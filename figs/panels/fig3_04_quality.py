@@ -104,8 +104,13 @@ VARIANT_GLOB = "fig3_quality__*.json"
 #: Series names. Short enough that a three-line key fits the 57.3 mm third-column
 #: slot this panel keeps in LAYOUTS[3] -- the earlier exploratory render spelt the
 #: fresh arm as a sentence and needed two-thirds width for it.
-FRESH_NAME = "LUC3D greedy, fresh anchor"
-SHIPPED_NAME = "LUC3D greedy, shipped"
+#: RENAMED 2026-08-17 (Eric's decision): the fresh-anchor operating point is now
+#: the SHIPPED configuration; the arm that shipped before it is the previous
+#: default. "LUC3D" is dropped from the key text to keep the tagged name inside
+#: the 57.3 mm key band (the hue already says LUC3D: teal is LUC3D everywhere in
+#: Fig 3, per the docstring).
+FRESH_NAME = "greedy, fresh anchor (shipped)"
+SHIPPED_NAME = "greedy, previous default"
 
 #: Method -> (deposit key, display name, colour), for the --as-shipped render.
 #: SALMON/TEAL match 3a and 3f: salmon is the published exhaustive method, teal is

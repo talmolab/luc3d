@@ -42,11 +42,11 @@ sessions rather than an interpolation through the five deposited thresholds; the
 threshold is marked so the numbers in the caption can be read straight off.
 
 WHAT THIS PANEL MEASURES IS NOT WHAT 7a MEASURES, and the figure previously gave a
-reader no way to tell. 7a's "within view" is 0.749 -- BMimica, 50 sessions, 5
+reader no way to tell. 7a's "within view" is 0.749 -- Mouse-Dyad-10M, 50 sessions, 5
 cameras. This is SLAP-2M, 74 sessions, 6 cameras, where LUC3D's within-view mean is
 0.752. Two different quantities, both called within-view IDF1; the corpus and n are
 now on the panel, and BOTH DIRECTIONS OF THE POINTER ARE DRAWN -- `SLAP-2M corpus ·
-a is BMimica` heads the count block here, and 7a's footer carries `b-f: SLAP-2M`.
+a is Mouse-Dyad-10M` heads the count block here, and 7a's footer carries `b-f: SLAP-2M`.
 One-sided labelling was the state that made 7.6 a finding: naming the corpus on the
 panel a reader happens to be looking at does nothing if the panel they are comparing
 it with is unlabelled, and the two numbers (0.749 vs 0.752) are close enough to read
@@ -99,7 +99,7 @@ MARK = 0.9
 N_CAMERAS = 6
 #: The corpus, stated as a header over the in-axes count block. See the comment at
 #: its `ax.text` for why it is there and not on a fourth footer line.
-CORPUS = "SLAP-2M corpus · a is BMimica"
+CORPUS = "SLAP-2M corpus · a is Mouse-Dyad-10M"
 #: Panel height in mm, DECLARED rather than taken from `ROW_H["std"]` (52 mm). Every
 #: panel in this figure was 52 mm and none of them needed it: measured on the 300 dpi
 #: render this panel's ink spanned 49.4 of 52.1 mm, and the assembled page came to
@@ -138,9 +138,11 @@ def main(variant=False, corrected=True):
     # its arms; the arm is distinguished by dash pattern and by the key.
     extra = []
     if variant:
-        extra = [("LUC3D pre-#131 (Fig 7b as shipped)",
+        # Relabelled 2026-08-17: the fresh anchor is the SHIPPED configuration
+        # now, and the arm the manuscript panel draws is the previous default.
+        extra = [("LUC3D pre-#131 (retired)",
                   ref["within_view"]["luc3d"]["per_session"], MUTED, REF_LS, 1.1),
-                 ("LUC3D + fresh anchor (EXPERIMENTAL)",
+                 ("LUC3D + fresh anchor (shipped)",
                   fresh["within_view"]["luc3d"]["per_session"], entity("luc3d"),
                   FRESH_LS, 1.5)]
     for label, vals, color, ls, lw in extra:
@@ -180,9 +182,9 @@ def main(variant=False, corrected=True):
     block = [(label, np.asarray(wv[key]["per_session"]), color, am[key], n_cs)
              for key, label, color in TRACKERS]
     if variant:
-        block = [("LUC3D (shipped)", np.asarray(wv["luc3d"]["per_session"]),
+        block = [("LUC3D (previous default)", np.asarray(wv["luc3d"]["per_session"]),
                   entity("luc3d"), am["luc3d"], n_cs),
-                 ("LUC3D + fresh (EXPT)",
+                 ("LUC3D + fresh (shipped)",
                   np.asarray(fresh["within_view"]["luc3d"]["per_session"]),
                   entity("luc3d"),
                   fresh["camera_session_argmax"]["luc3d"],
@@ -200,7 +202,7 @@ def main(variant=False, corrected=True):
     # THE CORPUS, AS A HEADER OVER THAT BLOCK, and it is load-bearing rather than
     # provenance boilerplate. 7a's "within view" is 0.749 and this curve is centred
     # near 0.90; both are called within-view IDF1 and they are DIFFERENT quantities
-    # (a: BMimica, 50 sessions, C = 5; here: SLAP-2M, 74 sessions, C = 6). The footer
+    # (a: Mouse-Dyad-10M, 50 sessions, C = 5; here: SLAP-2M, 74 sessions, C = 6). The footer
     # already names SLAP-2M, but a reader reads a number where it is printed, and the
     # counts in this block are the numbers a reader compares against a. So the
     # contrast is stated at the block, in MUTED so it reads as a label for the three
@@ -245,7 +247,8 @@ def main(variant=False, corrected=True):
              f"LUC3D within-view IDF1: mean {luc['mean']:.3f}, "
              f"median {luc['median']:.3f}"
              + ("" if not variant else
-                f"\nLUC3D here is the SHIPPED tracker: mean {luc['mean']:.4f} / median "
+                f"\nLUC3D here is the PREVIOUS DEFAULT tracker (shipped until the "
+                f"2026-08-17 fresh-anchor promotion): mean {luc['mean']:.4f} / median "
                 f"{luc['median']:.4f} / {int((np.asarray(luc['per_session']) >= MARK).sum())}"
                 f" sessions >= {MARK}, against the pre-#131 tracker this panel printed "
                 f"until 2026-08-13 "
@@ -253,7 +256,7 @@ def main(variant=False, corrected=True):
                 f"{ref['within_view']['luc3d']['median']:.4f} / "
                 f"{int((np.asarray(ref['within_view']['luc3d']['per_session']) >= MARK).sum())}), "
                 f"retired 2026-07-06"
-                f"\nthe EXPERIMENTAL fresh anchor is "
+                f"\nthe fresh anchor (shipped since 2026-08-17) is "
                 f"{fresh['within_view']['luc3d']['mean']:.4f} / "
                 f"{fresh['within_view']['luc3d']['median']:.4f} / "
                 f"{int((np.asarray(fresh['within_view']['luc3d']['per_session']) >= MARK).sum())}"

@@ -770,6 +770,81 @@ export async function setIdentityPalette(page, colors = null) {
     return res;
 }
 
+/**
+ * The COMPLETE 26-edge plotting skeleton for the 15-node SLAP mouse, copied
+ * verbatim from figs/src/skeleton_style.py MOUSE_EDGES (itself verbatim from
+ * viz_08 cell 16 via blender-images/cage_scene.py -- keep the copies in sync).
+ * The sessions' own .slp skeletons carry a sparser edge set that reads as spiky
+ * lines rather than a mouse at print size; the figure tiles override to this
+ * list so the app's own renderer draws the full ears/shoulder/haunch/spine/tail
+ * chain. A few pairs duplicate each other as unordered edges (e.g.
+ * Haunch_right--TTI appears twice); that is how viz_08 drew it, the overdraw is
+ * invisible (opaque strokes of one colour), so the list is kept verbatim.
+ */
+export const MOUSE_EDGES = [
+    ['TailTip', 'Tail_2'], ['Tail_2', 'Tail_1'], ['Tail_1', 'Tail_0'], ['Tail_0', 'TTI'],
+    ['TTI', 'Trunk'], ['Trunk', 'Neck'], ['Neck', 'Head'], ['Head', 'Nose'],
+    ['TTI', 'Haunch_left'], ['TTI', 'Haunch_right'], ['Trunk', 'Haunch_right'], ['Trunk', 'Haunch_left'],
+    ['Neck', 'Shoulder_left'], ['Neck', 'Shoulder_right'], ['Ear_L', 'Head'], ['Ear_R', 'Head'],
+    ['Ear_L', 'Nose'], ['Ear_R', 'Nose'], ['Shoulder_left', 'Head'], ['Shoulder_right', 'Head'],
+    ['Shoulder_left', 'Haunch_left'], ['Shoulder_right', 'Haunch_right'],
+    ['Haunch_right', 'TTI'], ['Haunch_left', 'TTI'],
+    ['Shoulder_left', 'Shoulder_right'], ['Haunch_left', 'Haunch_right'],
+];
+
+/**
+ * Replace the loaded session's skeleton EDGE list with `namePairs` (node-name
+ * pairs, default MOUSE_EDGES) and redraw, applied to the LIVE app rather than to
+ * the session files or the app source (same philosophy as setIdentityPalette).
+ *
+ * Display-only, and verified so: nothing on the tracking/triangulation path
+ * reads skeleton.edges -- the only consumers are the 2D overlay drawers
+ * (ui/overlays.js drawFrameOverlays reads session.skeleton live on every draw),
+ * the 3D viewport (Viewport3D captured the SAME state.session.skeleton object at
+ * construction, so an in-place splice reaches it too), the info panel, and the
+ * save/export writers (which the figure scripts never call). Nodes, instances,
+ * and tracker settings are untouched; the figure scripts additionally prove it
+ * by diffing their manifests' numeric payloads against the pre-override runs.
+ *
+ * Fails loudly on an unknown node name instead of silently dropping the edge --
+ * a session with different node names would otherwise export a bare skeleton.
+ */
+export async function setSkeletonEdges(page, namePairs = MOUSE_EDGES) {
+    const res = await page.evaluate(async (pairs) => {
+        const s = window.__lucid.state.session;
+        if (!s || !s.skeleton) return { ok: false, why: 'no session/skeleton' };
+        const sk = s.skeleton;
+        // nodes are plain name strings in these sessions, but the drawers also
+        // accept { name } objects -- handle both.
+        const names = sk.nodes.map(n => (typeof n === 'string' ? n : (n && n.name)));
+        const missing = [];
+        const edges = [];
+        for (const [a, b] of pairs) {
+            const ia = names.indexOf(a), ib = names.indexOf(b);
+            if (ia < 0 || ib < 0) { missing.push(`${a}--${b}`); continue; }
+            edges.push([ia, ib]);
+        }
+        if (missing.length) return { ok: false, why: 'unknown node(s)', missing, names };
+        // REPLACE in place: Viewport3D holds a reference to this same array's
+        // owner object, so mutating rather than reassigning updates 2D and 3D.
+        const nBefore = sk.edges.length;
+        sk.edges.length = 0;
+        for (const e of edges) sk.edges.push(e);
+        // Refresh the way the app's own mutators do (cf. setColorMode): redraw
+        // every 2D overlay and rebuild the 3D skeletons for the current frame.
+        const r = await import('/ui/rendering.js');
+        const init = await import('/pose/initialization.js');
+        const f = window.__lucid.state.currentFrame;
+        r.drawAllOverlays(f);
+        init.update3DViewport(f);
+        return { ok: true, nNodes: names.length, edgesBefore: nBefore, edgesAfter: sk.edges.length };
+    }, namePairs);
+    log('[skeletonEdges] ' + JSON.stringify(res));
+    if (!res.ok) throw new Error('setSkeletonEdges failed: ' + JSON.stringify(res));
+    await page.waitForTimeout(400);
+    return res;
+}
+
 export async function setOverlayStyle(page, opts = {}) {
     const applied = await page.evaluate(async (o) => {
         const set = (id, v) => {

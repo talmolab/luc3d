@@ -35,8 +35,8 @@ which came from comparing tracker ids against GT track indices with no permutati
   two pools' levels are not comparable, and there is no single corpus-level direction to
   report: the arm cuts switches on both pools and cuts MASS only on the predictions pool.
 
-  corr3dWeight 12 DOES NOT TRANSFER FROM BMimica, and that is worth stating as a negative
-  result rather than leaving out. On BMimica corr12 beat corr6 (371 vs 413 switches). On the
+  corr3dWeight 12 DOES NOT TRANSFER FROM Mouse-Dyad-10M, and that is worth stating as a negative
+  result rather than leaving out. On Mouse-Dyad-10M corr12 beat corr6 (371 vs 413 switches). On the
   other SLAP-2M pool it is neutral: 1,314 vs 1,312 switches, cross-view IDF1 0.7205 vs
   0.7212, misgrouped 122,191 vs 125,142 -- all within noise. It is not drawn on Figure 9
   (the keeptrack deposit has no corr12 cell as of this render); if a third series is ever

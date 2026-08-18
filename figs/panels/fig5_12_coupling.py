@@ -4,7 +4,7 @@ Fig 5g -- the coupling itself: one animal's rear makes the other's far more like
 but only when they are close.
 
 WHAT THE CURVE IS. Take every rear ONSET by one animal (9,354 of them across 56
-BMimica sessions) and read out the probability that the OTHER animal is rearing at
+Mouse-Dyad-10M sessions) and read out the probability that the OTHER animal is rearing at
 each lag around it, divided by that other animal's own base rate. 1.0 is chance. This
 is the measurement the rest of the figure rests on -- it is why "both animals reared
 at once" is worth defining as an event at all -- and until now it appeared only as one
@@ -41,7 +41,7 @@ evidence of no effect.
 
 THE HONEST NEGATIVE, in the caption rather than on the panel: SLAP-2M's two-animal
 sessions give 1.08x near and 0.97x far. Its arena is 3.2 body lengths across against
-BMimica's 6.9, so "within 2 body lengths" is most of the time there and the near/far
+Mouse-Dyad-10M's 6.9, so "within 2 body lengths" is most of the time there and the near/far
 contrast barely exists.
 
 Source: figs/out/fig5_rear_coupling_2animal.json (figs/fig5_rear_coupling.py

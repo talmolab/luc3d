@@ -9,7 +9,7 @@ Fig 8a -- ID-switch RATE against every remaining tracker threshold, one at a tim
     defaults; do any of the others matter?" -- and it should not be cited as a
     result until that question has been decided.
 
-WHAT THIS PANEL CLAIMS. On these 8 BMimica sessions, at every value sampled, with
+WHAT THIS PANEL CLAIMS. On these 8 Mouse-Dyad-10M sessions, at every value sampled, with
 all other thresholds at their shipped default: the within-view ID-switch rate as
 one threshold is varied. Ten one-dimensional sweeps, not a grid.
 
@@ -139,7 +139,7 @@ INERT_ROW = ["track3dWeight", "prevIdentityBonus", "minMatchScore",
 #: an assignment (velocityThreshold); or the corpus cannot exercise it at all. The
 #: last is the dangerous one, because it looks exactly like a null result and is not
 #: one -- `filterMinInstanceScore` gates on `inst.score != null`, and the shared
-#: BMimica detection pool (`{cam}_predictions.h5`) contains a `tracks` dataset and
+#: Mouse-Dyad-10M detection pool (`{cam}_predictions.h5`) contains a `tracks` dataset and
 #: NOTHING else, so no instance carries a score and the filter cannot fire at any
 #: threshold. That sweep is uninformative, not negative.
 FLAT_NOTE = {
@@ -301,7 +301,7 @@ def main():
 
     footnote(fig.axes[0],
              f"rate basis: {int(df.camera_frames.iloc[0]):,} camera-frames "
-             "(8 BMimica sessions x 5 cameras, full length), the same denominator "
+             "(8 Mouse-Dyad-10M sessions x 5 cameras, full length), the same denominator "
              "as Fig 3e\n"
              "each sweep varies ONE threshold and holds every other at its shipped "
              "default; dotted line = shipped default\n"

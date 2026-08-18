@@ -40,7 +40,7 @@ prose about past events are the letters things had at the time).
     re-scored them to `_eval_baseline.csv`'s 0.7360353065988466 with zero
     per-session deviation. `figs/out/ITEM3-SLAP2M-GATE.md`.
 
-    Fig 7a's BMimica arm, by contrast, IS `runCrossViewTracker`. So the figure
+    Fig 7a's Mouse-Dyad-10M arm, by contrast, IS `runCrossViewTracker`. So the figure
     as shipped labels two different trackers "LUC3D".
 
     THERE ARE TWO MOVEMENTS AND THEY ARE KEPT APART. c-g now PLOT the first and

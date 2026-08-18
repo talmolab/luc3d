@@ -1,0 +1,9 @@
+,No installation,Browser-based,Multi-animal,Multi-camera 3D,Cross-view ID,3D proofreading
+LUC3D (this work),True,True,True,True,True,True
+SLEAP,False,False,True,sleap-anipose,False,2D only
+Label3D,False,False,False,True,False,True
+JARVIS (HybridNet),False,False,False,True,False,reproj. error
+Lightning Pose,False,True,False,multi-view losses,False,False
+DeepLabCut,False,False,True,pairwise,False,False
+Anipose,False,False,False,True,False,False
+DANNCE / SDANNCE,False,False,True,True,False,False

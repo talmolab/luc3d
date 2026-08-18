@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Fig 8d -- the shipped tracker against the candidate parameter sets, on ALL 50 BMimica
+Fig 8d -- the shipped tracker against the candidate parameter sets, on ALL 50 Mouse-Dyad-10M
 sessions: survival curves for identity precision, identity recall and cross-view IDF1,
 plus ID switches per 100,000 camera-frames.
 
@@ -238,7 +238,7 @@ def main(deposit_name="fig8_methods_50.json"):
              "the IoU sweep is degenerate (recall moves 0.016 over IoU 0.05-0.90)\n"
              "M1 = score all views against one frame-start 3D snapshot; stale N = evict a "
              "per-camera detection older than N frames before re-triangulating\n"
-             f"all {len(d['sessions'])} proofread BMimica sessions x 5 cameras, full "
+             f"all {len(d['sessions'])} proofread Mouse-Dyad-10M sessions x 5 cameras, full "
              f"length, {cf:,} camera-frames; sessions PAIRED across parameter sets")
     if missing:
         note += "\nnot yet measured at 50 sessions: " + ", ".join(missing)

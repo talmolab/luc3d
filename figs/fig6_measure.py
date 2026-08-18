@@ -292,7 +292,15 @@ def main():
             print(f"  SLAP calibration: {type(e).__name__}: {e}")
 
     payload = dict(
-        corpora=[summarise("BMimica", bm, 150.0), summarise("SLAP-2M", slap, 50.0)],
+        # SLAP-2M's default is 30.0, NOT the 50.0 this passed until 2026-08-17.
+        # `points3d.h5` carries no `recording_frame_rate`, so this fallback IS the
+        # corpus's reported frame rate, and three independent sources say 30: the mp4
+        # container, master_sheet.xlsx's own frames / duration (exactly 30.000 on every
+        # session, duration being in MINUTES), and RESULTS.md's "11 frames at 30 fps".
+        # At 50 the deposit reported 10.86 h where the data says 18.1 h, and Fig 6's
+        # corpus panel printed it. BMimica reads its rate from the file and never uses
+        # its default.
+        corpora=[summarise("BMimica", bm, 150.0), summarise("SLAP-2M", slap, 30.0)],
         rigs=rigs, skeleton=skel,
         bmimica=bm, slap2m=slap,
         roots=dict(bmimica=BM_ROOT, slap2m=SLAP_ROOT),

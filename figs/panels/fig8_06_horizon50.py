@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Fig 8d (REDONE) -- the staleness HORIZON on all 50 BMimica sessions: shipped vs stale 1 / 10 / 20 / 30.
+Fig 8d (REDONE) -- the staleness HORIZON on all 50 Mouse-Dyad-10M sessions: shipped vs stale 1 / 10 / 20 / 30.
 
     THIS FIGURE IS EXPLORATORY AND UNPLACED. It is not part of the manuscript, is
     absent from FIGURE-LEGENDS.md / METHODS.md / RESULTS.md / CAPTIONS.md, and no
@@ -10,7 +10,7 @@ WHAT THIS PANEL IS FOR. 8d compared ~24 method families on 8 sessions and 8e che
 two best on all 50. This is the narrowed question that is actually left: the one method
 that worked is evicting stale per-camera detections before re-triangulating, and the only
 free parameter is HOW OLD is too old. Everything else is held fixed -- `sync` on,
-`distanceThreshold` 25, same detections, same scorer, all 50 proofread BMimica sessions at
+`distanceThreshold` 25, same detections, same scorer, all 50 proofread Mouse-Dyad-10M sessions at
 full length.
 
 WHY THE PARAMETER EXISTS AT ALL. `Target.detsByCam` in pose/cross-view-tracker.js keeps one
@@ -156,7 +156,7 @@ def main():
             f"{best_id.idf1_mean:.4f} against {ship.idf1_mean:.4f}\n"
             "every point holds `sync` on and distanceThreshold 25; only the horizon "
             "varies\n"
-            f"all {len(d['sessions'])} proofread BMimica sessions x 5 cameras, full "
+            f"all {len(d['sessions'])} proofread Mouse-Dyad-10M sessions x 5 cameras, full "
             f"length, {cf:,} camera-frames, one shared detection pool")
     if missing:
         note += ("\nNOT YET MEASURED at 50 sessions and so absent from the curve: "

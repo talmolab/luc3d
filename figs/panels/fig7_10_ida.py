@@ -15,7 +15,8 @@ is at 100.0% -- most sessions carry not one wrongly-labelled detection -- while 
 worst is at 56.6%, one animal's identity held for roughly half the session. A bare
 mean (92.5%) describes no session at all. Same idiom as the set's other
 per-session-dots panels; the two operating points use the established solid
-(shipped) vs hollow (fresh anchor, EXPERIMENTAL) idiom in LUC3D's own hue.
+(previous default) vs hollow (fresh anchor, the shipped configuration since
+2026-08-17) idiom in LUC3D's own hue.
 
 Source: figs/out/fig8_ida_shipped.json, figs/out/fig8_ida_sync_stale20_dist25.json
 (both gated: their IDF1 reproduces fig8_methods_50.json's cells).
@@ -32,8 +33,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.data_loader import load  # noqa: E402
 from src.style import entity, deposit, panel, save, use  # noqa: E402
 
-ARMS = [("shipped", "fig8_ida_shipped.json", False),
-        ("fresh anchor", "fig8_ida_sync_stale20_dist25.json", True)]
+# Arm names relabelled 2026-08-17 (fresh-anchor promotion): the deposit
+# FILENAMES keep their historical "shipped" spelling; only the names move.
+ARMS = [("previous default", "fig8_ida_shipped.json", False),
+        ("fresh anchor (shipped)", "fig8_ida_sync_stale20_dist25.json", True)]
 
 
 def main():
@@ -62,11 +65,11 @@ def main():
     deposit(pd.DataFrame(rows), 7, "fig7s4_ida.csv")
 
     from src.style import text_legend
-    text_legend(ax, [("filled: shipped tracker · rule: pooled rate", teal),
-                     ("hollow: fresh anchor (EXPERIMENTAL)", teal)],
+    text_legend(ax, [("filled: previous default · rule: pooled rate", teal),
+                     ("hollow: fresh anchor (shipped)", teal)],
                 "above", size=6.5)
     ax.set_xticks([0, 1])
-    ax.set_xticklabels(["shipped", "fresh\nanchor"])
+    ax.set_xticklabels(["previous\ndefault", "fresh anchor\n(shipped)"])
     ax.set_xlim(-0.6, 1.6)
     ax.set_ylim(50, 101)
     ax.set_yticks([50, 60, 70, 80, 90, 100])

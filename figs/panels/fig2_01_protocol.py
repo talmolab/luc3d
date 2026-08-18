@@ -30,6 +30,13 @@ all, the QUANTIFICATION in panels b-d. Both are named in Fig 1d and must be cite
 Source: figs/out/fig2-protocol.json + figs/out/fig2p-*.png
         (node figs/fig2_protocol.mjs)
 
+SKELETON EDGES: the tiles are re-exported with the app's skeleton edge set
+overridden to the complete 26-edge plotting skeleton (figs/_drive.mjs
+setSkeletonEdges / MOUSE_EDGES, from src/skeleton_style.py) so the animals read
+as mice rather than spiky lines (Eric 2026-08-16). Display-only: nothing on the
+tracking/triangulation path reads skeleton.edges, and the manifests' numeric
+payloads were diff-verified unchanged. The tiles remain the app's own canvases.
+
     python3 figs/panels/fig2_01_protocol.py
 """
 import sys
@@ -169,6 +176,43 @@ def schematic(ax, anchors=()):
     ax.set_ylim(-3.6, 2.6)
 
 
+def fix_cam6_id_labels(ax, view):
+    """Re-typeset the two colliding identity chips on the cam 6 anchor tile.
+
+    On this frame the app draws each instance's identity label at its box's
+    top edge, and id_0's box (x 583-695) and id_1's (x 446-620) overlap -- so
+    the BAKED labels collide and the tile reads "id id_1" with id_0's name
+    buried (adversarial review 2026-08-17, Agent 3 MAJOR 4). The label pixels
+    are app chrome, not evidence, so the fix is to re-set the same two names,
+    in the app's own per-instance colours FROM THE MANIFEST (`view["details"]`
+    exists precisely "so the composer can put a leader line + label on" --
+    fig2_protocol.mjs), on an opaque chip that covers the garbled cluster.
+    Nothing else in the photograph is touched, and a re-export that moves the
+    animals moves `details` with it, so the vector chips cannot drift from the
+    render they cover.
+
+    Axes-fraction geometry, measured off the cropped tile: the baked cluster
+    spans x 0.61-0.83, y 0.63-0.70 (imshow's y inverted).
+    """
+    import matplotlib.patches as mpatches
+
+    by_id = {d["identity"]: d for d in view["details"]}
+    # The chip: the app's label background is the dark arena wall here; a black
+    # chip is what the legible labels elsewhere in the frame sit on. Sized for
+    # the TYPE, not just the garble: at 6 pt each name is ~0.14 of the tile's
+    # width, so two names plus a gap need ~0.33 -- the first cut of this fix
+    # used the garble's own 0.245 and reproduced the collision in vector.
+    ax.add_patch(mpatches.Rectangle((0.545, 0.625), 0.335, 0.085,
+                                    transform=ax.transAxes, facecolor="black",
+                                    edgecolor="none", zorder=5))
+    # id_1's animal is the left of the pair, id_0's the right -- same order the
+    # baked labels attempted.
+    for name, x, ha in (("id_1", 0.558, "left"), ("id_0", 0.868, "right")):
+        ax.text(x, 0.667, name, transform=ax.transAxes, ha=ha, va="center",
+                color=by_id[name]["color"], fontsize=6.0, fontweight="bold",
+                zorder=6)
+
+
 def main():
     use()
     p = load("fig2-protocol.json")
@@ -190,8 +234,10 @@ def main():
         f = OUT / f"fig2p-anchor-f150-{cam}.png"
         if not f.exists():
             sys.exit(f"missing figs/out/{f.name} — run `node figs/fig2_protocol.mjs`")
-        tile(cells[(r, 0)], f, bbox_of(va, cam),
-             badge=f"{cam_label(cam)} · anchor", pad=0.06)
+        ax_t = tile(cells[(r, 0)], f, bbox_of(va, cam),
+                    badge=f"{cam_label(cam)} · anchor", pad=0.06)
+        if cam == "Camera6_sideL":
+            fix_cam6_id_labels(ax_t, view_of(va, cam))
 
     # --- 2: the solve, and what it produced -------------------------------
     schematic(cells[(0, 1)], anchors)

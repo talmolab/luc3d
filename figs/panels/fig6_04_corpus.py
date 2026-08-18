@@ -8,10 +8,21 @@ measures.
 docstring cited the wrong panel.)
 
 Everything here is read from the files themselves by `fig6_measure.py`, not from a lab
-notebook: 130 sessions with 3D, 12,039,174 frames, 29.6 hours.
+notebook: 130 sessions with 3D, 12,039,174 frames, 36.8 hours.
+
+THE HOURS WERE WRONG UNTIL 2026-08-17 and the error was in the measurement pass, not
+here: `fig6_measure.py` fell back to a hard-coded 50 fps for SLAP-2M, because
+`points3d.h5` carries no `recording_frame_rate`, and that fallback IS the corpus's
+reported rate. Three independent sources say 30 -- the mp4 container,
+`master_sheet.xlsx`'s own frames / duration (exactly 30.000 per session, duration in
+MINUTES), and RESULTS.md's own "11 frames at 30 fps" -- so this table printed
+`10.9 @50 fps` for a corpus that holds 18.1 h, and the total read 29.6 h instead of
+36.8. Eric caught it on the artwork ("fig 6 is incorrect SLAP-2M is 30 FPS!"). The
+regenerated deposit differs from its predecessor in the SLAP-2M `fps` and `hours` and
+in NOTHING else, which was checked rather than assumed.
 
 WHICH CORPUS EACH PANEL MEASURES IS IN THE LEGEND, NOT IN THIS TABLE. c, d and f are
-SLAP-2M only, and BMimica carries 84 % of the corpus frame count while contributing
+SLAP-2M only, and Mouse-Dyad-10M carries 84 % of the corpus frame count while contributing
 nothing to those panels, so the 130-session / 12.0 M-frame total here is a COMPOSITION
 statement and must not be read as the n behind c, d and f. That qualification used to
 be a "Measured in c, d, f" row on the table itself, which was a build-time note rather
@@ -34,7 +45,7 @@ text object, so a tick mark renders as a missing-glyph box and warns on every sa
 
 TWO NUMBERS PER CORPUS THAT MUST NOT BE CONFLATED: sessions TOTAL and sessions WITH
 3D. The cell carries both, and on the current data they are equal everywhere --
-SLAP-2M `74 of 74`, BMimica `56 of 56`, total `130 of 130`.
+SLAP-2M `74 of 74`, Mouse-Dyad-10M `56 of 56`, total `130 of 130`.
 
 IT USED TO READ `74 of 84`, AND THAT WAS A BUG IN THE MEASUREMENT, NOT A DISCLOSURE.
 `fig6_measure.py` enumerated SLAP-2M by walking `{SLAP_ROOT}/20*/<session>/`, which
@@ -71,7 +82,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.data_loader import load  # noqa: E402
-from src.style import INK, SPAN, deposit, mm, save, use  # noqa: E402
+from src.style import corpus, INK, SPAN, deposit, mm, save, use  # noqa: E402
 
 #: corpus name -> the key in fig6.json holding its per-session records, and whether
 #: panels c, d and f measure it.
@@ -176,17 +187,19 @@ def main():
         "Sessions with 3D": (f"{sum(c['sessions_with_3d'] for c in used)} of "
                              f"{sum(c['sessions_total'] for c in used)}"),
         "Frames": f"{sum(c['frames_total'] for c in used):,}",
-        # SUM OF THE DISPLAYED VALUES, not display of the exact sum (review round
-        # 3): 18.68 + 10.86 = 29.54 prints as 29.5, while the addends print as 18.7
-        # and 10.9 -- so the table showed 18.7 + 10.9 = 29.5 and failed its own
-        # arithmetic as read. Rounding the addends first makes the printed column
-        # self-consistent; the exact total lives in the deposit.
+        # SUM OF THE DISPLAYED VALUES, not display of the exact sum (review round 3).
+        # The rule earns its keep whenever the addends round in the same direction: on
+        # the pre-2026-08-17 numbers, 18.66 + 10.86 = 29.52 printed as 29.5 while the
+        # addends printed 18.7 and 10.9, so the table showed 18.7 + 10.9 = 29.5 and
+        # failed its own arithmetic as read. The current numbers happen not to trip it
+        # (18.66 + 18.1 = 36.76, and 18.7 + 18.1 = 36.8 either way) -- which is luck,
+        # not a reason to drop the rule. The exact total lives in the deposit.
         "Hours": f"{sum(round(c['hours'], 1) for c in used):.1f}",
         "Nodes": nodes,
     }
     cols.append("Total")
 
-    deposit(pd.DataFrame([{"attribute": r, **{c: cells[c][r] for c in cols}}
+    deposit(pd.DataFrame([{"attribute": r, **{corpus(c): cells[c][r] for c in cols}}
                           for r in ROWS]), 6, "fig6f_corpora.csv")
 
     nline = len(ROWS) + 1                     # + the header
@@ -212,9 +225,12 @@ def main():
     def row_y(i):
         return len(ROWS) - i - 0.1
 
+    # HEADERS GO THROUGH `corpus()`: `cols` holds the names the DEPOSIT uses, because
+    # they are what `corpora[...]` is looked up by, and only the printed form is renamed
+    # (see src/style.py CORPUS_NAMES).
     for j, c in enumerate(cols):
-        ax.text(x0[j + 1], row_y(-1), c, fontweight="bold", va="center", color=INK,
-                fontsize=7)
+        ax.text(x0[j + 1], row_y(-1), corpus(c), fontweight="bold", va="center",
+                color=INK, fontsize=7)
     # EVERY ROW IS SET THE SAME. The last row used to be bold, because it was the
     # "measured in c, d, f" disclosure and carried the qualification the table existed
     # for. With that row gone the bolding had moved onto "Nodes", emphasising the one

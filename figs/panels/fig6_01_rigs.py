@@ -11,7 +11,7 @@ optical axis is the third row of R. So this is the geometry the reconstructions 
 actually computed in, not a sketch of it.
 
 Plotted in plan view (x-y) with each camera's optical axis as a short spur, because
-what distinguishes these two rigs is the AZIMUTHAL spread -- BMimica's 5 cameras
+what distinguishes these two rigs is the AZIMUTHAL spread -- Mouse-Dyad-10M's 5 cameras
 against SLAP-2M's 8 -- and that is what conditions a two-view solve (Fig 2d).
 
 MIND THE Z SIGN. This rig's calibration frame has +Z pointing DOWN: the overhead
@@ -32,7 +32,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.data_loader import load  # noqa: E402
-from src.style import MUTED, grid, GREY, INK, SET2, deposit, save, use  # noqa: E402
+from src.style import corpus as corpus_name, MUTED, grid, GREY, INK, SET2, deposit, save, use  # noqa: E402
 
 
 def centres(rig: dict):
@@ -58,11 +58,14 @@ def main():
     rows = []
     fig, axes = grid(1, len(rigs), span="half", row="std", despine=False)
     axes = np.atleast_1d(axes)
+    # `rigs` is keyed by the name the DEPOSIT uses; the printed label goes through
+    # src.style.corpus() (see CORPUS_NAMES) so renaming a corpus needs no re-measurement
     for k, (corpus, rig) in enumerate(rigs.items()):
+        label = corpus_name(corpus)
         ax = axes[k]
         cams = centres(rig)
         if not cams:
-            ax.text(0.5, 0.5, f"{corpus}\n(no extrinsics in fig6.json)",
+            ax.text(0.5, 0.5, f"{label}\n(no extrinsics in fig6.json)",
                     transform=ax.transAxes, ha="center", va="center", color=MUTED,
                     fontsize=7)
             ax.set_axis_off()
@@ -89,7 +92,7 @@ def main():
         ax.set_yticks([])
         for s in ax.spines.values():
             s.set_visible(False)
-        ax.set_xlabel(f"{corpus}\n{len(cams)} cameras", color=INK, fontsize=7.5)
+        ax.set_xlabel(f"{label}\n{len(cams)} cameras", color=INK, fontsize=7.5)
 
     if rows:
         deposit(pd.DataFrame(rows), 6, "fig6a_rigs.csv")

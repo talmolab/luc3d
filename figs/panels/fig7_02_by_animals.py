@@ -192,8 +192,8 @@ def main(variant=False, corrected=True):
               "luc3d_within_switches": tab[tk][str(a)]["within_switches"]}
              for arm, blk, tk in (("LUC3D pre-#131 (manuscript panel)", ref,
                                   "pre131_reference"),
-                                 ("LUC3D (shipped)", sl, "shipped"),
-                                 ("LUC3D + fresh anchor (EXPERIMENTAL)", fresh,
+                                 ("LUC3D (previous default)", sl, "shipped"),
+                                 ("LUC3D + fresh anchor (shipped)", fresh,
                                   "fresh_anchor"))
              for a in counts]),
             7, "fig7c_by_animals_variant.csv")
@@ -252,7 +252,7 @@ def main(variant=False, corrected=True):
             return (f"{a} animals (n = {pv[a]['n_sessions']}): Δ {pr:+.3f} → {ps:+.3f} "
                     f"→ {pf:+.3f} · switches {sr:,} → {ss:,} → {sf:,}", INK)
         text_legend(ax, [
-            ("LUC3D − SLEAP: shipped (solid) · fresh anchor (open, EXPERIMENTAL)",
+            ("LUC3D − SLEAP: previous default (solid) · fresh anchor (open, shipped)",
              LUC3D),
             ("grey: LUC3D pre-#131, what Fig 7c printed until 2026-08-13", MUTED),
             line("3"), line("4")],
@@ -358,14 +358,16 @@ def main(variant=False, corrected=True):
         ar = ref["paired_vs_sleap"]["all"]
         af = fresh["paired_vs_sleap"]["all"]
         note += (
-            f"\nLUC3D here is the SHIPPED tracker: all {a['n_sessions']} sessions "
+            f"\nLUC3D here is the PREVIOUS DEFAULT tracker (shipped until the "
+            f"2026-08-17 fresh-anchor promotion): all {a['n_sessions']} sessions "
             f"{ar['mean']:+.3f} ({ar['wins']}/{ar['n_sessions']}) → {a['mean']:+.3f} "
             f"({a['wins']}/{a['n_sessions']}) → {af['mean']:+.3f} "
-            f"({af['wins']}/{af['n_sessions']}) for pre-#131 → shipped → fresh anchor; "
+            f"({af['wins']}/{af['n_sessions']}) for pre-#131 → previous default → "
+            f"fresh anchor (shipped); "
             f"the pre-#131 arm is the tracker retired 2026-07-06"
             f"\nTHE CORPUS GAIN IS THE 2-ANIMAL STRATUM ONLY. At 3 animals (n = "
             f"{pv['3']['n_sessions']}) and 4 animals (n = {pv['4']['n_sessions']}) the "
-            f"RETIRED tracker is better and the shipped one emits "
+            f"RETIRED tracker is better and the previous default emits "
             f"{tab['shipped']['3']['within_switches'] / tab['pre131_reference']['3']['within_switches']:.1f}x "
             f"and "
             f"{tab['shipped']['4']['within_switches'] / tab['pre131_reference']['4']['within_switches']:.1f}x "
@@ -374,7 +376,7 @@ def main(variant=False, corrected=True):
             f"{tab['shipped']['3']['within_switches']:,} and "
             f"{tab['pre131_reference']['4']['within_switches']:,} → "
             f"{tab['shipped']['4']['within_switches']:,})"
-            f"\nthe EXPERIMENTAL fresh anchor removes nearly all of that blow-up "
+            f"\nthe fresh anchor (shipped since 2026-08-17) removes nearly all of that blow-up "
             f"({tab['fresh_anchor']['3']['within_switches']:,} and "
             f"{tab['fresh_anchor']['4']['within_switches']:,}) and recovers part but not "
             f"all of the IDF1 (3 animals: within-view "

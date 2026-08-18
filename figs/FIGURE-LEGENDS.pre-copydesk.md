@@ -1,0 +1,496 @@
+# Figure legends
+
+Legends for Figs 1 to 7. Each states the finding, then takes the panels in order with
+the sample size and the statistic. Supplementary panels (S-numbered) follow their
+parent figure's entry; none is placed in a composite. Procedures are in METHODS.md. A
+plain-text copy of this file, for pasting into a word processor, is
+FIGURE-LEGENDS.txt.
+
+---
+
+## Fig. 1)
+
+LUC3D annotates and proofreads multi-camera 3D pose in a browser with no installation,
+and gives each animal one identity in every view.
+
+A) The SLAP-2M rig, rendered from one session's own data: the eight camera poses
+from the session's calibration, the cage from its measured corner coordinates, and
+the two animals' tracked 3D poses — nothing is hand-posed.
+
+B) Pipeline, from videos to export. Videos from N cameras are drawn as per-camera
+tiles; 2D pose estimation (SLEAP or any other predictor; LUC3D reads .slp) leaves the
+tiles per-camera, every animal in one undifferentiated colour; cross-view
+re-identification recolours the same tiles into identity colours, one per animal,
+shared by every view; triangulation (DLT, any two or more views) collapses the tiles
+into a single 3D volume; the 3D is proofread against per-view reprojections; and the
+project exports as .slp 2.8 or HDF5. Calibration (TOML) enters as a side input at
+triangulation, not earlier — a detector needs no calibration. The bracket marks the
+stages contributed here: cross-view re-identification, triangulation, 3D proofreading
+and export — export is a contribution because the SLP 2.8 columnar session data that
+carries the calibration, identities and 3D points through a SLEAP round-trip is
+introduced with this work.
+
+C) One frame of an 8-camera, 3-mouse recording, 15-node skeleton. Left, the per-camera
+tracks supplied to the app; right, the same two views after cross-view
+re-identification (cam 0 mid and cam 7 sideR, 2 of 8 views). Labels are the per-camera
+track name and the resolved identity. Track colours are arbitrary within each camera
+and carry no meaning across views; identity colours are shared by every view. Across
+all 8 views this frame holds 24 detections carrying 20 distinct track names, which
+resolve to 3 identities, one per animal in every view.
+
+D) The same frame triangulated. Left, cam 0 mid with identity overlays; middle, the
+3D viewport placed at that camera's own pose and field of view; right, the rig, with
+all 8 calibrated cameras and the 3 reconstructed animals. 45 of 45 3D keypoints
+filled.
+
+E) Capability comparison against 7 multi-animal or multi-camera pose tools, read from
+each tool's published documentation on 4 August 2026. A dash means the capability is
+not documented, except in the DANNCE and SDANNCE cross-view cell, where it means not
+applicable.
+
+---
+
+## Fig. 2)
+
+Labelling two anchor views and accepting the reprojection in the rest cuts manual
+keypoint placements 2.3-fold on a 5-camera rig, because only 5.5% of reprojections
+fall outside a 10 px tolerance.
+
+A) The protocol in the app: two anchor views labelled (cam 1 topB, cam 6 sideL); the
+3D solved from those two alone; the resulting reprojection drawn into the remaining
+views (cam 0 mid and cam 2 topC, neither labelled); and one view magnified beside that
+frame's measured per-view error split.
+
+B) Labels per animal per frame against rig size C. The long-dashed line is every
+label a frame needs, C x N with N = 15 nodes — the premise that a labeller places
+every node in every view, assumed rather than measured at any C. The two other
+curves are how many of those labels the reprojection supplies for free: 2N are
+placed by hand in the anchor views, and each of the remaining (C - 2)N is accepted
+when the reprojection lands within tau of that view's own detection (tau = 10 px,
+heavy; tau = 5 px, light dashed), so free = CN - [2N + (C - 2)Np] with p the measured
+correction rate. p is measured at one rig size only — the single filled marker at
+C = 5 — and every other point on either curve is the model. At C = 5 and tau = 10 px,
+43 of 75 labels arrive free (57%), which is 2.3 times fewer manual placements.
+
+C) 3D error against the number of cameras in the solve, k = 2 to 5 — the full rig
+included. A 3D point is solved from k of the rig's 5 cameras and scored as its
+distance in mm from the proofread reference reconstruction; k = 2 is exactly the
+two-anchor protocol of panels A and B. Medians 4.74, 2.89, 1.91 and 1.19 mm at
+k = 2, 3, 4 and 5 (170,134,120, 170,134,120, 85,067,060 and 17,013,412 keypoint
+solves over the 50 proofread sessions — every C-choose-k camera subset). Boxes span
+the 25th to 75th percentile, taken as the across-session median of each session's
+own percentiles; dots, each session's own median of the same field, 50 per box. No
+whiskers are drawn, deliberately: the 5th and 95th percentiles were never computed
+upstream, and whiskers drawn from any other quantity would put two different
+measurements on one glyph — the dots carry the spread instead. These are comparison
+values, not absolute 3D accuracy: the proofread reference carries its own error
+(median reprojection 2.40 px), so the spacing between camera counts is real while
+the absolute level includes the reference's noise — the same caveat panel D carries
+for the same reference. The held-out form of this measurement — solved from k views,
+reprojected into a camera the solve never saw and scored in px against that camera's
+own detection, which exists only for k <= 4 — renders under a separate slug, with
+medians 4.32, 3.66 and 3.34 px at k = 2, 3 and 4 (510,402,360, 340,268,240 and
+85,067,060 held-out keypoint solves); it is the estimator Fig 4B builds on. The
+retired cumulative form of that k = 2 held-out measurement carries the tolerance
+readings quoted in the text: median 4.32 px against the view's own detection, with
+59.9% of reprojections at or below 5 px and 94.6% at or below 10 px; scored against
+the all-view reference 3D instead, the curve moves only slightly.
+
+D) Median 3D error of a two-anchor solve against the baseline angle the anchor pair
+subtends at the animal, one marker per camera pair (ten pairs). Dashed curve, the
+depth-uncertainty law k/sin(theta), with k = 1.52 mm estimated robustly as the median
+of err x sin(theta); band, plus or minus 25% around the curve. Eight of the ten pairs
+fall inside that band — a descriptive, in-sample statement rather than a test, since
+k is fitted and scored on the same ten pairs, so roughly half of them sit near the
+curve by construction and no held-out agreement is claimed. The two pairs outside the
+band are named on the panel (cam 1+2 and cam 0+2; both include camera 2, the farthest
+camera). The extremes carry their values: 12.6 mm at the narrowest pair (13 degrees)
+down to 2.7 mm at the widest (31 degrees), a 4.7-fold range that is free at
+annotation time. Dotted line, the all-five-view floor (1.2 mm).
+
+n: A is one frame of the 8-camera application session (Methods). B and D rest on all
+56 BMimica sessions, every frame, 286,200,174 keypoints; 5 cameras, 2 mice per
+session, 15 nodes. The corpus is 9 individual mice in 18 pairings, so sessions are
+repeated recordings of those pairs; D's ten pairs share the same five cameras and one
+calibration, so ten markers are not ten independent observations. C is measured in
+Figure 4's by-camera-count pass — the 50 proofread sessions at Figure 4's sampling,
+442,348,712 keypoint solves in total; its held-out variant rests on 935,737,660
+held-out view scorings.
+
+S1) Supplementary; not placed in the composite. Cross-view IDF1 against the number
+of cameras used, k of 5 — the identity half of the how-many-cameras question, which
+panel C answers for geometry. The shipped cross-view tracker is re-run on
+deterministic camera subsets of the BMimica rig, three subsets per k (the same three
+for every session), so each dot is one subset's 50-session mean and the vertical
+spread at a k is which cameras are kept, not session-to-session noise; the line
+threads the per-k means, 0.675, 0.736, 0.752 and 0.749 at k = 2, 3, 4 and 5. k = 5 is
+not a new run: it re-scores the head-to-head harness's cached full-rig outputs and
+reproduced fig8_methods_50.json exactly (gate difference 0.0), which is what makes
+the subset cells comparable to every other 50-session number. At k = 2 the best pair
+(0.688) beats the worst (0.669) by 0.018, while the best triple sits +0.056 above the
+best pair — which cameras matters less than how many. Design in Methods,
+"Camera-subset identity".
+
+---
+
+## Fig. 3)
+
+Greedy per-camera Hungarian assignment chooses the same grouping as exhaustive
+hypothesis enumeration on 4,591,055 of the 4,591,864 frames both could be scored on
+across 92 sessions (99.982%), at 10⁶-fold lower cost in the configuration where
+enumeration becomes intractable.
+
+A) The two search strategies. Exhaustive hypothesis testing (Maree et al., 2024)
+enumerates every grouping of detections into identities, (A!)^C per frame for A
+animals and C cameras, and keeps the lowest reprojection error. LUC3D solves one
+Hungarian assignment per camera, committing each camera before the next, at O(C·A³).
+The association cost the Hungarian solver minimises — a 2D term on the distance
+between the detection and the target's reprojection into that view, decayed by target
+age, and a 3D term on the distance from the target to the detection's back-projected
+ray — is stated in full in Methods, "Cross-view association".
+
+B) Hypotheses per frame for exhaustive enumeration, one curve per rig size, exact
+arithmetic. Dotted line, the harness cap of 10⁶ hypotheses per frame.
+
+C) Frames whose grouping differs from proofread ground truth, per configuration, on
+identical detections and on every frame exhaustive enumeration could run, as a rate
+per 10,000 clean frames (log axis; each configuration's clean-frame count is under
+its tick: 4.3M, 238k, 10k and 19k). Two series: exhaustive (filled salmon) and
+LUC3D's greedy grouping at the fresh-anchor operating point (hollow teal; per-view
+detections expire from the 3D anchor after 20 frames, synchronous update, 3D distance
+normaliser 25 mm, cost weights unchanged — see Methods). Pooled over the 4,591,725
+scored clean frames the fresh anchor misgroups 940 frames, 2.05 per 10,000, against
+exhaustive's 1,453, 3.16 per 10,000; per configuration the rates are 1.32, 14.5,
+12.5 and 4.7 per 10,000 for the fresh anchor against 1.29, 30.1, 15.4 and 85.2 for
+exhaustive at 2 x 5, 2 x 6, 3 x 5 and 4 x 3. On the 672 frames where the two choose
+different groupings, ground truth agrees with the greedy grouping on 592 and with
+exhaustive on 79 — optimising the reprojection objective exhaustively is not the same
+thing as being right. The tracker as shipped misgroups 1,077 frames, 2.35 per 10,000
+(809 disagreements with exhaustive, ground truth siding 592 to 216); its raw counts
+are in the deposited table and its own render is kept under a separate slug.
+
+D) Ablation of the 3D term over all 50 BMimica sessions, for the fresh-anchor
+configuration of panel C (teal), in two stacked plots on one shared r axis
+(r = corr3d/corr2d, log): within-view ID switches per 100,000 camera-frames above
+(log axis; denominator 45,021,960 camera-frames, full sessions) and cross-view IDF1
+below. Only the ratio matters (verified on the earlier 8-session grid: all 24 weight
+combinations collapse exactly onto r), so each r is sampled once at corr2d = 1.
+r = 0, the 3D term switched off, sits in a broken-off slot left of the axis at 632
+per 100,000 — without the 3D term nothing links the views. The switch rate is
+already at 4.66 per 100,000 at r = 0.25; at the marked app default r = 6 the arm
+holds 413 switches (0.92 per 100,000) at IDF1 0.8613 — the tracker as shipped holds
+2,071 at 0.7493 at the same r (deposited; drawn under a separate slug) — and its
+minimum, 371 switches at r = 12, buys no IDF1 over r = 6 (0.8614 against 0.8613).
+The flat salmon rules are exhaustive enumeration, drawn flat because it has no
+cost-weight ratio — it does not use the cost function, so it is constant in r:
+cross-view IDF1 0.400 and 81.0 switches per 100,000 clean camera-frames.
+Exhaustive's rate is over its own denominator — the 21,622,345 clean camera-frames it
+computed, since it runs only on frames where every camera holds exactly 2 detections —
+and its identities exist only through the cross-frame threading described in Methods,
+so its rules are reference levels, not a third arm of the sweep.
+
+E) Measured time per frame for both methods on identical detections, log time axis.
+Exhaustive was offered 9,678,503 frames across the 92 sessions and computed all
+4,591,864 eligible frames; the 5,086,639 skipped are frames where some camera did not
+hold exactly A detections — the occlusion-heavy frames, which are the hard case for
+association. On the computed frames the two methods choose the same grouping 99.982%
+of the time (4,591,055 of 4,591,864); per configuration the agreement is 99.996%,
+99.814%, 99.760% and 99.038% at 2 x 5, 2 x 6, 3 x 5 and 4 x 3, and 94.2% of computed
+frames are the cheapest configuration, 2 animals in 5 cameras. The measured cost
+rises from 11 ms per frame at 2 x 5 to 2.7 s at 3 x 5 and 5.5 s at 4 x 3. The
+4-animal, 6-camera configuration exceeds the 10⁶-hypothesis cap 191-fold and ran zero
+frames; its open marker is an arithmetic lower bound — the (4!)⁵ = 7,962,624 distinct
+groupings that remain after the A!-fold relabelling symmetry is removed, priced at the
+cheapest measured per-hypothesis rate, 249 µs, about 0.55 h per frame — and its bar
+runs up to the as-published arithmetic, (4!)⁶ = 1.9 x 10⁸ hypotheses at the 396 µs
+rate measured at the largest configuration that ran, about 21.0 h per frame. At the
+lower bound, one second of 50 fps video costs at least a day of enumeration. LUC3D's
+measured time is 1.1 to 2.4 ms per frame across all five configurations, 10⁶-fold
+below the 4 x 6 lower bound.
+
+92 sessions: 50 BMimica at 2 x 5 and all 35 two-animal, 4 three-animal and 3
+four-animal SLAP-2M sessions, being every session with both pool detections and
+proofread ground truth. Of 9,678,503 frames considered, 4,591,864 were clean (every
+camera holding exactly A detections) and so eligible for exhaustive enumeration;
+5,086,639 were skipped as ineligible, and every eligible frame was computed — 10,419
+at 3 x 5 and 19,135 at 4 x 3; the per-session caps an earlier pass placed on those
+two configurations are gone.
+
+---
+
+## Fig. 4)
+
+Triangulation accuracy is set by how many views contribute and by whether a badly
+fitting view is rejected, not by the choice of solver: 4.32 to 3.34 px in a camera the
+solve never saw as views go from 2 to 4, and a median 7.2 mm displacement from
+dropping one view that disagrees by 10 px or more.
+
+A) The two solvers the app ships, each heading set in its solver's own hue — the
+same hue that solver keeps in the rest of the figure. Linear DLT, algebraic error
+minimised in closed form, the app default; and non-linear triangulation, geometric
+error in the camera's native pixels with the cameras held fixed, which the app's
+menu calls "Bundle Adjustment". Padlocks mark the fixed cameras; the straight and
+bowed dashed paths are the residual each solver minimises.
+
+B) Error in a camera outside the solve, against the number of cameras used, for both
+LUC3D solvers — the held-out measurement behind Fig 2C's held-out variant (both read
+fig4_by_views.json); this panel adds the refined solver. Every C-choose-k subset;
+median over 50 sessions. DLT 4.32, 3.66 and 3.34 px and refinement 4.42, 3.54 and
+3.15 px at 2, 3 and 4 cameras, over 884,697,424 solves. The multipliers on the
+artwork are each solver's own improvement from 2 to 4 cameras: 1.29× for the DLT
+(4.32 to 3.34) and 1.41× for the refinement (4.42 to 3.15). The refined solver is
+worse than the DLT at 2 views and better at 3 and 4.
+
+C) Reprojection error in the kept views, per session, with all views in the solve
+against the same solve with the worst-fitting view dropped, scored against the kept
+views' own detections. One grey line per session connects its two means, 50 lines
+over 17,013,412 solves, and every one slopes down — dropping the disagreeing view
+lowers the error in the views that are kept in 50 of 50 sessions; the teal pair is
+the across-session mean, 2.06 to 1.71 px. The per-session numbers are a
+re-measurement of the robust arm with session capture, because the original pass
+pooled without recording sessions; the re-run is gated — its pooled strata reproduce
+the original deposit's means to about 2.5 x 10⁻¹³ with identical counts, and the
+panel refuses to draw if that gate fails. The disagreement strata themselves stay in
+the deposit: in the stratum where the worst view sat 10 px or more from the all-view
+solution, the 3D estimate moves a median 7.18 mm when that view is dropped.
+
+D) Median reprojection error per session for four solvers, paired by algorithm class;
+one dot per session joined across the four, rules at the median of the 50 sessions, the
+same 17,013,412 keypoints in every column. Scored in the cameras the solve used, where
+LUC3D's refinement is lowest by construction, since that is the quantity it minimises
+and a backtracking guard vetoes any step that raises it. Scored instead in a camera no
+solve saw, which is the comparison in which nothing is enforced, Anipose is lower in
+both pairs, in 50 of 50 and 49 of 50 sessions (3.11 against 3.34 px linear, 3.11 against
+3.15 px non-linear); those values are in the deposited table and in Fig 4B's estimator.
+
+E) Solve time per keypoint, with undistortion excluded from all four measurements.
+LUC3D is 4.6 times faster on the linear pair (6.3 against 29.0 us) and 5.2 times on the
+non-linear pair (44.0 against 228.8 us). The whisker spans session sizes, since the cost
+per keypoint of Anipose optim depends on how many points one global least-squares
+receives.
+
+Anipose is aniposelib 0.7.2, with ransac and temporal smoothing off.
+
+---
+
+## Fig. 5)
+
+Two mice rear together face to face, and one animal of each pair starts 80% of the
+displays.
+
+A) One display in five views: the 3D reconstruction and the same instant as each
+camera saw it. Every camera sits 58 to 76 degrees above the animals, so the height
+that defines the event exists only after triangulation. Scale bar, 93 mm, one body
+length.
+
+B) Time course around display onset: across-session median of per-session median
+curves, band p25 to p75 across sessions. The two height curves are within-display
+ranks, not individuals. The nose gap falls to 0.12 body lengths at onset.
+
+C) Time the initiator is up before the follower joins, as a fraction of all 539
+displays. Median 0.37 s (p25 to p75, 0.16 to 0.89 s). Hatched bar, overflow: 7.8% of
+displays exceed 2 s.
+
+D) Separation velocity of the two tail bases (left axis; negative is closing) and each
+animal's speed relative to its own baseline (right axis), by role.
+
+E) Speed during the display as a multiple of that animal's own session median. Median
+0.44, with 94% of displays below baseline and a median duration of 0.71 s. Hatched
+bar, overflow.
+
+F) Fraction of each session's displays started by its leader, the animal that started
+more of them, against the number of displays in the session; one dot per session,
+n = 37. Blue line, the pooled figure over all displays, 432 of 539 (80.1%). Grey band,
+the central 95% of leader shares a fair coin gives at that session size. 16 of the 24
+sessions with 5 or more displays clear the band; among those, median leader share 0.83
+(IQR 0.73 to 0.89), Wilcoxon signed-rank against 0.5, P = 9 x 10⁻⁶.
+
+G) For every rear onset by one animal, the probability that the other animal is
+rearing at each lag, divided by that animal's own base rate; 1.0 is chance. Lines,
+across-session medians; band, p25 to p75. Within 2 body lengths the curve reaches 2.9
+at the onset and peaks at 4.1 half a second later; beyond 2 body lengths it is flat at
+1.05; the circular-shift null is flat at 0.99.
+
+n = 539 displays from 37 of 56 sessions (2 mice, 5 cameras, 150 fps); the corpus is 9
+individual mice in 18 pairings. A display is both animals reared, neck above 0.75 of
+that animal's own body length, tail bases within 2 body lengths, held for at least
+0.25 s. Repeating F with the pair as the unit of replication gives 14 pairs with 5 or
+more displays covering 536 displays, the same member leading in 14 of 14 (sign test
+P = 1.2 x 10 to the minus 4) and 429 of 536 displays, 80.0%, started by the leader.
+G uses all 56 sessions and 9,354 rear onsets.
+
+---
+
+## Fig. 6)
+
+Session difficulty acts on whether a keypoint is detected rather than on how well: the
+per-view miss rate rises 10.8-fold across strata (5.3% to 57.7%) while the mean error
+of the detections that do fire rises 1.30-fold (3.65 to 4.74 px).
+
+A) The rig as LUC3D renders it, all 8 cameras with the frame's own reconstructed
+animals, with the boxed cluster of 4 animals magnified at the right.
+
+B) One frame across the 6 proofread cameras, cropped to the app's per-view bounding
+box, instances coloured by identity. Scale bars, 50 mm.
+
+C) Keypoints still missing per view after reprojection recovery, against the
+difficulty rating and the rig size k = 2 to 6; cell values in per cent. A keypoint
+the detector misses in one view counts as recovered when the same animal's keypoint
+is detected in at least 2 other cameras of the rig at hand — it can then be
+triangulated from those views and reprojected into the view that missed it. Every
+cell is an exact closed-form expectation over all C(6, k) camera subsets
+(hypergeometric; Methods, "Reprojection recovery") — no sampling and no per-subset
+re-runs — and the matching that defines "missing" is the same convention as panel
+G's detection quality, at stride 1. Over the corpus, 26.1% of keypoints are missing
+per view; recovery is 0% at k = 2, by construction — one other view cannot
+triangulate — and rises to 45.7% of misses at k = 6, taking the residual from 26.1%
+to 14.2%.
+
+D) The per-view miss rate re-run within each animal count (n = 32, 35, 4 and 3
+sessions for 1 to 4 animals). Error bars, plus or minus 1 s.d. between sessions;
+hollow markers, cells resting on a single session.
+
+E) The percentage of ground-truth instances missed, per camera, over all 74
+sessions: pooled bars with the 74 per-session rates as dots. Top 30.1%, topL 33.3%,
+midL 33.2%, mid 39.7%, backL 38.0% and back 40.3% — the two top-down cameras are the
+best views of a mouse and the two back cameras the worst, and the spread is pure
+viewpoint, because every camera sees the same sessions, animals and frames. Misses
+are the shipped tracker's MOT misses on the shared detection pool, which measure the
+detector (the three trackers' recalls agree to about 0.003). The unit is a whole
+instance unmatched in a frame, not a keypoint, so the level is not comparable to
+panel G's keypoint miss rate. The rig's side and sideL cameras are not in the scored
+pool; all 74 sessions use these six.
+
+F) Corpus composition, attributes down and corpora across. The 130-session,
+12,039,174-frame total describes the corpora as a whole and is not the sample behind
+any panel: C, D, E, G and H are SLAP-2M only, and BMimica carries 84% of that frame
+count without entering them.
+
+G) Raw per-view detection quality against the difficulty rating, in three sub-plots:
+keypoints missing (10.81-fold), error of those present (mean plus or minus s.d.
+between sessions, with the 95th percentile; 1.30-fold), and the fraction beyond the
+app's 20 px tolerance (5.72-fold). n per stratum is printed under the row.
+
+H) Per difficulty stratum: sessions, keypoints, animal counts, bedding split, error
+mean, p95 and p99, and the fraction beyond 20 px.
+
+n for D, G and H: all 74 sessions, every frame, 187,134,382 keypoint comparisons, 6
+cameras, 15 nodes. C rests on the same 74 sessions and the same matching at stride 1,
+42,184,875 keypoint-instances (253,103,420 keypoint-view observations); E is the
+instance-level measurement over the same 74 sessions. A and B are one further
+session.
+
+Note on size: the assembled figure runs 249 mm tall, over the 200 mm ceiling; which
+panel to cut or shrink is pending Eric's decision.
+
+S4) Supplementary; not placed in the composite. The per-view keypoint miss rate
+against difficulty, one line per animal-count stratum — the same cells as panel D, so
+the two variables can be read against each other: within 1 animal the miss rate rises
+5.3 to 16.7% over ratings 1 to 5, within 2 animals 10.9 to 57.8% over ratings 2 to 7,
+and at matched difficulty more animals is worse (rating 4: 11.9, 19.0 and 39.5% for
+1, 2 and 4 animals) — neither variable explains the rise alone. Error bars, plus or
+minus 1 s.d. between sessions; a hollow marker is a cell resting on a single session
+(1 animal at difficulty 6, 66.1%; 3 animals at difficulty 7); a count is joined by a
+line only where it occupies 3 or more difficulty cells. n = 32, 35, 4 and 3 sessions
+for 1 to 4 animals, as in panel D.
+
+---
+
+## Fig. 7)
+
+On identical detections, LUC3D is the only method whose identities survive being
+pooled across cameras: its IDF1 is unchanged from within-view to cross-view scoring
+(retention 1.00) while per-camera trackers, even re-run at the most favourable
+configuration we could give them, keep 0.23 of theirs.
+
+A) Within-view against cross-view IDF1 over the 50 BMimica sessions; mean with 95%
+bootstrap CI over sessions at both ends. The LUC3D line is the EXPERIMENTAL
+fresh-anchor configuration and is labelled so on the artwork — the benchmark harness's
+fresh-anchor operating point (Methods), not the shipped application. It scores 0.861
+within view and 0.861 cross view (retention 1.00) with 413 within-view ID switches;
+the shipped tracker, preserved in the deposit, scores 0.749 to 0.749 with 2,071
+switches, and the experimental arm is ahead of it in 38 of 50 sessions on both
+scorings. The two per-camera baselines are re-run fairly rather than as shipped
+(Methods, "Baseline configuration"): SLEAP is sleap-nn re-run with its track count
+capped at the true animal count (--max_tracks 2, cap verified on all 250
+camera-sessions), scoring 0.642 within view to 0.146 cross view (retention 0.23);
+ByteTrack is run with track retirement disabled (lost_track_buffer = session length)
+and its output then reduced to 2 identities by a tracklet-whole greedy stitch of ours
+that uses no ground truth, 0.676 to 0.157 (retention 0.23) — ByteTrack's own knob
+alone reaches only 0.272 within view. 3D-MuPPET (BMimica only; dotted, hollow
+markers) is flat at 0.011 to 0.011, but that number is a coverage artefact, not an
+identity score: its published pipeline builds its camera-to-global identity map once
+at the initialisation frame while its SORT tracker retires tracks after 10 frames, so
+its assignments cover a median 1.31% of a session (range 0.17 to 7.22%, a contiguous
+prefix from frame 0 in all 50 sessions) and every unlabelled frame scores as a miss —
+the "1.3% coverage" tag on its key line is that median, printed in place of the
+retention ratio the other series carry;
+on the frames it does label it scores within-view 0.21 to 0.67 (4 sessions, first
+20,000 frames), so its flatness must not be read as cross-view consistency. Cross-view
+pooling is camera-scoped — a per-camera tracker's ids stay distinct across cameras,
+the convention every series here uses; unscoped pooling would credit the capped SLEAP
+with a cross-view IDF1 of 0.600 through nothing but the same two slot numbers
+recurring in every camera. The dashed rule at 1/C = 0.20 is where camera-scoped
+pooling puts a per-camera tracker — a property of the scoring convention, not a
+ceiling; chance is set by the animal count and sits near 0.5 with 2 animals.
+
+B) Within-view IDF1 over 74 sessions as a survival curve, one step per session. This
+and all later panels are the shipped tracker on SLAP-2M; LUC3D's mean is 0.752 and
+its median 0.920. At IDF1 of 0.9 or above the counts are 39, 22 and 10 of 74 for
+LUC3D, SLEAP and ByteTrack; of the 444 camera-sessions, LUC3D scores highest outright
+on 269, SLEAP on 79 and ByteTrack on 4, with 92 tied — most ties are single-animal
+camera-sessions where LUC3D and SLEAP score identically.
+
+C) Paired per-session difference in within-view IDF1, LUC3D minus SLEAP, by animal
+count; mean with 95% bootstrap CI, every session drawn behind its cell, n and win
+count under each tick: +0.142 (25 of 32) at 1 animal, +0.075 (30 of 35) at 2, -0.052
+(0 of 4) at 3, -0.080 (0 of 3) at 4. Pooled over all 74 sessions the difference is
++0.091 (55 of 74, sign test P = 3 x 10⁻⁵); pooled over the 42 sessions with 2 or
+more animals — where there is anything to associate across views — it is +0.052
+(30 of 42, P = 0.008). The 3- and 4-animal cells rest on 4 and 3 sessions, and SLEAP
+is ahead in all 7.
+
+D) False positives and ID switches as percentages of camera-frames (11,726,640
+camera-frames): false positives 0.317%, 0.531% and 0.435%, and ID switches 0.0264%,
+0.0308% and 0.105%, for LUC3D, SLEAP and ByteTrack. False negatives are 98.8 to 99.3%
+of every tracker's error budget and are not plotted.
+
+E) Session within-view IDF1 against the shared detector's recall, one point per
+session, with the diagonal on which the two are equal. LUC3D r = 0.990, SLEAP
+r = 0.945, ByteTrack r = 0.775.
+
+F) Paired fragmentations per camera-session, LUC3D minus SLEAP; mean with 95%
+bootstrap CI over 74 sessions, with the median beside it. +6.2 (95% CI +3.0 to
++10.4), median +1.3; SLEAP fragments fewer in 72 of 74 sessions.
+
+A uses 50 BMimica sessions (5 cameras, 2 mice per session, 9 individual mice in 18
+pairings) and is the only panel carrying the experimental arm; B to F use all 74
+SLAP-2M sessions (6 proofread cameras, 1 to 4 animals, 126 animal-sessions) and the
+shipped tracker. The corpus split is printed on panel A itself — "50 BMimica
+sessions / b–f: SLAP-2M" — so the artwork and this paragraph carry the same pointer.
+
+S3) Supplementary; not placed in the composite. Within-view IDF1 of the three
+trackers by SLAP-2M difficulty rating — the difficulty companion to panel C's
+animal-count split. Marks and lines, the median over each stratum's sessions;
+whiskers, p25 to p75; session-level IDF1 is the mean over that session's
+camera-sessions; n per stratum is printed under the ticks (12, 13, 9, 13, 10, 4 and
+13 sessions at ratings 1 to 7). By the drawn medians the order LUC3D, SLEAP,
+ByteTrack holds in all seven strata, falling from 1.00, 1.00 and 0.95 at rating 1 to
+0.36, 0.31 and 0.18 at rating 7. Difficulty 1 is single-animal only (Fig 6F), so its
+within-view IDF1 is detection coverage, not identity. The panel refuses to draw
+unless its recomputed corpus means reproduce Fig 7's deposited 0.7520, 0.6614 and
+0.5274 to 1e-9.
+
+S4) Supplementary; not placed in the composite. ID accuracy of the cross-view
+tracker on the 50 BMimica sessions — IDA = idtp / num_matches: of the detections
+matched to a real animal, the share carrying the correct identity, with detector
+misses and false-positive detections both excluded from the denominator. False
+positives are 0.11% of the shipped arm's 78,728,126 matches and 0.10% of the fresh
+anchor's 78,734,134, so IDA is within a whisker of IDP on this corpus. One dot per
+session; the heavy rule is the pooled rate over all matched detections, not a mean
+of the dots. The shipped tracker (filled) pools to 80.56%, session median 84.0%,
+worst session 53.3%; the fresh-anchor configuration (hollow markers, EXPERIMENTAL)
+pools to 92.46%, median 100.0%, worst 56.6%. The distribution is bimodal: on the
+fresh anchor the median session carries no mislabelled detection at all, while a
+tail of hard sessions remains — a split a mean alone would hide. Both source passes
+are gated: their IDF1 reproduces fig8_methods_50.json for the same cells.

@@ -71,6 +71,15 @@ PRODUCERS = {
     "fig4.json": "figs/fig4_measure.mjs (+ figs/fig4_anipose.py, figs/fig4_by_views.mjs)",
     "fig6.json": "figs/fig6_measure.py (+ figs/fig6_pose.py, figs/fig6_app.mjs)",
     "fig5_views.json": "figs/fig5_views.py",
+    # Not a figs/out JSON: Fig 1a is a Blender render, and the "measurement pass"
+    # that produced it is the scene script that placed the session's calibration,
+    # cage corners and tracked poses (see panels/fig1_00_render.py).
+    "blender-images/renders/cage_two_mice.png": "blender-images/cage_scene.py",
+    # The BMimica-10M half of Fig 1a takes TWO scripts: the deposit script measures the
+    # arena footprint, picks the frame and carries the calibration into the 3D frame;
+    # the scene script only draws what it deposited.
+    "blender-images/renders/bmimica_arena.png":
+        "figs/fig1_bmimica_scene.py (+ blender-images/bmimica_scene.py)",
 }
 
 
@@ -122,15 +131,29 @@ def write_plain() -> None:
 
 
 def panel_script(letter: str, slug: str, fig_no: int) -> Path | None:
-    """The script whose `save()` claims this (letter, slug) -- assemble's own rule."""
+    """The script whose `save()` claims this (letter, slug).
+
+    Assemble's own rule is the literal substring `"letter", "slug"`, which misses any
+    save() whose slug is an expression -- `save(fig, 3, "c", "quality_shipped" if
+    as_shipped else "quality")` and Fig 7's `save(fig, 7, "b", slug("survival",
+    variant, corrected))` both produced false MISSING rows here. The fallback regex
+    accepts any save() call carrying this figure number and letter whose argument
+    list contains the slug as a string literal.
+    """
+    lit = f'"{letter}", "{slug}"'
+    pat = re.compile(
+        rf'save\(\s*[^,()]+,\s*{fig_no}\s*,\s*"{letter}"\s*,[^)]*?"{slug}"')
     for src in sorted(PANELS.glob(f"fig{fig_no}_*.py")):
-        if f'"{letter}", "{slug}"' in src.read_text():
+        t = src.read_text()
+        if lit in t or pat.search(t):
             return src
     return None
 
 
 def facts(src: Path) -> dict:
     t = src.read_text()
+    m = re.match(r"fig(\d+)_", src.name)
+    fig_no = int(m.group(1)) if m else 0
     doc = re.search(r'"""(.*?)"""', t, re.S)
     doc = doc.group(1).strip() if doc else ""
     lines = [ln.strip() for ln in doc.splitlines() if ln.strip()]
@@ -145,11 +168,31 @@ def facts(src: Path) -> dict:
     inputs = sorted(set(re.findall(r"figs/out/([A-Za-z0-9_.\-]+\.json)", doc)
                         + re.findall(r'load\(\s*"([^"]+\.json)"', t)
                         + re.findall(r'OUT\s*/\s*"([^"]+\.json)"', t)))
-    # `deposit(df, N, "name.csv")` where df is often a call with its own commas, so
-    # the first argument has to be matched as balanced-ish rather than [^,]+.
-    csvs = sorted(set(m[1] for m in re.findall(
-        r'deposit\((?:[^()"]|\([^()]*\)|"[^"]*")*?,\s*(\d+),\s*"([^"]+\.csv)"', t)))
-    return {"purpose": purpose, "inputs": inputs, "csvs": csvs}
+    # Image panels that read a rendered/exported image directly rather than a
+    # figs/out JSON (Fig 1a's Blender render). Named in the docstring's Source
+    # line; kept separate from `inputs` so render() does not prefix them `out/`.
+    images = sorted(set(re.findall(
+        r"blender-images/renders/[A-Za-z0-9_.\-]+\.png", doc)))
+    # `deposit(df, N, "name.csv")` where df is often a call with its own commas and
+    # the name is often a conditional expression, so: take every string literal
+    # ending .csv inside each deposit() call (both branches of a conditional), then
+    # keep only the names whose deposited file actually exists under data/figN/.
+    # The existence filter is what drops retired variants -- fig2c's `--cdf` path
+    # still names `fig2c_reprojection_accuracy.csv`, a file no longer deposited,
+    # and listing it here pointed the provenance at a dead table.
+    # Fig 7's corrected panels build the name as f"{slug('fig7b_survival', ...)}.csv"
+    # -- a single-quoted stem inside the call -- so stems are candidates too, with
+    # ".csv" appended; the existence filter keeps only the ones actually deposited.
+    dep_re = re.compile(r'deposit\(((?:[^()\'"]|\([^()]*\)|"[^"]*"|\'[^\']*\')*)\)',
+                        re.S)
+    names = set()
+    for args in dep_re.findall(t):
+        names.update(re.findall(r'"([^"]+\.csv)"', args))
+        names.update(f"{stem}.csv"
+                     for stem in re.findall(r"'([A-Za-z0-9_\-]+)'", args))
+    csvs = sorted({f"data/fig{fig_no}/{name}" for name in names
+                   if (FIGS / "data" / f"fig{fig_no}" / name).exists()})
+    return {"purpose": purpose, "inputs": inputs, "images": images, "csvs": csvs}
 
 
 def render() -> str:
@@ -166,26 +209,46 @@ def render() -> str:
            "last two for every figure; the measurement passes are run by hand "
            "because they need the corpora and take minutes to hours.",
            ""]
+    # Fig 11 owns no panel scripts: fig11_sync.py copies fig7/fig10 panel PDFs at a
+    # reduced vector scale, and its MAPPING is the letter table. Resolve each fig11
+    # letter through it so the row points at the real source panel instead of
+    # reporting 13 false MISSING rows.
+    import fig11_sync as F11
+    sync_map = {ltr: (sf, sl, slug) for ltr, sf, sl, slug, _ in F11.MAPPING}
     placed = set()
     for fig_no in sorted(A.LAYOUTS):
         out.append(f"## Figure {fig_no}")
         out.append("")
+        if fig_no == 11:
+            out.append("Combined view of Figs 7 + 10: every panel is a source panel "
+                       "PDF copied at reduced vector scale by `figs/fig11_sync.py` "
+                       "(no panel scripts of its own; re-run the sync after any "
+                       "fig7/fig10 panel regenerates).")
+            out.append("")
         out.append("| Panel | Title | Drawn by | Reads | Measured by | Deposits |")
         out.append("|---|---|---|---|---|---|")
         for row in A.LAYOUTS[fig_no]:
             for letter, slug in row:
-                src = panel_script(letter, slug, fig_no)
+                src_fig, src_letter = fig_no, letter
+                via = ""
+                if fig_no == 11 and letter in sync_map:
+                    src_fig, src_letter, _ = sync_map[letter]
+                    via = (f" (fig{src_fig}{src_letter}, via "
+                           f"`figs/fig11_sync.py`)")
+                src = panel_script(src_letter, slug, src_fig)
                 if src is None:
                     out.append(f"| **{letter}** | — | **MISSING** | | | |")
                     continue
                 placed.add(src.name)
                 f = facts(src)
                 title = A.TITLES.get((fig_no, letter), "")
-                producers = sorted({PRODUCERS.get(i, "—") for i in f["inputs"]})
-                ins = ", ".join(f"`out/{i}`" for i in f["inputs"]) or "— (drawn)"
+                producers = sorted({PRODUCERS.get(i, "—")
+                                    for i in f["inputs"] + f["images"]})
+                ins = ", ".join([f"`out/{i}`" for i in f["inputs"]]
+                                + [f"`{i}`" for i in f["images"]]) or "— (drawn)"
                 prod = ", ".join(f"`{p}`" for p in producers if p != "—") or "—"
-                dep = ", ".join(f"`data/fig{fig_no}/{c}`" for c in f["csvs"]) or "—"
-                out.append(f"| **{letter}** | {title} | `panels/{src.name}` | "
+                dep = ", ".join(f"`{c}`" for c in f["csvs"]) or "—"
+                out.append(f"| **{letter}** | {title} | `panels/{src.name}`{via} | "
                            f"{ins} | {prod} | {dep} |")
         out.append("")
     unplaced = [p for p in sorted(PANELS.glob("fig*.py")) if p.name not in placed]
@@ -205,6 +268,9 @@ def render() -> str:
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--check", action="store_true")
+    ap.add_argument("--sources-only", action="store_true",
+                    help="write PANEL-SOURCES.md only; do not regenerate the "
+                         ".txt twins of the hand-written documents")
     args = ap.parse_args()
     text = render()
     if args.check:
@@ -216,7 +282,8 @@ def main():
         return
     OUT.write_text(text)
     print(f"wrote {OUT.relative_to(FIGS.parent)}")
-    write_plain()
+    if not args.sources_only:
+        write_plain()
 
 
 if __name__ == "__main__":

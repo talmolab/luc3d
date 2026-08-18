@@ -19,40 +19,103 @@ the evidence, the skeleton is the answer.
 
 WHAT IS REAL AND WHAT IS ARRANGED, stated because a 3D figure invites the assumption
 that everything in it is metric:
-  * REAL -- the 3D pose (P-frame, z is height above the cage floor in mm); each
-    camera's DIRECTION from the scene; the projected 2D on each plane, which is
+  * REAL -- the 3D pose (P-frame, z is height above the cage floor); each camera's
+    DIRECTION from the scene; the projected 2D on each plane, which is
     `cv2.projectPoints` of the aligned pose through that camera's real intrinsics,
     distortion and extrinsics.
   * ARRANGED -- the five projections are each drawn to fit their own little frame, so
     their SCALES are not comparable to each other; the elevation above each says where
-    it was taken from. Only the 3D panel is metric.
+    it was taken from. The 3D render's proportions are metric (the pose is placed in
+    the volume at true scale) but it carries no axes, so the volume's dimensions are
+    stated on the panel instead.
 
-Source: figs/out/fig5_views.json (figs/fig5_views.py, which needs the bench env).
+THE 3D PANEL IS A BLENDER RENDER (Eric 2026-08-16: prettier skeleton renders): the
+matplotlib stick-figure axes were replaced by a Cycles render in the established
+house aesthetic (blender-images/cage_scene.py -- matte PBR ball-and-stick skeleton,
+translucent body membranes, soft area lights, orthographic camera), the pose inside
+a plain translucent box because this dataset has no cage geometry. Regenerate with:
+
+    cd figs/blender-images && ./bpyenv/bin/python fig5a_scene.py \
+        --azim 255 --elev 22 --ortho 0.335 --box 230 230 140 \
+        --samples 200 --res 1900 1900 --out renders/fig5a_upright.png
+
+(square, not landscape: the render sits in a portrait grid cell, and a 4:3 image
+letterboxed into it left a dead zone below).
+
+The five 2D projections were restyled to match (the old stick+arrow lines read as a
+different species next to the render): each animal is now the same surface-filled
+skeleton in 2D -- body membranes as low-alpha fills, bones as round-capped lines,
+joints as small dots -- in the same Set2 teal/pink.
+
+Source: figs/out/fig5_views.json (figs/fig5_views.py, which needs the bench env),
+plus blender-images/renders/fig5a_upright.png (command above).
 
     python3 figs/panels/fig5_05_upright_views.py
 """
 import sys
 from pathlib import Path
 
+import matplotlib.image as mpimg
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.data_loader import load  # noqa: E402
-from src.style import MUTED, ROW_H, SPAN, deposit, mm, save, use  # noqa: E402
+from src.style import FIGS, MUTED, ROW_H, SPAN, deposit, mm, save, use  # noqa: E402
 
-NOSE, TTI = 0, 3
 CA, CB = "#66C2A5", "#E78AC3"        # the two animals, as in every other 5c-e panel
+RENDER = FIGS / "blender-images" / "renders" / "fig5a_upright.png"
+BOX_MM = (230, 230, 140)             # the render's volume; keep in sync with the
+                                     # fig5a_scene.py command in the docstring
+
+# The surface-filled mouse, mirrored from blender-images/cage_scene.py
+# (MOUSE_SURFACES / MOUSE_EDGES, themselves verbatim from viz_08 cell 16) so the
+# five 2D projections draw the same animal the Blender render does. By NAME, not
+# index: fig5_views.json's node order differs from the SLAP skeleton toml order.
+MOUSE_SURFACES = [
+    ["Nose", "Head", "Ear_R"], ["Nose", "Head", "Ear_L"],
+    ["Head", "Neck", "Shoulder_left"], ["Head", "Neck", "Shoulder_right"],
+    ["Neck", "Trunk", "Haunch_left", "Shoulder_left"],
+    ["Neck", "Trunk", "Haunch_right", "Shoulder_right"],
+    ["Trunk", "TTI", "Haunch_left"], ["Trunk", "TTI", "Haunch_right"],
+    ["Head", "Shoulder_left", "Shoulder_right"],
+    ["Haunch_left", "Haunch_right", "Shoulder_right", "Shoulder_left"],
+    ["Haunch_left", "Haunch_right", "TTI"],
+]
+MOUSE_EDGES = [
+    ["TailTip", "Tail_2"], ["Tail_2", "Tail_1"], ["Tail_1", "Tail_0"], ["Tail_0", "TTI"],
+    ["TTI", "Trunk"], ["Trunk", "Neck"], ["Neck", "Head"], ["Head", "Nose"],
+    ["TTI", "Haunch_left"], ["TTI", "Haunch_right"],
+    ["Trunk", "Haunch_right"], ["Trunk", "Haunch_left"],
+    ["Neck", "Shoulder_left"], ["Neck", "Shoulder_right"],
+    ["Ear_L", "Head"], ["Ear_R", "Head"], ["Ear_L", "Nose"], ["Ear_R", "Nose"],
+    ["Shoulder_left", "Head"], ["Shoulder_right", "Head"],
+    ["Shoulder_left", "Haunch_left"], ["Shoulder_right", "Haunch_right"],
+    ["Shoulder_left", "Shoulder_right"], ["Haunch_left", "Haunch_right"],
+]
+
+
+def draw_mouse2d(ax, pts, idx, col):
+    """One animal as the render draws it, flattened: membrane fills under
+    round-capped bone lines under small joint dots, nose emphasised."""
+    for snodes in MOUSE_SURFACES:
+        poly = pts[[idx[n] for n in snodes]]
+        ax.fill(poly[:, 0], poly[:, 1], color=col, alpha=0.28, lw=0, zorder=2)
+    for a, b in MOUSE_EDGES:
+        ax.plot(pts[[idx[a], idx[b]], 0], pts[[idx[a], idx[b]], 1],
+                color=col, lw=0.8, solid_capstyle="round", zorder=3)
+    ax.plot(pts[:, 0], pts[:, 1], "o", color=col, ms=1.0, mew=0, zorder=4)
+    ax.plot(pts[idx["Nose"], 0], pts[idx["Nose"], 1], "o", color=col, ms=2.4,
+            mec="white", mew=0.4, zorder=5)
 
 
 def main():
     use()
     d = load("fig5_views.json")
     P = np.asarray(d["pose_mm"], float)              # (2, 15, 3) mm, z = height
-    edges = d["edges"]
-    A = P.shape[0]
-    ctr = np.r_[P[:, TTI, :2].mean(axis=0), P[:, :, 2].mean()]
+    idx = {n: i for i, n in enumerate(d["nodes"])}
+    ctr = np.r_[P[:, idx["TTI"], :2].mean(axis=0), P[:, :, 2].mean()]
 
     deposit(pd.DataFrame([
         {"camera": c["name"], "tti_gap_px": c["tti_gap_px"],
@@ -72,45 +135,30 @@ def main():
     w, h = SPAN["half"], ROW_H["tall"]
     fig = plt.figure(figsize=(mm(w), mm(h)), layout="constrained")
     gs = fig.add_gridspec(1, 2, width_ratios=[1.15, 1.0], wspace=0.01)
-    ax = fig.add_subplot(gs[0, 0], projection="3d")
     # 3 ROWS x 2 COLS, not 2 x 3: the right column is tall and narrow, so three tall
     # rows fill it and give each projection a usable frame. At 2 x 3 the five views
     # were postage stamps with a hole in the middle of the panel.
     gsr = gs[0, 1].subgridspec(3, 2, hspace=0.30, wspace=0.08)
 
-    # ---- the reconstruction ----------------------------------------------------
-    for a_i, col in ((0, CA), (1, CB)):
-        for u, vtx in edges:
-            ax.plot(*[[P[a_i, u, kk], P[a_i, vtx, kk]] for kk in range(3)],
-                    color=col, lw=1.5, solid_capstyle="round", zorder=6)
-        ax.scatter(P[a_i, :, 0], P[a_i, :, 1], P[a_i, :, 2], color=col, s=4,
-                   depthshade=False, zorder=7)
-        ax.scatter([P[a_i, NOSE, 0]], [P[a_i, NOSE, 1]], [P[a_i, NOSE, 2]],
-                   color=col, s=26, edgecolor="white", linewidth=0.7,
-                   depthshade=False, zorder=8)
-    xy = P[:, :, :2].reshape(-1, 2)
-    r = float(np.nanmax(np.abs(xy - ctr[:2]))) * 1.15
-    zmax = float(np.nanmax(P[:, :, 2])) * 1.15
-    ax.set_xlim(ctr[0] - r, ctr[0] + r)
-    ax.set_ylim(ctr[1] - r, ctr[1] + r)
-    ax.set_zlim(0, zmax)
-    ax.set_box_aspect((1, 1, 1.0))
-    ax.view_init(elev=14, azim=-62)
-    for axis in (ax.xaxis, ax.yaxis, ax.zaxis):
-        axis.pane.set_facecolor("white")
-        axis.pane.set_edgecolor("#DDDDDD")
-        axis.pane.set_alpha(1.0)
-        axis._axinfo["grid"].update(color="#EEEEEE", linewidth=0.4)
-    ax.set_xticks([]); ax.set_yticks([])
-    ax.set_zticks([z for z in (0, 50, 100, 150) if z <= zmax])
-    ax.tick_params(axis="z", labelsize=5.5, pad=0)
-    L = d["body_length_mm"]
-    ax.plot([ctr[0] - r + 0.05 * L, ctr[0] - r + 0.05 * L + L],
-            [ctr[1] - 0.92 * r, ctr[1] - 0.92 * r], [0, 0], color=MUTED, lw=1.3)
-    ax.text2D(0.02, 0.99, "3D reconstruction", transform=ax.transAxes, fontsize=6.5,
-              color="#4C4D4C", va="top", ha="left", fontweight="bold")
-    ax.text2D(0.02, 0.93, f"height in mm · bar = {L:.0f} mm",
-              transform=ax.transAxes, fontsize=5.6, color=MUTED, va="top", ha="left")
+    # ---- the reconstruction (Blender render; regeneration command in docstring) --
+    # Placed by hand, OUTSIDE constrained layout: the five aspect-locked projection
+    # axes on the right make the solver reapportion the outer gridspec's columns,
+    # and the render (itself aspect-locked) then shrank to ~34 mm inside a cell it
+    # no longer filled. A fixed axes with in_layout=False cannot be squeezed; the
+    # panel's size is declared on the grid, so the fractions are deterministic.
+    fig.text(0.012, 0.985, "3D reconstruction", fontsize=6.5,
+             color="#4C4D4C", va="top", ha="left", fontweight="bold")
+    fig.text(0.012, 0.915, f"volume {BOX_MM[0]} × {BOX_MM[1]} × {BOX_MM[2]} mm\n"
+                           "only the 3D panel is metric",
+             fontsize=5.0, color=MUTED, va="top", ha="left", linespacing=1.3)
+    ax = fig.add_axes([0.005, 0.045, 0.505, 0.79], in_layout=False)
+    img = mpimg.imread(str(RENDER))
+    H, W = img.shape[:2]
+    # trim the render's grey-world margins; the scene was framed with air around it
+    img = img[int(0.02 * H):int(0.96 * H), int(0.03 * W):int(0.97 * W)]
+    ax.imshow(img)
+    ax.set_anchor("N")                # hug the title strip, not the cell centre
+    ax.axis("off")
 
     # ---- the five real camera projections --------------------------------------
     cams = sorted(d["cameras"], key=lambda c: -_elev(c, ctr))
@@ -118,14 +166,12 @@ def main():
         a2 = fig.add_subplot(gsr[i // 2, i % 2])
         proj = np.asarray(cam["proj_px"], float)
         for a_i, col in ((0, CA), (1, CB)):
-            for u, vtx in edges:
-                a2.plot(proj[a_i, [u, vtx], 0], proj[a_i, [u, vtx], 1],
-                        color=col, lw=0.7)
-            a2.plot(proj[a_i, NOSE, 0], proj[a_i, NOSE, 1], "o", color=col, ms=1.8)
+            draw_mouse2d(a2, proj[a_i], idx, col)
         # IMAGE CONVENTION: y DOWN. Without inverting, every projection is drawn
         # upside down and the reared animals appear to hang from the ceiling.
         a2.invert_yaxis()
         a2.set_aspect("equal")
+        a2.margins(0.08)
         a2.set_xticks([]); a2.set_yticks([])
         for s in a2.spines.values():
             s.set_color("#D8D8D8")

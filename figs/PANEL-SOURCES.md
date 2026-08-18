@@ -8,10 +8,11 @@ Build order for any figure is: run the measurement pass (column *measured by*) �
 
 | Panel | Title | Drawn by | Reads | Measured by | Deposits |
 |---|---|---|---|---|---|
-| **a** | Pipeline | `panels/fig1_01_pipeline.py` | — (drawn) | — | — |
-| **b** | Cross-view re-identification | `panels/fig1_02_tracking.py` | `out/fig1.json` | `figs/fig1_gui.mjs, figs/fig1_rig.mjs, figs/fig1_tracking.mjs` | — |
-| **c** | Triangulated 3D | `panels/fig1_03_reconstruction.py` | `out/fig1.json` | `figs/fig1_gui.mjs, figs/fig1_rig.mjs, figs/fig1_tracking.mjs` | — |
-| **d** | Capability comparison | `panels/fig1_04_tool_table.py` | — (drawn) | — | `data/fig1/fig1d_tool_table.csv` |
+| **a** | The rig, from its own data | `panels/fig1_00_render.py` | `blender-images/renders/bmimica_arena.png`, `blender-images/renders/cage_two_mice.png` | `blender-images/cage_scene.py`, `figs/fig1_bmimica_scene.py (+ blender-images/bmimica_scene.py)` | — |
+| **b** | Pipeline | `panels/fig1_01_pipeline.py` | — (drawn) | — | — |
+| **c** | Cross-view re-identification | `panels/fig1_02_tracking.py` | `out/fig1.json` | `figs/fig1_gui.mjs, figs/fig1_rig.mjs, figs/fig1_tracking.mjs` | — |
+| **d** | Triangulated 3D | `panels/fig1_03_reconstruction.py` | `out/fig1.json` | `figs/fig1_gui.mjs, figs/fig1_rig.mjs, figs/fig1_tracking.mjs` | — |
+| **e** | Capability comparison | `panels/fig1_04_tool_table.py` | — (drawn) | — | `data/fig1/fig1e_tool_table.csv` |
 
 ## Figure 2
 
@@ -19,7 +20,7 @@ Build order for any figure is: run the measurement pass (column *measured by*) �
 |---|---|---|---|---|---|
 | **a** | Protocol | `panels/fig2_01_protocol.py` | `out/fig2-protocol.json` | `figs/fig2_protocol.mjs` | — |
 | **b** | Labels free by reprojection | `panels/fig2_02_placements_vs_rig.py` | `out/fig2.json` | `figs/fig2_protocol.mjs` | `data/fig2/fig2b_placements_vs_rig.csv` |
-| **c** | Error vs cameras in the solve | `panels/fig2_03_reprojection_accuracy.py` | `out/fig2.json`, `out/fig4_by_views.json` | `figs/fig2_protocol.mjs`, `figs/fig4_by_views.mjs` | `data/fig2/fig2c_error_by_cameras.csv`, `data/fig2/fig2c_reprojection_accuracy.csv` |
+| **c** | Error vs cameras in the solve | `panels/fig2_03_reprojection_accuracy.py` | `out/fig2.json`, `out/fig4_by_views.json` | `figs/fig2_protocol.mjs`, `figs/fig4_by_views.mjs` | `data/fig2/fig2c_error_by_cameras.csv`, `data/fig2/fig2c_heldout_by_cameras.csv` |
 | **d** | Anchor-pair geometry | `panels/fig2_04_baseline_angle.py` | `out/fig2.json` | `figs/fig2_protocol.mjs` | `data/fig2/fig2d_baseline_angle.csv` |
 
 ## Figure 3
@@ -28,8 +29,8 @@ Build order for any figure is: run the measurement pass (column *measured by*) �
 |---|---|---|---|---|---|
 | **a** | Grouping strategies | `panels/fig3_01_association.py` | — (drawn) | — | — |
 | **b** | Hypotheses per frame | `panels/fig3_03_cost_model.py` | `out/fig3_headtohead.json`, `out/fig3_runtime.json` | `figs/fig3_headtohead.py`, `figs/fig3_scale_runtime.py` | `data/fig3/fig3b_cost_model.csv` |
-| **c** | — | **MISSING** | | | |
-| **d** | 3D-term ablation | `panels/fig3_05_sweep.py` | `out/fig3_exhaustive_bmimica.json`, `out/fig3_sweep.json`, `out/fig3_sweep50.json` | `figs/fig3_sweep.py` | `data/fig3/fig3d_sweep.csv`, `data/fig3/fig3d_sweep_legacy8.csv` |
+| **c** | Grouping accuracy, head to head | `panels/fig3_04_quality.py` | `out/fig3_hh_exhaustive_probe.json`, `out/fig3_hh_gate.json`, `out/fig3_quality.json` | `figs/fig3_quality.py` | `data/fig3/fig3c_quality.csv` |
+| **d** | 3D-term ablation | `panels/fig3_05_sweep.py` | `out/fig3_exhaustive_bmimica.json`, `out/fig3_sweep.json`, `out/fig3_sweep50.json` | `figs/fig3_sweep.py` | `data/fig3/fig3d_sweep.csv` |
 | **e** | Time per frame | `panels/fig3_06_head_to_head.py` | `out/fig3_headtohead.json`, `out/fig3_runtime.json` | `figs/fig3_headtohead.py`, `figs/fig3_scale_runtime.py` | `data/fig3/fig3e_head_to_head.csv` |
 
 ## Figure 4
@@ -46,7 +47,7 @@ Build order for any figure is: run the measurement pass (column *measured by*) �
 
 | Panel | Title | Drawn by | Reads | Measured by | Deposits |
 |---|---|---|---|---|---|
-| **a** | One display, five views | `panels/fig5_05_upright_views.py` | `out/fig5_views.json` | `figs/fig5_views.py` | `data/fig5/fig5a_camera_gaps.csv` |
+| **a** | One display, five views | `panels/fig5_05_upright_views.py` | `out/fig5_views.json`, `blender-images/renders/fig5a_upright.png` | `figs/fig5_views.py` | `data/fig5/fig5a_camera_gaps.csv` |
 | **b** | Both rise, noses converge | `panels/fig5_06_upright_dynamics.py` | `out/fig5_upright.json` | `figs/fig5_upright.py` | `data/fig5/fig5d_upright_dynamics.csv` |
 | **c** | One animal is up first | `panels/fig5_08_upright_initiator.py` | `out/fig5_upright.json` | `figs/fig5_upright.py` | `data/fig5/fig5c_initiator_lag.csv` |
 | **d** | Close, hold, withdraw | `panels/fig5_09_upright_velocity.py` | `out/fig5_upright.json` | `figs/fig5_upright.py` | `data/fig5/fig5d_upright_velocity.csv` |
@@ -62,8 +63,8 @@ Build order for any figure is: run the measurement pass (column *measured by*) �
 | **b** | One frame, six cameras | `panels/fig6_05_cameras.py` | `out/fig6-app.json` | `figs/fig6_app.mjs` | — |
 | **c** | Missing keypoints vs difficulty and cameras | `panels/fig6_12_recovery_surface.py` | `out/fig6_recovery.json` | — | `data/fig6/fig6c_recovery_surface.csv` |
 | **d** | Animal-count control | `panels/fig6_07_animal_count.py` | `out/fig6_detections.json` | `figs/fig6_detections.py` | `data/fig6/fig6d_animal_count.csv` |
-| **e** | Per-camera detection quality | `panels/fig6_11_percam_quality.py` | — (drawn) | — | `data/fig6/fig6e_percam_quality.csv` |
-| **f** | Corpora | `panels/fig6_04_corpus.py` | `out/fig6.json` | `figs/fig6_measure.py (+ figs/fig6_pose.py, figs/fig6_app.mjs)` | `data/fig6/fig6f_corpora.csv` |
+| **e** | Cross-view IDF1 by difficulty | `panels/fig6_11_idf1_by_difficulty.py` | `out/fig6_detections.json`, `out/fig9_slap2m.json` | `figs/fig6_detections.py` | `data/fig6/fig6e_idf1_by_difficulty.csv` |
+| **f** | Corpora | `panels/fig6_04_corpus.py` | `out/fig6.json` | `figs/fig6_measure.py (+ figs/fig6_pose.py, figs/fig6_app.mjs)` | — |
 | **g** | Detection quality | `panels/fig6_06_detection_quality.py` | `out/fig6_detections.json` | `figs/fig6_detections.py` | `data/fig6/fig6g_detection_quality.csv` |
 | **h** | Difficulty strata | `panels/fig6_08_difficulty_strata.py` | `out/fig6_detections.json` | `figs/fig6_detections.py` | `data/fig6/fig6h_difficulty_strata.csv` |
 
@@ -71,12 +72,12 @@ Build order for any figure is: run the measurement pass (column *measured by*) �
 
 | Panel | Title | Drawn by | Reads | Measured by | Deposits |
 |---|---|---|---|---|---|
-| **a** | Within- vs cross-view IDF1 (+ experimental arm) | `panels/fig7_05_within_vs_cross.py` | `out/fig3_trackers.json`, `out/fig7_sleap_scoped.json`, `out/fig7_variant_best.json` | `figs/fig3_trackers.py` | `data/fig7/fig7a_within_vs_cross_variant.csv` |
-| **b** | — | **MISSING** | | | |
-| **c** | — | **MISSING** | | | |
-| **d** | — | **MISSING** | | | |
-| **e** | — | **MISSING** | | | |
-| **f** | — | **MISSING** | | | |
+| **a** | Within- vs cross-view IDF1 | `panels/fig7_05_within_vs_cross.py` | `out/fig3_trackers.json`, `out/fig7_sleap_scoped.json`, `out/fig7_variant_best.json` | `figs/fig3_trackers.py` | `data/fig7/fig7a_within_vs_cross.csv`, `data/fig7/fig7a_within_vs_cross_variant.csv` |
+| **b** | Within-view IDF1 per session | `panels/fig7_01_survival.py` | `out/fig3_trackers.json`, `out/fig7_variant_best.json` | `figs/fig3_trackers.py` | `data/fig7/fig7b_survival.csv` |
+| **c** | Per-session paired difference | `panels/fig7_02_by_animals.py` | `out/fig3_trackers.json`, `out/fig7_variant_best.json` | `figs/fig3_trackers.py` | `data/fig7/fig7c_by_animals.csv` |
+| **d** | Error composition | `panels/fig7_03_error_decomposition.py` | `out/fig3_trackers.json`, `out/fig7_variant_best.json` | `figs/fig3_trackers.py` | `data/fig7/fig7d_error_decomposition.csv` |
+| **e** | IDF1 vs detector recall | `panels/fig7_07_recall.py` | `out/fig3_trackers.json`, `out/fig7_variant_best.json` | `figs/fig3_trackers.py` | `data/fig7/fig7e_recall.csv`, `data/fig7/fig7e_recall_variant.csv` |
+| **f** | Fragmentation | `panels/fig7_08_fragmentations.py` | `out/fig3_trackers.json`, `out/fig7_variant_best.json` | `figs/fig3_trackers.py` | `data/fig7/fig7f_fragmentations.csv` |
 
 ## Figure 8
 
@@ -92,16 +93,48 @@ Build order for any figure is: run the measurement pass (column *measured by*) �
 | **b** | Switch and misgrouped-detection rates | `panels/fig9_02_rates.py` | `out/fig9_slap2m.json`, `out/fig9_slap2m_predictions.json` | — | `data/fig9/fig9b_rates.csv` |
 | **c** | By difficulty and animal count | `panels/fig9_03_strata.py` | `out/fig9_slap2m.json`, `out/fig9_slap2m_predictions.json` | — | `data/fig9/fig9c_strata.csv` |
 
+## Figure 10
+
+| Panel | Title | Drawn by | Reads | Measured by | Deposits |
+|---|---|---|---|---|---|
+| **a** |  | `panels/fig10_01_views.py` | — (drawn) | — | — |
+| **b** |  | `panels/fig10_02_residuals.py` | — (drawn) | — | — |
+| **c** |  | `panels/fig10_03_noise.py` | — (drawn) | — | — |
+| **d** |  | `panels/fig10_04_dropout.py` | — (drawn) | — | — |
+| **e** |  | `panels/fig10_05_inputs.py` | — (drawn) | — | — |
+| **f** |  | `panels/fig10_08_cameras.py` | — (drawn) | — | — |
+| **g** |  | `panels/fig10_07_switches.py` | — (drawn) | — | — |
+
+## Figure 11
+
+Combined view of Figs 7 + 10: every panel is a source panel PDF copied at reduced vector scale by `figs/fig11_sync.py` (no panel scripts of its own; re-run the sync after any fig7/fig10 panel regenerates).
+
+| Panel | Title | Drawn by | Reads | Measured by | Deposits |
+|---|---|---|---|---|---|
+| **a** | Within- vs cross-view IDF1 | `panels/fig7_05_within_vs_cross.py` (fig7a, via `figs/fig11_sync.py`) | `out/fig3_trackers.json`, `out/fig7_sleap_scoped.json`, `out/fig7_variant_best.json` | `figs/fig3_trackers.py` | `data/fig7/fig7a_within_vs_cross.csv`, `data/fig7/fig7a_within_vs_cross_variant.csv` |
+| **b** | Within-view IDF1 per session | `panels/fig7_01_survival.py` (fig7b, via `figs/fig11_sync.py`) | `out/fig3_trackers.json`, `out/fig7_variant_best.json` | `figs/fig3_trackers.py` | `data/fig7/fig7b_survival.csv` |
+| **c** | Per-session paired difference | `panels/fig7_02_by_animals.py` (fig7c, via `figs/fig11_sync.py`) | `out/fig3_trackers.json`, `out/fig7_variant_best.json` | `figs/fig3_trackers.py` | `data/fig7/fig7c_by_animals.csv` |
+| **d** | Error composition | `panels/fig7_03_error_decomposition.py` (fig7d, via `figs/fig11_sync.py`) | `out/fig3_trackers.json`, `out/fig7_variant_best.json` | `figs/fig3_trackers.py` | `data/fig7/fig7d_error_decomposition.csv` |
+| **e** | IDF1 vs detector recall | `panels/fig7_07_recall.py` (fig7e, via `figs/fig11_sync.py`) | `out/fig3_trackers.json`, `out/fig7_variant_best.json` | `figs/fig3_trackers.py` | `data/fig7/fig7e_recall.csv`, `data/fig7/fig7e_recall_variant.csv` |
+| **f** | Fragmentation | `panels/fig7_08_fragmentations.py` (fig7f, via `figs/fig11_sync.py`) | `out/fig3_trackers.json`, `out/fig7_variant_best.json` | `figs/fig3_trackers.py` | `data/fig7/fig7f_fragmentations.csv` |
+| **g** | s-DANNCE transfer: one view per dataset, 3D reprojected | `panels/fig10_01_views.py` (fig10a, via `figs/fig11_sync.py`) | — (drawn) | — | — |
+| **h** | Reprojection vs raw clicks | `panels/fig10_02_residuals.py` (fig10b, via `figs/fig11_sync.py`) | — (drawn) | — | — |
+| **i** | IDF1 vs 2D noise | `panels/fig10_03_noise.py` (fig10c, via `figs/fig11_sync.py`) | — (drawn) | — | — |
+| **j** | IDF1 under dropout | `panels/fig10_04_dropout.py` (fig10d, via `figs/fig11_sync.py`) | — (drawn) | — | — |
+| **k** | Keypoints vs COM-only | `panels/fig10_05_inputs.py` (fig10e, via `figs/fig11_sync.py`) | — (drawn) | — | — |
+| **l** | Switches vs cameras | `panels/fig10_08_cameras.py` (fig10f, via `figs/fig11_sync.py`) | — (drawn) | — | — |
+| **m** | Switches vs noise | `panels/fig10_07_switches.py` (fig10g, via `figs/fig11_sync.py`) | — (drawn) | — | — |
+
 ## Panel scripts kept but not placed
 
 These still run under `make_figures.py` and still deposit their CSVs; they are not on any figure. They are kept because the measurement behind them is cited in the legends or the methods, or because they were superseded rather than refuted.
 
 | Script | What it draws |
 |---|---|
+| `panels/fig10_06_merge.py` | where the sigma = 0 losses come from: every session's noiseless IDF1. |
 | `panels/fig2_05_cams_identity.py` | Fig 2 s1 -- identity against the number of cameras: the other half of the. |
 | `panels/fig3_02_cost_terms.py` | the association cost itself: what one (target, detection) pair scores. |
-| `panels/fig3_04_quality.py` | greedy vs exhaustive against GROUND TRUTH, per configuration --. |
-| `panels/fig3_07_sweep50_freshanchor.py` | the corr2d x corr3d sweep re-run on ALL 50 BMimica sessions with the FRESH-ANCHOR. |
+| `panels/fig3_07_sweep50_freshanchor.py` | the corr2d x corr3d sweep re-run on ALL 50 Mouse-Dyad-10M sessions with the FRESH-ANCHOR. |
 | `panels/fig5_01_loop.py` | the proofreading loop LUC3D supports today. |
 | `panels/fig5_02_per_view_error.py` | what the app reports for the frame you are on: the reprojection against. |
 | `panels/fig5_03_capture.py` | how much real correction a bounded review budget finds. |
@@ -111,13 +144,8 @@ These still run under `make_figures.py` and still deposit their CSVs; they are n
 | `panels/fig6_02_pose.py` | Fig 6s2 (SUPPLEMENTARY) -- the mean proofread pose, and the scale of the animal. |
 | `panels/fig6_03_difficulty.py` | Fig 6s3 (SUPPLEMENTARY) -- reprojection error and miss rate by session difficulty,. |
 | `panels/fig6_10_quality_by_animals.py` | Fig 6s4 (SUPPLEMENTARY) -- per-view keypoint miss rate against difficulty, one line. |
-| `panels/fig7_01_survival.py` | within-view IDF1 per session, across the SLAP-2M corpus. |
-| `panels/fig7_02_by_animals.py` | per-session paired difference in IDF1, LUC3D minus SLEAP, by animal count. |
-| `panels/fig7_03_error_decomposition.py` | error composition: false positives and ID switches, as a PERCENTAGE of. |
 | `panels/fig7_04_trackers.py` | Fig 7 supplementary -- per-session IDF1 for the three trackers, across SLAP-2M. |
 | `panels/fig7_06_bedding.py` | bedding invariance: does the tracker survive a change of background?. |
-| `panels/fig7_07_recall.py` | session IDF1 against the shared detector's recall. |
-| `panels/fig7_08_fragmentations.py` | the measured LUC3D DISADVANTAGE: it fragments more tracks than SLEAP. |
 | `panels/fig7_09_idf1_by_difficulty.py` | Fig 7s3 (SUPPLEMENTARY) -- within-view IDF1 of the three trackers, by SLAP-2M. |
 | `panels/fig7_10_ida.py` | Fig 7 s4 -- ID accuracy: of the detections matched to a real animal, the percentage. |
 | `panels/fig7_variant_common.py` | Shared machinery for the tracker arms of Fig 7's SLAP-2M panels (b-f since the. |
@@ -125,7 +153,7 @@ These still run under `make_figures.py` and still deposit their CSVs; they are n
 | `panels/fig8_02_idf1.py` | cross-view IDF1 for the same ten one-dimensional threshold sweeps as 8a. |
 | `panels/fig8_03_loss_budget.py` | WHERE the shipped tracker's cross-view IDF1 actually goes, per session. |
 | `panels/fig8_04_methods.py` | ALGORITHMIC methods for the cross-view tracker, against the ceiling 8c set. |
-| `panels/fig8_05_all50.py` | the two candidate tracker changes over ALL 50 proofread BMimica sessions. |
-| `panels/fig8_06_horizon50.py` | Fig 8d (REDONE) -- the staleness HORIZON on all 50 BMimica sessions: shipped vs stale 1 / 10 / 20 / 30. |
+| `panels/fig8_05_all50.py` | the two candidate tracker changes over ALL 50 proofread Mouse-Dyad-10M sessions. |
+| `panels/fig8_06_horizon50.py` | Fig 8d (REDONE) -- the staleness HORIZON on all 50 Mouse-Dyad-10M sessions: shipped vs stale 1 / 10 / 20 / 30. |
 | `panels/fig9_common.py` | Shared loading, guards and constants for Figure 9's three panels. |
 

@@ -13,7 +13,7 @@ data-anchored curve rather than from the comparison against the reference 3D, wh
 would flatter a two-anchor solve.
 
 ONE RIG SIZE WAS MEASURED, AND THE ARTWORK MUST NOT SUGGEST MORE. Every one of the
-50 BMimica sessions is a FIVE-camera rig -- `{s["cameras"] for s in per_session}` is
+50 Mouse-Dyad-10M sessions is a FIVE-camera rig -- `{s["cameras"] for s in per_session}` is
 `{5}` -- so `p` is a single number measured at C = 5, from a two-anchor solve with
 three held-out views. C = 2, 3 and 4 are therefore exactly as much a model as
 C = 6, 7, 8 are. Two earlier drafts got this wrong in the same way and each time the

@@ -317,7 +317,7 @@ def main(all50=False):
              "(fig8_methods_verify.json)\n"
              + (("".join(f"{a} is numerically identical to {b} and is folded into it\n"
                           for a, b in folded)) if folded else "")
-             + f"8 BMimica sessions x 5 cameras, full length, {total_cf:,} "
+             + f"8 Mouse-Dyad-10M sessions x 5 cameras, full length, {total_cf:,} "
              "camera-frames, one shared detection pool")
     save(fig, 8, "d", "methods")
 

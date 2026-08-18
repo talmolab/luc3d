@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """
-Fig 1d -- where LUC3D sits among existing multi-camera pose tools.
+Fig 1e -- where LUC3D sits among existing multi-camera pose tools. (Was 1d
+until 2026-08-16, when the cage render became the figure's opening panel --
+Eric.)
 
 The cells and every claim behind them live in `src/tools_table.py`; read its
 docstring before changing anything here. This module only draws.
@@ -128,7 +130,7 @@ def main():
             f"or restore the two-stroke drawn tick (see git history).")
 
     use()
-    deposit(pd.DataFrame(TOOLS, columns=COLS), 1, "fig1d_tool_table.csv")
+    deposit(pd.DataFrame(TOOLS, columns=COLS), 1, "fig1e_tool_table.csv")
 
     nrow, ncol = len(TOOLS), len(COLS)
     # Column widths in axes units, sized to the longest string each column carries
@@ -205,7 +207,7 @@ def main():
                 f"re-verify before submission", color=SALMON, fontsize=NOTE_PT,
                 va="center")
 
-    save(fig, 1, "d", "tool_table")
+    save(fig, 1, "e", "tool_table")
 
 
 if __name__ == "__main__":

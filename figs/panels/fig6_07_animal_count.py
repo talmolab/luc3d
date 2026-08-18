@@ -140,6 +140,13 @@ def main():
     totals = {a: int(ba[str(a)]["n_sessions"]) for a in counts if str(a) in ba}
 
     fig, ax = panel("half", ROW_H)
+    # COINCIDENT MARKERS GET A DODGE. At difficulty 7 the 2-animal mean (58.1%)
+    # and the single-session 3-animal cell (56.0%) land within ~2 points of each
+    # other, and the hollow triangle drawn over the filled square was invisible
+    # (adversarial review 2026-08-17). Any later-drawn marker within 4 points of
+    # an already-placed one at the same rating steps +0.16 right -- data-driven,
+    # so a re-run that separates the cells draws no dodge at all.
+    placed = {}
     for a in counts:
         g = df[df.animals == a].sort_values("difficulty")
         c = RAMP.get(a, "#7A2A0E")
@@ -156,7 +163,12 @@ def main():
                         elinewidth=0.7, capsize=1.4, capthick=0.7, zorder=4)
         for _, r in g.iterrows():
             solo = r.n_sessions <= 1
-            ax.plot([r.difficulty], [r.miss_mean_pct], MARKS.get(a, "o"), ms=4.2,
+            xd = r.difficulty
+            if any(abs(r.miss_mean_pct - y) < 4.0
+                   for y in placed.get(r.difficulty, [])):
+                xd += 0.16
+            placed.setdefault(r.difficulty, []).append(r.miss_mean_pct)
+            ax.plot([xd], [r.miss_mean_pct], MARKS.get(a, "o"), ms=4.2,
                     mfc="white" if solo else c, mec=c, mew=1.1, zorder=5)
 
     ax.set_xticks(sorted(df.difficulty.unique()))

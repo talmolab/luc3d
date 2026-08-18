@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Fig 3d -- 3D-term ablation: ID-switch RATE and cross-view IDF1 against r = corr3d/corr2d,
-now over ALL 50 proofread BMimica sessions and BOTH tracker states.
+now over ALL 50 proofread Mouse-Dyad-10M sessions and BOTH tracker states.
 
 UPDATED 2026-08 (on instruction): the manuscript panel now draws TWO ARMS -- the
 SHIPPED tracker and the FRESH-ANCHOR configuration (`sync` + `stale 20` +
@@ -166,8 +166,12 @@ LABELLED_R = (0.0, 1.0, 2.0, 6.0, 24.0)
 FRESH_GLOB = "fig3_sweep50__distanceThreshold25-stale20-sync_*.json"
 
 #: Arm names as they appear in the key and the deposited CSV.
-SHIPPED_NAME = "shipped tracker"
-FRESH_NAME = "fresh anchor"
+#: RENAMED 2026-08-17 (Eric's decision): the fresh-anchor operating point (sync
+#: association, stale 20, distanceThreshold 25, corr3dWeight 6) is now the
+#: SHIPPED configuration, and the arm that shipped before it is the previous
+#: default. The mechanism words stay; only the status tag moved.
+SHIPPED_NAME = "previous default"
+FRESH_NAME = "fresh anchor (shipped)"
 
 
 def _rows(dep, arm):
@@ -378,7 +382,17 @@ HOLLOW + DASHED = FRESH ANCHOR, FILLED + SOLID = SHIPPED. Briefly changed to
     # reserved key band, and drawn "above" it landed on the axes (lint: on the 300
     # tick and the data). At r >= 1 the switch-rate curve is at the bottom decade,
     # so the corner is empty.
-    ax_top.text(0.97, 0.93, "LUC3D, fresh anchor", transform=ax_top.transAxes,
+    # TWO LINES, still right-anchored: "(shipped)" joined the name 2026-08-17
+    # (the fresh anchor is the app's shipped configuration now) and on one line
+    # the label would reach x ~ 0.13, into the descending switch-rate curve's
+    # top-left region; stacked, it keeps the one-line footprint.
+    # AT 0.60, BELOW the exhaustive rule: at the old 0.93 anchor the second line
+    # printed straight through the salmon rule -- which sits at 0.675 of the
+    # axes height (79.4/100k on this log axis), MEASURED via lint's on-data
+    # check after a first cut at 0.68 landed the top line exactly on it. The
+    # band between the rule and the teal tail (~0.04) is empty at r >= 2.
+    ax_top.text(0.97, 0.60, "LUC3D, fresh anchor\n(shipped)",
+                transform=ax_top.transAxes,
                 ha="right", va="top", color=TEAL, fontsize=7, fontweight="bold")
     # ONE NAME PER SUBPLOT: two 7 pt lines need ~0.30 of a 17 mm axis and the top
     # corner has ~0.20 above the exhaustive rule -- they collided with each other or
@@ -387,9 +401,20 @@ HOLLOW + DASHED = FRESH ANCHOR, FILLED + SOLID = SHIPPED. Briefly changed to
     # colours bind the pairs across the two plots.
     # x = 0.60: at 0.97 the label crossed the app-default r = 6 rule (10% inked);
     # between r = 2 and r = 6 nothing is drawn below the exhaustive rule.
-    ax_bot.text(0.60, 0.15, "exhaustive", transform=ax_bot.transAxes,
+    # THE 0.400 RULE IS A COARSE ESTIMATE AND THE ARTWORK SAYS SO (adversarial
+    # review 2026-08-17): the exhaustive deposit's own caveat marks its IDF1 as
+    # not-citable -- the identity threading that makes IDF1 computable for a
+    # pure per-frame method is our scaffolding, not Maree et al.'s (see 3e's
+    # docstring). The rule stays as the reference it is; the gloss rides as the
+    # label's second line. BOTH ABOVE the rule: the rule sits at ~0.09 of the
+    # axes height, so anything hung under it prints through it (the first cut
+    # of this fix did exactly that); between the rule and the teal curve's
+    # ~0.44 floor there is room for two lines.
+    ax_bot.text(0.60, 0.26, "exhaustive", transform=ax_bot.transAxes,
                 ha="right", va="bottom", color=SALMON, fontsize=7,
                 fontweight="bold")
+    ax_bot.text(0.60, 0.24, "≈0.40, coarse estimate", transform=ax_bot.transAxes,
+                ha="right", va="top", color=SALMON, fontsize=6)
     save(fig, 3, "d", "sweep" if not with_shipped else "sweep_with_shipped")
 
 

@@ -19,6 +19,13 @@
  * Also records the app's OWN per-view reprojection errors for both the two-anchor
  * and the all-views solve, so the panel's annotations quote this run.
  *
+ * The skeleton EDGE SET is overridden to the complete 26-edge plotting skeleton
+ * (setSkeletonEdges / MOUSE_EDGES, from src/skeleton_style.py) before any export
+ * (Eric 2026-08-16): the session's own sparse edge list reads as spiky lines
+ * rather than a mouse at print size. Display-only -- nothing on the tracking or
+ * triangulation path reads skeleton.edges, and the manifest's reprojection
+ * errors were diff-verified unchanged against the pre-override run.
+ *
  * Writes figs/out/fig2p-*.png and figs/out/fig2-protocol.json.
  *
  * Usage: node figs/fig2_protocol.mjs   (env: PORT, FRAME, NANIMALS, ANCHORS, SHOWCAMS)
@@ -27,7 +34,7 @@ import {
     launch, loadSession, gotoFrame, trackAll, triangulateAll, setColorMode,
     setOverlayStyle, setVisibility, setAnchorViews, reprojErrors, setLayout,
     set3dChrome, hide3dButtons, rigFit, frame3d, shootEl, exportViews, clearOverlays,
-    writeManifest, done, log, CAMS, setIdentityPalette,
+    writeManifest, done, log, CAMS, setIdentityPalette, setSkeletonEdges,
 } from './_drive.mjs';
 
 const FRAME = Number(process.env.FRAME || 150);
@@ -52,6 +59,8 @@ try {
     const loaded = await loadSession(page, { cams: CAMS });
     await gotoFrame(page, FRAME);
     await setOverlayStyle(page, PRINT_STYLE);
+    // Complete plotting skeleton for every tile (display-only; see header note).
+    const skelEdges = await setSkeletonEdges(page);
     await setColorMode(page, 'id');
 
     const tracked = await trackAll(page, NANIMALS);
@@ -110,7 +119,7 @@ try {
     writeManifest('fig2-protocol', {
         session: loaded, frame: FRAME, nAnimals: NANIMALS, brightness: BRIGHT,
         overlayStyle: PRINT_STYLE, anchors: ANCHORS, showCams: SHOWCAMS,
-        cameras: CAMS, tracked,
+        cameras: CAMS, tracked, skeletonEdges: skelEdges,
         triangulatedAllViews: triAll, triangulatedTwoAnchors: tri2,
         reprojErrorsAllViews: errAll, reprojErrorsTwoAnchors: err2,
         views: { anchor: anchors, reproj, check },

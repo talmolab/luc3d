@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """
-Fig 1b -- cross-view re-identification: per-camera tracks -> LUC3D identities.
+Fig 1c -- cross-view re-identification: per-camera tracks -> LUC3D identities.
+(Was 1b until 2026-08-16, when the cage render became the figure's opening
+panel -- Eric.)
 
 FOUR TILES, TWO CAMERAS, BEFORE AND AFTER. Two cameras are shown because the whole
 point is CROSS-view: with one camera there is nothing to re-identify. Left pair =
@@ -54,7 +56,8 @@ named for what it actually counts:
   reader would have to reconcile by hand. But there are only 20 distinct label
   STRINGS, and an earlier version of this line printed the detection count and called
   it a label count, which a reader who counts strings in the data cannot reproduce.
-  Both numbers are now on the artwork and both are in `fig1b_reid_ledger.csv`.
+  Both numbers are now on the artwork and both are in `fig1c_reid_ledger.csv`
+  (`fig1b_reid_ledger.csv` until the 2026-08-16 re-lettering).
 
   20 DISTINCT TRACK NAMES, 3 of them reused across cameras: `track_89` in cams 0
   and 5, `track_127` in cams 1 and 4, `track_93` in cams 5, 6 and 7 (`ledger.
@@ -103,6 +106,13 @@ shipped IDENTITY_COLORS: those start #00ff00, #ff00ff, #00ffff, and under
 deuteranopia the green and magenta converge -- the two animals a reader is meant to
 tell apart become the same colour. The app on disk is deliberately untouched.
 
+SKELETON EDGES: the tiles are re-exported with the app's skeleton edge set
+overridden to the complete 26-edge plotting skeleton (figs/_drive.mjs
+setSkeletonEdges / MOUSE_EDGES, from src/skeleton_style.py) so the animals read
+as mice rather than spiky lines (Eric 2026-08-16). Display-only: nothing on the
+tracking/triangulation path reads skeleton.edges, and the manifests' numeric
+payloads were diff-verified unchanged. The tiles remain the app's own canvases.
+
     python3 figs/panels/fig1_02_tracking.py
 """
 import sys
@@ -124,7 +134,7 @@ STAGES = [("before", "per-camera tracks"), ("after", "LUC3D identities")]
 #: Tile aspect (width : height), shared by all four tiles so the row is flush.
 #: 1.34 x 4 tiles at the 33 mm row height comes to 176 of the 180 mm, so the
 #: tiles are 44 mm wide with a ~1.5 mm gutter between neighbours -- a contact
-#: sheet, not four islands, and the same gutter panel c's row lands on. Raising it
+#: sheet, not four islands, and the same gutter panel d's row lands on. Raising it
 #: further would make the tiles WIDTH-limited (the cells are 45 mm) and start
 #: costing height, which is the dimension that matters.
 TILE_ASPECT = 1.34
@@ -263,7 +273,7 @@ def main():
         "identities": led["identities"], "assigned": led["assigned"],
         "unassigned": len(led["unassigned"]), "cameras": j["stats"]["nCameras"],
         "views_missing_an_identity": len(led["viewsMissingAnIdentity"]),
-    }]), 1, "fig1b_reid_ledger.csv")
+    }]), 1, "fig1c_reid_ledger.csv")
 
     tiles = []
     for stage, _ in STAGES:
@@ -309,7 +319,7 @@ def main():
         # honours the clip, and `load_tile`'s own crop cannot make this shape.)
         # The badge carries the camera INDEX as well as its name (`cam 0 mid`, not
         # `mid`). The claim being made is that a track label is per CAMERA, so the
-        # camera has to be identified; and panel c badges the same view `cam 0 mid`,
+        # camera has to be identified; and panel d badges the same view `cam 0 mid`,
         # so dropping the index here made one figure name one camera two ways.
         tile(ax, p, None, badge=cam.replace("Camera", "cam ").replace("_", " "),
              corner="lower left")
@@ -410,7 +420,7 @@ def main():
           + ("; one per animal in every view" if every_view
              else f"; ONLY {led['assigned']}/{total} assigned"))
 
-    save(fig, 1, "b", "tracking")
+    save(fig, 1, "c", "tracking")
 
 
 if __name__ == "__main__":

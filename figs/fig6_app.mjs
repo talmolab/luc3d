@@ -17,6 +17,13 @@
  * Videos are optional: with VIDEOS=0 the session loads labels + calibration only,
  * which is all the 3D viewport needs, and the per-view export is skipped.
  *
+ * The skeleton EDGE SET is overridden to the complete 26-edge plotting skeleton
+ * (setSkeletonEdges / MOUSE_EDGES, from src/skeleton_style.py) before any export
+ * (Eric 2026-08-16): the session's own sparse edge list reads as spiky lines
+ * rather than a mouse at print size. Display-only -- nothing on the tracking or
+ * triangulation path reads skeleton.edges, and the manifest's numbers (scale,
+ * bodyMm, counts) were diff-verified unchanged against the pre-override run.
+ *
  * Three things this records that the layout script cannot derive on its own:
  *
  *   PALETTE       the app's stock identity colours are pure #00ff00 / #00ffff /
@@ -45,10 +52,13 @@
 import {
     launch, loadSession, gotoFrame, trackAll, triangulateAll, setColorMode,
     setOverlayStyle, setLayout, set3dChrome, hide3dButtons, rigFit, frame3d,
-    shootEl, exportViews, clearOverlays, writeManifest, done, log,
+    shootEl, exportViews, clearOverlays, writeManifest, done, log, setSkeletonEdges,
 } from './_drive.mjs';
 
-const FRAME = Number(process.env.FRAME || 120);
+// FRAME 20 since 2026-08-16 (Eric): picked from an 8-frame probe sheet
+// (_probe_fig6a_frames.mjs) — at 120 the magnified 3D group's proportions read
+// stretched; at 20 all four animals are distinct and plausibly proportioned.
+const FRAME = Number(process.env.FRAME || 20);
 const NANIMALS = Number(process.env.NANIMALS || 4);
 // 1.9 is the display gain the other figure scripts use on these dark IR frames (see
 // figs/README.md). At 1.0 the two DARK animals in this session are invisible, so the
@@ -268,6 +278,8 @@ try {
     const loaded = await loadSession(page, { cams: CAMS6, deferVideos: !WITH_VIDEO });
     await gotoFrame(page, FRAME);
     await setOverlayStyle(page, PRINT_STYLE);
+    // Complete plotting skeleton for every tile (display-only; see header note).
+    const skelEdges = await setSkeletonEdges(page);
     await setColorMode(page, 'id');
 
     // The proofread labels already carry per-camera identity, but the app's 3D needs
@@ -320,7 +332,7 @@ try {
         session: loaded, sessionRel: process.env.SESSION_REL || 'figs/session',
         frame: FRAME, nAnimals: NANIMALS, cameras: CAMS6, brightness: BRIGHT,
         overlayStyle: PRINT_STYLE, tracked, triangulated: tri,
-        palette, scale,
+        palette, scale, skeletonEdges: skelEdges,
         threeD: { rig: `${TAG}-rig.png`, framing: rig, rigBBox,
                   animals: `${TAG}-3d-animals.png`, animalsFraming: near,
                   animalsBBox },

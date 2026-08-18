@@ -6,7 +6,7 @@ WHAT THE PANEL SHOWS. The display begins when the SECOND animal comes up, so the
 display's own onset says nothing about who started it; that needs each animal's own
 rear bout. The initiator is already up a median 0.37 s before the follower joins
 (p25-p75 0.16-0.89 s). 0.37 s is 56 frames at this rig's 150 fps and would be a
-handful at 30 fps -- one reason this analysis lives on BMimica.
+handful at 30 fps -- one reason this analysis lives on Mouse-Dyad-10M.
 
 WHO the initiator is has moved to its own panel (5f). It was an inset here, and an
 inset is the wrong place for the result: it ran into this panel's own annotation,

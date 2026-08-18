@@ -42,6 +42,13 @@ leaves the row 12 mm short of its own width. Badges therefore also cannot drift 
 a tile edge (they did, at 0.97 in axes coordinates on a tile this small); they sit
 inside a measured inset.
 
+SKELETON EDGES: the tiles are re-exported with the app's skeleton edge set
+overridden to the complete 26-edge plotting skeleton (figs/_drive.mjs
+setSkeletonEdges / MOUSE_EDGES, from src/skeleton_style.py) so the animals read
+as mice rather than spiky lines (Eric 2026-08-16). Display-only: nothing on the
+tracking/triangulation path reads skeleton.edges, and the manifests' numeric
+payloads were diff-verified unchanged. The tiles remain the app's own canvases.
+
     python3 figs/panels/fig6_05_cameras.py
 """
 import json

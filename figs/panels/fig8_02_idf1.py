@@ -188,7 +188,7 @@ def main():
              "plateau\n"
              "a point inside the band is not distinguishable from the shipped "
              "default by this measurement\n"
-             "8 BMimica sessions x 5 cameras, full length, one shared detection pool")
+             "8 Mouse-Dyad-10M sessions x 5 cameras, full length, one shared detection pool")
     save(fig, 8, "b", "idf1")
 
 

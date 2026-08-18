@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """
-Fig 1c -- the triangulated 3D, in LUC3D's own viewport, next to the image it came from.
+Fig 1d -- the triangulated 3D, in LUC3D's own viewport, next to the image it came from.
+(Was 1c until 2026-08-16, when the cage render became the figure's opening
+panel -- Eric.)
 
 THREE TILES, AND THE ORDER IS THE ARGUMENT: the camera's video, the same camera's
 view of the 3D reconstruction, and the whole rig. Reading left to right you can
@@ -74,14 +76,14 @@ could have fixed either).
 
   PALETTE. The 3D exports used to be staged BEFORE `setIdentityPalette()` existed, so
   they carried the app's shipped `IDENTITY_COLORS` (#00ff00 green, #ff00ff magenta,
-  #00ffff cyan) while panel b carried the colourblind-safe Okabe-Ito palette: the
+  #00ffff cyan) while panel c carried the colourblind-safe Okabe-Ito palette: the
   same three animals in two colour schemes inside one figure, and the shipped
   green/magenta pair is exactly the one that converges under deuteranopia. Fixed at
   the source: `fig1_tracking.mjs` now calls `setIdentityPalette(page)` AFTER
   `trackAll()` -- the order matters, because `Identity`'s constructor reads the
   palette only at construction time, so the helper rewrites `.color` on identities
   that already exist and calling it any earlier is a no-op. Both 3D tiles are now
-  bluish-green / orange / sky blue, the same three colours panel b carries, read from
+  bluish-green / orange / sky blue, the same three colours panel c carries, read from
   the same `fig1.json identityPalette`. The PNGs were re-exported, never recoloured.
 
   THE RIG TILE'S GEOMETRY. It used to be `showInitialView()` into whatever pane the
@@ -117,6 +119,13 @@ could have fixed either).
   so an edge is one device pixel at any canvas size and a bigger canvas therefore
   prints THINNER), and that is a driver change with its own cost to the skeletons --
   not a panel change. Left alone deliberately.
+
+SKELETON EDGES: the tiles are re-exported with the app's skeleton edge set
+overridden to the complete 26-edge plotting skeleton (figs/_drive.mjs
+setSkeletonEdges / MOUSE_EDGES, from src/skeleton_style.py) so the animals read
+as mice rather than spiky lines (Eric 2026-08-16). Display-only: nothing on the
+tracking/triangulation path reads skeleton.edges, and the manifests' numeric
+payloads were diff-verified unchanged. The tiles remain the app's own canvases.
 
     python3 figs/panels/fig1_03_reconstruction.py
 """
@@ -183,7 +192,7 @@ def main():
             b = v["bbox"]
             bbox = (b["x0"], b["y0"], b["x1"], b["y1"])
 
-    # The 3D tiles and panel b must be in the SAME identity palette; both come from
+    # The 3D tiles and panel c must be in the SAME identity palette; both come from
     # the one driver run that recorded this. Report it rather than assert it -- the
     # panel's job is not to gate the build, but a silent mismatch is what shipped once.
     pal = (j.get("identityPalette") or {}).get("identities") or []
@@ -233,7 +242,7 @@ def main():
     print(f"  {j['stats']['groupsThisFrame']} animals from "
           f"{j['stats']['nCameras']} cameras, "
           f"{j['stats']['nodes3dFilled']}/{j['stats']['nodes3d']} 3D nodes filled")
-    save(fig, 1, "c", "reconstruction")
+    save(fig, 1, "d", "reconstruction")
 
 
 if __name__ == "__main__":

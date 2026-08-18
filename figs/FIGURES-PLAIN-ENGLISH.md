@@ -26,9 +26,9 @@ cameras at once. The figures make five arguments, in this order:
 5. **The corpus is hard in a specific, measurable way** (Fig 6), and we swept our own
    parameters honestly (Figs 8, 9).
 
-Two corpora do all the work. **BMimica** — 56 sessions, 5 cameras, 2 mice, 150 fps,
+Two corpora do all the work. **Mouse-Dyad-10M** — 56 sessions, 5 cameras, 2 mice, 150 fps,
 ~180,000 frames each, human-proofread 3D. **SLAP-2M** — 74 sessions, 6 proofread
-cameras, 1 to 4 animals. Fig 7a and Figs 2/4/5/8 are BMimica; Figs 3, 6, 7b–g and 9
+cameras, 1 to 4 animals. Fig 7a and Figs 2/4/5/8 are Mouse-Dyad-10M; Figs 3, 6, 7b–g and 9
 are mostly SLAP-2M. **They are not interchangeable and the same metric has different
 values on each** — that confusion is a defect we already had to fix once.
 
@@ -39,16 +39,18 @@ values on each** — that confusion is a defect we already had to fix once.
 **What it says.** You can do multi-camera 3D pose annotation in a browser with no
 install, and every animal gets one identity in every view.
 
-**What made it.** Screenshots of the real app plus one comparison table. Panel B is one
+**What made it.** Screenshots of the real app plus one comparison table, opened by a
+Blender render. Panel A is the SLAP-2M rig — cage, 8 cameras and 2 animals — rendered
+from one session's own calibration and tracked poses, nothing hand-posed. Panel C is one
 frame of an 8-camera, 3-mouse recording: on the left the per-camera tracks that came
 in, on the right the same views after cross-view re-identification. The number to quote
 is that this frame holds **24 detections carrying 20 different track names, which
-resolve to 3 identities** — one per animal, in every view. Panel C is that same frame
-triangulated, 45 of 45 3D keypoints filled, shown next to the calibrated rig. Panel D
+resolve to 3 identities** — one per animal, in every view. Panel D is that same frame
+triangulated, 45 of 45 3D keypoints filled, shown next to the calibrated rig. Panel E
 compares capabilities against 7 other tools, read off each tool's own documentation on
 4 August 2026.
 
-**Watch out.** Panel D is a documentation review, not a benchmark — we did not run
+**Watch out.** Panel E is a documentation review, not a benchmark — we did not run
 those tools. A dash means "not documented". Say that out loud if anyone reads it as a
 head-to-head.
 
@@ -61,7 +63,7 @@ reproject into the remaining cameras. That cuts manual keypoint placements **2.3
 on a 5-camera rig, and it works because only **5.5%** of those reprojections land
 outside a 10 px tolerance.
 
-**What made it.** All 56 BMimica sessions, every frame, **286 million keypoints**.
+**What made it.** All 56 Mouse-Dyad-10M sessions, every frame, **286 million keypoints**.
 Panel C is the honest core: the distribution of reprojection error in views that were
 *not* labelled — median **4.32 px**, 94.6% within 10 px. Panel D explains when the
 trick fails: a two-camera solve is only as good as the angle between the two cameras,
@@ -85,7 +87,7 @@ committing each camera before moving to the next: `O(C·A³)`. **The two pick th
 grouping on 4,571,669 of 4,572,311 frames**, at about a **million-fold** lower cost in
 the configuration where enumeration stops being possible at all.
 
-**What made it.** 92 sessions with both detections and proofread 3D (50 BMimica + 42
+**What made it.** 92 sessions with both detections and proofread 3D (50 Mouse-Dyad-10M + 42
 SLAP-2M), scored against the human-proofread grouping, on **identical detections** for
 both methods. Panel D is the money panel: pooled, greedy misgroups **1,052** frames,
 exhaustive **1,309**. On the 642 frames where they disagree, the human agrees with
@@ -106,7 +108,7 @@ session, spread across the session, not the first N).
 a camera the solve never saw goes 4.32 → 3.34 px as you go from 2 to 4 cameras, and
 dropping one badly-fitting view moves the 3D point by a median **7.2 mm**.
 
-**What made it.** 50 BMimica sessions, every C-choose-k camera subset, **885 million
+**What made it.** 50 Mouse-Dyad-10M sessions, every C-choose-k camera subset, **885 million
 solves**. Four solvers compared, paired by algorithm class: our linear DLT vs Anipose
 linear, our non-linear refinement vs Anipose's optimiser. We are **4.6× and 5.2×
 faster**.
@@ -154,7 +156,7 @@ keypoints **go missing**. Across difficulty strata the per-view miss rate rises
 comparisons, plus rig and per-camera renders from the app.
 
 **Watch out.** Panel E's 130-session / 12-million-frame total describes **the corpora as
-a whole and is not the sample behind any panel** — BMimica carries 84% of that frame
+a whole and is not the sample behind any panel** — Mouse-Dyad-10M carries 84% of that frame
 count and doesn't enter panels C, D or F. That's stated on the figure.
 
 ---
@@ -167,7 +169,7 @@ cross-view scoring (0.749 → 0.749), while per-camera trackers lose half to thr
 quarters of theirs. That within→cross **ratio** is the claim; the absolute levels are
 secondary.
 
-**What made it.** Panel a: 4 trackers over 50 BMimica sessions. Panels c–g: 74 SLAP-2M
+**What made it.** Panel a: 4 trackers over 50 Mouse-Dyad-10M sessions. Panels c–g: 74 SLAP-2M
 sessions — c is the distribution of within-view IDF1 as a survival curve, d is the
 paired LUC3D-minus-SLEAP difference split by animal count, e is the error budget
 (false positives vs ID switches as a % of camera-frames), f is IDF1 against the shared
@@ -196,7 +198,7 @@ detector's recall, g is fragmentation, which is the one clean result that goes
 
 ## Fig 8 — "we swept our own parameters" (exploratory, not in the manuscript)
 
-**What it says.** On all 50 BMimica sessions, what do the tracker's knobs and the
+**What it says.** On all 50 Mouse-Dyad-10M sessions, what do the tracker's knobs and the
 candidate algorithmic fixes actually buy? It's now a **single panel** (8d): identity
 precision, identity recall and cross-view IDF1 as survival curves over the 50 sessions,
 plus the % of camera-frames carrying an ID switch, one line per parameter set.
@@ -329,8 +331,8 @@ space. Fixed today.)*
 
 | corpus | switches | cross-view IDF1 |
 |---|---|---|
-| BMimica 50 sessions, shipped | 2,071 | 0.7493 |
-| BMimica, **M1 + stale 20 + distThresh 25** | **413** | **0.8613** |
+| Mouse-Dyad-10M 50 sessions, shipped | 2,071 | 0.7493 |
+| Mouse-Dyad-10M, **M1 + stale 20 + distThresh 25** | **413** | **0.8613** |
 | SLAP-2M 42 multi-animal, shipped | 3,094 | 0.7040 |
 | SLAP-2M, same configuration | **1,312** | 0.7212 |
 
@@ -343,7 +345,7 @@ mean.
 
 **Other names you'll hear.** `corr2d` / `corr3d` are the weights on the two cost terms,
 and only their **ratio r = corr3d/corr2d** matters; the shipped default is **r = 6**. We
-tested **r = 12** and **rejected** it: a 10% switch reduction on BMimica only, no IDF1
+tested **r = 12** and **rejected** it: a 10% switch reduction on Mouse-Dyad-10M only, no IDF1
 gain anywhere, and it badly harms two individual sessions. "M2, M3, M4…" are the other
 candidate methods we tried and mostly discarded — cross-view bundling was 70× worse,
 and skeletal re-identification was at chance because the mice are the same strain and
@@ -380,7 +382,7 @@ between-animal body differences (~2 mm) are smaller than our triangulation noise
 
 ## What's in flight tonight (as of 2026-08-13 ~21:00 UTC)
 
-We found that **both** per-camera baselines on BMimica were run in configurations that
+We found that **both** per-camera baselines on Mouse-Dyad-10M were run in configurations that
 guarantee the fragmentation they were then penalised for, while LUC3D's arm is
 constrained to 2 identities by construction. That's our defect, not theirs, so both are
 being re-run:

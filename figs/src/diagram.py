@@ -146,7 +146,7 @@ def mouse_pose(ax, bx, by, bw, bh, color=INK, lw=None, dot=0.075):
     """The set's mini mouse -- nose-head-hip-tailbase spine plus two limbs -- drawn to
     fill the rectangle (bx, by, bw, bh) in ordinary y-up coordinates.
 
-    ONE SHAPE, USED EVERYWHERE. Fig 1a's `pose2d` / `pose3d` / `instances3d` glyphs
+    ONE SHAPE, USED EVERYWHERE. Fig 1b's `pose2d` / `pose3d` / `instances3d` glyphs
     already drew this; the multi-view tile glyphs first used a stroke-and-dot mark
     instead and it read as a smudge rather than an animal (review 2026-08-14: "they
     should still look like little mice like the proofread3d does, but just 2D
@@ -182,10 +182,10 @@ def icon(ax, kind, x, y, s=1.0, color=INK, lw=None):
     (`tiles2d`, `tilesid`, `volume3d`), which are `TILES_W * s` wide and CENTRED on
     x + s/2, and return their own (x, y, w, h).
 
-    kinds: camera, cameras, skeleton, ids, triangulate, cube, check, file, mouse,
-    pose2d, pose3d, instances3d
+    kinds: camera, cameras, skeleton, ids, triangulate, cube, check, checkerboard,
+    file, mouse, pose2d, pose3d, instances3d
 
-    The last three are the Fig 1a pipeline glyphs (review 2026-08: the pipeline's
+    The last three are the Fig 1b pipeline glyphs (review 2026-08: the pipeline's
     icons should show THIS pipeline's objects, not generic marks): `pose2d` is two
     animals' 2D poses in ONE colour -- detections exist, identity does not yet;
     `pose3d` is one animal's pose over a ground plane -- the triangulated result;
@@ -259,6 +259,31 @@ def icon(ax, kind, x, y, s=1.0, color=INK, lw=None):
     elif kind == "check":
         L(x + s * 0.16, 0.54, x + s * 0.40, 0.78)
         L(x + s * 0.40, 0.78, x + s * 0.86, 0.20)
+    elif kind == "checkerboard":
+        # Fig 1b's calibration stage: a 4x3 calibration target with alternating
+        # squares filled, which is what makes a checkerboard readable at 5 mm.
+        # The top edge is inset only SLIGHTLY -- enough to read as a board held at an
+        # angle, not enough to read as a bucket, which is what a 0.16 s inset looked
+        # like at this size (measured off the first render, 2026-08-17).
+        nx, ny = 4, 3
+        x0, x1 = x + s * 0.04, x + s * 0.96       # bottom edge
+        t = s * 0.06                              # top-edge inset per side
+        for r in range(ny):
+            f0, f1 = 0.14 + r * 0.24, 0.14 + (r + 1) * 0.24
+            for cc in range(nx):
+                if (r + cc) % 2:
+                    continue
+                quad = []
+                for f, u in ((f0, cc), (f0, cc + 1), (f1, cc + 1), (f1, cc)):
+                    # rows nearer the top are inset, giving the perspective taper
+                    k = (f - 0.14) / (ny * 0.24)
+                    a0, a1 = x0 + t * k, x1 - t * k
+                    quad.append((a0 + (a1 - a0) * u / nx, Y(f)))
+                ax.add_patch(Polygon(quad, closed=True, facecolor=color,
+                                     edgecolor="none", zorder=3))
+        ax.add_patch(Polygon([(x0, Y(0.14)), (x1, Y(0.14)),
+                              (x1 - t, Y(0.86)), (x0 + t, Y(0.86))],
+                             closed=True, fill=False, ec=color, lw=lw, zorder=4))
     elif kind == "file":
         f = 0.26
         ax.add_patch(Polygon([(x + s * 0.16, Y(0.06)),
@@ -325,7 +350,7 @@ def icon(ax, kind, x, y, s=1.0, color=INK, lw=None):
     elif kind in ("tiles2d", "tilesid", "volume3d"):
         # ##################################################################
         # THE PIPELINE'S ACTUAL SHAPE (review 2026-08-13). The three glyphs
-        # before this one drew ONE pose per stage, so Fig 1a asserted a
+        # before this one drew ONE pose per stage, so Fig 1b asserted a
         # single-view pipeline -- the opposite of the paper's claim. These
         # three carry the real story in colour alone:
         #
@@ -338,7 +363,7 @@ def icon(ax, kind, x, y, s=1.0, color=INK, lw=None):
         #             colours -- the views have collapsed into one space
         #
         # Colours come from `identity()`, which mirrors the app's own
-        # IDENTITY_COLORS, so the schematic and the Fig 1b/1c screenshots
+        # IDENTITY_COLORS, so the schematic and the Fig 1c/1d screenshots
         # name the same animal the same way.
         #
         # WIDE, NOT SQUARE: three tiles in a 0.5-unit square would be 1.5 mm

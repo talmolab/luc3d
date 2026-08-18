@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Fig 3g -- the corr2d x corr3d sweep re-run on ALL 50 BMimica sessions with the FRESH-ANCHOR
+Fig 3g -- the corr2d x corr3d sweep re-run on ALL 50 Mouse-Dyad-10M sessions with the FRESH-ANCHOR
 tracker, and the interaction Fig 8 could not see.
 
     EXPLORATORY, and since 2026-08-14 SUPERSEDED BY 3e ITSELF: on instruction, the
@@ -124,17 +124,13 @@ def main():
     axS.plot(g.corr3d, g.switches_per_100k, color=TEAL, lw=1.5, zorder=3)
     axS.plot(g.corr3d, g.switches_per_100k, "o", color=TEAL, ms=5, mec="white", mew=0.8,
              zorder=4)
-    # PER-POINT OFFSETS, because a single offset cannot clear a curve that falls three
-    # decades between the first two points. Centred-above works everywhere except r = 1,
-    # where the steep segment arriving from r = 0 runs straight through the box a centred
-    # label would occupy (measured: 18% of it inked). At r = 1 the label goes to the
-    # right, over the flat tail, which is the empty quadrant at that point.
-    for _i, r in g.iterrows():
-        right = r.corr3d == 1
-        axS.annotate(f"{int(r.switches):,}", (r.corr3d, r.switches_per_100k),
-                     textcoords="offset points", xytext=((9, 2) if right else (0, 7)),
-                     ha="left" if right else "center", va="bottom",
-                     fontsize=5.8, color=MUTED)
+    # PER-POINT COUNT LABELS DROPPED (2026-08-17): they were written for the
+    # original 4-cell deposit; the sweep deposit now carries the full 12-ratio
+    # row (it is the same file fig3d reads), and twelve 5.8 pt labels over a
+    # 12-point curve collided with each other and with the strokes (lint:
+    # OVERLAP x2, ON DATA x2) -- the same failure the manuscript fig3d already
+    # solved by keeping counts in the CSV. The endpoint counts stay in the
+    # footnote below; the r = 6 reference keeps its labelled diamond.
     if ref:
         axS.plot(ref["corr3d"], ref["switches_per_100k"], "D", color=SALMON, ms=5.5,
                  mec="white", mew=0.8, zorder=5)
@@ -169,7 +165,10 @@ def main():
     text_legend(axS, [
         ("fresh-anchor tracker: M1 + stale 20 + distThresh 25", TEAL),
         ("the shipped corr3dWeight = 6, same 50 sessions, same tracker", SALMON),
-        ("EXPERIMENTAL: not in pose/cross-view-tracker.js", MUTED),
+        # Relabelled 2026-08-17: the fresh-anchor operating point was promoted
+        # to the shipped configuration, so the old "EXPERIMENTAL: not in
+        # pose/cross-view-tracker.js" line became false.
+        ("the shipped configuration since 2026-08-17", MUTED),
     ], "above")
 
     note = (f"corr3d = {best.corr3d:g} reaches {int(best.switches):,} switches"

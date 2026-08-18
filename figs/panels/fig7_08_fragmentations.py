@@ -121,11 +121,11 @@ def main(variant=False, corrected=True):
     luc_better = fp["wins"]          # sessions where LUC3D fragments LESS
 
     # (label, block, colour, hollow) -- the manuscript panel is the first row alone.
-    rows = [("LUC3D (shipped)" if variant else "LUC3D − SLEAP", fp,
+    rows = [("LUC3D (previous default)" if variant else "LUC3D − SLEAP", fp,
              entity("luc3d") if variant else SLEAP, False)]
     if variant:
         rows.insert(0, ("pre-#131", ref["fragmentations_paired"], MUTED, False))
-        rows.append(("fresh anchor", fresh["fragmentations_paired"],
+        rows.append(("fresh anchor (shipped)", fresh["fragmentations_paired"],
                      entity("luc3d"), True))
 
     if not variant:
@@ -244,7 +244,7 @@ def main(variant=False, corrected=True):
                  f"[{fr['ci95_lo']:+.1f}, {fr['ci95_hi']:+.1f}] this panel printed until "
                  f"2026-08-13 for the pre-#131 tracker -- so '+24.0' is a "
                  f"property of a tracker the app no longer contains"
-                 f"\nthe EXPERIMENTAL fresh anchor is {ff['mean']:+.1f} "
+                 f"\nthe fresh anchor (shipped since 2026-08-17) is {ff['mean']:+.1f} "
                  f"[{ff['ci95_lo']:+.1f}, {ff['ci95_hi']:+.1f}]. THE SIGN IS UNCHANGED ON "
                  f"ALL THREE ARMS -- SLEAP fragments fewer in "
                  f"{fr['n_sessions'] - fr['wins']}, {fp['n_sessions'] - fp['wins']} and "

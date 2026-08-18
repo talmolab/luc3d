@@ -112,7 +112,12 @@ def main():
     ax2.annotate(f"{p['gap']['p50'][gmin]:.2f} BL", (t[gmin], p["gap"]["p50"][gmin]),
                  textcoords="offset points", xytext=(13, -1), ha="left",
                  color=CG, fontsize=6.5, fontweight="bold", va="center")
-    ax.text(0.02, 0.97, f"n = {d['n_events']} displays, {d['n_sessions']} sessions",
+    # TWO LINES: on one line the string ran from x = 0.02 past the axes'
+    # midline and sat on the dashed t = 0 rule (adversarial review 2026-08-17).
+    # Wrapped (and with the mid-line comma dropped -- the first line otherwise
+    # still grazed the rule at this width), it ends left of t = 0 and stays
+    # above the gap band's p75.
+    ax.text(0.01, 0.97, f"n = {d['n_events']} displays\n{d['n_sessions']} sessions",
             transform=ax.transAxes, fontsize=6, color=MUTED, va="top")
     save(fig, 5, "b", "upright_dynamics")
 

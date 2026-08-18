@@ -137,7 +137,7 @@ def main():
              "already get one\n"
              "oracle = each detection relabelled to its best-IoU GT box; a detection "
              "matching no GT keeps a private id so it stays a false positive\n"
-             "8 BMimica sessions x 5 cameras, full length, 7,205,370 camera-frames, "
+             "8 Mouse-Dyad-10M sessions x 5 cameras, full length, 7,205,370 camera-frames, "
              "one shared detection pool")
     save(fig, 8, "c", "loss_budget")
 

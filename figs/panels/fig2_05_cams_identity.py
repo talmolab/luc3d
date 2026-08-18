@@ -5,7 +5,7 @@ how-many-cameras question.
 
 Panel c answers it for GEOMETRY (held-out reprojection error falls 4.32 -> 3.34 px
 from 2 to 4 cameras). This panel answers it for IDENTITY: the shipped cross-view
-tracker re-run on camera subsets of the BMimica rig, cross-view IDF1 against k.
+tracker re-run on camera subsets of the Mouse-Dyad-10M rig, cross-view IDF1 against k.
 Together they are the review's "# of cameras vs error, # of cameras vs switches"
 (F2.6). Supplementary letter until Eric places it.
 

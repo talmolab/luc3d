@@ -105,7 +105,7 @@ at all -- but not as a bound. The invalid top-2-track series sat so far below it
 distinction never came up.
 
 THIS PANEL'S "WITHIN VIEW" IS NOT PANEL c'S. Both are called within-view IDF1 and
-they are different quantities: 0.749 here is BMimica, 50 sessions, C = 5, while c is
+they are different quantities: 0.749 here is Mouse-Dyad-10M, 50 sessions, C = 5, while c is
 SLAP-2M, 74 sessions, C = 6, where LUC3D's within-view mean is 0.736 and its median
 0.900. Nothing about the two numbers announces the difference -- 0.749 and 0.736 look
 like the same measurement rounded twice -- so the corpus is named in this panel's
@@ -117,15 +117,15 @@ sessions) at both ends of its slope; the panel previously plotted bare means, so
 reader could not see that LUC3D's two intervals coincide (the no-drift result).
 
 FOUR TRACKERS HERE, THREE IN b-g, AND THE KEY SAYS WHY. 3D-MuPPET is measured on
-BMimica only; the SLAP-2M deposit has no 3D-MuPPET column anywhere. The tracker sets
+Mouse-Dyad-10M only; the SLAP-2M deposit has no 3D-MuPPET column anywhere. The tracker sets
 genuinely differ between the two corpora, but a reader who is not told that reads the
 missing fourth series as a dropped comparison -- so its key entry carries
-"· BMimica only", right where the question comes up.
+"· Mouse-Dyad-10M only", right where the question comes up.
 
 THE SLEAP SERIES: `--variant` CARRIES A CORRECTION, NOT A VARIANT, AND IT IS THE ONE
 DIFFERENCE HERE THAT IS ABOUT THE COMPETITOR RATHER THAN ABOUT US.
 
-Fig 7a's BMimica SLEAP numbers -- 0.115 within, 0.062 cross, out of
+Fig 7a's Mouse-Dyad-10M SLEAP numbers -- 0.115 within, 0.062 cross, out of
 `bmimica_crossview_all_eval.csv`'s `sleap_idf1` -- ARE scored from SLEAP's own tracker, and
 the earlier claim in this docstring that they came from a detections-only pool's unstable
 slot index was WRONG. They are scored from `outputs/bmimica/sleap_h5/`, which
@@ -184,13 +184,13 @@ the first diagnosis rested on was measured on the DETECTION pool, which is not w
 series was scored from. `--fix-sleap` still applies that gate -- a series measured from
 incoherent tracks would be refused -- but it is not why the old number was wrong.
 
-AND THE HONEST HALF OF THE RESULT. The correction was expected to lift BMimica's SLEAP into
+AND THE HONEST HALF OF THE RESULT. The correction was expected to lift Mouse-Dyad-10M's SLEAP into
 the regime of SLAP-2M's tracked SLEAP (0.661). It does not, and it cannot: SLAP-2M's pool is
 indexed BY SLEAP's own tracks, so SLEAP's fragmentation costs it nothing there, whereas on
-BMimica an all-tracks SLEAP is spread over a median 47 tracks -- 1,111,431 fragmentations --
+Mouse-Dyad-10M an all-tracks SLEAP is spread over a median 47 tracks -- 1,111,431 fragmentations --
 whose top-2-id arithmetic ceiling is a session mean of 0.2702. The measured 0.2062 sits just
 under that ceiling, which is the consistent answer rather than a disappointing one. SLEAP is
-genuinely weak on BMimica: the manuscript's qualitative claim survives and only the
+genuinely weak on Mouse-Dyad-10M: the manuscript's qualitative claim survives and only the
 magnitude was overstated. LUC3D is still ahead in 50/50 sessions on both metrics against the
 corrected series, recomputed per session.
 
@@ -245,20 +245,22 @@ must not show it. Hence the flag, and hence three separate defences:
   It is lettered "a" (not "h", as an earlier version was; those `fig7h_*` artefacts have
   been deleted and the deposited CSV was renamed to match this panel's letter) because
   `assemble.py`'s `LAYOUTS[7]` now PLACES this panel in position a: the assembled
-  `figures/fig7/fig7.pdf` shows the variant, titled "... (+ experimental arm)", and a
+  `figures/fig7/fig7.pdf` shows the variant (titled without the retired
+  "(+ experimental arm)" suffix since the 2026-08-17 promotion), and a
   panel lettered h sitting in the first slot would read as a mistake. Swapping the slug
   back in `LAYOUTS[7]` restores the manuscript panel;
 * it reads `fig7_variant_best.json`, a separate deposit whose own `generated_by`
   says "NOT the manuscript deposit" and whose `caveats` carry the provenance of the
   extra arm. The default path still reads `fig3_trackers.json` and is unchanged, which
   is checked by re-rendering without the flag;
-* the extra series is labelled EXPERIMENTAL on the artwork -- on its own key line, in
+* the extra series was labelled EXPERIMENTAL on the artwork while it was one (it is
+  labelled "(shipped)" since the 2026-08-17 promotion) -- on its own key line, in
   the data area next to its switch count, and in the footnote -- because a panel that
   reads as Fig 7a with one more tracker on it WILL be screenshotted out of context.
 
-Only BMimica carries the arm. It has never been run on SLAP-2M, so b-g cannot be
+Only Mouse-Dyad-10M carries the arm. It has never been run on SLAP-2M, so b-g cannot be
 redrawn from that file, and SLAP-2M is a different regime anyway (the detector misses
-35.4% of GT there; the identity-fix ceiling is 0.7704 against BMimica's 0.9367). No
+35.4% of GT there; the identity-fix ceiling is 0.7704 against Mouse-Dyad-10M's 0.9367). No
 extrapolation from this panel to the rest of the figure is licensed.
 
 Source: figs/out/fig3_trackers.json `bmimica_50_sessions`, `bmimica_wins`, `caveats`;
@@ -281,7 +283,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.data_loader import load  # noqa: E402
-from src.style import (AMBER, MUTED, entity, footnote, deposit, panel,  # noqa: E402
+from src.style import (MUTED, entity, footnote, deposit, panel,  # noqa: E402
                        save, text_legend, use)
 
 #: (deposit key, name on the artwork, colour). The deposit calls SLEAP's entry
@@ -304,15 +306,21 @@ ORDER = [("LUC3D", "LUC3D", entity("luc3d")),
          ("3D-MuPPET", "3D-MuPPET", entity("3d-muppet"))]
 
 #: WHY THIS PANEL HAS FOUR SERIES AND b-g HAVE THREE, said next to the series that is
-#: only here. 3D-MuPPET is measured on BMimica alone: `fig3_trackers.json` lists it
+#: only here. 3D-MuPPET is measured on Mouse-Dyad-10M alone: `fig3_trackers.json` lists it
 #: under `bmimica_50_sessions` and nowhere under `slap2m`, whose `within_view`,
 #: `error_decomposition` and paired tables carry luc3d/sleap/bytetrack only. Read with
-#: the figure footer ("a: 50 BMimica sessions ... b-g: 74 SLAP-2M sessions") that is a
+#: the figure footer ("a: 50 Mouse-Dyad-10M sessions ... b-g: 74 SLAP-2M sessions") that is a
 #: complete answer to "where did the fourth tracker go", and it rides in the key band
 #: `panel(key=...)` has already reserved, so it costs no axes height -- see the
 #: footnote comment below for what a fourth footnote line would have cost instead.
 #: Entry measures 65.6 mm from the key's x = 12.3 mm, i.e. 77.9 of 88 mm.
-CORPUS_NOTE = {"3D-MuPPET": "· BMimica only"}
+#: The note that says this series has no counterpart in b-g. It read "· BMimica only"
+#: until the corpus was renamed on 2026-08-17, and "· Mouse-Dyad-10M only" pushed the
+#: entry to 53 characters against the key's ~50-character width -- lint_text.py reported
+#: it CLIPPED. Rather than abbreviate the corpus name, the note now names the MISSING
+#: arm, which is both shorter and the thing a reader actually needs: there is no
+#: SLAP-2M 3D-MuPPET measurement anywhere in the deposit.
+CORPUS_NOTE = {"3D-MuPPET": "· no SLAP-2M arm"}
 NCAM = 5
 
 #: `--variant` ONLY. The deposit, and the tracker key inside it that names the arm on
@@ -347,24 +355,19 @@ VARIANT_KEY = "LUC3D + fresh anchor"
 SLEAP_KEY = "SLEAP per-camera"
 SLEAP_INVALID_KEY = "SLEAP per-camera (2-track truncation, invalid)"
 
-#: AMBER, AND NOT THROUGH `entity()`. Every hue `entity()` hands out is already spoken
-#: for on this panel or set-wide: TEAL is this work (LUC3D), PERIWINKLE SLEAP, SALMON
-#: ByteTrack, PINK 3D-MuPPET, GREY the 1/C ceiling, GREEN Anipose. `#DF9C20` is one of
-#: the two `fig2b` accents the palette reserves for nothing, it is the farthest hue from
-#: all four series here, and it is the DARKEST of them (2.4:1 on white against teal's
-#: 2.1:1), which matters because this label carries the word a reader must not miss.
-#: SKY (`#93C9DE`) was the other candidate and is rejected: pale blue against
-#: PERIWINKLE's blue-violet is exactly the pair that stops being separable at print
-#: size, and it is the lightest ink in the module.
-#:
-#: DELIBERATELY NOT ADDED TO `ENTITY`. That table reserves hues for entities that RECUR
-#: across the set, and the whole point of this series is that it recurs nowhere -- it is
-#: in one opt-in panel and in no shipped figure. Minting a set-wide reservation for it
-#: would be a promise the set does not keep, and editing `style.py` would put every
-#: other panel's colours in the blast radius of a variant render. The rule the ENTITY
-#: comment actually forbids is one hue meaning two different things on facing pages;
-#: amber means nothing anywhere else, so there is nothing to collide with.
-VARIANT_COLOR = AMBER
+#: TEAL, THROUGH `entity()`, since the 2026-08-17 promotion. The arm wore AMBER while
+#: it was EXPERIMENTAL -- "a bare LUC3D in teal would present an EXPERIMENTAL tracker
+#: as the shipped one" was the whole argument -- but Eric promoted this operating
+#: point (sync association, stale 20, distanceThreshold 25, corr3dWeight 6) to the
+#: SHIPPED configuration, so the arm now IS "this work as it ships" and the set-wide
+#: rule (`ENTITY`: teal = this work, whatever it is called in that figure) says teal.
+#: Panels b-f draw the PREVIOUS default, also in teal -- same rule, both arms are this
+#: work; the key text is what tells them apart, exactly as Fig 3d's two teal arms do.
+#: The move also FREES amber: `style.py DATASET_COLORS` now spends it on the SCN2A
+#: dataset family in Figs 10-11, and Fig 11 places this panel on the same page --
+#: amber meaning "our tracker arm" on 11a and "a dataset" on 11i-m would have been
+#: the very collision class the 2026-08-17 recolor exists to remove.
+VARIANT_COLOR = entity("luc3d")
 
 #: Its own key line, NOT a suffix on the series entry, because the entry has no room:
 #: at bold 8 pt the four existing entries reach 77.9 of 88 mm (see CORPUS_NOTE), and
@@ -373,7 +376,11 @@ VARIANT_COLOR = AMBER
 #: the page, and the renderer drops the overhang WITHOUT COMPLAINT (it is `lint_text.py`
 #: `truncated()`, not matplotlib, that would have told me). A short line of its own in
 #: the same amber reads as part of the same entry and measures 57 mm.
-VARIANT_NOTE = "· experimental: NOT in the shipped app"
+#: REWRITTEN 2026-08-17: the arm was promoted to the shipped configuration, so the
+#: old warning ("· experimental: NOT in the shipped app") became a false statement
+#: about the line beside it. The note now carries the operating point instead --
+#: the mechanism words a reader needs to match this arm against Figs 3d/8/10.
+VARIANT_NOTE = "· shipped config: sync · stale 20 · dist 25"
 
 #: `--variant` ONLY, and the on-artwork half of the SLEAP correction. The variant plots
 #: SLEAP at 0.206 -> 0.084 where Fig 7a plots the SAME SERIES at 0.115 -> 0.062, and a
@@ -514,9 +521,10 @@ def main(variant=False, fair=True):
     # REPLACEMENT, not addition (2026-08-13, on instruction): the variant deposit puts the
     # improved tracker INTO the `LUC3D` slot, so every series here picks it up and there is
     # exactly one LUC3D line -- two would force the reader to work out which one is the app.
-    # The name on the artwork becomes "LUC3D (fresh anchor)" and the colour becomes AMBER,
-    # because a bare "LUC3D" in teal would present an EXPERIMENTAL tracker as the shipped
-    # one, which is the single thing this panel must never do. If the deposit still carries
+    # The name on the artwork is "LUC3D fresh anchor (shipped)" -- the arm was promoted to
+    # the shipped configuration 2026-08-17, so it wears entity teal (see VARIANT_COLOR's
+    # note; while it was experimental the name carried an EXPERIMENTAL tag and the hue was
+    # amber, precisely so it could not be read as the app). If the deposit still carries
     # a separate `LUC3D + fresh anchor` key (the older additive layout) that is drawn
     # instead, so both deposit shapes render.
     vkey = VARIANT_KEY if VARIANT_KEY in t["bmimica_50_sessions"] else "LUC3D"
@@ -524,15 +532,11 @@ def main(variant=False, fair=True):
     if not variant:
         order = ORDER
     elif VARIANT_KEY in t["bmimica_50_sessions"]:
-        order = ORDER + [(VARIANT_KEY, VARIANT_KEY, VARIANT_COLOR)]
+        order = ORDER + [(VARIANT_KEY, "LUC3D + fresh anchor (shipped)",
+                          VARIANT_COLOR)]
     else:
-        # VARIANT_COLOR, NOT `col` (caught in adversarial review 2026-08-14): `col`
-        # is entity("luc3d") teal, and this branch is the one whose docstring says a
-        # bare LUC3D in teal "would present an EXPERIMENTAL tracker as the shipped
-        # one, which is the single thing this panel must never do" -- teal here also
-        # collided with panels b-f, where teal IS the shipped tracker at 0.752.
-        order = [(("LUC3D", "LUC3D (fresh anchor)", VARIANT_COLOR) if k == "LUC3D"
-                  else (k, nm, col)) for k, nm, col in ORDER]
+        order = [(("LUC3D", "LUC3D fresh anchor (shipped)", VARIANT_COLOR)
+                  if k == "LUC3D" else (k, nm, col)) for k, nm, col in ORDER]
     height = ROW_H_VARIANT if variant else ROW_H
     # Whether this deposit's SLEAP series is the CORRECTED one. See SLEAP_INVALID_KEY:
     # the note below is a claim about provenance, so it is drawn from evidence in the
@@ -594,7 +598,7 @@ def main(variant=False, fair=True):
         # visually classing a tracker that labels 1.3% of frames with the one that
         # retains its score across cameras. The ratio is dropped and the denominator
         # is named in-line; the dotted/hollow mark stays.
-        # "1.3% coverage" REPLACES "· BMimica only" on this line rather than joining
+        # "1.3% coverage" REPLACES the CORPUS_NOTE on this line rather than joining
         # it -- both suffixes together are 56 characters and run off the panel (lint:
         # CLIPPED). Coverage is the one a reader must have to not misread the mark;
         # the corpus note is in the legend with the other provenance.
@@ -683,6 +687,20 @@ def main(variant=False, fair=True):
     if not variant:
         ax.text(-0.13, 1 / NCAM + 0.015, rule,
                 color=MUTED, fontsize=6.5, va="bottom", linespacing=1.4)
+    else:
+        # THE RULE IS NAMED ON THE VARIANT TOO (adversarial review 2026-08-17:
+        # an unlabelled dashed line at 0.2 with the corpus note near it read as
+        # the note's underline). One line, the retraction's wording ("scoring
+        # convention", not "ceiling" -- see `rule` above, whose three-line form
+        # stays legend material), hung UNDER the rule at the left edge, where
+        # the descending baselines are still ~0.45 above and 3D-MuPPET's dotted
+        # series is far below at 0.011. At 8 pt, NOT the 6-6.5 pt gloss size:
+        # fig11 re-uses this panel at 0.635 scale, where anything under 7.9 pt
+        # lands below lint's 5 pt floor -- the accepted fig11 fine-print list is
+        # closed and must not grow.
+        ax.text(-0.13, 1 / NCAM - 0.022,
+                f"1/C = {1 / NCAM:.2f} · camera-scoped convention",
+                color=MUTED, fontsize=8, va="top")
 
     # THE SWITCH COUNTS, IN THE DATA AREA, IN THE VARIANT ONLY. IDF1 alone understates
     # what the fresher anchor does -- 0.749 -> 0.850 is one number, 2,071 -> 511 ID
@@ -701,16 +719,19 @@ def main(variant=False, fair=True):
     text_legend(ax, entries, "above", dy=key_dy(height), xy=(0.14, 0.985),
                 transform=fig.transFigure)
     # THE CORPUS, ON THE ARTWORK (review round 3): 7b kept its "SLAP-2M corpus ·
-    # a is BMimica" header when footnote() was suppressed set-wide; this panel's half
+    # a is Mouse-Dyad-10M" header when footnote() was suppressed set-wide; this panel's half
     # of that two-way pointer was IN footnote() and silently vanished -- leaving five
     # headline numbers with no corpus, one panel away from a SLEAP median of 0.749 on
     # a different corpus. Same idiom as 7b: one MUTED line, in the plot's empty
     # upper-left, saying which corpus and pointing at the rest of the figure.
     if variant:
-        # LOWER LEFT, not upper: the amber arm runs flat at 0.861, right through the
+        # LOWER LEFT, not upper: the teal arm runs flat at 0.861, right through the
         # upper-left band (lint: 20% inked). Below the descending baselines' left
         # ends (~0.64 at x=0) the corner under y~0.55 is empty on this render.
-        ax.text(0.02, 0.40, "50 BMimica sessions\nb–f: SLAP-2M",
+        # 0.46, not 0.40: at 0.40 the second line's box grazed the 0.20 rule the
+        # review read it as sitting on; the rule now carries its own label below
+        # it, and the note clears both (adversarial review 2026-08-17).
+        ax.text(0.02, 0.46, "50 Mouse-Dyad-10M sessions\nb–f: SLAP-2M",
                 transform=ax.transAxes, ha="left", va="top", color=MUTED,
                 fontsize=6.5, linespacing=1.4)
     ax.set_xlim(-0.15, 1.05)
@@ -750,7 +771,7 @@ def main(variant=False, fair=True):
     # extent hangs off the left of the page and the renderer drops the overhang
     # without complaint. Every line here is under 68 mm, measured.
     #
-    # A FOURTH LINE IS NOT FREE, which is why the "BMimica only" note rides in the
+    # A FOURTH LINE IS NOT FREE, which is why the "Mouse-Dyad-10M only" note rides in the
     # key instead (see CORPUS_NOTE). `footnote` folds into the x label, so each line
     # is 3.2 mm taken out of THIS panel's axes: measured, a fourth line shrinks the
     # plot from 22.0 to 18.8 mm, and the two-line ceiling annotation then fills a
@@ -758,12 +779,12 @@ def main(variant=False, fair=True):
     #
     # `b–f: SLAP-2M` RIDES ON LINE 3 FOR THAT REASON, and it is not decoration.
     # TWO DIFFERENT QUANTITIES IN THIS FIGURE ARE BOTH CALLED "within-view IDF1":
-    # this panel's 0.749 is BMimica, 50 sessions, C = 5; panel c's survival curve is
+    # this panel's 0.749 is Mouse-Dyad-10M, 50 sessions, C = 5; panel c's survival curve is
     # SLAP-2M, 74 sessions, C = 6, where the same tracker's within-view mean is 0.736
     # and its median 0.900. A reader who meets 0.749 here and a curve centred near
     # 0.90 there has no way to know they are different corpora unless BOTH panels say
     # so, so each names its own corpus AND points at the other (c carries the mirror
-    # note "a is BMimica"). Naming only this one would still leave c unlabelled.
+    # note "a is Mouse-Dyad-10M"). Naming only this one would still leave c unlabelled.
     #
     # THE VARIANT ADDS TWO MORE LINES and can afford them: `footnote` no longer draws
     # anything (it prints to the build log and returns -- the journal sets the legend),
@@ -774,20 +795,20 @@ def main(variant=False, fair=True):
     # "every tracker" is precise on 7a, where every tracker in the file IS a published
     # comparison; on 7h it would be false, because the panel shows one that beats LUC3D.
     every = "every published tracker" if variant else "every tracker"
-    note = (f"n = {int(df.n_sessions.iloc[0])} full BMimica sessions, "
+    note = (f"n = {int(df.n_sessions.iloc[0])} full Mouse-Dyad-10M sessions, "
             f"{NCAM} cameras, 2 mice\n"
             f"mean ± 95% CI; LUC3D drift ≤ {drift:.3f} in every session\n"
             f"ahead of {every} in {xwins}/{xn} sessions · b–f: SLAP-2M")
     if variant:
         vw = wins[vkey]
         note += (
-            f"\nLUC3D here is the EXPERIMENTAL fresh-anchor tracker, NOT the shipped app: "
-            "figs/fig8-bench/xv_experimental.js, "
-            "method {sync, stale 20} + distanceThreshold 25 — NOT in "
-            "pose/cross-view-tracker.js and NOT what the app does\n"
-            f"it is ahead of the shipped tracker in {vw['within']['wins']}/"
+            f"\nLUC3D here is the fresh-anchor tracker — the SHIPPED configuration "
+            "since 2026-08-17 (Eric's promotion): "
+            "method {sync, stale 20} + distanceThreshold 25, "
+            "benched in figs/fig8-bench/xv_experimental.js\n"
+            f"it is ahead of the previous default in {vw['within']['wins']}/"
             f"{vw['within']['n']} sessions within view and {vw['cross']['wins']}/"
-            f"{vw['cross']['n']} cross view. This panel is BMimica; the SLAP-2M panels "
+            f"{vw['cross']['n']} cross view. This panel is Mouse-Dyad-10M; the SLAP-2M panels "
             "b-g rest on a different detection pool (predictions_h5s via "
             "PAF_3d_kalman) and need their own run of this arm")
         # THE TWO COMPETITOR CORRECTIONS, in the note as well as on the artwork, so they

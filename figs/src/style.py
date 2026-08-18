@@ -75,6 +75,11 @@ TEAL, SALMON, PERIWINKLE, PINK, GREEN, YELLOW, TAN, GREY = SET2
 AMBER = "#DF9C20"
 SKY = "#93C9DE"
 
+#: Dataset-family violet (Figs 10-11). Not a Set2 hue: the families need a third
+#: non-entity colour that survives Fig 11's 0.635 down-scale, and Set2's YELLOW
+#: does not (contrast 1.38 against the white page, against 6.46 here).
+VIOLET = "#6C4F9E"
+
 #: Box/whisker and general line ink in the reference (NOT pure black).
 INK = "#4C4D4C"
 
@@ -138,9 +143,33 @@ ENTITY = {
 }
 
 
+#: THE s-DANNCE DATASET FAMILIES (Figs 10-11), defined ONCE so every fig10 panel
+#: agrees. These are deliberately NON-entity hues: the families used to wear
+#: teal/salmon/periwinkle, so on Fig 11 -- which combines Fig 7 (teal = LUC3D,
+#: salmon = ByteTrack, periwinkle = SLEAP) with Fig 10 -- the same three hues
+#: carried both meanings on one page (adversarial review 2026-08-17, Agent 3
+#: MAJOR 2). SKY/VIOLET/AMBER are three separated hue families that the ENTITY
+#: table does not reserve: validated with the dataviz palette checker as a trio
+#: all-pairs (no FAIL). BEDDING was Set2's YELLOW until 2026-08-17; it is VIOLET
+#: now because yellow carries only 1.38 contrast against the white page (violet
+#: 6.46), and Fig 11 renders these panels at PLOT_SCALE 0.635, which thins every
+#: line and marker until a pale hue stops reading. AMBER
+#: goes to SCN2A, the densest family (n = 29 sessions of scatter);
+#: every fig10 series also carries its own marker shape (o/s/^) and a direct
+#: colour-word label, the secondary encoding the checker requires of pastels.
+#: NOTE amber was fig7a's ad-hoc hue for the then-EXPERIMENTAL fresh-anchor arm;
+#: that arm is the SHIPPED configuration as of 2026-08-17 and is drawn in
+#: entity teal, which is what frees amber for a dataset family here.
+DATASET_COLORS = {
+    "TRIADS": SKY,      # #93C9DE
+    "BEDDING": VIOLET,  # #6C4F9E
+    "SCN2A": AMBER,     # #DF9C20
+}
+
+
 #: THE APP'S OWN IDENTITY PALETTE, mirrored from `pose/pose-data.js`
-#: `IDENTITY_COLORS`. Fig 1b, Fig 1c, Fig 2a and Fig 6b are SCREENSHOTS of the app, so
-#: any schematic that draws the same identities -- Fig 1a's pipeline icons, Fig 3's
+#: `IDENTITY_COLORS`. Fig 1c, Fig 1d, Fig 2a and Fig 6b are SCREENSHOTS of the app, so
+#: any schematic that draws the same identities -- Fig 1b's pipeline icons, Fig 3's
 #: association diagrams -- has to use the same hues or the reader is asked to follow an
 #: identity across a colour change (review 2026-08-13: "watch the colour matching the
 #: instance"). Keep this list in sync with the app; it is the app that owns it.
@@ -592,3 +621,37 @@ def deposit(df, fig_no, name) -> Path:
     df.to_csv(p, index=False)
     print(f"  deposited {p.relative_to(FIGS)}  ({len(df)} rows)")
     return p
+
+
+#: CORPUS DISPLAY NAMES. The DATA keeps its original names -- deposit fields, dict keys
+#: and file paths all still say "BMimica" -- and only the PRINTED name changed (Eric,
+#: 2026-08-17: "for fig1 and all figures we want to rename BMimica-10M or BMimica to
+#: Mouse-Dyad-10M").
+#:
+#: WHY A MAPPING RATHER THAN A SWEEP OF THE LITERALS. Two panels match a label against a
+#: deposit's own field: `fig6_04_corpus.py` looks its column up by
+#: `fig6.json corpora[i]["name"]`, and `fig3_06_head_to_head.py` matches its per-session
+#: CORPUS map against the runtime deposit's `dataset` string. Renaming those literals in
+#: place returns None and drops a column or a row -- silently, because both sides are
+#: strings and neither is validated. So the lookup keys stay as the data spells them and
+#: the name is translated at the moment it is drawn. Renaming the deposits instead would
+#: mean re-running every measurement pass that wrote one.
+CORPUS_NAMES = {
+    "BMimica": "Mouse-Dyad-10M",
+    "BMimica-10M": "Mouse-Dyad-10M",
+    "BMimica-12M": "Mouse-Dyad-10M",      # a name that existed for ~20 minutes
+}
+
+
+def corpus(name: str) -> str:
+    """The printed name for a corpus, given the name the DATA uses."""
+    return CORPUS_NAMES.get(name, name)
+
+
+def recorpus(text: str) -> str:
+    """Translate every corpus name inside a longer string -- for footers, keys and
+    notes that name a corpus mid-sentence. Longest alias first, so "BMimica-10M" is
+    not left as "Mouse-Dyad-10M-10M"."""
+    for old in ("BMimica-12M", "BMimica-10M", "BMimica"):
+        text = text.replace(old, CORPUS_NAMES[old])
+    return text

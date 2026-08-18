@@ -16,8 +16,11 @@ of this: Fig 2's "two anchors cost ~3.5 mm" is ~5% of a nose-to-trunk length, an
 Fig 4c's 7.2 mm outlier displacement is ~11%. Without the animal's own scale on the
 page those numbers have no referent.
 
-Drawn as the skeleton graph in two orthogonal projections, at one stroke weight,
-with a scale bar. No shading, no perspective: this is a ruler, not a rendering.
+Drawn as the surface-filled skeleton in two orthogonal projections, with a scale
+bar. Still orthographic and still a ruler -- no perspective -- but the pose now
+wears the set's body membranes (Eric 2026-08-16: pose skeletons get
+surfaces/fills; src/skeleton_style.py, the viz_08 look) so it reads as the same
+animal every other pose in the set draws, not a wireframe.
 
 Source: figs/out/fig6.json `mean_pose`.
 
@@ -32,6 +35,7 @@ from matplotlib.transforms import blended_transform_factory
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.data_loader import load  # noqa: E402
+from src.skeleton_style import draw_skeleton_2d  # noqa: E402
 from src.style import MUTED, grid, GREY, INK, TEAL, deposit, save, use  # noqa: E402
 
 VIEWS = [((0, 1), "top (x–y)"), ((0, 2), "side (x–z)")]
@@ -41,7 +45,6 @@ def main():
     use()
     mp = load("fig6.json")["mean_pose"]
     xyz = np.asarray(mp["xyz_mm"], float)
-    edges = mp["edges"]
     names = mp["node_names"]
 
     deposit(pd.DataFrame({"node": names, "x_mm": xyz[:, 0], "y_mm": xyz[:, 1],
@@ -49,11 +52,12 @@ def main():
 
     fig, axes = grid(1, len(VIEWS), span="half", row="std", despine=False)
     for ax, ((i, j), label) in zip(np.atleast_1d(axes), VIEWS):
-        for a, b in edges:
-            ax.plot([xyz[a, i], xyz[b, i]], [xyz[a, j], xyz[b, j]], color=TEAL,
-                    lw=1.4, zorder=2, solid_capstyle="round")
-        ax.plot(xyz[:, i], xyz[:, j], "o", color=TEAL, ms=3.5, mec="white",
-                mew=0.7, zorder=3)
+        # The set's surface-filled skeleton (src/skeleton_style.py): membranes +
+        # round-capped edges + joint dots, in place of the old bare stick graph.
+        # The membrane/edge lists are the viz_08 ones, so the drawn edges are the
+        # HOUSE skeleton, not the deposit's minimal edge list -- the deposit still
+        # carries the node coordinates, which is what the panel measures.
+        draw_skeleton_2d(ax, xyz[:, [i, j]], TEAL, node_names=names, edge_lw=1.4)
         ax.set_aspect("equal")
         ax.set_xticks([])
         ax.set_yticks([])

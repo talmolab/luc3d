@@ -35,7 +35,7 @@ PROGRESS = "tail figs/out/tmp/fig9_slap2m.log"
 #: (config key, label drawn on the panel, colour).
 #:
 #: Colours match Fig 8d exactly -- shipped is INK and this arm is PERIWINKLE there --
-#: because the two figures are read against each other (BMimica there, SLAP-2M here) and
+#: because the two figures are read against each other (Mouse-Dyad-10M there, SLAP-2M here) and
 #: a hue that swapped meaning between them would be worse than no colour at all.
 #:
 #: The long label is deliberate. "stale 20" names nothing on its own, and the arm is
@@ -90,7 +90,7 @@ def misgrouped_lines(width, colour, tail=None):
 
 #: The identity-fix ceiling on SLAP-2M: the cross-view IDF1 a tracker that got EVERY
 #: identity right would still be stuck at, because 35.4% of ground truth has no
-#: detection to carry a label at all. BMimica's detector misses 8.7% and its ceiling is
+#: detection to carry a label at all. Mouse-Dyad-10M's detector misses 8.7% and its ceiling is
 #: 0.9527, which is why a smaller gain here than there is EXPECTED rather than a
 #: failure. Both are asserted against the deposit's own `caveats` by `verify()`.
 CEILING = 0.7704
@@ -99,7 +99,7 @@ MISS_RATE = "35.4%"
 
 #: The reference result on the other corpus, quoted on 9b so the SLAP-2M numbers are
 #: read against something. From figs/out/fig8_methods_50.json via Fig 8d.
-BMIMICA_REF = ("BMimica reference (50 sessions, 5 cameras): shipped 2,071 switches "
+BMIMICA_REF = ("Mouse-Dyad-10M reference (50 sessions, 5 cameras): shipped 2,071 switches "
                "(0.00460% of camera-frames) -> stale 20's 413 (0.00092%); "
                "cross-view IDF1 0.749 -> 0.861")
 
@@ -233,7 +233,7 @@ CF = {}
 #: only for the two or three cells' multi-animal aggregates, never merged with this pool's
 #: numbers: the two pools have different detectors, so their LEVELS are not comparable.
 OTHER_POOL = "fig9_slap2m_predictions.json"
-#: The BMimica winner that does NOT transfer, checked for in the deposits rather than assumed.
+#: The Mouse-Dyad-10M winner that does NOT transfer, checked for in the deposits rather than assumed.
 CORR12 = "sync_stale20_dist25_corr12"
 
 

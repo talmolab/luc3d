@@ -11,6 +11,14 @@
  * the real pipeline runs on real data (figs/session -- 8 cameras, 3 mice, 15-node
  * skeleton, 60 fps, trimmed from 20260605_133431-HardFight).
  *
+ * The skeleton EDGE SET is overridden to the complete 26-edge plotting skeleton
+ * (setSkeletonEdges / MOUSE_EDGES, from src/skeleton_style.py) before any export
+ * (Eric 2026-08-16): the session's own sparse edge list reads as spiky lines
+ * rather than a mouse at print size. Display-only -- nodes, detections, tracking
+ * and triangulation are untouched (nothing on those paths reads skeleton.edges),
+ * and the manifest's ledger/stats were diff-verified unchanged against the
+ * pre-override run.
+ *
  * Three states of the SAME frame:
  *   before-*   per-camera SLEAP tracks, coloured BY TRACK, Tracks timeline.
  *              Many track_N labels for 3 animals, no correspondence across views.
@@ -28,7 +36,7 @@
  */
 import {
     launch, loadSession, gotoFrame, trackAll, triangulateAll, setColorMode,
-    setTimelineMode, setOverlayStyle, setIdentityPalette, showCameraView,
+    setTimelineMode, setOverlayStyle, setIdentityPalette, setSkeletonEdges, showCameraView,
     showInitialView, setLayout, set3dChrome, hide3dButtons, exportViews,
     rigFit, writeManifest, shootEl, clearOverlays, done, log, CAMS,
 } from './_drive.mjs';
@@ -48,7 +56,15 @@ import {
 // (reared against the near wall in Camera7_sideR) has several skeleton edges falling
 // off it onto the black frame, which at 40 mm reads as noise. In both, all 3 animals
 // carry all 15 nodes in both figure cameras.
-const FRAME = Number(process.env.FRAME || 276);
+// FRAME 198 since 2026-08-16 (Eric): 276 was the completeness-scan pick (all 8
+// cameras exactly 3 detections, all assigned — only 276/278 qualify), but its
+// third animal is reared against the near wall and its skeleton reads as a
+// jumble with the complete edge set. 198 was picked from a relaxed probe
+// (_probe_fig1b_frames.mjs: both FIGURE cameras complete and assigned, 3D
+// extents sane, ranked by worst-animal extent): the cyan animal is compact in
+// both shown views. The cost, accepted deliberately: one surplus detection in
+// a NON-shown camera, so the ledger reads "1 unassigned" instead of 276's 0.
+const FRAME = Number(process.env.FRAME || 198);
 const NANIMALS = Number(process.env.NANIMALS || 3);
 const VIEW_CAM = process.env.VIEW_CAM || 'Camera0_mid';
 const BRIGHT = Number(process.env.BRIGHT || 1.9);
@@ -84,6 +100,9 @@ try {
     const loaded = await loadSession(page, { cams });
     await gotoFrame(page, FRAME);
     await setOverlayStyle(page, PRINT_STYLE);
+    // Complete plotting skeleton for every tile, incl. the pre-tracking "before"
+    // exports (display-only; see header note).
+    const skelEdges = await setSkeletonEdges(page);
 
     // ---- BEFORE: per-camera tracks -------------------------------------------
     await setColorMode(page, 'tracks');
@@ -259,6 +278,7 @@ try {
         session: loaded, frame: FRAME, nAnimals: NANIMALS, viewCam: VIEW_CAM,
         brightness: BRIGHT, overlayStyle: PRINT_STYLE, cameras: cams,
         tracked, triangulated: tri, stats, ledger, identityPalette: palette,
+        skeletonEdges: skelEdges,
         distinctTrackLabels: detKeys.size, distinctTrackNames: distinctNames.size,
         before, after,
         timelines: { before: 'before-timeline.png', after: 'after-timeline.png' },

@@ -1,113 +1,60 @@
-# Overnight report — figures, 2026-08-15 morning
+# Overnight report — 2026-08-16 morning
 
-You asked for majorly improved figures, more stratified plots, no prose on artwork,
-docs in sync, and self-sustained iteration. Three adversarial review rounds ran
-overnight (each a fresh agent told to break the figures, each finding verified
-against the scripts before anything moved); everything below is committed on
-`eric/figs`, lint is at its 2 pre-existing issues, and every number that moved is in
-`FIGURE-LEGENDS.md` / `METHODS.md`, which a dedicated agent kept honest all night.
+You went to sleep with three visual-quality workstreams launched and two
+benchmark reruns in flight. Everything landed; every panel below was verified
+by eye (the rendered PNGs, not just exit codes) before being called done.
+(The previous morning's report is preserved at `MORNING-SUMMARY-2026-08-15.md`.)
 
 ## Look at these first
 
-1. `figures/fig7/fig7.png` — 7a now plots the FAIR baselines (SLEAP 0.642 with the
-   2-track cap actually enforced; ByteTrack 0.676 never-retire + our 2-identity
-   stitch), the experimental arm is AMBER (it was wearing the shipped tracker's teal
-   — caught by review), 3D-MuPPET's line says "1.3% coverage" instead of a
-   misleading ×1.00, the ~30% dead band is reclaimed, and the corpus pointer is
-   back. All caveats live in the legend.
-2. `figures/fig2/fig2.png` — 2c is the box-plot-by-cameras in mm, ALL FIVE cameras
-   included (4.74 → 1.19 mm; the held-out px form is under `--heldout`). 2b plots
-   labels-free-by-reprojection with C×N as the labelled denominator. 2a draws six
-   grey cameras where its caption says six, and names its anchor cams.
-3. **New measurement, finished and gated:** `figures/fig2/fig2s1_cams_identity.png`
-   — cross-view identity vs cameras used. 450 tracking runs over deterministic
-   camera subsets; the k=5 cell reproduces the published 50-session numbers to
-   0.000e+00. Result: **0.67 → 0.74 → 0.75 → 0.75** — the 2→3 jump is the whole
-   story, the diminishing return you predicted.
+1. `figures/fig5/fig5.png` — **5a is now a Blender render**: the mutual upright
+   display's two mice as matte ball-and-stick skeletons with filled membranes,
+   inside a plain translucent cutaway cube (no cage — different dataset), in
+   fig5's Set2 teal/pink. The five 2D projection views are restyled to the same
+   surface-filled skeleton look. Regenerate the render with the command in
+   `panels/fig5_05_upright_views.py`'s docstring (`blender-images/fig5a_scene.py`).
+   TWO REAL BUGS found en route, both documented in the scene file:
+   (a) `cage_scene.hex2rgba` feeds raw sRGB values into Blender's LINEAR color
+   sockets — the systemic pastel wash in these renders; fig5a pre-linearizes its
+   hexes instead (cage_scene untouched, its approved renders unchanged);
+   (b) the box's camera-facing translucent walls were desaturating everything
+   behind them — the box is now a cutaway (film only on the far walls, full ink
+   wireframe). If you ever re-render `cage_two_mice`, consider the same fixes.
+2. `figures/fig10/fig10.png` — three changes you asked for, finished:
+   **10a** tiles now draw full skeletons (the deposit's own `joints_idx` edges +
+   translucent convex-hull body panels + joint dots) instead of bare dots;
+   **10f** is the camera-count ablation under 25% instance dropout at σ=0|σ=3
+   (your spec): pooled switch rate falls ~130–190 → 4–10 per 100k frames from
+   2 → 6 cameras (~20–40×), four spread cameras recover most of it, and adding
+   3 px noise barely moves the curve — missingness, not noise, is what cameras
+   buy protection against; **10g**'s dropout arm is now at σ=0 (0 → ~1 → ~7
+   per 100k at 0/25/50%). All lines figure-wide are now POOLED statistics
+   (your "why does it say 0 switches" review) — medians live in caption text.
+3. `figures/fig6/fig6s2_mean_pose.png` — the mean-pose supplementary panel
+   restyled with the new shared helper `src/skeleton_style.py` (2D + 3D
+   surface-filled skeletons for any future panel; includes a workaround for a
+   real matplotlib-3.11 `add_collection3d` bug, documented in the module).
 
-## The stratified plots you asked for (supplementary letters, awaiting your placement)
+## Benchmark state (fig10)
 
-| panel | what | proposed home |
-|---|---|---|
-| `fig7s3_idf1_by_difficulty` | three trackers' within-view IDF1 by SLAP-2M difficulty, median + IQR, n under ticks | Fig 7, beside 7c |
-| `fig6s4_quality_by_animals` | miss rate vs difficulty per animal-count stratum | replaces 6d, or stays supplementary (same cells as 6d — don't place both) |
-| ~~fig6s5~~ **now Fig 6e** | per-camera miss %, pooled bars + 74 session dots (top 30.1% → back 40.3%) | PLACED — it fills the reflowed grid |
-| `fig2s1_cams_identity` | identity vs cameras used (above) | Fig 2, beside 2c |
+- 1,562 cell results in `fig10-bench/results/` (main matrix 656 + C6 hand-labels
+  + C7 camera ablations at σ3/σ10/σ0/σ0+drop25/σ3+drop25 + C8 drop50@σ0),
+  zero missing per `fig10_aggregate.py`, zero failed cells.
+- Verification controls deposited (`fig10_controls.py` → `results/agg/controls.json`):
+  randomized-GT re-score collapses to chance; a GT splice is detected exactly;
+  wrong calibration collapses the score. The scorer cannot self-confirm.
+- `LEGEND-fig10.md` numbers re-verified against `summary.csv` after every
+  condition change; PANEL-SOURCES rows updated (e/f/g conditions, 10a pipeline).
 
-## The late-night instruction round (all committed)
+## Open decisions (yours)
 
-- **2c** now shows 3D error vs the proofread reference in **mm for k = 2..5,
-  including all cameras** (4.74 → 2.89 → 1.91 → 1.19 mm) — your "include all
-  cameras" ask; the held-out px form lives under `--heldout`.
-- **3d** is **two stacked plots** — switch rate above, IDF1 below — one colour
-  scheme (teal = fresh anchor, salmon = exhaustive, flat because it has no r),
-  rotated y-labels sized to fit after the horizontal-caption experiment was
-  rejected.
-- **4a** unboxed like 3a; **4c** went through three forms on your messages and
-  landed as the per-session line field: 50 grey lines (all views → worst view
-  dropped, **every one of the 50 slopes down**), teal mean pair 2.06 → 1.71 px.
-  That needed a re-measurement with session capture (`fig4_robust_sessions.mjs`,
-  ~90 s), gated to reproduce the published pooled numbers to 2.5e-13.
-- **6c** is the **missing-keypoints × difficulty × cameras surface** — a NEW
-  measurement (`fig6_recovery.py`, 74 sessions in 29 s, exact over all camera
-  subsets): 26.1% of keypoints missing per view; recovery 0% at k=2 (one other
-  view can't triangulate) rising to **45.7% of misses at k=6**. The 3D-plane
-  render exists under `--surface`.
-- **Fig 6 reflowed** around it on your instruction: everything back, no white
-  space, per-camera panel promoted to e. **The figure now runs 249 mm against
-  the 200 mm ceiling — something needs to shrink or move; your call.**
-
-## Fig 3, final state
-
-3a unboxed (coloured headings, screenshot-matching identity colours); 3b cut (the
-cost function lives in METHODS.md, in the code's own form — including a `(1+Δt)`
-factor the old schematic omitted); 3c is fresh-anchor vs exhaustive, **fully
-uncapped**: GT scoring now covers every eligible frame (ticks 10k/19k), and the
-full-sample 4×3 contrast is greedy ~4.7 vs exhaustive ~85 misgrouped per 10,000 —
-stronger than the sampled version suggested; 3d is your two stacked plots (teal
-fresh anchor, salmon exhaustive drawn flat because it has no r term); 3e has no
-prose and its 4×6 bound is re-priced from the measured uncapped rate (0.55–21 h
-per frame). Panels re-lettered c→b, d→c, e→d, f→e.
-
-## Measured overnight (all gated)
-
-- **Camera subsets** (above): `figs/out/fig2_cams_identity.json`.
-- **ID accuracy**: IDA = 92.46% pooled for the fresh anchor, median 100%, worst
-  56.6%; false positives are 0.104% of matches, so IDA ≈ IDP. In METHODS.md.
-- **Uncapped exhaustive 3×5 and 4×3**: DONE — every eligible frame computed
-  (10,419 and 19,135 instead of the 7,001/3,000 samples you flagged; ~14 h at 2.7
-  and 5.5 s/frame). Agreement 99.760% / 99.038%, pooled 99.982% over 4.59M frames;
-  3c re-rendered with the full denominators, no sampling caveat left. One incident,
-  recorded honestly: the run's aggregation step overwrote the four-config
-  `fig3_headtohead.json` with a two-config file (my launch scoped the compute but
-  not the output). Caught at harvest, rebuilt from intact caches in ~9 min, A2 rows
-  verified unchanged. Commit `0c1f334`.
-
-## Fixed after being caught by review (worth knowing)
-
-- My fig2c "fix" (dots plotting 3D-mm against px boxes) **died in a failed shell
-  call and I committed a message claiming it anyway.** The round-2 reviewer caught
-  it by arithmetic (50 dots below their own box's p25). Actually applied and
-  verified in round 2; the commit message of the false claim is `5f0cc69`, the real
-  fix `4b51d21`.
-- fig7s3's mean±s.d. whiskers asserted IDF1 up to 1.14 on a [0,1] metric → now
-  median with IQR whiskers.
-- fig6e's Hours column showed 18.7 + 10.9 = 29.5.
-
-## Needs you (nothing else can move these)
-
-1. **Place or decline the four supplementary panels** (table above).
-2. **2a's 3D viewport re-render from sideL** — needs the app opened on the demo
-   session; everything scripted around it is done.
-3. **F7.3 recovery tolerance** (10 px / 20 px?) and denominator — blocks the
-   false-negative-recovery panel.
-4. **X.2 px→cm scale plane** (arena floor vs mean animal height).
-5. **F3.3 "the square"** — Jaccard metric, heat-map, or R²?
-6. 7b/7e per your late-night message: if you meant the SLAP-2M fair-baseline
-   substitution on those panels too, that needs the baselines re-run on SLAP-2M
-   (different pool; SLEAP's detections there are indexed by its own tracks) — a
-   real experiment, not a redraw. Say the word and I'll spec it.
-
-Commits tonight: `5f0cc69`, `6d280f3`, `4b51d21`, `c85a796`, `3c4ece7`, plus the
-docs sync and whatever lands from the final legend pass. `git log --oneline` reads
-as the narrative.
+- **Fig 10 is 236 mm** against the 200 mm soft ceiling (7 panels). Candidate
+  trims: shrink the 10a image row, or move 10b to supplementary (its number is
+  also in the caption). Same situation as fig6's overrun — your call.
+- The fig5a render's mice sit slightly lighter than the 2D views' Set2 (soft
+  lighting lift after the linearization fix; compensation factor 0.8 noted in
+  `fig5a_scene.py`). Judged close enough to read as the same animals — push
+  further only if it bothers you.
+- sRGB-vs-linear bug in `cage_scene.hex2rgba`: left in place deliberately
+  (fixing it would change the approved cage_two_mice renders). Flag if you want
+  it fixed and those re-rendered.

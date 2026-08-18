@@ -82,10 +82,12 @@ FOOTERS: dict[int, list[str]] = {}
 #: their provenance), and a title inside a panel would scale with the panel while the
 #: letter beside it did not. At assembly both are one typographic unit.
 TITLES = {
-    (1, "a"): "Pipeline",
-    (1, "b"): "Cross-view re-identification",
-    (1, "c"): "Triangulated 3D",
-    (1, "d"): "Capability comparison",
+    # Fig 1 re-lettered 2026-08-16 (Eric: cage render leads the figure).
+    (1, "a"): "The rig, from its own data",
+    (1, "b"): "Pipeline",
+    (1, "c"): "Cross-view re-identification",
+    (1, "d"): "Triangulated 3D",
+    (1, "e"): "Capability comparison",
     (2, "a"): "Protocol",
     (2, "b"): "Labels free by reprojection",
     (2, "c"): "Error vs cameras in the solve",
@@ -116,11 +118,14 @@ TITLES = {
     (6, "b"): "One frame, six cameras",
     (6, "c"): "Missing keypoints vs difficulty and cameras",
     (6, "d"): "Animal-count control",
-    (6, "e"): "Per-camera detection quality",
+    (6, "e"): "Cross-view IDF1 by difficulty",
     (6, "f"): "Corpora",
     (6, "g"): "Detection quality",
     (6, "h"): "Difficulty strata",
-    (7, "a"): "Within- vs cross-view IDF1 (+ experimental arm)",
+    # "(+ experimental arm)" retired 2026-08-17: the fresh-anchor arm the panel
+    # features was promoted to the shipped configuration, so the suffix became a
+    # false statement about the artwork; the arm is labelled inside the panel.
+    (7, "a"): "Within- vs cross-view IDF1",
     (7, "b"): "Within-view IDF1 per session",
     (7, "c"): "Per-session paired difference",
     (7, "d"): "Error composition",
@@ -151,6 +156,26 @@ TITLES = {
     (9, "a"): "Cross-view identity on 42 multi-animal SLAP-2M sessions",
     (9, "b"): "Switch and misgrouped-detection rates",
     (9, "c"): "By difficulty and animal count",
+    # FIGURE 11 IS A COMBINED VIEW of Figs 7 + 10 built from their existing panel
+    # PDFs (Eric 2026-08-16). Titles are the source panels', shortened to fit the
+    # denser rows; the letter mapping lives in figs/fig11_sync.py and
+    # PANEL-SOURCES.md.
+    # a's source title carries "(+ experimental arm)"; at 0.62 scale the panel is
+    # 54.6 mm and the full string ran into b's letter, so it is shortened here --
+    # the arm is still labelled inside the panel itself.
+    (11, "a"): "Within- vs cross-view IDF1",
+    (11, "b"): "Within-view IDF1 per session",
+    (11, "c"): "Per-session paired difference",
+    (11, "d"): "Error composition",
+    (11, "e"): "IDF1 vs detector recall",
+    (11, "f"): "Fragmentation",
+    (11, "g"): "s-DANNCE transfer: one view per dataset, 3D reprojected",
+    (11, "h"): "Reprojection vs raw clicks",
+    (11, "i"): "IDF1 vs 2D noise",
+    (11, "j"): "IDF1 under dropout",
+    (11, "k"): "Keypoints vs COM-only",
+    (11, "l"): "Switches vs cameras",
+    (11, "m"): "Switches vs noise",
 }
 TITLE_PT = 7.5            # panel titles, below the 9 pt letter
 
@@ -160,10 +185,14 @@ TITLE_PT = 7.5            # panel titles, below the 9 pt letter
 #: a row is simply the panels that share it. Widths that disagreed with the panels'
 #: real sizes were how the first pass produced ragged rows.
 LAYOUTS = {
-    1: [[("a", "pipeline")],
-        [("b", "tracking")],
-        [("c", "reconstruction")],
-        [("d", "tool_table")]],
+    # RE-LETTERED 2026-08-16 (Eric: cage render leads the figure). Panel a is the
+    # Blender render of the SLAP-2M rig (blender-images/renders/cage_two_mice.png,
+    # from real calibration + tracked poses); the previous a-d moved down to b-e.
+    1: [[("a", "render")],
+        [("b", "pipeline")],
+        [("c", "tracking")],
+        [("d", "reconstruction")],
+        [("e", "tool_table")]],
     2: [[("a", "protocol")],
         [("b", "placements_vs_rig"), ("c", "reprojection_accuracy"),
          ("d", "baseline_angle")]],
@@ -212,9 +241,12 @@ LAYOUTS = {
     # difficulty (c) / animal-count (d) / camera (e) breakdown the review asked for.
     # NOTE the page runs ~235 mm, over the 200 mm soft ceiling -- panels to cut or
     # shrink is Eric's call, not one more overnight re-letter.
+    # e REPLACED 2026-08-16 (Eric): the per-camera miss-rate bars out, cross-view
+    # IDF1 per difficulty stratum in (panels/fig6_11_idf1_by_difficulty.py; the old
+    # bars' data stays deposited at data/fig6/fig6e_percam_quality.csv).
     6: [[("a", "rig"), ("b", "cameras")],
         [("c", "recovery_surface"), ("d", "animal_count")],
-        [("e", "percam_quality"), ("f", "corpora")],
+        [("e", "idf1_by_difficulty"), ("f", "corpora")],
         [("g", "detection_quality")],
         [("h", "difficulty_strata")]],
     # Panel a carries the EXPERIMENTAL high-performing arm (2026-08-13, on
@@ -289,6 +321,32 @@ LAYOUTS = {
     9: [[("a", "idf1_survival")],
         [("b", "rates")],
         [("c", "strata")]],
+    # FIG 10 -- the s-DANNCE transfer benchmark (PLAN-fig10-triads-bedding.md /
+    # PLAN-fig10-scn2a.md, exploratory until placed). Row 1 is the deposit's own
+    # frames with our reprojections (the at-a-glance calibration claim); row 2 the
+    # anchor + the two synthetic-difficulty sweeps; row 3 the input ablation and
+    # the merge-event caveat panel.
+    10: [[("a", "views")],
+         [("b", "residuals"), ("c", "noise"), ("d", "dropout")],
+         # f REPLACED 2026-08-16 (Eric): the merge scatter out, the camera-count
+         # ablation in. The merge finding stays in the legend text and the panel
+         # script (fig10_06_merge.py) still renders — kept, not placed.
+         [("e", "inputs"), ("f", "cameras")],
+         [("g", "switches")]],
+    # FIGURE 11 IS A COMBINED VIEW of Figs 7 + 10 built from their existing panel
+    # PDFs (Eric 2026-08-16: "combine fig 7 and fig 10 ... make the plots smaller
+    # but cram them all in"). It has NO panel scripts of its own: figs/fig11_sync.py
+    # copies each source panel PDF into figures/fig11/ at a reduced vector scale
+    # (assemble places panels at native width, so "smaller" must happen in the PDF).
+    # REGENERATING A SOURCE PANEL DOES NOT UPDATE FIG 11 -- re-run the sync first:
+    #     .venv/bin/python figs/fig11_sync.py && .venv/bin/python figs/assemble.py 11
+    # Letters a-f are Fig 7 a-f (home-corpus tracker comparison); g-m are Fig 10 a-g
+    # (the s-DANNCE transfer benchmark). LAYOUTS[7]/[10] are untouched.
+    11: [[("a", "within_vs_cross_variant"), ("b", "survival"), ("c", "by_animals")],
+         [("d", "decomposition"), ("e", "recall"), ("f", "fragmentations")],
+         [("g", "views")],
+         [("h", "residuals"), ("i", "noise"), ("j", "dropout"), ("k", "inputs")],
+         [("l", "cameras"), ("m", "switches")]],
 }
 
 

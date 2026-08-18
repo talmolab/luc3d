@@ -271,9 +271,9 @@ def main(variant=False, corrected=True):
             f"{ed['luc3d']['id_switches']:,}, false positives {er['false_positives']:,} -> "
             f"{ed['luc3d']['false_positives']:,}"
             f"\nso the retired arm's note 'LUC3D does not win on within-view "
-            f"switches' no longer holds: shipped {ed['luc3d']['id_switches']:,} against "
-            f"SLEAP's unchanged {ed['sleap']['id_switches']:,}, and the EXPERIMENTAL fresh "
-            f"anchor {ef['id_switches']:,} -- but the shipped arm's false positives are "
+            f"switches' no longer holds: the previous default {ed['luc3d']['id_switches']:,} against "
+            f"SLEAP's unchanged {ed['sleap']['id_switches']:,}, and the now-shipped fresh "
+            f"anchor {ef['id_switches']:,} -- but the previous-default arm's false positives are "
             f"{ed['luc3d']['false_positives'] / er['false_positives'] - 1:+.1%} against the "
             f"retired one, so the correction is not one-sided"
             f"\n{pool_note()}")

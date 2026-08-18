@@ -103,7 +103,7 @@ the embedded font name differs.
 | `fig1_tracking.mjs` | Runs the pipeline and writes Fig 1's source panels + `fig1.json`. |
 | `fig1_rig.mjs` | Sweeps rig framings for Fig 1c (orbit azimuth taken from a real top camera x elevation x zoom) so one can be chosen by eye. |
 | `fig2_protocol.mjs` | Stages the reprojection-aided labelling protocol in the app for Fig 2a: label 2 anchors → triangulate from ONLY those two (via the app's Camera Views weights) → reprojections in the rest → accept/nudge. Records the app's own per-view reprojection errors. |
-| `fig2_measure.py` | Measures Fig 2b/2c on real proofread BMimica data. Run with the bench env. |
+| `fig2_measure.py` | Measures Fig 2b/2c on real proofread Mouse-Dyad-10M data. Run with the bench env. |
 | `fig5_panel_a.mjs` | Stages Fig 5a in the app: Track All -> Triangulate All with **all** views contributing, then exports the tiles plus the app's own per-view reprojection errors (`fig5a.json`). Exists because Fig 5a used to reuse Fig 2's **two-anchor** frame, which inflated every non-anchor residual by design and made its headline number an artefact. |
 | `probe.mjs`, `fig1_gui.mjs` | Earlier full-GUI screenshot passes. Kept because the whole-window shot is still useful for docs/slides, but it is **not** the figure — at print size the 8-pane GUI is illegible, which is why Fig 1b uses native-resolution crops instead. **Naming rule (enforced): every file these two write is prefixed `gui-`, and no `panels/*.py` may read a `gui-*` file.** They used to write `fig1b-*.png` / `probe-full.png`, names indistinguishable from Fig 1's real panel sources — which is how `panels/fig1_03_reconstruction.py` came to read two stale pre-`setIdentityPalette()` files for weeks (see below). Do not reintroduce figure-shaped names here; a panel's source must come from the driver named after that figure. |
 | `make_docs.py` | Generates `PANEL-SOURCES.md` from `assemble.LAYOUTS` and the panel scripts themselves — the map from each placed panel to the script that draws it, the `out/*.json` it reads, the measurement pass that wrote that JSON, and the CSV it deposits. `--check` exits non-zero when the file is stale, so it works as a pre-submission gate. A hand-kept index of 48 panels is wrong within a week; this one cannot drift without the build changing. |
@@ -115,10 +115,10 @@ the embedded font name differs.
 | `HANDOFF-OFFBOX.md` | Which measurement jobs are worth running on a different machine and how. Short version: only the 4-animal 6-camera exhaustive configuration, which is the one number in the paper that is extrapolated rather than measured, travels in under 2 GB, and is parallel across frames. |
 | `REVISION-LOG.md` | **What changed in response to that report, with the before and after value of every number that moved**, plus the items that are the manuscript's to fix rather than this repo's. A response-to-reviewers letter can be assembled from it. Update it whenever a measurement is re-run; the numbers in the docs are only checkable against something if that something is written down. |
 | `CAPTIONS.md` | The working caption document: extended reasoning, the readings each figure must NOT support, and the analyses that were run and not shown. Source material for `FIGURE-LEGENDS.md` and for a Supplementary Note; not itself a submission artefact. |
-| `fig8_param_sweeps.py` | **EXPLORATORY, NOT IN THE MANUSCRIPT.** Sweeps every remaining `CrossViewTracker` threshold one at a time (10 parameters, 35 cells) on exactly Fig 3e's measurement — same 8 BMimica sessions, full length, same detections, same `fig3_score.py`, same 7,205,370-camera-frame denominator — so its rates are directly comparable to Fig 3e's. Imports `fig3_sweep.py` for the corpus/driver/scorer rather than re-deriving them; does not modify it and does not touch `out/fig3_sweep.json`. Deposits `out/fig8_param_sweeps.json`, caches per-cell tracker runs under `out/tmp/fig8/` so it is restartable, and **reuses Fig 3e's `corr2d=1/corr3d=6` cell as the shipped-default cell by symlink** — that one configuration is the default for all ten parameters and is measured once, not ten times. Run it with the bench interpreter (`/root/vast/eric/luc3d-bench/liezl_env/bin/python`); scoring needs motmetrics. See "Fig 8" below for what it found. |
+| `fig8_param_sweeps.py` | **EXPLORATORY, NOT IN THE MANUSCRIPT.** Sweeps every remaining `CrossViewTracker` threshold one at a time (10 parameters, 35 cells) on exactly Fig 3e's measurement — same 8 Mouse-Dyad-10M sessions, full length, same detections, same `fig3_score.py`, same 7,205,370-camera-frame denominator — so its rates are directly comparable to Fig 3e's. Imports `fig3_sweep.py` for the corpus/driver/scorer rather than re-deriving them; does not modify it and does not touch `out/fig3_sweep.json`. Deposits `out/fig8_param_sweeps.json`, caches per-cell tracker runs under `out/tmp/fig8/` so it is restartable, and **reuses Fig 3e's `corr2d=1/corr3d=6` cell as the shipped-default cell by symlink** — that one configuration is the default for all ten parameters and is measured once, not ten times. Run it with the bench interpreter (`/root/vast/eric/luc3d-bench/liezl_env/bin/python`); scoring needs motmetrics. See "Fig 8" below for what it found. |
 | `fig8_diag_loss.py` | **EXPLORATORY.** Decomposes the tracker's cross-view IDF1 loss into IDENTITY versus COVERAGE error, off existing result JSONs (no re-tracking): `as_is`, `oracle_id` (every LABELLED detection relabelled to its best-IoU GT box) and `oracle_full` (every detection with a bbox). Answers "what is the missing IDF1 made of" before any method is written, and sets the ceiling Fig 8d is read against. `--cell`/`--root` select any cached cell from either `tmp/fig8/` or `tmp/fig8m/`. Bench interpreter. Deposits `out/fig8_diag_loss_<cell>.json`. |
 | `fig8_diag_anchor_age.py` | **EXPLORATORY.** Measures how OLD the per-camera detections are that `Target._retriangulate()` fuses into the 3D each association is scored against — the mechanism behind Fig 8d's best result. Behaviour-neutral, and that is *proved* per session by digest-comparing against the `shipped` cell, because a probe that perturbs what it measures is worthless. Deposits `out/fig8_diag_anchor_age.json`. |
-| `fig8_methods.py` | **EXPLORATORY, NOT IN THE MANUSCRIPT.** ALGORITHMIC methods for the cross-view tracker on exactly Fig 8's measurement, via `figs/fig8-bench/` (an ESM loader hook serving `xv_experimental.js` in place of `pose/cross-view-tracker.js`; **no app source is modified**). `--verify` proves the fork with an empty method block is byte-identical to the shipped tracker on all 8 full sessions. `--recheck` re-tracks one session per cached cell under today's code — the cache outlives tracker edits and this is the tripwire against silently mixing code versions (it has already caught one real bug). `--all-sessions` re-runs over all 50 proofread BMimica sessions into a separate cache and deposit, since `switches` is a raw sum whose denominator differs. `--reaggregate` recomputes the per-session comparison without re-scoring. Bench interpreter. Deposits `out/fig8_methods.json`. |
+| `fig8_methods.py` | **EXPLORATORY, NOT IN THE MANUSCRIPT.** ALGORITHMIC methods for the cross-view tracker on exactly Fig 8's measurement, via `figs/fig8-bench/` (an ESM loader hook serving `xv_experimental.js` in place of `pose/cross-view-tracker.js`; **no app source is modified**). `--verify` proves the fork with an empty method block is byte-identical to the shipped tracker on all 8 full sessions. `--recheck` re-tracks one session per cached cell under today's code — the cache outlives tracker edits and this is the tripwire against silently mixing code versions (it has already caught one real bug). `--all-sessions` re-runs over all 50 proofread Mouse-Dyad-10M sessions into a separate cache and deposit, since `switches` is a raw sum whose denominator differs. `--reaggregate` recomputes the per-session comparison without re-scoring. Bench interpreter. Deposits `out/fig8_methods.json`. |
 | `fig8_report50.py` | Reads `out/fig8_methods_50.json` and prints the all-50-session picture: a harness cross-check against `fig3_trackers.json`'s independent 50-session LUC3D number FIRST, then medians and quartiles rather than means, per-session win/loss, worst single-session harm, and paired Wilcoxon tests. |
 | `lint_text.py` | Finds overlapping and clipped text in the RENDERED panel PDFs, by measuring every text span's bounding box. Non-zero exit if anything is found, so it works as a pre-submission gate. This is the useful half of the legacy `lint.py`, reinstated for the same reason: these defects exist only in the emitted geometry and reading the generator source never finds them. It caught 55 on its first run. |
 | `legacy/` | The retired `nature.py` composite-SVG path (`fig1.py`…`fig6.py`, `lint.py`, `render.mjs`). Not part of the build; kept for the provenance in its docstrings. See `legacy/README.md`. |
@@ -167,8 +167,9 @@ that got picked up by mistake.
 names (`gui-a-predictions.png` … `gui-i-full-matched.png`, `gui-probe-full.png`),
 both carry a header saying their output must not be read by any panel, and the 21
 orphaned `fig1b-*.png` / `probe-full.png` files were deleted from `out/` after
-grepping `panels/` to confirm nothing read them. `fig1b_reid_ledger.csv`
-(`panels/fig1_02_tracking.py`, under `data/fig1/`) is unrelated and stays.
+grepping `panels/` to confirm nothing read them. `fig1c_reid_ledger.csv`
+(`panels/fig1_02_tracking.py`, under `data/fig1/`; named `fig1b_reid_ledger.csv`
+until the 2026-08-16 re-lettering) is unrelated and stays.
 
 **The rig tile (fixed), and a premise that was also wrong.** The old export was
 800x1696 portrait with the rig occupying ~19% of frame and camera labels clipped at
@@ -276,7 +277,7 @@ submission.
 Corrected below against the live `figs/out/fig2.json`; the superseded 12-session values
 are kept only where the difference is instructive.
 
-Measured on **all 50 BMimica sessions** (5 calibrated cameras, 2 mice, 15 nodes,
+Measured on **all 50 Mouse-Dyad-10M sessions** (5 calibrated cameras, 2 mice, 15 nodes,
 **1,277,424 keypoints**; 38,322,720 held-out view measurements). Each keypoint is
 triangulated from **two** views and the result reprojected into the views that were
 *not* used. There are **two** references, and they answer different questions:
@@ -331,7 +332,7 @@ from the files:
 
 | corpus | cameras | animals | sessions w/ 3D | frames | hours | complete 3D |
 |---|---|---|---|---|---|---|
-| BMimica | 5 | 2 | 56/56 | 10,084,734 | 18.7 @150 fps | 56/56 |
+| Mouse-Dyad-10M | 5 | 2 | 56/56 | 10,084,734 | 18.7 @150 fps | 56/56 |
 | SLAP-2M | 8 | 1–4 | 74/74 | 1,954,440 | 10.9 @50 fps | 74/74 |
 | **total** | | 1–4 | **130** | **12,039,174** | **29.5** | |
 
@@ -415,7 +416,7 @@ Status of the panels:
   HOTA, and the `corr3dWeight = 6` champion claim was established on IDF1. The
   corr2d×corr3d grid still needs running.
 * **3e** — head-to-head is *implementable*: exhaustive is only `2^5 = 32` hypotheses
-  at 2 animals / 5 cameras, so it can be run for real on BMimica and compared
+  at 2 animals / 5 cameras, so it can be run for real on Mouse-Dyad-10M and compared
   against the Hungarian on identical detections. It becomes intractable at
   4 animals / 6 cameras (`24^6 ≈ 1.9 × 10^8`), which is the panel's point.
 * **3g** — track-length distributions and sustained-identity fractions from real
@@ -423,7 +424,7 @@ Status of the panels:
 
 ## Fig 4 — DLT vs non-linear refinement (measured, from `eric/bundle-adj`)
 
-`fig4_export.py` (real BMimica observations) then `fig4_measure.mjs`, which imports
+`fig4_export.py` (real Mouse-Dyad-10M observations) then `fig4_measure.mjs`, which imports
 the **`eric/bundle-adj` worktree's** `pose/triangulation.js` read-only. **All 50
 sessions, 3 calibrations, 17,013,412 keypoints at stride 15**, 5 cameras, median
 distortion displacement **8.41 px** (p95 23.34) — so native-vs-ideal space is a real
@@ -680,7 +681,7 @@ Fig 3e swept `corr2dWeight` × `corr3dWeight` and held every other tracker thres
 at its default — do any of the others matter?
 
 `fig8_param_sweeps.py` sweeps the remaining ten one at a time (35 cells) on exactly
-Fig 3e's measurement: the same 8 BMimica sessions at full length, the same shared
+Fig 3e's measurement: the same 8 Mouse-Dyad-10M sessions at full length, the same shared
 detections, the same `fig3_score.py`, and the same measured 7,205,370-camera-frame
 denominator, so every rate below is directly comparable to a Fig 3e rate. The
 shipped-default cell is Fig 3e's own `corr2d=1/corr3d=6` run, reused by symlink
@@ -695,7 +696,7 @@ sessions. Three quite different things are hiding behind those flat lines.
 |---|---|---|
 | **never read** | `track3dWeight`, `prevIdentityBonus`, `minMatchScore`, `reprojSigma`, `epipolarDecay` | `runCrossViewTracker` does not read them at all — see below |
 | **read, never decisive** | `velocityThreshold` (2 → 40) | it normalises the 2D term, which saturates in normalised image units; the 3D term decides matches. A genuine null. |
-| **not exercisable** | `filterMinInstanceScore` (0 → 0.85) | the filter gates on `inst.score != null` and the BMimica `{cam}_predictions.h5` pool holds a `tracks` dataset and nothing else. **Uninformative, not negative.** |
+| **not exercisable** | `filterMinInstanceScore` (0 → 0.85) | the filter gates on `inst.score != null` and the Mouse-Dyad-10M `{cam}_predictions.h5` pool holds a `tracks` dataset and nothing else. **Uninformative, not negative.** |
 
 **`runCrossViewTracker` — the function `trackAll()` calls — reads exactly seven
 thresholds**: `corr2dWeight`, `corr3dWeight`, `velocityThreshold`,
@@ -748,7 +749,7 @@ sections on how badly single-run and small-n conclusions have travelled here).
 
 ### Fig 8c/8d — what an ALGORITHM change buys, once you know what the loss is made of
 
-8a/8b answer "do the constants matter". 8c and 8d answer what follows. Same 8 BMimica
+8a/8b answer "do the constants matter". 8c and 8d answer what follows. Same 8 Mouse-Dyad-10M
 sessions, same full length, same detections, same `fig3_score.py`, same 7,205,370-camera-
 frame denominator, so every number here is comparable to a Fig 3e or Fig 8a/8b number.
 `fig8_methods.py` drives `figs/fig8-bench/fig8_bench.mjs`, which serves
@@ -848,7 +849,7 @@ it. Not "grouping-then-associating is wrong"; "this grouping threw away the stro
 
 **Two other identity signals are ruled out for this corpus without new code.** Per-camera
 `trackIdx` continuity: Fig 3's tracker comparison puts SLEAP's own per-camera tracker at
-within-view IDF1 **0.115** on BMimica. Pixel appearance: the `{cam}_predictions.h5`
+within-view IDF1 **0.115** on Mouse-Dyad-10M. Pixel appearance: the `{cam}_predictions.h5`
 detection pool holds a `tracks` keypoint dataset and no images, so a real appearance
 re-id model has no input on this measurement.
 
@@ -928,11 +929,11 @@ worse, `ambigMargin` up to 83x worse), which no corpus change plausibly reverses
 thresholds are the ones that would repay it, precisely because 8e shows their 8-session
 gain was mostly subset noise.
 
-### Fig 8e — ALL 50 BMimica sessions, which corrected two of the conclusions above
+### Fig 8e — ALL 50 Mouse-Dyad-10M sessions, which corrected two of the conclusions above
 
 Everything from 8a to 8d is measured on Fig 3e's 8 sessions. `fig8_methods.py
 --all-sessions` re-ran the control, the best pure-threshold setting and both candidates
-over **all 50 proofread BMimica sessions** at full length — 45,021,960 camera-frames, with
+over **all 50 proofread Mouse-Dyad-10M sessions** at full length — 45,021,960 camera-frames, with
 sessions PAIRED across configurations. Report: `$PY figs/fig8_report50.py`.
 
 **The harness validated exactly, before anything was read off it.** `fig3_trackers.json`
@@ -1009,7 +1010,7 @@ python3 figs/panels/fig8_03_loss_budget.py figs/panels/fig8_04_methods.py
   observations. A study where annotators label views independently would be needed to
   claim anything about human cross-view inconsistency.
 * **Panel a and panels b/c come from different rigs** (8-camera HardFight for the
-  app staging, 5-camera BMimica for the measurements) because only BMimica has a
+  app staging, 5-camera Mouse-Dyad-10M for the measurements) because only Mouse-Dyad-10M has a
   proofread 3D reconstruction to measure against. Stated in the figure's footer.
 
 ---
@@ -1229,7 +1230,7 @@ by 1/PT = 2.83x.
 Two questions worth recording because I got the second one wrong first.
 
 **Where the reference 3D comes from.** `<session>/*_points3d_translated_rotated_metric.h5`
-in the BMimica corpus. The filename is the provenance: it was **translated, rotated and
+in the Mouse-Dyad-10M corpus. The filename is the provenance: it was **translated, rotated and
 converted to metres**, which is why it does not sit in the calibration frame. Recovered
 scale is ~994.8 or ~1012.9 depending on which of the corpus's two calibrations a session
 uses, i.e. the calibration frame is in millimetres and the reference is in metres;
@@ -1322,7 +1323,7 @@ on the 3- and 4-animal sessions (205 → 744, 299 → 606) and scores lower ther
 **7b (bedding) WAS NOT IN THE INSTRUCTION and is still on the pre-#131 arm**
 (`arms(variant, corrected=False)`). Until it is switched, one figure carries two tracker
 generations under the name "LUC3D" — b is the old one, c-g are the shipped one. It is one
-keyword away and it needs a decision, not an inference. **7a** is BMimica and always was
+keyword away and it needs a decision, not an inference. **7a** is Mouse-Dyad-10M and always was
 `runCrossViewTracker`.
 
 `FIGURE-LEGENDS.md` was updated for c, d, f and g (e's legend quotes no tracker number).

@@ -28,7 +28,7 @@ The measured LUC3D times come from `fig3_runtime.json measured`, matched to each
 configuration by (animals, cameras) AND CORPUS, not averaged: the (2, 5) cell was
 measured twice on two corpora (both rows are in the runtime deposit; the panel that
 used to plot them all is retired -- quality vs GT replaced it as d), and the
-exhaustive 2x5 run is BMimica, so the BMimica LUC3D measurement is the one that
+exhaustive 2x5 run is Mouse-Dyad-10M, so the Mouse-Dyad-10M LUC3D measurement is the one that
 belongs beside it. `luc3d_for()` refuses rather than averages if that leaves the
 match ambiguous.
 
@@ -143,7 +143,7 @@ def luc3d_for(measured, animals, cameras, dataset):
     """LUC3D's measured seconds/frame for one configuration. Never an average.
 
     Matches on (animals, cameras) and then on corpus, because the (2, 5) cell was
-    measured on both corpora and the exhaustive run at that cell is BMimica. If the
+    measured on both corpora and the exhaustive run at that cell is Mouse-Dyad-10M. If the
     match is still ambiguous, or missing, this exits: a silent mean of two sessions
     would put a number on the artwork that was never measured.
     """
@@ -259,10 +259,13 @@ def main():
     # label above its flat left end, where its own curve does not reach for another
     # half-config, and LUC3D above its flat right end, under the exhaustive curve
     # that has by then climbed five decades away.
-    # 0.10, not 0.35: at 0.35 s the label's box clipped the composition block's
-    # third line (lint: 33% overlap). A decade lower it still clears its own curve
-    # (0.008-0.016 s at the left) by ~0.9 decades.
-    annotate_series(ax, 0.06, 0.10, "exhaustive", SALMON, size=7, va="bottom")
+    # (-0.25, 0.30), not (0.06, 0.10): at the old anchor the label's last glyphs
+    # ran into the exhaustive curve's own ascent between 2x6 and 3x5 (adversarial
+    # review 2026-08-17 -- the composition block whose third line the 0.35
+    # position clipped is gone, so the head-room above is free again). Anchored
+    # a step further left and a half-decade up, the label ends near x = 1.3,
+    # where the ascending segment is still ~0.9 decades above the text box.
+    annotate_series(ax, -0.25, 0.30, "exhaustive", SALMON, size=7, va="bottom")
     annotate_series(ax, len(df) - 0.6, 0.02, "LUC3D", TEAL, size=7, va="bottom",
                     ha="right")
 

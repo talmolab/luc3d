@@ -171,8 +171,11 @@ def main(variant=False, corrected=True):
         # and the note that the x axis is arm-dependent. LUC3D keeps its hue on both
         # of its arms (open markers mark the experimental one); the retired arm is the
         # only thing in MUTED.
-        entries = [(f"LUC3D shipped r = {d['luc3d']['r']:.3f}", entity("luc3d")),
-                   (f"LUC3D + fresh (EXPT, open) r = "
+        # Relabelled 2026-08-17: fresh anchor = the shipped configuration; the
+        # solid cloud is the previous default.
+        entries = [(f"LUC3D prev. default r = {d['luc3d']['r']:.3f}",
+                    entity("luc3d")),
+                   (f"LUC3D + fresh (shipped, open) r = "
                     f"{fresh['detector_recall_corr']['luc3d']['r']:.3f}",
                     entity("luc3d")),
                    (f"LUC3D pre-#131 r = "
@@ -216,11 +219,12 @@ def main(variant=False, corrected=True):
             f"ByteTrack {d['bytetrack']['r2']:.2f}")
     if variant:
         dr, df_ = ref["detector_recall_corr"], fresh["detector_recall_corr"]
-        note += (f"\nLUC3D here is the SHIPPED tracker: r = {d['luc3d']['r']:.4f} "
+        note += (f"\nLUC3D here is the PREVIOUS DEFAULT tracker (shipped until the "
+                 f"2026-08-17 fresh-anchor promotion): r = {d['luc3d']['r']:.4f} "
                  f"(R² {d['luc3d']['r2']:.4f}) against the pre-#131 tracker this panel "
                  f"printed until 2026-08-13, r = {dr['luc3d']['r']:.4f} "
                  f"(R² {dr['luc3d']['r2']:.4f}), "
-                 f"retired 2026-07-06; the EXPERIMENTAL fresh anchor is "
+                 f"retired 2026-07-06; the fresh anchor (shipped since 2026-08-17) is "
                  f"r = {df_['luc3d']['r']:.4f}"
                  f"\nTHE X AXIS IS ARM-DEPENDENT: the recall column is taken from the "
                  f"LUC3D rows and motmetrics' recall counts MATCHED predictions, so it "

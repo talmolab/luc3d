@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Fig 8e -- the two candidate tracker changes over ALL 50 proofread BMimica sessions.
+Fig 8e -- the two candidate tracker changes over ALL 50 proofread Mouse-Dyad-10M sessions.
 
     THIS FIGURE IS EXPLORATORY AND UNPLACED. It is not part of the manuscript, is
     absent from FIGURE-LEGENDS.md / METHODS.md / RESULTS.md / CAPTIONS.md, and no
@@ -27,7 +27,7 @@ handful of them, which is exactly how 8d's eight-session number flatters `stale:
          gains on the mean by damaging such sessions is not a candidate.
 
 THE HARNESS IS CROSS-CHECKED, NOT ASSUMED. `figs/out/fig3_trackers.json` already carries
-an independent 50-session BMimica measurement of the shipped tracker through a different
+an independent 50-session Mouse-Dyad-10M measurement of the shipped tracker through a different
 pipeline (LUC3D cross-view IDF1 0.7493). The footnote prints this pass's shipped value
 beside it; if they disagree, the panel says so on its face rather than leaving a reader to
 discover it.
@@ -147,7 +147,7 @@ def main():
                  f"({cells[cfg]['switches'] * 1e5 / cf:.3f} per 100,000) against "
                  f"shipped's {cells['shipped']['switches']:,} "
                  f"({cells['shipped']['switches'] * 1e5 / cf:.3f})\n")
-    note += (f"all {len(d['sessions'])} proofread BMimica sessions x 5 cameras, full "
+    note += (f"all {len(d['sessions'])} proofread Mouse-Dyad-10M sessions x 5 cameras, full "
              f"length, {cf:,} camera-frames, one shared detection pool; sessions are "
              "PAIRED across configurations")
     footnote(axL, note)

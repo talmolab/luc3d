@@ -394,14 +394,19 @@ def build_camera_unit(name, C, R_c2w, M, coll, focus, body_scale=1.0):
         ob.matrix_world = Rm @ ob.matrix_world
 
 
-def build_camera_support(name, C, M, coll, floor_z):
+def build_camera_support(name, C, M, coll, floor_z, ceiling=1.5):
     """World-vertical mounting hardware, so the cameras don't float: overhead
     units hang from rods that leave the top of frame (an unseen ceiling rig),
     the low side units stand on rods to the floor — panelA's cameras are
-    likewise on physical mounts."""
+    likewise on physical mounts.
+
+    `ceiling` is where the overhead rods stop, and it MUST be above the top of
+    the rendered frame or the rod visibly ends in mid-air. 1.5 m is right for
+    this cage's framing; bmimica_scene.py's arena is framed 1.5 m tall and
+    passes its own value computed from the fitted frame."""
     x, y, z = C
     if z > 0.4:  # overhead ring
-        tube(f"rod_{name}", [(x, y, z + 0.015), (x, y, 1.5)], 0.0042, M["mount"], coll)
+        tube(f"rod_{name}", [(x, y, z + 0.015), (x, y, ceiling)], 0.0042, M["mount"], coll)
     else:        # side-mounted
         tube(f"rod_{name}", [(x, y, z - 0.015), (x, y, floor_z)], 0.0042, M["mount"], coll)
         cylinder(f"foot_{name}", 0.022, 0.008, (x, y, floor_z + 0.004), M["mount"], coll)
@@ -521,6 +526,10 @@ def setup_cycles(samples, res):
     scn.cycles.samples = samples
     scn.cycles.use_denoising = True
     scn.cycles.use_adaptive_sampling = True
+    # a ray can cross 2 cage walls + both mice's stacked membranes; the default
+    # cap of 8 transparent bounces terminates such rays BLACK (a black torso
+    # patch whenever membranes go edge-on). 32 is plenty and near-free here.
+    scn.cycles.transparent_max_bounces = 32
     # only the animals change between video frames — keep the cage/cameras/
     # lights synced and the BVH warm instead of rebuilding the world per frame
     scn.render.use_persistent_data = True

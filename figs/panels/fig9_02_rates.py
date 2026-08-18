@@ -134,7 +134,7 @@ ROW_H = 64.0
 #: Key layout: TWO COLUMNS plus one full-width line under them. This panel's key has to
 #: carry eight sentences (two configurations, the shared denominator, what the numbers
 #: beside each mark are, why the multi-animal cohort is the reading, the misgrouped
-#: definition, why it is only a relative rate, and the BMimica reference). As one column
+#: definition, why it is only a relative rate, and the Mouse-Dyad-10M reference). As one column
 #: at 155 characters that is nine lines = half the panel's height. In two columns of ~80
 #: characters it is five, and the plot keeps 38 of 64 mm.
 KEY_X = (0.022, 0.505)
@@ -248,7 +248,7 @@ def main():
     # survivable while the other two were only in prose; it is not, now that the misgrouped
     # rate is above 100,000 per 100,000 and the reader needs to see why that is arithmetic.
     vf, cf_multi, det_lab = corpus_shape(d, cells[SHIPPED])
-    # Two columns of ~70 characters, then the BMimica reference across the full width.
+    # Two columns of ~70 characters, then the Mouse-Dyad-10M reference across the full width.
     # Line length is measured, not guessed: at 6 pt a character is ~1.0 mm, so a column
     # starting at 0.505 of a 180 mm panel holds ~85 before it runs off the artwork (an
     # earlier single-column key had four lines cut mid-word).
@@ -316,7 +316,7 @@ def main():
         if CORR12 in op:
             c12 = op[CORR12]
             wide.append(
-                (f"corr3dWeight 12, BMimica's winner (371 vs 413 switches there), is NEUTRAL "
+                (f"corr3dWeight 12, Mouse-Dyad-10M's winner (371 vs 413 switches there), is NEUTRAL "
                  f"there: {c12['switches']:,} vs {i['switches']:,} switches, IDF1 "
                  f"{c12['idf1_cross']:.4f} vs {i['idf1_cross']:.4f} — corpus-specific", GREY))
     else:
@@ -386,7 +386,7 @@ def main():
                 if SHIPPED in op and IMPROVED in op else
                 f"OTHER POOL: figs/out/{OTHER_POOL} unavailable, so the pool-dependence of "
                 f"the mass result could not be stated\n")
-             + (f"corr3dWeight 12 (BMimica's winner, 371 vs 413 switches there) is NEUTRAL on "
+             + (f"corr3dWeight 12 (Mouse-Dyad-10M's winner, 371 vs 413 switches there) is NEUTRAL on "
                 f"the other SLAP-2M pool: {op[CORR12]['switches']:,} vs "
                 f"{op[IMPROVED]['switches']:,} switches, cross-view IDF1 "
                 f"{op[CORR12]['idf1_cross']:.4f} vs {op[IMPROVED]['idf1_cross']:.4f}, "

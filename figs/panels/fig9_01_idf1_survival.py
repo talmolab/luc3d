@@ -46,9 +46,9 @@ cohort had been dropped, so it printed the multi-animal mean twice and labelled 
 
 THE CEILING IS DRAWN, AND IT IS NOT A BOUND ON THESE CURVES -- which is exactly why it
 has to be drawn with its provenance rather than as a bare rule. The deposit's own caveat
-says SLAP-2M's detector misses 35.4% of ground truth against BMimica's 8.7%, capping any
+says SLAP-2M's detector misses 35.4% of ground truth against Mouse-Dyad-10M's 8.7%, capping any
 identity-only method at IDF1 0.7704 here against 0.9527 there, so a gain smaller than
-BMimica's 0.749 -> 0.861 is EXPECTED and is not evidence the method failed. But that
+Mouse-Dyad-10M's 0.749 -> 0.861 is EXPECTED and is not evidence the method failed. But that
 0.7704 was computed WITHIN-view on the `PAF_3d_kalman` detections, whose published
 within-view IDF1 is 0.7360 -- the number Fig 7c plots -- and THIS pass runs on the
 `keeptrack_h5s` pool through the Fig 8 driver, where the same 74 sessions score within-view
@@ -277,9 +277,9 @@ def main():
         ("misgrouped detections, so they are EXCLUDED: pooling them changed only the "
          "denominator, a 43% dilution", MUTED),
         (f"grey rule {CEILING}: the deposit's identity-only ceiling for SLAP-2M, whose "
-         f"detector misses {MISS_RATE} of GT (BMimica 8.7%, ceiling {BMIMICA_CEILING}) — "
+         f"detector misses {MISS_RATE} of GT (Mouse-Dyad-10M 8.7%, ceiling {BMIMICA_CEILING}) — "
          f"a smaller gain", GREY),
-        ("here than BMimica's 0.749 -> 0.861 is EXPECTED. It is NOT a bound on these "
+        ("here than Mouse-Dyad-10M's 0.749 -> 0.861 is EXPECTED. It is NOT a bound on these "
          "curves: that ceiling was measured WITHIN-view on the PAF_3d_kalman pool,", GREY),
         (f"where these same 74 sessions score {cross_check_ref}, against "
          f"{all74_within:.3f} on the keeptrack_h5s pool this pass runs on", GREY),
@@ -297,7 +297,7 @@ def main():
              f"detections under both configurations), so there is no pooled all-74 "
              f"number on this panel\n"
              f"ceiling {CEILING} because SLAP-2M's detector misses {MISS_RATE} of GT "
-             f"(BMimica 8.7%, ceiling {BMIMICA_CEILING}); BMimica reference for this "
+             f"(Mouse-Dyad-10M 8.7%, ceiling {BMIMICA_CEILING}); Mouse-Dyad-10M reference for this "
              f"arm: cross-view IDF1 0.749 -> 0.861\n"
              f"POOL CROSS-CHECK: {cross_check} -- the drawn ceiling was computed on the "
              f"other pool and does not bound these curves\n"
