@@ -3982,6 +3982,48 @@ kbd {
   font-style: italic;
 }
 
+/* The Edit Plane section's body is swapped out wholesale for its empty state,
+   so it needs its own flex column — otherwise the wrapper collapses the
+   `.plane-details-body` gap between the name row, the members table and the
+   connections. */
+#planeEditorContent {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* The plane SELECTOR row. Ruled off from the body below it because it is the
+   one control in the section that stays live with nothing selected — it picks
+   (or mints) the plane everything under the rule then acts on. */
+.plane-picker-row {
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+/* "Edit Plane — floor". The label is fixed; the name is the selected
+   plane's, so with three sibling sections the reader can tell at a glance which
+   plane the controls below act on. */
+.plane-summary-name {
+  margin-left: 6px;
+  font-weight: 400;
+  color: var(--accent);
+}
+
+/* The selected plane's member list. The colour here is a READ-ONLY swatch: a
+   node's colour is a property of the node and is edited once, in the Nodes
+   table, so a second picker would imply two places to change it. */
+.plane-member-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plane-member-swatch {
+  width: 12px;
+  height: 12px;
+  margin-right: 0;
+}
+
 /* Draggable plane-skeleton rows. */
 #planeSkeletonsTable tbody tr {
   cursor: grab;
@@ -4203,6 +4245,152 @@ kbd {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* A pinned node's reprojection residual is OUT of sample, so it is reported
+   apart from the solve's own error rather than blended into it. */
+.plane-anchor-summary {
+  border-top: none;
+  padding-top: 0;
+  margin-top: 2px;
+  color: var(--warning-color);
+}
+
+/* --- The Nodes table: the global pool ------------------------------------ */
+
+/* A node in no plane is a normal resting state (planes are deleted without
+   their nodes), so it is dimmed rather than flagged — it simply is not drawn
+   on any view until some plane takes it up. */
+.plane-node-row.plane-node-unused td {
+  opacity: 0.6;
+}
+
+/* Shared by 2+ planes: the whole point of the pool, so it is legible at a
+   glance rather than only in a tooltip. */
+.plane-node-row.plane-node-shared {
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.plane-node-pin {
+  margin: 0;
+  vertical-align: middle;
+  cursor: pointer;
+}
+
+.plane-node-pin:disabled {
+  cursor: default;
+  opacity: 0.4;
+}
+
+.plane-node-state {
+  display: inline-block;
+  padding: 0 3px;
+  border-radius: 3px;
+  font-size: 9px;
+  line-height: 14px;
+  white-space: nowrap;
+  color: var(--text-muted);
+  border: 1px solid transparent;
+}
+
+.plane-node-state-frozen {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+/* Pinned but never triangulated — a dead end, because pinning is exactly what
+   stops a solve from filling it in. Loud on purpose: the state cannot resolve
+   itself and blocks every fit of every plane the node belongs to. */
+.plane-node-state-frozen-unsolved {
+  color: var(--error-color);
+  border-color: var(--error-color);
+  font-weight: 600;
+}
+
+/* Panel-level explanation of the above, so it is read without hovering. */
+.plane-warning {
+  margin-top: 6px;
+  padding: 5px 6px;
+  border: 1px solid var(--error-color);
+  border-radius: 4px;
+  background: rgba(229, 72, 77, 0.08);
+  color: var(--text-secondary);
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+/* "+2 shared" marker next to a plane's node count. */
+.plane-shared-count {
+  margin-left: 4px;
+  padding: 0 3px;
+  border-radius: 3px;
+  font-size: 9px;
+  line-height: 14px;
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  vertical-align: middle;
+}
+
+/* --- Blocking / confirming dialog (ui/plane-definition.js) ---------------- */
+
+.plane-confirm-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  z-index: 20000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.plane-confirm-modal {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 20px 22px;
+  min-width: 380px;
+  max-width: 520px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  color: var(--text-primary);
+}
+
+.plane-confirm-modal h3 {
+  margin: 0 0 12px 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.plane-confirm-message {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.plane-confirm-modal .modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 18px;
+}
+
+.plane-confirm-modal button {
+  padding: 6px 16px;
+  border-radius: 4px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.plane-confirm-modal button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.plane-confirm-modal button:hover {
+  filter: brightness(1.15);
 }
 
 /* ============================================

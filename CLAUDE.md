@@ -3,8 +3,8 @@
 Multi-view pose annotation GUI. No build system — pure vanilla JS served as static files.
 
 ## Architecture
-ES modules, vanilla JS (no build step). `index.html` loads `app.js` as `<script type="module">`; `app.js` is a 2-line entry point that imports from `pose/`. The 44 modules are grouped into four directories:
-- `pose/` — data model, cross-view tracking, DLT triangulation, plane annotation model, origin transform, app initialization (8 files)
+ES modules, vanilla JS (no build step). `index.html` loads `app.js` as `<script type="module">`; `app.js` is a 2-line entry point that imports from `pose/`. The 45 modules are grouped into four directories:
+- `pose/` — data model, cross-view tracking, DLT triangulation, plane annotation model (planes + the global plane-node pool), origin transform, app initialization (9 files)
 - `ui/` — UI state, canvas rendering, mouse/keyboard interaction, info panel, modals, timeline, 3D viewport, video display settings, plane definition, origin definition, settings (22 files)
 - `loading/` — video decoding, session loading, SLP/package readers, web workers (6 files)
 - `import-export/` — file I/O, save/load, SLP import/merge, visibility metadata (8 files)

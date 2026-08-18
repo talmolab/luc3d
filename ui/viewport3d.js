@@ -1353,7 +1353,8 @@ export class Viewport3D {
      * up its constraint plane by id across the rebuilds it triggers.
      *
      * @param {Array<{id:number, name:string, color:string,
-     *                nodeColors?:string[], edges?:Array<number[]>,
+     *                nodeColors?:string[], nodeImmutable?:boolean[],
+     *                edges?:Array<number[]>,
      *                polygonOrder?:number[], filled?:boolean,
      *                editable?:boolean,
      *                planeFit?:{centroid:number[], normal:number[]},
@@ -1403,9 +1404,18 @@ export class Viewport3D {
                 mesh.name = 'planeNode_' + k;
                 mesh.userData.planeId = plane.id;
                 mesh.userData.nodeIdx = k;
-                mesh.userData.planeEditable = draggable;
+                // A PINNED node is never draggable, however fitted its plane
+                // is. `planeEditable` gates the hover cursor as well as the
+                // drag (`_pickPlaneNode`), so leaving it true here would offer
+                // a `move` cursor over a corner the edit path then refuses —
+                // an affordance advertising an action that cannot happen.
+                const pinned = !!(plane.nodeImmutable && plane.nodeImmutable[k]);
+                mesh.userData.planeEditable = draggable && !pinned;
+                mesh.userData.planeImmutable = pinned;
                 // Independent of `draggable`: Set Origin Mode turns dragging OFF
-                // but still needs these exact corners to be pickable.
+                // but still needs these exact corners to be pickable. A pinned
+                // corner is a PREFERRED origin anchor, so this must not follow
+                // `planeEditable` down.
                 mesh.userData.planeFitted = !!plane.planeFit;
                 planeGroup3D.add(mesh);
             }

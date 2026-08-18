@@ -35,16 +35,21 @@ const TRUTH = [[-60, -45, 210], [60, -45, 214], [66, 40, 220], [-66, 40, 226]];
 await page.evaluate(async (TRUTH) => {
     const P = await import('/ui/plane-definition.js');
     const AS = await import('/ui/app-state.js');
-    const sk = P.planeState.skeletons[0];
+    const model = P.planeModel();
+    // Entering the mode no longer mints a plane, so there is no `planes[0]`
+    // to grab — make one.
+    const sk = model.planes[0] || P.createPlane();
     sk.name = 'floor';
-    ['fl', 'fr', 'br', 'bl'].forEach(n => sk.addNode(n));
-    [[0, 1], [1, 2], [2, 3], [3, 0]].forEach(([a, b]) => sk.addEdge(a, b));
+    ['fl', 'fr', 'br', 'bl'].forEach(n => model.createNodeInPlane(n, sk));
+    for (let k = 0; k < 4; k++) sk.addEdge(sk.nodeIds[k], sk.nodeIds[(k + 1) % 4]);
+    const poolIdx = sk.nodeIds.map(id => model.pool.indexOf(id));
     const cams = AS.state.session.cameras;
     ['camA', 'camB'].forEach(name => {
         const cam = cams.find(c => c.name === name);
         const view = AS.state.views.find(v => v.name === name);
-        P.addPlacement(sk, name, view.videoWidth / 2, view.videoHeight / 2);
-        P.getPlacementOn(name, sk.id).setPointsFrom(TRUTH.map(q => cam.project(q)));
+        P.placePlaneOnView(sk, name, view.videoWidth / 2, view.videoHeight / 2);
+        const inst = P.getPlaneInstance(name);
+        TRUTH.map(q => cam.project(q)).forEach((q, k) => inst.setPoint(poolIdx[k], q[0], q[1]));
     });
     sk.filled = true;
     P.refreshPlanePanel();
@@ -66,7 +71,7 @@ await page.screenshot({ path: PREFIX + '-1-pick-node.png' });
 await page.evaluate(async () => {
     const O = await import('/ui/origin-definition.js');
     const P = await import('/ui/plane-definition.js');
-    O.pickOriginNode(P.planeState.skeletons[0].id, 0);
+    O.pickOriginNode(P.planeModel().planes[0].id, 0);
 });
 await new Promise(r => setTimeout(r, 400));
 await page.screenshot({ path: PREFIX + '-2-pick-axis.png' });

@@ -50,16 +50,31 @@ export class InteractionManager {
      *   editable in that mode; outside it they draw but never take a click, so
      *   they can never compete with pose instances during normal annotation.
      * @param {Function} [callbacks.getPlaneInstances] - (viewName) => PlaneInstance[]
-     *   The planes placed on a view. Supplied as a callback (rather than an
+     *   The plane annotation on a view. Supplied as a callback (rather than an
      *   import) to keep this module free of a dependency on the plane feature.
+     * @param {Function} [callbacks.getPlaneNodeIndices] - (viewName) => number[]|null
+     *   Which node indices of those instances are actually SHOWN on this view.
+     *   A plane instance covers the feature's whole node pool, and a node whose
+     *   only plane is not placed here draws nothing — without this filter it
+     *   would still take a click, so the user would grab an invisible node.
+     *   null (or no callback) means "all of them".
      * @param {Function} [callbacks.getPlaneEdges] - (planeInstance) => [number,number][]
-     *   The connections of that plane's skeleton, for edge hit testing.
+     *   The connections drawn on that view, as index pairs, for edge hit testing.
      * @param {Function} [callbacks.getPlaneNodeSize] - () => number
      *   The drawn plane-node radius in canvas px, so the hit radius follows the
      *   Plane Appearance ▸ Node Size slider.
-     * @param {Function} [callbacks.onPlaneChanged] - (planeInstance) => void
+     * @param {Function} [callbacks.beginPlaneDrag] -
+     *   (viewName, nodeIdx, wholePlane) => {allowed:boolean, indices:number[]|null}
+     *   Asked once, at mousedown, before a plane drag starts. `allowed:false`
+     *   refuses it (the feature reports why — a node may be pinned), and the
+     *   click still selects. `indices` restricts a whole-plane translate to
+     *   those node indices; null means every point of the instance. Without the
+     *   callback a drag is allowed and unrestricted.
+     * @param {Function} [callbacks.onPlaneChanged] - (planeInstance, movedIndices|null) => void
      *   Called after a plane node/instance drag completes or a node is toggled
-     *   off, so the app can refresh the Define Plane panel.
+     *   off, so the app can invalidate exactly what changed and refresh the
+     *   Define Plane panel. `movedIndices` are the node indices the edit
+     *   touched; null means "unknown".
      * @param {Function} [callbacks.onPlaneSelectionChanged] - (planeInstance|null) => void
      *   Called when the selected plane changes.
      */
@@ -471,6 +486,11 @@ export class InteractionManager {
      * every zoom level. An edge hit returns `nodeIdx: -1`, which the caller
      * resolves via `_resolveNearestNode`.
      *
+     * Only the indices `getPlaneNodeIndices` reports as shown here are
+     * considered — see that callback's note: an instance covers the feature's
+     * whole node pool, so without the filter a node that draws nothing on this
+     * view would still be grabbable.
+     *
      * @param {number} videoX
      * @param {number} videoY
      * @param {string} viewName
@@ -480,6 +500,7 @@ export class InteractionManager {
         if (!this._planeEditable()) return null;
         const planes = this.callbacks.getPlaneInstances(viewName);
         if (!planes || planes.length === 0) return null;
+        const shown = this.planeNodeIndexSet(viewName);
 
         const state = this._getState();
         const displayToVideo = this._displayToVideo(state, viewName);
@@ -499,6 +520,7 @@ export class InteractionManager {
             if (!plane || plane.numNodes === 0) continue;
 
             for (let n = 0; n < plane.numNodes; n++) {
+                if (shown && !shown.has(n)) continue;
                 if (!plane.hasPoint(n)) continue;
                 const dx = plane.getX(n) - videoX;
                 const dy = plane.getY(n) - videoY;
@@ -533,6 +555,18 @@ export class InteractionManager {
             }
         }
         return best;
+    }
+
+    /**
+     * The set of plane-node indices shown on a view, or null for "all".
+     * @param {string} viewName
+     * @returns {Set<number>|null}
+     * @private
+     */
+    planeNodeIndexSet(viewName) {
+        if (!this.callbacks.getPlaneNodeIndices) return null;
+        const list = this.callbacks.getPlaneNodeIndices(viewName);
+        return list ? new Set(list) : null;
     }
 
     /**
@@ -850,12 +884,15 @@ export class InteractionManager {
             var planeNullHit = this.findNearestPlaneNode(vx, vy, viewName);
             if (planeNullHit) {
                 var pnIdx = planeNullHit.nodeIdx;
-                if (pnIdx === -1) pnIdx = this._resolveNearestNode(planeNullHit.plane, vx, vy);
+                if (pnIdx === -1) {
+                    pnIdx = this._resolveNearestNode(planeNullHit.plane, vx, vy,
+                        this.planeNodeIndexSet(viewName));
+                }
                 if (pnIdx < 0) return;
                 planeNullHit.plane.toggleNodeNull(pnIdx);
                 this.selectPlane(planeNullHit.plane, -1);
                 if (this.callbacks.onPlaneChanged) {
-                    this.callbacks.onPlaneChanged(planeNullHit.plane);
+                    this.callbacks.onPlaneChanged(planeNullHit.plane, [pnIdx]);
                 }
                 this._requestRedraw();
                 return;
@@ -939,15 +976,26 @@ export class InteractionManager {
             var planeInst = planeHit.plane;
             var planeNodeIdx = planeHit.nodeIdx;
             if (planeNodeIdx === -1) {
-                planeNodeIdx = this._resolveNearestNode(planeInst, vx, vy);
+                planeNodeIdx = this._resolveNearestNode(planeInst, vx, vy,
+                    this.planeNodeIndexSet(viewName));
             }
             this.selectPlane(planeInst, -1);
             if (planeNodeIdx >= 0) {
+                // Ask the plane feature whether this drag may start at all (a
+                // pinned node refuses) and, for an Alt+drag, which points it
+                // may carry — a plane instance covers every node in the pool,
+                // so translating all of them would drag unrelated planes too.
+                var planePlan = this.callbacks.beginPlaneDrag
+                    ? this.callbacks.beginPlaneDrag(viewName, planeNodeIdx, !!e.altKey)
+                    : { allowed: true, indices: null };
                 // Alt+drag translates the whole plane; plain drag moves the
                 // one node. Same two modes as a UserInstance drag — see
                 // _startDrag's `altDragSource`.
-                this._startDrag(viewName, -1, planeNodeIdx, vx, vy, null,
-                    e.altKey ? planeInst : null, planeInst);
+                if (!planePlan || planePlan.allowed !== false) {
+                    this._startDrag(viewName, -1, planeNodeIdx, vx, vy, null,
+                        e.altKey ? planeInst : null, planeInst,
+                        planePlan ? planePlan.indices : null);
+                }
             }
             e.preventDefault();
             e.stopPropagation();
@@ -1281,7 +1329,8 @@ export class InteractionManager {
         var planeHover = this.findNearestPlaneNode(vx, vy, viewName);
         var planeHoverNodeIdx = planeHover ? planeHover.nodeIdx : -1;
         if (planeHover && planeHoverNodeIdx === -1) {
-            planeHoverNodeIdx = this._resolveNearestNode(planeHover.plane, vx, vy);
+            planeHoverNodeIdx = this._resolveNearestNode(planeHover.plane, vx, vy,
+                this.planeNodeIndexSet(viewName));
         }
         this.hoveredPlaneNode = planeHover
             ? { viewName: viewName, planeId: planeHover.plane.id, nodeIdx: planeHoverNodeIdx }
@@ -1392,6 +1441,7 @@ export class InteractionManager {
                     const fdx = info.currentPos[0] - info.startPos[0];
                     const fdy = info.currentPos[1] - info.startPos[1];
                     for (var fi = 0; fi < instance.numNodes; fi++) {
+                        if (info.indexFilter && !info.indexFilter.has(fi)) continue;
                         if (info.originalPoints[fi]) {
                             instance.setPoint(fi,
                                 info.originalPoints[fi][0] + fdx,
@@ -1410,7 +1460,12 @@ export class InteractionManager {
                 // Notify the application
                 if (info.plane) {
                     if (this.callbacks.onPlaneChanged) {
-                        this.callbacks.onPlaneChanged(info.plane);
+                        // Name exactly which nodes moved, so the feature can
+                        // invalidate their 3D and nothing else's.
+                        this.callbacks.onPlaneChanged(info.plane,
+                            info.mode === 'instance'
+                                ? (info.indexFilter ? Array.from(info.indexFilter) : null)
+                                : [info.nodeIdx]);
                     }
                 } else if (group && this.callbacks.onNodeMoved) {
                     this.callbacks.onNodeMoved(
@@ -1624,14 +1679,18 @@ export class InteractionManager {
      * @param {Instance} instance - The instance whose points to search
      * @param {number} vx - Click X in video coordinates
      * @param {number} vy - Click Y in video coordinates
+     * @param {Set<number>|null} [allowed] - Restrict to these indices. Plane
+     *   annotation passes the nodes actually shown on the view, so an edge hit
+     *   cannot resolve to a node that draws nothing there.
      * @returns {number} Resolved node index, or -1 if no valid node found
      * @private
      */
-    _resolveNearestNode(instance, vx, vy) {
+    _resolveNearestNode(instance, vx, vy, allowed) {
         if (!instance || instance.numNodes === 0) return -1;
         var bestIdx = -1;
         var bestDist = Infinity;
         for (var ni = 0; ni < instance.numNodes; ni++) {
+            if (allowed && !allowed.has(ni)) continue;
             if (!instance.hasPoint(ni)) continue;
             var dx = instance.getX(ni) - vx;
             var dy = instance.getY(ni) - vy;
@@ -1709,9 +1768,14 @@ export class InteractionManager {
      *   the instance itself. Planes live outside `frameGroups`, so unlike a
      *   grouped instance they cannot be re-resolved from `instanceGroupIdx`
      *   mid-drag and are carried on `dragInfo` directly.
+     * @param {number[]|null} [indexFilter] - Whole-instance drags move only
+     *   these node indices. Used by plane annotation, whose instance covers a
+     *   shared node pool: an Alt+drag must carry the grabbed plane's nodes and
+     *   leave every other plane's where they are. null = every point.
      * @private
      */
-    _startDrag(viewName, instanceGroupIdx, nodeIdx, vx, vy, unlinked, altDragSource, plane) {
+    _startDrag(viewName, instanceGroupIdx, nodeIdx, vx, vy, unlinked, altDragSource, plane,
+        indexFilter) {
         // Clean up any previous drag listeners
         this._removeDragListeners();
 
@@ -1739,6 +1803,7 @@ export class InteractionManager {
             unlinked: unlinked,
             plane: plane || null,
             originalPoints: originalPoints,
+            indexFilter: (indexFilter && indexFilter.length) ? new Set(indexFilter) : null,
             thresholdMet: false,
         };
 
@@ -1815,6 +1880,7 @@ export class InteractionManager {
                 var dx = vx - info.startPos[0];
                 var dy = vy - info.startPos[1];
                 for (var pi = 0; pi < instance.numNodes; pi++) {
+                    if (info.indexFilter && !info.indexFilter.has(pi)) continue;
                     if (info.originalPoints[pi]) {
                         instance.setPoint(pi,
                             info.originalPoints[pi][0] + dx,

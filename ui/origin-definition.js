@@ -1,6 +1,6 @@
 // ui/origin-definition.js — "Set Origin Mode", the last step of the pipeline.
 //
-// Everything upstream (View ▸ Define Planes: skeletons, placements,
+// Everything upstream (View ▸ Define Planes: nodes, planes, placements,
 // triangulation, plane fit, 3D corner dragging) exists to produce a fitted
 // plane. This module turns one corner of one fitted plane plus a choice of
 // which way +Z points into the **translation + rotation** that re-express the
@@ -41,14 +41,16 @@ import { getPoint3d, hasPoint3d } from '../pose/pose-data.js';
 // Circular by design (plane-definition imports this module's `enterOriginMode`
 // for its button). Safe: every use is inside a function body, so the binding
 // resolves at call time.
-import { planeState, getPlaneSkeleton, syncPlanes3D } from './plane-definition.js';
+import {
+    planeState, planeModel, getPlane, planePoints3d, planeNodeNameAt, syncPlanes3D,
+} from './plane-definition.js';
 
 export const originState = {
     /** @type {boolean} True while Set Origin Mode is active. */
     active: false,
     /** @type {'node'|'axis'|'confirm'} Wizard step; meaningless when inactive. */
     step: 'node',
-    /** @type {number|null} Plane skeleton the picked corner belongs to. */
+    /** @type {number|null} Plane the picked corner belongs to. */
     planeId: null,
     /** @type {number|null} Node index of the picked corner. */
     nodeIdx: null,
@@ -88,10 +90,23 @@ export function isOriginModeActive() {
     return originState.active;
 }
 
-/** Every plane skeleton that has been fit — the only ones offering a corner. */
+/**
+ * Every plane that has been fit — the only ones offering a corner.
+ *
+ * A plane's 3D lives on the shared node pool now, so "has 3D" is asked of the
+ * materialized points rather than of a field on the plane: a plane whose nodes
+ * were all invalidated still holds its `planeFit` until something clears it,
+ * and offering its corners would dead-end the wizard on a point that no longer
+ * exists.
+ */
 export function fittedPlanes() {
-    return planeState.skeletons.filter(function (sk) {
-        return !!sk.planeFit && !!sk.points3d;
+    return planeModel().planes.filter(function (plane) {
+        if (!plane.planeFit) return false;
+        var pts = planePoints3d(plane);
+        for (var k = 0; k < plane.nodeIds.length; k++) {
+            if (hasPoint3d(pts, k)) return true;
+        }
+        return false;
     });
 }
 
@@ -347,35 +362,42 @@ export function renderWizard() {
  * on a room-sized plane and shoots off screen on a small one. Returns 0 (the
  * viewport's fallback) if the plane has no other usable corner to measure with.
  */
-function arrowLengthFor(sk, origin) {
+function arrowLengthFor(plane, points3d, origin) {
     var far = 0;
-    for (var k = 0; k < sk.nodes.length; k++) {
-        if (!hasPoint3d(sk.points3d, k)) continue;
-        var p = getPoint3d(sk.points3d, k);
+    for (var k = 0; k < plane.nodeIds.length; k++) {
+        if (!hasPoint3d(points3d, k)) continue;
+        var p = getPoint3d(points3d, k);
         var d = Math.hypot(p[0] - origin[0], p[1] - origin[1], p[2] - origin[2]);
         if (d > far) far = d;
     }
     return far > 0 ? far * 0.7 : 0;
 }
 
-/** Step 1 result: a corner of a fitted plane. */
+/**
+ * Step 1 result: a corner of a fitted plane.
+ *
+ * `nodeIdx` is an index into the PLANE's own node order — the same order the 3D
+ * payload was laid out in, which is what the viewport picked from — not a pool
+ * index. The two differ as soon as a node is shared or the pool is reordered.
+ */
 export function pickOriginNode(planeId, nodeIdx) {
     if (!originState.active || originState.step !== 'node') return false;
-    var sk = getPlaneSkeleton(planeId);
-    if (!sk || !sk.planeFit || !sk.points3d) return false;
-    if (!hasPoint3d(sk.points3d, nodeIdx)) return false;
+    var plane = getPlane(planeId);
+    if (!plane || !plane.planeFit) return false;
+    var points3d = planePoints3d(plane);
+    if (!hasPoint3d(points3d, nodeIdx)) return false;
 
-    var p = getPoint3d(sk.points3d, nodeIdx);
+    var p = getPoint3d(points3d, nodeIdx);
     originState.planeId = planeId;
     originState.nodeIdx = nodeIdx;
     originState.originPoint = [p[0], p[1], p[2]];
-    originState.normal = sk.planeFit.normal.slice();
-    originState.arrowLength = arrowLengthFor(sk, originState.originPoint);
+    originState.normal = plane.planeFit.normal.slice();
+    originState.arrowLength = arrowLengthFor(plane, points3d, originState.originPoint);
     originState.chosen = null;
     originState.step = 'axis';
     renderWizard();
-    setStatus('Origin corner: "' + (sk.nodes[nodeIdx] || ('node ' + nodeIdx)) +
-        '" on plane "' + sk.name + '" — ' + STEP_TEXT.axis);
+    setStatus('Origin corner: "' + planeNodeNameAt(plane, nodeIdx) +
+        '" on plane "' + plane.name + '" — ' + STEP_TEXT.axis);
     return true;
 }
 
@@ -418,9 +440,9 @@ export function applyOrigin() {
         return null;
     }
 
-    var sk = getPlaneSkeleton(originState.planeId);
-    frame.sourcePlane = sk ? sk.name : null;
-    frame.sourceNode = sk ? (sk.nodes[originState.nodeIdx] || ('node ' + originState.nodeIdx)) : null;
+    var plane = getPlane(originState.planeId);
+    frame.sourcePlane = plane ? plane.name : null;
+    frame.sourceNode = plane ? planeNodeNameAt(plane, originState.nodeIdx) : null;
     originState.frame = frame;
 
     if (viewport3d) viewport3d.setOriginFrame(frame);
