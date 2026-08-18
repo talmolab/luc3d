@@ -117,7 +117,7 @@ import { setStatus } from '../import-export/save-load.js';
 // at module evaluation.
 import { drawAllOverlays } from './rendering.js';
 import {
-    triangulatePoints, reprojectPointCamera,
+    triangulatePoints, reprojectPointCamera, cameraDepth,
     fitPlaneToPoints3d, projectPoints3dOntoPlane,
     fitPlaneConstrained, projectPoints3dOntoPlaneConstrained,
     mergeFrozenPoints3d, summarizePlaneTriangulation, planesInvalidatedByFit,
@@ -468,7 +468,11 @@ export function triangulatePlane(plane) {
             var p = contributors[vi].inst;
             var camv = contributors[vi].cam;
             var pi = poolIdx[k];
-            if (pi >= 0 && p.hasPoint(pi) && !p.isNodeNulled(pi)) {
+            // A DERIVED point is this solve's own previous output reprojected
+            // into a view the user never annotated. Feeding it back adds no
+            // information and pulls the reported error toward zero, so it is
+            // excluded exactly like a nulled one.
+            if (pi >= 0 && p.hasPoint(pi) && !p.isNodeNulled(pi) && !p.isNodeDerived(pi)) {
                 var r = p.getPoint(pi);
                 raw.push(r);
                 obs.push(camv.undistortPoint ? camv.undistortPoint(r) : r);
@@ -479,6 +483,27 @@ export function triangulatePlane(plane) {
         }
         allObs.push(obs);
         allRaw.push(raw);
+    }
+
+    // Views carrying at least one HAND-PLACED observation. Placement alone is
+    // no longer the same question: once triangulation reprojects a plane into
+    // the views it was not placed on, those views ARE placed but contribute
+    // nothing, so gating on `contributors.length` would let a plane annotated
+    // on a single view look like a 2-view solve and return a confident answer
+    // built from one ray.
+    var usableViews = [];
+    for (var uv = 0; uv < contributors.length; uv++) {
+        for (var un = 0; un < nNodes; un++) {
+            if (allRaw[un][uv]) { usableViews.push(contributors[uv].cam.name); break; }
+        }
+    }
+    if (usableViews.length < 2) {
+        return {
+            ok: false,
+            reason: '"' + plane.name + '" has hand-placed corners on ' +
+                (usableViews.length ? 'only 1 view (' + usableViews[0] + ')' : 'no view') +
+                ' — reprojected corners are not evidence, so place it on another view',
+        };
     }
 
     var mask = planeImmutableMask(plane);
@@ -524,7 +549,11 @@ export function triangulatePlane(plane) {
         else if (node) node.error = nodeErrors[w] != null ? nodeErrors[w] : node.error;
     }
 
-    var viewNames = contributors.map(function (v) { return v.cam.name; });
+    // Only the views that actually contributed, so the stored summary (and
+    // `refreshTriangulationErrors`, which re-derives from it) never averages in
+    // a view whose residual is zero by construction.
+    var viewNames = usableViews;
+    var reprojected = reprojectPlaneIntoUnplacedViews(plane);
     plane.triangulation = {
         views: viewNames,
         nNodes: summary.nNodes,
@@ -539,7 +568,117 @@ export function triangulatePlane(plane) {
         meanError: summary.meanError,
         nAnchors: summary.nAnchors,
         anchorMeanError: summary.anchorMeanError,
+        reprojectedViews: reprojected.views,
+        reprojectedNodes: reprojected.nodes,
+        behindViews: reprojected.behindViews,
     };
+}
+
+/**
+ * Reproject a plane's solved 3D into every view it is NOT placed on, write the
+ * result into that view's `PlaneInstance`, and place the plane there.
+ *
+ * Why into the PlaneInstance and not a separate reprojection overlay: a plane is
+ * reference geometry the user is trying to get RIGHT, so the useful thing is not
+ * just seeing where it lands in the other views but being able to grab a corner
+ * there and correct it. A read-only marker would show the disagreement and offer
+ * no way to act on it. So these become real plane points — draggable, and the
+ * moment one is dragged it stops being derived and starts being evidence
+ * (`onPlaneChanged`).
+ *
+ * Three things this deliberately refuses to do:
+ *   - **Claim to be evidence.** Each written point is flagged
+ *     `derived` on the instance and excluded from the next solve and from the
+ *     reprojection-error average. It is the current 3D projected, so its
+ *     residual is zero by construction; counting it would make the error
+ *     readout improve every time the button is pressed.
+ *   - **Write a mirrored ghost.** A point BEHIND a camera still divides through
+ *     to a finite, plausible pixel coordinate (`reprojectPoint` does not check
+ *     the sign of `w`), so every node is gated on `cameraDepth > 0`. A view that
+ *     ends up with nothing in front of it is left alone entirely, not placed.
+ *   - **Touch a view the user placed.** Placed views hold the user's own
+ *     annotation; overwriting it with the model's opinion of it is precisely
+ *     what `applyPlaneFit` refuses to do for pinned nodes, for the same reason.
+ *     The one exception is a point that is ITSELF derived: those are refreshed
+ *     wherever they are, because a reprojection left over from a solve two edits
+ *     ago is worse than none — it reads as current.
+ *
+ * Nodes with no 3D contribute nothing. Off-frame reprojections ARE written when
+ * the point is in front of the camera — the plane may legitimately extend past
+ * the frame edge, and clamping would fake a corner position.
+ *
+ * @param {PlaneSkeleton} plane
+ * @returns {{views:string[], refreshedViews:string[], nodes:number,
+ *            behindViews:string[]}} `views` = views written to and newly placed;
+ *   `refreshedViews` = already-placed views whose derived points were brought up
+ *   to date; `behindViews` = views skipped because no corner is in front of that
+ *   camera.
+ */
+export function reprojectPlaneIntoUnplacedViews(plane) {
+    var out = { views: [], refreshedViews: [], nodes: 0, behindViews: [] };
+    var session = state.session;
+    if (!plane || !session || !session.cameras) return out;
+    var model = planeModel();
+    var pool = model.pool;
+    var points3d = points3dForPlane(plane, pool);
+
+    for (var c = 0; c < session.cameras.length; c++) {
+        var cam = session.cameras[c];
+        // Keyed by camera name, like every other plane path — a view IS a
+        // camera here. A camera with no view on screen would be given a
+        // placement nobody can see, so it is skipped.
+        if (!viewByName(cam.name)) continue;
+        var placed = model.isPlanePlaced(plane, cam.name);
+        var existing = model.getInstance(cam.name);
+        // A PLACED view holds the user's own annotation and is never touched —
+        // except for points that are themselves derived, which must be brought
+        // up to date or they are a stale reprojection of a solve two edits ago,
+        // displayed as if current.
+        if (placed && (!existing || !existing.derivedNodes.size)) continue;
+
+        var writes = [];
+        var anyBehind = false;
+        for (var k = 0; k < plane.nodeIds.length; k++) {
+            if (!hasPoint3d(points3d, k)) continue;
+            var pi = pool.indexOf(plane.nodeIds[k]);
+            if (pi < 0) continue;
+            if (placed && !existing.isNodeDerived(pi)) continue;
+            var xyz = getPoint3d(points3d, k);
+            var w = cameraDepth(xyz, cam);
+            if (!(w > 0) || !isFinite(w)) { anyBehind = true; continue; }
+            var uv = reprojectPointCamera(xyz, cam);
+            if (!uv || !isFinite(uv[0]) || !isFinite(uv[1])) continue;
+            writes.push([pi, uv[0], uv[1]]);
+        }
+        if (!writes.length) {
+            if (anyBehind && !placed) out.behindViews.push(cam.name);
+            continue;
+        }
+
+        var inst = model.ensureInstance(cam.name);
+        for (var wi = 0; wi < writes.length; wi++) {
+            inst.setPoint(writes[wi][0], writes[wi][1], writes[wi][2]);
+            inst.setNodeDerived(writes[wi][0], true);
+        }
+        inst.modified = true;
+        out.nodes += writes.length;
+        if (placed) {
+            out.refreshedViews.push(cam.name);
+        } else {
+            inst.placedPlanes.add(plane.id);
+            out.views.push(cam.name);
+        }
+    }
+    return out;
+}
+
+/** The `state.views` entry named `name`, or null. @returns {Object|null} */
+function viewByName(name) {
+    var views = state.views || [];
+    for (var i = 0; i < views.length; i++) {
+        if (views[i].name === name) return views[i];
+    }
+    return null;
 }
 
 /** Triangulate + push to the 3D viewer + report + refresh the panel. */
@@ -553,11 +692,26 @@ function triangulatePlaneAndReport(plane) {
         setStatus('Triangulated "' + plane.name + '": ' + res.nNodes + '/' +
             plane.nodeIds.length + ' nodes from ' + res.views.length + ' views' +
             (res.nAnchors ? ' (' + res.nAnchors + ' pinned, kept)' : '') +
-            (res.meanError != null ? ' — mean error ' + res.meanError.toFixed(2) + ' px' : ''),
+            (res.meanError != null ? ' — mean error ' + res.meanError.toFixed(2) + ' px' : '') +
+            // Say where the plane just appeared and that those corners are the
+            // model's, not evidence — they are draggable, and dragging one is
+            // what turns it into an observation.
+            (res.reprojectedViews && res.reprojectedViews.length
+                ? '; reprojected onto ' + res.reprojectedViews.join(', ') +
+                  ' (drag a corner there to make it count)'
+                : '') +
+            (res.behindViews && res.behindViews.length
+                ? '; behind ' + res.behindViews.join(', ')
+                : ''),
             'success');
     }
     syncPlanes3D();
     refreshPlanePanel();
+    // The 2D overlays too, not just the 3D: triangulation now WRITES 2D — it
+    // reprojects the plane into the views it was not placed on — so without
+    // this the new placement is real but invisible until some unrelated event
+    // happens to redraw.
+    redraw();
     return res;
 }
 
@@ -717,7 +871,11 @@ export function applyPlaneFit(plane, plan) {
                 if (pi < 0 || pi >= inst.numNodes) continue;
                 var uv = reprojectPointCamera(getPoint3d(flattened, k), cam);
                 if (!uv || !isFinite(uv[0]) || !isFinite(uv[1])) continue;
-                if (inst.hasPoint(pi)) {
+                // `movedPx` answers "how far did the fit move YOUR
+                // annotations" — a derived point is the model's own
+                // reprojection, so its movement is not that. Still rewritten
+                // below, so it keeps agreeing with the 3D.
+                if (inst.hasPoint(pi) && !inst.isNodeDerived(pi)) {
                     var dx = uv[0] - inst.getX(pi);
                     var dy = uv[1] - inst.getY(pi);
                     movedSum += Math.sqrt(dx * dx + dy * dy);
@@ -820,6 +978,7 @@ function refreshTriangulationErrors(plane) {
         for (var v = 0; v < contributors.length; v++) {
             var p = contributors[v].inst;
             if (pi < 0 || !p.hasPoint(pi) || p.isNodeNulled(pi)) continue;
+            if (p.isNodeDerived(pi)) continue;   // its residual is 0 by construction
             var rp = reprojectPointCamera(pt, contributors[v].cam);
             if (!rp) continue;
             var dx = rp[0] - p.getX(pi);
@@ -2023,13 +2182,27 @@ function buildPlacementsRow(plane, views, pool) {
         name.textContent = viewName;
         row.appendChild(name);
 
-        var off = 0;
+        var off = 0, derived = 0;
         for (var i = 0; i < poolIdx.length; i++) {
-            if (poolIdx[i] >= 0 && inst && inst.isNodeNulled(poolIdx[i])) off++;
+            if (poolIdx[i] < 0 || !inst) continue;
+            if (inst.isNodeNulled(poolIdx[i])) off++;
+            else if (inst.isNodeDerived(poolIdx[i])) derived++;
         }
         var meta = document.createElement('span');
         meta.className = 'plane-placement-meta';
-        meta.textContent = off ? off + ' off' : '';
+        // A view the plane was REPROJECTED onto is placed like any other, so
+        // without this the list gives no clue that its corners are the model's
+        // output rather than the user's annotation — and that they do not count
+        // as evidence in the next solve.
+        var bits = [];
+        if (off) bits.push(off + ' off');
+        if (derived) bits.push(derived + ' reprojected');
+        meta.textContent = bits.join(', ');
+        if (derived) {
+            meta.title = derived + ' corner(s) here were reprojected from the 3D, ' +
+                'not annotated on this view — drag one to make it count as an ' +
+                'observation in the next triangulation';
+        }
         row.appendChild(meta);
 
         var del = makeDeleteButton(
@@ -2354,13 +2527,24 @@ function beginPlaneDrag(viewName, nodeIdx, wholePlane) {
  * @param {PlaneInstance} inst
  * @param {number[]|null} [movedIndices] - POOL indices the drag touched; null
  *   means "unknown", which is treated as everything visible on that view.
+ * @param {{moved?:boolean}} [opts] - `moved:true` = the user DRAGGED these
+ *   points. Only a drag promotes a reprojected point to an observation;
+ *   right-clicking a node off calls this too and must not.
  */
-function onPlaneChanged(inst, movedIndices) {
+function onPlaneChanged(inst, movedIndices, opts) {
     if (!inst) return;
     var model = planeModel();
     var indices = movedIndices && movedIndices.length
         ? movedIndices
         : model.visibleNodeIndices(inst.viewName);
+    // A point the user moved is THEIRS, whatever put it there — so it stops
+    // being a reprojection and starts counting as an observation in this view.
+    // Deliberately not done in `setPoint`: the fit's 2D write-back and the 3D
+    // corner drag go through the same setter and must NOT promote the model's
+    // own output to evidence. Nor does a null-toggle (`moved` false): the user
+    // turning a corner off says nothing about where it is, so un-toggling it
+    // later must not leave a reprojection counting as an annotation.
+    if (opts && opts.moved) inst.clearDerivedNodes(indices);
     for (var i = 0; i < indices.length; i++) {
         var node = model.pool.nodeAt(indices[i]);
         if (node) model.invalidateNode3D(node.id);
@@ -2470,6 +2654,11 @@ export function drawPlaneOverlays(view) {
  * A PINNED node gets an extra white ring: it is the one node under the cursor
  * that will refuse to move, and finding that out only by dragging it would read
  * as a broken drag rather than as a deliberate lock.
+ *
+ * Three states are visually distinct because they mean three different things
+ * to the next solve: solid = your annotation, counted; hollow grey = you turned
+ * it off; ghosted with a dashed ring = REPROJECTED from the 3D into a view you
+ * never annotated, so it is shown and draggable but not counted.
  */
 function drawPlaneNodes(ctx, model, inst, tf, hovered, viewName) {
     var pool = model.pool;
@@ -2485,6 +2674,7 @@ function drawPlaneNodes(ctx, model, inst, tf, hovered, viewName) {
         if (!node) continue;
         var pt = tf(inst.getX(n), inst.getY(n));
         var nulled = inst.isNodeNulled(n);
+        var derived = !nulled && inst.isNodeDerived(n);
         var nodeColor = nulled ? NULLED_COLOR : node.color;
         var isHovered = !!(hovered && hovered.viewName === viewName &&
             hovered.planeId === inst.id && hovered.nodeIdx === n);
@@ -2506,6 +2696,22 @@ function drawPlaneNodes(ctx, model, inst, tf, hovered, viewName) {
             ctx.lineWidth = 1.5;
             ctx.strokeStyle = nodeColor;
             ctx.stroke();
+        } else if (derived) {
+            // REPROJECTED here, not annotated here: ghosted fill + a dashed
+            // ring. It is a real, draggable point — dragging it is what turns
+            // it into an observation — so it must read as neither a solid
+            // annotation nor a nulled one. Nulled wins when both apply: "you
+            // turned this off" is the more actionable fact.
+            ctx.save();
+            ctx.globalAlpha = 0.35;
+            ctx.fillStyle = nodeColor;
+            ctx.fill();
+            ctx.restore();
+            ctx.setLineDash([3, 2.5]);
+            ctx.lineWidth = 1.5;
+            ctx.strokeStyle = nodeColor;
+            ctx.stroke();
+            ctx.setLineDash([]);
         } else {
             ctx.fillStyle = nodeColor;
             ctx.fill();

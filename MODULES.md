@@ -184,10 +184,11 @@ annotation produces and nothing about the solve or the UI, which live in
   keeps that a single implementation. Carries `id`, `viewName`,
   `type: 'plane'`, `nulledNodes` (Set of POOL INDICES; same field name and
   meaning as a UserInstance's, so the inherited `hasAnyUsablePoint()` already
-  reads it), `placedPlanes` (Set of PLANE IDS — explicit, because with shared
-  nodes "this node has a position here" can no longer tell you which planes the
-  user placed) and **`nodeIds`** (the NODE ID of each column). Frame-independent
-  by design.
+  reads it), **`derivedNodes`** (Set of POOL INDICES whose 2D here was
+  REPROJECTED from the 3D rather than annotated — see below), `placedPlanes`
+  (Set of PLANE IDS — explicit, because with shared nodes "this node has a
+  position here" can no longer tell you which planes the user placed) and
+  **`nodeIds`** (the NODE ID of each column). Frame-independent by design.
   - `nodeIds` is a LEDGER, not a second addressing scheme: callers still address
     the instance by POOL INDEX through the inherited accessors. It exists
     because **a count is not an identity.** An instance can be DETACHED from the
@@ -198,18 +199,36 @@ annotation produces and nothing about the solve or the UI, which live in
     can tell those cases apart.
   - `isNodeNulled(i)` / `toggleNodeNull(i)` / `isPlanePlaced(planeId)`,
     `centroid(indices?)` (restrict to one plane's nodes for its label).
+  - `isNodeDerived(i)` / `setNodeDerived(i, on)` / `clearDerivedNodes(indices?)`
+    — the REPROJECTED flag. `triangulatePlane` reprojects a solved plane into the
+    views it is not placed on so the user can see (and correct) where it lands
+    there; such a point is exactly the projection of the current 3D, so it is not
+    evidence. Feeding it back would add no information while dragging the
+    reported reprojection error toward zero — a quality readout that improves
+    every time you press the button. So a derived point renders and drags like
+    any other, but is excluded from the solve and from the error average until
+    the user DRAGS it, which clears the flag. Deliberately separate from
+    `nulledNodes`: "turned off" and "never placed" are different facts, and a
+    right-click-off must not silently promote a reprojection to an annotation.
+  - `_indexFlagSets()` — every index-keyed flag set (`nulledNodes`,
+    `derivedNodes`) in one list, which the three index-remapping paths
+    (`resyncToNodeIds` / `removeNodeAt` / `moveNodeAt`) all iterate. A set left
+    un-remapped points at its NEIGHBOUR's node and every point still looks
+    valid — the aliasing failure class this whole model was rebuilt to avoid — so
+    add a new per-(view, node) set here and remapping follows for free.
   - `appendNode(id)` — one unpositioned column. New slots are left UNPOSITIONED,
     unlike the per-plane model: a node only becomes visible on a view once a
     plane referencing it is placed there, and that is where seeding happens.
   - `resyncToNodeIds(ids)` — re-seat the columns onto `ids` BY NODE ID; a
-    survivor keeps its point and nulled flag wherever it moved to, a dropped
+    survivor keeps its point and its per-node flags (nulled, derived) wherever it
+    moved to, a dropped
     node's column goes, a new node arrives unpositioned. The repair path for a
     detached map, and what `attachPlacements` / `ensureInstance` use.
   - `seedNodeNear(idx, cx, cy, ordinal, videoW, videoH)` — golden-angle spoke,
     for a node joining an ALREADY-placed plane (an unpositioned node draws
     nothing, so there would be nothing to grab).
   - `removeNodeAt(i)` / `moveNodeAt(from, to)` — mirror the pool's splice/move,
-    carrying the `nulledNodes` flags with their nodes.
+    carrying the per-node flag sets with their nodes.
 - `class PlaneModel` — pool + planes + `placements` (`Map<viewName,
   PlaneInstance>`), and every operation that spans them. Doing any of these
   piecemeal corrupts the index space: `createPlane`/`getPlane`/`deletePlane`
@@ -2495,9 +2514,13 @@ drift from pose editing. Added surface:
   both `_onDragMove` and `_onDragUp` honour in whole-instance mode — an
   Alt+drag must carry the grabbed plane's nodes and leave every other plane's
   where they are, and the pool-wide instance makes that a real distinction.
-- `onPlaneChanged(planeInstance, movedIndices)` — the second argument names the
-  node indices the edit touched (`[nodeIdx]`, the alt-drag's filter, or null for
-  "unknown"), so the feature can invalidate exactly those nodes' 3D.
+- `onPlaneChanged(planeInstance, movedIndices, {moved})` — the second argument
+  names the node indices the edit touched (`[nodeIdx]`, the alt-drag's filter, or
+  null for "unknown"), so the feature can invalidate exactly those nodes' 3D.
+  `moved` separates a DRAG (`true`) from a right-click null-toggle (`false`):
+  only a drag means the user positioned those points, which is what promotes a
+  REPROJECTED corner to a real observation. Toggling one off says nothing about
+  where it is, so it must not.
 - `_startDrag`'s trailing `plane` argument, carried on `dragInfo.plane`.
   Planes live outside `frameGroups`, so unlike a grouped instance they cannot
   be re-resolved from `instanceGroupIdx` mid-drag and are held by reference.
@@ -2920,7 +2943,10 @@ would misstate the model.
    outline the convex hull cannot (a CONCAVE one). Without edges the fill hulls
    the plane's points, so an unconnected plane still fills correctly.
 3. **Planes** (`#planePlanesDetails`) — `#planeSkeletonsTable` (the drag
-   source, with the per-plane expander and placement rows),
+   source, with the per-plane expander and placement rows; each row's meta reads
+   `N off, N reprojected`, since a view Triangulate reprojected onto is placed
+   like any other and would otherwise give no clue that its corners are the
+   model's output rather than the user's annotation),
    `#planeSkeletonsEmpty`, `+ New Plane`, the shared `.plane-action-row`
    (Triangulate / Fill / Fit) and `Set Origin`. LAST, deliberately: the editor
    is where the work happens, so it gets the space next to the pool it draws
@@ -2987,8 +3013,42 @@ plane.
   DLT result) but their residual IS measured and reported separately
   (`summarizePlaneTriangulation`) — an out-of-sample residual saying "your
   pinned anchor no longer agrees with where you clicked". DLT only, no BA: a
-  plane is 3-8 hand-placed corners. Requires 2+ views; returns
-  `{ok:false, reason}` rather than throwing.
+  plane is 3-8 hand-placed corners. Returns `{ok:false, reason}` rather than
+  throwing.
+  - **Requires 2+ HAND-PLACED views, not 2+ placements.** Once triangulation
+    reprojects a plane into the views it was not placed on, those views ARE
+    placed but contribute nothing, so a placement count would let a plane
+    annotated on ONE view return a confident answer built from one ray. The gate
+    counts views with at least one usable (positioned, not nulled, not derived)
+    observation, and `plane.triangulation.views` lists only those — otherwise
+    `refreshTriangulationErrors` would average in a view whose residual is zero
+    by construction.
+  - Then it calls `reprojectPlaneIntoUnplacedViews`, and
+    `triangulatePlaneAndReport` **redraws the 2D overlays** — triangulation now
+    writes 2D, so without that the new placement is real, listed in the panel,
+    and invisible until some unrelated event repaints.
+- `reprojectPlaneIntoUnplacedViews(plane)` — writes the plane's solved 3D into
+  the `PlaneInstance` of every view it is NOT placed on, flags those points
+  `derived`, and places the plane there so it draws. Into the real instance
+  rather than a read-only reprojection overlay because a plane is reference
+  geometry the user is trying to get RIGHT: the useful thing is not only seeing
+  where it lands in the other views but being able to grab a corner there and
+  fix it, and dragging one is what turns it into evidence. Three refusals:
+  - **Never claims to be evidence** — every written point is `derived`, so it is
+    out of the next solve and out of the error average (see `PlaneInstance`).
+  - **Never writes a mirrored ghost** — a point BEHIND a camera still divides
+    through to a finite, plausible pixel (`reprojectPoint` does not check the
+    sign of `w`), so each node is gated on `cameraDepth > 0`. A view with nothing
+    in front of it is left alone and reported in `behindViews`.
+  - **Never overwrites a view the user placed** — those hold the user's own
+    annotation. The one exception is a point that is itself derived: those are
+    REFRESHED wherever they are, because a reprojection left over from a solve
+    two edits ago reads as current, which is worse than none.
+  Off-frame reprojections are still written when the point is in front of the
+  camera (a plane may legitimately extend past the frame edge; clamping would
+  fake a corner). Cameras with no `state.views` entry are skipped — a placement
+  nobody can see. Consequence worth knowing: un-placing a reprojected view is
+  undone by the next Triangulate, by design.
 - `planPlaneFit(plane)` / `applyPlaneFit(plane, plan)` / `fitPlane(plane, opts)`
   — the **second half** of the origin pipeline, split so the two outcomes that
   need the user happen before anything is written. With **no pinned node** it
@@ -3000,8 +3060,11 @@ plane.
   `syncPlanes3D` for the viewer, and `reprojectPointCamera` into every placed
   view's 2D — **skipping pinned nodes**, whose 3D did not move and whose
   annotation is the user's, not the model's. Nodes toggled OFF still get their
-  2D updated; the off flags are preserved. `refreshTriangulationErrors`
-  re-derives the per-node errors afterwards.
+  2D updated; the off flags are preserved. Derived points are rewritten too (so
+  they keep agreeing with the fitted 3D) but excluded from the reported
+  `movedPx`, which answers "how far did the fit move YOUR annotations".
+  `refreshTriangulationErrors` re-derives the per-node errors afterwards, also
+  skipping derived points.
 - **Blocking vs confirming.** `fitPlaneAndReport` dispatches on the result
   **CODE**, never on the message text. `no_anchor_3d` / `anchors_collinear` /
   `anchors_noncoplanar` / `underdetermined` BLOCK: the message goes to a dialog
@@ -3053,18 +3116,26 @@ plane.
   while drawing nothing), and `beginPlaneDrag` refuses a **pinned** node and
   restricts an Alt+drag to the grabbed plane's nodes (translating every point of
   the instance would drag unrelated planes along).
-- `onPlaneChanged(inst, movedIndices)` — a 2D edit invalidates the 3D of **the
-  nodes that moved**, not the whole plane: a node's 3D is the node's, and
+- `onPlaneChanged(inst, movedIndices, {moved})` — a 2D edit invalidates the 3D of
+  **the nodes that moved**, not the whole plane: a node's 3D is the node's, and
   clearing a neighbour's would throw away work the edit says nothing about.
   Pinned nodes are skipped (`invalidateNode3D`), but every plane standing on a
-  moved node still loses its fit.
+  moved node still loses its fit. When `moved` is true it also clears those
+  nodes' `derived` flags — a point the user dragged is theirs, whatever put it
+  there. Deliberately NOT done inside `setPoint`: the fit's 2D write-back and the
+  3D corner drag go through the same setter and must not promote the model's own
+  output to evidence.
 - `drawPlaneOverlays(view)` — fills and edges per placed plane, then the NODES
   once each over the union of those planes (a shared corner is one node with one
   point, so drawing it twice would only double the anti-aliasing), then the
   plane name at each plane's own centroid. Called by `drawAllOverlays` **after**
-  `drawFrameOverlays`. A nulled node draws hollow; a **pinned** node gets an
-  extra white ring, because finding out it will not move by dragging it would
-  read as a broken drag rather than a deliberate lock.
+  `drawFrameOverlays`. Three node states are visually distinct because they mean
+  three different things to the next solve: **solid** = the user's annotation,
+  counted; **hollow grey** = nulled, turned off; **ghosted with a dashed ring** =
+  derived, reprojected into a view the user never annotated, so shown and
+  draggable but not counted. Nulled wins when both apply. A **pinned** node gets
+  an extra white ring on top, because finding out it will not move by dragging it
+  would read as a broken drag rather than a deliberate lock.
 - `refreshPlanePanel()` — rebuilds the panel: `renderEditor` (section header +
   empty state, plane name, the global Nodes table, the frozen-node warning, the
   selected plane's members table, the add-an-existing-node dropdown, and the

@@ -641,6 +641,77 @@ console.log('\n17. Hull ordering degenerates safely');
     check(eq(planeFillOrder3d(null, null), []), 'a null plane has no fill order');
 }
 
+console.log('\n18. Derived (reprojected) 2D flags are per-(view, node) and travel with their node');
+{
+    // `derivedNodes` marks a point that triangulation reprojected into a view
+    // the user never annotated. It is an INDEX-keyed set, exactly like
+    // `nulledNodes` — which is the aliasing bug class this whole model was
+    // rebuilt to avoid: a flag set left un-remapped points at its neighbour's
+    // node, and every point still looks perfectly valid.
+    const m = new PlaneModel();
+    const n = ['q0', 'q1', 'q2', 'q3', 'q4'].map(x => m.addNode(x));
+    const P = m.createPlane('quad');
+    n.forEach(x => m.addNodeToPlane(P, x.id));
+    const inst = m.ensureInstance('camA');
+    n.forEach((x, i) => inst.setPoint(i, 100 + i, 200 + i));
+
+    check(inst.isNodeDerived(2) === false, 'nothing is derived to begin with');
+    inst.setNodeDerived(2, true);
+    inst.setNodeDerived(4, true);
+    check(inst.isNodeDerived(2) && inst.isNodeDerived(4), 'two nodes flagged');
+    check(!inst.isNodeDerived(0) && !inst.isNodeDerived(3), 'and only those two');
+
+    // Independent of nulled: both can be set, and neither implies the other.
+    inst.toggleNodeNull(2);
+    check(inst.isNodeNulled(2) && inst.isNodeDerived(2), 'nulled and derived coexist');
+    check(!inst.isNodeNulled(4) && inst.isNodeDerived(4), 'and are independent');
+    inst.toggleNodeNull(2);
+
+    // A view the user never touched has its own (empty) set — the flag is
+    // per-(view, node), because a corner can be hand-placed on one view and
+    // reprojected on another.
+    const other = m.ensureInstance('camB');
+    check(!other.isNodeDerived(2), 'the flag does not leak to another view');
+
+    // Deleting a node from the MIDDLE of the pool: flags above it shift down
+    // with their node, and the deleted node's flag goes.
+    m.deleteNode(n[1].id);
+    check(eq(inst.nodeIds, [n[0].id, n[2].id, n[3].id, n[4].id]), 'the ledger spliced');
+    check(inst.isNodeDerived(1) && inst.isNodeDerived(3),
+        'derived flags followed their nodes down a deletion');
+    check(!inst.isNodeDerived(2), 'and did not smear onto the neighbour');
+    check(eq(inst.getPoint(1), [102, 202]), 'the point moved with the flag, not past it');
+
+    // Reordering the pool.
+    m.moveNode(0, 3);   // q0 to the end: q2 q3 q4 q0
+    check(eq(inst.nodeIds, [n[2].id, n[3].id, n[4].id, n[0].id]), 'the ledger reordered');
+    check(inst.isNodeDerived(0) && inst.isNodeDerived(2),
+        'derived flags followed a reorder');
+    check(!inst.isNodeDerived(1) && !inst.isNodeDerived(3), 'and nothing else moved');
+
+    // The detach/reattach repair path — the one that must match BY ID.
+    const detached = new Map();
+    detached.set('camA', inst);
+    m.addNode('q5');                       // pool changed while detached
+    m.attachPlacements(detached);
+    check(inst.numNodes === m.pool.size, 'reattached instance spans the pool');
+    const derivedNames = [];
+    for (let i = 0; i < inst.numNodes; i++) {
+        if (inst.isNodeDerived(i)) derivedNames.push(m.pool.nodeAt(i).name);
+    }
+    check(eq(derivedNames.slice().sort(), ['q2', 'q4']),
+        `the same NODES are derived after a resync (got ${JSON.stringify(derivedNames)})`);
+
+    // Clearing: a user edit clears only what it touched.
+    const i2 = m.pool.indexOf(n[2].id);
+    check(inst.clearDerivedNodes([i2]) === 1, 'clearing one reports one');
+    check(!inst.isNodeDerived(i2), 'and it is cleared');
+    check(inst.isNodeDerived(m.pool.indexOf(n[4].id)), 'while the other survives');
+    check(inst.clearDerivedNodes([i2]) === 0, 'clearing it again reports nothing');
+    check(inst.clearDerivedNodes() === 1, 'clearing all reports the remainder');
+    check(inst.derivedNodes.size === 0, 'and the set is empty');
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 console.log(failed === 0 ? 'PASS' : 'FAIL');
 process.exit(failed === 0 ? 0 : 1);

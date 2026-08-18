@@ -304,11 +304,70 @@ export class PlaneInstance extends Instance {
          */
         this.nulledNodes = new Set();
         /**
+         * @type {Set<number>} Nodes whose 2D on this view was REPROJECTED from
+         * the 3D rather than annotated by the user, BY POOL INDEX.
+         *
+         * Written by triangulation, which reprojects a solved plane into the
+         * views it is not placed on so the user can see where it lands there.
+         * Such a point is EXACTLY the projection of the current 3D, so it is
+         * not evidence: feeding it back into the next solve would add no
+         * information while dragging the reported reprojection error toward
+         * zero — a quality readout that improves every time you press the
+         * button. So a derived point renders, and can be dragged, but is
+         * excluded from the solve until the user touches it, at which point it
+         * becomes their annotation and the flag is cleared.
+         *
+         * Separate from `nulledNodes` on purpose: "the user turned this off"
+         * and "the user never placed this" are different facts, and a
+         * deliberately-nulled node must not be silently re-enabled by a drag.
+         */
+        this.derivedNodes = new Set();
+        /**
          * @type {Set<number>} PLANE ids placed on this view. Explicit, not
          * derived: with nodes shared between planes, "this node has a position
          * here" can no longer tell you which planes the user placed here.
          */
         this.placedPlanes = new Set();
+    }
+
+    /**
+     * Every index-keyed flag set on this instance, so the three index-remapping
+     * paths (`resyncToNodeIds` / `removeNodeAt` / `moveNodeAt`) cannot remap one
+     * and forget another — a set left un-remapped points at its neighbour's
+     * node, which looks perfectly valid. Add any new per-(view, node) set here
+     * and the remapping follows for free.
+     * @returns {Set<number>[]}
+     * @private
+     */
+    _indexFlagSets() { return [this.nulledNodes, this.derivedNodes]; }
+
+    /** Is node at POOL INDEX `i`'s 2D here reprojected rather than annotated?
+     * @param {number} i @returns {boolean} */
+    isNodeDerived(i) {
+        return this.derivedNodes.has(i);
+    }
+
+    /**
+     * Flag (or un-flag) pool-index node `i` as reprojected on this view.
+     * @param {number} i @param {boolean} on
+     */
+    setNodeDerived(i, on) {
+        if (on) this.derivedNodes.add(i);
+        else this.derivedNodes.delete(i);
+    }
+
+    /**
+     * Clear the derived flag on `indices` (or every node when omitted) — what a
+     * user edit does: a point they moved is theirs, whatever put it there.
+     * @param {number[]} [indices] @returns {number} How many flags were cleared.
+     */
+    clearDerivedNodes(indices) {
+        var n = 0;
+        if (!indices) { n = this.derivedNodes.size; this.derivedNodes.clear(); return n; }
+        for (var i = 0; i < indices.length; i++) {
+            if (this.derivedNodes.delete(indices[i])) n++;
+        }
+        return n;
     }
 
     /** Is node at POOL INDEX `i` toggled off? @param {number} i @returns {boolean} */
@@ -368,8 +427,8 @@ export class PlaneInstance extends Instance {
      *
      * The repair path for an instance that was detached from the model while
      * the pool changed (a per-session placement map, switched away and back).
-     * A surviving node keeps its point and its nulled flag wherever its column
-     * has moved to; a node the pool no longer holds is dropped; a node this
+     * A surviving node keeps its point and its per-node flags (nulled,
+     * derived) wherever its column has moved to; a node the pool no longer holds is dropped; a node this
      * instance has never seen arrives unpositioned. Deletions and reorders in
      * the MIDDLE of the pool are exactly the cases a count-based resize gets
      * silently and catastrophically wrong — every later column lands on its
@@ -388,17 +447,24 @@ export class PlaneInstance extends Instance {
             if (this.nodeIds[i] != null) byId.set(this.nodeIds[i], i);
         }
         var changed = ids.length !== this.numNodes;
-        var nulled = new Set();
+        var flagSets = this._indexFlagSets();
+        var next = flagSets.map(function () { return new Set(); });
         var pts = new Array(ids.length);
         for (var j = 0; j < ids.length; j++) {
             var from = byId.has(ids[j]) ? byId.get(ids[j]) : -1;
             if (from !== j) changed = true;
             pts[j] = from >= 0 ? this.getPoint(from) : null;
-            if (from >= 0 && this.nulledNodes.has(from)) nulled.add(j);
+            if (from < 0) continue;
+            for (var f = 0; f < flagSets.length; f++) {
+                if (flagSets[f].has(from)) next[f].add(j);
+            }
         }
         this.nodeIds = ids.slice();
         this.setPointsFrom(pts);
-        this.nulledNodes = nulled;
+        for (var g = 0; g < flagSets.length; g++) {
+            flagSets[g].clear();
+            next[g].forEach(function (k) { flagSets[g].add(k); });
+        }
         return changed;
     }
 
@@ -428,8 +494,8 @@ export class PlaneInstance extends Instance {
 
     /**
      * Drop the point at POOL INDEX `nodeIdx`, mirroring the pool's splice so the
-     * remaining points stay aligned with the renumbered nodes. Nulled flags at
-     * higher indices shift down with them.
+     * remaining points stay aligned with the renumbered nodes. Per-node flags
+     * (nulled, derived) at higher indices shift down with them.
      * @param {number} nodeIdx
      */
     removeNodeAt(nodeIdx) {
@@ -437,20 +503,24 @@ export class PlaneInstance extends Instance {
         var pts = this.toPointsArray();
         pts.splice(nodeIdx, 1);
         this.nodeIds.splice(nodeIdx, 1);
-        var wasNulled = [];
-        this.nulledNodes.forEach(function (k) { wasNulled.push(k); });
+        var flagSets = this._indexFlagSets();
+        var was = flagSets.map(function (set) {
+            var arr = []; set.forEach(function (k) { arr.push(k); }); return arr;
+        });
         this.setPointsFrom(pts);
-        this.nulledNodes = new Set();
-        for (var i = 0; i < wasNulled.length; i++) {
-            var k = wasNulled[i];
-            if (k === nodeIdx) continue;
-            this.nulledNodes.add(k > nodeIdx ? k - 1 : k);
+        for (var f = 0; f < flagSets.length; f++) {
+            flagSets[f].clear();
+            for (var i = 0; i < was[f].length; i++) {
+                var k = was[f][i];
+                if (k === nodeIdx) continue;
+                flagSets[f].add(k > nodeIdx ? k - 1 : k);
+            }
         }
     }
 
     /**
      * Move the point at POOL INDEX `from` to `to`, mirroring `PlaneNodePool
-     * .moveNode`. Nulled flags travel with their node.
+     * .moveNode`. Per-node flags (nulled, derived) travel with their node.
      * @param {number} from @param {number} to
      */
     moveNodeAt(from, to) {
@@ -459,10 +529,17 @@ export class PlaneInstance extends Instance {
         var pts = this.toPointsArray();
         pts.splice(to, 0, pts.splice(from, 1)[0]);
         this.nodeIds.splice(to, 0, this.nodeIds.splice(from, 1)[0]);
-        var next = new Set();
-        this.nulledNodes.forEach(function (k) { next.add(remapMovedIndex(k, from, to)); });
+        var flagSets = this._indexFlagSets();
+        var next = flagSets.map(function (set) {
+            var out = new Set();
+            set.forEach(function (k) { out.add(remapMovedIndex(k, from, to)); });
+            return out;
+        });
         this.setPointsFrom(pts);
-        this.nulledNodes = next;
+        for (var f = 0; f < flagSets.length; f++) {
+            flagSets[f].clear();
+            next[f].forEach(function (k) { flagSets[f].add(k); });
+        }
     }
 }
 

@@ -859,6 +859,29 @@ export function reprojectPointCamera(point3d, camera) {
 }
 
 /**
+ * The homogeneous depth `w` of a 3D point in a camera's projective frame:
+ * POSITIVE in front of the camera, negative behind it, ~0 on the plane through
+ * the centre of projection.
+ *
+ * `reprojectPoint` divides by `w` without checking its sign, so a point BEHIND
+ * the camera comes back as a mirrored pixel coordinate that is finite,
+ * plausible, and geometrically meaningless. Any caller reprojecting into a
+ * camera it did not choose — one the user never annotated in, e.g. filling in
+ * the views a plane was not placed on — has to gate on this. Callers
+ * reprojecting into the camera an observation CAME from do not: the point is
+ * in front by construction there.
+ *
+ * @param {number[]} point3d - [X, Y, Z]
+ * @param {Camera} camera - Needs `.projectionMatrix`.
+ * @returns {number} `w`, or NaN if the camera has no projection matrix.
+ */
+export function cameraDepth(point3d, camera) {
+    const P = camera && camera.projectionMatrix;
+    if (!P || !P[2]) return NaN;
+    return P[2][0] * point3d[0] + P[2][1] * point3d[1] + P[2][2] * point3d[2] + P[2][3];
+}
+
+/**
  * Reproject an array of 3D points into a camera's native (distorted) pixel space.
  *
  * @param {Float64Array} points3d - Flat [X,Y,Z] per keypoint (all-NaN = missing)

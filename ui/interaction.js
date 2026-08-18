@@ -70,7 +70,11 @@ export class InteractionManager {
      *   click still selects. `indices` restricts a whole-plane translate to
      *   those node indices; null means every point of the instance. Without the
      *   callback a drag is allowed and unrestricted.
-     * @param {Function} [callbacks.onPlaneChanged] - (planeInstance, movedIndices|null) => void
+     * @param {Function} [callbacks.onPlaneChanged] - (planeInstance,
+     *   movedIndices|null, {moved:boolean}) => void. `moved` distinguishes a
+     *   DRAG (the user positioned these points) from a null-toggle (they did
+     *   not), which the plane feature needs to decide whether a reprojected
+     *   point has become the user's own annotation.
      *   Called after a plane node/instance drag completes or a node is toggled
      *   off, so the app can invalidate exactly what changed and refresh the
      *   Define Plane panel. `movedIndices` are the node indices the edit
@@ -892,7 +896,11 @@ export class InteractionManager {
                 planeNullHit.plane.toggleNodeNull(pnIdx);
                 this.selectPlane(planeNullHit.plane, -1);
                 if (this.callbacks.onPlaneChanged) {
-                    this.callbacks.onPlaneChanged(planeNullHit.plane, [pnIdx]);
+                    // `moved: false` — toggling a node off is not the user
+                    // placing it, so it must not be treated as one. See the
+                    // callback's doc for what turns on that distinction.
+                    this.callbacks.onPlaneChanged(planeNullHit.plane, [pnIdx],
+                        { moved: false });
                 }
                 this._requestRedraw();
                 return;
@@ -1465,7 +1473,8 @@ export class InteractionManager {
                         this.callbacks.onPlaneChanged(info.plane,
                             info.mode === 'instance'
                                 ? (info.indexFilter ? Array.from(info.indexFilter) : null)
-                                : [info.nodeIdx]);
+                                : [info.nodeIdx],
+                            { moved: true });
                     }
                 } else if (group && this.callbacks.onNodeMoved) {
                     this.callbacks.onNodeMoved(
