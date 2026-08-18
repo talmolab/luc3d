@@ -149,6 +149,8 @@
                     <div class="menu-separator"></div>
                     <div class="menu-dropdown-item" id="menuResetView">Reset 3D View</div>
                     <div class="menu-dropdown-item" id="menuFitScene">Fit 3D to Scene</div>
+                    <div class="menu-separator"></div>
+                    <div class="menu-dropdown-item" id="menuDefinePlanes">Define Planes</div>
                 </div>
             </div>
             <div class="menu-item" id="menuHotkeys" style="cursor:pointer;">Hot Keys</div>
@@ -210,6 +212,24 @@
             <button class="toolbar-btn" id="infoPanelToggleBtn" style="margin-left:auto;" title="Toggle info panel (I)">Hide Panel</button>
         </div>
 
+        <!-- Defining Plane Mode banner (View ▸ Define Planes). Hidden unless the
+             mode is active; see ui/plane-definition.js. -->
+        <div class="plane-mode-bar" id="planeModeBar" style="display:none;">
+            <span class="plane-mode-dot"></span>
+            <span class="plane-mode-label">Defining Plane Mode</span>
+            <span class="plane-mode-hint" id="planeModeHint">Drag a plane from the panel onto a video view</span>
+            <button class="toolbar-btn plane-mode-exit" id="planeModeExit" title="Leave Defining Plane Mode">Exit</button>
+        </div>
+
+        <!-- Set Origin Mode. Replaces the plane bar while active (both at once
+             would advertise two modes). Exit and Esc are the only ways out. -->
+        <div class="plane-mode-bar origin-mode-bar" id="originModeBar" style="display:none;">
+            <span class="plane-mode-dot"></span>
+            <span class="plane-mode-label">Set Origin Mode</span>
+            <span class="plane-mode-hint" id="originModeHint"></span>
+            <button class="toolbar-btn plane-mode-exit" id="originModeExit" title="Leave Set Origin Mode (Esc)">Exit</button>
+        </div>
+
         <!-- Main content: video grid + 3D viewport + info panel -->
         <div class="main-content">
             <!-- Video Grid Section (left/center) -->
@@ -252,6 +272,23 @@
                 <button class="viewport3d-show-cam-btn" id="btnShowInitialView" title="Reset to initial view" style="display:none; top:36px;">Show Initial View</button>
                 <button class="viewport3d-show-cam-btn" id="btnSetEnv" title="Freeze current frame's 3D groups as persistent environment reference" style="bottom:6px; top:auto;">Set Env</button>
                 <button class="viewport3d-show-cam-btn" id="btnClearEnv" title="Remove environment overlay" style="bottom:6px; top:auto; left:70px; display:none;">Clear Env</button>
+                <!-- Set Origin Mode wizard: instructions live over the 3D view
+                     because that is where the clicking happens. -->
+                <div class="origin-instruction" id="originInstruction" style="display:none;">
+                    <!-- The box floats over the very geometry the user has to
+                         click, so it can be dragged out of the way. Only the
+                         grip takes pointer events (see styles.css). -->
+                    <div class="origin-drag-handle" id="originDragHandle" title="Drag to move">&#8942;&#8942;&#8942;</div>
+                    <div class="origin-step" id="originStepText"></div>
+                    <div class="origin-legend" id="originLegend" style="display:none;">
+                        <span class="origin-swatch origin-swatch-pos"></span><span>Red arrow = +Z</span>
+                        <span class="origin-swatch origin-swatch-neg"></span><span>Blue arrow = +Z</span>
+                    </div>
+                    <div class="origin-confirm-row" id="originConfirmRow" style="display:none;">
+                        <button class="panel-btn" id="btnOriginCancel">Cancel</button>
+                        <button class="panel-btn origin-continue" id="btnOriginContinue">Continue</button>
+                    </div>
+                </div>
             </div>
 
             <!-- Split handle: 3D viewport | info panel -->
@@ -778,6 +815,217 @@
                             <div>Drag empty: Box zoom / Pan</div>
                             <div>Double-click: Reset zoom / Convert</div>
                             <div>Right-click: Toggle node visibility</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ==================== Define Plane Panel ====================
+                     Shown INSTEAD of the tab bar + tab contents while Defining
+                     Plane Mode is active (View ▸ Define Planes). Populated by
+                     ui/plane-definition.js.
+
+                     THREE SIBLING SECTIONS, in the order the work happens:
+                     Nodes (the project-wide pool) -> Edit Plane (what THAT
+                     plane is made of) -> Planes (the list). Node creation is
+                     deliberately NOT nested inside the plane editor: a node
+                     outlives the planes that use it and may belong to several
+                     at once, so presenting it as a sub-step of editing one
+                     plane would misstate the model. -->
+                <div class="plane-panel" id="planePanel" style="display:none;">
+
+                    <!-- 1 — NODES: the PROJECT-WIDE pool. Everything in this
+                         table acts on the NODE, so it applies to every plane
+                         using it. + Node ONLY mints a pool node — putting one
+                         into a plane is + Add in the Edit Plane section. -->
+                    <div class="info-section">
+                        <details class="plane-details" id="planeNodesDetails" open>
+                            <summary>Nodes</summary>
+                            <div class="plane-details-body">
+                                <table class="data-table" id="planeNodesTable">
+                                    <thead>
+                                        <tr>
+                                            <th>Name</th>
+                                            <th style="width:34px">Color</th>
+                                            <th style="width:26px" title="Pin: freeze this node's 3D so no solve can move it">Pin</th>
+                                            <th style="width:74px">3D</th>
+                                            <th style="width:30px"></th>
+                                        </tr>
+                                    </thead>
+                                    <tbody></tbody>
+                                </table>
+                                <div class="table-empty" id="planeNodesEmpty">No nodes yet</div>
+                                <!-- Pinned-but-never-triangulated nodes, named in the
+                                     open: that state cannot resolve itself, so a
+                                     tooltip would not reach the user who caused it. -->
+                                <div class="plane-warning" id="planeFrozenWarning" style="display:none;"></div>
+                                <div class="panel-button-row" style="margin-top:6px">
+                                    <input type="text" id="planeNodeNameInput" class="plane-text-input" placeholder="Node name" />
+                                    <button class="panel-btn" id="btnAddPlaneNode" title="Mint a node in the project-wide pool. It joins NO plane and creates none — put it in a plane with + Add in the Edit Plane section.">+ Node</button>
+                                </div>
+                                <div class="plane-hint">Nodes are project-wide and belong to no plane until you put them in one. Renaming, recolouring, pinning or deleting one here changes every plane that uses it. To put a node into a plane, use + Add in the Edit Plane section — the same node in two planes is what makes them meet along one line.</div>
+                            </div>
+                        </details>
+                    </div>
+
+                    <!-- 2 — EDIT PLANE: what THIS plane is made of. Its
+                         members are references into the pool above, so the ×
+                         here takes the node OUT OF THIS PLANE only and the node
+                         itself survives; and the Add node dropdown offers every
+                         pool node not already in it, which is how one node comes
+                         to be in two planes. Connections are per-plane, so they
+                         live here too. -->
+                    <div class="info-section">
+                        <details class="plane-details" id="planeEditorDetails" open>
+                            <summary><span class="plane-summary-label">Edit Plane</span><span class="plane-summary-name" id="planeEditorTitle"></span></summary>
+                            <div class="plane-details-body">
+                                <!-- WHICH plane is edited. Sits ABOVE the empty
+                                     state and OUTSIDE #planeEditorContent so it
+                                     stays live with nothing selected: its pinned
+                                     "+ New Plane" entry is a primary way to make
+                                     the first plane. It is a SELECTOR only —
+                                     renaming is the Name field below. -->
+                                <div class="plane-name-row plane-picker-row">
+                                    <span>Plane</span>
+                                    <select id="planeSelect" class="plane-select" title="Pick the plane to edit, or + New Plane to make one"></select>
+                                </div>
+                                <!-- The rest of the section is empty-stated rather
+                                     than shown half-dead: every control in it needs
+                                     a plane to act on. -->
+                                <div class="table-empty" id="planeEditorEmpty" style="display:none;">No plane selected — pick one in the Plane dropdown above, or choose + New Plane there.</div>
+                                <div id="planeEditorContent">
+                                    <!-- The EDITABLE name. The dropdown above only
+                                         chooses a plane; this is where one is
+                                         renamed, and the rename updates both. -->
+                                    <div class="plane-name-row">
+                                        <span>Name</span>
+                                        <input type="text" id="planeSkeletonName" placeholder="plane_1" />
+                                    </div>
+
+                                    <details class="plane-details plane-subdetails" id="planeMembersDetails" open>
+                                        <summary>Nodes In This Plane</summary>
+                                        <div class="plane-details-body">
+                                            <table class="data-table" id="planeMembersTable">
+                                                <thead>
+                                                    <tr>
+                                                        <th>Name</th>
+                                                        <th style="width:34px">Color</th>
+                                                        <th style="width:30px"></th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody></tbody>
+                                            </table>
+                                            <div class="table-empty" id="planeMembersEmpty">No nodes in this plane yet</div>
+                                            <!-- THE way a node comes to be shared: pick a
+                                                 node that is already in the pool and add it
+                                                 here as well. -->
+                                            <div class="panel-button-row" style="margin-top:6px">
+                                                <select id="planeAddNodeSelect" class="plane-select"></select>
+                                                <button class="panel-btn" id="btnAddExistingPlaneNode" title="Add the selected existing node to this plane. A node may belong to several planes — that is how two planes share an intersection line.">+ Add</button>
+                                            </div>
+                                            <div class="plane-hint" id="planeAddNodeHint"></div>
+                                        </div>
+                                    </details>
+
+                                    <details class="plane-details plane-subdetails" id="planeEdgesDetails" open>
+                                        <summary>Node Connections</summary>
+                                        <div class="plane-details-body">
+                                            <table class="data-table" id="planeEdgesTable">
+                                                <thead>
+                                                    <tr>
+                                                        <th>Source</th>
+                                                        <th>Destination</th>
+                                                        <th style="width:30px"></th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody></tbody>
+                                            </table>
+                                            <div class="table-empty" id="planeEdgesEmpty">No connections</div>
+                                            <div class="panel-button-row" style="margin-top:6px">
+                                                <select id="planeEdgeSrcSelect" class="plane-select"></select>
+                                                <select id="planeEdgeDstSelect" class="plane-select"></select>
+                                                <button class="panel-btn" id="btnAddPlaneEdge" title="Connect two nodes of this plane">+ Link</button>
+                                            </div>
+                                            <div class="plane-hint">Connections are OPTIONAL: triangulation and fitting are edge-independent. They exist for visual reference, and to decide the order the polygon is filled in.</div>
+                                        </div>
+                                    </details>
+                                </div>
+                            </div>
+                        </details>
+                    </div>
+
+                    <!-- 3 — PLANES: each one is an ordered set of nodes from the
+                         Nodes pool, plus optional connections. Deleting a plane
+                         KEEPS its nodes — the Nodes table is the only place a
+                         node is destroyed.
+                         Sits BELOW the Edit Plane editor deliberately: the
+                         editor is where the work happens, so it gets the space
+                         nearest the pool it draws nodes from, and this list
+                         reads as the roster you switch between. -->
+                    <div class="info-section">
+                        <details class="plane-details" id="planePlanesDetails" open>
+                            <summary>Planes</summary>
+                            <div class="plane-details-body">
+                                <table class="data-table" id="planeSkeletonsTable">
+                                    <thead>
+                                        <tr>
+                                            <th style="width:34px"></th>
+                                            <th>Name</th>
+                                            <th>Nodes</th>
+                                            <th style="width:78px"></th>
+                                        </tr>
+                                    </thead>
+                                    <tbody></tbody>
+                                </table>
+                                <div class="table-empty" id="planeSkeletonsEmpty">No planes yet</div>
+                                <div class="panel-button-row" style="margin-top:6px">
+                                    <button class="panel-btn" id="btnNewPlaneSkeleton" title="Create a new plane">+ New Plane</button>
+                                </div>
+                                <!-- Act on the SELECTED plane; disabled when none is
+                                     selected. Populated with icons by ui/plane-definition.js. -->
+                                <div class="panel-button-row plane-action-row" style="margin-top:6px">
+                                    <button class="panel-btn" id="btnPlaneTriangulate" disabled>Triangulate</button>
+                                    <button class="panel-btn" id="btnPlaneFill" disabled>Fill</button>
+                                    <button class="panel-btn" id="btnPlaneFit" disabled>Fit</button>
+                                </div>
+                                <div class="panel-button-row" style="margin-top:6px">
+                                    <button class="panel-btn" id="btnSetOrigin" disabled>Set Origin</button>
+                                </div>
+                                <div class="plane-hint">Drag a row onto a video view to place that plane on it. Expand a row to see where it is placed.</div>
+                            </div>
+                        </details>
+                    </div>
+
+                    <!-- Shared across every plane, by design: one node size and one
+                         edge weight for all of them (see ui/plane-definition.js). -->
+                    <div class="info-section">
+                        <h3>Plane Appearance</h3>
+                        <div class="vis-slider-row">
+                            <span>2D Node Size</span>
+                            <input type="range" id="planeNodeSize" min="1" max="20" value="13" step="1">
+                            <span class="vis-val" id="planeNodeSizeVal">13</span>
+                        </div>
+                        <div class="vis-slider-row">
+                            <span>Edge Weight</span>
+                            <input type="range" id="planeEdgeWeight" min="1" max="12" value="3" step="1">
+                            <span class="vis-val" id="planeEdgeWeightVal">3</span>
+                        </div>
+                        <!-- Sizes plane corners in the 3D scene ONLY. Pose skeleton
+                             nodes keep their own size (`skeletonNodeSize`). -->
+                        <div class="vis-slider-row">
+                            <span>3D Node Size</span>
+                            <input type="range" id="planeNodeSize3d" min="1" max="20" value="4" step="1">
+                            <span class="vis-val" id="planeNodeSize3dVal">4</span>
+                        </div>
+                    </div>
+
+                    <!-- The output of the whole feature: the transform from the
+                         calibration's world frame to the user's. Populated by
+                         ui/origin-definition.js; hidden until an origin is set. -->
+                    <div class="info-section" id="originResultSection" style="display:none;">
+                        <h3>Defined Origin</h3>
+                        <div class="origin-result" id="originResult"></div>
+                        <div class="panel-button-row" style="margin-top:6px">
+                            <button class="panel-btn" id="btnClearOrigin">Reset to Calibration Origin</button>
                         </div>
                     </div>
                 </div>

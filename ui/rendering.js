@@ -13,6 +13,10 @@ import {
 } from '../pose/triangulation.js';
 import { drawFrameOverlays } from './overlays.js';
 import { isCameraTracked } from './settings.js';
+// Plane placements draw on the same overlay canvas, so they must run AFTER
+// drawFrameOverlays (which opens with a clearRect). Circular import — safe
+// because the call site is inside drawAllOverlays' body.
+import { drawPlaneOverlays, applyPlaneModeToolbarLock } from './plane-definition.js';
 
 // Pass 3f: editGroupState + finishEditGroup moved to ui/identity-assignment.js.
 import { editGroupState, finishEditGroup } from './identity-assignment.js';
@@ -217,6 +221,11 @@ export function drawAllOverlays(frameIdx) {
         var isReprojSelected = interactionManager ? interactionManager.selectedReprojected : false;
         tbEditGroup.disabled = isReprojSelected;
     }
+    // Defining Plane Mode blocks the pose-annotation buttons, and the two
+    // above are recomputed on EVERY overlay draw — so the lock is re-asserted
+    // here rather than only at `enterPlaneMode`, where it would survive until
+    // the first mouse move. A no-op when the mode is off.
+    applyPlaneModeToolbarLock();
 
     var editGroupTarget = interactionManager ? interactionManager.editGroupTarget : null;
 
@@ -287,6 +296,10 @@ export function drawAllOverlays(frameIdx) {
             editGroupTarget: editGroupTarget,
             trackingExcluded: !isCameraTracked(view.name),
         });
+
+        // Annotated planes (View ▸ Define Planes). Frame-independent, so they
+        // are drawn on every frame regardless of the current FrameGroup.
+        drawPlaneOverlays(view);
     }
 
     // Update info panel with current frame stats + the timeline playhead.

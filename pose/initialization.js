@@ -19,10 +19,14 @@ import {
 import { OnDemandVideoDecoder, VideoController } from '../loading/video.js';
 import { rebuildVideoController } from '../loading/session-loader.js';
 import { markDirty, setStatus, showLoading, hideLoading } from '../import-export/save-load.js';
+import { resetPlaneState } from '../import-export/plane-metadata.js';
 import { createDemoSession } from '../demo-data.js';
 import { setupUI, setupMenus, updateSeekbar, onPlaybackStateChange, fitTimelineToData } from '../ui/ui-wiring.js';
 import { installTimelineShortcuts } from '../ui/timeline-controller.js';
 import { setupPanelTabs, setupSkeletonEditing, updateInfoPanel } from '../ui/info-panel.js';
+import {
+    setupPlaneDefinition, planeInteractionCallbacks, syncPlanes3D, refreshPlanePanel,
+} from '../ui/plane-definition.js';
 import { setupSplitHandles } from '../ui/layout-controls.js';
 import { drawAllOverlays, setReprojErrorVisible } from '../ui/rendering.js';
 import { populateViewStrip, populateSessionStrip } from '../ui/sessions-panes.js';
@@ -57,6 +61,7 @@ async function init() {
         setupUI();
         setupPanelTabs();
         setupSkeletonEditing();
+        setupPlaneDefinition();
         setupInteraction();
         try {
             paneManager.init(document.getElementById('videoDock'));
@@ -136,6 +141,11 @@ export async function loadDemoSession() {
         state.session = null;
         state.sessions = [];
         state.triangulationResults = new Map();
+        // Plane state is project-scoped and lives on a module singleton, so
+        // it does NOT go away with `state.sessions`. `readPlaneMetadata`
+        // only restores into an EMPTY model, so without this the previous
+        // project's planes would survive and the new one's be dropped.
+        resetPlaneState();
         paneManager.clearAll();
 
         // Load videos and create view objects (no grid cells needed - dockview creates them)
@@ -363,7 +373,7 @@ export function addNewInstanceSmart() {
 // ============================================
 
 export function setupInteraction() {
-    setInteractionManager(new InteractionManager({
+    setInteractionManager(new InteractionManager(Object.assign({
         getState: function () { return state; },
 
         getInstanceGroups: function (frameIdx) {
@@ -832,7 +842,10 @@ export function setupInteraction() {
                 videoController.resetZoom(view);
             }
         },
-    }));
+    // Plane annotation (View ▸ Define Planes). Merged in as its own bag so
+    // `ui/interaction.js` needs no import of the plane feature and the plane
+    // module owns its own callback contract.
+    }, planeInteractionCallbacks())));
 
     // Attach to all overlay canvases
     interactionManager.attach(state.views);
@@ -915,6 +928,16 @@ export function setup3DViewport() {
 
         // Show initial frame's 3D points
         update3DViewport(state.currentFrame);
+
+        // Re-apply annotated planes. `setup3DViewport` disposes and re-creates
+        // the Viewport3D, which drops everything in its scene — without this
+        // a triangulated plane vanishes the next time the viewport is rebuilt
+        // (the same gap `setEnvironment` still has).
+        syncPlanes3D();
+        // …and the panel that lists them. Every project-load path rebuilds the
+        // viewport, so this is the one place a freshly RESTORED plane model
+        // reaches the Nodes / Planes tables.
+        refreshPlanePanel();
 
         // Fit after a short delay to ensure skeleton meshes are in the scene
         setTimeout(function () {

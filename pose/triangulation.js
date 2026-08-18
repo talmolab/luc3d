@@ -859,6 +859,29 @@ export function reprojectPointCamera(point3d, camera) {
 }
 
 /**
+ * The homogeneous depth `w` of a 3D point in a camera's projective frame:
+ * POSITIVE in front of the camera, negative behind it, ~0 on the plane through
+ * the centre of projection.
+ *
+ * `reprojectPoint` divides by `w` without checking its sign, so a point BEHIND
+ * the camera comes back as a mirrored pixel coordinate that is finite,
+ * plausible, and geometrically meaningless. Any caller reprojecting into a
+ * camera it did not choose — one the user never annotated in, e.g. filling in
+ * the views a plane was not placed on — has to gate on this. Callers
+ * reprojecting into the camera an observation CAME from do not: the point is
+ * in front by construction there.
+ *
+ * @param {number[]} point3d - [X, Y, Z]
+ * @param {Camera} camera - Needs `.projectionMatrix`.
+ * @returns {number} `w`, or NaN if the camera has no projection matrix.
+ */
+export function cameraDepth(point3d, camera) {
+    const P = camera && camera.projectionMatrix;
+    if (!P || !P[2]) return NaN;
+    return P[2][0] * point3d[0] + P[2][1] * point3d[1] + P[2][2] * point3d[2] + P[2][3];
+}
+
+/**
  * Reproject an array of 3D points into a camera's native (distorted) pixel space.
  *
  * @param {Float64Array} points3d - Flat [X,Y,Z] per keypoint (all-NaN = missing)
@@ -1432,6 +1455,969 @@ export function hungarianAlgorithm(costMatrix) {
     }
 
     return result;
+}
+
+
+// ============================================
+// Plane fitting (View ▸ Define Planes)
+// ============================================
+
+/**
+ * Least-squares plane of best fit through a flat `points3d` set.
+ *
+ * Total-least-squares via PCA: the plane through the centroid whose normal is
+ * the eigenvector of the SMALLEST eigenvalue of the points' 3x3 covariance.
+ * That minimizes the sum of squared PERPENDICULAR distances, which is the
+ * right objective here — the corners carry error in all three axes (they come
+ * out of triangulation), so an ordinary least-squares fit of z on (x, y) would
+ * both privilege an arbitrary axis and blow up for a plane seen edge-on.
+ *
+ * Rejects degenerate input. Three or more points always admit *a* plane, but
+ * COLLINEAR points admit infinitely many — the normal is then arbitrary within
+ * a pencil, and "fitting" to it would silently rotate the annotation to
+ * nonsense. The middle eigenvalue is the spread along the plane's minor
+ * in-plane axis, so comparing it against the largest detects exactly that case.
+ *
+ * @param {Float64Array} points3d - Flat [X,Y,Z] per node; all-NaN = missing.
+ * @returns {{centroid:number[], normal:number[], rms:number, nPoints:number}|null}
+ *   null when fewer than 3 nodes are present, all coincide, or they are collinear.
+ */
+export function fitPlaneToPoints3d(points3d) {
+    const n = points3dNodeCount(points3d);
+    const p = [0, 0, 0];
+
+    let cx = 0, cy = 0, cz = 0, count = 0;
+    for (let k = 0; k < n; k++) {
+        if (!readPoint3d(points3d, k, p)) continue;
+        cx += p[0]; cy += p[1]; cz += p[2];
+        count++;
+    }
+    if (count < 3) return null;
+    cx /= count; cy /= count; cz /= count;
+
+    // Covariance of the centered points (symmetric — only 6 unique terms).
+    let xx = 0, xy = 0, xz = 0, yy = 0, yz = 0, zz = 0;
+    for (let k = 0; k < n; k++) {
+        if (!readPoint3d(points3d, k, p)) continue;
+        const dx = p[0] - cx, dy = p[1] - cy, dz = p[2] - cz;
+        xx += dx * dx; xy += dx * dy; xz += dx * dz;
+        yy += dy * dy; yz += dy * dz; zz += dz * dz;
+    }
+
+    // jacobiEigen returns eigenvectors as ROWS already paired with
+    // `eigenvalues[i]`, and does NOT sort them — find the extremes ourselves.
+    const eig = jacobiEigen([[xx, xy, xz], [xy, yy, yz], [xz, yz, zz]]);
+    let minIdx = 0, maxIdx = 0;
+    for (let i = 1; i < 3; i++) {
+        if (Math.abs(eig.eigenvalues[i]) < Math.abs(eig.eigenvalues[minIdx])) minIdx = i;
+        if (Math.abs(eig.eigenvalues[i]) > Math.abs(eig.eigenvalues[maxIdx])) maxIdx = i;
+    }
+    if (minIdx === maxIdx) return null;          // all eigenvalues equal — no structure
+    const midIdx = 3 - minIdx - maxIdx;
+
+    const largest = Math.abs(eig.eigenvalues[maxIdx]);
+    if (!(largest > 0)) return null;                                      // coincident
+    if (Math.abs(eig.eigenvalues[midIdx]) / largest < 1e-10) return null; // collinear
+
+    const v = eig.eigenvectors[minIdx];
+    const len = Math.sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+    if (!(len > 1e-12)) return null;
+    const normal = [v[0] / len, v[1] / len, v[2] / len];
+
+    // RMS perpendicular distance — how planar the annotation already was.
+    let sq = 0;
+    for (let k = 0; k < n; k++) {
+        if (!readPoint3d(points3d, k, p)) continue;
+        const d = (p[0] - cx) * normal[0] + (p[1] - cy) * normal[1] + (p[2] - cz) * normal[2];
+        sq += d * d;
+    }
+
+    return {
+        centroid: [cx, cy, cz],
+        normal: normal,
+        rms: Math.sqrt(sq / count),
+        nPoints: count,
+    };
+}
+
+/**
+ * Orthogonally project every present point onto `plane`, returning a NEW flat
+ * `points3d` (the input is left intact, so a caller can keep the raw
+ * triangulation alongside the flattened version). Missing nodes stay missing.
+ *
+ * @param {Float64Array} points3d
+ * @param {{centroid:number[], normal:number[]}} plane
+ * @returns {Float64Array}
+ */
+export function projectPoints3dOntoPlane(points3d, plane) {
+    const n = points3dNodeCount(points3d);
+    const out = makePoints3d(n);
+    const p = [0, 0, 0];
+    const c = plane.centroid, nv = plane.normal;
+    for (let k = 0; k < n; k++) {
+        if (!readPoint3d(points3d, k, p)) continue;
+        const d = (p[0] - c[0]) * nv[0] + (p[1] - c[1]) * nv[1] + (p[2] - c[2]) * nv[2];
+        setPoint3d(out, k, [p[0] - d * nv[0], p[1] - d * nv[1], p[2] - d * nv[2]]);
+    }
+    return out;
+}
+
+
+// ============================================
+// CONSTRAINED plane fitting (immutable / frozen nodes)
+// ============================================
+//
+// A plane node may be flagged IMMUTABLE: its 3D position is FROZEN and must not
+// be moved by 2D editing, by triangulation, or by the plane fit. The fit then
+// stops being a free total-least-squares problem and becomes the SAME residual
+// minimized subject to hard linear constraints — the plane must pass through
+// every frozen point.
+//
+// ## The unified solve
+//
+// Every case is "pin the plane's OFFSET with an anchor, then restrict its
+// NORMAL to an admissible subspace":
+//
+//   a  = anchor point (one frozen point, or the frozen set's centroid)
+//   r_i = p_i − a  over the MUTABLE points that have 3D
+//   M  = Σ r_i r_iᵀ            (scatter about `a`, NOT about the centroid —
+//                               M = S_c + m·(c−a)(c−a)ᵀ, so this is genuinely a
+//                               different matrix from the free fit's)
+//   N  = orthonormal 3×q basis of admissible normals
+//   n  = N·y, where y is the eigenvector of the SMALLEST eigenvalue of NᵀMN
+//
+// q falls out of the frozen set's rank:
+//
+//   rank 0 (1 frozen point, or several coincident)  → q = 3, N = I
+//   rank 1 (2 frozen points, or 3+ collinear)       → q = 2, N spans d⊥
+//   rank 2 (3+ frozen points, non-collinear)        → q = 1, the anchors alone
+//                                                     determine the plane and
+//                                                     the mutable points get
+//                                                     ZERO weight (the
+//                                                     constraints are hard, not
+//                                                     weighted)
+//
+// For exactly 3 non-collinear anchors the normal is the exact cross product
+// (b−a)×(c−a) — no eigen solve, because the scatter of three points is exactly
+// rank 2 and Jacobi round-off buys nothing there. For 4+ the anchors are
+// OVER-determined and only admit a plane if they are already coplanar; that is
+// checked before anything is fitted.
+//
+// ## The 0-frozen case is deliberately NOT handled here
+//
+// `fitPlaneConstrained` returns `not_constrained` when nothing is frozen. The
+// unconstrained path stays on `fitPlaneToPoints3d` above, bit-for-bit — its
+// behavior is pinned by `tests/e2e/define-plane-mode.mjs` and routing it through
+// this code would move floats for no benefit.
+//
+// ## Every threshold is SCALE-RELATIVE
+//
+// Scene units are whatever the calibration used, so an absolute millimetre
+// tolerance would misfire on either a bench rig or an arena. Coplanarity and
+// conditioning are both expressed as fractions of the point set's diameter.
+
+/**
+ * Coplanarity tolerance for an over-determined (4+) frozen set, as a fraction
+ * of that set's diameter. 1e-3 = "flat to one part in a thousand of its own
+ * size".
+ */
+export const PLANE_COPLANAR_TOL_FRAC = 1e-3;
+
+/**
+ * Absolute floor under {@link PLANE_COPLANAR_TOL_FRAC}, so a frozen set whose
+ * diameter is (near) zero cannot demand exact-zero deviation.
+ */
+export const PLANE_COPLANAR_TOL_FLOOR = 1e-9;
+
+/**
+ * Conditioning fraction κ. A length must exceed κ × diameter to count as a
+ * direction: anchor separation, anchor collinearity (a sine, not an area), and
+ * the mutable spread that resolves the remaining freedom. Eigenvalue ratios are
+ * compared against κ² because eigenvalues are squared lengths.
+ */
+export const PLANE_ANCHOR_COND_FRAC = 1e-3;
+
+/**
+ * Safety margin over machine epsilon for the one test that has NO defensible
+ * set-relative scale: "are two frozen points the same point?". A ratio test is
+ * circular there (`|b−a| ≤ κ·|b−a|` never fires) and the whole-scene diameter
+ * is unrelated geometry, so the reference is the floating-point noise floor of
+ * the subtraction `b − a` itself: `factor · ε · max|anchor coordinate|`.
+ */
+export const PLANE_ANCHOR_NOISE_FACTOR = 1e3;
+
+/**
+ * Default "this flatten would be absurd" threshold for MUTABLE points, as a
+ * fraction of the point set's diameter. Purely advisory — it produces a
+ * `warning`, never an error, because the geometry is well defined; only its
+ * consequence is drastic.
+ */
+export const PLANE_MUTABLE_DEVIATION_FRAC = 0.05;
+
+/** Display name for node `k`. @private */
+function planeNodeName(nodeNames, k) {
+    const n = nodeNames && nodeNames[k];
+    return (typeof n === 'string' && n.length) ? n : ('node ' + k);
+}
+
+/**
+ * "A", "A and B", "A, B, C" — the two-item case reads as prose, longer lists as
+ * a list. @private
+ */
+function nameList(names) {
+    if (!names || names.length === 0) return '(none)';
+    if (names.length === 1) return names[0];
+    if (names.length === 2) return names[0] + ' and ' + names[1];
+    return names.join(', ');
+}
+
+/** `"Floor": ` prefix, or `Plane: ` when the caller gave no name. @private */
+function planePrefix(planeName) {
+    return (typeof planeName === 'string' && planeName.length)
+        ? '"' + planeName + '": '
+        : '';
+}
+
+/** Format a length in the caller's unit. @private */
+function fmtLen(v, unit) {
+    if (!isFinite(v)) return '—';
+    const a = Math.abs(v);
+    const s = a >= 100 ? v.toFixed(1) : (a >= 1 ? v.toFixed(2) : v.toPrecision(3));
+    return s + (unit ? ' ' + unit : '');
+}
+
+/**
+ * Normalize a per-node immutability spec into a boolean mask of length `n`.
+ *
+ * Accepts a `Set` of node indices, a boolean array parallel to the nodes, or an
+ * array of node indices (numbers). Booleans and numbers are told apart by
+ * element type, so a mask MUST be booleans — `[0, 1, 1]` is read as the indices
+ * 0 and 1, not as a mask.
+ *
+ * @param {Set<number>|boolean[]|number[]|null|undefined} immutable
+ * @param {number} n
+ * @returns {boolean[]}
+ */
+export function normalizeImmutableMask(immutable, n) {
+    const mask = new Array(n).fill(false);
+    if (!immutable) return mask;
+    const mark = function (k) { if (k >= 0 && k < n) mask[k] = true; };
+    if (typeof Set !== 'undefined' && immutable instanceof Set) {
+        immutable.forEach(mark);
+        return mask;
+    }
+    if (Array.isArray(immutable)) {
+        let allBool = immutable.length > 0;
+        for (let i = 0; i < immutable.length; i++) {
+            if (typeof immutable[i] !== 'boolean') { allBool = false; break; }
+        }
+        if (allBool) {
+            for (let i = 0; i < immutable.length && i < n; i++) if (immutable[i]) mask[i] = true;
+        } else {
+            for (let i = 0; i < immutable.length; i++) {
+                if (typeof immutable[i] === 'number') mark(immutable[i] | 0);
+            }
+        }
+    }
+    return mask;
+}
+
+/** Is node `k` a usable 3D point (present AND finite)? @private */
+function finitePoint3d(points3d, k) {
+    if (!hasPoint3d(points3d, k)) return false;
+    const o = k * 3;
+    return isFinite(points3d[o]) && isFinite(points3d[o + 1]) && isFinite(points3d[o + 2]);
+}
+
+/** Max pairwise distance over a small boxed point list. @private */
+function pointSetDiameter(pts) {
+    let d2 = 0;
+    for (let i = 0; i < pts.length; i++) {
+        for (let j = i + 1; j < pts.length; j++) {
+            const dx = pts[i][0] - pts[j][0];
+            const dy = pts[i][1] - pts[j][1];
+            const dz = pts[i][2] - pts[j][2];
+            const s = dx * dx + dy * dy + dz * dz;
+            if (s > d2) d2 = s;
+        }
+    }
+    return Math.sqrt(d2);
+}
+
+/**
+ * Centroid + eigen-decomposition of a boxed point list's scatter matrix,
+ * eigenvalues sorted DESCENDING (jacobiEigen does not sort). @private
+ * @returns {{centroid:number[], values:number[], vectors:number[][]}}
+ */
+function scatterEigen(pts) {
+    let cx = 0, cy = 0, cz = 0;
+    for (let i = 0; i < pts.length; i++) { cx += pts[i][0]; cy += pts[i][1]; cz += pts[i][2]; }
+    const m = pts.length || 1;
+    cx /= m; cy /= m; cz /= m;
+    let xx = 0, xy = 0, xz = 0, yy = 0, yz = 0, zz = 0;
+    for (let i = 0; i < pts.length; i++) {
+        const dx = pts[i][0] - cx, dy = pts[i][1] - cy, dz = pts[i][2] - cz;
+        xx += dx * dx; xy += dx * dy; xz += dx * dz;
+        yy += dy * dy; yz += dy * dz; zz += dz * dz;
+    }
+    const eig = jacobiEigen([[xx, xy, xz], [xy, yy, yz], [xz, yz, zz]]);
+    const order = [0, 1, 2].sort(function (a, b) {
+        return Math.abs(eig.eigenvalues[b]) - Math.abs(eig.eigenvalues[a]);
+    });
+    return {
+        centroid: [cx, cy, cz],
+        values: order.map(function (i) { return Math.abs(eig.eigenvalues[i]); }),
+        vectors: order.map(function (i) { return eig.eigenvectors[i]; }),
+    };
+}
+
+/** Unit-length copy, or null when too short to have a direction. @private */
+function unit3(v) {
+    const n = Math.sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+    if (!(n > 1e-300) || !isFinite(n)) return null;
+    return [v[0] / n, v[1] / n, v[2] / n];
+}
+
+/** Any unit vector orthogonal to `d` (assumed unit). @private */
+function anyPerp(d) {
+    const ax = Math.abs(d[0]), ay = Math.abs(d[1]), az = Math.abs(d[2]);
+    const axis = (ax <= ay && ax <= az) ? [1, 0, 0] : (ay <= az ? [0, 1, 0] : [0, 0, 1]);
+    return unit3(cross3v(axis, d));
+}
+
+/** Cross product (local — `pose/origin-frame.js` is deliberately not imported
+ * here, so this file stays free of any dependency it does not already have). */
+function cross3v(a, b) {
+    return [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ];
+}
+
+/**
+ * Flip `normal` so it agrees with `previous`, so a re-fit cannot silently
+ * reverse the origin's +Z. An eigenvector's sign is arbitrary, so without this
+ * the same annotation can produce ±n across runs.
+ *
+ * @param {number[]} normal - unit normal
+ * @param {number[]|null|undefined} previous - the previous fit's unit normal
+ * @returns {number[]} `normal`, possibly negated
+ */
+export function orientNormalLike(normal, previous) {
+    if (!normal || !previous || previous.length < 3) return normal;
+    if (!isFinite(previous[0]) || !isFinite(previous[1]) || !isFinite(previous[2])) return normal;
+    const d = normal[0] * previous[0] + normal[1] * previous[1] + normal[2] * previous[2];
+    return d < 0 ? [-normal[0], -normal[1], -normal[2]] : normal;
+}
+
+/**
+ * Smallest-eigenvalue eigenvector of the symmetric 2x2 [[a,b],[b,c]].
+ * Closed form — no iteration. @private
+ */
+function smallestEigenvector2x2(a, b, c) {
+    const mid = 0.5 * (a + c);
+    const half = 0.5 * (a - c);
+    const disc = Math.sqrt(half * half + b * b);
+    const lo = mid - disc;
+    // (A − λI) v = 0 → v ∝ (b, λ−a) or (λ−c, b); take the better-conditioned one.
+    const v1 = [b, lo - a];
+    const v2 = [lo - c, b];
+    const n1 = v1[0] * v1[0] + v1[1] * v1[1];
+    const n2 = v2[0] * v2[0] + v2[1] * v2[1];
+    let v = n1 >= n2 ? v1 : v2;
+    const n = Math.sqrt(Math.max(n1, n2));
+    if (!(n > 1e-300)) return { vector: [1, 0], value: lo, high: mid + disc };
+    v = [v[0] / n, v[1] / n];
+    return { vector: v, value: lo, high: mid + disc };
+}
+
+/**
+ * Fit a plane CONSTRAINED to pass through every immutable ("frozen") node.
+ *
+ * Pure: nothing in `points3d` is read after validation fails and nothing is ever
+ * written. The caller flattens with
+ * {@link projectPoints3dOntoPlaneConstrained}, which leaves the frozen
+ * coordinates bit-identical.
+ *
+ * **Requires at least one immutable node.** With none, it returns
+ * `code: 'not_constrained'` and the caller must use {@link fitPlaneToPoints3d}
+ * — the unconstrained path is deliberately unchanged.
+ *
+ * @param {Float64Array} points3d - Flat [X,Y,Z] per node; all-NaN = missing.
+ * @param {{immutable?:Set<number>|boolean[]|number[], nodeNames?:string[],
+ *          planeName?:string, previousNormal?:number[]|null, unit?:string,
+ *          tolFrac?:number, condFrac?:number, mutableDeviationFrac?:number}} [options]
+ * @returns {PlaneConstrainedFitResult} See the module docs above for codes.
+ */
+export function fitPlaneConstrained(points3d, options) {
+    options = options || {};
+    const n = points3dNodeCount(points3d);
+    const nodeNames = options.nodeNames || null;
+    const planeName = options.planeName;
+    const unit = options.unit != null ? options.unit : 'mm';
+    const tolFrac = options.tolFrac != null ? options.tolFrac : PLANE_COPLANAR_TOL_FRAC;
+    const kappa = options.condFrac != null ? options.condFrac : PLANE_ANCHOR_COND_FRAC;
+    const devFrac = options.mutableDeviationFrac != null
+        ? options.mutableDeviationFrac : PLANE_MUTABLE_DEVIATION_FRAC;
+    const mask = normalizeImmutableMask(options.immutable, n);
+    const nm = function (k) { return planeNodeName(nodeNames, k); };
+    const pre = planePrefix(planeName);
+
+    /** Build a failure result. Nothing has been mutated at any call site. */
+    const fail = function (code, message, extra) {
+        const res = {
+            ok: false, code: code, message: message, plane: null,
+            anchorIndices: [], anchorNames: [], mutableIndices: [], mutableNames: [],
+            warnings: [], metrics: {},
+        };
+        if (extra) for (const key in extra) res[key] = extra[key];
+        return res;
+    };
+
+    // ---- Partition, and defend against a non-finite frozen coordinate -------
+    // `hasPoint3d` only rejects NaN, so an ±Infinity would sail through it and
+    // reach `jacobiEigen`, which has no NaN/Inf guard and would return a
+    // garbage eigenvector. Check finiteness explicitly (decision 7).
+    const anchorIdx = [], anchorPts = [], mutIdx = [], mutPts = [];
+    const missingAnchors = [];
+    for (let k = 0; k < n; k++) {
+        if (mask[k]) {
+            if (!finitePoint3d(points3d, k)) { missingAnchors.push(k); continue; }
+            anchorIdx.push(k);
+            anchorPts.push([points3d[k * 3], points3d[k * 3 + 1], points3d[k * 3 + 2]]);
+        } else if (finitePoint3d(points3d, k)) {
+            mutIdx.push(k);
+            mutPts.push([points3d[k * 3], points3d[k * 3 + 1], points3d[k * 3 + 2]]);
+        }
+    }
+    const anchorNames = anchorIdx.map(nm);
+    const mutableNames = mutIdx.map(nm);
+
+    if (missingAnchors.length) {
+        const names = missingAnchors.map(nm);
+        return fail('no_anchor_3d',
+            pre + 'immutable ' + (names.length === 1 ? 'point ' : 'points ') + nameList(names) +
+            ' ' + (names.length === 1 ? 'has' : 'have') + ' no 3D position — triangulate ' +
+            (names.length === 1 ? 'it' : 'them') + ' (or unfreeze ' +
+            (names.length === 1 ? 'it' : 'them') + ') before fitting.',
+            { anchorIndices: missingAnchors, anchorNames: names });
+    }
+    if (anchorIdx.length === 0) {
+        return fail('not_constrained',
+            pre + 'no immutable points — use the unconstrained fit.');
+    }
+
+    // ---- Scales --------------------------------------------------------------
+    // THREE different references, and mixing them up is a real bug (see the
+    // coincidence tolerance below). Each threshold is scaled by the geometry it
+    // is actually judging:
+    //   * anchor COINCIDENCE / anchor COPLANARITY → the ANCHOR set only. These
+    //     ask a question about the frozen points' mutual arrangement, so an
+    //     unrelated mutable point must not be able to change the answer.
+    //   * MUTABLE spread (does anything resolve the remaining freedom?) → the
+    //     mutable points' own extent about the anchor (`totalR2`, below).
+    //   * `diam` is retained ONLY as a reported metric and for the advisory
+    //     "this flatten would be absurd" threshold, which genuinely is about
+    //     the whole annotation.
+    const allPts = anchorPts.concat(mutPts);
+    const diam = pointSetDiameter(allPts);
+    const anchorDiam = pointSetDiameter(anchorPts);
+    // Largest coordinate magnitude among the ANCHORS — the magnitude of the
+    // numbers `b − a` actually subtracts, hence the size of the rounding error
+    // in that subtraction.
+    let anchorMag = 0;
+    for (let i = 0; i < anchorPts.length; i++) {
+        for (let c = 0; c < 3; c++) {
+            const a = Math.abs(anchorPts[i][c]);
+            if (a > anchorMag) anchorMag = a;
+        }
+    }
+    // Coincidence tolerance. NOT `κ · diam`: `diam` spans the mutable points
+    // too, so a single far-away mutable node could inflate it until a real,
+    // deliberately-placed anchor separation was ruled "coincident" and the line
+    // constraint the user pinned was silently discarded (a 50-unit anchor gap
+    // with a mutable point 1e5 away used to collapse rank 1 → 0 and then fail
+    // `underdetermined` on a perfectly solvable problem).
+    //
+    // Nor `κ · anchorDiam`, which is circular — `anchorDiam <= κ · anchorDiam`
+    // can never fire for κ < 1. There is no non-circular *set-relative* scale
+    // for "is this set bigger than a point", so the honest reference is the
+    // FLOATING-POINT NOISE FLOOR: `d = (b−a)/|b−a|` is well-conditioned exactly
+    // when |b−a| stands clear of the rounding error in forming it, which is
+    // ~ε·max|coordinate|. `PLANE_ANCHOR_NOISE_FACTOR` (1e3) is the safety
+    // margin, and `PLANE_COPLANAR_TOL_FLOOR` keeps a near-origin anchor pair
+    // from being trusted at absurdly small separations. Both terms are
+    // anchor-intrinsic, so no mutable geometry can veto a user's constraint.
+    const coincidenceTol = Math.max(
+        PLANE_COPLANAR_TOL_FLOOR,
+        PLANE_ANCHOR_NOISE_FACTOR * Number.EPSILON * anchorMag);
+
+    const warnings = [];
+    const metrics = {
+        nAnchors: anchorIdx.length, nMutable: mutIdx.length,
+        diameter: diam, anchorDiameter: anchorDiam,
+        anchorMagnitude: anchorMag, coincidenceTolerance: coincidenceTol,
+        anchorRms: 0, anchorTolerance: 0, anchorMaxDeviation: 0,
+        rank: 0, freedom: 0,
+    };
+
+    // ---- Rank of the frozen set → the admissible-normal subspace ------------
+    let anchor = anchorPts[0];
+    let rank = 0;
+    let lineDir = null;      // rank 1
+    let normal = null;       // rank 2 (fully determined by the anchors)
+
+    if (anchorIdx.length >= 2) {
+        if (anchorDiam <= coincidenceTol) {
+            // Frozen points sit on top of each other: they pin a POINT, not a
+            // line. Reducing rank here is what stops a meaningless direction
+            // from being amplified into the constraint.
+            rank = 0;
+            const se0 = scatterEigen(anchorPts);
+            anchor = se0.centroid;
+            warnings.push({
+                code: 'anchors_coincident',
+                nodeNames: anchorNames.slice(),
+                message: pre + 'immutable points ' + nameList(anchorNames) +
+                    ' are coincident (' + fmtLen(anchorDiam, unit) +
+                    ' apart) — treated as a single anchor point.',
+            });
+        } else {
+            const se = scatterEigen(anchorPts);
+            anchor = se.centroid;
+            // Collinearity as a RATIO of lengths (sqrt of the eigenvalue ratio),
+            // so the test means "the off-line spread is < κ of the along-line
+            // spread" in the same units the user thinks in. Both sides come
+            // from the ANCHOR-only scatter, which is centred — so this is
+            // already scale-free, translation-invariant, and immune to the
+            // mutable-geometry pollution that broke the coincidence test. For
+            // three anchors it is the eigenvalue form of the sine test
+            // ‖(b−a)×(c−a)‖ ≥ κ·|b−a|·|c−a|, generalized to any anchor count.
+            const along = Math.sqrt(se.values[0]);
+            const across = Math.sqrt(se.values[1]);
+            if (!(along > 0) || across / along < kappa) {
+                rank = 1;
+                lineDir = unit3(se.vectors[0]);
+                if (lineDir == null) { rank = 0; }
+                else if (anchorIdx.length >= 3) {
+                    // Decision: a collinear 3rd+ anchor adds no information —
+                    // relax to the 2-anchor (line) case and say so.
+                    warnings.push({
+                        code: 'anchors_collinear_relaxed',
+                        nodeNames: anchorNames.slice(),
+                        message: pre + 'immutable points ' + nameList(anchorNames) +
+                            ' are collinear — they pin the line through them, not a plane; ' +
+                            'the remaining freedom is resolved by the mutable points.',
+                    });
+                }
+            } else {
+                rank = 2;
+                if (anchorIdx.length === 3) {
+                    // Exact: three non-collinear points ARE a plane. No eigen
+                    // solve (their scatter is exactly rank 2 and Jacobi
+                    // round-off would only add noise).
+                    const a = anchorPts[0], b = anchorPts[1], c = anchorPts[2];
+                    normal = unit3(cross3v(
+                        [b[0] - a[0], b[1] - a[1], b[2] - a[2]],
+                        [c[0] - a[0], c[1] - a[1], c[2] - a[2]]));
+                    anchor = a;
+                    metrics.anchorRms = 0;
+                    metrics.anchorMaxDeviation = 0;
+                    metrics.anchorTolerance = Math.max(tolFrac * anchorDiam, PLANE_COPLANAR_TOL_FLOOR);
+                } else {
+                    // 4+ non-collinear frozen points are OVER-determined: they
+                    // only admit a plane if they are already coplanar. Free-fit
+                    // them alone (reusing the tested unconstrained fit) and test
+                    // the residual against a scale-relative tolerance.
+                    //
+                    // Scaled by `anchorDiam`, NOT the whole-scene `diam`: it is
+                    // the ANCHORS' mutual coplanarity being judged, and both
+                    // sides of the comparison (`af.rms` and the tolerance) come
+                    // from the anchor set alone, so no mutable point can move
+                    // the verdict.
+                    const anchorFlat = makePoints3d(anchorPts.length);
+                    for (let i = 0; i < anchorPts.length; i++) setPoint3d(anchorFlat, i, anchorPts[i]);
+                    const af = fitPlaneToPoints3d(anchorFlat);
+                    const tol = Math.max(tolFrac * anchorDiam, PLANE_COPLANAR_TOL_FLOOR);
+                    metrics.anchorTolerance = tol;
+                    if (af == null) {
+                        return fail('anchors_collinear',
+                            pre + 'immutable points ' + nameList(anchorNames) +
+                            ' do not determine a plane (they are collinear or coincident). ' +
+                            'Unfreeze one, or add a mutable node off that line.',
+                            { anchorIndices: anchorIdx, anchorNames: anchorNames,
+                              mutableIndices: mutIdx, mutableNames: mutableNames,
+                              metrics: metrics });
+                    }
+                    let maxDev = 0;
+                    for (let i = 0; i < anchorPts.length; i++) {
+                        const d = Math.abs(
+                            (anchorPts[i][0] - af.centroid[0]) * af.normal[0] +
+                            (anchorPts[i][1] - af.centroid[1]) * af.normal[1] +
+                            (anchorPts[i][2] - af.centroid[2]) * af.normal[2]);
+                        if (d > maxDev) maxDev = d;
+                    }
+                    metrics.anchorRms = af.rms;
+                    metrics.anchorMaxDeviation = maxDev;
+                    if (af.rms > tol) {
+                        return fail('anchors_noncoplanar',
+                            pre + 'points ' + nameList(anchorNames) +
+                            ' are immutable — impossible fit, they are ' +
+                            fmtLen(af.rms, unit) + ' off any common plane (limit ' +
+                            fmtLen(tol, unit) + '). Unfreeze one, or re-triangulate it.',
+                            { anchorIndices: anchorIdx, anchorNames: anchorNames,
+                              mutableIndices: mutIdx, mutableNames: mutableNames,
+                              metrics: metrics });
+                    }
+                    normal = af.normal;
+                    anchor = af.centroid;
+                }
+                if (normal == null) {
+                    return fail('anchors_collinear',
+                        pre + 'immutable points ' + nameList(anchorNames) +
+                        ' are collinear — they do not determine a plane. ' +
+                        'Unfreeze one, or add a mutable node off that line.',
+                        { anchorIndices: anchorIdx, anchorNames: anchorNames,
+                          mutableIndices: mutIdx, mutableNames: mutableNames,
+                          metrics: metrics });
+                }
+            }
+        }
+    }
+    metrics.rank = rank;
+    metrics.freedom = 2 - rank;   // q − 1: remaining rotational DOF of the normal
+
+    // ---- Solve the remaining freedom against the mutable points -------------
+    // The scatter is taken about the ANCHOR, not the centroid: the plane is
+    // pinned there, so `M = Σ (p_i − a)(p_i − a)ᵀ` is the right matrix.
+    const collinearAnchors = warnings.some(function (w) {
+        return w.code === 'anchors_collinear_relaxed';
+    });
+    const underdetermined = function () {
+        const which = rank === 1
+            ? ('the rotation about ' + nameList(anchorNames))
+            : ('the plane through ' + nameList(anchorNames));
+        const msg = pre + (anchorNames.length === 1 ? 'point ' : 'points ') +
+            nameList(anchorNames) + ' ' + (anchorNames.length === 1 ? 'is' : 'are') +
+            ' immutable — impossible fit with ' +
+            (mutableNames.length ? 'points ' + nameList(mutableNames) : 'the mutable points') +
+            ': no mutable node has a usable 3D position to resolve ' + which + '.';
+        return fail(collinearAnchors ? 'anchors_collinear' : 'underdetermined',
+            collinearAnchors
+                ? pre + 'immutable points ' + nameList(anchorNames) +
+                  ' are collinear and no mutable node lies off that line, so no plane is ' +
+                  'determined. Unfreeze one, or add a mutable node off that line.'
+                : msg,
+            { anchorIndices: anchorIdx, anchorNames: anchorNames,
+              mutableIndices: mutIdx, mutableNames: mutableNames, metrics: metrics,
+              warnings: warnings });
+    };
+
+    if (rank < 2) {
+        // Scatter of the mutable points about the anchor.
+        let xx = 0, xy = 0, xz = 0, yy = 0, yz = 0, zz = 0, totalR2 = 0;
+        const R = [];
+        for (let i = 0; i < mutPts.length; i++) {
+            const dx = mutPts[i][0] - anchor[0];
+            const dy = mutPts[i][1] - anchor[1];
+            const dz = mutPts[i][2] - anchor[2];
+            R.push([dx, dy, dz]);
+            xx += dx * dx; xy += dx * dy; xz += dx * dz;
+            yy += dy * dy; yz += dy * dz; zz += dz * dz;
+            totalR2 += dx * dx + dy * dy + dz * dz;
+        }
+        // Same rule as the coincidence tolerance above: judge the mutable
+        // points' spread against THEIR OWN extent about the anchor, never
+        // against the whole-scene diameter. Scaling by `diam` here would let a
+        // large anchor separation (which is part of `diam` but not part of
+        // `totalR2`) declare a perfectly adequate mutable spread "too small".
+        // Both sides are squared lengths of the same mutable-about-anchor
+        // vectors, so these tests are scale- and translation-invariant.
+        const k2 = kappa * kappa;
+
+        if (!(totalR2 > 0)) return underdetermined();   // every mutable point AT the anchor
+
+        if (rank === 0) {
+            // q = 3. Two independent mutable directions from the anchor are
+            // needed, or the "plane" is really a pencil about a line.
+            if (mutPts.length < 2) return underdetermined();
+            const eig = jacobiEigen([[xx, xy, xz], [xy, yy, yz], [xz, yz, zz]]);
+            const ord = [0, 1, 2].sort(function (a, b) {
+                return Math.abs(eig.eigenvalues[b]) - Math.abs(eig.eigenvalues[a]);
+            });
+            const lam = ord.map(function (i) { return Math.abs(eig.eigenvalues[i]); });
+            if (!(lam[0] > 0)) return underdetermined();
+            // The real conditioning test, and it is a pure RATIO of the mutable
+            // scatter's own eigenvalues: the second direction must carry at
+            // least κ² of the first, or the mutable points are collinear with
+            // the anchor and the "plane" is a pencil about that line.
+            if (lam[1] / lam[0] < k2) return underdetermined();
+            normal = unit3(eig.eigenvectors[ord[2]]);
+            if (normal == null) return underdetermined();
+        } else {
+            // q = 2. Restrict to the 2-space orthogonal to the frozen line.
+            const d = lineDir;
+            const u = anyPerp(d);
+            if (u == null) return underdetermined();
+            const w = unit3(cross3v(d, u));
+            if (w == null) return underdetermined();
+            let auu = 0, auw = 0, aww = 0;
+            for (let i = 0; i < R.length; i++) {
+                const al = R[i][0] * u[0] + R[i][1] * u[1] + R[i][2] * u[2];
+                const be = R[i][0] * w[0] + R[i][1] * w[1] + R[i][2] * w[2];
+                auu += al * al; auw += al * be; aww += be * be;
+            }
+            const sol = smallestEigenvector2x2(auu, auw, aww);
+            // Undetermined only when EVERY mutable point is (near) parallel to
+            // the frozen line — then both 2x2 eigenvalues vanish and any normal
+            // in the pencil fits equally well.
+            //
+            // The threshold is a NOISE FLOOR, not a κ-fraction of the mutable
+            // extent. A mutable point that lies ON the frozen line contributes
+            // exactly zero residual for EVERY admissible normal, so it cannot
+            // make the fit less determined however far away it sits — but it
+            // does inflate `totalR2`, and scaling by that would let one distant
+            // on-line point veto a perfectly good off-line one (the same
+            // pollution as the coincidence tolerance). What actually bounds the
+            // answer is the rounding error in the off-line components
+            // α = r·u, β = r·w, which is ~ε·|r| — hence (factor·ε)²·totalR2 in
+            // squared units.
+            const offLineNoise2 = Math.pow(PLANE_ANCHOR_NOISE_FACTOR * Number.EPSILON, 2);
+            if (!(sol.high > offLineNoise2 * totalR2)) return underdetermined();
+            normal = unit3([
+                sol.vector[0] * u[0] + sol.vector[1] * w[0],
+                sol.vector[0] * u[1] + sol.vector[1] * w[1],
+                sol.vector[0] * u[2] + sol.vector[1] * w[2],
+            ]);
+            if (normal == null) return underdetermined();
+        }
+        // Silence the unused-var lint on totalR2 while keeping it as a metric.
+        metrics.mutableSpread = Math.sqrt(totalR2 / Math.max(1, R.length));
+    }
+
+    // ---- Sign carry-forward (decision 4) -----------------------------------
+    normal = orientNormalLike(normal, options.previousNormal);
+
+    // ---- Report the plane in the same shape as the free fit -----------------
+    // `centroid` is a point ON the plane, chosen as the projection of ALL
+    // present points' centroid so a plane widget draws centred on the
+    // annotation. `anchor` is the exact constrained reference point.
+    let gx = 0, gy = 0, gz = 0;
+    for (let i = 0; i < allPts.length; i++) { gx += allPts[i][0]; gy += allPts[i][1]; gz += allPts[i][2]; }
+    gx /= allPts.length; gy /= allPts.length; gz /= allPts.length;
+    const gd = (gx - anchor[0]) * normal[0] + (gy - anchor[1]) * normal[1] + (gz - anchor[2]) * normal[2];
+    const centroid = [gx - gd * normal[0], gy - gd * normal[1], gz - gd * normal[2]];
+
+    const signedDist = function (p) {
+        return (p[0] - anchor[0]) * normal[0] + (p[1] - anchor[1]) * normal[1] +
+               (p[2] - anchor[2]) * normal[2];
+    };
+
+    let sqAll = 0;
+    for (let i = 0; i < allPts.length; i++) { const d = signedDist(allPts[i]); sqAll += d * d; }
+    let sqMut = 0, maxMut = 0, worstIdx = [];
+    const devTol = Math.max(devFrac * diam, PLANE_COPLANAR_TOL_FLOOR);
+    for (let i = 0; i < mutPts.length; i++) {
+        const d = Math.abs(signedDist(mutPts[i]));
+        sqMut += d * d;
+        if (d > maxMut) maxMut = d;
+        if (d > devTol) worstIdx.push(mutIdx[i]);
+    }
+    metrics.mutableRmsDeviation = mutPts.length ? Math.sqrt(sqMut / mutPts.length) : 0;
+    metrics.mutableMaxDeviation = maxMut;
+    metrics.mutableDeviationTolerance = devTol;
+
+    if (worstIdx.length) {
+        const worstNames = worstIdx.map(nm);
+        warnings.push({
+            code: 'mutable_far_from_plane',
+            nodeNames: worstNames,
+            nodeIndices: worstIdx,
+            maxDeviation: maxMut,
+            rmsDeviation: metrics.mutableRmsDeviation,
+            message: pre + (anchorNames.length === 1 ? 'point ' : 'points ') +
+                nameList(anchorNames) + ' ' + (anchorNames.length === 1 ? 'is' : 'are') +
+                ' immutable and fix the plane. Flattening would move ' +
+                (worstNames.length === 1 ? 'point ' : 'points ') + nameList(worstNames) +
+                ' by ' + fmtLen(maxMut, unit) + ' (max), ' +
+                fmtLen(metrics.mutableRmsDeviation, unit) + ' RMS.',
+        });
+    }
+
+    return {
+        ok: true,
+        code: 'ok',
+        message: pre + 'fitted through ' + anchorIdx.length + ' immutable point' +
+            (anchorIdx.length === 1 ? '' : 's') + ' (' + nameList(anchorNames) + ')' +
+            (mutIdx.length ? ' and ' + mutIdx.length + ' mutable point' +
+                (mutIdx.length === 1 ? '' : 's') : '') + '.',
+        plane: {
+            centroid: centroid,
+            normal: normal,
+            rms: Math.sqrt(sqAll / allPts.length),
+            nPoints: allPts.length,
+            anchor: anchor,
+            constrained: true,
+        },
+        anchorIndices: anchorIdx,
+        anchorNames: anchorNames,
+        mutableIndices: mutIdx,
+        mutableNames: mutableNames,
+        warnings: warnings,
+        metrics: metrics,
+    };
+}
+
+/**
+ * Constrained analogue of {@link projectPoints3dOntoPlane}: project only the
+ * MUTABLE points onto `plane` and copy every immutable coordinate through
+ * **bit-identically**.
+ *
+ * The copy is a raw element copy, not "project it and rely on it already being
+ * on the plane" — round-off makes that false, and a frozen point that drifts by
+ * an ulp per fit is exactly the silent corruption immutability exists to
+ * prevent. Missing nodes stay missing (including missing immutable ones).
+ *
+ * @param {Float64Array} points3d
+ * @param {{centroid:number[], normal:number[]}} plane
+ * @param {Set<number>|boolean[]|number[]} immutable
+ * @returns {Float64Array} New array; the input is untouched.
+ */
+export function projectPoints3dOntoPlaneConstrained(points3d, plane, immutable) {
+    const n = points3dNodeCount(points3d);
+    const mask = normalizeImmutableMask(immutable, n);
+    const out = makePoints3d(n);
+    const c = plane.centroid, nv = plane.normal;
+    for (let k = 0; k < n; k++) {
+        const o = k * 3;
+        if (mask[k]) {
+            // Verbatim — same doubles, same bits.
+            out[o] = points3d[o]; out[o + 1] = points3d[o + 1]; out[o + 2] = points3d[o + 2];
+            continue;
+        }
+        if (!hasPoint3d(points3d, k)) continue;
+        const x = points3d[o], y = points3d[o + 1], z = points3d[o + 2];
+        const d = (x - c[0]) * nv[0] + (y - c[1]) * nv[1] + (z - c[2]) * nv[2];
+        out[o] = x - d * nv[0];
+        out[o + 1] = y - d * nv[1];
+        out[o + 2] = z - d * nv[2];
+    }
+    return out;
+}
+
+/**
+ * Carry frozen 3D into a freshly triangulated `points3d`.
+ *
+ * An immutable node is SKIPPED by triangulation rather than triangulated and
+ * discarded, so the array a triangulation pass produces has a hole where every
+ * frozen node should be. This fills those holes from the stored frozen
+ * coordinates, bit-identically.
+ *
+ * @param {Float64Array} solved - Freshly triangulated points (not modified).
+ * @param {Float64Array} frozen - Frozen coordinates, indexed the same way.
+ * @param {Set<number>|boolean[]|number[]} immutable
+ * @returns {Float64Array} New array.
+ */
+export function mergeFrozenPoints3d(solved, frozen, immutable) {
+    const n = points3dNodeCount(solved);
+    const mask = normalizeImmutableMask(immutable, n);
+    const out = makePoints3d(n);
+    const fn = frozen ? points3dNodeCount(frozen) : 0;
+    for (let k = 0; k < n; k++) {
+        const o = k * 3;
+        if (mask[k] && k < fn) {
+            out[o] = frozen[o]; out[o + 1] = frozen[o + 1]; out[o + 2] = frozen[o + 2];
+        } else if (mask[k]) {
+            out[o] = NaN; out[o + 1] = NaN; out[o + 2] = NaN;
+        } else {
+            out[o] = solved[o]; out[o + 1] = solved[o + 1]; out[o + 2] = solved[o + 2];
+        }
+    }
+    return out;
+}
+
+/**
+ * Split a plane's per-node reprojection residuals into a SOLVE summary and an
+ * ANCHOR summary.
+ *
+ * A frozen node's residual is an OUT-OF-SAMPLE residual: no degrees of freedom
+ * were spent fitting it, so folding it into `meanError` makes the solve look
+ * better or worse than it is — and that number is what the user reads to judge
+ * annotation quality. It is still worth showing (it says "your frozen anchor no
+ * longer agrees with where you clicked"), just under a different label.
+ *
+ * @param {Float64Array} points3d - Flat [X,Y,Z] per node.
+ * @param {(number|null)[]} nodeErrors - Per-node mean pixel residual, or null.
+ * @param {Set<number>|boolean[]|number[]} immutable
+ * @returns {{nNodes:number, meanError:number|null, nAnchors:number,
+ *            anchorMeanError:number|null, provenance:string[]}}
+ *   `nNodes`/`meanError` cover MUTABLE nodes only; `provenance[k]` is
+ *   `'frozen'`, `'triangulated'` or `'missing'`.
+ */
+export function summarizePlaneTriangulation(points3d, nodeErrors, immutable) {
+    const n = points3dNodeCount(points3d);
+    const mask = normalizeImmutableMask(immutable, n);
+    const provenance = new Array(n);
+    let nNodes = 0, sum = 0, count = 0;
+    let nAnchors = 0, aSum = 0, aCount = 0;
+    for (let k = 0; k < n; k++) {
+        const present = hasPoint3d(points3d, k);
+        provenance[k] = !present ? 'missing' : (mask[k] ? 'frozen' : 'triangulated');
+        if (!present) continue;
+        const e = nodeErrors && nodeErrors[k] != null ? nodeErrors[k] : null;
+        if (mask[k]) {
+            nAnchors++;
+            if (e != null) { aSum += e; aCount++; }
+        } else {
+            nNodes++;
+            if (e != null) { sum += e; count++; }
+        }
+    }
+    return {
+        nNodes: nNodes,
+        meanError: count > 0 ? sum / count : null,
+        nAnchors: nAnchors,
+        anchorMeanError: aCount > 0 ? aSum / aCount : null,
+        provenance: provenance,
+    };
+}
+
+/**
+ * Which OTHER planes a fit has invalidated, because it moved a node they share.
+ *
+ * Plane nodes are global, so flattening plane A onto its fit can move a node
+ * plane B was fitted against — B's stored `planeFit` is then derived from
+ * geometry that no longer holds. This does not BLOCK the fit (a co-owned node
+ * is ordinary work, not an error); it tells the UI whose `planeFit` to drop.
+ *
+ * The user's instrument for pinning a shared intersection line is the immutable
+ * flag: freeze the shared nodes and neither fit can move them.
+ *
+ * @param {Iterable<number|string>} movedNodeIds - Nodes this fit actually moved.
+ * @param {Array<{id:*, nodeIds:Array<number|string>}>} planes - Candidate planes.
+ * @param {*} [excludePlaneId] - Usually the plane that was just fitted.
+ * @returns {Array<*>} Plane ids, input order, deduped.
+ */
+export function planesInvalidatedByFit(movedNodeIds, planes, excludePlaneId) {
+    const moved = new Set();
+    if (movedNodeIds) {
+        for (const id of movedNodeIds) moved.add(id);
+    }
+    const out = [];
+    const seen = new Set();
+    if (!planes || !moved.size) return out;
+    for (let i = 0; i < planes.length; i++) {
+        const pl = planes[i];
+        if (!pl || pl.id === undefined || pl.id === null) continue;
+        if (excludePlaneId !== undefined && pl.id === excludePlaneId) continue;
+        if (seen.has(pl.id)) continue;
+        const ids = pl.nodeIds || [];
+        for (let j = 0; j < ids.length; j++) {
+            if (moved.has(ids[j])) { out.push(pl.id); seen.add(pl.id); break; }
+        }
+    }
+    return out;
 }
 
 

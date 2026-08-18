@@ -3,11 +3,11 @@
 Multi-view pose annotation GUI. No build system — pure vanilla JS served as static files.
 
 ## Architecture
-ES modules, vanilla JS (no build step). `index.html` loads `app.js` as `<script type="module">`; `app.js` is a 2-line entry point that imports from `pose/`. The 43 modules are grouped into four directories:
-- `pose/` — data model, cross-view tracking, DLT triangulation, app initialization (6 files)
-- `ui/` — UI state, canvas rendering, mouse/keyboard interaction, info panel, modals, timeline, 3D viewport, video encoding, video display settings, settings (23 files)
+ES modules, vanilla JS (no build step). `index.html` loads `app.js` as `<script type="module">`; `app.js` is a 2-line entry point that imports from `pose/`. The 50 modules are grouped into four directories:
+- `pose/` — data model, cross-view tracking, DLT triangulation, plane annotation model (planes + the global plane-node pool), plane/origin serialization, origin transform, app initialization (10 files)
+- `ui/` — UI state, canvas rendering, mouse/keyboard interaction, info panel, modals, timeline, 3D viewport, video encoding, video display settings, plane definition, origin definition, settings (25 files)
 - `loading/` — video decoding, session loading, SLP/package readers, web workers (6 files)
-- `import-export/` — file I/O, save/load, SLP import/merge, visibility metadata (8 files)
+- `import-export/` — file I/O, save/load, SLP import/merge, visibility metadata, plane metadata (9 files)
 - `demo-data.js` — synthetic skeleton and camera data
 - `styles.css` — all styling
 
@@ -359,7 +359,66 @@ the contrast half.
   manifest live in the untracked `scratch/VENDORING-sleap-io.md`.
 - All loaded via script tags / import maps in index.html
 
+## Define Planes state in `metadata.lucid`
+
+The whole Define Planes pipeline persists per session in the `.slp` (and in the
+project JSON), under LUCID's own `metadata.lucid` dict, through **one** module —
+`import-export/plane-metadata.js` (`writePlaneMetadata` / `readPlaneMetadata` /
+`resetPlaneState`, `PLANE_METADATA_KEYS`), which the same four writers and three
+readers as the Visibility settings all call. The mapping itself lives in the
+DOM-free `pose/plane-serialization.js`.
+
+The four keys split by SCOPE, and getting that split wrong is the failure mode:
+- **Project-scoped** — `planeNodes` (the global pool, in pool order), `planes`
+  (membership, edges, fill, the triangulation summary, the plane fit) and
+  `planeOrigin` (the applied origin frame, written as its two INPUTS — the
+  origin point and the chosen +Z — and rebuilt by `buildOriginFrame` on load).
+  These are written **identically into every session's dict**, and read back by
+  whichever session is ingested first.
+- **Session-scoped** — `planePlacements`, the per-view 2D. It lives on
+  `Session.planePlacements`, and must not leak between sessions.
+
+Rules, each with a test pinning it:
+- **Defaults are never written.** A project that never opened Define Planes
+  carries none of the four keys, so `tests/e2e/save-golden-digest.mjs` must not
+  move.
+- **Nothing else in `metadata.lucid` is touched**, exactly as with the
+  Visibility keys.
+- **Points and plane membership are addressed BY NODE ID, never by index.** The
+  pool's order is the index space every `PlaneInstance` is keyed by, so a
+  count-based restore silently re-seats every column past a mid-pool edit onto
+  its neighbour's node with every point still looking valid. `adoptNode` /
+  `adoptPlane` keep the file's IDs rather than re-minting them.
+- **Every load path must call `resetPlaneState()` first.** `readPlaneMetadata`
+  only restores into an EMPTY model (that guard is what makes ingesting N
+  sessions idempotent), so skipping the reset keeps the OLD project's planes and
+  silently drops the new one's.
+- **Every plane/node mutation calls `markDirty()`** — rename, re-colour, pin,
+  place/un-place, membership, edges, fill, triangulate, fit, 2D/3D drags, origin
+  apply/clear. Per mutation, not per repaint. The plane panel's node-size /
+  edge-width / 3D-corner-size sliders are the deliberate exception: browser-local
+  display taste, not written to the project, so they do not mark it dirty.
+
+Coverage: `tests/test-plane-serialization.mjs` (unit, the mapping) and
+`tests/e2e/plane-persistence-roundtrip.mjs` (real app, both `.slp` writers, the
+dirty flag, the scope split, and both negative controls).
+
 ## UI Conventions
+**Defining Plane Mode blocks the pose-annotation toolbar.** `+ Instance`,
+`- Instance`, `Group`, `Edit Group`, `Triangulate`, `Triangulate All`,
+`Track Frame` and `Track All` are disabled while the mode is on
+(`applyPlaneModeToolbarLock` in `ui/plane-definition.js`) — they act on POSE
+annotation, which in the mode is a selection the user can no longer see or
+change. The **visibility** controls (User / Predicted / Reproj / Errors),
+Sessions, Color and Hide Panel stay live: they change what is DRAWN, not what
+is annotated. Adding a button to that lock means adding its id to
+`PLANE_LOCKED_TOOLBAR_IDS`; if it opens a menu, its wrapper also needs
+`PLANE_LOCKED_DROPDOWN_IDS` (a `.tri-dropdown` menu opens on hover and its
+items are `div`s, so `disabled` on the button reaches neither).
+NOTE the keyboard shortcuts for these actions (`n`, `t`, `Shift+T`,
+`Mod+Shift+T`, `Shift+g`, `Delete`) and the Edit / Analysis menu items are
+**not** gated yet — they still reach the same handlers.
+
 **Modals must close on `Esc`** unless explicitly stated otherwise. When building
 or editing any modal/overlay dialog, wire a `keydown` listener that closes it on
 `Escape` (and removes the listener on close). For a modal mid-operation (e.g. an
@@ -371,7 +430,7 @@ There are **three** test populations, each with its own runner. Run all three �
 they cover disjoint code, and a green run of one says nothing about the others.
 
 ```bash
-node tests/e2e/run-unit-tests.mjs     # tests/*.js  (browser suite, headless) — 1406 assertions
+node tests/e2e/run-unit-tests.mjs     # tests/*.js  (browser suite, headless) — 1407 assertions
 node tests/run-mjs-tests.mjs          # tests/test-*.mjs  (native-ESM Node tests)
 node tests/e2e/<name>.mjs             # tests/e2e/*.mjs  (Playwright, one file per behavior)
 ```

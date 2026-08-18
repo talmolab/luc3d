@@ -967,9 +967,17 @@ body {
   transition: background var(--transition-fast), color var(--transition-fast);
 }
 
-.toolbar-btn:hover {
+.toolbar-btn:hover:not(:disabled) {
   background: var(--bg-button-hover);
   color: var(--text-primary);
+}
+
+/* A disabled toolbar button had NO styling of its own, so it looked exactly
+   like a live one and only failed on click. Give it the same read as every
+   other disabled control in the app. */
+.toolbar-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
 }
 
 .toolbar-btn:active {
@@ -1049,6 +1057,15 @@ body {
 .tri-dropdown {
   position: relative;
   display: inline-flex;
+}
+
+/* Defining Plane Mode blocks the pose-annotation buttons (ui/plane-definition.js,
+   `applyPlaneModeToolbarLock`). These wrappers need their own rule: the menu
+   below opens on :hover and its DLT / BA entries are <div>s with their own
+   click handlers, so `disabled` on the button inside reaches neither —
+   `pointer-events: none` on the wrapper kills the hover-open AND the items. */
+.tri-dropdown.plane-mode-locked {
+  pointer-events: none;
 }
 
 .tri-caret {
@@ -3997,4 +4014,750 @@ kbd {
 .settings-btn-apply:hover {
   background: var(--accent-hover);
   border-color: var(--accent-hover);
+}
+
+/* --------------------------------------------------------------------------
+   Defining Plane Mode (View ▸ Define Planes)
+
+   A MODE, not a modal: the banner sits under the toolbar for as long as the
+   mode is active, and the info panel swaps its tab bar for the Define Plane
+   panel. Both are driven by ui/plane-definition.js.
+   -------------------------------------------------------------------------- */
+
+.plane-mode-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+  height: var(--toolbar-height);
+  padding: 0 10px;
+  background: linear-gradient(
+    to bottom,
+    rgba(102, 126, 234, 0.22),
+    rgba(102, 126, 234, 0.12)
+  );
+  border-bottom: 1px solid var(--accent);
+  font-size: 12px;
+  user-select: none;
+}
+
+.plane-mode-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 6px var(--accent);
+  flex: 0 0 auto;
+}
+
+.plane-mode-label {
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  color: var(--text-primary);
+}
+
+.plane-mode-hint {
+  color: var(--text-secondary);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plane-mode-exit {
+  margin-left: auto;
+  flex: 0 0 auto;
+}
+
+/* A video view accepting a plane-skeleton drop. */
+.video-cell.plane-drop-target::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border: 2px dashed var(--accent);
+  background: var(--accent-dim);
+  z-index: 5;
+}
+
+/* --- Define Plane info panel --------------------------------------------- */
+
+/* Mirrors .panel-tab-content's box so swapping the tabs for this panel does
+   not change the info panel's scroll behaviour. */
+.plane-panel {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px;
+}
+
+.plane-details {
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background: var(--bg-secondary);
+}
+
+.plane-details > summary {
+  cursor: pointer;
+  user-select: none;
+  padding: 6px 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+  list-style: none;
+}
+
+.plane-details > summary::-webkit-details-marker {
+  display: none;
+}
+
+.plane-details > summary::before {
+  content: "\25B6";
+  display: inline-block;
+  width: 12px;
+  font-size: 9px;
+  color: var(--text-muted);
+  transition: transform var(--transition-fast);
+}
+
+.plane-details[open] > summary::before {
+  transform: rotate(90deg);
+}
+
+.plane-details > summary:hover {
+  background: var(--bg-tertiary);
+}
+
+.plane-details-body {
+  padding: 6px 8px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.plane-subdetails {
+  background: var(--bg-primary);
+}
+
+.plane-subdetails > summary {
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.plane-name-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.plane-name-row input,
+.plane-text-input,
+.plane-select {
+  flex: 1;
+  min-width: 0;
+  padding: 3px 4px;
+  font-size: 12px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  color: var(--text-primary);
+  border-radius: 3px;
+}
+
+.plane-hint {
+  margin-top: 6px;
+  font-size: 10px;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+/* The Edit Plane section's body is swapped out wholesale for its empty state,
+   so it needs its own flex column — otherwise the wrapper collapses the
+   `.plane-details-body` gap between the name row, the members table and the
+   connections. */
+#planeEditorContent {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* The plane SELECTOR row. Ruled off from the body below it because it is the
+   one control in the section that stays live with nothing selected — it picks
+   (or mints) the plane everything under the rule then acts on. */
+.plane-picker-row {
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+/* "Edit Plane — floor". The label is fixed; the name is the selected
+   plane's, so with three sibling sections the reader can tell at a glance which
+   plane the controls below act on. */
+.plane-summary-name {
+  margin-left: 6px;
+  font-weight: 400;
+  color: var(--accent);
+}
+
+/* The selected plane's member list. The colour here is a READ-ONLY swatch: a
+   node's colour is a property of the node and is edited once, in the Nodes
+   table, so a second picker would imply two places to change it. */
+.plane-member-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plane-member-swatch {
+  width: 12px;
+  height: 12px;
+  margin-right: 0;
+}
+
+/* Draggable plane-skeleton rows. */
+#planeSkeletonsTable tbody tr {
+  cursor: grab;
+}
+
+#planeSkeletonsTable tbody tr:active {
+  cursor: grabbing;
+}
+
+#planeSkeletonsTable tbody tr.plane-selected {
+  background: var(--accent-dim);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.plane-swatch {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  margin-right: 5px;
+  vertical-align: middle;
+}
+
+/* Per-node colour picker in the Nodes table. Native <input type=color> is a
+   chunky control by default; strip it back to a swatch that fits the row. */
+.plane-node-color {
+  width: 26px;
+  height: 18px;
+  padding: 0;
+  border: 1px solid var(--border-color);
+  border-radius: 3px;
+  background: transparent;
+  cursor: pointer;
+  vertical-align: middle;
+}
+
+.plane-node-color::-webkit-color-swatch-wrapper {
+  padding: 2px;
+}
+
+.plane-node-color::-webkit-color-swatch {
+  border: none;
+  border-radius: 2px;
+}
+
+.plane-node-color::-moz-color-swatch {
+  border: none;
+  border-radius: 2px;
+}
+
+/* --- Plane skeleton row: expander + action buttons ----------------------- */
+
+.plane-expander {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 3px;
+  min-width: 0;
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 10px;
+  cursor: pointer;
+  border-radius: 3px;
+}
+
+.plane-expander:hover:not(:disabled) {
+  background: var(--bg-button);
+  color: var(--text-primary);
+}
+
+.plane-expander:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.plane-expander .plane-caret {
+  display: inline-block;
+  font-size: 8px;
+  transition: transform var(--transition-fast);
+}
+
+.plane-expander.open .plane-caret {
+  transform: rotate(90deg);
+}
+
+.plane-placed-count {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.plane-actions {
+  white-space: nowrap;
+  text-align: right;
+}
+
+.plane-icon-btn {
+  padding: 1px 3px;
+  min-width: 0;
+  line-height: 1;
+  vertical-align: middle;
+  color: var(--text-secondary);
+}
+
+.plane-icon-btn:hover:not(:disabled) {
+  color: var(--text-primary);
+}
+
+.plane-icon-btn:disabled {
+  opacity: 0.3;
+}
+
+.plane-icon-btn.active {
+  background: var(--accent-dim);
+  border-color: var(--accent);
+}
+
+.plane-tri-btn.active {
+  color: var(--success-color);
+}
+
+/* Shared Triangulate / Fill / Fit row — acts on the selected plane skeleton. */
+.plane-action-row .panel-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 4px 4px;
+  font-size: 11px;
+}
+
+.plane-action-row .panel-btn svg {
+  flex: 0 0 auto;
+}
+
+.plane-action-row .panel-btn.active {
+  border-color: var(--accent);
+  background: var(--accent-dim);
+}
+
+/* "this plane has 3D" marker in the table row. */
+.plane-solved-badge {
+  display: inline-block;
+  margin-right: 4px;
+  padding: 0 3px;
+  border-radius: 3px;
+  font-size: 9px;
+  font-weight: 600;
+  line-height: 14px;
+  color: var(--success-color);
+  border: 1px solid var(--success-color);
+  vertical-align: middle;
+}
+
+.plane-fit-summary {
+  border-top: none;
+  padding-top: 0;
+  margin-top: 2px;
+  color: var(--success-color);
+}
+
+/* --- Expanded placements sub-row ---------------------------------------- */
+
+.plane-placements-row > td {
+  background: var(--bg-primary);
+  padding: 4px 6px 6px 24px !important;
+}
+
+.plane-placement-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 4px;
+  font-size: 11px;
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+.plane-placement-item:hover {
+  background: var(--bg-tertiary);
+}
+
+.plane-placement-item.plane-selected {
+  background: var(--accent-dim);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.plane-placement-view {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plane-placement-meta {
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+/* `.panel-btn` is `flex: 1`, which stretches the × across the row's free
+   space inside this flex container. Keep it button-sized. */
+.plane-placement-item .panel-btn {
+  flex: 0 0 auto;
+}
+
+.plane-tri-summary {
+  margin-top: 5px;
+  padding-top: 5px;
+  border-top: 1px solid var(--border-color);
+  font-size: 10px;
+  color: var(--text-secondary);
+}
+
+.plane-tri-node {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10px;
+  color: var(--text-muted);
+  padding-left: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* A pinned node's reprojection residual is OUT of sample, so it is reported
+   apart from the solve's own error rather than blended into it. */
+.plane-anchor-summary {
+  border-top: none;
+  padding-top: 0;
+  margin-top: 2px;
+  color: var(--warning-color);
+}
+
+/* --- The Nodes table: the global pool ------------------------------------ */
+
+/* A node in no plane is a normal resting state (planes are deleted without
+   their nodes), so it is dimmed rather than flagged — it simply is not drawn
+   on any view until some plane takes it up. */
+.plane-node-row.plane-node-unused td {
+  opacity: 0.6;
+}
+
+/* Shared by 2+ planes: the whole point of the pool, so it is legible at a
+   glance rather than only in a tooltip. */
+.plane-node-row.plane-node-shared {
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.plane-node-pin {
+  margin: 0;
+  vertical-align: middle;
+  cursor: pointer;
+}
+
+.plane-node-pin:disabled {
+  cursor: default;
+  opacity: 0.4;
+}
+
+.plane-node-state {
+  display: inline-block;
+  padding: 0 3px;
+  border-radius: 3px;
+  font-size: 9px;
+  line-height: 14px;
+  white-space: nowrap;
+  color: var(--text-muted);
+  border: 1px solid transparent;
+}
+
+.plane-node-state-frozen {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+/* Pinned but never triangulated — a dead end, because pinning is exactly what
+   stops a solve from filling it in. Loud on purpose: the state cannot resolve
+   itself and blocks every fit of every plane the node belongs to. */
+.plane-node-state-frozen-unsolved {
+  color: var(--error-color);
+  border-color: var(--error-color);
+  font-weight: 600;
+}
+
+/* Panel-level explanation of the above, so it is read without hovering. */
+.plane-warning {
+  margin-top: 6px;
+  padding: 5px 6px;
+  border: 1px solid var(--error-color);
+  border-radius: 4px;
+  background: rgba(229, 72, 77, 0.08);
+  color: var(--text-secondary);
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+/* "+2 shared" marker next to a plane's node count. */
+.plane-shared-count {
+  margin-left: 4px;
+  padding: 0 3px;
+  border-radius: 3px;
+  font-size: 9px;
+  line-height: 14px;
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  vertical-align: middle;
+}
+
+/* --- Blocking / confirming dialog (ui/plane-definition.js) ---------------- */
+
+.plane-confirm-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  z-index: 20000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.plane-confirm-modal {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 20px 22px;
+  min-width: 380px;
+  max-width: 520px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  color: var(--text-primary);
+}
+
+.plane-confirm-modal h3 {
+  margin: 0 0 12px 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.plane-confirm-message {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.plane-confirm-modal .modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 18px;
+}
+
+.plane-confirm-modal button {
+  padding: 6px 16px;
+  border-radius: 4px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.plane-confirm-modal button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.plane-confirm-modal button:hover {
+  filter: brightness(1.15);
+}
+
+/* ============================================
+   Set Origin Mode (ui/origin-definition.js)
+   ============================================ */
+
+/* Distinguished from the plane bar by colour alone — same shape, so it reads as
+   a mode banner immediately, but never mistaken for the one it replaces. */
+.origin-mode-bar {
+  background: rgba(255, 145, 60, 0.13);
+  border-bottom-color: rgba(255, 145, 60, 0.4);
+}
+
+.origin-mode-bar .plane-mode-dot {
+  background: #ff913c;
+}
+
+/* The menu bar's dropdowns are divs, so `disabled` cannot reach them. */
+body.origin-mode-lock .menu-bar,
+body.origin-mode-lock .view-strip,
+body.origin-mode-lock .timeline-container {
+  pointer-events: none;
+  opacity: 0.5;
+}
+
+/* Instructions sit over the 3D viewport because that is where the clicking
+   happens — a panel-side hint would be read after the click, not before. */
+.origin-instruction {
+  position: absolute;
+  /* Below the viewport's own top-right button row, which it would otherwise
+     sit on top of. */
+  top: 36px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 20;
+  max-width: min(420px, 90%);
+  padding: 8px 12px;
+  border-radius: 6px;
+  background: rgba(20, 20, 24, 0.92);
+  border: 1px solid rgba(255, 145, 60, 0.5);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.5);
+  text-align: center;
+  pointer-events: none;   /* never steal a pick from the canvas below */
+}
+
+/* The grip is the one part of the box that takes the pointer, so the box can be
+   dragged aside when it covers the geometry being picked without ever becoming
+   a click target itself. Full-width so it is easy to grab, but only a few
+   pixels tall so it costs almost none of the click-through area. */
+.origin-drag-handle {
+  pointer-events: auto;
+  cursor: move;
+  margin: -6px -10px 2px;
+  padding: 2px 4px 3px;
+  border-radius: 5px 5px 0 0;
+  font-size: 10px;
+  line-height: 9px;
+  letter-spacing: 3px;
+  color: var(--text-muted, #888);
+  user-select: none;
+  touch-action: none;   /* pointermove must not turn into a scroll/pan */
+}
+
+.origin-drag-handle:hover {
+  color: var(--text-primary, #e0e0e0);
+  background: rgba(255, 145, 60, 0.15);
+}
+
+.origin-step {
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text-primary);
+}
+
+.origin-legend {
+  margin-top: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  font-size: 10px;
+  color: var(--text-secondary);
+}
+
+.origin-legend > span:not(.origin-swatch) {
+  margin-right: 8px;
+}
+
+.origin-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  display: inline-block;
+}
+
+.origin-swatch-pos { background: #ff4d4d; }
+.origin-swatch-neg { background: #4d8bff; }
+
+/* The buttons are the one part of the overlay that must take clicks. */
+.origin-confirm-row {
+  margin-top: 8px;
+  display: flex;
+  gap: 6px;
+  justify-content: center;
+  pointer-events: auto;
+}
+
+.origin-confirm-row .panel-btn {
+  flex: 0 0 auto;
+  min-width: 84px;
+}
+
+.origin-continue {
+  border-color: rgba(255, 145, 60, 0.7);
+  color: #ffb877;
+}
+
+/* --- the result table --- */
+
+.origin-source {
+  font-size: 10px;
+  color: var(--text-secondary);
+  margin-bottom: 3px;
+}
+
+.origin-convention,
+.origin-matrix-label {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10px;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+}
+
+.origin-matrix-label {
+  margin-top: 8px;
+  font-family: inherit;
+}
+
+.origin-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10px;
+}
+
+.origin-table th {
+  color: var(--text-muted);
+  font-weight: 500;
+  text-align: right;
+  padding: 1px 4px;
+}
+
+.origin-table td {
+  text-align: right;
+  padding: 1px 4px;
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+
+.origin-table .origin-row-name {
+  text-align: left;
+  color: var(--text-secondary);
+  font-family: inherit;
+}
+
+.origin-table .origin-unit {
+  color: var(--text-muted);
+  text-align: left;
+  width: 22px;
+}
+
+.origin-matrix td {
+  border: 1px solid var(--border-color);
+  text-align: center;
+}
+
+.origin-angle {
+  margin-top: 5px;
+  font-size: 10px;
+  color: var(--text-secondary);
 }

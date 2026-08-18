@@ -68,6 +68,24 @@ export class Viewport3D {
         /** @type {function(boolean): void|null} Callback when camera view mode changes */
         this.onCameraViewChanged = null;
 
+        /**
+         * @type {function(number, number, number[]): void|null}
+         * Called on every pointer move while a plane corner is being dragged in
+         * 3D: `(planeId, nodeIdx, [x, y, z])`. The new position is ALWAYS on
+         * that plane's fitted plane — see `_onPlanePointerDown`. The owner is
+         * expected to write the model and call `setPlanes` again; this class
+         * does not mutate `points3d` itself.
+         */
+        this.onPlaneNodeDragged = options.onPlaneNodeDragged || null;
+
+        /**
+         * @type {function(number, number): void|null}
+         * Called once when a 3D plane-corner drag ends and actually moved
+         * something: `(planeId, nodeIdx)`. For work too expensive to do per
+         * move (panel rebuilds, error recomputation).
+         */
+        this.onPlaneNodeDragEnd = options.onPlaneNodeDragEnd || null;
+
         /** @type {number|null} Index of the currently selected/highlighted instance */
         this.selectedInstanceIdx = null;
 
@@ -104,6 +122,47 @@ export class Viewport3D {
         this._cameraGroup = null;
         /** @type {THREE.Group} Group holding skeleton meshes for the current frame */
         this._skeletonGroup = null;
+        /**
+         * @type {THREE.Group} Group holding user-annotated PLANES
+         * (View ▸ Define Planes). A sibling of `_skeletonGroup`, NOT a child —
+         * `updateSkeleton` clears `_skeletonGroup` on every frame, and planes
+         * are frame-independent scene geometry that must survive that.
+         */
+        this._planeGroup = null;
+
+        /** @type {Array<Object>} The last `setPlanes` payload, kept so a drag can
+         * look up the plane's fit (its drag constraint) by id. */
+        this._planes = [];
+        /** @type {number} Corner-sphere size for annotated PLANES only, driven by
+         * the panel's "3D Node Size" slider. Deliberately not `skeletonNodeSize`:
+         * sizing plane corners must not resize pose nodes. */
+        this.planeNodeSize = options.planeNodeSize !== undefined ? options.planeNodeSize : 4;
+        /** @type {{planeId:number, nodeIdx:number, moved:boolean, pointerId:number}|null}
+         * Non-null only while a plane corner is being dragged in 3D. */
+        this._planeDrag = null;
+        /** @type {boolean} Set when a plane drag ends, so the camera-picking
+         * `click` that follows the same pointer-up is not read as a camera click. */
+        this._suppressCameraClick = false;
+
+        // --- Set Origin Mode ---
+        /** @type {'node'|'axis'|null} What a click is currently picking, if anything. */
+        this._originPickMode = null;
+        /** @type {THREE.Group} Candidate +Z arrows + the picked-corner marker. */
+        this._originGroup = null;
+        /** @type {THREE.Group} Parent of the grid floor + axis helper, moved by
+         * `setOriginFrame` so the DISPLAYED frame can be re-based without
+         * touching a single data point. */
+        this._framePivot = null;
+        /** @type {THREE.GridHelper|null} */
+        this._gridFloor = null;
+        /** @type {Object|null} The frame currently displayed, or null for the
+         * calibration's own. Also what the camera pivots on and spins about —
+         * see `originPivot` / `originUp` / `_rebaseControls`. */
+        this._originFrame = null;
+        /** @type {function(number, number, number[]): void|null} */
+        this.onOriginNodePicked = options.onOriginNodePicked || null;
+        /** @type {function(string): void|null} `'positive'` or `'negative'`. */
+        this.onOriginAxisPicked = options.onOriginAxisPicked || null;
 
         /** @type {number} Animation frame request ID */
         this._rafId = 0;
@@ -167,6 +226,34 @@ export class Viewport3D {
      * Initialize Three.js scene, renderer, camera, lights, grid, and controls.
      * @private
      */
+    /**
+     * Build the OrbitControls, orbiting about the camera's CURRENT `up`.
+     *
+     * Split out of `_init` because the orbit axis is baked in at construction:
+     * r147's `update` captures a quaternion from `camera.up` once, when the
+     * closure is defined, so a later `camera.up = …` re-aims the camera without
+     * re-aiming the orbit. Re-basing the frame therefore has to rebuild the
+     * controls (`_rebaseControls`), and the two paths must not drift apart in
+     * their tuning — hence one function owning it.
+     * @private
+     */
+    _createControls() {
+        const controls = new THREE.OrbitControls(this.threeCamera, this.renderer.domElement);
+        controls.enableDamping = true;
+        controls.dampingFactor = 0.1;
+        controls.screenSpacePanning = true;
+        controls.minDistance = 10;
+        controls.maxDistance = 100000;
+        // Declutter: check distance to the viewed camera on orbit changes. Lives
+        // here, not in `_setupCameraPicking`, so a rebuild keeps it.
+        controls.addEventListener('change', () => { this._checkDeclutter(); });
+        // What the orbit axis actually is, as opposed to what `camera.up` says
+        // — `_rebaseControls` compares against this to know when a rebuild is
+        // the only way to move the axis.
+        this._controlsUp = this.threeCamera.up.clone().normalize();
+        return controls;
+    }
+
     _init() {
         const width = this.container.clientWidth || 400;
         const height = this.container.clientHeight || 300;
@@ -188,13 +275,8 @@ export class Viewport3D {
         this.threeCamera.up.set(0, 0, 1); // Z-up world convention
 
         // --- Orbit Controls ---
-        this.controls = new THREE.OrbitControls(this.threeCamera, this.renderer.domElement);
+        this.controls = this._createControls();
         this.controls.target.set(0, 0, 0);
-        this.controls.enableDamping = true;
-        this.controls.dampingFactor = 0.1;
-        this.controls.screenSpacePanning = true;
-        this.controls.minDistance = 10;
-        this.controls.maxDistance = 100000;
         this.controls.update();
 
         // --- Lights ---
@@ -210,12 +292,26 @@ export class Viewport3D {
         fillLight.position.set(-200, 200, 100);
         this.scene.add(fillLight);
 
+        // --- Origin frame: grid floor + axis helper ---
+        // Both live under one pivot so "Set Origin" can move the WHOLE frame
+        // with a single matrix, without touching any data group. Re-basing the
+        // display must never re-bake the data: 3D points stay in calibration
+        // world coordinates, and the transform is reported instead.
+        this._framePivot = new THREE.Group();
+        this._framePivot.name = 'originFrame';
+        this.scene.add(this._framePivot);
+
         // --- Grid floor (XY plane at Z=0, matching Z-up convention) ---
         this._addGridFloor();
 
         // --- Axis helper (will be rescaled in fitToScene) ---
         this._axisHelper = new THREE.AxesHelper(50);
-        this.scene.add(this._axisHelper);
+        this._framePivot.add(this._axisHelper);
+
+        // --- Origin-picking overlay (Set Origin Mode arrows) ---
+        this._originGroup = new THREE.Group();
+        this._originGroup.name = 'originPicker';
+        this.scene.add(this._originGroup);
 
         // --- Scene groups ---
         this._cameraGroup = new THREE.Group();
@@ -230,11 +326,18 @@ export class Viewport3D {
         this._envGroup.name = 'environment';
         this.scene.add(this._envGroup);
 
+        this._planeGroup = new THREE.Group();
+        this._planeGroup.name = 'planes';
+        this.scene.add(this._planeGroup);
+
         // --- Draw camera pyramids ---
         this.addCameraPyramids();
 
         // --- Camera picking (click to match perspective) ---
         this._setupCameraPicking();
+
+        // --- Plane-corner dragging (View ▸ Define Planes) ---
+        this._setupPlaneEditing();
 
         // --- Resize handling ---
         this._resizeObserver = new ResizeObserver(() => {
@@ -262,7 +365,8 @@ export class Viewport3D {
         // GridHelper creates grid on XZ plane; rotate -90deg around X to put it on XY
         grid.rotation.x = -Math.PI / 2;
 
-        this.scene.add(grid);
+        this._gridFloor = grid;
+        this._framePivot.add(grid);
     }
 
     // ============================================
@@ -498,6 +602,20 @@ export class Viewport3D {
         const mouse = new THREE.Vector2();
 
         this.renderer.domElement.addEventListener('click', (e) => {
+            // A plane-corner drag that happens to end over a camera pyramid
+            // still produces a `click`. Swallow exactly that one, or letting go
+            // of a corner would jump the view into a camera's perspective.
+            if (this._suppressCameraClick) {
+                this._suppressCameraClick = false;
+                return;
+            }
+            // Set Origin Mode owns the click while it is armed, and consumes it
+            // even on a miss — a stray click must not select a camera and swing
+            // the view away from the corner the user is aiming at.
+            if (this._originPickMode) {
+                this._handleOriginPick(e);
+                return;
+            }
             const rect = this.renderer.domElement.getBoundingClientRect();
             mouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
             mouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
@@ -519,11 +637,192 @@ export class Viewport3D {
                 }
             }
         });
+        // The controls' own 'change' listener is attached in `_createControls`,
+        // so it survives a rebuild.
+    }
 
-        // Declutter: check distance to viewed camera on orbit changes
-        this.controls.addEventListener('change', () => {
-            this._checkDeclutter();
+    // ============================================
+    // Plane-corner dragging (View ▸ Define Planes)
+    // ============================================
+
+    /**
+     * Let the user drag a plane's corners directly in the 3D scene.
+     *
+     * Two rules, both enforced here rather than by the caller:
+     *   1. Only a plane that has been FIT is draggable. `setPlanes` marks node
+     *      meshes with `userData.planeEditable`, and only those are ever picked,
+     *      so an un-fit (merely triangulated) plane's corners are inert.
+     *   2. A corner can only move WITHIN the plane it was fitted to. The drag
+     *      resolves the pointer ray against that plane, so the result is on it
+     *      by construction — there is no "move then re-project" step that could
+     *      drift, and no way to pull a corner off the plane at all.
+     *
+     * The fit itself (centroid + normal) is held FIXED for the whole drag and
+     * is not re-derived after it. That is the point: those two are what a later
+     * step turns into the origin's translation + rotation, and nudging a corner
+     * must not move the frame it defines. Re-fitting mid-drag would also let
+     * the plane chase the corner being dragged.
+     * @private
+     */
+    _setupPlaneEditing() {
+        const dom = this.renderer.domElement;
+
+        // Scratch objects, reused per event — these run on every pointer move.
+        this._planeNdc = new THREE.Vector2();
+        this._planeMathPlane = new THREE.Plane();
+        this._planeHitPoint = new THREE.Vector3();
+        this._planeHoverCursor = '';
+
+        // CAPTURE, and on the CONTAINER rather than the canvas. OrbitControls
+        // registered its own `pointerdown` on the canvas back in `_init`, and
+        // at the target element capture and bubble listeners fire in
+        // REGISTRATION order — so a capture listener on the canvas would still
+        // run second and the orbit would already have started. From an ancestor
+        // the capture phase genuinely precedes the target, which lets us
+        // stopPropagation() and keep OrbitControls from ever seeing the press.
+        this._onPlaneDownCapture = (e) => this._onPlanePointerDown(e);
+        this.container.addEventListener('pointerdown', this._onPlaneDownCapture, true);
+
+        this._onPlaneMoveBound = (e) => this._onPlanePointerMove(e);
+        this._onPlaneUpBound = (e) => this._onPlanePointerUp(e);
+        dom.addEventListener('pointermove', this._onPlaneMoveBound);
+        dom.addEventListener('pointerup', this._onPlaneUpBound);
+        dom.addEventListener('pointercancel', this._onPlaneUpBound);
+    }
+
+    /**
+     * The `setPlanes` payload entry for a plane id, or null.
+     * @private
+     */
+    _planePayloadById(id) {
+        for (let i = 0; i < this._planes.length; i++) {
+            if (this._planes[i].id === id) return this._planes[i];
+        }
+        return null;
+    }
+
+    /**
+     * Raycast the pointer against DRAGGABLE plane-corner meshes only.
+     * @returns {THREE.Mesh|null}
+     * @private
+     */
+    _pickPlaneNode(e) {
+        if (this._disposed || !this.renderer || !this._planeGroup) return null;
+        const dom = this.renderer.domElement;
+        const rect = dom.getBoundingClientRect();
+        if (!rect.width || !rect.height) return null;
+
+        const meshes = [];
+        this._planeGroup.traverse(function (child) {
+            if (child.isMesh && child.userData && child.userData.planeEditable) meshes.push(child);
         });
+        if (meshes.length === 0) return null;
+        // See `_handleOriginPick`: a plane rebuilt this frame would otherwise be
+        // raycast against transforms `render()` has not written yet.
+        if (this.scene) this.scene.updateMatrixWorld();
+
+        this._planeNdc.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+        this._planeNdc.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+        this._raycaster.setFromCamera(this._planeNdc, this.threeCamera);
+        const hits = this._raycaster.intersectObjects(meshes, false);
+        return hits.length > 0 ? hits[0].object : null;
+    }
+
+    /** @private */
+    _onPlanePointerDown(e) {
+        if (this._disposed || !this.renderer) return;
+        // Self-heal: if a previous drag ended off-canvas no `click` followed, so
+        // the suppression flag is still set. Clear it before it eats a real one.
+        this._suppressCameraClick = false;
+        // The container also holds the overlay buttons ("Show Camera View", …).
+        if (e.target !== this.renderer.domElement) return;
+        if (e.button !== 0) return;
+
+        const mesh = this._pickPlaneNode(e);
+        if (!mesh) return;
+        const payload = this._planePayloadById(mesh.userData.planeId);
+        if (!payload || !payload.planeFit) return;
+
+        const n = payload.planeFit.normal;
+        const c = payload.planeFit.centroid;
+        if (!n || !c) return;
+        this._planeMathPlane.setFromNormalAndCoplanarPoint(
+            new THREE.Vector3(n[0], n[1], n[2]).normalize(),
+            new THREE.Vector3(c[0], c[1], c[2]));
+
+        this._planeDrag = {
+            planeId: mesh.userData.planeId,
+            nodeIdx: mesh.userData.nodeIdx,
+            moved: false,
+            pointerId: e.pointerId,
+        };
+        if (this.controls) this.controls.enabled = false;
+        // Keep OrbitControls from starting an orbit under the drag.
+        e.stopPropagation();
+        e.preventDefault();
+        try { this.renderer.domElement.setPointerCapture(e.pointerId); } catch (_) { /* synthetic pointer */ }
+    }
+
+    /** @private */
+    _onPlanePointerMove(e) {
+        if (this._disposed || !this.renderer) return;
+        if (!this._planeDrag) {
+            this._updatePlaneHoverCursor(e);
+            return;
+        }
+
+        const dom = this.renderer.domElement;
+        const rect = dom.getBoundingClientRect();
+        if (!rect.width || !rect.height) return;
+        this._planeNdc.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+        this._planeNdc.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+        this._raycaster.setFromCamera(this._planeNdc, this.threeCamera);
+
+        // Edge-on views make the ray nearly parallel to the plane, where the
+        // intersection is numerically meaningless and would fling the corner to
+        // a huge coordinate. Refuse rather than move it somewhere absurd.
+        const cosine = this._raycaster.ray.direction.dot(this._planeMathPlane.normal);
+        if (Math.abs(cosine) < 1e-3) return;
+        const hit = this._raycaster.ray.intersectPlane(this._planeMathPlane, this._planeHitPoint);
+        if (!hit) return;
+        if (!isFinite(hit.x) || !isFinite(hit.y) || !isFinite(hit.z)) return;
+
+        this._planeDrag.moved = true;
+        e.preventDefault();
+        if (this.onPlaneNodeDragged) {
+            this.onPlaneNodeDragged(this._planeDrag.planeId, this._planeDrag.nodeIdx,
+                [hit.x, hit.y, hit.z]);
+        }
+    }
+
+    /** @private */
+    _onPlanePointerUp(e) {
+        if (!this._planeDrag) return;
+        const drag = this._planeDrag;
+        this._planeDrag = null;
+        if (this.controls) this.controls.enabled = true;
+        if (this.renderer) {
+            try { this.renderer.domElement.releasePointerCapture(drag.pointerId); } catch (_) { /* never captured */ }
+        }
+        this._suppressCameraClick = true;
+        if (drag.moved && this.onPlaneNodeDragEnd) {
+            this.onPlaneNodeDragEnd(drag.planeId, drag.nodeIdx);
+        }
+    }
+
+    /**
+     * Cursor affordance: draggable corners are the only thing in the 3D scene
+     * that responds to a press, so they have to look different.
+     * @private
+     */
+    _updatePlaneHoverCursor(e) {
+        if (!this.renderer) return;
+        // Set Origin Mode owns the cursor while it is armed.
+        if (this._originPickMode) return;
+        const want = this._pickPlaneNode(e) ? 'move' : '';
+        if (this._planeHoverCursor === want) return;
+        this._planeHoverCursor = want;
+        this.renderer.domElement.style.cursor = want;
     }
 
     /**
@@ -578,9 +877,10 @@ export class Viewport3D {
             this._viewingCamera = null;
         }
         this._viewingCamData = null;
-        // Reset FOV and up vector to defaults before fitting
+        // Reset FOV and up vector to defaults before fitting — "up" being the
+        // displayed frame's +Z, which is world +Z until an origin is applied.
         this.threeCamera.fov = 50;
-        this.threeCamera.up.set(0, 0, 1);
+        this.threeCamera.up.copy(this.originUp());
         this.threeCamera.updateProjectionMatrix();
         this.fitToScene();
         if (this.onCameraViewChanged) {
@@ -1034,6 +1334,463 @@ export class Viewport3D {
     }
 
     /**
+     * Show user-annotated planes (View ▸ Define Planes) in the 3D scene.
+     *
+     * Full rebuild per call, like `setEnvironment` — a handful of planes with
+     * a handful of corners each, so diffing would be more code than it saves.
+     * Everything lands in `_planeGroup`, a sibling of `_skeletonGroup`, so the
+     * per-frame `updateSkeleton` clear leaves it alone: a plane is static scene
+     * geometry, not per-frame content.
+     *
+     * `points3d` needs no transform on the way in. The Three camera is Z-up
+     * (`threeCamera.up.set(0,0,1)`) and the scene is already in the
+     * calibration's world frame, so triangulated coordinates go straight into
+     * `position.set` — the same as skeleton nodes and camera centres.
+     *
+     * A plane whose payload carries BOTH `editable` and `planeFit` has
+     * draggable corners (see `_setupPlaneEditing`); everything else is inert
+     * scenery. The payload is kept in `_planes` so a drag in progress can look
+     * up its constraint plane by id across the rebuilds it triggers.
+     *
+     * @param {Array<{id:number, name:string, color:string,
+     *                nodeColors?:string[], nodeImmutable?:boolean[],
+     *                edges?:Array<number[]>,
+     *                polygonOrder?:number[], filled?:boolean,
+     *                editable?:boolean,
+     *                planeFit?:{centroid:number[], normal:number[]},
+     *                points3d:Float64Array}>} planes
+     */
+    setPlanes(planes) {
+        this._clearGroup(this._planeGroup);
+        this._planes = planes || [];
+        if (!planes || planes.length === 0) return;
+
+        const ss = this._sceneScale || 1;
+        // Planes size their corners independently of pose nodes — the Plane
+        // Appearance "3D Node Size" slider, pushed in by `syncPlanes3D`.
+        const nodeRadius = this.planeNodeSize * 0.9 * ss;
+        const edgeRadius = this.skeletonEdgeWeight * 0.9 * ss;
+
+        for (let i = 0; i < planes.length; i++) {
+            const plane = planes[i];
+            const pts = plane.points3d;
+            if (!pts) continue;
+
+            const nNodes = points3dNodeCount(pts);
+            if (nNodes === 0) continue;
+
+            const planeGroup3D = new THREE.Group();
+            planeGroup3D.name = 'plane_' + plane.id;
+
+            // One shared sphere geometry per plane; materials differ per node
+            // because plane nodes carry their own colour (the cross-view
+            // correspondence cue).
+            const sphereGeo = new THREE.SphereGeometry(nodeRadius, 12, 12);
+
+            // Only a FIT plane's corners can be dragged — a corner with no
+            // plane to slide along has no constrained direction to move in.
+            const draggable = !!(plane.editable && plane.planeFit);
+
+            for (let k = 0; k < nNodes; k++) {
+                const pt = getPoint3d(pts, k);
+                if (pt == null) continue;
+                if (!isFinite(pt[0]) || !isFinite(pt[1]) || !isFinite(pt[2])) continue;
+                const color = (plane.nodeColors && plane.nodeColors[k]) || plane.color;
+                const mesh = new THREE.Mesh(sphereGeo, new THREE.MeshPhongMaterial({
+                    color: new THREE.Color(color),
+                    shininess: 60,
+                }));
+                mesh.position.set(pt[0], pt[1], pt[2]);
+                mesh.name = 'planeNode_' + k;
+                mesh.userData.planeId = plane.id;
+                mesh.userData.nodeIdx = k;
+                // A PINNED node is never draggable, however fitted its plane
+                // is. `planeEditable` gates the hover cursor as well as the
+                // drag (`_pickPlaneNode`), so leaving it true here would offer
+                // a `move` cursor over a corner the edit path then refuses —
+                // an affordance advertising an action that cannot happen.
+                const pinned = !!(plane.nodeImmutable && plane.nodeImmutable[k]);
+                mesh.userData.planeEditable = draggable && !pinned;
+                mesh.userData.planeImmutable = pinned;
+                // Independent of `draggable`: Set Origin Mode turns dragging OFF
+                // but still needs these exact corners to be pickable. A pinned
+                // corner is a PREFERRED origin anchor, so this must not follow
+                // `planeEditable` down.
+                mesh.userData.planeFitted = !!plane.planeFit;
+                planeGroup3D.add(mesh);
+            }
+
+            const edgeMaterial = new THREE.MeshPhongMaterial({
+                color: new THREE.Color(plane.color),
+                shininess: 30,
+                transparent: true,
+                opacity: 0.9,
+            });
+            const edges = plane.edges || [];
+            for (let e = 0; e < edges.length; e++) {
+                const a = getPoint3d(pts, edges[e][0]);
+                const b = getPoint3d(pts, edges[e][1]);
+                if (a == null || b == null) continue;
+                if (!isFinite(a[0]) || !isFinite(a[1]) || !isFinite(a[2])) continue;
+                if (!isFinite(b[0]) || !isFinite(b[1]) || !isFinite(b[2])) continue;
+                const cyl = this._createCylinder(a, b, edgeRadius, edgeMaterial, 6);
+                cyl.name = 'planeEdge_' + edges[e][0] + '_' + edges[e][1];
+                planeGroup3D.add(cyl);
+            }
+
+            if (plane.filled) {
+                const fill = this._buildPlaneFillMesh(plane, pts);
+                if (fill) planeGroup3D.add(fill);
+            }
+
+            this._planeGroup.add(planeGroup3D);
+        }
+    }
+
+    /**
+     * Triangle-soup mesh filling a plane's polygon, or null if it has fewer
+     * than 3 usable corners.
+     *
+     * Fan triangulation from the first vertex, walking `polygonOrder` — the
+     * user's connection cycle when there is one, else the convex hull of the
+     * plane's corners, so the fan is over the real outline rather than an
+     * index-order bowtie, and an interior corner is COVERED by the fill rather
+     * than being a vertex of it. A fan is only valid over a convex ring, which
+     * the hull always is; a user-drawn concave ring can still fan wrong, and
+     * that is the price of honouring their edges. `DoubleSide` because
+     * a plane is viewable from either face; `depthWrite: false` so the
+     * translucent fill never occludes skeleton nodes behind it.
+     * @private
+     */
+    _buildPlaneFillMesh(plane, pts) {
+        const order = (plane.polygonOrder && plane.polygonOrder.length)
+            ? plane.polygonOrder
+            : null;
+        const verts = [];
+        const n = points3dNodeCount(pts);
+        const walk = order || Array.from({ length: n }, function (_, i) { return i; });
+        for (let i = 0; i < walk.length; i++) {
+            const pt = getPoint3d(pts, walk[i]);
+            if (pt == null) continue;
+            if (!isFinite(pt[0]) || !isFinite(pt[1]) || !isFinite(pt[2])) continue;
+            verts.push(pt);
+        }
+        if (verts.length < 3) return null;
+
+        const positions = [];
+        for (let t = 1; t < verts.length - 1; t++) {
+            positions.push(verts[0][0], verts[0][1], verts[0][2]);
+            positions.push(verts[t][0], verts[t][1], verts[t][2]);
+            positions.push(verts[t + 1][0], verts[t + 1][1], verts[t + 1][2]);
+        }
+        const geo = new THREE.BufferGeometry();
+        geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+        const mesh = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({
+            color: new THREE.Color(plane.color),
+            transparent: true,
+            opacity: 0.28,
+            side: THREE.DoubleSide,
+            depthWrite: false,
+        }));
+        mesh.name = 'planeFill';
+        return mesh;
+    }
+
+    // ============================================
+    // Set Origin Mode (pick a corner, pick a +Z, re-base the frame)
+    // ============================================
+
+    /**
+     * Resolve a click while Set Origin Mode is armed.
+     *
+     * In `'node'` mode only corners of FITTED planes are candidates — a corner
+     * with no fitted plane has no +Z to offer, so letting it be picked would
+     * dead-end the wizard. The flag comes from `setPlanes`' `planeFitted`
+     * userData, which is deliberately independent of `planeEditable`: dragging
+     * is off during the wizard, but those same corners stay pickable.
+     * @private
+     */
+    _handleOriginPick(e) {
+        const dom = this.renderer.domElement;
+        const rect = dom.getBoundingClientRect();
+        if (!rect.width || !rect.height) return;
+        // Raycasting reads `matrixWorld`, which is only refreshed by `render()`.
+        // The arrows are built in response to the PREVIOUS click, so a click
+        // arriving before the next frame would raycast against stale (identity)
+        // transforms and silently miss.
+        if (this.scene) this.scene.updateMatrixWorld();
+        this._planeNdc.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+        this._planeNdc.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+        this._raycaster.setFromCamera(this._planeNdc, this.threeCamera);
+
+        if (this._originPickMode === 'node') {
+            const meshes = [];
+            this._planeGroup.traverse(function (child) {
+                if (child.isMesh && child.userData && child.userData.planeFitted) meshes.push(child);
+            });
+            if (meshes.length === 0) return;
+            const hits = this._raycaster.intersectObjects(meshes, false);
+            if (hits.length === 0) return;
+            const hit = hits[0].object;
+            if (this.onOriginNodePicked) {
+                this.onOriginNodePicked(hit.userData.planeId, hit.userData.nodeIdx,
+                    [hit.position.x, hit.position.y, hit.position.z]);
+            }
+            return;
+        }
+
+        if (this._originPickMode === 'axis') {
+            const meshes = [];
+            this._originGroup.traverse(function (child) {
+                if (child.isMesh && child.userData && child.userData.originAxis) meshes.push(child);
+            });
+            if (meshes.length === 0) return;
+            const hits = this._raycaster.intersectObjects(meshes, false);
+            if (hits.length === 0) return;
+            const key = hits[0].object.userData.originAxis;
+            if (key && this.onOriginAxisPicked) this.onOriginAxisPicked(key);
+        }
+    }
+
+    /**
+     * Arm 3D picking for Set Origin Mode.
+     *
+     * @param {'node'|'axis'|null} mode - `'node'` picks a corner of a FITTED
+     *   plane (`onOriginNodePicked`), `'axis'` picks one of the two candidate
+     *   +Z arrows (`onOriginAxisPicked`), null disarms. While armed, clicks are
+     *   consumed here and never reach camera picking — selecting a camera
+     *   mid-wizard would yank the view away from what the user is aiming at.
+     */
+    setOriginPickMode(mode) {
+        this._originPickMode = mode || null;
+        if (this.renderer) {
+            this.renderer.domElement.style.cursor = mode ? 'crosshair' : '';
+            this._planeHoverCursor = mode ? 'crosshair' : '';
+        }
+    }
+
+    /**
+     * Draw the two candidate +Z directions as arrows from the chosen origin.
+     *
+     * Both are always drawn — the choice is between a normal and its negation,
+     * and showing only one would hide that there IS a choice. `chosen` dims the
+     * loser instead of removing it, so the picked direction reads as a decision
+     * rather than as the only option.
+     *
+     * @param {{origin:number[], normal:number[], length?:number,
+     *          chosen?:'positive'|'negative'|null}|null} spec
+     *   `length` should be derived from the PLANE's extent by the caller — a
+     *   fixed size scaled only by the camera baseline is either invisible on a
+     *   room-sized plane or off-screen on a small one.
+     */
+    setOriginCandidates(spec) {
+        this._clearGroup(this._originGroup);
+        if (!spec || !spec.origin || !spec.normal) return;
+
+        const n = new THREE.Vector3(spec.normal[0], spec.normal[1], spec.normal[2]);
+        if (n.lengthSq() < 1e-18) return;
+        n.normalize();
+
+        const ss = this._sceneScale || 1;
+        const length = (spec.length > 0) ? spec.length : 110 * ss;
+        const radius = Math.max(0.6 * ss, length * 0.02);
+        const chosen = spec.chosen || null;
+
+        const build = (dir, key, colorHex) => {
+            const dim = chosen != null && chosen !== key;
+            const material = new THREE.MeshPhongMaterial({
+                color: new THREE.Color(colorHex),
+                shininess: 70,
+                transparent: true,
+                opacity: dim ? 0.22 : 1.0,
+                // The chosen arrow must read through the plane fill it starts on.
+                depthTest: !dim,
+            });
+            const arrow = this._createArrowMesh(spec.origin, dir, length, radius, material);
+            arrow.name = 'originAxis_' + key;
+            arrow.traverse(function (c) {
+                c.userData.originAxis = key;
+                c.name = c.name || ('originAxisPart_' + key);
+            });
+            this._originGroup.add(arrow);
+        };
+
+        build([n.x, n.y, n.z], 'positive', 0xff4d4d);
+        build([-n.x, -n.y, -n.z], 'negative', 0x4d8bff);
+
+        // A marker at the picked corner, so it stays visible under the arrows.
+        const dot = new THREE.Mesh(
+            new THREE.SphereGeometry(radius * 1.8, 14, 14),
+            new THREE.MeshPhongMaterial({ color: new THREE.Color(0xffffff), shininess: 90 }));
+        dot.position.set(spec.origin[0], spec.origin[1], spec.origin[2]);
+        dot.name = 'originMarker';
+        this._originGroup.add(dot);
+    }
+
+    /** Remove the Set Origin arrows and marker. */
+    clearOriginCandidates() {
+        this._clearGroup(this._originGroup);
+    }
+
+    /**
+     * A shaft + head arrow as pickable MESHES (not `ArrowHelper`, whose Line
+     * shaft raycasts against a distance threshold rather than real geometry —
+     * unreliable to click).
+     * @private
+     */
+    _createArrowMesh(origin, dir, length, radius, material) {
+        const group = new THREE.Group();
+        const headLen = length * 0.26;
+        const shaftLen = Math.max(1e-6, length - headLen);
+
+        const shaft = new THREE.Mesh(
+            new THREE.CylinderGeometry(radius, radius, shaftLen, 12), material);
+        shaft.position.y = shaftLen / 2;
+        group.add(shaft);
+
+        const head = new THREE.Mesh(
+            new THREE.ConeGeometry(radius * 2.4, headLen, 14), material);
+        head.position.y = shaftLen + headLen / 2;
+        group.add(head);
+
+        // Built along +Y (the geometry default), then rotated onto `dir`.
+        const d = new THREE.Vector3(dir[0], dir[1], dir[2]).normalize();
+        group.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), d);
+        group.position.set(origin[0], origin[1], origin[2]);
+        return group;
+    }
+
+    /**
+     * Re-base the DISPLAYED frame: move the grid floor and axis helper onto the
+     * user's origin and orientation.
+     *
+     * Only the frame and the ORBIT move. Cameras, skeletons and planes stay
+     * exactly where the calibration puts them, because re-baking them would
+     * silently change every 3D coordinate the rest of the app reads and reports
+     * — and the transform, not a rewritten point cloud, is the deliverable here.
+     * The visual result is the same either way: the grid now lies on the
+     * annotated plane with +Z pointing the chosen way.
+     *
+     * The orbit follows because interaction is part of the display: dragging
+     * and zooming re-center on the new origin (`_rebaseControls`), or the scene
+     * would swing about a calibration origin that is no longer drawn anywhere.
+     * That moves the camera, never the data.
+     *
+     * @param {{origin:number[], xAxis:number[], yAxis:number[], zAxis:number[]}|null}
+     *   frame - from `buildOriginFrame`; null restores the calibration frame.
+     */
+    setOriginFrame(frame) {
+        if (!this._framePivot) return;
+        if (!frame) {
+            this._framePivot.position.set(0, 0, 0);
+            this._framePivot.quaternion.identity();
+            this._originFrame = null;
+            // Symmetric with applying one: the orbit goes back to the
+            // calibration origin and world +Z, or Reset would leave the user
+            // pivoting on an origin the display no longer shows.
+            this._rebaseControls();
+            return;
+        }
+        const x = frame.xAxis, y = frame.yAxis, z = frame.zAxis, o = frame.origin;
+        // Basis COLUMNS are the new axes: this maps frame-local coordinates out
+        // into world, which is exactly what a parent transform has to do.
+        const m = new THREE.Matrix4().makeBasis(
+            new THREE.Vector3(x[0], x[1], x[2]),
+            new THREE.Vector3(y[0], y[1], y[2]),
+            new THREE.Vector3(z[0], z[1], z[2]));
+        this._framePivot.quaternion.setFromRotationMatrix(m);
+        this._framePivot.position.set(o[0], o[1], o[2]);
+        this._originFrame = frame;
+        this._rebaseControls();
+    }
+
+    /** Restore the calibration's own frame. */
+    clearOriginFrame() {
+        this.setOriginFrame(null);
+    }
+
+    /**
+     * The point every camera interaction pivots on: the user's origin once one
+     * is applied, the calibration's until then.
+     */
+    originPivot() {
+        const f = this._originFrame;
+        return f ? new THREE.Vector3(f.origin[0], f.origin[1], f.origin[2])
+                 : new THREE.Vector3(0, 0, 0);
+    }
+
+    /** The axis orbiting spins about: the frame's +Z, else the world's. */
+    originUp() {
+        const f = this._originFrame;
+        return f ? new THREE.Vector3(f.zAxis[0], f.zAxis[1], f.zAxis[2]).normalize()
+                 : new THREE.Vector3(0, 0, 1);
+    }
+
+    /**
+     * A direction stated in FRAME coordinates, rotated out into world ones —
+     * so a canned viewing angle ("above and to the side") means the same thing
+     * relative to the user's grid as it did relative to the calibration's.
+     * @private
+     */
+    _frameDirection(x, y, z) {
+        const v = new THREE.Vector3(x, y, z);
+        if (this._framePivot) v.applyQuaternion(this._framePivot.quaternion);
+        return v;
+    }
+
+    /**
+     * Move the ORBIT onto the applied frame: pivot on the user's origin, spin
+     * about the user's +Z.
+     *
+     * Re-basing only the grid leaves the user dragging and zooming around a
+     * point that is no longer marked by anything on screen — the whole scene
+     * swings about the old calibration origin while the axes sit somewhere
+     * else. This is what makes the interaction agree with the display.
+     *
+     * The camera is translated by the same delta as the target, so the view
+     * direction and the distance survive: what is on screen does not jump, only
+     * what the next drag or wheel tick keys on. Rebuilding the controls is not
+     * optional for the axis — see `_createControls` — but it is skipped when the
+     * axis has not actually moved, which is the common case (a re-applied frame,
+     * a Reset View) and keeps a rebuild off the hot paths.
+     * @private
+     */
+    _rebaseControls() {
+        if (!this.controls || !this.threeCamera) return;
+        const target = this.originPivot();
+        const up = this.originUp();
+
+        this.threeCamera.position.add(target.clone().sub(this.controls.target));
+        this.threeCamera.up.copy(up);
+        this.controls.target.copy(target);
+
+        if (this._controlsUp && this._controlsUp.dot(up) > 0.999999) {
+            this.controls.update();
+            return;
+        }
+        const old = this.controls;
+        const enabled = old.enabled;
+        const minDistance = old.minDistance;
+        const maxDistance = old.maxDistance;   // re-derived by the next fit
+        old.dispose();
+        this.controls = this._createControls();
+        this.controls.minDistance = minDistance;
+        this.controls.maxDistance = maxDistance;
+        this.controls.enabled = enabled;
+        this.controls.target.copy(target);
+        this.controls.update();
+    }
+
+    /**
+     * Remove every annotated plane from the 3D scene.
+     */
+    clearPlanes() {
+        this._clearGroup(this._planeGroup);
+        this._planes = [];
+        this._planeDrag = null;
+    }
+
+    /**
      * Create a cylinder mesh connecting two 3D points.
      *
      * @param {number[]} start - [x, y, z] start point
@@ -1197,17 +1954,21 @@ export class Viewport3D {
      * Positions the camera to see all camera pyramids and the skeleton.
      */
     resetCamera() {
-        this.threeCamera.position.set(500, -500, 400);
-        this.threeCamera.up.set(0, 0, 1);
-        this.controls.target.set(0, 0, 0);
-        this.controls.update();
+        // Relative to the DISPLAYED frame: with a user origin applied, "the
+        // default view" means the same angle onto their grid, not onto the
+        // calibration's.
+        const o = this.originPivot();
+        const off = this._frameDirection(500, -500, 400);
+        this.threeCamera.position.set(o.x + off.x, o.y + off.y, o.z + off.z);
+        this.controls.target.copy(o);
+        this._rebaseControls();
     }
 
     /**
-     * Center the orbit controls target on the world origin.
+     * Center the orbit controls target on the displayed origin.
      */
     lookAtOrigin() {
-        this.controls.target.set(0, 0, 0);
+        this.controls.target.copy(this.originPivot());
         this.controls.update();
     }
 
@@ -1243,8 +2004,28 @@ export class Viewport3D {
             });
         }
 
-        // Add origin
-        points.push([0, 0, 0]);
+        // Annotated planes (View ▸ Define Planes) count too — they are the
+        // reference geometry the mode exists to create, so "Fit 3D to Scene"
+        // must frame them. `_planeGroup` is only ever non-empty once a plane
+        // has been triangulated, so this cannot change framing for a project
+        // that has no planes. The `planeNode_` prefix deliberately does not
+        // match the `node_` test above, so nothing is counted twice.
+        if (this._planeGroup) {
+            this._planeGroup.traverse(function (child) {
+                if (child.name && child.name.indexOf('planeNode_') === 0) {
+                    var p = child.position;
+                    if (isFinite(p.x) && isFinite(p.y) && isFinite(p.z)) {
+                        points.push([p.x, p.y, p.z]);
+                    }
+                }
+            });
+        }
+
+        // Add the DISPLAYED origin — the user's once Set Origin has applied one,
+        // the calibration's until then. It is what orbit and zoom key on, so the
+        // framing has to account for it.
+        const pivot = this.originPivot();
+        points.push([pivot.x, pivot.y, pivot.z]);
 
         if (points.length === 0) return;
 
@@ -1258,6 +2039,18 @@ export class Viewport3D {
         cx /= points.length;
         cy /= points.length;
         cz /= points.length;
+
+        // With a user origin applied, fit AROUND that origin rather than around
+        // the point cloud's centroid. The two are different points, and framing
+        // one while orbiting the other is what makes the first drag after a fit
+        // swing the scene about something off-centre. The radius below is
+        // measured from the same point, so nothing leaves the frame — the view
+        // just sits a little further back when the origin is off to one side.
+        if (this._originFrame) {
+            cx = pivot.x;
+            cy = pivot.y;
+            cz = pivot.z;
+        }
 
         let maxDist = 0;
         for (let i = 0; i < points.length; i++) {
@@ -1290,14 +2083,20 @@ export class Viewport3D {
             this._axisHelper.scale.setScalar(axisScale / 50); // 50 was original size
         }
 
-        const direction = new THREE.Vector3(1, -1, 0.8).normalize();
+        // Stated in frame coordinates, so the canned angle means the same thing
+        // relative to the user's grid as it did relative to the calibration's.
+        const direction = this._frameDirection(1, -1, 0.8).normalize();
         this.threeCamera.position.set(
             cx + direction.x * cameraDistance,
             cy + direction.y * cameraDistance,
             cz + direction.z * cameraDistance
         );
         this.controls.target.set(cx, cy, cz);
-        this.controls.update();
+        // Only when the fit is already centred on the frame's origin: fitting on
+        // a centroid deliberately keeps that centroid as the pivot, and moving
+        // the target away from what was just framed would undo the fit.
+        if (this._originFrame) this._rebaseControls();
+        else this.controls.update();
     }
 
     /**
@@ -1318,6 +2117,26 @@ export class Viewport3D {
             this._resizeObserver.disconnect();
             this._resizeObserver = null;
         }
+
+        // Plane-drag listeners. The pointerdown one lives on the CONTAINER,
+        // which outlives this viewport — leaving it attached would keep a
+        // disposed instance alive and firing.
+        if (this._onPlaneDownCapture && this.container) {
+            this.container.removeEventListener('pointerdown', this._onPlaneDownCapture, true);
+            this._onPlaneDownCapture = null;
+        }
+        if (this.renderer && this.renderer.domElement) {
+            const dom = this.renderer.domElement;
+            if (this._onPlaneMoveBound) dom.removeEventListener('pointermove', this._onPlaneMoveBound);
+            if (this._onPlaneUpBound) {
+                dom.removeEventListener('pointerup', this._onPlaneUpBound);
+                dom.removeEventListener('pointercancel', this._onPlaneUpBound);
+            }
+        }
+        this._onPlaneMoveBound = null;
+        this._onPlaneUpBound = null;
+        this._planeDrag = null;
+        this._planes = [];
 
         // Dispose controls
         if (this.controls) {
