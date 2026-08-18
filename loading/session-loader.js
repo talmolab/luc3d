@@ -71,6 +71,7 @@ import { populateViewStrip, populateSessionStrip, switchSession } from '../ui/se
 import { updateSeekbar, fitTimelineToData, onPlaybackStateChange } from '../ui/ui-wiring.js';
 import { getLoadingProgressModal } from '../ui/loading-progress-modal.js';
 import { readVisibilityMetadata } from '../import-export/visibility-metadata.js';
+import { readPlaneMetadata, resetPlaneState } from '../import-export/plane-metadata.js';
 
 // Module-private debounce timer for the zoom-redraw callback in
 // rebuildVideoController(). app.js's setupEmptyVideoController() has its own
@@ -2208,6 +2209,11 @@ export async function handleLoadProjectSlpLazy(slpFile) {
         state.views = [];
         state.videoFiles = [];
         state.triangulationResults = new Map();
+        // Plane state is project-scoped and lives on a module singleton, so
+        // it does NOT go away with `state.sessions`. `readPlaneMetadata`
+        // only restores into an EMPTY model, so without this the previous
+        // project's planes would survive and the new one's be dropped.
+        resetPlaneState();
         paneManager.clearAll();
 
         var loader = new SioLazyLoader();
@@ -2251,6 +2257,9 @@ export async function handleLoadProjectSlpLazy(slpFile) {
         // Session-scoped Visibility-panel state — the lazy-reopen mirror of the
         // eager read in import-export/slp-import.js.
         readVisibilityMetadata(session, lucid);
+        // Define Planes state — the lazy-reopen mirror of the eager read in
+        // `import-export/slp-import.js`.
+        readPlaneMetadata(session, lucid);
 
         session.lazyLoader = loader;
         session._lazyReopened = true;

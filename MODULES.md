@@ -126,6 +126,12 @@ references.
   `indexOf(id)`, `has(id)`, `ids()`/`names()`/`colors()`, `setImmutable`,
   `freezeState`, `hasPoint3d`/`getPoint3d`/`setPoint3d`/`clearPoint3d` by id,
   `points3d()` (flat, pool order, freshly allocated) and `mutableIds()`.
+  `adoptNode(node)` is the RESTORE-path twin of `addNode`: it takes an
+  already-built node and KEEPS ITS ID, because plane membership, plane edges and
+  every placement's `nodeIds` ledger are all stored as IDs — re-minting them on
+  load would re-point every one of those references at whatever node landed in
+  that slot. It advances `_nextId` past the adopted ID, so the pool's "IDs are
+  NEVER reused" promise survives a load. Used by `pose/plane-serialization.js`.
 - `nodeFreezeState(node)` → `'mutable' | 'frozen' | 'frozen-unsolved'`. The
   flag is settable at ANY time, including before anything is triangulated —
   marking a known reference up front is reasonable and rejecting it would be
@@ -144,9 +150,11 @@ array in the order they asked for.
 
 **Imports from project modules.** None (deliberately dependency-free).
 
-**Imported by.** `pose/plane-data.js` (which re-exports all of it).
+**Imported by.** `pose/plane-data.js` (which re-exports all of it),
+`pose/plane-serialization.js`.
 
-**Tests.** `tests/test-plane-nodes.mjs`.
+**Tests.** `tests/test-plane-nodes.mjs`,
+`tests/test-plane-serialization.mjs` (the `adoptNode` restore path).
 
 ---
 
@@ -233,6 +241,9 @@ annotation produces and nothing about the solve or the UI, which live in
   PlaneInstance>`), and every operation that spans them. Doing any of these
   piecemeal corrupts the index space: `createPlane`/`getPlane`/`deletePlane`
   (**deletes NO nodes — every one survives**),
+  `adoptPlane(plane)` (the restore-path twin of `createPlane`, keeping the
+  plane's ID because `PlaneInstance.placedPlanes` stores plane IDs — see
+  `PlaneNodePool.adoptNode`),
   `planesForNode(id)`, `ensureInstance`/`getInstance`/`views`/`allInstances`,
   `attachPlacements(map)` (adopt a session-owned map, re-syncing every instance
   to the pool and pruning placement flags for deleted planes),
@@ -335,9 +346,83 @@ user/predicted/reprojected.
 **Imports from project modules.** `./pose-data.js` — `Instance`;
 `./plane-nodes.js` — the pool (re-exported).
 
-**Imported by.** `ui/plane-definition.js`.
+**Imported by.** `ui/plane-definition.js`, `pose/plane-serialization.js`.
 
-**Tests.** `tests/test-plane-nodes.mjs`, `tests/e2e/define-plane-mode.mjs`.
+**Tests.** `tests/test-plane-nodes.mjs`, `tests/test-plane-serialization.mjs`,
+`tests/e2e/define-plane-mode.mjs`.
+
+---
+
+### pose/plane-serialization.js
+
+**Purpose.** The Define Planes feature's **on-disk form, both ways** — the node
+pool, the planes (membership, edges, fill, the solve summary, the plane fit),
+the per-view 2D and the origin frame, to plain JSON and back. Owns the mapping
+and NOTHING about where the bytes end up; `import-export/plane-metadata.js`
+decides that. DOM-free and UI-free so the round trip is directly testable, which
+matters more here than usual: a subtly wrong restore does not crash, it hands
+back a plane whose corners sit on their NEIGHBOURS' nodes with every point still
+looking perfectly valid.
+
+**The scope split it encodes.** PROJECT-scoped: the pool, the planes, the origin
+frame — one node has one 3D position for the whole project, which is the entire
+reason the pool is global. SESSION-scoped: the `PlaneInstance` per view, because
+a view belongs to a session (stored on `Session.planePlacements`).
+
+**Key exports.**
+- `serializePlaneNodes(pool)` / `restorePlaneNodes(data)` — pool order is
+  preserved because it IS the index space every `PlaneInstance` is keyed by. A
+  node with no 3D **omits `xyz` entirely** rather than writing three numbers:
+  `JSON.stringify(NaN)` is `null`, so a naive round trip returns
+  `[null, null, null]` and every `isFinite` check downstream has to defend
+  against it. A pinned node's coordinate is restored with `{force: true}` —
+  being pinned is exactly what refuses an ordinary write. Entries with a missing
+  or DUPLICATE id are skipped, never renumbered.
+- `serializePlanes(planes)` / `restorePlanes(data, pool)` — includes `filled`,
+  `triangulation` and `planeFit`, because those are the plane's STATE, not a
+  cache: a reopened plane that came back un-fit would offer Set Origin no
+  corners and report no error, so the user would have to re-solve to get back
+  what they saved. References to nodes the pool does not hold are **dropped**
+  (the plane comes back one corner short, which is visible) rather than kept
+  dangling (a -1 index reads whatever sits at the end of the points array —
+  a corner in a plausible but wrong place, which is not).
+- `serializePlanePlacements(placements, pool)` / `restorePlanePlacements(data,
+  pool, planeIds)` — points are written as `{n: <nodeId>, xy, off, derived}`,
+  **not** as a dense pool-order array. A dense array can only be re-seated by
+  COUNTING, and counting is exactly the repair that cannot tell "a node was
+  appended" from "a node was spliced out of the middle": every column past the
+  edit comes back on its neighbour's node, still looking like a good point. A
+  view holding no positioned point and no placed plane contributes nothing.
+- `serializeOriginFrame(frame)` / `restoreOriginFrame(data)` — writes only the
+  **two things the user chose** (the origin and the +Z, plus the
+  `sourcePlane`/`sourceNode` labels, which cannot be re-derived once a plane is
+  renamed). `R`, the translation and the axis-angle form are derived
+  deterministically by `buildOriginFrame`, so storing them too would create a
+  second source of truth that a file edit or a version bump could put at odds
+  with the inputs. The rebuild is exact.
+- `serializePlaneProject(model)` / `restorePlaneProject(model, data)` — the
+  project-scoped bundle. `restore` **REPLACES** the model's pool and planes
+  rather than merging: two projects' node IDs are unrelated, so a merge would
+  either collide IDs or renumber them, and renumbering is the one thing this
+  module must never do. A plane the user named but has not populated still
+  round-trips; a model with neither nodes nor planes serializes to `null`.
+
+**Absence is a value.** Every serializer returns `null` when there is nothing to
+say, so a project that never opened the feature writes no keys and its bytes are
+unchanged (`tests/e2e/save-golden-digest.mjs`). Every reader tolerates absent,
+malformed and partial input — a `.slp` from SLEAP, or from a LUCID build older
+than this module, restores an empty model rather than throwing.
+
+**Imports from project modules.** `./plane-nodes.js` — `PlaneNode`,
+`PlaneNodePool`; `./plane-data.js` — `PlaneSkeleton`, `PlaneInstance`;
+`./origin-frame.js` — `buildOriginFrame`.
+
+**Imported by.** `import-export/plane-metadata.js`.
+
+**Tests.** `tests/test-plane-serialization.mjs` (ESM, 74 assertions — identity
+after the trip, the NaN case, a pool that CHANGED between save and load, garbage
+tolerance, the origin rebuild), `tests/e2e/plane-persistence-roundtrip.mjs`
+(the same claims through the real app and a real `.slp`).
 
 ---
 
@@ -381,7 +466,10 @@ inverse is `p_old = Rᵀ · p_new + origin`.
 
 **Imports from project modules.** None, deliberately.
 
-**Imported by.** `ui/origin-definition.js`.
+**Imported by.** `ui/origin-definition.js`, `pose/plane-serialization.js`
+(which persists an applied frame as its two INPUTS — the origin and the chosen
++Z — and rebuilds everything else through `buildOriginFrame` on load, so the
+derived `R` / translation / axis-angle can never contradict them).
 
 **Tests.** `tests/test-origin-frame.mjs` (ESM, 54 assertions — the numerical
 branches the wizard rarely reaches: 180°, the near-parallel X fallback,
@@ -2894,10 +2982,17 @@ nothing about the solve. The data model (`PlaneNodePool`, `PlaneSkeleton`,
 `PlaneInstance`, `PlaneModel`) lives in `pose/plane-nodes.js` +
 `pose/plane-data.js` and is partly re-exported here.
 
-Everything is in app-session memory and on the active `Session`. **Nothing is
-persisted to the `.slp` yet**, which is why plane edits deliberately do **not**
-call `markDirty()` — flagging a project unsaved for state a save would silently
-drop is worse than losing it on reload.
+The pool, the planes and the origin frame live in app-session memory; the
+per-view 2D lives on the active `Session`. **All of it is persisted** by
+`import-export/plane-metadata.js`, so **every plane/node MUTATION calls
+`markDirty()`** — an unsaved rename, re-colour, pin, placement, membership
+change, fill, solve, drag or origin is a real unsaved change and the save dot
+has to say so. The rule is per mutation, **not** per repaint:
+`refreshPlanePanel()` / `syncPlanes3D()` / `redraw()` run for plenty of reasons
+that change nothing on disk (entering the mode, a slider, a hover), and marking
+from them would leave the dot permanently on. The node-size / edge-width /
+3D-corner-size sliders are the deliberate exception — browser-local display
+taste, not written to the project, so they must not mark it dirty.
 
 **Nodes are GLOBAL and a node may be in several planes.** The pool holds every
 plane node in the project; a plane is an ordered list of node IDs plus optional
@@ -3185,7 +3280,7 @@ spawn a dockview panel.
   imports `planeState` / `planeModel` / `getPlane` / `planePoints3d` /
   `planeNodeNameAt` / `syncPlanes3D` back); call-time use only.
 - `./overlays.js` — `makeVideoToCanvasTransform`.
-- `../import-export/save-load.js` — `setStatus`.
+- `../import-export/save-load.js` — `setStatus`, `markDirty`.
 - `./rendering.js` — `drawAllOverlays`, and `../pose/triangulation.js` —
   `triangulatePoints`, `reprojectPointCamera`, `fitPlaneToPoints3d`,
   `projectPoints3dOntoPlane`, `fitPlaneConstrained`,
@@ -3196,8 +3291,11 @@ spawn a dockview panel.
 
 **Imported by.** `ui/rendering.js` (`drawPlaneOverlays`), `ui/ui-wiring.js`
 (`togglePlaneMode`, for the View menu item), `pose/initialization.js`
-(`setupPlaneDefinition`, `planeInteractionCallbacks`),
-`ui/origin-definition.js`.
+(`setupPlaneDefinition`, `planeInteractionCallbacks`, `refreshPlanePanel` —
+called next to `syncPlanes3D` in `setup3DViewport`, which is the one place a
+freshly RESTORED plane model reaches the Nodes / Planes tables on every
+project-load path), `ui/origin-definition.js`,
+`import-export/plane-metadata.js` (`planeState`, at call time).
 
 **DOM it owns.** `#planeModeBar` (+ `#planeModeExit`) under the toolbar, and
 `#planePanel` inside `#infoPanel` — **three sibling `.info-section`s**, in this
@@ -3326,8 +3424,14 @@ the displayed grid + axes — and the ORBIT with them, so dragging and zooming
 re-center on the new origin (`_rebaseControls`, see `ui/viewport3d.js`); cameras,
 skeletons and planes stay in calibration world coordinates. Re-baking them would silently change every 3D number the rest
 of the app reads and reports — and the transform, not a rewritten point cloud,
-is the deliverable. Nothing is persisted to the `.slp` yet, so like plane
-placements this does not call `markDirty()`.
+is the deliverable.
+
+The frame **is** persisted: `import-export/plane-metadata.js` writes it as its
+two INPUTS — the origin and the chosen +Z — and `pose/origin-frame.js` rebuilds
+`R`, the translation and the axis-angle form deterministically on load, so the
+derived quantities can never contradict the inputs. Applying or clearing an
+origin therefore calls `markDirty()`; entering and leaving the mode does not, as
+a wizard the user backed out of changed nothing.
 
 **Arrow length is scaled to the PLANE** (`arrowLengthFor`: 70% of the plane's
 reach from the picked corner), not to the camera baseline — a fixed length is
@@ -3342,7 +3446,7 @@ node order (what the 3D payload was laid out in), not a pool index; the two
 differ as soon as a node is shared.
 
 **Imports from project modules.** `./app-state.js` (`state`, `viewport3d`),
-`../import-export/save-load.js` (`setStatus`), `../pose/origin-frame.js`,
+`../import-export/save-load.js` (`setStatus`, `markDirty`), `../pose/origin-frame.js`,
 `../pose/pose-data.js` (`getPoint3d`, `hasPoint3d`), and **circularly**
 `./plane-definition.js` (`planeState`, `planeModel`, `getPlane`,
 `planePoints3d`, `planeNodeNameAt`, `syncPlanes3D`) — call-time use only,
@@ -3351,7 +3455,8 @@ node pool now, so this module reads it through `planePoints3d(plane)` (a
 plane-ordered materialization) and node names through `planeNodeNameAt`,
 never off the plane object.
 
-**Imported by.** `ui/plane-definition.js`.
+**Imported by.** `ui/plane-definition.js`,
+`import-export/plane-metadata.js` (`originState`, at call time).
 
 **DOM it owns.** `#originModeBar` (+ `#originModeExit`), the
 `#originInstruction` overlay inside `.viewport3d-container`
@@ -5333,6 +5438,80 @@ the v2 and v3 project-JSON shapes) — and the three readers —
 **Tests.** `tests/test-visibility-metadata.js` (unit; bridged as
 `window.__VisibilityMetadata`) and
 `tests/e2e/visibility-settings-roundtrip.mjs` (real app, both writers).
+
+---
+
+### import-export/plane-metadata.js
+
+**Purpose.** The `metadata.lucid` ↔ plane-state mapping, and the reason plane
+edits now mark the project dirty. The Define Planes pipeline (nodes, planes,
+per-view 2D, triangulation, plane fit, origin frame) is project state — it
+describes *this* project's cage, floor and reference geometry — but until this
+module none of it reached the project file, which is why `ui/plane-definition.js`
+deliberately did **not** call `markDirty()`: flagging a project dirty for state a
+save would silently drop is worse than losing it. Same shape and the same three
+invariants as `import-export/visibility-metadata.js`; one module owns the key
+list so a writer and a reader cannot drift.
+
+**The scope split, and why one payload is written N times.** `metadata.lucid` is
+per SESSION, but the plane model is not:
+- The **node pool, the planes and the origin frame are PROJECT-scoped** — a node
+  has one 3D position whatever session you are looking at. They are written
+  IDENTICALLY into every session's dict, so opening any one session of a
+  multi-session project restores the same geometry, and read back by whichever
+  session is ingested first (the rest hold the same bytes). Duplication is the
+  price of a per-session container; the payload is a few dozen nodes, not a
+  frame table.
+- The **per-view 2D is SESSION-scoped**, because a view belongs to a session. It
+  lives on `Session.planePlacements`, exactly where `planeModel()` picks it up.
+
+**Key exports.**
+- `PLANE_METADATA_KEYS` — `planeNodes`, `planes`, `planePlacements`,
+  `planeOrigin`. Exported so the slim-metadata / golden-digest guards can assert
+  a project that never opened the feature carries none of them.
+- `writePlaneMetadata(lucid, session)` — mutate a `metadata.lucid` dict in place;
+  returns the same dict. Reads the pool / planes off the module singleton and the
+  2D off `session.planePlacements`, so saving a BACKGROUND session writes its own
+  placements rather than whichever map the model happens to have attached.
+- `readPlaneMetadata(session, lucid)` — placements land on `session`; the
+  project-scoped half lands on the shared model **only when it is still empty**.
+  That guard is what makes ingesting N sessions idempotent: the first session
+  carrying plane state restores it, the rest are skipped rather than appended
+  (which would double every node).
+- `resetPlaneState()` — empty the model, drop the applied origin and the plane
+  selection. **Every load path must call it**, because the corollary of the
+  empty-model guard is that skipping it does not merge the two projects — it
+  keeps the OLD one and silently discards the NEW one's planes. Called by
+  `newProject`, the JSON load, the eager `.slp` import, the lazy reopen and the
+  demo-session load.
+
+**What is deliberately NOT written.** The plane panel's node size, edge width and
+3D corner size are browser-local display taste — the same category as the
+Visibility panel's global appearance preferences, and kept out of the `.slp` for
+the same reason. So are the editor's transient selections. The one thing restored
+beyond the data is the plane SELECTION being re-pointed at a plane that still
+exists, since a selection naming a deleted plane renders an empty editor.
+
+**Imports from project modules.** `../pose/plane-serialization.js` (all the
+actual mapping); `../ui/plane-definition.js` — `planeState`;
+`../ui/origin-definition.js` — `originState`; `../ui/app-state.js` — `state`.
+The two `ui/` imports are circular by design and safe for the same reason the
+rest of this feature's cycles are: every use is inside a function body, so the
+bindings resolve at call time.
+
+**Imported by.** The four writers — `import-export/file-io.js`
+(`buildSlpLabelsAllViews`), `import-export/slp-streaming-write.js`
+(`buildSessionRefGraph`), and `import-export/save-load.js` (`saveProject`, both
+the v2 and v3 project-JSON shapes) — and the three readers —
+`import-export/slp-import.js` (`handleLoadSlpFile`), `loading/session-loader.js`
+(`handleLoadProjectSlpLazy`), and `import-export/save-load.js`
+(`_restoreProjectV2`). Plus `pose/initialization.js` for `resetPlaneState` on the
+demo-session load.
+
+**Tests.** `tests/e2e/plane-persistence-roundtrip.mjs` (real app, both `.slp`
+writers, the dirty-flag half, the session-scope split, the untouched-project
+control and the replace-not-merge control) over
+`tests/test-plane-serialization.mjs` (the mapping itself).
 
 ---
 

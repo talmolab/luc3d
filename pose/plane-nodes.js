@@ -209,6 +209,31 @@ export class PlaneNodePool {
     }
 
     /**
+     * Adopt an already-built node, KEEPING ITS ID. Restore path only.
+     *
+     * `addNode` mints an ID, which is wrong for a project being read back from
+     * disk: plane membership, plane edges and every placement's `nodeIds`
+     * ledger are all stored as IDs, so re-minting them would re-point every one
+     * of those references at whatever node happened to land in that slot. The
+     * ID here comes from the file and is authoritative.
+     *
+     * `_nextId` is advanced past the adopted ID so the pool's "IDs are NEVER
+     * reused" promise survives a load — a node created after opening a project
+     * must not collide with one that was deleted before it was saved.
+     *
+     * @param {PlaneNode} node
+     * @returns {boolean} False when the ID is already taken (nothing adopted).
+     */
+    adoptNode(node) {
+        if (!node || this._byId.has(node.id)) return false;
+        this.nodes.push(node);
+        this._byId.set(node.id, node);
+        if (node.id >= this._nextId) this._nextId = node.id + 1;
+        this._colorSeq++;
+        return true;
+    }
+
+    /**
      * Remove a node by ID. LOW LEVEL — it shifts the index space every
      * `PlaneInstance` is keyed by, and leaves plane membership and edges
      * pointing at a node that is gone. Use `PlaneModel.deleteNode`.

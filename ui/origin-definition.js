@@ -31,11 +31,16 @@
 // scene about a calibration origin that is no longer drawn; cameras, skeletons
 // and planes stay in calibration world coordinates. Re-baking them would silently change
 // every 3D number the rest of the app reads and reports, and the transform —
-// not a rewritten point cloud — is the deliverable. Nothing here is persisted
-// to the `.slp` yet, so like plane placements it does not call `markDirty()`.
+// not a rewritten point cloud — is the deliverable.
+//
+// The frame IS persisted (`import-export/plane-metadata.js` writes it as the
+// origin + the chosen +Z; `pose/origin-frame.js` rebuilds the rest
+// deterministically on load), so applying or clearing one marks the project
+// dirty. Entering and leaving the mode does not — a wizard the user backed out
+// of changed nothing.
 
 import { state, viewport3d } from './app-state.js';
-import { setStatus } from '../import-export/save-load.js';
+import { setStatus, markDirty } from '../import-export/save-load.js';
 import { buildOriginFrame } from '../pose/origin-frame.js';
 import { getPoint3d, hasPoint3d } from '../pose/pose-data.js';
 // Circular by design (plane-definition imports this module's `enterOriginMode`
@@ -444,6 +449,7 @@ export function applyOrigin() {
     frame.sourcePlane = plane ? plane.name : null;
     frame.sourceNode = plane ? planeNodeNameAt(plane, originState.nodeIdx) : null;
     originState.frame = frame;
+    markDirty();
 
     if (viewport3d) viewport3d.setOriginFrame(frame);
     exitOriginMode();
@@ -456,6 +462,7 @@ export function applyOrigin() {
 
 /** Drop the user frame and put the grid back on the calibration origin. */
 export function clearOrigin() {
+    if (originState.frame) markDirty();
     originState.frame = null;
     if (viewport3d) viewport3d.setOriginFrame(null);
     renderOriginResult();

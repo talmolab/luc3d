@@ -3,11 +3,11 @@
 Multi-view pose annotation GUI. No build system — pure vanilla JS served as static files.
 
 ## Architecture
-ES modules, vanilla JS (no build step). `index.html` loads `app.js` as `<script type="module">`; `app.js` is a 2-line entry point that imports from `pose/`. The 45 modules are grouped into four directories:
-- `pose/` — data model, cross-view tracking, DLT triangulation, plane annotation model (planes + the global plane-node pool), origin transform, app initialization (9 files)
+ES modules, vanilla JS (no build step). `index.html` loads `app.js` as `<script type="module">`; `app.js` is a 2-line entry point that imports from `pose/`. The 47 modules are grouped into four directories:
+- `pose/` — data model, cross-view tracking, DLT triangulation, plane annotation model (planes + the global plane-node pool), plane/origin serialization, origin transform, app initialization (10 files)
 - `ui/` — UI state, canvas rendering, mouse/keyboard interaction, info panel, modals, timeline, 3D viewport, video display settings, plane definition, origin definition, settings (22 files)
 - `loading/` — video decoding, session loading, SLP/package readers, web workers (6 files)
-- `import-export/` — file I/O, save/load, SLP import/merge, visibility metadata (8 files)
+- `import-export/` — file I/O, save/load, SLP import/merge, visibility metadata, plane metadata (9 files)
 - `demo-data.js` — synthetic skeleton and camera data
 - `styles.css` — all styling
 
@@ -325,6 +325,50 @@ the contrast half.
   builds from source instead (for unreleased pins); the detailed recipe + SHA-256
   manifest live in the untracked `scratch/VENDORING-sleap-io.md`.
 - All loaded via script tags / import maps in index.html
+
+## Define Planes state in `metadata.lucid`
+
+The whole Define Planes pipeline persists per session in the `.slp` (and in the
+project JSON), under LUCID's own `metadata.lucid` dict, through **one** module —
+`import-export/plane-metadata.js` (`writePlaneMetadata` / `readPlaneMetadata` /
+`resetPlaneState`, `PLANE_METADATA_KEYS`), which the same four writers and three
+readers as the Visibility settings all call. The mapping itself lives in the
+DOM-free `pose/plane-serialization.js`.
+
+The four keys split by SCOPE, and getting that split wrong is the failure mode:
+- **Project-scoped** — `planeNodes` (the global pool, in pool order), `planes`
+  (membership, edges, fill, the triangulation summary, the plane fit) and
+  `planeOrigin` (the applied origin frame, written as its two INPUTS — the
+  origin point and the chosen +Z — and rebuilt by `buildOriginFrame` on load).
+  These are written **identically into every session's dict**, and read back by
+  whichever session is ingested first.
+- **Session-scoped** — `planePlacements`, the per-view 2D. It lives on
+  `Session.planePlacements`, and must not leak between sessions.
+
+Rules, each with a test pinning it:
+- **Defaults are never written.** A project that never opened Define Planes
+  carries none of the four keys, so `tests/e2e/save-golden-digest.mjs` must not
+  move.
+- **Nothing else in `metadata.lucid` is touched**, exactly as with the
+  Visibility keys.
+- **Points and plane membership are addressed BY NODE ID, never by index.** The
+  pool's order is the index space every `PlaneInstance` is keyed by, so a
+  count-based restore silently re-seats every column past a mid-pool edit onto
+  its neighbour's node with every point still looking valid. `adoptNode` /
+  `adoptPlane` keep the file's IDs rather than re-minting them.
+- **Every load path must call `resetPlaneState()` first.** `readPlaneMetadata`
+  only restores into an EMPTY model (that guard is what makes ingesting N
+  sessions idempotent), so skipping the reset keeps the OLD project's planes and
+  silently drops the new one's.
+- **Every plane/node mutation calls `markDirty()`** — rename, re-colour, pin,
+  place/un-place, membership, edges, fill, triangulate, fit, 2D/3D drags, origin
+  apply/clear. Per mutation, not per repaint. The plane panel's node-size /
+  edge-width / 3D-corner-size sliders are the deliberate exception: browser-local
+  display taste, not written to the project, so they do not mark it dirty.
+
+Coverage: `tests/test-plane-serialization.mjs` (unit, the mapping) and
+`tests/e2e/plane-persistence-roundtrip.mjs` (real app, both `.slp` writers, the
+dirty flag, the scope split, and both negative controls).
 
 ## UI Conventions
 **Modals must close on `Esc`** unless explicitly stated otherwise. When building

@@ -592,6 +592,22 @@ export class PlaneModel {
         return plane;
     }
 
+    /**
+     * Adopt an already-built plane, KEEPING ITS ID. Restore path only — the
+     * plane-model twin of `PlaneNodePool.adoptNode`, and for the same reason:
+     * `PlaneInstance.placedPlanes` stores plane IDs, so a re-minted ID would
+     * re-point every view's placement flags at a different plane.
+     *
+     * @param {PlaneSkeleton} plane
+     * @returns {boolean} False when the ID is already taken (nothing adopted).
+     */
+    adoptPlane(plane) {
+        if (!plane || this.getPlane(plane.id)) return false;
+        this.planes.push(plane);
+        if (plane.id >= this._nextPlaneId) this._nextPlaneId = plane.id + 1;
+        return true;
+    }
+
     /** The plane with this id, or null. @param {number} id @returns {PlaneSkeleton|null} */
     getPlane(id) {
         for (var i = 0; i < this.planes.length; i++) {

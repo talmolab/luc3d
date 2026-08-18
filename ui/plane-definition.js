@@ -88,10 +88,17 @@
 // corner is defined by the plane and its views are just where it lands. A
 // pinned corner is refused there too.
 //
-// Deliberately NOT here yet (later steps): persisting any of this into the
-// `.slp`. Because nothing is persisted yet, plane edits do NOT call
-// `markDirty()` — flagging a project dirty for state a save would silently drop
-// is worse than losing it.
+// EVERY EDIT HERE MARKS THE PROJECT DIRTY. Plane state is persisted into the
+// `.slp` (and the project JSON) by `import-export/plane-metadata.js`, so an
+// unsaved rename, re-colour, pin, placement or solve is a real unsaved change
+// and the save dot has to say so. The rule is per MUTATION, not per repaint:
+// `refreshPlanePanel()` / `syncPlanes3D()` / `redraw()` run for plenty of
+// reasons that change nothing on disk (entering the mode, a slider, a hover),
+// and calling `markDirty()` from them would leave the dot permanently on.
+//
+// The node size / edge width / 3D corner size sliders are the deliberate
+// exception: they are browser-local display taste, are NOT written to the
+// project, and so must not mark it dirty.
 //
 // The drag payload uses a private MIME type (`PLANE_DRAG_MIME`) and never sets
 // `text/plain`. That is load-bearing: `ui/sessions-panes.js` tells dockview to
@@ -110,7 +117,7 @@ import {
 import { hasPoint3d, getPoint3d } from '../pose/pose-data.js';
 import { state, interactionManager, viewport3d } from './app-state.js';
 import { makeVideoToCanvasTransform } from './overlays.js';
-import { setStatus } from '../import-export/save-load.js';
+import { setStatus, markDirty } from '../import-export/save-load.js';
 // Circular (rendering.js imports `drawPlaneOverlays` from here, and
 // triangulation.js imports rendering.js). Safe because every use below is
 // inside a function body, so the binding is resolved at call time rather than
@@ -217,6 +224,7 @@ export function getSelectedPlane() {
 export function createPlane(name) {
     var plane = planeModel().createPlane(name);
     planeState.selectedPlaneId = plane.id;
+    markDirty();
     return plane;
 }
 
@@ -248,6 +256,7 @@ export function deletePlane(id) {
     }
     planeState.expanded.delete(id);
     clearSelectionIfGone();
+    markDirty();
     syncPlanes3D();
     return true;
 }
@@ -340,6 +349,7 @@ export function placePlaneOnView(plane, viewName, cx, cy) {
     if (!view) return null;
     if (model.isPlanePlaced(plane, viewName)) return null;
     model.placePlane(plane, viewName, cx, cy, view.videoWidth || 0, view.videoHeight || 0);
+    markDirty();
     return model.getInstance(viewName);
 }
 
@@ -352,6 +362,7 @@ export function placePlaneOnView(plane, viewName, cx, cy) {
 export function unplacePlaneFromView(plane, viewName) {
     var removed = planeModel().unplacePlane(plane, viewName);
     if (removed) {
+        markDirty();
         clearSelectionIfGone();
         syncPlanes3D();
     }
@@ -705,6 +716,10 @@ function triangulatePlaneAndReport(plane) {
                 : ''),
             'success');
     }
+    // A solve writes node 3D and, via the reprojection pass, 2D on the views
+    // the plane was not placed on. A REFUSED solve wrote neither, so it does
+    // not mark the project dirty.
+    if (res.ok) markDirty();
     syncPlanes3D();
     refreshPlanePanel();
     // The 2D overlays too, not just the 3D: triangulation now WRITES 2D — it
@@ -1014,6 +1029,7 @@ function fitPlaneAndReport(plane) {
             onConfirm: function () {
                 var done = applyPlaneFit(plane, res.plan);
                 reportFit(plane, done);
+                markDirty();
                 syncPlanes3D();
                 refreshPlanePanel();
                 redraw();
@@ -1032,6 +1048,7 @@ function fitPlaneAndReport(plane) {
     } else {
         planeState.expanded.add(plane.id);
         reportFit(plane, res);
+        markDirty();
     }
     syncPlanes3D();
     refreshPlanePanel();
@@ -1301,6 +1318,7 @@ function onPlaneNodeDragEnd3D(planeId, nodeIdx) {
     // stored per-node errors are stale — re-derive them against what is now on
     // screen rather than leaving the panel reporting the pre-drag numbers.
     refreshTriangulationErrors(plane);
+    markDirty();
     refreshPlanePanel();
     setStatus('Moved "' + planeNodeNameAt(plane, nodeIdx) + '" on plane "' + plane.name +
         '" — it stays on the fitted plane');
@@ -1565,6 +1583,7 @@ function renderNodesTable() {
             var newName = input.value.trim();
             if (!newName) { input.value = node.name; return; }
             node.name = newName;
+            markDirty();
             refreshPlanePanel();
             redraw();
         });
@@ -1585,6 +1604,7 @@ function renderNodesTable() {
         });
         color.addEventListener('change', function () {
             node.color = color.value;
+            markDirty();
             syncPlanes3D();
             refreshPlanePanel();
             redraw();
@@ -1610,6 +1630,7 @@ function renderNodesTable() {
             // a plane standing on this node was solved under different rules.
             var planes = model.planesForNode(node.id);
             for (var i = 0; i < planes.length; i++) planes[i].planeFit = null;
+            markDirty();
             syncPlanes3D();
             refreshPlanePanel();
             redraw();
@@ -1660,6 +1681,7 @@ function deleteNodeWithConfirm(node, usedBy) {
     var model = planeModel();
     var doIt = function () {
         model.deleteNode(node.id);
+        markDirty();
         syncPlanes3D();
         refreshPlanePanel();
         redraw();
@@ -1811,6 +1833,7 @@ function renderPlaneMembers(plane) {
             ' — delete it in the Nodes table if you want it gone.',
             function () {
                 model.removeNodeFromPlane(plane, id, { deleteIfOrphan: false });
+                markDirty();
                 syncPlanes3D();
                 refreshPlanePanel();
                 redraw();
@@ -1929,6 +1952,7 @@ function renderEditorEdges(plane) {
         var tdDel = document.createElement('td');
         tdDel.appendChild(makeDeleteButton('Remove connection', function () {
             plane.removeEdge(edgeIdx);
+            markDirty();
             syncPlanes3D();
             refreshPlanePanel();
             redraw();
@@ -2549,6 +2573,7 @@ function onPlaneChanged(inst, movedIndices, opts) {
         var node = model.pool.nodeAt(indices[i]);
         if (node) model.invalidateNode3D(node.id);
     }
+    markDirty();      // a drag AND a null-toggle both change what gets saved
     syncPlanes3D();   // drops any plane that lost its last 3D from the scene too
     refreshPlanePanel();
 }
@@ -2850,6 +2875,7 @@ export function setupPlaneDefinition() {
             var newName = nameInput.value.trim();
             if (!newName) { nameInput.value = plane.name; return; }
             plane.name = newName;
+            markDirty();
             syncPlanes3D();
             refreshPlanePanel();
             redraw();
@@ -2887,6 +2913,7 @@ export function setupPlaneDefinition() {
                 return;
             }
             var node = model.addNode(name);
+            markDirty();
             if (nodeInput) nodeInput.value = '';
             setStatus('Created node "' + node.name + '" in the project pool — it is in ' +
                 'no plane yet; add it to one with + Add in Edit Plane');
@@ -2931,6 +2958,7 @@ export function setupPlaneDefinition() {
                     ? ' — it is now shared with ' + shared + ' other plane(s), so they ' +
                       'meet at that corner'
                     : ''), 'success');
+            markDirty();
             syncPlanes3D();
             refreshPlanePanel();
             redraw();
@@ -2954,6 +2982,7 @@ export function setupPlaneDefinition() {
                 setStatus('Cannot connect: duplicate or same node', 'warning');
                 return;
             }
+            markDirty();
             syncPlanes3D();
             refreshPlanePanel();
             redraw();
@@ -2990,6 +3019,7 @@ export function setupPlaneDefinition() {
                 return;
             }
             plane.filled = !plane.filled;
+            markDirty();
             syncPlanes3D();          // the 3D fill mirrors the 2D one
             refreshPlanePanel();
             redraw();
