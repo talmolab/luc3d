@@ -2947,6 +2947,17 @@ data sources. Plus visibility-toggle helpers and frame counter updates.
   Defining Plane Mode. Pinned by `tests/e2e/define-plane-mode.mjs`, which
   samples overlay pixels.
 
+  **Defining Plane Mode's toolbar lock is re-asserted here.** The toolbar block
+  near the top of `drawAllOverlays` RECOMPUTES `tbGroup.disabled` /
+  `tbEditGroup.disabled` from the pose selection on every overlay draw, and the
+  mode redraws constantly — so `applyPlaneModeToolbarLock()`
+  (`ui/plane-definition.js`) is called right after it rather than only at
+  `enterPlaneMode`, where the lock would survive until the first mouse move. A
+  no-op when the mode is off. Pinned by
+  `tests/e2e/plane-mode-toolbar-lock.mjs` §3, which first proves the draw really
+  does reach that code (without a session `drawAllOverlays` returns early and
+  the assertion would be vacuous).
+
 **Imports from project modules.**
 - `./app-state.js` — `state`, `interactionManager`, `timeline`.
 - `../pose/triangulation.js` — `ensureLazyFrameData`,
@@ -2957,9 +2968,9 @@ data sources. Plus visibility-toggle helpers and frame counter updates.
   `trackingExcluded` so views excluded in the Tracking Wizard render grey).
 - `./identity-assignment.js` — `editGroupState`, `finishEditGroup`.
 - `./info-panel.js` — `updateFrameInfo`.
-- `./plane-definition.js` — `drawPlaneOverlays`. **Circular** (that module
-  imports `drawAllOverlays` back); safe because both call sites are inside
-  function bodies.
+- `./plane-definition.js` — `drawPlaneOverlays`, `applyPlaneModeToolbarLock`.
+  **Circular** (that module imports `drawAllOverlays` back); safe because both
+  call sites are inside function bodies.
 
 **Imported by.** `pose/triangulation.js`, `pose/tracker.js`,
 `pose/initialization.js`, `import-export/save-load.js`,
@@ -3289,7 +3300,39 @@ spawn a dockview panel.
   (rendering imports `drawPlaneOverlays` from here, and triangulation imports
   rendering); safe because every use is inside a function body.
 
-**Imported by.** `ui/rendering.js` (`drawPlaneOverlays`), `ui/ui-wiring.js`
+**The mode blocks the pose-annotation toolbar.**
+`applyPlaneModeToolbarLock()` disables `+ Instance` / `- Instance` / `Group` /
+`Edit Group` / `Triangulate` / `Triangulate All` / `Track Frame` / `Track All`
+while the mode is on. All of them act on POSE annotation, which is a different
+object than the plane geometry the mode is for: in the mode a click lands on a
+plane node, the info panel is the plane panel, and `interactionManager`'s
+selection is a plane — so pressing Group or Triangulate would operate on a pose
+selection the user can no longer see or change, producing an edit they did not
+mean and cannot observe. The VISIBILITY controls (User / Predicted / Reproj /
+Errors), Sessions, Color and Hide Panel are deliberately NOT blocked: they
+change what is DRAWN, not what is annotated, and turning Predicted off to see
+the plane you are placing is exactly what the mode is for.
+
+Three details it has to get right:
+- **`disabled` alone is not enough for the two Triangulate buttons.** Each sits
+  inside a `.tri-dropdown` whose menu opens on **hover** (CSS) and whose DLT /
+  BA entries are `div`s with their own click handlers, so `disabled` on the
+  button reaches neither. The wrappers get `.plane-mode-locked`
+  (`pointer-events: none`), which kills the hover-open and the items together.
+- **The lock is re-asserted from `drawAllOverlays`**, because that function
+  rewrites `tbGroup.disabled` / `tbEditGroup.disabled` on every overlay draw.
+- **Each button's prior `disabled` is snapshotted at lock time and restored on
+  exit** — the rule `lockUI` in `ui/origin-definition.js` already follows, so a
+  button disabled for its own reasons (Track All mid-run) does not come back
+  enabled. The snapshot is taken only on the transition; re-taking it on the
+  re-assert would record the LOCKED state and make the restore a no-op.
+
+`styles.css` gained a `.toolbar-btn:disabled` rule at the same time — a disabled
+toolbar button previously had no styling of its own, so it looked exactly like a
+live one and only failed on click.
+
+**Imported by.** `ui/rendering.js` (`drawPlaneOverlays`,
+`applyPlaneModeToolbarLock`), `ui/ui-wiring.js`
 (`togglePlaneMode`, for the View menu item), `pose/initialization.js`
 (`setupPlaneDefinition`, `planeInteractionCallbacks`, `refreshPlanePanel` —
 called next to `syncPlanes3D` in `setup3DViewport`, which is the one place a
@@ -3375,7 +3418,10 @@ not on the panel selection — because the wizard picks its corner in the 3D
 scene from any fitted plane; gating it on the selection would disable it for a
 perfectly valid project. `renderOriginButton()` owns that.
 
-**Tests.** `tests/e2e/define-plane-mode.mjs`.
+**Tests.** `tests/e2e/define-plane-mode.mjs`, `tests/e2e/plane-mode-toolbar-lock.mjs`
+(the toolbar lock: the redraw race, the dropdown hole, the visibility
+carve-out and the restore-on-exit rule), `tests/e2e/plane-persistence-roundtrip.mjs`
+(the dirty flag, driven through the real panel handlers).
 
 ---
 

@@ -821,9 +821,17 @@ body {
   transition: background var(--transition-fast), color var(--transition-fast);
 }
 
-.toolbar-btn:hover {
+.toolbar-btn:hover:not(:disabled) {
   background: var(--bg-button-hover);
   color: var(--text-primary);
+}
+
+/* A disabled toolbar button had NO styling of its own, so it looked exactly
+   like a live one and only failed on click. Give it the same read as every
+   other disabled control in the app. */
+.toolbar-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
 }
 
 .toolbar-btn:active {
@@ -903,6 +911,15 @@ body {
 .tri-dropdown {
   position: relative;
   display: inline-flex;
+}
+
+/* Defining Plane Mode blocks the pose-annotation buttons (ui/plane-definition.js,
+   `applyPlaneModeToolbarLock`). These wrappers need their own rule: the menu
+   below opens on :hover and its DLT / BA entries are <div>s with their own
+   click handlers, so `disabled` on the button inside reaches neither —
+   `pointer-events: none` on the wrapper kills the hover-open AND the items. */
+.tri-dropdown.plane-mode-locked {
+  pointer-events: none;
 }
 
 .tri-caret {

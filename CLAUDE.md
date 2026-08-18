@@ -371,6 +371,21 @@ Coverage: `tests/test-plane-serialization.mjs` (unit, the mapping) and
 dirty flag, the scope split, and both negative controls).
 
 ## UI Conventions
+**Defining Plane Mode blocks the pose-annotation toolbar.** `+ Instance`,
+`- Instance`, `Group`, `Edit Group`, `Triangulate`, `Triangulate All`,
+`Track Frame` and `Track All` are disabled while the mode is on
+(`applyPlaneModeToolbarLock` in `ui/plane-definition.js`) — they act on POSE
+annotation, which in the mode is a selection the user can no longer see or
+change. The **visibility** controls (User / Predicted / Reproj / Errors),
+Sessions, Color and Hide Panel stay live: they change what is DRAWN, not what
+is annotated. Adding a button to that lock means adding its id to
+`PLANE_LOCKED_TOOLBAR_IDS`; if it opens a menu, its wrapper also needs
+`PLANE_LOCKED_DROPDOWN_IDS` (a `.tri-dropdown` menu opens on hover and its
+items are `div`s, so `disabled` on the button reaches neither).
+NOTE the keyboard shortcuts for these actions (`n`, `t`, `Shift+T`,
+`Mod+Shift+T`, `Shift+g`, `Delete`) and the Edit / Analysis menu items are
+**not** gated yet — they still reach the same handlers.
+
 **Modals must close on `Esc`** unless explicitly stated otherwise. When building
 or editing any modal/overlay dialog, wire a `keydown` listener that closes it on
 `Escape` (and removes the listener on close). For a modal mid-operation (e.g. an
