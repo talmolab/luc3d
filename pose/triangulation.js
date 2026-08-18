@@ -2232,12 +2232,7 @@ export async function batchLoadLazyFrames(startIdx, count, onProgress) {
             }
         }
         session.addFrameGroup(fg);
-        for (var [cn, camInsts] of fg.instances) {
-            for (var instItem of camInsts) {
-                fg.addUnlinkedInstance(cn, new UnlinkedInstance(instItem, cn));
-            }
-            fg.instances.set(cn, []);
-        }
+        finalizeLazyFrameGroup(session, fg, frameIdx);
         loaded++;
         if (onProgress && loaded % 100 === 0) onProgress(loaded, needEnd - needStart);
     }
