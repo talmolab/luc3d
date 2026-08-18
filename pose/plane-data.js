@@ -116,7 +116,9 @@ export class PlaneSkeleton {
         this.edges = (edges || []).map(function (e) { return [e[0], e[1]]; });
         /**
          * @type {boolean} Draw the plane's polygon filled with `color`. A plane
-         * IS a polygon, so this is the shape readout — see `planePolygonOrder`.
+         * IS a polygon, so this is the shape readout — see
+         * `planeFillOrderPoolIndices` (2D) / `planeFillOrder3d` (3D) for how
+         * its outline is decided.
          */
         this.filled = false;
         /**
@@ -1117,25 +1119,29 @@ export function planeEdgesPoolIndices(plane, pool) {
 }
 
 /**
- * The order to walk a plane's nodes as a POLYGON, as NODE IDS.
+ * The RING the user drew, as NODE IDS, or `null` when their connections do not
+ * form one.
  *
- * A plane is a polygon, but membership order only traces its outline when the
- * user happened to add the corners in ring order — connect them as a quad in
- * any other order and a membership-ordered fill draws a self-intersecting
- * bowtie. So when the connections form a single simple cycle covering every
- * node (each node with exactly two distinct neighbours, one closed walk), that
- * cycle IS the outline and is returned. Anything else — an open chain, a
- * partial cycle, a branch, no edges at all — falls back to membership order
- * rather than guessing.
+ * A ring is a single simple cycle covering every node the plane references:
+ * each node at degree exactly 2, one closed walk. Anything else — an open
+ * chain, a partial cycle, a branch, two disjoint cycles, no edges at all —
+ * returns null, because those state an outline only partially and guessing the
+ * rest of it is how a fill ends up self-intersecting.
+ *
+ * This is the TOPOLOGICAL half of a plane's outline and it ignores coordinates
+ * entirely, so it is the only form that can express a CONCAVE outline (an
+ * L-shaped floor): the user's edges say so explicitly. Callers that need an
+ * outline for a plane with no ring fall back to geometry — see
+ * `planeFillOrderPoolIndices` / `planeFillOrder3d`.
  *
  * @param {PlaneSkeleton} plane
- * @returns {number[]} Node IDs in polygon order.
+ * @returns {number[]|null} Node IDs in ring order, or null.
  */
-export function planePolygonOrderIds(plane) {
-    if (!plane) return [];
+export function planeCycleOrderIds(plane) {
+    if (!plane) return null;
     var ids = plane.nodeIds;
     var n = ids.length;
-    if (n < 3) return ids.slice();
+    if (n < 3) return null;
 
     // Work in local indices; the adjacency algorithm is identical, and the
     // result is mapped back to IDs at the end.
@@ -1149,7 +1155,7 @@ export function planePolygonOrderIds(plane) {
         adj[d].add(s);
     }
     // A simple cycle has every node at degree exactly 2.
-    for (var c = 0; c < n; c++) if (adj[c].size !== 2) return ids.slice();
+    for (var c = 0; c < n; c++) if (adj[c].size !== 2) return null;
 
     var walk = [0];
     var seen = new Set([0]);
@@ -1158,15 +1164,33 @@ export function planePolygonOrderIds(plane) {
         var next = -1;
         adj[cur].forEach(function (x) { if (x !== prev && next === -1) next = x; });
         // A second disjoint cycle would revisit before covering every node.
-        if (next === -1 || seen.has(next)) return ids.slice();
+        if (next === -1 || seen.has(next)) return null;
         walk.push(next);
         seen.add(next);
         prev = cur;
         cur = next;
     }
     // …and the walk has to close back to where it started.
-    if (!adj[cur].has(0)) return ids.slice();
+    if (!adj[cur].has(0)) return null;
     return walk.map(function (i) { return ids[i]; });
+}
+
+/**
+ * The order to walk a plane's nodes as a POLYGON, as NODE IDS: the user's ring
+ * when there is one, otherwise MEMBERSHIP order.
+ *
+ * Purely topological, and kept as the coordinate-free form of the question —
+ * the FILL does not use this, because membership order draws a
+ * self-intersecting shape for any plane whose nodes were not added in ring
+ * order. `planeFillOrderPoolIndices` / `planeFillOrder3d` are what the
+ * renderers call.
+ *
+ * @param {PlaneSkeleton} plane
+ * @returns {number[]} Node IDs in polygon order.
+ */
+export function planePolygonOrderIds(plane) {
+    if (!plane) return [];
+    return planeCycleOrderIds(plane) || plane.nodeIds.slice();
 }
 
 /**
@@ -1180,13 +1204,214 @@ export function planePolygonOrder(plane) {
 }
 
 /**
- * `planePolygonOrderIds` as POOL indices — what the 2D overlay's polygon fill
- * wants, since it reads points off a `PlaneInstance`.
+ * `planePolygonOrderIds` as POOL indices. The coordinate-free form; the 2D
+ * overlay's fill uses `planeFillOrderPoolIndices` instead, which falls back to
+ * the convex hull rather than to membership order.
  * @param {PlaneSkeleton} plane @param {PlaneNodePool} pool @returns {number[]}
  */
 export function planePolygonOrderPoolIndices(plane, pool) {
     if (!plane || !pool) return [];
     return planePolygonOrderIds(plane).map(function (id) { return pool.indexOf(id); });
+}
+
+/**
+ * Indices of the CONVEX HULL of a 2D point set, as indices into `pts`, in ring
+ * order.
+ *
+ * Andrew's monotone chain. Points strictly INSIDE the hull are dropped, which
+ * is the whole point of using it: a node the user placed in the middle of a
+ * plane is enclosed by the fill instead of being dragged out to the boundary as
+ * a reflex vertex. Points lying exactly ON a hull edge are dropped too — they
+ * are boundary vertices that do not change the shape.
+ *
+ * Fewer than 3 hull vertices means every point is coincident or collinear:
+ * there is no outline, so the input order is returned unchanged rather than a
+ * degenerate 2-gon (both fill to nothing, but the caller's own `< 3` guards
+ * then read the same as they always did).
+ *
+ * @param {number[][]} pts - `[x, y]` per point; every coordinate must be finite.
+ * @returns {number[]} Indices into `pts`.
+ */
+export function convexHullOrder2d(pts) {
+    var n = pts ? pts.length : 0;
+    var all = [];
+    for (var i = 0; i < n; i++) all.push(i);
+    if (n < 3) return all;
+
+    var byX = all.slice().sort(function (a, b) {
+        return (pts[a][0] - pts[b][0]) || (pts[a][1] - pts[b][1]);
+    });
+    var cross = function (o, a, b) {
+        return (pts[a][0] - pts[o][0]) * (pts[b][1] - pts[o][1])
+            - (pts[a][1] - pts[o][1]) * (pts[b][0] - pts[o][0]);
+    };
+    var chain = function (seq) {
+        var out = [];
+        for (var k = 0; k < seq.length; k++) {
+            while (out.length >= 2
+                && cross(out[out.length - 2], out[out.length - 1], seq[k]) <= 0) out.pop();
+            out.push(seq[k]);
+        }
+        return out;
+    };
+    var lower = chain(byX);
+    var upper = chain(byX.slice().reverse());
+    // Each chain ends where the other begins, so drop both closing vertices.
+    var hull = lower.slice(0, -1).concat(upper.slice(0, -1));
+    return hull.length >= 3 ? hull : all;
+}
+
+/** @returns {number} */
+function dot3(a, b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; }
+/** @returns {number[]} */
+function cross3(a, b) {
+    return [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+}
+/** @returns {number[]|null} Null for a zero-length (or non-finite) vector. */
+function unit3(a) {
+    var L = Math.sqrt(dot3(a, a));
+    if (!(L > 0) || !isFinite(L)) return null;
+    return [a[0] / L, a[1] / L, a[2] / L];
+}
+
+/**
+ * Convex-hull ring for 3D points that lie (near enough) on a common plane, as
+ * indices into the point list.
+ *
+ * A hull is a 2D question, so the points are projected onto an in-plane basis
+ * first. `normal` — a `planeFit`'s, when the plane has been fit — fixes that
+ * projection plane; without one, a normal is estimated from the two longest
+ * independent directions in the set, which is exact for coplanar points and
+ * adequate for near-coplanar ones. Either way this only ever decides vertex
+ * ORDER: no coordinate is read back out of the projection.
+ *
+ * @param {number[][]} qs - `[x, y, z]` per point; every coordinate finite.
+ * @param {number[]|null} [normal]
+ * @returns {number[]} Indices into `qs`.
+ */
+export function convexHullOrder3d(qs, normal) {
+    var n = qs ? qs.length : 0;
+    var all = [];
+    for (var i = 0; i < n; i++) all.push(i);
+    if (n < 3) return all;
+
+    var c = [0, 0, 0];
+    for (var a = 0; a < n; a++) { c[0] += qs[a][0]; c[1] += qs[a][1]; c[2] += qs[a][2]; }
+    c[0] /= n; c[1] /= n; c[2] /= n;
+    var rel = qs.map(function (q) { return [q[0] - c[0], q[1] - c[1], q[2] - c[2]]; });
+
+    // First in-plane axis: the longest spoke from the centroid. Longest rather
+    // than "the first one" so a near-coincident pair cannot define the basis.
+    var u = null, best = 0;
+    for (var b = 0; b < n; b++) {
+        var L = dot3(rel[b], rel[b]);
+        if (L > best) { best = L; u = rel[b]; }
+    }
+    u = unit3(u || [0, 0, 0]);
+    if (!u) return all;
+
+    var w = unit3(normal && normal.length === 3 ? normal : [0, 0, 0]);
+    if (!w) {
+        // No fit to borrow a normal from: take the spoke with the largest
+        // component perpendicular to `u`. Zero for every spoke means the whole
+        // set is collinear, which has no outline.
+        var bestPerp = 0, wRaw = null;
+        for (var d = 0; d < n; d++) {
+            var x = cross3(u, rel[d]);
+            var m = dot3(x, x);
+            if (m > bestPerp) { bestPerp = m; wRaw = x; }
+        }
+        w = unit3(wRaw || [0, 0, 0]);
+        if (!w) return all;
+    }
+    // `u` came from the data and `w` may have come from a fit, so they are not
+    // orthogonal in general — Gram-Schmidt before building `v`. If `u` is
+    // (anti)parallel to the normal the points are not on that plane at all;
+    // fall back to any perpendicular rather than dividing by ~0.
+    var uPerp = unit3([
+        u[0] - dot3(u, w) * w[0], u[1] - dot3(u, w) * w[1], u[2] - dot3(u, w) * w[2],
+    ]);
+    if (!uPerp) {
+        uPerp = unit3(cross3(w, Math.abs(w[0]) < 0.9 ? [1, 0, 0] : [0, 1, 0]));
+        if (!uPerp) return all;
+    }
+    var v = cross3(w, uPerp);
+
+    var flatPts = rel.map(function (r) { return [dot3(r, uPerp), dot3(r, v)]; });
+    return convexHullOrder2d(flatPts);
+}
+
+/**
+ * Vertex ring for one plane's FILL on ONE view, as POOL indices.
+ *
+ * The user's ring wins when they drew one — edges are the only way to state a
+ * CONCAVE outline, so an explicit ring must never be second-guessed. Failing
+ * that the fill is the CONVEX HULL of whatever this view has positioned, so a
+ * node in the middle of the plane sits INSIDE the fill: the outline is the
+ * outermost points, which is what "fill the plane" means to someone who just
+ * dropped a 5th node in the middle of a quad.
+ *
+ * Hulling per VIEW rather than once in 3D is deliberate: the fill is a 2D
+ * silhouette drawn from that view's 2D points, and those exist before anything
+ * has been triangulated.
+ *
+ * Unpositioned nodes are skipped — they have no vertex to contribute here.
+ *
+ * @param {PlaneSkeleton} plane @param {PlaneNodePool} pool
+ * @param {PlaneInstance} instance
+ * @returns {number[]} Pool indices, in ring order.
+ */
+export function planeFillOrderPoolIndices(plane, pool, instance) {
+    if (!plane || !pool || !instance) return [];
+    var ring = planeCycleOrderIds(plane);
+    if (ring) {
+        var out = [];
+        for (var r = 0; r < ring.length; r++) {
+            var kr = pool.indexOf(ring[r]);
+            if (kr >= 0 && instance.hasPoint(kr)) out.push(kr);
+        }
+        return out;
+    }
+    var ks = [], pts = [];
+    for (var i = 0; i < plane.nodeIds.length; i++) {
+        var k = pool.indexOf(plane.nodeIds[i]);
+        if (k < 0 || !instance.hasPoint(k)) continue;
+        ks.push(k);
+        pts.push([instance.getX(k), instance.getY(k)]);
+    }
+    return convexHullOrder2d(pts).map(function (h) { return ks[h]; });
+}
+
+/**
+ * Vertex ring for one plane's 3D FILL, as LOCAL indices into the plane's node
+ * order — the shape the 3D viewport payload's `polygonOrder` has.
+ *
+ * Same rule as the 2D half (`planeFillOrderPoolIndices`): the user's ring when
+ * they drew one, otherwise the convex hull, here computed in the plane's own
+ * basis so an interior node is enclosed rather than pulled onto the boundary.
+ * Nodes with no 3D yet are skipped by the hull; the ring path leaves them in
+ * and the viewport skips them, which is what it has always done.
+ *
+ * @param {PlaneSkeleton} plane @param {PlaneNodePool} pool
+ * @returns {number[]} Local indices, in ring order.
+ */
+export function planeFillOrder3d(plane, pool) {
+    if (!plane) return [];
+    var ring = planeCycleOrderIds(plane);
+    if (ring) return ring.map(function (id) { return plane.indexOfNode(id); });
+    if (!pool) return [];
+
+    var idx = [], qs = [];
+    for (var i = 0; i < plane.nodeIds.length; i++) {
+        var node = pool.getNode(plane.nodeIds[i]);
+        if (!node || !node.hasPoint3d()) continue;
+        var q = node.xyz;
+        if (!isFinite(q[0]) || !isFinite(q[1]) || !isFinite(q[2])) continue;
+        idx.push(i);
+        qs.push([q[0], q[1], q[2]]);
+    }
+    var normal = plane.planeFit ? plane.planeFit.normal : null;
+    return convexHullOrder3d(qs, normal).map(function (h) { return idx[h]; });
 }
 
 /**

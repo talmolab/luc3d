@@ -251,16 +251,41 @@ annotation produces and nothing about the solve or the UI, which live in
   `planeNodeIndices`, `planeEdgesLocal` (plane-order index pairs, for the 3D
   payload) / `planeEdgesPoolIndices` (for the 2D overlay + interaction hit
   test), `planeCentroid2d(plane, pool, instance)`.
-- `planePolygonOrderIds(plane)` — the order to walk the nodes as a POLYGON.
-  When the connections form a single simple cycle covering every node (every
-  node at degree exactly 2, one closed walk) that cycle IS the outline;
-  anything else — open chain, partial or disjoint cycles, branch, no edges —
-  falls back to membership order rather than guessing. Membership order only
-  traces the outline when the corners happened to be added in ring order, so
-  filling a quad linked `0-2-1-3` in membership order draws a self-intersecting
-  bowtie. `planePolygonOrder(plane)` (plane-local indices, for the 3D payload)
-  and `planePolygonOrderPoolIndices(plane, pool)` (for the 2D fill) are the two
-  index views of it.
+- `planeCycleOrderIds(plane)` — the RING the user drew, as node IDs, or `null`
+  when their connections do not form one. A ring is a single simple cycle
+  covering every node the plane references (every node at degree exactly 2, one
+  closed walk); an open chain, a partial or disjoint cycle, a branch, or no
+  edges at all returns null, because those state an outline only partially and
+  guessing the rest is how a fill self-intersects. Purely topological, so it is
+  the ONLY form that can express a **concave** outline (an L-shaped floor) — the
+  user's edges say so explicitly, and nothing may second-guess them.
+- `planePolygonOrderIds(plane)` — the ring when there is one, else MEMBERSHIP
+  order, as node IDs; `planePolygonOrder(plane)` (plane-local indices) and
+  `planePolygonOrderPoolIndices(plane, pool)` are its two index views. The
+  coordinate-free answer, kept for callers that want it — **the fill does not
+  use these** (see below).
+- `convexHullOrder2d(pts)` / `convexHullOrder3d(qs, normal?)` — hull of a point
+  set as indices into it, in ring order. Andrew's monotone chain; interior
+  points, points on a hull edge, and duplicates are dropped, so the result is
+  the outline and nothing else. Fewer than 3 hull vertices (coincident or
+  collinear input) returns the input order unchanged, so a caller's own `< 3`
+  guard reads the way it always did. The 3D form projects onto an in-plane basis
+  first — `normal` (a `planeFit`'s) fixes it, otherwise one is estimated from
+  the two longest independent directions in the set; that only ever decides
+  vertex ORDER, never a coordinate.
+- `planeFillOrderPoolIndices(plane, pool, instance)` (2D, pool indices) /
+  `planeFillOrder3d(plane, pool)` (3D, plane-local indices) — **what the fill
+  actually walks.** The user's ring when they drew one, otherwise the CONVEX
+  HULL of the plane's points. Two things this fixes over membership order: a
+  quad whose corners were not added in ring order fills as a self-intersecting
+  bowtie, and — the reason the hull fallback exists — a node placed in the
+  MIDDLE of a plane is necessarily a REFLEX vertex in membership order, so the
+  fill carves a notch in to it instead of covering it. Under the hull the
+  outline is the outermost nodes and an interior node sits INSIDE the fill.
+  Hulling per VIEW in 2D rather than once in 3D is deliberate: the fill is a 2D
+  silhouette of that view's points, which exist before anything is triangulated.
+  Unpositioned nodes contribute no vertex; a node with 2D but no 3D is a vertex
+  of the 2D fill and not the 3D one.
 - `seedPlanePoints(n, cx, cy, videoW, videoH)` — node 0 at 12 o'clock, the rest
   evenly around a ring of `PLACEMENT_RADIUS_FRAC` (12%) of the video's shorter
   side, clamped into the frame. A 4-node plane lands as a recognisable quad to
@@ -2891,7 +2916,9 @@ would misstate the model.
    disabled with a spoken reason when there is none, and now the **only** way a
    node enters a plane; and `#planeEdgesDetails` (edges are per-plane), whose
    hint states that connections are OPTIONAL — triangulation and fitting are
-   edge-independent and edges exist for visual reference and polygon fill order.
+   edge-independent and edges exist for visual reference, and to state a fill
+   outline the convex hull cannot (a CONCAVE one). Without edges the fill hulls
+   the plane's points, so an unconnected plane still fills correctly.
 3. **Planes** (`#planePlanesDetails`) — `#planeSkeletonsTable` (the drag
    source, with the per-plane expander and placement rows),
    `#planeSkeletonsEmpty`, `+ New Plane`, the shared `.plane-action-row`
@@ -2988,8 +3015,10 @@ plane.
   `planeFit` is dropped and the user is told which ones went stale — a shared
   node moved by fitting plane B silently breaks plane A's fit otherwise.
 - `syncPlanes3D()` — pushes every plane that has 3D into `viewport3d.setPlanes`
-  (`points3dForPlane` / `planeEdgesLocal` / `planePolygonOrder` /
-  `planeNodeColors`, all in the plane's own node order). Full rebuild, so it is
+  (`points3dForPlane` / `planeEdgesLocal` / `planeFillOrder3d` /
+  `planeNodeColors`, all in the plane's own node order). `polygonOrder` is the
+  FILL's ring — the user's edge cycle or the convex hull — not membership order,
+  so an interior corner is covered by the fill rather than notching it. Full rebuild, so it is
   also the REMOVE path. No-ops when `viewport3d` is null. Also the one place the
   3D drag callbacks are wired (idempotent), since the viewport is re-created per
   session load. The payload's `editable` is
@@ -3074,7 +3103,8 @@ spawn a dockview panel.
 **Imports from project modules.**
 - `../pose/plane-data.js` — `PlaneModel`, `PlaneSkeleton`, `PlaneInstance`,
   `PlaneNode`, `PlaneNodePool`, `seedPlanePoints`, `planePolygonOrder`,
-  `planePolygonOrderPoolIndices`, `planeNodeIndices`, `planeNodeNames`,
+  `planeFillOrderPoolIndices`, `planeFillOrder3d`, `planeNodeIndices`,
+  `planeNodeNames`,
   `planeNodeColors`, `planeEdgesLocal`, `planeEdgesPoolIndices`,
   `planeCentroid2d`, `points3dForPlane`, `writePoints3dForPlane`,
   `nodeErrorsForPlane`, `nodeFreezeState`.
@@ -4336,7 +4366,10 @@ edges reuse `_createCylinder`, and `filled` adds a fan-triangulated
 `BufferGeometry` mesh built by `_buildPlaneFillMesh` — `DoubleSide` because a
 plane is viewable from either face, `depthWrite: false` so the translucent fill
 never occludes nodes behind it. The fan walks `polygonOrder`, so it covers the
-real outline rather than an index-order bowtie. **`points3d` needs no
+real outline rather than an index-order bowtie, and a corner in the middle of a
+plane is covered by the fill instead of being a vertex of it. A fan is only
+valid over a convex ring, which a hull always is; a user-drawn CONCAVE ring can
+still fan wrong, which is the price of honouring their edges. **`points3d` needs no
 transform**: the Three camera is Z-up and the scene is already in the
 calibration's world frame, so coordinates go straight into `position.set`, the
 same as skeleton nodes and camera centres.

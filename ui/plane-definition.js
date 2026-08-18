@@ -100,7 +100,8 @@
 
 import {
     PlaneModel, PlaneSkeleton, PlaneInstance, PlaneNode, PlaneNodePool,
-    seedPlanePoints, planePolygonOrder, planePolygonOrderPoolIndices,
+    seedPlanePoints, planePolygonOrder,
+    planeFillOrderPoolIndices, planeFillOrder3d,
     planeNodeIndices, planeNodeNames, planeNodeColors, planeNodeImmutability,
     planeEdgesLocal, planeEdgesPoolIndices, planeCentroid2d,
     points3dForPlane, writePoints3dForPlane, nodeErrorsForPlane,
@@ -1028,7 +1029,11 @@ export function syncPlanes3D() {
             // with another plane is pinned in every plane at once.
             nodeImmutable: planeNodeImmutability(plane, pool),
             edges: planeEdgesLocal(plane),
-            polygonOrder: planePolygonOrder(plane),
+            // The FILL's vertex ring, not membership order: the user's edge
+            // ring when they drew one, else the convex hull of the plane's 3D
+            // points, so a node in the middle of a plane is enclosed by the
+            // fill instead of pulling the outline in to itself.
+            polygonOrder: planeFillOrder3d(plane, pool),
             filled: plane.filled,
             // Corners are draggable in 3D only once the plane has been FIT —
             // the fit is what supplies the surface a corner is allowed to slide
@@ -2530,16 +2535,19 @@ function drawPlaneNodes(ctx, model, inst, tf, hovered, viewName) {
 
 /**
  * Fill one plane's polygon. Vertex order comes from
- * `planePolygonOrderPoolIndices`, which follows the user's connections when
- * they form a closed ring — membership order would draw a self-intersecting
- * bowtie for any quad whose corners were not added in ring order.
+ * `planeFillOrderPoolIndices`: the user's connections when they form a closed
+ * ring, otherwise the CONVEX HULL of this view's positioned nodes. Membership
+ * order would draw a self-intersecting bowtie for any quad whose corners were
+ * not added in ring order, and would turn a node placed in the MIDDLE of a
+ * plane into a reflex vertex that carves a notch out of the fill instead of
+ * being covered by it.
  *
  * Nulled nodes are still vertices here: toggling a corner off means "don't use
  * this observation in the solve", not "this corner isn't part of the plane",
  * and dropping it would distort the outline.
  */
 function fillPolygon(ctx, plane, pool, inst, tf, color) {
-    var order = planePolygonOrderPoolIndices(plane, pool);
+    var order = planeFillOrderPoolIndices(plane, pool, inst);
     var pts = [];
     for (var i = 0; i < order.length; i++) {
         var k = order[i];

@@ -19,6 +19,8 @@ import {
     PlaneModel, PlaneSkeleton, PlaneInstance, PlaneNodePool,
     points3dForPlane, writePoints3dForPlane, nodeErrorsForPlane,
     planePolygonOrder, planePolygonOrderIds, planePolygonOrderPoolIndices,
+    planeCycleOrderIds, convexHullOrder2d, convexHullOrder3d,
+    planeFillOrderPoolIndices, planeFillOrder3d,
     planeEdgesLocal, planeEdgesPoolIndices, planeNodeIndices, planeNodeNames,
     planeCentroid2d, seedPlanePoints, nodeFreezeState, defaultNodeColor,
 } from '../pose/plane-data.js';
@@ -526,6 +528,117 @@ console.log('\n15. `force` cannot leak through an invalidation cascade');
     check(!m.pool.hasPoint3d(pin.id), 'forceClearImmutable does clear it');
     check(out2.clearedNodeIds.includes(pin.id), 'and says so');
     check(pin.immutable === true, 'clearing the coordinate does not un-pin the node');
+}
+
+console.log('\n16. A plane\'s FILL outlines the outermost nodes, not membership order');
+{
+    // The reported case: a quad with a fifth node dropped in the MIDDLE. In
+    // membership order that middle node is a vertex, and being interior it is
+    // necessarily a REFLEX one — the fill carves a notch in to it instead of
+    // covering it. Coordinates are the ones from the report (a floor marked up
+    // in one view, screen pixels, y down).
+    const m = new PlaneModel();
+    const P = m.createPlane('floor');
+    const XY = { A: [274, 817], B: [313, 445], C: [603, 536], D: [412, 867], Ground: [404, 642] };
+    const names = ['A', 'B', 'C', 'D', 'Ground'];
+    names.forEach(n => m.createNodeInPlane(n, P));
+    const inst = m.ensureInstance('camA');
+    const poolIdx = {};
+    P.nodeIds.forEach((id, i) => {
+        poolIdx[names[i]] = m.pool.indexOf(id);
+        inst.setPoint(poolIdx[names[i]], XY[names[i]][0], XY[names[i]][1]);
+    });
+    const named = ks => ks.map(k => m.pool.nodeAt(k).name);
+
+    // The old behaviour, still available and still what it always was — this is
+    // what the fill USED to walk, and the reason the notch appeared.
+    check(eq(planePolygonOrder(P), [0, 1, 2, 3, 4]), 'membership order includes the middle node');
+    check(planeCycleOrderIds(P) === null, 'and with no edges there is no user ring');
+
+    const fill2d = planeFillOrderPoolIndices(P, m.pool, inst);
+    check(eq(named(fill2d), ['A', 'B', 'C', 'D']), '2D fill walks the four outer nodes');
+    check(!named(fill2d).includes('Ground'), 'the middle node is not a vertex of the fill');
+    check(fill2d.length === 4, 'so the fill is a quad, not a five-point star');
+
+    // Enclosure is the actual claim, so test THAT rather than just the vertex
+    // list: ray-cast the middle point against the fill polygon.
+    const inside = (pt, ring) => {
+        let hit = false;
+        for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+            const a = ring[i], b = ring[j];
+            if ((a[1] > pt[1]) !== (b[1] > pt[1])
+                && pt[0] < (b[0] - a[0]) * (pt[1] - a[1]) / (b[1] - a[1]) + a[0]) hit = !hit;
+        }
+        return hit;
+    };
+    const ring2d = fill2d.map(k => [inst.getX(k), inst.getY(k)]);
+    check(inside(XY.Ground, ring2d), 'and the middle node lies INSIDE the filled quad');
+    check(!inside([10, 10], ring2d), 'while a point outside the quad is outside (the test can fail)');
+
+    // 3D half. Lift the same layout onto a plane and hull it there.
+    P.nodeIds.forEach((id, i) => m.pool.setPoint3d(id, [XY[names[i]][0], XY[names[i]][1], 12]));
+    const named3 = is => is.map(i => m.pool.getNode(P.nodeIds[i]).name);
+    check(eq(named3(planeFillOrder3d(P, m.pool)).sort(), ['A', 'B', 'C', 'D']),
+        '3D fill hulls to the same four nodes with no fit to borrow a normal from');
+    P.planeFit = { centroid: [400, 650, 12], normal: [0, 0, 1], rms: 0, nPoints: 5 };
+    check(eq(named3(planeFillOrder3d(P, m.pool)), ['A', 'B', 'C', 'D']),
+        '…and again using the fit normal');
+
+    // A node with no 3D yet contributes no 3D vertex, but still contributes a
+    // 2D one — the two representations are independent.
+    m.pool.clearPoint3d(P.nodeIds[2]);
+    check(!named3(planeFillOrder3d(P, m.pool)).includes('C'), 'an untriangulated node is not a 3D vertex');
+    check(named(planeFillOrderPoolIndices(P, m.pool, inst)).includes('C'),
+        'but it is still a 2D one');
+    m.pool.setPoint3d(P.nodeIds[2], [XY.C[0], XY.C[1], 12]);
+
+    // An EXPLICIT ring is the user stating a concave outline, and must win over
+    // the hull — otherwise an L-shaped floor is impossible to express.
+    [['A', 'B'], ['B', 'C'], ['C', 'Ground'], ['Ground', 'D'], ['D', 'A']].forEach(e =>
+        P.addEdge(P.nodeIds[names.indexOf(e[0])], P.nodeIds[names.indexOf(e[1])]));
+    check(planeCycleOrderIds(P) !== null, 'the five edges form a ring');
+    check(eq(named(planeFillOrderPoolIndices(P, m.pool, inst)),
+        ['A', 'B', 'C', 'Ground', 'D']), 'a user-drawn ring wins over the hull in 2D');
+    check(eq(named3(planeFillOrder3d(P, m.pool)), ['A', 'B', 'C', 'Ground', 'D']),
+        '…and in 3D');
+    check(!inside(XY.Ground, named(planeFillOrderPoolIndices(P, m.pool, inst))
+        .map(n => XY[n])), 'so the concave notch the user asked for is preserved');
+}
+
+console.log('\n17. Hull ordering degenerates safely');
+{
+    const quad = convexHullOrder2d([[0, 0], [4, 0], [4, 4], [0, 4]]);
+    check(quad.length === 4, 'a convex quad hulls to exactly four corners');
+    check(eq(quad.slice().sort(), [0, 1, 2, 3]), '…all of them, each once');
+    // Collinear and coincident sets have no outline at all. Returning the input
+    // order keeps every caller's own `< 3` guard reading the way it always did,
+    // rather than handing back a 2-gon that fills to nothing but looks valid.
+    check(eq(convexHullOrder2d([[0, 0], [1, 1], [2, 2]]), [0, 1, 2]),
+        'a collinear set falls back to input order');
+    check(eq(convexHullOrder2d([[1, 1], [1, 1], [1, 1]]), [0, 1, 2]),
+        'so does a coincident one');
+    check(eq(convexHullOrder2d([[0, 0], [1, 0]]), [0, 1]), 'and fewer than 3 points');
+    check(eq(convexHullOrder2d([]), []), 'and none at all');
+    // A duplicate ON the hull would otherwise add a zero-area triangle to the
+    // 3D fan.
+    check(eq(convexHullOrder2d([[0, 0], [0, 0], [4, 0], [4, 4], [0, 4]]).length, 4),
+        'a duplicated hull vertex appears once');
+    // A point exactly on a hull EDGE is boundary, but not a corner.
+    const mid = convexHullOrder2d([[0, 0], [4, 0], [4, 4], [0, 4], [2, 0]]);
+    check(mid.length === 4 && !mid.includes(4), 'a point on a hull edge is not a vertex');
+    check(eq(convexHullOrder3d([[0, 0, 0], [1, 1, 1], [2, 2, 2]]), [0, 1, 2]),
+        'a collinear 3D set falls back to input order');
+    // Strictly interior, not on an edge: projecting into an in-plane basis
+    // perturbs an exactly-collinear point by roundoff, so a point ON a hull
+    // edge may survive as a vertex in 3D where it would not in 2D. That is
+    // harmless (it adds a zero-area triangle to the fan, not a notch) and is
+    // deliberately not pinned; being INSIDE is what has to be dropped.
+    const sq3 = convexHullOrder3d([[0, 0, 5], [4, 0, 5], [4, 4, 5], [0, 4, 5], [2, 2, 5]]);
+    check(sq3.length === 4 && !sq3.includes(4), 'a 3D hull drops the interior point');
+    // A normal the points do NOT lie on must not divide by ~0 building the basis.
+    check(convexHullOrder3d([[0, 0, 0], [1, 0, 0], [2, 0, 0], [0, 1, 0]], [1, 0, 0]).length >= 3,
+        'a normal parallel to the data\'s longest axis still yields a ring');
+    check(eq(planeFillOrder3d(null, null), []), 'a null plane has no fill order');
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

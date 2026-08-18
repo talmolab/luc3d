@@ -1451,9 +1451,13 @@ export class Viewport3D {
      * Triangle-soup mesh filling a plane's polygon, or null if it has fewer
      * than 3 usable corners.
      *
-     * Fan triangulation from the first vertex, walking `polygonOrder` — which
-     * follows the user's connection cycle when there is one, so the fan is over
-     * the real outline rather than an index-order bowtie. `DoubleSide` because
+     * Fan triangulation from the first vertex, walking `polygonOrder` — the
+     * user's connection cycle when there is one, else the convex hull of the
+     * plane's corners, so the fan is over the real outline rather than an
+     * index-order bowtie, and an interior corner is COVERED by the fill rather
+     * than being a vertex of it. A fan is only valid over a convex ring, which
+     * the hull always is; a user-drawn concave ring can still fan wrong, and
+     * that is the price of honouring their edges. `DoubleSide` because
      * a plane is viewable from either face; `depthWrite: false` so the
      * translucent fill never occludes skeleton nodes behind it.
      * @private

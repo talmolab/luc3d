@@ -1657,6 +1657,113 @@ try {
     check(eq(m.quadOrder, [0, 1, 2, 3]),
         `the natural quad round-trips (got ${JSON.stringify(m.quadOrder)})`);
 
+    // -----------------------------------------------------------------
+    // 11b — a node in the MIDDLE of a plane is COVERED by the fill
+    // -----------------------------------------------------------------
+    // Reported symptom: dropping a fifth node inside a quad turned it into a
+    // vertex of the fill, and being interior it is necessarily a REFLEX one, so
+    // the fill carved a notch in to it instead of enclosing it. Sampled from
+    // the real overlay rather than asserted on the order alone — the order is
+    // pinned in tests/test-plane-nodes.mjs; what matters here is the pixels.
+    console.log('\n11b. An interior node is enclosed by the fill, not a vertex of it');
+    m = await page.evaluate(async () => {
+        const P = await import('/ui/plane-definition.js');
+        const PD = await import('/pose/plane-data.js');
+        const R = await import('/ui/rendering.js');
+        const AS = await import('/ui/app-state.js');
+        const model = P.planeModel();
+        const sk = window.__plane(0);
+        const out = {};
+
+        // The quad from section 11, plus a fifth node at its centre.
+        window.__setPts(sk, 'camB', [[200, 200], [400, 200], [400, 350], [200, 350]]);
+        const midNode = model.createNodeInPlane('mid', sk);
+        const midK = model.pool.indexOf(midNode.id);
+        P.getPlaneInstance('camB').setPoint(midK, 300, 275);
+        out.nodeCount = sk.nodeIds.length;
+
+        // (220,275) is inside the quad but inside the NOTCH that membership
+        // order carves out (the triangle corner-corner-centre on the left), and
+        // clear of every node disc, node label and the centred plane label.
+        function pixel(x, y) {
+            const v = AS.state.views.find(q => q.name === 'camB');
+            const t = (x / v.videoWidth) * v.overlayCanvas.width;
+            const u = (y / v.videoHeight) * v.overlayCanvas.height;
+            return v.overlayCtx.getImageData(Math.round(t), Math.round(u), 1, 1).data[3];
+        }
+
+        sk.filled = true;
+        R.drawAllOverlays(AS.state.currentFrame);
+        out.notchAlpha = pixel(220, 275);
+        out.centreAreaAlpha = pixel(340, 300);
+        out.outsideAlpha = pixel(120, 275);
+        out.hullNames = PD.planeFillOrderPoolIndices(sk, model.pool, P.getPlaneInstance('camB'))
+            .map(k => model.pool.nodeAt(k).name);
+
+        // Now say the notch is WANTED, with edges. An explicit ring is the only
+        // way to state a concave outline, so it must beat the hull — and the
+        // same pixel must go back to empty, which is what makes the assertion
+        // above falsifiable rather than just "something got drawn". This ring is
+        // deliberately the plane's MEMBERSHIP order, so the second render is
+        // pixel-for-pixel what the fill used to draw before the hull fallback:
+        // the pre-fix symptom is reproduced inside the test that fixes it.
+        const id = k => sk.nodeIds[k];
+        const savedEdges = sk.edges.map(e => e.slice());
+        sk.edges = [[id(0), id(1)], [id(1), id(2)], [id(2), id(3)], [id(3), id(4)], [id(4), id(0)]];
+        R.drawAllOverlays(AS.state.currentFrame);
+        out.ringNotchAlpha = pixel(220, 275);
+        out.ringNames = PD.planeFillOrderPoolIndices(sk, model.pool, P.getPlaneInstance('camB'))
+            .map(k => model.pool.nodeAt(k).name);
+
+        // 3D takes the same route: the interior node is not a fan vertex.
+        sk.nodeIds.forEach((nid, i) => {
+            const xy = [[0, 0], [200, 0], [200, 150], [0, 150], [100, 75]][i];
+            model.pool.setPoint3d(nid, [xy[0], xy[1], 300]);
+        });
+        out.order3dRing = PD.planeFillOrder3d(sk, model.pool)
+            .map(i => model.pool.getNode(sk.nodeIds[i]).name);
+        sk.edges = [];
+        out.order3dHull = PD.planeFillOrder3d(sk, model.pool)
+            .map(i => model.pool.getNode(sk.nodeIds[i]).name);
+        P.syncPlanes3D();
+        const grp = AS.viewport3d._planeGroup.children[0];
+        const fill = grp && grp.children.find(c => c.name === 'planeFill');
+        out.fanVerts = fill ? fill.geometry.getAttribute('position').count : 0;
+
+        // Restore this section's precondition for everything downstream.
+        model.invalidatePlane3D(sk);
+        model.deleteNode(midNode.id);
+        sk.edges = savedEdges;
+        sk.filled = false;
+        P.syncPlanes3D();
+        P.refreshPlanePanel();
+        R.drawAllOverlays(AS.state.currentFrame);
+        out.restoredNodes = sk.nodeIds.length;
+        // Sampled at the notch point again, NOT the centroid — the centroid
+        // carries the plane-name label, which is drawn filled or not.
+        out.restoredAlpha = pixel(220, 275);
+        return out;
+    });
+    check(m.nodeCount === 5, `precondition: a fifth node sits inside the quad (${m.nodeCount} nodes)`);
+    check(eq(m.hullNames, ['fl', 'fr', 'br', 'bl']),
+        `the fill outlines the four OUTER nodes (got ${JSON.stringify(m.hullNames)})`);
+    check(m.notchAlpha > 0,
+        `the region between an outer edge and the interior node is FILLED (alpha ${m.notchAlpha})`);
+    check(m.centreAreaAlpha > 0, 'as is the rest of the quad');
+    check(m.outsideAlpha === 0,
+        `while outside the quad stays empty (alpha ${m.outsideAlpha}) — the sample can fail`);
+    check(eq(m.ringNames, ['fl', 'fr', 'br', 'bl', 'mid']),
+        `a user-drawn ring through the interior node wins over the hull (got ${JSON.stringify(m.ringNames)})`);
+    check(m.ringNotchAlpha === 0,
+        `and carves the notch back out (alpha ${m.notchAlpha} -> ${m.ringNotchAlpha})`);
+    check(eq(m.order3dRing, ['fl', 'fr', 'br', 'bl', 'mid']), '3D honours the ring too');
+    check(eq(m.order3dHull.slice().sort(), ['bl', 'br', 'fl', 'fr']),
+        `and hulls to the outer four without one (got ${JSON.stringify(m.order3dHull)})`);
+    check(m.fanVerts === 6,
+        `so the 3D fill fans 2 triangles over the hull, not 3 over a star (${m.fanVerts} verts)`);
+    check(m.restoredNodes === 4 && m.restoredAlpha === 0,
+        'the section restores the four-node unfilled quad it started from');
+
     // =================================================================
     // 12 — PlaneInstance behaves like a UserInstance under the mouse
     // =================================================================
