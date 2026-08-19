@@ -81,7 +81,7 @@ Build order for any figure is: run the measurement pass (column *measured by*) �
 
 | Panel | Title | Drawn by | Reads | Measured by | Deposits |
 |---|---|---|---|---|---|
-| **d** | Parameter sets on all 50 sessions | `panels/fig8_07_pr_switches.py` | `out/fig8_methods_50.json` | — | — |
+| **d** | Fresh anchor parameter sweep on Mouse-Dyad-10M Sessions | `panels/fig8_07_pr_switches.py` | `out/fig8_methods_50.json` | — | — |
 
 ## Figure 9
 

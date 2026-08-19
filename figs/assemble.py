@@ -138,7 +138,10 @@ TITLES = {
     (8, "a"): "ID-switch rate per threshold",
     (8, "b"): "Cross-view IDF1 per threshold",
     (8, "c"): "Where the IDF1 goes",
-    (8, "d"): "Parameter sets on all 50 sessions",
+    # Names the experiment rather than the sweep's bookkeeping (Eric, 2026-08-19).
+    # The n it used to carry is in the panel's own footnote, which states all 50
+    # proofread sessions and the camera-frame count.
+    (8, "d"): "Fresh anchor parameter sweep on Mouse-Dyad-10M Sessions",
     (8, "e"): "All 50 sessions",
     # FIGURE 9 IS EXPLORATORY AND UNPLACED, on the same footing as Figure 8: no entry in
     # FIGURE-LEGENDS.md, METHODS.md, RESULTS.md or CAPTIONS.md, and no panel of Figures
