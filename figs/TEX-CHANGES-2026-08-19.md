@@ -1,10 +1,16 @@
 # Changes applied to `figures/drafts/luc3d.tex`
 
 I audited every figure reference in the manuscript against the artwork that is
-currently on disk and edited the file directly. Eleven lines changed, each one a
-whole-line replacement. No lines were inserted or deleted, so nothing shifted and
-the file is 486 lines before and after. In Overleaf you can select the old line
-and paste the new one over it.
+currently on disk and edited the file directly.
+
+**Two rounds.** The first round changed eleven lines in place, each a whole-line
+replacement with nothing inserted, so the file stayed at 486 lines. The second
+round replaced Fig 5f and then ADDED two new subsections for the fresh-anchor
+result, which is the only change in either round that moves line numbers: the
+file is now **496 lines**. Everything below is quoted against the current file.
+
+New material is listed first because it is the part that shifts everything after
+it. The in-place replacements follow.
 
 Line 200 was edited once more after the Fig 6a renders were rebuilt with the near
 cage wall left unfilled. The added clause is noted in the entry for that line.
@@ -15,23 +21,68 @@ The version you gave me is backed up at
 One figure was regenerated as part of this pass, Fig 5f, for the reason given in
 the entry for line 185. Everything else is text only.
 
+## NEW: the fresh-anchor sections, lines 226 and 374
+
+These are the only ADDED text in the file. Everything else is a replacement.
+Both are drafted from `figs/FRESH-ANCHOR.txt`, condensed to one Results
+subsection and one Methods subsection, and both refer to the sweep as
+**Supplementary Fig. 8d** in plain text rather than as a `\ref`, because no
+supplementary figure environment exists in this file yet. If you add one, give it
+a label and swap the two references.
+
+**Line 226, end of Results, after the rats subsection and before
+`\FloatBarrier`.** New subsection, two paragraphs:
+
+> \subsection{Stale evidence in the 3D anchor is the dominant switch mechanism}\label{subsec2-9}
+
+The first paragraph gives the mechanism and the headline numbers: switches
+2,071 to 413 at N = 20, mean cross-view IDF1 0.749 to 0.861, and at N = 10, 511
+switches with median session 0.760 to 0.913, 32 of 50 improved and 6 worsened,
+P = 1.7e-6, with a margin of 0.078 IDF1 over the best pure re-tuning, P = 2.7e-5.
+The second argues specificity: the eviction windows are indistinguishable and
+reverse order between the pilot and the benchmark, so the step is from no
+eviction to any eviction, while traversing the axis the other way is
+monotonically harmful, and N = 10 is adopted over N = 20 on harm profile.
+
+**Line 374, Methods, between "Baseline configuration" and "Transfer benchmark on
+social-DANNCE".** New subsection, one paragraph:
+
+> \subsection{Anchor staleness and the fresh-anchor tracker}\label{methods-anchor}
+
+It records the defect (retained detections enter the anchor at any age because
+the reference computes but does not apply Chen et al.'s age weights), the
+measurement (mean ages 3.0 to 49.8 frames, maxima 844 to 8,652), the three
+coordinated changes (eviction at N, synchronous scoring M1, distance threshold
+50 to 25), and the benchmark (all 50 proofread sessions, identical detections,
+harness validated bit-identically against the deposited result, paired Wilcoxon).
+
+**Check before submitting.** The numbers in both come from `FRESH-ANCHOR.txt`,
+which I did not re-derive from the deposits. If that file is older than
+`figs/out/fig8_methods_50.json`, re-check the eight quoted values.
+
 ## Summary
 
 | Line | Section | Change |
 |---|---|---|
+| 226 | Results, NEW | Fresh-anchor subsection interpreting Supplementary Fig. 8d, two paragraphs. |
+| 374 | Methods, NEW | Anchor-staleness subsection, one paragraph. |
 | 109 | Fig 1 caption | Panel A no longer calls the Mouse-Dyad-10M volume an enclosure. Panel D now says 7 of 8 cameras. |
 | 126 | Fig 2 caption | Panel A now states the sideL viewpoint and describes the legend the panel actually carries. |
 | 162 | Fig 4 caption | Panel C no longer claims one line per session. |
-| 176 | Fig 5 Results | Leader cohort corrected to 16 of 23 sessions with at least six displays. |
-| 185 | Fig 5 caption | Same correction, and the panel now states that all 37 sessions are drawn. |
+| 176 | Fig 5 Results | Leader paragraph rewritten for the surrogate panel (was the 16-of-23 null-band wording). |
+| 185 | Fig 5 caption | Panel A: near wall noted as edges only. Panel F: rewritten for the two-box surrogate panel. |
 | 191 | Fig 6 Results | `\ref{fig6}C` corrected to `\ref{fig6}E`, and a sentence introducing Fig 6A added. |
 | 195 | Fig 6 Results | Typo, "Sincle" to "Since". |
-| 272 | Data descriptor | Three sentences describing Fig 6A added. |
-| 185 | Fig 5 caption | Panel A: near wall of the volume noted as edges only; a semicolon split into two sentences. |
 | 200 | Fig 6 caption | One clause added, stating that the near cage wall is drawn as edges only. |
-| 344 | Methods | Leader cohort corrected to six or more displays, 16 of 23 and 9 of 23. |
-| 348 | Methods | Typo, "arttfact" to "artifact". |
-| 420 | Supplementary caption | Typo, "Snapshopt" to "Snapshot". |
+| 278 | Data descriptor | Three sentences describing Fig 6A added. |
+| 350 | Methods | Fig 5f null replaced by the size-matched surrogate and its permutation bound. |
+| 354 | Methods | Typo, "arttfact" to "artifact". |
+| 430 | Supplementary caption | Typo, "Snapshopt" to "Snapshot". |
+
+Line numbers in this table are against the CURRENT 496-line file. The data
+descriptor, both Methods entries and the supplementary caption moved down by
+6 to 10 lines when the two new subsections went in; if you are working from an
+older copy, search the quoted text rather than trusting the number.
 
 ---
 
@@ -94,7 +145,12 @@ New:
 
 > with the worst view dropped; across-session means, bars the 95\% CI of the mean.
 
-## Lines 176, 185 and 344, the leader analysis
+## Lines 176, 185 and 350, the leader analysis (SUPERSEDED, see below)
+
+**Read this section for the reasoning, not for the text to paste.** It records
+why the cohort moved from five displays to six, which still stands and is still
+in the file. The wording it quotes was then overwritten when Fig 5f itself was
+replaced; the text now in the manuscript is in "Fig 5f was replaced" below.
 
 **This is the one change that also altered a figure, and it is worth reading
 before you accept it.**
@@ -174,7 +230,7 @@ New:
 
 > Every camera sits 58 to 76 degrees above the animals, so the height that defines the event exists only after triangulation. Only the 3D panel is metric ($230 \times 230 \times 140$~mm), and the wall of that volume nearest the viewer is drawn as edges only so the interior is seen through clear air.
 
-## Lines 176, 185 and 344 again — Fig 5f was replaced
+## Lines 176, 185 and 350, Fig 5f was replaced (CURRENT text)
 
 Fig 5f is no longer the leader-share scatter with a null band. It is now two boxes,
 the observed shares against a size-matched fair-coin surrogate, with a bracket and
@@ -223,7 +279,7 @@ New:
 Old: "Sincle the enrichment objects are transparent"
 New: "Since the enrichment objects are transparent"
 
-## Line 272, data descriptor
+## Line 278, data descriptor
 
 Fig 6A describes what the corpus contains rather than reporting a measurement,
 and this paragraph already enumerates the six enrichment levels and the one to
@@ -233,12 +289,12 @@ popular 2D datasets lack environmental enrichment":
 
 > Figure~\ref{fig6}A shows these two axes as renders, one session for each condition, with every cage and the animals inside it drawn from that session's own tracked 3D. It also shows what the corpus does and does not contain, because enriched conditions were recorded only with one and two animals, so the empty cells are absent from the data rather than omitted from the figure. The inset expands the four-animal session into the six proofread camera views of a single frame.
 
-## Line 348, Methods
+## Line 354, Methods
 
 Old: "It is not an arttfact of the per-animal height threshold"
 New: "It is not an artifact of the per-animal height threshold"
 
-## Line 420, supplementary caption
+## Line 430, supplementary caption
 
 Old: "Snapshopt of the LUC3D GUI."
 New: "Snapshot of the LUC3D GUI."
