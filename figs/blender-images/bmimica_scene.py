@@ -48,6 +48,22 @@ run off the top of the image -- the same device `cage_scene.py` uses, and the re
 
   bpyenv/bin/python bmimica_scene.py                     # ~1 min, Cycles/OptiX (A40)
   bpyenv/bin/python bmimica_scene.py --samples 256       # the shipped still
+
+VIDEO MODE mirrors `cage_scene.py --video` (same per-frame re-pose machinery, same
+resume-safe absolute frame names, same --orbit/--orbit-range semantics) but the
+framing is sweep-aware: this scene's frame is COMPUTED from the content, and both
+the window and the ceiling-rod heights depend on azimuth, so an orbit fits ONE
+fixed focus/ortho/res that covers every azimuth of the sweep (`fit_sweep`) and
+rods run high enough to leave the frame at every azimuth. BMimica records at
+150.105 fps (the deposit's `fps`), so STEP 5 encoded at 30 fps is real time to
+0.07% — rendering all 9,000 frames for a 150 fps mp4 would quintuple the render
+for playback no display shows. The 60 s clip around the shipped still (frame
+56806, azim 218), 30 s either side, with the still's own view at the midpoint:
+
+  bpyenv/bin/python bmimica_scene.py --video 52301 61311 5 --orbit 60 --azim 188 \
+      --samples 96 --long-edge 1280 --outdir renders/video_bmimica60
+  ffmpeg -framerate 30 -start_number 52301 -i renders/video_bmimica60/f%05d.png \
+      -c:v libx264 -pix_fmt yuv420p -crf 20 renders/bmimica_arena_60s.mp4
 """
 import argparse
 import json
@@ -56,6 +72,7 @@ import os
 import sys
 
 import bpy
+import h5py
 import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -113,6 +130,49 @@ def fit_frame(content, centre_xy, azim_deg, elev_deg, margin=FIT_MARGIN):
     return tuple(focus), ortho, res, y1
 
 
+def fit_sweep(content, centre_xy, azims, elev_deg, margin=FIT_MARGIN,
+              long_edge=LONG_EDGE, force_res=None):
+    """`fit_frame` for an orbit: ONE fixed focus / ortho / res that keeps the
+    content box in frame at EVERY azimuth of the sweep.
+
+    Anchors the focus at the sweep-midpoint azimuth's tight fit, then widens the
+    window to the worst-case projected extent across `azims`. By default the
+    resolution follows the content aspect (long edge `long_edge`); with
+    `force_res` the resolution is EXACTLY that, and the ortho is the smallest
+    window of that aspect containing the content (the content is tall, so a
+    forced landscape frame gains white margins left and right — the same airy
+    composition cage_two_mice_60s.mp4 has). Returns
+    (view_focus, ortho_scale, (res_x, res_y)); the window half-height the
+    ceiling rods need is derived from ortho/res in main (Blender's ortho_scale
+    spans the LARGER resolution dimension). Auto-fitted resolutions are rounded
+    even for yuv420p encoding."""
+    focus, _, _, _ = fit_frame(content, centre_xy, azims[len(azims) // 2],
+                               elev_deg, margin)
+    f = np.asarray(focus)
+    half_x = half_y = 0.0
+    for a in azims:
+        right, up = screen_axes(a, elev_deg)
+        sx, sy = content @ right - f @ right, content @ up - f @ up
+        half_x = max(half_x, -sx.min(), sx.max())
+        half_y = max(half_y, -sy.min(), sy.max())
+    span_x, span_y = 2 * (half_x + margin), 2 * (half_y + margin)
+    if force_res is not None:
+        res = tuple(force_res)
+        if res[0] >= res[1]:
+            ortho = max(span_x, span_y * res[0] / res[1])
+        else:
+            ortho = max(span_x * res[1] / res[0], span_y)
+        return tuple(focus), ortho, res
+    if span_y >= span_x:
+        res = (max(2, int(round(long_edge * span_x / span_y))), long_edge)
+        ortho = span_y
+    else:
+        res = (long_edge, max(2, int(round(long_edge * span_y / span_x))))
+        ortho = span_x
+    res = tuple(r + (r % 2) for r in res)
+    return tuple(focus), ortho, res
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--scene", default=SCENE_JSON)
@@ -128,6 +188,27 @@ def main():
                     help="override the auto-fitted resolution")
     ap.add_argument("--ortho", type=float, default=None,
                     help="override the auto-fitted orthographic scale")
+    ap.add_argument("--video", nargs=3, type=int, metavar=("START", "END", "STEP"),
+                    help="render a frame range from the deposit's points3d h5 "
+                         "instead of the deposit's one still frame")
+    ap.add_argument("--outdir", default=os.path.join(HERE, "renders", "video_bmimica"))
+    ap.add_argument("--orbit", type=float, default=0.0,
+                    help="degrees of render-camera azimuth sweep across the video")
+    ap.add_argument("--orbit-range", nargs=2, type=int, metavar=("START", "END"),
+                    help="frame range the orbit spans (defaults to --video's); "
+                         "lets parallel workers render disjoint chunks of one sweep")
+    ap.add_argument("--long-edge", type=int, default=LONG_EDGE,
+                    help="rendered long edge, px (1280 for video parity with "
+                         "cage_two_mice_60s.mp4)")
+    ap.add_argument("--transparent-bounces", type=int, default=256,
+                    help="Cycles transparent_max_bounces. cage_scene's 32 is NOT "
+                         "enough here: two rearing mice in a clinch stack ~22 "
+                         "membrane films on one ray (plus box walls), and a ray "
+                         "grazing a fan-triangulated membrane edge-on crosses many "
+                         "of its triangles -- exhausted rays paint torso patches "
+                         "BLACK (video60 f61161: 344 black px at 32, 0 at 256; "
+                         "diffs >20 confined to the patch, so bounce-cap re-renders "
+                         "stay splice-safe)")
     args = ap.parse_args()
 
     with open(args.scene) as f:
@@ -160,37 +241,59 @@ def main():
         ob.location = (ob.location[0] + cx, ob.location[1] + cy, ob.location[2])
 
     # ---- the animals, in cage_scene's tab10 colours (NOT recoloured: the SLAP-2M
-    # half uses tab10 blue/orange and the two halves must read as one pair)
-    for tr in range(pose.shape[0]):
-        if not np.isnan(pose[tr]).all():
-            cs.build_animal(tr, pose[tr], S["nodes"], M, scn_coll)
+    # half uses tab10 blue/orange and the two halves must read as one pair).
+    # Video mode instead builds/re-poses them per frame in the render loop below.
+    if not args.video:
+        for tr in range(pose.shape[0]):
+            if not np.isnan(pose[tr]).all():
+                cs.build_animal(tr, pose[tr], S["nodes"], M, scn_coll)
 
     # ---- framing: the arena box and the camera bodies, nothing else. Fitted BEFORE
     # the mounting hardware is built, because the rods have to be told how far to run
-    # to leave the top of the frame (see build_ceiling below).
+    # to leave the top of the frame (see build_ceiling below). An orbit sweeps the
+    # azimuth, so the sweep fit covers every azimuth with one window (fit_sweep).
     hs = side / 2
     C_all = np.array([c["centre_mm"] for c in cams], float) * cs.MM
     corners = np.array([[cx + sx * hs, cy + sy * hs, z]
                         for sx in (-1, 1) for sy in (-1, 1) for z in (0.0, height)])
     cam_pts = np.concatenate([C_all, C_all + CAM_PAD, C_all - CAM_PAD])
-    view_focus, ortho, res, y_top = fit_frame(np.vstack([corners, cam_pts]), (cx, cy),
-                                              args.azim, args.elev)
+    content = np.vstack([corners, cam_pts])
+    if args.video and args.orbit:
+        azims = list(np.linspace(args.azim, args.azim + args.orbit, 61))
+        view_focus, ortho, res = fit_sweep(
+            content, (cx, cy), azims, args.elev, long_edge=args.long_edge,
+            force_res=tuple(args.res) if args.res else None)
+    else:
+        azims = [args.azim]
+        view_focus, ortho, res, _ = fit_frame(content, (cx, cy), args.azim,
+                                              args.elev)
+        if args.long_edge != LONG_EDGE:
+            scale = args.long_edge / max(res)
+            res = tuple(max(2, int(round(r * scale))) for r in res)
+        if args.res:
+            res = tuple(args.res)
     if args.ortho:
         ortho = args.ortho
-    if args.res:
-        res = tuple(args.res)
+    # the window's half-height on the screen-up axis, for the ceiling rods:
+    # Blender's ortho_scale spans the LARGER resolution dimension
+    half_h = (ortho * res[1] / res[0] if res[0] >= res[1] else ortho) / 2
     print(f"framing: ortho {ortho:.3f} m, res {res[0]}x{res[1]} "
           f"(aspect {res[1] / res[0]:.3f}), focus "
           f"({view_focus[0]:.3f}, {view_focus[1]:.3f}, {view_focus[2]:.3f})")
 
     def ceiling_for(C):
         """The z at which a world-vertical rod at C's (x, y) leaves the top of the
-        frame, plus a margin. cage_scene's fixed 1.5 m is right for the cage's
-        framing and WRONG here -- this frame is 1.5 m tall, so at any elevation
-        above ~25 deg a 1.5 m rod stopped in mid-air inside the picture."""
-        _, up = screen_axes(args.azim, args.elev)
-        # solve C_xy . up_xy + z * up_z = y_top + margin
-        return float((y_top + 0.10 - C[0] * up[0] - C[1] * up[1]) / up[2])
+        frame, plus a margin, at EVERY azimuth the render will visit.
+        cage_scene's fixed 1.5 m is right for the cage's framing and WRONG here --
+        this frame is 1.5 m tall, so at any elevation above ~25 deg a 1.5 m rod
+        stopped in mid-air inside the picture."""
+        z = 0.0
+        for a in azims:
+            _, up = screen_axes(a, args.elev)
+            y_top = np.asarray(view_focus) @ up + half_h
+            # solve C_xy . up_xy + z * up_z = y_top + margin
+            z = max(z, float((y_top + 0.10 - C[0] * up[0] - C[1] * up[1]) / up[2]))
+        return z
 
     # ---- the real cameras, placed exactly as cage_scene places SLAP-2M's ---------
     # cage_scene.build_camera_unit wants cam->world, whose COLUMNS are the camera's
@@ -215,14 +318,59 @@ def main():
     # point only while the box is the movement extent; with the box a cube on the
     # footprint (2026-08-17) its mid-height is 325 mm and the animals top out near
     # 130 mm, so `height * 0.5` pointed the key light a body length above them.
-    cs.setup_lighting((float(np.nanmean(pose[:, :, 0])),
-                       float(np.nanmean(pose[:, :, 1])),
-                       float(np.nanmean(pose[:, :, 2]))))
+    # For a video the aim is the window-mean animal position (a fixed light rig,
+    # like cage_scene's; the animals stay within centimetres of that mean's height).
+    if args.video:
+        start, end, step = args.video
+        with h5py.File(S["points3d"]) as f:
+            trx = f["tracks"][start:end] * 1000.0 * cs.MM   # (F, A, N, 3) m
+        aim_pt = tuple(float(np.nanmean(trx[:, :, :, k])) for k in range(3))
+    else:
+        aim_pt = (float(np.nanmean(pose[:, :, 0])),
+                  float(np.nanmean(pose[:, :, 1])),
+                  float(np.nanmean(pose[:, :, 2])))
+    cs.setup_lighting(aim_pt)
     cs.setup_cycles(args.samples, res)
-    cs.setup_render_camera(view_focus, args.azim, args.elev, ortho)
-    os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
-    cs.render_to(args.out)
-    print("wrote", args.out)
+    # override cage_scene's 32 -- see --transparent-bounces
+    bpy.context.scene.cycles.transparent_max_bounces = args.transparent_bounces
+    cam = cs.setup_render_camera(view_focus, args.azim, args.elev, ortho)
+
+    if args.video:
+        # cage_scene's video loop verbatim: absolute frame names (resume/parallel-
+        # safe), re-pose animals in place, orbit shared across workers via
+        # --orbit-range. STEP is the caller's fps contract (see the docstring).
+        frames = list(range(start, end, step))
+        os.makedirs(args.outdir, exist_ok=True)
+        o0, o1 = args.orbit_range if args.orbit_range else (start, end)
+        animals = {}  # track -> handles; rebuilt only if the live-track set changes
+        for i, fr in enumerate(frames):
+            outpath = os.path.join(args.outdir, f"f{fr:05d}.png")
+            if os.path.exists(outpath):
+                continue
+            if args.orbit:
+                az = args.azim + args.orbit * (fr - o0) / max(1, o1 - o0 - 1)
+                el = math.radians(args.elev)
+                d = cs.Vector(cam.location) - cs.Vector(view_focus)
+                cam.location = cs.Vector(view_focus) + d.length * cs.Vector(
+                    (math.cos(el) * math.cos(math.radians(az)),
+                     math.cos(el) * math.sin(math.radians(az)),
+                     math.sin(el)))
+                cs.aim(cam, view_focus)
+            pts = trx[fr - start]
+            live = [tr for tr in range(pts.shape[0]) if not np.isnan(pts[tr]).all()]
+            if set(live) != set(animals):
+                cs.clear_animals(scn_coll)
+                animals = {tr: cs.build_animal(tr, pts[tr], S["nodes"], M, scn_coll)
+                           for tr in live}
+            else:
+                for tr in live:
+                    cs.update_animal(animals[tr], pts[tr])
+            cs.render_to(outpath)
+            print(f"[{i + 1}/{len(frames)}] frame {fr}", flush=True)
+    else:
+        os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
+        cs.render_to(args.out)
+        print("wrote", args.out)
 
 
 if __name__ == "__main__":

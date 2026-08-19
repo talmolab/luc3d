@@ -12,7 +12,7 @@ synthetic five-camera cartoon -- threw away the only evidence the panel had.
   1  label two anchor views          -- cam 1 topB, cam 6 sideL
   2  triangulate from ONLY those two -- schematic + the resulting 3D
   3  reprojections appear            -- cam 0 mid, cam 2 topC, neither labelled
-  4  accept or nudge                 -- magnified, with the measured error split
+  4  accept or nudge                 -- magnified, with a cursor on a reprojection
 
 THE NUMBERS IN STEP 4 ARE MEASURED, not chosen: the two anchor views land low
 because they were labelled, while the other six sit higher because they were only
@@ -45,6 +45,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.lines import Line2D
+from matplotlib.patches import Arc, Polygon
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.data_loader import OUT, load  # noqa: E402
@@ -70,6 +71,23 @@ def cam_label(name):
     """
     idx, view = name.removeprefix("Camera").split("_", 1)
     return f"cam {idx} {view}"
+
+
+def viewport_content_bbox(path, tol=40 / 255):
+    """(x0, y0, x1, y1) around the skeletons in a 3D-viewport shot.
+
+    The viewport's background is a flat #1a1a1a, so "content" is anything more than
+    `tol` away from it -- the same test `_drive.shootEl` uses when it records a bbox.
+    Measured here rather than recorded in the manifest because this shot's framing is
+    computed at export time and moves whenever the fit or the frame does.
+    """
+    import matplotlib.image as _mpimg
+    a = _mpimg.imread(str(path))[:, :, :3]
+    m = np.abs(a - 0x1a / 255).max(2) > tol
+    ys, xs = np.where(m)
+    if not len(xs):
+        sys.exit(f"{path.name}: no content found — did the 3D shot render empty?")
+    return int(xs.min()), int(ys.min()), int(xs.max()) + 1, int(ys.max()) + 1
 
 
 def bbox_of(views, name):
@@ -110,6 +128,68 @@ def zoom_on_largest(view, ar=CELL_AR, pad=0.20):
     h = w / ar
     cx, cy = (b[0] + b[2]) / 2.0, (b[1] + b[3]) / 2.0
     return (cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2)
+
+
+def click_target(png, zoom, *, spread=15, edge=0.16):
+    """Where in `zoom` to put the cursor: the far end of the drawn overlay.
+
+    The manifest carries a centroid and a box per instance but NO node
+    coordinates, so a keypoint cannot be addressed from the data. The overlay is,
+    however, already drawn in the tile, so the target is recovered from the
+    pixels. The tile is a greyscale camera frame, so the overlay is the only
+    CHROMATIC ink in it -- any pixel whose channels spread by more than `spread`
+    out of 255 belongs to a bone or a node, and nothing else in the frame does.
+    (Matching the identity colour itself does not work: the app draws these
+    overlays desaturated, so `#00b478` never appears -- the ink runs to a channel
+    spread of only ~34.) The target is then the chromatic pixel farthest from
+    their centroid, which is a limb end -- nose or tail tip -- and that is exactly
+    where the two-anchor reprojection sits farthest from the detection (the
+    per-view spread runs to 24.6 px), i.e. the keypoint a labeller would nudge.
+    `edge` keeps the cursor's own body inside the window.
+    """
+    img = plt.imread(png)
+    a = (img[..., :3] * 255).round().astype(np.int16) if img.dtype != np.uint8 \
+        else img[..., :3].astype(np.int16)
+    x0, y0, x1, y1 = (int(round(v)) for v in zoom)
+    x0, y0 = max(x0, 0), max(y0, 0)
+    x1, y1 = min(x1, a.shape[1]), min(y1, a.shape[0])
+    win = a[y0:y1, x0:x1]
+    hit = (win.max(axis=2) - win.min(axis=2)) > spread
+    if hit.sum() < 20:
+        return None
+    ys, xs = np.nonzero(hit)
+    cx, cy = xs.mean(), ys.mean()
+    order = np.argsort(-((xs - cx) ** 2 + (ys - cy) ** 2))
+    mx, my = edge * (x1 - x0), edge * (y1 - y0)
+    for k in order:                     # first far point with room for the cursor
+        if mx <= xs[k] <= (x1 - x0) - mx and my <= ys[k] <= (y1 - y0) - my:
+            return x0 + float(xs[k]), y0 + float(ys[k])
+    return x0 + float(xs[order[0]]), y0 + float(ys[order[0]])
+
+
+#: The classic arrow pointer, tip at (0, 0), pointing up and to the left, in units
+#: of the cursor's own height. Drawn rather than imported so it scales with the
+#: tile's own pixel coordinates and needs no font or asset.
+CURSOR = [(0.0, 0.0), (0.0, 1.00), (0.24, 0.76), (0.40, 1.06),
+          (0.53, 1.00), (0.37, 0.70), (0.66, 0.66)]
+
+
+def click_cursor(ax, xy, *, h):
+    """Draw a pointer clicking at `xy` (data coords), `h` tall in the same units.
+
+    Step 4 of the protocol is an ACTION -- accept the reprojection or nudge it --
+    and until now the tile showed only its result (Eric, 2026-08-18: "I want a
+    little mouse to appear like it is clicking on one of the reprojections").
+    White fill with a dark outline, because the tile behind it is video and can be
+    any value; two short arcs off the tip carry the click.
+    """
+    x, y = xy
+    pts = [(x + dx * h, y + dy * h) for dx, dy in CURSOR]
+    ax.add_patch(Polygon(pts, closed=True, facecolor="white", edgecolor=INK,
+                         lw=0.7, joinstyle="miter", zorder=7))
+    for r, lw in ((0.42, 0.9), (0.72, 0.6)):
+        ax.add_patch(Arc((x, y), 2 * r * h, 2 * r * h, angle=0.0,
+                         theta1=118.0, theta2=196.0, color=INK, lw=lw, zorder=7))
 
 
 def chevron(fig, x, y, *, h=0.023, w=0.010, color=GREY, lw=1.2):
@@ -241,8 +321,16 @@ def main():
 
     # --- 2: the solve, and what it produced -------------------------------
     schematic(cells[(0, 1)], anchors)
-    tile(cells[(1, 1)], OUT / "fig2p-3d-animals.png", None,
-         badge="3D from the 2 anchors")
+    # CROPPED TO THE POSE, MEASURED (2026-08-19). This tile used to go in whole
+    # (`bbox=None`), so most of it was empty viewport. The driver now stages it at
+    # the sideL anchor's own camera pose with a computed FOV fit, and the pose is
+    # WIDE and SHORT in that view -- so the fit is set by the horizontal extent and
+    # leaves the frame two-thirds empty vertically whatever the driver does. The
+    # crop is measured off the pixels rather than recorded, so a re-export cannot
+    # slide it off the content.
+    tile(cells[(1, 1)], OUT / "fig2p-3d-animals.png",
+         viewport_content_bbox(OUT / "fig2p-3d-animals.png"),
+         badge="3D from the 2 anchors", pad=0.10)
 
     # --- 3: two views nobody labelled -------------------------------------
     for r, cam in enumerate(REPROJ_CAMS):
@@ -258,16 +346,28 @@ def main():
                badge=f"{cam_label('Camera0_mid')} · magnified")
     ax0.set_xlim(zoom[0], zoom[2])
     ax0.set_ylim(zoom[3], zoom[1])
+    # The cursor goes on the tile a labeller would act on: the magnified,
+    # unlabelled view whose overlay is a reprojection. Sized at 13% of the zoom
+    # height so it reads as a pointer at 33 mm tall and does not cover the animal.
+    tgt = click_target(OUT / "fig2p-reproj-f150-Camera0_mid.png", zoom)
+    if tgt is None:
+        print("  [warn] no overlay ink found — cursor skipped")
+    else:
+        click_cursor(ax0, tgt, h=0.13 * (zoom[3] - zoom[1]))
+        print(f"  cursor at {tgt[0]:.0f}, {tgt[1]:.0f} px in the source frame")
 
     ax = cells[(1, 3)]
     blank(ax)
     ax.set_aspect("auto")
     ax.set_xlim(0, 1)
     ax.set_ylim(0, 1)
+    # ONLY THE ENCODING KEY (Eric, 2026-08-18: "get rid of '2 anchor solve, this
+    # frame', 'anchor views 1.4-4.5px' and 'the other 6 2.5-24.6' ... you can keep
+    # dotted = reprojected and solid = detected, and bring those up higher"). The
+    # measured per-view split is still computed above and still deposited; it is a
+    # caption number now, not artwork. With three lines gone the two that remain
+    # start at the top of the cell, directly under the magnified view they explain.
     for i, (t, c, w) in enumerate([
-            ("2-anchor solve, this frame", INK, "bold"),
-            (f"anchor views {min(a_vals):.1f}–{max(a_vals):.1f} px", INK, "normal"),
-            (f"the other 6 {min(o_vals):.1f}–{max(o_vals):.1f} px", TEAL, "normal"),
             ("dotted = reprojected", GREY, "normal"),
             ("solid = detected", GREY, "normal")]):
         ax.text(0.0, 0.95 - i * 0.17, t, color=c, fontweight=w, fontsize=7, va="top")

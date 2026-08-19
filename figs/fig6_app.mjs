@@ -81,12 +81,23 @@ const PRINT_STYLE = {
     reprojNodeSize: 5, reprojEdgeWeight: 3, reprojLabelSize: 0,
 };
 
-// Okabe-Ito, ordered so the first four (this session has four animals) stay separable
-// under deuteranopia AND carry enough luminance to read on a dark IR frame: orange,
-// bluish green, reddish purple, sky blue. #0072B2 is last because at ~25% luminance it
-// is the one member of the set that goes muddy against black bedding.
+// TAB10, PERMUTED TO AGREE WITH THE BLENDER RENDERS (Eric, 2026-08-19: Fig 6a's
+// camera-view inset must carry the same colour per animal as the cage tile it is
+// expanded from). The renders paint H5 track k with tab10[k]; the h5 track order and
+// this app's identity order do NOT agree, and the measured mapping is track 0 -> id_3,
+// 1 -> id_2, 2 -> id_0, 3 -> id_1 (blender-images/enrichment_scene.TRACK_TO_IDENTITY,
+// with how it was derived). Inverting it, id_0..id_3 take tab10 entries 2, 3, 1, 0 --
+// which is the order below. VERIFIED after export by projecting each h5 track into all
+// six views and reading the painted colour: 100% agreement on all four animals.
+// KEEP IN STEP with enrichment_scene.COMBOS[(4,0)]'s frame; re-derive if either moves.
+//
+// This replaced an Okabe-Ito set chosen for deuteranopia separability and luminance on
+// dark IR frames. That property is lost here: tab10's green (#2CA02C) and red
+// (#D62728) converge under deuteranopia, and its blue is darker against black bedding.
+// The identities are also labelled by number in the app's own overlays, so colour is
+// not the only cue -- but do not describe this panel's colours as colourblind-safe.
 const PALETTE = (process.env.PALETTE
-    || '#E69F00,#009E73,#CC79A7,#56B4E9,#D55E00,#F0E442,#0072B2').split(',');
+    || '#2CA02C,#D62728,#FF7F0E,#1F77B4,#9467BD,#8C564B,#E377C2').split(',');
 
 /** Repaint every identity from `pal` and redraw, in 2D and in the 3D viewport. */
 async function recolorIdentities(page, pal) {

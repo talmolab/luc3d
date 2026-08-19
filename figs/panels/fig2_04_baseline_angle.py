@@ -166,8 +166,10 @@ def main():
     # and scored on the same ten pairs -- descriptive, not a test, and it needed two
     # lines of hedging to say so honestly. Both the count and the hedge are now in the
     # legend, which is where a claim that needs a paragraph belongs.
-    ax.text(0.97, 0.97, f"k = {k:.2f} mm", transform=ax.transAxes, ha="right",
-            va="top", color=TEAL, fontsize=7)
+    # `k` IS NO LONGER PRINTED (Eric, 2026-08-18: "for 2d get rid of 'k = 1.52mm'").
+    # The curve is still named `k / sin theta` on itself, and its value is in the
+    # caption -- so the law is attributable on the artwork and reproducible from the
+    # legend, which is where a fitted constant belongs.
 
     ax.set_xlabel("anchor-pair angle at the animal (°)")
     ax.set_ylabel("3D error vs proofread (mm)")

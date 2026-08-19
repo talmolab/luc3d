@@ -194,7 +194,19 @@ def main(variant=False, corrected=True):
     # nothing can overlap.
     nser = len(series)
     bar_w = BAR_W if not variant else 0.20
-    fig, ax = panel(80.0, ROW_H, key=(nser + 2) if variant else 1)
+    # THE MANUSCRIPT PANEL'S KEY SITS INSIDE THE AXES, TOP RIGHT, AND RESERVES NO
+    # BAND (`key=0`). It used to be drawn in the `panel(key=...)` band above the
+    # plot -- but with `key=1` reserving ONE line's worth (3.6 mm at ROW_H) for the
+    # THREE names actually stacked there, the second and third lines fell back into
+    # the axes: at Fig 11's 0.635 cram scale "ByteTrack" landed ON the y spine's top
+    # (measured on the assembled page: key ink x 109.1-133.4 / y 153.1-168.6 against
+    # a spine at x 110.5 running from y 161.1). Reserving three lines instead would
+    # have cost 8.8 of 50 mm of plot height on a panel whose whole figure is crammed.
+    # The bars leave the top-right quadrant empty -- `top` is 1.30x the tallest FP bar
+    # and the ID-switch bars are ~12x shorter -- so the names go there, where they
+    # collide with nothing and the axes keeps its full height. The VARIANT keeps the
+    # band: its six entries carry rates and are too wide to sit inside the data area.
+    fig, ax = panel(80.0, ROW_H, key=(nser + 2) if variant else 0)
     top = max(blk["error_decomposition"][tk]["false_positives"]
               for (blk, _l, _c, _h), tk in zip(series, tkey)) / tcf * 100 * 1.30
     x = np.arange(len(TERMS))
@@ -244,8 +256,16 @@ def main(variant=False, corrected=True):
         entries.append((f"grey rule: LUC3D pre-#131, retired "
                         f"(sw {er['id_switches'] / tcf * 100:.3g}%)", MUTED))
 
-    text_legend(ax, entries if variant else [(lab, c) for (_b, lab, c, _h) in series],
-                "above", dy=KEY_DY, xy=(0.14, 0.985), transform=fig.transFigure)
+    if variant:
+        text_legend(ax, entries, "above", dy=KEY_DY, xy=(0.14, 0.985),
+                    transform=fig.transFigure)
+    else:
+        # Axes coordinates, so the stack tracks the plot box rather than the page: dy
+        # 0.085 of the axes height is ~3.4 mm per line, the same air the band's KEY_DY
+        # gave, and three lines from y = 0.98 clear the tallest bar (0.531 of a 0.690
+        # axis, i.e. 77% of the height) because they hang at the RIGHT edge.
+        text_legend(ax, [(lab, c) for (_b, lab, c, _h) in series],
+                    "upper right", dy=0.085)
     ax.set_xticks(x)
     ax.set_xticklabels([n for _, n in TERMS])
     ax.set_xlim(-0.45, len(TERMS) - 0.55)

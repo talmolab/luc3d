@@ -60,7 +60,7 @@ METRICS = ["idf1", "idp", "idr", "num_switches", "recall", "precision", "idtp",
 
 
 def score_session(result_json_path, det_dir, gt_dir, cameras, num_animals, max_frames=None,
-                   det_session_idx=0, gt_paths=None):
+                   det_session_idx=0, gt_paths=None, frame_subset=None):
     """Score one session's bench_crossview/fig3_bench result JSON against GT.
 
     det_dir: dir with {cam}_predictions.h5. det_session_idx selects the row in
@@ -71,6 +71,21 @@ def score_session(result_json_path, det_dir, gt_dir, cameras, num_animals, max_f
     gt_paths: optional {cam: absolute proofread .analysis.h5 path} — SLAP-2M's
               master-sheet layout has no common gt_dir, each camera's GT path is
               independent.
+    frame_subset: optional set/frozenset of frame indices. When given, ONLY those
+              frames enter the accumulators — GT on every other frame is not
+              counted as a miss. Default None keeps the full-session behaviour
+              byte for byte, so no deposited number can move.
+
+              This exists for ONE comparison: exhaustive enumeration only emits a
+              result on frames where every camera holds exactly `animals` clean
+              detections (~48% of BMimica), so scoring it over the whole session
+              charges it an IDFN for every frame it structurally cannot enter,
+              while greedy is scored over all of them. That is a COVERAGE
+              difference, not a quality one, and `fig3_headtohead.py`'s own caveat
+              list says so ("exhaustive is scored over only the frames it computed
+              while greedy is scored over the whole session ... the gap is not a
+              quality difference"). Passing the exhaustive arm's computed-frame set
+              here for BOTH arms is what makes their IDF1 comparable.
     Returns a dict; raises on missing files (caller decides failed/why).
     """
     with open(result_json_path) as f:
@@ -103,6 +118,8 @@ def score_session(result_json_path, det_dir, gt_dir, cameras, num_animals, max_f
         ids = ev.luc3d_assignments_for_cam(luc, cam, nf, ndet)  # (nf, ndet) global id or -1
         pc = mm.MOTAccumulator(auto_id=False)
         for fi in range(nf):
+            if frame_subset is not None and fi not in frame_subset:
+                continue
             gtb, gti = [], []
             for t in range(gt.shape[1]):
                 if not occ[fi, t]:

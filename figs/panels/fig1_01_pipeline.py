@@ -77,10 +77,6 @@ STAGES = [
     ("export", ".slp 2.8 / H5", True, "file"),
 ]
 
-#: The stage whose INCOMING arrow carries the calibration file, by index into STAGES --
-#: the FIRST stage that consumes it, which is the cross-view tracker (see above).
-CALIB_CONSUMER = 3
-
 #: Chevron geometry. The box holds the ICON ONLY and the label sits under it --
 #: see `main()` for why the label is no longer inside the chevron.
 W, H, GAP, NOTCH = 2.05, 1.05, 0.36, 0.24
@@ -92,8 +88,10 @@ W, H, GAP, NOTCH = 2.05, 1.05, 0.36, 0.24
 #: white above the chevrons, which is 2.8 mm of the figure at the scale below.
 #: `calibrate`'s sub-label WRAPS to a second line, which the "this work" bracket has to
 #: clear -- hence a bottom of -2.45 and a bracket at -2.05, against -2.20 and -1.80 in
-#: the one-line era. The top carries the `.toml` label above the row's fifth arrow.
-YLIM = (-2.45, H / 2 + 0.46)   # 0.34 clipped the .toml label (lint_text.py)
+#: the one-line era. The top was H/2 + 0.46 while the `.toml` label sat above the row;
+#: with that label cut (see main()) nothing is drawn above the chevrons again, so the
+#: top is back to the ink: the chevron's top edge plus its stroke and a hair.
+YLIM = (-2.45, H / 2 + 0.06)
 
 #: Millimetres per data unit. THIS, NOT THE PANEL HEIGHT, IS THE FIXED QUANTITY.
 #: `blank()` sets aspect='equal' and the drawing is 14.8 units wide against 2.8 tall,
@@ -219,21 +217,16 @@ def main():
                 (x - GAP + 0.06, 0), (x + 0.04, 0), arrowstyle="-|>",
                 mutation_scale=7, color=GREY, lw=0.9, shrinkA=0, shrinkB=0))
 
-    # CALIBRATION, ENTERING WHERE IT IS ACTUALLY USED. An arrow up into the
-    # triangulate chevron rather than a word inside stage 1: 2D pose does not need
-    # calibration and triangulation cannot proceed without it, and the figure should
-    # say which. Drawn in MUTED so it reads as an input to the row, not a stage in it.
-    # ABOVE the row, not below it: under the chevron the label landed on the
-    # "triangulate" caption and its sub-label ("DLT, N >= 2 views"), which is the one
-    # band of this panel that is already full. Above the chevrons nothing is drawn at
-    # all, and an input arriving from outside the row reads correctly as an input.
-    # THE ARTEFACT, NAMED ON THE EDGE THAT CARRIES IT. `calibrate` is a stage in the
-    # row now, so the calibration file is what crosses the arrow into `triangulate`
-    # rather than a side input into it. Named above that one arrow, in MUTED: the row's
-    # other arrows carry the animals' data and need no label, and the space above the
-    # chevrons is otherwise empty.
-    ax.text(CALIB_CONSUMER * (W + GAP) - GAP / 2, H / 2 + 0.10, ".toml",
-            ha="center", va="bottom", color=MUTED, fontsize=SUB_PT)
+    # THE `.toml` LABEL IS GONE (Eric, 2026-08-19: "why does it just say .toml above
+    # calibrate ... maybe just get rid of that"). It named the calibration artefact on
+    # the arrow OUT of `calibrate` and into `cross-view re-ID`, the first stage that
+    # consumes it -- but a file extension floating over the chevron row reads as a
+    # label for `calibrate` itself rather than for the edge, and at panel size the
+    # distinction between "above the arrow" and "above the stage" does not survive.
+    # Nothing else on the row names its artefact, so this one was the odd mark out;
+    # `export`'s sub-label still names the output format, which is where a reader
+    # looks for file types. If it ever comes back, it belongs ON the arrow (a
+    # horizontal rule with the word set into it), not floating above the row.
 
     # ONE bracket under the three stages this paper contributes, as in the legacy
     # figure. Per-stage "this paper" tags said the same thing three times and did

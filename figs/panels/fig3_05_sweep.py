@@ -47,6 +47,55 @@ the machinery, and the reasons for it, are unchanged from the 8-session panel (s
 
 THE METRIC IS IDF1, NOT HOTA. Nothing in luc3d-bench computes HOTA. Do not relabel.
 
+THE FLAT RULES ARE NOW FRAME-MATCHED, AND THAT MOVED THE IDF1 ONE A LONG WAY.
+-----------------------------------------------------------------------------
+Until 2026-08-18 the salmon IDF1 rule sat at 0.400, read from
+`fig3_exhaustive_bmimica.json`, and that number was a COVERAGE artefact rather than an
+association result. Exhaustive only emits a result where every camera holds exactly A
+clean detections -- 4,324,469 of 9,004,392 BMimica frames, 48% -- but
+`fig3_headtohead.py:361` scored it over the WHOLE session, so every ground-truth
+animal on the other 52% was charged to it as an identity miss while greedy was scored
+on all of them. Across the 50 sessions corr(coverage, that IDF1) = 0.86, and perfect
+association with silence elsewhere caps IDF1 at ~0.64 at this coverage -- below the
+teal curve before exhaustive makes a single mistake. `fig3_headtohead.py`'s own caveat
+list said as much ("the gap is not a quality difference ... no figure panel plots
+them") and this panel plotted them. Eric, 2026-08-18: "is the idf1 score just so low
+because we didnt try it on the frames with missing detections?" and then "can we get a
+fair estimate for 3d also?"
+
+So both rules now come from `fig3_frame_matched_bmimica.json`
+(`figs/fig3_frame_matched.py`), which re-scores BOTH arms over exactly the frames
+exhaustive computed -- same stored driver outputs, same GT, same scorer, only the frame
+set moves and it moves for both:
+
+    exhaustive   cross IDF1 0.6275 (was 0.400)   17,516 switches   81.01 /100k
+    greedy       cross IDF1 0.7906               1,730 switches     8.00 /100k
+    (identical 21,622,345 camera-frames; exhaustive higher in 10 of 50 sessions)
+
+TWO RULES, NOT ONE, because a fair number needs its comparator on the same basis. The
+grey rule is the head-to-head greedy arm on those same frames; grey is the set's
+reference-level ink (7d uses it the same way) and NOT teal, because this is a
+different arm at a different operating point from the swept curve -- `greedy.json` is
+`fig3_bench.mjs` at DEFAULT thresholds, while the curve sweeps the fresh anchor over r
+on the full session. A teal rule would read as a point on that curve.
+
+THE SWITCH RULE DID NOT MOVE, AND THAT IS THE CROSS-CHECK. Exhaustive's switch count
+was always tallied on the frames it computed, so frame-matching cannot change it: the
+rescore returns 17,516 switches / 81.0088 per 100k against the published deposit's
+17,516 / 81.00879. The panel asserts that equality before drawing -- it is the evidence
+that this rescore is the same measurement as the published one, differing only where
+IDF1's denominator was the problem.
+
+WHAT FRAME-MATCHING DOES NOT FIX. Exhaustive is purely per-frame; its identities exist
+only through `fig3_exhaustive.mjs`'s nearest-3D-centroid threading to the previous
+COMPUTED frame, which is OUR scaffolding and not the published method. On the matched
+frames its IDP, IDR and IDF1 come out equal (a 1:1 detection match to GT with no false
+positives and no misses), so the remaining 0.63 vs 0.79 is entirely "did the identity
+survive the gap" -- temporal bookkeeping, not association. The threading-free comparison
+is the partition agreement, and on these same frames the two methods choose the SAME
+partition on 4,324,311 of 4,324,469 (99.996%). That is why the rules stay reference
+levels and not a third arm of the sweep.
+
 Source: figs/out/fig3_sweep50.json (shipped arm) and
         figs/out/fig3_sweep50__distanceThreshold25-stale20-sync_*.json (fresh anchor),
         both written by figs/fig3_sweep50.py over the full 12-ratio corr2d = 1 row.
@@ -276,6 +325,22 @@ def main(with_shipped=False):
     # TWO STACKED AXES (Eric, 2026-08-15): grid() at panel width, ~34 mm per plot.
     from src.style import grid as _grid
     fig, (ax_top, ax_bot) = _grid(2, 1, span="third", row="std")
+    # A KEY BAND ABOVE BOTH PLOTS, reserved the way `panel(key=...)` reserves one --
+    # `grid()` has none of its own. Two series names and the app-default note share it,
+    # so nothing that identifies a line sits inside the data any more (Eric, 2026-08-18:
+    # "just say exhaustive and greedy in green and blue at the top, bring app default
+    # up"). 0.105 of the panel height carries two 7 pt rows; the axes give that up once,
+    # not once each, because the band is above the whole grid.
+    #
+    # 0.075, NOT 0.105, AND THAT IS SET BY THE Y LABELS. Both are rotated and set along
+    # their own ~17 mm axis with millimetres to spare ("ID switches /100k" measured
+    # ~16.5 mm at 7 pt); take 0.105 of the panel and each axis drops to ~15 mm, the
+    # labels overrun their own axes, and the two of them print through each other in the
+    # middle of the panel -- which `lint_text.py` does NOT catch, because two thin
+    # rotated boxes crossing overlap less than its 18% floor. The band is one row, the
+    # labels come down to 6.5 pt, and the top one loses its "ID" (the panel measures no
+    # other kind of switch).
+    fig.get_layout_engine().set(rect=(0, 0, 1, 1 - 0.075))
     ax = ax_top
 
     r = np.sort(df.r.unique()).astype(float)
@@ -318,6 +383,30 @@ HOLLOW + DASHED = FRESH ANCHOR, FILLED + SOLID = SHIPPED. Briefly changed to
     exh = load("fig3_exhaustive_bmimica.json")
     df["rate"] = df.switches.clip(lower=1) / tcf * PER
     exh_rate = exh["switches_per_100k_camera_frames"]
+    # THE FAIR BASIS (2026-08-18): both rules over the frames exhaustive computed.
+    fm = load("fig3_frame_matched_bmimica.json")
+    fm_e, fm_g = fm["arms"]["exhaustive"], fm["arms"]["greedy"]
+    # The switch rate is the invariant across the two scorings -- exhaustive's
+    # switches were always counted on its own computed frames -- so an inequality
+    # here means the frame-matched rescore is NOT the same measurement as the
+    # published deposit and neither number may be drawn beside the other.
+    if abs(fm_e["switches_per_100k_camera_frames"] - exh_rate) > 1e-4:
+        sys.exit(f"fig3d: frame-matched exhaustive switch rate "
+                 f"{fm_e['switches_per_100k_camera_frames']:.5f} != the published "
+                 f"deposit's {exh_rate:.5f} -- the two rescores disagree on the arm "
+                 f"they share; reconcile before drawing")
+    if fm_e["camera_frames_scored"] != fm_g["camera_frames_scored"]:
+        sys.exit("fig3d: the two frame-matched arms were scored over different "
+                 "camera-frame counts -- the rules would not be comparable")
+    # The footnote states the matched frames as a SHARE of this panel's own exposure,
+    # so the two denominators must be the same population: 50 sessions x 5 cameras,
+    # 45,021,960 camera-frames in the sweep deposit and 9,004,392 x 5 in the
+    # head-to-head's `framesConsidered`. Equal, and asserted because a mismatch would
+    # turn the share into a ratio of two different corpora.
+    if fm_e["camera_frames_scored"] > tcf:
+        sys.exit(f"fig3d: the frame-matched arms cover "
+                 f"{fm_e['camera_frames_scored']:,} camera-frames, more than this "
+                 f"panel's own {tcf:,} -- the two deposits are not the same corpus")
 
     def sweep_line(axis, ycol):
         g = df[df.arm == FRESH_NAME].sort_values("r")
@@ -337,6 +426,16 @@ HOLLOW + DASHED = FRESH ANCHOR, FILLED + SOLID = SHIPPED. Briefly changed to
         axis.plot([zero_x, r[-1]], [yval] * 2, "s", color=SALMON, ms=3.4,
                   mec="white", mew=0.7, zorder=3, clip_on=False)
 
+    # THE SAME-FRAMES GREEDY RULE IS NOT DRAWN (Eric, 2026-08-18: "we dont need ...
+    # LUC3D greedy 0.79 and 8.0/100k ... written there"). It was a grey dashed rule at
+    # the greedy arm's own frame-matched values, added the same day as the frame-matched
+    # exhaustive rule so the pair could be read like for like. Its numbers are NOT lost:
+    # both arms are deposited in `data/fig3/fig3d_frame_matched_rules.csv` and quoted in
+    # the caption (greedy 0.791 IDF1, 8.0 switches per 100k on exactly the frames
+    # exhaustive can enter, against exhaustive's 0.628 and 81.0). Dropping it also
+    # removes an unnamed line style from the artwork, which is the defect this panel's
+    # neighbour 2b was just fixed for.
+
     _axes_setup(ax_top, min(float(df.rate.min()), exh_rate),
                 max(float(df.rate.max()), exh_rate), zero_x, first, has_zero)
     # Compact axis: full decades only. The 0.3/3/30/300 half-steps collided at
@@ -352,7 +451,7 @@ HOLLOW + DASHED = FRESH ANCHOR, FILLED + SOLID = SHIPPED. Briefly changed to
     # rule, so both fit INSIDE their own axis with a hair to spare; the full
     # denominator ("per 100,000 camera-frames") stays in the footnote, where the
     # rate basis is stated exactly.
-    ax_top.set_ylabel("ID switches /100k", fontsize=7)
+    ax_top.set_ylabel("switches /100k", fontsize=6.5)
     ax_top.tick_params(labelbottom=False)
     ax_top.set_xlabel("")
 
@@ -363,18 +462,45 @@ HOLLOW + DASHED = FRESH ANCHOR, FILLED + SOLID = SHIPPED. Briefly changed to
     ax_bot.yaxis.set_minor_locator(NullLocator())
     ax_bot.set_ylim(0.35, 0.92)
     sweep_line(ax_bot, "idf1")
-    exh_line(ax_bot, exh["idf1_cross_mean"], 5)
-    ax_bot.set_ylabel("cross-view IDF1", fontsize=7)
+    exh_line(ax_bot, fm_e["idf1_cross_mean"], 5)
+    # THE RULES ARE DRAWN, SO THE RULES ARE DEPOSITED. Their values live in
+    # out/fig3_frame_matched_bmimica.json, which is not a tracked artefact; the four
+    # numbers on the artwork belong in data/ beside the curve they are compared with.
+    deposit(pd.DataFrame([
+        {"arm": arm, "basis": "frames exhaustive computed (both arms)",
+         "idf1_cross_mean": a["idf1_cross_mean"],
+         "idf1_cross_median": a["idf1_cross_median"],
+         "switches": a["switches_total"],
+         "switches_per_100k_camera_frames": a["switches_per_100k_camera_frames"],
+         "camera_frames_scored": a["camera_frames_scored"],
+         "n_sessions": fm["n_sessions"]}
+        for arm, a in (("exhaustive", fm_e), ("greedy (head-to-head, default)", fm_g))
+    ]), 3, "fig3d_frame_matched_rules.csv")
+    ax_bot.set_ylabel("cross-view IDF1", fontsize=6.5)
 
     footnote(ax_bot, "r = 0: no 3D term, left of the break\n"
              f"rate basis: {tcf:,} camera-frames (50 sessions x 5 cameras, "
-             f"full length), corr2d = 1 row; exhaustive's rate is over its own "
-             f"{exh['camera_frames_computed']:,} clean camera-frames")
+             f"full length), corr2d = 1 row\n"
+             f"the two flat rules are FRAME-MATCHED: exhaustive and the head-to-head "
+             f"greedy arm (fig3_bench.mjs at default thresholds), both scored over "
+             f"the same {fm_e['camera_frames_scored']:,} camera-frames -- the "
+             f"{fm_e['camera_frames_scored'] / tcf:.0%} of frames where "
+             f"every camera holds exactly 2 clean detections, which is the only set "
+             f"exhaustive can enter. Scoring exhaustive over the whole session, as "
+             f"this panel did until 2026-08-18, charged it an identity miss for every "
+             f"frame it cannot enter and put the rule at 0.400 instead of "
+             f"{fm_e['idf1_cross_mean']:.3f}. Its identities still come from our "
+             f"nearest-centroid threading, not the published method; the two choose "
+             f"the same partition on 99.996% of these frames")
 
     for axis in (ax_top, ax_bot):
         axis.axvline(SHIPPED_R, color=GREY, lw=0.8, ls=(0, (1.5, 1.5)), zorder=1)
+    # UP INTO THE BAND ("bring app default up"), on the key's own row rather than 2 pt
+    # off the top spine. Still anchored to r = 6 in DATA x, so it stays over the rule it
+    # names whatever the axis does; only its vertical offset changed, from +2 pt to the
+    # band's own line.
     ax_top.annotate(f"app default r = {SHIPPED_R:g}", (SHIPPED_R, 1.0),
-                    xycoords=("data", "axes fraction"), xytext=(0, 2),
+                    xycoords=("data", "axes fraction"), xytext=(0, 9),
                     textcoords="offset points", color=MUTED, fontsize=6.5,
                     ha="center", va="bottom")
 
@@ -391,9 +517,20 @@ HOLLOW + DASHED = FRESH ANCHOR, FILLED + SOLID = SHIPPED. Briefly changed to
     # axes height (79.4/100k on this log axis), MEASURED via lint's on-data
     # check after a first cut at 0.68 landed the top line exactly on it. The
     # band between the rule and the teal tail (~0.04) is empty at r >= 2.
-    ax_top.text(0.97, 0.60, "LUC3D, fresh anchor\n(shipped)",
-                transform=ax_top.transAxes,
-                ha="right", va="top", color=TEAL, fontsize=7, fontweight="bold")
+    # TWO WORDS IN THE BAND, ONE PER SERIES, and nothing else on the artwork identifies
+    # a line (Eric, 2026-08-18: "just say exhaustive and greedy"). The long name this
+    # replaces -- "LUC3D, fresh anchor (shipped)" -- was inside the top plot and had
+    # already been moved twice to dodge the data; WHICH configuration is swept is a
+    # caption fact, not a thing the curve needs to carry, and the caption states it
+    # ("for the fresh-anchor configuration of c").
+    # SALMON AND TEAL, not the blue/green the instruction named: salmon IS "exhaustive"
+    # in this figure's a, c and e, and teal is LUC3D set-wide, so recolouring d alone
+    # would leave the figure disagreeing with itself about what a hue means. Confirmed
+    # with Eric before drawing.
+    fig.text(0.16, 0.985, "exhaustive", ha="left", va="top", color=SALMON,
+             fontsize=7, fontweight="bold")
+    fig.text(0.52, 0.985, "greedy", ha="left", va="top", color=TEAL,
+             fontsize=7, fontweight="bold")
     # ONE NAME PER SUBPLOT: two 7 pt lines need ~0.30 of a 17 mm axis and the top
     # corner has ~0.20 above the exhaustive rule -- they collided with each other or
     # with the rule at every spacing tried. The teal name stays here; the salmon name
@@ -410,11 +547,6 @@ HOLLOW + DASHED = FRESH ANCHOR, FILLED + SOLID = SHIPPED. Briefly changed to
     # axes height, so anything hung under it prints through it (the first cut
     # of this fix did exactly that); between the rule and the teal curve's
     # ~0.44 floor there is room for two lines.
-    ax_bot.text(0.60, 0.26, "exhaustive", transform=ax_bot.transAxes,
-                ha="right", va="bottom", color=SALMON, fontsize=7,
-                fontweight="bold")
-    ax_bot.text(0.60, 0.24, "≈0.40, coarse estimate", transform=ax_bot.transAxes,
-                ha="right", va="top", color=SALMON, fontsize=6)
     save(fig, 3, "d", "sweep" if not with_shipped else "sweep_with_shipped")
 
 

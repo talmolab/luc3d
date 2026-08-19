@@ -159,7 +159,19 @@ VIEW_CAM = "Camera0_mid"
 TILES = [
     ("after-f{frame}-Camera0_mid.png", "cam 0 mid: video", None, 1.87),
     ("tri3d-camview.png", "cam 0 mid: 3D", (594, 949, 1573, 1998), 1.95),
-    ("tri3d-rig.png", "rig", (272, 56, 1227, 805), 1.50),
+    # THE RIG CROP EXCLUDES Camera3_sideC ON PURPOSE (Eric, 2026-08-19: "not
+    # visualize that camera in the bottom left, there is too much black space, lets
+    # look at the mice and the other cameras a bit more"). That camera projects to
+    # (281, 796) -- a lone frustum in the far bottom-left corner with nothing between
+    # it and the rest of the rig, so including it forced a crop 955x749 px of which
+    # the empty diagonal was most of the area. The other seven cameras and all three
+    # animals occupy a compact 570x593 block, measured as connected components of the
+    # non-background pixels: seven blobs from (656,383) [Camera2_topC/7_sideR] to
+    # (1226,149) [Camera0_mid/4_topR] and down to (861,648) [Camera6_sideL], with the
+    # animals at (853,506)-(1112,612). Cropping to that block prints the content
+    # 1.26x larger at the same tile size. THE PANEL THEREFORE SHOWS 7 OF 8 CAMERAS
+    # and the legend must not say "all 8 calibrated cameras" -- see FIGURE-LEGENDS.md.
+    ("tri3d-rig.png", "rig", (656, 55, 1226, 648), 1.50),
 ]
 #: Breathing room added to the bbox HEIGHT, as a fraction of it -- the number that
 #: sets how big everything prints, so it stays small.

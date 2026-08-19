@@ -23,9 +23,16 @@ the pose bounding-box midpoint so the box, lights and camera live at the
 origin. The box is 260 x 260 x 140 mm sitting on the floor (pose xy extent is
 ~172 x 151 mm, heights to ~100 mm above floor).
 
-  bpyenv/bin/python fig5a_scene.py                                # the still
-  bpyenv/bin/python fig5a_scene.py --azim 220 --elev 20 \
-      --samples 200 --res 2200 1650 --out renders/fig5a_upright.png
+THE SHIPPING COMMAND IS THE ONE BELOW, and it is not the argparse defaults. The
+example here used to read `--azim 220 --elev 20 --res 2200 1650`, which is a
+different camera and a different frame aspect from the render Fig 5a actually
+carries; re-rendering from it silently changed the panel's viewpoint (caught by
+Eric, 2026-08-19). The authoritative copy also lives in
+panels/fig5_05_upright_views.py, whose BOX_MM must stay in step with `--box`.
+
+  bpyenv/bin/python fig5a_scene.py --azim 255 --elev 22 --ortho 0.335 \
+      --box 230 230 140 --samples 200 --res 1900 1900 \
+      --out renders/fig5a_upright.png
 """
 import argparse
 import os
@@ -89,6 +96,9 @@ def build_box(sx, sy, sz, M, coll, azim_deg=255.0):
         "lid": ["t00", "t10", "t11", "t01"],
     }
     import math as _m
+    # `v` is the HORIZONTAL DIRECTION FROM THE SCENE TOWARD THE CAMERA, matching
+    # cage_scene.setup_render_camera, so a wall whose outward normal has a positive
+    # dot with it is a NEAR wall, between the camera and the animals.
     v = (_m.cos(_m.radians(azim_deg)), _m.sin(_m.radians(azim_deg)))
     normals = {"wall_s": (0, -1), "wall_e": (1, 0), "wall_n": (0, 1), "wall_w": (-1, 0)}
     for name, loop in faces.items():
@@ -96,7 +106,15 @@ def build_box(sx, sy, sz, M, coll, azim_deg=255.0):
             continue                       # cutaway: no lid film
         if name in normals:
             n = normals[name]
-            if n[0] * v[0] + n[1] * v[1] < 0.2:
+            # SENSE CORRECTED 2026-08-19. This test read `< 0.2` and therefore kept
+            # the film on exactly the two walls the docstring says it removes: at the
+            # default azimuth of 220 the near walls are wall_s and wall_w, and those
+            # were the two being filled while the far walls got edges only. The
+            # panel was being viewed through the very film the cutaway exists to
+            # remove, which is the pastel wash the note above blames on it. Now the
+            # NEAR walls are edges only and the far walls keep the film as a backdrop
+            # (Eric: "make that front facing surface completely transparent").
+            if n[0] * v[0] + n[1] * v[1] > -0.2:
                 continue                   # near/side wall: edges only
         mat = M["cage_floor"] if name == "floor" else M["cage_wall"]
         cs.ngon(f"box_{name}", np.array([C[k] for k in loop], float), mat, coll)

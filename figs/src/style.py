@@ -203,7 +203,20 @@ def identity(i, print_safe=True):
     return "#%02x%02x%02x" % (int(r * 255), int(g * 255), int(b * 255))
 
 
-def level(i, n, lo=0.25, hi=0.85):
+#: Explicit `level()` stops for a FOUR-level ordered series whose first two levels carry
+#: the data -- fig6d and fig6s4's animal counts, at n = 32, 35, 4 and 3 sessions. Evenly
+#: spaced viridis samples land those two in the same blue-teal family (#3b528b against
+#: #25848e: dE 41.6 and only 11 L* apart), and they are the two curves that cross in the
+#: middle of 6d, so the panel became hard to read (Eric, 2026-08-18: "the colors for 1
+#: and 2 animals are way too close in similarity it is a very hard graph to read"). These
+#: stops measure dE 57.2 / 56.3 / 56.7 between neighbours at L* 15 / 43 / 63 / 80, so
+#: every adjacent pair differs in HUE and in LIGHTNESS -- the second is what survives a
+#: greyscale print, and it is what the even ramp had almost none of at the low end. The
+#: light end is unchanged from what 6d already printed, so only the first three move.
+LEVEL4_SPREAD = (0.0, 0.35, 0.62, 0.85)
+
+
+def level(i, n, lo=0.25, hi=0.85, stops=None):
     """Colour for the `i`-th of `n` values of an ORDERED, non-entity quantity --
     a cost-weight ratio, a camera count, a difficulty stratum.
 
@@ -212,9 +225,19 @@ def level(i, n, lo=0.25, hi=0.85):
     both wastes the reader's learned mapping and hides the ordering. Reserving the
     categoricals for entities is what stops teal meaning "us" on one panel and "r = 4"
     on the next (review 2026-08-13).
+
+    `stops` replaces the even spacing between `lo` and `hi` with explicit positions in
+    [0, 1] -- for the case where `n` is small enough that evenly spaced samples put two
+    adjacent levels in the same hue family. See `LEVEL4_SPREAD`. The ramp is still
+    viridis and still ordered; only where it is sampled changes.
     """
     import matplotlib as mpl
-    t = lo if n <= 1 else lo + (hi - lo) * (i / (n - 1))
+    if stops is not None:
+        if len(stops) != n:
+            raise ValueError(f"level(): {len(stops)} stops for {n} levels")
+        t = stops[i]
+    else:
+        t = lo if n <= 1 else lo + (hi - lo) * (i / (n - 1))
     return mpl.colormaps["viridis"](t)
 
 

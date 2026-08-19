@@ -89,13 +89,13 @@ TITLES = {
     (1, "d"): "Triangulated 3D",
     (1, "e"): "Capability comparison",
     (2, "a"): "Protocol",
-    (2, "b"): "Labels free by reprojection",
+    (2, "b"): "Placements vs rig size",
     (2, "c"): "Error vs cameras in the solve",
     (2, "d"): "Anchor-pair geometry",
     (3, "a"): "Grouping strategies",
     (3, "b"): "Hypotheses per frame",
-    (3, "c"): "Grouping accuracy, head to head",
-    (3, "d"): "3D-term ablation",
+    (3, "c"): "Grouping accuracy",
+    (3, "d"): "3D term parameter sweep",
     (3, "e"): "Time per frame",
     # EXPLORATORY (2026-08-13): the corr2d x corr3d sweep re-run on all 50
     # BMimica sessions with the fresh-anchor tracker. The manuscript 3e is
@@ -105,23 +105,22 @@ TITLES = {
     (4, "a"): "Triangulation solvers",
     (4, "b"): "Accuracy vs cameras used",
     (4, "c"): "Dropping the worst camera",
-    (4, "d"): "Per session, vs Anipose",
+    (4, "d"): "Triangulation: LUC3D vs Anipose",
     (4, "e"): "Time per keypoint",
-    (5, "a"): "One display, five views",
+    (5, "a"): "3D pose and 2D camera views for social rearing behavior",
     (5, "b"): "Both rise, noses converge",
     (5, "c"): "One animal is up first",
     (5, "d"): "Close, hold, withdraw",
     (5, "e"): "Brief and still",
     (5, "f"): "Each session has a leader",
     (5, "g"): "One rear invites another — up close",
-    (6, "a"): "Rig and 3D",
-    (6, "b"): "One frame, six cameras",
+    # Fig 6 re-lettered 2026-08-19 (difficulty grid leads the figure).
+    (6, "a"): "Levels of tracking difficulty",
+    (6, "b"): "Cross-view IDF1 by difficulty",
     (6, "c"): "Missing keypoints vs difficulty and cameras",
     (6, "d"): "Animal-count control",
-    (6, "e"): "Cross-view IDF1 by difficulty",
-    (6, "f"): "Corpora",
-    (6, "g"): "Detection quality",
-    (6, "h"): "Difficulty strata",
+    (6, "e"): "Detection quality",
+    (6, "f"): "Difficulty strata",
     # "(+ experimental arm)" retired 2026-08-17: the fresh-anchor arm the panel
     # features was promoted to the shipped configuration, so the suffix became a
     # false statement about the artwork; the arm is labelled inside the panel.
@@ -179,6 +178,23 @@ TITLES = {
 }
 TITLE_PT = 7.5            # panel titles, below the 9 pt letter
 
+#: Panel titles are CENTRED OVER THEIR AXES rather than set flush beside the letter
+#: (Eric, 2026-08-18: "the letters can stay where they are but the titles should be
+#: more centered, moved to the right a centimeter or two so that they are more centered
+#: above the x axis" -- then, for every other figure, "can we do the same thing for the
+#: titles in all the other figures?"). On a plot panel the letter sits at the panel's
+#: left edge while the axes start past the y label and its ticks, 13-16 mm in on a
+#: third-width panel, so a flush title reads as hanging off the left of the plot it
+#: names.
+#:
+#: There is no table of offsets: `axes_extent` reads the spines out of each panel's own
+#: PDF and the title is centred on them, so a redrawn or resized panel keeps its title
+#: centred instead of drifting off a stale constant. A panel with no spines -- an image
+#: plate, a schematic, a rule-only table -- reports none and keeps the flush position,
+#: which is the right answer there: its ink already starts at the panel's left edge.
+#: Opt out by letter here if a particular title is better off flush.
+TITLE_FLUSH: set[tuple[int, str]] = set()
+
 #: figure -> [row, ...] where a row is [(letter, slug), ...].
 #: NO SIZES HERE. Panels are built on the column grid in src/style.py and saved at
 #: exactly their declared size, so the assembler places each at its true width and
@@ -209,8 +225,11 @@ LAYOUTS = {
     # unstated quantity. Panels re-lettered: c->b, d->c, e->d, f->e.
     3: [[("a", "association"), ("b", "cost_model")],
         [("c", "quality"), ("d", "sweep"), ("e", "head_to_head")]],
-    4: [[("a", "solvers")],
-        [("b", "accuracy_vs_cameras"), ("c", "worst_camera")],
+    # REGROUPED 2026-08-19 (Eric: "put abc on the same row ... and de is the
+    # second row" -- panel a alone on row 1 at two-thirds left a third of the
+    # page white). a re-spanned two-thirds -> third; letters unchanged. 4c also
+    # lost its 50 grey per-session lines the same day, on instruction.
+    4: [[("a", "solvers"), ("b", "accuracy_vs_cameras"), ("c", "worst_camera")],
         [("d", "per_session"), ("e", "time_per_keypoint")]],
     # ROW 3 REPLACED (2026-08): the review cut "Correction found per review budget"
     # and "Six timelines vs one identity" -- the first was a triage curve whose
@@ -244,11 +263,21 @@ LAYOUTS = {
     # e REPLACED 2026-08-16 (Eric): the per-camera miss-rate bars out, cross-view
     # IDF1 per difficulty stratum in (panels/fig6_11_idf1_by_difficulty.py; the old
     # bars' data stays deposited at data/fig6/fig6e_percam_quality.csv).
-    6: [[("a", "rig"), ("b", "cameras")],
-        [("c", "recovery_surface"), ("d", "animal_count")],
-        [("e", "idf1_by_difficulty"), ("f", "corpora")],
-        [("g", "detection_quality")],
-        [("h", "difficulty_strata")]],
+    # REBUILT AROUND THE DIFFICULTY GRID 2026-08-19 (Eric: "put 6d where 6G is,
+    # then get rid of 6f and put 6c there, then put the enrichment_grid where
+    # 6abcd are"). The Blender difficulty grid (panels/fig6_13_enrichment_grid.py,
+    # enrichment x animals, 10 real-session tiles) takes the whole top; the
+    # surface and animal-count plots move down into the freed slots and keep
+    # their letters c and d by reading order; IDF1 re-letters e->b, detection
+    # quality g->e (kept, at HALF span, beside d -- Eric: "we should still have
+    # the detection quality one next to d ... so we dont have all that white
+    # space"), the strata table h->f. OFF the artwork, still depositing: the
+    # rig render (old a, fig6_09), the six-camera frame (old b, fig6_05), and
+    # the corpora table (old f, fig6_04 -- cut on instruction).
+    6: [[("a", "enrichment_grid")],
+        [("b", "idf1_by_difficulty"), ("c", "recovery_surface")],
+        [("d", "animal_count"), ("e", "detection_quality")],
+        [("f", "difficulty_strata")]],
     # Panel a carries the EXPERIMENTAL high-performing arm (2026-08-13, on
     # instruction): the variant is fig7a plus `LUC3D + fresh anchor`. (It was briefly
     # lettered "h" by mistake; every `fig7h_*` artifact has been deleted and the code no
@@ -348,6 +377,78 @@ LAYOUTS = {
          [("h", "residuals"), ("i", "noise"), ("j", "dropout"), ("k", "inputs")],
          [("l", "cameras"), ("m", "switches")]],
 }
+
+
+def axes_extent(pdf: Path) -> tuple[float, float] | None:
+    """(x0, x1) spanned by a panel's axes, in mm from its own left edge.
+
+    A SPINE, not merely a long horizontal line: the stroke must have a vertical
+    stroke meeting one of its ends, which is what separates an x axis from a table
+    rule (`fig1e`, `fig6f` and `fig6h` are full-width rules with no verticals at
+    all, and they keep the flush title). The extent is the union over every such
+    spine, so a panel holding a row of sub-plots -- `fig6g`'s three, `fig11j`'s
+    three -- centres over the whole row rather than over its first axes.
+
+    Returns None when nothing qualifies, or when the axes already start at the
+    panel's left edge, where centring would move a title that is not misplaced.
+    """
+    doc = fitz.open(pdf)
+    page = doc[0]
+    w, h = page.rect.width, page.rect.height
+    # WHETHER TICKS ARE REQUIRED depends on whether the panel embeds an image. The
+    # thing a spine can be confused with is an image tile's border, and only a panel
+    # that places a raster HAS tiles -- so a plate (`fig5a`, `fig6a`, `fig6b`,
+    # `fig11g`) must show ticks before its "spine" is believed, while a vector plot
+    # can be taken on the corner alone. That distinction is what lets `fig4d`,
+    # `fig7f` and `fig11f` centre: their axes are categorical, drawn with no tick
+    # marks at all, so a ticks-always rule left exactly the panels Eric asked about
+    # sitting flush.
+    plate = bool(page.get_images())
+    hor, ver = [], []
+    for d in page.get_drawings():
+        for it in d["items"]:
+            if it[0] != "l":
+                continue
+            p0, p1 = it[1], it[2]
+            # 0.15, not 0.25, of the panel width: a panel holding a ROW of small
+            # sub-plots has short spines -- `fig6g`'s three run 44.8 mm on a 180 mm
+            # panel (0.249) and `fig11j`'s 7.5 mm on 36.4 (0.21) -- and at 0.25 both
+            # fell through to the flush position by a hair. Nothing else in these
+            # panels is a long horizontal WITH a vertical at one end: box medians and
+            # whisker caps are millimetres, legend rules have no verticals, and bars,
+            # heat cells and colour bars are rectangles rather than lines.
+            if abs(p0.y - p1.y) < 0.4 and abs(p1.x - p0.x) >= 0.15 * w:
+                hor.append((min(p0.x, p1.x), max(p0.x, p1.x), p0.y))
+            elif abs(p0.x - p1.x) < 0.4:
+                # EVERY vertical, at every length: the long ones are candidate y
+                # spines and the SHORT ones are the tick marks the test below needs.
+                # Filtering by length here is the bug that made this reject every
+                # panel in the set -- a 1.7 mm tick on a 52 mm panel is 0.03 of its
+                # height and never survived a 0.15 gate.
+                ver.append((p0.x, min(p0.y, p1.y), max(p0.y, p1.y)))
+    doc.close()
+    # AN AXES IS A SPINE *PLUS ITS TICKS*, and the ticks are what make the test
+    # sound. A corner alone is not enough: an image tile's border draws exactly the
+    # same signature -- a long horizontal with a vertical rising from its left end --
+    # and on `fig5a`'s plate of five camera views that misread the tile frames as
+    # axes and threw the title 52 mm right. Only a real x axis also carries short
+    # verticals hanging DOWN off the stroke at the tick positions, so requiring two
+    # of them separates plots from plates, tables and schematics.
+    def ticked(x0: float, x1: float, y: float) -> bool:
+        corner = any((abs(vx - x0) < 1.0 or abs(vx - x1) < 1.0)
+                     and (vy1 - vy0) >= 0.15 * h
+                     for vx, vy0, vy1 in ver if vy0 - 1.0 <= y <= vy1 + 1.0)
+        ticks = sum(1 for vx, vy0, vy1 in ver
+                    if abs(vy0 - y) < 0.6 and (vy1 - vy0) <= 3.5 * MM
+                    and x0 - 0.5 <= vx <= x1 + 0.5)
+        return corner and (ticks >= 2 or not plate)
+
+    spines = [(x0, x1) for x0, x1, y in hor if ticked(x0, x1, y)]
+    if not spines:
+        return None
+    x0 = min(s0 for s0, _ in spines) / MM
+    x1 = max(s1 for _, s1 in spines) / MM
+    return None if x0 < 3.0 else (x0, x1)
 
 
 def panel_pdf(fig_no: int, letter: str, slug: str) -> Path | None:
@@ -459,7 +560,18 @@ def assemble(fig_no: int) -> Path | None:
         # onto the wrong panel is worse than none.
         title = TITLES.get((fig_no, letter))
         if title:
-            page.insert_text(fitz.Point((lx + 4.4) * MM, (y - 1.2) * MM), title,
+            tx = lx + 4.4
+            if (fig_no, letter) not in TITLE_FLUSH:
+                span = axes_extent(p)
+                if span:
+                    tw = fitz.get_text_length(title, fontname="hebo",
+                                              fontsize=TITLE_PT) / MM
+                    # Centred on the axes, but never left of the flush position (it
+                    # would run into the letter) and never past the panel's right
+                    # edge (it would overhang the artwork and be silently clipped).
+                    tx = min(max(x + (span[0] + span[1]) / 2 - tw / 2, tx),
+                             x + w - tw)
+            page.insert_text(fitz.Point(tx * MM, (y - 1.2) * MM), title,
                              fontname="hebo", fontsize=TITLE_PT, color=INK)
 
     fy = page_h - MARGIN - FOOTER_LEAD * (len(foot) - 0.35)

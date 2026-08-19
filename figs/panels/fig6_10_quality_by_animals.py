@@ -43,7 +43,8 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.data_loader import load  # noqa: E402
-from src.style import deposit, footnote, level, panel, save, use  # noqa: E402
+from src.style import (LEVEL4_SPREAD, deposit, footnote, level, panel,  # noqa: E402
+                       save, use)
 
 MARKS = {1: "o", 2: "s", 3: "^", 4: "D"}
 
@@ -79,7 +80,13 @@ def main():
     deposit(df, 6, "fig6s4_quality_by_animals.csv")
 
     counts = sorted(df.animals.unique())
-    colour = {a: level(i, len(counts)) for i, a in enumerate(counts)}
+    # SAME STOPS AS 6d, because this panel exists to sit beside it on the same ramp
+    # (see the docstring). `LEVEL4_SPREAD` only applies at four levels, which is what
+    # the corpus has; a fifth count would have to widen the ramp in style.py rather than
+    # silently fall back to even spacing here.
+    colour = {a: (level(i, len(counts), stops=LEVEL4_SPREAD)
+                  if len(counts) == len(LEVEL4_SPREAD) else level(i, len(counts)))
+              for i, a in enumerate(counts)}
     totals = {a: int(df[df.animals == a].n_sessions.sum()) for a in counts}
 
     fig, ax = panel("half", "std")

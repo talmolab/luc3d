@@ -904,3 +904,209 @@ place; 32 samples; 3 workers ×2 videos saturate the 64 cores; frames named
 by absolute index, resume-safe, `--orbit-range` shares one sweep across
 workers). Assemble: `ffmpeg -framerate 30 -start_number 9000 -i f%05d.png`.
 Cut any sub-section without re-rendering: `-start_number N -frames:v M`.
+
+### BMimica arena 60 s video (2026-08-18)
+
+`renders/bmimica_arena_60s.mp4`: the `bmimica_arena.png` scene animated, 30 s
+either side of the still's frame 56806, via a new `--video` mode in
+`bmimica_scene.py` that mirrors `cage_scene.py --video` (same re-pose loop,
+absolute resume-safe frame names, `--orbit`/`--orbit-range`).
+
+- **fps**: BMimica records at **150.105 fps** (the deposit's `fps`), so the
+  clip renders **frames 52301–61306, STEP 5** (1802 frames) and encodes at
+  30 fps — real time to 0.07%. Rendering all 9,000 frames for a 150 fps mp4
+  would quintuple the render for playback no display shows. The whole window
+  is NaN-free for both animals (checked before rendering).
+- **Orbit**: 60° like the cage 60s video, but STARTED at azim 188 so the sweep
+  passes through the still's own view (azim 218) exactly at the 30 s midpoint —
+  at t = 30 s the video matches `bmimica_arena.png`.
+- **Sweep-aware framing**: this scene's frame is COMPUTED from the content and
+  is azimuth-dependent, so `fit_sweep` fits ONE fixed focus/ortho/res covering
+  every azimuth of the sweep (ortho 1.574 m vs the still's tight 1.547 m), and
+  `ceiling_for` takes the max rod height over the sweep so no rod ends mid-air
+  at any azimuth. Resolution is rounded even for yuv420p (918×1280 portrait).
+- Command: `bpyenv/bin/python bmimica_scene.py --video 52301 61311 5 --orbit 60
+  --azim 188 --samples 96 --long-edge 1280 --outdir renders/video_bmimica60`
+  (3 workers on disjoint chunks sharing the sweep via
+  `--orbit-range 52301 61311`; 42 min wall / ~43 frames/min on the A40), then
+  `ffmpeg -framerate 30 -pattern_type glob -i 'renders/video_bmimica60/f*.png'
+  -c:v libx264 -pix_fmt yuv420p -crf 20 renders/bmimica_arena_60s.mp4` —
+  **glob, not -start_number**: step-5 frame names are not consecutive.
+- Scanned clean: 0/1802 frames over the 0.03% dark-fraction threshold
+  (the black-artifact detector from the 5-minute videos).
+
+## enrichment_scene.py — difficulty tiles: cage + animals + enrichment objects (2026-08-19)
+
+Per Eric: renderings of the SLAP-2M cage at each (# animals) × (environmental
+enrichment) condition, to be assembled on an enrichment-x / animals-y grid as
+an intuition for difficulty levels — candidate replacement for fig6 A/B (and
+maybe drop 6f). Builds on cage_scene.py (imported as a module) with the
+enrichment objects from `pilot_figure_1_viz.00.ipynb`.
+
+- **Objects are synthetic, and have to be**: no session carries triangulated
+  object points — `targets/` and `grid_volumes/` are empty in every session
+  dir. The notebook draws them synthetically too: 100 mm wireframe cubes
+  (`draw_cube`, r=[0,100]) and a coarse `plot_wireframe` dome (4 meridians ×
+  2 rings, r=50 mm, its bottom ring landing exactly on a cube top at z≈100).
+  `cube_skeleton.json` (a SLEAP skeleton: 4 top + 4 bottom nodes, 12 edges)
+  confirms the cube topology; the dome is a 9-node skeleton (pole + 2 rings).
+- **Style**: ball-and-edge like the animals, but every part (balls, tubes,
+  face membranes) is the `flat_translucent` matplotlib-alpha film in green
+  (`#1E8449`, deliberately NOT tab10 green #2CA02C = track 2's mouse; still
+  flag to Eric on 3-4-animal tiles). Edge/node alpha 0.60/0.70, faces 0.13;
+  `--obj-color`, `--obj-alpha`. Object parts cast no shadows.
+- **The grid shows ONLY the dataset's real coverage** (Eric's correction,
+  2026-08-19 — the first draft invented a full 4×6 factorial): master_sheet's
+  (animals × obstacle_rating) support is **14 of 24 cells** — 1 animal spans
+  all six ratings, 2 animals lacks rating 1, 3 animals has only {0, 4},
+  4 animals only {0}. `COMBOS` in enrichment_scene.py is the authority: one
+  representative session per real combo, **a session actually recorded under
+  that condition**, with a frame picked by scan (NaN-free all tracks, body-
+  bone warp in the low percentile, max animal separation for multi / mid-
+  session for singles). `--animals/--objects` REFUSES combos the dataset
+  lacks; the grid leaves those cells `n/a` — the sparsity is information.
+- **Arrangements follow the old draft's anchors** (`cage_renders/`,
+  viz cells 20-28): rating 5 = L of 3 cubes + dome on the corner cube,
+  rating ~3 = single-cube territory. Graded: dome / cube / cube + floor dome /
+  L / L + dome. Cubes within a unit share one yaw and sit flush, so a
+  cluster reads as a structure.
+- **Objects rest ON the rendered floor, not in it** (two rounds of Eric
+  catching clips): base corners are lifted one ball radius + 1 mm
+  (`OBJ_LIFT`), and the base height is `rest_z` = the floor's HIGH point
+  under the footprint, interpolated barycentrically on the floor ngon's own
+  fan triangulation (`floor_height`). A plane fit through the low corners is
+  NOT enough — the floor fan is ~25 mm higher toward the filter-side loop
+  nodes, which buried a cube's back edge. Objects stay level, so downhill
+  corners float a few mm; that reads fine, sinking does not.
+- **Placement is deterministic greedy**: units anchor on a floor-trapezoid
+  grid (Bot_NW-Bot_NE-SpoutBot_NE-SpoutBot_NW — the filter side is a raised
+  shelf) at the spot maximizing clearance from the frame's animals and from
+  placed objects, with per-element footprint radii (cube half-diagonal /
+  dome foot) against the walls and each other. Skips loudly if nothing fits.
+  Note the mice in enriched sessions sometimes climb the REAL (invisible)
+  objects — a rearing mouse can float mid-air; the synthetic objects are
+  placed away from the animals, not under them.
+- **Framing: `--fit cage` (default) fits the ortho window to the cage alone**,
+  so every tile of the grid shares identical framing; `--fit content` is the
+  per-still tight fit. `--cameras` adds the calibrated rig (off for tiles).
+- `transparent_max_bounces` 128 here (cage_scene keeps 32): objects stack
+  several films on one ray — the known bounce-exhaustion black-patch class.
+- Tiles: loop `enrichment_scene.py --animals A --objects O --samples 96` over
+  `COMBOS` (~5 s/tile on the A40 at 1400×1200; `--samples 256` for finals),
+  then `bpyenv/bin/python enrichment_grid.py` → `renders/enrichment_grid.png`.
+  **Layout = Eric's original draft** (cage_renders/difficulty.png): # of
+  animals on X (1-4), environmental enrichment on Y (rows 0, 2, 5 bottom to
+  top), 10 tiles with the upper-right cells simply ABSENT — a full lattice
+  with `n/a` cells was tried and rejected ("seems like a waste of space");
+  the staircase silhouette IS the coverage statement. (3,4) exists in the
+  corpus but is not placed, as in the draft.
+### Joint radius is uniform within each anatomical group (2026-08-19)
+
+`cage_scene.build_animal` sized joints as `0.0095 if n in (Head, Trunk, TTI) else
+0.0068`. Two of those three outsized balls sit next to each other at the hip, TTI
+beside the two haunches, so that end of the animal read as a giant bead flanked by
+small ones (Eric: "the large nodes on TTI and haunches looks weird ... the body
+nodes should all be the same size"). `NODE_R` and `NODE_GROUP` now give one radius
+per group: body 0.0078, head 0.0068, tail 0.0068. Head and tail keep the radius
+they already had, since those groups already read correctly, so only the three
+oversized nodes move and the animal tapers rather than being spotted. This is
+shared by every render — Fig 1a's two tiles, Fig 5a and all Fig 6a tiles were
+re-rendered; the shipped videos predate it and were not.
+
+### fig5a_scene.py — the near walls were the WRONG two (2026-08-19)
+
+`build_box`'s cutaway test read `n . v < 0.2 -> skip`, where `v` points from the
+scene TOWARD the camera, so it kept the film on exactly the two walls its own
+docstring says it removes. At the shipping azimuth of 255 the near walls are
+`wall_s` and `wall_w`, and those were the two being filled while the far walls got
+edges only. The panel was being viewed through the very film the cutaway exists to
+remove, which is also the pastel wash the file blames on it. The test is now
+`> -0.2 -> skip`, so the near walls are edges only and the far walls keep the film
+as a backdrop.
+
+**The shipping command is NOT the argparse defaults, and the example in
+`fig5a_scene.py` was stale.** It read `--azim 220 --elev 20 --res 2200 1650`; the
+real one, recorded in `panels/fig5_05_upright_views.py` and now corrected in the
+scene file too, is `--azim 255 --elev 22 --ortho 0.335 --box 230 230 140
+--samples 200 --res 1900 1900`. Re-rendering from the stale example silently
+changed the panel's viewpoint and frame aspect, which Eric caught immediately.
+`BOX_MM` in the panel must stay in step with `--box`.
+
+- **The near wall is drawn UNFILLED** (2026-08-19, Eric: "it would look better if
+  the front facing surface of the cage, the large side nearest to us, was
+  completely transparent so that we can see what's inside"). Two translucent films
+  between the viewer and the animals is what was greying them out, and the near one
+  contributes nothing but haze because nothing sits in front of it. Its EDGES stay,
+  so the cage still reads as a box. `cage_scene.build_cage(open_toward=...)` takes
+  the unit vector toward the camera and drops the fill of any surface whose outward
+  normal faces it above `OPEN_MIN_FACING` (0.2) with area above `OPEN_MIN_AREA`
+  (0.05 m^2). COMPUTED, NOT NAMED, so it follows `--azim`: at the default 205/22
+  only `west_wall` qualifies (0.109 m^2, facing 0.86), while the other
+  camera-facing surfaces are the spout wall, spout front and filter east at 0.016,
+  0.014 and 0.004 m^2 and keep their fills, which is what still reads as a box.
+  The area threshold sits in the gap between 0.016 and 0.109 with margin on both
+  sides. On by default in `enrichment_scene.py` (`--no-open-front` to disable),
+  opt-in via `--open-front` in `cage_scene.py` because the shipped videos were
+  rendered without it; Fig 1a's still uses it. Fig 1a's Mouse-Dyad-10M tile and
+  Fig 5a get the same treatment through `fig5a_scene.build_box`, which
+  `bmimica_scene.py` imports.
+- **Fig 1a's Mouse-Dyad tile needs `--ortho 2.15`, which is NOT the default.**
+  `bmimica_scene.py` fits its own ortho to the content, giving 1.547 m at
+  1280x960, which frames the arena much tighter than the panel wants and runs the
+  cube off the bottom of the tile. The shipping value was recorded nowhere and was
+  lost in an accidental re-render at the fitted value; 2.15 was recovered by
+  measuring the content box back to the 547 px width the shipping tile had. It is
+  now in `panels/fig1_00_render.py` beside the SLAP-2M command. The scene JSON must
+  also be at frame 55701, and regenerating it with `fig1_bmimica_scene.py --frame
+  55701` needs cv2, which the figs venv lacks; the pose was restored in place by
+  reading `tracks[frame]*1000` from the P-frame h5, a transform verified bit-exact
+  against the pose the file already carried.
+- **The (4, 0) tile is pinned to the app export** (2026-08-19): it renders original
+  frame **6020** — the prepared session `figs/session-slap-10072022145420` starts at
+  6000 and `fig6_app.mjs` exports its frame 20 — so the cage tile and Fig 6a's
+  six-camera inset are one instant. The **app** was recoloured to the renders'
+  tab10 (`fig6_app.mjs PALETTE`), not the reverse; the h5-track → app-identity
+  mapping is `TRACK_TO_IDENTITY`, measured by projecting each track into all six
+  views and reading the painted colour (verified 100% per animal after the
+  re-export). Found on the way: `fig6_05_cameras.py` hard-coded
+  `fig6-view-f120-*` while the driver's last run wrote `f20`, so that panel had
+  been drawing frame-120 images cropped by frame-20 bboxes — both panels now take
+  the frame from the manifest.
+- **Placed on Fig 6 as panel a** (2026-08-19, Eric): `panels/fig6_13_enrichment_grid.py`
+  rebuilds the same staircase from the tiles in house style (the PIL
+  `enrichment_grid.py` stays as the standalone preview — keep the two layouts in
+  step). The staircase's empty upper-right holds the **six-camera inset** (the
+  old 6b's tiles, bordered off, dashed leaders from the (4 animals, enrichment 0)
+  cage tile — honestly: the app export's sessionRel IS that tile's session,
+  10072022145420). Old 6a (rig render) and 6f (corpora) came off the artwork;
+  surface/animal-count kept letters c/d, IDF1 e→b, detection quality g→e at
+  two-thirds beside d, strata h→f. See assemble.py LAYOUTS[6].
+
+### BMimica videos v2 — bounce cap 256 + the 1280×960 pair-format clip (2026-08-18)
+
+Eric caught **black torso patches** in `bmimica_arena_60s.mp4` that the 0.03%
+dark-fraction detector missed — the mice are small in this framing, so a whole
+black membrane (f61161: 344 px) is ~0.03% of the image. It is the KNOWN
+**transparent-bounce-exhaustion** class, but 32 bounces is NOT enough in this
+scene: two rearing mice in a clinch stack ~22 membrane films on one ray (plus
+the box walls), and a ray grazing a fan-triangulated membrane edge-on crosses
+many of its triangles. Diagnosed by exact A/B on f61161: **344 black px at 32
+bounces, 0 at 256**, with all diffs > 20 luma confined to the patch — so the
+bounce-cap re-render is splice-safe here too. `bmimica_scene.py` now sets
+`transparent_max_bounces = 256` (`--transparent-bounces`, default 256) after
+`cs.setup_cycles`; `cage_scene.py` keeps 32 (its videos scan clean there).
+
+- **Detector for THIS scene**: scan at FULL resolution and flag **> 5 dark px**
+  (luma < 70) — the fraction threshold is too coarse, and the box's dark-grey
+  edge wireframe legitimately anti-aliases 1–3 px under 70 on many frames.
+  289/1802 portrait frames flagged; re-rendered at 256 and re-assembled
+  (worst frame after: 3 px, all on the wireframe).
+- `renders/bmimica_arena_60s_1280x960.mp4`: the same clip in
+  **cage_two_mice_60s.mp4's exact format** (1280×960 @ 30 fps). `fit_sweep`
+  gained `force_res`: the smallest ortho window of EXACTLY that aspect
+  containing the content at every sweep azimuth (ortho 2.099 m), rods sized
+  from the actual window. The content is tall (overhead camera array), so the
+  4:3 frame carries white side margins — the same airy composition the cage
+  60s video itself has; elevations 6–70° were checked and none fills 4:3
+  much better (48→64%), so the pair-matching elev 22 stays. Command: as the
+  portrait video but `--res 1280 960` instead of `--long-edge 1280`.

@@ -74,13 +74,20 @@ from src.style import (GREY, INK, MUTED, PERIWINKLE, SALMON, TEAL,  # noqa: E402
                        deposit, footnote, grid, save, text_legend, use)
 
 #: (config, label drawn on the panel, colour). Order is the drawing order.
-#: The label names every ingredient -- see the docstring for why.
+#:
+#: SHORT LABELS SINCE 2026-08-19 (Eric). They used to name every ingredient, on the
+#: reasoning that "stale 10" means nothing on its own. It does not, but four
+#: repetitions of "M1 + ... + distThresh 25" spent most of the key restating the two
+#: constants every candidate shares, and the same strings had to serve as tick labels
+#: on the switch sub-panel where there is no room for them. M1 and distThresh 25 are
+#: common to all four candidates, so they belong in the caption; what varies between
+#: them, and the only thing the reader has to tell apart, is the staleness horizon.
 SERIES = [
     ("shipped", "shipped", INK),
-    ("sync_stale1_dist25", "M1 + stale 1 + distThresh 25", SALMON),
-    ("sync_stale10_dist25", "M1 + stale 10 + distThresh 25", TEAL),
-    ("sync_stale20_dist25", "M1 + stale 20 + distThresh 25", PERIWINKLE),
-    ("sync_stale30_dist25", "M1 + stale 30 + distThresh 25", GREY),
+    ("sync_stale1_dist25", "stale 1", SALMON),
+    ("sync_stale10_dist25", "stale 10", TEAL),
+    ("sync_stale20_dist25", "stale 20", PERIWINKLE),
+    ("sync_stale30_dist25", "stale 30", GREY),
 ]
 
 
@@ -180,7 +187,9 @@ def main(deposit_name="fig8_methods_50.json"):
         ax.tick_params(labelsize=6.5)
 
     survival(axP, "_per_session_idp", "identity precision (cross-view)",
-             "% of the 50 sessions at or above")
+             # "the sessions", not "the 50 sessions": the n belongs in the caption,
+             # and the panel title already carries it (Eric, 2026-08-19).
+             "% of the sessions at or above")
     survival(axR, "_per_session_idr", "identity recall (cross-view)")
     survival(axF, "_per_session_idf1", "cross-view IDF1")
 
@@ -202,12 +211,17 @@ def main(deposit_name="fig8_methods_50.json"):
         axS.annotate(f"  {r.switches_pct:.5f}%  ({int(r.switches):,})",
                      (r.switches_pct, y), textcoords="offset points", xytext=(6, 0),
                      ha="left", va="center", fontsize=5.8, color=r._colour)
+    # The parameter sets NAME THEMSELVES on this axis now, rather than carrying an
+    # index the reader has to carry back to the key. That is only possible because
+    # the labels are short (see SERIES); it was numbers 1 to 5 while they were not.
     axS.set_yticks(ypos)
-    axS.set_yticklabels([str(i + 1) for i in range(len(df))], fontsize=6.5)
+    axS.set_yticklabels(list(df.label), fontsize=6.5)
     axS.set_ylim(-0.7, len(df) - 0.3)
-    axS.set_ylabel("parameter set (see key)", fontsize=7)
-    axS.set_xlabel("% of all camera-frames with an ID switch\n(raw switch total in "
-                   "parentheses)", fontsize=7)
+    # WRAPPED AND SHORTENED. The one-line-plus-parenthetical form overflowed this
+    # sub-panel's width and lint_text.py reported it as silently dropped; the
+    # sub-panel is a quarter of the row, so the label has to fit ~40 mm. What the
+    # parenthetical number is now lives in the caption.
+    axS.set_xlabel("% of camera-frames\nwith an ID switch", fontsize=7)
     axS.set_xlim(lo, df.switches_pct.max() * 9.0)
     axS.tick_params(axis="x", labelsize=6.5)
     from matplotlib.ticker import FuncFormatter, LogLocator, NullFormatter
@@ -215,8 +229,9 @@ def main(deposit_name="fig8_methods_50.json"):
     axS.xaxis.set_major_formatter(FuncFormatter(lambda v, _p: f"{v:g}%"))
     axS.xaxis.set_minor_formatter(NullFormatter())
 
-    text_legend(axP, [(f"{i + 1}. {r.label}", r._colour)
-                      for i, (_ix, r) in enumerate(df.iterrows())], "above")
+    # No leading index: the switch sub-panel now labels its own rows, so nothing
+    # needs to be looked up by number.
+    text_legend(axP, [(r.label, r._colour) for _ix, r in df.iterrows()], "above")
 
     ship = df[df.config == "shipped"]
     best = df.loc[df.switches_pct.idxmin()]
@@ -228,16 +243,23 @@ def main(deposit_name="fig8_methods_50.json"):
                  f"({100 * (1 - best.switches_pct / sh.switches_pct):.0f}% lower); "
                  f"median cross-view IDF1 {sh.idf1_cross_median:.4f} -> "
                  f"{best.idf1_cross_median:.4f}\n")
+    # The two .replace() calls that used to trim "M1 + " and " + distThresh 25" off
+    # each label are gone with the long labels they existed for (see SERIES).
     note += ("RAW switch totals over all 50 sessions (the percentage's numerator; "
              f"denominator {cf:,} camera-frames): "
-             + ", ".join(f"{r.label.replace('M1 + ', '').replace(' + distThresh 25', '')} "
-                         f"{int(r.switches):,}" for _i, r in df.iterrows()) + "\n")
+             + ", ".join(f"{r.label} {int(r.switches):,}" for _i, r in df.iterrows())
+             + "\n")
     note += ("the first three are survival curves in Fig 7c's idiom -- the vertical "
              "distance between two curves at any threshold IS the comparison. No PR curve "
              "is drawn: an operating curve needs a score to sweep, this pool has none, and "
              "the IoU sweep is degenerate (recall moves 0.016 over IoU 0.05-0.90)\n"
-             "M1 = score all views against one frame-start 3D snapshot; stale N = evict a "
-             "per-camera detection older than N frames before re-triangulating\n"
+             # distThresh 25 lives HERE now rather than in every legend entry: it is
+             # common to all four candidates, so repeating it four times in the key
+             # spent the key on a constant (Eric, 2026-08-19).
+             "every candidate is M1 + distThresh 25 + the stale window named in the key; "
+             "M1 = score all views against one frame-start 3D snapshot, stale N = evict a "
+             "per-camera detection older than N frames before re-triangulating, "
+             "distThresh 25 = the 3D term's distance threshold, 50 in the shipped tracker\n"
              f"all {len(d['sessions'])} proofread Mouse-Dyad-10M sessions x 5 cameras, full "
              f"length, {cf:,} camera-frames; sessions PAIRED across parameter sets")
     if missing:

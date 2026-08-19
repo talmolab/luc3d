@@ -1,0 +1,3 @@
+arm,basis,idf1_cross_mean,idf1_cross_median,switches,switches_per_100k_camera_frames,camera_frames_scored,n_sessions
+exhaustive,frames exhaustive computed (both arms),0.6275326134639502,0.6261254697090888,17516,81.00878974967794,21622345,50
+"greedy (head-to-head, default)",frames exhaustive computed (both arms),0.7905653566021403,0.8067799625242558,1730,8.000982317135351,21622345,50

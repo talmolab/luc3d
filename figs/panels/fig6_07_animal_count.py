@@ -93,8 +93,12 @@ from src.style import deposit, footnote, panel, save, use  # noqa: E402
 #: (review 2026-08-14). The old ramp was tints of SALMON, ByteTrack's reserved hue --
 #: an ordered stratum wearing an entity colour, exactly the X.1 collision class. Also
 #: matches fig6s4, which strata the same counts on the same ramp.
-from src.style import level as _level
-RAMP = {a: _level(a - 1, 4, hi=0.75) for a in (1, 2, 3, 4)}
+#: THE STOPS ARE EXPLICIT, NOT EVENLY SPACED, and `LEVEL4_SPREAD` carries the reason
+#: and the measurement: evenly spaced viridis put 1 and 2 animals -- this panel's two
+#: dominant series, 32 and 35 sessions, and the two curves that cross each other -- in
+#: the same blue-teal family. Same ramp, sampled where four levels can be told apart.
+from src.style import LEVEL4_SPREAD, level as _level
+RAMP = {a: _level(a - 1, 4, stops=LEVEL4_SPREAD) for a in (1, 2, 3, 4)}
 MARKS = {1: "o", 2: "s", 3: "^", 4: "D"}
 
 #: Panel height in mm, and the key's line pitch in POINTS. 5.91 pt is MEASURED off the
@@ -139,7 +143,9 @@ def main():
     counts = sorted(df.animals.unique())
     totals = {a: int(ba[str(a)]["n_sessions"]) for a in counts if str(a) in ba}
 
-    fig, ax = panel("half", ROW_H)
+    # half -> third in the 2026-08-19 re-letter: shares its row with detection
+    # quality at two-thirds (57.3 + 117.3 + 4 mm gutter = 178.6 mm)
+    fig, ax = panel("third", ROW_H)
     # COINCIDENT MARKERS GET A DODGE. At difficulty 7 the 2-animal mean (58.1%)
     # and the single-session 3-animal cell (56.0%) land within ~2 points of each
     # other, and the hollow triangle drawn over the filled square was invisible

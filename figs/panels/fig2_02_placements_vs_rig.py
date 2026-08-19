@@ -2,6 +2,31 @@
 """
 Fig 2b -- manual placements per animal per frame, against rig size.
 
+THE PANEL PLOTS LABELS *NEEDED*, ALL THREE CURVES, AND IT IS BACK TO THAT ON
+PURPOSE. From 2026-08-13 to 2026-08-18 the ordinate was labels *free* by
+reprojection for the two aided curves while the salmon baseline stayed C x N --
+two different quantities on one axis. The reader had to subtract one from the
+other to recover the number they came for (how many labels a human places), and
+the panel's own arithmetic ran backwards: MORE free labels is better, MORE
+needed labels is worse, and both directions were drawn upward in the same
+frame. Reverted at Eric's instruction (2026-08-18): "cant we just depict how
+many labels are needed given these reprojections? rather than free by
+reprojection? the graph is too confusing otherwise". `aided_tau*` is the
+primitive the model computes; `free_tau*` was the derived column. Both are still
+deposited, so either framing is recoverable from the CSV.
+
+EVERY CURVE IS NAMED ON ITSELF, WHICH IS THE OTHER HALF OF THE SAME FIX. The key
+was three `text_legend` lines with the two teal tolerances in the SAME colour and
+nothing in a text-only key able to say which of them was the solid line and which
+the dashed one -- so the encoding was unreadable by construction (Eric, same
+message: "uses a dotted line for one and a solid line for another but does not
+explain which or label which"). On the labels-needed quantity the three curves
+FAN APART to the right (120 / 65 / 35 at C = 8) instead of converging toward a
+ceiling, which is exactly what makes end-of-curve labels possible here and was
+not possible on the free-label quantity. So the key band is gone -- `annotate_series`'s
+form, each line labelled in its own colour at its own right end -- and the panel
+gets that band's ~11 mm back as plot height.
+
 What the reprojection-aided protocol actually changes: a labeller places two anchor
 views by hand and then only CORRECTS the reprojections that land outside tolerance.
 Traditional labelling is C x N placements; the protocol is 2 x N plus the measured
@@ -111,7 +136,10 @@ def main():
     # THREE slots for TWO entries, for the same reason as Fig 2c: `text_legend`'s
     # 0.052 stack pitch is 7.7 pt against a 8.9 pt glyph box, so at key=2 the lines
     # overlapped and the first sat 0.8 pt from the page edge.
-    fig, ax = panel("third", "std", key=3)
+    # NO KEY BAND (`key=0`): every curve is named at its own right end now, and the
+    # band the three-line key reserved was ~0.21 of the panel height (dy 0.064 x 3
+    # plus pad) -- ~11 mm of a 52 mm panel, handed back to the plot.
+    fig, ax = panel("third", "std")
     # THE TWO CURVES ARE NOT THE SAME KIND OF OBJECT, so they are not drawn the same
     # way. `traditional = C x 15` is a PREMISE about how labelling is done -- nothing
     # about it was measured at any C -- while the aided curves carry a correction rate
@@ -131,8 +159,8 @@ def main():
     # therefore "labels per animal per frame" and each line says which labels it
     # counts. (Caught in review, 2026-08-14.)
     ax.plot(df.cameras, df.traditional, color=SALMON, lw=1.4, ls=(0, (6, 2.5)))
-    ax.plot(df.cameras, df[f"free_tau{int(TAU_MAIN)}"], color=TEAL, lw=2.0)
-    ax.plot(df.cameras, df[f"free_tau{int(TAU_STRICT)}"], color=TEAL, lw=1.2,
+    ax.plot(df.cameras, df[f"aided_tau{int(TAU_MAIN)}"], color=TEAL, lw=2.0)
+    ax.plot(df.cameras, df[f"aided_tau{int(TAU_STRICT)}"], color=TEAL, lw=1.2,
             ls=(0, (2.5, 1.5)))
 
     # ONE filled marker on the whole panel, at the ONE rig size p was measured on, on
@@ -141,27 +169,29 @@ def main():
     # mistake for four measured rigs -- or for a measured traditional cost.
     m = df[df.measured]
     assert len(m) == 1, m
-    ax.plot(m.cameras, m[f"free_tau{int(TAU_MAIN)}"], "o", color=TEAL, ms=5.5,
+    ax.plot(m.cameras, m[f"aided_tau{int(TAU_MAIN)}"], "o", color=TEAL, ms=5.5,
             mec="white", mew=1.0, zorder=5)
 
-    # THE TOLERANCES MOVED INTO THE KEY. On the old quantity the two teal curves ran
-    # apart at the right edge and could be labelled there; on this one they converge
-    # toward the ceiling, and both end-labels landed on a stroke (the τ = 10 label
-    # read as naming the salmon line, and τ = 5 sat across the solid curve). The key
-    # band is free and names each line once.
-    # SHORT ENOUGH FOR 57 mm: "of those, free from reprojection, τ = 10 px" is 43
-    # characters at 8 pt and ran off the panel (lint: CLIPPED, TRUNCATED). "free by
-    # reprojection" carries the same relation to the line above it, which already says
-    # what the total is.
-    text_legend(ax, [("labels needed, C × N (assumed)", SALMON),
-                     ("free by reprojection, τ = 10 px", TEAL),
-                     ("free by reprojection, τ = 5 px", TEAL)], "above",
-                xy=(0.14, 0.972), dy=0.064, transform=fig.transFigure)
-
-    # The two tolerances stay ON the plot, because each one names a specific curve
-    # and there are two teal curves. Both are pushed well clear of the line they
-    # label -- 6 units above the dashed one, 7 below the solid one -- since at this
-    # panel size a 2.0 pt line is ~2.5 data units thick on its own.
+    # EACH CURVE NAMED AT ITS OWN RIGHT END, in its own colour: the labels-needed
+    # quantity fans the three apart (120 / 65 / 35 at C = 8), so every one has clear
+    # air above its endpoint and no key is needed to say which line is which. All
+    # three are right-anchored at C = 8 so they cannot run off a 57 mm panel, and all
+    # three sit ABOVE the line they name -- a 1.4-2.0 pt stroke is ~2.5 data units
+    # thick here, so a label hung under a line prints through it.
+    # THE CURVES ARE NAMED BY WHAT THE LABELLER DOES, not by their tolerance (Eric,
+    # 2026-08-18). "manual labeling" is the C x N denominator; "accept" is the
+    # tau = 10 px curve, where the reprojection is taken as it lands; "nudge" is the
+    # stricter tau = 5 px curve, where more of them get corrected by hand. The
+    # tolerances themselves are in the caption. Styles are unchanged, so the long
+    # dash is still the assumed curve and the short dash still the strict one.
+    ax.text(CMAX, CMAX * NODES + 4.0, "manual labeling", ha="right",
+            va="bottom", color=SALMON, fontsize=7, fontweight="bold")
+    ax.text(CMAX, df[f"aided_tau{int(TAU_STRICT)}"].iloc[-1] + 2.5,
+            "nudge", ha="right", va="bottom", color=TEAL,
+            fontsize=7, fontweight="bold")
+    ax.text(CMAX, df[f"aided_tau{int(TAU_MAIN)}"].iloc[-1] + 2.5,
+            "accept", ha="right", va="bottom", color=TEAL,
+            fontsize=7, fontweight="bold")
 
     # What is measured and what is not, in the empty wedge above the traditional line
     # on the left -- INSIDE the axes, because the panel saves at an exact size and
@@ -178,9 +208,27 @@ def main():
     # glyph hung over the spine and read as clipped.
     # 0.90, not 0.985: the C x N dashed line passes y ~ 115 near C = 7, exactly
     # where the second text line used to end (review round 3).
-    ax.text(2.12, CMAX * NODES * 1.10 * 0.90,
-            f"one measured rig (marker): C = {ncam}.\nAll three curves are the model.",
-            color=MUTED, ha="left", va="top", fontsize=7, linespacing=1.35)
+    # BELOW the salmon end-label and clear of the salmon LINE, which is the binding
+    # constraint: this note is left-anchored inside the y spine while the line it must
+    # not touch descends leftward, so the note's usable width shrinks with its height.
+    # At y = 110 the C x N line is at C = 7.3, and the shortened second line ("every
+    # curve here is a model", 26 characters at 7 pt) ends near C = 6.6. The old
+    # 31-character "All three curves are the model." ran through the dashes -- the key
+    # band used to hold the axes down far enough to hide that.
+    # TWO SHORT LINES AT y = 118, and both numbers are set by the salmon line, not by
+    # taste: the note is left-anchored at the spine while the C x N line descends
+    # leftward, so each line's usable width is whatever that line leaves at that
+    # height. Line 1 ends near C = 6.4 where the line is at C = 7.1-7.9; line 2 ends
+    # near C = 5.1 where it is at C = 6.4-7.1. Above y = 118 is the C x N end-label's
+    # own box. The 31-character "All three curves are the model." this replaces ran
+    # straight through the dashes once the key band stopped holding the axes down.
+    # The FULL statement -- one measured rig, every other point a model, at C < 5
+    # exactly as much as at C > 5 -- is in the caption, in bold, and has been all along.
+    # THE MEASURED-VS-MODEL NOTE IS GONE from the artwork (Eric, 2026-08-18: "we
+    # dont need the other text like 'marker = measurement rig C=5' no need for
+    # 'curves are the model'"). The statement it carried -- one measured rig, every
+    # other point a model -- is in the caption, and the single filled marker still
+    # marks the measured C on the artwork.
 
     # The ratio, at the measured rig size only. The label sits to the RIGHT of the
     # arrow, in the wedge between the dashed tau = 5 px curve and the traditional
@@ -193,13 +241,29 @@ def main():
     # it plots and the paper quotes the other. The arrow spans the free labels at the
     # measured rig; the label gives the count, the share of CN it is, and the
     # placements-ratio the abstract uses -- all three are the same arithmetic.
-    ax.annotate("", (ncam - 0.35, 0), (ncam - 0.35, free),
+    # THE ARROW NOW SPANS THE SAVING, which on this quantity is the GAP between the
+    # two curves (aided -> C x N) rather than a distance from zero. On the free-label
+    # quantity the same saving was the aided curve's own height, so the arrow ran from
+    # the axis; here an arrow from 0 would measure the labels still being placed.
+    ax.annotate("", (ncam - 0.35, aided), (ncam - 0.35, trad),
                 arrowprops=dict(arrowstyle="<->", lw=0.8, color=INK))
-    # TWO SHORT LINES: the one-line form ran off the right edge of a 57 mm panel.
-    ax.text(ncam + 0.15, free * 0.55,
-            f"{free:.0f} of {trad:.0f} free\n{free / trad:.0%} · "
-            f"{trad / aided:.1f}× fewer", ha="left", va="center", fontsize=6.5,
-            fontweight="bold", color=INK, linespacing=1.35)
+    # BELOW the arrow's foot, in the empty band under the τ = 10 px curve: everything
+    # from C = 3 rightward and y < 30 is clear on this quantity, whereas the wedge
+    # between the salmon line and the τ = 5 px curve -- where this label sat -- is
+    # crossed by one or the other at every height the arrow's mid-point offers.
+    # BOTH READINGS OF THE SAME MEASURED POINT, because the paper quotes the ratio and
+    # the panel plots the count: 32 placed of 75, i.e. 57% arriving free, i.e. 2.3x
+    # fewer placements. One arithmetic, three sentences a reader might want.
+    # RIGHT-ANCHORED AT C = 8, not left-anchored at the arrow: "at C = 5: 32 of 75 by
+    # hand" set from x = 4.85 ran off the artwork and matplotlib dropped the overhang
+    # silently (lint: TRUNCATED). Anchored to the right edge it cannot overrun, and it
+    # still reads as the arrow's label -- it is the only text in the empty band under
+    # the τ = 10 px curve, and it names its own C.
+    # THE RATIO LABEL IS GONE from the artwork (Eric, 2026-08-18: "no need for 'at
+    # C = 5: 32 of 75 by hand 57% free and 2.3x fewer'"). All three readings are in
+    # the caption. The arrow stays: it is a mark, not text, and it is what shows the
+    # saving at the measured rig.
+    del free
 
     # Every integer: C is a count, and the one measured marker sits at C = 5, which
     # the old [2, 4, 6, 8] left between ticks.
@@ -221,9 +285,15 @@ def main():
     # centred line under a 57 mm axis takes ~30 characters before it reaches the
     # panel edge (the full sentence, 37 characters, cleared the edge by 0.2 mm).
     footnote(ax, f"assumed: {NODES} nodes × C views")
-    ax.set_ylabel("labels\nper animal per frame")
+    # THE AXIS NAMES ONE QUANTITY AGAIN. "labels per animal per frame" had to stay
+    # vague while the salmon line counted labels needed and the teal ones counted
+    # labels free; all three now count the placements a human makes, so the axis says
+    # exactly that.
+    ax.set_ylabel("manual placements\nper animal per frame")
     ax.set_xlim(2, CMAX)
-    ax.set_ylim(0, CMAX * NODES * 1.10)
+    # 1.16, not 1.10: the C x N end-label rides above the line's own top (y = 120), and
+    # at 1.10 it sat 1 pt off the frame.
+    ax.set_ylim(0, CMAX * NODES * 1.16)
     save(fig, 2, "b", "placements_vs_rig")
 
 

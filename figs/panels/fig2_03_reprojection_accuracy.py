@@ -16,9 +16,32 @@ WHAT THE NUMBER IS AND IS NOT. It is measured against the corpus's proofread 3D,
 which carries its own error (median reprojection 2.40 px) -- so these are COMPARISON
 values, not absolute 3D accuracy; the spacing is real, the absolute level includes
 the reference's own noise. Same caveat Fig 2d carries for the same reference
-(figs/README.md, "the Fig 2c '3D error' floor"). Box = across-session median of
-per-session p25/p50/p75; dots = each session's own median of the SAME field
-(per_session[].by_k -- the field is verified against the box source at build time).
+(figs/README.md, "the Fig 2c '3D error' floor").
+
+THE BOX IS THE SESSIONS, WHICH IS NOT WHAT IT USED TO BE, and the change is the
+point rather than a side effect (Eric, 2026-08-18: "2c should be a box and
+whisker"). Until now the panel drew `ax.bxp` with `whislo = q1` and `whishi = q3`
+and the whisker/cap strokes at `lw=0` -- a box with its whiskers deliberately
+suppressed, because the only spread the deposit carries for the hinges is
+`err3d_mm_across_sessions`, whose p25/p75 are the ACROSS-SESSION MEDIAN OF EACH
+SESSION'S OWN p25/p75 over keypoints (`fig4_by_views.mjs:105-110`). That is a
+typical session's KEYPOINT spread, so at k = 2 the box spanned 2.57-8.68 mm while
+the 50 dots beside it -- session medians -- spanned only 3.65-6.95 mm. A box drawn
+around a dot cloud is read as that cloud's summary, and it was not one: the hinges
+and the dots were different distributions, and no whisker could be added to the old
+box without a per-session p5/p95 the deposit does not have (per-session `by_k`
+carries n/mean/p25/p50/p75 and nothing else -- extending it means re-running the
+170 M-keypoint pass).
+
+So the box is now the DISTRIBUTION OF THE 50 SESSION MEDIANS: median, IQR, whiskers
+to 1.5x IQR, `showfliers=False` because every session is already a dot (10e's rule).
+Box and dots are one population, the whiskers mean what whiskers mean, and the
+session is the unit of replication the rest of the set uses. What leaves the artwork
+is the typical within-session keypoint spread; it stays in the deposited CSV, in the
+`agg_*` columns, beside the session-level statistics the box now draws. The drawn
+median is asserted equal to the deposit's own p50 at build time -- both are the
+median of the same 50 per-session medians, so a mismatch would mean the dots are not
+the population the deposit summarises.
 
 The held-out px version renders under `--heldout` (k <= 4, slug
 `reprojection_heldout`) -- it remains the out-of-sample form Fig 4b builds on. The
@@ -36,6 +59,8 @@ from pathlib import Path
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+import numpy as np  # noqa: E402
+from matplotlib.colors import to_rgba  # noqa: E402
 from src.data_loader import load, median  # noqa: E402
 from src.style import (INK, SALMON, TEAL, deposit, panel, save,  # noqa: E402
                        text_legend, use)
@@ -130,7 +155,6 @@ def main(heldout=False):
 
     rows = []
     fig, ax = panel("third", "std")
-    import numpy as np
     for i, k in enumerate(ks):
         g = agg[k]["dlt"]
         # Dots read the SAME field family as the boxes -- per_field pairs with agg
@@ -138,18 +162,42 @@ def main(heldout=False):
         # panel has already had once.
         vals = np.array([s_[per_field][k]["dlt"]["p50"] for s_ in per
                          if k in s_.get(per_field, {})])
+        # THE SAME 50 NUMBERS DRAW THE BOX AND THE DOTS -- see the docstring. The
+        # deposit's p50 is the median of these very values, computed on the other
+        # side of the pipeline (JS `med`), so equality is a real cross-check on the
+        # join and not a tautology; a drift means the dots are a different field.
+        if abs(np.median(vals) - g["p50"]) > 1e-9 * max(1.0, abs(g["p50"])):
+            sys.exit(f"fig2c: k={k} box median {np.median(vals):.9f} != deposit p50 "
+                     f"{g['p50']:.9f} -- the dots and the aggregate are not the "
+                     f"same population; do not draw a box around them")
+        q1, q3 = np.percentile(vals, [25, 75])
+        ax.boxplot([vals], positions=[i], widths=0.42, whis=1.5, showfliers=False,
+                   manage_ticks=False, patch_artist=True, zorder=2,
+                   # Fill as RGBA, not `alpha=`: the patch-level alpha fades the
+                   # edge with it, and the box's edge is what gives it its shape
+                   # against a 2.2 pt dot cloud.
+                   boxprops=dict(edgecolor=INK, lw=0.9,
+                                 facecolor=to_rgba(TEAL, 0.18)),
+                   medianprops=dict(color=TEAL, lw=1.6),
+                   whiskerprops=dict(color=INK, lw=0.9),
+                   capprops=dict(color=INK, lw=0.9))
         jit = ((np.arange(len(vals)) * 0.6180339887) % 1.0 - 0.5) * 0.30
         ax.plot(i + jit, vals, "o", color=TEAL, ms=2.2, alpha=0.40, mec="none",
-                zorder=2)
-        ax.bxp([{"med": g["p50"], "q1": g["p25"], "q3": g["p75"],
-                 "whislo": g["p25"], "whishi": g["p75"], "fliers": []}],
-               positions=[i], widths=0.42, showfliers=False, manage_ticks=False,
-               patch_artist=True,
-               boxprops=dict(edgecolor=INK, lw=0.9, facecolor="none"),
-               medianprops=dict(color=TEAL, lw=1.6),
-               whiskerprops=dict(color=INK, lw=0), capprops=dict(color=INK, lw=0))
-        rows.append({"cameras_in_solve": int(k), "p25": g["p25"], "p50": g["p50"],
-                     "p75": g["p75"], "n_keypoint_solves": g["n_values"],
+                zorder=3)
+        lo = vals[vals >= q1 - 1.5 * (q3 - q1)].min()
+        hi = vals[vals <= q3 + 1.5 * (q3 - q1)].max()
+        # BOTH FAMILIES DEPOSITED. `sess_*` is what the box draws (the session
+        # medians); `agg_*` is the across-session median of each session's own
+        # keypoint quartiles, which the box used to draw and the caption's
+        # within-session spread still comes from. Dropping it here would delete the
+        # only record of that spread.
+        rows.append({"cameras_in_solve": int(k),
+                     "sess_p25": float(q1), "sess_p50": float(np.median(vals)),
+                     "sess_p75": float(q3), "sess_whisker_lo": float(lo),
+                     "sess_whisker_hi": float(hi), "sess_min": float(vals.min()),
+                     "sess_max": float(vals.max()), "n_sessions_drawn": len(vals),
+                     "agg_p25": g["p25"], "agg_p50": g["p50"], "agg_p75": g["p75"],
+                     "n_keypoint_solves": g["n_values"],
                      "n_sessions": g["n_sessions"]})
     deposit(pd.DataFrame(rows), 2,
             "fig2c_error_by_cameras.csv" if not heldout
@@ -164,7 +212,11 @@ def main(heldout=False):
     else:
         ax.set_xlabel("cameras in the solve")
         ax.set_ylabel("3D error vs proofread\n(mm)")
-        ax.set_ylim(0, 10)
+        # 8, not 10. The 10 was headroom for the OLD box, whose k = 2 upper hinge was
+        # a typical session's keypoint p75 at 8.68 mm; the session-level box and its
+        # whiskers top out at 5.47 with one dot at 6.95, so 10 left a third of the
+        # axis empty and shrank every difference the panel is about.
+        ax.set_ylim(0, 8)
     ax.set_xlim(-0.55, len(ks) - 0.45)
     save(fig, 2, "c", "reprojection_accuracy" if not heldout
          else "reprojection_heldout")

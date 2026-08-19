@@ -166,8 +166,13 @@ N = 15. The 2.3× is annotated at that one measured C and nowhere else.
 (c) 3D error against the number of cameras in the solve, all five included: the 3D
 distance between the k-view DLT solve and the proofread reference, k = 2 to 5. Medians
 4.74 / 2.89 / 1.91 / 1.19 mm — big gains early, diminishing later, ending at the
-all-view solve. Boxes are across-session p25/p50/p75; dots are each session's own
-median. These are comparison values against a reference that carries its own error
+all-view solve. Boxes are the **across-session** distribution of the 50 session medians
+— median, IQR, whiskers to 1.5× IQR — and every session is also drawn as a dot, so a dot
+past a whisker is a session, not a separate flier encoding. (Through 2026-08-17 the box's
+hinges were instead the across-session median of each session's own keypoint p25/p75,
+which is a typical session's **within**-session spread: 2.57–8.68 mm at k = 2 against the
+session medians' 3.65–6.95. Both families are in `data/fig2/fig2c_error_by_cameras.csv`,
+`sess_*` and `agg_*`.) These are comparison values against a reference that carries its own error
 (median reprojection 2.41 px), not absolute 3D accuracy; the spacing is what the panel
 supports.
 (d) Median 3D error of a two-anchor solve against the angle that anchor pair subtends
@@ -366,10 +371,30 @@ the 3D term must be switched on and where each metric stops improving; it does n
 select 6.** With the term off (r = 0) the arm gives 632 switches per 100,000 at IDF1
 0.599; at the marked app default r = 6 it holds 413 switches (0.92 per 100,000) at
 IDF1 0.8613, where the previous default configuration holds 2,071 switches at 0.7493
-at the same r (deposited; drawn under a separate slug). The flat salmon rules are
-exhaustive enumeration, constant in r because it does not use the cost function; its
-identities exist only through the cross-frame threading described in Methods, so the
-rules are reference levels, not a third arm of the sweep.
+at the same r (deposited; drawn under a separate slug). The flat salmon rule is exhaustive
+enumeration — a **frame-matched reference level, not a third arm of the sweep**, constant
+in r because it does not use the cost function. It is scored over **exactly the frames
+exhaustive can enter**: the 21,622,345 camera-frames, 48% of the exposure, where every
+camera holds exactly two clean detections. On those same frames the greedy arm
+(`fig3_bench.mjs` at default thresholds, not the swept fresh-anchor configuration) scores
+**0.791** IDF1 and **8.0** switches per 100,000 against exhaustive's **0.628** and
+**81.0**, and exhaustive is higher in 10 of the 50 sessions; that comparison is the
+like-for-like one, and both arms are deposited in
+`data/fig3/fig3d_frame_matched_rules.csv` rather than drawn as a second rule.
+
+**The IDF1 rule used to read 0.400, and that number was a coverage artefact.** Until
+2026-08-18 both arms were scored over the whole session (`fig3_headtohead.py`), so
+exhaustive was charged an identity miss for every frame it structurally cannot enter
+while greedy was scored on all of them — and across the 50 sessions that IDF1 correlates
+0.86 with per-session coverage. The switch rule did not move at all (17,516 switches,
+81.00879 → 81.0088 per 100,000), because a switch count is only ever tallied where the
+method emits output; that invariance is asserted at build time as the check that the two
+scorings are the same measurement. What frame-matching does **not** remove: exhaustive is
+purely per-frame, so its identities exist only through the nearest-3D-centroid threading
+described in Methods, and on the matched frames its IDP, IDR and IDF1 are equal (a 1:1
+detection match to ground truth), which means the residual 0.628-vs-0.791 gap is
+temporal bookkeeping rather than association — the two methods choose the **same
+partition on 99.996%** of these frames.
 (**e**) Measured wall-clock time per frame for both methods on identical detections, over
 the four configurations that could be attempted, on a log axis from 1 ms to 1 day; the
 panel carries the partition-agreement rate and both frame counts. The 4-animal,
@@ -453,8 +478,9 @@ it favours greedy — held-out ground truth sides with the cheaper grouping on 5
 mechanism, so to make IDF1 computable for it at all our implementation threads identity
 across frames by nearest-3D-centroid matching to the previous computed frame; that
 threading is not part of the association decision, which is why panel d draws
-exhaustive's IDF1 (0.400) and switch rate (81.0 per 100,000 over its own 21,622,345
-clean camera-frames) as flat reference rules rather than as a third arm, and why the
+exhaustive's IDF1 (0.628 frame-matched, over the same 21,622,345 clean camera-frames as
+the greedy arm's 0.791) and switch rate (81.0 per 100,000 against 8.0) as flat reference
+rules rather than as a third arm, and why the
 partition agreement is the number the figure reports.
 
 **The response in panel d is flat in the ratio, not in the 3D weight, and the sweep
@@ -508,10 +534,18 @@ arrows mark cameras free to move. Schematic, not data.
 (**b**) **Reference-free.** Solve from *k* of the five cameras (every C-choose-*k*
 subset), project into each camera **outside** the subset, and score against that
 camera's raw detection in its native, still-distorted pixels. Both LUC3D solvers;
-median over 50 sessions; band p25–p75 for the DLT — a median *of* the per-session
-IQRs, not a confidence interval, drawn for one curve only because two overlapping
-ribbons read as four tints and neither stays legible (the refinement's IQR is in
-`fig4b_accuracy_vs_cameras.csv`). DLT **4.32 / 3.65 / 3.34 px** and refinement
+median over 50 sessions, one value per session per solver. **Error bars are the
+distribution-free 95% CI of that median** — the 18th and 33rd of the 50 sorted
+sessions, exact binomial coverage 96.7%, so no bootstrap and no seed. They are the
+precision of the plotted point, not the spread of the sessions: the between-session
+IQR is 3.38–4.45 px for the DLT at k = 2 against a CI of 4.11–4.40, and it is
+deposited (`*_p25`/`*_p75` in `fig4b_accuracy_vs_cameras.csv`) rather than drawn,
+because as a ribbon it was a redraw of Fig 2c's boxes. **The solver comparison is
+paired and the bars understate it**: the two solvers run on the same 50 sessions, so
+the test of the crossing is the per-session difference — refined minus DLT +0.111 px
+at k = 2 (DLT lower in 50/50 sessions), −0.069 at k = 3 (refined lower in 33/50) and
+−0.098 at k = 4 (34/50) — not whether two unpaired intervals overlap, and they do
+overlap at k = 3 and 4. DLT **4.32 / 3.65 / 3.34 px** and refinement
 **4.43 / 3.53 / 3.15** for 2/3/4 cameras — a **1.29×** and **1.41×** improvement.
 No reference 3D enters this panel, and **neither solver optimises this metric**: the
 refinement minimises reprojection error in the views it *was* given, never the
@@ -560,17 +594,21 @@ fixed camera, this one is a median of session medians over every C-choose-*k* su
 Same story, different estimator; **do not mix the two sets of numbers**. And *not*
 `fig2.json`'s `by_anchor_count` px arm, which despite the name scores against the
 reprojected reference (`gtk`) rather than the raw detection.
-(**c**) Distance the 3D estimate moves when the single worst-fitting view is dropped
-and the point re-solved from the rest, by how far that view sat from the all-view
-solution. Median 1.07 mm (< 3 px, n = 1,167,554), 1.76 mm (3–10 px, n = 3,019,181),
-7.18 mm (≥ 10 px, n = 66,901); boxes p25–p75, whiskers p5–p95, **box width ∝ √n**
-because n differs 45-fold and three equal boxes would read as three equal conditions.
-Each stratum's **share of the keypoints** is printed under its tick (27% / 71% /
-**1.6%** — so the 7.2 mm headline is 1.6% of the data, not a typical value), and so is
-the **fraction where the drop actually lowered the kept views' error** (87% / 83% /
-96%), because a displacement has no sign and the magnitude alone is equally consistent
-with the drop fixing the point and with it wrecking it. No reference 3D enters this
-measurement.
+(**c**) Reprojection error in the **kept** views, all five in the solve against the
+single worst-fitting view dropped and the point re-solved from the rest, per session:
+**one grey line per session**, 50 of them, and the teal pair is the across-session mean
+with a **t-based 95% CI** (n = 50, so mean ± t(49) × SEM). 2.056 [1.984, 2.129] px falls
+to 1.711 [1.651, 1.772]. The bars are the CI of the mean and not ±1 s.d., because the
+spread is already the 50 lines and a bar repeating it would be a second encoding of
+marks already on the panel. **The paired change is the stronger statement and is on the
+artwork**: −0.345 px, 95% CI [−0.359, −0.332], **lower in 50 of 50 sessions** — an
+interval seven times tighter than either mean's, because the between-session variation
+(s.d. 0.25 px) cancels in the difference. The y axis starts at 1.0, below the lowest
+session (1.27), so that a 0.14 px interval is legible; no line is clipped. No reference
+3D enters this measurement. (Through 2026-08-15 this panel was a three-stratum box
+chart binned by worst-view disagreement — medians 1.07 / 1.76 / 7.18 mm at n =
+1,167,554 / 3,019,181 / 66,901; that form was cut on request and its numbers remain in
+`fig4.json`'s `robust` block.)
 (**d**, **e**) **Four solvers, paired by algorithm class**, so that each comparison is
 between two things that do the same amount of work:
 
@@ -585,15 +623,18 @@ their closed-form SVD next to our iterative one and invited the reading "our ref
 is 1.6× slower than Anipose" — a category error, and the reason both panels now carry
 all four.
 
-(**d**) Median reprojection error per session; one dot per session, the four joined so
-the comparison is visibly paired; rules are the median of the 50 session dots, not of
-the pooled keypoints. All four columns are the same 4,253,636 keypoints. Open circles
-mark the `optim` columns, filled the linear ones. Left, scored in the cameras the solve
-used — labelled **(refined enforced)**, because our refinement minimises the reported
-metric and a backtracking guard vetoes any step that raises it, so "refined lowest"
-there cannot come out otherwise. Right, scored in a camera no solve saw, where nothing
-is enforced: **Anipose is lower in both pairs, 50/50 and 49/50** (3.11 / 3.34 linear,
-3.12 / 3.14 non-linear).
+(**d**) Median reprojection error per session, one box-and-whisker per solver over the
+50 sessions: median, IQR, whiskers to 1.5× IQR, and the session — not the pooled
+keypoint — as the unit, so the median is the median of the 50 session medians. All four
+columns are the same 4,253,636 keypoints. **Open boxes** mark the `optim` columns,
+filled the linear ones. The panel is scored **in the cameras the solve used** and is
+labelled **(refined enforced)**, because our refinement minimises the reported metric
+and a backtracking guard vetoes any step that raises it, so "refined lowest" here
+cannot come out otherwise. The out-of-sample arm — scored in a camera no solve saw,
+where nothing is enforced — is deposited rather than drawn, and there **Anipose is
+lower in both pairs, 50/50 and 49/50** (3.11 / 3.34 linear, 3.12 / 3.14 non-linear).
+Which session went where is in `data/fig4/fig4d_per_session.csv`; the paired win counts
+are the summary of it.
 (**e**) Solve time per keypoint. All four bars are the **solve alone** — undistortion is
 excluded from every one, because `CameraGroup.triangulate` undistorts inside the call
 and LUC3D undistorts outside it, and charging only one of them would be an artefact of
@@ -1061,8 +1102,9 @@ at four animals.
 (e) Cross-view identity performance against the same difficulty rating: cross-view
 IDF1 of LUC3D's tracker in its previous default configuration (the configuration of
 Fig 7's panels b–f), one dot per session over the **42 multi-animal** SLAP-2M sessions,
-a tick at each stratum's median, n printed under every tick (10, 3, 10, 3, 3 and 13
-sessions at ratings 2–7). Identity holds across most of the rating range and degrades
+a box-and-whisker per stratum — median line, IQR box, whiskers to 1.5× IQR, no separate
+flier marks because every session is already drawn as a dot — and n printed under every
+stratum (10, 3, 10, 3, 3 and 13 sessions at ratings 2–7). Identity holds across most of the rating range and degrades
 only in the hardest strata: stratum medians 0.989, 0.923, 0.969 and 0.925 at ratings
 2–5, then 0.829 at 6 and **0.649** at 7 — and the rating-7 stratum spans 0.41–0.90
 across its 13 sessions, so the hardest rating is also the most heterogeneous. Read

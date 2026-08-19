@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Fig 6e -- cross-view identity performance (IDF1) across the corpus's own 1-7
-difficulty rating: one dot per session, a median tick per stratum.
+difficulty rating: one dot per session, a box-and-whisker per stratum.
 
 REPLACES the per-camera detection-quality bar chart (Eric, 2026-08-16). The old
 panel's numbers are not lost: its plot-ready table remains deposited at
@@ -36,11 +36,25 @@ carry against fig6's -- the two deposits read the same master sheet through
 different scripts, and a silent disagreement would mean one of them is stale.
 At build time: 74/74 sessions join, 0 mismatches, 42 multi-animal drawn.
 
-MEDIAN TICK + DOTS, not a pooled line: the strata are n = 3 to 13 sessions of
+BOX-AND-WHISKER + DOTS, not a pooled line: the strata are n = 3 to 13 sessions of
 similar length, so a detection-weighted pool would let one long session carry a
-stratum while looking like a summary of it. The house form for that situation is
-10c/d's dots with a per-stratum summary and 6g's n printed per stratum. TEAL
-because the series is LUC3D's own performance (the set-wide entity rule).
+stratum while looking like a summary of it. The per-stratum summary was a bare
+median tick until 2026-08-18 (Eric: "can we make fig 6e a box and whisker also"),
+which said where the middle sat but nothing about the spread around it -- and
+spread is half of what this panel claims, since difficulty 7 is both the lowest
+and by far the widest stratum. The box is 10e's house form exactly: median line +
+IQR box, whiskers to 1.5x IQR, `showfliers=False` because EVERY session is drawn
+as a faint dot beside its box anyway -- so a dot means one session here, the same
+as in 6c/6d, rather than the boxplot default's "outlier only", which would read as
+a third encoding. 6g's n is still printed per stratum. TEAL because the series is
+LUC3D's own performance (the set-wide entity rule).
+
+A BOX NEEDS A BOX'S WORTH OF SESSIONS. Ratings 3, 5 and 6 hold n = 3, where the
+quartiles ARE the three observations and the whiskers have nothing left to reach;
+the box is drawn anyway because suppressing it for the small strata would make the
+form itself encode n, which the printed n already does -- but the median line goes
+back to TEAL wherever the IQR is too thin to carry a white one (10e's rule), so a
+degenerate stratum looks degenerate rather than looking like a summary.
 
 Source: figs/out/fig9_slap2m.json (shipped cell, per_session[].cross_idf1),
         figs/out/fig6_detections.json (sessions[].difficulty).
@@ -109,19 +123,36 @@ def main():
     use()
     df = build()
     deposit(df.sort_values(["difficulty", "session"]), 6,
-            "fig6e_idf1_by_difficulty.csv")
+            "fig6b_idf1_by_difficulty.csv")
 
     fig, ax = panel("half", "std")
     rng = np.random.default_rng(0)
     for d in DIFFICULTIES:
         v = df[df.difficulty == d].cross_idf1.to_numpy()
         if len(v):
+            # 10e's box, and 10e's white-median rule with it: a white line reads
+            # cleanly on a filled box but ERASES a box thinner than it, and three
+            # of these seven strata are near-degenerate (n = 3, or an IQR of
+            # 0.01 at rating 2), so the median falls back to TEAL there.
+            q1, q3 = np.percentile(v, [25, 75])
+            med_color = "white" if q3 - q1 > 0.04 else TEAL
+            # `manage_ticks=False`: boxplot otherwise installs its OWN fixed
+            # locator AND formatter per call, and the `set_xticks(DIFFICULTIES)`
+            # below then re-uses that stale label list positionally -- which drew
+            # the 1-7 axis one stratum out of register (the n=10 rating-2 box
+            # labelled "3"). The panel sets its own ticks; the boxes must not.
+            ax.boxplot([v], positions=[d], widths=0.46, patch_artist=True,
+                       showfliers=False, zorder=2, manage_ticks=False,
+                       medianprops=dict(color=med_color, linewidth=2.0),
+                       boxprops=dict(facecolor=TEAL, edgecolor=TEAL,
+                                     linewidth=0.8, alpha=0.55),
+                       whiskerprops=dict(color=TEAL, linewidth=0.8),
+                       capprops=dict(color=TEAL, linewidth=0.8))
+            # Dots ON TOP of the box, and jittered inside it: one session is one
+            # dot everywhere in this figure, so the box summarises marks the
+            # reader can still count rather than replacing them.
             ax.scatter(np.full(len(v), d) + rng.uniform(-0.14, 0.14, len(v)), v,
-                       s=8, color=TEAL, alpha=0.5, linewidths=0, zorder=2)
-            # The stratum summary is the MEDIAN, drawn as 10c's tick: n is 3-13
-            # per stratum, small enough that a mean would follow its own outlier.
-            ax.plot([d - 0.24, d + 0.24], [np.median(v)] * 2, color=TEAL,
-                    lw=2.0, solid_capstyle="butt", zorder=3)
+                       s=8, color=TEAL, alpha=0.55, linewidths=0, zorder=4)
         # n under every stratum, 6g's requirement -- including the structurally
         # empty difficulty-1 cell, which would otherwise read as an axis mistake.
         ax.text(d, 0.03, f"n={len(v)}", ha="center", va="bottom",
@@ -143,7 +174,8 @@ def main():
              # panel reads is the arm that shipped BEFORE it. The deposit key
              # (`SHIPPED = "shipped"`) is fig9_slap2m.json's own spelling and
              # stays; only the prose name moves.
-             "one dot per session, tick = stratum median; previous default "
+             "one dot per session, box = stratum IQR with median, whiskers "
+             "1.5x IQR (fliers not drawn -- every session is a dot); previous default "
              "LUC3D configuration, cross-view IDF1 (fig9_slap2m.json, the cell "
              "its key still calls 'shipped')\n"
              f"42 multi-animal SLAP-2M sessions (Fig 9a's cohort; the 32 "
@@ -151,7 +183,8 @@ def main():
              f"are excluded); difficulty 1 is single-animal only, so n=0\n"
              "medians: "
              + " · ".join(f"d{d} {m:.3f}" for d, m in med.items()))
-    save(fig, 6, "e", "idf1_by_difficulty")
+    # e -> b in the 2026-08-19 re-letter (the difficulty grid leads the figure)
+    save(fig, 6, "b", "idf1_by_difficulty")
 
 
 if __name__ == "__main__":

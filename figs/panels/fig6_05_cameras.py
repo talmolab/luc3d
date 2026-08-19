@@ -99,12 +99,17 @@ def crop_to(img, bbox, aspect, pad=0.06):
 def main():
     use()
     man_p = OUT / "fig6-app.json"
-    paths = {c: OUT / f"fig6-view-f120-{c}.png" for c in CAMS}
-    missing = [p.name for p in paths.values() if not p.exists()]
-    if missing or not man_p.exists():
-        sys.exit(f"missing figs/out/{missing or ['fig6-app.json']} — "
-                 "run `node figs/fig6_app.mjs`")
+    if not man_p.exists():
+        sys.exit("missing figs/out/fig6-app.json — run `node figs/fig6_app.mjs`")
     app = json.loads(man_p.read_text())
+    # Frame from the MANIFEST, not a literal -- this line said `f120` while the
+    # driver's last run wrote `f20`, so the panel drew frame-120 images cropped by
+    # frame-20 bboxes (found 2026-08-19). This panel is currently off the artwork;
+    # the same fix is live in panels/fig6_13_enrichment_grid.py.
+    paths = {c: OUT / f"fig6-view-f{app['frame']}-{c}.png" for c in CAMS}
+    missing = [p.name for p in paths.values() if not p.exists()]
+    if missing:
+        sys.exit(f"missing figs/out/{missing} — run `node figs/fig6_app.mjs`")
     boxes = {v["name"]: v["bbox"] for v in app.get("views") or []}
     per = (app.get("scale") or {}).get("perView") or {}
     L = (app.get("scale") or {}).get("L") or 50.0

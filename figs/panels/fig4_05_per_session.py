@@ -39,9 +39,22 @@ is worse than its own linear solve in 50/50 sessions. Off, what remains is soft-
 reprojection error with the cameras fixed, which is exactly what our refinement is.
 `fig4_anipose.py` measures both and deposits both; this panel draws the fair one.
 
-One dot per session per solver, joined, so the comparison is visibly PAIRED: these
-are 50 correlated recordings, not 50 independent draws, which is exactly why a bar
-chart of four pooled medians would overstate every difference here.
+BOXES ONLY -- NO PER-SESSION DOTS AND NO PAIRING LINES (Eric, 2026-08-18: "for 4d we
+dont need all the scatter dots and we dont need all the lines connecting them
+either"). The panel used to draw one dot per session per solver joined by a grey
+polyline, so that the comparison read as PAIRED: these are 50 correlated recordings,
+not 50 independent draws. That pairing is not lost, it is just no longer drawn --
+every per-session value is in `data/fig4/fig4d_per_session.csv`, and the pairing's
+actual RESULT is the win counts, counted on the pairs and quoted in the legend
+(Anipose's linear solve lower than our DLT in 50/50 sessions out of sample, lower
+than our refinement in 49/50). What the artwork now shows is four distributions;
+what it no longer shows is which session went where.
+
+FLIERS ARE DRAWN, and that is a consequence of dropping the dots rather than a
+preference. With every session on the panel as a dot, `showfliers=False` was correct
+-- a flier mark would have been a second encoding of a mark already there (10e's
+rule). With the dots gone it would instead DELETE the extreme sessions from the
+artwork, so the fliers come back, in the column's own colour.
 
 THE LEFT GROUP IS ENFORCED FOR THE REFINEMENT, and is labelled so on the artwork.
 The refinement's phase 2 minimises the reported error itself and a backtracking
@@ -49,9 +62,20 @@ guard vetoes any step that raises it, so "refined lowest" on the cameras the sol
 used cannot come out any other way. It is shown only to size the in-sample effect
 beside the held-out group, which any of the three can lose -- and ours does.
 
-The rules are the median OF THE SESSION DOTS, not the median pooled over all 4.2 M
-keypoints. A rule drawn through a dot cloud must be that cloud's median, and the
-session is the independent unit.
+BOX-AND-WHISKER OVER THE SESSION DOTS, not a bare median rule (Eric, 2026-08-18:
+"lets make figure 4d a box and whisker as well"). The box is the SESSION
+distribution -- median, IQR, whiskers to 1.5x IQR -- which is the same unit the
+dots and the pairing lines are in, never the median pooled over all 4.2 M
+keypoints. `showfliers=False` because every session is already a dot, so a flier
+mark would be a second encoding of the same observation (10e's rule).
+
+THE OPTIM COLUMNS' BOXES ARE UNFILLED, which is where the open-circle convention
+went when the circles did. Anipose keeps ONE hue across both of its columns because
+it is one library, so something other than colour has to say which configuration --
+it was the marker fill, and it is now the box fill (10e does exactly this for its
+keypoints-vs-COM pair). Filled boxes take a WHITE median line and open ones the
+column colour, 10e's rule again: white reads cleanly on a filled box and erases an
+unfilled one.
 
 Source: figs/out/fig4.json `per_session[].{reproj_p50,heldout_p50}` (dlt, ba)
         figs/out/fig4_anipose.json `per_session[].{reproj_p50,heldout_p50}` (linear)
@@ -67,6 +91,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.data_loader import load, median  # noqa: E402
+from matplotlib.colors import to_rgba  # noqa: E402
 from src.style import MUTED, deposit, entity, panel, save, use  # noqa: E402
 
 #: Set-wide entity colours -- see the note in `fig4_01_solvers.py`. Anipose earns
@@ -181,24 +206,38 @@ def main():
         # the reader is meant to follow a single recording through the solvers, and
         # a session whose anipose dot is low but whose refined dot is high should
         # trace a visible zigzag rather than two unrelated links.
-        for _, r in g.iterrows():
-            ax.plot([xs[k] for k, *_ in SOLVERS], [r[k] for k, *_ in SOLVERS],
-                    color="#DDDDDD", lw=0.5, zorder=1)
         for k, _, color in SOLVERS:
             # THE OPTIM COLUMNS ARE OPEN CIRCLES, the linear ones filled. Anipose
             # keeps one hue across both of its columns because it is one library, so
             # the marker has to carry "which configuration" -- as the hatch does on
             # 4e's optim bar. Two solid green columns read as two methods.
-            fill = "none" if k.endswith("_optim") else color
-            ax.plot(np.full(len(g), xs[k]), g[k], "o", ms=4.5, zorder=2,
-                    color=color, markerfacecolor=fill, markeredgecolor=color,
-                    markeredgewidth=0.8, linestyle="none")
-            ax.plot([xs[k] - 0.18, xs[k] + 0.18], [median(g[k])] * 2, color=color,
-                    lw=3.0, zorder=3, solid_capstyle="butt")
+            open_box = k.endswith("_optim")
+            # 0.34 wide: the columns are 0.5 apart, so anything past ~0.4 has
+            # neighbouring boxes touching across the pair.
+            # ALPHA ON THE FILL ONLY, as an RGBA facecolor: `alpha=` on the patch
+            # fades the EDGE with it, and an open box is nothing but edge.
+            ax.boxplot([g[k].to_numpy()], positions=[xs[k]], widths=0.34,
+                       patch_artist=True, manage_ticks=False, zorder=2, whis=1.5,
+                       medianprops=dict(color=color if open_box else "white",
+                                        lw=1.6),
+                       boxprops=dict(facecolor="none" if open_box
+                                     else to_rgba(color, 0.85),
+                                     edgecolor=color, lw=0.9),
+                       whiskerprops=dict(color=color, lw=0.9),
+                       capprops=dict(color=color, lw=0.9),
+                       flierprops=dict(marker="o", ms=3.0, markerfacecolor=color,
+                                       markeredgecolor=color, alpha=0.6))
 
     keys = [k for k, *_ in SOLVERS]
-    lo, hi = df[keys].min().min(), df[keys].max().max()
-    ax.set_ylim(lo - 0.2, hi + 0.55)
+    # THE LIMITS COME FROM THE DRAWN GROUP ONLY. `df` still carries the held-out arm
+    # (DEPOSIT_GROUPS), whose errors are larger, so taking min/max over the whole
+    # frame set the axis -- and the median labels that hang off `hi` -- by rows that
+    # are not on the panel: the top third was empty and the four medians floated
+    # 1.4 px above the boxes they name. Harmless while a dot cloud filled the space,
+    # visible the moment the dots came off.
+    drawn = df[df.group == GROUPS[0][0]]
+    lo, hi = drawn[keys].min().min(), drawn[keys].max().max()
+    ax.set_ylim(lo - 0.12, hi + 0.38)
     # The four columns and a margin, not the two-group span: with the held-out
     # group gone, the old limit left the right half of the panel empty and the
     # marks smaller than the space allowed.
@@ -220,7 +259,7 @@ def main():
         # matplotlib cannot colour part of one. Printed in COLUMN order, not sorted,
         # so the numbers line up under the columns they belong to.
         for k, _, color in SOLVERS:
-            ax.text(centre + OFFSET[k], hi + 0.42, f"{median(g[k]):.2f}",
+            ax.text(centre + OFFSET[k], hi + 0.30, f"{median(g[k]):.2f}",
                     ha="center", va="top", fontweight="bold", fontsize=8,
                     color=color)
         # The win count belongs to its group, so it goes INTO the tick label on a

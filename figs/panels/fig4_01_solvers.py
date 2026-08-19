@@ -40,7 +40,9 @@ from src.style import MUTED, entity, grid, GREY, INK, save, use  # noqa: E402
 #: rule down the left edge; the restyle dropped both and left three unbounded
 #: columns of line art that read as one continuous drawing. The card is what makes
 #: "three solvers" legible as three things, so it is restored here.
-CARD = (-1.85, -3.55, 5.85, 4.42)   # x0, y0, x1, y1 in data coordinates
+#: y1 4.42 -> 8.45 in the third-span restack: the wrapped 6-line text block
+#: needs the vertical room the one-line-per-row block did not.
+CARD = (-1.85, -3.55, 5.85, 8.45)   # x0, y0, x1, y1 in data coordinates
 
 #: THE SOLVER COLOURS COME FROM `entity()`, not from a local pick. DLT was drawn in
 #: periwinkle here, which is SLEAP's hue in Fig 7 -- a reader who learns periwinkle
@@ -52,12 +54,16 @@ CARD = (-1.85, -3.55, 5.85, 4.42)   # x0, y0, x1, y1 in data coordinates
 #: `ink` is the TEXT colour for the card's status tag and is not always `color`:
 #: GREY is #B3B3B3, i.e. 2.1:1 on white, which is below every legibility floor for
 #: type. Marks and rules may be GREY; words that must be read are MUTED.
+#: WRAPPED FOR THIRD SPAN (2026-08-19). The panel moved from two-thirds into a
+#: three-panel a/b/c row (Eric: "put abc on the same row, so we don't have all of
+#: that annoying white space"), so each card is now ~26 mm wide and the one-line
+#: 8 pt titles no longer fit; every text block wraps and drops a point instead.
 SOLVERS = [
-    dict(title="Linear DLT", sub="algebraic error · closed form",
+    dict(title="Linear DLT", sub="algebraic error\nclosed form",
          tag="app default", color=entity("dlt"), fixed=True, curved=False,
          iterative=False),
-    dict(title="Non-linear triangulation", sub="geometric error · native pixels",
-         tag="app menu: “Bundle Adjustment”", color=entity("refined"), fixed=True,
+    dict(title="Non-linear\ntriangulation", sub="geometric error\nnative pixels",
+         tag="app menu:\n“Bundle Adjustment”", color=entity("refined"), fixed=True,
          curved=True, iterative=False),
 ]
 
@@ -106,29 +112,30 @@ def draw(ax, s):
 
     ax.set_xlim(CARD[0] - 0.15, CARD[2] + 0.15)
     ax.set_ylim(CARD[1] - 0.12, CARD[3] + 0.12)
-    # Title block reads top-down: what it is, what it minimises, what the app calls it.
-    ax.text(-1.4, 4.3, s["title"], fontweight="bold", va="top",
-            color=s["color"])
-    ax.text(-1.4, 3.6, s["sub"], va="top", color=MUTED, fontsize=7)
-    ax.text(-1.4, 3.0, s["tag"], va="top", color=ink, fontsize=7)
+    # Title block reads top-down: what it is, what it minimises, what the app calls
+    # it. Wrapped two-line blocks at 7/6 pt since the third-span move (see SOLVERS);
+    # the y anchors are FIXED across both cards so the blocks align even though
+    # "Linear DLT" is one line where the other title is two.
+    ax.text(-1.4, 8.3, s["title"], fontweight="bold", va="top",
+            color=s["color"], fontsize=7, linespacing=1.25)
+    ax.text(-1.4, 6.2, s["sub"], va="top", color=MUTED, fontsize=6,
+            linespacing=1.25)
+    ax.text(-1.4, 4.5, s["tag"], va="top", color=ink, fontsize=6,
+            linespacing=1.25)
 
 
 def main():
     use()
-    # 46 mm, not 50. `blank()` sets aspect="equal" and the card is ~square, so the row
-    # height sets the card WIDTH too: at 50 mm each card was 45 mm wide inside a 60 mm
-    # slot, i.e. a quarter of the row was gutter that no panel asked for. 46 mm buys
-    # back the 4 mm the third footer line costs and keeps the composite off the 200 mm
-    # ceiling; the type stays 8 pt, and the tightest clearance in the card -- the
-    # status tag above the upper camera -- is still ~0.1 of a data unit.
-    #
-    # two-thirds, not full: with the joint-BA card cut (review 2026-08) two ~45 mm
-    # cards in a 180 mm row would swim in 45 mm of gutter that reads as a missing
-    # third card. At 117.3 mm the two cards keep the same slot width they had.
-    fig, axes = grid(1, 2, span="two-thirds", row=46.0, despine=False)
+    # THIRD SPAN, 52 mm row (2026-08-19, Eric: "put abc on the same row, so we
+    # don't have all of that annoying white space" -- the old two-thirds row left
+    # a third of the page white beside this panel). Two ~26 mm cards side by side;
+    # `blank()` sets aspect="equal" and the card is now taller than wide (the
+    # wrapped text block, see SOLVERS/CARD), so WIDTH is the binding dimension and
+    # the 52 mm row -- matching b's and c's "std" row -- gives the cards vertical
+    # slack rather than clipping them.
+    fig, axes = grid(1, 2, span="third", row=52.0, despine=False)
     for ax, s in zip(axes, SOLVERS):
         draw(ax, s)
-    fig.subplots_adjust(wspace=0.05)
     save(fig, 4, "a", "solvers")
 
 

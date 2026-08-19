@@ -134,7 +134,13 @@ def main():
     # Same content, and the elevations now carry the fact the clump was hiding.
     w, h = SPAN["half"], ROW_H["tall"]
     fig = plt.figure(figsize=(mm(w), mm(h)), layout="constrained")
-    gs = fig.add_gridspec(1, 2, width_ratios=[1.15, 1.0], wspace=0.01)
+    # 1.62, up from 1.15 (Eric, 2026-08-19: "make the 2d pose visualizations a little
+    # smaller and make the 3d bigger"). With the header and the volume note cut, the
+    # render is the only thing in the left column, and because its content is wider
+    # than tall in a column that is taller than wide it is WIDTH-limited: the column
+    # ratio is the only lever that makes it bigger. The five projections shrink to
+    # suit, which is the other half of the instruction.
+    gs = fig.add_gridspec(1, 2, width_ratios=[1.62, 1.0], wspace=0.01)
     # 3 ROWS x 2 COLS, not 2 x 3: the right column is tall and narrow, so three tall
     # rows fill it and give each projection a usable frame. At 2 x 3 the five views
     # were postage stamps with a hole in the middle of the panel.
@@ -146,18 +152,30 @@ def main():
     # and the render (itself aspect-locked) then shrank to ~34 mm inside a cell it
     # no longer filled. A fixed axes with in_layout=False cannot be squeezed; the
     # panel's size is declared on the grid, so the fractions are deterministic.
-    fig.text(0.012, 0.985, "3D reconstruction", fontsize=6.5,
-             color="#4C4D4C", va="top", ha="left", fontweight="bold")
-    fig.text(0.012, 0.915, f"volume {BOX_MM[0]} × {BOX_MM[1]} × {BOX_MM[2]} mm\n"
-                           "only the 3D panel is metric",
-             fontsize=5.0, color=MUTED, va="top", ha="left", linespacing=1.3)
-    ax = fig.add_axes([0.005, 0.045, 0.505, 0.79], in_layout=False)
+    # NO IN-PANEL EXPOSITION (Eric, 2026-08-19). The "3D reconstruction" header, the
+    # "volume 230 x 230 x 140 mm / only the 3D panel is metric" note, and the
+    # "5 camera views, same instant / all 58-76 above, 93-106 px apart / None has the
+    # vertical" block in the sixth cell were all cut. The panel's own title, which the
+    # assembler draws from TITLES, now says what it is, and the volume and the camera
+    # elevations are caption material rather than artwork. `BOX_MM` is kept because
+    # the caption quotes it and it must stay in step with the render.
+    #
+    # The render takes the height the header used to occupy, which is why the axes
+    # runs to 0.95 rather than 0.79 + 0.045.
+    ax = fig.add_axes([0.002, 0.030, 0.618, 0.94], in_layout=False)
     img = mpimg.imread(str(RENDER))
     H, W = img.shape[:2]
-    # trim the render's grey-world margins; the scene was framed with air around it
-    img = img[int(0.02 * H):int(0.96 * H), int(0.03 * W):int(0.97 * W)]
+    # TRIMMED TO THE INK, MEASURED, not to a guessed margin. On the shipping render
+    # the box edges and the two mice span x 0.073 to 0.926 and y 0.101 to 0.816; the
+    # rest is the grey world and the floor shadow. The old crop kept 0.02 to 0.96 in
+    # y, so about a quarter of the panel's left column was empty world, which is what
+    # pushed the box inward from the panel edge and away from c below it.
+    img = img[int(0.085 * H):int(0.845 * H), int(0.055 * W):int(0.945 * W)]
     ax.imshow(img)
-    ax.set_anchor("N")                # hug the title strip, not the cell centre
+    # CENTRED, not anchored north. It hugged the header that has now been cut, which
+    # left the whole lower half of the column empty. The render is landscape and the
+    # column is tall, so some slack is unavoidable; splitting it above and below
+    # reads as margin rather than as a hole.
     ax.axis("off")
 
     # ---- the five real camera projections --------------------------------------
@@ -177,19 +195,13 @@ def main():
             s.set_color("#D8D8D8")
             s.set_linewidth(0.5)
         a2.set_title(f"{_elev(cam, ctr):.0f}°", fontsize=5.6, color=MUTED, pad=1.0)
-    # the sixth cell carries the note rather than an empty frame. Lines kept SHORT:
-    # the first version ran past the panel edge and lint could not see it, because the
-    # text belongs to an axes that is itself at the figure boundary.
-    a3 = fig.add_subplot(gsr[2, 1])
-    a3.axis("off")
+    # The sixth cell is left empty. It used to carry the note that has now been cut;
+    # the numbers it quoted are still printed here so they stay available to the
+    # caption, which is where they now live.
     gaps = [c["tti_gap_px"] for c in d["cameras"]]
-    a3.text(0.0, 1.0, "5 camera views,\nsame instant", fontsize=5.8,
-            color=MUTED, va="top", ha="left", fontweight="bold", linespacing=1.25)
-    a3.text(0.0, 0.50, f"all {min(_elev(c, ctr) for c in cams):.0f}–"
-                       f"{max(_elev(c, ctr) for c in cams):.0f}° above,\n"
-                       f"{min(gaps):.0f}–{max(gaps):.0f} px apart\n"
-                       f"in every view.\nNone has the\nvertical.",
-            fontsize=5.0, color=MUTED, va="top", ha="left", linespacing=1.28)
+    print(f"  cameras {min(_elev(c, ctr) for c in cams):.0f}-"
+          f"{max(_elev(c, ctr) for c in cams):.0f} deg above the animals; "
+          f"tail-base gap {min(gaps):.0f}-{max(gaps):.0f} px in every view")
     save(fig, 5, "a", "upright_views")
 
 

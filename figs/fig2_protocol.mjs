@@ -33,7 +33,8 @@
 import {
     launch, loadSession, gotoFrame, trackAll, triangulateAll, setColorMode,
     setOverlayStyle, setVisibility, setAnchorViews, reprojErrors, setLayout,
-    set3dChrome, hide3dButtons, rigFit, frame3d, shootEl, exportViews, clearOverlays,
+    set3dChrome, hide3dButtons, rigFit, frame3d, showCameraView,
+    shootEl, exportViews, clearOverlays,
     writeManifest, done, log, CAMS, setIdentityPalette, setSkeletonEdges,
 } from './_drive.mjs';
 
@@ -46,6 +47,80 @@ const ANCHORS = (process.env.ANCHORS || 'Camera1_topB,Camera6_sideL').split(',')
 // The views the figure shows as "not labelled".
 const SHOWCAMS = (process.env.SHOWCAMS || 'Camera0_mid,Camera4_topR,Camera2_topC')
     .split(',');
+// Margin left around the 3D pose in the "3D from the 2 anchors" tile, as a
+// multiple of the tightest fit. 1.0 puts the outermost keypoint exactly on the
+// frame edge, so this is the breathing room -- not a zoom factor to taste.
+const FIT3D_PAD = Number(process.env.FIT3D_PAD || 1.18);
+
+/**
+ * Aim the 3D viewport at the frame's animals and narrow its FOV until they fill it.
+ *
+ * Called right after `showCameraView`, so the camera POSITION and ROLL stay the
+ * calibrated ones; only the look-at and the field of view move. That makes the tile
+ * a CROP of what sideL sees rather than a new viewpoint, which is the whole point of
+ * putting it under the sideL video.
+ *
+ * THE FOV IS COMPUTED, NOT DIALLED IN. A hand-set zoom (2.6x was the first try) has
+ * no way to know where the outermost keypoint is and clipped the third animal off the
+ * left edge. Here every 3D point is resolved onto the camera's own right/up/forward
+ * axes and the vertical half-angle is taken as the max of what the point needs
+ * vertically and what it needs horizontally once the pane's aspect is divided out --
+ * so nothing can fall outside the frame, whatever the pose does.
+ */
+async function zoomOnAnimals(page, pad) {
+    const res = await page.evaluate((padv) => {
+        const v = window.__lucid.viewport3d;
+        const st = window.__lucid.state;
+        const s = st.session;
+        if (!v || !s) return null;
+        const gs = s.instanceGroups.get(st.currentFrame) || [];
+        const pts = [];
+        let cx = 0, cy = 0, cz = 0;
+        for (const g of gs) {
+            const p = g.points3d;                 // flat Float64Array(3N) since #189
+            if (!p) continue;
+            for (let i = 0; i + 2 < p.length; i += 3) {
+                const x = p[i], y = p[i + 1], z = p[i + 2];
+                if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) continue;
+                pts.push([x, y, z]); cx += x; cy += y; cz += z;
+            }
+        }
+        const n = pts.length;
+        if (!n) return { n: 0 };
+        cx /= n; cy /= n; cz /= n;
+        const cam = v.threeCamera;
+        const fov0 = cam.fov;
+        v.controls.target.set(cx, cy, cz);
+        v.controls.update();                      // keeps position, re-aims at target
+        cam.updateMatrixWorld(true);
+        const e = cam.matrixWorld.elements;       // column-major: right, up, -forward
+        const right = [e[0], e[1], e[2]];
+        const up = [e[4], e[5], e[6]];
+        const fwd = [-e[8], -e[9], -e[10]];
+        const pos = [e[12], e[13], e[14]];
+        const aspect = cam.aspect || 1;
+        let tan = 0;
+        for (const p of pts) {
+            const d = [p[0] - pos[0], p[1] - pos[1], p[2] - pos[2]];
+            const depth = d[0] * fwd[0] + d[1] * fwd[1] + d[2] * fwd[2];
+            if (depth <= 1e-6) continue;          // behind the camera
+            const vert = Math.abs(d[0] * up[0] + d[1] * up[1] + d[2] * up[2]) / depth;
+            const horz = Math.abs(d[0] * right[0] + d[1] * right[1] + d[2] * right[2])
+                / depth / aspect;
+            tan = Math.max(tan, vert, horz);
+        }
+        if (!(tan > 0)) return { n, why: 'no point in front of the camera' };
+        cam.fov = Math.min(fov0, 2 * Math.atan(tan * padv) * 180 / Math.PI);
+        cam.updateProjectionMatrix();
+        if (v.renderer && v.scene) v.renderer.render(v.scene, cam);
+        return { n, centroid: [cx, cy, cz].map(x => +x.toFixed(1)), aspect: +aspect.toFixed(3),
+                 fov0: +fov0.toFixed(2), fov: +cam.fov.toFixed(2),
+                 zoom: +(fov0 / cam.fov).toFixed(2), pad: padv };
+    }, pad);
+    log('[zoomOnAnimals] ' + JSON.stringify(res));
+    await page.waitForTimeout(400);
+    return res;
+}
 
 const PRINT_STYLE = {
     predNodeSize: 5, predEdgeWeight: 3,
@@ -112,7 +187,16 @@ try {
     // "here is the geometry", but at the 42 mm a figure column allows, the animals in
     // it are ~2 mm across; step 2's claim is "you now have a 3D pose", so that needs
     // a tile where the pose is legible.
-    const near = await frame3d(page, { azimuth: 40, elevation: 22, pad: 2.4 });
+    //
+    // FROM THE sideL ANCHOR'S OWN VIEWPOINT, NOT AN ARBITRARY ORBIT (Eric,
+    // 2026-08-19: "re render that with the camera in the same camera angle as sideL
+    // and zoom in a bit"). This tile sits directly under the "cam 6 sideL - anchor"
+    // video in the panel, so putting the 3D at that camera's real pose lets a reader
+    // check the reconstruction against the pixels it came from -- the same reasoning
+    // Fig 1d's middle tile uses. `showCameraView` is the app's own "Show Camera
+    // View" button, so the pose and FOV are the session's calibrated extrinsics.
+    await showCameraView(page, ANCHORS[1]);
+    const near = await zoomOnAnimals(page, FIT3D_PAD);
     await shootEl(page, '#viewport3dContainer', 'fig2p-3d-animals');
     await hide3dButtons(page, false);
 

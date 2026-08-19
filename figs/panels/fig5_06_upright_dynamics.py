@@ -77,7 +77,11 @@ def main():
     # labels beside each curve were tried first and collided with all three series:
     # the two height curves converge away from the peak, and the gap curve crosses
     # them.
-    fig, ax = panel("third", "std", key=3)
+    # HALF/TALL, was third/std (Eric, 2026-08-19: "make b bigger to fill out that
+    # white space"). Panel a beside it is half-width and 64 mm tall, so at 57.3 x 52
+    # this panel left about 31 mm of the 180 mm row empty on its right and sat 12 mm
+    # short of a's bottom edge. 88 + 88 + the 4 mm gutter is exactly the page.
+    fig, ax = panel("half", "tall", key=3)
     for key, c in (("hi", CA), ("lo", CB)):
         ax.fill_between(t, p[key]["p25"], p[key]["p75"], color=c, alpha=0.16, lw=0)
         ax.plot(t, p[key]["p50"], color=c, lw=1.8, zorder=3)

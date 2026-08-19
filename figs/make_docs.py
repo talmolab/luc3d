@@ -73,13 +73,19 @@ PRODUCERS = {
     "fig5_views.json": "figs/fig5_views.py",
     # Not a figs/out JSON: Fig 1a is a Blender render, and the "measurement pass"
     # that produced it is the scene script that placed the session's calibration,
-    # cage corners and tracked poses (see panels/fig1_00_render.py).
-    "blender-images/renders/cage_two_mice.png": "blender-images/cage_scene.py",
-    # The BMimica-10M half of Fig 1a takes TWO scripts: the deposit script measures the
-    # arena footprint, picks the frame and carries the calibration into the 3D frame;
-    # the scene script only draws what it deposited.
-    "blender-images/renders/bmimica_arena.png":
+    # cage corners and tracked poses (see panels/fig1_00_render.py). Since
+    # 2026-08-19 the panel reads the video-frame framings under fig1_renders/.
+    "blender-images/renders/fig1_renders/slap2m-4mice_f06020.png":
+        "blender-images/cage_scene.py",
+    # The Mouse-Dyad-10M half of Fig 1a takes TWO scripts: the deposit script measures
+    # the arena footprint, picks the frame and carries the calibration into the 3D
+    # frame; the scene script only draws what it deposited.
+    "blender-images/renders/fig1_renders/mouse-dyad_f55701.png":
         "figs/fig1_bmimica_scene.py (+ blender-images/bmimica_scene.py)",
+    # Fig 6a reads TEN tiles (enrich_a{A}_o{O}.png); the docstring names the first
+    # as the representative, and the scene script is the measurement pass for all.
+    "blender-images/renders/enrich_a1_o0.png":
+        "blender-images/enrichment_scene.py",
 }
 
 
@@ -172,7 +178,7 @@ def facts(src: Path) -> dict:
     # figs/out JSON (Fig 1a's Blender render). Named in the docstring's Source
     # line; kept separate from `inputs` so render() does not prefix them `out/`.
     images = sorted(set(re.findall(
-        r"blender-images/renders/[A-Za-z0-9_.\-]+\.png", doc)))
+        r"blender-images/renders/[A-Za-z0-9_.\-/]+\.png", doc)))
     # `deposit(df, N, "name.csv")` where df is often a call with its own commas and
     # the name is often a conditional expression, so: take every string literal
     # ending .csv inside each deposit() call (both branches of a conditional), then

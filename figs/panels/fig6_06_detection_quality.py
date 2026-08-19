@@ -112,9 +112,15 @@ def main():
     ks = [k for k in sorted(bd, key=int) if bd[k].get("n_sessions")]
     df = pd.DataFrame([dict(difficulty=int(k),
                             **{c: bd[k].get(c) for c in FIELDS}) for k in ks])
-    deposit(df, 6, "fig6g_detection_quality.csv")
+    deposit(df, 6, "fig6e_detection_quality.csv")
 
-    fig, axes = grid(1, 3, span="full", row=H)
+    # full -> two-thirds span in the 2026-08-19 re-letter: this panel now shares
+    # its row with the animal-count control (Eric: "we should still have the
+    # detection quality one next to d"). Half span was tried first and is too
+    # tight for three annotated sub-plots -- the fold ratios collided with the
+    # "95th pct" / "mean +- s.d." notes and the third x-label clipped -- so the
+    # row splits third + two-thirds (57.3 + 117.3 + 4 mm gutter = 178.6 mm).
+    fig, axes = grid(1, 3, span="two-thirds", row=H)
     # rect is (left, bottom, WIDTH, HEIGHT) -- NOT (left, bottom, right, top).
     fig.get_layout_engine().set(rect=(0, FOOT, 1, 1 - FOOT))
     for ax, (col, label, color, scale, sdcol, second, note) in zip(axes, PLOTS):
@@ -165,7 +171,8 @@ def main():
              + ", ".join(str(int(v)) for v in df.n_sessions)
              + " sessions at difficulty 1–7",
              ha="center", va="center", color=INK, fontsize=6.0)
-    save(fig, 6, "g", "detection_quality")
+    # g -> e in the 2026-08-19 re-letter (the difficulty grid leads the figure)
+    save(fig, 6, "e", "detection_quality")
 
 
 if __name__ == "__main__":

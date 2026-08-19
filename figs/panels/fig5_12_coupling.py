@@ -77,7 +77,9 @@ def main():
         "null_p25": d["null"]["p25"], "null_p75": d["null"]["p75"],
     }), 5, "fig5g_rear_coupling.csv")
 
-    fig, ax = panel("half", "short")
+    # TWO-THIRDS, up from half (2026-08-19): 5f became a narrow two-box panel, so
+    # this one takes the freed width. 57.3 + 117.3 + the 4 mm gutter is the page.
+    fig, ax = panel("two-thirds", "short")
     ax.fill_between(t, d["null"]["p25"], d["null"]["p75"], color=CX, alpha=0.55,
                     lw=0, zorder=1)
     ax.fill_between(t, d["near"]["p25"], d["near"]["p75"], color=CN, alpha=0.18,

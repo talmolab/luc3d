@@ -323,6 +323,25 @@ def load_session(session):
 
 TAIL_NODES = [7, 8, 9, 4]  # Tail_0, Tail_1, Tail_2, TailTip in mouse node order
 
+#: JOINT RADIUS BY ANATOMICAL GROUP, m. The rule used to be
+#: `0.0095 if n in ("Head", "Trunk", "TTI") else 0.0068`, which put three outsized
+#: balls on an otherwise even skeleton. Two of them sit next to each other at the
+#: hip -- TTI beside the two haunches -- so that end of the animal read as a giant
+#: bead flanked by small ones (Eric, 2026-08-19: "the large nodes on TTI and haunches
+#: looks weird ... the body nodes should all be the same size ... roughly standard
+#: size within tail, body and head"). Each group is now internally UNIFORM, and the
+#: head and tail sit slightly smaller than the trunk, which tapers the animal instead
+#: of spotting it. Head and tail keep the radius they already had, since those two
+#: groups already read correctly; only the three oversized nodes move.
+NODE_R = {"body": 0.0078, "head": 0.0068, "tail": 0.0068}
+NODE_GROUP = {
+    "Nose": "head", "Ear_R": "head", "Ear_L": "head", "Head": "head",
+    "Neck": "body", "Trunk": "body", "TTI": "body",
+    "Shoulder_left": "body", "Shoulder_right": "body",
+    "Haunch_left": "body", "Haunch_right": "body",
+    "Tail_0": "tail", "Tail_1": "tail", "Tail_2": "tail", "TailTip": "tail",
+}
+
 
 def cage_planes(cage_nodes, cage, margin=0.004):
     """Half-space model of the cage interior: the floor and the four outer
@@ -367,9 +386,63 @@ def load_frame(session, frame):
 # --------------------------------------------------------------------------
 # scene builders
 # --------------------------------------------------------------------------
-def build_cage(cage_nodes, cage, M, coll):
+#: Minimum area, m^2, for a camera-facing wall to have its fill dropped by
+#: `open_toward`. The near wall of this cage is 0.109 m^2 and the next camera-facing
+#: surfaces are the spout wall and spout front at 0.016 and 0.014, so anything
+#: between roughly 0.02 and 0.10 separates them. Set at 0.05 to leave margin on both
+#: sides: the small end panels and the filter box keep their fills, which is what
+#: still reads as a box once the near wall is gone.
+OPEN_MIN_AREA = 0.05
+#: How square-on a wall must be to count as facing the camera. The near wall scores
+#: 0.86 here; the walls that must keep their fill score negative.
+OPEN_MIN_FACING = 0.2
+
+
+def facing_surfaces(cage_nodes, cage, toward, min_area=OPEN_MIN_AREA,
+                    min_facing=OPEN_MIN_FACING):
+    """Names of the large cage surfaces whose outward normal points at `toward`.
+
+    `toward` is the unit vector from the cage to the camera. Each surface is fit by
+    SVD, its normal oriented away from the cage centroid, and its polygon area taken
+    in its own plane, so the test is on the real geometry rather than on a hard-coded
+    wall name and stays correct if the render azimuth moves."""
     idx = {n: i for i, n in enumerate(cage_nodes)}
+    ctr = cage.mean(axis=0)
+    out = []
     for name, nodes in CAGE_SURFACES.items():
+        P = cage[[idx[n] for n in nodes]]
+        c = P.mean(axis=0)
+        _, _, vt = np.linalg.svd(P - c)
+        n = vt[2]
+        if np.dot(c - ctr, n) < 0:
+            n = -n
+        xy = np.c_[(P - c) @ vt[0], (P - c) @ vt[1]]
+        m = len(xy)
+        area = 0.5 * abs(sum(xy[i, 0] * xy[(i + 1) % m, 1]
+                             - xy[(i + 1) % m, 0] * xy[i, 1] for i in range(m)))
+        if area >= min_area and float(np.dot(n, toward)) >= min_facing:
+            out.append(name)
+    return out
+
+
+def build_cage(cage_nodes, cage, M, coll, open_toward=None):
+    """The cage as filled translucent surfaces plus its edge wireframe.
+
+    `open_toward`, a unit vector from the cage to the camera, drops the FILL of the
+    large wall the camera is looking through, leaving its edges in place. Eric,
+    2026-08-19: "it would look better if the front facing surface of the cage, the
+    large side nearest to us, was completely transparent so that we can see what's
+    inside". Two translucent films stacked between the viewer and the animals is
+    what was greying them out, and the near one contributes nothing but haze because
+    nothing is in front of it. The edges stay, so the cage still reads as a box.
+    Default None leaves every existing caller, including the videos, unchanged."""
+    idx = {n: i for i, n in enumerate(cage_nodes)}
+    skip = set(facing_surfaces(cage_nodes, cage, open_toward)) if open_toward is not None else set()
+    if skip:
+        print("  cage: fill dropped on", ", ".join(sorted(skip)))
+    for name, nodes in CAGE_SURFACES.items():
+        if name in skip:
+            continue
         mat = M["cage_floor"] if name == "floor" else M["cage_wall"]
         ngon(f"cage_{name}", cage[[idx[n] for n in nodes]], mat, coll)
     for i, (a, b) in enumerate(CAGE_EDGES):
@@ -412,21 +485,28 @@ def build_camera_support(name, C, M, coll, floor_z, ceiling=1.5):
         cylinder(f"foot_{name}", 0.022, 0.008, (x, y, floor_z + 0.004), M["mount"], coll)
 
 
-def build_animal(track, pts, mouse_nodes, M, coll):
+def build_animal(track, pts, mouse_nodes, M, coll, colors=None):
     """viz_08's ball-and-stick mouse in tab10, plus its translucent body
     membranes — surfaces filled, as asked. Returns handles so update_animal
     can re-pose the same objects on later video frames instead of rebuilding
-    (object creation/deletion dominated per-frame cost — the GPU sat idle)."""
+    (object creation/deletion dominated per-frame cost — the GPU sat idle).
+
+    `colors` overrides TAB10 with an explicit per-track hex list — used by the
+    figure panels that have to agree with the APP's identity colours (Fig 6a's
+    camera-view inset, Fig 1a). Default None keeps every existing caller,
+    including the videos, on tab10 exactly as before."""
     idx = {n: i for i, n in enumerate(mouse_nodes)}
-    col = TAB10[track % len(TAB10)]
+    pal = colors or TAB10
+    col = pal[track % len(pal)]
+    node_r = {n: NODE_R.get(NODE_GROUP.get(n, "body"), NODE_R["body"])
+              for n in mouse_nodes}
     solid = M.setdefault(f"mouse{track}", matte_mat(f"mouse{track}", col))
     body = M.setdefault(f"body{track}", matte_mat(f"body{track}", col, alpha=0.38))
     sub = bpy.data.collections.new(f"animal_{track}")
     coll.children.link(sub)
     h = {"balls": [], "tubes": [], "surfs": []}
     for n, i in idx.items():
-        r = 0.0095 if n in ("Head", "Trunk", "TTI") else 0.0068
-        h["balls"].append((ball(f"a{track}_{n}", pts[i], r, solid, sub), i))
+        h["balls"].append((ball(f"a{track}_{n}", pts[i], node_r[n], solid, sub), i))
     for j, (a, b) in enumerate(MOUSE_EDGES):
         h["tubes"].append((tube(f"a{track}_e{j}", pts[[idx[a], idx[b]]], 0.0036, solid, sub),
                            idx[a], idx[b]))
@@ -505,6 +585,17 @@ def setup_lighting(focus):
     scn.world = world
 
 
+def camera_dir(azim_deg, elev_deg):
+    """Unit vector from the scene toward a camera at this azimuth and elevation.
+
+    The same expression `setup_render_camera` uses to place the camera, factored out
+    so `build_cage(open_toward=...)` cannot drift from where the camera actually is."""
+    az, el = math.radians(azim_deg), math.radians(elev_deg)
+    return np.array([math.cos(el) * math.cos(az),
+                     math.cos(el) * math.sin(az),
+                     math.sin(el)])
+
+
 def setup_render_camera(focus, azim_deg, elev_deg, ortho_scale, dist=4.0):
     az, el = math.radians(azim_deg), math.radians(elev_deg)
     loc = Vector(focus) + dist * Vector(
@@ -579,9 +670,20 @@ def main():
                          "the cage centroid so the overhead cameras stay in frame")
     ap.add_argument("--cam-scale", type=float, default=1.0,
                     help="scale factor on the camera body meshes")
+    ap.add_argument("--open-front", action="store_true",
+                    help="drop the fill of the large wall the camera looks through, "
+                         "so the interior is seen through clean air. Opt-in here "
+                         "because the videos were rendered without it; the figure "
+                         "stills (Fig 1a) use it. Default in enrichment_scene.py.")
     ap.add_argument("--clamp-tail", action="store_true",
                     help="project tail keypoints that triangulated outside the "
                          "cage back inside its walls/floor (visualization only)")
+    ap.add_argument("--colors",
+                    help="comma-separated hex colours, one per TRACK INDEX, "
+                         "replacing tab10 (stills only). Unused by the shipping "
+                         "figures — the app export is recoloured to match these "
+                         "renders instead (figs/fig6_app.mjs PALETTE); kept for "
+                         "the reverse direction")
     args = ap.parse_args()
 
     bpy.ops.wm.read_factory_settings(use_empty=True)
@@ -596,7 +698,8 @@ def main():
     # walls as the flat film too — same back-lit-black failure mode as the
     # membranes; the near-horizontal cage floor keeps real shading (shadows)
     M["cage_wall"] = flat_translucent("cage_wall", PBR["cage_wall"][0], PBR["cage_wall"][3])
-    build_cage(cage_nodes, cage, M, scn_coll)
+    build_cage(cage_nodes, cage, M, scn_coll,
+               open_toward=camera_dir(args.azim, args.elev) if args.open_front else None)
     zmin_cage = float(cage[:, 2].min())
     for c in cams:
         build_camera_unit(c["name"], c["C"], c["R_cam2world"], M, scn_coll,
@@ -653,9 +756,10 @@ def main():
         pts = load_frame(args.session, args.frame)
         if args.clamp_tail:
             clamp_tails(pts, cage_planes(cage_nodes, cage))
+        colors = args.colors.split(",") if args.colors else None
         for tr in range(pts.shape[0]):
             if not np.isnan(pts[tr]).all():
-                build_animal(tr, pts[tr], mouse_nodes, M, scn_coll)
+                build_animal(tr, pts[tr], mouse_nodes, M, scn_coll, colors=colors)
         setup_render_camera(view_focus, args.azim, args.elev, args.ortho)
         os.makedirs(os.path.dirname(args.out), exist_ok=True)
         render_to(args.out)

@@ -53,9 +53,35 @@ NOT fig2.json's `by_anchor_count`, despite the similar name: that arm scores aga
 the REPROJECTED REFERENCE (`gtk`, "3D-consistent target"), so it inherits the
 reference's error and is not reference-free.
 
-Each session contributes its own p25/p50/p75 and this panel plots the ACROSS-SESSION
-median of each, so the band is the typical session's IQR rather than a pooled spread
-that would hide the between-session variation. (`fig4.json`'s `heldout_by_views` is
+ERROR BARS ARE THE MEDIAN'S 95% CI, DISTRIBUTION-FREE (Eric, 2026-08-18: "we also
+need error bars for 4b and 4c"). Each session gives one number per (k, solver) -- its
+own median held-out error -- and the plotted point is the median of those 50. The bar
+is the classic order-statistic interval on that median: for n = 50 the 18th and 33rd
+sorted sessions, whose exact binomial coverage is 96.7%. No bootstrap, so no seed and
+no run-to-run drift in a manuscript figure; asymmetric, because the interval is made
+of real sessions rather than of a symmetric standard error.
+
+IT IS THE PRECISION OF THE PLOTTED POINT, NOT THE SPREAD OF THE SESSIONS -- those are
+different quantities here and the difference is large: at k = 2 the DLT's 50 session
+medians run 3.38-4.45 px (IQR) while the median's CI is 4.11-4.40. The between-session
+spread was drawn on this panel once, as an IQR ribbon, and review removed it in
+2026-08-14 as a redraw of Fig 2c's boxes; a CI is the thing that ribbon was being
+misread AS ("an unnamed ribbon is read as [a confidence interval on the plotted
+median]", the footnote's own words), so this adds the missing quantity rather than
+putting the removed one back.
+
+AND THE BARS UNDERSTATE THE SOLVER COMPARISON, WHICH IS PAIRED. The two solvers run on
+the same 50 sessions, so the honest test of the crossing is the per-session difference,
+not whether two unpaired intervals overlap -- and they do overlap at k = 3 and k = 4
+while the paired difference is decisive: refined MINUS DLT is +0.111 px at k = 2 (sd
+0.031, DLT lower in 50/50 sessions), -0.069 at k = 3 (34 of 50 favour refined) and
+-0.098 at k = 4. The paired numbers are deposited in the CSV and quoted in the caption;
+the bars on the artwork answer "how well do we know this point", which is what an error
+bar answers.
+
+Each session contributes its own p25/p50/p75 and the deposit's `*_p25`/`*_p75` are the
+ACROSS-SESSION median of each, i.e. the typical session's IQR rather than a pooled
+spread that would hide the between-session variation. (`fig4.json`'s `heldout_by_views` is
 the pooled version of a similar measurement and runs ~5-10% lower; it pools over
 keypoints instead of sessions and holds out one fixed camera rather than scoring
 every camera outside the subset. Same story, different estimator -- do not mix the
@@ -66,6 +92,7 @@ two sets of numbers.)
 import sys
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -80,9 +107,27 @@ from src.style import (MUTED, deposit, entity, footnote, panel,  # noqa: E402
 SOLVERS = [("dlt", "DLT", entity("dlt")), ("ba", "refined", entity("refined"))]
 
 
+#: Distribution-free 95% CI of a median from n sorted observations: the (k, n+1-k)
+#: order statistics for the largest k whose binomial coverage still clears 0.95. At
+#: n = 50 that is the 18th and 33rd session, coverage 96.7%. Deterministic -- the
+#: alternative, a bootstrap, would put a random number generator in the artwork.
+def _median_ci(v):
+    from scipy import stats
+    v = np.sort(np.asarray(v, dtype=float))
+    n = len(v)
+    k = 1
+    while k < n // 2:
+        if stats.binom.cdf(n - (k + 1), n, 0.5) - stats.binom.cdf(k, n, 0.5) < 0.95:
+            break
+        k += 1
+    cov = float(stats.binom.cdf(n - k, n, 0.5) - stats.binom.cdf(k - 1, n, 0.5))
+    return float(v[k - 1]), float(v[n - k]), cov, int(n)
+
+
 def build() -> pd.DataFrame:
     j = load("fig4_by_views.json")
     a = j["heldout_px_across_sessions"]
+    per = j["per_session"]
     rows = []
     for k in sorted(int(x) for x in a):
         g = a[str(k)]
@@ -91,6 +136,32 @@ def build() -> pd.DataFrame:
             row[f"{key}_p25"] = g[key]["p25"]
             row[f"{key}_p50"] = g[key]["p50"]
             row[f"{key}_p75"] = g[key]["p75"]
+            # ONE VALUE PER SESSION, which is what the CI is over. The deposit's p50
+            # is the median of exactly these, computed on the JS side, so equality is
+            # a cross-check on the join rather than a tautology -- a drift means the
+            # bar and the point are not the same population.
+            vals = [s_["heldout_px_by_k"][str(k)][key]["p50"] for s_ in per
+                    if str(k) in s_.get("heldout_px_by_k", {})]
+            lo, hi, cov, n = _median_ci(vals)
+            if abs(np.median(vals) - g[key]["p50"]) > 1e-9 * max(1.0, g[key]["p50"]):
+                sys.exit(f"fig4b: k={k} {key}: median of the {n} session medians "
+                         f"{np.median(vals):.9f} != deposit p50 {g[key]['p50']:.9f}; "
+                         f"the error bar would not belong to the plotted point")
+            row[f"{key}_ci_lo"] = lo
+            row[f"{key}_ci_hi"] = hi
+            row[f"{key}_ci_coverage"] = cov
+            row[f"{key}_n_ci_sessions"] = n
+            # THE PAIRED DIFFERENCE, deposited because the bars cannot carry it: the
+            # solvers share sessions, so this -- not the overlap of two unpaired
+            # intervals -- is the test of the crossing.
+            if key == "ba":
+                d = np.array([s_["heldout_px_by_k"][str(k)]["ba"]["p50"]
+                              - s_["heldout_px_by_k"][str(k)]["dlt"]["p50"]
+                              for s_ in per
+                              if str(k) in s_.get("heldout_px_by_k", {})])
+                row["paired_ba_minus_dlt_mean"] = float(d.mean())
+                row["paired_ba_minus_dlt_sd"] = float(d.std(ddof=1))
+                row["paired_ba_lower_in_n"] = int((d < 0).sum())
         row["n_sessions"] = g["dlt"]["n_sessions"]
         row["n_values"] = g["dlt"]["n_values"]
         row["ratio_ba_over_dlt"] = row["ba_p50"] / row["dlt_p50"]
@@ -124,6 +195,14 @@ def main():
                 ax.fill_between(df.cameras, df[f"{key}_p25"], df[f"{key}_p75"],
                             color=color, alpha=0.18, lw=0)
         ax.plot(df.cameras, df[f"{key}_p50"], color=color, lw=2.0, zorder=3)
+        # BARS AT THE EXACT k, NOT DODGED. A dodge would move a marker off the camera
+        # count it belongs to for the sake of legibility, and the marker's white ring
+        # already separates the two where the intervals overlap.
+        ax.errorbar(df.cameras, df[f"{key}_p50"],
+                    yerr=[df[f"{key}_p50"] - df[f"{key}_ci_lo"],
+                          df[f"{key}_ci_hi"] - df[f"{key}_p50"]],
+                    fmt="none", ecolor=color, elinewidth=1.0, capsize=2.4,
+                    capthick=1.0, zorder=3)
         ax.plot(df.cameras, df[f"{key}_p50"], "o", color=color, ms=5, mec="white",
                 mew=1.0, zorder=4)
 
@@ -147,8 +226,11 @@ def main():
                         textcoords="offset points", xytext=(dx, dy), ha=ha,
                         va="center", color=color, fontweight="bold", fontsize=6)
 
-    lo_y = min(df[f"{k}_p25"].min() for k, *_ in SOLVERS)
-    hi_y = max(df[f"{k}_p75"].max() for k, *_ in SOLVERS)
+    # THE LIMITS FOLLOW THE INK, and the ink is now the CI bars, not the retired IQR
+    # ribbon: `*_p25`/`*_p75` are still deposited but nothing draws them, so sizing the
+    # axis by them left the bars in the middle third of the panel.
+    lo_y = min(df[f"{k}_ci_lo"].min() for k, *_ in SOLVERS)
+    hi_y = max(df[f"{k}_ci_hi"].max() for k, *_ in SOLVERS)
     # NOT ZERO-BASED. A reprojection floor set by detector noise means zero is not a
     # reachable value and anchoring there compresses the whole effect into the top
     # third of the panel. The axis starts below the lowest p25 drawn.
@@ -184,7 +266,15 @@ def main():
     # session's own p25/p50/p75 -- neither a confidence interval on the plotted median
     # nor any one session's IQR, and an unnamed ribbon is read as the former.
     footnote(ax, f"all C-choose-k subsets · stride {int(df.stride.iloc[0])}\n"
-                 "same held-out measurement as Fig 2c")
+                 "same held-out measurement as Fig 2c\n"
+                 f"bars: distribution-free 95% CI of the median over "
+                 f"{int(df.dlt_n_ci_sessions.iloc[0])} sessions "
+                 f"({df.dlt_ci_coverage.iloc[0]:.1%} exact coverage); the solver "
+                 f"comparison is PAIRED -- refined minus DLT "
+                 + " · ".join(f"k={int(r.cameras)} {r.paired_ba_minus_dlt_mean:+.3f} px "
+                              f"(refined lower in {int(r.paired_ba_lower_in_n)}/"
+                              f"{int(r.dlt_n_ci_sessions)})"
+                              for r in df.itertuples()))
     save(fig, 4, "b", "accuracy_vs_cameras")
 
 
