@@ -56,9 +56,21 @@ coordinated changes (eviction at N, synchronous scoring M1, distance threshold
 50 to 25), and the benchmark (all 50 proofread sessions, identical detections,
 harness validated bit-identically against the deposited result, paired Wilcoxon).
 
+**Chen et al. 2020 is cited in both.** `\bibitem{Chen2020}` was already in the
+bibliography at line 456 and was previously cited only once, in the
+introduction. The anchor-staleness material now cites it four more times with
+`\citet{Chen2020}`, matching the `\citet{Maree2024}` style used elsewhere: for
+the tracking-by-3D-consensus design the tracker follows, for the exponential age
+weighting of their Eq. 11 that the reference implementation computes but does
+not apply, for eviction being the step-function limit of that attenuation, and
+in the Results paragraph that places the omission as benign at their time scales
+and dominant at behavioral ones. No new bibliography entry was needed.
+
 **Check before submitting.** The numbers in both come from `FRESH-ANCHOR.txt`,
 which I did not re-derive from the deposits. If that file is older than
-`figs/out/fig8_methods_50.json`, re-check the eight quoted values.
+`figs/out/fig8_methods_50.json`, re-check the eight quoted values. The claim
+about the inverted sign in the reference's weight computation also comes from
+that file rather than from my own reading of the reference.
 
 ## Summary
 
