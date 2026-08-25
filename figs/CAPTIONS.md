@@ -44,19 +44,17 @@ badges such leftovers **?**; that badge is a real state and the panel still rend
 it when it occurs in a shown view). Frame 198 was chosen from a scan of the
 session's 300 frames for the cleanest third animal in both shown views with both
 figure views complete and fully assigned. Illustration; quantified in Figs 3 and 7. **d**, The same frame
-triangulated. Left, cam 0 mid's video with the identity overlays; middle, LUC3D's
-3D viewport placed at that camera's own pose and field of view (its "Show Camera
-View"), rendered at the camera's aspect ratio and cropped to the identical
-normalised region, so the two can be compared directly; right, the rig, all eight
-calibrated cameras plus the three reconstructed animals in their identity colours.
-The rig tile carries geometry only — the app's camera name labels are switched off,
-because they are screen-space bitmaps at a fixed pixel size and pile up at the
-magnification this tile needs. Two *pairs* of cameras project within ~12 px of each
-other in the 799 × 450 render (`Camera0_mid`/`Camera4_topR`, 10.7 px;
-`Camera2_topC`/`Camera7_sideR`, 13.7 px; `fig1.json threeD.rigFraming.camScreen`), so
-fewer than eight frustums are separable by eye at this viewing angle; every camera's
-projected position is deposited for a composer that wants to typeset the names.
-All 3 animals were reconstructed, with all 45 of 45 3D
+triangulated. Left, cam 0 mid's video with the identity overlays; middle, the
+triangulated 3D poses in the overlays' own identity colours, standing on the arena
+floor plane fitted from the animals' movement (the 0.1–99.9 percentile footprint of
+every triangulated keypoint across the session's 36,000 frames, 496 × 321 mm); right,
+the rig — that footprint extruded into a volume by its shorter side, the three
+reconstructed animals inside it, and 7 of the 8 calibrated cameras around it on their
+mounts (the eighth sits far outside the cluster and is omitted so the rest print
+larger). The pose is the app's own reconstruction, exported from the identical
+tracking-and-triangulation run the overlays come from (cross-check against an
+independent offline triangulation of the same frame: ~1 mm median keypoint
+distance). All 3 animals were reconstructed, with all 45 of 45 3D
 keypoints (15 nodes × 3 animals) filled. **e**, Capability comparison; every
 non-LUC3D cell was checked against that tool's published documentation on
 2026-08-05 (the table's own `CHECK_DATE`; see qualifications below).
@@ -123,13 +121,15 @@ Triangulate All reconstructed 900 of 900 instance groups.
   false as a general statement about this frame, for the reason above. The caption
   names the two per-view labels of one specific animal (`track_89` in cam 0,
   `track_83` in cam 7) instead.
-* **Pixel-exact 2D/3D agreement.** The 3D viewport is set to cam 0 mid's real
-  extrinsics and to the vertical field of view implied by its intrinsics
-  (2·atan(h/2f_y) = 63.7°) at the camera's aspect ratio, so the effective focal
-  length matches and the same normalised crop frames both tiles. But the viewport
-  renders an ideal pinhole camera while the video frame carries the lens distortion
-  (k₁ = −0.36 on this camera), so agreement is close, not pixel-exact, and degrades
-  toward the frame edge. "Directly comparable" is the strongest safe wording.
+* **2D/3D agreement.** The middle tile is no longer drawn from cam 0 mid's own
+  viewpoint (that framing made the tiles directly comparable, but cam 0 looks
+  straight down and the pose read as a flat smear; since 2026-08-25 both 3D tiles
+  are Blender renders from the Fig 1a family's corner view). What ties the tiles
+  together now is provenance, not viewpoint: the rendered pose is the app's own
+  reconstruction from the identical run that drew the video tile's overlays, in the
+  same identity colours, and the deposit cross-checks it against an independent
+  offline triangulation of the same frame (~1 mm median keypoint distance). Do not
+  caption the tiles as "the same viewpoint".
 * **Eight-view grids.** The 4 × 2 before/after grid the earlier draft showed is
   ~45 mm of page for no additional claim; it belongs in Extended Data. The
   statement it supported — that all three identities are present in all eight views
@@ -341,8 +341,22 @@ ray. (The panel that printed that cost verbatim was cut from the layout 2026-08-
 (**b**) Hypotheses per frame for the exhaustive method, one curve per rig size, exact
 arithmetic; the dotted rule is the harness's own 10⁶ hypotheses-per-frame cap. This axis
 carries **only** the exhaustive count: the greedy solve enumerates no hypotheses at all,
-so its cost is measured in **e** (the teal series), not drawn as a second curve here.
-(**c**) **Grouping quality head to head against proofread ground truth, on the identical
+so its cost is measured in **f** (the teal series), not drawn as a second curve here.
+(**c**) What one hypothesis IS, next to b's count of them: a real frame (3-animal
+SLAP-2M session 2022-10-07/10072022142111, frame 11586) seen by two of its real
+cameras, staged in 3D with the proofread animals on the floor between the two image
+planes. Camera B's three detections are unresolved (white, dashed); thin grey lines
+are all 3×3 candidate cross-view pairings; the coloured lines single out the one
+correct grouping, each pairing closing a triangle from camera A's detection through
+the real 3D centroid to camera B's. Same render as Fig 13c
+(`blender-images/hyp_fig_prep.py` → `hyp_fig_scene.py` → `figs/hyp_fig_style.py`,
+deposited by `panels/fig3_03b_hyp_illustration.py`); overlays are the proofread 3D
+reprojected into each undistorted view — see hyp_common.py for the frame-choice
+criteria (extended, grounded, separated poses with sane head and tail chains) and
+hyp_fig_prep.undistorted_image_px for the distortion convention. Promoted from Fig 13
+on instruction (2026-08-25: "integrate this into fig3 as a pdf"); the old c/d/e
+re-lettered to d/e/f.
+(**d**) **Grouping quality head to head against proofread ground truth, on the identical
 detections, for every frame the exhaustive method could be run at all** (4,591,725
 GT-scored clean frames across the four tractable configurations; a frame is clean when
 every camera holds exactly A detections). Frames whose grouping differs from the
@@ -361,8 +375,8 @@ in-sample victory over the reprojection objective, and the held-out ground truth
 with the cheaper grouping. The **previous default** configuration misgroups 1,077
 frames (2.35 per 10,000; 809 disagreements with exhaustive, ground truth siding
 592/216); it is deposited and its render is kept under a separate slug (`--as-shipped`).
-(**d**) An ablation **of LUC3D against itself**, over all 50 Mouse-Dyad-10M sessions at full
-length, for the fresh-anchor configuration of **c**: within-view ID switches per
+(**e**) An ablation **of LUC3D against itself**, over all 50 Mouse-Dyad-10M sessions at full
+length, for the fresh-anchor configuration of **d**: within-view ID switches per
 100,000 camera-frames (top, log axis; denominator 45,021,960 camera-frames) and
 cross-view IDF1 (bottom) against r = corr3d/corr2d (log axis). Only the ratio matters
 (verified on the earlier 8-session grid, where all 24 (corr2d, corr3d) combinations
@@ -395,7 +409,7 @@ described in Methods, and on the matched frames its IDP, IDR and IDF1 are equal 
 detection match to ground truth), which means the residual 0.628-vs-0.791 gap is
 temporal bookkeeping rather than association — the two methods choose the **same
 partition on 99.996%** of these frames.
-(**e**) Measured wall-clock time per frame for both methods on identical detections, over
+(**f**) Measured wall-clock time per frame for both methods on identical detections, over
 the four configurations that could be attempted, on a log axis from 1 ms to 1 day; the
 panel carries the partition-agreement rate and both frame counts. The 4-animal,
 6-camera point ((4!)⁶ = 1.9 × 10⁸ hypotheses per frame, 191× above the harness's 10⁶

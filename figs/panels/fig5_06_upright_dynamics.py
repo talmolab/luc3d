@@ -16,30 +16,29 @@ panel, where it read as a third height trace and covered the space the series na
 need. Left alone, the gap FALLS while the heights RISE and the two cross, which
 states the coupling more directly than a shared direction would.
 
-THE TWO CURVES ARE RANKS, NOT ANIMALS. "Reaches higher" and "reaches lower" are
-assigned PER EVENT by which animal peaked higher, not by identity, because averaging
-by identity would wash both curves toward their mean. This is why the two curves are
-separated at the peak (1.18 vs 1.02 body lengths) but converge away from the event:
-the labelling is conditioned on the peak, so the gap between them at t = 0 is partly
-that selection and must not be read as two stable classes of animal. What is NOT
-selection is the timing -- both peak together, which is the panel's claim.
+THE TWO CURVES ARE NOW MALE/FEMALE, NOT RANKS (revised 2026-08-21). Until now they
+were "reaches higher"/"reaches lower", assigned PER EVENT by which animal peaked
+higher, explicitly NOT by identity -- an adversarial pass had found that label changes
+hands within a session on about a quarter of displays, so averaging by TRACK identity
+was rejected as something that would "wash both curves toward their mean" without the
+figure being able to say what identity meant. What changed: Eric pointed out that
+track slot in this corpus is not an arbitrary per-session label after all -- slot 0 is
+always male and slot 1 always female (checked against every session's track_names: 6
+animal IDs seen only at slot 0, 9 only at slot 1, zero in both) -- so keying by track
+is keying by SEX, which is exactly the identity axis that does not wash out: female is
+the one that reaches higher on 80.9% of displays, not ~50%, so male/female curves stay
+separated by nearly the same margin the old hi/lo curves showed by construction. Male
+is structurally the LONGER animal (median 90.1 vs 84.2 mm body length, male longer in
+29/37 sessions, paired Wilcoxon P<0.0001) and still the one that reaches lower here:
+whatever makes the difference, it is not who is bigger -- see `fig5_10_leader.py`.
 
-The series were called "taller animal" and "shorter animal" until an adversarial pass
-asked whether either named an individual. Neither does. The label changes hands
-within a session on about a quarter of displays; the animal that reaches higher is
-the structurally longer one on only 41% of displays; and the animals that reach
-higher during displays are NOT the ones that rear higher in general -- the followers
-peak at a median 118 mm over their own rear bouts against the initiators' 89 mm.
-Height in this panel is a within-display rank in units of each animal's own body
-length, and that is all it is.
-
-Heights are in BODY LENGTHS (each animal's own median nose-to-tail-base distance)
-because the corpus spans animals of different sizes; millimetres would mix growth
-with posture.
+Height in this panel is a within-display measurement in units of each animal's own
+body length (each mouse's own median nose-to-tail-base distance), because the corpus
+spans animals of different sizes; millimetres would mix growth with posture.
 
 Band is the across-session p25-p75 of the per-session median curves.
 
-Source: figs/out/fig5_upright.json `peri.{hi,lo,gap}` (figs/fig5_upright.py).
+Source: figs/out/fig5_upright.json `peri.{t0,t1,gap}` (figs/fig5_upright.py).
 
     python3 figs/panels/fig5_06_upright_dynamics.py
 """
@@ -54,7 +53,10 @@ from src.data_loader import load  # noqa: E402
 from src.style import (INK, MUTED, deposit, panel, save,  # noqa: E402
                        text_legend, use)
 
-CA, CB = "#66C2A5", "#E78AC3"      # taller / shorter, matching the pose panel
+# male / female -- distinct from the teal/pink "taller"/"shorter" pair panels a and c
+# still use for their own (rank, not sex) framing, so a colour never carries two
+# different meanings across the figure.
+CA, CB = "#4393C3", "#D6604D"      # male, female
 CG = "#FC8D62"                     # the nose gap
 
 
@@ -65,10 +67,10 @@ def main():
     p = d["peri"]
     deposit(pd.DataFrame({
         "t_s": t,
-        "taller_p50": p["hi"]["p50"], "shorter_p50": p["lo"]["p50"],
+        "male_p50": p["t0"]["p50"], "female_p50": p["t1"]["p50"],
         "nose_gap_p50": p["gap"]["p50"],
-        "taller_p25": p["hi"]["p25"], "taller_p75": p["hi"]["p75"],
-        "shorter_p25": p["lo"]["p25"], "shorter_p75": p["lo"]["p75"],
+        "male_p25": p["t0"]["p25"], "male_p75": p["t0"]["p75"],
+        "female_p25": p["t1"]["p25"], "female_p75": p["t1"]["p75"],
         "nose_gap_p25": p["gap"]["p25"], "nose_gap_p75": p["gap"]["p75"],
     }), 5, "fig5d_upright_dynamics.csv")
 
@@ -82,7 +84,7 @@ def main():
     # this panel left about 31 mm of the 180 mm row empty on its right and sat 12 mm
     # short of a's bottom edge. 88 + 88 + the 4 mm gutter is exactly the page.
     fig, ax = panel("half", "tall", key=3)
-    for key, c in (("hi", CA), ("lo", CB)):
+    for key, c in (("t0", CA), ("t1", CB)):
         ax.fill_between(t, p[key]["p25"], p[key]["p75"], color=c, alpha=0.16, lw=0)
         ax.plot(t, p[key]["p50"], color=c, lw=1.8, zorder=3)
     ax.axvline(0, color=INK, lw=0.7, ls="--", alpha=0.55, zorder=1)
@@ -104,13 +106,11 @@ def main():
     ax2.spines["top"].set_visible(False)
     ax2.spines["right"].set_color(CG)
 
-    # "REACHES HIGHER", NOT "TALLER ANIMAL". The old wording named an individual and
-    # the data do not support one: the label is assigned per display by which animal
-    # peaked higher, in units of its OWN body length, and it changes hands within a
-    # session on a quarter of displays. It is also not the bigger mouse -- the
-    # animal that reaches higher during a display is the longer one on 41% of them.
-    text_legend(ax, [("reaches higher", CA), ("reaches lower", CB),
-                     ("nose gap", CG)])
+    # MALE/FEMALE, not "reaches higher"/"reaches lower" (revised 2026-08-21) -- see
+    # the docstring: track slot 0/1 is a stable sex identity in this corpus, so this
+    # is the same separation the old rank labels showed, now with the identity that
+    # actually explains it.
+    text_legend(ax, [("male", CA), ("female", CB), ("nose gap", CG)])
 
     gmin = int(np.argmin(p["gap"]["p50"]))
     ax2.annotate(f"{p['gap']['p50'][gmin]:.2f} BL", (t[gmin], p["gap"]["p50"][gmin]),

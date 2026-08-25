@@ -1,0 +1,28 @@
+{
+ "idf1": 0.999501,
+ "accuracy": 0.999985,
+ "switches": 4,
+ "sw_per_100k": 0.386,
+ "coverage": 0.999034,
+ "n_gt_dets": 1037101,
+ "n_pred_dets": 1036099,
+ "unmatched_det": 0,
+ "identities": 2,
+ "animals": 2,
+ "frames": 89000,
+ "runtimeSeconds": 83.247,
+ "fps": 1069.1,
+ "condition": {
+  "noise_px": 3.0,
+  "drop_instance": 0.0,
+  "drop_node": 0.0,
+  "occl_dist": 100.0,
+  "occl_prob": 0.5,
+  "com_only": false,
+  "seed": 1184134958
+ },
+ "session": "/root/vast/eric/s-DANNCE-data/s-DANNCE-SCN2A_SOC3/2022_10_04_M1_M2",
+ "dataset": "soc3",
+ "session_name": "2022_10_04_M1_M2",
+ "cell": "C3_occl0.5"
+}

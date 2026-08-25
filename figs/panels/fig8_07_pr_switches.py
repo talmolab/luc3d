@@ -1,16 +1,29 @@
 #!/usr/bin/env python3
 """
-Fig 8d -- the shipped tracker against the candidate parameter sets, on ALL 50 Mouse-Dyad-10M
-sessions: survival curves for identity precision, identity recall and cross-view IDF1,
-plus ID switches per 100,000 camera-frames.
+Fig 8d -- the no-eviction control against the candidate parameter sets, on ALL 50 Mouse-Dyad-10M
+sessions: an identity precision-recall plane (one operating point per parameter set),
+the cross-view IDF1 survival curve, and ID switches per 100,000 camera-frames.
 
-    THIS FIGURE IS EXPLORATORY AND UNPLACED. It is not part of the manuscript, is
-    absent from FIGURE-LEGENDS.md / METHODS.md / RESULTS.md / CAPTIONS.md, and no
-    panel of Figures 1-7 depends on it. Do not cite it as a result.
+    THIS PANEL SHIPS AS THE SWEEP ROW OF FIGURE 11 (fig11_sync.py copies it in at
+    full scale; LAYOUTS[8] itself is no longer assembled). It is described in
+    FIGURE-LEGENDS.md's Fig. 7 entry -- keep that text in step with this panel.
 
 WHAT EACH PARAMETER SET IS, spelled out because "stale 10" means nothing on its own:
 
-  shipped                    pose/cross-view-tracker.js exactly as it ships.
+  no eviction                `pose/cross-view-tracker.js` with no staleness eviction --
+                             the control this panel's candidates are measured against.
+                             LABELLED "no eviction", NOT "shipped" (Eric, 2026-08-20).
+                             The deposit's config KEY is still `shipped` and must not be
+                             renamed (it is what `fig8_methods.py --all-sessions` wrote),
+                             but the word cannot appear on the artwork: the configuration
+                             the paper now ships IS the fresh anchor -- corr3d r = 6 with
+                             stale 20, this panel's 413-switch / 0.8613 arm (METHODS.md
+                             "fresh anchor (shipped)", CAPTIONS.md on Fig 3d) -- so
+                             labelling the no-eviction control "shipped" named the one
+                             arm that is NOT shipped, and contradicted Methods on the
+                             same page. It is also the axis the candidates vary along:
+                             "no eviction" reads as the N -> infinity end of stale N,
+                             which "shipped" did not.
   M1 + stale N + distThresh 25   three changes, stacked:
         M1 (`sync`)          score all five views against ONE frame-start 3D snapshot and
                              re-triangulate once at frame end, instead of running a
@@ -18,7 +31,7 @@ WHAT EACH PARAMETER SET IS, spelled out because "stale 10" means nothing on its 
                              (which lets camera 1's decision move the state camera 2 is
                              then judged against).
         stale N              evict a target's per-camera detection once it is older than
-                             N frames, before re-triangulating. The shipped tracker NEVER
+                             N frames, before re-triangulating. The control NEVER
                              expires one: `Target.detsByCam` holds one detection per
                              camera indefinitely and `_retriangulate()` fuses all of them,
                              so the 3D pose every association is scored against blends the
@@ -29,23 +42,38 @@ WHAT EACH PARAMETER SET IS, spelled out because "stale 10" means nothing on its 
   Only N varies between the candidate rows. Everything else -- detections, cameras,
   sessions, scorer -- is identical across every point on this panel.
 
-WHY SURVIVAL CURVES AND NOT SUMMARY POINTS. The first version of this panel drew one
-point per parameter set for precision and recall. That is a bad plot for the same reason
-Fig 7c gives in its own docstring: a single summary hides where the trackers actually
-separate, and at n = 50 a mean can be carried by a handful of sessions -- which this repo
-has been burned by before (see figs/README.md on Fig 4). So the first three sub-panels are
-SURVIVAL CURVES in Fig 7c's idiom: the percentage of the 50 sessions scoring at or above
-each threshold on the x axis. A vertical distance between two curves at any threshold the
-reader picks IS the comparison, and the y axis is a full 0-100%.
+THE PRECISION/RECALL PRESENTATION HAS MOVED TWICE, and both moves are worth keeping in
+view. Version 1 drew one summary point per parameter set and was replaced by survival
+curves (a single summary hides where the trackers separate, and at n = 50 a mean can be
+carried by a handful of sessions -- see figs/README.md on Fig 4). Version 2 drew identity
+precision and identity recall as two separate survival sub-panels; Eric, 2026-08-25:
+"ideally we could combine identity precision and identity recall into one precision
+recall curve ... it has to be ID precision and ID recall not the IOU". A THRESHOLD-swept
+PR curve still cannot be drawn -- an operating curve needs a score to threshold, this
+detection pool has none (the fact that made filterMinInstanceScore inert in Fig 8b), and
+the one sweepable axis, IoU, is degenerate (recall moves 0.016 over IoU 0.05-0.90;
+figs/fig8_pr_curve.py measured it). Version 3, THE ONE THAT SHIPS: a PR PLANE, one
+median +- IQR crosshair per parameter set. Version 4 -- quantile PR curves, each arm's
+trace pairing the q-th quantile of recall with the q-th quantile of precision, built
+the same day on "cant we make it look similar to the graph next to it" -- was REVERTED
+within hours (Eric: "nevermind i like the other precision recall curve better, this
+one is very confusing"), and deservedly: in PR space every arm rides ONE shared
+session-difficulty path, so the five curves superimposed and the arms differed only in
+how far along the path their sessions sat -- a subtle read where the crosshairs are a
+direct one. Do not rebuild version 4 without new instruction; the iso-IDF1 contours
+version 3 originally carried stay REMOVED ("we dont need the idf1 gradient thing"), as
+do the lollipop's raw counts. A per-session scatter (50 x 5 points) was tried on the
+way to version 2 and was unreadable.
 
-  1  IDENTITY PRECISION, survival. Low precision means identities are attached to
-     detections that are not that animal.
-  2  IDENTITY RECALL, survival. Low recall means the right identity is missing where it
-     should be. IDF1 is the harmonic mean of these two, so IDF1 alone cannot say WHICH
-     failure a tracker has, and the two have different fixes -- that is the whole reason
-     both are drawn.
-  3  CROSS-VIEW IDF1, survival. The headline metric, on the same footing as 1 and 2.
-  4  WITHIN-VIEW ID SWITCHES PER 100,000 CAMERA-FRAMES.
+  1  IDENTITY PRECISION-RECALL PLANE, one median +- IQR operating point per
+     parameter set. Low precision means identities attached to detections that are
+     not that animal; low recall means the right identity missing where it belongs.
+     IDF1 is their harmonic mean, so IDF1 alone cannot say WHICH failure a tracker
+     has -- that is what the PR axes separate.
+  2  CROSS-VIEW IDF1, survival, Fig 7c's idiom: % of the 50 sessions at or above each
+     threshold; the vertical distance between two curves at any threshold the reader
+     picks IS the comparison. The headline metric keeps its full distribution.
+  3  WITHIN-VIEW ID SWITCHES PER 100,000 CAMERA-FRAMES.
 
      ON THIS AXIS: THE NUMBER PLOTTED IS A RATE, and it is annotated as a rate. An earlier
      version plotted the rate but annotated each point with the RAW TOTAL switch count over
@@ -83,7 +111,7 @@ from src.style import (GREY, INK, MUTED, PERIWINKLE, SALMON, TEAL,  # noqa: E402
 #: common to all four candidates, so they belong in the caption; what varies between
 #: them, and the only thing the reader has to tell apart, is the staleness horizon.
 SERIES = [
-    ("shipped", "shipped", INK),
+    ("shipped", "no eviction", INK),
     ("sync_stale1_dist25", "stale 1", SALMON),
     ("sync_stale10_dist25", "stale 10", TEAL),
     ("sync_stale20_dist25", "stale 20", PERIWINKLE),
@@ -142,28 +170,67 @@ def main(deposit_name="fig8_methods_50.json"):
     proves the guard, not the drawing code."""
     use()
     df, cf, d, missing = build(deposit_name)
+    # The PR plane's marks, deposited so the artwork is reproducible from the CSV:
+    # across-session median and quartiles per axis, alongside the means build() keeps.
+    for key, col in [("_per_session_idp", "idp"), ("_per_session_idr", "idr")]:
+        vals = [np.asarray(v, float) for v in df[key]]
+        df[f"{col}_median"] = [float(np.median(v)) for v in vals]
+        df[f"{col}_q1"] = [float(np.percentile(v, 25)) for v in vals]
+        df[f"{col}_q3"] = [float(np.percentile(v, 75)) for v in vals]
     deposit(df.drop(columns=[c for c in df.columns if c.startswith("_")]),
             8, "fig8d_pr_switches.csv")
 
-    fig, axes = grid(1, 4, span="full", row=62.0)
-    fig.get_layout_engine().set(rect=(0, 0, 1, 1 - (0.052 * len(df) + 0.02)))
-    axP, axR, axF, axS = axes
+    fig, axes = grid(1, 3, span="full", row=58.0)
+    # The key is a single HORIZONTAL line along the BOTTOM since 2026-08-25 (Eric:
+    # "the legend for no eviction stale 1, 10 etc is taking up too much white
+    # space, that is prime real estate ... maybe we can put it horizontally at the
+    # bottom"). The old vertical stack reserved 28% of the panel's height above
+    # the sub-plots and used a fifth of the row's width; one bottom line costs 9%.
+    # `rect` is (left, bottom, WIDTH, HEIGHT), NOT (left, bottom, right, top) --
+    # the same trap fig1_03_reconstruction.py documents. Written as "top = 0.93"
+    # this put the axes band's top at 0.09 + 0.93 = 1.02, off the page, and the
+    # survival panel's 100% tick label printed half above the figure edge
+    # (lint_text: CLIPPED '100'). Bottom 0.09 is the key strip; height 0.84
+    # leaves a real top margin for tick labels and markers ON the axis limit.
+    fig.get_layout_engine().set(rect=(0, 0.09, 1, 0.84))
+    axP, axF, axS = axes
+
+    # ---- 1: the identity precision-recall plane ---------------------------------
+    # One MEDIAN +- IQR operating point per parameter set (see the docstring's
+    # version history: the quantile-curve form built on the same day was REVERTED
+    # on instruction -- Eric: "nevermind i like the other precision recall curve
+    # better, this one is very confusing" -- because every arm rides one shared
+    # session-difficulty path in PR space, so the curves overlapped and only their
+    # endpoints and medians differed. The two instructions that arrived WITH the
+    # curve request still stand and are kept: no iso-IDF1 contours, and no raw
+    # switch counts on the lollipop labels.)
+    x0 = min(df.idr_q1.min(), df.idr_median.min()) - 0.03
+    x1 = max(df.idr_q3.max(), df.idr_median.max()) + 0.03
+    y0 = min(df.idp_q1.min(), df.idp_median.min()) - 0.03
+    # the candidates' median precision IS 1.0 (the distribution is skewed -- half
+    # the sessions are perfect), so the top limit leaves a hair of air or the
+    # markers sit clipped ON the axis line
+    y1 = min(1.012, max(df.idp_q3.max(), df.idp_median.max()) + 0.03)
+    for _i, r in df.iterrows():
+        axP.errorbar(r.idr_median, r.idp_median,
+                     xerr=[[r.idr_median - r.idr_q1], [r.idr_q3 - r.idr_median]],
+                     yerr=[[r.idp_median - r.idp_q1], [r.idp_q3 - r.idp_median]],
+                     fmt="o", color=r._colour, ms=4.6, mec="white", mew=0.7,
+                     elinewidth=0.9, capsize=1.6, capthick=0.9,
+                     zorder=5 if r.config == "shipped" else 4)
+    axP.set_xlabel("identity recall (cross-view)", fontsize=7)
+    axP.set_ylabel("identity precision (cross-view)", fontsize=7)
+    axP.set_xlim(x0, x1)
+    axP.set_ylim(y0, y1)
+    axP.tick_params(labelsize=6.5)
 
     def survival(ax, key, xlabel, ylabel=None):
         """% of the 50 sessions at or above each threshold -- Fig 7c's idiom exactly.
 
-        WHY THIS AND NOT A PR PLANE. An earlier version put identity precision against
-        identity recall as a scatter, one point per session. It was unreadable, and the
-        reason is worth stating: a PR *curve* is traced by sweeping an operating threshold,
-        which is what SLEAP's model-evaluation notebook does (detection confidence against
-        OKS). This is not a detector evaluation -- the detection pool is FIXED and shared
-        by every parameter set, has no per-instance confidence to threshold (the same fact
-        that made filterMinInstanceScore inert in Fig 8b), and the only sweepable axis,
-        IoU, is degenerate here: recall moves 0.016 over IoU 0.05-0.90
-        (figs/fig8_pr_curve.py measured it). With no operating axis, IDP and IDR are
-        per-session summary statistics, and the honest way to show a summary statistic
-        over 50 sessions is its distribution. Drawn the same way as IDF1 so all three read
-        identically and can be compared by eye.
+        Since 2026-08-25 only cross-view IDF1 is drawn this way: identity precision
+        and recall moved into the PR plane (sub-panel 1; the module docstring carries
+        the full history, including why the plane holds operating POINTS and not a
+        swept curve, and why the per-session scatter version was abandoned).
 
         A true ECDF over every session's own value, not an interpolation through chosen
         thresholds.
@@ -182,16 +249,16 @@ def main(deposit_name="fig8_methods_50.json"):
         if ylabel:
             ax.set_ylabel(ylabel, fontsize=7)
         ax.set_xlim(0.3, 1.0)
-        ax.set_ylim(0, 100)
+        # 101.5, not 100: at 100 the top tick label's cap height lands exactly on
+        # the figure edge and lint_text reports it CLIPPED
+        ax.set_ylim(0, 101.5)
         ax.set_yticks([0, 25, 50, 75, 100])
         ax.tick_params(labelsize=6.5)
 
-    survival(axP, "_per_session_idp", "identity precision (cross-view)",
-             # "the sessions", not "the 50 sessions": the n belongs in the caption,
-             # and the panel title already carries it (Eric, 2026-08-19).
+    # "the sessions", not "the 50 sessions": the n belongs in the caption,
+    # and the panel title already carries it (Eric, 2026-08-19).
+    survival(axF, "_per_session_idf1", "cross-view IDF1",
              "% of the sessions at or above")
-    survival(axR, "_per_session_idr", "identity recall (cross-view)")
-    survival(axF, "_per_session_idf1", "cross-view IDF1")
 
     # ---- switches: HORIZONTAL, so each label has room -------------------------------
     # Vertical was tried twice and both label placements collided -- above the marker the
@@ -205,10 +272,11 @@ def main(deposit_name="fig8_methods_50.json"):
         axS.plot([lo, r.switches_pct], [y, y], color=r._colour, lw=1.0, alpha=0.5, zorder=2)
         axS.plot(r.switches_pct, y, "o", color=r._colour, ms=6.0, mec="white", mew=0.9,
                  zorder=4)
-        # BOTH units on the label. A bare 0.00092% invites being read as "92 per 100,000";
-        # it is 0.92 per 100,000, i.e. 413 switches over the whole corpus, and that
-        # misreading actually happened.
-        axS.annotate(f"  {r.switches_pct:.5f}%  ({int(r.switches):,})",
+        # Percentage only since 2026-08-25 (Eric: "we dont need the counts like
+        # (2,071) ... the percentages should be enough"). The raw totals stay in
+        # the deposit CSV and in FIGURE-LEGENDS' Fig. 7 F entry, which is where a
+        # "92 per 100,000" misreading gets corrected now.
+        axS.annotate(f"  {r.switches_pct:.5f}%",
                      (r.switches_pct, y), textcoords="offset points", xytext=(6, 0),
                      ha="left", va="center", fontsize=5.8, color=r._colour)
     # The parameter sets NAME THEMSELVES on this axis now, rather than carrying an
@@ -230,8 +298,16 @@ def main(deposit_name="fig8_methods_50.json"):
     axS.xaxis.set_minor_formatter(NullFormatter())
 
     # No leading index: the switch sub-panel now labels its own rows, so nothing
-    # needs to be looked up by number.
-    text_legend(axP, [(r.label, r._colour) for _ix, r in df.iterrows()], "above")
+    # needs to be looked up by number. Laid out width-aware (draw, measure,
+    # advance) rather than at guessed anchors, so a renamed parameter set cannot
+    # silently overlap its neighbour.
+    fig.canvas.draw()
+    renderer = fig.canvas.get_renderer()
+    kx, fw = 0.005, fig.bbox.width
+    for _ix, r in df.iterrows():
+        t = fig.text(kx, 0.012, r.label, color=r._colour, fontsize=7,
+                     fontweight="bold", ha="left", va="bottom")
+        kx += t.get_window_extent(renderer).width / fw + 0.022
 
     ship = df[df.config == "shipped"]
     best = df.loc[df.switches_pct.idxmin()]
@@ -239,7 +315,7 @@ def main(deposit_name="fig8_methods_50.json"):
     if len(ship):
         sh = ship.iloc[0]
         note += (f"{best.label}: an ID switch on {best.switches_pct:.5f}% of "
-                 f"camera-frames against shipped's {sh.switches_pct:.5f}% "
+                 f"camera-frames against {sh.label} at {sh.switches_pct:.5f}% "
                  f"({100 * (1 - best.switches_pct / sh.switches_pct):.0f}% lower); "
                  f"median cross-view IDF1 {sh.idf1_cross_median:.4f} -> "
                  f"{best.idf1_cross_median:.4f}\n")
@@ -249,17 +325,18 @@ def main(deposit_name="fig8_methods_50.json"):
              f"denominator {cf:,} camera-frames): "
              + ", ".join(f"{r.label} {int(r.switches):,}" for _i, r in df.iterrows())
              + "\n")
-    note += ("the first three are survival curves in Fig 7c's idiom -- the vertical "
-             "distance between two curves at any threshold IS the comparison. No PR curve "
-             "is drawn: an operating curve needs a score to sweep, this pool has none, and "
-             "the IoU sweep is degenerate (recall moves 0.016 over IoU 0.05-0.90)\n"
+    note += ("PR plane: one point per parameter set at the across-session MEDIAN, whiskers "
+             "the IQR. Operating points, not a swept curve: a curve needs a score to "
+             "sweep, this pool has none, and the IoU sweep is degenerate (recall moves "
+             "0.016 over IoU 0.05-0.90). IDF1 sub-panel: survival in Fig 7c's idiom -- "
+             "the vertical distance between two curves at any threshold IS the comparison\n"
              # distThresh 25 lives HERE now rather than in every legend entry: it is
              # common to all four candidates, so repeating it four times in the key
              # spent the key on a constant (Eric, 2026-08-19).
              "every candidate is M1 + distThresh 25 + the stale window named in the key; "
              "M1 = score all views against one frame-start 3D snapshot, stale N = evict a "
              "per-camera detection older than N frames before re-triangulating, "
-             "distThresh 25 = the 3D term's distance threshold, 50 in the shipped tracker\n"
+             "distThresh 25 = the 3D term's distance threshold, default 50\n"
              f"all {len(d['sessions'])} proofread Mouse-Dyad-10M sessions x 5 cameras, full "
              f"length, {cf:,} camera-frames; sessions PAIRED across parameter sets")
     if missing:

@@ -1,0 +1,741 @@
+656 cells, 12 workers
+[1/656] SKIP triads/2023_03_01_M12_M13_M14/C1_sigma0
+[2/656] SKIP triads/2023_03_01_M12_M13_M14/C1_sigma1
+[3/656] SKIP triads/2023_03_01_M12_M13_M14/C1_sigma2
+[4/656] SKIP triads/2023_03_01_M12_M13_M14/C1_sigma5
+[5/656] SKIP triads/2023_03_01_M12_M13_M14/C3_occl0.25
+[6/656] SKIP triads/2023_03_01_M12_M13_M14/C1_sigma10
+[7/656] SKIP triads/2023_03_01_M12_M13_M14/C1_sigma3
+[8/656] SKIP triads/2023_03_01_M12_M13_M14/C2_drop0.25
+[9/656] SKIP triads/2023_03_01_M12_M13_M14/C2_drop0.5
+[10/656] SKIP triads/2023_03_01_M12_M13_M14/C1_sigma20
+[11/656] SKIP triads/2023_03_01_M12_M13_M14/C2b_nodedrop0.25
+[12/656] SKIP triads/2023_03_01_M12_M13_M14/C2_drop0.1
+[13/656] SKIP triads/2023_03_01_M12_M13_M14/C2b_nodedrop0.5
+[14/656] SKIP triads/2023_03_01_M12_M13_M14/C3_occl0.5
+[15/656] SKIP triads/2023_03_01_M15_M16_M14/C1_sigma0
+[16/656] SKIP triads/2023_03_01_M12_M13_M14/C4_com_sigma3
+[17/656] SKIP triads/2023_03_01_M15_M16_M14/C1_sigma1
+[18/656] SKIP triads/2023_03_01_M12_M13_M14/C4_com_sigma0
+[19/656] SKIP triads/2023_03_01_M15_M16_M14/C1_sigma2
+[20/656] SKIP triads/2023_03_01_M15_M16_M14/C1_sigma3
+[21/656] OK triads/2023_03_01_M15_M16_M14/C4_com_sigma0 idf1=0.799418 acc=0.799418 sw=14
+[22/656] OK triads/2023_03_01_M15_M16_M14/C4_com_sigma3 idf1=0.613672 acc=0.613672 sw=12
+[23/656] OK triads/2023_03_01_M15_M16_M14/C2_drop0.5 idf1=0.984077 acc=0.999885 sw=20
+[24/656] OK triads/2023_03_01_M15_M16_M14/C2b_nodedrop0.5 idf1=0.999998 acc=0.999998 sw=0
+[25/656] SKIP triads/2023_03_01_M1_M2_M3/C1_sigma3
+[26/656] OK triads/2023_03_01_M15_M16_M14/C2_drop0.25 idf1=0.999468 acc=0.99999 sw=0
+[27/656] OK triads/2023_03_01_M15_M16_M14/C2_drop0.1 idf1=0.999992 acc=0.999996 sw=0
+[28/656] OK triads/2023_03_01_M15_M16_M14/C2b_nodedrop0.25 idf1=1.0 acc=1.0 sw=0
+[29/656] OK triads/2023_03_01_M15_M16_M14/C3_occl0.25 idf1=0.999952 acc=0.999997 sw=0
+[30/656] OK triads/2023_03_01_M15_M16_M14/C1_sigma10 idf1=0.999998 acc=0.999998 sw=0
+[31/656] OK triads/2023_03_01_M15_M16_M14/C3_occl0.5 idf1=0.998986 acc=0.999989 sw=2
+[32/656] OK triads/2023_03_01_M15_M16_M14/C1_sigma20 idf1=0.999996 acc=0.999996 sw=0
+[33/656] OK triads/2023_03_01_M15_M16_M14/C1_sigma5 idf1=1.0 acc=1.0 sw=0
+[34/656] OK triads/2023_03_01_M1_M2_M3/C1_sigma0 idf1=1.0 acc=1.0 sw=0
+[35/656] OK triads/2023_03_01_M1_M2_M3/C1_sigma1 idf1=1.0 acc=1.0 sw=0
+[36/656] OK triads/2023_03_01_M1_M2_M3/C4_com_sigma0 idf1=0.836105 acc=0.836105 sw=10
+[37/656] OK triads/2023_03_01_M1_M2_M3/C2_drop0.5 idf1=0.874679 acc=0.888726 sw=35
+[38/656] OK triads/2023_03_01_M1_M2_M3/C1_sigma2 idf1=1.0 acc=1.0 sw=0
+[39/656] OK triads/2023_03_01_M1_M2_M3/C2_drop0.25 idf1=0.903679 acc=0.904142 sw=4
+[40/656] OK triads/2023_03_01_M1_M2_M3/C1_sigma10 idf1=1.0 acc=1.0 sw=0
+[41/656] OK triads/2023_03_01_M1_M2_M3/C1_sigma5 idf1=1.0 acc=1.0 sw=0
+[42/656] OK triads/2023_03_01_M1_M2_M3/C2b_nodedrop0.5 idf1=0.999987 acc=0.999987 sw=0
+[43/656] OK triads/2023_03_01_M1_M2_M3/C2_drop0.1 idf1=0.99999 acc=0.999995 sw=0
+[44/656] OK triads/2023_03_01_M1_M2_M3/C4_com_sigma3 idf1=0.836077 acc=0.836077 sw=10
+[45/656] OK triads/2023_03_01_M1_M2_M3/C1_sigma20 idf1=0.999996 acc=0.999996 sw=0
+[46/656] OK triads/2023_03_01_M1_M2_M3/C2b_nodedrop0.25 idf1=1.0 acc=1.0 sw=0
+[47/656] OK triads/2023_03_01_M1_M2_M3/C3_occl0.25 idf1=0.999944 acc=0.999978 sw=4
+[48/656] OK triads/2023_03_01_M1_M2_M3/C3_occl0.5 idf1=0.837215 acc=0.837824 sw=18
+[49/656] OK triads/2023_03_01_M4_M5_M6/C2_drop0.5 idf1=0.983939 acc=0.999931 sw=6
+[50/656] OK triads/2023_03_01_M4_M5_M6/C1_sigma0 idf1=1.0 acc=1.0 sw=0
+[51/656] OK triads/2023_03_01_M4_M5_M6/C1_sigma1 idf1=1.0 acc=1.0 sw=0
+[52/656] OK triads/2023_03_01_M4_M5_M6/C2_drop0.25 idf1=0.999527 acc=0.999999 sw=0
+[53/656] OK triads/2023_03_01_M4_M5_M6/C1_sigma2 idf1=1.0 acc=1.0 sw=0
+[54/656] OK triads/2023_03_01_M4_M5_M6/C1_sigma5 idf1=1.0 acc=1.0 sw=0
+[55/656] OK triads/2023_03_01_M4_M5_M6/C1_sigma20 idf1=0.999998 acc=0.999998 sw=0
+[56/656] OK triads/2023_03_01_M4_M5_M6/C1_sigma10 idf1=1.0 acc=1.0 sw=0
+[57/656] OK triads/2023_03_01_M4_M5_M6/C1_sigma3 idf1=1.0 acc=1.0 sw=0
+[58/656] OK triads/2023_03_01_M4_M5_M6/C2_drop0.1 idf1=0.999995 acc=1.0 sw=0
+[59/656] OK triads/2023_03_01_M4_M5_M6/C2b_nodedrop0.25 idf1=1.0 acc=1.0 sw=0
+[60/656] OK triads/2023_03_01_M4_M5_M6/C4_com_sigma0 idf1=0.999565 acc=0.999565 sw=4
+[61/656] OK triads/2023_03_01_M4_M5_M6/C4_com_sigma3 idf1=0.999389 acc=0.999389 sw=4
+[62/656] OK triads/2023_03_01_M4_M5_M6/C2b_nodedrop0.5 idf1=1.0 acc=1.0 sw=0
+[63/656] OK triads/2023_03_01_M4_M5_M6/C3_occl0.5 idf1=0.99922 acc=0.99998 sw=9
+[64/656] OK triads/2023_03_01_M4_M5_M6/C3_occl0.25 idf1=0.99997 acc=1.0 sw=0
+[65/656] OK triads/2023_03_01_M7_M8_M6/C1_sigma1 idf1=1.0 acc=1.0 sw=0
+[66/656] OK triads/2023_03_01_M7_M8_M6/C1_sigma0 idf1=1.0 acc=1.0 sw=0
+[67/656] OK triads/2023_03_01_M7_M8_M6/C1_sigma2 idf1=1.0 acc=1.0 sw=0
+[68/656] OK triads/2023_03_01_M7_M8_M6/C1_sigma3 idf1=1.0 acc=1.0 sw=0
+[69/656] OK triads/2023_03_01_M7_M8_M6/C2_drop0.5 idf1=0.983943 acc=0.999989 sw=2
+[70/656] OK triads/2023_03_01_M7_M8_M6/C1_sigma5 idf1=1.0 acc=1.0 sw=0
+[71/656] OK triads/2023_03_01_M7_M8_M6/C1_sigma10 idf1=1.0 acc=1.0 sw=0
+[72/656] OK triads/2023_03_01_M7_M8_M6/C2_drop0.25 idf1=0.999541 acc=0.999999 sw=0
+[73/656] OK triads/2023_03_01_M7_M8_M6/C2_drop0.1 idf1=0.999995 acc=1.0 sw=0
+[74/656] OK triads/2023_03_01_M7_M8_M6/C1_sigma20 idf1=1.0 acc=1.0 sw=0
+[75/656] OK triads/2023_03_01_M7_M8_M6/C4_com_sigma0 idf1=0.999841 acc=0.999841 sw=0
+[76/656] OK triads/2023_03_01_M7_M8_M6/C4_com_sigma3 idf1=0.999717 acc=0.999717 sw=0
+[77/656] OK triads/2023_03_01_M7_M8_M6/C2b_nodedrop0.5 idf1=1.0 acc=1.0 sw=0
+[78/656] OK triads/2023_03_01_M7_M8_M6/C2b_nodedrop0.25 idf1=1.0 acc=1.0 sw=0
+[79/656] OK triads/2023_03_01_M7_M8_M6/C3_occl0.5 idf1=0.999533 acc=0.999998 sw=0
+[80/656] OK triads/2023_03_01_M7_M8_M6/C3_occl0.25 idf1=0.999976 acc=1.0 sw=0
+[81/656] OK triads/2023_03_15_M2_M3_M4/C1_sigma0 idf1=1.0 acc=1.0 sw=0
+[82/656] OK triads/2023_03_15_M2_M3_M4/C1_sigma1 idf1=1.0 acc=1.0 sw=0
+[83/656] OK triads/2023_03_15_M2_M3_M4/C1_sigma2 idf1=1.0 acc=1.0 sw=0
+[84/656] OK triads/2023_03_15_M2_M3_M4/C1_sigma5 idf1=1.0 acc=1.0 sw=0
+[85/656] OK triads/2023_03_15_M2_M3_M4/C1_sigma3 idf1=1.0 acc=1.0 sw=0
+[86/656] OK triads/2023_03_15_M2_M3_M4/C1_sigma10 idf1=0.999998 acc=0.999998 sw=0
+[87/656] OK triads/2023_03_15_M2_M3_M4/C2_drop0.1 idf1=0.999994 acc=1.0 sw=0
+[88/656] OK triads/2023_03_15_M2_M3_M4/C1_sigma20 idf1=0.999996 acc=0.999996 sw=0
+[89/656] OK triads/2023_03_15_M2_M3_M4/C4_com_sigma0 idf1=0.999555 acc=0.999555 sw=10
+[90/656] OK triads/2023_03_15_M2_M3_M4/C4_com_sigma3 idf1=0.626316 acc=0.626316 sw=14
+[91/656] OK triads/2023_03_15_M2_M3_M4/C2_drop0.5 idf1=0.983928 acc=0.999948 sw=6
+[92/656] OK triads/2023_03_15_M2_M3_M4/C2_drop0.25 idf1=0.999512 acc=0.999999 sw=0
+[93/656] OK triads/2023_03_15_M2_M3_M4/C2b_nodedrop0.5 idf1=0.999996 acc=0.999996 sw=0
+[94/656] OK triads/2023_03_15_M2_M3_M4/C2b_nodedrop0.25 idf1=1.0 acc=1.0 sw=0
+[95/656] OK triads/2023_03_15_M2_M3_M4/C3_occl0.25 idf1=0.999955 acc=0.999996 sw=0
+[96/656] OK triads/2023_03_15_M2_M3_M4/C3_occl0.5 idf1=0.999075 acc=0.999982 sw=6
+[97/656] OK bedding/2024_05_05_F1_F2/C1_sigma0 idf1=1.0 acc=1.0 sw=0
+[98/656] OK bedding/2024_05_05_F1_F2/C1_sigma1 idf1=1.0 acc=1.0 sw=0
+[99/656] OK bedding/2024_05_05_F1_F2/C1_sigma2 idf1=1.0 acc=1.0 sw=0
+[100/656] PREP-FAIL bedding/2024_05_05_F1_F2/C4_com_sigma0: , in main
+    X = load_com_3d(S) if args.com_only else load_pred_3d(S)   # (F,A,3,N)
+        ^^^^^^^^^^^^^^
+  File "/root/vast/eric/sleap-3d-gui/scratch/repos/lucid/figs/fig10-bench/fig10_prep.py", line 64, in load_com_3d
+    assert files, f'no instance com3d under {S}/COM'
+           ^^^^^
+AssertionError: no instance com3d under /root/vast/eric/s-DANNCE-data/s-DANNCE-BEDDING/2024_05_05_F1_F2/COM
+
+[101/656] PREP-FAIL bedding/2024_05_05_F1_F2/C4_com_sigma3: , in main
+    X = load_com_3d(S) if args.com_only else load_pred_3d(S)   # (F,A,3,N)
+        ^^^^^^^^^^^^^^
+  File "/root/vast/eric/sleap-3d-gui/scratch/repos/lucid/figs/fig10-bench/fig10_prep.py", line 64, in load_com_3d
+    assert files, f'no instance com3d under {S}/COM'
+           ^^^^^
+AssertionError: no instance com3d under /root/vast/eric/s-DANNCE-data/s-DANNCE-BEDDING/2024_05_05_F1_F2/COM
+
+[102/656] OK bedding/2024_05_05_F1_F2/C1_sigma3 idf1=0.999998 acc=0.999998 sw=0
+[103/656] OK bedding/2024_05_05_F1_F2/C1_sigma5 idf1=0.999994 acc=0.999994 sw=0
+[104/656] OK bedding/2024_05_05_F1_F2/C1_sigma10 idf1=0.792337 acc=0.792337 sw=4
+[105/656] OK bedding/2024_05_05_F1_F2/C2_drop0.1 idf1=0.792555 acc=0.792558 sw=2
+[106/656] OK bedding/2024_05_05_F1_F2/C1_sigma20 idf1=0.735439 acc=0.735439 sw=22
+[107/656] OK bedding/2024_05_05_F1_F2/C2_drop0.5 idf1=0.779274 acc=0.791796 sw=71
+[108/656] OK bedding/2024_05_05_F1_F2/C2_drop0.25 idf1=0.700617 acc=0.700962 sw=28
+[109/656] OK bedding/2024_05_05_F1_F2/C2b_nodedrop0.5 idf1=0.775377 acc=0.775377 sw=12
+[110/656] OK bedding/2024_05_05_F1_F2/C2b_nodedrop0.25 idf1=0.83198 acc=0.83198 sw=2
+[111/656] OK bedding/2024_05_05_F1_F2/C3_occl0.25 idf1=0.78464 acc=0.784713 sw=10
+[112/656] OK bedding/2024_05_05_F1_F2/C3_occl0.5 idf1=0.668908 acc=0.670335 sw=92
+[113/656] OK bedding/2024_05_05_F5_F3/C1_sigma0 idf1=1.0 acc=1.0 sw=0
+[114/656] OK bedding/2024_05_05_F5_F3/C1_sigma1 idf1=1.0 acc=1.0 sw=0
+[115/656] OK bedding/2024_05_05_F5_F3/C1_sigma2 idf1=0.999998 acc=0.999998 sw=0
+[116/656] PREP-FAIL bedding/2024_05_05_F5_F3/C4_com_sigma0: , in main
+    X = load_com_3d(S) if args.com_only else load_pred_3d(S)   # (F,A,3,N)
+        ^^^^^^^^^^^^^^
+  File "/root/vast/eric/sleap-3d-gui/scratch/repos/lucid/figs/fig10-bench/fig10_prep.py", line 64, in load_com_3d
+    assert files, f'no instance com3d under {S}/COM'
+           ^^^^^
+AssertionError: no instance com3d under /root/vast/eric/s-DANNCE-data/s-DANNCE-BEDDING/2024_05_05_F5_F3/COM
+
+[117/656] PREP-FAIL bedding/2024_05_05_F5_F3/C4_com_sigma3: , in main
+    X = load_com_3d(S) if args.com_only else load_pred_3d(S)   # (F,A,3,N)
+        ^^^^^^^^^^^^^^
+  File "/root/vast/eric/sleap-3d-gui/scratch/repos/lucid/figs/fig10-bench/fig10_prep.py", line 64, in load_com_3d
+    assert files, f'no instance com3d under {S}/COM'
+           ^^^^^
+AssertionError: no instance com3d under /root/vast/eric/s-DANNCE-data/s-DANNCE-BEDDING/2024_05_05_F5_F3/COM
+
+[118/656] OK bedding/2024_05_05_F5_F3/C1_sigma3 idf1=1.0 acc=1.0 sw=0
+[119/656] OK bedding/2024_05_05_F5_F3/C1_sigma5 idf1=0.999994 acc=0.999994 sw=0
+[120/656] OK bedding/2024_05_05_F5_F3/C1_sigma10 idf1=0.999644 acc=0.999644 sw=18
+[121/656] OK bedding/2024_05_05_F5_F3/C2_drop0.1 idf1=0.999976 acc=0.999981 sw=2
+[122/656] OK bedding/2024_05_05_F5_F3/C2_drop0.5 idf1=0.736425 acc=0.748146 sw=52
+[123/656] OK bedding/2024_05_05_F5_F3/C1_sigma20 idf1=0.857748 acc=0.857748 sw=56
+[124/656] OK bedding/2024_05_05_F5_F3/C2_drop0.25 idf1=0.999472 acc=0.999962 sw=2
+[125/656] OK bedding/2024_05_05_F5_F3/C2b_nodedrop0.5 idf1=0.857757 acc=0.857757 sw=56
+[126/656] OK bedding/2024_05_05_F5_F3/C2b_nodedrop0.25 idf1=0.999994 acc=0.999994 sw=0
+[127/656] OK bedding/2024_05_05_F5_F3/C3_occl0.25 idf1=0.999907 acc=0.999955 sw=8
+[128/656] OK bedding/2024_05_05_F5_F3/C3_occl0.5 idf1=0.889536 acc=0.890277 sw=48
+[129/656] OK bedding/2024_05_07_F1_F3/C1_sigma0 idf1=1.0 acc=1.0 sw=0
+[130/656] OK bedding/2024_05_07_F1_F3/C1_sigma1 idf1=1.0 acc=1.0 sw=0
+[131/656] OK bedding/2024_05_07_F1_F3/C1_sigma2 idf1=1.0 acc=1.0 sw=0
+[132/656] PREP-FAIL bedding/2024_05_07_F1_F3/C4_com_sigma0: , in main
+    X = load_com_3d(S) if args.com_only else load_pred_3d(S)   # (F,A,3,N)
+        ^^^^^^^^^^^^^^
+  File "/root/vast/eric/sleap-3d-gui/scratch/repos/lucid/figs/fig10-bench/fig10_prep.py", line 64, in load_com_3d
+    assert files, f'no instance com3d under {S}/COM'
+           ^^^^^
+AssertionError: no instance com3d under /root/vast/eric/s-DANNCE-data/s-DANNCE-BEDDING/2024_05_07_F1_F3/COM
+
+[133/656] PREP-FAIL bedding/2024_05_07_F1_F3/C4_com_sigma3: , in main
+    X = load_com_3d(S) if args.com_only else load_pred_3d(S)   # (F,A,3,N)
+        ^^^^^^^^^^^^^^
+  File "/root/vast/eric/sleap-3d-gui/scratch/repos/lucid/figs/fig10-bench/fig10_prep.py", line 64, in load_com_3d
+    assert files, f'no instance com3d under {S}/COM'
+           ^^^^^
+AssertionError: no instance com3d under /root/vast/eric/s-DANNCE-data/s-DANNCE-BEDDING/2024_05_07_F1_F3/COM
+
+[134/656] OK bedding/2024_05_07_F1_F3/C1_sigma3 idf1=0.999998 acc=0.999998 sw=0
+[135/656] OK bedding/2024_05_07_F1_F3/C1_sigma5 idf1=0.999998 acc=0.999998 sw=0
+[136/656] OK bedding/2024_05_07_F1_F3/C2_drop0.1 idf1=0.999988 acc=0.999991 sw=0
+[137/656] OK bedding/2024_05_07_F1_F3/C1_sigma10 idf1=1.0 acc=1.0 sw=0
+[138/656] OK bedding/2024_05_07_F1_F3/C1_sigma20 idf1=0.999994 acc=0.999994 sw=0
+[139/656] OK bedding/2024_05_07_F1_F3/C2_drop0.5 idf1=0.577655 acc=0.586909 sw=28
+[140/656] OK bedding/2024_05_07_F1_F3/C2_drop0.25 idf1=0.999452 acc=0.999972 sw=2
+[141/656] OK bedding/2024_05_07_F1_F3/C2b_nodedrop0.5 idf1=0.999969 acc=0.999969 sw=2
+[142/656] OK bedding/2024_05_07_F1_F3/C2b_nodedrop0.25 idf1=0.999998 acc=0.999998 sw=0
+[143/656] OK bedding/2024_05_07_F1_F3/C3_occl0.5 idf1=0.506645 acc=0.507451 sw=26
+[144/656] OK bedding/2024_05_07_F1_F3/C3_occl0.25 idf1=0.90654 acc=0.906602 sw=14
+[145/656] OK bedding/2024_05_07_F5_F3/C1_sigma0 idf1=1.0 acc=1.0 sw=0
+[146/656] OK bedding/2024_05_07_F5_F3/C1_sigma1 idf1=1.0 acc=1.0 sw=0
+[147/656] OK bedding/2024_05_07_F5_F3/C2_drop0.1 idf1=0.999984 acc=0.999991 sw=0
+[148/656] OK bedding/2024_05_07_F5_F3/C1_sigma5 idf1=0.999996 acc=0.999996 sw=0
+[149/656] PREP-FAIL bedding/2024_05_07_F5_F3/C4_com_sigma0: , in main
+    X = load_com_3d(S) if args.com_only else load_pred_3d(S)   # (F,A,3,N)
+        ^^^^^^^^^^^^^^
+  File "/root/vast/eric/sleap-3d-gui/scratch/repos/lucid/figs/fig10-bench/fig10_prep.py", line 64, in load_com_3d
+    assert files, f'no instance com3d under {S}/COM'
+           ^^^^^
+AssertionError: no instance com3d under /root/vast/eric/s-DANNCE-data/s-DANNCE-BEDDING/2024_05_07_F5_F3/COM
+
+[150/656] OK bedding/2024_05_07_F5_F3/C1_sigma2 idf1=1.0 acc=1.0 sw=0
+[151/656] PREP-FAIL bedding/2024_05_07_F5_F3/C4_com_sigma3: , in main
+    X = load_com_3d(S) if args.com_only else load_pred_3d(S)   # (F,A,3,N)
+        ^^^^^^^^^^^^^^
+  File "/root/vast/eric/sleap-3d-gui/scratch/repos/lucid/figs/fig10-bench/fig10_prep.py", line 64, in load_com_3d
+    assert files, f'no instance com3d under {S}/COM'
+           ^^^^^
+AssertionError: no instance com3d under /root/vast/eric/s-DANNCE-data/s-DANNCE-BEDDING/2024_05_07_F5_F3/COM
+
+[152/656] OK bedding/2024_05_07_F5_F3/C1_sigma3 idf1=1.0 acc=1.0 sw=0
+[153/656] OK bedding/2024_05_07_F5_F3/C1_sigma10 idf1=0.847965 acc=0.847965 sw=2
+[154/656] OK bedding/2024_05_07_F5_F3/C1_sigma20 idf1=0.999659 acc=0.999659 sw=20
+[155/656] OK bedding/2024_05_07_F5_F3/C2_drop0.5 idf1=0.540967 acc=0.549641 sw=41
+[156/656] OK bedding/2024_05_07_F5_F3/C2_drop0.25 idf1=0.999499 acc=0.999976 sw=2
+[157/656] OK bedding/2024_05_07_F5_F3/C2b_nodedrop0.5 idf1=0.848202 acc=0.848202 sw=14
+[158/656] OK bedding/2024_05_07_F5_F3/C2b_nodedrop0.25 idf1=0.999991 acc=0.999991 sw=2
+[159/656] OK bedding/2024_05_07_F5_F3/C3_occl0.25 idf1=0.999955 acc=0.999989 sw=0
+[160/656] OK bedding/2024_05_07_F5_F3/C3_occl0.5 idf1=0.843526 acc=0.844099 sw=36
+[161/656] OK bedding/2024_05_07_F6_F2/C1_sigma10 idf1=0.969737 acc=0.969737 sw=2
+[162/656] OK bedding/2024_05_07_F6_F2/C1_sigma0 idf1=0.969743 acc=0.969743 sw=2
+[163/656] OK bedding/2024_05_07_F6_F2/C1_sigma3 idf1=0.969741 acc=0.969741 sw=2
+[164/656] PREP-FAIL bedding/2024_05_07_F6_F2/C4_com_sigma0: , in main
+    X = load_com_3d(S) if args.com_only else load_pred_3d(S)   # (F,A,3,N)
+        ^^^^^^^^^^^^^^
+  File "/root/vast/eric/sleap-3d-gui/scratch/repos/lucid/figs/fig10-bench/fig10_prep.py", line 64, in load_com_3d
+    assert files, f'no instance com3d under {S}/COM'
+           ^^^^^
+AssertionError: no instance com3d under /root/vast/eric/s-DANNCE-data/s-DANNCE-BEDDING/2024_05_07_F6_F2/COM
+
+[165/656] PREP-FAIL bedding/2024_05_07_F6_F2/C4_com_sigma3: , in main
+    X = load_com_3d(S) if args.com_only else load_pred_3d(S)   # (F,A,3,N)
+        ^^^^^^^^^^^^^^
+  File "/root/vast/eric/sleap-3d-gui/scratch/repos/lucid/figs/fig10-bench/fig10_prep.py", line 64, in load_com_3d
+    assert files, f'no instance com3d under {S}/COM'
+           ^^^^^
+AssertionError: no instance com3d under /root/vast/eric/s-DANNCE-data/s-DANNCE-BEDDING/2024_05_07_F6_F2/COM
+
+[166/656] OK bedding/2024_05_07_F6_F2/C1_sigma5 idf1=0.969743 acc=0.969743 sw=2
+[167/656] OK bedding/2024_05_07_F6_F2/C1_sigma2 idf1=0.969743 acc=0.969743 sw=2
+[168/656] OK bedding/2024_05_07_F6_F2/C1_sigma1 idf1=0.969743 acc=0.969743 sw=2
+[169/656] OK bedding/2024_05_07_F6_F2/C1_sigma20 idf1=0.733487 acc=0.733487 sw=6
+[170/656] OK bedding/2024_05_07_F6_F2/C2_drop0.1 idf1=0.515269 acc=0.515271 sw=4
+[171/656] OK bedding/2024_05_07_F6_F2/C2_drop0.5 idf1=0.95379 acc=0.969201 sw=40
+[172/656] OK bedding/2024_05_07_F6_F2/C2_drop0.25 idf1=0.567971 acc=0.568234 sw=14
+[173/656] OK bedding/2024_05_07_F6_F2/C2b_nodedrop0.5 idf1=0.515407 acc=0.515407 sw=4
+[174/656] OK bedding/2024_05_07_F6_F2/C2b_nodedrop0.25 idf1=0.969737 acc=0.969737 sw=2
+[175/656] OK bedding/2024_05_07_F6_F2/C3_occl0.5 idf1=0.652973 acc=0.653321 sw=36
+[176/656] OK bedding/2024_05_07_F6_F2/C3_occl0.25 idf1=0.651458 acc=0.651473 sw=6
+[177/656] OK bedding/2024_05_07_F6_F3/C1_sigma2 idf1=1.0 acc=1.0 sw=0
+[178/656] OK bedding/2024_05_07_F6_F3/C1_sigma1 idf1=1.0 acc=1.0 sw=0
+[179/656] OK bedding/2024_05_07_F6_F3/C1_sigma3 idf1=1.0 acc=1.0 sw=0
+[180/656] OK bedding/2024_05_07_F6_F3/C1_sigma0 idf1=1.0 acc=1.0 sw=0
+[181/656] PREP-FAIL bedding/2024_05_07_F6_F3/C4_com_sigma0: , in main
+    X = load_com_3d(S) if args.com_only else load_pred_3d(S)   # (F,A,3,N)
+        ^^^^^^^^^^^^^^
+  File "/root/vast/eric/sleap-3d-gui/scratch/repos/lucid/figs/fig10-bench/fig10_prep.py", line 64, in load_com_3d
+    assert files, f'no instance com3d under {S}/COM'
+           ^^^^^
+AssertionError: no instance com3d under /root/vast/eric/s-DANNCE-data/s-DANNCE-BEDDING/2024_05_07_F6_F3/COM
+
+[182/656] PREP-FAIL bedding/2024_05_07_F6_F3/C4_com_sigma3: , in main
+    X = load_com_3d(S) if args.com_only else load_pred_3d(S)   # (F,A,3,N)
+        ^^^^^^^^^^^^^^
+  File "/root/vast/eric/sleap-3d-gui/scratch/repos/lucid/figs/fig10-bench/fig10_prep.py", line 64, in load_com_3d
+    assert files, f'no instance com3d under {S}/COM'
+           ^^^^^
+AssertionError: no instance com3d under /root/vast/eric/s-DANNCE-data/s-DANNCE-BEDDING/2024_05_07_F6_F3/COM
+
+[183/656] OK bedding/2024_05_07_F6_F3/C1_sigma5 idf1=1.0 acc=1.0 sw=0
+[184/656] OK bedding/2024_05_07_F6_F3/C1_sigma10 idf1=0.999994 acc=0.999994 sw=0
+[185/656] OK bedding/2024_05_07_F6_F3/C2_drop0.1 idf1=0.999994 acc=0.999998 sw=0
+[186/656] OK bedding/2024_05_07_F6_F3/C1_sigma20 idf1=0.977665 acc=0.977665 sw=2
+[187/656] OK bedding/2024_05_07_F6_F3/C2_drop0.5 idf1=0.961753 acc=0.977396 sw=10
+[188/656] OK bedding/2024_05_07_F6_F3/C2_drop0.25 idf1=0.99952 acc=0.999985 sw=2
+[189/656] OK bedding/2024_05_07_F6_F3/C2b_nodedrop0.5 idf1=0.999985 acc=0.999985 sw=2
+[190/656] OK bedding/2024_05_07_F6_F3/C2b_nodedrop0.25 idf1=1.0 acc=1.0 sw=0
+[191/656] OK bedding/2024_05_07_F6_F3/C3_occl0.25 idf1=0.977487 acc=0.977518 sw=2
+[192/656] OK soc1/2022_09_22_M3_M4/C1_sigma0 idf1=1.0 acc=1.0 sw=0
+[193/656] OK bedding/2024_05_07_F6_F3/C3_occl0.5 idf1=0.999274 acc=0.999957 sw=12
+[194/656] OK soc1/2022_09_22_M3_M4/C1_sigma1 idf1=1.0 acc=1.0 sw=0
+[195/656] OK soc1/2022_09_22_M3_M4/C1_sigma2 idf1=1.0 acc=1.0 sw=0
+[196/656] OK soc1/2022_09_22_M3_M4/C1_sigma3 idf1=1.0 acc=1.0 sw=0
+[197/656] OK soc1/2022_09_22_M3_M4/C1_sigma5 idf1=1.0 acc=1.0 sw=0
+[198/656] OK soc1/2022_09_22_M3_M4/C1_sigma10 idf1=0.588491 acc=0.588491 sw=4
+[199/656] OK soc1/2022_09_22_M3_M4/C4_com_sigma0 idf1=0.638398 acc=0.638398 sw=58
+[200/656] OK soc1/2022_09_22_M3_M4/C4_com_sigma3 idf1=0.668619 acc=0.668619 sw=64
+[201/656] OK soc1/2022_09_22_M3_M4/C2_drop0.1 idf1=0.999985 acc=0.99999 sw=0
+[202/656] OK soc1/2022_09_22_M3_M4/C1_sigma20 idf1=0.584837 acc=0.584837 sw=24
+[203/656] OK soc1/2022_09_22_M3_M4/C2_drop0.5 idf1=0.659461 acc=0.670103 sw=44
+[204/656] OK soc1/2022_09_22_M3_M4/C2_drop0.25 idf1=0.999471 acc=0.999935 sw=12
+[205/656] OK soc1/2022_09_22_M3_M4/C2b_nodedrop0.25 idf1=1.0 acc=1.0 sw=0
+[206/656] OK soc1/2022_09_22_M3_M4/C2b_nodedrop0.5 idf1=0.999081 acc=0.999081 sw=10
+[207/656] OK soc1/2022_09_22_M3_M4/C3_occl0.5 idf1=0.613239 acc=0.614242 sw=62
+[208/656] OK soc1/2022_09_22_M3_M4/C3_occl0.25 idf1=0.999904 acc=0.999973 sw=4
+[209/656] OK soc1/2022_09_22_M5_M6/C1_sigma1 idf1=1.0 acc=1.0 sw=0
+[210/656] OK soc1/2022_09_22_M5_M6/C1_sigma0 idf1=1.0 acc=1.0 sw=0
+[211/656] OK soc1/2022_09_22_M5_M6/C1_sigma2 idf1=1.0 acc=1.0 sw=0
+[212/656] OK soc1/2022_09_22_M5_M6/C1_sigma10 idf1=0.999991 acc=0.999991 sw=0
+[213/656] OK soc1/2022_09_22_M5_M6/C1_sigma3 idf1=1.0 acc=1.0 sw=0
+[214/656] OK soc1/2022_09_22_M5_M6/C1_sigma5 idf1=1.0 acc=1.0 sw=0
+[215/656] OK soc1/2022_09_22_M5_M6/C2_drop0.5 idf1=0.984011 acc=0.999834 sw=23
+[216/656] OK soc1/2022_09_22_M5_M6/C2_drop0.1 idf1=0.999992 acc=0.999996 sw=0
+[217/656] OK soc1/2022_09_22_M5_M6/C4_com_sigma0 idf1=0.729485 acc=0.729485 sw=14
+[218/656] OK soc1/2022_09_22_M5_M6/C1_sigma20 idf1=0.999949 acc=0.999949 sw=8
+[219/656] OK soc1/2022_09_22_M5_M6/C4_com_sigma3 idf1=0.922546 acc=0.922546 sw=24
+[220/656] OK soc1/2022_09_22_M5_M6/C2_drop0.25 idf1=0.500468 acc=0.500707 sw=7
+[221/656] OK soc1/2022_09_22_M5_M6/C2b_nodedrop0.5 idf1=0.501283 acc=0.501283 sw=12
+[222/656] OK soc1/2022_09_22_M5_M6/C2b_nodedrop0.25 idf1=0.999983 acc=0.999983 sw=2
+[223/656] OK soc1/2022_09_22_M5_M6/C3_occl0.5 idf1=0.931669 acc=0.932823 sw=35
+[224/656] OK soc1/2022_09_22_M5_M6/C3_occl0.25 idf1=0.504121 acc=0.504152 sw=8
+[225/656] OK soc1/2022_09_23_M1_M6/C1_sigma0 idf1=1.0 acc=1.0 sw=0
+[226/656] OK soc1/2022_09_23_M1_M6/C1_sigma1 idf1=0.999998 acc=0.999998 sw=0
+[227/656] OK soc1/2022_09_23_M1_M6/C1_sigma2 idf1=0.999998 acc=0.999998 sw=0
+[228/656] OK soc1/2022_09_23_M1_M6/C1_sigma3 idf1=0.999998 acc=0.999998 sw=0
+[229/656] OK soc1/2022_09_23_M1_M6/C1_sigma5 idf1=0.999996 acc=0.999996 sw=0
+[230/656] OK soc1/2022_09_23_M1_M6/C2_drop0.5 idf1=0.524579 acc=0.533087 sw=26
+[231/656] OK soc1/2022_09_23_M1_M6/C2_drop0.1 idf1=0.99999 acc=0.999996 sw=0
+[232/656] OK soc1/2022_09_23_M1_M6/C1_sigma10 idf1=0.999991 acc=0.999991 sw=0
+[233/656] OK soc1/2022_09_23_M1_M6/C2_drop0.25 idf1=0.589284 acc=0.589589 sw=4
+[234/656] OK soc1/2022_09_23_M1_M6/C1_sigma20 idf1=0.999897 acc=0.999897 sw=6
+[235/656] OK soc1/2022_09_23_M1_M6/C4_com_sigma0 idf1=0.752381 acc=0.752381 sw=44
+[236/656] OK soc1/2022_09_23_M1_M6/C4_com_sigma3 idf1=0.795915 acc=0.795915 sw=60
+[237/656] OK soc1/2022_09_23_M1_M6/C2b_nodedrop0.5 idf1=0.589597 acc=0.589597 sw=4
+[238/656] OK soc1/2022_09_23_M1_M6/C2b_nodedrop0.25 idf1=0.589487 acc=0.589487 sw=2
+[239/656] OK soc1/2022_09_23_M1_M6/C3_occl0.25 idf1=0.999958 acc=0.999986 sw=0
+[240/656] OK soc1/2022_09_23_M1_M6/C3_occl0.5 idf1=0.885702 acc=0.886085 sw=24
+[241/656] OK soc1/2022_09_23_M3_M2/C1_sigma0 idf1=0.999991 acc=0.999991 sw=2
+[242/656] OK soc1/2022_09_23_M3_M2/C1_sigma2 idf1=0.999991 acc=0.999991 sw=2
+[243/656] OK soc1/2022_09_23_M3_M2/C1_sigma1 idf1=0.999993 acc=0.999993 sw=2
+[244/656] OK soc1/2022_09_23_M3_M2/C1_sigma3 idf1=0.999998 acc=0.999998 sw=0
+[245/656] OK soc1/2022_09_23_M3_M2/C1_sigma5 idf1=0.999993 acc=0.999993 sw=2
+[246/656] OK soc1/2022_09_23_M3_M2/C1_sigma10 idf1=0.875667 acc=0.875667 sw=16
+[247/656] OK soc1/2022_09_23_M3_M2/C2_drop0.1 idf1=0.999985 acc=0.99999 sw=0
+[248/656] OK soc1/2022_09_23_M3_M2/C2_drop0.5 idf1=0.983823 acc=0.999754 sw=21
+[249/656] OK soc1/2022_09_23_M3_M2/C2_drop0.25 idf1=0.999426 acc=0.99992 sw=15
+[250/656] OK soc1/2022_09_23_M3_M2/C1_sigma20 idf1=0.999753 acc=0.999753 sw=38
+[251/656] OK soc1/2022_09_23_M3_M2/C4_com_sigma0 idf1=0.847102 acc=0.847102 sw=22
+[252/656] OK soc1/2022_09_23_M3_M2/C4_com_sigma3 idf1=0.751491 acc=0.751491 sw=22
+[253/656] OK soc1/2022_09_23_M3_M2/C2b_nodedrop0.5 idf1=0.875753 acc=0.875753 sw=26
+[254/656] OK soc1/2022_09_23_M3_M2/C2b_nodedrop0.25 idf1=0.999931 acc=0.999931 sw=8
+[255/656] OK soc1/2022_09_23_M3_M2/C3_occl0.25 idf1=0.999937 acc=0.999967 sw=4
+[256/656] OK soc1/2022_09_23_M3_M2/C3_occl0.5 idf1=0.999148 acc=0.999892 sw=22
+[257/656] OK soc1/2022_09_23_M5_M4/C1_sigma0 idf1=0.648182 acc=0.648182 sw=2
+[258/656] OK soc1/2022_09_23_M5_M4/C1_sigma1 idf1=0.64818 acc=0.64818 sw=2
+[259/656] OK soc1/2022_09_23_M5_M4/C1_sigma2 idf1=0.999717 acc=0.999717 sw=4
+[260/656] OK soc1/2022_09_23_M5_M4/C1_sigma3 idf1=0.648185 acc=0.648185 sw=2
+[261/656] OK soc1/2022_09_23_M5_M4/C2_drop0.1 idf1=0.999714 acc=0.999719 sw=4
+[262/656] OK soc1/2022_09_23_M5_M4/C1_sigma5 idf1=0.999721 acc=0.999721 sw=4
+[263/656] OK soc1/2022_09_23_M5_M4/C1_sigma10 idf1=0.999712 acc=0.999712 sw=4
+[264/656] OK soc1/2022_09_23_M5_M4/C1_sigma20 idf1=0.648199 acc=0.648199 sw=2
+[265/656] OK soc1/2022_09_23_M5_M4/C2_drop0.5 idf1=0.516041 acc=0.524355 sw=15
+[266/656] OK soc1/2022_09_23_M5_M4/C4_com_sigma0 idf1=0.51595 acc=0.51595 sw=12
+[267/656] OK soc1/2022_09_23_M5_M4/C2_drop0.25 idf1=0.999216 acc=0.999704 sw=4
+[268/656] OK soc1/2022_09_23_M5_M4/C4_com_sigma3 idf1=0.853472 acc=0.853472 sw=6
+[269/656] OK soc1/2022_09_23_M5_M4/C2b_nodedrop0.5 idf1=0.999704 acc=0.999704 sw=4
+[270/656] OK soc1/2022_09_23_M5_M4/C2b_nodedrop0.25 idf1=0.999725 acc=0.999725 sw=4
+[271/656] OK soc1/2022_09_23_M5_M4/C3_occl0.5 idf1=0.998483 acc=0.999825 sw=10
+[272/656] OK soc1/2022_09_23_M5_M4/C3_occl0.25 idf1=0.999705 acc=0.999774 sw=4
+[273/656] OK soc1/2022_09_24_M2_M4/C1_sigma0 idf1=1.0 acc=1.0 sw=0
+[274/656] OK soc1/2022_09_24_M2_M4/C1_sigma1 idf1=1.0 acc=1.0 sw=0
+[275/656] OK soc1/2022_09_24_M2_M4/C1_sigma2 idf1=1.0 acc=1.0 sw=0
+[276/656] OK soc1/2022_09_24_M2_M4/C1_sigma3 idf1=1.0 acc=1.0 sw=0
+[277/656] OK soc1/2022_09_24_M2_M4/C1_sigma5 idf1=1.0 acc=1.0 sw=0
+[278/656] OK soc1/2022_09_24_M2_M4/C2_drop0.1 idf1=0.999989 acc=0.999992 sw=0
+[279/656] OK soc1/2022_09_24_M2_M4/C1_sigma20 idf1=0.999899 acc=0.999899 sw=8
+[280/656] OK soc1/2022_09_24_M2_M4/C1_sigma10 idf1=0.999996 acc=0.999996 sw=0
+[281/656] OK soc1/2022_09_24_M2_M4/C4_com_sigma0 idf1=0.595 acc=0.595 sw=40
+[282/656] OK soc1/2022_09_24_M2_M4/C2_drop0.5 idf1=0.98385 acc=0.999717 sw=56
+[283/656] OK soc1/2022_09_24_M2_M4/C4_com_sigma3 idf1=0.856802 acc=0.856802 sw=62
+[284/656] OK soc1/2022_09_24_M2_M4/C2_drop0.25 idf1=0.999424 acc=0.999954 sw=6
+[285/656] OK soc1/2022_09_24_M2_M4/C2b_nodedrop0.5 idf1=0.561684 acc=0.561684 sw=4
+[286/656] OK soc1/2022_09_24_M2_M4/C2b_nodedrop0.25 idf1=0.561659 acc=0.561659 sw=2
+[287/656] OK soc1/2022_09_24_M2_M4/C3_occl0.5 idf1=0.998485 acc=0.999899 sw=32
+[288/656] OK soc1/2022_09_24_M2_M4/C3_occl0.25 idf1=0.99992 acc=0.999971 sw=4
+[289/656] OK soc1/2022_09_24_M3_M6/C1_sigma0 idf1=1.0 acc=1.0 sw=0
+[290/656] OK soc1/2022_09_24_M3_M6/C1_sigma1 idf1=1.0 acc=1.0 sw=0
+[291/656] OK soc1/2022_09_24_M3_M6/C1_sigma3 idf1=1.0 acc=1.0 sw=0
+[292/656] OK soc1/2022_09_24_M3_M6/C1_sigma2 idf1=1.0 acc=1.0 sw=0
+[293/656] OK soc1/2022_09_24_M3_M6/C1_sigma5 idf1=1.0 acc=1.0 sw=0
+[294/656] OK soc1/2022_09_24_M3_M6/C1_sigma10 idf1=1.0 acc=1.0 sw=0
+[295/656] OK soc1/2022_09_24_M3_M6/C1_sigma20 idf1=1.0 acc=1.0 sw=0
+[296/656] OK soc1/2022_09_24_M3_M6/C2_drop0.1 idf1=0.999994 acc=0.999998 sw=0
+[297/656] OK soc1/2022_09_24_M3_M6/C2_drop0.5 idf1=0.983883 acc=0.999959 sw=5
+[298/656] OK soc1/2022_09_24_M3_M6/C4_com_sigma3 idf1=0.627087 acc=0.627087 sw=6
+[299/656] OK soc1/2022_09_24_M3_M6/C4_com_sigma0 idf1=0.999787 acc=0.999787 sw=4
+[300/656] OK soc1/2022_09_24_M3_M6/C2_drop0.25 idf1=0.999494 acc=0.999992 sw=0
+[301/656] OK soc1/2022_09_24_M3_M6/C2b_nodedrop0.5 idf1=1.0 acc=1.0 sw=0
+[302/656] OK soc1/2022_09_24_M3_M6/C2b_nodedrop0.25 idf1=1.0 acc=1.0 sw=0
+[303/656] OK soc1/2022_09_24_M3_M6/C3_occl0.25 idf1=0.999957 acc=0.999994 sw=2
+[304/656] OK soc1/2022_09_24_M3_M6/C3_occl0.5 idf1=0.99925 acc=0.999988 sw=2
+[305/656] OK soc1/2022_09_24_M5_M1/C1_sigma0 idf1=1.0 acc=1.0 sw=0
+[306/656] OK soc1/2022_09_24_M5_M1/C1_sigma1 idf1=1.0 acc=1.0 sw=0
+[307/656] OK soc1/2022_09_24_M5_M1/C1_sigma2 idf1=1.0 acc=1.0 sw=0
+[308/656] OK soc1/2022_09_24_M5_M1/C1_sigma3 idf1=1.0 acc=1.0 sw=0
+[309/656] OK soc1/2022_09_24_M5_M1/C1_sigma5 idf1=1.0 acc=1.0 sw=0
+[310/656] OK soc1/2022_09_24_M5_M1/C2_drop0.1 idf1=0.999992 acc=0.999999 sw=0
+[311/656] OK soc1/2022_09_24_M5_M1/C1_sigma10 idf1=1.0 acc=1.0 sw=0
+[312/656] OK soc1/2022_09_24_M5_M1/C1_sigma20 idf1=1.0 acc=1.0 sw=0
+[313/656] OK soc1/2022_09_24_M5_M1/C2_drop0.5 idf1=0.984337 acc=0.99995 sw=9
+[314/656] OK soc1/2022_09_24_M5_M1/C4_com_sigma0 idf1=0.821817 acc=0.821817 sw=6
+[315/656] OK soc1/2022_09_24_M5_M1/C4_com_sigma3 idf1=0.821613 acc=0.821613 sw=8
+[316/656] OK soc1/2022_09_24_M5_M1/C2_drop0.25 idf1=0.999551 acc=0.999985 sw=1
+[317/656] OK soc1/2022_09_24_M5_M1/C2b_nodedrop0.5 idf1=0.999998 acc=0.999998 sw=0
+[318/656] OK soc1/2022_09_24_M5_M1/C2b_nodedrop0.25 idf1=1.0 acc=1.0 sw=0
+[319/656] OK soc1/2022_09_24_M5_M1/C3_occl0.5 idf1=0.997659 acc=0.999987 sw=6
+[320/656] OK soc1/2022_09_24_M5_M1/C3_occl0.25 idf1=0.999885 acc=0.999993 sw=0
+[321/656] OK soc1/2022_09_25_M1_M4/C1_sigma0 idf1=1.0 acc=1.0 sw=0
+[322/656] OK soc1/2022_09_25_M1_M4/C1_sigma1 idf1=1.0 acc=1.0 sw=0
+[323/656] OK soc1/2022_09_25_M1_M4/C1_sigma2 idf1=1.0 acc=1.0 sw=0
+[324/656] OK soc1/2022_09_25_M1_M4/C1_sigma3 idf1=1.0 acc=1.0 sw=0
+[325/656] OK soc1/2022_09_25_M1_M4/C1_sigma10 idf1=1.0 acc=1.0 sw=0
+[326/656] OK soc1/2022_09_25_M1_M4/C1_sigma5 idf1=1.0 acc=1.0 sw=0
+[327/656] OK soc1/2022_09_25_M1_M4/C2_drop0.1 idf1=0.999995 acc=0.999999 sw=0
+[328/656] OK soc1/2022_09_25_M1_M4/C1_sigma20 idf1=1.0 acc=1.0 sw=0
+[329/656] OK soc1/2022_09_25_M1_M4/C4_com_sigma0 idf1=0.559526 acc=0.559526 sw=4
+[330/656] OK soc1/2022_09_25_M1_M4/C4_com_sigma3 idf1=0.5595 acc=0.5595 sw=4
+[331/656] OK soc1/2022_09_25_M1_M4/C2_drop0.5 idf1=0.848004 acc=0.861897 sw=12
+[332/656] OK soc1/2022_09_25_M1_M4/C2_drop0.25 idf1=0.861751 acc=0.862146 sw=5
+[333/656] OK soc1/2022_09_25_M1_M4/C2b_nodedrop0.5 idf1=0.999994 acc=0.999994 sw=0
+[334/656] OK soc1/2022_09_25_M1_M4/C2b_nodedrop0.25 idf1=0.999998 acc=0.999998 sw=0
+[335/656] OK soc1/2022_09_25_M1_M4/C3_occl0.25 idf1=0.999927 acc=0.999998 sw=0
+[336/656] OK soc1/2022_09_25_M1_M4/C3_occl0.5 idf1=0.998312 acc=0.999982 sw=10
+[337/656] OK soc1/2022_09_25_M5_M3/C1_sigma3 idf1=0.999996 acc=0.999996 sw=0
+[338/656] OK soc1/2022_09_25_M5_M3/C1_sigma2 idf1=0.999998 acc=0.999998 sw=0
+[339/656] OK soc1/2022_09_25_M5_M3/C1_sigma0 idf1=1.0 acc=1.0 sw=0
+[340/656] OK soc1/2022_09_25_M5_M3/C1_sigma1 idf1=0.999998 acc=0.999998 sw=0
+[341/656] OK soc1/2022_09_25_M5_M3/C1_sigma10 idf1=0.748442 acc=0.748442 sw=24
+[342/656] OK soc1/2022_09_25_M5_M3/C1_sigma5 idf1=0.999976 acc=0.999976 sw=0
+[343/656] OK soc1/2022_09_25_M5_M3/C1_sigma20 idf1=0.719624 acc=0.719624 sw=150
+[344/656] OK soc1/2022_09_25_M5_M3/C2_drop0.1 idf1=0.999964 acc=0.999971 sw=0
+[345/656] OK soc1/2022_09_25_M5_M3/C2_drop0.5 idf1=0.934522 acc=0.949609 sw=118
+[346/656] OK soc1/2022_09_25_M5_M3/C4_com_sigma0 idf1=0.768296 acc=0.768296 sw=46
+[347/656] OK soc1/2022_09_25_M5_M3/C2_drop0.25 idf1=0.730822 acc=0.731176 sw=24
+[348/656] OK soc1/2022_09_25_M5_M3/C4_com_sigma3 idf1=0.803211 acc=0.803211 sw=54
+[349/656] OK soc1/2022_09_25_M5_M3/C2b_nodedrop0.5 idf1=0.599966 acc=0.599966 sw=104
+[350/656] OK soc1/2022_09_25_M5_M3/C2b_nodedrop0.25 idf1=0.982429 acc=0.982429 sw=8
+[351/656] OK soc1/2022_09_25_M5_M3/C3_occl0.5 idf1=0.880063 acc=0.881478 sw=94
+[352/656] OK soc1/2022_09_25_M5_M3/C3_occl0.25 idf1=0.999817 acc=0.999894 sw=20
+[353/656] OK soc1/2022_09_25_M6_M2/C1_sigma0 idf1=1.0 acc=1.0 sw=0
+[354/656] OK soc1/2022_09_25_M6_M2/C1_sigma1 idf1=1.0 acc=1.0 sw=0
+[355/656] OK soc1/2022_09_25_M6_M2/C1_sigma3 idf1=1.0 acc=1.0 sw=0
+[356/656] OK soc1/2022_09_25_M6_M2/C1_sigma2 idf1=1.0 acc=1.0 sw=0
+[357/656] OK soc1/2022_09_25_M6_M2/C1_sigma5 idf1=1.0 acc=1.0 sw=0
+[358/656] OK soc1/2022_09_25_M6_M2/C2_drop0.1 idf1=0.999992 acc=0.999996 sw=0
+[359/656] OK soc1/2022_09_25_M6_M2/C1_sigma20 idf1=1.0 acc=1.0 sw=0
+[360/656] OK soc1/2022_09_25_M6_M2/C1_sigma10 idf1=1.0 acc=1.0 sw=0
+[361/656] OK soc1/2022_09_25_M6_M2/C2_drop0.5 idf1=0.984028 acc=0.999847 sw=24
+[362/656] OK soc1/2022_09_25_M6_M2/C2_drop0.25 idf1=0.94319 acc=0.94367 sw=6
+[363/656] OK soc1/2022_09_25_M6_M2/C4_com_sigma0 idf1=0.863978 acc=0.863978 sw=6
+[364/656] OK soc1/2022_09_25_M6_M2/C4_com_sigma3 idf1=0.833372 acc=0.833372 sw=6
+[365/656] OK soc1/2022_09_25_M6_M2/C2b_nodedrop0.5 idf1=0.999996 acc=0.999996 sw=0
+[366/656] OK soc1/2022_09_25_M6_M2/C2b_nodedrop0.25 idf1=1.0 acc=1.0 sw=0
+[367/656] OK soc1/2022_09_25_M6_M2/C3_occl0.5 idf1=0.999329 acc=0.999965 sw=18
+[368/656] OK soc1/2022_09_25_M6_M2/C3_occl0.25 idf1=0.999968 acc=0.99999 sw=2
+[369/656] OK soc1/2022_09_26_M1_M3/C1_sigma0 idf1=1.0 acc=1.0 sw=0
+[370/656] OK soc1/2022_09_26_M1_M3/C1_sigma1 idf1=1.0 acc=1.0 sw=0
+[371/656] OK soc1/2022_09_26_M1_M3/C1_sigma2 idf1=1.0 acc=1.0 sw=0
+[372/656] OK soc1/2022_09_26_M1_M3/C1_sigma3 idf1=1.0 acc=1.0 sw=0
+[373/656] OK soc1/2022_09_26_M1_M3/C2_drop0.1 idf1=0.999985 acc=0.999992 sw=0
+[374/656] OK soc1/2022_09_26_M1_M3/C1_sigma5 idf1=1.0 acc=1.0 sw=0
+[375/656] OK soc1/2022_09_26_M1_M3/C1_sigma20 idf1=0.816594 acc=0.816594 sw=12
+[376/656] OK soc1/2022_09_26_M1_M3/C2_drop0.5 idf1=0.74637 acc=0.758384 sw=51
+[377/656] OK soc1/2022_09_26_M1_M3/C1_sigma10 idf1=1.0 acc=1.0 sw=0
+[378/656] OK soc1/2022_09_26_M1_M3/C4_com_sigma0 idf1=0.999837 acc=0.999837 sw=2
+[379/656] OK soc1/2022_09_26_M1_M3/C4_com_sigma3 idf1=0.85373 acc=0.85373 sw=12
+[380/656] OK soc1/2022_09_26_M1_M3/C2_drop0.25 idf1=0.999467 acc=0.999973 sw=6
+[381/656] OK soc1/2022_09_26_M1_M3/C2b_nodedrop0.5 idf1=0.999949 acc=0.999949 sw=2
+[382/656] OK soc1/2022_09_26_M1_M3/C2b_nodedrop0.25 idf1=0.999994 acc=0.999994 sw=0
+[383/656] OK soc1/2022_09_26_M1_M3/C3_occl0.25 idf1=0.999927 acc=0.999982 sw=4
+[384/656] OK soc1/2022_09_26_M1_M3/C3_occl0.5 idf1=0.883356 acc=0.884413 sw=36
+[385/656] OK soc1/2022_09_26_M5_M2/C1_sigma0 idf1=0.999998 acc=0.999998 sw=0
+[386/656] OK soc1/2022_09_26_M5_M2/C1_sigma1 idf1=0.999998 acc=0.999998 sw=0
+[387/656] OK soc1/2022_09_26_M5_M2/C1_sigma2 idf1=0.779022 acc=0.779022 sw=2
+[388/656] OK soc1/2022_09_26_M5_M2/C1_sigma3 idf1=0.779022 acc=0.779022 sw=2
+[389/656] OK soc1/2022_09_26_M5_M2/C1_sigma5 idf1=0.779017 acc=0.779017 sw=2
+[390/656] OK soc1/2022_09_26_M5_M2/C1_sigma10 idf1=0.778875 acc=0.778875 sw=16
+[391/656] OK soc1/2022_09_26_M5_M2/C1_sigma20 idf1=0.999393 acc=0.999393 sw=50
+[392/656] OK soc1/2022_09_26_M5_M2/C2_drop0.1 idf1=0.999964 acc=0.99997 sw=2
+[393/656] OK soc1/2022_09_26_M5_M2/C4_com_sigma0 idf1=0.607591 acc=0.607591 sw=34
+[394/656] OK soc1/2022_09_26_M5_M2/C4_com_sigma3 idf1=0.577826 acc=0.577826 sw=36
+[395/656] OK soc1/2022_09_26_M5_M2/C2_drop0.5 idf1=0.672327 acc=0.683392 sw=46
+[396/656] OK soc1/2022_09_26_M5_M2/C2_drop0.25 idf1=0.999424 acc=0.999899 sw=12
+[397/656] OK soc1/2022_09_26_M5_M2/C2b_nodedrop0.5 idf1=0.778556 acc=0.778556 sw=28
+[398/656] OK soc1/2022_09_26_M5_M2/C2b_nodedrop0.25 idf1=0.779021 acc=0.779021 sw=2
+[399/656] OK soc1/2022_09_26_M5_M2/C3_occl0.5 idf1=0.719431 acc=0.720942 sw=32
+[400/656] OK soc1/2022_09_26_M5_M2/C3_occl0.25 idf1=0.588631 acc=0.588692 sw=6
+[401/656] OK soc1/2022_09_26_M6_M4/C1_sigma0 idf1=1.0 acc=1.0 sw=0
+[402/656] OK soc1/2022_09_26_M6_M4/C1_sigma1 idf1=1.0 acc=1.0 sw=0
+[403/656] OK soc1/2022_09_26_M6_M4/C1_sigma2 idf1=1.0 acc=1.0 sw=0
+[404/656] OK soc1/2022_09_26_M6_M4/C1_sigma3 idf1=1.0 acc=1.0 sw=0
+[405/656] OK soc1/2022_09_26_M6_M4/C1_sigma5 idf1=1.0 acc=1.0 sw=0
+[406/656] OK soc1/2022_09_26_M6_M4/C2_drop0.1 idf1=0.999984 acc=0.999989 sw=2
+[407/656] OK soc1/2022_09_26_M6_M4/C1_sigma10 idf1=0.999998 acc=0.999998 sw=0
+[408/656] OK soc1/2022_09_26_M6_M4/C1_sigma20 idf1=0.999753 acc=0.999753 sw=14
+[409/656] OK soc1/2022_09_26_M6_M4/C2_drop0.5 idf1=0.85397 acc=0.867567 sw=34
+[410/656] OK soc1/2022_09_26_M6_M4/C4_com_sigma0 idf1=0.89202 acc=0.89202 sw=6
+[411/656] OK soc1/2022_09_26_M6_M4/C4_com_sigma3 idf1=0.891904 acc=0.891904 sw=4
+[412/656] OK soc1/2022_09_26_M6_M4/C2_drop0.25 idf1=0.999484 acc=0.999966 sw=4
+[413/656] OK soc1/2022_09_26_M6_M4/C2b_nodedrop0.5 idf1=0.999491 acc=0.999491 sw=4
+[414/656] OK soc1/2022_09_26_M6_M4/C2b_nodedrop0.25 idf1=1.0 acc=1.0 sw=0
+[415/656] OK soc1/2022_09_26_M6_M4/C3_occl0.5 idf1=0.998403 acc=0.999927 sw=22
+[416/656] OK soc1/2022_09_26_M6_M4/C3_occl0.25 idf1=0.999894 acc=0.999969 sw=8
+[417/656] OK soc3/2022_10_04_M1_M2/C1_sigma0 idf1=1.0 acc=1.0 sw=0
+[418/656] OK soc3/2022_10_04_M1_M2/C1_sigma1 idf1=1.0 acc=1.0 sw=0
+[419/656] OK soc3/2022_10_04_M1_M2/C1_sigma2 idf1=1.0 acc=1.0 sw=0
+[420/656] OK soc3/2022_10_04_M1_M2/C1_sigma3 idf1=1.0 acc=1.0 sw=0
+[421/656] OK soc3/2022_10_04_M1_M2/C1_sigma5 idf1=1.0 acc=1.0 sw=0
+[422/656] OK soc3/2022_10_04_M1_M2/C2_drop0.1 idf1=0.999994 acc=0.999999 sw=0
+[423/656] OK soc3/2022_10_04_M1_M2/C1_sigma10 idf1=1.0 acc=1.0 sw=0
+[424/656] OK soc3/2022_10_04_M1_M2/C1_sigma20 idf1=1.0 acc=1.0 sw=0
+[425/656] OK soc3/2022_10_04_M1_M2/C2_drop0.5 idf1=0.983947 acc=0.999899 sw=12
+[426/656] OK soc3/2022_10_04_M1_M2/C4_com_sigma0 idf1=0.999957 acc=0.999957 sw=0
+[427/656] OK soc3/2022_10_04_M1_M2/C2_drop0.25 idf1=0.999502 acc=0.999993 sw=2
+[428/656] OK soc3/2022_10_04_M1_M2/C4_com_sigma3 idf1=0.999907 acc=0.999907 sw=0
+[429/656] OK soc3/2022_10_04_M1_M2/C2b_nodedrop0.5 idf1=0.999996 acc=0.999996 sw=0
+[430/656] OK soc3/2022_10_04_M1_M2/C2b_nodedrop0.25 idf1=0.999998 acc=0.999998 sw=0
+[431/656] OK soc3/2022_10_04_M1_M2/C3_occl0.5 idf1=0.999501 acc=0.999985 sw=4
+[432/656] OK soc3/2022_10_04_M1_M2/C3_occl0.25 idf1=0.999981 acc=0.999997 sw=0
+[433/656] OK soc3/2022_10_04_M3_M4/C1_sigma0 idf1=0.972423 acc=0.972423 sw=2
+[434/656] OK soc3/2022_10_04_M3_M4/C1_sigma1 idf1=0.972419 acc=0.972419 sw=2
+[435/656] OK soc3/2022_10_04_M3_M4/C1_sigma2 idf1=0.972416 acc=0.972416 sw=2
+[436/656] OK soc3/2022_10_04_M3_M4/C1_sigma3 idf1=0.972418 acc=0.972418 sw=2
+[437/656] OK soc3/2022_10_04_M3_M4/C1_sigma5 idf1=0.972112 acc=0.972112 sw=8
+[438/656] OK soc3/2022_10_04_M3_M4/C2_drop0.1 idf1=0.972381 acc=0.972387 sw=2
+[439/656] OK soc3/2022_10_04_M3_M4/C1_sigma10 idf1=0.999326 acc=0.999326 sw=42
+[440/656] OK soc3/2022_10_04_M3_M4/C1_sigma20 idf1=0.971691 acc=0.971691 sw=92
+[441/656] OK soc3/2022_10_04_M3_M4/C4_com_sigma0 idf1=0.534113 acc=0.534113 sw=50
+[442/656] OK soc3/2022_10_04_M3_M4/C4_com_sigma3 idf1=0.512404 acc=0.512404 sw=48
+[443/656] OK soc3/2022_10_04_M3_M4/C2_drop0.5 idf1=0.951475 acc=0.966921 sw=92
+[444/656] OK soc3/2022_10_04_M3_M4/C2_drop0.25 idf1=0.7006 acc=0.700924 sw=32
+[445/656] OK soc3/2022_10_04_M3_M4/C2b_nodedrop0.5 idf1=0.634412 acc=0.634412 sw=66
+[446/656] OK soc3/2022_10_04_M3_M4/C2b_nodedrop0.25 idf1=0.972268 acc=0.972268 sw=10
+[447/656] OK soc3/2022_10_04_M3_M4/C3_occl0.5 idf1=0.802108 acc=0.803277 sw=67
+[448/656] OK soc3/2022_10_04_M3_M4/C3_occl0.25 idf1=0.971993 acc=0.972057 sw=16
+[449/656] OK soc3/2022_10_04_M5_M6/C1_sigma0 idf1=1.0 acc=1.0 sw=0
+[450/656] OK soc3/2022_10_04_M5_M6/C1_sigma1 idf1=1.0 acc=1.0 sw=0
+[451/656] OK soc3/2022_10_04_M5_M6/C1_sigma2 idf1=1.0 acc=1.0 sw=0
+[452/656] OK soc3/2022_10_04_M5_M6/C1_sigma3 idf1=1.0 acc=1.0 sw=0
+[453/656] OK soc3/2022_10_04_M5_M6/C2_drop0.1 idf1=0.999998 acc=1.0 sw=0
+[454/656] OK soc3/2022_10_04_M5_M6/C1_sigma5 idf1=1.0 acc=1.0 sw=0
+[455/656] OK soc3/2022_10_04_M5_M6/C1_sigma10 idf1=0.999998 acc=0.999998 sw=0
+[456/656] OK soc3/2022_10_04_M5_M6/C1_sigma20 idf1=0.901835 acc=0.901835 sw=4
+[457/656] OK soc3/2022_10_04_M5_M6/C4_com_sigma0 idf1=0.99973 acc=0.99973 sw=2
+[458/656] OK soc3/2022_10_04_M5_M6/C4_com_sigma3 idf1=0.999394 acc=0.999394 sw=4
+[459/656] OK soc3/2022_10_04_M5_M6/C2_drop0.5 idf1=0.984235 acc=0.999925 sw=14
+[460/656] OK soc3/2022_10_04_M5_M6/C2_drop0.25 idf1=0.999494 acc=0.999986 sw=0
+[461/656] OK soc3/2022_10_04_M5_M6/C2b_nodedrop0.25 idf1=1.0 acc=1.0 sw=0
+[462/656] OK soc3/2022_10_04_M5_M6/C2b_nodedrop0.5 idf1=0.999989 acc=0.999989 sw=0
+[463/656] OK soc3/2022_10_04_M5_M6/C3_occl0.25 idf1=0.999923 acc=0.999997 sw=0
+[464/656] OK soc3/2022_10_04_M5_M6/C3_occl0.5 idf1=0.934969 acc=0.93642 sw=14
+[465/656] OK soc3/2022_10_05_M1_M6/C1_sigma1 idf1=1.0 acc=1.0 sw=0
+[466/656] OK soc3/2022_10_05_M1_M6/C1_sigma0 idf1=1.0 acc=1.0 sw=0
+[467/656] OK soc3/2022_10_05_M1_M6/C1_sigma3 idf1=1.0 acc=1.0 sw=0
+[468/656] OK soc3/2022_10_05_M1_M6/C1_sigma2 idf1=1.0 acc=1.0 sw=0
+[469/656] OK soc3/2022_10_05_M1_M6/C1_sigma5 idf1=1.0 acc=1.0 sw=0
+[470/656] OK soc3/2022_10_05_M1_M6/C1_sigma10 idf1=1.0 acc=1.0 sw=0
+[471/656] OK soc3/2022_10_05_M1_M6/C1_sigma20 idf1=0.999993 acc=0.999993 sw=0
+[472/656] OK soc3/2022_10_05_M1_M6/C2_drop0.5 idf1=0.605763 acc=0.615459 sw=10
+[473/656] OK soc3/2022_10_05_M1_M6/C2_drop0.1 idf1=0.999994 acc=0.999999 sw=0
+[474/656] OK soc3/2022_10_05_M1_M6/C4_com_sigma0 idf1=0.999854 acc=0.999854 sw=4
+[475/656] OK soc3/2022_10_05_M1_M6/C4_com_sigma3 idf1=0.999778 acc=0.999778 sw=4
+[476/656] OK soc3/2022_10_05_M1_M6/C2_drop0.25 idf1=0.999486 acc=0.99997 sw=4
+[477/656] OK soc3/2022_10_05_M1_M6/C2b_nodedrop0.5 idf1=1.0 acc=1.0 sw=0
+[478/656] OK soc3/2022_10_05_M1_M6/C2b_nodedrop0.25 idf1=0.999998 acc=0.999998 sw=0
+[479/656] OK soc3/2022_10_05_M1_M6/C3_occl0.25 idf1=0.999934 acc=0.999997 sw=0
+[480/656] OK soc3/2022_10_05_M1_M6/C3_occl0.5 idf1=0.998725 acc=0.999978 sw=8
+[481/656] OK soc3/2022_10_05_M3_M2/C1_sigma0 idf1=1.0 acc=1.0 sw=0
+[482/656] OK soc3/2022_10_05_M3_M2/C1_sigma1 idf1=1.0 acc=1.0 sw=0
+[483/656] OK soc3/2022_10_05_M3_M2/C1_sigma2 idf1=1.0 acc=1.0 sw=0
+[484/656] OK soc3/2022_10_05_M3_M2/C1_sigma3 idf1=1.0 acc=1.0 sw=0
+[485/656] OK soc3/2022_10_05_M3_M2/C2_drop0.1 idf1=0.999983 acc=0.999992 sw=0
+[486/656] OK soc3/2022_10_05_M3_M2/C1_sigma10 idf1=1.0 acc=1.0 sw=0
+[487/656] OK soc3/2022_10_05_M3_M2/C1_sigma5 idf1=1.0 acc=1.0 sw=0
+[488/656] OK soc3/2022_10_05_M3_M2/C1_sigma20 idf1=0.999993 acc=0.999993 sw=0
+[489/656] OK soc3/2022_10_05_M3_M2/C2_drop0.25 idf1=0.999456 acc=0.999965 sw=4
+[490/656] OK soc3/2022_10_05_M3_M2/C4_com_sigma0 idf1=0.999887 acc=0.999887 sw=0
+[491/656] OK soc3/2022_10_05_M3_M2/C2_drop0.5 idf1=0.952001 acc=0.967064 sw=29
+[492/656] OK soc3/2022_10_05_M3_M2/C4_com_sigma3 idf1=0.999843 acc=0.999843 sw=0
+[493/656] OK soc3/2022_10_05_M3_M2/C2b_nodedrop0.5 idf1=0.538533 acc=0.538533 sw=2
+[494/656] OK soc3/2022_10_05_M3_M2/C2b_nodedrop0.25 idf1=1.0 acc=1.0 sw=0
+[495/656] OK soc3/2022_10_05_M3_M2/C3_occl0.25 idf1=0.999927 acc=0.999967 sw=10
+[496/656] OK soc3/2022_10_05_M3_M2/C3_occl0.5 idf1=0.999141 acc=0.999922 sw=30
+[497/656] OK soc3/2022_10_05_M5_M4/C1_sigma1 idf1=1.0 acc=1.0 sw=0
+[498/656] OK soc3/2022_10_05_M5_M4/C1_sigma2 idf1=0.999996 acc=0.999996 sw=0
+[499/656] OK soc3/2022_10_05_M5_M4/C1_sigma0 idf1=1.0 acc=1.0 sw=0
+[500/656] OK soc3/2022_10_05_M5_M4/C1_sigma3 idf1=0.999996 acc=0.999996 sw=0
+[501/656] OK soc3/2022_10_05_M5_M4/C2_drop0.1 idf1=0.999976 acc=0.99998 sw=0
+[502/656] OK soc3/2022_10_05_M5_M4/C1_sigma10 idf1=0.895266 acc=0.895266 sw=4
+[503/656] OK soc3/2022_10_05_M5_M4/C1_sigma5 idf1=0.999998 acc=0.999998 sw=0
+[504/656] OK soc3/2022_10_05_M5_M4/C1_sigma20 idf1=0.893577 acc=0.893577 sw=28
+[505/656] OK soc3/2022_10_05_M5_M4/C4_com_sigma0 idf1=0.999904 acc=0.999904 sw=0
+[506/656] OK soc3/2022_10_05_M5_M4/C4_com_sigma3 idf1=0.999809 acc=0.999809 sw=0
+[507/656] OK soc3/2022_10_05_M5_M4/C2_drop0.5 idf1=0.983751 acc=0.999772 sw=14
+[508/656] OK soc3/2022_10_05_M5_M4/C2_drop0.25 idf1=0.895045 acc=0.895479 sw=2
+[509/656] OK soc3/2022_10_05_M5_M4/C2b_nodedrop0.25 idf1=0.999989 acc=0.999989 sw=0
+[510/656] OK soc3/2022_10_05_M5_M4/C2b_nodedrop0.5 idf1=0.998101 acc=0.998101 sw=18
+[511/656] OK soc3/2022_10_05_M5_M4/C3_occl0.5 idf1=0.891916 acc=0.894428 sw=20
+[512/656] OK soc3/2022_10_05_M5_M4/C3_occl0.25 idf1=0.894729 acc=0.894834 sw=6
+[513/656] OK soc3/2022_10_06_M2_M4/C1_sigma0 idf1=1.0 acc=1.0 sw=0
+[514/656] OK soc3/2022_10_06_M2_M4/C1_sigma1 idf1=1.0 acc=1.0 sw=0
+[515/656] OK soc3/2022_10_06_M2_M4/C1_sigma3 idf1=0.999987 acc=0.999987 sw=0
+[516/656] OK soc3/2022_10_06_M2_M4/C1_sigma2 idf1=1.0 acc=1.0 sw=0
+[517/656] OK soc3/2022_10_06_M2_M4/C1_sigma5 idf1=0.888708 acc=0.888708 sw=8
+[518/656] OK soc3/2022_10_06_M2_M4/C2_drop0.1 idf1=0.999958 acc=0.999963 sw=0
+[519/656] OK soc3/2022_10_06_M2_M4/C1_sigma10 idf1=0.999753 acc=0.999753 sw=36
+[520/656] OK soc3/2022_10_06_M2_M4/C1_sigma20 idf1=0.999406 acc=0.999406 sw=54
+[521/656] OK soc3/2022_10_06_M2_M4/C2_drop0.5 idf1=0.981505 acc=0.997394 sw=95
+[522/656] OK soc3/2022_10_06_M2_M4/C4_com_sigma0 idf1=0.815635 acc=0.815635 sw=8
+[523/656] OK soc3/2022_10_06_M2_M4/C4_com_sigma3 idf1=0.934276 acc=0.934276 sw=16
+[524/656] OK soc3/2022_10_06_M2_M4/C2_drop0.25 idf1=0.888305 acc=0.888716 sw=16
+[525/656] OK soc3/2022_10_06_M2_M4/C2b_nodedrop0.5 idf1=0.999594 acc=0.999594 sw=38
+[526/656] OK soc3/2022_10_06_M2_M4/C2b_nodedrop0.25 idf1=0.999961 acc=0.999961 sw=0
+[527/656] OK soc3/2022_10_06_M2_M4/C3_occl0.5 idf1=0.876008 acc=0.878708 sw=78
+[528/656] OK soc3/2022_10_06_M2_M4/C3_occl0.25 idf1=0.999751 acc=0.999885 sw=20
+[529/656] OK soc3/2022_10_06_M3_M6/C1_sigma0 idf1=1.0 acc=1.0 sw=0
+[530/656] OK soc3/2022_10_06_M3_M6/C1_sigma1 idf1=0.999983 acc=0.999983 sw=2
+[531/656] OK soc3/2022_10_06_M3_M6/C1_sigma2 idf1=0.99988 acc=0.99988 sw=8
+[532/656] OK soc3/2022_10_06_M3_M6/C1_sigma3 idf1=0.501993 acc=0.501993 sw=38
+[533/656] OK soc3/2022_10_06_M3_M6/C2_drop0.1 idf1=0.999321 acc=0.999328 sw=42
+[534/656] OK soc3/2022_10_06_M3_M6/C1_sigma10 idf1=0.947801 acc=0.947801 sw=266
+[535/656] OK soc3/2022_10_06_M3_M6/C1_sigma5 idf1=0.973657 acc=0.973657 sw=92
+[536/656] OK soc3/2022_10_06_M3_M6/C1_sigma20 idf1=0.972552 acc=0.972552 sw=352
+[537/656] OK soc3/2022_10_06_M3_M6/C4_com_sigma0 idf1=0.594904 acc=0.594904 sw=56
+[538/656] OK soc3/2022_10_06_M3_M6/C2_drop0.5 idf1=0.579299 acc=0.58867 sw=238
+[539/656] OK soc3/2022_10_06_M3_M6/C4_com_sigma3 idf1=0.866413 acc=0.866413 sw=106
+[540/656] OK soc3/2022_10_06_M3_M6/C2_drop0.25 idf1=0.882068 acc=0.882515 sw=72
+[541/656] OK soc3/2022_10_06_M3_M6/C2b_nodedrop0.5 idf1=0.547981 acc=0.547981 sw=282
+[542/656] OK soc3/2022_10_06_M3_M6/C2b_nodedrop0.25 idf1=0.973702 acc=0.973702 sw=66
+[543/656] OK soc3/2022_10_06_M3_M6/C3_occl0.25 idf1=0.57203 acc=0.57206 sw=74
+[544/656] OK soc3/2022_10_06_M3_M6/C3_occl0.5 idf1=0.773659 acc=0.774526 sw=146
+[545/656] OK soc3/2022_10_06_M5_M1/C1_sigma1 idf1=1.0 acc=1.0 sw=0
+[546/656] OK soc3/2022_10_06_M5_M1/C1_sigma0 idf1=1.0 acc=1.0 sw=0
+[547/656] OK soc3/2022_10_06_M5_M1/C1_sigma2 idf1=1.0 acc=1.0 sw=0
+[548/656] OK soc3/2022_10_06_M5_M1/C1_sigma3 idf1=1.0 acc=1.0 sw=0
+[549/656] OK soc3/2022_10_06_M5_M1/C1_sigma5 idf1=0.999993 acc=0.999993 sw=0
+[550/656] OK soc3/2022_10_06_M5_M1/C2_drop0.5 idf1=0.98383 acc=0.999861 sw=23
+[551/656] OK soc3/2022_10_06_M5_M1/C1_sigma10 idf1=0.867169 acc=0.867169 sw=20
+[552/656] OK soc3/2022_10_06_M5_M1/C1_sigma20 idf1=0.867174 acc=0.867174 sw=48
+[553/656] OK soc3/2022_10_06_M5_M1/C2_drop0.1 idf1=0.999989 acc=0.999994 sw=0
+[554/656] OK soc3/2022_10_06_M5_M1/C2_drop0.25 idf1=0.999484 acc=0.999983 sw=2
+[555/656] OK soc3/2022_10_06_M5_M1/C4_com_sigma0 idf1=0.999872 acc=0.999872 sw=2
+[556/656] OK soc3/2022_10_06_M5_M1/C4_com_sigma3 idf1=0.999637 acc=0.999637 sw=6
+[557/656] OK soc3/2022_10_06_M5_M1/C2b_nodedrop0.5 idf1=0.999747 acc=0.999747 sw=38
+[558/656] OK soc3/2022_10_06_M5_M1/C2b_nodedrop0.25 idf1=1.0 acc=1.0 sw=0
+[559/656] OK soc3/2022_10_06_M5_M1/C3_occl0.5 idf1=0.790394 acc=0.792115 sw=20
+[560/656] OK soc3/2022_10_06_M5_M1/C3_occl0.25 idf1=0.999887 acc=0.999985 sw=2
+[561/656] OK soc3/2022_10_07_M1_M4/C1_sigma0 idf1=1.0 acc=1.0 sw=0
+[562/656] OK soc3/2022_10_07_M1_M4/C1_sigma1 idf1=1.0 acc=1.0 sw=0
+[563/656] OK soc3/2022_10_07_M1_M4/C1_sigma5 idf1=1.0 acc=1.0 sw=0
+[564/656] OK soc3/2022_10_07_M1_M4/C1_sigma2 idf1=1.0 acc=1.0 sw=0
+[565/656] OK soc3/2022_10_07_M1_M4/C1_sigma3 idf1=1.0 acc=1.0 sw=0
+[566/656] OK soc3/2022_10_07_M1_M4/C1_sigma10 idf1=1.0 acc=1.0 sw=0
+[567/656] OK soc3/2022_10_07_M1_M4/C1_sigma20 idf1=0.999987 acc=0.999987 sw=0
+[568/656] OK soc3/2022_10_07_M1_M4/C2_drop0.1 idf1=0.999992 acc=0.999998 sw=0
+[569/656] OK soc3/2022_10_07_M1_M4/C2_drop0.5 idf1=0.965879 acc=0.981434 sw=11
+[570/656] OK soc3/2022_10_07_M1_M4/C4_com_sigma0 idf1=0.999804 acc=0.999804 sw=0
+[571/656] OK soc3/2022_10_07_M1_M4/C4_com_sigma3 idf1=0.99973 acc=0.99973 sw=0
+[572/656] OK soc3/2022_10_07_M1_M4/C2_drop0.25 idf1=0.99949 acc=0.99999 sw=0
+[573/656] OK soc3/2022_10_07_M1_M4/C2b_nodedrop0.5 idf1=1.0 acc=1.0 sw=0
+[574/656] OK soc3/2022_10_07_M1_M4/C2b_nodedrop0.25 idf1=1.0 acc=1.0 sw=0
+[575/656] OK soc3/2022_10_07_M1_M4/C3_occl0.5 idf1=0.998317 acc=0.99995 sw=24
+[576/656] OK soc3/2022_10_07_M1_M4/C3_occl0.25 idf1=0.999901 acc=0.999978 sw=2
+[577/656] OK soc3/2022_10_07_M5_M3/C1_sigma1 idf1=1.0 acc=1.0 sw=0
+[578/656] OK soc3/2022_10_07_M5_M3/C1_sigma0 idf1=1.0 acc=1.0 sw=0
+[579/656] OK soc3/2022_10_07_M5_M3/C1_sigma2 idf1=1.0 acc=1.0 sw=0
+[580/656] OK soc3/2022_10_07_M5_M3/C1_sigma3 idf1=1.0 acc=1.0 sw=0
+[581/656] OK soc3/2022_10_07_M5_M3/C1_sigma5 idf1=1.0 acc=1.0 sw=0
+[582/656] OK soc3/2022_10_07_M5_M3/C2_drop0.1 idf1=0.99999 acc=0.999995 sw=0
+[583/656] OK soc3/2022_10_07_M5_M3/C2_drop0.5 idf1=0.983704 acc=0.999797 sw=36
+[584/656] OK soc3/2022_10_07_M5_M3/C1_sigma20 idf1=0.999966 acc=0.999966 sw=2
+[585/656] OK soc3/2022_10_07_M5_M3/C1_sigma10 idf1=0.999998 acc=0.999998 sw=0
+[586/656] OK soc3/2022_10_07_M5_M3/C4_com_sigma0 idf1=0.999654 acc=0.999654 sw=6
+[587/656] OK soc3/2022_10_07_M5_M3/C4_com_sigma3 idf1=0.992824 acc=0.992824 sw=6
+[588/656] OK soc3/2022_10_07_M5_M3/C2_drop0.25 idf1=0.99949 acc=0.999978 sw=2
+[589/656] OK soc3/2022_10_07_M5_M3/C2b_nodedrop0.5 idf1=0.763551 acc=0.763551 sw=2
+[590/656] OK soc3/2022_10_07_M5_M3/C2b_nodedrop0.25 idf1=0.999996 acc=0.999996 sw=0
+[591/656] OK soc3/2022_10_07_M5_M3/C3_occl0.5 idf1=0.997889 acc=0.999936 sw=18
+[592/656] OK soc3/2022_10_07_M5_M3/C3_occl0.25 idf1=0.999894 acc=0.999981 sw=2
+[593/656] OK soc3/2022_10_07_M6_M2/C1_sigma0 idf1=1.0 acc=1.0 sw=0
+[594/656] OK soc3/2022_10_07_M6_M2/C1_sigma2 idf1=1.0 acc=1.0 sw=0
+[595/656] OK soc3/2022_10_07_M6_M2/C1_sigma1 idf1=1.0 acc=1.0 sw=0
+[596/656] OK soc3/2022_10_07_M6_M2/C1_sigma5 idf1=0.999978 acc=0.999978 sw=0
+[597/656] OK soc3/2022_10_07_M6_M2/C1_sigma3 idf1=1.0 acc=1.0 sw=0
+[598/656] OK soc3/2022_10_07_M6_M2/C2_drop0.1 idf1=0.999975 acc=0.999979 sw=0
+[599/656] OK soc3/2022_10_07_M6_M2/C1_sigma20 idf1=0.791921 acc=0.791921 sw=14
+[600/656] OK soc3/2022_10_07_M6_M2/C1_sigma10 idf1=0.999562 acc=0.999562 sw=14
+[601/656] OK soc3/2022_10_07_M6_M2/C2_drop0.5 idf1=0.899106 acc=0.91374 sw=58
+[602/656] OK soc3/2022_10_07_M6_M2/C4_com_sigma0 idf1=0.999789 acc=0.999789 sw=10
+[603/656] OK soc3/2022_10_07_M6_M2/C4_com_sigma3 idf1=0.922041 acc=0.922041 sw=18
+[604/656] OK soc3/2022_10_07_M6_M2/C2_drop0.25 idf1=0.724355 acc=0.724702 sw=10
+[605/656] OK soc3/2022_10_07_M6_M2/C2b_nodedrop0.5 idf1=0.791972 acc=0.791972 sw=24
+[606/656] OK soc3/2022_10_07_M6_M2/C2b_nodedrop0.25 idf1=0.524663 acc=0.524663 sw=4
+[607/656] OK soc3/2022_10_07_M6_M2/C3_occl0.25 idf1=0.999946 acc=0.999971 sw=8
+[608/656] OK soc3/2022_10_07_M6_M2/C3_occl0.5 idf1=0.916985 acc=0.917581 sw=46
+[609/656] OK soc3/2022_10_08_M1_M3/C1_sigma0 idf1=1.0 acc=1.0 sw=0
+[610/656] OK soc3/2022_10_08_M1_M3/C1_sigma1 idf1=1.0 acc=1.0 sw=0
+[611/656] OK soc3/2022_10_08_M1_M3/C1_sigma2 idf1=1.0 acc=1.0 sw=0
+[612/656] OK soc3/2022_10_08_M1_M3/C1_sigma3 idf1=1.0 acc=1.0 sw=0
+[613/656] OK soc3/2022_10_08_M1_M3/C2_drop0.1 idf1=0.999993 acc=0.999999 sw=0
+[614/656] OK soc3/2022_10_08_M1_M3/C1_sigma5 idf1=1.0 acc=1.0 sw=0
+[615/656] OK soc3/2022_10_08_M1_M3/C2_drop0.5 idf1=0.984194 acc=0.999952 sw=5
+[616/656] OK soc3/2022_10_08_M1_M3/C1_sigma20 idf1=0.999998 acc=0.999998 sw=0
+[617/656] OK soc3/2022_10_08_M1_M3/C1_sigma10 idf1=1.0 acc=1.0 sw=0
+[618/656] OK soc3/2022_10_08_M1_M3/C2_drop0.25 idf1=0.999535 acc=0.999998 sw=0
+[619/656] OK soc3/2022_10_08_M1_M3/C4_com_sigma3 idf1=0.999687 acc=0.999687 sw=0
+[620/656] OK soc3/2022_10_08_M1_M3/C4_com_sigma0 idf1=0.999817 acc=0.999817 sw=0
+[621/656] OK soc3/2022_10_08_M1_M3/C2b_nodedrop0.5 idf1=0.999998 acc=0.999998 sw=0
+[622/656] OK soc3/2022_10_08_M1_M3/C2b_nodedrop0.25 idf1=1.0 acc=1.0 sw=0
+[623/656] OK soc3/2022_10_08_M1_M3/C3_occl0.5 idf1=0.964537 acc=0.965993 sw=12
+[624/656] OK soc3/2022_10_08_M1_M3/C3_occl0.25 idf1=0.999926 acc=0.999997 sw=0
+[625/656] OK soc3/2022_10_08_M5_M2/C1_sigma1 idf1=1.0 acc=1.0 sw=0
+[626/656] OK soc3/2022_10_08_M5_M2/C1_sigma0 idf1=1.0 acc=1.0 sw=0
+[627/656] OK soc3/2022_10_08_M5_M2/C1_sigma3 idf1=1.0 acc=1.0 sw=0
+[628/656] OK soc3/2022_10_08_M5_M2/C1_sigma2 idf1=1.0 acc=1.0 sw=0
+[629/656] OK soc3/2022_10_08_M5_M2/C1_sigma10 idf1=0.999989 acc=0.999989 sw=0
+[630/656] OK soc3/2022_10_08_M5_M2/C2_drop0.1 idf1=0.999989 acc=0.999995 sw=0
+[631/656] OK soc3/2022_10_08_M5_M2/C1_sigma5 idf1=1.0 acc=1.0 sw=0
+[632/656] OK soc3/2022_10_08_M5_M2/C1_sigma20 idf1=0.999912 acc=0.999912 sw=10
+[633/656] OK soc3/2022_10_08_M5_M2/C2_drop0.5 idf1=0.983908 acc=0.999787 sw=36
+[634/656] OK soc3/2022_10_08_M5_M2/C4_com_sigma0 idf1=0.578844 acc=0.578844 sw=4
+[635/656] OK soc3/2022_10_08_M5_M2/C4_com_sigma3 idf1=0.511661 acc=0.511661 sw=10
+[636/656] OK soc3/2022_10_08_M5_M2/C2_drop0.25 idf1=0.999495 acc=0.999971 sw=4
+[637/656] OK soc3/2022_10_08_M5_M2/C2b_nodedrop0.25 idf1=0.999991 acc=0.999991 sw=0
+[638/656] OK soc3/2022_10_08_M5_M2/C2b_nodedrop0.5 idf1=0.668019 acc=0.668019 sw=8
+[639/656] OK soc3/2022_10_08_M5_M2/C3_occl0.25 idf1=0.999866 acc=0.999991 sw=0
+[640/656] OK soc3/2022_10_08_M5_M2/C3_occl0.5 idf1=0.997038 acc=0.999953 sw=20
+[641/656] OK soc3/2022_10_08_M6_M4/C1_sigma0 idf1=1.0 acc=1.0 sw=0
+[642/656] OK soc3/2022_10_08_M6_M4/C1_sigma1 idf1=0.999983 acc=0.999983 sw=0
+[643/656] OK soc3/2022_10_08_M6_M4/C1_sigma2 idf1=0.999916 acc=0.999916 sw=6
+[644/656] OK soc3/2022_10_08_M6_M4/C1_sigma3 idf1=0.976474 acc=0.976474 sw=22
+[645/656] OK soc3/2022_10_08_M6_M4/C1_sigma5 idf1=0.976311 acc=0.976311 sw=34
+[646/656] OK soc3/2022_10_08_M6_M4/C2_drop0.1 idf1=0.999817 acc=0.999824 sw=20
+[647/656] OK soc3/2022_10_08_M6_M4/C1_sigma10 idf1=0.97629 acc=0.97629 sw=48
+[648/656] OK soc3/2022_10_08_M6_M4/C1_sigma20 idf1=0.994056 acc=0.994056 sw=112
+[649/656] OK soc3/2022_10_08_M6_M4/C2_drop0.5 idf1=0.957046 acc=0.972373 sw=83
+[650/656] OK soc3/2022_10_08_M6_M4/C4_com_sigma0 idf1=0.976581 acc=0.976581 sw=44
+[651/656] OK soc3/2022_10_08_M6_M4/C4_com_sigma3 idf1=0.998969 acc=0.998969 sw=42
+[652/656] OK soc3/2022_10_08_M6_M4/C2_drop0.25 idf1=0.97602 acc=0.976476 sw=26
+[653/656] OK soc3/2022_10_08_M6_M4/C2b_nodedrop0.5 idf1=0.999228 acc=0.999228 sw=84
+[654/656] OK soc3/2022_10_08_M6_M4/C2b_nodedrop0.25 idf1=0.999818 acc=0.999818 sw=26
+[655/656] OK soc3/2022_10_08_M6_M4/C3_occl0.25 idf1=0.977488 acc=0.977549 sw=30
+[656/656] OK soc3/2022_10_08_M6_M4/C3_occl0.5 idf1=0.994369 acc=0.995642 sw=84

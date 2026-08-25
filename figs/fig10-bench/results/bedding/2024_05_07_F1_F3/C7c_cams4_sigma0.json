@@ -1,0 +1,30 @@
+{
+ "idf1": 1.0,
+ "accuracy": 1.0,
+ "grouping_accuracy": 1.0,
+ "frames_perfectly_grouped": 1.0,
+ "switches": 0,
+ "sw_per_100k": 0.0,
+ "coverage": 1.0,
+ "n_gt_dets": 720000,
+ "n_pred_dets": 720000,
+ "unmatched_det": 0,
+ "identities": 2,
+ "animals": 2,
+ "frames": 90000,
+ "runtimeSeconds": 75.487,
+ "fps": 1192.3,
+ "condition": {
+  "noise_px": 0.0,
+  "drop_instance": 0.0,
+  "drop_node": 0.0,
+  "occl_dist": 0.0,
+  "occl_prob": 0.0,
+  "com_only": false,
+  "seed": 4206532116
+ },
+ "session": "/root/vast/eric/s-DANNCE-data/s-DANNCE-BEDDING/2024_05_07_F1_F3",
+ "dataset": "bedding",
+ "session_name": "2024_05_07_F1_F3",
+ "cell": "C7c_cams4_sigma0"
+}

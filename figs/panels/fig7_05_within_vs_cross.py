@@ -537,6 +537,19 @@ def main(variant=False, fair=True):
     else:
         order = [(("LUC3D", "LUC3D fresh anchor (shipped)", VARIANT_COLOR)
                   if k == "LUC3D" else (k, nm, col)) for k, nm, col in ORDER]
+    # FIG 11 COMPACT PASS (Eric, 2026-08-25: "for 11a just say LUC3D SLEAP
+    # ByteTrack, you can remove 3D Muppet. we dont need 0.011 - 0.011 1.3%
+    # coverage.... to much writing!!"). The VARIANT render IS fig11a, synced into
+    # the 2x2 block at ~0.41 vector scale -- at that scale the annotated key and
+    # the fine-print notes are unreadable, so the variant drops the
+    # coverage-limited 3D-MuPPET series from the artwork entirely (its number
+    # stays in FIGURE-LEGENDS' Fig. 7 A text), carries bare tracker names in the
+    # key, and sets type at COMPACT_FS so it prints near the other panels' size
+    # after the shrink. The non-variant (manuscript-history) render is untouched.
+    if variant:
+        order = [e for e in order if e[0] != MUPPET_KEY]
+    #: variant type size, source pt: 13 pt at the block's 0.41 scale prints 5.3 pt.
+    COMPACT_FS = 13.0
     height = ROW_H_VARIANT if variant else ROW_H
     # Whether this deposit's SLEAP series is the CORRECTED one. See SLEAP_INVALID_KEY:
     # the note below is a claim about provenance, so it is drawn from evidence in the
@@ -560,7 +573,9 @@ def main(variant=False, fair=True):
     # MuPPET reservations counted lines that stopped being appended when the
     # per-series notes moved to the legend, so ~30% of the panel was a blank band
     # between key and axes. Five lines: four series + the EXPERIMENTAL note.
-    fig, ax = panel("half", height, key=len(order) + (1 if variant else 0))
+    # variant: the key is 3 bare names at COMPACT_FS on double spacing, so the
+    # band reserves 2 rows per entry at the standard spacing panel() knows.
+    fig, ax = panel("half", height, key=2 * len(order) if variant else len(order))
     for rank, (key, name, color) in enumerate(order):
         if key not in bm:
             continue
@@ -602,6 +617,11 @@ def main(variant=False, fair=True):
         # it -- both suffixes together are 56 characters and run off the panel (lint:
         # CLIPPED). Coverage is the one a reader must have to not misread the mark;
         # the corpus note is in the legend with the other provenance.
+        if variant:
+            # bare names only (compact pass) -- the arm's numbers, config and the
+            # dropped MuPPET line all live in FIGURE-LEGENDS' Fig. 7 A entry
+            entries.append(("LUC3D" if key in ("LUC3D", vkey) else name, color))
+            continue
         entry = (f"{name}  {w:.3f} → {c:.3f} · 1.3% coverage" if limited else
                  f"{name}  {w:.3f} → {c:.3f} ×{c / w:.2f}"
                  + (f"  {CORPUS_NOTE[name]}" if name in CORPUS_NOTE else ""))
@@ -698,9 +718,11 @@ def main(variant=False, fair=True):
         # fig11 re-uses this panel at 0.635 scale, where anything under 7.9 pt
         # lands below lint's 5 pt floor -- the accepted fig11 fine-print list is
         # closed and must not grow.
-        ax.text(-0.13, 1 / NCAM - 0.022,
-                f"1/C = {1 / NCAM:.2f} · camera-scoped convention",
-                color=MUTED, fontsize=8, va="top")
+        # "1/C = 0.20" alone since the compact pass -- "· camera-scoped
+        # convention" is legend material ("to much writing!!"); at COMPACT_FS it
+        # prints ~5.3 pt after the block's shrink, above lint's floor.
+        ax.text(-0.13, 1 / NCAM - 0.022, f"1/C = {1 / NCAM:.2f}",
+                color=MUTED, fontsize=COMPACT_FS, va="top")
 
     # THE SWITCH COUNTS, IN THE DATA AREA, IN THE VARIANT ONLY. IDF1 alone understates
     # what the fresher anchor does -- 0.749 -> 0.850 is one number, 2,071 -> 511 ID
@@ -716,8 +738,10 @@ def main(variant=False, fair=True):
     # and cross every horizontal strip this note used to sit in. 413 against 2,071 is
     # a strong number and it belongs in the legend, not typeset over the data.
 
-    text_legend(ax, entries, "above", dy=key_dy(height), xy=(0.14, 0.985),
-                transform=fig.transFigure)
+    text_legend(ax, entries, "above",
+                dy=key_dy(height) * (2.0 if variant else 1.0),
+                size=COMPACT_FS if variant else None,
+                xy=(0.14, 0.985), transform=fig.transFigure)
     # THE CORPUS, ON THE ARTWORK (review round 3): 7b kept its "SLAP-2M corpus ·
     # a is Mouse-Dyad-10M" header when footnote() was suppressed set-wide; this panel's half
     # of that two-way pointer was IN footnote() and silently vanished -- leaving five
@@ -731,14 +755,21 @@ def main(variant=False, fair=True):
         # 0.46, not 0.40: at 0.40 the second line's box grazed the 0.20 rule the
         # review read it as sitting on; the rule now carries its own label below
         # it, and the note clears both (adversarial review 2026-08-17).
-        ax.text(0.02, 0.46, "50 Mouse-Dyad-10M sessions\nb–f: SLAP-2M",
-                transform=ax.transAxes, ha="left", va="top", color=MUTED,
-                fontsize=6.5, linespacing=1.4)
+        # THE IN-PLOT CORPUS NOTE IS OFF THE ARTWORK since the compact pass
+        # (Eric: "to much writing!!") -- it had already been made
+        # lettering-agnostic that morning ("b-f: SLAP-2M" was true in Fig 7 and
+        # false in Fig 11); now both halves of the two-way corpus pointer live in
+        # the caption only (FIGURE-LEGENDS Fig. 7's tail names every panel's
+        # corpus), and fig7_01's mirror note came off in the same pass.
+        pass
     ax.set_xlim(-0.15, 1.05)
     ax.set_xticks([0, 1])
     ax.set_xticklabels(["within view", "cross view"])
     ax.set_ylabel("IDF1")
     ax.set_ylim(0, 0.95)
+    if variant:
+        ax.tick_params(labelsize=COMPACT_FS)
+        ax.yaxis.label.set_fontsize(COMPACT_FS)
     # Explicit: the shorter plot made matplotlib fall back to 0.0 / 0.5 alone, and
     # a reader cannot place the 0.20 rule against two ticks.
     ax.set_yticks([0, 0.2, 0.4, 0.6, 0.8])
@@ -798,7 +829,7 @@ def main(variant=False, fair=True):
     note = (f"n = {int(df.n_sessions.iloc[0])} full Mouse-Dyad-10M sessions, "
             f"{NCAM} cameras, 2 mice\n"
             f"mean ± 95% CI; LUC3D drift ≤ {drift:.3f} in every session\n"
-            f"ahead of {every} in {xwins}/{xn} sessions · b–f: SLAP-2M")
+            f"ahead of {every} in {xwins}/{xn} sessions · other tracker panels: SLAP-2M")
     if variant:
         vw = wins[vkey]
         note += (

@@ -132,6 +132,50 @@ def _dot_sizes(node_names, scale):
                      for n in node_names])
 
 
+def draw_pose_overlay(ax, pts_xy, color, node_names=SLAP_NODES, *,
+                      lw=1.23, ms=2.82, ls="-", dot_face=None, dot_edge="white",
+                      dot_edge_lw=0.6, alpha=1.0, zorder=6.0):
+    """The Fig 13 PHOTO-OVERLAY pose: solid thin edges + uniform white-rimmed
+    dots, NO membranes.
+
+    This is `idswitch_fig_style.draw_pose` / `hyp_fig_style.draw_pose` (the
+    marks on Fig 13c/13d's camera panes) made available to the tile panels --
+    Eric, 2026-08-25: "we should use the same style of overlays that we are
+    doing on the image overlays for fig 13c and 13d ... for 1c and 1d (left)
+    ... and the ones i want to do for fig1 and fig2 too." Those two scripts
+    size their strokes in on-page points via a placed-mm conversion because
+    they composite at render resolution; the tile panels are true-size
+    matplotlib figures, so here `lw`/`ms` ARE on-page points and the defaults
+    are Fig 13's own (pt(1.23) / pt(2.82)). Scale them down together for tiles
+    whose animals print smaller than Fig 13's ~90 mm panes.
+
+    Variants used by the figures:
+      unresolved / not-yet-assigned (13c's top pane): `color="white",
+        ls=(0, (2.2, 1.6)), dot_face="white", dot_edge="#3A3A3A"`
+      reprojected-not-detected (Fig 2a's semantics "dotted = reprojected"):
+        keep the identity color, pass a dashed `ls` and (optionally) a hollow
+        dot via `dot_face="none"`, `dot_edge=color`.
+
+    `pts_xy` is (N, 2) in the axes' DATA coordinates (source-image pixels when
+    the axes shows an image), rows in `node_names` order; NaN rows are skipped.
+    """
+    from matplotlib.collections import LineCollection
+
+    pts = np.asarray(pts_xy, float)
+    segs = _segs(pts, node_names)
+    if segs:
+        ax.add_collection(LineCollection(
+            segs, colors=color, linewidths=lw, linestyles=ls, alpha=alpha,
+            capstyle="round", joinstyle="round", zorder=zorder))
+    ok = np.isfinite(pts).all(axis=1)
+    if ok.any():
+        ax.scatter(pts[ok, 0], pts[ok, 1], s=ms ** 2,
+                   facecolors=(dot_face if dot_face is not None else color),
+                   edgecolors=dot_edge, linewidths=dot_edge_lw, alpha=alpha,
+                   zorder=zorder + 0.1)
+    return ax
+
+
 def draw_skeleton_2d(ax, pts_xy, color, node_names=SLAP_NODES, scale=1.0, *,
                      surfaces="full", surface_alpha=0.30, edge_lw=1.6,
                      dots=True, zorder=2.0):

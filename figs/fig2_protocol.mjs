@@ -19,6 +19,20 @@
  * Also records the app's OWN per-view reprojection errors for both the two-anchor
  * and the all-views solve, so the panel's annotations quote this run.
  *
+ * TILES ARE EXPORTED CLEAN (overlay: false) SINCE 2026-08-25: the panel draws its
+ * own overlays from the manifest's per-node coordinates in the Fig 13 style
+ * (src/skeleton_style.draw_pose_overlay) -- Eric: "we should also do the overlays
+ * in the style that we did in fig13". Every anchor/reproj view carries
+ * `details[].points` (per-node [x,y]|null, detected 2D) and the reproj views also
+ * carry `reprojections` (per-identity per-node 2D of the TWO-ANCHOR 3D reprojected
+ * back, read from the app's own reprojectedInstances). The `check` export keeps the
+ * app's baked overlay as a reference of what the app itself drew.
+ *
+ * Also dumps figs/out/fig2a_pose.json -- the per-identity 3D of the TWO-ANCHOR
+ * solve at FRAME (pattern: fig1d_pose_export.mjs), plus the same frame's all-views
+ * solve for a cross-check, for the Blender re-render of the "3D from the 2
+ * anchors" tile (figs/fig2a_scene.py -> blender-images/fig1d_scene.py --mode pose).
+ *
  * The skeleton EDGE SET is overridden to the complete 26-edge plotting skeleton
  * (setSkeletonEdges / MOUSE_EDGES, from src/skeleton_style.py) before any export
  * (Eric 2026-08-16): the session's own sparse edge list reads as spiky lines
@@ -26,7 +40,8 @@
  * triangulation path reads skeleton.edges, and the manifest's reprojection
  * errors were diff-verified unchanged against the pre-override run.
  *
- * Writes figs/out/fig2p-*.png and figs/out/fig2-protocol.json.
+ * Writes figs/out/fig2p-*.png, figs/out/fig2-protocol.json and
+ * figs/out/fig2a_pose.json.
  *
  * Usage: node figs/fig2_protocol.mjs   (env: PORT, FRAME, NANIMALS, ANCHORS, SHOWCAMS)
  */
@@ -122,6 +137,40 @@ async function zoomOnAnimals(page, pad) {
     return res;
 }
 
+/**
+ * The per-identity 3D at `frame`, exactly fig1d_pose_export.mjs's dump: for each
+ * instance group { identityId, name, color, nCameras, points3d (N x 3 arrays,
+ * calib-world mm, NaN -> null) }, plus the skeleton's node order. Called once
+ * under the all-views solve and once under the two-anchor solve, so the Blender
+ * deposit can cross-check the crippled solve against the full one.
+ */
+async function dumpPose(page, frame) {
+    return await page.evaluate((f) => {
+        const s = window.__lucid.state.session;
+        const groups = [];
+        for (const g of (s.instanceGroups.get(f) || [])) {
+            if (!g.points3d) continue;
+            const p = g.points3d;   // flat Float64Array(3N) since luc3d #189
+            const pts = [];
+            for (let i = 0; i + 2 < p.length; i += 3) {
+                const ok = Number.isFinite(p[i]) && Number.isFinite(p[i + 1])
+                    && Number.isFinite(p[i + 2]);
+                pts.push(ok ? [p[i], p[i + 1], p[i + 2]] : null);
+            }
+            const id = s.getIdentity(g.identityId);
+            groups.push({
+                identityId: g.identityId,
+                name: id ? id.name : null,
+                color: id ? id.color : null,
+                nCameras: g.instances.size,
+                points3d: pts,
+            });
+        }
+        groups.sort((a, b) => a.identityId - b.identityId);
+        return { nodes: s.skeleton.nodes.slice(), groups };
+    }, frame);
+}
+
 const PRINT_STYLE = {
     predNodeSize: 5, predEdgeWeight: 3,
     userNodeSize: 5, userEdgeWeight: 3, userLabelSize: 0,
@@ -141,13 +190,14 @@ try {
     const tracked = await trackAll(page, NANIMALS);
     // Identities exist only after tracking, and the constructor reads the palette once,
     // so the override has to land here -- not before loadSession.
-    await setIdentityPalette(page);
+    const palette = await setIdentityPalette(page);
 
     // ---- reference: triangulate from ALL views -------------------------------
     const triAll = await triangulateAll(page);
     await clearOverlays(page);
     await gotoFrame(page, FRAME);
     const errAll = await reprojErrors(page);
+    const poseAll = await dumpPose(page, FRAME);
 
     // ---- the protocol: triangulate from the TWO anchor views only ------------
     await setAnchorViews(page, ANCHORS);
@@ -155,22 +205,44 @@ try {
     await clearOverlays(page);
     await gotoFrame(page, FRAME);
     const err2 = await reprojErrors(page);
+    const pose2 = await dumpPose(page, FRAME);
 
-    // 1+2. The anchor views as the labeller leaves them: labels visible, no
-    //      reprojection drawn over them.
+    // The two-anchor 3D as numbers, for the Blender tile (figs/fig2a_scene.py).
+    for (const g of pose2.groups) {
+        log(`  [pose2] ${g.name} ${g.color}: `
+            + `${g.points3d.filter(Boolean).length}/${pose2.nodes.length} nodes, `
+            + `${g.nCameras} cameras`);
+    }
+    writeManifest('fig2a_pose.json', {
+        session: loaded, frame: FRAME, nAnimals: NANIMALS, anchors: ANCHORS,
+        tracked, triangulatedTwoAnchors: tri2, identityPalette: palette,
+        coordinateFrame: 'calib-world mm (+Z down on this rig); align with '
+            + 'blender-images/renders/hardfight_alignment.json',
+        nodes: pose2.nodes,
+        groups: pose2.groups,               // the TWO-ANCHOR solve (the tile)
+        groupsAllViews: poseAll.groups,     // the all-views solve (cross-check only)
+    });
+
+    // 1+2. The anchor views as the labeller leaves them. CLEAN frames -- the
+    //      panel draws the pose itself (Fig 13 style) from details[].points.
     await setVisibility(page, { predicted: true, user: true, reprojections: false, errors: false });
-    const anchors = await exportViews(page, { cams: ANCHORS, prefix: 'fig2p-anchor', brightness: BRIGHT });
+    const anchors = await exportViews(page, { cams: ANCHORS, prefix: 'fig2p-anchor', brightness: BRIGHT,
+                                              overlay: false });
 
-    // 3. The unlabelled views: ONLY the reprojection.
+    // 3. The unlabelled views: clean frames + the reprojected 2D as NUMBERS
+    //    (per-identity `reprojections`), for the panel's dashed overlay.
     await setVisibility(page, { predicted: false, user: false, reprojections: true, errors: false });
-    const reproj = await exportViews(page, { cams: SHOWCAMS, prefix: 'fig2p-reproj', brightness: BRIGHT });
+    const reproj = await exportViews(page, { cams: SHOWCAMS, prefix: 'fig2p-reproj', brightness: BRIGHT,
+                                             overlay: false, reprojections: true });
 
     // 4. The accept/nudge decision: reprojection against the detection, with the
-    //    error vectors the app draws between them. Reprojection labels off -- this
-    //    tile is shown MAGNIFIED, where a pane-sized label covers the animal.
+    //    error vectors the app draws between them. This export keeps the app's own
+    //    BAKED overlay -- a reference the panel's hand-drawn overlays can be
+    //    checked against (the panel composes its magnified tile from `reproj`).
     await setVisibility(page, { predicted: true, user: true, reprojections: true, errors: true });
     await setOverlayStyle(page, { ...PRINT_STYLE, reprojLabelSize: 0 });
-    const check = await exportViews(page, { cams: SHOWCAMS, prefix: 'fig2p-check', brightness: BRIGHT });
+    const check = await exportViews(page, { cams: SHOWCAMS, prefix: 'fig2p-check', brightness: BRIGHT,
+                                            reprojections: true });
 
     // The 3D built from two views, seen from the rig.
     await hide3dButtons(page, true);
@@ -204,6 +276,7 @@ try {
         session: loaded, frame: FRAME, nAnimals: NANIMALS, brightness: BRIGHT,
         overlayStyle: PRINT_STYLE, anchors: ANCHORS, showCams: SHOWCAMS,
         cameras: CAMS, tracked, skeletonEdges: skelEdges,
+        skeletonNodes: pose2.nodes, identityPalette: palette,
         triangulatedAllViews: triAll, triangulatedTwoAnchors: tri2,
         reprojErrorsAllViews: errAll, reprojErrorsTwoAnchors: err2,
         views: { anchor: anchors, reproj, check },

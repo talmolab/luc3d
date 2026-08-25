@@ -10,11 +10,17 @@ what the per-camera tracker produces (a different track label per camera, no
 correspondence between them); right pair = after Track All, one identity per animal,
 consistent across every view.
 
-Every tile comes out of LUC3D's own canvases after the real pipeline ran (load ->
-Track All -> Triangulate All) on real 8-camera data. Nothing is mocked, no skeleton
-is hand-placed: `_drive.mjs`'s `exportViews()` reads the video and overlay canvases
-at native 1280x1024, composites them, and records where each animal was and the
-exact colour the app drew it in. The crops below use those recorded bounding boxes.
+Every tile is a CLEAN video frame out of LUC3D's own canvases after the real
+pipeline ran (load -> Track All -> Triangulate All) on real 8-camera data.
+Nothing is mocked, no skeleton is hand-placed: `_drive.mjs`'s `exportViews()`
+(with `overlay: false` since 2026-08-25) reads the video canvas at native
+1280x1024 and records, per detection, its per-node 2D points, bbox, and the
+exact colour the app would have drawn it in. The skeletons are then drawn HERE,
+in matplotlib, with `src.skeleton_style.draw_pose_overlay` -- the same Fig 13c/d
+photo-overlay style (solid thin edges, uniform white-rimmed dots, no membranes;
+Eric 2026-08-25: "we should use the same style of overlays that we are doing on
+the image overlays for fig 13c and 13d ... for 1c and 1d (left)"). The crops
+below use the recorded bounding boxes.
 
 WHY NATIVE CROPS AND NOT GUI SCREENSHOTS. A view pane is a CSS-scaled 1280x1024
 canvas laid out 4-across, so a pane crop is ~300 px wide and a mouse is a few dozen
@@ -76,14 +82,14 @@ named for what it actually counts:
 
 EVERY ANIMAL CARRIES ITS OWN LABEL, and without them the panel does not make its
 claim. The left pair is meant to show that the tracker's labels are PER CAMERA and
-carry no correspondence: `t89`/`t82`/`t94` in cam 0 against `t83`/`t93`/`t95` in
-cam 7, six labels for three animals in two of eight views, with no clue in the
-strings themselves that t89 and t83 are the same mouse. With the labels removed (as
-an earlier pass of this rewrite had it) the left pair is just three
+carry no correspondence: `T 89`/`T 82`/`T 94` in cam 0 against `T 83`/`T 93`/`T 95`
+in cam 7, six labels for three animals in two of eight views, with no clue in the
+strings themselves that T 89 and T 83 are the same mouse. With the labels removed
+(as an earlier pass of this rewrite had it) the left pair is just three
 differently-coloured skeletons and nothing on the artwork shows what the 24 in the
-ledger line ARE. The right pair carries the identity the app assigned -- `1`, `2`,
-`3`, the same number for the same animal in both views. So the collapse the ledger
-line counts is drawn: t89 and t83 both become 1.
+ledger line ARE. The right pair carries the identity the app assigned -- `ID 1`,
+`ID 2`, `ID 3`, the same number for the same animal in both views. So the collapse
+the ledger line counts is drawn: T 89 and T 83 both become ID 1.
 
 Labels are placed above each detection's own recorded bbox (`details[].box`, source
 pixels), pushed apart vertically when two animals are in contact -- the normal case
@@ -106,12 +112,15 @@ shipped IDENTITY_COLORS: those start #00ff00, #ff00ff, #00ffff, and under
 deuteranopia the green and magenta converge -- the two animals a reader is meant to
 tell apart become the same colour. The app on disk is deliberately untouched.
 
-SKELETON EDGES: the tiles are re-exported with the app's skeleton edge set
-overridden to the complete 26-edge plotting skeleton (figs/_drive.mjs
-setSkeletonEdges / MOUSE_EDGES, from src/skeleton_style.py) so the animals read
-as mice rather than spiky lines (Eric 2026-08-16). Display-only: nothing on the
-tracking/triangulation path reads skeleton.edges, and the manifests' numeric
-payloads were diff-verified unchanged. The tiles remain the app's own canvases.
+SKELETON EDGES: drawn by matplotlib from `skeleton_style.MOUSE_EDGES` (the
+complete 26-edge plotting skeleton), so the animals read as mice rather than
+spiky lines. The driver's app-side edge override (setSkeletonEdges) no longer
+affects these tiles' look -- with `overlay: false` the app draws nothing into
+them; it only shapes the 3D viewport exports the panel does not use. The node
+ORDER of `details[].points` is the session skeleton's, which the manifest
+records as `skeletonNodes`; it is checked against SLAP_NODES below rather than
+assumed. Stroke weights: Fig 13 tunes lw=1.23 / ms=2.82 for ~90 mm panes; these
+tiles are ~30 mm tall, so POSE_LW / POSE_MS below are scaled down together.
 
     python3 figs/panels/fig1_02_tracking.py
 """
@@ -123,7 +132,9 @@ import matplotlib.pyplot as plt
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.data_loader import OUT, load  # noqa: E402
 from src.style import (MUTED, GREY, INK, SPAN, deposit, mm, save, tile, use)  # noqa: E402
+from src.skeleton_style import SLAP_NODES, draw_pose_overlay  # noqa: E402
 
+import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 
 #: The two cameras shown. Deliberately one overhead and one side view, so the
@@ -156,6 +167,23 @@ LABEL_CONTRAST = 3.5
 LABEL_GAP_PT = 1.8
 #: One typographic point in millimetres.
 MM_PER_PT = 25.4 / 72.0
+
+#: Skeleton stroke weights, in ON-PAGE points (draw_pose_overlay's units for a
+#: true-size figure). Fig 13's own values (lw=1.23, ms=2.82) are tuned for its
+#: ~90 mm camera panes; these tiles print the animals at ~30 mm, so both are
+#: scaled down together -- far enough that two mice in contact stay two mice
+#: (crisp thin lines, tight dots), not so far that the edges go to hairlines at
+#: this print size. Judged visually against fig13c/13d. Shared by
+#: fig1_03_reconstruction.py's video tile so 1c-after and 1d-left match.
+POSE_LW = 0.85
+POSE_MS = 1.9
+#: The dots' white rim, scaled with the marks (Fig 13 uses 0.6 at ms=2.82).
+POSE_DOT_EDGE_LW = 0.45
+
+
+def pose_points(d):
+    """`details[].points` ([x, y] | None per node) as an (N, 2) float array."""
+    return np.array([p if p else (np.nan, np.nan) for p in d["points"]], float)
 
 
 def bbox_for(manifest, cam):
@@ -198,12 +226,14 @@ def on_white(hex_color, target=LABEL_CONTRAST):
 def short_label(d, stage):
     """The label this detection carries IN THIS TILE, and the colour to set it in.
 
-    Left tiles: the tracker's own name, shortened `track_89` -> `t89` exactly as the
-    legacy figure did -- the full form is three times as wide and would not fit
-    beside a second animal. Right tiles: the identity, 1-based (`id_0` -> `1`), or
-    `?` for a detection re-ID did not assign. `?` is set in INK rather than in the
-    detection's leftover per-track colour, because an identity colour is precisely
-    what it does not have.
+    Left tiles: the tracker's own name, shortened `track_89` -> `T 89` (Eric,
+    2026-08-25: "the tracks should say T 82 T 89, T 94, etc." -- was `t89`; the
+    full `track_89` form is three times as wide and would not fit beside a second
+    animal). Right tiles: the identity, 1-based, as `ID 1` (`id_0` -> `ID 1`;
+    same instruction: "instead of the ids saying 1 2 3 they should say ID 1,
+    ID 2, ID 3"), or `?` for a detection re-ID did not assign. `?` is set in INK
+    rather than in the detection's leftover per-track colour, because an
+    identity colour is precisely what it does not have.
 
     The `?` branch does NOT fire on the frame this panel ships (276: every detection
     assigned). It is kept because it is the honest rendering of an unassigned
@@ -211,10 +241,10 @@ def short_label(d, stage):
     surplus detection and the artwork must say so rather than quietly drop it.
     """
     if stage == "before":
-        return d["track"].replace("track_", "t"), d["color"] or "#000000"
+        return d["track"].replace("track_", "T "), d["color"] or "#000000"
     if d.get("identity"):
         tail = str(d["identity"]).rsplit("_", 1)[-1]
-        return (str(int(tail) + 1) if tail.isdigit() else tail), d["color"] or "#000000"
+        return (f"ID {int(tail) + 1}" if tail.isdigit() else tail), d["color"] or "#000000"
     return "?", INK
 
 
@@ -275,6 +305,14 @@ def main():
         "views_missing_an_identity": len(led["viewsMissingAnIdentity"]),
     }]), 1, "fig1c_reid_ledger.csv")
 
+    # The overlays are drawn from `details[].points`, whose rows are in the
+    # SESSION skeleton's node order -- checked against the plotting skeleton's,
+    # not assumed, because a silently re-ordered skeleton would draw edges
+    # between the wrong joints and still look superficially mouse-like.
+    if j.get("skeletonNodes") != SLAP_NODES:
+        sys.exit(f"fig1.json skeletonNodes != skeleton_style.SLAP_NODES:\n"
+                 f"  manifest: {j.get('skeletonNodes')}\n  expected: {SLAP_NODES}")
+
     tiles = []
     for stage, _ in STAGES:
         for cam in CAMS:
@@ -285,7 +323,7 @@ def main():
             p = OUT / f"{stage}-f{j['frame']}-{cam}.png"
             if not p.exists():
                 sys.exit(f"missing figs/out/{p.name} — run `node figs/fig1_tracking.mjs`")
-            tiles.append((p, bbox_for(j[stage], cam), cam))
+            tiles.append((p, bbox_for(j[stage], cam), cam, stage))
 
     w = SPAN["full"]
     H = 40.0
@@ -309,7 +347,7 @@ def main():
     fig.get_layout_engine().set(rect=(0, 0.0, 1, 0.905), wspace=0.01,
                                 w_pad=0.004, h_pad=0.004)
     crops = []
-    for ax, (p, bbox, cam) in zip(axes, tiles):
+    for ax, (p, bbox, cam, stage) in zip(axes, tiles):
         # bbox=None: read the frame whole, then crop by setting the view limits.
         # imshow puts source pixels in data coordinates, so the axes shows exactly
         # the window asked for, keeps aspect='equal' (no stretching), and the badge
@@ -322,12 +360,22 @@ def main():
         # camera has to be identified; and panel d badges the same view `cam 0 mid`,
         # so dropping the index here made one figure name one camera two ways.
         tile(ax, p, None, badge=cam.replace("Camera", "cam ").replace("_", " "),
-             corner="lower left")
+             corner="lower right")
         sh, sw = ax.images[0].get_array().shape[:2]
         x0, y0, x1, y1 = crop_to_aspect(bbox, sw, sh, TILE_ASPECT, TILE_PAD)
         ax.set_xlim(x0, x1)
         ax.set_ylim(y1, y0)           # imshow's y axis runs downwards
         crops.append((x0, y0, x1, y1))
+        # The skeletons, Fig 13-style, over the clean frame. Before-pair =
+        # per-camera track colours, after-pair = identity colours -- both are
+        # `details[].color`, recorded by the app's own colour function at export
+        # time. Points are source pixels = imshow data coordinates; NaN rows
+        # (nodes SLEAP did not detect, e.g. cam 7's t95 carries 11/15) are
+        # skipped by draw_pose_overlay. zorder below the label chips (6).
+        for d in details_for(j[stage], cam):
+            draw_pose_overlay(ax, pose_points(d), d["color"] or "#000000",
+                              lw=POSE_LW, ms=POSE_MS,
+                              dot_edge_lw=POSE_DOT_EDGE_LW, zorder=4.0)
     # constrained_layout only places the axes when the figure is drawn; before that
     # `get_position()` still returns the DEFAULT subplot params (left=0.125,
     # right=0.9), which put both headings ~7 mm to the right of their own pair.

@@ -7,17 +7,25 @@
  * track/identity each carries, and the exact colour the app drew it in. The
  * composer crops tight, lays them out large, and adds the arrows and labels.
  *
- * Nothing is mocked: the tiles are the app's own canvases (video + overlay) after
- * the real pipeline runs on real data (figs/session -- 8 cameras, 3 mice, 15-node
- * skeleton, 60 fps, trimmed from 20260605_133431-HardFight).
+ * Nothing is mocked: the tiles are CLEAN video frames (`exportViews` with
+ * `overlay: false`) after the real pipeline runs on real data (figs/session --
+ * 8 cameras, 3 mice, 15-node skeleton, 60 fps, trimmed from
+ * 20260605_133431-HardFight). SINCE 2026-08-25 the app's burned-in canvas
+ * overlays are NOT composited into the tiles: the panels draw their own Fig 13
+ * -style overlays in matplotlib (src/skeleton_style.draw_pose_overlay) from the
+ * per-node `points` every `details[]` entry carries -- source-image pixels, in
+ * the session skeleton's node order, which the manifest records as
+ * `skeletonNodes` so the panel can verify it against SLAP_NODES. Colors, boxes
+ * and labels still come from the manifest exactly as before (the app's own
+ * color function).
  *
- * The skeleton EDGE SET is overridden to the complete 26-edge plotting skeleton
- * (setSkeletonEdges / MOUSE_EDGES, from src/skeleton_style.py) before any export
- * (Eric 2026-08-16): the session's own sparse edge list reads as spiky lines
- * rather than a mouse at print size. Display-only -- nodes, detections, tracking
- * and triangulation are untouched (nothing on those paths reads skeleton.edges),
- * and the manifest's ledger/stats were diff-verified unchanged against the
- * pre-override run.
+ * The skeleton EDGE SET is still overridden to the complete 26-edge plotting
+ * skeleton (setSkeletonEdges / MOUSE_EDGES, from src/skeleton_style.py) before
+ * any export (Eric 2026-08-16). With overlay:false it no longer affects the
+ * video tiles' look (matplotlib draws MOUSE_EDGES itself); it is kept because
+ * the 3D viewport exports below still read it, and it remains display-only --
+ * nodes, detections, tracking and triangulation are untouched (nothing on those
+ * paths reads skeleton.edges).
  *
  * Three states of the SAME frame:
  *   before-*   per-camera SLEAP tracks, coloured BY TRACK, Tracks timeline.
@@ -31,6 +39,14 @@
  *
  * Writes figs/out/{before,after}-f<FRAME>-<cam>.png (1280x1024), the 3D crops,
  * the two timelines, and figs/out/fig1.json.
+ *
+ * SINCE 2026-08-25 the two 3D exports (tri3d-camview.png / tri3d-rig.png) are NO
+ * LONGER ON THE PANEL: Fig 1d's 3D tiles are Blender renders (Eric: "nice blender
+ * renders ... i think they look like a mess atm") -- see figs/fig1d_pose_export.mjs
+ * -> figs/fig1_hardfight_scene.py -> blender-images/fig1d_scene.py. The exports and
+ * their manifest fields are still written (they document the app's own viewport and
+ * the rigFit/camScreen numbers CAPTIONS.md used to quote), but only the video tile
+ * and fig1.json's frame/palette/stats feed panels/fig1_03_reconstruction.py now.
  *
  * Usage: node figs/fig1_tracking.mjs     (env: PORT, FRAME, NANIMALS, CAMS, VIEW_CAM)
  */
@@ -103,11 +119,18 @@ try {
     // Complete plotting skeleton for every tile, incl. the pre-tracking "before"
     // exports (display-only; see header note).
     const skelEdges = await setSkeletonEdges(page);
+    // The session skeleton's node ORDER: `details[].points` rows are in this
+    // order, and the panels' draw_pose_overlay assumes SLAP_NODES -- recorded so
+    // the panel can verify instead of assuming.
+    const skeletonNodes = await page.evaluate(() => {
+        const s = window.__lucid.state.session;
+        return s && s.skeleton ? [...s.skeleton.nodes] : null;
+    });
 
     // ---- BEFORE: per-camera tracks -------------------------------------------
     await setColorMode(page, 'tracks');
     await setTimelineMode(page, 'tracks');
-    const before = await exportViews(page, { cams, prefix: 'before', brightness: BRIGHT });
+    const before = await exportViews(page, { cams, prefix: 'before', brightness: BRIGHT, overlay: false });
     await shootEl(page, '#timelineContainer', 'before-timeline');
 
     // ---- AFTER: cross-view identities ----------------------------------------
@@ -122,7 +145,7 @@ try {
     await gotoFrame(page, FRAME);
     await setColorMode(page, 'id');
     await setTimelineMode(page, 'identities');
-    const after = await exportViews(page, { cams, prefix: 'after', brightness: BRIGHT });
+    const after = await exportViews(page, { cams, prefix: 'after', brightness: BRIGHT, overlay: false });
     await shootEl(page, '#timelineContainer', 'after-timeline');
 
     // ---- 3D: triangulated, viewed from a real camera --------------------------
@@ -279,6 +302,7 @@ try {
         brightness: BRIGHT, overlayStyle: PRINT_STYLE, cameras: cams,
         tracked, triangulated: tri, stats, ledger, identityPalette: palette,
         skeletonEdges: skelEdges,
+        skeletonNodes,
         distinctTrackLabels: detKeys.size, distinctTrackNames: distinctNames.size,
         before, after,
         timelines: { before: 'before-timeline.png', after: 'after-timeline.png' },

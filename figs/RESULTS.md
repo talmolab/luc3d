@@ -25,9 +25,10 @@ in one view and track 83 in another. After re-identification the frame holds thr
 identities, one per animal in every view, with 24 of the 25 detections assigned. The
 one left over is a duplicate detection of an already-matched animal in a view the panel
 does not show, which one-to-one assignment correctly refuses. Figure 1D triangulates
-that frame and fills all 45 of its 3D keypoints, placing the reconstruction at one
-camera's own pose and field of view so that it can be compared directly against that
-camera's video.
+that frame and fills all 45 of its 3D keypoints, showing the reconstructed poses on
+the arena floor plane fitted from the animals' own movement, and the rig that
+produced them: that footprint extruded into a volume, ringed by the calibrated
+cameras.
 
 Figure 1E places the tool among seven existing packages. Reprojection-aided labelling
 predates this work: Label3D and JARVIS both provide it. No other tool in the table

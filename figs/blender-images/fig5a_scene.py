@@ -47,16 +47,19 @@ import cage_scene as cs  # noqa: E402  (materials, primitives, animals, rig)
 
 VIEWS_JSON = os.path.join(HERE, "..", "out", "fig5_views.json")
 
-# fig5's two animals, as in every other fig5 panel (Set2 teal / pink)
-CA, CB = "#66C2A5", "#E78AC3"
+# fig5's two animals -- male/female (blue/red), matching every other fig5 panel
+# (2026-08-21: was Set2 teal/pink, retired once every other fig5 panel moved to
+# explicit male=blue/female=red; this was the one place still carrying the old
+# palette, so the render disagreed with its own figure).
+CA, CB = "#4393C3", "#D6604D"
 # Color-space compensation (2026-08-16): cage_scene.hex2rgba feeds raw sRGB
 # component values (/255) straight into Blender's LINEAR color sockets, which
 # lightens every material well above its intended color — the systemic pastel
 # wash in these renders. Rather than change cage_scene (its reference renders
-# are approved as-is), we pre-LINEARIZE fig5's Set2 hexes (sRGB EOTF), so the
+# are approved as-is), we pre-LINEARIZE fig5's hexes (sRGB EOTF), so the
 # raw-/255 interpretation lands on the correct linear values and the lit mice
-# match the 2D projection views drawn in the true Set2.
-CA_LIT, CB_LIT = "#1b6e4d", "#a3346f"  # linearized Set2 x0.8 (lighting lift)
+# match the 2D projection views drawn in the true male/female colours.
+CA_LIT, CB_LIT = "#0b3c6f", "#89180f"  # linearized male/female x0.8 (lighting lift)
 
 
 def load_pose(path):

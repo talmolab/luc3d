@@ -1,32 +1,30 @@
 #!/usr/bin/env python3
 """
-Fig 5d -- the approach: they close, hold, and separate; the initiator waits.
+Fig 5d -- individual speed before the display: male still travelling, female
+already still.
 
-TWO SERIES, TWO THINGS.
+BOX-AND-WHISKER, MALE VS FEMALE, NOT A TIME COURSE (revised 2026-08-21, third
+version of this panel -- restored to male/female speed after two other panels
+occupied this slot in between; see fig5_13_angle_rose.py and this file's own
+earlier history). Draws the comparison the same way Fig 5e/5f draw theirs -- two
+boxes, one number each -- for a single, focused "who is faster right before onset"
+question rather than a continuous curve. The window is the same 0.5 s immediately
+before onset `speed_bl_s_t0`/`speed_bl_s_t1` (figs/fig5_upright.py) define.
 
-MUTUAL VELOCITY (left axis) is the rate of change of the tail-base separation, in body
-lengths per second. Negative is closing. It runs at about -0.1 through the approach,
-reaches -0.18 at contact, and crosses zero and reverses to +0.09 within a second --
-so the display is a closing, a hold, and a withdrawal rather than two animals drifting
-past each other. Zero is marked because the sign is the content.
+OVERALL SPEED, NOT EACH ANIMAL'S OWN BASELINE (revised again, same day): this used
+to divide by each animal's own median speed (`speed_rel_t0`/`speed_rel_t1`, still
+computed and deposited), so a slow animal that sped up a little could outscore a
+fast animal that barely changed pace. Plain body-lengths/second answers a plainer
+question -- who is moving faster, full stop -- at the cost of not correcting for
+the two animals' different typical paces (see Fig 5b/5g for the own-baseline
+version of individual differences).
 
-INDIVIDUAL SPEED (right axis), each animal's own tail-base speed divided by its OWN
-whole-session median, split by who started the display. This is the panel's finding:
-the INITIATOR IS THE SLOWER ANIMAL THROUGHOUT -- 0.66x its baseline a second before
-contact against the follower's 1.07x. The initiator stops and rears; the follower is
-still travelling and closes the distance. Both drop at contact (0.38x and 0.87x),
-which is the stillness Fig 5e quantifies.
+THE FINDING. Male: median 0.38 body lengths/s. Female: median 0.23 -- already
+near-still. Paired across all 538 displays with both resolved, his speed exceeds
+hers (Wilcoxon signed-rank P = 6.5e-22).
 
-WHY EACH ANIMAL IS NORMALISED TO ITSELF. Absolute speeds would mix body size, cage and
-recording day into a comparison whose whole point is initiator versus follower within
-the same event. Dividing by each animal's own median removes all of that and leaves the
-contrast.
-
-Curves are the across-session median of per-session medians; bands p25-p75 over the 37
-sessions. The window is +/-2 s around display onset (t = 0 is when the SECOND animal
-reaches the rear threshold, so the initiator's own rise happens before it).
-
-Source: figs/out/fig5_upright.json `peri.{dsep,spd_init,spd_follow}`.
+Source: figs/out/fig5_upright.json `events[].{speed_bl_s_t0,speed_bl_s_t1}`
+        (figs/fig5_upright.py).
 
     python3 figs/panels/fig5_09_upright_velocity.py
 """
@@ -35,60 +33,69 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from scipy import stats
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.data_loader import load  # noqa: E402
-from src.style import (INK, MUTED, deposit, panel, save,  # noqa: E402
-                       text_legend, use)
+from src.style import INK, deposit, panel, save, use  # noqa: E402
 
-CV = "#FC8D62"       # mutual velocity
-CI = "#66C2A5"       # initiator
-CF = "#E78AC3"       # follower
+CM, CFEM = "#4393C3", "#D6604D"      # male, female -- matches 5b/5e/5f/5g
+
+
+def whisker_extent(v):
+    """matplotlib's own boxplot whisker rule (Q3 + 1.5*IQR, capped at the furthest
+    point actually inside it, and the low-side mirror) -- so a significance
+    bracket can sit just above the real drawn whisker, not an approximation of it."""
+    q1, q3 = np.percentile(v, [25, 75])
+    iqr = q3 - q1
+    hi = v[v <= q3 + 1.5 * iqr].max()
+    lo = v[v >= q1 - 1.5 * iqr].min()
+    return lo, hi
 
 
 def main():
     use()
     d = load("fig5_upright.json")
-    t = np.asarray(d["t"], float)
-    p = d["peri"]
-    for k in ("dsep", "spd_init", "spd_follow"):
-        if p.get(k) is None:
-            raise SystemExit(
-                f"fig5_upright.json has no `peri.{k}` -- re-run figs/fig5_upright.py "
-                f"(an earlier version computed these per session and dropped them "
-                f"in the summary step)")
-    deposit(pd.DataFrame({
-        "t_s": t, "sep_velocity_bl_s": p["dsep"]["p50"],
-        "initiator_speed_rel": p["spd_init"]["p50"],
-        "follower_speed_rel": p["spd_follow"]["p50"],
-    }), 5, "fig5d_upright_velocity.csv")
+    ev = pd.DataFrame(d["events"])
+    deposit(ev[["speed_bl_s_t0", "speed_bl_s_t1", "speed_rel_t0", "speed_rel_t1"]],
+            5, "fig5d_upright_velocity.csv")
 
-    fig, ax = panel("third", "std", key=3)
-    ax.fill_between(t, p["dsep"]["p25"], p["dsep"]["p75"], color=CV, alpha=0.16, lw=0)
-    ax.plot(t, p["dsep"]["p50"], color=CV, lw=1.9, zorder=4)
-    ax.axhline(0, color=INK, lw=0.7, ls="-", alpha=0.35, zorder=1)
-    ax.axvline(0, color=INK, lw=0.7, ls="--", alpha=0.55, zorder=1)
-    ax.set_xlabel("time from display onset (s)")
-    ax.set_ylabel("separation velocity\n(body lengths / s) · − = closing")
-    lo = min(p["dsep"]["p25"]); hi = max(p["dsep"]["p75"])
-    pad = 0.35 * (hi - lo)
-    ax.set_ylim(lo - pad * 0.3, hi + pad)
-    # THE SIGN CONVENTION LIVES IN THE Y LABEL, not as a floating annotation. Two
-    # placements were tried inside the axes (at the trough, and below the zero rule
-    # hard left) and both came back 91-96% inked -- the velocity band covers the full
-    # width of this panel at every t. A label cannot collide with the data.
+    m = ev["speed_bl_s_t0"].to_numpy(float)
+    f = ev["speed_bl_s_t1"].to_numpy(float)
+    both = np.isfinite(m) & np.isfinite(f)
+    m, f = m[both], f[both]
+    w = stats.wilcoxon(m - f)
+    print(f"  male median {np.median(m):.3f}  female median {np.median(f):.3f}  "
+          f"paired Wilcoxon n={both.sum()} P={w.pvalue:.3g}")
 
-    ax2 = ax.twinx()
-    for key, c in (("spd_init", CI), ("spd_follow", CF)):
-        ax2.plot(t, p[key]["p50"], color=c, lw=1.5, ls=(0, (3, 1.5)), zorder=3)
-    ax2.set_ylabel("speed / own baseline", fontsize=6.5, color=MUTED)
-    ax2.tick_params(axis="y", labelsize=6.5, colors=MUTED)
-    ax2.set_ylim(0, 1.55)
-    ax2.spines["top"].set_visible(False)
-    ax2.spines["right"].set_color("#BBBBBB")
+    # THIRD/STD, matching 5e/5f's box-and-whisker footprint exactly.
+    fig, ax = panel("third", "std")
+    for x, data, col in ((0, m, CM), (1, f, CFEM)):
+        ax.boxplot(data, positions=[x], widths=0.52, patch_artist=True,
+                   showfliers=False,
+                   medianprops=dict(color="white", lw=1.4),
+                   whiskerprops=dict(color=col, lw=1.0),
+                   capprops=dict(color=col, lw=1.0),
+                   boxprops=dict(facecolor=col, edgecolor=col, lw=0.8))
 
-    text_legend(ax, [("separation velocity", CV), ("initiator speed", CI),
-                     ("follower speed", CF)])
+    lo_m, hi_m = whisker_extent(m)
+    lo_f, hi_f = whisker_extent(f)
+    lo, hi = min(lo_m, lo_f, 0.0), max(hi_m, hi_f)
+    pad = 0.12 * (hi - lo)
+
+    # SIGNIFICANCE BRACKET, same idiom as 5e/5f.
+    y = hi + 0.5 * pad
+    ax.plot([0, 0, 1, 1], [y - 0.1, y, y, y - 0.1], color=INK, lw=0.9,
+            solid_joinstyle="miter", clip_on=False)
+    stars = "***" if w.pvalue < 1e-3 else ("**" if w.pvalue < 1e-2 else "*")
+    ax.text(0.5, y + 0.06, stars, ha="center", va="bottom", color=INK,
+            fontsize=8.5, fontweight="bold", clip_on=False)
+
+    ax.set_xticks([0, 1])
+    ax.set_xticklabels(["male", "female"])
+    ax.set_xlim(-0.62, 1.62)
+    ax.set_ylim(lo - pad, y + 3 * pad)
+    ax.set_ylabel("speed, 0.5 s before onset\n(body lengths / s)")
     save(fig, 5, "d", "upright_velocity")
 
 

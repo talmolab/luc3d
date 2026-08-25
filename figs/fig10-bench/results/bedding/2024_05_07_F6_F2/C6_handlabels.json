@@ -1,0 +1,27 @@
+{
+ "idf1": 0.492806,
+ "accuracy": 0.5,
+ "grouping_accuracy": 0.890511,
+ "frames_perfectly_grouped": 0.692308,
+ "switches": 19,
+ "sw_per_100k": 6737.589,
+ "coverage": 0.971631,
+ "n_gt_dets": 282,
+ "n_pred_dets": 274,
+ "unmatched_det": 0,
+ "identities": 2,
+ "animals": 2,
+ "frames": 38001,
+ "runtimeSeconds": 0.052,
+ "fps": 750,
+ "condition": {
+  "noise_px": "human",
+  "drop_instance": 0,
+  "drop_node": 0,
+  "occl_dist": 0,
+  "occl_prob": 0,
+  "com_only": false,
+  "seed": 6
+ },
+ "session": "/root/vast/eric/s-DANNCE-data/s-DANNCE-BEDDING/2024_05_07_F6_F2"
+}

@@ -34,6 +34,17 @@ Unit of analysis is the SESSION, as everywhere else in this figure: each session
 contributes one curve per condition and the summary is the across-session median with
 p25-p75.
 
+DIRECTIONAL SPLIT, near_i0/near_i1 (2026-08-21). The near condition above pools BOTH
+directions -- animal 0 initiating and animal 1 initiating -- into one curve. In
+BMimica (always exactly 2 animals, track 0 always male and track 1 always female, see
+fig5_10_leader.py) that pooling hides whether the coupling is symmetric: does the
+male's rear make the female more likely to rear just as much as the reverse? near_i0
+is the near curve restricted to onsets BY animal 0 (male, in BMimica); near_i1 to
+onsets by animal 1 (female). Computed only when A == 2, so a >2-animal SLAP-2M
+session (when --slap-animals 0) never contributes a spurious "direction" -- with more
+than two animals "animal 0 initiated" is one of several ordered pairs sharing that
+label, not a single relationship.
+
     figs/.venv/bin/python figs/fig5_rear_coupling.py
 """
 from __future__ import annotations
@@ -108,16 +119,40 @@ def session_coupling(tracks_mm, fps, seed=0):
     gap = int(round(MERGE_GAP_S * fps))
 
     rear = np.zeros((F, A), bool)
-    onsets = {}
+    onsets, bouts = {}, {}
     for a in range(A):
         rr = runs(neck[:, a, 2] / L[a] > REAR_FRAC, min_len, gap)
+        bouts[a] = rr
         onsets[a] = [s for s, _ in rr if lag <= s < F - lag]
         for s, e in rr:
             rear[s:e, a] = True
 
     rng = np.random.default_rng(seed)
-    acc = {"all": [], "near": [], "far": [], "near_q": [], "far_q": [], "null": []}
-    n_on = {"all": 0, "near": 0, "far": 0, "near_q": 0, "far_q": 0}
+    # near_i0/near_i1 (2026-08-21): the SAME near condition, split by WHICH TRACK
+    # initiated -- track 0 vs track 1 -- rather than pooled over both directions.
+    # Meaningful only at A==2 (both BMimica and the --slap-animals 2 SLAP-2M subset
+    # this feeds fig5g from), where "track 0 initiated" and "track 1 initiated" are
+    # each exactly one of the two ordered pairs, not a mix of several. In BMimica
+    # track 0 is always male and track 1 always female (see fig5_10_leader.py).
+    #
+    # READ THE DIRECTION CAREFULLY: near_i0 (male onset) rising almost instantly to
+    # ~4.7x at lag 0 does NOT mean the male's rear causes a fast female response --
+    # it means most of his near rear onsets are him JOINING a rear the female already
+    # started (see already_mid_bout below). near_i1 (female onset) starting BELOW
+    # chance at lag 0 and rising over ~1 s means the male is usually not yet rearing
+    # when she starts and catches up afterward -- consistent with, not opposed to,
+    # her being the leader in Fig 5f.
+    acc = {"all": [], "near": [], "far": [], "near_q": [], "far_q": [], "null": [],
+           "near_i0": [], "near_i1": []}
+    n_on = {"all": 0, "near": 0, "far": 0, "near_q": 0, "far_q": 0,
+            "near_i0": 0, "near_i1": 0}
+    # ALREADY-MID-BOUT AT ONSET, per direction: of animal i's near rear onsets, how
+    # many happen while j is ALREADY mid-rear (j's bout started strictly before i's
+    # onset) rather than not-yet-rearing. This is what actually explains near_i0 vs
+    # near_i1's shapes -- see the comment above -- and is reported as a scalar
+    # (per-session counts), not a lag curve.
+    already = {"i0": 0, "i1": 0}
+    already_tot = {"i0": 0, "i1": 0}
     base_rates = []
     sep_bl = []          # separation at every onset, for the deposit
     for i in range(A):
@@ -140,6 +175,18 @@ def session_coupling(tracks_mm, fps, seed=0):
             if near.any():
                 acc["near"].append(obs[near].mean(axis=0) / base)
                 n_on["near"] += int(near.sum())
+                if A == 2:
+                    key = "near_i0" if i == 0 else "near_i1"
+                    acc[key].append(obs[near].mean(axis=0) / base)
+                    n_on[key] += int(near.sum())
+                    # ALREADY-MID-BOUT: of i's near onsets, how many land strictly
+                    # inside a bout of j's that started earlier (j "already up") vs
+                    # land before any of j's bouts have started ("j not yet up").
+                    akey = "i0" if i == 0 else "i1"
+                    for s in idx[near]:
+                        already_tot[akey] += 1
+                        if any(bs < s < be for bs, be in bouts[j]):
+                            already[akey] += 1
             if (~near).any():
                 acc["far"].append(obs[~near].mean(axis=0) / base)
                 n_on["far"] += int((~near).sum())
@@ -172,7 +219,8 @@ def session_coupling(tracks_mm, fps, seed=0):
            "n_onsets": n_on, "base_rate": float(np.mean(base_rates)),
            "sep_bl_p33": float(np.percentile(sep_bl, 33.3)) if sep_bl else None,
            "sep_bl_p50": float(np.median(sep_bl)) if sep_bl else None,
-           "sep_bl_p67": float(np.percentile(sep_bl, 66.7)) if sep_bl else None}
+           "sep_bl_p67": float(np.percentile(sep_bl, 66.7)) if sep_bl else None,
+           "already_mid_bout": already, "already_tot": already_tot}
     for k, v in acc.items():
         out[k] = np.nanmean(np.asarray(v), axis=0).tolist() if v else None
     return out
@@ -229,12 +277,35 @@ def summarise(rows, corpus):
     t = np.arange(-lag, lag + 1) / fps
     out = {"corpus": corpus, "n_sessions": len(rows), "t": t.tolist(),
            "fps_min": fps,
-           "n_onsets": {k: int(sum(r["n_onsets"][k] for r in rows))
-                        for k in ("all", "near", "far", "near_q", "far_q")},
+           "n_onsets": {k: int(sum(r["n_onsets"].get(k, 0) for r in rows))
+                        for k in ("all", "near", "far", "near_q", "far_q",
+                                  "near_i0", "near_i1")},
            "sep_bl": {q: float(np.median([r[f"sep_bl_p{q}"] for r in rows
                                           if r.get(f"sep_bl_p{q}") is not None]))
-                      for q in ("33", "50", "67")}}
-    for key in ("all", "near", "far", "near_q", "far_q", "null"):
+                      for q in ("33", "50", "67")},
+           # ALREADY-MID-BOUT (2026-08-21): of animal i's near rear onsets, the
+           # fraction where j was ALREADY mid-rear rather than not-yet-rearing. This
+           # is what actually separates near_i0 from near_i1's shapes -- see
+           # session_coupling's comment. Pooled (every onset counted once) and as
+           # the across-session median of each session's own fraction (sessions
+           # with < 10 onsets in that direction excluded from the median -- too few
+           # to give a stable per-session fraction).
+           "already_mid_bout": {
+               akey: {
+                   "pooled": (sum(r["already_mid_bout"][akey] for r in rows) /
+                              sum(r["already_tot"][akey] for r in rows))
+                   if sum(r["already_tot"][akey] for r in rows) else None,
+                   "median_session": float(np.median([
+                       r["already_mid_bout"][akey] / r["already_tot"][akey]
+                       for r in rows if r["already_tot"].get(akey, 0) >= 10]))
+                   if sum(1 for r in rows if r["already_tot"].get(akey, 0) >= 10)
+                   else None,
+                   "n_sessions": sum(1 for r in rows
+                                     if r["already_tot"].get(akey, 0) >= 10),
+               } for akey in ("i0", "i1")
+           } if all("already_mid_bout" in r for r in rows) else None}
+    for key in ("all", "near", "far", "near_q", "far_q", "null",
+                "near_i0", "near_i1"):
         cur, dropped = [], 0
         for r in rows:
             c = r[key]
@@ -318,7 +389,8 @@ def main():
               f"far {s['n_onsets']['far']:,}) ===")
         print(f"  separation at onset (body lengths): p33 {s['sep_bl']['33']:.2f}  "
               f"p50 {s['sep_bl']['50']:.2f}  p67 {s['sep_bl']['67']:.2f}")
-        for key in ("all", "near", "far", "near_q", "far_q", "null"):
+        for key in ("all", "near", "far", "near_q", "far_q", "null",
+                    "near_i0", "near_i1"):
             g = s[key]
             if not g:
                 continue
@@ -326,6 +398,15 @@ def main():
             k = int(np.argmax(mu))
             print(f"  {key:5}  at lag 0 {mu[z]:5.2f}x chance   peak {mu[k]:5.2f}x "
                   f"at {t[k]:+.2f} s")
+        amb = s.get("already_mid_bout")
+        if amb:
+            for akey, tag in (("i0", "animal-0 (male in BMimica) onset"),
+                              ("i1", "animal-1 (female in BMimica) onset")):
+                a = amb[akey]
+                if a["pooled"] is not None:
+                    print(f"  already-mid-bout at {tag}: pooled {a['pooled']:.1%}, "
+                          f"session median {a['median_session']:.1%} "
+                          f"(n={a['n_sessions']} sessions)")
     print(f"\n[json] {args.out}")
 
 

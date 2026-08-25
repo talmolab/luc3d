@@ -160,19 +160,27 @@ def pooled_multi(pv, counts):
     return sum(multi) / len(multi), w, len(multi), sign_p(w, len(multi))
 
 
-def main(variant=False, corrected=True):
+#: fig11-compact type size, source pt (see the COMPACT PASS comment in main):
+#: 11.5 pt at the fig11 block's ~0.48 vector scale prints ~5.5 pt.
+COMPACT_FS = 11.5
+
+
+def main(variant=False, corrected=True, fresh_arm=False):
     use()
-    sl, fresh, ref, tab = arms(variant, corrected)
+    sl, fresh, ref, tab = arms(variant, corrected, fresh_arm)
     pv = sl["paired_vs_sleap"]
     counts = sorted(int(k) for k in pv if k != "all")
 
     if not variant:
         rows = [{"animals": a, "mean": pv[str(a)]["mean"],
+                 "median": float(np.median(pv[str(a)]["per_session"])),
+                 "q1": float(np.percentile(pv[str(a)]["per_session"], 25)),
+                 "q3": float(np.percentile(pv[str(a)]["per_session"], 75)),
                  "ci95_lo": pv[str(a)]["ci95_lo"], "ci95_hi": pv[str(a)]["ci95_hi"],
                  "n_sessions": pv[str(a)]["n_sessions"], "wins": pv[str(a)]["wins"]}
                 for a in counts]
         df = pd.DataFrame(rows)
-        deposit(df, 7, f"{slug('fig7c_by_animals', variant, corrected)}.csv")
+        deposit(df, 7, f"{slug('fig7c_by_animals', variant, corrected, fresh_arm)}.csv")
     else:
         df = pd.DataFrame([{"animals": a, "mean": pv[str(a)]["mean"],
                             "ci95_lo": pv[str(a)]["ci95_lo"],
@@ -209,17 +217,23 @@ def main(variant=False, corrected=True):
     # are the shipped arm's only -- three clouds of 32/35/4/3 sessions in one tick is
     # unreadable, and the shipped arm is the one whose spread the panel is arguing from.
     dx = 0.0 if not variant else 0.24
+    from matplotlib.colors import to_rgba
     for i, r in df.iterrows():
         a = str(int(r.animals))
-        color = LUC3D if r["mean"] > 0 else SLEAP
-        # The sessions themselves, behind the interval: sign-coloured like the
-        # mean, faint, with value-decorrelated golden-ratio jitter.
+        # The sessions themselves, behind the box: sign-coloured, faint, with
+        # value-decorrelated golden-ratio jitter. KEPT under the boxes because the
+        # 3- and 4-animal strata are n = 4 and n = 3 -- a box alone over-implies
+        # a distribution there; the dots ARE the stratum.
         vals = np.asarray(pv[a]["per_session"], float)
         jit = ((np.arange(len(vals)) * 0.6180339887) % 1.0 - 0.5) * 0.30
         for xv, yv in zip(i + jit, vals):
             ax.plot([xv], [yv], "o", color=LUC3D if yv > 0 else SLEAP, ms=2.2,
                     alpha=0.45, mec="none", zorder=2)
         if variant:
+            # The variant's three-arm diagnostic keeps its mean +- CI marks; the
+            # box presentation below is the SHIPPING panel's (Eric, 2026-08-25:
+            # "lets do box and whisker for the per-session paired difference").
+            color = LUC3D if r["mean"] > 0 else SLEAP
             for blk, col, hollow in ((ref, MUTED, False), (fresh, LUC3D, True)):
                 c = blk["paired_vs_sleap"][a]
                 xv = i - dx if col is MUTED else i + dx
@@ -228,16 +242,38 @@ def main(variant=False, corrected=True):
                 ax.plot([xv], [c["mean"]], "o", color=col, ms=4.6,
                         mfc="white" if hollow else col,
                         mec=col if hollow else "white", mew=0.9, zorder=4)
-        ax.plot([i, i], [r.ci95_lo, r.ci95_hi], color=color, lw=1.2, zorder=3)
-        ax.plot([i], [r["mean"]], "o", color=color, ms=6, mec="white", mew=1.0,
-                zorder=4)
-        # Label AWAY from zero -- above a positive mean, below a negative one. The
-        # 3- and 4-animal means are -0.052 and -0.080 (they were -0.030 and -0.028 on
-        # the retired tracker, close enough to the zero rule that a vertically centred
-        # label had the rule running through it -- which is why this exists).
-        up = r["mean"] > 0
-        ax.annotate(f"{r['mean']:+.3f}", (i, r["mean"]), textcoords="offset points",
-                    xytext=(9, 4 if up else -4), color=color, fontsize=6.5,
+            ax.plot([i, i], [r.ci95_lo, r.ci95_hi], color=color, lw=1.2, zorder=3)
+            ax.plot([i], [r["mean"]], "o", color=color, ms=6, mec="white", mew=1.0,
+                    zorder=4)
+            up = r["mean"] > 0
+            ax.annotate(f"{r['mean']:+.3f}", (i, r["mean"]),
+                        textcoords="offset points", xytext=(9, 4 if up else -4),
+                        color=color, fontsize=6.5, va="bottom" if up else "top")
+            continue
+        # BOX AND WHISKER since 2026-08-25 (Eric), in fig2c's house idiom: median,
+        # IQR, whiskers 1.5x IQR, no fliers (the dot cloud already shows every
+        # session). Sign-coloured by the MEDIAN, which is also what is annotated
+        # -- the paired mean stays in the deposit and the caption.
+        med = float(np.median(vals))
+        color = LUC3D if med > 0 else SLEAP
+        ax.boxplot([vals], positions=[i], widths=0.42, whis=1.5, showfliers=False,
+                   manage_ticks=False, patch_artist=True, zorder=3,
+                   boxprops=dict(edgecolor=INK, lw=0.9,
+                                 facecolor=to_rgba(color, 0.18)),
+                   medianprops=dict(color=color, lw=1.6),
+                   whiskerprops=dict(color=INK, lw=0.9),
+                   capprops=dict(color=INK, lw=0.9))
+        # Label AWAY from zero, CENTRED over/under its own box and anchored at
+        # the whisker end -- beside-the-box labels at COMPACT_FS ran into the
+        # neighbouring cell (the 3- and 4-animal labels overlapped on the first
+        # compact rebuild).
+        q1, q3 = np.percentile(vals, [25, 75])
+        wlo = vals[vals >= q1 - 1.5 * (q3 - q1)].min()
+        whi = vals[vals <= q3 + 1.5 * (q3 - q1)].max()
+        up = med > 0
+        ax.annotate(f"{med:+.3f}", (i, whi if up else wlo),
+                    textcoords="offset points", xytext=(0, 5 if up else -5),
+                    color=color, fontsize=COMPACT_FS, ha="center",
                     va="bottom" if up else "top")
 
     if variant:
@@ -260,11 +296,18 @@ def main(variant=False, corrected=True):
             transform=fig.transFigure)
 
     ax.set_xticks(x)
-    # TWO lines, not three: n is the denominator of the win count, so "25/32" prints
-    # both numbers a separate "n = 32" line was printing.
-    ax.set_xticklabels([f"{int(r.animals)}\n{int(r.wins)}/{int(r.n_sessions)}"
-                        for _, r in df.iterrows()])
-    ax.set_xlabel("animals · wins / sessions", labelpad=2)
+    # DEFAULT render: bare animal counts (Eric, 2026-08-25: "in 11c get rid of
+    # the 25/32 30/35 0/4 etc thats annoying" -- the per-stratum wins/n live in
+    # FIGURE-LEGENDS' Fig. 7 C entry). The variant diagnostic keeps the two-line
+    # form: n is the denominator of the win count, so "25/32" prints both numbers
+    # a separate "n = 32" line was printing.
+    if variant:
+        ax.set_xticklabels([f"{int(r.animals)}\n{int(r.wins)}/{int(r.n_sessions)}"
+                            for _, r in df.iterrows()])
+        ax.set_xlabel("animals · wins / sessions", labelpad=2)
+    else:
+        ax.set_xticklabels([str(int(r.animals)) for _, r in df.iterrows()])
+        ax.set_xlabel("animals", labelpad=2)
     # TWO LINES. Rotated, this label sets ~30 mm of type against a ~19 mm axis at
     # this row height, and a rotated label cannot be shrunk by constrained_layout --
     # it is centred on the axes and simply overhangs, so at anything under 52 mm the
@@ -284,18 +327,41 @@ def main(variant=False, corrected=True):
         lim = max([lim] + [abs(b["paired_vs_sleap"][str(a)][k]) * 1.15
                            for b in (ref, fresh) for a in counts
                            for k in ("ci95_lo", "ci95_hi")])
+    # FIG 11 COMPACT PASS (Eric, 2026-08-25: "remobe all the little extra text
+    # from the 11c plot, cant read it anyways. make the numbers bigger, make the
+    # legends bigger"): the DEFAULT render ships inside fig11's 2x2 block at
+    # ~0.48 vector scale, so its brackets and both 6 pt stat notes are OFF that
+    # artwork -- their content already lives in this panel's footnote (build log)
+    # and in FIGURE-LEGENDS' Fig. 7 C entry -- and the type that stays (median
+    # labels, the ahead/behind key, ticks, axis labels) is set at COMPACT_FS,
+    # which prints ~5.5 pt after the shrink. The --variant diagnostic keeps
+    # everything at its original sizes.
     ax.text(0.98, 0.96, "LUC3D ahead", transform=ax.transAxes, ha="right",
-            va="top", color=LUC3D, fontsize=6.5, fontweight="bold")
-    ax.text(0.98, 0.04, "SLEAP ahead", transform=ax.transAxes, ha="right",
-            va="bottom", color=SLEAP, fontsize=6.5, fontweight="bold")
+            va="top", color=LUC3D, fontsize=6.5 if variant else COMPACT_FS,
+            fontweight="bold")
+    # compact render: LOWER LEFT, not lower right -- the 4-animal cell's median
+    # label hangs under its whisker at the bottom right and the two collided on
+    # the first compact rebuild; the lower-left corner is empty (cell 1's spread
+    # is all above zero). The variant keeps its original corner (its bottom band
+    # is the bracket notes').
+    ax.text(0.98 if variant else 0.02, 0.04, "SLEAP ahead",
+            transform=ax.transAxes, ha="right" if variant else "left",
+            va="bottom", color=SLEAP, fontsize=6.5 if variant else COMPACT_FS,
+            fontweight="bold")
+    if not variant:
+        ax.set_ylim(-lim * 1.02, lim * 1.02)
+        ax.tick_params(labelsize=COMPACT_FS)
+        ax.xaxis.label.set_fontsize(COMPACT_FS)
+        ax.yaxis.label.set_fontsize(COMPACT_FS)
 
-    # TWO BRACKETS AND TWO NOTES, in the empty band below the data: one over the
-    # 1-animal cell saying why its +0.141 cannot be a cross-view result, one over the
-    # 2/3/4 cells carrying their pooled statistic. Both notes live BELOW the data
-    # rather than beside it -- placed at the top of the axes the 1-animal note landed
-    # on that cell's own "+0.141" label (23% overlap). `by` hangs a fixed margin
-    # under the LOWEST MARK (dot or CI end) now that session dots are drawn -- the
-    # old fixed -0.37*lim ran through the 2-animal cell's -0.177 session.
+    # TWO BRACKETS AND TWO NOTES, in the empty band below the data (VARIANT ONLY
+    # since the compact pass): one over the 1-animal cell saying why its +0.141
+    # cannot be a cross-view result, one over the 2/3/4 cells carrying their
+    # pooled statistic. Both notes live BELOW the data rather than beside it --
+    # placed at the top of the axes the 1-animal note landed on that cell's own
+    # "+0.141" label (23% overlap). `by` hangs a fixed margin under the LOWEST
+    # MARK (dot or CI end) now that session dots are drawn -- the old fixed
+    # -0.37*lim ran through the 2-animal cell's -0.177 session.
     by = min(all_vals.min(), df.ci95_lo.min()) - lim * 0.16
     ty = by - lim * 0.10
     # The floor is set by the notes' 6 pt lines under `ty`, not symmetrically: a
@@ -306,16 +372,18 @@ def main(variant=False, corrected=True):
     # line of clearance (0.84; 0.68 still left the spine on the last line at 15% inked) or the same spine lands on its last line -- measured the same
     # way, and it is a per-render number rather than a constant for the same reason the
     # 0.52 is.
-    ax.set_ylim(ty - lim * (0.84 if variant else 0.52), lim)
-    for lo, hi in ((-0.28, 0.28), (0.72, 3.28)):
-        ax.plot([lo, hi], [by, by], color=GREY, lw=0.8, zorder=1)
-        for xe in (lo, hi):
-            ax.plot([xe, xe], [by, by + lim * 0.05], color=GREY, lw=0.8, zorder=1)
-    # INK for the notes, GREY for the brackets: the notes carry results and GREY
-    # (#B3B3B3) is a series colour at 2.1:1 on white.
-    ax.text(-0.55, ty, "1 animal: nothing to\nassociate across views",
-            color=INK, fontsize=6, ha="left", va="top", linespacing=1.35)
-    ax.text(1.15, ty,
+    if variant:
+        ax.set_ylim(ty - lim * 0.84, lim)
+        for lo, hi in ((-0.28, 0.28), (0.72, 3.28)):
+            ax.plot([lo, hi], [by, by], color=GREY, lw=0.8, zorder=1)
+            for xe in (lo, hi):
+                ax.plot([xe, xe], [by, by + lim * 0.05], color=GREY, lw=0.8,
+                        zorder=1)
+        # INK for the notes, GREY for the brackets: the notes carry results and
+        # GREY (#B3B3B3) is a series colour at 2.1:1 on white.
+        ax.text(-0.55, ty, "1 animal: nothing to\nassociate across views",
+                color=INK, fontsize=6, ha="left", va="top", linespacing=1.35)
+        ax.text(1.15, ty,
             (f"≥ 2 animals pooled: {m_mean:+.3f}\n"
              f"(n = {m_n}, {m_wins}/{m_n}, P = {m_p:.2f})") if not variant else
             # THREE SHORT LINES, NOT TWO LONG ONES, AND THE WIDTH IS THE BINDING
@@ -386,7 +454,7 @@ def main(variant=False, corrected=True):
             f"SESSIONS: weak, reproducible, never to be averaged away"
             f"\n{pool_note()}")
     footnote(ax, note)
-    save(fig, 7, "c", slug("by_animals", variant, corrected))
+    save(fig, 7, "c", slug("by_animals", variant, corrected, fresh_arm))
 
 
 if __name__ == "__main__":

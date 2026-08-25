@@ -119,9 +119,9 @@ ROW_H = 50.0
 
 
 
-def main(variant=False, corrected=True):
+def main(variant=False, corrected=True, fresh_arm=False):
     use()
-    sl, fresh, ref, _tab = arms(variant, corrected)
+    sl, fresh, ref, _tab = arms(variant, corrected, fresh_arm)
     wv = sl["within_view"]
     am = sl["camera_session_argmax"]
     n_cs = sl["n_camera_sessions"]
@@ -166,7 +166,7 @@ def main(variant=False, corrected=True):
                 zorder=4)
 
     deposit(pd.DataFrame(rows), 7,
-            f"{slug('fig7b_survival', variant, corrected)}.csv")
+            f"{slug('fig7b_survival', variant, corrected, fresh_arm)}.csv")
 
     ax.axvline(MARK, color=GREY, lw=0.8, ls=(0, (1.5, 1.5)), zorder=1)
     # Lower LEFT: every curve starts near 100% and falls rightwards, so this corner
@@ -193,12 +193,26 @@ def main(variant=False, corrected=True):
                   np.asarray(ref["within_view"]["luc3d"]["per_session"]), MUTED,
                   ref["camera_session_argmax"]["luc3d"],
                   ref["n_camera_sessions"])] + block[1:]
-    y0 = 0.22 + 0.09 * (len(block) - 3)
-    for i, (label, v, color, won, ncs) in enumerate(block):
-        ax.text(0.03, y0 - i * 0.09,
-                f"{label}  {int((v >= MARK).sum())}/{len(v)} · {won}/{ncs}",
-                transform=ax.transAxes, ha="left", color=color, fontsize=7,
-                fontweight="bold")
+    # FIG 11 COMPACT PASS (Eric, 2026-08-25: "for 11b only nead LUC3D SLEAP and
+    # ByteTrack no need for 39/74 269/444 etc no need! ... make the legends
+    # bigger"): this render ships inside fig11's 2x2 block at ~0.51 vector scale,
+    # so the DEFAULT render's in-plot key is three bare tracker names at
+    # COMPACT_FS (11 pt here prints ~5.6 pt after the shrink) on wider spacing;
+    # the counts live in FIGURE-LEGENDS' Fig. 7 B entry. The --variant diagnostic
+    # keeps its five annotated lines.
+    COMPACT_FS = 11.0
+    if variant:
+        y0 = 0.22 + 0.09 * (len(block) - 3)
+        for i, (label, v, color, won, ncs) in enumerate(block):
+            ax.text(0.03, y0 - i * 0.09,
+                    f"{label}  {int((v >= MARK).sum())}/{len(v)} · {won}/{ncs}",
+                    transform=ax.transAxes, ha="left", color=color, fontsize=7,
+                    fontweight="bold")
+    else:
+        for i, (label, _v, color, _won, _ncs) in enumerate(block):
+            ax.text(0.03, 0.30 - i * 0.13, label, transform=ax.transAxes,
+                    ha="left", color=color, fontsize=COMPACT_FS,
+                    fontweight="bold")
     # THE CORPUS, AS A HEADER OVER THAT BLOCK, and it is load-bearing rather than
     # provenance boilerplate. 7a's "within view" is 0.749 and this curve is centred
     # near 0.90; both are called within-view IDF1 and they are DIFFERENT quantities
@@ -214,8 +228,13 @@ def main(variant=False, corrected=True):
     # 33.9 mm against the ~46 mm of clear width before the ByteTrack step reaches
     # this height, so it lands on nothing. Measured, not assumed; `lint_text.py`'s
     # on-data check is the backstop.
-    ax.text(0.03, y0 + 0.09, CORPUS, transform=ax.transAxes, ha="left",
-            va="baseline", color=MUTED, fontsize=6.5)
+    # THE CORPUS HEADER IS OFF THE DEFAULT ARTWORK since the compact pass ("to
+    # much writing!!") -- both halves of the a<->b two-way corpus pointer are
+    # caption material now (FIGURE-LEGENDS Fig. 7's tail; fig7_05's half came off
+    # in the same pass). The variant diagnostic keeps it.
+    if variant:
+        ax.text(0.03, y0 + 0.09, CORPUS, transform=ax.transAxes, ha="left",
+                va="baseline", color=MUTED, fontsize=6.5)
     # HORIZONTAL, NOT ROTATED, and this is a height consequence rather than a taste
     # change. Set along the rule the label is ~11 mm of type; against the 25 mm axis
     # this panel had at 52 mm that reached down to about the 52% line and cleared
@@ -223,8 +242,8 @@ def main(variant=False, corrected=True):
     # step at x = 0.9 (`lint_text.py`: ON DATA, 8% of its box inked). Laid flat it
     # spends the panel's WIDTH, of which there is far more to spare: it occupies
     # x = 0.70-0.88 at y = 98, where the highest curve is still 35 points below.
-    ax.text(MARK - 0.02, 98, f"IDF1 ≥ {MARK}", color=MUTED, fontsize=7,
-            ha="right", va="top")
+    ax.text(MARK - 0.02, 98, f"IDF1 ≥ {MARK}", color=MUTED,
+            fontsize=7 if variant else COMPACT_FS, ha="right", va="top")
 
     ax.set_xlim(0, 1)
     ax.set_ylim(0, 100)
@@ -234,12 +253,20 @@ def main(variant=False, corrected=True):
     # six per-camera scores. The legacy footer said so and it had been dropped; on the
     # label it is next to the quantity it qualifies, and the footer lines stay narrow
     # enough not to hang off an 88 mm panel.
-    ax.set_xlabel(f"IDF1 threshold, session mean over {N_CAMERAS} cameras")
+    # compact render: the full "session mean over 6 cameras" qualifier is ~112 mm
+    # of type at COMPACT_FS on an 88 mm panel and clipped (seen on the first
+    # rebuild); it moves to the caption (FIGURE-LEGENDS Fig. 7 B).
+    ax.set_xlabel(f"IDF1 threshold, session mean over {N_CAMERAS} cameras"
+                  if variant else "IDF1 threshold",
+                  fontsize=None if variant else COMPACT_FS)
+    if not variant:
+        ax.tick_params(labelsize=COMPACT_FS)
     # TWO LINES: rotated, this label is ~40 mm of type against a ~20 mm axis at this
     # row height. A rotated label cannot be shrunk to fit -- constrained_layout
     # centres it and lets it overhang -- so at anything under 52 mm the page cut its
     # ends off (`lint_text.py` CLIPPED). Wrapping spends width, not height.
-    ax.set_ylabel("% of sessions\nat or above")
+    ax.set_ylabel("% of sessions\nat or above",
+                  fontsize=None if variant else COMPACT_FS)
     luc = wv["luc3d"]
     footnote(ax, f"one step per session; n = {luc['n_sessions']} SLAP-2M sessions\n"
              f"counts: sessions ≥ {MARK} · camera-sessions won "
@@ -266,7 +293,7 @@ def main(variant=False, corrected=True):
                 f"{am['sleap']}) is camera-sessions the two now score IDENTICALLY, not "
                 f"camera-sessions SLEAP lost"
                 f"\n{pool_note()}"))
-    save(fig, 7, "b", slug("survival", variant, corrected))
+    save(fig, 7, "b", slug("survival", variant, corrected, fresh_arm))
 
 
 if __name__ == "__main__":

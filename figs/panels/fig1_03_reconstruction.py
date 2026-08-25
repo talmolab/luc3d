@@ -1,131 +1,62 @@
 #!/usr/bin/env python3
 """
-Fig 1d -- the triangulated 3D, in LUC3D's own viewport, next to the image it came from.
+Fig 1d -- the triangulated 3D next to the image it came from, then the whole rig.
 (Was 1c until 2026-08-16, when the cage render became the figure's opening
 panel -- Eric.)
 
-THREE TILES, AND THE ORDER IS THE ARGUMENT: the camera's video, the same camera's
-view of the 3D reconstruction, and the whole rig. Reading left to right you can
-check the reconstruction against the pixels it was computed from, then see where the
-cameras that produced it actually sit.
+THREE TILES, AND THE ORDER IS THE ARGUMENT: the camera's video with the tracked
+overlays, the triangulated 3D pose those overlays produce, and the apparatus that
+produced it -- the movement-fitted arena volume ringed by the calibrated cameras.
+Reading left to right you go from pixels to geometry to the rig that connects them.
 
-WHY THE VIEWPORT IS SET TO A REAL CAMERA'S PERSPECTIVE. An arbitrary orbit angle
-cannot be checked against anything. Using the app's own "Show Camera View" button
-puts the 3D skeletons exactly where that camera's 2D pane shows the animals, so
-tiles 1 and 2 are the SAME scene from the SAME viewpoint and the reader can compare
-rather than take it on faith.
+THE TWO 3D TILES ARE BLENDER RENDERS SINCE 2026-08-25 (Eric: "lets do nice blender
+renders of the pose (center) and the camera rig (right) more like our other blender
+rigs ... with the arena floor plane ... inferred from the trajectories ... shown
+with the cameras like we have been visualizing the other arenas in the fig3 and
+fig1a. we just need to make those look a bit nicer, i think they look like a mess
+atm"). They used to be the app's own three.js canvases, which cost this panel a
+long war of attrition documented in this file's git history: one-device-pixel
+frustum lines that PRINT THINNER the larger the export (LineBasicMaterial ignores
+linewidth), screen-space camera labels that shrink as the canvas grows, hand
+re-measured content bboxes that silently slid off the content on every re-export.
+All of that is gone: the tiles are now `blender-images/renders/fig1d_pose.png` and
+`fig1d_rig.png`, rendered by `blender-images/fig1d_scene.py` from the deposit
+`figs/fig1_hardfight_scene.py` writes -- the same cage_scene.py house aesthetic as
+Fig 1a's two arena renders, framed COMPUTATIONALLY at exactly this panel's cell
+aspects, so they are placed full-frame with no crop constants to re-measure.
 
-WHICH WAY IS UP. This rig's calibration frame has +Z pointing DOWN: the overhead
-cameras have a SMALLER z than the animals on the floor. Assuming Z-up (the
-viewport's default) renders the rig upside down with the animals floating above the
-cameras, which is how the first pass of this panel came out. `rigFit()` takes "up"
-from the data instead -- whichever Z direction points from the animals toward the
-cameras.
+WHAT KEEPS THE TILES HONEST. The pose render is the app's OWN reconstruction at
+this same frame -- `node figs/fig1d_pose_export.mjs` runs the identical
+trackAll + triangulateAll the video tile's overlays come from and exports the
+per-identity 3D with its identity colours, so the mice match the overlays by
+construction (deposit cross-check: app-vs-offline median keypoint distance ~1 mm).
+It is no longer drawn from cam 0's calibrated viewpoint (that comparability was
+the old center tile's argument, and it cost legibility: cam 0 looks straight
+down, so the pose read as a flat smear); the render uses the Fig 1a family's
+corner view instead, and the ARENA FLOOR PLANE under the mice ties it to the rig
+tile, whose box floor is the same fitted rectangle.
 
-FRAMING. The app's own "Show Initial View" fits the scene BOUNDS, which leaves the
-animals a few pixels across. `rigFit()` projects the real content, takes its
-bounding box in the render, and scales the viewing distance AND pans so that box
-fills the frame. Fitting a bounding sphere was tried first and is both loose and
-off-centre -- the rig is a flat-ish shell whose centroid is not where the content
-lands on screen.
+THE RIG TILE SHOWS 7 OF 8 CAMERAS, keeping Eric's 2026-08-19 ruling from the old
+tile ("not visualize that camera in the bottom left, there is too much black
+space") -- Camera3_sideC sits ~350 mm beyond the next furthest camera and framing
+on it shrinks everything else by ~30%; see fig1d_scene.py's docstring. The legend
+must keep saying 7 of 8 (FIGURE-LEGENDS.md).
+
+FRAME 198 since 2026-08-16 (see fig1_tracking.mjs for the choice's argument). The
+video tile is still the app's own export (`after-f{frame}-Camera0_mid.png`, from
+`node figs/fig1_tracking.mjs`), cropped to the manifest's content bbox -- but
+since 2026-08-25 it is a CLEAN frame (`exportViews` with `overlay: false`) and
+the identity-coloured skeletons are drawn HERE, in matplotlib, with
+`src.skeleton_style.draw_pose_overlay` from the manifest's per-node
+`details[].points` -- the same Fig 13c/d photo-overlay style, at the same stroke
+weights as Fig 1c's after-tiles (keep POSE_* in sync with fig1_02_tracking.py),
+so 1c-after and this tile read as the same drawing.
 
 TILE SIZE. The row is 180 mm wide but only ~32 mm tall, so the tiles are
-HEIGHT-limited and a square tile can never be wider than ~32 mm -- three of them
-left half the row empty and the rig tile 24 mm wide, which is not enough to read a
-camera label in. The crops below are therefore TIGHT on the content vertically
-(that, against the row's height in mm, is the only thing that sets how big anything
-prints) and opened out to a landscape `aspect` horizontally, which fills the row at
-no cost in magnification. `src.style.tile()`/`load_tile()` cannot do this -- they pad
-the bbox out to `max(w, h)` on both sides and always return a SQUARE -- so the crop
-is taken here and applied as view limits, and the cell widths are set from the
-aspects so no cell is wider than the tile it holds. The row of tiles went from 91 mm
-of the 180 to 162 mm, and to 170 mm once the landscape rig re-export let that tile's
-aspect open out from 1.25 to 1.50.
-
-The wins are in the two tiles that were paying for the square. Against the earlier
-PORTRAIT 3D exports (800x1696) the 3D view's crop dropped 390 px -> 294 px (the old
-box carried 120 px of empty viewport above the animals) and the rig's 1113 px ->
-638 px, so at equal row height the rig printed 1.7x larger and the 3D 1.3x. The
-video tile is the one that gains nothing: its animals span 620 of 1024 px, so the old
-square crop was already sized on their HEIGHT and there is no slack to take. It
-prints 0.95x -- the panel is 35 mm rather than the 38 mm this rewrite was tuned at,
-because Fig 1 has to clear assemble.py's 200 mm ceiling and 3 mm came out of this row
-to pay for the figure-level footer. That 3 mm is worth ~9% on all three tiles if it
-is ever available again.
-
-BOTH 3D TILES WERE THEN RE-EXPORTED -- see RE-STAGED below. At the same printed
-height the 3D view now carries 1122 px of source instead of 294, 3.8x the linear
-resolution. The rig gains far less, 801 px against 638 (1.26x), and deliberately so:
-it is LINE ART and a bigger export makes it WORSE, because three.js draws the camera
-frustums with `LineBasicMaterial`, whose `linewidth` WebGL ignores -- every frustum
-edge is one device pixel however large the canvas is, so its printed weight is (tile
-mm)/(crop px) and thins as the export grows. A 4000x2560 re-staging was tried first
-and its frustums came out as a barely-there grey smudge at 0.014 mm. The rig's win is
-in the other three defects (aspect, framing, clipping) plus a tile 1.2x wider at the
-same height, not in pixel count. See the fig1_tracking.mjs rig block for the
-arithmetic.
-
-WHY THE RIG CROP IS STILL TIGHTER THAN THE FRAME. The ground-plane grid and the axis
-gizmo are app chrome, not data, and on this rig the grid (a bare GridHelper at world
-Z=0) floats ABOVE everything; they are now switched off at export time rather than
-cropped away. What is left over is the margin `rigFit()` leaves around the content,
-so the crop below is still taken on the measured content box.
-
-RE-STAGED (both defects below were in the EXPORTED PIXELS -- no panel-side change
-could have fixed either).
-
-  PALETTE. The 3D exports used to be staged BEFORE `setIdentityPalette()` existed, so
-  they carried the app's shipped `IDENTITY_COLORS` (#00ff00 green, #ff00ff magenta,
-  #00ffff cyan) while panel c carried the colourblind-safe Okabe-Ito palette: the
-  same three animals in two colour schemes inside one figure, and the shipped
-  green/magenta pair is exactly the one that converges under deuteranopia. Fixed at
-  the source: `fig1_tracking.mjs` now calls `setIdentityPalette(page)` AFTER
-  `trackAll()` -- the order matters, because `Identity`'s constructor reads the
-  palette only at construction time, so the helper rewrites `.color` on identities
-  that already exist and calling it any earlier is a no-op. Both 3D tiles are now
-  bluish-green / orange / sky blue, the same three colours panel c carries, read from
-  the same `fig1.json identityPalette`. The PNGs were re-exported, never recoloured.
-
-  THE RIG TILE'S GEOMETRY. It used to be `showInitialView()` into whatever pane the
-  camview tile had left behind: 800x1696 PORTRAIT with the rig in ~19% of the frame
-  and the right-hand camera labels running off the edge of the CANVAS -- clipped in
-  the source, so no crop could recover them, and what survived printed at ~4 pt. The
-  driver now sets the 3D pane to a landscape 800x450 CSS (1600x900 exported at
-  deviceScaleFactor 2) and frames it with `rigFit()`, which also fixes the
-  orientation: `showInitialView()` resets the up vector to +Z, which on this rig
-  points DOWN, so the old tile was rendered upside down with the cameras below the
-  animals. The ground-plane grid and axis gizmo are switched off rather than cropped.
-  The app's camera labels are switched OFF too: they are screen-space bitmaps at a
-  FIXED pixel size, so enlarging the canvas makes them smaller relative to the rig
-  rather than bigger, and framing the rig tightly enough for them to be legible piles
-  them on top of each other. This tile therefore carries geometry only -- how many
-  cameras there are and where they sit -- and `rigFit()` returns every camera's
-  projected pixel position (`fig1.json threeD.rigFraming.camScreen`) for a composer
-  that wants to typeset its own names at the journal's size.
-
-  MEASURED ON THE CURRENT EXPORT, so this does not have to be re-litigated. The tile
-  prints 47.6 x 31.7 mm (78% of the video tile's area, not the quarter the earlier
-  portrait export gave), the crop is 1202 x 801 px of `tri3d-rig.png`'s 1600 x 900,
-  and the measured content box (272, 56)-(1227, 805) sits inside it with 123 px of
-  margin to spare -- so nothing is clipped, all 8 camera frustums are present and
-  countable, and with the app's labels off there is no overlapping type left to clip.
-  Effective resolution is ~640 dpi and the thinnest frustum edge is one device pixel,
-  i.e. 31.7 mm / 801 px = 0.040 mm on the page (median ink run 0.13 mm; the frustum
-  colour is 3.0:1 against the tile's #1a1a1a at the median and 6.7:1 at the stroke
-  core). That is thin, and THE CROP CANNOT MEANINGFULLY FIX IT: printed stroke width
-  is (tile mm)/(crop px), the crop is already only 7% taller than the content it must
-  contain, so `TILE_PAD` -> 0 buys 6.8% and nothing else does. The lever that would
-  work is a SMALLER export canvas (three.js `LineBasicMaterial` ignores `linewidth`,
-  so an edge is one device pixel at any canvas size and a bigger canvas therefore
-  prints THINNER), and that is a driver change with its own cost to the skeletons --
-  not a panel change. Left alone deliberately.
-
-SKELETON EDGES: the tiles are re-exported with the app's skeleton edge set
-overridden to the complete 26-edge plotting skeleton (figs/_drive.mjs
-setSkeletonEdges / MOUSE_EDGES, from src/skeleton_style.py) so the animals read
-as mice rather than spiky lines (Eric 2026-08-16). Display-only: nothing on the
-tracking/triangulation path reads skeleton.edges, and the manifests' numeric
-payloads were diff-verified unchanged. The tiles remain the app's own canvases.
+HEIGHT-limited: the crops are tight on the content vertically and open out to a
+landscape aspect horizontally, which fills the row at no cost in magnification.
+The Blender tiles are RENDERED at their cells' aspects (1.95 and 1.50), so their
+"crop" is the full frame.
 
     python3 figs/panels/fig1_03_reconstruction.py
 """
@@ -137,44 +68,36 @@ import matplotlib.pyplot as plt
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.data_loader import OUT, load  # noqa: E402
 from src.style import INK, SPAN, mm, save, tile, use  # noqa: E402
+from src.skeleton_style import SLAP_NODES, draw_pose_overlay  # noqa: E402
+
+import numpy as np  # noqa: E402
+
+RENDERS = Path(__file__).resolve().parent.parent / "blender-images" / "renders"
 
 VIEW_CAM = "Camera0_mid"
 
-#: file, badge, CONTENT bbox in source pixels (None = use the manifest's own bbox),
-#: tile aspect (w:h). The bbox is what must stay in frame; the aspect is how far the
-#: crop opens out sideways to fill the row (see TILE SIZE above). Both 3D tiles are a
-#: viewport pane whose content sits well inside the frame, so they name their content
-#: explicitly -- MEASURED, not guessed: these are the extents of the pixels that
-#: differ from the viewport's #1a1a1a background by more than 40/255, i.e. the
-#: skeletons plus (rig only) the camera frustums and spheres.
-#:
-#: `tri3d-camview.png` is 3200x2560 and `tri3d-rig.png` 1600x900, both written by
-#: `node figs/fig1_tracking.mjs`. THE BBOXES BELONG TO THOSE EXPORTS: re-run the
-#: driver with a different pane size or rig framing and they must be re-measured, or
-#: the crop silently slides off the content.
-#:
-#: `{frame}` is filled from the manifest, never hard-coded: the driver names its
-#: exports by frame, so a literal frame number here silently kept reading the OLD
-#: tile after the driver was re-run on another frame.
+#: Skeleton stroke weights for the video tile, in ON-PAGE points. KEEP IN SYNC
+#: with fig1_02_tracking.py's POSE_* -- this tile sits one row under 1c's
+#: after-tiles, shows the same camera at near-identical magnification, and must
+#: read as the same drawing. (See there for how they were scaled down from
+#: Fig 13's lw=1.23 / ms=2.82.)
+POSE_LW = 0.85
+POSE_MS = 1.9
+POSE_DOT_EDGE_LW = 0.45
+
+#: (file, badge, badge colour, content bbox in source px, tile aspect w:h).
+#: bbox None = the manifest's own content bbox (video tile); "full" = the whole
+#: frame (the Blender tiles are rendered AT their cell aspect, nothing to crop).
+#: The video tile keeps the white badge of the app exports; the Blender tiles
+#: sit on a near-white room, so their badges are ink.
 TILES = [
-    ("after-f{frame}-Camera0_mid.png", "cam 0 mid: video", None, 1.87),
-    ("tri3d-camview.png", "cam 0 mid: 3D", (594, 949, 1573, 1998), 1.95),
-    # THE RIG CROP EXCLUDES Camera3_sideC ON PURPOSE (Eric, 2026-08-19: "not
-    # visualize that camera in the bottom left, there is too much black space, lets
-    # look at the mice and the other cameras a bit more"). That camera projects to
-    # (281, 796) -- a lone frustum in the far bottom-left corner with nothing between
-    # it and the rest of the rig, so including it forced a crop 955x749 px of which
-    # the empty diagonal was most of the area. The other seven cameras and all three
-    # animals occupy a compact 570x593 block, measured as connected components of the
-    # non-background pixels: seven blobs from (656,383) [Camera2_topC/7_sideR] to
-    # (1226,149) [Camera0_mid/4_topR] and down to (861,648) [Camera6_sideL], with the
-    # animals at (853,506)-(1112,612). Cropping to that block prints the content
-    # 1.26x larger at the same tile size. THE PANEL THEREFORE SHOWS 7 OF 8 CAMERAS
-    # and the legend must not say "all 8 calibrated cameras" -- see FIGURE-LEGENDS.md.
-    ("tri3d-rig.png", "rig", (656, 55, 1226, 648), 1.50),
+    ("after-f{frame}-Camera0_mid.png", "cam 0 mid", "white", None, 1.87),
+    ("fig1d_pose.png", "triangulated 3D", INK, "full", 1.95),
+    ("fig1d_rig.png", "Hard Fight rig", INK, "full", 1.50),
 ]
 #: Breathing room added to the bbox HEIGHT, as a fraction of it -- the number that
-#: sets how big everything prints, so it stays small.
+#: sets how big everything prints, so it stays small. Applies to the video tile;
+#: the Blender tiles carry their margin inside the render (fig1d_scene.FIT_MARGIN).
 TILE_PAD = 0.07
 
 
@@ -199,58 +122,72 @@ def main():
     use()
     j = load("fig1.json")
     bbox = None
+    details = []
     for v in j["after"]:
         if v["name"] == VIEW_CAM:
             b = v["bbox"]
             bbox = (b["x0"], b["y0"], b["x1"], b["y1"])
+            details = v["details"]
 
-    # The 3D tiles and panel c must be in the SAME identity palette; both come from
-    # the one driver run that recorded this. Report it rather than assert it -- the
-    # panel's job is not to gate the build, but a silent mismatch is what shipped once.
+    # `details[].points` rows are in the SESSION skeleton's node order --
+    # checked against the plotting skeleton's, not assumed (a re-ordered
+    # skeleton would draw edges between the wrong joints).
+    if j.get("skeletonNodes") != SLAP_NODES:
+        sys.exit(f"fig1.json skeletonNodes != skeleton_style.SLAP_NODES:\n"
+                 f"  manifest: {j.get('skeletonNodes')}\n  expected: {SLAP_NODES}")
+
+    # The video tile's overlays and the Blender pose tile must be in the SAME
+    # identity palette; the pose deposit carries the palette it exported with.
+    # Report rather than assert -- a silent mismatch is what shipped once.
     pal = (j.get("identityPalette") or {}).get("identities") or []
     print("  identity palette (from fig1.json): "
           + ", ".join(f"{d['name']} {d['color']}" for d in pal))
+    hf = load("fig1_hardfight_scene.json")
+    print("  blender pose palette (fig1_hardfight_scene.json): "
+          + ", ".join(hf["pose_colors"]))
+    if [d["color"] for d in pal] != hf["pose_colors"]:
+        print("  *** PALETTE MISMATCH between app export and blender deposit ***")
 
     fig, axes = plt.subplots(1, 3, figsize=(mm(SPAN["full"]), mm(35.0)),
                              layout="constrained",
                              gridspec_kw={"width_ratios": [a for *_, a in TILES]})
     # `rect` is `(left, bottom, WIDTH, HEIGHT)`, NOT `(left, bottom, right, top)`.
-    # Written as the latter, `(0, 0.11, 1, 0.985)` put the tiles' band from y = 0.11
-    # to y = 1.095 -- off the top of the page, so every tile lost its top ~9%, taking
-    # part of the burned-in camera names in the rig view with it. The band now really
-    # does stop inside the page.
-    #
-    # Only the 7 pt stat line is reserved for, 3.1 mm at the bottom; the tiles run to
-    # the top edge of the panel, since the assembler already leaves 4.5 mm of lead
-    # above every row for the panel letter. Every millimetre in a strip is a
-    # millimetre off the height of all three tiles, and they are height-limited.
-    #
-    # THE PANEL HEIGHT IS THE WHOLE BUDGET HERE: the tiles are exactly as tall as the
-    # band and no taller, so every millimetre taken off this figsize comes straight
-    # off all three of them. At 35 mm the band is 31.9 mm and the row of tiles is
-    # 164 of the 180 mm; at 38 mm it was 34.7 mm and 176 mm. Fig 1 has to clear
-    # assemble.py's 200 mm ceiling, so this is where the trade lands.
+    # (History: written as the latter it pushed the tiles off the top of the page.)
     fig.get_layout_engine().set(rect=(0, 0.0, 1, 1.0), wspace=0.01,
                                 w_pad=0.004, h_pad=0.004)
-    for ax, (name_tpl, badge, crop, aspect) in zip(axes, TILES):
+    for ax, (name_tpl, badge, bcol, crop, aspect) in zip(axes, TILES):
         name = name_tpl.format(frame=j["frame"])
-        p = OUT / name
+        p = (OUT / name) if "{" in name_tpl or name.startswith("after") \
+            else (RENDERS / name)
         if not p.exists():
-            sys.exit(f"missing figs/out/{name} — run `node figs/fig1_tracking.mjs`")
+            src = ("`node figs/fig1_tracking.mjs`" if name.startswith("after") else
+                   "`blender-images/bpyenv/bin/python blender-images/fig1d_scene.py"
+                   f" --mode {'pose' if 'pose' in name else 'rig'} --samples 200`")
+            sys.exit(f"missing {p} — run {src}")
         # bbox=None: read the frame whole, then crop by setting the view limits.
         # imshow puts source pixels in data coordinates, so the axes shows exactly
         # the window asked for, keeps aspect='equal' (no stretching), and the badge
         # -- drawn in axes coordinates -- still lands in the tile's own corner.
-        tile(ax, p, None, badge=badge, corner="lower left")
+        tile(ax, p, None, badge=badge, badge_color=bcol, corner="lower right")
         sh, sw = ax.images[0].get_array().shape[:2]
-        x0, y0, x1, y1 = crop_to_aspect(crop if crop is not None else bbox,
-                                        sw, sh, aspect, TILE_PAD)
+        window = (0, 0, sw, sh) if crop == "full" else (crop or bbox)
+        pad = 0.0 if crop == "full" else TILE_PAD
+        x0, y0, x1, y1 = crop_to_aspect(window, sw, sh, aspect, pad)
         ax.set_xlim(x0, x1)
         ax.set_ylim(y1, y0)           # imshow's y axis runs downwards
+        if crop is None:
+            # The video tile: identity-coloured Fig 13-style skeletons over the
+            # clean frame, from the manifest's per-node points (source pixels =
+            # imshow data coordinates; NaN nodes are skipped).
+            for d in details:
+                pts = np.array([q if q else (np.nan, np.nan)
+                                for q in d["points"]], float)
+                draw_pose_overlay(ax, pts, d["color"] or "#000000",
+                                  lw=POSE_LW, ms=POSE_MS,
+                                  dot_edge_lw=POSE_DOT_EDGE_LW, zorder=4.0)
 
     # The stat line ("3 animals triangulated from 8 cameras - 45/45 3D nodes
-    # filled") is caption text and now lives in figs/FIGURE-LEGENDS.md; the strip it
-    # occupied goes back to the tiles, which are height-limited.
+    # filled") is caption text and lives in figs/FIGURE-LEGENDS.md.
     print(f"  {j['stats']['groupsThisFrame']} animals from "
           f"{j['stats']['nCameras']} cameras, "
           f"{j['stats']['nodes3dFilled']}/{j['stats']['nodes3d']} 3D nodes filled")

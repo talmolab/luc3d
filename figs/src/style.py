@@ -167,6 +167,27 @@ DATASET_COLORS = {
 }
 
 
+#: THE CORPORA COMPARED IN FIG 12, defined once so its three panels agree.
+#:
+#: SCN2A keeps `DATASET_COLORS["SCN2A"]` BY REFERENCE rather than by repeating the hex:
+#: it is the same deposit Figs 10-11 draw, and a reader moving between the s-DANNCE
+#: benchmark and this supplemental must not see that family change colour. That fixes
+#: amber, so the two home corpora take the other two members of the validated
+#: SKY/VIOLET/AMBER trio (see the DATASET_COLORS note for why those three).
+#:
+#: The cross-page reuse this DOES incur -- violet is BEDDING and sky is TRIADS on
+#: Figs 10-11 -- is accepted rather than overlooked: Fig 12 draws neither of those
+#: families and those figures draw neither mouse corpus, so no page carries both
+#: meanings at once (which was the actual defect DATASET_COLORS was created to fix).
+#: Colour here is also REDUNDANT encoding -- every corpus is named on its own axis or
+#: tick -- so it carries no information a reader can lose.
+CORPUS_COLORS = {
+    "mouse-dyad-10m": VIOLET,
+    "slap-2m": SKY,
+    "scn2a": DATASET_COLORS["SCN2A"],
+}
+
+
 #: THE APP'S OWN IDENTITY PALETTE, mirrored from `pose/pose-data.js`
 #: `IDENTITY_COLORS`. Fig 1c, Fig 1d, Fig 2a and Fig 6b are SCREENSHOTS of the app, so
 #: any schematic that draws the same identities -- Fig 1b's pipeline icons, Fig 3's
@@ -663,6 +684,12 @@ CORPUS_NAMES = {
     "BMimica": "Mouse-Dyad-10M",
     "BMimica-10M": "Mouse-Dyad-10M",
     "BMimica-12M": "Mouse-Dyad-10M",      # a name that existed for ~20 minutes
+    # Fig 12's corpus keys. `fig12_social.py` runs three corpora through one detector
+    # and keys them by slug rather than by the directory name the other scripts use,
+    # so the slugs need printed forms too.
+    "mouse-dyad-10m": "Mouse-Dyad-10M",
+    "slap-2m": "SLAP-2M",
+    "scn2a": "s-DANNCE SCN2A",
 }
 
 

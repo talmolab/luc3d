@@ -1,0 +1,55 @@
+{
+ "session": "/root/vast/eric/s-DANNCE-data/s-DANNCE-SCN2A_SOC1/2022_09_23_M5_M4",
+ "animals": 2,
+ "frames": 89000,
+ "seed": 3763517528,
+ "global_min_pair_mm": 3.89,
+ "switch_frames": [
+  31312,
+  31312
+ ],
+ "n_switches": 2,
+ "scored_cell_switches": 2,
+ "switch_count_matches_scored": true,
+ "reverts_in_session": [],
+ "per_animal": [
+  {
+   "animal": 0,
+   "original_id": 0,
+   "final_id": 1,
+   "n_switches": 1,
+   "reverts_in_session": false
+  },
+  {
+   "animal": 1,
+   "original_id": 1,
+   "final_id": 0,
+   "n_switches": 1,
+   "reverts_in_session": false
+  }
+ ],
+ "events": [
+  {
+   "animal": 0,
+   "frame": 31312,
+   "prev_frame": 31311,
+   "from_id": 0,
+   "to_id": 1,
+   "dist_at_swap_mm": 9.38,
+   "min_dist_within_50f_mm": 5.87,
+   "argmin_frame": 31286,
+   "reverts_to_from_id_later": false
+  },
+  {
+   "animal": 1,
+   "frame": 31312,
+   "prev_frame": 31311,
+   "from_id": 1,
+   "to_id": 0,
+   "dist_at_swap_mm": 9.38,
+   "min_dist_within_50f_mm": 5.87,
+   "argmin_frame": 31286,
+   "reverts_to_from_id_later": false
+  }
+ ]
+}

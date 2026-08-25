@@ -113,9 +113,9 @@ ROW_H = 50.0
 
 
 
-def main(variant=False, corrected=True):
+def main(variant=False, corrected=True, fresh_arm=False):
     use()
-    sl, fresh, ref, _tab = arms(variant, corrected)
+    sl, fresh, ref, _tab = arms(variant, corrected, fresh_arm)
     fp = sl["fragmentations_paired"]
     n = fp["n_sessions"]
     luc_better = fp["wins"]          # sessions where LUC3D fragments LESS
@@ -133,7 +133,7 @@ def main(variant=False, corrected=True):
                                "ci95_lo": fp["ci95_lo"], "ci95_hi": fp["ci95_hi"]},
                               {"statistic": "median", "value": fp["median"],
                                "ci95_lo": None, "ci95_hi": None}]),
-                7, f"{slug('fig7f_fragmentations', variant, corrected)}.csv")
+                7, f"{slug('fig7f_fragmentations', variant, corrected, fresh_arm)}.csv")
     else:
         # The variant's table carries all three arms and both statistics. The default
         # deposit above is left column-for-column as committed: it is a manuscript
@@ -252,7 +252,7 @@ def main(variant=False, corrected=True):
                  f"stands and only its magnitude moves"
                  f"\n{pool_note()}")
     footnote(ax, note)
-    save(fig, 7, "f", slug("fragmentations", variant, corrected))
+    save(fig, 7, "f", slug("fragmentations", variant, corrected, fresh_arm))
 
 
 if __name__ == "__main__":

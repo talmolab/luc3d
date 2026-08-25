@@ -203,7 +203,7 @@ def main():
     # becomes HALF the page wide, which is what frees the right-hand half of that row
     # for panel c -- the quantitative version of the same contrast (hypotheses per
     # frame). `row` doubles because the panel now carries two content bands.
-    fig, axes = grid(2, 1, span="half", row=2 * ROW_MM, despine=False)
+    fig, axes = grid(2, 1, span="third", row=2 * ROW_MM, despine=False)
     # Vertical pad only. `w_pad` is left at matplotlib's default, so the horizontal
     # geometry -- and therefore the ink bounding box's WIDTH -- is untouched.
     fig.get_layout_engine().set(h_pad=HPAD_MM / 25.4)

@@ -29,13 +29,29 @@ all, the QUANTIFICATION in panels b-d. Both are named in Fig 1d and must be cite
 
 Source: figs/out/fig2-protocol.json + figs/out/fig2p-*.png
         (node figs/fig2_protocol.mjs)
+        + blender-images/renders/fig2a_pose.png for the "3D from the 2 anchors"
+        tile (figs/fig2a_scene.py -> blender-images/fig1d_scene.py --mode pose)
 
-SKELETON EDGES: the tiles are re-exported with the app's skeleton edge set
-overridden to the complete 26-edge plotting skeleton (figs/_drive.mjs
-setSkeletonEdges / MOUSE_EDGES, from src/skeleton_style.py) so the animals read
-as mice rather than spiky lines (Eric 2026-08-16). Display-only: nothing on the
-tracking/triangulation path reads skeleton.edges, and the manifests' numeric
-payloads were diff-verified unchanged. The tiles remain the app's own canvases.
+OVERLAYS ARE DRAWN HERE, IN THE FIG 13 STYLE (Eric 2026-08-25: "we should also
+do the overlays in the style that we did in fig13 ... so the overlay and 3d for
+fig2 as well"). The driver exports CLEAN video frames plus the per-node 2D as
+numbers -- `details[].points` (detected) and `reprojections[]` (the two-anchor
+3D reprojected back, read from the app's own reprojectedInstances) -- and this
+panel draws them with src/skeleton_style.draw_pose_overlay: solid thin identity-
+coloured skeletons on the anchor tiles, DASHED identity-coloured skeletons with
+hollow dots on the not-labelled tiles, both together on the magnified tile, so
+"dotted = reprojected / solid = detected" is carried by the linestyle exactly as
+before. The identity chips are typeset here too (vector, from the manifest's own
+colours) instead of being baked app chrome. The 26-edge plotting skeleton comes
+from skeleton_style.MOUSE_EDGES, the same set the app tiles were previously
+re-exported with (Eric 2026-08-16).
+
+THE 3D TILE IS A BLENDER RENDER since 2026-08-25 (Eric: "lets do a blender style
+render like we just did for fig 1d (center) for fig2a2 (bottom)"): the TWO-ANCHOR
+solve's ball-and-stick mice in the same identity colours on the movement-fitted
+arena floor, rendered from the cam 6 sideL anchor's own viewpoint -- the tile
+sits under that camera's video, same reasoning as the app-viewport shot it
+replaces. Framed computationally at the cell's aspect, placed full-frame.
 
     python3 figs/panels/fig2_01_protocol.py
 """
@@ -50,7 +66,10 @@ from matplotlib.patches import Arc, Polygon
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.data_loader import OUT, load  # noqa: E402
 from src.diagram import blank, icon, point, ray  # noqa: E402
+from src.skeleton_style import SLAP_NODES, draw_pose_overlay  # noqa: E402
 from src.style import MUTED, GREY, INK, SALMON, SPAN, TEAL, mm, save, tile, use  # noqa: E402
+
+RENDERS = Path(__file__).resolve().parent.parent / "blender-images" / "renders"
 
 STEPS = ["Label 2 anchor views", "Triangulate",
          "Reprojections appear", "Accept or nudge"]
@@ -73,23 +92,6 @@ def cam_label(name):
     return f"cam {idx} {view}"
 
 
-def viewport_content_bbox(path, tol=40 / 255):
-    """(x0, y0, x1, y1) around the skeletons in a 3D-viewport shot.
-
-    The viewport's background is a flat #1a1a1a, so "content" is anything more than
-    `tol` away from it -- the same test `_drive.shootEl` uses when it records a bbox.
-    Measured here rather than recorded in the manifest because this shot's framing is
-    computed at export time and moves whenever the fit or the frame does.
-    """
-    import matplotlib.image as _mpimg
-    a = _mpimg.imread(str(path))[:, :, :3]
-    m = np.abs(a - 0x1a / 255).max(2) > tol
-    ys, xs = np.where(m)
-    if not len(xs):
-        sys.exit(f"{path.name}: no content found — did the 3D shot render empty?")
-    return int(xs.min()), int(ys.min()), int(xs.max()) + 1, int(ys.max()) + 1
-
-
 def bbox_of(views, name):
     for v in views:
         if v["name"] == name:
@@ -100,6 +102,101 @@ def bbox_of(views, name):
 
 def view_of(views, name):
     return next(v for v in views if v["name"] == name)
+
+
+#: draw_pose_overlay stroke/dot weights for the ~27 mm photo tiles. Fig 13's
+#: defaults (lw 1.23 / ms 2.82) were tuned at ~90 mm panes; at a third of that
+#: the same on-page points bury the animal, so both are scaled down together
+#: (judged at print size, not derived). The magnified tile prints the animal
+#: ~3x larger, so it takes weights near Fig 13's own.
+TILE_LW, TILE_MS = 0.85, 1.9
+#: magnified tile: the DETECTED pose sits slightly lighter UNDER the reprojected
+#: one -- at this magnification the two nearly coincide over the torso, and two
+#: equal-weight strokes braid into visual mush; the offset at the extremities
+#: (the panel's actual evidence) reads best with the dashed stroke dominant.
+MAG_DET_LW, MAG_DET_MS = 1.0, 2.2
+MAG_REP_LW, MAG_REP_MS = 1.35, 2.7
+#: the reprojected variant's dash pattern (draw_pose_overlay's docstring gives
+#: (2.2, 1.6); the gap is widened so the dashes still read as dashes at the
+#: ~27 mm tiles' stroke width)
+REPROJ_LS = (0, (2.3, 2.1))
+
+
+def photo_tile(ax, path, bbox, *, badge, pad=0.06):
+    """A video tile framed like `tile(..., bbox)` but KEEPING source-pixel data
+    coordinates, so `draw_pose_overlay` can draw straight from the manifest.
+
+    `tile`'s `load_tile` crops the ARRAY (data coords become crop-relative);
+    here the frame goes in whole and the same square window -- max side widened
+    by `pad`, clipped to the frame -- is applied via the axes LIMITS instead
+    (the fig1_03_reconstruction.py idiom). Returns (ax, window)."""
+    ax = tile(ax, path, None, badge=badge)
+    sh, sw = ax.images[0].get_array().shape[:2]
+    x0, y0, x1, y1 = bbox
+    m = max(x1 - x0, y1 - y0) * (1 + pad) / 2.0
+    cx, cy = (x0 + x1) / 2.0, (y0 + y1) / 2.0
+    win = (max(0, cx - m), max(0, cy - m), min(sw, cx + m), min(sh, cy + m))
+    ax.set_xlim(win[0], win[2])
+    ax.set_ylim(win[3], win[1])          # imshow's y axis runs downwards
+    return ax, win
+
+
+def pts_of(entry):
+    """manifest per-node points ([x, y] | null, skeleton order) -> (15, 2) array."""
+    return np.array([[np.nan, np.nan] if q is None else q
+                     for q in entry["points"]], float)
+
+
+def draw_detected(ax, view, *, lw=TILE_LW, ms=TILE_MS):
+    """Solid Fig 13-style pose per detected instance, in its identity colour."""
+    for d in view["details"]:
+        draw_pose_overlay(ax, pts_of(d), d["color"], lw=lw, ms=ms,
+                          dot_edge_lw=0.45, zorder=5)
+
+
+def draw_reprojected(ax, view, *, lw=TILE_LW, ms=TILE_MS):
+    """Dashed identity-coloured pose with hollow dots -- the panel's
+    "dotted = reprojected" mark, per draw_pose_overlay's reprojected variant."""
+    for r in view["reprojections"]:
+        draw_pose_overlay(ax, pts_of(r), r["color"], lw=lw, ms=ms, ls=REPROJ_LS,
+                          dot_face="none", dot_edge=r["color"], dot_edge_lw=0.55,
+                          zorder=6)
+
+
+def id_chips(ax, view, win, *, names=None):
+    """The identity chips the app used to bake in, re-typeset in vector.
+
+    One chip per instance -- the identity name in its own colour on an opaque
+    dark chip (the app's label look) -- anchored above the instance's box. Chips
+    that would collide are pushed apart along x (cam 6's id_0/id_1 boxes overlap
+    on this frame, which is exactly the garble the old `fix_cam6_id_labels`
+    existed to cover), and every chip is clamped inside the window.
+    """
+    x0, y0, x1, y1 = win
+    w = x1 - x0
+    chip_w = 0.155 * w                    # ~4 chars at 6 pt bold in a ~30 mm tile
+    ds = sorted(view["details"], key=lambda d: (d["box"][0] + d["box"][2]) / 2)
+    if names is not None:
+        ds = [d for d in ds if d["identity"] in names]
+    xs = [(d["box"][0] + d["box"][2]) / 2.0 for d in ds]
+    for _ in range(20):                   # relax pairwise overlaps
+        moved = False
+        for i in range(len(xs) - 1):
+            gap = xs[i + 1] - xs[i]
+            if gap < chip_w:
+                push = (chip_w - gap) / 2
+                xs[i] -= push
+                xs[i + 1] += push
+                moved = True
+        if not moved:
+            break
+    for d, cx in zip(ds, xs):
+        cx = min(max(cx, x0 + chip_w / 2), x1 - chip_w / 2)
+        cy = max(d["box"][1] - 0.035 * (y1 - y0), y0 + 0.06 * (y1 - y0))
+        ax.text(cx, cy, d["identity"], ha="center", va="bottom",
+                color=d["color"], fontsize=6.0, fontweight="bold", zorder=7,
+                bbox=dict(boxstyle="square,pad=0.3", facecolor="black",
+                          edgecolor="none"))
 
 
 def zoom_on_largest(view, ar=CELL_AR, pad=0.20):
@@ -130,41 +227,33 @@ def zoom_on_largest(view, ar=CELL_AR, pad=0.20):
     return (cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2)
 
 
-def click_target(png, zoom, *, spread=15, edge=0.16):
-    """Where in `zoom` to put the cursor: the far end of the drawn overlay.
+def click_target(view, zoom, *, edge=0.16):
+    """Where in `zoom` to put the cursor: the reprojected keypoint farthest out.
 
-    The manifest carries a centroid and a box per instance but NO node
-    coordinates, so a keypoint cannot be addressed from the data. The overlay is,
-    however, already drawn in the tile, so the target is recovered from the
-    pixels. The tile is a greyscale camera frame, so the overlay is the only
-    CHROMATIC ink in it -- any pixel whose channels spread by more than `spread`
-    out of 255 belongs to a bone or a node, and nothing else in the frame does.
-    (Matching the identity colour itself does not work: the app draws these
-    overlays desaturated, so `#00b478` never appears -- the ink runs to a channel
-    spread of only ~34.) The target is then the chromatic pixel farthest from
-    their centroid, which is a limb end -- nose or tail tip -- and that is exactly
-    where the two-anchor reprojection sits farthest from the detection (the
-    per-view spread runs to 24.6 px), i.e. the keypoint a labeller would nudge.
-    `edge` keeps the cursor's own body inside the window.
+    The cursor goes on a REPROJECTED node (the thing a labeller accepts or
+    nudges). The manifest now carries every reprojected node's 2D, so the target
+    is picked from the data -- an earlier version of this function had to recover
+    it from the tile's pixels by chroma, because only centroids were exported.
+    Among the reprojected nodes inside the window (with `edge` margin so the
+    cursor's own body fits), take the one farthest from their common centroid:
+    a limb end -- nose or tail tip -- which is exactly where the two-anchor
+    reprojection sits farthest from the detection (the per-view spread runs to
+    24.6 px), i.e. the keypoint a labeller would nudge.
     """
-    img = plt.imread(png)
-    a = (img[..., :3] * 255).round().astype(np.int16) if img.dtype != np.uint8 \
-        else img[..., :3].astype(np.int16)
-    x0, y0, x1, y1 = (int(round(v)) for v in zoom)
-    x0, y0 = max(x0, 0), max(y0, 0)
-    x1, y1 = min(x1, a.shape[1]), min(y1, a.shape[0])
-    win = a[y0:y1, x0:x1]
-    hit = (win.max(axis=2) - win.min(axis=2)) > spread
-    if hit.sum() < 20:
+    x0, y0, x1, y1 = zoom
+    P = np.vstack([pts_of(r) for r in view["reprojections"]])
+    P = P[np.isfinite(P).all(axis=1)]
+    ins = P[(P[:, 0] >= x0) & (P[:, 0] <= x1) & (P[:, 1] >= y0) & (P[:, 1] <= y1)]
+    if not len(ins):
         return None
-    ys, xs = np.nonzero(hit)
-    cx, cy = xs.mean(), ys.mean()
-    order = np.argsort(-((xs - cx) ** 2 + (ys - cy) ** 2))
+    c = ins.mean(axis=0)
     mx, my = edge * (x1 - x0), edge * (y1 - y0)
-    for k in order:                     # first far point with room for the cursor
-        if mx <= xs[k] <= (x1 - x0) - mx and my <= ys[k] <= (y1 - y0) - my:
-            return x0 + float(xs[k]), y0 + float(ys[k])
-    return x0 + float(xs[order[0]]), y0 + float(ys[order[0]])
+    room = ins[(ins[:, 0] >= x0 + mx) & (ins[:, 0] <= x1 - mx)
+               & (ins[:, 1] >= y0 + my) & (ins[:, 1] <= y1 - my)]
+    if not len(room):
+        room = ins
+    k = np.argmax(((room - c) ** 2).sum(axis=1))
+    return float(room[k, 0]), float(room[k, 1])
 
 
 #: The classic arrow pointer, tip at (0, 0), pointing up and to the left, in units
@@ -256,48 +345,27 @@ def schematic(ax, anchors=()):
     ax.set_ylim(-3.6, 2.6)
 
 
-def fix_cam6_id_labels(ax, view):
-    """Re-typeset the two colliding identity chips on the cam 6 anchor tile.
-
-    On this frame the app draws each instance's identity label at its box's
-    top edge, and id_0's box (x 583-695) and id_1's (x 446-620) overlap -- so
-    the BAKED labels collide and the tile reads "id id_1" with id_0's name
-    buried (adversarial review 2026-08-17, Agent 3 MAJOR 4). The label pixels
-    are app chrome, not evidence, so the fix is to re-set the same two names,
-    in the app's own per-instance colours FROM THE MANIFEST (`view["details"]`
-    exists precisely "so the composer can put a leader line + label on" --
-    fig2_protocol.mjs), on an opaque chip that covers the garbled cluster.
-    Nothing else in the photograph is touched, and a re-export that moves the
-    animals moves `details` with it, so the vector chips cannot drift from the
-    render they cover.
-
-    Axes-fraction geometry, measured off the cropped tile: the baked cluster
-    spans x 0.61-0.83, y 0.63-0.70 (imshow's y inverted).
-    """
-    import matplotlib.patches as mpatches
-
-    by_id = {d["identity"]: d for d in view["details"]}
-    # The chip: the app's label background is the dark arena wall here; a black
-    # chip is what the legible labels elsewhere in the frame sit on. Sized for
-    # the TYPE, not just the garble: at 6 pt each name is ~0.14 of the tile's
-    # width, so two names plus a gap need ~0.33 -- the first cut of this fix
-    # used the garble's own 0.245 and reproduced the collision in vector.
-    ax.add_patch(mpatches.Rectangle((0.545, 0.625), 0.335, 0.085,
-                                    transform=ax.transAxes, facecolor="black",
-                                    edgecolor="none", zorder=5))
-    # id_1's animal is the left of the pair, id_0's the right -- same order the
-    # baked labels attempted.
-    for name, x, ha in (("id_1", 0.558, "left"), ("id_0", 0.868, "right")):
-        ax.text(x, 0.667, name, transform=ax.transAxes, ha=ha, va="center",
-                color=by_id[name]["color"], fontsize=6.0, fontweight="bold",
-                zorder=6)
-
-
 def main():
     use()
     p = load("fig2-protocol.json")
     anchors = p["anchors"]
     va, vr = p["views"]["anchor"], p["views"]["reproj"]
+    # The exported per-node arrays are in the session skeleton's node order;
+    # draw_pose_overlay's edge set is written in SLAP_NODES. They are the same
+    # 15-node skeleton -- assert it, so a session swap fails loudly here rather
+    # than drawing bones between the wrong joints.
+    assert p["skeletonNodes"] == SLAP_NODES, \
+        f"exported node order {p['skeletonNodes']} != skeleton_style.SLAP_NODES"
+
+    # The photo overlays, the Blender pose tile and the chips must share one
+    # identity palette. Report rather than assert -- a silent mismatch is what
+    # shipped once (fig1_03_reconstruction.py's precedent).
+    pal = [d["color"] for d in (p.get("identityPalette") or {}).get("identities", [])]
+    print("  identity palette (fig2-protocol.json): " + ", ".join(pal))
+    scn = load("fig2a_scene.json")
+    print("  blender pose palette (fig2a_scene.json): " + ", ".join(scn["pose_colors"]))
+    if pal != scn["pose_colors"]:
+        print("  *** PALETTE MISMATCH between app export and blender deposit ***")
 
     # The measured split: the two anchor views against the six reprojected into.
     per = p["reprojErrorsTwoAnchors"]
@@ -309,49 +377,63 @@ def main():
     gs = fig.add_gridspec(2, 4)
     cells = {(r, c): fig.add_subplot(gs[r, c]) for r in (0, 1) for c in range(4)}
 
+    frame = p["frame"]
+
     # --- 1: the two anchor views ------------------------------------------
     for r, cam in enumerate(anchors):
-        f = OUT / f"fig2p-anchor-f150-{cam}.png"
+        f = OUT / f"fig2p-anchor-f{frame}-{cam}.png"
         if not f.exists():
             sys.exit(f"missing figs/out/{f.name} — run `node figs/fig2_protocol.mjs`")
-        ax_t = tile(cells[(r, 0)], f, bbox_of(va, cam),
-                    badge=f"{cam_label(cam)} · anchor", pad=0.06)
-        if cam == "Camera6_sideL":
-            fix_cam6_id_labels(ax_t, view_of(va, cam))
+        v = view_of(va, cam)
+        ax_t, win = photo_tile(cells[(r, 0)], f, bbox_of(va, cam),
+                               badge=f"{cam_label(cam)} · anchor")
+        draw_detected(ax_t, v)
+        id_chips(ax_t, v, win)
 
     # --- 2: the solve, and what it produced -------------------------------
     schematic(cells[(0, 1)], anchors)
-    # CROPPED TO THE POSE, MEASURED (2026-08-19). This tile used to go in whole
-    # (`bbox=None`), so most of it was empty viewport. The driver now stages it at
-    # the sideL anchor's own camera pose with a computed FOV fit, and the pose is
-    # WIDE and SHORT in that view -- so the fit is set by the horizontal extent and
-    # leaves the frame two-thirds empty vertically whatever the driver does. The
-    # crop is measured off the pixels rather than recorded, so a re-export cannot
-    # slide it off the content.
-    tile(cells[(1, 1)], OUT / "fig2p-3d-animals.png",
-         viewport_content_bbox(OUT / "fig2p-3d-animals.png"),
-         badge="3D from the 2 anchors", pad=0.10)
+    # BLENDER RENDER, FULL-FRAME. The render is framed computationally at this
+    # cell's own aspect (fig2a_scene.py deposits, fig1d_scene.py --mode pose
+    # fits), so nothing is cropped here -- the old app-viewport shot needed its
+    # content bbox measured off the pixels; this tile does not. Dark-ink badge:
+    # the background is now a white room, not the app's dark viewport.
+    p3d = RENDERS / "fig2a_pose.png"
+    if not p3d.exists():
+        sys.exit("missing blender-images/renders/fig2a_pose.png — run "
+                 "`figs/.venv/bin/python figs/fig2a_scene.py`, then "
+                 "`blender-images/bpyenv/bin/python blender-images/fig1d_scene.py "
+                 "--mode pose --scene figs/out/fig2a_scene.json --out "
+                 "blender-images/renders/fig2a_pose.png` (see fig2a_scene.py)")
+    tile(cells[(1, 1)], p3d, None, badge="3D from the 2 anchors",
+         badge_color=INK)
 
     # --- 3: two views nobody labelled -------------------------------------
     for r, cam in enumerate(REPROJ_CAMS):
-        tile(cells[(r, 2)], OUT / f"fig2p-reproj-f150-{cam}.png", bbox_of(vr, cam),
-             badge=f"{cam_label(cam)} · not labelled", pad=0.06)
+        v = view_of(vr, cam)
+        ax_t, _ = photo_tile(cells[(r, 2)], OUT / f"fig2p-reproj-f{frame}-{cam}.png",
+                             bbox_of(vr, cam),
+                             badge=f"{cam_label(cam)} · not labelled")
+        draw_reprojected(ax_t, v)
 
-    # --- 4: magnified, and the measured error split -----------------------
-    # The whole image goes in and the crop is done with the LIMITS, because that is
-    # the only way to get a non-square window through `tile` (`load_tile` squares
-    # any bbox it is given). Badges are in axes coordinates, so they follow.
-    zoom = zoom_on_largest(view_of(vr, "Camera0_mid"))
-    ax0 = tile(cells[(0, 3)], OUT / "fig2p-reproj-f150-Camera0_mid.png", None,
+    # --- 4: magnified, and the accept-or-nudge evidence --------------------
+    # The whole image goes in and the crop is done with the LIMITS (non-square
+    # window). Reprojected DASHED over detected SOLID -- at this magnification
+    # the offset between them is the tile's whole content, and the linestyles
+    # carry the "dotted = reprojected / solid = detected" key below.
+    vm = view_of(vr, "Camera0_mid")
+    zoom = zoom_on_largest(vm)
+    ax0 = tile(cells[(0, 3)], OUT / f"fig2p-reproj-f{frame}-Camera0_mid.png", None,
                badge=f"{cam_label('Camera0_mid')} · magnified")
     ax0.set_xlim(zoom[0], zoom[2])
     ax0.set_ylim(zoom[3], zoom[1])
+    draw_detected(ax0, vm, lw=MAG_DET_LW, ms=MAG_DET_MS)
+    draw_reprojected(ax0, vm, lw=MAG_REP_LW, ms=MAG_REP_MS)
     # The cursor goes on the tile a labeller would act on: the magnified,
     # unlabelled view whose overlay is a reprojection. Sized at 13% of the zoom
     # height so it reads as a pointer at 33 mm tall and does not cover the animal.
-    tgt = click_target(OUT / "fig2p-reproj-f150-Camera0_mid.png", zoom)
+    tgt = click_target(vm, zoom)
     if tgt is None:
-        print("  [warn] no overlay ink found — cursor skipped")
+        print("  [warn] no reprojected keypoint in the zoom — cursor skipped")
     else:
         click_cursor(ax0, tgt, h=0.13 * (zoom[3] - zoom[1]))
         print(f"  cursor at {tgt[0]:.0f}, {tgt[1]:.0f} px in the source frame")

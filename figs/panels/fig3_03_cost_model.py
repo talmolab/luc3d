@@ -89,10 +89,20 @@ def main():
     #: panel and the "not run" point in panel f are the SAME number.
     cap = load("fig3_headtohead.json")["caps"]["max_hypotheses_per_frame"]
 
+    render(df, cap, "third", 3)
+    # fig13's a/b stack keeps the ORIGINAL half-span geometry (Eric, after the
+    # 2026-08-25 third-span re-span for fig3's hyp-illustration row: "you
+    # messed up the [side] of 13b you changed the x axis size, that is a
+    # mistake, change it back") -- so fig13 gets its own half-span twin, which
+    # fig13_sync.build_stack now reads instead of fig3's b.
+    render(df, cap, "half", 13)
+
+
+def render(df, cap, span, fig_no):
     # key=4, one per camera count. The band panel() reserves has to match the number
     # of entries actually stacked in it: keyed too small, the last entries fall out
     # of the band and land on the top tick label and the data.
-    fig, ax = panel("half", "std", key=4)
+    fig, ax = panel(span, "std", key=4)
     for i, c in enumerate(CAMERAS):
         g = df[df.cameras == c]
         # `level()`, NOT SET2 (review 2026-08-13, X.1). Rig size is an ORDERED
@@ -132,7 +142,7 @@ def main():
     footnote(ax, f"dotted rule: the harness's 10{_sup(round(math.log10(cap)))} "
                  "hypotheses/frame cap\n"
                  "greedy (LUC3D) enumerates none: C solves per frame")
-    save(fig, 3, "b", "cost_model")
+    save(fig, fig_no, "b", "cost_model")
 
 
 if __name__ == "__main__":

@@ -1,28 +1,47 @@
 #!/usr/bin/env python3
 """
-Fig 5e -- what kind of behaviour it is: brief, and STILL.
+Fig 5e -- he is pursuing her: his own BODY AXIS is oriented at her while moving;
+hers is not oriented at him.
 
-THE STILLNESS IS THE FINDING, and it is the one that decides how the display may be
-described. A mutual upright posture at close range is the classic agonistic
-configuration, and the obvious caption would be "boxing". But the animals move at a
-median 0.44x their OWN baseline speed during the display, with 94% of events below
-baseline: they stop, rise, hold for about 0.7 s, and come down. That is a standoff or
-a mutual assessment, not a tussle -- and this figure therefore says "upright display"
-and never "fight". Video would be needed to go further, and no video was scored.
+PURSUIT BY FACING, NOT BY TRAVEL DIRECTION (revised 2026-08-21, fifth version of
+this panel -- two changes from the previous one, both requested after that version
+was not convincing). First, `pursuit_rel_t0`/`pursuit_rel_t1` (figs/fig5_upright.py)
+now decompose each animal's own BODY-AXIS ORIENTATION (Nose -> TTI, not the velocity
+vector -- an animal can travel toward its partner while turned sideways, or face it
+while stationary, and these are different questions) onto the line connecting the
+two animals, then scale by that animal's own (unsigned) speed so facing without
+moving scores near zero rather than a large number: for track a, `away_a` is the
+unit vector from the OTHER animal to a, `facing_a` is a's own Nose->TTI axis, and
+`pursuit_a = dot(facing_a, away_a) * speed_a`, divided by a's own baseline speed.
+Second, the window widened from the last 0.5 s before onset to the last 1.5 s: the
+peri time course showed the male/female gap is not a last-instant effect, it is
+present (if anything slightly larger) a full 1-1.5 s out from onset -- a sustained
+orientation difference over the whole approach, not a flourish right before contact.
 
-Speed is each animal's tail-base translation, smoothed over 0.2 s, in body lengths
-per second, divided by that animal's own whole-session median so cage size and animal
-size cancel. The dashed rule at 1.0 is "as fast as this animal usually moves", which
-is the comparison that matters -- an absolute speed would be uninterpretable.
+THE FINDING, and it is now a much larger effect than the travel-direction version.
+Male: median -0.71 (99% of displays negative -- his body axis points at her, and he
+is moving, on almost every display), IQR -1.75 to -0.31. Female: median -0.06 (62%
+negative -- close to an even split), IQR -0.21 to +0.13 -- close to neutral, not
+oriented at him one way or the other. Paired across all 538 displays with both
+resolved, his score is more negative than hers (Wilcoxon signed-rank
+P = 3.3e-73 -- against P = 9.3e-7 for the retired travel-direction version at the
+narrower window, a difference of 66 orders of magnitude from asking the more precise
+question).
 
-PROBABILITY, NOT COUNTS, and an explicit overflow bin: same two changes as 5c, for
-the same two reasons. 0.7% of displays are faster than 2x baseline and used to fall
-off the right edge unremarked.
+WHAT THIS DOES AND DOES NOT SHOW. It shows he is oriented at her, moving, for over
+a second before a display she leads -- consistent with the raw speed numbers (his
+own retired box plot: median 0.75x baseline vs her 0.34x) being partly explained by
+him closing a real gap while facing her, not moving for some unrelated reason. It
+does NOT show she is oriented AWAY from him (her median is only slightly negative);
+the asymmetry is that HE is doing the orienting-and-approaching, not that she is
+doing the opposite.
 
-THE HEIGHT MATCH HAS MOVED to its own panel (5g). It was an inset here and its y
-axis ran into this panel's median block; it also needed a null it could not fit.
+WHY EACH ANIMAL IS NORMALISED TO ITS OWN BASELINE SPEED, same reasoning as every
+other individual-speed measure in this figure: comparable across animals of
+different overall activity levels.
 
-Source: figs/out/fig5_upright.json `events[]` (figs/fig5_upright.py).
+Source: figs/out/fig5_upright.json `events[].{pursuit_rel_t0,pursuit_rel_t1}`
+        (figs/fig5_upright.py).
 
     python3 figs/panels/fig5_07_upright_stats.py
 """
@@ -31,14 +50,25 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from scipy import stats
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.data_loader import load  # noqa: E402
-from src.style import INK, MUTED, deposit, panel, save, use  # noqa: E402
+from src.style import INK, deposit, panel, save, use  # noqa: E402
 
-CS = "#E78AC3"      # speed
-TOP = 2.0
-NBIN = 32
+CM, CFEM = "#4393C3", "#D6604D"      # male, female -- matches 5b/5d/5f/5g
+
+
+def whisker_extent(v):
+    """matplotlib's own boxplot whisker rule (Q3 + 1.5*IQR, capped at the furthest
+    point actually inside it, and the low-side mirror) -- NOT percentile(5/95),
+    which does not match what the drawn whisker caps actually reach and left the
+    significance bracket cutting through the male cap in an earlier version."""
+    q1, q3 = np.percentile(v, [25, 75])
+    iqr = q3 - q1
+    hi = v[v <= q3 + 1.5 * iqr].max()
+    lo = v[v >= q1 - 1.5 * iqr].min()
+    return lo, hi
 
 
 def main():
@@ -46,40 +76,47 @@ def main():
     d = load("fig5_upright.json")
     ev = pd.DataFrame(d["events"])
     deposit(ev[["dur_s", "peak_hi", "peak_lo", "height_match", "min_nose_gap",
-                "base_gap", "ratio", "speed_rel"]], 5, "fig5e_upright_stats.csv")
+                "base_gap", "ratio", "speed_rel", "speed_rel_t0", "speed_rel_t1",
+                "pursuit_rel_t0", "pursuit_rel_t1"]],
+            5, "fig5e_upright_stats.csv")
 
-    v = ev["speed_rel"].to_numpy(float)
-    v = v[np.isfinite(v)]
-    edges = np.linspace(0, TOP, NBIN + 1)
-    w = edges[1] - edges[0]
-    inside = np.histogram(v[v <= TOP], bins=edges)[0] / v.size
-    over = float((v > TOP).mean())
+    m = ev["pursuit_rel_t0"].to_numpy(float)
+    f = ev["pursuit_rel_t1"].to_numpy(float)
+    both = np.isfinite(m) & np.isfinite(f)
+    m, f = m[both], f[both]
+    w = stats.wilcoxon(m - f)
+    print(f"  male median {np.median(m):.3f}  female median {np.median(f):.3f}  "
+          f"paired Wilcoxon n={both.sum()} P={w.pvalue:.3g}")
 
+    # THIRD/STD, matching 5f's box-and-whisker footprint exactly.
     fig, ax = panel("third", "std")
-    ax.bar(edges[:-1], inside, width=w, align="edge", color=CS, alpha=0.9, lw=0,
-           zorder=2)
-    ax.bar([TOP + 0.5 * w], [over], width=w, align="edge", facecolor="none",
-           edgecolor=CS, lw=0.8, hatch="///", zorder=2)
-    ax.axvline(1.0, color=INK, lw=1.0, ls="--", zorder=3)
-    ax.set_xlabel("speed during display\n(× that animal's own baseline)")
-    ax.set_ylabel("probability")
-    ax.set_xlim(0, TOP + 2.0 * w)
-    ax.set_xticks([0, 0.5, 1.0, 1.5, 2.0])
-    # HEADROOM FOR THE CALLOUT, in the band above the bars. The histogram peaks in
-    # the upper LEFT, which is exactly where a centred label would go, so the block
-    # sits right of the mode and above the 1.0 rule instead.
-    ax.set_ylim(0, inside.max() * 1.65)
+    for x, data, col in ((0, m, CM), (1, f, CFEM)):
+        ax.boxplot(data, positions=[x], widths=0.52, patch_artist=True,
+                   showfliers=False,
+                   medianprops=dict(color="white", lw=1.4),
+                   whiskerprops=dict(color=col, lw=1.0),
+                   capprops=dict(color=col, lw=1.0),
+                   boxprops=dict(facecolor=col, edgecolor=col, lw=0.8))
+    ax.axhline(0.0, color=INK, lw=0.7, ls="--", alpha=0.55, zorder=1)
 
-    below = float((v < 1).mean())
-    ax.text(0.42, 0.98,
-            f"median {np.median(v):.2f}×\n{below * 100:.0f}% below baseline",
-            transform=ax.transAxes, ha="left", va="top", fontsize=6.5,
-            fontweight="bold", color=CS, linespacing=1.25)
-    ax.text(0.42, 0.72, f"median duration {np.median(ev['dur_s']):.2f} s",
-            transform=ax.transAxes, fontsize=6, color=MUTED, va="top", ha="left")
-    ax.annotate(f"> 2×\n{100 * over:.0f}%", (TOP + 0.5 * w, over),
-                textcoords="offset points", xytext=(0, 3), ha="center",
-                va="bottom", fontsize=5.5, color=MUTED, linespacing=1.1)
+    lo_m, hi_m = whisker_extent(m)
+    lo_f, hi_f = whisker_extent(f)
+    lo, hi = min(lo_m, lo_f), max(hi_m, hi_f)
+    pad = 0.12 * (hi - lo)
+
+    # SIGNIFICANCE BRACKET, same idiom as 5f.
+    y = hi + 0.5 * pad
+    ax.plot([0, 0, 1, 1], [y - 0.05, y, y, y - 0.05], color=INK, lw=0.9,
+            solid_joinstyle="miter", clip_on=False)
+    stars = "***" if w.pvalue < 1e-3 else ("**" if w.pvalue < 1e-2 else "*")
+    ax.text(0.5, y + 0.03, stars, ha="center", va="bottom", color=INK,
+            fontsize=8.5, fontweight="bold", clip_on=False)
+
+    ax.set_xticks([0, 1])
+    ax.set_xticklabels(["male", "female"])
+    ax.set_xlim(-0.62, 1.62)
+    ax.set_ylim(lo - pad, y + 3 * pad)
+    ax.set_ylabel("facing-pursuit\n(− = approaching)")
     save(fig, 5, "e", "upright_stats")
 
 

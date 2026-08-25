@@ -123,11 +123,17 @@ ROW_H = 50.0
 #: branch is bypassed) holds the spacing at 2.70 mm, so the key reads unchanged.
 KEY_DY = 0.052 * 52.0 / ROW_H
 
+#: fig11-compact type size, source pt: the DEFAULT render ships inside fig11's
+#: 2x2 block at ~0.48 vector scale (fig11_sync.BLOCK_ROWS), so 11.5 pt prints
+#: ~5.5 pt there (Eric, 2026-08-25: bigger ticks/labels/legends/numbers on the
+#: block panels). The --variant diagnostic keeps its original sizes.
+COMPACT_FS = 11.5
 
 
-def main(variant=False, corrected=True):
+
+def main(variant=False, corrected=True, fresh_arm=False):
     use()
-    sl, fresh, ref, _tab = arms(variant, corrected)
+    sl, fresh, ref, _tab = arms(variant, corrected, fresh_arm)
     ed = sl["error_decomposition"]
     tcf = sl.get("total_camera_frames")
     if not tcf:
@@ -182,7 +188,7 @@ def main(variant=False, corrected=True):
                             "fn_share": blk["error_decomposition"][tk]["fn_share"]}
                            for lab, tk, blk in rows for key, name in TERMS])
     deposit(df, 7,
-            f"{slug('fig7d_error_decomposition', variant, corrected)}.csv")
+            f"{slug('fig7d_error_decomposition', variant, corrected, fresh_arm)}.csv")
 
     # 80 mm rather than a half: this row now carries three panels (e, f, g) and the
     # six labelled rates need the width. At 88 mm the row would not fit 180 mm.
@@ -230,9 +236,35 @@ def main(variant=False, corrected=True):
                 # still sit on the same line on adjacent bars. Stagger the middle
                 # tracker upward; the FP group is spread enough not to need it. (On the
                 # retired arm these were 0.0316 vs 0.0308, i.e. closer still.)
-                lift = 0.055 if (j == 1 and i == 1) else 0.0
-                ax.text(px, v + (0.02 + lift) * top, f"{v:.3g}%", ha="center",
-                        va="bottom", color=color, fontsize=6, fontweight="bold")
+                # COMPACT_FS since the fig11 compact pass (Eric, 2026-08-25: "make
+                # the numbers bigger") -- this render ships inside fig11's 2x2
+                # block at ~0.48 vector scale, so 11.5 pt here prints ~5.5 pt. At
+                # that size the labels are ~13 mm wide on bars ~6 mm apart, so
+                # same-height centred labels overlap whatever the values do: the
+                # OUTER labels lean outward off their bar's far edge (green sets
+                # right-aligned at its left flank, orange left-aligned at its
+                # right flank) and the middle one, which has nowhere sideways to
+                # go, lifts in the switches group where its neighbours' values
+                # are within a label-height of its own.
+                # FP group: centred (its values are a label-height apart already;
+                # nudging green outward ran it into the y ticks). Switches group:
+                # the middle label lifts a full label-height and the orange one
+                # leans right off its bar's far flank -- the two moves that
+                # actually collided at this size.
+                side = 1 if (i == 1 and j == len(series) - 1) else 0
+                lift = 0.24 if (j == 1 and i == 1) else 0.0
+                # SHORT LABELS (Eric, 2026-08-25: "lets use precision like .31%
+                # and .53% etc no need for the 0. or the 3 or 4 decimal places
+                # for 11d" -- the full-precision labels collided at COMPACT_FS).
+                # Two decimals above ~0.1, three below (the switch rates all
+                # start .0xx and two decimals would print two of them as the
+                # same number); leading zero stripped. Full precision stays in
+                # the deposit CSV and the caption.
+                short = (f"{v:.2f}" if v >= 0.0995 else f"{v:.3f}").lstrip("0")
+                ax.text(px + side * bar_w * 0.30, v + (0.02 + lift) * top,
+                        f"{short}%", va="bottom", color=color,
+                        ha="left" if side else "center",
+                        fontsize=COMPACT_FS, fontweight="bold")
         else:
             entries.append((f"{lab}  FP {vals[0]:.3g}% · sw {vals[1]:.3g}%", color))
             if lab == FRESH_LABEL:
@@ -264,8 +296,10 @@ def main(variant=False, corrected=True):
         # 0.085 of the axes height is ~3.4 mm per line, the same air the band's KEY_DY
         # gave, and three lines from y = 0.98 clear the tallest bar (0.531 of a 0.690
         # axis, i.e. 77% of the height) because they hang at the RIGHT edge.
+        # bigger key + wider spacing since the compact pass ("make the legends
+        # bigger")
         text_legend(ax, [(lab, c) for (_b, lab, c, _h) in series],
-                    "upper right", dy=0.085)
+                    "upper right", dy=0.15, size=COMPACT_FS)
     ax.set_xticks(x)
     ax.set_xticklabels([n for _, n in TERMS])
     ax.set_xlim(-0.45, len(TERMS) - 0.55)
@@ -274,6 +308,9 @@ def main(variant=False, corrected=True):
     # lint: clipped + silently dropped -- so keep it terse.)
     ax.set_ylabel("errors (% of frames)")
     ax.set_ylim(0, top)
+    if not variant:
+        ax.tick_params(labelsize=COMPACT_FS)
+        ax.yaxis.label.set_fontsize(COMPACT_FS)
     lo = min(ed[k]["fn_share"] for k, _, _ in TRACKERS)
     hi = max(ed[k]["fn_share"] for k, _, _ in TRACKERS)
     # 100_000/… not .1%: the shares are the SAME numbers as before, but the line
@@ -298,7 +335,7 @@ def main(variant=False, corrected=True):
             f"retired one, so the correction is not one-sided"
             f"\n{pool_note()}")
     footnote(ax, note)
-    save(fig, 7, "d", slug("decomposition", variant, corrected))
+    save(fig, 7, "d", slug("decomposition", variant, corrected, fresh_arm))
 
 
 if __name__ == "__main__":

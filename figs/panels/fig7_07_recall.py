@@ -115,9 +115,9 @@ ROW_H = 50.0
 KEY_DY = 0.052 * 52.0 / ROW_H
 
 
-def main(variant=False, corrected=True):
+def main(variant=False, corrected=True, fresh_arm=False):
     use()
-    sl, fresh, ref, _tab = arms(variant, corrected)
+    sl, fresh, ref, _tab = arms(variant, corrected, fresh_arm)
     d = sl["detector_recall_corr"]
     per = np.asarray(d["per_session"], float)
     # Columns are [recall, luc3d IDF1, sleap IDF1, n_animals, bytetrack IDF1].
@@ -138,7 +138,7 @@ def main(variant=False, corrected=True):
     if not variant:
         deposit(pd.DataFrame({"detector_recall": recall, "luc3d_idf1": luc,
                               "sleap_idf1": sle, "bytetrack_idf1": byt}),
-                7, f"{slug('fig7e_recall', variant, corrected)}.csv")
+                7, f"{slug('fig7e_recall', variant, corrected, fresh_arm)}.csv")
     else:
         # The variant's table carries all three LUC3D arms AND all three recall
         # columns, because the x coordinate is arm-dependent (see the notice above) and
@@ -234,7 +234,7 @@ def main(variant=False, corrected=True):
                  f"although its IDF1 column is byte-identical"
                  f"\n{pool_note()}")
     footnote(ax, note)
-    save(fig, 7, "e", slug("recall", variant, corrected))
+    save(fig, 7, "e", slug("recall", variant, corrected, fresh_arm))
 
 
 if __name__ == "__main__":

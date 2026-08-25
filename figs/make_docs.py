@@ -86,6 +86,20 @@ PRODUCERS = {
     # as the representative, and the scene script is the measurement pass for all.
     "blender-images/renders/enrich_a1_o0.png":
         "blender-images/enrichment_scene.py",
+    # Fig 1d's two 3D tiles: the pose export dumps the app's own reconstruction,
+    # the deposit script fits the arena + carries the cameras, the scene script
+    # draws both renders (--mode pose / --mode rig).
+    "fig1_hardfight_scene.json":
+        "figs/fig1d_pose_export.mjs, figs/fig1_hardfight_scene.py",
+    "blender-images/renders/fig1d_pose.png":
+        "blender-images/fig1d_scene.py",
+    # Fig 2a's "3D from the 2 anchors" tile: the protocol driver dumps the
+    # two-anchor 3D, the deposit script aligns it + fits the floor, and Fig 1d's
+    # scene script renders it (--mode pose --scene out/fig2a_scene.json).
+    "fig2a_scene.json":
+        "figs/fig2_protocol.mjs, figs/fig2a_scene.py",
+    "blender-images/renders/fig2a_pose.png":
+        "blender-images/fig1d_scene.py",
 }
 
 
@@ -221,15 +235,26 @@ def render() -> str:
     # reporting 13 false MISSING rows.
     import fig11_sync as F11
     sync_map = {ltr: (sf, sl, slug) for ltr, sf, sl, slug, _ in F11.MAPPING}
+    # Fig 13 places three PRE-MERGED composites (assemble.py takes one PDF per
+    # slot); no panel script saves those slugs, so each was a false MISSING row
+    # that hid the scripts drawing its halves. fig13_sync.COMPOSITES is the
+    # letter table, same role as fig11_sync.MAPPING above.
+    import fig13_sync as F13
     placed = set()
     for fig_no in sorted(A.LAYOUTS):
         out.append(f"## Figure {fig_no}")
         out.append("")
         if fig_no == 11:
-            out.append("Combined view of Figs 7 + 10: every panel is a source panel "
-                       "PDF copied at reduced vector scale by `figs/fig11_sync.py` "
-                       "(no panel scripts of its own; re-run the sync after any "
-                       "fig7/fig10 panel regenerates).")
+            out.append("Figures 7 and 8 combined (2026-08-20, re-cut 2026-08-25): "
+                       "Figure 7's a-d pre-merged by `figs/fig11_sync.py` into one "
+                       "2x2 block (entry letter a; b/c/d drawn by "
+                       "`assemble.EXTRA_LETTERS`) beside the Chen-2020-style anchor "
+                       "diagram (e, `panels/fig11_00_chen_style.py` -- the one fig11 "
+                       "panel with its own script), over Figure 8's full-width "
+                       "fresh-anchor sweep (f). Fig 7's e/f (recall scatter, "
+                       "fragmentation) are not placed here. Re-run the sync after any "
+                       "fig7/fig8 panel regenerates. `LAYOUTS[8]` is commented out, "
+                       "so Figure 8 no longer assembles on its own.")
             out.append("")
         out.append("| Panel | Title | Drawn by | Reads | Measured by | Deposits |")
         out.append("|---|---|---|---|---|---|")
@@ -241,6 +266,27 @@ def render() -> str:
                     src_fig, src_letter, _ = sync_map[letter]
                     via = (f" (fig{src_fig}{src_letter}, via "
                            f"`figs/fig11_sync.py`)")
+                if fig_no == 13 and slug in F13.COMPOSITES:
+                    for part_letter, part_slug in F13.COMPOSITES[slug]:
+                        part = panel_script(part_letter, part_slug, 13)
+                        title = A.TITLES.get((13, part_letter), "")
+                        note = ("" if part_letter == letter else
+                                f" (drawn inside **{letter}**'s composite)")
+                        if part is None:
+                            out.append(f"| **{part_letter}** | {title} | "
+                                       f"**MISSING**{note} | | | |")
+                            continue
+                        placed.add(part.name)
+                        f = facts(part)
+                        producers = sorted({PRODUCERS.get(i, "—")
+                                            for i in f["inputs"] + f["images"]})
+                        ins = ", ".join([f"`out/{i}`" for i in f["inputs"]]
+                                        + [f"`{i}`" for i in f["images"]]) or "— (drawn)"
+                        prod = ", ".join(f"`{p}`" for p in producers if p != "—") or "—"
+                        dep = ", ".join(f"`{c}`" for c in f["csvs"]) or "—"
+                        out.append(f"| **{part_letter}** | {title} | "
+                                   f"`panels/{part.name}`{note} | {ins} | {prod} | {dep} |")
+                    continue
                 src = panel_script(src_letter, slug, src_fig)
                 if src is None:
                     out.append(f"| **{letter}** | — | **MISSING** | | | |")

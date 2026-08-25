@@ -170,108 +170,115 @@ def build(as_shipped=False):
         # twelve markers and twelve labels in 57 mm. The shipped arm is still measured
         # and still in the deposit -- `--as-shipped` renders the two-series panel it
         # belonged to -- but the comparison this panel makes is exhaustive against the
-        # configuration we would recommend, and that is two series.
+        # configuration we would recommend, and that is two series. FRESH_NAME is the
+        # `{"sync": true, "stale": 20}` + distanceThreshold 25 tracker configuration
+        # (VARIANT_GLOB resolves to the one deposit tagged "stale20" -- see its
+        # docstring), the fresh-anchor operating point this panel exists to show.
         methods = [("exhaustive", "exhaustive", SALMON),
                    ("greedy_fresh", FRESH_NAME, TEAL)]
     rows = []
+    # PER-SESSION rates for the box-and-whisker (review: "show box and whisker
+    # plots not just dots" -- a single pooled dot per config hid that most
+    # sessions are perfect and a few are not). Keyed by (label, method name).
+    session_rates = {}
     for c in q["configs"]:
         if c.get("status") != "ok":
             continue
+        label = f"{c['animals']}×{c['cameras']}"
         for key, name, _ in methods:
-            g = (vc[c["key"]]["gt"]["greedy"] if key == "greedy_fresh"
-                 else c["gt"][key])
+            src = vc[c["key"]] if key == "greedy_fresh" else c
+            field = "greedy" if key == "greedy_fresh" else key
+            g = src["gt"][field]
             rows.append({
-                "label": f"{c['animals']}×{c['cameras']}",
+                "label": label,
                 "hypotheses": None, "method": name,
                 "frames": g["frames"],
                 "gt_exact": g["exact_match_frames"],
                 "misgrouped": g["frames"] - g["exact_match_frames"],
-                # The rate the axis plots, and the count it prints, from the SAME
-                # two numbers -- so the marker height and the label beside it
-                # cannot disagree.
+                # The rate the axis plots, from the SAME two numbers the box
+                # summarises -- so the pooled row and the per-session box
+                # cannot disagree about what went into either.
                 "misgrouped_per_10k": (g["frames"] - g["exact_match_frames"])
                 / g["frames"] * PER,
                 "pair_accuracy_mean": g["pair_accuracy_mean"],
                 "n_agree": c["n_agree"], "n_compared": c["n_compared"],
             })
+            rates = []
+            for ps in src["per_session"]:
+                pg = ps["gt"][field]
+                if pg["frames"] == 0:
+                    continue
+                rates.append((pg["frames"] - pg["exact_match_frames"])
+                             / pg["frames"] * PER)
+            session_rates[(label, name)] = np.array(rates)
     df = pd.DataFrame(rows)
     detail = [d for c in q["configs"] for d in c.get("disagreement_detail", [])]
     vdetail = ([d for c in var["configs"] for d in c.get("disagreement_detail", [])]
                if var else None)
-    return df, detail, methods, vdetail
+    return df, detail, methods, vdetail, session_rates
 
 
 def main(as_shipped=False):
     use()
-    df, detail, methods, vdetail = build(as_shipped)
+    df, detail, methods, vdetail, session_rates = build(as_shipped)
     deposit(df, 3, "fig3c_quality_shipped.csv" if as_shipped
             else "fig3c_quality.csv")
 
     # A THIRD, in both renders: this panel shares its LAYOUTS[3] row with e and f
     # and the grid only closes at 180 mm if all three are "third" (see 3e's note).
-    # The three-series key fits because the series names are kept short.
     fig, ax = panel("third", "std", key=len(methods))
-    labels = list(dict.fromkeys(df.label))
-    x = np.arange(len(labels))
 
-    # A LOG RATE AXIS, because the rates now span 1.3 to 90 per 10,000. On a linear
-    # axis the 4x3 point pins the top and the three two-animal configurations pile up
-    # against the floor, which is what the corpus-scale re-run turned this panel into:
-    # with 92 sessions instead of 4 the counts went from 0/1/3 to three and four
-    # digits, and the old layout collided in five places (lint: 4 OVERLAP, 1 dropped
-    # run). Log separates them and makes the animal-count trend legible, which is the
-    # panel's actual content now that there is a trend to see.
-    # THE TWO LUC3D ARMS SHARE ONE HUE (see the docstring): the fresh-anchor arm is
-    # teal with a HOLLOW marker, not a second colour.
-    hollow = {FRESH_NAME}
-    n_m = len(methods)
-    for mi, (key, name, color) in enumerate(methods):
-        g = df[df.method == name].set_index("label").loc[labels]
-        xs = x + (mi - (n_m - 1) / 2) * (0.52 if n_m == 2 else 0.36)
-        if name in hollow:
-            ax.plot(xs, g.misgrouped_per_10k, "o", mfc="white", mec=color, mew=1.5,
-                    ms=5.5, zorder=3)
-        else:
-            ax.plot(xs, g.misgrouped_per_10k, "o", color=color, ms=5.5, mec="white",
-                    mew=1.0, zorder=3)
-        # RAW COUNT ABOVE EACH MARKER. One misgrouped frame is a fact a rate hides,
-        # so the count stays. Putting one series BELOW its marker was tried and is
-        # wrong at the bottom of a log axis: LUC3D's 2x5 point sits at 1.7 per
-        # 10,000, so its label fell through the axis floor and printed on the spine.
-        # The horizontal dodge separates the series instead; in the three-series
-        # render the hollow arm's label goes a step higher so two arms landing at a
-        # similar rate cannot stack their labels.
-        # THE RAW COUNTS ARE OFF THE ARTWORK (review 2026-08-14: "i also dont like all
-        # the numbers above them its annoying and hard to read"). Eight bold labels
-        # over eight markers on a log axis was the densest text in the figure. The
-        # counts are in the deposited CSV and in the legend; the y axis is a rate and
-        # the denominators are under their own ticks, so the panel still says what
-        # each point is a fraction of.
+    # POOLED ACROSS animals x cameras (review: the 4-config x 2-method grid of
+    # boxes was "ugly and hard to read" -- one box per METHOD, pooling every
+    # session from every configuration, is the plain "how accurate is grouping"
+    # comparison this panel exists to make). Each box is over every session's
+    # per-session misgrouped rate, regardless of which of the 4 configurations
+    # that session came from -- a session is still the unit of replication, the
+    # animals x cameras split just no longer gets its own axis.
+    pooled = {name: np.concatenate([session_rates[(lab, name)]
+                                    for lab in df.label.unique()
+                                    if len(session_rates[(lab, name)])])
+             for _, name, _ in methods}
+
+    # BOX-AND-WHISKER + DOTS over the pooled per-session rates, not one summary
+    # dot (review: "show box and whisker plots not just dots"). UNFILLED boxes --
+    # a solid alpha-fill read as a heavy bar chart when Q1 sits at/near zero
+    # ("those box and whiskers are really ugly"), because a filled box from 0 to
+    # Q3 has no visual box left, just a block. Thin colored outline + a colored
+    # median tick; dots small, faint, and BEHIND the box so its edge stays crisp.
+    x = np.arange(len(methods))
+    rng = np.random.default_rng(0)
+    for i, (key, name, color) in enumerate(methods):
+        v = pooled[name]
+        if not len(v):
+            continue
+        ax.scatter(np.full(len(v), i) + rng.uniform(-0.16, 0.16, len(v)),
+                  v, s=4, color=color, alpha=0.35, linewidths=0, zorder=1)
+        ax.boxplot([v], positions=[i], widths=0.5, patch_artist=False,
+                  showfliers=False, zorder=3, manage_ticks=False,
+                  medianprops=dict(color=color, linewidth=1.8),
+                  boxprops=dict(color=color, linewidth=1.1),
+                  whiskerprops=dict(color=color, linewidth=0.9),
+                  capprops=dict(color=color, linewidth=0.9))
 
     text_legend(ax, [(n, c) for _, n, c in methods], "above")
     ax.set_xticks(x)
-    # n GOES UNDER ITS OWN TICK, not into a list. "n = 4,324,330 - 237,841 - 7,001 -
-    # 3,000 frames" was too long for a 57 mm panel and PyMuPDF dropped the whole run
-    # from the PDF, so the denominators silently vanished from the artwork.
-    def _n(v):
-        return f"{v / 1e6:.1f}M" if v >= 1e6 else (f"{v / 1e3:.0f}k" if v >= 1e4
-                                                  else f"{v:,}")
-    ns = [int(df[df.label == lab].frames.iloc[0]) for lab in labels]
-    ax.set_xticklabels([f"{lab}\n{_n(n)}" for lab, n in zip(labels, ns)])
-    ax.set_xlim(-0.55, len(labels) - 0.45)
-    ax.set_yscale("log")
-    # Floor just below the smallest rate, ceiling one short step above the largest so
-    # the count labels clear the frame. No band is reserved at the top any more:
-    # the pooled totals that used to sit there are legend text now. The ceiling is
-    # widened only if a series exceeds the shipped render's 400 (the fresh arm's
-    # rates were not known when 400 was chosen).
-    top = (400 if as_shipped
-           else max(400, float(df.misgrouped_per_10k.max()) * 10 ** 0.65))
-    ax.set_ylim(0.75, top)
-    ax.set_yticks([1, 10, 100] + ([1000] if top > 1000 else []))
-    ax.set_yticklabels(["1", "10", "100"] + (["1000"] if top > 1000 else []))
+    # NO METHOD NAMES UNDER THE BOXES: the legend above already names and
+    # colors each one, and the fresh-anchor name is too long to sit under a
+    # single box in a 57 mm panel without wrapping onto the next box.
+    ax.set_xticklabels([""] * len(methods))
+    ax.tick_params(axis="x", length=0)
+    ax.set_xlim(-0.6, len(methods) - 0.4)
+    # SYMLOG, not log: most sessions are PERFECT (misgrouped rate exactly 0),
+    # which a log axis cannot place at all. `linthresh=1` keeps the bottom
+    # decade linear (so the pile of zero-rate sessions sits at the floor, not
+    # off the axis) and log-scales the nonzero tail above it.
+    ax.set_yscale("symlog", linthresh=1, linscale=0.6)
+    top = max(400, float(max(v.max() for v in pooled.values() if len(v))) * 10 ** 0.25)
+    ax.set_ylim(0, top)
+    ax.set_yticks([0, 1, 10, 100] + ([1000] if top > 1000 else []))
+    ax.set_yticklabels(["0", "1", "10", "100"] + (["1000"] if top > 1000 else []))
     ax.set_ylabel("frames misgrouped vs GT\nper 10,000 clean frames")
-    ax.set_xlabel("animals × cameras")
 
     # NO POOLED-TOTAL BLOCK ON THE ARTWORK. The corpus-scale re-run put four-digit
     # counts and a 4.57M denominator into a 57 mm panel, and every arrangement of
@@ -296,7 +303,7 @@ def main(as_shipped=False):
         print(f"  fresh anchor vs exhaustive disagree on {len(vdetail):,}: GT sides "
               f"with greedy {vg:,}, exhaustive {ve:,}")
 
-    save(fig, 3, "c", "quality_shipped" if as_shipped else "quality")
+    save(fig, 3, "d", "quality_shipped" if as_shipped else "quality")
 
 
 if __name__ == "__main__":

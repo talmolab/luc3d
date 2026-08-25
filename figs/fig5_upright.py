@@ -56,6 +56,7 @@ REAR_FRAC, NEAR_BL = 0.75, 2.0
 MIN_EVENT_S, MERGE_GAP_S = 0.25, 0.15
 WIN_S = 2.0
 SPEED_WIN_S = 0.20        # smoothing for the speed estimate
+ANGLE_BIN_EDGES_DEG = np.linspace(-180, 180, 25)  # 24 x 15-degree bins, for the rose plot
 
 
 def runs(mask, min_len, merge_gap):
@@ -80,7 +81,8 @@ def _bias(tracks):
     return max(tracks.count(0), tracks.count(1)) / len(tracks)
 
 
-def _session(sd):
+def _load(sd):
+    """Mouse-Dyad-10M session -> (tracks_mm, fps, track_names, experimental_code)."""
     fp = glob.glob(os.path.join(sd, "*points3d*.h5"))
     if not fp:
         return None
@@ -95,6 +97,18 @@ def _session(sd):
                  for t in h["track_names"][:]] if "track_names" in h else ["0", "1"]
         code = h["experimental_code"][()] if "experimental_code" in h else b""
         code = code.decode() if isinstance(code, bytes) else str(code)
+    return t, fps, names, code
+
+
+def session_upright(t, fps, names, code, session):
+    """Detect and characterise mutual upright displays in ONE session.
+
+    Pure function of the array, so any corpus can drive it (Fig 12 runs SLAP-2M and
+    the s-DANNCE SCN2A dyads through this exact detector rather than a copy of it).
+    `t` is (F, A, N, 3) in MILLIMETRES with the floor at z = 0; only the NOSE, TTI
+    and NECK slots are read, so a corpus with a different skeleton adapts by placing
+    its own three nodes in those slots (see `fig12_social.py`).
+    """
     F, A = t.shape[0], t.shape[1]
     if A != 2:
         return None
@@ -103,6 +117,17 @@ def _session(sd):
     if not np.all(np.isfinite(L)) or np.any(L <= 0):
         return None
     Lm = float(np.mean(L))
+
+    # ARENA EXTENT, fit exactly the way fig1_bmimica_scene.py's fit_arena() does
+    # (0.1-99.9th percentile of every body point over the whole session) so an
+    # event's distance to the nearest wall is measured against the same floor
+    # footprint the rest of the pipeline already uses -- not a separately-invented
+    # boundary. There is no calibrated physical wall position in this corpus; this
+    # is each session's own movement-range proxy for it.
+    P_all = t.reshape(-1, 3)
+    P_all = P_all[np.isfinite(P_all).all(1)]
+    wall_x = np.percentile(P_all[:, 0], [0.1, 99.9])
+    wall_y = np.percentile(P_all[:, 1], [0.1, 99.9])
 
     w = int(round(WIN_S * fps))
     min_len = int(round(MIN_EVENT_S * fps))
@@ -133,11 +158,52 @@ def _session(sd):
 
     # speed of the tail base (body translation), body lengths per second
     spd = np.full((F, 2), np.nan)
+    k = np.ones(sw) / sw
     for a in range(2):
         d = np.linalg.norm(np.diff(tti[:, a, :2], axis=0), axis=-1) / Lm * fps
-        k = np.ones(sw) / sw
         spd[1:, a] = np.convolve(d, k, mode="same")
     base_spd = np.nanmedian(spd, axis=0)
+
+    # PURSUIT BY FACING, NOT BY WHERE THE ANIMAL IS ACTUALLY HEADED (revised
+    # 2026-08-21: a first version used the VELOCITY vector -- where the animal is
+    # actually travelling -- instead of this). Facing and travel direction are
+    # different questions: an animal can be moving toward its partner while turned
+    # sideways, or facing it while stationary or backing away. This version asks
+    # specifically whether the animal's own BODY AXIS (Nose -> TTI) is oriented at
+    # its partner, then scales that orientation by how fast the animal is actually
+    # moving, so a fast animal facing its partner counts far more than a slow or
+    # stationary one facing the same way. For track a, `away_a` is the unit vector
+    # from the partner to a (partner -> self): `facing_a` (Nose - TTI, normalised)
+    # dotted with `away_a` is NEGATIVE when a's body axis points at its partner
+    # (opposite `away_a`) and POSITIVE when it points away, and multiplying by that
+    # animal's own (unsigned) speed weights it by how much motion is actually behind
+    # the orientation -- a stationary animal facing its partner scores ~0, not a
+    # large negative number, because facing without moving is not pursuit.
+    sep_vec = tti[:, 0, :2] - tti[:, 1, :2]                       # track 0 - track 1
+    sep_norm = np.linalg.norm(sep_vec, axis=-1)
+    sep_unit = sep_vec / np.where(sep_norm[:, None] > 0, sep_norm[:, None], np.nan)
+    facing_vec = nose[:, :, :2] - tti[:, :, :2]                   # (F, 2, 2)
+    facing_norm = np.linalg.norm(facing_vec, axis=-1)
+    facing_unit = facing_vec / np.where(facing_norm[..., None] > 0,
+                                        facing_norm[..., None], np.nan)
+    pursuit = np.full((F, 2), np.nan)
+    pursuit[:, 0] = np.einsum("ij,ij->i", facing_unit[:, 0, :], sep_unit) * spd[:, 0]
+    pursuit[:, 1] = np.einsum("ij,ij->i", facing_unit[:, 1, :], -sep_unit) * spd[:, 1]
+
+    # RELATIVE HEAD/BODY ANGLE, for the rose-plot panel: how each animal's own HEAD
+    # (Nose -> Neck) and BODY (Neck -> TTI) axis is oriented relative to the
+    # direction TO ITS PARTNER, in degrees, 0 = pointing straight at the partner,
+    # +-180 = pointing straight away. Two different anatomical references on
+    # purpose -- the head can turn independently of the trunk, so "is he facing her"
+    # and "is his whole body turned toward her" can differ.
+    to_partner = np.stack([-sep_vec, sep_vec], axis=1)              # (F, 2, 2)
+    ang_to_partner = np.arctan2(to_partner[:, :, 1], to_partner[:, :, 0])
+    head_vec = nose[:, :, :2] - neck[:, :, :2]
+    body_vec = neck[:, :, :2] - tti[:, :, :2]
+    ang_head = np.arctan2(head_vec[:, :, 1], head_vec[:, :, 0])
+    ang_body = np.arctan2(body_vec[:, :, 1], body_vec[:, :, 0])
+    rel_head_deg = np.degrees((ang_head - ang_to_partner + np.pi) % (2 * np.pi) - np.pi)
+    rel_body_deg = np.degrees((ang_body - ang_to_partner + np.pi) % (2 * np.pi) - np.pi)
 
     mask = rear[:, 0] & rear[:, 1] & np.isfinite(sep) & (sep <= NEAR_BL)
     ev = runs(mask, min_len, gap)
@@ -154,6 +220,27 @@ def _session(sd):
 
     events, peri_gap, peri_hi, peri_lo = [], [], [], []
     peri_dsep, peri_spd_i, peri_spd_f = [], [], []
+    # TRACK-INDEXED, NOT RANK-INDEXED (2026-08-21): peri_hi/peri_lo are "whichever
+    # animal peaked higher in THIS display", which changes hands display by display
+    # (see fig5_06_upright_dynamics.py's old docstring) and was deliberately kept
+    # anonymous. Eric then pointed out that Mouse-Dyad-10M's track slot IS a stable
+    # identity after all -- slot 0 is always male, slot 1 always female, verified
+    # against every session's track_names (6 animal IDs seen only at slot 0, 9 only
+    # at slot 1, zero seen at both) -- so a track-indexed series is no longer "washed
+    # toward the mean" the way an arbitrary identity split would be: female reaches
+    # higher on 80.9% of displays, not ~50%. `peri_t0`/`peri_t1` carry the RAW
+    # track-0/track-1 nose height (no rank relabelling) so the sex-specific curves can
+    # be drawn directly.
+    peri_t0, peri_t1 = [], []
+    # SAME TRACK-INDEXED FIX, for speed (2026-08-21): peri_spd_i/peri_spd_f below are
+    # keyed by INITIATOR RANK, not track/sex, and are also None-gated on init_a being
+    # resolvable. peri_spd_t0/t1 are the track-indexed twins -- unconditional on
+    # init_a, since they don't need to know who started.
+    peri_spd_t0, peri_spd_t1 = [], []
+    peri_pursuit_t0, peri_pursuit_t1 = [], []
+    # DURING-DISPLAY ANGLES, pooled across all events in this session for the rose
+    # plot -- every frame of every display, not a per-event summary.
+    angle_frames = {"head_t0": [], "head_t1": [], "body_t0": [], "body_t1": []}
     examples = []
     for s, e in ev:
         h0 = float(np.nanmax(nz[s:e, 0]))
@@ -176,6 +263,22 @@ def _session(sd):
             lag_s = abs(onsets[0] - onsets[1]) / fps
 
         pre = slice(max(0, s - int(round(0.5 * fps))), s)
+        # WIDER WINDOW FOR PURSUIT SPECIFICALLY (2026-08-21): the peri time course
+        # shows the male/female facing-pursuit gap is not just present in the last
+        # 0.5 s before onset, it is present (and if anything slightly LARGER)
+        # a full 1-1.5 s out -- this is a sustained orientation difference over the
+        # whole approach, not a last-instant effect, so pursuit_rel_t0/t1 use their
+        # own, wider 1.5 s pre-onset window rather than reusing `pre`.
+        pre_pursuit = slice(max(0, s - int(round(1.5 * fps))), s)
+        # PRE-APPROACH ONLY, per track (2026-08-21, revised): `speed_rel` above pools
+        # both animals AND only the display's own [s, e) window -- neither
+        # distinguishes male from female, and "during" is the wrong window for a
+        # question about who is still travelling INTO the display. speed_rel_t0/t1
+        # reuse the exact same 0.5 s pre-onset `pre` window the mutual-velocity
+        # measure already defines, per track, and stop at onset -- they do NOT
+        # include the display itself (an earlier version extended through the
+        # display's end; that pooled the approach with the mostly-still hold and
+        # muddied the "who is still moving in" question this is meant to answer).
         events.append({
             "dur_s": (e - s) / fps,
             "peak_hi": max(h0, h1), "peak_lo": min(h0, h1),
@@ -185,6 +288,22 @@ def _session(sd):
             "ratio": float(np.nanmedian(nose_xy[s:e] / np.maximum(base_xy[s:e], 1e-6))),
             "speed_rel": float(np.nanmedian(spd[s:e]) / np.nanmean(base_spd))
             if np.nanmean(base_spd) > 0 else np.nan,
+            "speed_rel_t0": float(np.nanmedian(spd[pre, 0]) / base_spd[0])
+            if base_spd[0] > 0 else np.nan,
+            "speed_rel_t1": float(np.nanmedian(spd[pre, 1]) / base_spd[1])
+            if base_spd[1] > 0 else np.nan,
+            # RAW (not own-baseline-normalised) speed, same 0.5 s pre-onset window,
+            # body lengths / s -- for panels that want overall speed rather than
+            # each animal's speed relative to its own typical pace.
+            "speed_bl_s_t0": float(np.nanmedian(spd[pre, 0])),
+            "speed_bl_s_t1": float(np.nanmedian(spd[pre, 1])),
+            # PURSUIT BY FACING: negative = body axis oriented at the partner while
+            # moving, positive = oriented away while moving, over the 1.5 s pre-onset
+            # `pre_pursuit` window, each animal's own baseline speed.
+            "pursuit_rel_t0": float(np.nanmedian(pursuit[pre_pursuit, 0]) / base_spd[0])
+            if base_spd[0] > 0 else np.nan,
+            "pursuit_rel_t1": float(np.nanmedian(pursuit[pre_pursuit, 1]) / base_spd[1])
+            if base_spd[1] > 0 else np.nan,
             # mutual velocity: how fast they closed in the half second before, and
             # how fast they separated after
             "approach_bl_s": float(np.nanmedian(dsep[pre])),
@@ -199,7 +318,7 @@ def _session(sd):
             "peak_mm_t1": float(np.nanmax(nz_mm[s:e, 1])),
             "taller_track_mm": int(np.nanmax(nz_mm[s:e, 0])
                                    < np.nanmax(nz_mm[s:e, 1])),
-            "session": os.path.basename(sd),
+            "session": session,
             "lag_s": lag_s,
             # body-axis elevation of each animal at the moment of closest approach
             "elev_hi": float(np.nanmax(ang[s:e, hi_a])),
@@ -208,13 +327,37 @@ def _session(sd):
             "y": float(np.nanmean(tti[s:e, :, 1])),
             "start_frame": int(s), "end_frame": int(e),
         })
+        # DISTANCE TO THE NEAREST WALL, both animals' mean position to the closest
+        # of the four session-fitted edges, in mm and in body lengths.
+        _ex, _ey = events[-1]["x"], events[-1]["y"]
+        _wall_mm = float(min(_ex - wall_x[0], wall_x[1] - _ex,
+                             _ey - wall_y[0], wall_y[1] - _ey))
+        events[-1]["wall_dist_mm"] = _wall_mm
+        events[-1]["wall_dist_bl"] = _wall_mm / Lm
+        # EVERY FRAME OF THIS DISPLAY, both tracks, both anatomical references --
+        # pooled across the whole session below for the rose plot.
+        for _k, _arr in (("head_t0", rel_head_deg[s:e, 0]),
+                        ("head_t1", rel_head_deg[s:e, 1]),
+                        ("body_t0", rel_body_deg[s:e, 0]),
+                        ("body_t1", rel_body_deg[s:e, 1])):
+            _fin = _arr[np.isfinite(_arr)]
+            if _fin.size:
+                angle_frames[_k].append(_fin)
         if s - w >= 0 and s + w < F:
             g = nose_xy[s - w:s + w + 1]
             if np.isfinite(g).all():
                 peri_gap.append(g)
                 peri_hi.append(nz[s - w:s + w + 1, hi_a])
                 peri_lo.append(nz[s - w:s + w + 1, 1 - hi_a])
+                peri_t0.append(nz[s - w:s + w + 1, 0])
+                peri_t1.append(nz[s - w:s + w + 1, 1])
                 peri_dsep.append(dsep[s - w:s + w + 1])
+                peri_spd_t0.append(spd[s - w:s + w + 1, 0] / max(base_spd[0], 1e-9))
+                peri_spd_t1.append(spd[s - w:s + w + 1, 1] / max(base_spd[1], 1e-9))
+                peri_pursuit_t0.append(pursuit[s - w:s + w + 1, 0]
+                                       / max(base_spd[0], 1e-9))
+                peri_pursuit_t1.append(pursuit[s - w:s + w + 1, 1]
+                                       / max(base_spd[1], 1e-9))
                 if init_a is not None:
                     peri_spd_i.append(spd[s - w:s + w + 1, init_a]
                                       / max(base_spd[init_a], 1e-9))
@@ -223,7 +366,7 @@ def _session(sd):
         if (e - s) / fps > 0.5 and min(h0, h1) > 0.9 and np.nanmin(nose_xy[s:e]) < 0.4:
             k = int(s + np.nanargmin(nose_xy[s:e]))
             if np.isfinite(t[k]).all():
-                examples.append({"frame": k, "session": os.path.basename(sd),
+                examples.append({"frame": k, "session": session,
                                  "L_mm": Lm, "pose": t[k].tolist(),
                                  "dur_s": (e - s) / fps})
     if not events:
@@ -262,8 +405,11 @@ def _session(sd):
         })
 
     med = lambda k: float(np.median([x[k] for x in events]))
+    angle_hist = {k: np.histogram(np.concatenate(v) if v else np.array([]),
+                                  bins=ANGLE_BIN_EDGES_DEG)[0].tolist()
+                 for k, v in angle_frames.items()}
     return {
-        "session": os.path.basename(sd), "fps": fps, "minutes": F / fps / 60.0,
+        "session": session, "fps": fps, "minutes": F / fps / 60.0,
         "experimental_code": code,
         "body_length_mm": Lm, "n_events": len(events),
         "rate_per_min": len(events) / (F / fps / 60.0),
@@ -272,8 +418,12 @@ def _session(sd):
         "events": events,
         "peri": {k: (np.nanmedian(np.asarray(v), axis=0).tolist() if v else None)
                  for k, v in (("gap", peri_gap), ("hi", peri_hi), ("lo", peri_lo),
+                              ("t0", peri_t0), ("t1", peri_t1),
                               ("dsep", peri_dsep), ("spd_init", peri_spd_i),
-                              ("spd_follow", peri_spd_f))} | {
+                              ("spd_follow", peri_spd_f),
+                              ("spd_t0", peri_spd_t0), ("spd_t1", peri_spd_t1),
+                              ("pursuit_t0", peri_pursuit_t0),
+                              ("pursuit_t1", peri_pursuit_t1))} | {
                      "n": len(peri_gap), "half_window": w},
         # PER-SESSION INITIATOR BIAS, off the animal's IDENTITY (track), not its
         # height: the share of resolvable displays started by whichever of the two
@@ -287,7 +437,15 @@ def _session(sd):
                                  if e_["initiator_track"] is not None),
         "per_track": per_track,
         "examples": examples[:6],
+        "angle_hist": angle_hist,
     }
+
+
+def _session(sd):
+    ld = _load(sd)
+    if ld is None:
+        return None
+    return session_upright(*ld, os.path.basename(sd))
 
 
 def main():
@@ -304,10 +462,14 @@ def main():
     w = int(round(WIN_S * fps))
     t = np.arange(-w, w + 1) / fps
     peri = {}
-    # ALL SIX SERIES, not just the three the first version had: dsep / spd_init /
+    # TEN SERIES, not just the three the first version had: dsep / spd_init /
     # spd_follow were being computed per session and then silently dropped here, so
     # the deposit carried `null` for them and the velocity panel had nothing to draw.
-    for key in ("gap", "hi", "lo", "dsep", "spd_init", "spd_follow"):
+    # t0/t1 (2026-08-21) are the track-indexed twins of hi/lo, and spd_t0/spd_t1 the
+    # track-indexed twins of spd_init/spd_follow -- see the peri_t0/t1 and
+    # peri_spd_t0/t1 comments above session_upright's event loop.
+    for key in ("gap", "hi", "lo", "t0", "t1", "dsep", "spd_init", "spd_follow",
+                "spd_t0", "spd_t1", "pursuit_t0", "pursuit_t1"):
         cur = []
         for r in rows:
             c = r["peri"].get(key)
@@ -324,10 +486,16 @@ def main():
                      "p25": np.nanpercentile(a, 25, axis=0).tolist(),
                      "p50": np.nanmedian(a, axis=0).tolist(),
                      "p75": np.nanpercentile(a, 75, axis=0).tolist()}
+    # ANGLE HISTOGRAMS ARE PLAIN COUNTS, so summing across sessions is exact --
+    # no interpolation needed the way the peri time courses need it.
+    angle_hist = {k: np.sum([r["angle_hist"][k] for r in rows], axis=0).tolist()
+                 for k in ("head_t0", "head_t1", "body_t0", "body_t1")}
     res = {
         "corpus": "BMimica", "n_sessions": len(rows), "n_events": len(allev),
         "rear_frac": REAR_FRAC, "near_bl": NEAR_BL, "min_event_s": MIN_EVENT_S,
         "edges": EDGES, "nodes": NODES,
+        "angle_hist": angle_hist,
+        "angle_bin_edges_deg": ANGLE_BIN_EDGES_DEG.tolist(),
         "t": t.tolist(), "peri": peri,
         "per_session": [{k: r[k] for k in ("session", "n_events", "rate_per_min",
                                            "body_length_mm", "minutes", "med",

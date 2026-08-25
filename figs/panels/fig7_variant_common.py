@@ -137,7 +137,7 @@ def _require_substituted(t):
                      f"--fix-sleap --muppet-coverage --slap2m")
 
 
-def arms(variant, corrected=True):
+def arms(variant, corrected=True, fresh=False):
     """(shipped, fresh, ref, arm_table) SLAP-2M blocks.
 
     THREE MODES, and the middle one is the manuscript's since 2026-08-13:
@@ -150,9 +150,34 @@ def arms(variant, corrected=True):
                                         `--as-shipped` renders under a `_pre131`
                                         slug for provenance.
       `arms(True)`                   -> all three arms, for the `--variant` render.
+      `arms(False, fresh=True)`      -> the FRESH-ANCHOR arm alone, in the same
+                                        one-arm shape as the corrected default.
+                                        This is what Figure 11 draws; see below.
 
     Outside `--variant` the other three returns are None, so a call site cannot
     silently draw a missing arm as zero -- it has to branch.
+
+    WHY A FOURTH MODE (2026-08-25, Eric: "we should definitely rerun fig11 with
+    the newest tracker that evicts the stale anchors (stale 20) and distThresh
+    25"). `slap2m_fresh_anchor` is that tracker -- {sync, stale 20} +
+    distanceThreshold 25 -- and it has been the configuration the app ships
+    since 2026-08-17, which several other panels already say in as many words
+    (`panels/fig8_07_pr_switches.py`: "the paper now ships IS the fresh anchor";
+    Fig 13 e/g label their arm "greedy, fresh anchor (shipped)"). The prose in
+    this file and in `fig7_variant_tracker.py` calling it "NOT in the app"
+    predates that promotion and is stale.
+
+    FIGURE 11 WAS ALREADY MIXING TWO TRACKERS. `LAYOUTS[11]` places
+    `within_vs_cross_variant` as its a -- the fresh-anchor render -- while b-f
+    were copies of Fig 7's manuscript panels, i.e. the PREVIOUS default. So one
+    figure carried two tracker generations under one name, which is precisely
+    the defect the 2026-08-13 substitution closed for Fig 7. This mode closes it
+    for Fig 11 by giving b-f the same arm a already draws.
+
+    FIGURE 7 IS NOT TOUCHED. The fresh render writes a `_fresh` slug (see
+    `slug`), so it cannot overwrite a manuscript PDF, PNG or CSV -- the same
+    guarantee `--variant` and `--as-shipped` have. Fig 7 keeps plotting the
+    shipped-at-the-time arm it was signed off with.
     """
     if variant:
         t = load(VARIANT_SRC)
@@ -162,23 +187,28 @@ def arms(variant, corrected=True):
         return load("fig3_trackers.json")["slap2m"], None, None, None
     t = load(VARIANT_SRC)
     _require_substituted(t)
+    if fresh:
+        return t[FRESH_KEY], None, None, None
     return t[SHIPPED_KEY], None, None, None
 
 
-def slug(base, variant, corrected=True):
-    """`<base>_variant` under `--variant` and `<base>_pre131` under `--as-shipped`,
-    so neither render can overwrite the manuscript panel's PDF, PNG or deposited CSV.
-    The bare slug belongs to the corrected default."""
+def slug(base, variant, corrected=True, fresh=False):
+    """`<base>_variant` under `--variant`, `<base>_pre131` under `--as-shipped`
+    and `<base>_fresh` under `--fresh`, so NONE of the three can overwrite the
+    manuscript panel's PDF, PNG or deposited CSV. The bare slug belongs to the
+    corrected default."""
     if variant:
         return f"{base}_variant"
+    if fresh:
+        return f"{base}_fresh"
     return base if corrected else f"{base}_pre131"
 
 
 def flags(argv):
-    """`(variant, corrected)` from a panel's `sys.argv`, so all five corrected panels
-    spell the two flags the same way and `--as-shipped` cannot mean one thing on 7c
-    and another on 7g."""
-    return "--variant" in argv, "--as-shipped" not in argv
+    """`(variant, corrected, fresh)` from a panel's `sys.argv`, so all five
+    corrected panels spell the three flags the same way and `--as-shipped`
+    cannot mean one thing on 7c and another on 7g."""
+    return ("--variant" in argv, "--as-shipped" not in argv, "--fresh" in argv)
 
 
 def pool_note():

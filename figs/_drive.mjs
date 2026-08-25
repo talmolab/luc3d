@@ -887,7 +887,17 @@ export async function setOverlayStyle(page, opts = {}) {
  *
  * Returns [{ name, width, height, file, bbox: {x0,y0,x1,y1} | null, nInstances }].
  */
-export async function exportViews(page, { cams = null, prefix = 'view', pad = 0.35, brightness = 1 } = {}) {
+/**
+ * `overlay: false` exports the VIDEO ONLY (no app-drawn overlay composite) --
+ * for panels that draw their own Fig 13-style overlays in matplotlib
+ * (src/skeleton_style.draw_pose_overlay) from the per-node `points` this
+ * function records in every detail entry. `reprojections: true` additionally
+ * records, per view, each instance GROUP's reprojected 2D at this frame
+ * (identity name/color + points) so the "dotted = reprojected" tiles can be
+ * drawn too. Both default off/absent, so every existing caller is unchanged.
+ */
+export async function exportViews(page, { cams = null, prefix = 'view', pad = 0.35, brightness = 1,
+                                          overlay = true, reprojections = false } = {}) {
     const frame = await page.evaluate(() => window.__lucid.state.currentFrame);
     // Expose the app's own colour function once, so tile labels use exactly the
     // colour the overlay drew rather than a hand-picked approximation.
@@ -897,7 +907,7 @@ export async function exportViews(page, { cams = null, prefix = 'view', pad = 0.
             window.__figColor = ov.getInstanceColor;
         }
     });
-    const data = await page.evaluate(async ({ cams, pad, brightness }) => {
+    const data = await page.evaluate(async ({ cams, pad, brightness, overlay, reprojections }) => {
         const st = window.__lucid.state;
         const s = st.session;
         const out = [];
@@ -913,7 +923,7 @@ export async function exportViews(page, { cams = null, prefix = 'view', pad = 0.
             if (brightness !== 1) c.filter = `brightness(${brightness})`;
             c.drawImage(v.canvas, 0, 0, w, h);
             c.filter = 'none';
-            if (v.overlayCanvas) c.drawImage(v.overlayCanvas, 0, 0, w, h);
+            if (overlay && v.overlayCanvas) c.drawImage(v.overlayCanvas, 0, 0, w, h);
 
             // 2D extent of every instance drawn in this view on this frame.
             // fg.instances is a Map<camera, Instance[]>, and BEFORE grouping every
@@ -971,12 +981,50 @@ export async function exportViews(page, { cams = null, prefix = 'view', pad = 0.
                     color = window.__figColor
                         ? window.__figColor(inst, s, v.name, !!st.colorByIdentity, st.currentFrame) : null;
                 } catch { /* colour is a nicety, not worth failing the export */ }
+                // Per-node 2D points for a composer that draws its OWN overlay
+                // (src/skeleton_style.draw_pose_overlay) -- [x, y] or null per
+                // node, in the session skeleton's node order.
+                const points = [];
+                for (let i = 0; p && i + 1 < p.length; i += 2) {
+                    const x = p[i], y = p[i + 1];
+                    points.push(Number.isFinite(x) && Number.isFinite(y)
+                        ? [Math.round(x * 100) / 100, Math.round(y * 100) / 100] : null);
+                }
                 details.push({
-                    track, identity, type: inst.type, color,
+                    track, identity, type: inst.type, color, points,
                     centroid: [Math.round(sx / k), Math.round(sy / k)],
                     box: [Math.round(ax0), Math.round(ay0), Math.round(ax1), Math.round(ay1)],
                     nVisible: k,
                 });
+            }
+
+            // Reprojected 2D of each instance GROUP into this view (opt-in):
+            // what the app draws dotted. Identity color comes from the identity
+            // object itself, so it matches the detections' identity coloring.
+            let reproj = null;
+            if (reprojections && s && s.instanceGroups) {
+                reproj = [];
+                for (const g of (s.instanceGroups.get(st.currentFrame) || [])) {
+                    const ri = g.reprojectedInstances ? g.reprojectedInstances.get(v.name) : null;
+                    const p = ri ? ri._xy : null;
+                    if (!p) continue;
+                    const points = [];
+                    let any = false;
+                    for (let i = 0; i + 1 < p.length; i += 2) {
+                        const x = p[i], y = p[i + 1];
+                        const okp = Number.isFinite(x) && Number.isFinite(y);
+                        any = any || okp;
+                        points.push(okp ? [Math.round(x * 100) / 100, Math.round(y * 100) / 100] : null);
+                    }
+                    if (!any) continue;
+                    const idObj = (s.identities || []).find(o => o.id === g.identityId);
+                    reproj.push({
+                        identityId: g.identityId,
+                        identity: idObj ? idObj.name : null,
+                        color: idObj ? idObj.color : null,
+                        points,
+                    });
+                }
             }
 
             let bbox = null;
@@ -988,10 +1036,11 @@ export async function exportViews(page, { cams = null, prefix = 'view', pad = 0.
                 };
             }
             out.push({ name: v.name, width: w, height: h, bbox, nInstances: n, details,
+                       ...(reproj ? { reprojections: reproj } : {}),
                        png: off.toDataURL('image/png') });
         }
         return out;
-    }, { cams, pad, brightness });
+    }, { cams, pad, brightness, overlay, reprojections });
 
     const res = [];
     for (const d of data) {

@@ -1,0 +1,30 @@
+{
+ "idf1": 0.767287,
+ "accuracy": 0.793124,
+ "grouping_accuracy": 0.999765,
+ "frames_perfectly_grouped": 0.998946,
+ "switches": 47,
+ "sw_per_100k": 11.614,
+ "coverage": 0.936904,
+ "n_gt_dets": 404683,
+ "n_pred_dets": 379149,
+ "unmatched_det": 0,
+ "identities": 3,
+ "animals": 3,
+ "frames": 60000,
+ "runtimeSeconds": 61.313,
+ "fps": 978.6,
+ "condition": {
+  "noise_px": 3.0,
+  "drop_instance": 0.25,
+  "drop_node": 0.0,
+  "occl_dist": 0.0,
+  "occl_prob": 0.0,
+  "com_only": false,
+  "seed": 1791960403
+ },
+ "session": "/root/vast/eric/s-DANNCE-data/s-DANNCE-TRIADS/2023_03_01_M12_M13_M14",
+ "dataset": "triads",
+ "session_name": "2023_03_01_M12_M13_M14",
+ "cell": "C7e_cams3_s3drop25"
+}

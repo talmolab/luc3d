@@ -83,7 +83,7 @@ FOOTERS: dict[int, list[str]] = {}
 #: letter beside it did not. At assembly both are one typographic unit.
 TITLES = {
     # Fig 1 re-lettered 2026-08-16 (Eric: cage render leads the figure).
-    (1, "a"): "The rig, from its own data",
+    (1, "a"): "Dataset arena visualizations with camera rigs and poses",
     (1, "b"): "Pipeline",
     (1, "c"): "Cross-view re-identification",
     (1, "d"): "Triangulated 3D",
@@ -92,11 +92,21 @@ TITLES = {
     (2, "b"): "Placements vs rig size",
     (2, "c"): "Error vs cameras in the solve",
     (2, "d"): "Anchor-pair geometry",
+    # ROW 3 ADDED 2026-08-20 (Eric: "add 13 g i and j to fig 2 as the third
+    # column in that fig" -- moved from a draft combined Fig 13, see
+    # panels/fig2_06_solver_accuracy.py's docstring for the full history).
+    (2, "e"): "Accuracy vs cameras used",
+    (2, "f"): "Triangulation: LUC3D vs Anipose",
+    (2, "g"): "Time per keypoint",
+    # c INSERTED / c-e RE-LETTERED d-f 2026-08-25 (Eric: "integrate
+    # [lucid_hyp_style_sidetop.png] into fig3 as a pdf") -- c's title matches
+    # its Fig 13 twin's, shortened to fit a third-width slot.
     (3, "a"): "Grouping strategies",
     (3, "b"): "Hypotheses per frame",
-    (3, "c"): "Grouping accuracy",
-    (3, "d"): "3D term parameter sweep",
-    (3, "e"): "Time per frame",
+    (3, "c"): "One grouping hypothesis",
+    (3, "d"): "Grouping accuracy",
+    (3, "e"): "3D term parameter sweep",
+    (3, "f"): "Time per frame",
     # EXPLORATORY (2026-08-13): the corr2d x corr3d sweep re-run on all 50
     # BMimica sessions with the fresh-anchor tracker. The manuscript 3e is
     # untouched. Not in LAYOUTS[3] -- it is a separate finding, not a
@@ -108,12 +118,12 @@ TITLES = {
     (4, "d"): "Triangulation: LUC3D vs Anipose",
     (4, "e"): "Time per keypoint",
     (5, "a"): "3D pose and 2D camera views for social rearing behavior",
-    (5, "b"): "Both rise, noses converge",
+    (5, "b"): "Both rise, noses converge — female reaches higher",
     (5, "c"): "One animal is up first",
-    (5, "d"): "Close, hold, withdraw",
-    (5, "e"): "Brief and still",
-    (5, "f"): "Each session has a leader",
-    (5, "g"): "One rear invites another — up close",
+    (5, "d"): "Female is still; male is travelling",
+    (5, "e"): "Male is pursuing female",
+    (5, "f"): "Female initiates displays",
+    (5, "g"): "Female rears first; male mostly joins in",
     # Fig 6 re-lettered 2026-08-19 (difficulty grid leads the figure).
     (6, "a"): "Levels of tracking difficulty",
     (6, "b"): "Cross-view IDF1 by difficulty",
@@ -124,6 +134,12 @@ TITLES = {
     # "(+ experimental arm)" retired 2026-08-17: the fresh-anchor arm the panel
     # features was promoted to the shipped configuration, so the suffix became a
     # false statement about the artwork; the arm is labelled inside the panel.
+    # Figure 12 (supplemental, provisional -- see LAYOUTS[12]).
+    # Titles name all THREE arms' outcome, not just SLAP-2M's: the SCN2A arm was added
+    # 2026-08-20 and "familiar pairs" stopped covering the panel.
+    (12, "a"): "Coupling reproduces in neither further corpus",
+    (12, "b"): "Co-rearing without coordination",
+    (12, "c"): "A leader in every novel session, none elsewhere",
     (7, "a"): "Within- vs cross-view IDF1",
     (7, "b"): "Within-view IDF1 per session",
     (7, "c"): "Per-session paired difference",
@@ -165,19 +181,39 @@ TITLES = {
     # a's source title carries "(+ experimental arm)"; at 0.62 scale the panel is
     # 54.6 mm and the full string ran into b's letter, so it is shortened here --
     # the arm is still labelled inside the panel itself.
-    (11, "a"): "Within- vs cross-view IDF1",
+    # SHORTER than fig7's own title for the same panel: inside the 2x2 block the
+    # b sub-letter sits 38.6 mm in, and the long form ran into it.
+    (11, "a"): "Within vs cross IDF1",
     (11, "b"): "Within-view IDF1 per session",
     (11, "c"): "Per-session paired difference",
     (11, "d"): "Error composition",
-    (11, "e"): "IDF1 vs detector recall",
-    (11, "f"): "Fragmentation",
-    (11, "g"): "s-DANNCE transfer: one view per dataset, 3D reprojected",
-    (11, "h"): "Reprojection vs raw clicks",
-    (11, "i"): "IDF1 vs 2D noise",
-    (11, "j"): "IDF1 under dropout",
-    (11, "k"): "Keypoints vs COM-only",
-    (11, "l"): "Switches vs cameras",
-    (11, "m"): "Switches vs noise",
+    # e/f RE-CUT 2026-08-25 (Eric): the recall scatter and fragmentation panels are
+    # off this figure (fragmentation "more a quirk of mot metrics"); e is now the
+    # Chen-2020-style anchor diagram and f the fresh-anchor sweep it explains.
+    (11, "e"): "The tracker's 2D and 3D anchor correspondence",
+    # FIGURE 8 FOLDED IN HERE 2026-08-20 (Eric: "figure 11 and figure 8 should be
+    # combined and all fit together clearly in a rectangle"); lettered g until the
+    # 2026-08-25 re-cut. Same title as its source, TITLES[(8, "d")], which is
+    # retained so the panel still builds and renders on its own.
+    (11, "f"): "Fresh anchor parameter sweep on Mouse-Dyad-10M Sessions",
+    # FIGURE 13 IS A COMBINED VIEW of Fig 3 + Fig 4's first three panels (see
+    # LAYOUTS[13]/fig13_sync.py). g/i/j (the triangulation-solver panels) were
+    # MOVED OUT to Fig 2 as its new third row 2026-08-20 (Eric: "actually i mean
+    # to add 13 g i and j to fig 2 as the third column in that fig" -- see
+    # panels/fig2_06_solver_accuracy.py's docstring). Titles are the source
+    # panels' own, re-lettered (Fig 4a/solvers is dropped). NO (13, "b") ENTRY:
+    # b is stacked directly under a into ONE composite PDF (fig13_sync.build_stack),
+    # so it has no LAYOUTS[13] slot for assemble() to title -- its letter/title
+    # are hand-drawn onto the composite, reading TITLES[(3, "b")] directly.
+    # NO (13, "h") ENTRY: h (the sweep's IDF1 half, under g in the block's
+    # second column composite) is deliberately untitled -- g's "3D term sweep"
+    # covers the stacked pair and h's y label names its metric.
+    (13, "a"): "Grouping strategies",
+    (13, "c"): "Visualization of ID grouping hypotheses in two camera views",
+    (13, "d"): "An identity switch in one camera view",
+    (13, "e"): "Grouping accuracy",
+    (13, "f"): "Time per frame",
+    (13, "g"): "3D term sweep",
 }
 TITLE_PT = 7.5            # panel titles, below the 9 pt letter
 
@@ -196,7 +232,75 @@ TITLE_PT = 7.5            # panel titles, below the 9 pt letter
 #: plate, a schematic, a rule-only table -- reports none and keeps the flush position,
 #: which is the right answer there: its ink already starts at the panel's left edge.
 #: Opt out by letter here if a particular title is better off flush.
-TITLE_FLUSH: set[tuple[int, str]] = set()
+#: (13, "a"): the a/b stack composite carries BOTH panels' drawings on one page,
+#: so axes_extent's spine scan would centre a's title on b's real (ticked) axes
+#: rather than a's own (a has none -- it is a blank schematic). Flush is the
+#: correct position for a anyway; this just avoids the ambiguous measurement.
+#: (2, "e"): same reasoning, for Fig 2's own merged accuracy/worst-camera panel
+#: (`panels/fig2_06_solver_accuracy.py`, moved here from the draft Fig 13's "g")
+#: -- it has TWO real ticked axes on one page, so this is a genuine
+#: simplification (it would otherwise centre on the union of both axes'
+#: spines), not a no-op.
+#: (11, "a"): the entry is the pre-merged 2x2 block, whose axes_extent spans all
+#: four sub-panels -- centring drifted a's title onto b's (drawn flush by
+#: EXTRA_LETTERS, which axes_extent cannot serve either).
+TITLE_FLUSH: set[tuple[int, str]] = {(13, "a"), (2, "e"), (11, "a")}
+
+#: (figure, letter) -> extra mm to shift a title RIGHT of where the rules above
+#: put it. For a plate -- an image panel with no axes for `axes_extent` to find
+#: -- the title falls back to flush beside the letter, which on a wide plate
+#: leaves it hanging at the far left while every neighbouring plot panel has
+#: its title centred over its axes. There is nothing in the PDF to centre on,
+#: so the alignment has to be stated.
+#:
+#: EMPTY. Fig 13's c was nudged here for a while to sit over the e/f column
+#: below it, but a plate's title starts a fixed 4.4 mm after its own letter,
+#: so pulling the title left far enough to reach that column ran it into the
+#: letter. The alignment Eric was after is done with LETTER_NUDGE_MM instead --
+#: see there.
+TITLE_NUDGE_MM: dict[tuple[int, str], float] = {}
+
+#: (figure, letter) -> extra mm to shift a panel LETTER right.
+#:
+#: A letter normally HANGS 2 mm left of its panel (`lx = max(0.6, x - 2.0)`),
+#: out in the gutter. A letter drawn INSIDE a pre-merged composite cannot do
+#: that -- `build_column`/`build_stack` have no negative coordinates to draw
+#: into, so they set their inner letters at composite_x + 0.6. The two rules
+#: disagree by 2.6 mm, which is why Fig 13's e sat 2.6 mm left of f, and g of h
+#: (Eric, 2026-08-25: "the literal letters e and f do not look vertically
+#: aligned, the literal letters g and h are not vertically aligned").
+#:
+#: Nudging the composite's OWN letter to +0.6 makes each stacked pair line up.
+#: c gets the same +2.6 so that EVERY letter on this figure sits at
+#: panel_x + 0.6: a and d already do (they start at x = 0, so the max() clamps
+#: them there), f and h are drawn there inside their composites, and c/e/g are
+#: nudged onto it. That is what puts c's letter over e's -- the two panels
+#: start within 0.04 mm of each other -- which is the alignment Eric asked for
+#: ("move the 13c title over ... so it aligns with e and f"); the title then
+#: follows its own letter at the usual 4.4 mm, as on every other panel.
+LETTER_NUDGE_MM: dict[tuple[int, str], float] = {
+    (13, "c"): 2.6, (13, "e"): 2.6, (13, "g"): 2.6,
+}
+
+#: (figure, entry letter) -> [(sub letter, dx_mm, dy_mm), ...]: extra letters the
+#: ASSEMBLER draws onto a pre-merged composite, at (panel_x + dx, panel_y + dy)
+#: with the same -1.2 mm baseline rise and TITLES lookup as any entry letter.
+#:
+#: This exists because fig13's approach -- composites drawing their INNER letters
+#: themselves -- cannot letter a sub-panel on a composite's TOP row: the letter
+#: band sits ABOVE the panel, i.e. outside the composite's own page, and content
+#: outside the page is clipped. Drawn here instead, a top-row sub-letter lands in
+#: the assembler's own lead band, at exactly the height of the neighbouring
+#: entries' letters ("make sure that the letters vertically align", Eric
+#: 2026-08-25). A dy > 0 letters a lower row inside the composite, whose headroom
+#: is the composite's own inter-row gap. Sub-letter TITLES are placed flush
+#: (letter + 4.4 mm) -- axes_extent cannot see one sub-panel inside a merged PDF.
+#:
+#: Fig 11a is the 2x2 a-d tracker block (fig11_sync.build_block, which PRINTS
+#: these offsets on every run -- copy them here after any geometry change).
+EXTRA_LETTERS: dict[tuple[int, str], list[tuple[str, float, float]]] = {
+    (11, "a"): [("b", 39.83, 0.0), ("c", 0.0, 32.74), ("d", 46.04, 32.74)],
+}
 
 #: figure -> [row, ...] where a row is [(letter, slug), ...].
 #: NO SIZES HERE. Panels are built on the column grid in src/style.py and saved at
@@ -212,9 +316,18 @@ LAYOUTS = {
         [("c", "tracking")],
         [("d", "reconstruction")],
         [("e", "tool_table")]],
+    # ROW 3 ADDED 2026-08-20 (Eric: "add 13 g i and j to fig 2 as the third
+    # column in that fig" -- moved wholesale from a draft combined Fig 13; see
+    # panels/fig2_06_solver_accuracy.py's docstring for the full history and
+    # why the colours revert to Fig 4's own SALMON/TEAL/GREEN here). e is g/h
+    # merged into one grid(2,1,...) panel (Fig 3e's "double stacked"
+    # convention); f is Fig 4d redrawn at third span instead of copied+squeezed;
+    # g is Fig 4e re-ordered to match f's column order. All three: third span,
+    # std row, 57.3 x 3 + 8 = 179.9 mm, matching row 2's own width exactly.
     2: [[("a", "protocol")],
         [("b", "placements_vs_rig"), ("c", "reprojection_accuracy"),
-         ("d", "baseline_angle")]],
+         ("d", "baseline_angle")],
+        [("e", "solver_accuracy"), ("f", "per_session"), ("g", "time_per_keypoint")]],
     # 3a STACKED AND HALVED, c MOVED UP BESIDE IT (review 2026-08-13). a now reads
     # exhaustive-above-greedy in the order the text introduces them and takes half the
     # page, so c -- the quantitative form of the same contrast, hypotheses per frame --
@@ -226,8 +339,16 @@ LAYOUTS = {
     # was the only place the cost function appeared on any artwork, so METHODS.md now
     # has to carry the 2D and 3D terms in full or the r sweep in 3e is a sweep over an
     # unstated quantity. Panels re-lettered: c->b, d->c, e->d, f->e.
-    3: [[("a", "association"), ("b", "cost_model")],
-        [("c", "quality"), ("d", "sweep"), ("e", "head_to_head")]],
+    # HYP ILLUSTRATION PROMOTED FROM FIG 13 (2026-08-25, Eric: "ok so then
+    # integrate this into fig3 as a pdf"): the what-a-hypothesis-IS render
+    # (panels/fig3_03b_hyp_illustration.py, the corrected/re-picked/recoloured
+    # lucid_hyp_style_sidetop.png) becomes c, beside b's hypothesis count --
+    # the same pairing Fig 13 has carried since 2026-08-20. Old c/d/e
+    # (quality/sweep/head_to_head) re-lettered d/e/f: panel-script save()
+    # letters, the deposited PDFs/PNGs, fig13_sync.py's copy sources, and the
+    # caption/body references in CAPTIONS.md + luc3d.tex all moved with them.
+    3: [[("a", "association"), ("b", "cost_model"), ("c", "hyp_illustration")],
+        [("d", "quality"), ("e", "sweep"), ("f", "head_to_head")]],
     # REGROUPED 2026-08-19 (Eric: "put abc on the same row ... and de is the
     # second row" -- panel a alone on row 1 at two-thirds left a third of the
     # page white). a re-spanned two-thirds -> third; letters unchanged. 4c also
@@ -334,7 +455,12 @@ LAYOUTS = {
     # regenerate -- they are un-plotted, not deleted.
     # 8e (per-session paired differences) was dropped from the figure on
     # instruction 2026-08-13; its script and rendered PDF are retained.
-    8: [[("d", "pr_switches")]],
+    # FIG 8 IS NO LONGER ASSEMBLED AS ITS OWN FIGURE (2026-08-20, Eric: "figure 11 and
+    # figure 8 should be combined ..."). Its one panel is now Fig 11g, copied in by
+    # fig11_sync.py. The LAYOUT is kept COMMENTED rather than deleted so `assemble.py 8`
+    # can be restored in one line; panels/fig8_07_pr_switches.py and
+    # figures/fig8/fig8d_pr_switches.pdf are untouched and still regenerate.
+    # 8: [[("d", "pr_switches")]],
     # EXPLORATORY, NOT IN THE MANUSCRIPT -- see the note beside its TITLES entries.
     # Three full-width rows, one question each, in the order a reader has to take them:
     # 9a is the distribution (survival curves for identity precision, recall and cross-view
@@ -372,13 +498,113 @@ LAYOUTS = {
     # (assemble places panels at native width, so "smaller" must happen in the PDF).
     # REGENERATING A SOURCE PANEL DOES NOT UPDATE FIG 11 -- re-run the sync first:
     #     .venv/bin/python figs/fig11_sync.py && .venv/bin/python figs/assemble.py 11
-    # Letters a-f are Fig 7 a-f (home-corpus tracker comparison); g-m are Fig 10 a-g
-    # (the s-DANNCE transfer benchmark). LAYOUTS[7]/[10] are untouched.
-    11: [[("a", "within_vs_cross_variant"), ("b", "survival"), ("c", "by_animals")],
-         [("d", "decomposition"), ("e", "recall"), ("f", "fragmentations")],
-         [("g", "views")],
-         [("h", "residuals"), ("i", "noise"), ("j", "dropout"), ("k", "inputs")],
-         [("l", "cameras"), ("m", "switches")]],
+    # Letters a-f are Fig 7 a-f (home-corpus tracker comparison). THE s-DANNCE HALF
+    # (g-m, Fig 10 a-g) WAS REMOVED 2026-08-20 (Eric: "for figure 11 get rid of g, h,
+    # i, j, k, l, m"). NOTE WHAT THIS LEAVES: Fig 11 is now the same six source panels
+    # as Figure 7, at 0.635 scale in a 3-wide layout instead of 2-wide -- the two
+    # figures draw the same data from the same PDFs. Flagged to Eric; keep the
+    # duplication in view rather than letting both go to press.
+    # LAYOUTS[7]/[10] are untouched, as are the Fig 10 panel scripts and PDFs.
+    # THREE FULL-WIDTH ROWS, which is the rectangle: 3 + 3 + 1, every row exactly
+    # 180 mm. g is Fig 8d, 180 mm native and placed UNSCALED (fig11_sync.FULL_SCALE)
+    # -- at a-f's 0.635 it would be 114 mm in a 180 mm row and the block would have a
+    # 66 mm notch cut out of its bottom right.
+    # RE-CUT TWICE 2026-08-25 (Eric). First cut: the Chen-2020-style anchor
+    # diagram in, "near the fresh anchor parameter sweep so we can explain that
+    # clearly"; fragmentation ("more a quirk of mot metrics") and the recall
+    # scatter out. Second cut, same day: "make a square on the left out of
+    # a,b,c,d and then make them a bit smaller, then make the diagram big on the
+    # right, get rid of the white space caused by the legend" -- so a-d are ONE
+    # pre-merged 2x2 block (fig11_sync.build_block; sub-letters b/c/d drawn by
+    # THIS assembler via EXTRA_LETTERS so they sit level with a and e), the
+    # diagram spans both of their rows at 91.4 mm (block and diagram solved to
+    # the SAME 56.8 mm height -- fig11_sync.BLOCK_W's comment has the equation),
+    # and the sweep (Fig 8d: identity PR plane + IDF1 survival + switch rates,
+    # its parameter key now one horizontal line along its own bottom) closes the
+    # rectangle full-width beneath the diagram that explains its swept variable.
+    11: [[("a", "block"), ("e", "chen_style")],
+         [("f", "pr_switches")]],
+    # FIGURE 12 IS SUPPLEMENTAL AND PROVISIONAL (Eric 2026-08-20: "put that in a
+    # supplemental figure 12 for now, and we can decide how to present it in fig 6
+    # later"). It asks whether Fig 5's social-rearing leader/follower finding
+    # REPRODUCES outside Mouse-Dyad-10M, and reports that it does not in SLAP-2M's
+    # familiar cagemate pairs. Nothing in Figures 1-11 was renumbered to make room,
+    # and Fig 5 is untouched -- 12 re-measures it, it does not replace it.
+    # Measured by figs/fig12_social.py, which IMPORTS the Fig 5 detectors rather
+    # than copying them, so both figures score the same events the same way.
+    12: [[("a", "coupling_replication")],
+         [("b", "rate_vs_coordination")],
+         [("c", "leader_bias")]],
+    # FIGURE 13 IS A COMBINED VIEW of Figs 3 + 4, on a new figure number so neither
+    # is disturbed (Eric 2026-08-20: "we want to add [the grouping-hypothesis
+    # illustration] to figure 3 in relation to b, but also we want to combine fig 4
+    # with fig 3, this is a big change, so lets call it fig13 for now so we dont
+    # undo any of our other work"). LAYOUTS[3] and LAYOUTS[4] are untouched.
+    #
+    # a directly over b, c beside them spanning both rows (Eric: "lets stack 13
+    # a and b on top of eachoother ... c can be in the top right spanning the
+    # first and second row occupying the whole top right"). assemble.py places
+    # panels by row and has no way to span one panel across two rows, so a+b
+    # are pre-merged into ONE composite PDF by fig13_sync.build_stack, with b's
+    # letter/title hand-drawn onto it; see that function's docstring. (Eric also
+    # asked for a second, "side by side" version to compare against -- built
+    # briefly as LAYOUTS[1301], since deleted on instruction: "forget about 1301
+    # dont use it. delete it.")
+    #
+    # PACKED TO MINIMISE LEFTOVER WIDTH IN EVERY ROW, after passes that each
+    # traded one waste for another (Eric, in order: "there is a lot of white space
+    # under a and b ... extend them downwards" when 13c first sat beside them at
+    # third span and forced their row taller than their own content; "there should
+    # be no white space on either side of the c ... we need it all to stack" when
+    # 13c then went to full page span alone; "we must use the real estate
+    # efficiently" when 13c then packed at std row height beside d, e. Fig 4a
+    # (solvers) is DROPPED (Eric: "get rid of G too") -- its script and PDF are
+    # untouched, un-plotted rather than deleted, same precedent as Fig 8/9's cut
+    # panels -- and h/i/j/k re-letter down to g/h/i/j to stay contiguous.
+    #
+    # Row 1: a, c               a/b stack (see fig13_sync.AB_STACK_SCALE) beside
+    #                           c at the SAME height -- exactly 180 mm, no gap
+    #                           either side (fig13_sync.build_stack).
+    # Row 2: d, e/f, g/h        the idswitch illustration beside the 2x2 data
+    #                           block (two column composites) --
+    #                           77.5 + 47.25 x 2 + 4 x 2 = 180 mm. Widths are
+    #                           solved in fig13_sync (IDSW_W / CELL_W).
+    # ROW 3 (g, i, j -- the triangulation-solver panels) REMOVED 2026-08-20 (Eric:
+    # "actually i mean to add 13 g i and j to fig 2 as the third column in that
+    # fig. so remove 13 g i and j from fig 13 and append it to fig 2") -- see
+    # LAYOUTS[2]'s own row 3 and panels/fig2_06_solver_accuracy.py's docstring
+    # for the full move.
+    #
+    # EVERY ROW-2 PANEL IS NATIVE FIG-13 ARTWORK as of the 2026-08-25 rebuild
+    # (nothing is a scaled copy of a Fig 3 PDF any more): d by
+    # panels/fig13_06_idswitch.py, e by panels/fig13_03_quality.py (thicker
+    # boxes, per-100k axis -- see its docstring), f by
+    # panels/fig13_08_head_to_head.py, g/h by
+    # panels/fig13_07_sweep_split.py. b has
+    # no script -- it is stacked inside a's composite; c is
+    # panels/fig13_00_hyp_illustration.py (rescaled to the a/b stack's height
+    # by fig13_sync.py).
+    # REGENERATING A SOURCE PANEL (fig3) DOES NOT UPDATE FIG 13 -- re-run the
+    # sync first (full list in fig13_sync.py's docstring):
+    #     .venv/bin/python figs/panels/fig13_0*.py   # the native fig13 panels
+    #     .venv/bin/python figs/fig13_sync.py
+    #     .venv/bin/python figs/assemble.py 13
+    # ROW 2 REBUILT AGAIN 2026-08-25 (Eric: "the d, e, f is way too small ...
+    # g should have similar width to c. maybe f should be split up and d, e,
+    # and split up f should be a square next to g ... the fig 13 g is too big
+    # and is not necessary"): the idswitch illustration comes down in width and
+    # the data panels form a 2x2 block in what is left -- the old
+    # sweep panel is SPLIT into its two metrics, and every cell is a NATIVE
+    # ~47 x 35 mm redraw at 7 pt rather than a 0.667-scaled copy. Then the two
+    # sides were SWAPPED and re-lettered (Eric: "h should be on the left side
+    # and d, e, f, g should be on the right side, and re number accordingly"):
+    # d is the illustration, e-h the block. "e" and "g" here are the block's
+    # two COLUMN composites (fig13_sync.build_column -- f's and h's
+    # letters/titles hand-drawn inside, letters run DOWN the columns because
+    # assemble() cannot letter the second panel of a composite's top row).
+    # Full geometry: fig13_sync.py's row-2 comment.
+    13: [[("a", "association"), ("c", "hyp_illustration")],
+         [("d", "idswitch"), ("e", "quality_col"), ("g", "sweep_col")]],
 }
 
 
@@ -554,7 +780,7 @@ def assemble(fig_no: int) -> Path | None:
         page.show_pdf_page(
             fitz.Rect(x * MM, y * MM, (x + w) * MM, (y + h) * MM), src, 0)
         src.close()
-        lx = max(0.6, x - 2.0)
+        lx = max(0.6, x - 2.0) + LETTER_NUDGE_MM.get((fig_no, letter), 0.0)
         page.insert_text(fitz.Point(lx * MM, (y - 1.2) * MM), letter,
                          fontname="hebo", fontsize=LETTER_PT, color=INK)
         # Title beside the letter, as the legacy set had it. Skipped silently when a
@@ -574,8 +800,20 @@ def assemble(fig_no: int) -> Path | None:
                     # edge (it would overhang the artwork and be silently clipped).
                     tx = min(max(x + (span[0] + span[1]) / 2 - tw / 2, tx),
                              x + w - tw)
+            tx += TITLE_NUDGE_MM.get((fig_no, letter), 0.0)
             page.insert_text(fitz.Point(tx * MM, (y - 1.2) * MM), title,
                              fontname="hebo", fontsize=TITLE_PT, color=INK)
+        # Sub-letters of a pre-merged composite (see EXTRA_LETTERS). dy = 0 rows
+        # land in this row's own lead band, exactly level with the entry letters.
+        for sub, dx, dy in EXTRA_LETTERS.get((fig_no, letter), []):
+            sx = x + dx + (0.6 if dx == 0.0 else 0.0)
+            page.insert_text(fitz.Point(sx * MM, (y + dy - 1.2) * MM), sub,
+                             fontname="hebo", fontsize=LETTER_PT, color=INK)
+            stitle = TITLES.get((fig_no, sub))
+            if stitle:
+                page.insert_text(fitz.Point((sx + 4.4) * MM, (y + dy - 1.2) * MM),
+                                 stitle, fontname="hebo", fontsize=TITLE_PT,
+                                 color=INK)
 
     fy = page_h - MARGIN - FOOTER_LEAD * (len(foot) - 0.35)
     for line in foot:

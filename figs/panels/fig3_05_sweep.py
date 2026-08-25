@@ -547,7 +547,7 @@ HOLLOW + DASHED = FRESH ANCHOR, FILLED + SOLID = SHIPPED. Briefly changed to
     # axes height, so anything hung under it prints through it (the first cut
     # of this fix did exactly that); between the rule and the teal curve's
     # ~0.44 floor there is room for two lines.
-    save(fig, 3, "d", "sweep" if not with_shipped else "sweep_with_shipped")
+    save(fig, 3, "e", "sweep" if not with_shipped else "sweep_with_shipped")
 
 
 # --------------------------------------------------------------------------------
@@ -700,7 +700,7 @@ def main_legacy8():
                 ha="center", va="bottom")
 
     text_legend(ax, [("ID-switch rate", SALMON), ("cross-view IDF1", TEAL)], "above")
-    save(fig, 3, "d", "sweep_legacy8")
+    save(fig, 3, "e", "sweep_legacy8")
 
 
 if __name__ == "__main__":

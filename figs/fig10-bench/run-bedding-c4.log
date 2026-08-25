@@ -1,0 +1,13 @@
+12 cells, 4 workers
+[1/12] OK bedding/2024_05_05_F1_F2/C4_com_sigma0 idf1=0.999996 acc=0.999996 sw=0
+[2/12] OK bedding/2024_05_05_F5_F3/C4_com_sigma0 idf1=0.999998 acc=0.999998 sw=0
+[3/12] OK bedding/2024_05_05_F1_F2/C4_com_sigma3 idf1=0.999576 acc=0.999576 sw=2
+[4/12] OK bedding/2024_05_05_F5_F3/C4_com_sigma3 idf1=0.999943 acc=0.999943 sw=0
+[5/12] OK bedding/2024_05_07_F1_F3/C4_com_sigma3 idf1=0.999944 acc=0.999944 sw=0
+[6/12] OK bedding/2024_05_07_F1_F3/C4_com_sigma0 idf1=0.999994 acc=0.999994 sw=0
+[7/12] OK bedding/2024_05_07_F5_F3/C4_com_sigma3 idf1=0.999854 acc=0.999854 sw=0
+[8/12] OK bedding/2024_05_07_F5_F3/C4_com_sigma0 idf1=0.999994 acc=0.999994 sw=0
+[9/12] OK bedding/2024_05_07_F6_F2/C4_com_sigma0 idf1=0.999983 acc=0.999983 sw=0
+[10/12] OK bedding/2024_05_07_F6_F2/C4_com_sigma3 idf1=0.999928 acc=0.999928 sw=0
+[11/12] OK bedding/2024_05_07_F6_F3/C4_com_sigma0 idf1=0.999998 acc=0.999998 sw=0
+[12/12] OK bedding/2024_05_07_F6_F3/C4_com_sigma3 idf1=0.999959 acc=0.999959 sw=0
