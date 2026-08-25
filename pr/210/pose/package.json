@@ -1,5 +1,0 @@
-{
-  "private": true,
-  "type": "module",
-  "description": "Scoped so Node's ESM loader treats these plain ES modules correctly when dynamically imported by scripts/bench/*.mjs. The app itself loads pose/*.js directly via <script type=module> in the browser, which never consults package.json — this file only affects headless Node tooling."
-}
