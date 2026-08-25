@@ -316,14 +316,19 @@ const TRACKING_THRESHOLDS = [
         desc: 'Normalizer for the 2D displacement term of the cross-view tracker (velocity_threshold, normalized image units). Bench value 10.',
     },
     {
-        id: 'distanceThreshold', label: 'Distance threshold (mm)', default: 50,
+        id: 'distanceThreshold', label: 'Distance threshold (mm)', default: 25,
         min: 0.1, max: 1000, step: 1,
-        desc: 'Normalizer for the 3D point-to-ray term of the cross-view tracker (distance_threshold, world units/mm). Bench value 50.',
+        desc: 'Normalizer for the 3D point-to-ray term of the cross-view tracker (distance_threshold, world units/mm). 25 = the validated stale-anchor-fix value (was 50); tightening it alongside `stale` measurably cuts sustained ID switches (figs/fig8-bench, 2026-08-14).',
     },
     {
         id: 'timePenalty', label: 'Time penalty', default: 0.1,
         min: 0, max: 10, step: 0.05,
         desc: 'Exponential decay exp(-time_penalty·Δt) applied over frame gaps in the cross-view tracker (time_penalty). Bench value 0.1.',
+    },
+    {
+        id: 'stale', label: 'Stale detection eviction (frames)', default: 20,
+        min: 0, max: 500, step: 1,
+        desc: 'The stale-anchor fix (pose/cross-view-tracker.js, 2026-08-14): evict a target\'s per-camera detection once it is older than this many frames, before that frame\'s matching runs, so a target cannot be re-triangulated from one fresh view fused with several ancient ones after an occlusion. 0 = off (reproduces the pre-fix, unbounded-staleness reference behavior). Validated default 20; measured to cut sustained ID switches roughly in half to 5x on both benchmark corpora when paired with a lower distance threshold.',
     },
     {
         id: 'reprojErrorThreshold', label: 'Reprojection error threshold (px)', default: 0,
@@ -343,6 +348,7 @@ TRACKING_THRESHOLDS.forEach(function (t) { _thrById.set(t.id, t); });
 const WIZARD_THRESHOLD_IDS = new Set([
     'filterMinVisibleNodes', 'filterMinInstanceScore',
     'corr2dWeight', 'corr3dWeight', 'velocityThreshold', 'distanceThreshold', 'timePenalty',
+    'stale',
     'reprojErrorThreshold',
 ]);
 
