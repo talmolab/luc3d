@@ -844,6 +844,8 @@ function crossViewHyperparams() {
         velocityThreshold: thr('velocityThreshold'),
         distanceThreshold: thr('distanceThreshold'),
         timePenalty: thr('timePenalty'),
+        // Stale-anchor fix (pose/cross-view-tracker.js, 2026-08-14).
+        stale: thr('stale'),
     };
 }
 
