@@ -1967,12 +1967,16 @@ export function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, ses
                     ? (group.getReprojectedInstance ? group.getReprojectedInstance(viewName) : null)
                     : null;
 
+                // Shared by both branches below (materialized Instance vs. raw
+                // reprojection fallback) so the Visibility panel's reprojection
+                // color setting applies regardless of which one a group takes.
+                var isSelected = selectedReprojected && selectedInstanceGroup && selectedInstanceGroup === group;
+                var reprojXColor = isSelected ? '#ffffff'
+                    : reprojNodeColor === 'black' ? '#000000'
+                    : reprojNodeColor === 'track' ? reprojTrackColor
+                    : '#ffffff';
+
                 if (reprojInst) {
-                    var isSelected = selectedReprojected && selectedInstanceGroup && selectedInstanceGroup === group;
-                    var reprojXColor = isSelected ? '#ffffff'
-                        : reprojNodeColor === 'black' ? '#000000'
-                        : reprojNodeColor === 'track' ? reprojTrackColor
-                        : '#ffffff';
                     drawSkeleton(ctx, reprojInst, skeleton, Object.assign({}, reprojRender, {
                         color: reprojXColor,
                         edgeColor: isSelected ? '#ffffff' : reprojTrackColor,
@@ -1988,14 +1992,11 @@ export function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, ses
                         }));
                     }
                 } else {
-                    // Fall back to raw reprojection data. Match the
-                    // primary path's color split: X marks (nodes) use the
-                    // designated reprojection color; connecting edges use
-                    // the track color. SLP-loaded groups populate
-                    // `group.reprojections` without ever materializing
-                    // `reprojectedInstances`, so this branch rendered
-                    // every reprojection in track-color before — making
-                    // it look like "reprojections use the node color."
+                    // Fall back to raw reprojection data. Bulk/"Triangulate
+                    // All" sweeps (pose/triangulation.js triangulateAllFrames)
+                    // populate `group.reprojections` without ever
+                    // materializing `reprojectedInstances`, so this branch is
+                    // the common case for BA-triangulated groups.
                     var reprojPts = group.reprojections ? group.reprojections[viewName] : null;
                     if (reprojPts) {
                         drawReprojectedSkeleton(ctx, reprojPts, skeleton, Object.assign({}, reprojRender, {

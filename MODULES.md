@@ -1396,6 +1396,27 @@ subtitle is populated for loaded projects, not just freshly triangulated ones.
   asserts no duplication; then ungroups one animal and confirms it correctly
   reappears unlinked while the other stays linked with no duplicate —
   confirmed all 4 assertions fail pre-fix and pass post-fix).
+  **`batchLoadLazyFrames`'s worker branch never called `finalizeLazyFrameGroup`
+  (luc3d #209).** The `isSync` branch (`SioLazyLoader`, in-memory `.slp`
+  projects) has always called `buildLazyFrameGroupSync` per frame, which calls
+  `finalizeLazyFrameGroup`. The OTHER branch — worker-backed `LazyFrameLoader`,
+  used for SLEAP analysis `.h5` prediction files
+  (`loading/session-loader.js`: `!lazyAreSlp ? new LazyFrameLoader()`) — built
+  its `FrameGroup` and then unconditionally dumped every raw instance into the
+  unlinked pool, regardless of whether `session.instanceGroups` already had
+  real (possibly hand-labeled `'user'`) groups for that frame. Symptom: a
+  frame rebuilt via this path looked completely untracked/unlabeled the first
+  time it was (re)visited after being evicted — reported as Bundle-Adjustment
+  reprojections "becoming predictions" starting around frame ~5,500, which
+  lines up with `loadAllLazyFrames`'s `BATCH = 5000` sweep window and
+  `ui/ui-wiring.js`'s 5000-frame playback preload (`batchLoadLazyFrames(cur,
+  5000)`) — any frame outside what's already resident takes this branch on
+  first touch. Fixed by calling `finalizeLazyFrameGroup(session, fg,
+  frameIdx)` here too, exactly mirroring the `isSync` branch. Regression test:
+  `tests/e2e/batch-lazy-hydration-worker-loader.mjs` (fakes the worker with a
+  synchronous `postMessage` stand-in; confirmed failing pre-fix — both the
+  pre-existing group's member AND the unrelated raw row landed in the
+  unlinked pool — and passing post-fix).
 - Frame access: `getInstanceGroupsForFrame`,
   `frameHasGroupedUserInstances`, `updateTimelineForFrame`.
 - Method preservation ("exported 3D == displayed 3D", see the BA section above):
@@ -2969,6 +2990,33 @@ palettes, and per-frame draw routines. Receives `frameGroup` and
   just user instances — so the cross-view tracker's output (predicted) shows its
   IDs as text for proofreading. `options.trailLength` threads through to
   `drawNodeTrails`. Covered by `tests/test-node-trails.mjs`.
+  **Reprojection node color ignored the Visibility panel on the raw-fallback
+  path (luc3d #209).** Step 2 has two ways to draw a group's reprojection:
+  a materialized `reprojectedInstances` `Instance` (built by
+  `storeReprojectedInstances`/`getOrComputeReprojectedInstance`,
+  `pose/triangulation.js`), or — when that Map is still empty, which is
+  ALWAYS true right after a bulk `triangulateAllFrames` sweep (BA is
+  typically run this way via "Triangulate All"; it deliberately skips
+  materializing `reprojectedInstances` for memory reasons) — a fallback that
+  draws straight from `group.reprojections`' raw points via
+  `drawReprojectedSkeleton`. `reprojXColor` (the marker/X color, computed
+  from `options.reprojNodeColor`) was a `var` declared only inside the
+  sibling `if (reprojInst)` branch; being function-scoped it still existed
+  in the `else` (raw-fallback) branch but was never assigned there, so it
+  was `undefined` — and `drawReprojectedSkeleton`'s `options.color ||
+  '#ff6b6b'` silently hardcoded every such reprojection to `'#ff6b6b'`,
+  ignoring white/black/track entirely. Because `'#ff6b6b'` is also
+  `TRACK_COLORS[0]`, this read exactly like "reprojections are forced into
+  track color" — and combined with `ui/rendering.js`'s lazy fill toggling a
+  group in and out of the "has `reprojectedInstances`" state across
+  redraws, produced a red/white flash while scrubbing BA-triangulated
+  frames. Fixed by hoisting the `reprojXColor`/`isSelected` computation
+  above the `if`/`else` so both branches share it. Regression test:
+  `tests/e2e/reprojection-fallback-color-setting.mjs` (drives the raw-
+  fallback branch directly with a group that has `reprojections` but no
+  `reprojectedInstances`, and asserts the marker's `fillStyle` matches
+  `reprojNodeColor` — confirmed failing pre-fix, both `'black'` and
+  `'white'` settings drawing `'#ff6b6b'`, and passing post-fix).
 - Misc: `drawLegend`, `getFrameStats`.
 
 **Imports from project modules.** None.
