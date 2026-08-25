@@ -2658,7 +2658,14 @@ export function ensureGroupsFromIdentities(session, frameIdx) {
             var _ulInst = _ulList[_u].instance;
             if (!allInstancesByCam[_cn2]) allInstancesByCam[_cn2] = [];
             allInstancesByCam[_cn2].push(_ulInst);
-            var _idId2 = session.getIdentityIdForTrack(_cn2, _ulInst.trackIdx, frameIdx);
+            // Unlinked rows take the UNLINKED resolver: a trackless one keeps
+            // its identity on the instance, not in the trackIdx-keyed map
+            // (luc3d #201). Asking by track would silently drop exactly the
+            // instances an ungroup produced, so a regroup-by-identity could not
+            // put back what the ungroup took apart.
+            var _idId2 = session.getIdentityIdForUnlinkedInstance
+                ? session.getIdentityIdForUnlinkedInstance(_cn2, _ulInst, frameIdx)
+                : session.getIdentityIdForTrack(_cn2, _ulInst.trackIdx, frameIdx);
             if (_idId2 == null) continue;
             if (!idBuckets[_idId2]) idBuckets[_idId2] = {};
             if (!idBuckets[_idId2][_cn2]) idBuckets[_idId2][_cn2] = _ulInst;

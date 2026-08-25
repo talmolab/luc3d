@@ -1480,7 +1480,14 @@ subtitle is populated for loaded projects, not just freshly triangulated ones.
   directly after **Track All** (which assigns identities but does not group).
   `triangulateAllFrames` now sweeps every frame (not just pre-grouped ones),
   so Triangulate All populates the 3D viewer after Track All; previously it
-  found no groups and bailed.
+  found no groups and bailed. Its **unlinked** rows are bucketed with
+  `session.getIdentityIdForUnlinkedInstance`, not the track-keyed resolver: a
+  trackless ungrouped instance carries its identity on the instance, not in the
+  trackIdx-keyed map (luc3d #201), so asking by track silently dropped exactly
+  the instances an ungroup had produced and a regroup-by-identity could not put
+  back what the ungroup took apart. Same fix in
+  `groupByIdentityAndTriangulateAll` (`ui/export-modals.js`), which duplicates
+  this bucketing; tracked rows are unaffected either way.
 
 **Imports from project modules.**
 - `./pose-data.js` — `mat3x3Multiply`, `FrameGroup`, `Instance`,
@@ -1590,6 +1597,21 @@ domain. The UI says **Grouped / Ungrouped** (the panel headers) and must never s
 "Unlinked": in SLEAP an *unlinked prediction* is one with no `from_predicted`
 back-link to a user instance, an unrelated concept that shares the word.
 
+**The identity filter reads a TRACKLESS row's instance-level identity.**
+`_identityMatches` resolves through the per-frame map for a tracked instance —
+never the stale `group.identityId` (the #155/#168 class) — but a trackless
+instance has no key in that map, so an ungrouped trackless row keeps its
+identity on `Instance.identityId` (stamped by `unlinkGroup`; luc3d #201).
+Reading only the map classified every such row as "no identity", which cuts
+both ways and one of them destroys data: `identityMode:'none'` — the "delete
+instances with no ID" sweep — MATCHED, and would delete, an animal the user had
+plainly just labeled, while filtering FOR that identity skipped it. The matcher
+now falls back to `inst.identityId` (`>= 0`) when there is no track, mirroring
+`Session.getIdentityIdForUnlinkedInstance`; tracked rows resolve exactly as
+before. Regression test: `tests/test-custom-delete-ops.js` "a TRACKLESS
+ungrouped instance matches on its retained instance identity" (confirmed to
+fail pre-fix).
+
 **Type and grouping are ORTHOGONAL axes**, not siblings — a grouped instance is
 still user or predicted. "Delete grouped instances" is `type:'all'` +
 `grouping:'grouped'`. Conflating them is the main way this dialog could become
@@ -1676,6 +1698,12 @@ SLP all-sessions, JSON labels, points3d H5, reproj H5).
   calling `update3DViewport(state.currentFrame)` so the 3D viewer populates for
   the current frame (this is the path "Triangulate All" takes when identities
   exist; previously it refreshed only the 2D overlays, leaving 3D empty).
+  Its **unlinked** rows bucket via `session.getIdentityIdForUnlinkedInstance`
+  rather than the track-keyed resolver — a trackless ungrouped instance keeps
+  its identity on the instance (luc3d #201), so asking by track dropped exactly
+  the instances an ungroup produced and this could not re-form what an ungroup
+  took apart. Mirrors the identical fix in `ensureGroupsFromIdentities`
+  (`pose/triangulation.js`), whose bucketing this duplicates.
 
   **Both grouping sweeps ADOPT existing 3D rather than re-solving it.** Each
   deletes a frame's `instanceGroups` and rebuilds fresh `InstanceGroup` objects
@@ -2185,6 +2213,24 @@ edit-group mode, keyboard shortcuts.
   vertical-line fallback when there are no edges).
 - `isInteractiveClickTarget(target)` — used by other UI to skip
   click-through on form controls.
+
+**Deselecting an unlinked instance clears the Delete target too.** Two fields
+track an unlinked selection: `assignmentSelection` (what the amber ring and the
+Ungrouped Instances row highlight read) and `selectedUnlinked` (what
+`_deleteSelected` acts on). Clicking an already-selected unlinked instance
+toggles it out of the first — `addToAssignmentSelection`'s toggle-off branch,
+reached from `onMouseUp` via `_unlinkedWasSelected` on a plain click with no
+drag — and used to leave the second pointing at it. The instance was then still
+armed for **Delete** with nothing anywhere on screen saying so: no ring, and no
+highlighted panel row. The toggle-off branch now clears `selectedUnlinked` when
+it names the same instance, so the two cannot drift apart. (This is also why
+`drawUnlinkedInstances`' `selectedUnlinkedId` option stays deliberately undrawn:
+a click always adds to `assignmentSelection`, so the amber ring already marks
+the selection. It is kept as the hook for ever distinguishing the PRIMARY,
+Delete-target selection within a multi-camera one.) Regression tests:
+`tests/test-assignment.js` "Assignment - deselect clears the Delete target too"
+— the state transition and a full click-click through real `MouseEvent`s, both
+confirmed to fail pre-fix.
 
 **Zoom-aware thresholds.** `_displayToVideo(state, viewName)` returns how many
 video pixels span one CSS pixel on screen given the view's current `zoom.scale`.
@@ -3002,6 +3048,62 @@ palettes, and per-frame draw routines. Receives `frameGroup` and
   distinct colors and the control is unaffected — confirmed it fails
   pre-fix, both colliding instances resolving to the identical color, and
   passes post-fix).
+  **`drawUnlinkedInstances` draws the track/identity NAME pill.** It used to
+  draw only the `?` badge and per-NODE names, so the "track_1"/"id_1" pill was
+  the one cue that vanished the instant an animal was ungrouped — and ungrouping
+  is exactly what the ID-correction workflow asks for (luc3d #201: ungroup, fix
+  the view that's wrong, regroup). The reported symptom was "the label
+  disappeared from the mouse altogether so he couldn't assign it to an ID":
+  with several detached detections on screen and no names on any of them, there
+  was no way to tell which one matched which Ungrouped Instances row. Nothing
+  about the DATA changes across an ungroup — `unlinkGroup` keeps `trackIdx` and
+  retains the identity — so the name was always resolvable; only the drawing was
+  missing. The pill now comes from a shared **`drawNamePill(ctx, cp, text,
+  color, fontSize)`** (module-private) that `drawInstanceLabels` also uses, so
+  the linked and unlinked states put the SAME pill at the SAME anchor and an
+  ungroup cannot move it either. It also save/restores `textAlign`/`textBaseline`,
+  which `drawInstanceLabels` had been leaving to the canvas default (true only
+  for the first instance of its own loop, and false for the unlinked caller,
+  which interleaves the `center`-aligned badge and `left`-aligned node labels).
+  Gating mirrors the linked counterparts exactly: user instances follow the
+  Visibility panel's show-labels (section 4a), predicted ones appear only in ID
+  mode (section 3a). This reaches the overlay-video export too, via the same
+  `userOpts.showLabels`.
+- **`getInstanceLabelName(instance, session, cameraName, useIdentity, frameIdx)`**
+  (exported) — the TEXT counterpart of `getInstanceColor`, resolved in the same
+  order so the two can never name different animals: ID mode + tracked → the
+  per-frame `frameIdentityMap` identity; ID mode + TRACKLESS → the identity
+  retained on `Instance.identityId` (luc3d #201 — `getInstanceColor` already
+  colors from it, so omitting it here would paint an identity color under a
+  track name); otherwise the raw track name, including `drawInstanceLabels`'
+  `'Track N'` fallback. Returns `null` only when there is genuinely nothing to
+  name (no track AND no identity), and the caller then draws no pill rather than
+  inventing a positional index. An explicit per-frame "no identity" marker
+  resolves to null at step 1 and falls through to the track name — the same
+  thing the linked path does, so an ungroup doesn't change that either.
+- **`resolveLabelIdentity(session, instance, group, cameraName, frameIdx)`**
+  (module-private) — the identity a LINKED instance's label should name, in the
+  same two steps `getGroupColor` uses: the per-frame map, then the parent
+  group's own `identityId`. Only the COLOR path had step 2, so a group with an
+  identity but no per-frame entry yet — which is **every group made with the
+  Group button**, since `createGroupFromUnlinked` sets `identityId` without
+  writing the map — was drawn in the identity's color under the raw TRACK name
+  ("track_1", in green-for-id_1). Used by both label passes (3a predicted, 4a
+  user).
+- **`drawInstanceLabels` `options.nameByIndex` / `options.colorByIndex`** —
+  per-instance names/colors, indexed like `instances`, taking precedence over
+  the trackIdx-keyed `trackNames`/`trackColors`. Those maps CANNOT express two
+  instances in one view that share a trackIdx (a real state the raw per-camera
+  tracker produces — the same one `getGroupColor`'s `writtenThisFrame` guard and
+  `drawUnlinkedInstances`' dup-index shading exist for), nor a trackless one,
+  whose `null` key collapses every trackless instance onto a single entry. The
+  color path already told such instances apart per instance; the label path was
+  last-write-wins, so two differently-colored animals could carry the same name.
+  Regression tests: `tests/test-unlinked-track-label.js` (grouped baseline →
+  ungroup keeps the name, in Tracks AND ID mode; trackless retained identity;
+  no pill when there is nothing to name; two grouped instances sharing a
+  trackIdx get their own identity names — all four confirmed to fail pre-fix,
+  the collision case producing `["track_0","track_0"]`).
 - Node trails (issue #102): `drawNodeTrails(ctx, viewName, session, frameIdx,
   options)` — mirrors SLEAP's TrackTrailOverlay. The window is the last
   `options.trailLength`+1 **present** frames up to and including `frameIdx`
@@ -3606,6 +3708,25 @@ row. The producer's per-track `counts`
 (occupancy) is kept as metadata but no longer drives the cap. Normal (few-track)
 sessions are under the cap and render exactly as before. Covered by
 `tests/test-timeline-sparse-occupancy.js`.
+
+**ID Timeline and TRACKLESS ungrouped instances.** Pass 1 of
+`_buildIdentitySegments` resolves each unlinked row with
+`session.getIdentityIdForUnlinkedInstance(cam, instance, frameIdx)`, not the
+track-keyed `getIdentityIdForTrack`. A trackless ungrouped instance keeps its
+identity on the instance (`Instance.identityId`, stamped by `unlinkGroup` —
+`frameIdentityMap` is keyed by trackIdx and a null track has no key; luc3d
+#201), and asking by track reads the shared per-camera "-1" slot instead. Every
+trackless ungrouped detection was therefore missing from the ID Timeline while
+the canvas drew and named it and the Ungrouped Instances table listed its ID.
+The unlinked resolver delegates to the track-keyed one whenever a track exists,
+so tracked rows are unchanged. Regression test:
+`tests/test-timeline-tree-grouping.js` "a TRACKLESS ungrouped instance appears
+in the ID timeline via its retained identity" (confirmed to fail pre-fix). The
+same track-keyed-resolver-on-an-unlinked-row slip was fixed in three sibling
+call sites: `ensureGroupsFromIdentities` (`pose/triangulation.js`),
+`groupByIdentityAndTriangulateAll` (`ui/export-modals.js`) — where it meant a
+regroup-by-identity could not put back what an ungroup took apart — and
+`_identityMatches` (`ui/custom-delete-ops.js`).
 
 **ID Timeline population after lazy eviction.** `_buildIdentitySegments` (the
 identity-mode counterpart to `_buildTrackSegments` above) had the same lazy-
