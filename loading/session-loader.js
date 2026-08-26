@@ -100,6 +100,68 @@ export function recomputeUploadedCameras(session, appState) {
     });
 }
 
+/**
+ * Pick the ONE `.slp` a camera directory should be loaded from.
+ *
+ * A camera dir accumulates successive exports (`<stem>_v1.slp`,
+ * `<stem>_v2.slp`, …) — "Export SLEAP File By Cam" writes `_v<N+1>` every time
+ * — and parsing all of them stacks every version's instances into the same
+ * (frame, camera) slot. The rule is the highest `_vN`, with an unversioned name
+ * counting as 0.
+ *
+ * Two things this adds over a bare max():
+ *
+ *  - **`lastModified` breaks a tie.** Two files at the same version used to be
+ *    resolved by folder-enumeration order, which is arbitrary.
+ *  - **It reports when the version suffix disagrees with the disk.** The
+ *    suffix is a naming convention, not a fact: writing fresh annotations to
+ *    the UNVERSIONED name while an older `_v1` export is still in the directory
+ *    — which is what "replacing the .slp file" means when the original had no
+ *    suffix — makes the stale file win. The version rule is deliberately left
+ *    intact (mtime survives neither copying nor syncing reliably, so it must
+ *    not decide), but the caller can now say so instead of logging a line that
+ *    calls the stale file "highest version".
+ *
+ * Pure — no DOM, no app state — so `tests/test-percam-slp-choice.js` can
+ * exercise it directly.
+ *
+ * @param {Array<{name: string, lastModified?: number}>} slps - one dir's `.slp` files, non-empty
+ * @returns {{file: Object, version: number, newer: Object|null}} `newer` is the
+ *   most-recently-modified candidate when it is NOT the chosen one, else null.
+ */
+export function chooseCameraSlp(slps) {
+    var versionOf = function (f) {
+        var stem = f.name.replace(/\.[^.]+$/, '');
+        var m = stem.match(/_(?:3D_)?v(\d+)$/);
+        return m ? parseInt(m[1]) : 0;
+    };
+    var mtimeOf = function (f) {
+        return typeof f.lastModified === 'number' ? f.lastModified : 0;
+    };
+
+    var best = slps[0];
+    var bestVersion = versionOf(slps[0]);
+    for (var i = 1; i < slps.length; i++) {
+        var v = versionOf(slps[i]);
+        if (v > bestVersion || (v === bestVersion && mtimeOf(slps[i]) > mtimeOf(best))) {
+            best = slps[i];
+            bestVersion = v;
+        }
+    }
+
+    // Strictly newer, so an equal timestamp (common when a whole folder is
+    // copied at once) never raises a warning nobody can act on.
+    var newest = null;
+    for (var j = 0; j < slps.length; j++) {
+        if (slps[j] === best) continue;
+        if (mtimeOf(slps[j]) > mtimeOf(best) && (!newest || mtimeOf(slps[j]) > mtimeOf(newest))) {
+            newest = slps[j];
+        }
+    }
+
+    return { file: best, version: bestVersion, newer: newest };
+}
+
 export async function handleLoadCalibration() {
     try {
         setStatus('Loading calibration...', 'warning');
@@ -2610,54 +2672,98 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
         showLoading('Parsing annotations (' + matchedCameraDirs.length + ' cameras)...');
         var parseJobs = [];
         var lazyJobs = [];
+        var slpFailures = [];   // { camName, file, message } — surfaced, never swallowed
+        var staleWarnings = []; // cameras whose chosen file is not the newest on disk
+
+        // Pass 1 — choose exactly ONE `.slp` per camera.
+        var slpChoices = [];
         for (var cdi = 0; cdi < matchedCameraDirs.length; cdi++) {
             var camDir = matchedCameraDirs[cdi];
-            if (camDir.slps.length > 0) {
-                // Pick exactly ONE .slp per camera — the highest `_vN` version
-                // (first-wins on a tie / when none are versioned). A camera dir
-                // accumulates successive exports (e.g. `<stem>_v1.slp`,
-                // `<stem>_v2.slp`, …); only the latest reflects current state.
-                // Parsing every file here stacked all versions' instances into
-                // the same (frame, camera) slot — the same two tracks repeated N
-                // times in the Instances tab.
-                var bestVersion = -1;
-                var bestSlp = camDir.slps[0];
-                for (var sli = 0; sli < camDir.slps.length; sli++) {
-                    var slStem = camDir.slps[sli].name.replace(/\.[^.]+$/, '');
-                    var slVer = slStem.match(/_(?:3D_)?v(\d+)$/);
-                    var ver = slVer ? parseInt(slVer[1]) : 0;
-                    if (ver > bestVersion) { bestVersion = ver; bestSlp = camDir.slps[sli]; }
-                }
-                slpVersionsLoaded[camDir.camName] = bestVersion;
-                if (camDir.slps.length > 1) {
-                    console.log('[session-folder] ' + camDir.camName + ': '
-                        + camDir.slps.length + ' .slp files found — loading only "'
-                        + bestSlp.name + '" (highest version), skipping '
-                        + (camDir.slps.length - 1) + ' older file(s).');
-                }
-                if (shouldUseLazyH5(bestSlp) || shouldUseLazySlp(bestSlp)) {
-                    lazyJobs.push({ camName: camDir.camName, file: bestSlp });
-                } else {
-                    parseJobs.push({
-                        camName: camDir.camName,
-                        file: bestSlp,
-                        promise: parseSlpH5(bestSlp).catch(function (e) { return null; }),
-                    });
+            if (camDir.slps.length === 0) continue;
+            var chosen = chooseCameraSlp(camDir.slps);
+            slpVersionsLoaded[camDir.camName] = chosen.version;
+            if (camDir.slps.length > 1) {
+                console.log('[session-folder] ' + camDir.camName + ': '
+                    + camDir.slps.length + ' .slp files found — loading only "'
+                    + chosen.file.name + '" (highest version), skipping '
+                    + (camDir.slps.length - 1) + ' older file(s).');
+                // "Highest `_vN`" is a naming convention, not a fact about the
+                // disk. Writing fresh annotations to the UNVERSIONED name while
+                // an older `_v1` export is still sitting in the directory — i.e.
+                // "replacing the .slp file" when the original had no suffix —
+                // silently loads the STALE one. Say so instead of only logging
+                // a line that calls the stale file "highest version".
+                if (chosen.newer) {
+                    staleWarnings.push(camDir.camName + ': loading ' + chosen.file.name
+                        + ' but ' + chosen.newer.name + ' is newer');
+                    console.warn('[session-folder] ' + camDir.camName
+                        + ': chosen "' + chosen.file.name + '" is OLDER on disk than "'
+                        + chosen.newer.name + '" — version suffix wins over mtime.');
                 }
             }
+            slpChoices.push({ camName: camDir.camName, file: chosen.file });
+        }
+
+        // Pass 2 — route the WHOLE FOLDER one way. Deciding per file let one
+        // folder come back part eager and part lazy, and that combination is
+        // silently lossy: the eager cameras populate `session.frameGroups`
+        // during load, and `ensureLazyFrameData` skips any frame that already
+        // has a FrameGroup, so the lazy cameras were never hydrated — on any
+        // frame, ever. All the panes appeared and only some carried
+        // annotations. Replacing prediction files with LUCID exports is exactly
+        // what moves a camera across the fixed 150 MB threshold, which is why
+        // it showed up on a reload and not on the original load.
+        //
+        // Unify toward LAZY, never toward eager: eager is what OOMs the tab on
+        // a 100k-frame prediction, so pulling a big file onto that path to match
+        // a small sibling would trade a display bug for a crash. A small file on
+        // the lazy path just hydrates on scrub. `pose/triangulation.js`'s
+        // `ensureLazyFrameData` also handles a partially-hydrated frame now, so
+        // a mix that arrives some other way degrades instead of losing views.
+        var anyLazy = slpChoices.some(function (c) {
+            return shouldUseLazyH5(c.file) || shouldUseLazySlp(c.file);
+        });
+        for (var sci = 0; sci < slpChoices.length; sci++) {
+            var choice = slpChoices[sci];
+            if (anyLazy) {
+                lazyJobs.push({ camName: choice.camName, file: choice.file });
+            } else {
+                parseJobs.push({
+                    camName: choice.camName,
+                    file: choice.file,
+                    promise: parseSlpH5(choice.file).catch((function (job) {
+                        return function (e) {
+                            // Record instead of discarding: a `null` here used to
+                            // `continue` past the camera, leaving that view empty
+                            // under a "Loaded N camera(s)" success message.
+                            slpFailures.push({
+                                camName: job.camName, file: job.file,
+                                message: (e && e.message) || String(e),
+                            });
+                            console.error('[session-folder] ' + job.camName
+                                + ': failed to parse "' + job.file.name + '":', e);
+                            return null;
+                        };
+                    })({ camName: choice.camName, file: choice.file })),
+                });
+            }
+        }
+        if (anyLazy && slpChoices.length > lazyJobs.length) {
+            console.log('[session-folder] Mixed file sizes — loading all '
+                + lazyJobs.length + ' camera(s) lazily so none are silently skipped.');
         }
 
         // Open lazy files (metadata only — fast). Large `.slp` predictions use the
         // sleap-io.js streaming lazy reader (SioLazyLoader); SLEAP analysis `.h5`
-        // use the worker-backed LazyFrameLoader. A session folder is normally
-        // homogeneous; pick the reader by the lazy jobs' extension.
+        // use the worker-backed LazyFrameLoader. Pick the reader by the extension
+        // of the whole set (see the unification note above).
         var lazyLoader = null;
         if (lazyJobs.length > 0) {
             var lazyAreSlp = lazyJobs.every(function (job) {
                 return /\.slp$/i.test(job.file.name);
             });
             lazyLoader = lazyAreSlp ? new SioLazyLoader() : new LazyFrameLoader();
-            showLoading('Opening ' + lazyJobs.length + ' large '
+            showLoading('Opening ' + lazyJobs.length + ' '
                 + (lazyAreSlp ? 'SLP' : 'H5') + ' file(s) (lazy mode)...');
             try {
                 await Promise.all(lazyJobs.map(function (job) {
@@ -3049,9 +3155,24 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
             }
         }
 
+        // The count is of matched DIRECTORIES, which is not the same as
+        // "cameras whose annotations loaded" — a camera whose `.slp` the reader
+        // choked on contributes a view and no data. Reporting plain success
+        // there is what made a lost view look like a mystery rather than a
+        // failure, so an unreadable file downgrades this to a warning that
+        // names the camera and the file.
         var statusMsg = 'Loaded ' + matchedCameraDirs.length + ' camera(s)';
         if (!calibFile) statusMsg += ' (no calibration — load separately via File > Load Calibration)';
-        setStatus(statusMsg, 'success');
+        var statusKind = 'success';
+        if (slpFailures.length > 0) {
+            statusMsg += ' — ' + slpFailures.length + ' annotation file(s) could not be read: '
+                + slpFailures.map(function (f) { return f.camName + ' (' + f.file.name + ')'; }).join(', ');
+            statusKind = 'error';
+        } else if (staleWarnings.length > 0) {
+            statusMsg += ' — newer .slp present but not loaded: ' + staleWarnings.join('; ');
+            statusKind = 'warning';
+        }
+        setStatus(statusMsg, statusKind);
 
     } catch (err) {
         console.error('[session-folder] Error:', err);
