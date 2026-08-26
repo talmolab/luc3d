@@ -134,6 +134,7 @@ worsens; 38 improve on cross-view IDF1, 8 worsen.
 | **L137** | Fig 3 grouping-accuracy reference `D` → `E`. |
 | **L143** | Fig 3 sweep reference `D` → `G and H`; configuration cross-reference `C` → `E`. |
 | **L370** | Dropped *"and Figure 6F reports it"* from the fragmentation paragraph — 6F is the staleness sweep. The fragmentation numbers are measured but not drawn on any panel (see open questions). |
+| **L370** | Fragmentation numbers updated to the shipped tracker: mean **6.2 → 3.2** fragmentations per camera-session, median **1.3 → 0.9**, and SLEAP fragments less in **72 → 70** of the 74 sessions. The fresh anchor roughly halves the fragmentation cost, so this paragraph now understates rather than overstates the price of the cross-view result. |
 | **L145** | Supplementary pointer repaired: stray space in `Supplementary ~\ref`, hard-coded "Section 5.1 and 5.2" → `\ref`, missing terminal period. |
 
 ---
