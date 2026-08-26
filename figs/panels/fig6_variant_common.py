@@ -103,12 +103,12 @@ ARMS_KEY = "slap2m_arm_comparison"
 #: Names on the artwork. Short enough for a key line (~50 characters at bold 8 pt in
 #: an 88 mm panel; `lint_text.truncated()` is the backstop) and each says what the arm
 #: IS rather than which flag produced it.
-SHIPPED_LABEL = "LUC3D (shipped)"
-FRESH_LABEL = "LUC3D + fresh anchor"
+SHIPPED_LABEL = "LUC3D (previous default)"
+FRESH_LABEL = "LUC3D (fresh anchor)"
 REF_LABEL = "LUC3D pre-#131 (Fig 7 as shipped)"
 
 #: One line each, drawn under the arm it qualifies, in that arm's own colour.
-FRESH_NOTE = "· EXPERIMENTAL: not in the shipped app"
+FRESH_NOTE = "· sync · stale 20 · dist 25"
 REF_NOTE = "· superseded: a tracker retired 2026-07-06"
 
 
@@ -199,16 +199,34 @@ def slug(base, variant, corrected=True, fresh=False):
     corrected default."""
     if variant:
         return f"{base}_variant"
-    if fresh:
-        return f"{base}_fresh"
-    return base if corrected else f"{base}_pre131"
+    if not corrected:
+        return f"{base}_pre131"
+    # `fresh` no longer takes a suffix -- it IS the manuscript panel (see
+    # `flags`). `--no-fresh` writes the retired arm under `_prevdefault` so it
+    # still cannot overwrite the placed PDF/PNG/CSV.
+    return base if fresh else f"{base}_prevdefault"
 
 
 def flags(argv):
-    """`(variant, corrected, fresh)` from a panel's `sys.argv`, so all five
-    corrected panels spell the three flags the same way and `--as-shipped`
-    cannot mean one thing on 7c and another on 7g."""
-    return ("--variant" in argv, "--as-shipped" not in argv, "--fresh" in argv)
+    """`(variant, corrected, fresh)` from a panel's `sys.argv`, so every panel
+    spells the flags the same way and `--as-shipped` cannot mean one thing on
+    one panel and another elsewhere.
+
+    THE FRESH ANCHOR IS THE DEFAULT since 2026-08-26 (Eric: "does this need to
+    be rerun with the new defaults ... stale 20 and distanceThresh 25 ... i
+    dont want to hear about the previous default tracker at all"). Before that,
+    a bare run drew `slap2m` -- the NO-EVICTION tracker -- so Fig 6's b/c/d
+    carried the retired configuration while its own panel a carried the fresh
+    anchor: one figure, two tracker generations, which is exactly the defect
+    the 2026-08-13 substitution closed for the old Fig 7. Nothing was
+    re-measured for the change; `slap2m_fresh_anchor` has been in the deposit
+    since 2026-08-17. `--no-fresh` restores the old arm for provenance.
+
+    The `_fresh` slug SUFFIX is dropped with it (see `slug`): the bare slug is
+    the manuscript panel, and the manuscript panel is now the fresh anchor.
+    """
+    return ("--variant" in argv, "--as-shipped" not in argv,
+            "--no-fresh" not in argv)
 
 
 def pool_note():

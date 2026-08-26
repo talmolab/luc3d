@@ -56,7 +56,8 @@ form itself encode n, which the printed n already does -- but the median line go
 back to TEAL wherever the IQR is too thin to carry a white one (10e's rule), so a
 degenerate stratum looks degenerate rather than looking like a summary.
 
-Source: figs/out/fig9_slap2m.json (shipped cell, per_session[].cross_idf1),
+Source: figs/out/fig9_slap2m.json (sync_stale20_dist25 cell = the fresh
+        anchor, per_session[].cross_idf1),
         figs/out/fig6_detections.json (sessions[].difficulty).
 
     figs/.venv/bin/python figs/panels/fig6_11_idf1_by_difficulty.py
@@ -71,8 +72,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.data_loader import load  # noqa: E402
 from src.style import MUTED, TEAL, deposit, footnote, panel, save, use  # noqa: E402
 
-#: The IDF1 source cell: the tracker as it ships, not any fig8/fig9 experimental arm.
-SHIPPED = "shipped"
+#: The IDF1 source cell. FRESH ANCHOR (2026-08-26, Eric: "rerun with the new
+#: defaults ... stale 20 and distanceThresh 25"). The deposit's `shipped` cell is
+#: the NO-EVICTION tracker -- the configuration this paper retired -- and drawing
+#: it here put the manuscript's dataset figure on one tracker while Fig 3 and
+#: Fig 6A were on another. `sync_stale20_dist25` is {sync, stale 20} +
+#: distanceThreshold 25, the fresh anchor every other placed panel now carries.
+#: The old cell is still in the deposit; nothing was re-measured for this change.
+SHIPPED = "sync_stale20_dist25"
 
 #: The full rating scale, drawn even where a stratum is empty -- 6c/6g/6h all run 1-7,
 #: and this panel sits in the same figure, so its axis must mean the same thing.
@@ -172,12 +179,12 @@ def main():
              # "previous default", not "shipped": the fresh-anchor operating
              # point was promoted to shipped 2026-08-17, and the fig9 cell this
              # panel reads is the arm that shipped BEFORE it. The deposit key
-             # (`SHIPPED = "shipped"`) is fig9_slap2m.json's own spelling and
-             # stays; only the prose name moves.
+             # The deposit cell key is fig9_slap2m.json's own spelling and stays;
+             # only the prose name moves.
              "one dot per session, box = stratum IQR with median, whiskers "
-             "1.5x IQR (fliers not drawn -- every session is a dot); previous default "
-             "LUC3D configuration, cross-view IDF1 (fig9_slap2m.json, the cell "
-             "its key still calls 'shipped')\n"
+             "1.5x IQR (fliers not drawn -- every session is a dot); fresh-anchor "
+             "LUC3D configuration (sync, stale 20, distThresh 25), cross-view "
+             "IDF1\n"
              f"42 multi-animal SLAP-2M sessions (Fig 9a's cohort; the 32 "
              f"single-animal sessions have nothing to associate across views and "
              f"are excluded); difficulty 1 is single-animal only, so n=0\n"
