@@ -97,9 +97,17 @@
     <script src="test-skeleton-json.js"></script>
     <script src="test-triangulation.js"></script>
     <script src="test-triangulation-ba.js"></script>
+    <!-- Excluded views + reprojection-error threshold in triangulateAndReproject.
+         Was referenced only by tests/run-node.js (the vm harness), which is not
+         one of the three routine suite commands — so it never ran either. -->
+    <script src="test-triangulation-robust.js"></script>
     <script src="test-file-io.js"></script>
     <script src="test-interaction.js"></script>
     <script src="test-regressions.js"></script>
+    <!-- Null-node graying, Session.unlinkGroup, reprojected-node nulling,
+         per-view skeleton cache. Referenced by NEITHER this runner nor
+         tests/run-node.js until now, so its 13 cases had never run. -->
+    <script src="test-null-node.js"></script>
     <script src="test-overlays.js"></script>
     <script src="test-node-shape.js"></script>
     <script src="test-unlinked-badge.js"></script>
@@ -121,6 +129,13 @@
     <script src="test-timeline-bugs.js"></script>
     <script src="test-timeline-height.js"></script>
     <script src="test-timeline-sparse-occupancy.js"></script>
+    <!-- Per-session Timeline visibility toggles (Views / Tracks / Identities):
+         the toggle lists, their persistence across display-mode switches, and
+         the hidden-set data model. Referenced only by tests/run-node.js before,
+         so none of these ran in a routine suite pass. -->
+    <script src="test-timeline-visibility-list.js"></script>
+    <script src="test-timeline-visibility-state.js"></script>
+    <script src="test-timeline-visibility-toggles.js"></script>
     <script src="test-grouped-track-dropdown.js"></script>
     <script src="test-track-identity-modals.js"></script>
     <script src="test-video-controller.js"></script>
