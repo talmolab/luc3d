@@ -51,7 +51,7 @@ def proj(stg, P):
 
 # ---- TYPE AND STROKE SIZES ARE GIVEN IN *ON-PAGE* POINTS ----
 # This panel is drawn FIG_W_IN inches wide and then rescaled to PLACED_MM by
-# fig13_sync.py, so a size written here in source points prints at
+# fig3_sync.py, so a size written here in source points prints at
 # source / SRC_PER_PAGE on the page. Every size below therefore states what it
 # should measure ON THE PAGE and is converted once, through `pt()`.
 #

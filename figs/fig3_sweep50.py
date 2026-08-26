@@ -32,18 +32,18 @@ Two things differ from `fig3_sweep.py`:
      balance. The 2D/3D balance is the axis Fig 3e swept, and a tracker whose 3D
      anchor is now fresh has no reason to want the same balance a tracker fusing
      8,000-frame-old detections wanted. This runs Fig 3e's grid on top of it and
-     finds out. Hence the driver here is `figs/fig8-bench/fig8_bench.mjs` (which
-     serves `figs/fig8-bench/xv_experimental.js` in place of
+     finds out. Hence the driver here is `figs/fig6-bench/fig6_bench.mjs` (which
+     serves `figs/fig6-bench/xv_experimental.js` in place of
      pose/cross-view-tracker.js through an ESM loader hook) and NOT
      `figs/fig3-bench/fig3_bench.mjs` — with an EMPTY method block the two are
-     byte-identical on all 8 full sessions, which `fig8_methods.py --verify` proves
+     byte-identical on all 8 full sessions, which `fig6_methods.py --verify` proves
      by SHA-256 of the identities+frames payload. No app source is modified.
 
 WHY IT IS A SEPARATE FILE
 -------------------------
 `fig3_sweep.py` is the deposit Fig 3e is drawn from and it is NOT modified and NOT
 overwritten here. Its 8-session cells, its `tmp/sweep_full/` cache and its
-7,205,370-camera-frame denominator stay exactly as they are; `fig8_param_sweeps.py`
+7,205,370-camera-frame denominator stay exactly as they are; `fig6_param_sweeps.py`
 reuses that cache by symlink and Fig 8's whole comparison rests on it. This script
 imports `fig3_sweep` for the corpus constants, the scorer wiring and
 `camera_frames()`, and touches nothing it owns.
@@ -116,13 +116,13 @@ OUT_DIR = REPO / "figs" / "out"
 # normaliser. Neither module is modified; neither of their deposits is written.
 sys.path.insert(0, str(REPO / "figs"))
 import fig3_sweep as f3  # noqa: E402
-import fig8_methods as f8m  # noqa: E402
-import fig8_param_sweeps as f8  # noqa: E402  (vslug)
+import fig6_methods as f8m  # noqa: E402
+import fig6_param_sweeps as f8  # noqa: E402  (vslug)
 
 #: The Fig 8 driver, not the Fig 3 one — this is the only one that honours a `method`
 #: block. With an empty method block it reproduces pose/cross-view-tracker.js bit for
 #: bit (figs/out/fig8_methods_verify.json).
-DRIVER = REPO / "figs" / "fig8-bench" / "fig8_bench.mjs"
+DRIVER = REPO / "figs" / "fig6-bench" / "fig6_bench.mjs"
 
 TMP_ROOT = OUT_DIR / "tmp" / "sweep50"
 
@@ -546,7 +546,7 @@ def main(a):
         "cache_dir": str(root),
         "max_frames": a.max_frames,
         "driver": str(DRIVER),
-        "experimental_tracker": str(REPO / "figs" / "fig8-bench" / "xv_experimental.js"),
+        "experimental_tracker": str(REPO / "figs" / "fig6-bench" / "xv_experimental.js"),
         "metric": "IDF1 (motmetrics) + ID-switches",
         "total_camera_frames": total_cf,
         "camera_frames_by_session": cf_by_session,
@@ -557,7 +557,7 @@ def main(a):
              f"exists to prove the pipeline runs; do not read numbers off it."
              if a.max_frames else
              "Every cell/session is tracked and scored on the FULL session -- every "
-             "frame, no window -- exactly as fig3_sweep.py and fig8_methods.py were."),
+             "frame, no window -- exactly as fig3_sweep.py and fig6_methods.py were."),
             (f"The corpus is all {len(sessions)} proofread BMimica sessions, NOT Fig "
              f"3e's eight. `switches` is a raw sum, so a switch count here is NOT "
              f"comparable to one in figs/out/fig3_sweep.json (8 sessions, 7,205,370 "
@@ -571,8 +571,8 @@ def main(a):
             "animal pooled over all cameras of a session; switches is the SUM of "
             "per-camera within-view ('2D') ID switches over all cameras and sessions "
             "in the cell. The corr3d=0 cell is the 'no 3D term at all' control.",
-            "The driver is figs/fig8-bench/fig8_bench.mjs, which serves "
-            "figs/fig8-bench/xv_experimental.js in place of "
+            "The driver is figs/fig6-bench/fig6_bench.mjs, which serves "
+            "figs/fig6-bench/xv_experimental.js in place of "
             "pose/cross-view-tracker.js through an ESM loader hook. With an EMPTY "
             "method block it is byte-identical to the shipped tracker on all 8 full "
             "sessions (figs/out/fig8_methods_verify.json, SHA-256 of the "

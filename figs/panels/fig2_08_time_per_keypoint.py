@@ -42,7 +42,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.style import MUTED, entity, panel, save, use  # noqa: E402
-import panels.fig4_06_time_per_keypoint as fig4e  # noqa: E402
+import panels.fig2_16_time_per_keypoint as fig4e  # noqa: E402
 
 #: shared column order with 2f (Anipose-linear, DLT, Anipose-optim, refined),
 #: not Fig 4e's own DLT/Anipose/refined/Anipose-optim pairing -- see docstring.

@@ -49,7 +49,7 @@ at camera 0). To draw the cameras around the animals both have to be in ONE fram
 this reuses the recipe Fig 2, Fig 4 and Fig 5 already use -- triangulate the raw
 per-camera 2D with the calibration, then RANSAC-Procrustes the P-frame points onto
 that cloud -- and then INVERTS it to carry the camera centres and axes into the
-P-frame, exactly as `fig5_views.py` does. A second, differently-wrong alignment would
+P-frame, exactly as `fig4_views.py` does. A second, differently-wrong alignment would
 put Fig 1's cameras somewhere Fig 5's are not. The fitted scale, inlier fraction and
 residual are deposited so the alignment is checkable rather than hidden.
 
@@ -61,7 +61,7 @@ possible pair of skeletons and the least legible possible BEHAVIOUR, two horizon
 smears on the floor of the box. Rearing is the one configuration that reads as an
 action at 50 mm on the page, it is the behaviour Fig 5 is about, and it is what makes
 the box's height mean something. So the rule is Fig 5's own event definition
-(`fig5_upright.py`: neck above REAR_FRAC of the animal's own body length, tail bases
+(`fig4_upright.py`: neck above REAR_FRAC of the animal's own body length, tail bases
 within NEAR_BL of each other) plus two constraints -- every keypoint of both animals
 inside IN_BOX_FRAC of the fitted footprint, since a keypoint outside it would be drawn
 poking through the wall of the box, and tail bases at least MIN_SEP_BL apart so the
@@ -85,7 +85,7 @@ session Fig 5a's own upright-display render comes from (`out/fig5_views.json`), 
 Fig 1a and Fig 5a now show the same behaviour in the same arena -- a DIFFERENT frame
 of it (56,806 here against 93,021 there), so nothing is printed twice.
 
-Needs the bench env for cv2/toml/scipy (as `fig5_views.py` does):
+Needs the bench env for cv2/toml/scipy (as `fig4_views.py` does):
 
     /root/vast/eric/luc3d-bench/lp3d_env/bin/python figs/fig1_bmimica_scene.py
 
@@ -127,7 +127,7 @@ NOSE, TTI, NECK = NODES.index("Nose"), NODES.index("TTI"), NODES.index("Neck")
 #: the arena-fit percentiles (see the docstring): robust to triangulation outliers,
 #: reproducible across sessions to ~5 mm.
 PCT_LO, PCT_HI = 0.1, 99.9
-#: frame-choice rule -- Fig 5's mutual-upright event definition (fig5_upright.py's
+#: frame-choice rule -- Fig 5's mutual-upright event definition (fig4_upright.py's
 #: REAR_FRAC / NEAR_BL, kept numerically identical so Fig 1 shows the same behaviour
 #: Fig 5 measures) plus the two legibility constraints.
 REAR_FRAC = 0.75         # neck above this fraction of the animal's own body length
@@ -293,7 +293,7 @@ def main():
             "name": c, "index": ci,
             "centre_mm": to_p(centre_cal)[0].tolist(),          # P-frame, mm
             # camera axes rotated into the P-frame -- same convention as
-            # fig5_views.py, so the two figures place these cameras identically
+            # fig4_views.py, so the two figures place these cameras identically
             "right": (R_.T @ R[0]).tolist(),
             "down": (R_.T @ R[1]).tolist(),
             "forward": (R_.T @ R[2]).tolist(),

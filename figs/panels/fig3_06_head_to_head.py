@@ -337,7 +337,7 @@ def main():
                  f"bar → {df.hypotheses.iloc[-1] / 1e8:.1f}×10⁸ × "
                  f"{meta['rate'] * 1e6:.0f} µs = {hi_h:.0f} h\n"
                  f"1 s of {FPS:g} fps video ≥ {days_per_s_video:.0f} day")
-    save(fig, 3, "f", "head_to_head")
+    save(fig, 3, "f", "head_to_head_src")
 
 
 if __name__ == "__main__":

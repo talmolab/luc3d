@@ -51,7 +51,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 #: inset is recoloured to match THEM (Eric, 2026-08-19 -- the reverse was tried, with
 #: the tiles taking the app's Okabe-Ito identity palette, and rejected). The app-side
 #: palette that makes the same animal the same colour is derived from the mapping
-#: below and lives in figs/fig6_app.mjs `PALETTE`; keep the two in step.
+#: below and lives in figs/fig5_app.mjs `PALETTE`; keep the two in step.
 #:
 #: H5 TRACK -> APP IDENTITY, MEASURED, NOT ASSUMED. The two orders come from different
 #: passes (SLEAP-Anipose proofread tracks vs LUC3D's cross-view tracker) and do NOT
@@ -81,8 +81,8 @@ COMBOS = {
     (3, 4): ("2022-10-07/10072022190807", 13967),
     # FRAME 6020, NOT A SCAN PICK: this tile is the one Fig 6a's camera-view inset
     # expands, so it must render the instant the app exported. The prepared session
-    # figs/session-slap-10072022145420 starts at original frame 6000 (fig6_session.py
-    # --start) and fig6_app.mjs exports its frame 20, i.e. original 6020 -- an offset
+    # figs/session-slap-10072022145420 starts at original frame 6000 (fig5_session.py
+    # --start) and fig5_app.mjs exports its frame 20, i.e. original 6020 -- an offset
     # CONFIRMED by the colour vote in TRACK_TO_IDENTITY, which is crisp at 6020 and
     # ambiguous 100 frames either side.
     (4, 0): ("2022-10-07/10072022145420", 6020),

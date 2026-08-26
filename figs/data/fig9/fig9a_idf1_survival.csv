@@ -1,3 +1,0 @@
-config,label,cohort,cohort_label,n_sessions,idf1_cross,idf1_cross_median,idf1_within,idp_cross,idr_cross
-shipped,shipped — pose/cross-view-tracker.js as it ships,multi_animal_only,42 multi-animal,42,0.8395506019596576,0.9236558262452395,0.8386499944517269,0.9012665382584168,0.7916055118619632
-sync_stale20_dist25,"M1 + stale 20 + distThresh 25 — EXPERIMENTAL: figs/fig8-bench/xv_experimental.js, not in the shipped app",multi_animal_only,42 multi-animal,42,0.838758786456111,0.9197290697951717,0.8378631242744147,0.9018914481010334,0.790110217155459

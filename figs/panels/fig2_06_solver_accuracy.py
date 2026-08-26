@@ -40,8 +40,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.style import INK, SALMON, TEAL, grid, save, use  # noqa: E402
-import panels.fig4_02_accuracy_vs_cameras as fig4b  # noqa: E402
-import panels.fig4_03_worst_camera as fig4c  # noqa: E402
+import panels.fig2_12_accuracy_vs_cameras as fig4b  # noqa: E402
+import panels.fig2_13_worst_camera as fig4c  # noqa: E402
 
 #: Fig 4b/4c's own colours -- see docstring.
 COLOR = {"dlt": SALMON, "ba": TEAL}

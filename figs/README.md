@@ -1,5 +1,19 @@
 # `figs/` — paper figures
 
+> **FIGURE RENUMBERING (2026-08-26, Eric).** The figure tree now carries the
+> manuscript's own numbering, six figures. The historical repo numbers map as
+> `fig1→fig1`, `fig2→fig2`, `fig13→fig3`, `fig5→fig4`, `fig6→fig5`, `fig11→fig6`;
+> the old fig3/fig4 compositions were absorbed into fig3/fig2, and figs 7–13 were
+> deleted from the branch (git history keeps them). Panel scripts, `data/` CSVs,
+> `figures/` outputs, the sync scripts (`fig3_sync.py`, `fig6_sync.py`) and the
+> measurement scripts were renamed to match. **The `figs/out/` deposit filenames
+> were deliberately left at their historical names** (`fig5_upright.json`,
+> `fig7_variant_best.json`, `fig8_methods_50.json`, `fig9_slap2m.json`, …): they
+> key ~100 GB of machine-local measurement records and are referenced from the
+> harnesses that produced them — renaming the files would break the measurement
+> record for zero gain. Body text below may still use the old numbering where it
+> narrates history.
+
 Figures for the LUC3D paper, generated from the **real app driven over real data** —
 no mock-ups, no hand-placed skeletons. Every panel that shows pose comes out of
 LUC3D's own canvases after the actual pipeline (load → Track All → Triangulate All)

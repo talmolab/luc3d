@@ -46,7 +46,7 @@ from matplotlib.colors import to_rgba
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.style import panel, save, use  # noqa: E402
-import panels.fig4_05_per_session as fig4d  # noqa: E402
+import panels.fig2_15_per_session as fig4d  # noqa: E402
 
 #: short, ONE-LINE form of fig4d.SOLVERS' two-line tick labels -- see the
 #: docstring. Same key/colour, just less text under it.

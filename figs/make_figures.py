@@ -52,6 +52,17 @@ def main(argv):
             for line in r.stdout.strip().splitlines():
                 print(line)
 
+    # Post-panel steps the composites need, in order: fig6a's variant arm (the
+    # placed panel; the default run writes the un-placed non-variant slug), then
+    # the two pre-merge syncs (fig3's a/b stack + column composites, fig6's 2x2
+    # tracker block). Without these, assemble places stale composites.
+    if nums is None or 6 in nums:
+        subprocess.run([sys.executable, str(PANELS / "fig6_05_within_vs_cross.py"),
+                        "--variant"], check=False)
+    for fig, sync in ((3, "fig3_sync.py"), (6, "fig6_sync.py")):
+        if nums is None or fig in nums:
+            subprocess.run([sys.executable, str(FIGS / sync)], check=False)
+
     if do_assemble:
         print("\nassembling")
         import assemble

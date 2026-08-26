@@ -41,7 +41,7 @@ through this new path — the Fig 8 driver + `xv_experimental.js` instead of
 `fig3_bench.mjs` + the real module — and
   1. compares the SHA-256 of the tracker's identities+frames payload against the cached
      `greedy.json` fig3_headtohead.py produced, per session, over EVERY session of every
-     configuration (92 of them; `fig8_methods.py --verify` only ever covered 8 BMimica
+     configuration (92 of them; `fig6_methods.py --verify` only ever covered 8 BMimica
      sessions and no SLAP-2M ones), and
   2. rebuilds both deposits through the same aggregation code and diffs every field
      against `figs/out/fig3_headtohead.json` / `figs/out/fig3_quality.json`.
@@ -93,11 +93,11 @@ OUT_DIR = REPO / "figs" / "out"
 sys.path.insert(0, str(REPO / "figs"))
 
 #: The Fig 8 driver: fig3_bench.mjs's CLI and output shape, plus a `method` block, and
-#: it registers hooks8.mjs so `pose/cross-view-tracker.js` is served from
-#: figs/fig8-bench/xv_experimental.js. With an EMPTY method block it reproduces the
+#: it registers hooks6.mjs so `pose/cross-view-tracker.js` is served from
+#: figs/fig6-bench/xv_experimental.js. With an EMPTY method block it reproduces the
 #: shipped tracker bit for bit -- which is what --gate re-proves here, on 92 sessions.
-DRIVER = REPO / "figs" / "fig8-bench" / "fig8_bench.mjs"
-EXPERIMENTAL = REPO / "figs" / "fig8-bench" / "xv_experimental.js"
+DRIVER = REPO / "figs" / "fig6-bench" / "fig6_bench.mjs"
+EXPERIMENTAL = REPO / "figs" / "fig6-bench" / "xv_experimental.js"
 PROBE_DRIVER = REPO / "figs" / "fig3-bench" / "fig3_exhaustive_probe.mjs"
 
 VAR_ROOT = OUT_DIR / "tmp" / "headtohead_var"
@@ -162,7 +162,7 @@ def make_driver_job(params, root, shipped_tmp, force=False):
     Same signature and same return shape `(key, session, errs)`, so
     fig3_headtohead.main()'s phase 1 drives it unchanged. Two differences:
 
-      * the GREEDY arm runs through `fig8_bench.mjs` with a `--params` block, and its
+      * the GREEDY arm runs through `fig6_bench.mjs` with a `--params` block, and its
         cache is validated against a sidecar that records the params digest -- an
         existing `greedy.json` from a DIFFERENT configuration must never be served
         (the failure mode fig3_sweep50.py's cache tag exists to prevent);
@@ -310,7 +310,7 @@ def run_pipeline(tag, params, jobs, only, idf1, force_greedy, quality=True):
             "corr3dWeight": "shipped default 6 (NOT 12 -- see FIX-PLAN-8-13 item 8)",
             "driver": str(DRIVER),
             "experimental_tracker": str(EXPERIMENTAL),
-            "greedy_arm": "re-run through fig8_bench.mjs + xv_experimental.js",
+            "greedy_arm": "re-run through fig6_bench.mjs + xv_experimental.js",
             "exhaustive_arm": ("SYMLINKED from the shipped cache "
                                f"({shipped_tmp}) -- unchanged, and verified "
                                "anchor-independent by --probe"),
@@ -532,7 +532,7 @@ def probe(which, jobs):
         "how": ("each session below was re-run through "
                 "figs/fig3-bench/fig3_exhaustive_probe.mjs, which registers hooks8's "
                 "redirect of pose/cross-view-tracker.js to "
-                "figs/fig8-bench/xv_experimental.js and FORCES "
+                "figs/fig6-bench/xv_experimental.js and FORCES "
                 f"method={json.dumps(FRESH_METHOD)} / "
                 f"thresholds={json.dumps(FRESH_THRESHOLDS)} onto globalThis.__BENCH "
                 "(the driver assigns __BENCH itself, so the probe installs an accessor "
@@ -770,7 +770,7 @@ def runtime(jobs):
             "cameras). fig3_runtime.json's (4 animals, 3 cameras) row is a PROGRESSIVE "
             "SUBSET, back/backL/mid, so it is the same C on different cameras -- a "
             "pre-existing mismatch in Fig 3f, not one introduced here.",
-            "seconds_per_frame_shipped here is a re-measurement through fig8_bench.mjs "
+            "seconds_per_frame_shipped here is a re-measurement through fig6_bench.mjs "
             "+ xv_experimental.js with an empty method block, NOT the deposited "
             "fig3_runtime.json value; comparing the two is a check on the harness, and "
             "the shipped/fresh RATIO is the quantity this file exists to supply.",

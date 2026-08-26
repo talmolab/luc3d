@@ -209,7 +209,7 @@ def main():
     fig.get_layout_engine().set(h_pad=HPAD_MM / 25.4)
     draw_exhaustive(axes[0])
     draw_greedy(axes[1])
-    save(fig, 3, "a", "association")
+    save(fig, 3, "a", "association_src")
 
 
 if __name__ == "__main__":

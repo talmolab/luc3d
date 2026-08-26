@@ -11,7 +11,7 @@ did in the slap2m images."
 So this is `cage_scene.py`'s render for the OTHER corpus, and it deliberately reuses
 that script for everything scene-side (materials, primitives, ball-and-stick animals,
 lights, Cycles/OptiX setup, the camera body + ceiling-rod hardware) plus
-`fig5a_scene.py`'s cutaway translucent box, so the two Fig 1a halves read as one pair.
+`fig4a_scene.py`'s cutaway translucent box, so the two Fig 1a halves read as one pair.
 The three differences from SLAP-2M are all data, not style:
 
   1. NO CAGE RECONSTRUCTION EXISTS for BMimica -- there is no

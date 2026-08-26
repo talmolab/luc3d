@@ -28,7 +28,7 @@ asked for ("# of cameras per switches ... to answer the how-many-cameras questio
     camera-frames of the cameras used, never the raw sum across arms.
     ############################################################################
 
-Stages (different interpreters, like fig7_bytetrack_max2.py):
+Stages (different interpreters, like fig6_bytetrack_max2.py):
     node stage    figs/fig2_cams_identity.py --stage track --workers 12
     score stage   /root/vast/eric/luc3d-bench/liezl_env/bin/python \\
                       figs/fig2_cams_identity.py --stage score --workers 16

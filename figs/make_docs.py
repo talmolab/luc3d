@@ -46,31 +46,28 @@ PRODUCERS = {
     "fig3_quality.json": "figs/fig3_quality.py",
     "fig3_continuity.json": "figs/fig3_continuity.py",
     "fig3_scale_runtime.json": "figs/fig3_scale_runtime.py",
-    "fig4_anipose.json": "figs/fig4_anipose.py",
-    "fig4_by_views.json": "figs/fig4_by_views.mjs",
-    "fig4_measure.json": "figs/fig4_measure.mjs",
-    "fig4_time.json": "figs/fig4_time_luc3d.mjs",
-    "fig5.json": "figs/fig5_panel_a.mjs",
-    "fig5a.json": "figs/fig5_panel_a.mjs",
-    "fig5_upright.json": "figs/fig5_upright.py",
-    "fig5_aftermath.json": "figs/fig5_aftermath.py",
-    "fig5_rear_coupling_2animal.json": "figs/fig5_rear_coupling.py --slap-animals 2",
-    "fig5_rear_coupling.json": "figs/fig5_rear_coupling.py",
-    "fig5_rearing.json": "figs/fig5_rearing.py",
-    "fig5_proofread.json": "figs/fig5_proofread.py",
-    "fig6_detections.json": "figs/fig6_detections.py",
-    "fig6_difficulty.json": "figs/fig6_difficulty.py",
-    "fig6_measure.json": "figs/fig6_measure.py",
-    "fig6_pose.json": "figs/fig6_pose.py",
-    "fig6_session.json": "figs/fig6_session.py",
-    "fig6_app.json": "figs/fig6_app.mjs",
-    "fig6-app.json": "figs/fig6_app.mjs",
+    "fig4_anipose.json": "figs/fig2_solvers_anipose.py",
+    "fig4_by_views.json": "figs/fig2_solvers_by_views.mjs",
+    "fig4_measure.json": "figs/fig2_solvers_measure.mjs",
+    "fig4_time.json": "figs/fig2_solvers_time_luc3d.mjs",
+    "fig5_upright.json": "figs/fig4_upright.py",
+    "fig5_rear_coupling_2animal.json": "figs/fig4_rear_coupling.py --slap-animals 2",
+    "fig5_rear_coupling.json": "figs/fig4_rear_coupling.py",
+    "fig6_detections.json": "figs/fig5_detections.py",
+    "fig6_difficulty.json": "figs/fig5_difficulty.py",
+    "fig6_measure.json": "figs/fig5_measure.py",
+    "fig6_pose.json": "figs/fig5_pose.py",
+    "fig6_session.json": "figs/fig5_session.py",
+    "fig6_app.json": "figs/fig5_app.mjs",
+    "fig6-app.json": "figs/fig5_app.mjs",
+    "fig7_sleap_scoped.json": "figs/fig6_sleap_scoped.py",
+    "fig9_slap2m.json": "figs/fig5_slap2m.py",
     "fig2-protocol.json": "figs/fig2_protocol.mjs",
     "fig3_runtime.json": "figs/fig3_scale_runtime.py",
     "fig3_trackers.json": "figs/fig3_trackers.py",
     "fig4.json": "figs/fig4_measure.mjs (+ figs/fig4_anipose.py, figs/fig4_by_views.mjs)",
-    "fig6.json": "figs/fig6_measure.py (+ figs/fig6_pose.py, figs/fig6_app.mjs)",
-    "fig5_views.json": "figs/fig5_views.py",
+    "fig6.json": "figs/fig5_measure.py (+ figs/fig5_pose.py, figs/fig5_app.mjs)",
+    "fig5_views.json": "figs/fig4_views.py",
     # Not a figs/out JSON: Fig 1a is a Blender render, and the "measurement pass"
     # that produced it is the scene script that placed the session's calibration,
     # cage corners and tracked poses (see panels/fig1_00_render.py). Since
@@ -237,32 +234,28 @@ def render() -> str:
            "last two for every figure; the measurement passes are run by hand "
            "because they need the corpora and take minutes to hours.",
            ""]
-    # Fig 11 owns no panel scripts: fig11_sync.py copies fig7/fig10 panel PDFs at a
-    # reduced vector scale, and its MAPPING is the letter table. Resolve each fig11
-    # letter through it so the row points at the real source panel instead of
-    # reporting 13 false MISSING rows.
-    import fig11_sync as F11
+    # Fig 6 pre-merges its a-d tracker panels into one block (fig6_sync); its
+    # MAPPING is empty since the 2026-08-26 renumbering, and COMPOSITES is the
+    # letter table for the block, same role as fig3_sync.COMPOSITES.
+    import fig6_sync as F11
     sync_map = {ltr: (sf, sl, slug) for ltr, sf, sl, slug, _ in F11.MAPPING}
     # Fig 13 places three PRE-MERGED composites (assemble.py takes one PDF per
     # slot); no panel script saves those slugs, so each was a false MISSING row
     # that hid the scripts drawing its halves. fig13_sync.COMPOSITES is the
     # letter table, same role as fig11_sync.MAPPING above.
-    import fig13_sync as F13
+    import fig3_sync as F13
     placed = set()
     for fig_no in sorted(A.LAYOUTS):
         out.append(f"## Figure {fig_no}")
         out.append("")
-        if fig_no == 11:
-            out.append("Figures 7 and 8 combined (2026-08-20, re-cut 2026-08-25): "
-                       "Figure 7's a-d pre-merged by `figs/fig11_sync.py` into one "
-                       "2x2 block (entry letter a; b/c/d drawn by "
-                       "`assemble.EXTRA_LETTERS`) beside the Chen-2020-style anchor "
-                       "diagram (e, `panels/fig11_00_chen_style.py` -- the one fig11 "
-                       "panel with its own script), over Figure 8's full-width "
-                       "fresh-anchor sweep (f). Fig 7's e/f (recall scatter, "
-                       "fragmentation) are not placed here. Re-run the sync after any "
-                       "fig7/fig8 panel regenerates. `LAYOUTS[8]` is commented out, "
-                       "so Figure 8 no longer assembles on its own.")
+        if fig_no == 6:
+            out.append("Supplementary identity figure (the repo's fig11 before "
+                       "the 2026-08-26 renumbering): the a-d tracker panels are "
+                       "pre-merged by `figs/fig6_sync.py` into one 2x2 block "
+                       "(entry letter a; b/c/d drawn by `assemble.EXTRA_LETTERS`) "
+                       "beside the Chen-2020-style anchor diagram (e), over the "
+                       "full-width fresh-anchor sweep (f). Re-run the sync after "
+                       "any fig6 a-d panel regenerates.")
             out.append("")
         out.append("| Panel | Title | Drawn by | Reads | Measured by | Deposits |")
         out.append("|---|---|---|---|---|---|")
@@ -270,14 +263,16 @@ def render() -> str:
             for letter, slug in row:
                 src_fig, src_letter = fig_no, letter
                 via = ""
-                if fig_no == 11 and letter in sync_map:
+                if fig_no == 6 and letter in sync_map:
                     src_fig, src_letter, _ = sync_map[letter]
                     via = (f" (fig{src_fig}{src_letter}, via "
-                           f"`figs/fig11_sync.py`)")
-                if fig_no == 13 and slug in F13.COMPOSITES:
-                    for part_letter, part_slug in F13.COMPOSITES[slug]:
-                        part = panel_script(part_letter, part_slug, 13)
-                        title = A.TITLES.get((13, part_letter), "")
+                           f"`figs/fig6_sync.py`)")
+                comp = F13.COMPOSITES if fig_no == 3 else (
+                    getattr(F11, "COMPOSITES", {}) if fig_no == 6 else {})
+                if slug in comp:
+                    for part_letter, part_slug in comp[slug]:
+                        part = panel_script(part_letter, part_slug, fig_no)
+                        title = A.TITLES.get((fig_no, part_letter), "")
                         note = ("" if part_letter == letter else
                                 f" (drawn inside **{letter}**'s composite)")
                         if part is None:

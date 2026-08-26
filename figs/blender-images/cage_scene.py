@@ -682,7 +682,7 @@ def main():
                     help="comma-separated hex colours, one per TRACK INDEX, "
                          "replacing tab10 (stills only). Unused by the shipping "
                          "figures — the app export is recoloured to match these "
-                         "renders instead (figs/fig6_app.mjs PALETTE); kept for "
+                         "renders instead (figs/fig5_app.mjs PALETTE); kept for "
                          "the reverse direction")
     args = ap.parse_args()
 
