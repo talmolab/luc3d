@@ -175,6 +175,11 @@
 
     <!-- Import trackIdx resolver (trackless user + predicted) tests -->
     <script src="test-import-track-resolve.js"></script>
+    <!-- Which `.slp` a camera directory is loaded from, and which lazy cameras a
+         FrameGroup still needs — the two rules behind "reload after replacing the
+         .slp files only brought back some of the views". -->
+    <script src="test-percam-slp-choice.js"></script>
+    <script src="test-lazy-camera-hydration.js"></script>
     <script src="test-occlusion-derive.js"></script>
 
     <!-- Tempdata triangulation pipeline tests -->
@@ -336,6 +341,13 @@
         // Pure (DOM-free) import-trackIdx resolver. Extracted from
         // session-loader.js (which pulls app.js) precisely so it's bridgeable.
         import * as __ImportTrackResolve from '../import-export/import-track-resolve.js';
+        // Pure per-camera `.slp` selection rule. Extracted from
+        // session-loader.js (which pulls app.js) precisely so it's bridgeable —
+        // same move as import-track-resolve.js above. Namespaced rather than
+        // spread: `chooseCameraSlp` is specific enough to be a global, but the
+        // module may grow siblings that are not.
+        import * as __PerCamSlpChoice from '../loading/percam-slp-choice.js';
+        window.__PerCamSlpChoice = __PerCamSlpChoice;
         // Dependency-free (no app.js in its import graph; uses window.SleapIO +
         // document.baseURI only inside open()). Bridged for the lazy-release tests.
         import * as __SioLazy from '../loading/sio-lazy-loader.js';

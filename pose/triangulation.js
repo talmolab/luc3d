@@ -2082,6 +2082,85 @@ function finalizeLazyFrameGroup(session, fg, frameIdx) {
 }
 
 /**
+ * The lazy-backed camera names a FrameGroup carries no data for.
+ *
+ * "No data" means neither a linked instance nor an unlinked one: the
+ * per-camera folder loader moves everything it parses into the unlinked pool,
+ * so checking `fg.instances` alone would call an already-loaded camera empty
+ * and duplicate it on the next scrub.
+ *
+ * Returns `[]` — the common case, one cheap Map lookup per camera — whenever
+ * the group already covers every lazy camera, which is what a group the lazy
+ * path built itself always does.
+ *
+ * Exported for `tests/test-lazy-camera-hydration.js`: this predicate is what
+ * decides whether a view comes back with its labels, and it is worth pinning in
+ * the fast browser suite rather than only through a full folder load.
+ */
+export function lazyCamerasMissingFrom(session, fg) {
+    var loader = session.lazyLoader;
+    if (!fg || !loader) return [];
+    // Both loaders key their per-camera state by camera name: SioLazyLoader in
+    // `labelsByCam`, LazyFrameLoader in `workers`.
+    var camMap = loader.labelsByCam || loader.workers;
+    if (!camMap || typeof camMap.keys !== 'function') return [];
+    var missing = [];
+    for (var cn of camMap.keys()) {
+        var linked = fg.instances.get(cn);
+        if (linked && linked.length > 0) continue;
+        var unlinked = fg.getUnlinkedInstances(cn);
+        if (unlinked && unlinked.length > 0) continue;
+        missing.push(cn);
+    }
+    return missing;
+}
+
+/**
+ * Hydrate ONLY `camNames` into the frame's existing FrameGroup.
+ *
+ * The rows are staged in a throwaway FrameGroup first so
+ * `finalizeLazyFrameGroup` — which decides per (camera, `_rawInstIndex`)
+ * whether a row belongs to an existing InstanceGroup or to the unlinked pool —
+ * runs on exactly the new cameras and cannot re-unlink instances the eager
+ * parse already placed. Whatever it produces is then merged in.
+ */
+async function hydrateLazyCameras(session, frameIdx, camNames) {
+    var cameraData = await session.lazyLoader.getFrame(frameIdx);
+    var fg = session.getFrameGroup(frameIdx);
+    if (!fg || !cameraData) return;
+
+    var wanted = new Set(camNames);
+    var staged = new FrameGroup(frameIdx);
+    var added = 0;
+    for (var [camName, instances] of cameraData) {
+        if (!wanted.has(camName)) continue;
+        // Re-check under the post-await state: a concurrent scrub may have
+        // hydrated this camera while `getFrame` was in flight.
+        var have = fg.instances.get(camName);
+        if (have && have.length > 0) continue;
+        var haveUl = fg.getUnlinkedInstances(camName);
+        if (haveUl && haveUl.length > 0) continue;
+        for (var ii = 0; ii < instances.length; ii++) {
+            var d = instances[ii];
+            var inst = new Instance(d.points || [], d.trackIdx, d.type || 'predicted', d.score || 0);
+            inst._rawInstIndex = ii;   // see the note in ensureLazyFrameData
+            staged.addInstance(camName, inst);
+            added++;
+        }
+    }
+    if (added === 0) return;
+
+    finalizeLazyFrameGroup(session, staged, frameIdx);
+
+    for (var [mcn, mInsts] of staged.instances) {
+        for (var mi = 0; mi < mInsts.length; mi++) fg.addInstance(mcn, mInsts[mi]);
+    }
+    for (var [ucn, uls] of staged.unlinkedInstances) {
+        for (var ui = 0; ui < uls.length; ui++) fg.addUnlinkedInstance(ucn, uls[ui]);
+    }
+}
+
+/**
  * Ensure frame data is loaded for lazy sessions.
  * For eager sessions, returns immediately. For lazy sessions,
  * fetches the frame data from workers and populates a temporary FrameGroup.
@@ -2090,7 +2169,17 @@ export async function ensureLazyFrameData(frameIdx) {
     var session = state.session;
     if (!session || !session.lazyLoader) return;
 
-    if (session.frameGroups.has(frameIdx)) return;
+    if (session.frameGroups.has(frameIdx)) {
+        // A FrameGroup already exists — but "exists" is not "complete". It may
+        // have been built by an EAGER parse covering only some cameras, in
+        // which case returning here leaves the lazy-backed cameras unhydrated
+        // forever, on every frame: all the panes render and only some carry
+        // annotations. Hydrate just the cameras that are missing.
+        var missing = lazyCamerasMissingFrom(session, session.getFrameGroup(frameIdx));
+        if (missing.length === 0) return;
+        await hydrateLazyCameras(session, frameIdx, missing);
+        return;
+    }
 
     var cameraData = await session.lazyLoader.getFrame(frameIdx);
 
