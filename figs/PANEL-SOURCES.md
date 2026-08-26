@@ -31,7 +31,7 @@ Build order for any figure is: run the measurement pass (column *measured by*) �
 | Panel | Title | Drawn by | Reads | Measured by | Deposits |
 |---|---|---|---|---|---|
 | **a** | Grouping strategies | `panels/fig3_15_association.py` | — (drawn) | — | — |
-| **b** | Hypotheses per frame | `panels/fig3_03_cost_model.py` (drawn inside **a**'s composite) | `out/fig3_headtohead.json`, `out/fig3_runtime.json` | `figs/fig3_headtohead.py`, `figs/fig3_scale_runtime.py` | `data/fig3/fig3b_cost_model.csv` |
+| **b** |  | `panels/fig3_03_cost_model.py` (drawn inside **a**'s composite) | `out/fig3_headtohead.json`, `out/fig3_runtime.json` | `figs/fig3_headtohead.py`, `figs/fig3_scale_runtime.py` | `data/fig3/fig3b_cost_model.csv` |
 | **c** | Visualization of ID grouping hypotheses in two camera views | `panels/fig3_10_hyp_illustration.py` | — (drawn) | — | — |
 | **d** | An identity switch in one camera view | `panels/fig3_16_idswitch.py` | — (drawn) | — | — |
 | **e** | Grouping accuracy | `panels/fig3_13_quality.py` | — (drawn) | — | — |
