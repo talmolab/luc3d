@@ -470,7 +470,12 @@ ROW_H = 50.0
 #: the per-series caveats moved to the legend -- and 70 mm was sized for nine. The
 #: note above records "62 mm did it for five lines". Assembled fig7.pdf returns to
 #: ~187 mm.
-ROW_H_VARIANT = 62.0
+#: 50 since 2026-08-25: the variant carries NO key band at all (the fig11 block's
+#: shared tracker strip replaced it -- see the panel() call), so the height that
+#: was sized for key lines drops to the same 50 mm as b/c/d, which is also what
+#: lets fig11_sync.build_block pack all four panels on ONE uniform scale with
+#: their letters and column edges aligned.
+ROW_H_VARIANT = 50.0
 
 
 def key_dy(h):
@@ -573,9 +578,13 @@ def main(variant=False, fair=True):
     # MuPPET reservations counted lines that stopped being appended when the
     # per-series notes moved to the legend, so ~30% of the panel was a blank band
     # between key and axes. Five lines: four series + the EXPERIMENTAL note.
-    # variant: the key is 3 bare names at COMPACT_FS on double spacing, so the
-    # band reserves 2 rows per entry at the standard spacing panel() knows.
-    fig, ax = panel("half", height, key=2 * len(order) if variant else len(order))
+    # variant: NO key band at all (Eric, 2026-08-25: "the legend is taking up too
+    # much space and the y axis is getting crushed, lets ... put LUC3D SLEAP and
+    # ByteTrack under the abcd block, so we dont have to repeat it 3 different
+    # times, that way a can be bigger") -- the fig11 block draws ONE shared
+    # horizontal tracker key under all four panels (fig11_sync.build_block), and
+    # this panel's whole height is axes.
+    fig, ax = panel("half", height, key=0 if variant else len(order))
     for rank, (key, name, color) in enumerate(order):
         if key not in bm:
             continue
@@ -738,10 +747,9 @@ def main(variant=False, fair=True):
     # and cross every horizontal strip this note used to sit in. 413 against 2,071 is
     # a strong number and it belongs in the legend, not typeset over the data.
 
-    text_legend(ax, entries, "above",
-                dy=key_dy(height) * (2.0 if variant else 1.0),
-                size=COMPACT_FS if variant else None,
-                xy=(0.14, 0.985), transform=fig.transFigure)
+    if not variant:
+        text_legend(ax, entries, "above", dy=key_dy(height),
+                    xy=(0.14, 0.985), transform=fig.transFigure)
     # THE CORPUS, ON THE ARTWORK (review round 3): 7b kept its "SLAP-2M corpus ·
     # a is Mouse-Dyad-10M" header when footnote() was suppressed set-wide; this panel's half
     # of that two-way pointer was IN footnote() and silently vanished -- leaving five

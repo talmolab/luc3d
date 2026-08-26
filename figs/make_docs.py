@@ -144,7 +144,15 @@ def plain(md: str, title: str) -> str:
 
 
 def write_plain() -> None:
+    # The hand-written documents are UNTRACKED since 2026-08-26 (Eric: the
+    # manuscript text's canonical home is figures/drafts/*.tex; the md/txt
+    # copies live only on machines that keep them) -- so a fresh clone has no
+    # sources here and the twins are simply skipped, not an error.
     for src, dst in PLAIN.items():
+        if not src.exists():
+            print(f"skipped {dst.name} (no local {src.name}; the writing docs "
+                  "are untracked -- see .gitignore's manuscript-docs block)")
+            continue
         title = src.stem.replace("-", " ").upper()
         dst.write_text(plain(src.read_text(), title))
         print(f"wrote {dst.relative_to(FIGS.parent)}")

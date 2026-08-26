@@ -200,7 +200,7 @@ def main(variant=False, corrected=True, fresh_arm=False):
     # COMPACT_FS (11 pt here prints ~5.6 pt after the shrink) on wider spacing;
     # the counts live in FIGURE-LEGENDS' Fig. 7 B entry. The --variant diagnostic
     # keeps its five annotated lines.
-    COMPACT_FS = 11.0
+    COMPACT_FS = 11.5
     if variant:
         y0 = 0.22 + 0.09 * (len(block) - 3)
         for i, (label, v, color, won, ncs) in enumerate(block):
@@ -208,11 +208,10 @@ def main(variant=False, corrected=True, fresh_arm=False):
                     f"{label}  {int((v >= MARK).sum())}/{len(v)} · {won}/{ncs}",
                     transform=ax.transAxes, ha="left", color=color, fontsize=7,
                     fontweight="bold")
-    else:
-        for i, (label, _v, color, _won, _ncs) in enumerate(block):
-            ax.text(0.03, 0.30 - i * 0.13, label, transform=ax.transAxes,
-                    ha="left", color=color, fontsize=COMPACT_FS,
-                    fontweight="bold")
+    # DEFAULT render: NO in-plot names since the shared-key pass (Eric,
+    # 2026-08-25: "put LUC3D SLEAP and ByteTrack under the abcd block, so we
+    # dont have to repeat it 3 different times") -- fig11_sync.build_block draws
+    # the one tracker key for all four block panels.
     # THE CORPUS, AS A HEADER OVER THAT BLOCK, and it is load-bearing rather than
     # provenance boilerplate. 7a's "within view" is 0.749 and this curve is centred
     # near 0.90; both are called within-view IDF1 and they are DIFFERENT quantities

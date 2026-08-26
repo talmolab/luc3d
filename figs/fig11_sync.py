@@ -72,22 +72,30 @@ MAPPING = [
     ("f", 8, "d", "pr_switches", FULL_SCALE),
 ]
 
-#: The a-d block's total width, mm. SOLVED, not chosen: with the block's rows
-#: packed to equal per-row heights (below) and the diagram's crop aspect A =
-#: 1.609 (fig11_00_chen_style prints it), equal block/diagram heights on a
-#: 180 mm page require
-#:   (W - GUTTER)*(1/3.1794 + 1/3.36) + (ROW_GAP + LETTER_LEAD) = (176 - W)/A
-#: whose solution is 84.57 (block and diagram both 56.8 mm tall, no leftover
-#: white in either column). Re-solve if the diagram is re-cropped or any fig7
-#: panel changes size; panels/fig11_00_chen_style.py's CHEN_W_MM and
+#: The a-d block's total width, mm. SOLVED, not chosen. Since the shared-key
+#: pass (Eric, 2026-08-25: "put LUC3D SLEAP and ByteTrack under the abcd block
+#: ... make sure that the literal letters a b c and d are vertically aligned
+#: ... preferably X axes and if possible Y axes aligned") every block panel is
+#: the SAME 88 x 50 mm native (fig7a's variant dropped its key band and 62 mm
+#: height; fig7d widened 80 -> 88), so the block packs on ONE uniform scale s
+#: with one column split -- letters and panel edges align by construction --
+#: plus a KEY_STRIP_MM tracker key along the bottom. Equal block/diagram
+#: heights on a 180 mm page then require, with diagram crop aspect A = 1.620
+#: (fig11_00_chen_style prints it) and gap = ROW_GAP + LETTER_LEAD = 7.5:
+#:   100 s + 7.5 + KEY_STRIP_MM = (172 - 176 s) / A,   W = 176 s + GUTTER
+#: whose solution is s = 0.4490, W = 83.02 (both columns 57.40 mm tall).
+#: Re-solve if the diagram is re-cropped or any block panel changes size;
+#: panels/fig11_00_chen_style.py's CHEN_W_MM and
 #: assemble.EXTRA_LETTERS[(11, "a")] carry the same numbers and must move with
 #: this (build_block prints the letter offsets to copy).
-BLOCK_W = 84.26  # re-solved 2026-08-25 (twice): diagram crop aspect now 1.620
+BLOCK_W = 83.02
+#: height of the block's bottom key strip ("LUC3D SLEAP ByteTrack", the one
+#: place the three names appear -- the per-panel keys are gone)
+KEY_STRIP_MM = 5.0
 #: The four panels merged into the block, as ((row1), (row2)) of
-#: (src_fig, src_letter, slug). Within each row every panel is scaled to the
-#: SAME height (a taller-native panel shrinks more), so the row bottoms align
-#: and the block packs with no ragged edge -- the whitespace complaint this
-#: re-cut answers.
+#: (src_fig, src_letter, slug). ALL FOUR must be the same native size (the
+#: uniform-scale/aligned-columns contract above); build_block fails loudly if
+#: one drifts.
 BLOCK_ROWS = (((7, "a", "within_vs_cross_variant"), (7, "b", "survival")),
               ((7, "c", "by_animals"), (7, "d", "decomposition")))
 
@@ -100,45 +108,67 @@ STALE = ["fig11a_within_vs_cross_variant.pdf", "fig11b_survival.pdf",
 
 
 def build_block(outdir: Path) -> None:
-    """The a-d composite: two rows of two fig7 panels, each row scaled to one
-    shared height, packed to exactly BLOCK_W. Letters and titles for all four
-    are drawn by assemble() itself -- "a" as the block's own LAYOUTS entry and
-    b/c/d via assemble.EXTRA_LETTERS -- so every letter sits in the same lead
-    band as its neighbours' ("make sure that the letters vertically align",
-    Eric 2026-08-25); this PDF holds ONLY the plots. The row-2 letters need
-    headroom INSIDE the block, which is what the (ROW_GAP + LETTER_LEAD) inter-
-    row gap is."""
+    """The a-d composite: a UNIFORM 2x2 grid of four same-size fig7 panels at
+    one scale, packed to exactly BLOCK_W, with the shared tracker key as one
+    horizontal strip along the bottom (the only place LUC3D/SLEAP/ByteTrack
+    are named -- the per-panel keys are gone; Eric, 2026-08-25). One scale and
+    one column split is what puts the b/d letters, and the panels' own edges,
+    on the same verticals. Letters and titles for all four are drawn by
+    assemble() itself -- "a" as the block's own LAYOUTS entry and b/c/d via
+    assemble.EXTRA_LETTERS -- so every letter sits in the same lead band as its
+    neighbours'; the row-2 letters' headroom is the (ROW_GAP + LETTER_LEAD)
+    inter-row gap."""
     from assemble import GUTTER, LETTER_LEAD, MM, ROW_GAP
+    from src.style import PERIWINKLE, SALMON, TEAL
 
     gap = ROW_GAP + LETTER_LEAD
-    rows = []
+    docs, dims = {}, {}
     for row in BLOCK_ROWS:
-        docs = [fitz.open(FIGURES / f"fig{f}" / f"fig{f}{l}_{s}.pdf")
-                for f, l, s in row]
-        dims = [(d[0].rect.width / MM, d[0].rect.height / MM) for d in docs]
-        h = (BLOCK_W - GUTTER) / sum(w / hh for w, hh in dims)
-        rows.append((row, docs, dims, h))
-
-    total_h = sum(h for *_, h in rows) + gap * (len(rows) - 1)
+        for f, l, s in row:
+            d = fitz.open(FIGURES / f"fig{f}" / f"fig{f}{l}_{s}.pdf")
+            docs[l] = d
+            dims[l] = (d[0].rect.width / MM, d[0].rect.height / MM)
+    if len({dims[l] for row in BLOCK_ROWS for _f, l, _s in row}) != 1:
+        raise SystemExit(f"fig11 block panels are not one size: {dims} -- the "
+                         "uniform-scale/aligned-columns contract needs all four "
+                         "at 88 x 50 mm (see BLOCK_W's comment)")
+    w0, h0 = next(iter(dims.values()))
+    s = (BLOCK_W - GUTTER) / (2 * w0)
+    ws, hs = w0 * s, h0 * s
+    total_h = 2 * hs + gap + KEY_STRIP_MM
     out = fitz.open()
     page = out.new_page(width=BLOCK_W * MM, height=total_h * MM)
-    y = 0.0
     offsets = []
-    for row, docs, dims, h in rows:
-        x = 0.0
-        for (_f, letter, _s), d, (w, hh) in zip(row, docs, dims):
-            ws = w * h / hh
+    for ri, row in enumerate(BLOCK_ROWS):
+        y = ri * (hs + gap)
+        for ci, (_f, letter, _s) in enumerate(row):
+            x = ci * (ws + GUTTER)
             page.show_pdf_page(
-                fitz.Rect(x * MM, y * MM, (x + ws) * MM, (y + h) * MM), d, 0)
+                fitz.Rect(x * MM, y * MM, (x + ws) * MM, (y + hs) * MM),
+                docs[letter], 0)
             offsets.append((letter, round(x, 2), round(y, 2)))
-            x += ws + GUTTER
-            d.close()
-        y += h + gap
+            docs[letter].close()
+
+    # the shared tracker key, one bold coloured line -- same idiom as the sweep
+    # panel's own bottom strip
+    hebo = fitz.Font("Helvetica-Bold")
+    page.insert_font(fontname="Fig11BlockHebo", fontbuffer=hebo.buffer)
+    key_pt, key_gap = 7.0, 6.0 * MM
+    ky = (total_h - KEY_STRIP_MM + 3.4) * MM
+    kx = 0.6 * MM
+    for name, hexc in (("LUC3D", TEAL), ("SLEAP", PERIWINKLE),
+                       ("ByteTrack", SALMON)):
+        rgb = tuple(int(hexc[i:i + 2], 16) / 255 for i in (1, 3, 5))
+        page.insert_text(fitz.Point(kx, ky), name, fontname="Fig11BlockHebo",
+                         fontsize=key_pt, color=rgb)
+        kx += hebo.text_length(name, fontsize=key_pt) + key_gap
+
     dst = outdir / "fig11a_block.pdf"
     out.save(dst, deflate=True)
     out.close()
-    print(f"  fig11a <- fig7 a+b / c+d block  ({BLOCK_W:.2f} x {total_h:.2f} mm; "
-          "sub-letter offsets for assemble.EXTRA_LETTERS: "
+    print(f"  fig11a <- fig7 a+b / c+d block  ({BLOCK_W:.2f} x {total_h:.2f} mm, "
+          f"x{s:.4f} + {KEY_STRIP_MM:g} mm key strip; sub-letter offsets for "
+          "assemble.EXTRA_LETTERS: "
           + ", ".join(f"{l} ({dx}, {dy})" for l, dx, dy in offsets) + ")")
 
 

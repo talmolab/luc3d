@@ -212,7 +212,10 @@ def main(variant=False, corrected=True, fresh_arm=False):
     # and the ID-switch bars are ~12x shorter -- so the names go there, where they
     # collide with nothing and the axes keeps its full height. The VARIANT keeps the
     # band: its six entries carry rates and are too wide to sit inside the data area.
-    fig, ax = panel(80.0, ROW_H, key=(nser + 2) if variant else 0)
+    # 88, not 80, since 2026-08-25: fig11_sync.build_block packs a/b/c/d on ONE
+    # uniform scale with a shared column split, which needs all four panels the
+    # same declared width (a/b/c are "half" = 88 mm).
+    fig, ax = panel(88.0, ROW_H, key=(nser + 2) if variant else 0)
     top = max(blk["error_decomposition"][tk]["false_positives"]
               for (blk, _l, _c, _h), tk in zip(series, tkey)) / tcf * 100 * 1.30
     x = np.arange(len(TERMS))
@@ -291,15 +294,10 @@ def main(variant=False, corrected=True, fresh_arm=False):
     if variant:
         text_legend(ax, entries, "above", dy=KEY_DY, xy=(0.14, 0.985),
                     transform=fig.transFigure)
-    else:
-        # Axes coordinates, so the stack tracks the plot box rather than the page: dy
-        # 0.085 of the axes height is ~3.4 mm per line, the same air the band's KEY_DY
-        # gave, and three lines from y = 0.98 clear the tallest bar (0.531 of a 0.690
-        # axis, i.e. 77% of the height) because they hang at the RIGHT edge.
-        # bigger key + wider spacing since the compact pass ("make the legends
-        # bigger")
-        text_legend(ax, [(lab, c) for (_b, lab, c, _h) in series],
-                    "upper right", dy=0.15, size=COMPACT_FS)
+    # DEFAULT render: no in-panel key since the shared-key pass (Eric,
+    # 2026-08-25: "put LUC3D SLEAP and ByteTrack under the abcd block, so we
+    # dont have to repeat it 3 different times") -- fig11_sync.build_block draws
+    # the one tracker key for all four block panels.
     ax.set_xticks(x)
     ax.set_xticklabels([n for _, n in TERMS])
     ax.set_xlim(-0.45, len(TERMS) - 0.55)

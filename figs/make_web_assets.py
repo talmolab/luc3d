@@ -25,11 +25,16 @@ So the page imports PNGs from `src/assets/`, and the vector PDF is ALSO copied i
 `public/pdf/` so each caption can offer a full-resolution link. Nothing is rasterised
 at build time.
 
-FIGURE NUMBERING IS THE MANUSCRIPT'S, NOT THE REPO'S. `figures/fig11/` is the
-combined tracking + transfer figure, which the manuscript prints as Figure 7 (the
-standalone figs 7 and 10 are retired to unplaced, as are 8 and 9). The page therefore
-shows seven figures numbered 1-7, and FIGURES maps that explicitly rather than leaving
-a reader to infer it from a filename.
+FIGURE NUMBERING IS THE MANUSCRIPT'S, NOT THE REPO'S (Eric, 2026-08-25 restructure).
+Standalone triangulation (`fig4`) folded into `fig2` as panels e-g. Cross-view
+association's `fig3` superseded by the expanded `fig13`. Behaviour and datasets shift
+up one slot (`fig5` -> Figure 4, `fig6` -> Figure 5). `figures/fig11/` -- the identity
+mechanism diagram plus the fresh-anchor sweep -- is Figure 6, and IT DROPS the
+social-DANNCE cross-dataset transfer content that `fig10` used to contribute; that
+transfer claim is retired, not just unplaced. There is no Figure 7: the manuscript is
+six figures. `fig7`, `fig8`, `fig9`, `fig10` and the bare `fig3`/`fig4` are all
+unplaced. FIGURES maps this explicitly rather than leaving a reader to infer it from a
+filename.
 
     python3 figs/make_web_assets.py                       # default page repo path
     python3 figs/make_web_assets.py --page-repo /path/to/luc3d-page
@@ -50,15 +55,14 @@ FIGS = Path(__file__).resolve().parent
 DEFAULT_PAGE_REPO = Path("/root/vast/eric/luc3d-page")
 
 #: (page figure number, artwork directory). The page's Figure N is FIGURES[N-1].
-#: fig11 -> Figure 7: see the docstring.
+#: See the docstring for the 2026-08-25 renumbering this encodes.
 FIGURES = [
     (1, "fig1"),
     (2, "fig2"),
-    (3, "fig3"),
-    (4, "fig4"),
-    (5, "fig5"),
-    (6, "fig6"),
-    (7, "fig11"),
+    (3, "fig13"),
+    (4, "fig5"),
+    (5, "fig6"),
+    (6, "fig11"),
 ]
 
 #: The dpi the composites are rendered at by `assemble.py` (its PNG proof). Recorded

@@ -50,11 +50,13 @@ SRC = (Path(__file__).resolve().parent.parent / "figures" / "drafts" / "figs"
 #: solved width (see WIDTH IS THE FIGURE'S ARITHMETIC) and the crop aspect that
 #: solution assumed -- keep all three of CHEN_W_MM / SOLVED_ASPECT /
 #: fig11_sync.BLOCK_W moving together.
-#: RE-SOLVED twice on 2026-08-25 as the diagram's type moved: bigger labels
-#: widened the crop (1.609 -> 1.723), then stacking the two anchor labels
-#: ("2D Anchor" over "Node (x_t'')", centred) narrowed it again (-> 1.620;
-#: block 84.26, this panel 91.74, shared height 56.63).
-CHEN_W_MM = 91.74
+#: RE-SOLVED three times on 2026-08-25 as the diagram's type and the block's
+#: packing moved: bigger labels widened the crop (1.609 -> 1.723), stacking the
+#: anchor labels narrowed it (-> 1.620), and the block's shared-key re-pack
+#: (uniform 88x50 panels + a 5 mm tracker strip; fig11_sync.BLOCK_W's comment
+#: has the new equation) set block 83.02 / this panel 92.98, shared height
+#: 57.40.
+CHEN_W_MM = 92.98
 SOLVED_ASPECT = 1.620
 
 

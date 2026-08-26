@@ -184,7 +184,9 @@ TITLES = {
     # SHORTER than fig7's own title for the same panel: inside the 2x2 block the
     # b sub-letter sits 38.6 mm in, and the long form ran into it.
     (11, "a"): "Within vs cross IDF1",
-    (11, "b"): "Within-view IDF1 per session",
+    # SHORTER than fig7's own title: at the block's 43.5 mm column split the
+    # long form ran into e's letter ("per session" is in the legend text).
+    (11, "b"): "Within-view IDF1",
     (11, "c"): "Per-session paired difference",
     (11, "d"): "Error composition",
     # e/f RE-CUT 2026-08-25 (Eric): the recall scatter and fragmentation panels are
@@ -299,7 +301,7 @@ LETTER_NUDGE_MM: dict[tuple[int, str], float] = {
 #: Fig 11a is the 2x2 a-d tracker block (fig11_sync.build_block, which PRINTS
 #: these offsets on every run -- copy them here after any geometry change).
 EXTRA_LETTERS: dict[tuple[int, str], list[tuple[str, float, float]]] = {
-    (11, "a"): [("b", 39.83, 0.0), ("c", 0.0, 32.74), ("d", 46.04, 32.74)],
+    (11, "a"): [("b", 43.51, 0.0), ("c", 0.0, 29.95), ("d", 43.51, 29.95)],
 }
 
 #: figure -> [row, ...] where a row is [(letter, slug), ...].

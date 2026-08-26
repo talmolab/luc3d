@@ -180,19 +180,24 @@ def main(deposit_name="fig8_methods_50.json"):
     deposit(df.drop(columns=[c for c in df.columns if c.startswith("_")]),
             8, "fig8d_pr_switches.csv")
 
-    fig, axes = grid(1, 3, span="full", row=58.0)
+    # 55, not 62: the vertical white this panel used to carry (key stack, then
+    # generous margins) is gone -- Eric, 2026-08-25: "get rid of the white space
+    # in between, also bring up the legend from no eviction stale 1 stale 10 etc".
+    fig, axes = grid(1, 3, span="full", row=55.0)
     # The key is a single HORIZONTAL line along the BOTTOM since 2026-08-25 (Eric:
     # "the legend for no eviction stale 1, 10 etc is taking up too much white
     # space, that is prime real estate ... maybe we can put it horizontally at the
     # bottom"). The old vertical stack reserved 28% of the panel's height above
-    # the sub-plots and used a fifth of the row's width; one bottom line costs 9%.
+    # the sub-plots and used a fifth of the row's width.
     # `rect` is (left, bottom, WIDTH, HEIGHT), NOT (left, bottom, right, top) --
     # the same trap fig1_03_reconstruction.py documents. Written as "top = 0.93"
     # this put the axes band's top at 0.09 + 0.93 = 1.02, off the page, and the
     # survival panel's 100% tick label printed half above the figure edge
-    # (lint_text: CLIPPED '100'). Bottom 0.09 is the key strip; height 0.84
-    # leaves a real top margin for tick labels and markers ON the axis limit.
-    fig.get_layout_engine().set(rect=(0, 0.09, 1, 0.84))
+    # (lint_text: CLIPPED '100'). Bottom 0.075 is the key strip, pulled UP under
+    # the x labels; height 0.895 keeps ~1.7 mm of top margin, enough for tick
+    # labels and markers ON the axis limit now that both top limits carry their
+    # own headroom (ylim 1.012 / 101.5).
+    fig.get_layout_engine().set(rect=(0, 0.075, 1, 0.895))
     axP, axF, axS = axes
 
     # ---- 1: the identity precision-recall plane ---------------------------------
@@ -305,7 +310,9 @@ def main(deposit_name="fig8_methods_50.json"):
     renderer = fig.canvas.get_renderer()
     kx, fw = 0.005, fig.bbox.width
     for _ix, r in df.iterrows():
-        t = fig.text(kx, 0.012, r.label, color=r._colour, fontsize=7,
+        # y = 0.022, up from 0.012: the strip rides directly under the x labels
+        # instead of hugging the panel's bottom edge with white above it
+        t = fig.text(kx, 0.022, r.label, color=r._colour, fontsize=7,
                      fontweight="bold", ha="left", va="bottom")
         kx += t.get_window_extent(renderer).width / fw + 0.022
 
