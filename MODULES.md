@@ -1386,6 +1386,32 @@ subtitle is populated for loaded projects, not just freshly triangulated ones.
   `LazyFrameLoader` spawns `loading/slp-import-worker.js` (resolved against
   `document.baseURI` so sub-path deployments work — see ISSUES.md I-8) for HDF5
   reads.
+  **A FrameGroup that exists is not necessarily complete.**
+  `ensureLazyFrameData` used to open with a bare
+  `if (session.frameGroups.has(frameIdx)) return;`, which is only sound when
+  every camera is lazy-backed. `handleLoadSessionFolderPerCamera` could route a
+  folder part eager and part lazy, and the eager cameras create the FrameGroup
+  at load time — so that guard skipped the frame and the lazy cameras were never
+  hydrated at all, on any frame. It now asks which lazy cameras the existing
+  group carries no data for (`lazyCamerasMissingFrom` — checks BOTH
+  `fg.instances` and the unlinked pool, since the per-camera folder loader moves
+  everything it parses into the latter) and hydrates only those
+  (`hydrateLazyCameras`), returning immediately in the normal case where nothing
+  is missing. The new rows are staged in a throwaway FrameGroup so
+  `finalizeLazyFrameGroup` runs on exactly the new cameras and cannot re-unlink
+  instances an eager parse already placed; whatever it produces is merged in.
+  A camera hydrated concurrently is re-checked after the `await`, so a scrub
+  racing this cannot double-add. `lazyCamerasMissingFrom` is **exported** and
+  unit-tested in `tests/test-lazy-camera-hydration.js` — it is the predicate
+  that decides whether a view comes back with its labels, and it can fail in
+  two opposite directions (call a loaded camera missing and the frame renders
+  every instance twice; call a missing one present and the view stays blank),
+  so it is worth pinning in the fast browser suite as well as end to end. The folder loader also no longer produces a
+  mixed session at all (see `loading/session-loader.js`) — this is the
+  independent half, and `tests/e2e/percam-mixed-lazy-eager.mjs` reaches it
+  directly by emptying one camera out of a hydrated FrameGroup, asserting the
+  repair, that the other cameras are untouched, and that a second pass adds
+  nothing (the #194/#195 re-materialize-duplicate class).
   **`_rawInstIndex` tagging (#158 fix).** All three lazy-materialization sites
   (`ensureLazyFrameData`, `buildLazyFrameGroupSync`, and the worker-batch
   branch of `batchLoadLazyFrames`) tag every constructed `Instance` with
@@ -4245,6 +4271,31 @@ frames (off-main-thread to keep UI responsive).
 
 ---
 
+### loading/percam-slp-choice.js
+
+**Purpose.** The rule for which `.slp` a camera directory is loaded from, as a
+pure function. Imports **nothing** — no project modules, no DOM — so it bridges
+into `tests/test-runner.html`. Extracted from `loading/session-loader.js` for
+exactly the reason `import-export/import-track-resolve.js` was: session-loader
+pulls app.js through its import graph and cannot be loaded there, and a rule
+this consequential should be assertable without driving a whole folder load.
+
+**Key export.** `chooseCameraSlp(slps)` → `{file, version, newer}`. See the
+`loading/session-loader.js` entry for the rule and why `lastModified` is
+deliberately NOT authoritative. `newer` is the most-recently-modified candidate
+when that is not the chosen file, else `null` — the signal that a leftover
+`_vN` is outranking a file the user just wrote.
+
+**Imports from project modules.** None (deliberately).
+
+**Imported by.** `loading/session-loader.js`, which re-exports it so its own
+import site is unchanged; bridged into the test runner as
+`window.__PerCamSlpChoice`.
+
+**Tests.** `tests/test-percam-slp-choice.js`.
+
+---
+
 ### loading/session-loader.js
 
 **Purpose.** Orchestrator for every session-loading workflow — empty
@@ -4341,14 +4392,79 @@ the latest reflects current state. Parsing every file stacked all versions'
 instances into the same (frame, camera) slot — the Instances tab then showed the
 same tracks repeated N times. Skipped files are logged.
 
-**Large `.slp` → lazy loading.** In `handleLoadSessionFolderPerCamera`, each
-camera's chosen `.slp` is routed by `shouldUseLazySlp(bestSlp)` (`> 150 MB`): large
+The choice itself lives in **`loading/percam-slp-choice.js`**'s
+`chooseCameraSlp(slps)` → `{file, version, newer}` — extracted from this module
+for the same reason `import-export/import-track-resolve.js` was: session-loader
+pulls app.js through its import graph and cannot be bridged into
+`tests/test-runner.html`, and this rule is worth exercising in the fast browser
+suite rather than only through a full folder load. session-loader re-exports it,
+so its import site is unchanged. Covered by `tests/test-percam-slp-choice.js`.
+
+It adds two things to a bare max():
+
+- **`lastModified` breaks a same-version tie**, which folder-enumeration order
+  used to settle arbitrarily.
+- **It reports when the version suffix disagrees with the disk** (`newer`, the
+  most-recently-modified candidate when that is NOT the chosen file; `null`
+  otherwise, including on equal mtimes so a folder copied in one go stays
+  quiet). "Highest `_vN`" is a naming convention, not a fact: since "Export
+  SLEAP File By Cam" writes `<stem>_v<N+1>.slp` every time, writing fresh
+  annotations to the UNVERSIONED name — which is what "replacing the .slp file"
+  means when the original had no suffix — makes a leftover `_v1` win, and the
+  console line called that stale file "highest version". The version rule is
+  deliberately UNCHANGED (mtime survives neither copying nor syncing reliably,
+  so it must not decide which file is authoritative); the load now just says a
+  newer file was left unread. Covered by
+  `tests/e2e/percam-slp-choice-and-failure.mjs`.
+
+**Large `.slp` → lazy loading.** In `handleLoadSessionFolderPerCamera`, the
+chosen `.slp` files are routed by `shouldUseLazySlp` (`> 150 MB`): large
 prediction files go to a `SioLazyLoader` (`./sio-lazy-loader.js`, sleap-io.js
 streaming lazy reader) instead of the eager `parseSlpH5` worker, which OOMs the tab
 on 100k-frame predictions. The lazy loader is chosen when all lazy jobs are `.slp`
 (analysis `.h5` folders still use `LazyFrameLoader`); a lazy-open failure surfaces
 an error rather than falling back to the OOM-prone eager path. It plugs into the
 existing `state.session.lazyLoader` seam, so rendering/scrubbing are unchanged.
+
+**The routing decision is per FOLDER, not per file.** Deciding per file let one
+folder come back part eager and part lazy, and that combination is silently
+lossy: the eager cameras populate `session.frameGroups` during load, and
+`ensureLazyFrameData` skipped any frame that already had a FrameGroup — so the
+lazy cameras were **never hydrated, on any frame, ever**. Every pane rendered
+and only some carried annotations, under a "Loaded N camera(s)" success line.
+This is the reported "I exported the .slp files, put them back in the session
+folder, reloaded, and only some of the views came back": replacing prediction
+files with LUCID exports is exactly what moves a camera across the fixed 150 MB
+threshold, which is why it appeared on a reload and not on the original load.
+Measured on a 3-camera folder: all-eager 12/12/12, all-lazy 12/12/12 after
+scrubbing, **mixed 0/12/12** — and the zero never recovered.
+
+The unification goes toward **LAZY, never toward eager**: eager is what OOMs the
+tab on a 100k-frame prediction, so pulling a big file onto that path to match a
+small sibling would trade a display bug for a crash. A small file on the lazy
+path just hydrates on scrub. An all-small folder is untouched — it still loads
+eagerly, with its data present immediately and no scrub needed.
+`pose/triangulation.js`'s `ensureLazyFrameData` independently repairs a
+partially-hydrated frame now, so a mix arriving some other way degrades rather
+than losing views. Covered by `tests/e2e/percam-mixed-lazy-eager.mjs`, which
+asserts all three routings plus the repair path and its idempotence (all four
+assertions confirmed to fail pre-fix).
+
+**A `.slp` the reader chokes on is reported, not swallowed.** The parse was
+`parseSlpH5(bestSlp).catch(function (e) { return null; })` followed by `if
+(!slpData) continue`, and the closing status counts matched DIRECTORIES rather
+than successful parses — so an unreadable file left that view empty under a
+success-styled "Loaded N camera(s)", the third way to lose a view with nothing
+said anywhere. Failures are now collected per camera and named in the status
+line, which downgrades to `error`. Note the root cause was one level down: `new
+h5wasm.File(path, 'r')` does NOT throw on non-HDF5 bytes — it returns a File
+wrapping an invalid id (the tell is HDF5-DIAG `H5Fclose(): not a file ID`) —
+and since every `f.get()` in `loading/slp-import-worker.js` is individually
+try/caught, parsing ran to the end and posted an ordinary result with 0 frames.
+The worker now checks `f.keys()` right after the open and throws
+`Not a readable HDF5/SLP file (no root datasets)` on an empty/unreadable root,
+so the failure reaches every caller as a rejection instead of a successful
+parse of nothing.
 
 **Lazy project reopen (`handleLoadProjectSlpLazy`).** The memory-bounded "Load
 Project" path for a large saved project `.slp` (routed here by
@@ -4657,6 +4773,21 @@ open-and-stream-frames.
 - OUT: `{type: 'progress', message}`, `{type: 'result', data: {...}}`,
   `{type: 'metadata', data: {...}}`, `{type: 'frameData', ...}`,
   `{type: 'framesData', ...}`, `{type: 'error', message}`.
+
+**An unopenable file must reject, not resolve empty.** `new h5wasm.File(path,
+'r')` does **not** throw on non-HDF5 bytes — it hands back a File wrapping an
+invalid id, the tell being HDF5-DIAG `H5Fclose(): not a file ID` on the way out.
+Every `f.get()` in `parseSlp` is individually try/caught and returns null on a
+missing dataset (correct for optional ones like `tracks_json`/`sessions_json`),
+so a truncated or non-SLP file parsed all the way to the end and posted a
+perfectly ordinary `result` with 0 frames. Callers could not tell that from a
+genuinely empty file: `handleLoadSessionFolderPerCamera` took it as a successful
+parse and that camera's view came up blank with nothing said anywhere. `parseSlp`
+now checks `f.keys()` immediately after the open and throws `Not a readable
+HDF5/SLP file (no root datasets)` when the root is empty or unreadable — an SLP
+always has root keys (`metadata`, `videos_json`, `frames`, …) — so the failure
+reaches every caller as a rejection. Covered by
+`tests/e2e/percam-slp-choice-and-failure.mjs`.
 
 **Imports from project modules.** None.
 
