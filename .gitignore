@@ -74,3 +74,19 @@ figs/**/__pycache__/
 !figs/*.md
 !figs/data/**
 !figs/figures/**
+# ...EXCEPT the manuscript-writing documents, UNTRACKED since 2026-08-26 (Eric:
+# "remove all of these md and txt files for writing methods, results, captions
+# figure legends etc from the eric/figs branch ... but make them untracked").
+# The manuscript text's canonical home is figures/drafts/*.tex; these live on
+# as local working copies only (last tracked state: the commit before this
+# rule landed). make_docs.py skips their .txt twins when the .md is absent.
+figs/CAPTIONS.md
+figs/FIGURE-LEGENDS*.md
+figs/FIGURE-LEGENDS.txt
+figs/METHODS*.md
+figs/METHODS.txt
+figs/RESULTS*.md
+figs/RESULTS.txt
+figs/FIGURES-PLAIN-ENGLISH.md
+figs/FRESH-ANCHOR.md
+figs/FRESH-ANCHOR.txt
