@@ -1401,7 +1401,12 @@ subtitle is populated for loaded projects, not just freshly triangulated ones.
   `finalizeLazyFrameGroup` runs on exactly the new cameras and cannot re-unlink
   instances an eager parse already placed; whatever it produces is merged in.
   A camera hydrated concurrently is re-checked after the `await`, so a scrub
-  racing this cannot double-add. The folder loader also no longer produces a
+  racing this cannot double-add. `lazyCamerasMissingFrom` is **exported** and
+  unit-tested in `tests/test-lazy-camera-hydration.js` — it is the predicate
+  that decides whether a view comes back with its labels, and it can fail in
+  two opposite directions (call a loaded camera missing and the frame renders
+  every instance twice; call a missing one present and the view stays blank),
+  so it is worth pinning in the fast browser suite as well as end to end. The folder loader also no longer produces a
   mixed session at all (see `loading/session-loader.js`) — this is the
   independent half, and `tests/e2e/percam-mixed-lazy-eager.mjs` reaches it
   directly by emptying one camera out of a hydrated FrameGroup, asserting the
@@ -4266,6 +4271,31 @@ frames (off-main-thread to keep UI responsive).
 
 ---
 
+### loading/percam-slp-choice.js
+
+**Purpose.** The rule for which `.slp` a camera directory is loaded from, as a
+pure function. Imports **nothing** — no project modules, no DOM — so it bridges
+into `tests/test-runner.html`. Extracted from `loading/session-loader.js` for
+exactly the reason `import-export/import-track-resolve.js` was: session-loader
+pulls app.js through its import graph and cannot be loaded there, and a rule
+this consequential should be assertable without driving a whole folder load.
+
+**Key export.** `chooseCameraSlp(slps)` → `{file, version, newer}`. See the
+`loading/session-loader.js` entry for the rule and why `lastModified` is
+deliberately NOT authoritative. `newer` is the most-recently-modified candidate
+when that is not the chosen file, else `null` — the signal that a leftover
+`_vN` is outranking a file the user just wrote.
+
+**Imports from project modules.** None (deliberately).
+
+**Imported by.** `loading/session-loader.js`, which re-exports it so its own
+import site is unchanged; bridged into the test runner as
+`window.__PerCamSlpChoice`.
+
+**Tests.** `tests/test-percam-slp-choice.js`.
+
+---
+
 ### loading/session-loader.js
 
 **Purpose.** Orchestrator for every session-loading workflow — empty
@@ -4362,9 +4392,15 @@ the latest reflects current state. Parsing every file stacked all versions'
 instances into the same (frame, camera) slot — the Instances tab then showed the
 same tracks repeated N times. Skipped files are logged.
 
-The choice itself lives in the pure, exported **`chooseCameraSlp(slps)`** →
-`{file, version, newer}`, so the rules are unit-testable. It adds two things to
-a bare max():
+The choice itself lives in **`loading/percam-slp-choice.js`**'s
+`chooseCameraSlp(slps)` → `{file, version, newer}` — extracted from this module
+for the same reason `import-export/import-track-resolve.js` was: session-loader
+pulls app.js through its import graph and cannot be bridged into
+`tests/test-runner.html`, and this rule is worth exercising in the fast browser
+suite rather than only through a full folder load. session-loader re-exports it,
+so its import site is unchanged. Covered by `tests/test-percam-slp-choice.js`.
+
+It adds two things to a bare max():
 
 - **`lastModified` breaks a same-version tie**, which folder-enumeration order
   used to settle arbitrarily.

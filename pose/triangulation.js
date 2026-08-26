@@ -2092,8 +2092,12 @@ function finalizeLazyFrameGroup(session, fg, frameIdx) {
  * Returns `[]` — the common case, one cheap Map lookup per camera — whenever
  * the group already covers every lazy camera, which is what a group the lazy
  * path built itself always does.
+ *
+ * Exported for `tests/test-lazy-camera-hydration.js`: this predicate is what
+ * decides whether a view comes back with its labels, and it is worth pinning in
+ * the fast browser suite rather than only through a full folder load.
  */
-function lazyCamerasMissingFrom(session, fg) {
+export function lazyCamerasMissingFrom(session, fg) {
     var loader = session.lazyLoader;
     if (!fg || !loader) return [];
     // Both loaders key their per-camera state by camera name: SioLazyLoader in
