@@ -52,17 +52,29 @@ DRIVER = FIGS / "fig3-bench" / "fig3_bench.mjs"
 BENCH = Path("/root/vast/eric/luc3d-bench")
 BM = BENCH / "outputs" / "bmimica"
 CAMS = ["21241563", "21369048", "21372315", "21372316", "22085397"]
-HH_CACHE = OUT / "tmp" / "headtohead" / "A2_C5_bmimica"
+HH_CACHE = OUT / "tmp" / "headtohead" / "A2_C5_bmimica"   # session list only
+
+#: The deposit cell the k = 5 gate must reproduce. THE SHIPPED FRESH ANCHOR
+#: (stale 20 + distanceThreshold 25 + frame-synchronous association, the app
+#: default since PR #210): this worktree's `pose/cross-view-tracker.js` and
+#: `scripts/bench/hooks.mjs` now carry those defaults, so an unflagged bench run
+#: IS the shipped configuration and must land on the fresh-anchor cell. Before
+#: 2026-08-26 this gate pointed at `shipped`, the no-eviction cell, because the
+#: branch predated the fix.
+GATE_CONFIG = "sync_stale20_dist25"
 
 
 def subsets():
-    """{tag: [cams]} for k = 2, 3, 4 -- three deterministic picks per k."""
+    """{tag: [cams]} for k = 2, 3, 4 -- three deterministic picks per k -- plus
+    k5_full, the whole rig, which is TRACKED here rather than re-scored from the
+    head-to-head cache (see `score_job`)."""
     out = {}
     for k in (2, 3, 4):
         combos = sorted(itertools.combinations(CAMS, k))
         for idx in (0, len(combos) // 2, len(combos) - 1):
             cams = list(combos[idx])
             out[f"k{k}_" + "-".join(c[-3:] for c in cams)] = cams
+    out["k5_full"] = list(CAMS)
     return out
 
 
@@ -101,8 +113,11 @@ def score_job(args):
     tag, cams, sid = args
     sys.path.insert(0, str(FIGS))
     import fig3_score as fs
-    src = (HH_CACHE / sid / "greedy.json") if tag == "k5_full" \
-        else (TMP / tag / f"{sid}.json")
+    # EVERY cell, k = 5 included, is scored from THIS pass's own tracking output
+    # (2026-08-26). It used to re-score the head-to-head cache for k5_full, but
+    # that cache is the PRE-#210 tracker -- mixing it with freshly tracked k = 2
+    # to 4 cells would have compared two tracker generations across the x axis.
+    src = TMP / tag / f"{sid}.json"
     try:
         r = fs.score_session(str(src), str(BM / "det_h5" / sid),
                              str(BM / "gt" / sid), cams, 2)
@@ -143,7 +158,6 @@ def main():
         return
 
     jobs = [(t, c, s) for t, c in subs.items() for s in sess]
-    jobs += [("k5_full", CAMS, s) for s in sess]
     rows, errs = [], []
     t0 = time.time()
     with ProcessPoolExecutor(max_workers=a.workers) as ex:
@@ -158,20 +172,20 @@ def main():
 
     # THE GATE: k5_full re-scored through this pass must match the deposit.
     dep = json.loads((OUT / "fig8_methods_50.json").read_text())
-    shipped = next(c for c in dep["cells"] if c["config"] == "shipped")
+    shipped = next(c for c in dep["cells"] if c["config"] == GATE_CONFIG)
     ref = {r["session"]: r for r in shipped["per_session"]}
     k5 = [r for r in rows if r["subset"] == "k5_full" and r["session"] in ref]
     dmax = max(abs(r["within_idf1"] - ref[r["session"]]["within_idf1"]) for r in k5)
-    print(f"[cams] GATE k5_full vs fig8_methods_50.json shipped: "
+    print(f"[cams] GATE k5_full vs fig8_methods_50.json {GATE_CONFIG}: "
           f"{len(k5)} sessions, max |diff| {dmax:.3e}")
     gate_ok = dmax < 1e-9
     if not gate_ok:
-        print("[cams] GATE FAILED -- k5 does not reproduce the shipped deposit; "
+        print("[cams] GATE FAILED -- k5 does not reproduce the fresh-anchor deposit; "
               "subset cells are NOT publishable. Depositing with gate.passed=false.")
 
     import numpy as np
     summary = {}
-    for tag in list(subs) + ["k5_full"]:
+    for tag in subs:
         g = [r for r in rows if r["subset"] == tag]
         if not g:
             continue
@@ -186,12 +200,13 @@ def main():
         }
     (OUT / "fig2_cams_identity.json").write_text(json.dumps({
         "generated_by": "figs/fig2_cams_identity.py",
-        "claim": "The shipped cross-view tracker re-run on deterministic camera "
+        "claim": "The shipped fresh-anchor cross-view tracker (stale 20, "
+                 "distanceThreshold 25, frame-synchronous) re-run on deterministic camera "
                  "subsets of the BMimica rig; identity (IDF1, switches) against the "
                  "number of cameras available.",
         "subsets": {t: c for t, c in subs.items()},
         "gate": {"passed": bool(gate_ok), "max_abs_diff_idf1": dmax,
-                 "reference": "fig8_methods_50.json config=shipped"},
+                 "reference": f"fig8_methods_50.json config={GATE_CONFIG}"},
         "summary": summary,
         "per_run": rows,
     }, indent=1))
