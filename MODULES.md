@@ -1,7 +1,7 @@
 # LUCID Module Reference
 
 In-depth reference for every ES module in the LUCID codebase. Use this to
-locate which module owns a given concern before editing.
+locate which module owns a given concern before editing. 
 
 The codebase is split across four directories plus two root files:
 
@@ -12,9 +12,11 @@ The codebase is split across four directories plus two root files:
 - root — `app.js` entry point, `demo-data.js` synthetic dataset.
 
 External script-tag globals (`three`, `mp4box`, `h5wasm`, `dockview-core` —
-**pinned to 6.6.1**, see CLAUDE.md Dependencies — and `Mp4Muxer` — local copy in
-`lib/mp4-muxer/`, used for 3D-video `.mp4` muxing) are not listed under
-"Imports from project modules".
+**pinned to 6.6.1**, see CLAUDE.md Dependencies) are not listed under
+"Imports from project modules". Neither are importmap bare specifiers
+(`mediabunny`, `h5wasm`, `pako`, `yaml`); `mediabunny` is vendored in
+`lib/mediabunny/` and is used for video DECODE (via sleap-io.js) and video
+ENCODE (via `ui/video-encode.js`).
 
 ---
 
@@ -247,7 +249,10 @@ session graph that holds them.
   (ideal→distorted, OpenCV forward model — the inverse of `undistortPoint`,
   used to re-distort reprojections into native pixel space).
 - `Instance` — per-view 2D keypoints with `trackIdx`, `type`
-  (`user`/`predicted`/`reprojected`), `score`, `occluded[]`, `nulledNodes`.
+  (`user`/`predicted`/`reprojected`), `score`, `occluded[]`, `nulledNodes`,
+  and `identityId` (null unless this is a TRACKLESS UNLINKED instance whose
+  disbanded group's identity was retained on it by `unlinkGroup` — luc3d
+  #201; consumed/cleared when the instance joins a group; not persisted).
   Methods `toggleOccluded`, `setPointVisible`, `backupPoints`, `restorePoints`.
 - `UnlinkedInstance` — wrapper around an `Instance` not yet placed in an
   `InstanceGroup`. Auto-incrementing `id`.
@@ -256,7 +261,18 @@ session graph that holds them.
 - `Identity` — id + name + color (uses `IDENTITY_COLORS` palette).
 - `IDENTITY_COLORS` — 20-color palette for identity badges.
 - `InstanceGroup` — cross-view grouped instances + triangulated `points3d`
-  + cached `reprojectedInstances`. `markDirty`/`markClean`.
+  + cached `reprojectedInstances`. `markDirty`/`markClean`. Also
+  `triangulationMethod` (`'ba'`|`'dlt'`|undefined), recording WHICH SOLVER
+  produced `points3d`. Read by `resolveTriangulationMethod`,
+  `ui/rendering.js`'s lazy reprojection fill, `adoptPrior3d` and the Info Panel's
+  method label — and **persisted**, in per-group
+  `metadata.lucid.triangulationMethod` (written only when `'ba'`; absent means
+  DLT), because it cannot be reconstructed from `points_3d`. Before that,
+  reopening a BA project gave every group BA 3D with an *unknown* method, so the
+  display fill re-derived reprojections with DLT and the panel reported DLT's
+  error under a "DLT" label for BA points (measured on the regression fixture:
+  1.62 px shown instead of 1.43 px). Guarded by
+  `tests/e2e/triangulate-all-ba-file-roundtrip.mjs`.
 - `Session` — top-level container: cameras, skeleton, tracks, identities,
   frameGroups, instanceGroups. The `numFrames` getter returns
   `lazyLoader.nFrames` on a lazy session (`frameGroups` there holds only the
@@ -286,7 +302,53 @@ session graph that holds them.
   180k-entry map of Sets; the per-frame uniqueness/collider rule is shared by both
   passes via `_applyIdentityAtFrame`. NOTE `assignTrackToIdentity` above is still
   resident-only — it has **no callers** (dead since #155) and is left alone
-  deliberately), group assignment
+  deliberately. `propagateIdentity` is now the FALLBACK for a manual identity
+  switch, used only when there is no identity to swap away from — see
+  `swapIdentitiesForward` next;
+  `swapIdentitiesForward(startFrame, identityA, identityB)` — **exchanges two
+  identities from `startFrame` through the END of the project, in every view**
+  (luc3d #172). This, not `propagateIdentity`, is what a MANUAL identity
+  correction means, and it is the identity-layer analogue of SLEAP's
+  `Labels.track_swap` over `(frame_idx, None)`. `propagateIdentity` cannot
+  express it: it follows ONE raw `(camera, trackIdx)` pair forward, so it dies at
+  the first fragment boundary of that raw track — and real per-camera tracker
+  output fragments constantly (the same animal is track 4 for a few hundred
+  frames, then 12, then 20), which is why a correction reached only the current
+  tracklet, and only the views the group happened to be visible in on that one
+  frame (#172: "only a small fragment of the ID propagates down the timeline",
+  "the propagation appears limited to tracks visible in the current view").
+  Identity, unlike a raw track, is DENSE project-wide — that is why
+  `frameIdentityMap` is per-frame keyed at all — so expressing the correction over
+  identity VALUES needs no track continuity. Rewrites both durable structures:
+  `frameIdentityMap` (values only, so mutating during iteration is safe; packed
+  keys carry `frameIdx` in their top bits, so the frame filter is arithmetic with
+  no decode and no allocation on the 2.6M-entry real project) and the
+  whole-project `instanceGroups[*].identityId` (saved into the columnar
+  `instance_groups` table, used as the display fallback, and read directly by
+  `propagateIdentitiesToTracks` step 2b — leaving it stale would let a later
+  IDs→Tracks resurrect the pre-swap assignment). Frames before `startFrame` are
+  never touched (#155), and the operation is an involution, so a later correction
+  at frame G composes to "until the next manual correction" without tracking
+  correction history. No frame materialization, so nothing hydrates or evicts.
+  Returns `{entries, groups, frames}`. Guarded by the `swapIdentitiesForward
+  (#172)` block in `tests/test-identity.js` and end to end by
+  `tests/e2e/identity-switch-propagates-to-end.mjs`;
+  `swapIdentitiesForwardInCamera(startFrame, cameraName, identityA, identityB)` —
+  the **single-view** counterpart (luc3d #201). Same dense value swap, forward to
+  the end of the project, but restricted to ONE camera: this is how an ID is
+  corrected in one view (ungroup → switch the ID on that view's Ungrouped row →
+  regroup), where the per-camera tracker crossed two animals in one camera and the
+  other views are already right. Not `propagateIdentity`, even though that is
+  already per-camera — it follows one raw track and dies at the first fragment
+  boundary, which is exactly the #172 truncation. Differs from
+  `swapIdentitiesForward` in one substantive way: it deliberately does NOT rewrite
+  `instanceGroups[*].identityId`, since that is a single field shared by every
+  view and writing it would leak the correction into the other cameras (`groups`
+  in the result is therefore always 0, kept only so the shape matches for
+  `describeIdentitySwitch`). Both the frame and camera filters are arithmetic on
+  the packed key. Guarded by `tests/test-ungroup-retains-identity.mjs` (incl. a
+  fragmented-raw-track case) and end to end by
+  `tests/e2e/ungroup-retains-identity.mjs`), group assignment
   (`assignIdentityToGroup`), lookup (`getIdentityIdForTrack`/
   `getIdentityForTrack` — per-frame only, return null with no fallback;
   `isExplicitNoIdentity`; `isNoIdTrack(trackIdx)` — true for the dedicated
@@ -329,6 +391,30 @@ session graph that holds them.
   `remapTracksFromIdentity` callback is one direct `Map.get` per instance row
   instead of re-deriving the same fact via `getIdentityIdForTrack` +
   `idToTrackIdx.get` (two hash lookups) on every row.
+  **Per-row resolution of ambiguous raw tracks (luc3d #203).** Step 2 skips
+  `frameIdentityMap`'s explicit `-1` "ambiguous" entries (written by
+  `commitTrackedFrame` when one camera's raw tracker briefly gives two animals the
+  same `trackIdx`, "most common on the first frame or two"). But
+  `oldKeyToNewTrackIdx` is also what step 4 remaps the COLUMNAR STORE through, and
+  an absent key there means *no track* — so those instances kept the right track in
+  memory (step 3's `instanceToIdentity` fallback) and went **trackless in the
+  store**, permanently: trackless on export, a hole at the start of the Tracks
+  Timeline, and store-derived `trackOccupancy` disagreeing with resident
+  `frameGroups` for exactly the first frames. Step 2b now also builds
+  **`rowClaim`**, keyed `(frame, camera, offsetInFrame)` from each group member's
+  `_rawInstIndex`, which the step-4 callback consults FIRST — so each store row is
+  resolved by its own group's identity even when two animals share one raw
+  `trackIdx` on that frame (the callback's new `offsetInFrame` argument is what
+  makes this possible; see `loading/sio-lazy-loader.js`). A per-track `rawClaim`
+  fallback covers a member with no `_rawInstIndex`, and refuses to guess when two
+  identities contest one key — those are counted and returned as
+  **`ambiguousRawKeys`** (also `console.warn`ed and surfaced by
+  `ui/ui-wiring.js`'s status line) rather than dropped silently. The return value
+  is now `{tracks, instances, lazyErrorRows, ambiguousRawKeys}`. Guarded by the
+  `propagateIdentitiesToTracks run twice (luc3d #203)` block in
+  `tests/test-lazy-reopen.js`, which also pins the whole-operation invariant:
+  after every run, the Timeline's `maxTrackIdx + 1` must equal
+  `session.tracks.length`, checked per source so a failure names the culprit.
   `propagateTracksToIdentities`'s lazy sweep now memoizes
   `getOrCreateIdentityForTrack` per distinct `trackIdx` (a local
   `identityForTrack` Map) — that lookup is a LINEAR SCAN over
@@ -392,13 +478,33 @@ session graph that holds them.
   `_buildIdentitySegments` see the correct identity too, not just resident
   in-memory instances), and an `instanceToIdentity` per-instance-object
   fallback Map (built from `instanceGroups` before any remap runs) that
-  `remapInstance` (steps 3/3b) checks before falling back to the raw
-  per-camera `getIdentityIdForTrack` lookup. Regression test:
+  `remapInstance` (steps 3/3b) consults when the raw per-camera
+  `getIdentityIdForTrack` lookup has no usable answer. Regression test:
   `tests/e2e/first-frame-track-identity-collision.mjs` (builds a synthetic
   raw-trackIdx collision on frame 0 only, propagates, and asserts both
   Timeline display modes cover frame 0 identically to frame 1 — confirmed it
   fails pre-fix with `[null, null]` on the colliding camera's frame-0
   instances and passes post-fix).
+  **Precedence (duplicate-ID-after-single-view-switch regression):** those
+  group-derived repairs are FALLBACKS, not overrides — `remapInstance` and
+  step 2b's per-member claims (`rowClaim`/`rawClaim`/the `newFrameMap`
+  supplement) resolve each instance's identity from `frameIdentityMap` FIRST
+  and consult `group.identityId` only for entries the map cannot answer
+  (absent, or the `-1` collision sentinel). That matches every display
+  consumer (`getGroupColor` is map-first) and matters because a single-view
+  ID switch (`swapIdentitiesForwardInCamera`, luc3d #201) rewrites ONLY the
+  map, deliberately leaving the cross-view `group.identityId` alone — the
+  earlier group-first order resurrected the stale group identity on the
+  still-grouped animal while the switched instance followed the map, landing
+  the SAME ID/track on both animals on the switch frame (in memory and in the
+  columnar store). `remapInstance` is also explicitly once-per-instance now
+  (a `remapped` Set): an object shared by the step-3 `frameGroups` walk and
+  the step-3b `instanceGroups` walk must not be remapped twice, since the
+  second pass would look its already-rewritten `trackIdx` up in the old map
+  and undo the first. Regression tests: the `single-view ID switch
+  (duplicate-ID regression)` block in `tests/test-pose-data.js` (in-memory,
+  store-remap callback, and a pin that the `-1`-collision group fallback
+  still works).
   Separately, the auto-generated track-name fallback changed from `'id_' +
   ident.id` to the app's normal `'track_' + index` convention (a genuinely
   custom identity name like "Alice" is still preserved verbatim; only a
@@ -408,13 +514,72 @@ session graph that holds them.
   instead of restoring the original naming. Legacy migration (`migrateGlobalIdentitiesToPerFrame` —
   converts a pre-per-frame project's global map to per-frame entries on load),
   group editing (`createGroupFromUnlinked` — when no identity is passed it
-  derives one from the first member's track, but only if that member HAS a
-  track: grouping trackless instances yields a group with NO identity (-1), not
-  a fabricated "id_null"; `unlinkGroup`, `removeInstanceGroup`, `assignToGroup`), repair
+  prefers an identity the members ALREADY read as (the first member with one,
+  via `getIdentityIdForUnlinkedInstance`, so a trackless member's retained
+  instance-level identity counts too), and only then derives one from the
+  first member's track, and only if that member HAS a
+  track: grouping identity-less trackless instances yields a group with NO
+  identity (-1), not
+  a fabricated "id_null". Preferring the held identity is what lets an
+  ungroup → re-assign one row → regroup round trip keep the animal's ID instead
+  of renaming it to `id_<rawTrackIdx>` (luc3d #201). Grouping CONSUMES the
+  members' instance-level retained identity (`Instance.identityId` reset to
+  null — the group owns it from there; `assignToGroup` does the same);
+  `unlinkGroup` — **retains identity** for each member before the group object
+  (and with it the `group.identityId` fallback every identity reader relies on)
+  is dropped (`_retainIdentityOnUnlink`): a TRACKED member gets the disbanding
+  group's `identityId` stamped into `frameIdentityMap`; a TRACKLESS member gets
+  it stamped on the instance itself (`Instance.identityId`) — the map is keyed
+  by raw trackIdx, so a null track keys one shared per-camera slot that cannot
+  name an individual, which is why the map-only retention silently skipped
+  trackless members and the bug RECURRED for untracked predictions / manual
+  annotations (the report against PR #202). Without retention, ungrouping
+  reset every Ungrouped row's ID to "—" and discarded the
+  assignment, making "swap the ID in one view" destructive (luc3d #201). The
+  map stamp only
+  fills in what the tracker path (`commitTrackedFrame`) already writes, and is
+  conservative: it never overwrites an existing positive entry (that entry is
+  what readers already prefer over `group.identityId`), and skips a raw-trackIdx
+  key still shared with another group in the frame (the ambiguous-`-1` collision
+  case — claiming it would mis-color the group still holding it). The instance
+  stamp OVERWRITES: while grouped, `group.identityId` is the freshest truth for
+  a trackless member (switches pin the group field and cannot write the map for
+  a null track), so an older instance-level value is stale by definition;
+  `getIdentityIdForUnlinkedInstance(cam, instance, frameIdx)` — THE resolver
+  for an UNLINKED instance's identity: the per-frame map entry when the
+  instance has a track (= `getIdentityIdForTrack`), the instance-level
+  retained identity when it does not. Used by the info panel's Ungrouped rows,
+  `getInstanceColor`, and the regroup derivation;
+  `assignIdentityToUnlinkedTrackless(frameIdx, camName, instance, identityId)`
+  — the one-view ID correction for a TRACKLESS unlinked row. Per-frame by
+  nature (no track = no linkage to carry the correction to other frames);
+  within the frame it hands the vacated identity to the trackless unlinked row
+  in the same camera that already held the target, keeping the view
+  duplicate-free (mirrors the tracked swap semantics). Routed to by
+  `applyIdentitySwitch` when the unlinked row's instance is trackless. All
+  trackless retention is guarded by `tests/test-ungroup-retains-identity.mjs`
+  and end to end (save → lazy reopen → ungroup → one-view switch → regroup) by
+  `tests/e2e/ungroup-trackless-reopen.mjs`;
+  `removeInstanceGroup`, `assignToGroup`), repair
   (`deduplicateFrameIdentities`, `scrubOrphanInstances`,
   `_promoteIfMixed`), skeleton propagation
   (`propagateNodeAdded`/`propagateNodeRemoved`), camera-rename
   (`renameCameraInAllData`).
+  **`videoContrast`** / **`videoBrightness`** / **`videoRotation`** (issue #149
+  and follow-ups) — three `{ cameraName: int }` maps: contrast in [−100, 100],
+  brightness percentage in [0, 200], rotation degrees in [−179, 180]. All
+  **per-session** and persisted in the `.slp` (`metadata.lucid.videoContrast` /
+  `videoBrightness` / `videoRotation`): `state.views` is rebuilt from scratch on
+  every session switch, so a per-view field would silently reset — which is
+  exactly what brightness used to do when it lived on `view._brightness`.
+  Contrast and brightness are display-only (CSS filters on the view canvas);
+  rotation is not — the renderer and hit-testing read `view.rotation`, which
+  `restoreViewRotation` re-seeds from here at pane build. Default entries (0 /
+  100 / 0) are never stored — see `ui/video-filters.js`, which owns every
+  read/write, and `import-export/visibility-metadata.js` for the `.slp` mapping.
+  The timeline's `_hiddenCameras` / `_hiddenTracks` / `_hiddenIdentities` Sets
+  are session-scoped and persisted the same way (see
+  `ui/timeline-visibility.js`).
 - `clonePoints(points)` — deep-clone helper for `[u,v]|null` arrays.
 - `mat3x3Multiply`, `mat3x3Multiply3x4` — matrix utilities used by
   `Camera` and `triangulation.js`.
@@ -712,9 +877,10 @@ computing `loader`/`windowed` first and checking `loader.nFrames > 0` instead of
 `tests/e2e/track-all-fresh-lazy-session.mjs` (reopens a real saved lazy project
 with 0 resident frameGroups and asserts Track All finds identities instead of
 bailing). Hyperparameters come from the
-`corr2dWeight`/`corr3dWeight`/`velocityThreshold`/`distanceThreshold`/`timePenalty`
+`corr2dWeight`/`corr3dWeight`/`velocityThreshold`/`distanceThreshold`/`timePenalty`/`stale`
 tracking thresholds (`ui/settings.js`; defaults are the `G_keeptrack_3d6`
-champion values). Track Frame/Track All pass the user's animal count as
+champion values, except `distanceThreshold`/`stale` which carry the 2026-08-14
+stale-anchor-fix values — see `pose/cross-view-tracker.js`). Track Frame/Track All pass the user's animal count as
 `maxTargets` so the tracker caps live targets at that number (a LUCID divergence
 from the reference — see `pose/cross-view-tracker.js`; `null`/omitted =
 uncapped/faithful). Covered by `tests/test-crossview-populate.mjs` (data-structure
@@ -736,12 +902,49 @@ from the Tracking Wizard.
 
 **Purpose.** `CrossViewTracker` — LUCID's cross-view 3D tracker and the app's
 only temporal tracker. Adapted from the `CrossViewTracker` written by Liezl Maree
-in the talmolab/sleap-3d repo (Python) and reimplemented in JS; a faithful port
-of `/root/vast/eric/sleap-3d/sleap_3d/tracker.py`. A cross-view 3D
-multi-target tracker: associates per-camera 2D detections to a running list of 3D
-`Target`s, one camera-view at a time, via Hungarian assignment on a cost that
-sums a 2D reprojection term and a 3D point-to-ray term. No Kalman filter, no
-velocity model, no track aging (matches the reference).
+in the talmolab/sleap-3d repo (Python) and reimplemented in JS; originally a
+faithful port of `/root/vast/eric/sleap-3d/sleap_3d/tracker.py`, and as of
+2026-08-14 no longer byte-faithful — see "Stale-anchor fix" below. A cross-view
+3D multi-target tracker: associates per-camera 2D detections to a running list
+of 3D `Target`s, one camera-view at a time, via Hungarian assignment on a cost
+that sums a 2D reprojection term and a 3D point-to-ray term. Still no Kalman
+filter, no velocity model (matches the reference).
+
+**Stale-anchor fix (2026-08-14).** The reference keeps one detection per camera
+FOREVER (never expired) and re-fuses mid-frame, mutating the shared target list
+one camera's Hungarian at a time — so after an occlusion a target's 3D anchor
+stays frozen at wherever it was last seen, and the surviving animal's own
+detection can drift closer to that stale ghost than to its own target,
+permanently swapping the two identities with nothing downstream able to detect
+it. Validated on real multi-view rodent corpora in `talmolab/luc3d@eric/figs`
+(`figs/fig8-bench/xv_experimental.js`, methods M1 `sync`/`stale`): BMimica
+cross-view switches 2,071 → 413 (50 sessions), SLAP-2M within-view switches
+3,094 → 1,312 / IDF1 0.7040 → 0.7212 (42 multi-animal sessions), at the
+recommended `stale: 20` + `distanceThreshold: 25` (`corr3dWeight` unchanged at
+6). Two changes, both additive (default/zero config reproduces the pre-fix
+tracker exactly):
+- **`stale` (hp, frames, default 20).** At the start of every `trackFrame()`
+  call (`_beginFrame`), evict any `detsByCam` entry older than `stale` frames,
+  before that frame's association runs, so `_retriangulate` can no longer fuse
+  one fresh view with several ancient ones. `0` restores the pre-fix,
+  unbounded-staleness behavior. Wired from the Tracking Wizard's new `stale`
+  threshold (`ui/settings.js`) via `crossViewHyperparams()` (`pose/tracker.js`).
+- **Frame-synchronous association (unconditional, no flag).** A target's
+  `points3d`/`frameIdxMean()` snapshot (`_snapMean`) is frozen at frame start
+  and every camera's Hungarian this frame is scored against it; the one
+  `_retriangulate()` happens once, in `_endFrame()`, after every camera in the
+  frame has been processed — replacing the reference's mid-frame
+  Gauss-Seidel-style mutation with a Jacobi-style update. `_adjacency2d`/
+  `_adjacency3d` still read `target.points3d` directly (unchanged signature) —
+  it is simply not mutated again until frame end — so calling them directly
+  outside a `trackFrame()` lifecycle (as `tests/test-crossview-features.mjs`
+  does) is unaffected; `_snapMean` is `null` there and the live
+  `frameIdxMean()` is used instead, matching pre-fix behavior exactly. Births
+  (`_initializeTargets`) still retriangulate immediately, unchanged, since a
+  target born mid-frame has nothing for `_endFrame` to defer.
+`distanceThreshold`'s Tracking Wizard default moved 50 → 25 alongside this
+fix (`ui/settings.js`); `scripts/bench/hooks.mjs`'s `THRESHOLD_DEFAULTS` was
+updated to match (its own comment requires staying in sync).
 
 **Coordinate conventions (verified vs `sleap_3d/geometry.py`).** Works entirely
 in NORMALIZED camera coordinates: detections are undistorted + K⁻¹-applied on
@@ -755,12 +958,13 @@ the 3D term dominates — hence `corr3dWeight` is the meaningful knob).
 maintains `.targets`), `Detection` (2D observation: `pointsNorm`/`pointsPixel` +
 `cam`/`frameIdx`/`slot`), `normalizePoint`.
 
-**Faithful-port quirks preserved (do NOT "fix").** Per-view-per-frame
-association; `velocity`/`distance` thresholds are SOFT (drive the cost negative,
-not hard gates) and negative matches are not filtered; the 3D term ignores the
-time gap; 3D velocity is zero; re-triangulation is plain DLT over all stored
-per-view detections. Adds a defensive `nansum`-style skip of non-finite cost
-terms (robust to a degenerate `[I|0]` camera).
+**Faithful-port quirks still preserved (do NOT "fix" without new measurement —
+not implicated by the fig8-bench search).** `velocity`/`distance` thresholds are
+SOFT (drive the cost negative, not hard gates) and negative matches are not
+filtered; the 3D term ignores the time gap; 3D velocity is zero;
+re-triangulation is plain DLT over all (now freshness-filtered) stored per-view
+detections. Adds a defensive `nansum`-style skip of non-finite cost terms
+(robust to a degenerate `[I|0]` camera).
 
 **LUCID divergence — `maxTargets` (opt-in target cap).** The reference has NO
 animal-count cap; births are unbounded and IDs stay bounded only via upstream
@@ -909,19 +1113,179 @@ sync** — `tracker.js` already imports from this module, so a two-way import wa
 avoided).
 
 **Triangulation methods.** `'dlt'` (default) is the fast linear DLT.
-`'ba'` initializes from DLT then runs per-point Levenberg–Marquardt bundle
-adjustment minimizing geometric reprojection error (slower, more accurate).
-Cameras are fixed (calibrated), so each keypoint is refined independently.
+`'ba'` initializes from DLT then runs a per-point Levenberg–Marquardt refinement
+of the geometric reprojection error. Cameras are fixed (calibrated), so each
+keypoint is refined independently — this mirrors aniposelib's
+`CameraGroup.optim_points`, which is what sleap-anipose actually runs for pose
+triangulation (aniposelib's `bundle_adjust_iter`, the one that also moves the
+cameras, is its *calibration* path). Costs 4.6–6.1x DLT: ~310 µs per keypoint
+versus ~54 µs, on a 5-camera / 15-node rig.
+
+**`'ba'` is guaranteed never worse than DLT on the reported error (issue #113).**
+Three properties make that true, and all three were wrong before:
+
+1. *Residual space.* Residuals are formed in the camera's **native (distorted)**
+   pixel space — where the detections live, where the noise is i.i.d., and the
+   space `meanError` is reported in. `distortJacobian` supplies the analytic
+   Brown–Conrady derivative and `projectAndJacobianCamera` chain-rules it onto
+   the projection Jacobian. Previously the objective used *undistorted*
+   observations and an ideal pinhole projection, so BA minimized one thing while
+   the UI displayed another; with radial distortion the displayed error rose on
+   up to 89% of points (2 cameras, k1=-0.3).
+2. *Robust loss.* Soft-L1 (pseudo-Huber) via IRLS in the normal equations, at
+   aniposelib's default scale (`BA_ROBUST_SCALE_PX` = 15 px, its
+   `reproj_error_threshold`). `robustScale: Infinity` restores plain squares.
+3. *Metric-matching polish.* A second LM phase minimizes Σ‖r‖, which **is** the
+   reported mean error up to the 1/nViews factor, so monotonicity in the
+   displayed number follows from the LM being monotone in its own loss. Seeded
+   from whichever of {DLT, phase 1} already scores better. Not decorative:
+   native-space soft-L1 alone still regressed ~20–47% of clean-noise trials,
+   because minimizing Σ‖r‖² and minimizing Σ‖r‖ genuinely disagree. Disable with
+   `polish: false`. A backtracking `guard` (on by default) is the belt-and-braces
+   net for what phase 2 cannot cover.
+
+Consequences worth knowing: the L1-type objective is ~10% less efficient than L2
+on genuinely clean Gaussian noise (3D error 0.2101 → 0.2309) but 11–18x better
+under a gross outlier (3.46 → 0.30), which is the right trade for real
+detections. `meanErrorUndistorted` is deliberately **not** guarded — DLT is
+inherently favored in ideal-pinhole coordinates since that is where its algebraic
+objective lives, and guarding both was measured to veto real improvements. Views
+**excluded** from the solve still count toward the headline `meanError`, so BA
+fitting the included views better can raise it; that is correct (chasing an
+excluded view is what excluding it forbids) and the invariant is pinned over the
+solve's own views instead. `{ robustScale: Infinity, polish: false, guard: false }`
+reproduces the pre-#113 behavior, which `tests/test-triangulation-ba.js` uses as
+a baseline so the suite cannot silently stop testing the bug. The
+Levenberg–Marquardt ladder itself was **not** the bug and was not changed — it
+was verified strictly monotone in its own objective and converged to the local
+optimum (0/3000 and 0/4000 respectively).
+
+**No joint bundle adjustment: cameras are NEVER refined (deliberate scope).**
+Everything the `'ba'` method does holds the cameras FIXED, so it is non-linear
+triangulation however it is labelled in the UI. A true joint camera+structure
+solve (`bundleAdjustCameras`, a port of aniposelib's
+`CameraGroup.bundle_adjust_iter` — what `slap-calibrate` runs) was implemented
+here and has been **DELETED**, along with its private support cast and its eight
+tests. LUCID CONSUMES a calibration; it is not a calibration tool, and that
+belongs where calibration is produced (sleap-anipose, on a checkerboard). Do not
+re-add it. Three reasons, spelled out at the "Point refinement" header in
+`pose/triangulation.js` so the next person finds them:
+
+- The calibration is an **input the user is entitled to trust**. Mutating
+  extrinsics mid-annotation means yesterday's 3D is not today's, and every
+  already-triangulated frame becomes inconsistent with the new rig unless the
+  whole project is re-solved.
+- Metric **scale is unobservable** from images alone — a uniform similarity of
+  cameras plus structure reprojects identically. aniposelib escapes this only via
+  its rigid-board `errors_obj` term (weighted 2/board_square_length); animal
+  keypoints have no equivalent reference. The deleted implementation had to pin
+  camera 0 and renormalize the camera-0-to-1 baseline after every accepted step
+  purely to keep the normal equations from being rank-deficient by 7 DoF, and it
+  still could not fix a scale error (measured: a rig 8% too large reprojected at
+  the 0.473 px noise floor before BA and came out unchanged).
+- Reprojection error would stop being a **diagnostic**. It is the signal a user
+  reads to spot a bad label or a bad calibration; if the solver may move the
+  cameras, low error no longer distinguishes good labels from cameras bent to fit
+  bad ones.
+
+Naming note: the user-facing "Bundle Adjustment" label and
+`triangulationMethodLabel` are unchanged — that is the term anipose/SLEAP users
+expect for `optim_points` — but it does not imply camera refinement.
+
 The method is selected via `options.method` on `triangulateAndReproject` and
 threaded through the orchestration functions; the chosen method is recorded on
 each group (`group.triangulationMethod`) and in each `state.triangulationResults`
-entry (`.method`) so the info panel can label it. Grouping operations
-(`groupByIdentityAndTriangulateAll`, group-by-track) always use DLT.
+entry (`.method`) so the info panel can label it.
 
-**Distortion handling.** 2D keypoints on disk are lens-distorted. Triangulation
-(DLT and BA) runs in ideal pinhole space: observations are undistorted first
-(`Camera.undistortPoint`). Reprojections meant for display or error comparison
-must therefore be **re-distorted** back to native pixel space
+**`options.method`'s default is SILENT — and that was a live footgun.** Omitting
+it does not mean "keep whatever method this group already used"; it means DLT.
+The governing rule now is **exported 3D == displayed 3D**: no path may replace a
+bundle-adjusted solve with a DLT one behind the user's back. Three helpers
+implement it, all in this module:
+
+- `resolveTriangulationMethod(group)` → `'ba'|'dlt'`. The group's own recorded
+  method wins; otherwise the user's global **Settings ▸ Triangulation Method**
+  (`getDefaultTriangulationMethod`). Never a bare `'dlt'` literal. Used by
+  `reTriangulateGroup`, both grouping sweeps in `ui/export-modals.js`,
+  `ui/sessions-panes.js`'s move-view re-triangulate, `ui/ui-wiring.js`'s
+  environment-skeleton solve, and `ui/identity-assignment.js`'s two group-writing
+  loops. **Deliberately NOT used by `ui/rendering.js`'s lazy reprojection fill:**
+  that path re-derives reprojections for 3D it does not own and does not write
+  back, so it must REPRODUCE the recorded solve exactly rather than fall back to a
+  global default. Rule of thumb — *writes* `points3d` → `resolveTriangulationMethod`;
+  only *reads* it → match `triangulationMethod` exactly.
+- `findEquivalentPriorGroup(priorGroups, group)` → the prior group with identical
+  membership (camera for camera, by `Instance` object identity), or null.
+- `adoptPrior3d(group, prior, method)` → copies `points3d`,
+  `triangulationMethod` and `usedCameras`; returns true when `group` therefore
+  needs no solve. Adoption requires identical membership **AND**
+  `prior.triangulationMethod === method`, so it only ever fires when re-solving
+  would be a provable no-op (an *unknown* prior method never matches). Does **not**
+  copy `reprojections` — leaving those empty is what lets `ui/rendering.js`'s fill
+  regenerate them (and `state.triangulationResults`) with the adopted method;
+  copying them would suppress that fill and leave the Info Panel with nothing.
+
+**The selected method GOVERNS the two grouping sweeps.** With Settings ▸ Default
+Triangulation set to Bundle Adjustment, "Group by Track / Group by ID &
+Triangulate All" leave BA 3D on *every* group — new, changed, or
+unchanged-but-previously-DLT. That last case is why `adoptPrior3d` takes a
+`method`: adopting on membership alone would keep the old DLT solution for exactly
+the groups a user is most likely to already have, making the setting a silent
+no-op. An explicit pick beats the default —
+`groupByIdentityAndTriangulateAll(explicitMethod)` takes one, and
+"Triangulate All ▸ DLT" (which routes there) passes `'dlt'`, so an explicit DLT
+request is not overridden by a BA default. Consequence to be aware of: with DLT
+selected, a grouping op over BA 3D *does* re-solve it as DLT — that is the setting
+being obeyed, and unlike the old behavior it is named in the progress text and
+status line rather than silent.
+
+Two bugs this closes, both measured on `tests/e2e/fixtures/ba-rig-fixture.js`
+(where BA's and DLT's 3D differ by 0.098 world units):
+
+1. **Display** (`ui/rendering.js`'s lazy fill, which did not pass a method): the
+   group kept BA's `points3d` and `triangulationMethod = 'ba'`, but the DLT
+   re-solve's error landed in `state.triangulationResults` — so the panel labelled
+   the number "Bundle Adjustment" and showed DLT's value (1.6155 px displayed vs
+   BA's actual 1.4273 px). Guarded by
+   `tests/e2e/triangulate-all-ba-display.mjs`.
+2. **Data** (the grouping sweeps): `groupByIdentityAndTriangulateAll` and
+   `groupByTrackAndTriangulateAll` delete a frame's `instanceGroups` and rebuild
+   fresh objects around the same `Instance`s, then re-solved every group with the
+   default method and stamped `triangulationMethod = 'dlt'`. Running either after
+   a BA Triangulate All silently downgraded the whole project's 3D to DLT, and
+   since save/export read `group.points3d`, the exported file stopped matching
+   what the user had computed. Verified pre-fix: the exporter emitted DLT's 3D
+   *exactly* (delta 0 from DLT, 0.098 from BA). Guarded by
+   `tests/e2e/triangulate-all-ba-export.mjs`.
+
+Regrouping does not invalidate a solve whose 2D inputs are unchanged, only one
+whose membership changed — so the sweeps now ADOPT rather than re-solve in the
+common case, which makes the correct behavior *cheaper* than the old one rather
+than paying BA's ~3x-6x cost per group project-wide. Both sweeps report 3D
+provenance ("N kept existing 3D, N solved via Bundle Adjustment, N via DLT") in
+their progress text and status line, so a method's cost is visible rather than
+hidden. The one deliberate DLT caller is the O(n×m) Hungarian cost matrix in
+`ui/identity-assignment.js`, whose temporary groups' 3D is discarded and where only
+the relative ordering of errors matters. It passes `{ method: 'dlt' }` **explicitly**,
+so the invariant is the checkable one — *every* call site states its method — rather
+than the uncheckable "every caller that forgot happened to want DLT".
+`tests/test-triangulation-method-propagation.mjs` enforces that by scanning the app
+source: it fails, naming file and line, on any call that omits the options object,
+omits `method`, hardcodes `'dlt'` outside the cost matrix, or passes something that
+is neither a resolver nor a threaded-in method (confirmed to catch the original
+`ui/rendering.js` bug). A runtime assert inside `triangulateAndReproject` was
+considered and REJECTED: it runs once per candidate PAIR inside that cost matrix, so
+a warning would fire O(n*m) times per auto-assign — noise in a legitimate path,
+which is exactly what the guard must not create.
+
+**Distortion handling.** 2D keypoints on disk are lens-distorted. **DLT** runs in
+ideal pinhole space: observations are undistorted first (`Camera.undistortPoint`),
+which is required — DLT is linear only in those coordinates. **BA does not**; it
+refines against the raw native-space detections (issue #113, above), so
+`triangulateAndReproject` keeps `allObservationsRaw` index-parallel to the
+undistorted set and masks the two identically whenever the outlier-rejection loop
+drops a view. Reprojections meant for display or error comparison
+must be **re-distorted** back to native pixel space
 (`reprojectPointCamera` / `reprojectPointsCamera` → project, then
 `Camera.distortPoint`). Comparing ideal reprojections against raw distorted
 keypoints previously produced spurious error that grew toward the frame edges
@@ -931,8 +1295,9 @@ projects 3D targets with distortion before measuring distance to raw detections.
 
 `triangulateAndReproject` reports the reprojection error in **both** spaces:
 `meanError`/`errors` (distorted — what is drawn and broken down per view/node)
-and `meanErrorUndistorted`/`errorsUndistorted` (ideal pinhole — the space BA
-actually minimizes). The info panel shows the distorted value as the headline
+and `meanErrorUndistorted`/`errorsUndistorted` (ideal pinhole — a diagnostic; as
+of #113 the distorted space is the one BA minimizes). The info panel shows the
+distorted value as the headline
 ("N.NN px", colour-coded) with the undistorted value as a small subtitle below
 it ("undist N.NN px"); the per-view and per-node breakdowns remain
 distorted-space. Both error spaces are recomputed on project load — `.slp`
@@ -941,9 +1306,16 @@ projects in `slp-import.js` and JSON/v2/v3 projects in `save-load.js`
 subtitle is populated for loaded projects, not just freshly triangulated ones.
 
 **Key exports.**
-- BA math: `triangulatePointBA(observations, projMatrices, initial?, options?)`,
-  `triangulatePointsBA(allObservations, projMatrices, initialPoints?)`,
+- BA math: `triangulatePointBA(observations, projMatrices, initial?, options?)`
+  (`options`: `cameras` → native-space residuals and `observations` are then the
+  RAW detections; `robustScale` px, default `BA_ROBUST_SCALE_PX`; `polish`;
+  `guard`; `maxIterations`; `tol`),
+  `triangulatePointsBA(allObservations, projMatrices, initialPoints?, options?)`
+  (forwards `options` verbatim), `BA_ROBUST_SCALE_PX` (= 15),
   `triangulationMethodLabel(method)` → `'DLT'` | `'Bundle Adjustment'`.
+  Module-private: `distortJacobian(camera, ideal)` → 2x2 Brown–Conrady
+  derivative, `projectAndJacobianCamera(point, camera)` → native-space
+  projection + 2x3 Jacobian.
 - Math: `triangulatePointDLT`, `triangulatePoints`, `reprojectPoint`,
   `reprojectPoints` (ideal pinhole), `reprojectPointCamera` /
   `reprojectPointsCamera` (project then re-distort into the camera's native
@@ -957,7 +1329,9 @@ subtitle is populated for loaded projects, not just freshly triangulated ones.
   `pointToRayDistance`, `pointsToRayDistances`,
   `computeFundamentalMatrix`, `epipolarError`, `epipolarErrorMatrix`.
 - Group math: `triangulateAndReproject(instanceGroup, cameras, options)`
-  (`options.method` = `'dlt'`|`'ba'`, `options.triangulateOnly`; returns
+  (`options.method` = `'dlt'`|`'ba'`, `options.triangulateOnly`,
+  `options.robustScale` (BA soft-L1 scale in px), `options.includedCameras`,
+  `options.reprojErrorThreshold`; returns
   `.method`, `.meanError`/`.errors` distorted-space and
   `.meanErrorUndistorted`/`.errorsUndistorted` ideal-pinhole-space),
   `storeReprojectedInstances(group, triangulationResult, allCameras)`.
@@ -1012,6 +1386,32 @@ subtitle is populated for loaded projects, not just freshly triangulated ones.
   `LazyFrameLoader` spawns `loading/slp-import-worker.js` (resolved against
   `document.baseURI` so sub-path deployments work — see ISSUES.md I-8) for HDF5
   reads.
+  **A FrameGroup that exists is not necessarily complete.**
+  `ensureLazyFrameData` used to open with a bare
+  `if (session.frameGroups.has(frameIdx)) return;`, which is only sound when
+  every camera is lazy-backed. `handleLoadSessionFolderPerCamera` could route a
+  folder part eager and part lazy, and the eager cameras create the FrameGroup
+  at load time — so that guard skipped the frame and the lazy cameras were never
+  hydrated at all, on any frame. It now asks which lazy cameras the existing
+  group carries no data for (`lazyCamerasMissingFrom` — checks BOTH
+  `fg.instances` and the unlinked pool, since the per-camera folder loader moves
+  everything it parses into the latter) and hydrates only those
+  (`hydrateLazyCameras`), returning immediately in the normal case where nothing
+  is missing. The new rows are staged in a throwaway FrameGroup so
+  `finalizeLazyFrameGroup` runs on exactly the new cameras and cannot re-unlink
+  instances an eager parse already placed; whatever it produces is merged in.
+  A camera hydrated concurrently is re-checked after the `await`, so a scrub
+  racing this cannot double-add. `lazyCamerasMissingFrom` is **exported** and
+  unit-tested in `tests/test-lazy-camera-hydration.js` — it is the predicate
+  that decides whether a view comes back with its labels, and it can fail in
+  two opposite directions (call a loaded camera missing and the frame renders
+  every instance twice; call a missing one present and the view stays blank),
+  so it is worth pinning in the fast browser suite as well as end to end. The folder loader also no longer produces a
+  mixed session at all (see `loading/session-loader.js`) — this is the
+  independent half, and `tests/e2e/percam-mixed-lazy-eager.mjs` reaches it
+  directly by emptying one camera out of a hydrated FrameGroup, asserting the
+  repair, that the other cameras are untouched, and that a second pass adds
+  nothing (the #194/#195 re-materialize-duplicate class).
   **`_rawInstIndex` tagging (#158 fix).** All three lazy-materialization sites
   (`ensureLazyFrameData`, `buildLazyFrameGroupSync`, and the worker-batch
   branch of `batchLoadLazyFrames`) tag every constructed `Instance` with
@@ -1061,10 +1461,41 @@ subtitle is populated for loaded projects, not just freshly triangulated ones.
   asserts no duplication; then ungroups one animal and confirms it correctly
   reappears unlinked while the other stays linked with no duplicate —
   confirmed all 4 assertions fail pre-fix and pass post-fix).
+  **`batchLoadLazyFrames`'s worker branch never called `finalizeLazyFrameGroup`
+  (luc3d #209).** The `isSync` branch (`SioLazyLoader`, in-memory `.slp`
+  projects) has always called `buildLazyFrameGroupSync` per frame, which calls
+  `finalizeLazyFrameGroup`. The OTHER branch — worker-backed `LazyFrameLoader`,
+  used for SLEAP analysis `.h5` prediction files
+  (`loading/session-loader.js`: `!lazyAreSlp ? new LazyFrameLoader()`) — built
+  its `FrameGroup` and then unconditionally dumped every raw instance into the
+  unlinked pool, regardless of whether `session.instanceGroups` already had
+  real (possibly hand-labeled `'user'`) groups for that frame. Symptom: a
+  frame rebuilt via this path looked completely untracked/unlabeled the first
+  time it was (re)visited after being evicted — reported as Bundle-Adjustment
+  reprojections "becoming predictions" starting around frame ~5,500, which
+  lines up with `loadAllLazyFrames`'s `BATCH = 5000` sweep window and
+  `ui/ui-wiring.js`'s 5000-frame playback preload (`batchLoadLazyFrames(cur,
+  5000)`) — any frame outside what's already resident takes this branch on
+  first touch. Fixed by calling `finalizeLazyFrameGroup(session, fg,
+  frameIdx)` here too, exactly mirroring the `isSync` branch. Regression test:
+  `tests/e2e/batch-lazy-hydration-worker-loader.mjs` (fakes the worker with a
+  synchronous `postMessage` stand-in; confirmed failing pre-fix — both the
+  pre-existing group's member AND the unrelated raw row landed in the
+  unlinked pool — and passing post-fix).
 - Frame access: `getInstanceGroupsForFrame`,
   `frameHasGroupedUserInstances`, `updateTimelineForFrame`.
+- Method preservation ("exported 3D == displayed 3D", see the BA section above):
+  `resolveTriangulationMethod(group)` — the group's own method, else the user's
+  Settings default, never a bare `'dlt'`;
+  `findEquivalentPriorGroup(priorGroups, group)` — the prior group with identical
+  membership by `Instance` object identity;
+  `adoptPrior3d(group, prior)` — take the prior's `points3d` /
+  `triangulationMethod` / `usedCameras` instead of re-solving (not
+  `reprojections`, deliberately). The latter two exist for the regrouping sweeps,
+  which rebuild `InstanceGroup` objects around unchanged `Instance`s.
 - Orchestration: `triangulateMultiFrameInstances(start, end, onProgress, method)`,
-  `reTriangulateGroup` (preserves the group's existing method),
+  `reTriangulateGroup` (preserves the group's existing method via
+  `resolveTriangulationMethod`),
   `triangulateCurrentFrame(method)`, `triangulateAllFrames(method)`
   (`method` defaults to `'dlt'`), `sessionHasCalibration`,
   `showCalibrationRequiredPopup`,
@@ -1083,6 +1514,8 @@ subtitle is populated for loaded projects, not just freshly triangulated ones.
 - `../ui/app-state.js` — `state`, `timeline`, `viewport3d`.
 - `../ui/rendering.js` — `setReprojErrorVisible`, `drawAllOverlays`.
 - `../ui/info-panel.js` — `updateTriangulationBadge`.
+- `../ui/settings.js` — `isCameraTracked`, `getTrackingThreshold`,
+  `getDefaultTriangulationMethod` (the fallback in `resolveTriangulationMethod`).
 - `../import-export/save-load.js` — `markDirty`, `setStatus`,
   `showLoading`, `hideLoading`.
 - `./initialization.js` — `update3DViewport` (circular).
@@ -1163,6 +1596,96 @@ playback state, dirty tracking, multi-session UI.
 
 ---
 
+### ui/custom-delete-ops.js
+
+**Purpose.** Pure, DOM-free logic behind "Custom Instance Delete…" — LUCID's
+equivalent of SLEAP's `sleap/gui/dialogs/delete.py` `DeleteDialog`
+(Labels ▸ Custom Instance Delete…), adapted to the multi-view model. Imports **no
+project modules** (only calls methods on the `Session` it is handed), so it bridges
+into `tests/test-runner.html` for isolated unit testing — same contract as
+`ui/track-identity-ops.js`. The DOM modal lives in `ui/ui-wiring.js`.
+
+**Exports.** `collectDeletionTargets(session, filters, ctx)` (pure — returns
+`{targets, count, byCamera, groupsDissolved, groupsUngrouped, instancesPromoted,
+groupsLosing3d}`), `previewCascade(targets)`, `executeDeletion(session, targets)`,
+`pruneOrphanIdentities(session, frameIndices)`.
+
+**Vocabulary.** SLEAP's *video* scope is LUCID's **session** — every camera in a
+session shares one frame index space, so a camera is a VIEW FILTER, not a frame
+domain. The UI says **Grouped / Ungrouped** (the panel headers) and must never say
+"Unlinked": in SLEAP an *unlinked prediction* is one with no `from_predicted`
+back-link to a user instance, an unrelated concept that shares the word.
+
+**Type and grouping are ORTHOGONAL axes**, not siblings — a grouped instance is
+still user or predicted. "Delete grouped instances" is `type:'all'` +
+`grouping:'grouped'`. Conflating them is the main way this dialog could become
+incoherent. `type:'all'` = user + predicted (matching SLEAP's "all instances"),
+never reprojections — those are derived and live in `reprojectedInstances`.
+
+**Lazy / not-yet-hydrated frames.** Scope enumeration must never loop
+`session.frameGroups` — that is the small resident window (31 of 180,210 frames
+measured on the real project), so a bulk delete driven from it would silently delete
+almost nothing while reporting success (the #185/#194/#195 bug class). So:
+- `frameScope:'currentSession'` is **store-driven** via
+  `lazyLoader.forEachInstanceRow`. It needs no hydration and no `async`, because all
+  four filter axes resolve without materializing a frame: **type/track** from the
+  store's own columns (`forEachInstanceRow`'s 4th `info` argument), **identity** from
+  `frameIdentityMap` (in memory project-wide), and **grouping** from
+  `session.instanceGroups` (also project-wide — rebuilt in full at reopen — whose
+  members carry `_rawInstIndex`).
+- `frameScope:'currentFrame'` normally reads the richer resident model, but falls
+  back to the same store-driven collector restricted to that one frame when the
+  frame has **no `FrameGroup`** (never hydrated). Otherwise its ungrouped rows,
+  which exist only in the store, would be missed — a sneaky partial failure, since
+  `instanceGroups` is project-wide so grouped members *would* still be found.
+- A non-resident row has no `UnlinkedInstance` wrapper; `executeDeletion` counts it
+  and skips the pool update. That is correct — the store row was the only thing that
+  existed for it, and the frame hydrates from the compacted store.
+- With no `lazyLoader` at all, session scope walks `frameGroups` ∪ `instanceGroups`;
+  an eager project is fully resident, so that enumeration is complete by definition.
+
+**Identity is resolved PER FRAME** via `session.getIdentityIdForTrack(cam,
+trackIdx, frameIdx)`, never `group.identityId` (only refreshed on the frame an
+identity was assigned — the #155/#168 staleness class). This is the same call
+`groupByIdentityAndTriangulateAll` buckets by, so the dialog and the grouping
+cannot disagree.
+
+**Cascade, and why the dialog reports it.** A group must have ≥2 members, so
+removing members can dissolve a group (`removeInstanceGroup`), auto-ungroup it
+(`unlinkGroup`, returning the lone survivor to the ungrouped pool and **promoting a
+predicted survivor of a formerly-mixed group to `type:'user', modified:true`**), or
+leave it intact with stale 3D. `previewCascade` predicts all of this before any
+mutation so the modal can warn — reporting only "N instances" hides two
+irreversible side effects.
+
+**`executeDeletion` order is load-bearing** (see `scratch/PLAN-custom-instance-delete.md`
+§5.2): (1) `lazyLoader.deleteInstanceRows` — the persistence, and it must run BEFORE
+`_rawInstIndex` is touched since the row identity *is* `_rawInstIndex`;
+(2) renumber `_rawInstIndex` on survivors, else `refFor` writes grouping refs at the
+wrong instances and `finalizeLazyFrameGroup` hydrates the wrong 2D;
+(3) `instanceGroups` cascade; (4) `frameGroups` cascade under the same `seen` Set
+(hydrated frames share instance objects between the maps — the #195 lesson);
+(5) prune `frameIdentityMap`. Never assigns `group.observedPoints` (read-only getter
+since #189 — assigning throws in every ES module). App-level triangulation caches
+are the caller's job: run `purgeTriangulationDataForGroup` over the returned
+`purgedGroups`.
+
+**`pruneOrphanIdentities` is not cosmetic.** `frameIdentityMap` is serialized into
+the `.slp`, so residue can re-attach a ghost identity to a later instance reusing
+the same `(frame, camera, track)`; and `ensureGroupsFromIdentities` RECREATES groups
+from this map for any frame with no `instanceGroups` entry, so an unpruned entry
+brings a deleted group back on the next Triangulate All. Goes through
+`session.deleteFrameIdentity` because the keys are **packed Numbers** since #185 —
+the raw `frameIdx + ':' + cam + ':' + track` string comparison used by the earlier
+PR #153 implementation silently matched nothing, making its prune dead code.
+
+**Imports from project modules.** None (deliberately).
+
+**Tests.** `tests/test-custom-delete-ops.js` (19 cases), plus
+`tests/test-custom-delete-store.js` for the store primitive it drives.
+
+---
+
 ### ui/export-modals.js
 
 **Purpose.** Modal dialogs for bulk-triangulation and export (Group-by-Track,
@@ -1171,10 +1694,54 @@ SLP all-sessions, JSON labels, points3d H5, reproj H5).
 
 **Key exports.**
 - `showGroupByTrackModal()` — modal that bulk-groups by trackIdx.
-- `groupByIdentityAndTriangulateAll()` — bulk-group then triangulate. Ends by
+- `groupByIdentityAndTriangulateAll(explicitMethod)` — bulk-group then
+  triangulate. `explicitMethod` (`'ba'|'dlt'`) is the user's explicit pick when
+  there was one — "Triangulate All ▸ DLT" routes here and passes `'dlt'`; omitting
+  it (Tracks ▸ Group by Identity) means "use Settings ▸ Default Triangulation".
+  Either way the resolved method **governs the whole sweep**. Ends by
   calling `update3DViewport(state.currentFrame)` so the 3D viewer populates for
   the current frame (this is the path "Triangulate All" takes when identities
   exist; previously it refreshed only the 2D overlays, leaving 3D empty).
+
+  **Both grouping sweeps ADOPT existing 3D rather than re-solving it.** Each
+  deletes a frame's `instanceGroups` and rebuilds fresh `InstanceGroup` objects
+  around the SAME `Instance` objects. The fresh object carries no `points3d` and
+  no `triangulationMethod`, so both used to re-solve every group with
+  `triangulateAndReproject`'s DEFAULT method — a silent DLT — and stamp
+  `triangulationMethod = 'dlt'`. Running "Group by Identity" (or Triangulate All ▸
+  DLT, which routes here) or "Group by Track" after a **BA** Triangulate All
+  therefore silently downgraded the whole project's 3D to DLT; since save/export
+  read `group.points3d`, the exported file stopped matching what the user had
+  computed and was looking at. Measured pre-fix on
+  `tests/e2e/fixtures/ba-rig-fixture.js`: the exporter emitted DLT's 3D *exactly*
+  (delta 0 from DLT, 0.098 world units from BA).
+
+  Each sweep resolves ONE governing method up front (the explicit pick, else
+  Settings ▸ Default Triangulation) and every group ends up with 3D from that
+  method. A group is ADOPTED rather than solved — `findEquivalentPriorGroup` +
+  `adoptPrior3d`, no solve at all — only when its membership is unchanged AND its
+  existing 3D already came from that same method, i.e. only when re-solving is a
+  provable no-op. So a DLT re-run over a DLT project solves nothing (measured: all
+  16 fixture groups adopted, 4 ms) while switching the default to BA re-solves the
+  project (0 adopted, 16 solved via BA, 13 ms — 3.0x, in line with the 3.4x
+  per-group BA/DLT ratio measured on the same rig; larger skeletons measure
+  ~4.6-6.1x). That cost is the user's explicit choice, so both sweeps name the
+  method and report 3D provenance ("N kept existing 3D, N solved via Bundle
+  Adjustment, N via DLT") in their progress text and status line — visible rather
+  than hidden.
+
+  Guarded by `tests/e2e/triangulate-all-ba-export.mjs` (six phases; 17 assertions
+  confirmed failing pre-fix, 0 after). It drives Group by Identity directly and
+  Group by Track through its real modal, and asserts the 3D
+  `buildPoints3dExportData` emits — what `buildPoints3dH5` and the JSON labels
+  export write — is bit-identical to an independent BA solve and NOT the DLT solve;
+  plus governance in both directions (DLT-over-DLT adopts everything; BA-over-DLT
+  re-solves everything) and that an explicit `'dlt'` beats a BA default.
+
+  `group.triangulationMethod` IS persisted (per-group
+  `metadata.lucid.triangulationMethod`), so adoption works across a reopen too and
+  a reopened BA project still displays BA's error — see `pose/pose-data.js`'s
+  `InstanceGroup` entry.
 - `sweepTriangulationFrames(session, onFrame, opts)` (module-private) +
   `frameGroupHasUserInstances(fg)` — memory-bounded driver both bulk-triangulate
   paths (identity + track) now use. On a windowing-capable lazy session
@@ -1249,19 +1816,32 @@ SLP all-sessions, JSON labels, points3d H5, reproj H5).
   frame) backed by two **editable, validated Start/End fields** (illegal input —
   non-integer, out of `[0, lastFrame]`, or crossing the other bound — is rejected
   and reverted); an editable FPS (duration = selectedFrames / fps); a
-  **resolution picker** (360p/720p/1080p/2K) that sets the output dimensions and
-  the matching H.264 level (`avc1.42001E` / `42001F` / `420028` / `420032`); live
-  readouts for **Duration**, **Exported Frames** (= selected range, updates with
-  the Start/End nodes/fields) and **Estimated File Size** (`_v3dBitrate` ×
-  duration ÷ 8, formatted by `_fmtBytes`; recomputed on range/FPS/resolution
-  change — same bitrate the encoder is configured with); and
+  **`Quality` picker** — the four shared tiers **480p (854×480) / 720p (1280×720)
+  / 1080p (1920×1080) / 2160p (3840×2160)**, each label stating its pixel size.
+  `V3D_RES` is **DERIVED from `RES_PRESETS`** in `ui/overlay-export-layout.js`
+  (`refW` is the exact width here, since this viewport is always 16:9) and its
+  H.264 level comes from that module's **`h264CodecFor`** — it used to be a
+  hand-written per-tier table that had already drifted (it claimed level 3.0 for
+  640×360 where the shared table says 3.1), and a wrong level only surfaces
+  mid-export at one resolution. Live readouts for **Output** (the chosen tier
+  echoed back as literal `W×H` + the Mbps it implies, so the resolution is on
+  screen and not only inside the dropdown), **Duration**, **Exported Frames**
+  (= selected range, updates with the Start/End nodes/fields) and **Estimated
+  File Size** (the shared **`estimatedBytes`**, not a local copy of
+  `bitrate × duration ÷ 8` — the same number decides whether the export streams
+  to disk, so the readout and that decision cannot drift; formatted by
+  `_fmtBytes`, recomputed on range/FPS/quality change); and
   Cancel / Export (all inputs disabled + playback stopped during an export).
   Export renders only the selected `[start, end]` range into the viewport at the
   chosen resolution (`renderer.setPixelRatio(1)` + `setSize(W,H)` + matching
   camera aspect), captures through an even-dimensioned 2D canvas, and encodes an
-  `.mp4` via WebCodecs `VideoEncoder` muxed with `mp4-muxer` (global `Mp4Muxer`,
-  local copy in `lib/mp4-muxer/`). Timestamps are relative to the range start.
-  Requires a Chromium-based browser (WebCodecs) — error status otherwise.
+  `.mp4` through **`ui/video-encode.js`** (mediabunny), passing the resolution's
+  H.264 level as `fullCodecString`. Timestamps are relative to the range start.
+  When the estimated output exceeds `shouldStreamToDisk`'s threshold it asks for
+  a save-file destination and **streams** to it (declining cancels the export,
+  since buffering was the thing being avoided); a short clip just downloads.
+  Requires WebCodecs — error status otherwise. Covered by
+  `tests/e2e/export-3d-video.mjs`.
 - `showTriangulateMultiFrameModal()` — frame-range triangulation modal.
 - `exportLabels()` — JSON labels export.
 - `exportPoints3dH5()` — points3d H5 export.
@@ -1274,7 +1854,9 @@ SLP all-sessions, JSON labels, points3d H5, reproj H5).
   `storeReprojectedInstances`, `frameHasGroupedUserInstances`,
   `loadAllLazyFrames`, `triangulateMultiFrameInstances`,
   `sessionHasCalibration`, `showCalibrationRequiredPopup`,
-  `getInstanceGroupsForFrame`.
+  `getInstanceGroupsForFrame`, `sweepLazyFrameWindows`,
+  `resolveTriangulationMethod`, `findEquivalentPriorGroup`, `adoptPrior3d`,
+  `triangulationMethodLabel` (the last four for the adopt-don't-downgrade rule).
 - `./viewport3d.js` — `Viewport3D` (Export 3D Video modal).
 - `./overlays.js` — `getTrackColor`, `getGroupColor` (Export 3D Video modal).
 - `./rendering.js` — `drawAllOverlays`, `setReprojErrorVisible`.
@@ -1313,14 +1895,59 @@ triangulation, multi-frame assignment modal, track/identity helpers.
   why both maps are required and why the de-duplication is load-bearing. The
   reported count is the durable row count when a store exists, the in-memory
   changed count otherwise.
-  `assignIdentityToSelected` (and the info-panel Identity dropdowns) propagate
-  the identity from the CURRENT frame **forward only** via the swap-aware
-  `propagateIdentity` — they no longer call `assignTrackToIdentity` (which
-  re-stamped EVERY frame of the track, corrupting already-correct earlier
-  frames when fixing a mid-video swap; issue #155). Whole-track identity
-  assignment is still available via **Tracks ▸ Propagate Tracks → IDs**; to
-  identity-stamp a whole track from the dropdown, assign at the track's first
-  frame.
+- Manual identity switch: `applyIdentitySwitch`, `describeIdentitySwitch`
+  (luc3d #172). **The single entry point for "the user picked a different ID for
+  this instance"** — the `1`–`9` hotkeys (`assignIdentityToSelected`), the Linked
+  Instance Groups identity dropdown and the unlinked-row identity dropdown
+  (`ui/info-panel.js`) all route through it so they cannot drift. Two modes:
+  - **swap** — the selection already reads as identity A and the user picks B, so
+    A and B are EXCHANGED from the current frame to the end of the timeline in
+    every view via `Session.swapIdentitiesForward`. A correction is a statement
+    about the rest of the video, exactly as SLEAP's `track_swap` is for tracks.
+    The private `resolveCurrentIdentityId` reads the CURRENT identity the way
+    `getGroupColor` does — the per-frame entry for one of the selection's own live
+    (camera, trackIdx) pairs first, `group.identityId` only as a fallback, because
+    that field is stale on every frame but the last assignment's (#155).
+  - **propagate** — nothing to swap away from (fresh project / just-grouped group
+    / "none" picked), so it falls back to the per-camera, per-track forward stamp
+    (`assignIdentityToGroup` + `Session.propagateIdentity`), the only continuity
+    signal available in that state.
+  - **frame** — the unlinked row's instance is TRACKLESS (the optional
+    `unlinkedInstance` argument, passed by both unlinked call sites, has
+    `trackIdx == null`). `frameIdentityMap` cannot key a null track and no
+    linkage exists to carry the correction to other frames, so this routes to
+    `Session.assignIdentityToUnlinkedTrackless`: per-frame, instance-level,
+    with an in-frame swap against the same camera's trackless row already
+    holding the target identity. `describeIdentitySwitch` says "this frame"
+    honestly instead of implying propagation (luc3d #201 recurrence).
+
+  The optional `scopeCamera` argument restricts either map mode to ONE camera
+  (luc3d #201), via `Session.swapIdentitiesForwardInCamera` in swap mode. Passed
+  by the two UNGROUPED call sites — the unlinked-row dropdown in
+  `ui/info-panel.js` and the `selectedUnlinked` branch of
+  `assignIdentityToSelected` — and omitted by the group ones. Rationale: an
+  ungrouped instance is one 2D detection belonging to no cross-view bundle, so a
+  correction on it speaks for that camera only, and fixing a single view is the
+  reason to ungroup at all (ungroup → switch the wrong view → regroup). The
+  all-views argument holds for a GROUP, which by definition asserts one animal
+  across cameras. A scoped swap does not pin `group.identityId` (there is no group,
+  and that field is shared by all views). The result carries `camera` so
+  `describeIdentitySwitch` reports "cam2 only" instead of claiming "all views".
+
+  This replaced a `for (cam of sel.instances) propagateIdentityForward(...)` loop
+  that was scoped to **one raw track and only the cameras the group was visible in
+  on that frame**, so a switch covered a few hundred frames of a multi-thousand-
+  frame project and skipped any view where the animal was occluded right then —
+  luc3d #172. Measured on `tests/e2e/identity-switch-propagates-to-end.mjs`
+  (3,000 frames × 3 cameras, raw tracks fragmented every 200 frames): 100 of
+  2,700 remaining frames in 2 of 3 cameras before, 2,700 of 2,700 in all 3 after,
+  surviving save + reopen. `describeIdentitySwitch` builds the status text so the
+  reported count is what actually changed — a plausible-looking count over a
+  silently truncated range ("propagated to 200 future instances") is exactly how
+  #172 hid. Still **forward-only**: earlier frames are never re-stamped (#155),
+  and `assignTrackToIdentity` (which re-stamped EVERY frame of a track) remains
+  uncalled. Whole-track identity assignment is still available via
+  **Tracks ▸ Propagate Tracks → IDs**.
 - Manual assign: `manualAssignState`, `getTotalUnlinkedCount`,
   `cleanupManualAssignment`, `startManualAssignment`.
 - Edit group: `editGroupState`, `startEditGroup`, `cancelEditGroup`,
@@ -1339,7 +1966,23 @@ triangulation, multi-frame assignment modal, track/identity helpers.
   `getInstanceGroupsForFrame`, `triangulateAndReproject`,
   `storeReprojectedInstances`, `reprojectPoints`,
   `computeInstanceDistance`, `hungarianAlgorithm`,
-  `updateTimelineForFrame`, `triangulateCurrentFrame`.
+  `updateTimelineForFrame`, `triangulateCurrentFrame`,
+  `resolveTriangulationMethod`.
+
+**Three `triangulateAndReproject` call sites, two of which write 3D.** The two
+that write it (`autoAssign`'s "auto-triangulate all groups for this frame" loop
+and `autoAssignAcrossFrames`' per-new-group solve) now pass
+`resolveTriangulationMethod(group)`. The first is the load-bearing one: it sweeps
+**every** group on the frame, including pre-existing bundle-adjusted ones, and
+passing no method silently re-solved them with DLT and overwrote `points3d` —
+which is what save/export read. The third, the O(nRef × nOther) **Hungarian cost
+matrix**, is deliberately DLT — its temporary groups' 3D is discarded, only the
+relative ordering of the errors matters, and BA's ~3x-6x cost would buy nothing —
+and it passes `{ method: 'dlt' }` explicitly rather than relying on the default, so
+that no call site in the app depends on that default (enforced by
+`tests/test-triangulation-method-propagation.mjs`). (This module already used `getDefaultTriangulationMethod()` for its
+`triangulateCurrentFrame` call, so honoring the user's method here is consistent
+rather than new policy.)
 - `./rendering.js` — `drawAllOverlays`, `setReprojErrorVisible`.
 - `./info-panel.js` — `updateInfoPanel`.
 - `../import-export/save-load.js` — `markDirty`, `setStatus`.
@@ -1479,7 +2122,24 @@ on reload); see `ui/app-state.js`.
   `createViewForVideoFile`, `rebuildVideoController`,
   `fitCanvasesToCells`, `loadSingleSessionFromCache`.
 - `./ui-wiring.js` — `unlinkGroup`, `showGroupContextMenu`.
-- `./identity-assignment.js` — `swapAssignTrack`, `propagateIdentityForward`.
+- `./identity-assignment.js` — `swapAssignTrack`, `applyIdentitySwitch`,
+  `describeIdentitySwitch` (`propagateIdentityForward` is no longer imported —
+  `applyIdentitySwitch` subsumes it). Both identity `<select>`s (the
+  Linked Instance Groups row and the unlinked row) drive their change through
+  `applyIdentitySwitch`, so a manual ID switch exchanges the two identities to the
+  end of the timeline (luc3d #172) and reports its real count via
+  `describeIdentitySwitch`. They differ in SCOPE: the grouped row switches every
+  view, while the **unlinked row passes its own camera as `scopeCamera`** so the
+  correction touches that view only (luc3d #201) — the ungroup → fix one view →
+  regroup workflow — and passes its instance so a TRACKLESS row takes the
+  per-frame instance-level path (`applyIdentitySwitch` mode **frame**; picking
+  "—" on a trackless row clears `Instance.identityId` directly, there being no
+  map entry to clear). The unlinked row's ID `<select>` pre-selects from
+  `getIdentityIdForUnlinkedInstance` (per-frame map entry for a tracked row,
+  instance-level retained identity for a trackless one), which is why
+  `Session.unlinkGroup` has to retain the
+  disbanded group's identity in the map / on the instance for the row to read as anything
+  but "—".
 - `./sessions-panes.js` — `populateSessionsPanel`, `populateViewStrip`,
   `populateSessionStrip`.
 
@@ -1657,6 +2317,564 @@ grid / 3D / info-panel / timeline.
 
 ---
 
+### ui/overlay-export-layout.js
+
+**Purpose.** The pure half of "Export Video Overlays" (issue #190):
+composition geometry, output sizing, encoder parameters, the persisted settings
+schema, and the seed-layout plan. Deliberately **dependency-free** — no project
+imports, no dockview, no DOM beyond `localStorage` — so it can be bridged into
+the classic-script unit runner and exercised without a browser dock.
+
+**Key exports.**
+- `TILE_3D` — the synthetic view name (`'__3d__'`) of the 3D viewport tile.
+- `fitRect(srcW, srcH, dstW, dstH)` — aspect-preserving "contain" fit. **Must
+  stay numerically identical to `videoToCanvas()` in `ui/overlays.js`**: the
+  video is drawn with this and the skeleton with that, so any divergence offsets
+  every burned-in overlay from the animal. Pinned by
+  `tests/test-overlay-export-layout.js`, which computes both and compares.
+- `distributeAxisSizes(base, min, max, vis, k, d, mode)` + `SASH_SHARE_FAR` /
+  `SASH_GROW_ONE` / `SASH_SHARE_SIDES` — sizes for one dock AXIS after dragging the
+  sash at index `k` by `d` px, so a resize is shared by more than the one adjacent
+  tile. dockview 6.6.1 hands the whole delta to that neighbour and only spills when it
+  clamps, and nothing configures that (see the `ui/overlay-export-modal.js` entry).
+  **The governing constraint:** a sash sits at the running SUM of the sizes before it,
+  so *"the sash stays under the cursor"* is the same statement as *"the total before
+  the sash changed by exactly the drag"*. Combined with *"the dragged tile changes
+  1:1"* that forces the tiles before the sash to hold still — so wanting all three of
+  {sash tracks cursor, dragged tile 1:1, EVERY other tile shares} is **geometrically
+  impossible** for any sash but the first. One of them must be given up, which is why
+  there are three modes rather than one.
+  **`'share-far'` is what the modal uses**: the sash is tile `k`'s trailing edge and
+  only the tiles BEYOND it take part — push it out and tile `k` grows by exactly the
+  drag while each tile after it gives up an equal share; pull it in and tile `k`
+  shrinks by exactly the drag while each tile after it gains. Tiles before the sash
+  never move, so the handle tracks the cursor exactly and both "make this one bigger"
+  and "make this one smaller" stay expressible. **Accepted gap:** the LAST sash on an
+  axis has one tile beyond it, so that single drag is still neighbour-only — pinned by
+  a unit test so it reads as a decision, not a regression.
+  `'grow-one'` shares with every tile instead (`delta/(n-1)` each). **Shipped once and
+  reverted**: the sizes are right, but tiles on both sides move, so the sash trails the
+  cursor by an amount that depends on which sash you grabbed — measured in a real dock
+  at 80/53/26 px for an 80 px drag on a 4-tile axis's three sashes (100%/66%/33%), and
+  it reads as completely broken. `'share-sides'` (tiles before the sash share the gain,
+  after share the loss) tracks the cursor but has no shrink-one gesture.
+  The result **always sums to `sum(base)`**, so the axis total — and therefore the
+  dock's box and every other axis — is untouched; swept over `k`, `d` and all three
+  modes by a unit test, because a drifting total would move the exported frame.
+  `fillEvenly` does even-share-**with-spill**: a tile pinned at its 100px minimum
+  holds still and the tiles with room absorb its share. It deliberately does NOT veto
+  the drag — an earlier version did, and a real seeded dock routinely has a tile at
+  the minimum, which made the sash feel dead.
+- `rotatedBoxSize(srcW, srcH, rotationDeg)` / `rotatedFit(srcW, srcH, dstW, dstH,
+  rotationDeg)` — the rotation-aware half of the fit. The main window rotates the
+  whole `.canvas-wrapper` (`applyZoom`, loading/video.js), so a 90° camera rotation
+  SWAPS a view's effective width and height and anything asking "what aspect is
+  this view?" must ask the ROTATED box. Cardinal angles are special-cased so 90/270
+  come out **exactly** swapped — trig dust would make an output dimension odd and
+  H.264 rejects odd yuv420 dimensions. `rotatedFit` returns the scale plus the
+  UNROTATED box size (`boxWidth`/`boxHeight`), which is what a tile draw needs: it
+  paints video AND overlays into that box centred on the tile and rotates the box.
+  **At rotation 0 `rotatedFit` degenerates to `fitRect` exactly** (same
+  `Math.min(dstW/srcW, dstH/srcH)`) — pinned by a test, since that identity is the
+  whole no-regression guarantee for unrotated projects.
+- `computeTileRects(dock, tiles, outW, outH)` — maps dock-local tile rects into
+  the output canvas (the dock is fitted first, so a mismatched output aspect
+  letterboxes the whole composition rather than distorting it). Integer pixels,
+  clamped into bounds, never degenerate.
+- `outputSizeFor(aspect, presetKey)` — height from `RES_PRESETS`, width from the
+  aspect, clamped to `MAX_OUT_DIM` (3840) with the height recomputed so the aspect
+  holds. **Always even**: `VideoEncoder` rejects odd H.264 (yuv420) dimensions, so
+  an odd size is a hard export failure.
+  `RES_PRESETS` is the **one quality-tier table both video-export modals use** —
+  **480 / 720 / 1080 / 2160**, keys ARE the height, labels state the pixel size
+  (`2160p (3840×2160)`). `ui/export-modals.js` builds its `V3D_RES` from it, so
+  the two modals cannot offer different choices again. Each entry's `refW` is the
+  16:9 reference width: the exact output width for the always-16:9 3D viewport,
+  and only a label hint here, where the real width follows the composition aspect.
+  Note `2160`'s `refW` (3840) is exactly `MAX_OUT_DIM` — one pixel more and every
+  16:9 4K export would silently clamp and lose height (pinned by a test).
+  `sanitizeSettings` maps a retired key (`360`, then `1440`/`2K`) to `DEFAULT_RES`
+  rather than to the nearest surviving tier, so reopening the modal cannot
+  silently ~2.25× the pixels, bitrate and file size of the next export.
+- `outputSizeFrom(settings, aspect)` / `RES_CUSTOM` / `clampOutDim(n)` /
+  `customAspect(settings)` — the editable-dimensions path. `res: 'custom'` uses
+  `settings.outW` × `settings.outH` verbatim instead of deriving the width from
+  the composition; `clampOutDim` puts a hand-typed value through the same
+  even/2..`MAX_OUT_DIM` gate the presets satisfy by construction.
+  `customAspect` returns the aspect the modal must **shape the dock to** (null
+  for a preset, where dock and output agree already) — shaping it is what stops
+  `computeTileRects` from burning letterbox bars into a custom-size export.
+- `bitrateIsClamped(W, H, fps, quality)` — true when `bitrateFor`'s [1, 48] Mbps
+  band actually bit. The clamp makes adjacent Quality tiers **collide**: at
+  3840×2160@60 `medium` and `high` are BOTH 48 Mbps, and at 640×360@30 `low` and
+  `medium` are BOTH 1 Mbps. There, changing Quality changes neither the estimate
+  nor the encoded file — and with nothing saying so, a correctly-wired picker just
+  looks broken, which is why the modal's output note surfaces it.
+- `h264CodecFor(W, H)`, `bitrateFor(W, H, fps, quality)`, `QUALITY_BPP`. **Both
+  video-export modals call these** — `showExport3DVideoModal`'s `_v3dBitrate` is
+  now just `bitrateFor(W, H, fps, 'medium')`. Its own copy clamped to
+  [2, 24] Mbps against this module's [1, 48] Mbps, so it doubled the bitrate (and
+  its own size estimate) at the smallest tier and would have capped the 2160p tier
+  at 24 Mbps instead of the 29.9 Mbps the formula asks for.
+- `estimatedBytes(W, H, fps, quality, nFrames)` — expected size of one output
+  file. Both modals' summary lines AND both streaming decisions read this, so
+  the size the UI promises cannot drift from the size the export plans for.
+  Returns 0 for a degenerate fps/range rather than `NaN`/`Infinity`.
+- `shouldStreamToDisk(totalBytes)` / `STREAM_TO_DISK_BYTES` (256 MB) — the
+  buffer-vs-stream split. Under the threshold an export buffers and downloads
+  exactly as it always has (no destination prompt); over it, the export asks for
+  a real file/folder and streams into it, because that much output buffered in
+  the pointer-compressed heap is the failure mode CLAUDE.md documents for
+  luc3d #185/#190/#191/#193. Used by BOTH video modals.
+- `defaultOverlayExportSettings()`, `mergeSettings(base, saved)`,
+  `sanitizeSettings(s)`, `applyStoredSettings`, `saveOverlayExportSettings`,
+  `SETTINGS_KEY` (`'overlayExportSettings.v1'`), `DEFAULT_RES` (`'1080'`).
+  `mergeSettings` is schema-driven: it ignores
+  keys `base` doesn't declare and values whose `typeof` doesn't match, so a stale
+  or hand-edited blob can never introduce an unknown key or slip a string into a
+  canvas/encoder parameter. It only type-checks, though, so `applyStoredSettings`
+  follows it with `sanitizeSettings`, which holds `res` to the *current* preset
+  set — the list has already changed once (`360` → `480`), and a stored key
+  nothing recognises would blank the `<select>` while `outputSizeFor` quietly fell
+  back to `DEFAULT_RES`, leaving the summary quoting a size the visible control
+  doesn't name.
+  `UNRESTORED_KEYS` (`res`, `outW`, `outH`) are **written to storage but never read
+  back**, so the modal always opens at `DEFAULT_RES` = **1080p**. The tier decides
+  pixel count, bitrate and therefore file size, and a value silently inherited from a
+  previous session is the kind of thing you only notice after sitting through a 4K
+  encode — so a departure from 1080 is always a choice made in front of the current
+  export's summary line. `outW`/`outH` come along because they are only consulted when
+  `res === RES_CUSTOM`, and a stale custom size behind a reset tier would let one click
+  on "Custom" resurrect dimensions from another day. Everything else — layers,
+  per-type styling, fps, quality, mode — IS still restored: those are how the user
+  likes overlays to look, not how big the file will be. Note it is the **read** that
+  resets, not the write; `tests/e2e/overlay-export-modal.mjs` asserts both halves.
+- `overlayOptionsFrom(settings, videoW, videoH, canvasW, canvasH)` — the
+  settings → `drawFrameOverlays()` options translation. Explicitly nulls ALL
+  interaction state (selection / hover / drag / assignment): an export has no
+  cursor, and a stray highlight would be burned into the video.
+- `seedLayoutPlan(viewNames, include3D)` — the mirror-the-main-window seed (same
+  row-count heuristic as `addAllViewsAsGrid`, 3D docked right of the whole grid).
+  Returns add-panel steps whose positions reference **earlier** entries by index,
+  so the caller can substitute real dockview panel ids as it walks forward.
+
+**Imports from project modules.** None (by design).
+
+**Imported by.** `ui/overlay-export-modal.js`; `ui/export-modals.js`
+(`shouldStreamToDisk`, so both video exports share one threshold); bridged into
+`tests/test-runner.html` as `window.__OverlayExportLayout`.
+
+---
+
+### ui/overlay-export-modal.js
+
+**Purpose.** The "Export Video Overlays" modal (File menu, above "Export 3D
+Video") — issue #190. Renders the session's 2D camera videos **with pose
+overlays burned in**, plus the 3D viewport, either stitched into one composed
+video laid out exactly as the user arranged it, or as one file per tile. The
+counterpart of SLEAP's `View ▸ Render Video Clip with Instances…`
+(`sleap/gui/dialogs/render_clip.py`), extended with LUCID's multi-view
+composition and its user / predicted / reprojected overlay layers.
+
+**Key exports.** `showOverlayExportModal()`, `settingsFromVisibilityPanel()`,
+`loadOverlayExportSettings()`, and a re-export of `TILE_3D`.
+
+**Layout.** `[views strip] [composition dock] [settings panel]`. The strip lists
+the **3D grid FIRST**, then one thumbnail per video; drag or double-click to dock.
+An entry that IS docked is **highlighted** — accent border + `--accent-dim` wash +
+a dot, matching `.session-strip-item.active` (`styles.css:360`) — by
+`refreshStripHighlights()`. That used to be inverted: a docked entry was faded to
+`opacity: 0.55`, which reads as *disabled*, the opposite of selected. It runs from
+exactly three sites, which is exhaustive because they are the only three that
+mutate the `tiles` map behind `isDocked`: `buildStrip()`, `TilePane.init` (the sole
+choke point for every add — dockview always calls `init` from `addPanel`, even for
+an inactive stacked tab) and `onDidRemovePanel` (tab X, whole-group close,
+close-everything). A panel MOVE deliberately gets no hook: dockview wraps moves in
+`movingLock` so neither event fires, and a moved panel keeps its id, so the docked
+SET is unchanged by definition.
+**Strip order is independent of DOCK order**: the 3D tile is still SEEDED last, a
+column to the right of the whole video grid (`seedLayoutPlan`). Reordering the
+strip must not move the tile, or every existing user's exported frame layout would
+shift; `tests/e2e/overlay-export-modal.mjs` asserts the tile's geometry stays right
+of the cameras, and `tests/test-overlay-export-layout.js`'s "3D docked last" pins
+the plan.
+**`qualityPhrase(W, H, fps, approx)`** builds the Quality half of the output note —
+tier name, the Mbps it really encodes at, and a "capped" warning from
+`bitrateIsClamped`. Bitrate is the one output setting a still preview CANNOT show
+(it exists only after H.264 encoding), so this text is the whole of the live
+feedback for the Quality picker; naming the tier in only the stitched branch is
+what made a correctly-wired picker read as inert in individual mode.
+The middle is its **own `DockviewComponent` instance** (same pinned
+`dockview-core@6.6.1` as `ui/sessions-panes.js` — **three** pins now share that
+version: `index.html`'s CSS, `sessions-panes.js`, and this module), seeded via
+`seedLayoutPlan` to mirror the main window. The settings panel carries the frame
+range (**1-based display**, 0-based internally, matching the issue) at the top,
+then layers, per-layer appearance, background, and quality/output.
+
+**Output dimensions.** Quality & Output has a Resolution picker — the four shared
+tiers **480p (854×480) / 720p (1280×720) / 1080p (1920×1080) / 2160p (3840×2160)**
+from `RES_PRESETS`, plus **Custom** — and a live `width × height` row. Quality
+itself is a *separate* control here: it is the bitrate tier (low / medium / high
+via `QUALITY_BPP`), not a resolution, which is why this modal keeps both where
+`showExport3DVideoModal` labels its single tier picker `Quality`. `resTierLabel()`
+names the chosen tier in the summary line next to the literal `W×H`, because the
+two can legitimately disagree — a preset fixes only the HEIGHT, so a very wide
+composition clamps the derived width to `MAX_OUT_DIM` and recomputes the height,
+and "2160p" can encode at 3840×960 (reported as `2160p (width-capped)`). The
+fields always show the size the
+export will really be — for a preset that is the derived size, refreshed by
+`syncOutFields()` out of `refreshSummary()` as the composition changes — and
+typing in either one is itself the gesture that switches Resolution to Custom, so
+the previously-shown derived numbers become the starting point. A custom size
+re-shapes the **dock** to that aspect (`applyDockAspect`, re-run on settings
+change and by a `ResizeObserver` on `#ovDockFrame`), which keeps the composition
+WYSIWYG: dock aspect and output aspect agree again, so `computeTileRects` fills
+the frame instead of letterboxing it. In individual mode a custom size applies to
+every file, with each tile letterboxed into it.
+
+**Reprojection fill.** `ensureReprojections()` is the export-side mirror of
+`ui/rendering.js`'s lazy fill, so exporting a triangulated-but-never-viewed range
+still draws reprojections. It **resolves the method from the group**
+(`triangulationMethod === 'ba' ? 'ba' : 'dlt'`) exactly as the display path does:
+omitting the option silently re-solves with DLT, which would burn DLT
+reprojections into the video while the app shows BA's, breaking the
+"exported 3D == displayed 3D" invariant. Guarded by
+`tests/test-triangulation-method-propagation.mjs`, which scans every
+`triangulateAndReproject` call site in the repo.
+
+**Still-frame previewer, no playback.** The modal has **no transport**: no
+play/pause, no frame stepping, no `setPlaying`/`playTimer`. Scrubbing the track is
+the only way to change frames (the range fields also preview the boundary they
+commit). Playing a multi-view composition here decoded every docked view per tick
+*and* pushed every tick into the app viewer, competing with the export the modal
+exists to configure; a single rendered frame is what tells you whether the
+overlays look right. Note the consequence: exact single-frame navigation now costs
+a pixel-accurate scrub, which is coarse on a long video — the range fields are the
+precise way to land on a specific frame.
+
+**Preview ↔ app viewer.** Scrubbing in the modal drives the real viewer through
+`videoController.scrubToFrame()` (`syncViewer`, called from `showFrame`), so the
+app's canvases, overlays and timeline follow the modal playhead and closing the
+modal leaves you on the frame you stopped at. `scrubToFrame` is the **coalescing**
+entry point — it keeps one seek in flight and drops intermediate targets — so a
+fast drag doesn't queue a decode backlog behind the preview. Suppressed while
+exporting.
+
+**Track gestures.** The two gestures on the scrub track are separated by *what you
+press*, tracked by `dragging` (`'playhead' | 'start' | 'end'`). Pressing the track
+scrubs the **current frame** and drags it; a range endpoint moves only when its
+handle is grabbed directly (the handles sit above the track via `z-index` and
+claim their own `pointerdown`, so such a press never reaches the track handler).
+Pressing the track used to pull whichever endpoint was *nearer*, which meant an
+innocent click halfway along silently redefined what would be exported — and which
+end moved depended on invisible arithmetic. Scrubbing is deliberately **not**
+clamped to the export range, so you can look just outside it before committing —
+the playhead is a preview cursor, not an export bound. Releasing an endpoint
+previews the boundary it was dropped on; releasing a playhead drag leaves the
+frame where it is.
+
+**Rendering model.** Every tile owns **two** canvases (video + overlay), exactly
+like the main window's `.canvas-wrapper`, because `drawFrameOverlays()` opens
+with a full-canvas `clearRect` and would otherwise erase the video drawn beneath
+it. Preview canvases track the tile's CSS box; export allocates **separate**
+canvases at the tile's output pixel box, so preparing an export never disturbs
+the live preview. Composition geometry is read straight off the DOM
+(`captureLayout` → `computeTileRects`), which is what makes the stitched output
+WYSIWYG with the dock the user arranged. A tile whose rect is <2px (a hidden tab
+in a stacked group) is skipped. `addTile` splits right rather than stacking when
+given no position — a stacked tab is hidden, so "add to composition" would
+otherwise silently do nothing visible.
+
+**3D tile.** A second `Viewport3D` (`preserveDrawingBuffer: true`), as in
+`showExport3DVideoModal`. For export its renderer is `setSize(w, h, false)`'d to
+the output tile box (CSS size untouched) with the container `ResizeObserver`
+**disconnected**, then restored afterwards.
+
+**Encoding.** Delegated entirely to **`ui/video-encode.js`** (mediabunny), shared
+with the 3D video export — this module no longer touches `VideoEncoder` or a
+muxer. Individual mode runs N writers inside the SAME frame loop, so each frame
+is decoded once no matter how many files come out, and `await writer.addFrame()`
+is what applies backpressure. **Destination:** an export whose estimated total
+exceeds `shouldStreamToDisk` asks for a save-file (stitched) or a folder
+(individual, one `getFileHandle` per tile; the folder handle is deliberately NOT
+cached to `state.exportDirHandle`, which `showSlpExportAllModal` reuses without
+prompting) and streams into it; below the threshold it buffers and
+downloads exactly as before, so a short export is still one click. Declining the
+picker for a large export **cancels** it rather than silently falling back to the
+memory buffer that was being avoided; with no File System Access API at all the
+user gets the same `confirm()` warning `exportLabels()` uses. Cancelling a
+streamed export leaves a real partial `.mp4` on disk (mediabunny closes the
+writable), which the status message says outright.
+
+**Settings persistence.** Seeded from the live Visibility panel
+(`getVisibilitySettings()`) on first open so an export defaults to looking like
+the app, then persisted to `localStorage` — surviving session switches within a
+project and page reloads. The **layout** is deliberately NOT persisted; a
+reopened modal re-seeds from the main-window mirror.
+
+**Sash drags are taken over from dockview.** A capture-phase `pointerdown` on
+`#ovDock` intercepts sash drags and re-implements them via `distributeAxisSizes`, so
+the change is shared across the whole axis instead of dumped on one neighbour.
+dockview 6.6.1 offers no option for this: `proportionalLayout` governs CONTAINER
+resize, is hardcoded `true`, is not in `DockviewComponentOptions`, and
+`updateOptions` says "not supported" outright; `distributeViewSizes()` equalises
+every view (throwing the composition away) and is on no public API; `LayoutPriority`
+only reorders the same spill list and the sash handler passes `undefined` for both
+priority lists, so it cannot reach a drag at all. Post-correcting in
+`onDidLayoutChange` was rejected — that fires **once at drag end**, so the drag would
+look native and then jump on release. Capture-phase `stopPropagation()` on an
+ancestor prevents dockview's own listener (bound to the sash **element**) from ever
+running, so there is exactly one handler and nothing to fight. An axis of two tiles
+with nothing to keep aligned is left to dockview on purpose — there our arithmetic and
+dockview's agree exactly.
+
+**A row divider moves that boundary in EVERY column** (`axesForSash`). dockview nests a
+4+ camera grid **column-major**: the root axis's children are columns, and each column
+owns its own vertical axis of rows. So a row sash natively resizes only its own column,
+and the grid drifts ragged with no gesture anywhere able to straighten it (measured:
+dragging column 1's row divider left `c1` at 417 px and `c4` at 257 while the other
+columns stayed at 337). `axesForSash` therefore returns the dragged axis **plus every
+sibling axis that has a boundary at the same index `k`**, and the drag is applied to all
+of them with the same delta. A sibling with too few tiles to have boundary `k` — a
+camera spanning the full height, or the 3D tile — simply does not take part, which is
+what leaves full-height tiles alone instead of splitting them. The ROOT axis has no
+parent, hence no siblings, so a COLUMN drag still just resizes columns (both videos in
+a column together), and a row drag never changes a width.
+This reaches **TypeScript-private dockview internals** — `gridview.root`, node
+`children` / `element` (walked to find the branch owning the sash **and its parent**),
+`BranchNode.splitview`, `Splitview.viewItems` / `sashes` / `layoutViews()` /
+`distributeEmptySpace()` / `saveProportions()`, and `viewItem.enabled` — all verified
+to resolve at **runtime** against the live minified `/+esm` build, not just by grep.
+Every one is feature-detected: if any is missing the handler returns WITHOUT calling
+`stopPropagation()` and dockview's stock neighbour-only drag runs, so a version bump
+can regress the behaviour but cannot break resizing.
+Two e2e files cover this, and the split matters:
+`tests/e2e/overlay-export-sash-distribute.mjs` covers the sharing on a FLAT axis
+(confirmed to FAIL on the pre-fix code, delta `-60, 0, 0`) and drags twice to assert the
+first drag's asymmetry survives — the guard against an "equalise everything" fix making
+the dock un-resizable. But it only ever drags **sash 0**, where share-far and grow-one
+are the same arithmetic, and it asserts its axis is flat — so it is structurally blind
+to both cursor tracking and the grid. `tests/e2e/overlay-export-sash-tracking.mjs`
+covers exactly those: the handle tracking every sash (confirmed to fail on `grow-one`,
+naming the measured 53 px and 26 px) and the cross-column row boundary on a real 5-camera
+nested grid (confirmed to fail with the propagation disabled). **Run both.**
+
+**The tab band is overlaid on the tile, not stacked above it** (`styles.css`,
+`#ovDock`). dockview lays a group out as `[tabs][content]` in a column flexbox, so a
+35px band cost 35px of video **per grid row** — ~8% of a two-row dock spent on
+chrome, with the tiles letterboxed to pay for it. Shortening the band to 20px and
+pulling `.dv-content-container` back up by exactly that height gives the tile (and
+its canvas backing store) the group's full height; measured 639 -> 674 px, and tile
+area 91.7% -> 99.45% on a six-tile composition. The real dockview tab is KEPT, not
+hidden: `.dv-tab` is dockview's **drag source**, so `header.hidden` would remove the
+only way to rearrange tiles — and `captureLayout()` reads that arrangement off the
+DOM, where it IS the exported frame. `position: relative` + `z-index: 2` on the band
+is load-bearing: the tile's canvases are absolutely positioned and would otherwise
+paint over it and swallow every tab click. Scoped to `#ovDock` because
+`.dockview-theme-abyss` is shared with the main window's dock, and declared on
+`.dv-groupview` rather than `#ovDock` because dockview puts the theme class on its own
+`.dv-shell` **inside** the container, which would otherwise re-declare the height.
+
+**The tab shows the ✕, never the name.** `Render Video Names` burns the caption into
+the same top-left band the chip occupies, so a visible tab title drew the name twice a
+few pixels apart in a different font — a ghost, worse the longer the name. So
+`.dv-default-tab-content` is `width: 0` unconditionally: with the layer ON the name
+comes from the burned-in caption (the copy that actually reaches the `.mp4`), and with
+it OFF from **hover**. `order: 2` puts the zero-width title AFTER the ✕ so the hover
+reveal grows the chip rightward and the ✕ never moves — a control that jumps out from
+under the cursor is a bug, and the e2e pins the ✕'s x in all four (layer × hover)
+states. A 12px `padding-left` leaves 19px of bare `.dv-tab` — the drag source — to the
+left of the ✕, so tiles can still be picked up; `min-width: 44px` is a non-binding
+floor in case a dockview bump drops the tab's own padding.
+`applyTabNameMode()` toggles `#ovDock.ov-hover-tab-names` from `onChange` AND from
+`buildSettings` (Reset replaces `settings` and calls the latter, not the former).
+The hover reveal is keyed on **`.dv-groupview:hover`, NOT the tile element**: the tab
+band is a *sibling* of `.dv-content-container`, so `[data-view-name]:hover` goes false
+the moment the pointer reaches the ✕ and the label would flicker off exactly as the
+user goes to click it (measured, not assumed). It survives the
+`.dv-content-container { pointer-events: none }` bypass because that only stops the
+container being a hit *target* — `:hover` still applies to ancestors of whatever is hit.
+With the layer ON the whole band is `translateY`'d one band-height so the ✕ sits
+**below** the caption rather than on it: the caption's width follows the name while the
+✕ is pinned at 19px, so a fixed padding cannot clear it ("topL" had its L behind the
+glyph). `transform` specifically — it does not affect layout, so the tile keeps the full
+height the overlaid band bought. The 3D tile keeps its name in every state (no overlay
+canvas ⇒ never captioned), via a `:has()` rule kept SEPARATE so an engine without
+`:has()` cannot drop the hover reveal along with it.
+
+**Display settings are inherited from the main window, not re-exposed.** Every 2D
+tile is rendered with that camera's **brightness, contrast, rotation and zoom** as
+the main window has them, by one shared `drawTileContent(vctx, octx, …)` that both
+the preview (`paintTile`) and the export (`drawExportTile`) call — they used to be
+two near-identical bodies labelled "export-time twin", i.e. two things guaranteed
+to drift. The modal deliberately has **no** control for any of the four (only the
+unrelated `settings.reproj.brightness`, an overlay *marker* dimming factor), and
+says so in `#ovDisplayNote`.
+
+This is not free: the main window applies all four as **CSS on live elements** —
+`view.canvas.style.filter` for brightness/contrast (`applyVideoFilters`), a
+`.canvas-wrapper` transform for rotation and zoom (`applyZoom`) — and **none of it
+survives a `drawImage` of the decoded frame into another canvas**, the same reason
+`applyVideoFilters` must re-set the filter on duplicate panes' mirror canvases. So
+the tile re-applies them: brightness/contrast via **`ctx.filter`**, which takes
+exactly the CSS filter-function list `buildVideoFilter` already emits (so the modal
+and the live canvas cannot disagree); rotation and zoom via a context transform
+applied to **video and overlays together**, because the main window transforms one
+wrapper holding both canvases — transforming only the pixels would slide every
+skeleton off the animal. Three details are load-bearing:
+- the overlay canvas is cleared under the **identity** transform first, because
+  `drawFrameOverlays`'s own `clearRect(0,0,w,h)` clears a *rotated* rect once a
+  transform is set, leaving the previous frame's skeleton in the corners of the
+  reused export canvas;
+- the legend is drawn **outside** the transform — `drawLegend` anchors to
+  `ctx.canvas.width` rather than the size it is passed, so inside the transform it
+  drifts by the letterbox offset (a regression even at rotation 0) and lands upside
+  down at 180°;
+- `ctx.filter` is reset with `'none'`, never `''` — an empty string is an invalid
+  value the setter silently ignores, which would leak the video's brightness onto
+  the overlay composite. `buildVideoFilter` returns `''` when both are default.
+Rotation prefers `view.rotation` over the session value: the hold-to-rotate chord
+advances the view every frame and only commits on keyup, so mid-gesture the view is
+what the user is actually looking at; a view never docked in the main window has no
+`view.rotation`, hence the session fallback. `individualSizeFor` derives each
+per-tile file's aspect from the **rotated** box, so a 90°-rotated 640×480 view
+exports portrait (360×480 at the 480 tier) instead of a landscape file with the
+frame pillarboxed inside it.
+**Zoom fidelity is partial, by construction:** magnification and pan centre match
+the main window, the visible **crop cannot**. The main window's crop comes from
+`.video-cell`'s `overflow:hidden` at the *cell's* aspect; an export tile has its own
+aspect, so a wider tile simply shows more video, and at high zoom near a frame edge
+that means black past the edge. The transform mirrors `applyZoom`'s CSS list under
+`transform-origin: 0 0`, which is why there is a `(z-1)*box/2` term (CSS scales
+about the TOP-LEFT, not the centre) and why the pan is converted from main-window
+CSS px by `box/baseW`. Covered end to end by
+`tests/e2e/overlay-export-display-settings.mjs`, which needs its own file because
+the main modal e2e runs decoder-less — black pixels are invariant under
+brightness/contrast and symmetric under rotation, so that suite cannot detect
+whether any of this is applied.
+
+**Unlinked instances ARE drawn**, in the preview and in the encoded frames, by
+`collectUnlinked(frameGroup, viewName)` — which reads the RAW `FrameGroup` via
+`getUnlinkedInstances()` (NOT the `toOverlayFrameGroup` copy, which carries only
+`frameGroup.instances`) and filters by the User/Predicted layer checkboxes, so
+unticking a layer drops its unlinked instances too. It is assigned onto the
+options as `opts.unlinkedInstances = …` rather than passed in the
+`overlayOptionsFrom` literal — worth knowing, because a grep for
+`unlinkedInstances:` misses it and makes the export look like it drops them.
+`overlayOptionsFrom` pins **`showUnlinkedBadge: false`**, so the skeleton is
+exported but the amber `?` editing prompt is not.
+
+**Imports from project modules.**
+- `./app-state.js` — `state`, `videoController`, `getActiveSession`.
+- `./viewport3d.js` — `Viewport3D`.
+- `./overlays.js` — `drawFrameOverlays`, `getTrackColor`, `getGroupColor`.
+- `./rendering.js` — `getVisibilitySettings` (the seed).
+- `./overlay-export-layout.js` — the pure helpers above.
+- `./video-encode.js` — `createMp4Writer`, `videoEncodingAvailable`.
+- `./video-filters.js` — `buildVideoFilter`, `getSessionBrightness`,
+  `getSessionContrast`, `getSessionRotation`. That module imports no project
+  modules, so this adds no cycle, and sharing `buildVideoFilter` with
+  `applyVideoFilters` is what keeps the export from drifting from the live view.
+- `../pose/triangulation.js` — `getInstanceGroupsForFrame`,
+  `ensureLazyFrameData`, `triangulateAndReproject`, `storeReprojectedInstances`,
+  `sessionHasCalibration`.
+- `../pose/pose-data.js` — `points3dNodeCount`.
+- `../import-export/save-load.js` — `setStatus`.
+
+**Imported by.** `ui/ui-wiring.js` (`menuExportOverlayVideo`).
+
+**Tests.** `tests/test-overlay-export-layout.js` (geometry / encoder params /
+custom-size clamping / preset set / stale-`res` fallback / settings merge /
+seed plan) and
+`tests/e2e/overlay-export-modal.mjs` (menu placement, dock seeding, 1-based range
+validation, settings round-trip, absence of any playback transport,
+scrub-to-app-viewer sync, live dock
+re-shaping on a custom size, and a **real** end-to-end mp4 export in all three
+shapes — stitched, individual, and custom-size. The `avc1` sample entry's
+width/height is asserted against `outputSizeFor`/the typed dimensions, which is
+what proves the layout capture and the encoder config agree).
+
+The **track-gesture** split is driven with real mouse events rather than synthetic
+dispatch, because the behavior is entirely about which element a press hit-tests
+to. Note which assertions actually discriminate it: the ones checking the export
+range is *unchanged* by a track press. A scrub lands on the same frame under
+either implementation — the old nearest-endpoint code previewed the endpoint it
+had just dragged — so the playhead assertions alone would pass on the old code
+too. Both range assertions were confirmed to fail against it.
+
+---
+
+### ui/video-encode.js
+
+**Purpose.** The app's **only** video-encoding seam. Both video exports
+("Export Video Overlays", "Export 3D Video") go through it; neither constructs a
+`VideoEncoder` or a muxer any more.
+
+**Why it is not sleap-io.js.** sleap-io.js has **no browser video encoder** —
+verified across every ref, not just the vendored pin. Its only encoder,
+`renderVideo()` (`src/rendering/video.ts`), spawns a native `ffmpeg` and is
+exported solely from the Node entry, never from `src/index.browser.ts`; its own
+docs state "there is no encoder in the JS port". So this is the one part of the
+video pipeline LUCID must own — and it owns it thinly, on top of **mediabunny**,
+the library sleap-io.js itself uses for decode and which LUCID already vendors in
+full (`lib/mediabunny/`, importmap `mediabunny`). This replaced the vendored
+**mp4-muxer 5.2.1 (deleted)** and the duplicated hand-rolled WebCodecs pairing.
+
+**Key exports.**
+- `createMp4Writer({canvas, width, height, fps, bitrate, frameCount,
+  fullCodecString, keyFrameEveryFrames, fileHandle})` → `{addFrame(outIdx),
+  finish(), cancel(), streaming, codec, fastStart, framesAdded}`. The writer is
+  bound to ONE canvas, sampled at each `addFrame`.
+- `resolveH264Config(width, height, bitrate, preferredCodecString)` — probes with
+  `canEncodeVideo` and degrades to mediabunny's own level pick if the caller's
+  exact H.264 level string isn't encodable here. Returns `null` when H.264 is
+  unavailable at that size, which is what turns into the user-facing error.
+- `videoEncodingAvailable()`, `MP4_MIME`, `KEYFRAME_INTERVAL_FRAMES` (60).
+
+**What it buys over the old path.**
+- **Streaming.** Given a `fileHandle` it writes through a mediabunny
+  `StreamTarget` at bounded memory instead of buffering the whole `.mp4` in an
+  `ArrayBufferTarget` — the failure mode CLAUDE.md documents at length for
+  luc3d #185/#190/#191/#193 (V8's pointer-compressed cage, hard-capped near 4 GB
+  in a Chrome renderer).
+- **moov-at-front while streaming.** Callers know the frame count, so it passes
+  `fastStart: 'reserve'` (+ `maximumPacketCount` in the track metadata, which
+  that mode requires) to reserve the sample table, stream `mdat`, then seek back
+  and write `moov` ahead of it. **mediabunny defaults `fastStart` to `'in-memory'`
+  for a BufferTarget but to `false` (trailing moov) for a StreamTarget**, so it is
+  always passed explicitly; `tests/e2e/video-encode-streaming.mjs` asserts the
+  byte order so a regression to a non-seekable file can't pass silently.
+- **Real backpressure that can fail.** `await source.add(...)` settles when the
+  encoder has room and **rejects** when it died, replacing a
+  `while (encodeQueueSize > 12) await setTimeout(0)` spin that had no exit on a
+  dead encoder (the old `error:` callback only logged).
+
+**Contracts it depends on** (none compile-checked — re-verify on any mediabunny
+bump, see `lib/mediabunny/PROVENANCE.txt`): `keyFrameInterval` is in **seconds**,
+so the historical "keyframe every 60 frames" is `60/fps`, belt-and-braced with a
+per-frame `{keyFrame}` flag that mediabunny ORs with the interval; `finalize()`
+and `cancel()` both **close the target's WritableStream themselves**, so a
+cancelled streamed export commits a partial file.
+
+**Deliberately unchanged from the old encoder.** H.264 only, the callers' own
+bitrate maths, and the 60-frame keyframe cadence. VP9/AV1 fallback is a one-line
+change here but is a separate decision.
+
+**Imports from project modules.** None. Imports `mediabunny` (importmap).
+
+**Imported by.** `ui/overlay-export-modal.js`, `ui/export-modals.js`.
+
+**Tests.** `tests/e2e/video-encode-streaming.mjs` drives it directly with a
+stand-in file handle — necessary because headless Chromium rejects
+`showSaveFilePicker()` instantly with `AbortError`, so the streaming path is
+unreachable through either modal under automation. It pins position-based writes,
+moov-before-mdat on both paths, the frameCount overrun guard, the canvas/size
+mismatch guard, and the encoded dimensions. The modals' own end-to-end exports
+(`tests/e2e/overlay-export-modal.mjs`, `tests/e2e/export-3d-video.mjs`) cover the
+buffered path.
+
+---
+
 ### ui/overlays.js
 
 **Purpose.** Pure canvas-rendering helpers for skeleton overlays, color
@@ -1665,12 +2883,20 @@ palettes, and per-frame draw routines. Receives `frameGroup` and
 
 **Key exports.**
 - Node markers: `drawNodeShape(ctx, x, y, shape, size, color)` — draws one
-  keypoint marker in one of four styles (`'circle'`, `'x'`, `'triangle'`,
-  `'square'`). All 2D node draws route through it: `drawSkeleton`
+  keypoint marker in one of six styles (`'circle'`, `'x'`, `'triangle'`,
+  `'square'`, plus `'diamond'` and `'cross'` — the plus-sign form, added for
+  SLEAP parity in the overlay-video export, issue #190). All 2D node draws route
+  through it: `drawSkeleton`
   (normal + nulled nodes, via `options.nodeShape`), `drawReprojectedSkeleton`
   (via `options.nodeShape`, default `'x'`), and `drawUnlinkedInstances`
   (`instNodeShape`). `drawFrameOverlays` threads the per-type Node Style toggle
   through as `nodeShape: {user,predicted,reproj}Opts.nodeStyle`.
+- Independent node/edge visibility: `drawSkeleton` and
+  `drawReprojectedSkeleton` accept `options.showNodes` / `options.showEdges`,
+  both **defaulting to `true`** so every pre-existing caller is unchanged. Only
+  the overlay-video export sets them (SLEAP's "Show: ☑ Nodes ☑ Edges"); the live
+  Visibility panel has no such toggle. They ride in on the per-type opts bags, so
+  `drawFrameOverlays` forwards them without needing to know about them.
 - Color: `TRACK_COLORS`, `REPROJECTION_COLOR`, `UNGROUPED_USER_COLOR`,
   `NULL_ID_COLOR` (space gray `#a7adba` for explicit-none instances when
   coloring by identity), `getTrackColor`, `getGroupColor`,
@@ -1680,7 +2906,11 @@ palettes, and per-frame draw routines. Receives `frameGroup` and
   `useIdentity` and `session.isExplicitNoIdentity(...)` is true, and also —
   when coloring by track — for any instance/group on the "No ID" track
   (`session.isNoIdTrack(trackIdx)`), so the null track matches the ID
-  panel's gray on the skeleton. **When coloring by identity,
+  panel's gray on the skeleton. When coloring by identity,
+  `getInstanceColor` also honors a TRACKLESS unlinked instance's retained
+  `Instance.identityId` (luc3d #201 — stamped by `unlinkGroup`; the map
+  cannot key a null track) before falling back to `UNGROUPED_USER_COLOR`,
+  so an ungrouped animal keeps the color it had while grouped. **When coloring by identity,
   `getGroupColor` resolves the identity from the per-frame map keyed by the
   group's LIVE `trackIdx` (`getIdentityForTrack`) FIRST, using
   `group.identityId` only as a fallback for a group with no per-frame entry
@@ -1743,7 +2973,43 @@ palettes, and per-frame draw routines. Receives `frameGroup` and
 - Skeleton drawing: `drawSkeleton`, `drawReprojectedSkeleton`,
   `drawReprojectionErrors`, `drawSelectionHighlight`,
   `drawHoverHighlight`, `drawDragPreview`, `drawInstanceLabels`,
-  `drawInstanceTypeIndicator`, `drawUnlinkedInstances`.
+  `drawInstanceTypeIndicator`, `drawUnlinkedInstances`, `drawViewNameLabel`.
+  **`drawViewNameLabel(ctx, text, options)`** draws a camera name **top-left**,
+  behind "Export Video Overlays" ▸ Layers ▸ **Render Video Names** — `layers.videoNames`,
+  **default ON** (a multi-camera composition is close to unreadable unlabelled, so the
+  caption is the expected output rather than an opt-in), and the first entry
+  in that group). The composed `.mp4` otherwise carries no labels at all — the
+  dock's per-tile name chip is UI chrome and is never encoded — so a five-camera
+  composition would ship as five anonymous rectangles. **Top**-left so it lands
+  exactly where that chip sits: the render then carries the same tag the
+  composition shows, just without the close X, and in the preview the two coincide
+  instead of reading as two labels. (It was bottom-left first, on the reasoning that
+  the corner was free — which put a *second* visible label on each tile.) No
+  collision with `drawLegend`, which owns the top-**right**. `options.corner:
+  'bottom-left'` is retained for a caller that wants it out of the way.
+  The font scales off `ctx.canvas` rather than being fixed: the same tile
+  is drawn at preview size and again at output size, and a fixed size is unreadable
+  in one or hairline in the other (`drawLegend`'s fixed 28px does drift this way —
+  deliberately not copied). It resets to the identity transform and `filter:'none'`
+  itself, and callers must invoke it OUTSIDE any view transform so a caption stays
+  upright on a rotated camera.
+  **`drawUnlinkedInstances` "?" badge is suppressible:** the amber `?` on an
+  unlinked instance is an **editing affordance** ("assign me"), so
+  `options.showUnlinkedBadge` (**default `true`** — a missing option must never
+  silently strip it) turns it off while KEEPING the other two unlinked cues, the
+  dashed edges and the reduced opacity. Hiding the badge must never hide the
+  detection. `drawFrameOverlays` spreads the flag into `unlinkedOpts`, which both
+  of its `drawUnlinkedInstances` passes (`typeFilter: 'predicted'` then `'user'`)
+  receive, so **one flag covers both types** — the badge block sits outside the
+  `isPredicted` branch, and a per-type regression would only show on one pass.
+  Two callers set it: the Visibility panel's `visUnlinkedBadge` toggle (via
+  `getVisibilitySettings`) and `overlayOptionsFrom` for video export, which pins
+  it `false` for the same reason it nulls selection/hover/drag — nobody watching
+  an `.mp4` can act on an editing prompt. Covered by
+  `tests/test-unlinked-badge.js` (pixel-level, both types, plus a whole-canvas
+  diff asserting **nothing outside the badge disc changes**) and
+  `tests/e2e/unlinked-badge-toggle.mjs` (the checkbox → settings → repaint →
+  localStorage → reload chain).
   **`drawUnlinkedInstances` same-trackIdx collision fix:** an unlinked
   instance (no group, no identity — e.g. an animal visible in only 1 camera
   this frame, so `commitTrackedFrame`'s `members.length < 2` check never
@@ -1789,6 +3055,33 @@ palettes, and per-frame draw routines. Receives `frameGroup` and
   just user instances — so the cross-view tracker's output (predicted) shows its
   IDs as text for proofreading. `options.trailLength` threads through to
   `drawNodeTrails`. Covered by `tests/test-node-trails.mjs`.
+  **Reprojection node color ignored the Visibility panel on the raw-fallback
+  path (luc3d #209).** Step 2 has two ways to draw a group's reprojection:
+  a materialized `reprojectedInstances` `Instance` (built by
+  `storeReprojectedInstances`/`getOrComputeReprojectedInstance`,
+  `pose/triangulation.js`), or — when that Map is still empty, which is
+  ALWAYS true right after a bulk `triangulateAllFrames` sweep (BA is
+  typically run this way via "Triangulate All"; it deliberately skips
+  materializing `reprojectedInstances` for memory reasons) — a fallback that
+  draws straight from `group.reprojections`' raw points via
+  `drawReprojectedSkeleton`. `reprojXColor` (the marker/X color, computed
+  from `options.reprojNodeColor`) was a `var` declared only inside the
+  sibling `if (reprojInst)` branch; being function-scoped it still existed
+  in the `else` (raw-fallback) branch but was never assigned there, so it
+  was `undefined` — and `drawReprojectedSkeleton`'s `options.color ||
+  '#ff6b6b'` silently hardcoded every such reprojection to `'#ff6b6b'`,
+  ignoring white/black/track entirely. Because `'#ff6b6b'` is also
+  `TRACK_COLORS[0]`, this read exactly like "reprojections are forced into
+  track color" — and combined with `ui/rendering.js`'s lazy fill toggling a
+  group in and out of the "has `reprojectedInstances`" state across
+  redraws, produced a red/white flash while scrubbing BA-triangulated
+  frames. Fixed by hoisting the `reprojXColor`/`isSelected` computation
+  above the `if`/`else` so both branches share it. Regression test:
+  `tests/e2e/reprojection-fallback-color-setting.mjs` (drives the raw-
+  fallback branch directly with a group that has `reprojections` but no
+  `reprojectedInstances`, and asserts the marker's `fillStyle` matches
+  `reprojNodeColor` — confirmed failing pre-fix, both `'black'` and
+  `'white'` settings drawing `'#ff6b6b'`, and passing post-fix).
 - Misc: `drawLegend`, `getFrameStats`.
 
 **Imports from project modules.** None.
@@ -1812,6 +3105,18 @@ data sources. Plus visibility-toggle helpers and frame counter updates.
 - `setReprojErrorVisible(visible)` — show/hide the reproj-error info
   column.
 - `getVisibilitySettings()` — reads per-view checkbox state from the DOM.
+  Includes **`showUnlinkedBadge`** (the Visibility panel's *Unlinked Instances ▸
+  Show "?" badge* toggle, `#visUnlinkedBadge`), passed straight through to
+  `drawFrameOverlays` in `drawAllOverlays`. Read via a `checkVal(id, fallback)`
+  helper that mirrors the existing `styleVal` tolerance and **defaults `true`
+  when the element is absent**: the headless runners build a partial DOM, and a
+  bare `.checked` on a missing node throws and takes the whole render down.
+  It is registered in `ui-wiring.js`'s `visCheckIds` (so it persists to
+  `localStorage`, and an older stored blob without the key keeps the HTML
+  `checked` default — no migration) and in the checkbox change-listener list (so
+  toggling repaints immediately rather than waiting for the next frame step).
+  Unlike the other entries in that list it needs no deselect sweep: it changes
+  only what is painted, never which instances exist.
   Each of `userOpts` / `predictedOpts` / `reprojOpts` now carries a `nodeStyle`
   (`'circle'`/`'x'`/`'triangle'`/`'square'`) read from the per-section Node
   Style button group (`visUserNodeStyle` / `visPredNodeStyle` /
@@ -1830,6 +3135,30 @@ data sources. Plus visibility-toggle helpers and frame counter updates.
   When paused (seek/step) they run every call; `VideoController.stopPlayback`
   fires one final unthrottled `drawAllOverlays` so the panel/playhead settle to
   the exact stop frame.
+
+  **Lazy reprojection fill — honors the group's triangulation method.** A group
+  with `points3d` but no `reprojections`/`reprojectedInstances` is re-solved here
+  and the result is written into `state.triangulationResults` (which is what the
+  Info Panel's headline error, per-camera rows and per-instance breakdown read).
+  That re-solve passes
+  `{ method: group.triangulationMethod === 'ba' ? 'ba' : 'dlt' }` — the same
+  method-preserving rule as `reTriangulateGroup`
+  (`pose/triangulation.js`) — and carries `method` through into the stored
+  result. It previously passed **no options**, and
+  `triangulateAndReproject`'s `options.method === 'ba' ? 'ba' : 'dlt'` default is
+  SILENT, so it re-solved with DLT. That is why **"Triangulate All ▸ Bundle
+  Adjustment" appeared to do nothing:** the windowed sweep
+  (`sweepTriangulateAllFrames`) deliberately drops `reprojections` and
+  `state.triangulationResults` project-wide (~1.9 GB at 531,799 groups — see its
+  docstring), so this fill is the ONLY thing that repopulates them, and the DLT
+  re-solve overwrote BA's error with DLT's while `group.triangulationMethod`
+  still read `'ba'` — so the panel labelled the number "Bundle Adjustment" and
+  showed DLT's value. The single-frame `triangulateCurrentFrame` path was
+  unaffected because it stores its own result AND populates `reprojections`, so
+  this condition is false. `points3d` is deliberately **not** written back
+  (the group already holds the authoritative 3D from the sweep); with the method
+  honored the two are bit-identical, which
+  `tests/e2e/triangulate-all-ba-display.mjs` asserts directly.
 - `updateFrameCounters()` — updates status-bar frame counters.
 
 **Imports from project modules.**
@@ -1865,7 +3194,12 @@ multi-video docking layout.
 - `panelRenderers` — Map of panelId → VideoPaneRenderer.
 - `multiSelectViews`, `clearMultiSelect`.
 - `refreshPaneInteractions`.
-- `clampRotation`, `syncRotationUI`.
+- `clampRotation` (a **re-export** of `ui/video-filters.js`'s, which is where the
+  function now lives — existing importers are unaffected), `syncRotationUI`.
+- `applyVideoFilters(view)` — write the COMBINED brightness+contrast CSS filter
+  onto a view's canvas (see below).
+- `restoreViewRotation(view)` — re-seed `view.rotation` from the session, the
+  non-CSS counterpart of `applyVideoFilters` (see below).
 - `populateViewStrip`, `populateSessionsPanel`, `populateSessionStrip`.
 - `showMoveVideoModal`.
 - `removeSession`, `switchSession` (async).
@@ -1875,13 +3209,25 @@ multi-video docking layout.
 - `../pose/pose-data.js` — `FrameGroup`, `UnlinkedInstance`, `Camera`.
 - `../pose/triangulation.js` — `triangulateAndReproject`,
   `storeReprojectedInstances`, `getInstanceGroupsForFrame`,
-  `sessionHasCalibration`.
+  `sessionHasCalibration`, `resolveTriangulationMethod`. Moving a view between
+  sessions strips that camera from every group in the origin session, which
+  genuinely invalidates their 3D — so those groups ARE re-solved, but with
+  `resolveTriangulationMethod(group)` and the result's method stamped back, so a
+  bundle-adjusted group is not silently downgraded to DLT (it previously passed no
+  method, i.e. a silent DLT, changing both the displayed 3D and what a later
+  save/export writes).
 - `../loading/session-loader.js` — `cellResizeObserver`,
   `createViewForVideoFile`, `rebuildVideoController`,
   `fitCanvasesToCells`, `updateTotalFrames`.
 - `../loading/video.js` — `OnDemandVideoDecoder`.
 - `../import-export/save-load.js` — `setStatus`, `showLoading`,
-  `hideLoading`.
+  `hideLoading`, `quickSave`, `markDirty`.
+- `./video-filters.js` — the `CONTRAST_*` / `BRIGHTNESS_*` / `ROTATION_*`
+  bounds, `clampContrast` / `clampBrightness` / `clampRotation` /
+  `clampRotationSetting`, `buildVideoFilter`, and the three per-session
+  get/set pairs. `clampRotation` is **re-exported** from here so
+  `ui/ui-wiring.js` (which has always imported it from this module) is
+  unaffected by the move.
 - `./rendering.js` — `drawAllOverlays`, `setReprojErrorVisible`.
 - `./info-panel.js` — `updateInfoPanel`.
 - `./identity-assignment.js` — `autoAssignState`.
@@ -1934,8 +3280,44 @@ Re-activating an evicted session later requires reopening it from scratch
 from within one already-open project `.slp` yet.
 
 **User-facing features.** Video pane docking (drag/move/resize), view
-strip (top), session strip (bottom), per-pane brightness/rotation
+strip (top), session strip (bottom), per-pane brightness/contrast/rotation
 controls, switch-session UX, move-video-between-sessions modal.
+
+**Video display settings — brightness, contrast (issue #149) and rotation.**
+`populateVideoBrightnessTable`, `populateVideoContrastTable` and
+`populateVideoRotationTable` render the Visibility tab's per-view tables
+(`#visVideoBrightnessTable`, `#visVideoContrastTable` — each with a `Select All
+Videos` link toggle — and `#visVideoRotationTable`, which is per-camera only).
+
+All three are stored **per SESSION** (`session.videoBrightness` /
+`videoContrast` / `videoRotation`) and persisted in the `.slp` via
+`import-export/visibility-metadata.js`. `switchSession` throws `state.views`
+away and rebuilds every pane, so a per-view field silently resets — which is
+precisely what brightness did before it moved onto the session. Any slider edit
+calls `markDirty()`: these are project state, not browser-local preferences.
+
+They restore in two different ways, because only two of them are CSS filters:
+- **Brightness + contrast** funnel into the single
+  **`applyVideoFilters(view)`**, which composes
+  `buildVideoFilter(getSessionBrightness(...), getSessionContrast(...))` into ONE
+  `style.filter` string. They must share one writer: both target the same CSS
+  property, so applying them independently would have the second write erase the
+  first.
+- **Rotation** is not display-only — the renderer and hit-testing read
+  `view.rotation`. **`restoreViewRotation(view)`** re-seeds that field from the
+  session; without it a saved rotation would load into the session and show
+  correctly in the table while the video rendered un-rotated.
+
+`VideoPaneRenderer.init`/`update` call `restoreViewRotation` then
+`applyVideoFilters` right after assigning `view.canvas` — that is what restores
+each session's own settings on a switch (and on a reopen). The hold-to-rotate
+gesture in `ui/ui-wiring.js` keeps a FRACTIONAL `view.rotation` while animating
+and commits the rounded degree to the session once, on keyup.
+`applyVideoFilters` also writes the filter onto any **duplicate panes** of the
+same view. Mirror panes receive their pixels via `drawImage`
+(`renderDuplicatePanels`), which copies raw pixel data and does not inherit the
+primary canvas's CSS filter — so without this they showed the unfiltered video
+(this also fixes that pre-existing gap for brightness).
 
 **Visibility-tab toggle list refresh (Block 2 / Prompt 4).** After
 `timeline.setData(newSession)`, `switchSession` calls
@@ -2415,13 +3797,25 @@ so it loads cleanly in the headless node test runner without dragging in
   `renameHiddenIdentity(session, oldName, newName)` — migrate hidden-set
   membership when the user renames a track / identity, so the toggle stays
   applied to the renamed entity.
+- `serializeHiddenSets(session)` → a partial `metadata.lucid` fragment carrying
+  only the NON-EMPTY sets (`hiddenCameras` / `hiddenTracks` /
+  `hiddenIdentities`), or **`null`** when nothing is hidden. Names are sorted,
+  so the written bytes depend on which entities are hidden and not on the order
+  the user clicked them.
+- `ingestHiddenSets(session, lucid)` — merge saved arrays back onto the Sets.
+  Reads all three keys off ONE object, so a caller cannot wire up two of the
+  three and silently drop the last. Additive, idempotent, and tolerant of a
+  missing/garbage payload. Returns the count applied.
 
 **Per-session state.** Lives directly on the `session` object as `Set<string>`
 fields (keyed by entity NAME, including identities). Empty by default — fresh
 sessions / new entities default to visible. Naming convention `_foo`
-mirrors Block 1's `_timelineHeight` / `_timelineCollapsed`. **In-memory only**;
-no round-trip through `save-load.js` (intentional per Block 2 spec — toggles
-don't persist across project reload).
+mirrors Block 1's `_timelineHeight` / `_timelineCollapsed`. Never cached in
+localStorage (a browser-local cache would be wrong for what is project state),
+but **persisted per session into the `.slp`** via the serialize/ingest pair
+above — which is also why `ingestHiddenSets` does not validate names against
+the session's current entities: a stale entry is harmless (it simply never
+matches), exactly as it is after a delete.
 
 **Global mirror.** Bottom of the file exposes the same surface on
 `window.TimelineVisibility.*` and individually on `window.toggleCameraVisibility`
@@ -2432,10 +3826,11 @@ under either lookup style.
 **Imports from project modules.** None.
 
 **Imported by.** `ui/info-panel.js` (toggle helpers + list helpers),
-`ui/ui-wiring.js` (rename-migration helpers). `ui/timeline.js` intentionally
-does **not** import this module — it inlines its own `ensureHiddenSets`
-equivalent so the timeline core stays decoupled from the visibility-panel
-wiring.
+`ui/ui-wiring.js` (rename-migration helpers),
+`import-export/visibility-metadata.js` (the serialize/ingest pair).
+`ui/timeline.js` intentionally does **not** import this module — it inlines its
+own `ensureHiddenSets` equivalent so the timeline core stays decoupled from the
+visibility-panel wiring.
 
 **User-facing features.** Backs the **Info Panel → Visibility → Timeline**
 subsection (Views / Tracks / Identities lists). Toggling off any entity
@@ -2496,6 +3891,92 @@ covered by `tests/test-track-identity-modals.js`; the lazy/durable half of
 
 ---
 
+### ui/video-filters.js
+
+**Purpose.** Per-CAMERA video display settings — brightness, contrast (issue
+#149) and rotation. Pure and DOM-free: it imports NO project modules, so it can
+be bridged into `tests/test-runner.html` and the `vm` sandbox runner without
+dragging `app.js` in. `ui/sessions-panes.js` owns the DOM half (the
+Visibility-tab tables) and calls in here for the math and the per-session stores.
+
+**One store shape, three settings.** All three are per-camera and live on the
+SESSION as a plain `{ cameraName: value }` map (`Session.videoBrightness` /
+`videoContrast` / `videoRotation`), because `state.views` is rebuilt from
+scratch on every session switch — anything parked on a view silently resets.
+Each has a default that is NEVER written to the map or to the `.slp`, so a
+project the user never adjusted serializes exactly as before these settings
+existed. The four store primitives (`readSetting` / `writeSetting` /
+`serializeSetting` / `ingestSetting`) are shared by all three, so a change to
+the default-omission rule cannot apply to two of them and silently skip the
+third. Brightness and contrast are pure CSS `filter` components; rotation is a
+geometric transform the renderer and hit-testing consume via `view.rotation`
+(this module owns only its clamp, its store and its serialization).
+
+**The contrast mapping.** CSS `filter: contrast(k)` is a per-channel linear
+transfer function pivoted on mid-grey — `out = k * in + (0.5 - 0.5 * k)` on
+normalized channel values. `k = 1` is identity, `k > 1` pushes values away from
+0.5 (more contrast), `k < 1` collapses them toward 0.5, and `k = 0` flattens the
+image to mid-grey. So the bipolar slider is a straight affine map with no branch
+on sign: `k = 1 + s / 100` for `s ∈ [-100, 100]` → `k ∈ [0, 2]`, mirroring the
+brightness slider's 0..200 % → `brightness(0..2)`.
+
+**Key exports.**
+- `CONTRAST_MIN` / `CONTRAST_MAX` / `CONTRAST_DEFAULT` (−100 / 100 / 0),
+  `BRIGHTNESS_MIN` / `BRIGHTNESS_MAX` / `BRIGHTNESS_DEFAULT` (0 / 200 / 100),
+  `ROTATION_MIN` / `ROTATION_MAX` / `ROTATION_DEFAULT` (−179 / 180 / 0).
+- `clampContrast(v)` / `clampBrightness(v)` — coerce anything (number, slider
+  string, `null`, `NaN`, out-of-range) to a valid integer setting; junk falls
+  back to the default rather than producing `NaN`.
+- `clampRotation(deg)` — wrap degrees into (−180, 180]. **Moved here verbatim
+  from `ui/sessions-panes.js`** (which re-exports it, so `ui/ui-wiring.js` and
+  any other importer are unaffected) to put it in the dependency-free module the
+  test runners can bridge. Deliberately does NOT round: the hold-to-rotate loop
+  in `ui/ui-wiring.js` advances by a fractional `60 * dt` per frame and needs the
+  sub-degree precision to look smooth.
+- `clampRotationSetting(v)` — what the store and the `.slp` hold: an INTEGER
+  degree in [−179, 180]. Rounds **before** wrapping, because `clampRotation`
+  maps into (−180, 180] — an open lower bound — so an input just under −179
+  comes back as ~180.9999, and rounding that afterwards would yield 181, one
+  past the max. Round-then-wrap is closed under the integer range.
+- `contrastFactor(v)` / `brightnessFactor(v)` — slider value → CSS amount.
+- `buildVideoFilter(brightness, contrast)` → the COMBINED filter string
+  (`''` / `'brightness(1.15)'` / `'brightness(1.15) contrast(0.6)'`). Both
+  settings share `canvas.style.filter`, so they must be emitted together —
+  writing them separately makes the second assignment erase the first. Identity
+  components are omitted, and an all-identity pair yields `''`, so an untouched
+  project leaves `style.filter` exactly as it was before contrast existed.
+- `getSession{Contrast,Brightness,Rotation}(session, camName)` /
+  `setSession{Contrast,Brightness,Rotation}(session, camName, value)` — the
+  per-session stores. The SESSION, not the view, is the source of truth:
+  `state.views` is rebuilt from scratch on every session switch, so a per-view
+  field would silently reset. `set` returns the clamped value actually stored
+  and **deletes** default entries.
+- `serializeVideo{Contrast,Brightness,Rotation}(session)` → the matching
+  `metadata.lucid` payload or **`null`** when nothing is worth writing (writers
+  must omit the key on `null`, which is what keeps untouched projects
+  byte-identical — `tests/e2e/save-golden-digest.mjs`).
+- `ingestVideo{Contrast,Brightness,Rotation}(session, raw)` — merge a saved
+  payload in, clamping and dropping anything unusable; tolerates a
+  missing/garbage payload (older `.slp` files have no such key). Returns the
+  count applied.
+
+Callers normally reach the serialize/ingest half through
+`import-export/visibility-metadata.js` rather than one setting at a time.
+
+**Imports from project modules.** None, by design.
+
+**Imported by.** `ui/sessions-panes.js` (the three tables + `applyVideoFilters`
++ `restoreViewRotation`, and the `clampRotation` re-export), `ui/ui-wiring.js`
+(`setSessionRotation`, to commit the hold-to-rotate gesture),
+`import-export/visibility-metadata.js` (the `metadata.lucid` mapping every
+reader and writer goes through). Bridged into `tests/test-runner.html` and
+covered by `tests/test-video-contrast.js` (contrast) and
+`tests/test-visibility-metadata.js` (brightness, rotation); the real-app halves
+are `tests/e2e/contrast-slider-roundtrip.mjs` and
+`tests/e2e/visibility-settings-roundtrip.mjs`.
+
+---
+
 ### ui/ui-wiring.js
 
 **Purpose.** Top-level UI wiring. Builds the menu bar, transport controls,
@@ -2532,7 +4013,9 @@ stopping at the last frame; the step transport buttons/keys stop it first.
   `data-value` + `drawAllOverlays` + `saveVisSettings`); they are added to
   `visStyleIds` for persistence/restore. The handler additionally rebuilds the
   3D skeleton for `vis3dNodeStyle` (`viewport3d.skeletonNodeShape = …; setFrame`).
-- File ▸ "Export 3D Video" (`menuExportVideo3d`) is wired to
+- File ▸ "Export Video Overlays" (`menuExportOverlayVideo`) is wired to
+  `showOverlayExportModal()` (overlay-export-modal.js); it sits directly above
+  File ▸ "Export 3D Video" (`menuExportVideo3d`), which is wired to
   `showExport3DVideoModal()` (export-modals.js).
 - Session strip: the **"+"** button (`btnAddSession`) calls
   `handleEmptySession()` to create a fresh empty session directly (inheriting the
@@ -2566,13 +4049,35 @@ stopping at the last frame; the step transport buttons/keys stop it first.
   `updateVideoGridDisplay`, `showViewIndicator`.
 - Playback: `applyPlaybackRate`, `seekToLabeledFrame`.
 
+**Visibility panel — the global/session split.** `saveVisSettings` /
+`restoreVisSettings` cache the panel's **global appearance preferences** (the
+`visSliderIds` / `visCheckIds` / `visStyleIds` lists — User, Predicted,
+Reprojections, Display Legend and 3D Viewer) in
+`localStorage.visibilitySettings`. Those are browser-local display taste, shared
+across every session, and are deliberately **not** written into the `.slp`:
+baking them into the project file would make opening a colleague's project
+silently reassign your node sizes and 3D widgets. The panel's *session-scoped*
+settings — per-camera video brightness / contrast / rotation and the timeline
+hidden sets — take the opposite route and persist per session via
+`import-export/visibility-metadata.js`; they never touch localStorage.
+
+**Hold-to-rotate (`Shift+R` + `←`/`→`).** `rotationLoop` advances
+`view.rotation` by a fractional `60 * dt` every frame so the animation stays
+smooth, and keeps the session store out of it. The gesture is committed **once,
+on keyup**: `setSessionRotation` stores the rounded degree, `view.rotation`
+snaps onto exactly that value (so what renders after the gesture is what a
+reopen will render), and `markDirty()` fires. Persisting per animation frame
+would be 60 Hz of churn on project state.
+
 **Imports from project modules.** Nearly every other module — see file
 header for the full list. Notable ones: `app-state.js`,
 `timeline-controller.js`, `pose-data.js`, `triangulation.js`,
 `rendering.js`, `info-panel.js`, `save-load.js`, `slp-import.js`,
 `file-io.js`, `session-loader.js`, `video.js`, `tracker.js`,
 `initialization.js`, `identity-assignment.js`, `export-modals.js`,
-`sessions-panes.js`, `settings.js`, `settings-modal.js`.
+`sessions-panes.js`, `settings.js`, `settings-modal.js`,
+`video-filters.js` (`setSessionRotation`; `clampRotation` still comes in via
+`sessions-panes.js`, which re-exports it).
 
 **Imported by.** `pose/initialization.js`, `ui/info-panel.js`,
 `ui/layout-controls.js`, `loading/session-loader.js`,
@@ -2602,7 +4107,10 @@ while hovering reveals a menu for picking DLT / BA explicitly. `wireTriDropdown`
 wires both the button click (default method) and the menu items (explicit
 picks). Implicit triangulation — the `t` shortcut, the Edit ▸ Triangulate menu
 item, and the auto-assign flow in `identity-assignment.js` — also uses the
-default method.
+default method. The **environment-skeleton** solve (Load Environment) likewise
+takes it, via `resolveTriangulationMethod(group)` on a brand-new group; it used
+to hardcode DLT, so a BA user's environment 3D silently disagreed with the method
+they had selected.
 
 **Track / Identity menu modals.** The `Tracks` menu's New / Rename / Delete
 actions for both tracks and identities open shared private modal helpers in
@@ -2618,6 +4126,31 @@ chains):
   "New name for …" entry. Apply renames `session.tracks` /
   `session.identities[].name`, migrates hidden-set membership
   (`renameHiddenTrack` / `renameHiddenIdentity`). Enter applies.
+- `showCustomDeleteModal()` — **Edit ▸ "Custom Instance Delete…"** (menu item
+  `#menuCustomDeleteInstance`), LUCID's equivalent of SLEAP's
+  Labels ▸ Custom Instance Delete… Six selects: `Delete` (predicted — the SLEAP
+  default — / user / all), `Grouping` (any / grouped only / ungrouped only, which
+  is ORTHOGONAL to type), `in` (current frame / current session — LUCID's analogue
+  of SLEAP's "current video", since a session shares one frame index space),
+  `in view` (all / one camera), plus `with track` / `with identity` rows shown only
+  when the session has any. A live count, a per-camera breakdown table with a Total
+  (same shape as `showDeleteModal`'s), and a **cascade line** — "N group(s)
+  removed · N ungrouped · N lose their 3D · N predicted instance(s) promoted to
+  User" — because the ≥2-member invariant makes those consequences both surprising
+  and irreversible. Esc closes; Delete is an explicit click (never Enter). On
+  apply it re-collects (the model can move under an open dialog), clears the
+  selection FIRST (a stale `selectedInstanceGroup` would point at a deleted object,
+  and `viewport3d.selectedInstanceIdx` is a positional index that re-indexes under
+  any group removal), runs `executeDeletion`, then
+  `purgeTriangulationDataForGroup` over the returned `purgedGroups` (the ops module
+  is import-free by design), and reports the **durable** store-row count rather
+  than the resident one — surfacing `errorRows` as a warning instead of claiming
+  success. All matching/cascade/durability logic is in `ui/custom-delete-ops.js`;
+  this is only the dialog. No keyboard shortcut (matching SLEAP), so no
+  `ACTION_CATALOG` entry. Covered by `tests/e2e/custom-delete-modal.mjs`.
+  Deliberately does NOT copy SLEAP's `labels.clean()` cascade, which also prunes
+  unused tracks and skeletons project-wide — LUCID has an explicit `Delete Track…`
+  and enforces one skeleton per project, so that would be data loss by surprise.
 - `showDeleteModal(kind)` — Delete Track / Delete Identity: single-select list, a
   red `.delete-warning` line ("Current track/identity "X" instances will have
   null …"), and — in place of a text entry — a per-camera table of instances
@@ -2738,6 +4271,31 @@ frames (off-main-thread to keep UI responsive).
 
 ---
 
+### loading/percam-slp-choice.js
+
+**Purpose.** The rule for which `.slp` a camera directory is loaded from, as a
+pure function. Imports **nothing** — no project modules, no DOM — so it bridges
+into `tests/test-runner.html`. Extracted from `loading/session-loader.js` for
+exactly the reason `import-export/import-track-resolve.js` was: session-loader
+pulls app.js through its import graph and cannot be loaded there, and a rule
+this consequential should be assertable without driving a whole folder load.
+
+**Key export.** `chooseCameraSlp(slps)` → `{file, version, newer}`. See the
+`loading/session-loader.js` entry for the rule and why `lastModified` is
+deliberately NOT authoritative. `newer` is the most-recently-modified candidate
+when that is not the chosen file, else `null` — the signal that a leftover
+`_vN` is outranking a file the user just wrote.
+
+**Imports from project modules.** None (deliberately).
+
+**Imported by.** `loading/session-loader.js`, which re-exports it so its own
+import site is unchanged; bridged into the test runner as
+`window.__PerCamSlpChoice`.
+
+**Tests.** `tests/test-percam-slp-choice.js`.
+
+---
+
 ### loading/session-loader.js
 
 **Purpose.** Orchestrator for every session-loading workflow — empty
@@ -2834,14 +4392,79 @@ the latest reflects current state. Parsing every file stacked all versions'
 instances into the same (frame, camera) slot — the Instances tab then showed the
 same tracks repeated N times. Skipped files are logged.
 
-**Large `.slp` → lazy loading.** In `handleLoadSessionFolderPerCamera`, each
-camera's chosen `.slp` is routed by `shouldUseLazySlp(bestSlp)` (`> 150 MB`): large
+The choice itself lives in **`loading/percam-slp-choice.js`**'s
+`chooseCameraSlp(slps)` → `{file, version, newer}` — extracted from this module
+for the same reason `import-export/import-track-resolve.js` was: session-loader
+pulls app.js through its import graph and cannot be bridged into
+`tests/test-runner.html`, and this rule is worth exercising in the fast browser
+suite rather than only through a full folder load. session-loader re-exports it,
+so its import site is unchanged. Covered by `tests/test-percam-slp-choice.js`.
+
+It adds two things to a bare max():
+
+- **`lastModified` breaks a same-version tie**, which folder-enumeration order
+  used to settle arbitrarily.
+- **It reports when the version suffix disagrees with the disk** (`newer`, the
+  most-recently-modified candidate when that is NOT the chosen file; `null`
+  otherwise, including on equal mtimes so a folder copied in one go stays
+  quiet). "Highest `_vN`" is a naming convention, not a fact: since "Export
+  SLEAP File By Cam" writes `<stem>_v<N+1>.slp` every time, writing fresh
+  annotations to the UNVERSIONED name — which is what "replacing the .slp file"
+  means when the original had no suffix — makes a leftover `_v1` win, and the
+  console line called that stale file "highest version". The version rule is
+  deliberately UNCHANGED (mtime survives neither copying nor syncing reliably,
+  so it must not decide which file is authoritative); the load now just says a
+  newer file was left unread. Covered by
+  `tests/e2e/percam-slp-choice-and-failure.mjs`.
+
+**Large `.slp` → lazy loading.** In `handleLoadSessionFolderPerCamera`, the
+chosen `.slp` files are routed by `shouldUseLazySlp` (`> 150 MB`): large
 prediction files go to a `SioLazyLoader` (`./sio-lazy-loader.js`, sleap-io.js
 streaming lazy reader) instead of the eager `parseSlpH5` worker, which OOMs the tab
 on 100k-frame predictions. The lazy loader is chosen when all lazy jobs are `.slp`
 (analysis `.h5` folders still use `LazyFrameLoader`); a lazy-open failure surfaces
 an error rather than falling back to the OOM-prone eager path. It plugs into the
 existing `state.session.lazyLoader` seam, so rendering/scrubbing are unchanged.
+
+**The routing decision is per FOLDER, not per file.** Deciding per file let one
+folder come back part eager and part lazy, and that combination is silently
+lossy: the eager cameras populate `session.frameGroups` during load, and
+`ensureLazyFrameData` skipped any frame that already had a FrameGroup — so the
+lazy cameras were **never hydrated, on any frame, ever**. Every pane rendered
+and only some carried annotations, under a "Loaded N camera(s)" success line.
+This is the reported "I exported the .slp files, put them back in the session
+folder, reloaded, and only some of the views came back": replacing prediction
+files with LUCID exports is exactly what moves a camera across the fixed 150 MB
+threshold, which is why it appeared on a reload and not on the original load.
+Measured on a 3-camera folder: all-eager 12/12/12, all-lazy 12/12/12 after
+scrubbing, **mixed 0/12/12** — and the zero never recovered.
+
+The unification goes toward **LAZY, never toward eager**: eager is what OOMs the
+tab on a 100k-frame prediction, so pulling a big file onto that path to match a
+small sibling would trade a display bug for a crash. A small file on the lazy
+path just hydrates on scrub. An all-small folder is untouched — it still loads
+eagerly, with its data present immediately and no scrub needed.
+`pose/triangulation.js`'s `ensureLazyFrameData` independently repairs a
+partially-hydrated frame now, so a mix arriving some other way degrades rather
+than losing views. Covered by `tests/e2e/percam-mixed-lazy-eager.mjs`, which
+asserts all three routings plus the repair path and its idempotence (all four
+assertions confirmed to fail pre-fix).
+
+**A `.slp` the reader chokes on is reported, not swallowed.** The parse was
+`parseSlpH5(bestSlp).catch(function (e) { return null; })` followed by `if
+(!slpData) continue`, and the closing status counts matched DIRECTORIES rather
+than successful parses — so an unreadable file left that view empty under a
+success-styled "Loaded N camera(s)", the third way to lose a view with nothing
+said anywhere. Failures are now collected per camera and named in the status
+line, which downgrades to `error`. Note the root cause was one level down: `new
+h5wasm.File(path, 'r')` does NOT throw on non-HDF5 bytes — it returns a File
+wrapping an invalid id (the tell is HDF5-DIAG `H5Fclose(): not a file ID`) —
+and since every `f.get()` in `loading/slp-import-worker.js` is individually
+try/caught, parsing ran to the end and posted an ordinary result with 0 frames.
+The worker now checks `f.keys()` right after the open and throws
+`Not a readable HDF5/SLP file (no root datasets)` on an empty/unreadable root,
+so the failure reaches every caller as a rejection instead of a successful
+parse of nothing.
 
 **Lazy project reopen (`handleLoadProjectSlpLazy`).** The memory-bounded "Load
 Project" path for a large saved project `.slp` (routed here by
@@ -2889,7 +4512,9 @@ blank until the user manually re-ran Triangulate All. Covered by
   `../import-export/skeleton-json.js` (`parseSkeletonJSON`),
   `../import-export/slp-import.js`, `../ui/loading-progress-modal.js`,
   `../import-export/import-track-resolve.js`,
-  `../pose/initialization.js`, `../ui/sessions-panes.js`, `../ui/ui-wiring.js`.
+  `../pose/initialization.js`, `../ui/sessions-panes.js`, `../ui/ui-wiring.js`,
+  `../import-export/visibility-metadata.js` (`readVisibilityMetadata`, for the
+  lazy-reopen read of the session-scoped Visibility settings).
 
 **Imported by.** `pose/initialization.js`, `import-export/save-load.js`,
 `import-export/slp-import.js`, `ui/info-panel.js`,
@@ -2999,6 +4624,50 @@ correctness for speed — same result either way). Verified on a real
 for real ordered data, confirms the fallback sort still engages and
 produces the IDENTICAL correct segments for a deliberately shuffled rowMap).
 
+**`deleteInstanceRows(shouldDeleteFn)` — the durable-delete primitive (Custom
+Instance Delete).** Permanently removes instance rows from the columnar store so a
+bulk delete survives eviction, re-hydration, save and reload. Companion to
+`remapTracksFromIdentity`; same diagnostics contract
+(`{deleted, errorRows, firstError, byCamera}`, per-row `try/catch`, `console.error`
+on `errorRows`). Exists because a resident-only delete fails **twice**: (1) without
+even saving — `finalizeLazyFrameGroup` re-derives `fg.instances` from store rows and
+puts any row with no matching `_rawInstIndex` member into the UNLINKED pool, so
+scrubbing away and back resurrects it; and (2) on save — `appendStore` copies the
+columns verbatim with no per-instance filter, and the user-correction overlay skips
+any camera-frame with no resident *user* instance and bails on
+`lucidInsts.length === 0`, so an emptied camera-frame streams back unchanged.
+Mutating the store is the only thing that fixes both.
+- Compacts every `instancesData` column of length `nInst` (iterates `Object.keys`,
+  so a schema addition is carried through; `col.constructor` preserves typed-vs-plain
+  and int-vs-float). **Leaves `pointsData`/`predPointsData` alone on purpose** —
+  `appendStore` walks points PER SURVIVING INSTANCE via `point_id_start/end`, so
+  orphaned point rows are never visited and never written.
+- **Keeps frame rows** (`frameRowByCam` is keyed by row index, and `refFor`,
+  `releaseFrame` and `_computeSparseOccupancy` all depend on that indexing). A frame
+  whose range collapses to `start === end` is written by `appendStore` as an empty
+  `LabeledFrame` — LUCID's answer to SLEAP's "empty LabeledFrames are removed".
+- Renumbers via a prefix sum (`survBefore`), so it does **not** assume frame rows are
+  sorted by `instance_id_start`: new index of surviving old row `i` is
+  `survBefore[i]`, and a frame's new range is `[survBefore[oldStart], survBefore[oldEnd])`.
+- Remaps `from_predicted` through the same table, degrading a link whose target was
+  deleted to `-1` — mirroring `appendStore`'s own `outIdxOf`.
+- Groups cameras by their `labels` so a **shared store** (`openProjectSlp`,
+  `_sharedStore === true`) is compacted EXACTLY ONCE; unlike
+  `remapTracksFromIdentity`'s `rebuiltLabels` guard (which only covers a one-time
+  tracks rebuild) this guard has to cover the whole mutation, because compaction is
+  global to a store.
+- Then rebuilds each affected camera's `trackOccupancy` and clears both cache layers
+  (`this.cache` + `labels._lazyFrameList.clearCache()`), same as
+  `remapTracksFromIdentity`.
+- **Caller contract:** store-only. The caller must also renumber `_rawInstIndex` on
+  surviving instances in each touched (camera, frame) — else `refFor` writes grouping
+  refs at the wrong instances and hydration loads the wrong 2D — and mirror the
+  removal into `frameGroups`/`instanceGroups` under one shared `seen` Set.
+- Unit tests: `tests/test-custom-delete-store.js` (11 cases — compaction, column-length
+  coherence, typed-array kind, order-independence, emptied-frame collapse,
+  `from_predicted` remap + degrade-to-`-1`, shared-store apply-once, per-row error
+  isolation, no-op).
+
 Memory-bounding primitives (phase-5 full pipeline): `open()` sets each camera's
 `labels.frameCacheLimit` (default 512) so sleap-io.js's lazy `Labels` FIFO-bounds
 its internal typed-frame cache automatically. `releaseFrame(frameIdx)` /
@@ -3025,12 +4694,19 @@ companion, used by `Session.propagateIdentitiesToTracks`: rebuilds each
 underlying `labels.tracks` (shared by reference with its
 `_lazyDataStore.tracks` — mutated in place, so both stay in sync; a shared
 project-`.slp` store is only rebuilt once) to `newTrackNames`, then for every
-instance row calls `remapFn(camName, frameIdx, oldTrackIdx)` and writes the
-result into `instancesData.track` in place — the same array `appendStore`
+instance row calls `remapFn(camName, frameIdx, oldTrackIdx, offsetInFrame)` and
+writes the result into `instancesData.track` in place — the same array `appendStore`
 (export, `import-export/slp-streaming-write.js`) and `materializeFrame`
 (re-materializing an evicted/revisited frame) both read by reference, so the
 propagated track survives eviction/reload and is exported correctly with no
-new writer plumbing. Also rebuilds THIS camera's `trackOccupancy` entry (via
+new writer plumbing. **`offsetInFrame`** (the row's index within its camera-frame,
+the same quantity `forEachInstanceRow` reports, matching `InstanceGroup` members'
+`_rawInstIndex`) lets a caller decide **per row** rather than per track — added for
+luc3d #203, where a raw-trackIdx collision meant a track-keyed callback had no
+answer that was right for both of the two rows sharing that trackIdx, so both were
+abandoned as trackless in the first frames of a project. Existing 3-argument
+callbacks (`swapTracksInStore` in `ui/identity-assignment.js`) are unaffected. Also
+rebuilds THIS camera's `trackOccupancy` entry (via
 `_computeSparseOccupancy`) from the just-remapped column — fixes a bug where
 the Tracks Timeline never reflected a propagate on a lazy session: `session.
 trackOccupancy` is the SAME Map object as `this.trackOccupancy` (aliased by
@@ -3097,6 +4773,21 @@ open-and-stream-frames.
 - OUT: `{type: 'progress', message}`, `{type: 'result', data: {...}}`,
   `{type: 'metadata', data: {...}}`, `{type: 'frameData', ...}`,
   `{type: 'framesData', ...}`, `{type: 'error', message}`.
+
+**An unopenable file must reject, not resolve empty.** `new h5wasm.File(path,
+'r')` does **not** throw on non-HDF5 bytes — it hands back a File wrapping an
+invalid id, the tell being HDF5-DIAG `H5Fclose(): not a file ID` on the way out.
+Every `f.get()` in `parseSlp` is individually try/caught and returns null on a
+missing dataset (correct for optional ones like `tracks_json`/`sessions_json`),
+so a truncated or non-SLP file parsed all the way to the end and posted a
+perfectly ordinary `result` with 0 frames. Callers could not tell that from a
+genuinely empty file: `handleLoadSessionFolderPerCamera` took it as a successful
+parse and that camera's view came up blank with nothing said anywhere. `parseSlp`
+now checks `f.keys()` immediately after the open and throws `Not a readable
+HDF5/SLP file (no root datasets)` when the root is empty or unreadable — an SLP
+always has root keys (`metadata`, `videos_json`, `frames`, …) — so the failure
+reaches every caller as a rejection. Covered by
+`tests/e2e/percam-slp-choice-and-failure.mjs`.
 
 **Imports from project modules.** None.
 
@@ -3364,6 +5055,68 @@ keyboard transport.
 
 ## import-export/
 
+### import-export/visibility-metadata.js
+
+**Purpose.** The `metadata.lucid` ↔ `Session` mapping for the Visibility panel's
+SESSION-SCOPED settings. One module owns the key list so a writer and a reader
+cannot drift: adding a setting means touching this file and nothing else.
+
+**What it covers, and what it deliberately does not.** The Visibility panel
+holds two kinds of state:
+- **Session-scoped** — per-camera video brightness / contrast / rotation and the
+  timeline's hidden camera / track / identity sets. These describe *this
+  project's* videos and entities, so they belong in the project file. That is
+  everything this module handles.
+- **Global appearance preferences** — the User / Predicted / Reprojections /
+  Display Legend / 3D Viewer sliders, styles and toggles. Those are browser-local
+  display taste, shared across every session, and stay in
+  `localStorage.visibilitySettings` (see `ui/ui-wiring.js`). They are **not**
+  written here on purpose: baking them into the `.slp` would make opening a
+  colleague's project silently reassign your node sizes and 3D widgets.
+
+**Key exports.**
+- `VISIBILITY_METADATA_KEYS` — every key this module may write
+  (`videoBrightness`, `videoContrast`, `videoRotation`, `hiddenCameras`,
+  `hiddenTracks`, `hiddenIdentities`). Exported so tests can assert a default
+  project carries none of them without duplicating the list.
+- `writeVisibilityMetadata(lucid, session)` — mutate a `metadata.lucid` dict in
+  place, adding only non-default settings; returns the same dict.
+- `readVisibilityMetadata(session, lucid)` — read them all back onto a session.
+
+**Three invariants the callers depend on.**
+1. **Defaults are never written.** Every helper returns `null` / omits the key at
+   its default, so a project nobody adjusted produces byte-identical output to
+   one saved before these settings existed — pinned by
+   `tests/e2e/save-golden-digest.mjs`.
+2. **Only `lucid` is touched.** The writer reads nothing else off the session's
+   metadata, so it cannot disturb `sessionName` / `tracks` / `frameIdentityMap` /
+   `identities` / `skeleton` / `identityId` or any future sibling.
+3. **Reads tolerate absence and garbage.** Every key is optional; a `.slp`
+   written before this existed, or by SLEAP or another tool, simply has none of
+   them and loads unchanged. Nothing here throws on a malformed payload.
+
+Purely additive to the file format: these are optional keys inside LUCID's own
+`metadata.lucid` dict, which sleap-io and sleap-io.js round-trip as opaque JSON,
+so files stay readable by the SLEAP GUI.
+
+**Imports from project modules.** `../ui/video-filters.js`,
+`../ui/timeline-visibility.js` — both dependency-free leaves, so this module
+bridges into the test runners without pulling `app.js` in.
+
+**Imported by.** The four writers — `import-export/file-io.js`
+(`buildSlpLabelsAllViews`), `import-export/slp-streaming-write.js`
+(`buildSessionRefGraph`), and `import-export/save-load.js` (`saveProject`, both
+the v2 and v3 project-JSON shapes) — and the three readers —
+`import-export/slp-import.js` (`handleLoadSlpFile`), `loading/session-loader.js`
+(`handleLoadProjectSlpLazy`), and `import-export/save-load.js`
+(`_restoreProjectV2`).
+
+**Tests.** `tests/test-visibility-metadata.js` (unit; bridged as
+`window.__VisibilityMetadata`) and
+`tests/e2e/visibility-settings-roundtrip.mjs` (real app, both writers).
+
+---
+
 ### import-export/skeleton-json.js
 
 **Purpose.** Pure, DOM-free (de)serialization for standalone `.skeleton.json`
@@ -3543,6 +5296,13 @@ exports via the eager path; partially-resident refuses and says so).
 
 **Imports from project modules.**
 - `../pose/pose-data.js` — `Camera`, `Skeleton`, `Instance`, `Identity`.
+- `./slp-merge.js` — `validateSkeletonCompatibility`.
+- `../pose/triangulation.js` — `getOrComputeReprojectedInstance`,
+  `sweepLazyFrameWindows`.
+- `./visibility-metadata.js` — `writeVisibilityMetadata` (writes the
+  session-scoped Visibility settings into `metadata.lucid`; its only deps are
+  two dependency-free `ui/` leaves, so it adds nothing to this module's import
+  graph).
 
 **Imported by.** `import-export/save-load.js`,
 `import-export/slp-import.js`, `loading/session-loader.js`,
@@ -3730,7 +5490,11 @@ reproj export. **Scope:** predictions + full grouping (identities + 3D) + 2D
 corrections.
 
 **Imports.** `window.SleapIO` (streaming writer API); `_buildSioPoints`
-(`import-export/file-io.js`). **Imported by.** `import-export/save-load.js`
+(`import-export/file-io.js`); `points3dNodeCount` (`pose/pose-data.js`);
+`writeVisibilityMetadata` (`import-export/visibility-metadata.js`, for the
+session-scoped Visibility settings in `metadata.lucid` — must stay in lockstep
+with the eager writer in `file-io.js`, which is why both call the one helper).
+**Imported by.** `import-export/save-load.js`
 (`buildSlpBytes`, `saveAllSessionsStreaming`, `commitSessionForMultiSessionSave`,
 `finalizeMultiSessionSave`).
 
@@ -3867,7 +5631,11 @@ project save/reload — matching the SLP import path in `slp-import.js`.
   `reopenSessionLazyLoader`), `./slp-streaming-write.js`,
   `../ui/rendering.js`, `../ui/info-panel.js`,
   `../pose/initialization.js`, `../ui/sessions-panes.js`,
-  `./slp-import.js`.
+  `./slp-import.js`, `./visibility-metadata.js`
+  (`writeVisibilityMetadata`/`readVisibilityMetadata` for the session-scoped
+  Visibility settings in the legacy v2/v3 project JSON — the same keys and the
+  same omit-the-defaults rule as the `.slp` writers, just at the session-dict
+  level rather than under a `metadata.lucid`).
 
 **Imported by.** `pose/triangulation.js`, `pose/tracker.js`,
 `pose/initialization.js`, `import-export/slp-import.js`,
@@ -3993,8 +5761,9 @@ onto the first track label (e.g. `global_0`) after an export/reload round-trip.
   `RecordingSession` (`frameGroups → instanceGroups → instanceByCamera`): 2D
   points/occlusion from each typed `Instance._xy`/`_visible`, per-instance
   metadata from `ig.metadata.lucid.instanceMeta`, 3D from `ig.instance3d.points`,
-  and per-session identity from `ig.metadata.lucid.identityId` (falling back to
-  the raw dict's `identity_idx` for legacy files). Reads both LUCID's legacy and
+  the solver that produced that 3D from `ig.metadata.lucid.triangulationMethod`
+  (absent = `'dlt'`), and per-session identity from `ig.metadata.lucid.identityId`
+  (falling back to the raw dict's `identity_idx` for legacy files). Reads both LUCID's legacy and
   the new canonical `sessions_json`. Same pass-1 dedup + trackless/identity-less
   handling as the dict version. Returns `{ restoredGroups, restoredWith3d }`.
 - `parseSlpForImport(file, onProgress)` (private) — dispatches `.slp` →
@@ -4016,7 +5785,8 @@ cancels every cold eviction timer, and re-initialises both arrays.
   `../loading/session-loader.js`, `./save-load.js`,
   `../ui/rendering.js`, `../ui/info-panel.js`,
   `../pose/initialization.js`, `../ui/ui-wiring.js`,
-  `../ui/sessions-panes.js`. Also spawns
+  `../ui/sessions-panes.js`, `./visibility-metadata.js`
+  (`readVisibilityMetadata`). Also spawns
   `../loading/frame-worker.js` (twice) via `new Worker(new URL(...))`.
 
 **Imported by.** `import-export/save-load.js`, `ui/ui-wiring.js`.

@@ -27,7 +27,11 @@ import {
 // Pass 3e-1: unlinkGroup + showGroupContextMenu moved to ui-wiring.js.
 import { unlinkGroup, showGroupContextMenu } from './ui-wiring.js';
 // Pass 3f: swapAssignTrack + propagateIdentityForward moved to identity-assignment.js.
-import { swapAssignTrack, propagateIdentityForward } from './identity-assignment.js';
+// luc3d #172: every manual identity switch routes through applyIdentitySwitch,
+// which subsumes this file's former direct propagateIdentityForward calls.
+import {
+    swapAssignTrack, applyIdentitySwitch, describeIdentitySwitch,
+} from './identity-assignment.js';
 // Pass 3h: populateSessionsPanel / populateViewStrip / populateSessionStrip moved to sessions-panes.js.
 import {
     populateSessionsPanel, populateViewStrip, populateSessionStrip,
@@ -314,6 +318,11 @@ export function populateTimelineVisibility(session) {
             catch (e) { /* non-fatal */ }
         }
         populateTimelineVisibility(session);
+        // The hidden sets are saved into the .slp
+        // (`metadata.lucid.hiddenCameras` / `hiddenTracks` / `hiddenIdentities`),
+        // so toggling one leaves the project unsaved — same rule as the
+        // brightness / contrast / rotation tables.
+        markDirty();
     }
 
     var i;
@@ -1667,15 +1676,20 @@ export function updateFrameInfo(frameIdx, instanceGroups) {
             (function (g, sel) {
                 function applyIdentity(newIdentityId) {
                     markDirty();
-                    state.session.assignIdentityToGroup(g, newIdentityId);
-                    // Propagate the identity from the CURRENT frame forward, per
-                    // camera (swap-aware, forward-only). The old whole-track
-                    // `assignTrackToIdentity` call (removed) relabelled every
-                    // frame of the track, corrupting already-correct earlier
-                    // frames when fixing a mid-video swap — issue #155.
+                    // A manual identity switch EXCHANGES the two identities from
+                    // this frame to the end of the timeline, in every view
+                    // (luc3d #172) — see `applyIdentitySwitch`. Forward-only, so
+                    // already-correct earlier frames are untouched (issue #155).
+                    // Trackless members are included on purpose — see the
+                    // propagate fallback in `applyIdentitySwitch`.
+                    var pairs = [];
                     for (var [cn, inst] of g.instances) {
-                        propagateIdentityForward(inst.trackIdx, newIdentityId, cn);
+                        if (inst) pairs.push([cn, inst.trackIdx]);
                     }
+                    var res = applyIdentitySwitch(state.session, state.currentFrame, pairs, g, newIdentityId);
+                    var idObj = state.session.getIdentity(newIdentityId);
+                    setStatus(describeIdentitySwitch(state.session, res,
+                        idObj ? idObj.name : (newIdentityId >= 0 ? String(newIdentityId) : '(none)')), 'success');
                     drawAllOverlays(state.currentFrame);
                     updateInfoPanel();
                     // `cap: true` (not `keepSize`): assigning an identity — a new
@@ -2008,19 +2022,33 @@ export function updateFrameInfo(frameIdx, instanceGroups) {
                 newIdOptUl.value = '__new__';
                 newIdOptUl.textContent = '(+) New ID';
                 idSelectUl.appendChild(newIdOptUl);
-                // Pre-select based on the per-frame identity for this track.
-                var currentIdForTrack = state.session.getIdentityIdForTrack(cam.name, ul.instance.trackIdx, state.currentFrame);
+                // Pre-select from the canonical unlinked-identity resolver:
+                // the per-frame entry for a tracked instance, the retained
+                // instance-level identity for a trackless one (luc3d #201).
+                var currentIdForTrack = state.session.getIdentityIdForUnlinkedInstance(cam.name, ul.instance, state.currentFrame);
                 idSelectUl.value = currentIdForTrack != null ? currentIdForTrack : '-1';
                 (function (inst, sel, camNameForId) {
                     function applyIdentity(newIdVal) {
                         if (newIdVal >= 0) {
-                            // Forward-only, swap-aware (issue #155): assign from
-                            // the current frame on without re-stamping earlier
-                            // frames (the old whole-track assignTrackToIdentity did).
+                            // Forward-only and swap-aware (issue #155),
+                            // whole-timeline (luc3d #172), but scoped to THIS
+                            // CAMERA (luc3d #201). This row is one view's
+                            // detached detection, and correcting a single view is
+                            // the reason to ungroup at all: ungroup, fix the view
+                            // that's wrong, regroup. A GROUP's switch stays
+                            // all-views — see `applyIdentitySwitch`.
                             markDirty();
-                            propagateIdentityForward(inst.trackIdx, newIdVal, camNameForId);
+                            var resUl = applyIdentitySwitch(state.session, state.currentFrame,
+                                [[camNameForId, inst.trackIdx]], null, newIdVal,
+                                camNameForId, inst);
+                            var idObjUl = state.session.getIdentity(newIdVal);
+                            setStatus(describeIdentitySwitch(state.session, resUl,
+                                idObjUl ? idObjUl.name : String(newIdVal)), 'success');
                         } else {
-                            state.session.clearTrackIdentity(inst.trackIdx, camNameForId);
+                            // "—": a trackless row's identity lives on the
+                            // instance (luc3d #201); a tracked row's in the map.
+                            if (inst.trackIdx == null) inst.identityId = null;
+                            else state.session.clearTrackIdentity(inst.trackIdx, camNameForId);
                             markDirty();
                         }
                         drawAllOverlays(state.currentFrame);

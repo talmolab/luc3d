@@ -661,6 +661,152 @@ body {
 }
 
 /* --------------------------------------------------------------------------
+   "Export Video Overlays" composition dock (#ovDock)
+   --------------------------------------------------------------------------
+   The tab band is OVERLAID on the tile instead of occupying its own row above
+   it. dockview lays a group out as `[tabs][content]` in a column flexbox
+   (`.dv-groupview`), so a 35px band cost 35px of VIDEO per grid ROW — on a
+   two-row composition that is ~8% of the dock spent on chrome, and the tiles
+   were letterboxed to pay for it. Shortening the band and pulling the content
+   container back up over it by exactly the band's height gives the content the
+   group's FULL height, so the tile — and its canvas backing store, resized by
+   `tileResizeObserver` — gets every pixel; the name + close X then float over
+   the top-left corner of the video.
+
+   Why this and NOT `group.model.header.hidden = true`: `.dv-tab` IS dockview's
+   drag source (`Tab` sets `draggable` on that element), so hiding the band
+   removes the only way to rearrange tiles by dragging, and takes the close X
+   with it. Rearranging is the whole point of this dock — `captureLayout()`
+   reads the arrangement off the DOM and it IS the exported frame. The band
+   stays real, just repositioned.
+
+   `position: relative` + `z-index` is load-bearing, not decoration: the tile's
+   video/overlay canvases are `position: absolute`, so without it they paint
+   OVER the band and swallow every click on the tab.
+
+   Scoped to `#ovDock`. The `.dockview-theme-abyss` block above is shared with
+   the MAIN WINDOW's video dock (ui/sessions-panes.js), which wants its normal
+   35px tabs. The id also supplies the specificity: styles.css is loaded BEFORE
+   the pinned dockview stylesheet (index.html), so a class-only override loses.
+
+   The custom properties are declared on `.dv-groupview`, NOT on `#ovDock`:
+   dockview puts the theme class on its own `.dv-shell` INSIDE the container, so
+   a value set on `#ovDock` is overridden by the theme's declaration on that
+   descendant. Declaring at or below the shell wins.
+   -------------------------------------------------------------------------- */
+
+#ovDock .dv-groupview {
+  --dv-tabs-and-actions-container-height: 20px;
+  --dv-tabs-and-actions-container-font-size: 10px;
+  /* Nothing behind the tabs — the video shows through the band. */
+  --dv-tabs-and-actions-container-background-color: transparent;
+  /* The tab itself becomes a translucent chip so the name stays readable over
+     both bright and dark video. Set through the theme's own variables so no
+     `!important` is needed to beat the dockview stylesheet. */
+  --dv-activegroup-visiblepanel-tab-background-color: rgba(0, 0, 0, 0.55);
+  --dv-inactivegroup-visiblepanel-tab-background-color: rgba(0, 0, 0, 0.45);
+  --dv-activegroup-visiblepanel-tab-color: #ffffff;
+  --dv-inactivegroup-visiblepanel-tab-color: #e0e0e0;
+}
+
+#ovDock .dv-tabs-and-actions-container {
+  position: relative;
+  z-index: 2;
+}
+
+#ovDock .dv-groupview > .dv-content-container {
+  margin-top: calc(-1 * var(--dv-tabs-and-actions-container-height));
+}
+
+/* Legibility for the case where the chip sits over a bright frame. */
+#ovDock .dv-tab {
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.9);
+  /* Floor for the drag hit area. With the name hidden the tab's natural width is
+     49px, so this never binds today — it is a guard: `.dv-tab` IS dockview's drag
+     source, and a future bump that dropped the tab's own padding must not leave a
+     chip too small to grab. 44px is the conventional minimum pointer target. */
+  min-width: 44px;
+}
+
+/* ---- The tab shows the X, never the name --------------------------------
+   `Layers ▸ Render Video Names` burns the camera name onto the TILE
+   (`drawViewNameLabel`, ui/overlays.js) at the TOP-LEFT — the same corner and the
+   same 20px band this chip occupies. Two texts in one place is a ghost, not a
+   label: measured on a 259px tile the caption inks x 5..45 while the tab text
+   starts at x 7, so a short name printed twice a few pixels apart and a long one
+   was unreadable. So the tab never renders its title, in either state:
+     layer ON  -> the name comes from the burned-in caption, which is the copy
+                  that actually reaches the .mp4;
+     layer OFF -> the name comes from HOVER (below), so the composition never
+                  shows a name the export will not carry.
+
+   `order: 2` puts the zero-width title AFTER the close X instead of before it, so
+   the hover reveal grows the chip to the RIGHT and the X does not move. A control
+   that jumps out from under the cursor is a bug; the X sits 19px from the tile's
+   left edge in all four (layer on/off x hover/not) states.
+
+   The `padding-left` is the "little space to the left of the X": 19px of bare
+   `.dv-tab` surface, which is the drag source, so a tile can still be picked up and
+   rearranged. (dockview's `.dv-void-container` fills the rest of the band and is
+   `draggable` too, so this is the guarantee rather than the only handle.) */
+#ovDock .dv-default-tab {
+  padding-left: 12px;
+}
+
+#ovDock .dv-default-tab-content {
+  order: 2;
+  flex: 0 0 auto;
+  width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+/* Layer OFF: the hovered tile — and only that tile — names itself, so the user can
+   still tell which video is which. The class is set by `applyTabNameMode()`
+   (ui/overlay-export-modal.js).
+
+   Keyed off `.dv-groupview:hover`, NOT the tile element: the tab band is a SIBLING
+   of `.dv-content-container`, so `[data-view-name]:hover` goes FALSE the moment the
+   pointer moves onto the band — the label would flicker off exactly as the user
+   reaches for the X (both measured in a browser probe). Unaffected by
+   `.dv-dockview .dv-content-container { pointer-events: none }` above: that stops
+   the container being a hit TARGET; `:hover` still applies to the ancestors of
+   whichever descendant is hit. */
+#ovDock.ov-hover-tab-names .dv-groupview:hover .dv-default-tab-content {
+  width: auto;
+  padding-left: 5px;
+}
+
+/* The 3D tile keeps its name in every state: it has no overlay canvas, so it never
+   gets a burned-in caption, and with the layer ON nothing else would name it. The
+   selector mirrors `TILE_3D` in ui/overlay-export-layout.js. Its OWN rule, not a
+   comma-arm of the hover rule above: a browser without `:has()` drops the entire
+   rule a failing selector appears in, and that must not take the hover reveal with
+   it. */
+#ovDock .dv-groupview:has(> .dv-content-container [data-view-name="__3d__"]) .dv-default-tab-content {
+  width: auto;
+  padding-left: 5px;
+}
+
+/* Layer ON: drop the X one band-height so it does not sit ON the caption.
+   The burned-in caption starts ~4px from the tile's left edge and its width follows
+   the NAME, while the X is pinned at 19px — so anything longer than about three
+   characters collided ("topL" had its L behind the glyph). A fixed left padding
+   cannot clear a variable-width caption, so the X moves down instead of across, and
+   the two stack: caption on the first line, X just under it.
+
+   `transform` deliberately, not margin/top: it does not affect layout, so the
+   content container still starts at the group's top edge and the tile keeps the full
+   height that the whole overlaid-band change bought.
+
+   Scoped to `:not(.ov-hover-tab-names)` — i.e. only when the layer is ON and a
+   caption actually exists. With the layer OFF there is nothing to collide with, and
+   the band stays where the pointer expects it. */
+#ovDock:not(.ov-hover-tab-names) .dv-tabs-and-actions-container {
+  transform: translateY(var(--dv-tabs-and-actions-container-height));
+}
+
+/* --------------------------------------------------------------------------
    Video Cell
    -------------------------------------------------------------------------- */
 
@@ -2589,6 +2735,32 @@ body {
 .toggle-switch input:checked + .slider::before {
   transform: translateX(18px);
   background: #ffffff;
+}
+
+/*
+ * Compact variant, for the "Export Video Overlays" settings panel — its rows are
+ * 11px and dense, and the stock 40x22 switch dominates them. The knob has to be
+ * resized with the box: `.slider::before` is a fixed 16px with a 18px travel, so
+ * inheriting it into a 17px-tall box would overflow the track and never line up.
+ */
+.toggle-switch.toggle-switch-sm {
+  width: 30px;
+  height: 17px;
+}
+
+.toggle-switch.toggle-switch-sm .slider {
+  border-radius: 17px;
+}
+
+.toggle-switch.toggle-switch-sm .slider::before {
+  width: 12px;
+  height: 12px;
+  left: 2px;
+  bottom: 2px;
+}
+
+.toggle-switch.toggle-switch-sm input:checked + .slider::before {
+  transform: translateX(14px);
 }
 
 .toggle-switch input:focus-visible + .slider {

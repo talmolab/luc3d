@@ -3,11 +3,11 @@
 Multi-view pose annotation GUI. No build system — pure vanilla JS served as static files.
 
 ## Architecture
-ES modules, vanilla JS (no build step). `index.html` loads `app.js` as `<script type="module">`; `app.js` is a 2-line entry point that imports from `pose/`. The 28 modules are grouped into four directories:
-- `pose/` — data model, cross-view tracking, DLT triangulation, app initialization (5 files)
-- `ui/` — UI state, canvas rendering, mouse/keyboard interaction, info panel, modals, timeline, 3D viewport, settings (14 files)
-- `loading/` — video decoding, session loading, SLP/package readers, web workers (5 files)
-- `import-export/` — file I/O, save/load, SLP import/merge (4 files)
+ES modules, vanilla JS (no build step). `index.html` loads `app.js` as `<script type="module">`; `app.js` is a 2-line entry point that imports from `pose/`. The 43 modules are grouped into four directories:
+- `pose/` — data model, cross-view tracking, DLT triangulation, app initialization (6 files)
+- `ui/` — UI state, canvas rendering, mouse/keyboard interaction, info panel, modals, timeline, 3D viewport, video encoding, video display settings, settings (23 files)
+- `loading/` — video decoding, session loading, SLP/package readers, web workers (6 files)
+- `import-export/` — file I/O, save/load, SLP import/merge, visibility metadata (8 files)
 - `demo-data.js` — synthetic skeleton and camera data
 - `styles.css` — all styling
 
@@ -23,12 +23,42 @@ python3 -m http.server 8080
 
 ## Dependencies (CDN only)
 - Three.js 0.147
-- dockview-core **pinned to 6.6.1** (`index.html` CSS + `ui/sessions-panes.js` ESM
-  import — keep the two pins in sync). 7.x renamed `api.onUnhandledDragOverEvent`
+- dockview-core **pinned to 6.6.1** in THREE places (`index.html` CSS +
+  `ui/sessions-panes.js` ESM import + `ui/overlay-export-modal.js` ESM import —
+  keep all three in sync). 7.x renamed `api.onUnhandledDragOverEvent`
   → `onUnhandledDragOver`, so an unpinned `/+esm` import silently breaks pane
   docking whenever the CDN cache refreshes. Audit the dockview API usage in
-  `ui/sessions-panes.js` before bumping past 6.x.
+  `ui/sessions-panes.js` and `ui/overlay-export-modal.js` before bumping past 6.x.
+  **`ui/overlay-export-modal.js` additionally depends on dockview INTERNALS** for
+  its sash resizing: `Gridview.root`, node `children`/`element` (walked to find the
+  branch owning the sash **and its parent**, which is what lets a row divider move
+  that boundary in every column), `BranchNode.splitview`,
+  `Splitview.viewItems`/`sashes`/`layoutViews()`/`distributeEmptySpace()`/
+  `saveProportions()`, and `viewItem.enabled`. These are TypeScript-private but real
+  and unmangled in the 6.6.1 `/+esm` build. They are all feature-detected, so a bump
+  degrades to dockview's stock neighbour-only drag rather than breaking resizing —
+  but `tests/e2e/overlay-export-sash-distribute.mjs` **and**
+  `tests/e2e/overlay-export-sash-tracking.mjs` will go red, which is the
+  intended signal. Run BOTH: the first only drags sash 0 of a flat axis and is
+  structurally blind to cursor tracking and to the nested grid; the second covers
+  exactly those. `styles.css`'s `#ovDock` block also depends on dockview's group
+  DOM (`.dv-groupview` > `[.dv-tabs-and-actions-container][.dv-content-container]`)
+  and on `--dv-tabs-and-actions-container-height`.
 - mp4box.js
+- **Video export = mediabunny, via `ui/video-encode.js` — the app's one encoding
+  seam.** sleap-io.js has NO browser encoder (its `renderVideo()` shells out to a
+  native `ffmpeg` and is Node-entry-only; its docs say "there is no encoder in the
+  JS port"), so encoding is the one part of the video pipeline LUCID owns. It is
+  built on mediabunny — the same library sleap-io.js uses for DECODE, already
+  vendored in full — so both directions share one dependency. This **replaced
+  `lib/mp4-muxer/` (5.2.1), now deleted**, and the hand-rolled WebCodecs
+  `VideoEncoder` plumbing that was duplicated in `ui/overlay-export-modal.js` and
+  `ui/export-modals.js`. Do NOT reintroduce a second muxer. Encoder contracts that
+  are not compile-checked (keyframe interval in SECONDS, `fastStart: 'reserve'`
+  needing `maximumPacketCount`, `finalize()`/`cancel()` closing the target's
+  WritableStream) are listed in `lib/mediabunny/PROVENANCE.txt` — re-verify them on
+  any mediabunny bump. Large exports stream to a picked file/folder; small ones
+  still just download (`shouldStreamToDisk`, 256 MB).
 - h5wasm 0.10.3 (WebAssembly HDF5) — **vendored locally** at `lib/h5wasm/`
   (ESM `hdf5_hl.js` + IIFE `h5wasm.iife.js`; no CDN fetch). See its `PROVENANCE.txt`.
 - sleap-io.js — vendored browser bundle in `lib/sleap-io/`, pinned to **0.5.5**,
@@ -64,7 +94,10 @@ python3 -m http.server 8080
   so sleap-io.js's `MediaBunnyVideoBackend` can do frame-accurate video decode
   (issue #115), wired into `loading/video.js` as the default (opt-out via
   `LUCID_VIDEO_BACKEND='html5'`) backend. Both `pako` and `mediabunny` are
-  aliased in the `index.html` importmap (and `tests/test-runner.html`). LUCID
+  aliased in the `index.html` importmap (and `tests/test-runner.html`). Note
+  `mediabunny` is now load-bearing for **video export too** (`ui/video-encode.js`,
+  see above), so a bump risks BOTH decode and encode — keep the 1.30.0 pin unless
+  you mean to retest both. LUCID
   uses sleap-io.js on **both** the read and write paths (PR 5.1/5.2).
   **LOCAL PATCH (issue #115):** `lib/sleap-io/chunk-X76PRJK6.js`
   `MediaBunnyVideoBackend.decodeSingleFrame`/`decodeRange` were patched to call
@@ -282,6 +315,37 @@ python3 -m http.server 8080
     `/session_data` needs sleap-io >= the #546 release). *Interop gate:
     `scripts/validate_slp_sleap_compat.py` (needs a SLEAP Python env).*
 
+## Session-scoped Visibility settings in `metadata.lucid`
+
+The Visibility panel's **session-scoped** state persists per session in the
+`.slp`, under LUCID's own `metadata.lucid` dict: `videoBrightness`,
+`videoContrast` and `videoRotation` (each `{ cameraName: int }`) plus
+`hiddenCameras` / `hiddenTracks` / `hiddenIdentities` (sorted name arrays).
+Everything goes through **one** module, `import-export/visibility-metadata.js`
+(`writeVisibilityMetadata` / `readVisibilityMetadata`, `VISIBILITY_METADATA_KEYS`),
+which the four writers and three readers all call — adding a setting means
+touching that file and nothing else.
+
+Three rules hold, and there are tests pinning each:
+- **Defaults are never written.** Every key is omitted at its default, so a
+  project nobody adjusted is byte-identical to one saved before these settings
+  existed — `tests/e2e/save-golden-digest.mjs` must not move.
+- **Nothing else in `metadata.lucid` is touched** (`sessionName`, `tracks`,
+  `identities`, `skeleton`, `frameIdentityMap`, `trustTracks`, `identityId`, …).
+- **Purely additive to the format.** These are optional keys in a dict sleap-io
+  and sleap-io.js round-trip as opaque JSON, so files stay SLEAP-GUI readable and
+  no other `.slp` import/export path changes.
+
+The panel's **global appearance preferences** (User / Predicted / Reprojections /
+Display Legend / 3D Viewer) deliberately stay in
+`localStorage.visibilitySettings` — they are browser-local display taste, not
+project state. Do not move them into the `.slp`.
+
+Coverage: `tests/test-visibility-metadata.js` (unit) and
+`tests/e2e/visibility-settings-roundtrip.mjs` (real app, both writers);
+`tests/test-video-contrast.js` + `tests/e2e/contrast-slider-roundtrip.mjs` cover
+the contrast half.
+
   All h5wasm is now LUCID's local vendored 0.10.3 (PR 5.2b): the importmap `h5wasm`
   → local ESM, the `index.html` `<script>` global + `readSlpStreaming`'s `h5wasmUrl`
   → local IIFE, and the module workers import the local ESM — no CDN h5wasm fetch on
@@ -307,7 +371,7 @@ There are **three** test populations, each with its own runner. Run all three �
 they cover disjoint code, and a green run of one says nothing about the others.
 
 ```bash
-node tests/e2e/run-unit-tests.mjs     # tests/*.js  (browser suite, headless) — 1201 assertions
+node tests/e2e/run-unit-tests.mjs     # tests/*.js  (browser suite, headless) — 1406 assertions
 node tests/run-mjs-tests.mjs          # tests/test-*.mjs  (native-ESM Node tests)
 node tests/e2e/<name>.mjs             # tests/e2e/*.mjs  (Playwright, one file per behavior)
 ```
@@ -335,6 +399,16 @@ node tests/e2e/<name>.mjs             # tests/e2e/*.mjs  (Playwright, one file p
     returns a plausible count, and only shows up a cycle later once the wrong
     state has been saved. `FRAMES=`/`CAMS=`/`NODES=`/`KEEP=1` are configurable; it
     asserts its own lazy precondition so it cannot silently stop testing that.
+  - `video-encode-streaming.mjs` — the **only** coverage of the streaming video
+    export path. Headless Chromium exposes `showSaveFilePicker()` but rejects it
+    instantly with `AbortError`, so neither video modal can reach that path under
+    automation; this drives `ui/video-encode.js` directly with a stand-in file
+    handle and asserts the bytes (position-based writes, `moov` before `mdat`).
+    If you touch video encoding, run this — the modal tests only exercise the
+    buffered path.
+  - `overlay-export-modal.mjs` / `export-3d-video.mjs` — the two video modals
+    end to end, each asserting a real `.mp4` whose `avc1` sample entry carries the
+    promised dimensions.
   - `_real-roundtrip.mjs` — the real-data acceptance run (needs a large `.slp`);
     `RELOAD_FILE=`, `MODIFY_RESAVE=1`, `KEEP_RESAVE=1`, `ATTRIBUTE=1`.
 
@@ -344,8 +418,11 @@ node tests/e2e/<name>.mjs             # tests/e2e/*.mjs  (Playwright, one file p
 - Require: h5py, numpy
 - `scripts/validate_slp_sleap_compat.py` — Assert LUCID-exported `.slp` files are
   SLEAP-GUI compatible (load via `sleap_io`, non-empty tracks, optional
-  `--compare` against a native SLEAP-GUI export). Headless half of `lucid-e2e`
-  Stage 4; run via `uv run python` from the SLEAP repo.
+  `--compare` against a native SLEAP-GUI export, and `--metadata-roundtrip` to
+  assert `metadata.lucid` — including the session-scoped Visibility settings —
+  survives a `sleap_io` load + re-save unchanged). Headless half of `lucid-e2e`
+  Stage 4; run via `uv run python` from the SLEAP repo, or standalone with
+  `uv run --with sleap-io --with numpy --with h5py python …`.
 
 ## Maintenance
 **When modifying any module, always update the corresponding entry in `MODULES.md` to reflect the change — including exports, dependencies, and purpose.**

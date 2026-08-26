@@ -575,5 +575,332 @@
             assertTrue(session.trackOccupancy.get('Camera_A') === postOcc,
                 'session.trackOccupancy (aliased to the loader\'s Map) sees the rebuilt entry');
         });
+
+        // ------------------------------------------------------------------
+        // luc3d #203 — running Propagate IDs -> Tracks TWICE
+        // ------------------------------------------------------------------
+        //
+        // Reported: "run Propagate IDs -> Tracks a second time [and] sometimes
+        // only in a handful of frames in the beginning you get multiple tracks
+        // created that overlap with original ones."
+        //
+        // The Tracks Timeline does not render `session.tracks`. It renders
+        // `maxTrackIdx + 1` (ui/timeline.js), where `maxTrackIdx` is the MAXIMUM
+        // over four independent sources: `session.tracks`, every camera's
+        // `trackOccupancy.nTracks`, `instanceGroups` members' `trackIdx`, and
+        // resident `frameGroups` members' `trackIdx`. Because it is a max, any
+        // ONE source still describing the pre-propagate world silently ADDS
+        // track rows rather than being reconciled away — which is exactly what
+        // "extra tracks overlapping the originals" looks like.
+        //
+        // So the invariant, asserted after EVERY run: all four sources agree,
+        // i.e. `maxTrackIdx + 1 === session.tracks.length`. Existing coverage
+        // ran propagate exactly ONCE, which is why a second-run divergence was
+        // invisible.
+        describe('propagateIdentitiesToTracks run twice (luc3d #203)', function () {
+
+            /** The Timeline's own `maxTrackIdx` computation, mirrored. */
+            function timelineMaxTrackIdx(session) {
+                let maxTrackIdx = session.tracks ? session.tracks.length - 1 : -1;
+                const sources = { tracks: maxTrackIdx, occupancy: -1, instanceGroups: -1, frameGroups: -1 };
+                if (session.trackOccupancy) {
+                    for (const [, occ] of session.trackOccupancy) {
+                        if (occ.nTracks - 1 > sources.occupancy) sources.occupancy = occ.nTracks - 1;
+                    }
+                }
+                if (session.instanceGroups) {
+                    for (const [, grps] of session.instanceGroups) {
+                        for (const g of grps) {
+                            for (const [, inst] of g.instances) {
+                                if (inst.trackIdx != null && inst.trackIdx > sources.instanceGroups) {
+                                    sources.instanceGroups = inst.trackIdx;
+                                }
+                            }
+                        }
+                    }
+                }
+                for (const [, fg] of session.frameGroups) {
+                    for (const [, insts] of fg.instances) {
+                        for (const inst of insts) {
+                            if (inst.trackIdx != null && inst.trackIdx > sources.frameGroups) {
+                                sources.frameGroups = inst.trackIdx;
+                            }
+                        }
+                    }
+                    for (const [, ulList] of fg.unlinkedInstances) {
+                        for (const ul of ulList) {
+                            if (ul.instance.trackIdx != null && ul.instance.trackIdx > sources.frameGroups) {
+                                sources.frameGroups = ul.instance.trackIdx;
+                            }
+                        }
+                    }
+                }
+                for (const k of ['occupancy', 'instanceGroups', 'frameGroups']) {
+                    if (sources[k] > maxTrackIdx) maxTrackIdx = sources[k];
+                }
+                return { maxTrackIdx: maxTrackIdx, sources: sources };
+            }
+
+            function describeState(session, res) {
+                const m = timelineMaxTrackIdx(session);
+                const occ = [];
+                if (session.trackOccupancy) {
+                    for (const [cn, o] of session.trackOccupancy) occ.push(cn + ':' + o.nTracks);
+                }
+                return 'tracks=' + JSON.stringify(session.tracks) +
+                    ' timelineRows=' + (m.maxTrackIdx + 1) +
+                    ' sources=' + JSON.stringify(m.sources) +
+                    ' occNTracks=[' + occ.join(',') + ']' +
+                    ' storeTracks=' + JSON.stringify(
+                        (session.lazyLoader.labelsByCam.get('Camera_A')._lazyDataStore.tracks || [])
+                            .map(function (t) { return t.name; })) +
+                    (res ? ' res=' + JSON.stringify(res) : '');
+            }
+
+            /**
+             * @param {Object} opts
+             * @param {boolean} opts.collapse map BOTH raw fixture tracks onto ONE
+             *   identity, so the track count shrinks (2 -> 1). This is what makes
+             *   a stale source VISIBLE: a leftover index 1 then exceeds
+             *   `session.tracks.length - 1 === 0` and the Timeline renders an extra
+             *   row overlapping the real one. A same-count remap (2 -> 2) cannot
+             *   distinguish a correctly-updated source from an untouched one, which
+             *   is exactly why the pre-existing single-run coverage missed this.
+             * @param {boolean} opts.ambiguous seed the `-1` marker
+             *   `commitTrackedFrame` writes on a raw-trackIdx collision, on frame 0
+             *   only — "a handful of frames in the beginning" per the report.
+             */
+            async function runTwice(name, opts) {
+                const S = window.SleapIO;
+                const bytes = await buildProjectFixtureBytes(S);
+                const { loader, opened } = await openProjectFixture(bytes, name);
+                const session = buildLucidSession(loader);
+                session.trackOccupancy = loader.trackOccupancy;
+
+                // Whole-project grouping in memory, as a lazy reopen builds it —
+                // needed so `instanceGroups` is a real source here (and so steps
+                // 2b/3b have something to read).
+                await reconstructLazy(session, opened, loader);
+
+                const idA = session.addIdentity('Alice');
+                const idB = opts.collapse ? idA : session.addIdentity('Bob');
+                for (let f = 0; f < N_FIXTURE_FRAMES; f++) {
+                    CAMS.forEach(function (camName) {
+                        session.setFrameIdentity(f, camName, 0, idA.id);
+                        session.setFrameIdentity(f, camName, 1, idB.id);
+                    });
+                }
+                if (opts.ambiguous) session.setFrameIdentity(0, 'Camera_A', 1, -1);
+
+                // Materialize frame 0 so `frameGroups` is a live source too — the
+                // reporter is looking at the beginning of the video, which is
+                // precisely the part that IS resident. On-scrub hydration reads
+                // `state.session` (pose/triangulation.js), so wire it.
+                const tri = await import('../pose/triangulation.js');
+                const { state } = await import('../ui/app-state.js');
+                const prevSession = state.session;
+                try {
+                    state.session = session;
+                    assertTrue(tri.buildLazyFrameGroupSync(0) === true,
+                        'precondition: frame 0 materialized, so frameGroups is a live source');
+                } finally {
+                    state.session = prevSession;
+                }
+                assertTrue(session.frameGroups.size > 0,
+                    'precondition: at least one frame is resident');
+
+                const res1 = session.propagateIdentitiesToTracks();
+                const after1 = describeState(session, res1);
+                assertEqual(res1.lazyErrorRows || 0, 0, 'run 1: no columnar rows failed to remap — ' + after1);
+                const m1 = timelineMaxTrackIdx(session);
+                assertEqual(m1.maxTrackIdx + 1, session.tracks.length,
+                    'run 1: timeline would render exactly session.tracks.length rows — ' + after1);
+
+                const tracksAfter1 = session.tracks.slice();
+                const res2 = session.propagateIdentitiesToTracks();
+                const after2 = describeState(session, res2);
+
+                assertDeepEqual(session.tracks, tracksAfter1,
+                    'run 2: session.tracks is unchanged — ' + after2);
+                assertEqual(res2.lazyErrorRows || 0, 0,
+                    'run 2: no columnar rows failed to remap — ' + after2);
+                // `res.instances` is in-memory + columnar changes combined, so 0
+                // is the whole idempotency claim in one number.
+                assertEqual(res2.instances, 0,
+                    'run 2: nothing changed track at all — the operation is idempotent — ' + after2);
+
+                const m2 = timelineMaxTrackIdx(session);
+                assertEqual(m2.maxTrackIdx + 1, session.tracks.length,
+                    'run 2: timeline would render exactly session.tracks.length rows, not extra ' +
+                    'overlapping ones — ' + after2);
+
+                // Each source individually, so a failure names the culprit rather
+                // than just reporting a bad max.
+                for (const [cn, occ] of session.trackOccupancy) {
+                    assertEqual(occ.nTracks, session.tracks.length,
+                        'run 2: ' + cn + ' occupancy nTracks matches session.tracks — ' + after2);
+                }
+                assertTrue(m2.sources.instanceGroups < session.tracks.length,
+                    'run 2: no instanceGroups member points past the track list — ' + after2);
+                assertTrue(m2.sources.frameGroups < session.tracks.length,
+                    'run 2: no resident frameGroups member points past the track list — ' + after2);
+                return session;
+            }
+
+            // The confirmed root cause. `commitTrackedFrame` marks a
+            // (frame, camera, rawTrackIdx) key ambiguous with an explicit -1 when
+            // one camera's raw tracker briefly gives two animals the same
+            // trackIdx — "most common on the first frame or two of a video".
+            //
+            // Step 2 of propagateIdentitiesToTracks builds `oldKeyToNewTrackIdx`
+            // from `frameIdentityMap` and (correctly) skips negative entries — but
+            // that map is ALSO what step 4 uses to remap the columnar store, and an
+            // absent key there means "no track" (the remap callback returns -1). So
+            // the instance on the marked frame silently lost its track IN THE
+            // STORE, while step 3/3b gave the in-memory copy the correct one via
+            // the `instanceToIdentity` fallback. Step 2b repairs `newFrameMap` for
+            // this exact case but never `oldKeyToNewTrackIdx`, so the store was
+            // left behind.
+            //
+            // Measured before the fix, one animal marked on frame 0 of one camera:
+            // that camera's store track column came back [0, -1, 0, 1, 0, 1] — the
+            // -1 being the marked instance, which every other frame has as track 1.
+            // Consequences: the instance exports trackless, the Tracks Timeline has
+            // a hole at the start, and occupancy (rebuilt from the store) disagrees
+            // with resident `frameGroups` for exactly the first frames.
+            it('an ambiguous (-1) raw-trackIdx marker must not cost the instance its track in the store',
+                async function () {
+                    const S = window.SleapIO;
+                    const bytes = await buildProjectFixtureBytes(S);
+                    const { loader, opened } = await openProjectFixture(bytes, 'lazy-propagate-ambiguous.slp');
+                    const session = buildLucidSession(loader);
+                    session.trackOccupancy = loader.trackOccupancy;
+                    await reconstructLazy(session, opened, loader);
+
+                    const idA = session.addIdentity('Alice');
+                    const idB = session.addIdentity('Bob');
+                    for (let f = 0; f < N_FIXTURE_FRAMES; f++) {
+                        CAMS.forEach(function (cn) {
+                            session.setFrameIdentity(f, cn, 0, idA.id);
+                            session.setFrameIdentity(f, cn, 1, idB.id);
+                        });
+                    }
+                    // Frame 0 / Camera_A marked ambiguous on the raw track of the
+                    // instance that frame's group actually holds (the fixture's
+                    // frame-0 group references raw instance 0, i.e. track 0). This
+                    // is faithful: `commitTrackedFrame` only writes the marker for
+                    // instances it is grouping, so the marked instance is always a
+                    // group member.
+                    const g0 = session.instanceGroups.get(0)[0];
+                    // The reconstructed fixture group carries no identity of its
+                    // own — give it one, as Track All would.
+                    g0.identityId = idA.id;
+                    const markedRawTrack = g0.instances.get('Camera_A').trackIdx;
+                    const markedIdentity = g0.identityId;
+                    session.setFrameIdentity(0, 'Camera_A', markedRawTrack, -1);
+
+                    const res = session.propagateIdentitiesToTracks();
+
+                    const store = loader.labelsByCam.get('Camera_A')._lazyDataStore;
+                    const trk = Array.from(store.instancesData.track).map(Number);
+                    const fd = store.framesData;
+                    const row0 = loader.frameRowByCam.get('Camera_A').get(0);
+                    const start0 = Number(fd.instance_id_start[row0]);
+                    const end0 = Number(fd.instance_id_end[row0]);
+                    const ctx = ' (col=' + JSON.stringify(trk) + ', tracks=' +
+                        JSON.stringify(session.tracks) + ', markedRawTrack=' + markedRawTrack +
+                        ', span=[' + start0 + ',' + end0 + '), res=' + JSON.stringify(res) + ')';
+
+                    // The marked instance keeps ITS OWN identity's track — resolved
+                    // per row, not per track.
+                    const wantIdx = session.tracks.indexOf(session.getIdentity(markedIdentity).name);
+                    assertTrue(wantIdx >= 0, 'precondition: the marked instance\'s identity got a track' + ctx);
+                    assertEqual(trk[start0], wantIdx,
+                        'the marked row kept its own identity\'s track instead of going trackless' + ctx);
+
+                    // Nothing else in the project lost its track either.
+                    const negs = [];
+                    for (let j = 0; j < trk.length; j++) if (trk[j] < 0) negs.push(j);
+                    assertDeepEqual(negs, [], 'no store row was left trackless' + ctx);
+
+                    assertEqual(res.ambiguousRawKeys, 0,
+                        'the marker was one-sided, so nothing is reported as genuinely contested' + ctx);
+                });
+
+            // The genuine two-animal collision: two DIFFERENT groups holding the
+            // same raw trackIdx on the same camera-frame. A track-keyed remap has
+            // no right answer here, so before the per-row resolution both rows went
+            // trackless. Each row belongs to exactly one group, so both are
+            // recoverable.
+            it('two animals sharing one raw trackIdx on a frame each keep their own track',
+                async function () {
+                    const S = window.SleapIO;
+                    const bytes = await buildProjectFixtureBytes(S);
+                    const { loader, opened } = await openProjectFixture(bytes, 'lazy-propagate-collision.slp');
+                    const session = buildLucidSession(loader);
+                    session.trackOccupancy = loader.trackOccupancy;
+                    await reconstructLazy(session, opened, loader);
+
+                    const idA = session.addIdentity('Alice');
+                    const idB = session.addIdentity('Bob');
+                    for (let f = 0; f < N_FIXTURE_FRAMES; f++) {
+                        CAMS.forEach(function (cn) {
+                            session.setFrameIdentity(f, cn, 0, idA.id);
+                            session.setFrameIdentity(f, cn, 1, idB.id);
+                        });
+                    }
+
+                    // Frame 0 has one fixture group (raw instance 0). Add a second
+                    // group for raw instance 1 and force BOTH onto raw track 0, the
+                    // state a briefly-undifferentiated per-camera tracker produces.
+                    const groups0 = session.instanceGroups.get(0);
+                    const gA = groups0[0];
+                    gA.identityId = idA.id;
+                    const gB = new window.InstanceGroup(9901, idB.id);
+                    CAMS.forEach(function (cn) {
+                        const memberA = gA.instances.get(cn);
+                        const memberB = Object.create(Object.getPrototypeOf(memberA));
+                        Object.assign(memberB, memberA);
+                        memberB._rawInstIndex = 1;      // the OTHER store row of this camera-frame
+                        memberB.trackIdx = memberA.trackIdx;   // ...on the SAME raw track
+                        gB.addInstance(cn, memberB);
+                    });
+                    groups0.push(gB);
+                    CAMS.forEach(function (cn) {
+                        session.setFrameIdentity(0, cn, gA.instances.get(cn).trackIdx, -1);   // ambiguous
+                    });
+
+                    const res = session.propagateIdentitiesToTracks();
+                    const aliceIdx = session.tracks.indexOf('Alice');
+                    const bobIdx = session.tracks.indexOf('Bob');
+
+                    CAMS.forEach(function (cn) {
+                        const store = loader.labelsByCam.get(cn)._lazyDataStore;
+                        const trk = Array.from(store.instancesData.track).map(Number);
+                        const fd = store.framesData;
+                        const row0 = loader.frameRowByCam.get(cn).get(0);
+                        const start0 = Number(fd.instance_id_start[row0]);
+                        const ctx = ' (' + cn + ' col=' + JSON.stringify(trk) + ', tracks=' +
+                            JSON.stringify(session.tracks) + ', res=' + JSON.stringify(res) + ')';
+                        assertEqual(trk[start0], aliceIdx,
+                            'colliding row 0 resolved to Alice, not trackless' + ctx);
+                        assertEqual(trk[start0 + 1], bobIdx,
+                            'colliding row 1 resolved to Bob, not trackless' + ctx);
+                    });
+                });
+
+            it('same-count remap (2 identities): a second run changes nothing and all four sources agree',
+                async function () {
+                    await runTwice('lazy-propagate-twice.slp', { collapse: false, ambiguous: true });
+                });
+
+            it('COLLAPSING remap (2 tracks -> 1 identity): a second run leaves no extra overlapping track row',
+                async function () {
+                    const session = await runTwice('lazy-propagate-twice-collapse.slp',
+                        { collapse: true, ambiguous: true });
+                    assertEqual(session.tracks.length, 1,
+                        'precondition: both raw tracks really did collapse onto one identity');
+                });
+        });
     });
 })();

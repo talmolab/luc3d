@@ -13,10 +13,14 @@
  * `_hiddenCameras` takes precedence — a hidden camera hides EVERY row in
  * its tree, regardless of per-track / per-identity toggle state.
  *
- * State is in-memory only (per the user's clarification — no localStorage
- * persistence across reloads). Renames migrate hidden-set membership from
- * the old name to the new name; deletes leave the stale entry harmlessly
- * (it just never matches anything).
+ * The Sets are never persisted to localStorage (a browser-local cache would
+ * be wrong for what is project state), but they ARE saved into the `.slp`
+ * per session as `metadata.lucid.hiddenCameras` / `hiddenTracks` /
+ * `hiddenIdentities` — see `serializeHiddenSets` / `ingestHiddenSets` at the
+ * bottom of this file. Renames migrate hidden-set membership from the old
+ * name to the new name; deletes leave the stale entry harmlessly (it just
+ * never matches anything) — which is also why ingest does NOT validate names
+ * against the session's current cameras/tracks/identities.
  *
  * Exports a flat set of helpers (`toggle*`, `is*Visible`, `list*`,
  * `get*VisibilityList`, `rename*`) that the Info Panel wiring and (live
@@ -198,11 +202,84 @@ function renameHiddenIdentity(session, oldName, newName) {
 }
 
 // ----------------------------------------------------------------------------
+// Persistence — the three Sets <-> `metadata.lucid.hidden*` name arrays.
+//
+// Serialized as SORTED arrays of names so the written bytes depend only on
+// which entities are hidden, not on the order the user clicked them.
+// An empty Set contributes NO key at all, so a project where nothing is
+// hidden — the overwhelming default — writes nothing and its bytes are
+// unchanged (`tests/e2e/save-golden-digest.mjs`).
+// ----------------------------------------------------------------------------
+
+/** The three hidden-set names, paired with their `metadata.lucid` key. */
+var HIDDEN_SET_KEYS = [
+    ['_hiddenCameras', 'hiddenCameras'],
+    ['_hiddenTracks', 'hiddenTracks'],
+    ['_hiddenIdentities', 'hiddenIdentities'],
+];
+
+/**
+ * Session -> a partial `metadata.lucid` fragment carrying only the non-empty
+ * hidden sets, or `null` when nothing is hidden. Writers must skip on `null`
+ * and otherwise merge the returned keys into `metadata.lucid`.
+ *
+ * @param {Object} session
+ * @returns {Object<string, string[]>|null}
+ */
+function serializeHiddenSets(session) {
+    if (!session) return null;
+    var out = null;
+    for (var i = 0; i < HIDDEN_SET_KEYS.length; i++) {
+        var set = session[HIDDEN_SET_KEYS[i][0]];
+        if (!set || typeof set.forEach !== 'function') continue;
+        var names = [];
+        set.forEach(function (n) { if (typeof n === 'string' && n !== '') names.push(n); });
+        if (names.length === 0) continue;
+        names.sort();
+        if (!out) out = {};
+        out[HIDDEN_SET_KEYS[i][1]] = names;
+    }
+    return out;
+}
+
+/**
+ * Merge saved `hidden*` arrays back onto a session's Sets. Reads all three keys
+ * off ONE object (the `metadata.lucid` dict, or the project-JSON session dict),
+ * so a caller cannot wire up two of the three and silently drop the last.
+ *
+ * Additive: entries already hidden stay hidden. Tolerates a missing or garbage
+ * payload — a `.slp` written before this existed simply has no such keys.
+ *
+ * @param {Object} session
+ * @param {*} lucid - the object the arrays live on (may be null/garbage)
+ * @returns {number} count of names applied
+ */
+function ingestHiddenSets(session, lucid) {
+    if (!session) return 0;
+    ensureHiddenSets(session);
+    if (!lucid || typeof lucid !== 'object') return 0;
+    var applied = 0;
+    for (var i = 0; i < HIDDEN_SET_KEYS.length; i++) {
+        var raw = lucid[HIDDEN_SET_KEYS[i][1]];
+        if (!Array.isArray(raw)) continue;
+        var set = session[HIDDEN_SET_KEYS[i][0]];
+        for (var j = 0; j < raw.length; j++) {
+            if (typeof raw[j] !== 'string' || raw[j] === '') continue;
+            set.add(raw[j]);
+            applied++;
+        }
+    }
+    return applied;
+}
+
+// ----------------------------------------------------------------------------
 // ESM exports
 // ----------------------------------------------------------------------------
 
 export {
     ensureHiddenSets,
+    serializeHiddenSets,
+    ingestHiddenSets,
     toggleCameraVisibility,
     toggleTrackVisibility,
     toggleIdentityVisibility,
@@ -231,6 +308,8 @@ export {
 if (typeof window !== 'undefined') {
     window.TimelineVisibility = {
         ensureHiddenSets: ensureHiddenSets,
+        serializeHiddenSets: serializeHiddenSets,
+        ingestHiddenSets: ingestHiddenSets,
         toggleCameraVisibility: toggleCameraVisibility,
         toggleTrackVisibility: toggleTrackVisibility,
         toggleIdentityVisibility: toggleIdentityVisibility,

@@ -55,6 +55,7 @@
 
 import { _buildSioPoints } from './file-io.js';
 import { points3dNodeCount } from '../pose/pose-data.js';
+import { writeVisibilityMetadata } from './visibility-metadata.js';
 
 function numAt(arr, i, dflt) {
     if (!arr || i < 0 || i >= arr.length) return dflt === undefined ? 0 : dflt;
@@ -393,6 +394,10 @@ export async function buildSessionRefGraph(session, views, videoFiles, ctx) {
         skeleton: { name: session.skeleton.name || 'skeleton', nodes: session.skeleton.nodes, edges: session.skeleton.edges },
         tracks: session.tracks,
     };
+    // Session-scoped Visibility-panel state — each key omitted when it is at its
+    // default, so untouched projects serialize byte-identically. Must stay in
+    // lockstep with the eager writer in `file-io.js` (both call the one helper).
+    writeVisibilityMetadata(sioSession.metadata.lucid, session);
     for (var av = 0; av < sioCameras.length; av++) sioSession.addVideo(ctx.allVideos[sessionVideoIndices[av]], sioCameras[av]);
 
     var camByName = new Map();
@@ -582,6 +587,10 @@ export async function buildSessionRefGraph(session, views, videoFiles, ctx) {
                 instanceMeta: {},
                 identityId: (group.identityId != null && group.identityId >= 0) ? group.identityId : -1,
             };
+            // Which solver produced this group's 3D — not reconstructable from
+            // `points_3d`, so it must be persisted. See the identical note in
+            // `file-io.js`'s eager writer. Only written when 'ba' (absent = DLT).
+            if (group.triangulationMethod === 'ba') igLucidMeta.triangulationMethod = 'ba';
             var refCount = 0;
             for (var entry of group.instances) {
                 var gCamName = entry[0];

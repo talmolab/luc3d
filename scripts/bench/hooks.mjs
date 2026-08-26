@@ -30,8 +30,9 @@ const THRESHOLD_DEFAULTS = {
     corr2dWeight: 1,
     corr3dWeight: 6,
     velocityThreshold: 10,
-    distanceThreshold: 50,
+    distanceThreshold: 25,
     timePenalty: 0.1,
+    stale: 20,
 };
 
 const SETTINGS_STUB = `
@@ -65,6 +66,12 @@ export function getTrackingThresholds() {
 export function isCameraTracked(name) {
     const ex = (globalThis.__BENCH && globalThis.__BENCH.excludedCameras) || [];
     return ex.indexOf(name) < 0;
+}
+
+// Default triangulation method — pose/triangulation.js imports this for
+// resolveTriangulationMethod's fallback, so it must exist for the link step.
+export function getDefaultTriangulationMethod() {
+    return (globalThis.__BENCH && globalThis.__BENCH.triangulationMethod) || 'dlt';
 }
 `;
 

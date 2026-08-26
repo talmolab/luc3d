@@ -10,7 +10,7 @@ import { state, videoController, interactionManager, viewport3d, timeline, paneM
 import { InstanceGroup, UnlinkedInstance, someValidPoint3d } from '../pose/pose-data.js';
 import {
     frameHasGroupedUserInstances, getInstanceGroupsForFrame,
-    triangulateAndReproject, storeReprojectedInstances,
+    triangulateAndReproject, storeReprojectedInstances, resolveTriangulationMethod,
     reprojectPointsCamera, computeInstanceDistanceTo, hungarianAlgorithm,
     updateTimelineForFrame,
     triangulateCurrentFrame,
@@ -234,6 +234,203 @@ export function propagateIdentityForward(trackIdx, identityId, cameraName) {
 }
 
 /**
+ * The identity a selection CURRENTLY reads as on `frameIdx`, resolved exactly
+ * the way the canvas does (`ui/overlays.js` `getGroupColor`): the per-frame
+ * entry for one of the selection's own live (camera, trackIdx) pairs first, then
+ * the group-level field as a fallback for a group with no per-frame entry yet.
+ *
+ * Reading `group.identityId` FIRST would be wrong here for the same reason it is
+ * wrong for coloring: it is only refreshed on the frame where an identity was
+ * last assigned, so it is stale on every other frame (issue #155).
+ *
+ * @param {Array<[string, number]>} camTrackPairs (cameraName, trackIdx) pairs
+ * @param {number|null|undefined} groupIdentityId fallback, or null for none
+ * @returns {number|null} a real identity id, or null when the selection has none
+ */
+function resolveCurrentIdentityId(session, frameIdx, camTrackPairs, groupIdentityId) {
+    for (var i = 0; i < camTrackPairs.length; i++) {
+        var cn = camTrackPairs[i][0], trk = camTrackPairs[i][1];
+        if (cn == null || trk == null || trk < 0) continue;
+        var v = session.getIdentityIdForTrack(cn, trk, frameIdx);
+        if (v != null && v >= 0) return v;
+    }
+    if (groupIdentityId != null && groupIdentityId >= 0) return groupIdentityId;
+    return null;
+}
+
+/**
+ * Apply a MANUAL identity switch from `frameIdx` through the end of the
+ * timeline (luc3d #172).
+ *
+ * The single entry point for "the user picked a different ID for this
+ * instance" — the 1-9 hotkeys, the Linked Instance Groups identity dropdown and
+ * the unlinked-row identity dropdown all route here so they cannot drift.
+ *
+ * Two modes, chosen by whether there is an identity to swap AWAY from:
+ *
+ *  - **swap** (the normal correction). The selection already reads as identity
+ *    A and the user picks B, so A and B are EXCHANGED from this frame to the end
+ *    of the project, in every view — `Session.swapIdentitiesForward`. This is
+ *    the semantics the issue asks for and the semantics SLEAP's `track_swap`
+ *    has for tracks: the correction is a statement about the rest of the video,
+ *    not about the current tracklet. Crucially it does not depend on raw track
+ *    continuity, so it survives the track fragmentation that made the old
+ *    per-track propagation stop after a few hundred frames.
+ *
+ *  - **propagate** (no identity to swap). The selection has no identity yet
+ *    (a fresh project, a just-grouped group, or the user picked "none"), so
+ *    there is no value to exchange. Fall back to the per-camera, per-track
+ *    forward stamp — the only continuity signal available in that state.
+ *
+ * ALL VIEWS, deliberately. An identity names a physical animal, which is a 3D
+ * fact shared by every camera (`InstanceGroup.identityId` is a single
+ * per-group field, not per view). Restricting the swap to the cameras the
+ * selected group happens to have an instance in at this instant — what the old
+ * `for (cam of sel.instances) propagateIdentityForward(...)` loop did — leaves
+ * the other views asserting the opposite identity, which is both visibly wrong
+ * and corrupts identity-based grouping. It is also the reporter's observation on
+ * #172 verbatim: "the propagation appears limited to tracks visible in the
+ * current view". A view where the animal is occluded on exactly this frame got
+ * nothing at all.
+ *
+ * SINGLE-VIEW corrections are the exception, via `scopeCamera` (luc3d #201). An
+ * UNGROUPED instance is one 2D detection that belongs to no cross-view bundle,
+ * so a correction on its row is a statement about that camera only — and fixing
+ * one view is the whole reason to ungroup in the first place (the reported
+ * workflow: ungroup, switch the ID on the one view that's wrong, regroup). The
+ * all-views argument above applies to a GROUP, which by definition asserts the
+ * same animal across cameras; it does not apply to a lone detection. Scoped
+ * corrections still swap by identity VALUE, so they stay immune to the raw-track
+ * fragmentation that #172 was filed for — see
+ * `Session.swapIdentitiesForwardInCamera`.
+ *
+ * @param {Object} session
+ * @param {number} frameIdx the frame the correction was made on (inclusive)
+ * @param {Array<[string, number]>} camTrackPairs the selection's live
+ *   (cameraName, trackIdx) pairs
+ * @param {Object|null} group the selected InstanceGroup, if any
+ * @param {number} newIdentityId
+ * @param {string} [scopeCamera] restrict the swap to this camera — pass the
+ *   unlinked instance's own camera for a single-view correction; omit for a
+ *   group (all views).
+ * @param {Object} [unlinkedInstance] the unlinked row's own Instance. Needed
+ *   for a TRACKLESS instance (luc3d #201): `frameIdentityMap` cannot key a
+ *   null track, so its identity lives on the instance
+ *   (`Instance.identityId`) and the correction is per-frame by nature — no
+ *   track means no linkage to carry it to other frames. Ignored when the
+ *   instance has a track.
+ * @returns {{mode:string, frames:number, entries:number, oldIdentityId:(number|null), camera:(string|null)}}
+ */
+export function applyIdentitySwitch(session, frameIdx, camTrackPairs, group, newIdentityId, scopeCamera, unlinkedInstance) {
+    // TRACKLESS unlinked row: per-frame instance-level assignment (with an
+    // in-frame swap against the row already holding the target identity), not
+    // a map operation — there is no track for the map to key or to propagate
+    // along. See Session.assignIdentityToUnlinkedTrackless.
+    if (unlinkedInstance && unlinkedInstance.trackIdx == null &&
+        scopeCamera && newIdentityId != null && newIdentityId >= 0 &&
+        session.assignIdentityToUnlinkedTrackless) {
+        var tr = session.assignIdentityToUnlinkedTrackless(
+            frameIdx, scopeCamera, unlinkedInstance, newIdentityId);
+        return {
+            mode: 'frame', frames: 1, entries: tr.swappedWithOther ? 2 : 1,
+            oldIdentityId: tr.oldIdentityId, camera: scopeCamera,
+        };
+    }
+
+    var oldIdentityId = resolveCurrentIdentityId(
+        session, frameIdx, camTrackPairs, group ? group.identityId : null);
+
+    if (newIdentityId != null && newIdentityId >= 0 &&
+        oldIdentityId != null && oldIdentityId >= 0 && oldIdentityId !== newIdentityId) {
+        var r;
+        if (scopeCamera && session.swapIdentitiesForwardInCamera) {
+            r = session.swapIdentitiesForwardInCamera(
+                frameIdx, scopeCamera, oldIdentityId, newIdentityId);
+            // Deliberately NOT pinning `group.identityId` here: it is one field
+            // shared by every view, so writing it would leak a single-view
+            // correction into the others. A scoped switch only ever targets an
+            // ungrouped instance, which has no group to pin.
+            return {
+                mode: 'swap', frames: r.frames, entries: r.entries,
+                oldIdentityId: oldIdentityId, camera: scopeCamera,
+            };
+        }
+        r = session.swapIdentitiesForward(frameIdx, oldIdentityId, newIdentityId);
+        // The swap is by VALUE, so a group whose `identityId` field was stale
+        // (or never set) is not caught by it — pin the selected group directly.
+        if (group) group.identityId = newIdentityId;
+        return {
+            mode: 'swap', frames: r.frames, entries: r.entries,
+            oldIdentityId: oldIdentityId, camera: null,
+        };
+    }
+
+    // No identity to swap away from: per-camera, per-track forward stamp.
+    // Trackless members are passed through UNCHANGED (a `null` trackIdx keys the
+    // "-1" fim slot) — exactly what the per-camera loops this replaced did, so
+    // assigning an identity to a trackless group behaves as before.
+    if (group) session.assignIdentityToGroup(group, newIdentityId);
+    var propagated = 0;
+    for (var i = 0; i < camTrackPairs.length; i++) {
+        var cn = camTrackPairs[i][0], trk = camTrackPairs[i][1];
+        if (cn == null) continue;
+        if (scopeCamera && cn !== scopeCamera) continue;
+        propagated += session.propagateIdentity(frameIdx, cn, trk, newIdentityId);
+    }
+    return {
+        mode: 'propagate', frames: propagated, entries: propagated,
+        oldIdentityId: oldIdentityId, camera: scopeCamera || null,
+    };
+}
+
+/**
+ * Status text for an `applyIdentitySwitch` result. Shared so every call site
+ * reports the SAME, honest number: the count is what actually changed, never a
+ * per-frame estimate — a plausible-looking count over a silently truncated
+ * range is exactly how #172 hid.
+ */
+export function describeIdentitySwitch(session, result, identityName) {
+    var msg = 'Assigned ' + identityName;
+    if (!result || !result.frames) return msg;
+    if (result.mode === 'swap') {
+        var oldName = null;
+        var oldIdent = session.getIdentity ? session.getIdentity(result.oldIdentityId) : null;
+        if (oldIdent) oldName = oldIdent.name;
+        // Name the actual scope — a single-view correction must not claim "all
+        // views", which is the kind of plausible-but-wrong report that hid #172.
+        msg += ' (swapped ' + result.frames + ' frames to end of timeline, ' +
+            (result.camera ? result.camera + ' only' : 'all views') +
+            (oldName ? ' — was ' + oldName : '') + ')';
+    } else if (result.mode === 'frame') {
+        // Trackless: the instance has no track linkage, so the correction is
+        // honestly per-frame — say so instead of implying propagation.
+        var oldNameF = null;
+        var oldIdentF = session.getIdentity ? session.getIdentity(result.oldIdentityId) : null;
+        if (oldIdentF) oldNameF = oldIdentF.name;
+        msg += ' (this frame, ' + (result.camera ? result.camera + ' only' : 'one view') +
+            ' — trackless instance' + (oldNameF ? ', was ' + oldNameF : '') + ')';
+    } else {
+        msg += ' (propagated to ' + result.frames + ' future instances' +
+            (result.camera ? ' in ' + result.camera : '') + ')';
+    }
+    return msg;
+}
+
+/**
+ * (cameraName, trackIdx) pairs for every member of a group — INCLUDING trackless
+ * members (`trackIdx == null`), which the propagate fallback still needs to
+ * stamp. `resolveCurrentIdentityId` skips those itself.
+ */
+function groupCamTrackPairs(group) {
+    var pairs = [];
+    if (!group || !group.instances) return pairs;
+    for (var [cn, inst] of group.instances) {
+        if (inst) pairs.push([cn, inst.trackIdx]);
+    }
+    return pairs;
+}
+
+/**
  * Assign identity to selected instance/group and propagate forward.
  */
 export function assignIdentityToSelected(identityId, identityName) {
@@ -246,30 +443,24 @@ export function assignIdentityToSelected(identityId, identityName) {
         return;
     }
 
-    var propagated = 0;
+    var result = null;
     if (sel) {
         markDirty();
-        session.assignIdentityToGroup(sel, identityId);
-        // Propagate the identity from the CURRENT frame forward, per camera,
-        // via the swap-aware setter. This is forward-only and never re-stamps
-        // earlier frames. The old whole-track `assignTrackToIdentity` call
-        // (removed) relabelled EVERY frame of the track, corrupting already-
-        // correct earlier frames when fixing a mid-video swap — issue #155.
-        for (var [cn, inst] of sel.instances) {
-            propagated += propagateIdentityForward(inst.trackIdx, identityId, cn);
-        }
+        result = applyIdentitySwitch(session, state.currentFrame, groupCamTrackPairs(sel), sel, identityId);
     } else if (selUl) {
         markDirty();
-        propagated = propagateIdentityForward(selUl.instance.trackIdx, identityId, selUl.cameraName);
+        // An ungrouped instance is a single view's detection — scope the switch
+        // to its own camera (luc3d #201).
+        result = applyIdentitySwitch(session, state.currentFrame,
+            [[selUl.cameraName, selUl.instance.trackIdx]], null, identityId,
+            selUl.cameraName, selUl.instance);
     }
 
     drawAllOverlays(state.currentFrame);
     updateInfoPanel();
     if (timeline) timeline.refreshTracks(state.session, { keepSize: true });
 
-    var msg = 'Assigned ' + identityName;
-    if (propagated > 0) msg += ' (propagated to ' + propagated + ' future instances)';
-    setStatus(msg, 'success');
+    setStatus(describeIdentitySwitch(session, result, identityName), 'success');
 }
 
 
@@ -637,11 +828,22 @@ export function runAutomaticAssignment(selectedViewNames) {
         for (var a = 0; a < nRef; a++) {
             costMatrix[a] = [];
             for (var b = 0; b < nOther; b++) {
-                // Create temporary group with instances from both views
+                // Create temporary group with instances from both views.
+                // DLT is DELIBERATE here, and passed EXPLICITLY: this is an
+                // O(nRef x nOther) cost matrix feeding the Hungarian matcher, the
+                // temporary group's 3D is discarded, and only the RELATIVE
+                // ordering of the errors matters — so BA's ~3x-6x cost would buy
+                // nothing. Nothing user-visible or exportable is written.
+                //
+                // Spelled out rather than left to `triangulateAndReproject`'s
+                // silent DLT default so that NO call site in the app relies on
+                // that default: "every caller states its method" is checkable,
+                // "every caller that forgot happened to want DLT" is not. This is
+                // the only intentionally-DLT caller.
                 var tempGroup = new InstanceGroup(-1, -1);
                 tempGroup.addInstance(refView, refInstances[a].instance);
                 tempGroup.addInstance(otherView, otherInstances[b].instance);
-                var result = triangulateAndReproject(tempGroup, cameras);
+                var result = triangulateAndReproject(tempGroup, cameras, { method: 'dlt' });
                 costMatrix[a][b] = (result.meanError != null && isFinite(result.meanError))
                     ? result.meanError : 1e6;
             }
@@ -684,8 +886,16 @@ export function runAutomaticAssignment(selectedViewNames) {
             return groupCamNames.indexOf(c.name) >= 0;
         });
         if (groupCameras.length >= 2) {
-            var result = triangulateAndReproject(group, groupCameras);
+            // This loop covers EVERY group on the frame, including ones that
+            // already existed with bundle-adjusted 3D — so it must preserve each
+            // group's own method (new groups fall back to the user's Settings
+            // choice). It previously passed no options, silently re-solving
+            // pre-existing BA groups with DLT and overwriting `points3d`, which
+            // is what save/export reads. Single frame, so the cost is bounded.
+            var result = triangulateAndReproject(group, groupCameras,
+                { method: resolveTriangulationMethod(group) });
             group.points3d = result.points3d;
+            group.triangulationMethod = result.method;
             group.reprojections = result.reprojections;
             storeReprojectedInstances(group, result, cameras);
             group.markClean();
@@ -884,8 +1094,14 @@ export function runTrackedAssignment(viewNames, prevGroups) {
                 return groupCamNames.indexOf(c.name) >= 0;
             });
             if (groupCameras.length >= 2) {
-                var result = triangulateAndReproject(group, groupCameras);
+                // Brand-new group, so nothing to preserve — take the user's
+                // Settings ▸ Triangulation Method rather than hardcoding DLT
+                // (this module already does exactly that at the tail of
+                // `autoAssignAcrossFrames`). Single frame; cost is bounded.
+                var result = triangulateAndReproject(group, groupCameras,
+                    { method: resolveTriangulationMethod(group) });
                 group.points3d = result.points3d;
+                group.triangulationMethod = result.method;
                 group.reprojections = result.reprojections;
                 storeReprojectedInstances(group, result, cameras);
                 group.markClean();

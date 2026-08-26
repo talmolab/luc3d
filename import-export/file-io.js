@@ -15,6 +15,9 @@ import { Camera, Skeleton, Instance, Identity,
          toBoxedPoints3d, getPoint3d, points3dNodeCount } from '../pose/pose-data.js';
 import { validateSkeletonCompatibility } from './slp-merge.js';
 import { getOrComputeReprojectedInstance, sweepLazyFrameWindows } from '../pose/triangulation.js';
+// Only pulls in the two dependency-free `ui/` leaf modules — safe for this
+// module's graph.
+import { writeVisibilityMetadata } from './visibility-metadata.js';
 
 // ============================================
 // Generic file picker
@@ -2129,6 +2132,10 @@ export function buildSlpLabelsAllViews(session, views, videoFiles) {
         },
         tracks: session.tracks,
     };
+    // Session-scoped Visibility-panel state. Every one of these is written ONLY
+    // when it holds a non-default value, so an untouched project's bytes are
+    // unchanged (tests/e2e/save-golden-digest.mjs).
+    writeVisibilityMetadata(sioSession.metadata.lucid, session);
     session.cameras.forEach(function (cam, i) {
         sioSession.addVideo(sioVideos[i], sioCameras[i]);
     });
@@ -2263,6 +2270,14 @@ export function buildSlpLabelsAllViews(session, views, videoFiles) {
                 instanceMeta: {},
                 identityId: (group.identityId != null && group.identityId >= 0) ? group.identityId : -1,
             };
+            // Which solver produced this group's 3D. NOT reconstructable from the
+            // file — `points_3d` is just numbers — so it must be persisted or a
+            // reopened project has BA 3D with an unknown method. That breaks two
+            // things: `ui/rendering.js`'s lazy fill re-derives reprojections with
+            // DLT and then displays DLT's error for BA 3D, and `adoptPrior3d` can
+            // never match, so every regroup needlessly re-solves. Written only when
+            // 'ba'; absent means DLT, which keeps `sessions_json` slim (#134).
+            if (group.triangulationMethod === 'ba') igLucidMeta.triangulationMethod = 'ba';
             for (var [metaCam, metaInst] of group.instances) {
                 var instMeta = {};
                 var hasMeta = false;

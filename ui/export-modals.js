@@ -19,6 +19,10 @@ import {
     showCalibrationRequiredPopup,
     getInstanceGroupsForFrame,
     sweepLazyFrameWindows,
+    resolveTriangulationMethod,
+    findEquivalentPriorGroup,
+    adoptPrior3d,
+    triangulationMethodLabel,
 } from '../pose/triangulation.js';
 import { Viewport3D } from './viewport3d.js';
 import { getTrackColor, getGroupColor } from './overlays.js';
@@ -35,6 +39,14 @@ import {
 
 // Pass 3i-3: update3DViewport moved to pose/initialization.js.
 import { update3DViewport } from '../pose/initialization.js';
+import { createMp4Writer, videoEncodingAvailable } from './video-encode.js';
+// The two video-export modals share ONE set of quality tiers, one bitrate
+// formula, one H.264 level table and one streaming threshold. They used to keep
+// private copies of all four and had silently drifted apart (a 2x bitrate floor
+// gap at the smallest tier, and two disagreeing level tables).
+import {
+    RES_PRESETS, bitrateFor, estimatedBytes, h264CodecFor, shouldStreamToDisk,
+} from './overlay-export-layout.js';
 
 // ============================================
 // Group by Track & Triangulate All
@@ -263,7 +275,18 @@ async function sweepTriangulationFrames(session, onFrame, opts) {
     return await sweepLazyFrameWindows(session, onFrame, opts);
 }
 
-export async function groupByIdentityAndTriangulateAll() {
+/**
+ * Bulk-group by identity, then triangulate every group.
+ *
+ * @param {'ba'|'dlt'} [explicitMethod] - the method the user explicitly asked
+ *   for, when they did. "Triangulate All ▸ DLT" routes here and passes `'dlt'`,
+ *   so an explicit pick stays honest. Omitted (Tracks ▸ Group by Identity) means
+ *   "use my configured default" — Settings ▸ Default Triangulation. Either way the
+ *   resulting method GOVERNS the whole sweep: with Bundle Adjustment selected,
+ *   every group ends up with BA 3D, including groups that already held valid DLT
+ *   3D with unchanged membership (see `adoptPrior3d`).
+ */
+export async function groupByIdentityAndTriangulateAll(explicitMethod) {
     if (!sessionHasCalibration()) {
         showCalibrationRequiredPopup();
         return;
@@ -289,10 +312,22 @@ export async function groupByIdentityAndTriangulateAll() {
         return;
     }
 
-    showLoading('Grouping by identity & triangulating 0/' + totalFrames + ' frames...');
+    // THE governing method for this whole sweep: an explicit user pick if there
+    // was one, else Settings ▸ Default Triangulation. Named in the progress text
+    // and the final status line so the method (and therefore its cost — BA runs
+    // ~3x-6x DLT per group) is visible rather than a surprise.
+    var prefMethod = explicitMethod
+        ? (explicitMethod === 'ba' ? 'ba' : 'dlt')
+        : resolveTriangulationMethod(null);
+
+    showLoading('Grouping by identity & triangulating 0/' + totalFrames + ' frames (' +
+        triangulationMethodLabel(prefMethod) + ')...');
 
     var totalGrouped = 0;
     var totalTriangulated = 0;
+    // 3D provenance, reported at the end: groups whose existing 3D was reused
+    // as-is vs. groups that genuinely had to be solved, and with what.
+    var reused3d = 0, solvedBa = 0, solvedDlt = 0;
 
     // Memory-bounded sweep over every frame (windows + release on lazy sessions),
     // replacing the old loadAllLazyFrames-then-iterate path that re-OOMed.
@@ -427,12 +462,31 @@ export async function groupByIdentityAndTriangulateAll() {
             }
             session.instanceGroups.get(frameIdx).push(group);
 
-            // Triangulate — store only points3d (compact).
-            // Reprojections are computed on-the-fly when drawing.
-            // Grouping always uses fast DLT.
-            var triResult = triangulateAndReproject(group, cameras, { triangulateOnly: true });
-            group.points3d = triResult.points3d;
-            group.triangulationMethod = triResult.method;
+            // 3D: ADOPT rather than re-solve when this rebuild reproduced a group
+            // that already existed with identical membership AND whose 3D was
+            // already produced by `prefMethod` — i.e. when re-solving would be a
+            // provable no-op. Everything else is solved with `prefMethod`.
+            //
+            // This used to unconditionally re-solve with the DEFAULT option, i.e.
+            // DLT, and stamp `triangulationMethod = 'dlt'`, regardless of the
+            // user's setting. Running "Group by Identity" (or Triangulate All ▸
+            // DLT, which routes here) after a BA Triangulate All therefore
+            // silently downgraded the whole project's 3D to DLT — and save/export
+            // read `group.points3d`, so the exported file stopped matching what
+            // the user had computed and was looking at.
+            var prior = findEquivalentPriorGroup(_existing, group);
+            if (adoptPrior3d(group, prior, prefMethod)) {
+                reused3d++;
+            } else {
+                // Still `triangulateOnly` (reprojections are recomputed on demand
+                // when drawing); that skips the reprojection/error passes, not the
+                // solve, so BA still runs when BA is what was asked for.
+                var triResult = triangulateAndReproject(group, cameras,
+                    { triangulateOnly: true, method: prefMethod });
+                group.points3d = triResult.points3d;
+                group.triangulationMethod = triResult.method;
+                if (triResult.method === 'ba') solvedBa++; else solvedDlt++;
+            }
             group.markClean();
 
             totalGrouped++;
@@ -443,7 +497,9 @@ export async function groupByIdentityAndTriangulateAll() {
         onProgress: function (done, total) {
             var el = document.getElementById('loadingStatus');
             if (el) el.textContent =
-                'Grouping by identity & triangulating ' + done + '/' + total + ' frames...';
+                'Grouping by identity & triangulating ' + done + '/' + total + ' frames (' +
+                triangulationMethodLabel(prefMethod) + '; ' +
+                reused3d.toLocaleString() + ' existing solutions kept)...';
         },
     });
 
@@ -456,8 +512,16 @@ export async function groupByIdentityAndTriangulateAll() {
     // "Triangulate", which calls update3DViewport(frameIdx) at its tail.
     update3DViewport(state.currentFrame);
     updateInfoPanel();
+    // Name the 3D's provenance so a run that kept BA solutions can't be mistaken
+    // for one that silently re-solved them with DLT.
     setStatus('Grouped ' + totalGrouped + ' identity groups, triangulated ' +
-        totalTriangulated + ' across ' + processedFrames + ' frames', 'success');
+        totalTriangulated + ' across ' + processedFrames + ' frames via ' +
+        triangulationMethodLabel(prefMethod) + ' (' +
+        reused3d.toLocaleString() + ' kept existing 3D, ' +
+        solvedBa.toLocaleString() + ' solved via Bundle Adjustment, ' +
+        solvedDlt.toLocaleString() + ' via DLT)', 'success');
+    console.log('[groupByIdentity] 3D provenance: reused', reused3d,
+        '| solved BA', solvedBa, '| solved DLT', solvedDlt);
 }
 
 
@@ -489,11 +553,22 @@ async function groupByTrackAndTriangulateAll(selectedTrackIndices, selectedCamer
         return;
     }
 
-    showLoading('Grouping & triangulating 0/' + totalFrames + ' frames...');
+    // THE governing method for this whole sweep: Settings ▸ Default
+    // Triangulation. This entry point has no explicit-pick path (it is only
+    // reachable through `showGroupByTrackModal`), so the configured default is the
+    // user's instruction. Named in the progress/status text so the method — and
+    // therefore its cost, BA running ~3x-6x DLT per group — is visible rather
+    // than a surprise.
+    var prefMethodT = resolveTriangulationMethod(null);
+
+    showLoading('Grouping & triangulating 0/' + totalFrames + ' frames (' +
+        triangulationMethodLabel(prefMethodT) + ')...');
 
     var totalGrouped = 0;
     var totalTriangulated = 0;
     var totalErrors = [];
+    // 3D provenance, reported at the end (see the adopt-vs-solve note below).
+    var reused3dT = 0, solvedBaT = 0, solvedDltT = 0;
 
     // Memory-bounded sweep over every frame (windows + release on lazy sessions);
     // also fixes the prior silent-drop (only resident frames were grouped before).
@@ -535,7 +610,10 @@ async function groupByTrackAndTriangulateAll(selectedTrackIndices, selectedCamer
         }
 
         // 2. Clear existing groups and instances for this frame
-        //    Remove old InstanceGroups
+        //    Remove old InstanceGroups — but keep a handle on them first, so a
+        //    rebuild that lands on the identical membership can ADOPT its
+        //    existing 3D instead of re-solving it (see step 4).
+        var priorGroups = session.instanceGroups.get(frameIdx) || [];
         session.instanceGroups.delete(frameIdx);
         //    Clear grouped instances (will be re-added from track buckets)
         for (var [cn] of fg.instances) {
@@ -597,8 +675,33 @@ async function groupByTrackAndTriangulateAll(selectedTrackIndices, selectedCamer
             }
             if (viewsWithLabels < 2) continue;
 
-            var result = triangulateAndReproject(group, groupCameras);
+            // ADOPT existing 3D only when this rebuild reproduced a group with
+            // identical membership AND whose 3D already came from `prefMethodT` —
+            // i.e. when re-solving would be a provable no-op (the common case when
+            // Group by Track is re-run with the same method). Everything else is
+            // solved with `prefMethodT`.
+            //
+            // This used to unconditionally re-solve with the DEFAULT option (DLT)
+            // and stamp `triangulationMethod = 'dlt'` regardless of the user's
+            // setting, so running Group by Track after a BA Triangulate All
+            // silently downgraded the whole project's 3D to DLT — and save/export
+            // read `group.points3d`, so the exported file no longer matched what
+            // the user had computed and was looking at.
+            var priorT = findEquivalentPriorGroup(priorGroups, group);
+            if (adoptPrior3d(group, priorT, prefMethodT)) {
+                reused3dT++;
+                group.markClean();
+                // No frameResult: the errors belong to the adopted solve, which
+                // is not recomputed here. `ui/rendering.js`'s lazy fill derives
+                // them (with the adopted method) for the frame being viewed —
+                // the same contract the windowed Triangulate All sweep uses.
+                continue;
+            }
+
+            var result = triangulateAndReproject(group, groupCameras,
+                { method: prefMethodT });
             group.triangulationMethod = result.method;
+            if (result.method === 'ba') solvedBaT++; else solvedDltT++;
 
             group.reprojections = result.reprojections;
             group.points3d = result.points3d;
@@ -639,7 +742,9 @@ async function groupByTrackAndTriangulateAll(selectedTrackIndices, selectedCamer
 
     }, {
         onProgress: function (done, total) {
-            showLoading('Triangulating... ' + done + '/' + total + ' frames');
+            showLoading('Triangulating... ' + done + '/' + total + ' frames (' +
+                triangulationMethodLabel(prefMethodT) + '; ' +
+                reused3dT.toLocaleString() + ' existing solutions kept)');
         },
     });
 
@@ -652,9 +757,17 @@ async function groupByTrackAndTriangulateAll(selectedTrackIndices, selectedCamer
     var avgError = totalErrors.length > 0
         ? (totalErrors.reduce(function (a, b) { return a + b; }, 0) / totalErrors.length).toFixed(2)
         : 'N/A';
+    // Name the 3D's provenance so a run that kept BA solutions can't be mistaken
+    // for one that silently re-solved them with DLT. `avgError` covers only the
+    // groups actually solved here — an adopted group's error is derived on demand.
     setStatus('Grouped ' + totalGrouped + ' track-groups, triangulated ' + totalTriangulated +
-        ' frames (avg error: ' + avgError + 'px)', 'success');
-    console.log('[group-by-track] Done:', totalGrouped, 'groups across', totalTriangulated, 'frames, avg error:', avgError);
+        ' frames via ' + triangulationMethodLabel(prefMethodT) +
+        ' (avg error: ' + avgError + 'px; ' + reused3dT.toLocaleString() +
+        ' kept existing 3D, ' + solvedBaT.toLocaleString() + ' solved via Bundle Adjustment, ' +
+        solvedDltT.toLocaleString() + ' via DLT)', 'success');
+    console.log('[group-by-track] Done:', totalGrouped, 'groups across', totalTriangulated,
+        'frames, avg error:', avgError, '| 3D provenance: reused', reused3dT,
+        '| solved BA', solvedBaT, '| solved DLT', solvedDltT);
 
     // Update timeline
     if (timeline) {
@@ -2590,10 +2703,20 @@ function _fmtDuration(totalSeconds) {
     return m + ':' + (rem < 10 ? '0' : '') + rem;
 }
 
-// Target H.264 bitrate (bits/sec) for the 3D-video encoder — must match the
-// encoder.configure() call so the size estimate and the real output agree.
+/**
+ * Target H.264 bitrate (bits/sec) for the 3D-video encoder — must match the
+ * `createMp4Writer` config so the size estimate and the real output agree.
+ *
+ * This is now just the shared `bitrateFor` at the **medium** tier: the 3D modal
+ * exposes no quality picker, and medium is the bpp its own private formula always
+ * used. Deferring keeps the two modals' bitrates identical for identical output,
+ * which the private copy did NOT: it clamped to [2, 24] Mbps against the shared
+ * [1, 48] Mbps, so it doubled the bitrate (and its own size estimate) at the
+ * smallest tier and would have silently capped the new 2160p tier at 24 Mbps
+ * instead of the 29.9 Mbps the formula asks for.
+ */
 function _v3dBitrate(W, H, fps) {
-    return Math.min(24000000, Math.max(2000000, Math.round(W * H * fps * 0.12)));
+    return bitrateFor(W, H, fps, 'medium');
 }
 
 function _fmtBytes(bytes) {
@@ -2609,11 +2732,14 @@ function _fmtBytes(bytes) {
  * instance mounted in the modal) so the user can orbit/zoom to choose the
  * camera angle. Controls: prev/play/next transport, a progress bar with two
  * draggable start/end nodes (defaulted to the first/last frame) backed by two
- * editable, validated Start/End number fields, an editable FPS, a resolution
- * picker (360p / 720p / 1080p / 2K — sets output dims and the matching H.264
- * level), and a live duration readout. On Export, the chosen frame range is
+ * editable, validated Start/End number fields, an editable FPS, a `Quality`
+ * picker (480p / 720p / 1080p / 2160p — the tiers shared with "Export Video
+ * Overlays" via `RES_PRESETS`, each stating its pixel size; sets output dims and,
+ * through `h264CodecFor`, the matching H.264 level) echoed back by a live
+ * `Output` readout, and a live duration readout. On Export, the chosen range is
  * rendered into the modal viewport at the chosen resolution and encoded to an
- * .mp4 via WebCodecs VideoEncoder + mp4-muxer.
+ * .mp4 via ui/video-encode.js (mediabunny), streaming to disk when the browser
+ * offers a save-file picker.
  */
 export function showExport3DVideoModal() {
     var session = getActiveSession();
@@ -2634,14 +2760,26 @@ export function showExport3DVideoModal() {
     var V3D_NUMF = 'width:66px;text-align:center;margin-left:4px;' + V3D_FIELD;
     var V3D_HANDLE = 'position:absolute;top:5px;width:15px;height:15px;margin-left:-8px;border-radius:50%;background:var(--accent,#4a9eff);border:2px solid #fff;box-sizing:border-box;cursor:ew-resize;touch-action:none;z-index:2;';
 
-    // Standard output resolutions (16:9). The H.264 level in `codec` is bumped
-    // to match the resolution so the decoder advertises the right capability.
-    var V3D_RES = {
-        '360':  { w: 640,  h: 360,  codec: 'avc1.42001E', label: '360p (640×360)' },
-        '720':  { w: 1280, h: 720,  codec: 'avc1.42001F', label: '720p (1280×720)' },
-        '1080': { w: 1920, h: 1080, codec: 'avc1.420028', label: '1080p (1920×1080)' },
-        '2k':   { w: 2560, h: 1440, codec: 'avc1.420032', label: '2K (2560×1440)' },
-    };
+    // Standard output resolutions (16:9), DERIVED from the quality tiers shared
+    // with "Export Video Overlays" so the two modals always offer the same
+    // choices: 480p / 720p / 1080p / 2160p. This viewport is always rendered
+    // 16:9, so each tier's `refW` is the exact output width here (in the overlay
+    // modal the width follows the composition aspect instead).
+    //
+    // The H.264 level comes from the shared `h264CodecFor` rather than a
+    // hand-written string per tier — the two tables had already disagreed (this
+    // one claimed level 3.0 for 640x360 where the shared one says 3.1), and a
+    // wrong level is only discovered mid-export, at one resolution, when
+    // mediabunny rejects the codec string.
+    var V3D_RES = {};
+    var V3D_RES_KEYS = Object.keys(RES_PRESETS);
+    V3D_RES_KEYS.forEach(function (k) {
+        var p = RES_PRESETS[k];
+        V3D_RES[k] = {
+            w: p.refW, h: p.h, codec: h264CodecFor(p.refW, p.h), label: p.label,
+        };
+    });
+    var V3D_RES_DEFAULT = '1080';
 
     var overlay = document.createElement('div');
     overlay.className = 'multi-frame-modal-overlay';
@@ -2655,18 +2793,23 @@ export function showExport3DVideoModal() {
         '  <div style="flex:1 1 auto;min-width:0;display:flex;flex-direction:column;gap:12px;">' +
         '    <div style="font-size:12px;color:var(--text-secondary);line-height:1.5;">Orbit and zoom the view to set the camera angle for the exported video.</div>' +
         '    <div style="display:flex;align-items:center;gap:8px;">' +
-        '      <label style="font-size:13px;width:34px;">FPS</label>' +
+        '      <label style="font-size:13px;width:52px;">FPS</label>' +
         '      <input type="number" id="v3dExportFps" min="1" max="240" step="1" style="width:74px;text-align:center;' + V3D_FIELD + '">' +
         '    </div>' +
         '    <div style="display:flex;align-items:center;gap:8px;">' +
-        '      <label style="font-size:13px;width:34px;">Res</label>' +
+        '      <label style="font-size:13px;width:52px;">Quality</label>' +
         '      <select id="v3dExportRes" style="width:190px;max-width:100%;box-sizing:border-box;' + V3D_FIELD + '">' +
-        '        <option value="360">' + V3D_RES['360'].label + '</option>' +
-        '        <option value="720" selected>' + V3D_RES['720'].label + '</option>' +
-        '        <option value="1080">' + V3D_RES['1080'].label + '</option>' +
-        '        <option value="2k">' + V3D_RES['2k'].label + '</option>' +
+        V3D_RES_KEYS.map(function (k) {
+            return '<option value="' + k + '"' +
+                (k === V3D_RES_DEFAULT ? ' selected' : '') + '>' +
+                V3D_RES[k].label + '</option>';
+        }).join('') +
         '      </select>' +
         '    </div>' +
+        // The chosen quality echoed back as the literal pixel size that will be
+        // encoded, so the tier number in the picker is never the only place the
+        // output resolution is stated.
+        '    <div style="font-size:12px;color:var(--text-secondary);">Output: <span id="v3dExportOutSize">—</span></div>' +
         '    <div style="font-size:12px;color:var(--text-secondary);">Duration: <span id="v3dExportDuration">0:00</span></div>' +
         '    <div style="font-size:12px;color:var(--text-secondary);">Exported Frames: <span id="v3dExportSelCount">' + frameCount + '</span></div>' +
         '    <div style="font-size:12px;color:var(--text-secondary);">Estimated File Size: <span id="v3dExportSize">—</span></div>' +
@@ -2754,6 +2897,7 @@ export function showExport3DVideoModal() {
     var endField = modal.querySelector('#v3dExportEnd');
     var selCountEl = modal.querySelector('#v3dExportSelCount');
     var sizeEl = modal.querySelector('#v3dExportSize');
+    var outSizeEl = modal.querySelector('#v3dExportOutSize');
     var previewValEl = modal.querySelector('#v3dExportScrubVal');
     var prevBtn = modal.querySelector('#v3dExportPrev');
     var playBtn = modal.querySelector('#v3dExportPlay');
@@ -2783,11 +2927,19 @@ export function showExport3DVideoModal() {
         refreshSize();
     }
     function refreshSize() {
-        var res = V3D_RES[resSelect.value] || V3D_RES['720'];
+        var res = V3D_RES[resSelect.value] || V3D_RES[V3D_RES_DEFAULT];
         var fps = currentFps();
-        // bytes = bitrate(bits/s) × duration(s) / 8 — same bitrate the encoder uses.
-        var bytes = _v3dBitrate(res.w, res.h, fps) * (selectedCount() / fps) / 8;
-        sizeEl.textContent = _fmtBytes(bytes);
+        // The shared estimator, NOT a local copy of `bitrate x duration / 8` —
+        // this number also decides whether the export streams to disk
+        // (`shouldStreamToDisk`), so the readout and that decision must be the
+        // same arithmetic. It was duplicated inline in both places before.
+        sizeEl.textContent = _fmtBytes(
+            estimatedBytes(res.w, res.h, fps, 'medium', selectedCount()));
+        // Echo the tier back as literal encoded pixels + the bitrate it implies.
+        if (outSizeEl) {
+            outSizeEl.textContent = res.w + '×' + res.h + ' · ' +
+                (_v3dBitrate(res.w, res.h, fps) / 1e6).toFixed(1) + ' Mbps';
+        }
     }
     function pctOf(f) { return lastIdx > 0 ? (f / lastIdx) * 100 : 0; }
 
@@ -2942,8 +3094,8 @@ export function showExport3DVideoModal() {
     exportBtn.addEventListener('click', async function () {
         if (exporting) return;
 
-        if (typeof VideoEncoder === 'undefined' || typeof window.Mp4Muxer === 'undefined') {
-            setStatus('3D video export needs a Chromium-based browser (WebCodecs)', 'error');
+        if (!videoEncodingAvailable()) {
+            setStatus('3D video export needs a browser with WebCodecs (Chrome, Edge or a recent Safari)', 'error');
             return;
         }
 
@@ -2969,7 +3121,7 @@ export function showExport3DVideoModal() {
         // Output at the chosen standard resolution. Render the viewport at that
         // size (pixelRatio 1 so the buffer is exactly W×H) and match the camera
         // aspect so the 3D content isn't distorted.
-        var res = V3D_RES[resSelect.value] || V3D_RES['720'];
+        var res = V3D_RES[resSelect.value] || V3D_RES[V3D_RES_DEFAULT];
         var W = res.w, H = res.h;
         try {
             vp.renderer.setPixelRatio(1);
@@ -2982,27 +3134,59 @@ export function showExport3DVideoModal() {
         cap.width = W; cap.height = H;
         var capCtx = cap.getContext('2d');
 
+        var fname = (session.name || 'session').replace(/[^\w.-]+/g, '_') +
+            '_3d_' + resSelect.value + '_f' + expStart + '-' + expEnd + '.mp4';
+
+        // A big clip streams to a real file instead of being buffered whole (see
+        // ui/video-encode.js); a small one just downloads, as it always has.
+        // This has to happen BEFORE the lazy-frame load below, because the File
+        // System Access API needs the transient user activation from the Export
+        // click and that does not survive a long await.
+        var estBytes = estimatedBytes(W, H, fps, 'medium', nFrames);
+        var fileHandle = null;
+        if (shouldStreamToDisk(estBytes)) {
+            if (typeof window.showSaveFilePicker === 'function') {
+                try {
+                    fileHandle = await window.showSaveFilePicker({
+                        suggestedName: fname,
+                        types: [{ description: 'MP4 video', accept: { 'video/mp4': ['.mp4'] } }],
+                    });
+                } catch (pickErr) {
+                    if (pickErr && pickErr.name === 'AbortError') {
+                        setStatus('3D video export cancelled — a clip this large (~' +
+                            _fmtBytes(estBytes) + ') needs a file to stream into', 'warning');
+                        exporting = false;
+                        cleanup();
+                        return;
+                    }
+                    console.warn('[3D video] destination pick failed:', pickErr);
+                    fileHandle = null;
+                }
+            }
+            if (!fileHandle && !window.confirm('This clip is about ' + _fmtBytes(estBytes) +
+                '. Without a save-file picker it must be built entirely in memory, which may ' +
+                'crash the tab.\n\nExport anyway?')) {
+                setStatus('3D video export cancelled', 'warning');
+                exporting = false;
+                cleanup();
+                return;
+            }
+        }
+
         // Lazy sessions: ensure all frames are available before sweeping.
         if (session.lazyLoader) {
             try { await loadAllLazyFrames(showLoading); hideLoading(); } catch (e) {}
         }
 
-        var muxer, encoder;
+        var writer;
         try {
-            muxer = new window.Mp4Muxer.Muxer({
-                target: new window.Mp4Muxer.ArrayBufferTarget(),
-                video: { codec: 'avc', width: W, height: H, frameRate: fps },
-                fastStart: 'in-memory',
-            });
-            encoder = new VideoEncoder({
-                output: function (chunk, meta) { muxer.addVideoChunk(chunk, meta); },
-                error: function (e) { console.error('[3D video] encoder error:', e); },
-            });
-            encoder.configure({
-                codec: res.codec,  // H.264 level matched to the chosen resolution
-                width: W, height: H,
+            writer = await createMp4Writer({
+                canvas: cap,
+                width: W, height: H, fps: fps,
                 bitrate: _v3dBitrate(W, H, fps),
-                framerate: fps,
+                fullCodecString: res.codec,   // H.264 level matched to the chosen resolution
+                frameCount: nFrames,
+                fileHandle: fileHandle,
             });
         } catch (err) {
             console.error('[3D video] setup failed:', err);
@@ -3012,7 +3196,6 @@ export function showExport3DVideoModal() {
             return;
         }
 
-        var frameDurUs = Math.round(1e6 / fps);
         var encodedOk = true;
         try {
             // Encode only the selected [expStart, expEnd] range; timestamps are
@@ -3026,38 +3209,32 @@ export function showExport3DVideoModal() {
                 vp.renderer.render(vp.scene, vp.threeCamera);
                 capCtx.drawImage(src, 0, 0, W, H);
 
-                var vframe = new VideoFrame(cap, {
-                    timestamp: Math.round(out * 1e6 / fps),
-                    duration: frameDurUs,
-                });
-                encoder.encode(vframe, { keyFrame: (out % 60 === 0) });
-                vframe.close();
+                // Awaiting the writer IS the backpressure: mediabunny settles
+                // once the encoder has room, and REJECTS if it died — the old
+                // `encodeQueueSize` spin could hang forever on a dead encoder.
+                await writer.addFrame(out);
 
-                // Update progress + relieve encoder backpressure periodically.
                 if (out % 5 === 0 || i === expEnd) {
                     var pct = Math.round(((out + 1) / nFrames) * 100);
                     progressFill.style.width = pct + '%';
                     progressLabel.textContent = 'Encoding ' + (out + 1) + ' / ' + nFrames;
                     await new Promise(function (r) { setTimeout(r, 0); });
                 }
-                while (encoder.encodeQueueSize > 12 && !cancelled) {
-                    await new Promise(function (r) { setTimeout(r, 0); });
-                }
             }
 
             if (!cancelled) {
                 progressLabel.textContent = 'Finalizing...';
-                await encoder.flush();
-                muxer.finalize();
-                var buffer = muxer.target.buffer;
-                var blob = new Blob([buffer], { type: 'video/mp4' });
-                var fname = (session.name || 'session').replace(/[^\w.-]+/g, '_') +
-                    '_3d_' + resSelect.value + '_f' + expStart + '-' + expEnd + '.mp4';
-                downloadBlob(blob, fname);
+                var result = await writer.finish();
+                if (!result.streamed) downloadBlob(result.blob, fname);
                 setStatus('3D video exported: ' + fname + ' (' + nFrames + ' frames @ ' + fps +
                     ' fps, ' + W + '×' + H + ')', 'success');
             } else {
-                setStatus('3D video export cancelled', 'warning');
+                // A cancelled STREAMED export still commits what was written,
+                // so the file on disk is a real but unplayable partial.
+                await writer.cancel();
+                setStatus(writer.streaming
+                    ? '3D video export cancelled — a partial file was written to the chosen destination'
+                    : '3D video export cancelled', 'warning');
             }
         } catch (err) {
             encodedOk = false;
@@ -3065,7 +3242,7 @@ export function showExport3DVideoModal() {
             setStatus('3D video export failed: ' + err.message, 'error');
         }
 
-        try { if (encoder.state !== 'closed') encoder.close(); } catch (e) {}
+        try { await writer.cancel(); } catch (e) {}
         exporting = false;
         cleanup();
     });

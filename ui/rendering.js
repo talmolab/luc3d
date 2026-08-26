@@ -51,6 +51,13 @@ export function getVisibilitySettings() {
         var el = document.getElementById(id);
         return (el && el.getAttribute('data-value')) || fallback;
     }
+    // Same tolerance as styleVal, for checkboxes added after the fact: the
+    // headless runners build a partial DOM, and a bare `.checked` on a missing
+    // element throws and takes the whole render down.
+    function checkVal(id, fallback) {
+        var el = document.getElementById(id);
+        return el ? el.checked : fallback;
+    }
     return {
         showLegend: document.getElementById('visLegend').checked,
         showUser: document.getElementById('visUser').checked,
@@ -58,6 +65,9 @@ export function getVisibilitySettings() {
         showReprojected: document.getElementById('visReprojections').checked,
         reprojNodeColor: document.getElementById('visReprojNodeColor').getAttribute('data-value') || 'white',
         showErrors: document.getElementById('visErrors').checked,
+        // The "?" badge on unlinked instances. Defaults TRUE when the control is
+        // absent, so the affordance is never lost by accident.
+        showUnlinkedBadge: checkVal('visUnlinkedBadge', true),
         userOpts: {
             nodeSize: parseInt(document.getElementById('visUserNodeSize').value) || 4,
             lineWidth: parseInt(document.getElementById('visUserEdgeWeight').value) || 2,
@@ -126,10 +136,24 @@ export function drawAllOverlays(frameIdx) {
             if (points3dNodeCount(_grp.points3d) > 0 &&
                 (!_grp.reprojectedInstances || _grp.reprojectedInstances.size === 0) &&
                 (!_grp.reprojections || Object.keys(_grp.reprojections).length === 0)) {
-                var _triRes = triangulateAndReproject(_grp, state.session.cameras);
+                // Re-solve with WHICHEVER METHOD this group was last triangulated
+                // with — same precondition as `reTriangulateGroup`. Passing no
+                // options makes the dispatcher silently default to 'dlt', which is
+                // how "Triangulate All ▸ Bundle Adjustment" appeared to do nothing:
+                // the windowed sweep deliberately drops `reprojections` /
+                // `state.triangulationResults` project-wide (~1.9 GB at 531,799
+                // groups — see sweepTriangulateAllFrames' docstring), so this fill
+                // is the ONLY thing that repopulates them, and a DLT re-solve here
+                // overwrote BA's error with DLT's while `group.triangulationMethod`
+                // still made the panel label it "Bundle Adjustment".
+                var _m = (_grp.triangulationMethod === 'ba') ? 'ba' : 'dlt';
+                var _triRes = triangulateAndReproject(_grp, state.session.cameras, { method: _m });
                 _grp.reprojections = _triRes.reprojections;
                 storeReprojectedInstances(_grp, _triRes, state.session.cameras);
-                // Store in triangulationResults for info panel
+                // Store in triangulationResults for info panel. `method` is carried
+                // through so the panel's method label comes from the solve that
+                // actually produced these numbers rather than falling back to
+                // `group.triangulationMethod` (which is what let the two disagree).
                 if (!_lazyFrameResults) _lazyFrameResults = [];
                 _lazyFrameResults.push({
                     group: _grp,
@@ -139,6 +163,7 @@ export function drawAllOverlays(frameIdx) {
                     errorsUndistorted: _triRes.errorsUndistorted,
                     meanError: _triRes.meanError,
                     meanErrorUndistorted: _triRes.meanErrorUndistorted,
+                    method: _triRes.method,
                 });
             }
         }
@@ -255,6 +280,7 @@ export function drawAllOverlays(frameIdx) {
             hoveredNode: hoveredNode,
             dragInfo: dragInfo,
             unlinkedInstances: viewUnlinked,
+            showUnlinkedBadge: vis.showUnlinkedBadge,
             assignmentSelectedIds: assignmentSelectedIds,
             assignmentMode: assignmentMode,
             selectedUnlinkedId: selectedUnlinked ? selectedUnlinked.id : null,

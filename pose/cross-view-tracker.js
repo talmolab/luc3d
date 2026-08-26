@@ -4,12 +4,13 @@
  * Adapted from the `CrossViewTracker` written by Liezl Maree in the
  * talmolab/sleap-3d repository (Python) and reimplemented here in JavaScript.
  *
- * A faithful re-implementation of the cross-view 3D multi-target tracker from
+ * A re-implementation of the cross-view 3D multi-target tracker from
  * `/root/vast/eric/sleap-3d/sleap_3d/tracker.py` (`CrossViewTracker`, L1158).
  * It associates per-camera 2D detections to a running list of 3D targets, one
  * camera-view at a time, via Hungarian assignment on a cost that sums a 2D
- * reprojection term and a 3D point-to-ray term. There is NO Kalman filter, NO
- * velocity model, and NO track aging — matching the reference.
+ * reprojection term and a 3D point-to-ray term. There is still NO Kalman filter
+ * and NO velocity model, matching the reference — but as of 2026-08-14 it is no
+ * longer a byte-faithful port: see "THE STALE-ANCHOR FIX" below.
  *
  * Coordinate conventions (verified against sleap_3d/geometry.py + geometry_legacy.py):
  *   - The tracker works entirely in NORMALIZED camera coordinates. 2D detections
@@ -21,14 +22,56 @@
  *     normalized image units (so the 2D term is near-saturated and the 3D term
  *     dominates — which is why `correspondence_weight_3d` is the meaningful knob).
  *
- * Faithful-port quirks preserved from the reference (do NOT "fix" these):
- *   - Association is per-view-per-frame; each camera's Hungarian mutates the
- *     shared target list before the next camera is processed.
+ * -----------------------------------------------------------------------
+ * THE STALE-ANCHOR FIX (2026-08-14) — no longer a byte-faithful port
+ * -----------------------------------------------------------------------
+ * The reference `Target` keeps exactly one detection per camera FOREVER — a
+ * `detsByCam` entry is only ever overwritten, never expired — and re-fuses
+ * whatever it is holding into `points3d` by mutating the SHARED target list
+ * mid-frame, one camera's Hungarian at a time. Two consequences, both measured
+ * on real multi-view rodent corpora (`talmolab/luc3d@eric/figs`,
+ * `figs/fig8-bench/xv_experimental.js`, methods M1 `sync` / `stale`):
+ *   1. After an occlusion, an animal's target keeps a 3D pose frozen at wherever
+ *      it was last seen, indefinitely. On re-entry, the surviving animal's OWN
+ *      detection can sit closer to that frozen ghost than to its own
+ *      (correctly-tracking) target, so the two identities permanently swap —
+ *      and nothing downstream can detect it, because both targets stay
+ *      internally consistent with their (now-swapped) detections.
+ *   2. Because one camera's match mutates `points3d` before the next camera in
+ *      the same frame is scored, a single frame runs a Gauss-Seidel update
+ *      instead of a Jacobi one: camera 2's assignment is judged against a state
+ *      camera 1 already perturbed this same frame, not against where the frame
+ *      actually started.
+ * Fixed by two changes, both gated behind hyperparameters and both verified
+ * additive (empty/zero config reproduces the pre-fix tracker exactly):
+ *   - **`stale` (frames, default 20)** — at the start of each frame, evict any
+ *     `detsByCam` entry older than `stale` frames, BEFORE that frame's
+ *     association runs. A target can no longer be re-triangulated from one
+ *     fresh view fused with four ancient ones.
+ *   - **Frame-synchronous association ("sync", unconditional, no flag)** — a
+ *     target's `points3d` is no longer mutated mid-frame. Every camera's
+ *     Hungarian this frame is scored against the SAME state (however it stood
+ *     at frame start); the one, single re-fuse happens once, after every
+ *     camera has been processed. Implemented by deferring `_retriangulate()`
+ *     to `_endFrame()` rather than a separate frozen-snapshot field, so a
+ *     target's `points3d` is always live and directly readable outside the
+ *     `trackFrame()` call (`_adjacency2d`/`_adjacency3d` still take a `target`
+ *     and read `target.points3d`/`target.detsByCam` directly when called
+ *     outside a frame — e.g. from tests — for exactly this reason).
+ * Measured on the validated recommended configuration (`stale: 20` +
+ * `distanceThreshold: 25`, `corr3dWeight` unchanged at 6): BMimica cross-view
+ * IDF1 switches 2,071 → 413 (50 sessions); SLAP-2M within-view (42 multi-animal
+ * sessions, predictions pool) switches 3,094 → 1,312, IDF1 0.7040 → 0.7212. Full
+ * derivation: `figs/out/tmp/corr12_run.log` and the manuscript pick-up notes in
+ * the `talmolab/luc3d@eric/figs` worktree (2026-08-13/14).
+ *
+ * Faithful-port quirks still preserved from the reference (do NOT "fix" these
+ * without new measurement — they were not implicated by the fig8-bench search):
  *   - `velocity_threshold` / `distance_threshold` are SOFT (drive the cost term
  *     negative), not hard gates; negative-cost matches are not filtered out.
  *   - The 3D term ignores the time gap (Δt forced to 0 in the reference).
  *   - 3D velocity is zero (no motion prediction); re-triangulation is plain DLT
- *     over all of a target's stored per-view detections (time weights unused).
+ *     over all of a target's (now freshness-filtered) per-view detections.
  *
  * Depends on: pose/triangulation.js (all geometry is coordinate-agnostic and
  * reused directly by passing the bare extrinsic + normalized points).
@@ -89,6 +132,8 @@ function Target(trackId) {
     this.detsByCam = new Map();   // camName -> Detection (one current det per view)
     this.points3d = null;         // Float64Array(3N) world coords, all-NaN = missing
     this.identityId = null;       // filled at commit time
+    this._touched = false;        // got a matched detection this frame (sync: re-fuse at frame end)
+    this._snapMean = null;        // frame-start frameIdxMean() snapshot (sync); null outside a frame
 }
 
 Target.prototype.frameIdxMean = function () {
@@ -97,9 +142,19 @@ Target.prototype.frameIdxMean = function () {
     return n > 0 ? s / n : 0;
 };
 
+// Immediate fuse: used for births, where the target does not exist yet at
+// frame start and so has nothing for `_endFrame` to defer.
 Target.prototype.addDetection = function (det) {
     this.detsByCam.set(det.cam.name, det);
     this._retriangulate();
+};
+
+// Frame-synchronous fuse: record the match but defer `_retriangulate()` to
+// `_endFrame()`, so every camera's Hungarian this frame sees the SAME
+// `points3d` regardless of what earlier cameras in this frame matched.
+Target.prototype._deferDetection = function (det) {
+    this.detsByCam.set(det.cam.name, det);
+    this._touched = true;
 };
 
 Target.prototype._retriangulate = function () {
@@ -140,6 +195,11 @@ export class CrossViewTracker {
      *   node's contribution to the 2D + 3D association cost is scaled by its
      *   weight; a weight of 0 drops the node from matching entirely. null
      *   (default) == every node weighted 1 (faithful reference behavior).
+     *   stale (20) — THE STALE-ANCHOR FIX (see file header). Evict a target's
+     *   per-camera detection once it is more than this many frames old, before
+     *   that frame's association runs. 0 disables eviction (reproduces the
+     *   pre-fix, unbounded-staleness reference behavior) for reproducibility/
+     *   debugging; any positive number is floored to an integer.
      */
     constructor(hp) {
         hp = hp || {};
@@ -154,11 +214,14 @@ export class CrossViewTracker {
         // LUCID extension (not in reference): per-node association weights.
         // null = every node weighted 1.
         this.nodeWeights = Array.isArray(hp.nodeWeights) ? hp.nodeWeights : null;
+        // Stale-anchor fix (see file header). Default 20; 0 = off (pre-fix behavior).
+        this.stale = Math.max(0, Math.floor(num(hp.stale, 20)));
 
         this.targets = [];                 // list of live Target
         this.unmatchedByCam = new Map();   // camName -> Detection[] (births buffer)
         this._nextTrackId = 0;
         this._fCache = {};                 // "camA:camB" -> fundamental matrix
+        this._frame = null;                // current frame index, for staleness eviction
     }
 
     /**
@@ -167,6 +230,7 @@ export class CrossViewTracker {
      * associates one view at a time within a frame).
      */
     trackFrame(detsByCam, camsOrder) {
+        this._beginFrame(detsByCam, camsOrder);
         for (var ci = 0; ci < camsOrder.length; ci++) {
             var cam = camsOrder[ci];
             var dets = detsByCam.get(cam.name) || [];
@@ -174,6 +238,52 @@ export class CrossViewTracker {
             // before re-populating them this frame.
             this.unmatchedByCam.set(cam.name, []);
             this._trackView(dets, cam);
+        }
+        this._endFrame();
+    }
+
+    // Stale-anchor fix, part 1: evict per-camera detections this target has not
+    // seen fresh in `stale` frames, before this frame's association runs. The
+    // frame index is derived from the detections themselves (no frame counter
+    // is threaded through the call site) — the max frameIdx seen this call, or
+    // one past the previous frame if this call carries no detections at all.
+    _beginFrame(detsByCam, camsOrder) {
+        var f = null;
+        for (var ci = 0; ci < camsOrder.length; ci++) {
+            var list = detsByCam.get(camsOrder[ci].name) || [];
+            for (var i = 0; i < list.length; i++) {
+                if (f == null || list[i].frameIdx > f) f = list[i].frameIdx;
+            }
+        }
+        if (f == null) f = (this._frame == null ? 0 : this._frame + 1);
+        this._frame = f;
+
+        var cutoff = this.stale > 0 ? f - this.stale : null;
+        for (var t = 0; t < this.targets.length; t++) {
+            var tg = this.targets[t];
+            if (cutoff != null) {
+                var drop = [];
+                tg.detsByCam.forEach(function (d, name) {
+                    if (d.frameIdx < cutoff) drop.push(name);
+                });
+                for (var k = 0; k < drop.length; k++) tg.detsByCam.delete(drop[k]);
+            }
+            // Sync fix: freeze the mean this frame's dt is measured against, so a
+            // camera processed later this frame doesn't see a mean already moved
+            // by an earlier camera's match this same frame.
+            tg._snapMean = tg.frameIdxMean();
+        }
+    }
+
+    // Stale-anchor fix, part 2 (frame-synchronous association): re-fuse every
+    // target touched this frame exactly once, after all cameras have been
+    // processed, instead of mid-frame inside `_trackView`.
+    _endFrame() {
+        for (var t = 0; t < this.targets.length; t++) {
+            var tg = this.targets[t];
+            if (tg._touched) tg._retriangulate();
+            tg._touched = false;
+            tg._snapMean = null;
         }
     }
 
@@ -196,7 +306,10 @@ export class CrossViewTracker {
             for (var ti = 0; ti < N; ti++) {
                 var di = assign[ti];
                 if (di != null && di >= 0 && di < M) {
-                    this.targets[ti].addDetection(dets[di]);   // match: fuse + re-triangulate
+                    // Sync fix: record the match now but defer re-triangulation to
+                    // _endFrame(), so a later camera THIS frame is scored against
+                    // the same points3d an earlier camera this frame was.
+                    this.targets[ti]._deferDetection(dets[di]);
                     matchedDet[di] = true;
                 }
             }
@@ -211,8 +324,13 @@ export class CrossViewTracker {
     }
 
     // Cost = adjacency_2d + adjacency_3d (reference `set_adjacency_matrix`).
+    // Sync fix: `_snapMean` is the frame-start snapshot when called from inside
+    // trackFrame()/_trackView(); it is null outside that lifecycle (e.g. a test
+    // calling this directly), in which case the live mean is used, unchanged
+    // from before the fix.
     _adjacency(target, det, cam) {
-        var dt = det.frameIdx - target.frameIdxMean();
+        var mean = target._snapMean != null ? target._snapMean : target.frameIdxMean();
+        var dt = det.frameIdx - mean;
         return this._adjacency2d(target, det, dt) + this._adjacency3d(target, det, cam);
     }
 
