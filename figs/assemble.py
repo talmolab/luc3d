@@ -102,14 +102,14 @@ TITLES = {
     (2, "f"): "Triangulation: LUC3D vs Anipose",
     (2, "g"): "Time per keypoint",
     # Fig 3 (cross-view tracking; the repo's fig13, itself the old fig3 + fig4
-    # combination). NO (3, "b") LAYOUT slot: b is stacked directly under a into
-    # ONE composite PDF (fig3_sync.build_stack), which draws b's letter/title
-    # itself, reading TITLES[(3, "b")]. NO (3, "h") ENTRY: h (the sweep's IDF1
-    # half, under g in the block's second column composite) is deliberately
-    # untitled -- g's title covers the stacked pair and h's y label names its
-    # metric.
+    # combination). NO (3, "b") ENTRY, deliberately: b is stacked directly
+    # under a into ONE composite PDF (fig3_sync.build_stack), which draws b's
+    # LETTER only -- the shipped artwork carries no b title, and an entry here
+    # would make build_stack start drawing one. NO (3, "h") ENTRY: h (the
+    # sweep's IDF1 half, under g in the block's second column composite) is
+    # deliberately untitled -- g's title covers the stacked pair and h's y
+    # label names its metric.
     (3, "a"): "Grouping strategies",
-    (3, "b"): "Hypotheses per frame",
     (3, "c"): "Visualization of ID grouping hypotheses in two camera views",
     (3, "d"): "An identity switch in one camera view",
     (3, "e"): "Grouping accuracy",

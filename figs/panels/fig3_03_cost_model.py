@@ -89,13 +89,13 @@ def main():
     #: panel and the "not run" point in panel f are the SAME number.
     cap = load("fig3_headtohead.json")["caps"]["max_hypotheses_per_frame"]
 
-    render(df, cap, "third", 3)
-    # fig13's a/b stack keeps the ORIGINAL half-span geometry (Eric, after the
-    # 2026-08-25 third-span re-span for fig3's hyp-illustration row: "you
-    # messed up the [side] of 13b you changed the x axis size, that is a
-    # mistake, change it back") -- so fig13 gets its own half-span twin, which
-    # fig13_sync.build_stack now reads instead of fig3's b.
-    render(df, cap, "half", 13)
+    # HALF SPAN, deliberately. The a/b stack keeps the ORIGINAL half-span
+    # geometry (Eric, after a 2026-08-25 third-span re-span: "you messed up
+    # the [side] of 13b you changed the x axis size, that is a mistake, change
+    # it back"); fig3_sync.build_stack reads this PDF as the stack's bottom
+    # half. The old standalone third-span render is gone with the old fig3
+    # composition (2026-08-26 renumbering).
+    render(df, cap, "half", 3)
 
 
 def render(df, cap, span, fig_no):

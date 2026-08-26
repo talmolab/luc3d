@@ -292,8 +292,8 @@ def build_stack(dst_fig: int, dst_letter: str, top: tuple, bottom: tuple,
     `top`/`bottom` are (src_fig, src_letter, slug). assemble.py places panels by
     row and cannot span one panel across two rows, so a genuine "one over the
     other" column has to be pre-merged into a single PDF -- this is that merge,
-    used for both the a/b stack and the g/h stack. `bottom`'s letter and title
-    are hand-drawn onto the composite (Helvetica-Bold, LETTER_PT/TITLE_PT, INK,
+    used for both the a/b stack and the g/h stack. `bottom`'s letter (and its title, when TITLES has an entry --
+    (3, "b") deliberately has none) is hand-drawn onto the composite (Helvetica-Bold, LETTER_PT/TITLE_PT, INK,
     matching assemble()'s own style) since assemble() only knows about the ONE
     (dst_letter, slug) entry this composite is filed under -- `top`'s.
 
