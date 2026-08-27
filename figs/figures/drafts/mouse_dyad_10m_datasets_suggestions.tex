@@ -1,0 +1,144 @@
+% =====================================================================
+% SUGGESTIONS for the Mouse-Dyad-10M paragraph of \subsection{Datasets}
+% =====================================================================
+%
+% Everything below is either (a) MEASURED from the corpus at
+% /root/vast/eric/BMimica and figs/out/dataset_sheets.json on 2026-08-27, or
+% (b) marked [VERIFY] because only you can supply it. Nothing is invented.
+%
+% Your paragraph as it stands is accurate -- I re-derived every number in it
+% from the data and all of them hold (see "WHAT I CHECKED" at the bottom). What
+% follows is what is MISSING, in the order I would add it.
+%
+% Style follows your rules: no colon constructions, no sex pronouns for the
+% animals, short sentences.
+%
+% ---------------------------------------------------------------------
+% THE ONE THING I WOULD FIX FIRST
+% ---------------------------------------------------------------------
+% "giving 10,084,734 frames in total" is the PER-VIEW count. Across the five
+% cameras the corpus holds 50,423,670 frames. The datasheet
+% (Table~\ref{tab:datasheets}) lists both and labels them "Frames" and
+% "Frames / View", so as written the text and the table disagree on what the
+% word "frames" means.
+%
+% And the paragraph never states the corpus's size in POSES, which is the
+% figure a reader comparing it against SLAP-2M will look for. SLAP-2M's
+% paragraph opens with "2.81 million 3D poses and 22.49 million 2D poses".
+% Mouse-Dyad-10M holds 20,169,468 3D poses and 100,847,340 reprojected 2D
+% poses -- roughly seven times SLAP-2M in 3D and four times in 2D -- and
+% currently says so nowhere.
+%
+% ---------------------------------------------------------------------
+% SUGGESTED REPLACEMENT PARAGRAPH (drop-in)
+% ---------------------------------------------------------------------
+
+The Mouse-Dyad-10M corpus consists of 56 sessions, each recording two mice with
+five synchronized cameras at 150 frames per second for approximately 20 minutes.
+That is 10,084,734 frames per view and 50,423,670 across the five, from which the
+corpus provides 20,169,468 proofread 3D poses and 100,847,340 2D poses
+reprojected into the individual views. Each session pairs one male with one
+female, drawn from nine animals, four male and five female, in 18 unique
+pairings recorded between one and six times each. A 15-node mouse skeleton was
+used throughout, comprising the nose, left and right ears, the tail-tip and tail
+base (denoted TTI), three intermediate tail nodes, the head, trunk and neck, and
+the left and right shoulders and haunches. The five cameras record at
+$1280 \times 1024$ and sit between 58 and 76 degrees above the animals, so no
+single view resolves the vertical axis, and each session carries its own
+calibration in an aniposelib-compatible TOML file giving every camera's
+intrinsics, radial distortion and extrinsic pose. The arena is
+$230 \times 230 \times 140$~mm, about 6.9 body lengths across. Every session ships
+the 3D reconstruction (\texttt{points3d.h5}), the per-view 2D keypoints
+(\texttt{analysis.h5}), the SLEAP predictions each view was tracked from
+(\texttt{predictions.slp}), the video and the calibration. The 3D was proofread
+manually by three annotators, and its median reprojection error is 2.40~px, which
+is the reference the geometric measurements in Figure~\ref{fig2} are scored
+against. Of the 56 sessions, the 50 that also carry the shared, identity-stripped
+detection pool and its transferred ground truth are the ones every tracking
+benchmark uses; the remaining six carry 3D but no pool. Figures~\ref{fig2}B to
+G,~\ref{fig3}E, G and H,~\ref{fig4},~\ref{fig6}A and~\ref{fig6}F were measured on
+this corpus.
+
+% ---------------------------------------------------------------------
+% ONE SENTENCE I WOULD ADD SOMEWHERE, BECAUSE FIGURE 4 DEPENDS ON IT
+% ---------------------------------------------------------------------
+% The whole male/female result in Figure 4 rests on a convention the Datasets
+% section never states. Track slot 0 is the male and slot 1 the female in all 56
+% sessions -- I verified it: the seven identifiers that ever occupy slot 0 and
+% the eight that ever occupy slot 1 do not overlap at all, and each identifier is
+% <individual>_<index>, so they collapse to four male and five female
+% individuals. Without this, a reader cannot tell how sex was assigned, and
+% Figure 4's central claim looks like it came from an arbitrary track label.
+% Methods/behavior states the convention; Datasets is where a reader will look
+% for it. Suggested:
+
+Animal identity is recorded per session as \texttt{<individual>\_<index>}, and
+the assignment is fixed across the corpus, with the male always in the first
+track slot and the female always in the second. No identifier appears in both
+slots in any of the 56 sessions, which is what allows the analysis in
+Figure~\ref{fig4} to be reported by sex rather than by track label.
+
+% ---------------------------------------------------------------------
+% [VERIFY] -- THINGS A DATASET PAPER NEEDS THAT I CANNOT SUPPLY
+% ---------------------------------------------------------------------
+% These are the gaps a reviewer of a dataset contribution will ask about. I have
+% left them out of the prose above rather than guess.
+%
+%  1. STRAIN. The datasheet says "White", which reads as an albino stock rather
+%     than a strain name. Give the actual strain (BALB/c, CD-1, ...). SLAP-2M's
+%     paragraph names three coat colours, so the contrast will be noticed.
+%  2. AGE AND WEIGHT at recording.
+%  3. HOUSING. Group or single housed, light cycle, and whether recordings were
+%     in the light or dark phase. For a courtship-adjacent result this matters.
+%  4. FAMILIARITY. Were the pairs cagemates or novel to each other, and was any
+%     pairing repeated on consecutive days? The corpus records each pairing
+%     between one and six times, so habituation across repeats is a question the
+%     data invites.
+%  5. ESTROUS STATE. Not staged, per the Results, but say so here as well since
+%     this is where a reader checks.
+%  6. THE ARENA ITSELF. Material, floor covering, walls opaque or clear, and
+%     whether anything was in it. The Figure 4A render shows a bare box.
+%  7. LIGHTING AND SYNCHRONIZATION. Visible or infrared, and how the five
+%     cameras were synchronized (hardware trigger, software timestamp).
+%  8. CAMERA MODEL and lens.
+%  9. THE 2D DETECTOR. How many frames were hand-labeled to train it, by how
+%     many annotators, and the model used. The paper says SLEAP produced the
+%     detections but never says how it was trained on this corpus.
+% 10. PROOFREADING PROTOCOL. Three annotators is in the datasheet. Add what they
+%     corrected, whether any session was double-proofread, and any agreement
+%     measure. This is the corpus's main claim to value.
+% 11. LICENCE for the released data.
+% 12. RECORDING DATES. The sessions span 2025-08-27 to 2025-09-08, seven
+%     recording days (7, 9, 4, 10, 10, 10 and 6 sessions). Worth one clause,
+%     since session-level statistics are not independent across a day.
+%
+% ---------------------------------------------------------------------
+% WHAT I CHECKED, AND HOW
+% ---------------------------------------------------------------------
+% MEASURED from /root/vast/eric/BMimica (56 session directories, excluding
+% scratch), reading each session's *points3d*.h5:
+%   * 56 sessions, 2 animals each, 15 nodes, node order identical in all 56.
+%   * 10,084,734 frames per view, 50,423,670 across five views.
+%   * 20,169,468 3D poses, 100,847,340 reprojected 2D poses.
+%       (figs/out/dataset_sheets.json, measured 2026-08-18, and it agrees with
+%        Table~\ref{tab:datasheets}.)
+%   * Track names collapse to 9 individuals -- slot 0 {178621, 181321, 181322,
+%     181323}, slot 1 {164332, 177397, 181312, 181313, 181315} -- giving 4 male
+%     and 5 female and exactly 18 distinct pairings over the 56 sessions, with
+%     1 to 6 sessions per pairing. YOUR N = 9, 4 MALE, 5 FEMALE AND 18 PAIRINGS
+%     ARE CORRECT. The raw track_names field carries 15 distinct strings, which
+%     is what makes this look wrong at first glance; the suffix is a per-session
+%     index, not an animal.
+%   * 50 of the 56 sessions have both pool detections and transferred ground
+%     truth under luc3d-bench/outputs/bmimica. The six that do not are all from
+%     2025-09-08.
+%   * Camera resolution 1280 x 1024, from the calibration TOMLs.
+%
+% TAKEN FROM THE MANUSCRIPT'S OWN ESTABLISHED NUMBERS: the 58 to 76 degree
+% camera elevation and the 230 x 230 x 140 mm arena (Figure 4A caption), 6.9
+% body lengths across (Methods, behavioral analysis), and the 2.40 px reference
+% reprojection error (Methods, triangulation).
+%
+% NOT CHECKED: the "approximately 20 minutes" per session. 10,084,734 / 56 /
+% 150 = 1,200.6 s, so it is right on average, but session lengths vary and the
+% figure is a mean rather than a constant.
