@@ -565,6 +565,15 @@ export class InteractionManager {
                 if (this.assignmentSelection[i].id === unlinked.id) {
                     // Toggle off: clicking the same instance removes it
                     this.assignmentSelection.splice(i, 1);
+                    // …and it stops being THE selection. `selectedUnlinked` is
+                    // what `_deleteSelected` acts on, while the amber ring is
+                    // driven by `assignmentSelection` — leaving the two out of
+                    // step meant a toggled-off instance was still armed for
+                    // Delete with nothing on screen (and no highlighted row in
+                    // the Ungrouped Instances table) to say so.
+                    if (this.selectedUnlinked && this.selectedUnlinked.id === unlinked.id) {
+                        this.selectedUnlinked = null;
+                    }
                     this._requestRedraw();
                     if (this.callbacks.onAssignmentSelectionChanged) {
                         this.callbacks.onAssignmentSelectionChanged(this.assignmentSelection.length);

@@ -769,7 +769,17 @@
                 return c.method === 'fillText' && c.text !== '?';
             });
 
-            assertEqual(labelCalls.length, 2, 'Should draw 2 labels for unlinked instance in detached canvas');
+            // Two node names ('a', 'b') plus the track-name pill. The pill is
+            // the LINKED path's label, drawn on unlinked instances too so an
+            // ungroup doesn't erase an animal's name — see
+            // tests/test-unlinked-track-label.js. No session here, so the name
+            // is drawInstanceLabels' own 'Track <trackIdx>' fallback.
+            var labelTexts = labelCalls.map(function (c) { return c.text; });
+            assertEqual(labelCalls.length, 3,
+                'Should draw 2 node labels + 1 name pill — got ' + JSON.stringify(labelTexts));
+            assertTrue(labelTexts.indexOf('Track 0') >= 0, 'name pill is present');
+            assertTrue(labelTexts.indexOf('a') >= 0 && labelTexts.indexOf('b') >= 0,
+                'both node labels are present');
 
             // Verify coordinates are finite
             for (var i = 0; i < labelCalls.length; i++) {

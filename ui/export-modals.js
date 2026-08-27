@@ -368,7 +368,13 @@ export async function groupByIdentityAndTriangulateAll(explicitMethod) {
                 if (!allInstancesByCam[camName2]) allInstancesByCam[camName2] = [];
                 allInstancesByCam[camName2].push(ulInst);
 
-                var identityId2 = session.getIdentityIdForTrack(camName2, ulInst.trackIdx, frameIdx);
+                // Unlinked rows take the UNLINKED resolver — a trackless one
+                // keeps its identity on the instance, not in the trackIdx-keyed
+                // map (luc3d #201) — so grouping by identity can re-form
+                // exactly what an ungroup took apart.
+                var identityId2 = session.getIdentityIdForUnlinkedInstance
+                    ? session.getIdentityIdForUnlinkedInstance(camName2, ulInst, frameIdx)
+                    : session.getIdentityIdForTrack(camName2, ulInst.trackIdx, frameIdx);
                 if (identityId2 == null) continue;
                 if (!idBuckets[identityId2]) idBuckets[identityId2] = {};
                 if (!idBuckets[identityId2][camName2]) idBuckets[identityId2][camName2] = ulInst;
