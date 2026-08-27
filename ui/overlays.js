@@ -1194,6 +1194,123 @@ export function drawDragPreview(ctx, points, dragNodeIdx, dragPos, skeleton, opt
 }
 
 /**
+ * Draw ONE track/identity name pill anchored above a canvas point.
+ *
+ * Factored out of `drawInstanceLabels` so the LINKED and UNLINKED paths draw
+ * the same pill at the same place: an ungroup must not move (or delete) an
+ * animal's name, which is exactly the bug this shared helper closes (see
+ * `drawUnlinkedInstances`). Anything that reads as a difference between the
+ * two states has to come from the NAME, not from the geometry.
+ *
+ * Saves/restores `textAlign` + `textBaseline` because the unlinked caller
+ * interleaves this with the "?" badge (which sets `center`) and per-node
+ * labels (`left`); `drawInstanceLabels` was relying on the canvas default
+ * `start` still being in effect, which held only for the first instance in
+ * its own loop.
+ *
+ * @param {CanvasRenderingContext2D} ctx
+ * @param {{x:number,y:number}} cp - anchor (the instance's first visible point)
+ * @param {string} text
+ * @param {string} color
+ * @param {number} fontSize - already display-scaled; <= 0 draws nothing
+ */
+function drawNamePill(ctx, cp, text, color, fontSize) {
+    if (!cp || !text || !(fontSize > 0)) return;
+    const prevAlign = ctx.textAlign;
+    const prevBaseline = ctx.textBaseline;
+    ctx.font = 'bold ' + fontSize + 'px sans-serif';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'bottom';
+
+    const textWidth = ctx.measureText(text).width;
+    const pillPad = 3;
+    const labelYOffset = fontSize * 1.5;
+    const pillX = cp.x - pillPad;
+    const pillY = cp.y - labelYOffset - fontSize - pillPad;
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
+    ctx.beginPath();
+    if (ctx.roundRect) {
+        ctx.roundRect(pillX, pillY, textWidth + pillPad * 2, fontSize + pillPad * 2, 3);
+    } else {
+        ctx.rect(pillX, pillY, textWidth + pillPad * 2, fontSize + pillPad * 2);
+    }
+    ctx.fill();
+
+    ctx.fillStyle = color;
+    ctx.fillText(text, cp.x, cp.y - labelYOffset);
+
+    ctx.textAlign = prevAlign;
+    ctx.textBaseline = prevBaseline;
+}
+
+/**
+ * The identity a LINKED instance's label should name, resolved in the same two
+ * steps `getGroupColor` uses so the pill's text and its color can never name
+ * different animals:
+ *
+ *   1. the per-frame `frameIdentityMap` entry for this (camera, trackIdx);
+ *   2. failing that, the parent group's own `identityId`.
+ *
+ * Only the COLOR path had step 2. A group that has an identity but no per-frame
+ * entry yet — which is every group made with the Group button, since
+ * `createGroupFromUnlinked` sets `identityId` without writing the map — was
+ * therefore drawn in the identity's color under the raw TRACK name: "track_1",
+ * in green-for-id_1.
+ *
+ * @returns {Object|null} the Identity, or null when there is none to name (the
+ *   caller then falls back to the track name, as it always did)
+ */
+function resolveLabelIdentity(session, instance, group, cameraName, frameIdx) {
+    if (!session || !instance) return null;
+    var ident = session.getIdentityForTrack
+        ? session.getIdentityForTrack(instance.trackIdx, cameraName, frameIdx)
+        : null;
+    if (ident) return ident;
+    if (group && group.identityId != null && group.identityId >= 0 && session.getIdentity) {
+        return session.getIdentity(group.identityId) || null;
+    }
+    return null;
+}
+
+/**
+ * The name to print on one instance's pill — the TEXT counterpart of
+ * `getInstanceColor`, and deliberately resolved in the same order so the two
+ * can never name different animals:
+ *
+ *   1. ID mode, tracked   -> the per-frame `frameIdentityMap` identity.
+ *   2. ID mode, TRACKLESS -> the identity retained on the instance
+ *      (`Instance.identityId`, written by `unlinkGroup` — the map cannot key a
+ *      null track; luc3d #201). `getInstanceColor` already colors from this,
+ *      so omitting it here would paint an identity color under a track name.
+ *   3. Otherwise the raw track name, matching `drawInstanceLabels`' fallback
+ *      (including `'Track N'` for a trackIdx with no entry in `session.tracks`).
+ *
+ * An explicit "no identity" per-frame marker resolves to `null` at step 1 and
+ * falls through to the track name — the same thing the linked-instance label
+ * path does, so ungrouping doesn't change it either.
+ *
+ * @returns {string|null} null only when there is genuinely nothing to name
+ *   (no track AND no identity) — the caller draws no pill at all rather than
+ *   inventing a positional index that means nothing to the user.
+ */
+export function getInstanceLabelName(instance, session, cameraName, useIdentity, frameIdx) {
+    if (!instance) return null;
+    if (useIdentity && session) {
+        var ident = null;
+        if (instance.trackIdx != null && session.getIdentityForTrack) {
+            ident = session.getIdentityForTrack(instance.trackIdx, cameraName, frameIdx);
+        } else if (instance.trackIdx == null && session.getIdentity &&
+                   instance.identityId != null && instance.identityId >= 0) {
+            ident = session.getIdentity(instance.identityId);
+        }
+        if (ident && ident.name) return ident.name;
+    }
+    if (instance.trackIdx == null) return null;
+    var tracks = session && session.tracks ? session.tracks : null;
+    return (tracks && tracks[instance.trackIdx]) || ('Track ' + instance.trackIdx);
+}
+
+/**
  * Draw track name and node name labels near instances.
  *
  * @param {CanvasRenderingContext2D} ctx
@@ -1202,6 +1319,11 @@ export function drawDragPreview(ctx, points, dragNodeIdx, dragPos, skeleton, opt
  * @param {string} viewName - Camera / view name
  * @param {Object} [options]
  * @param {string[]} [options.trackNames]     - Track name strings indexed by trackIdx
+ * @param {string[]} [options.nameByIndex]    - Per-instance names, indexed like
+ *   `instances`. Wins over `trackNames` where set. Use this whenever the name
+ *   is a property of the INSTANCE (an identity) rather than of its track.
+ * @param {string[]} [options.colorByIndex]   - Per-instance label colors, same
+ *   indexing and precedence as `nameByIndex`.
  * @param {number}   [options.selectedInstanceIdx] - Index of the selected instance (for node labels), or -1
  * @param {number}   [options.nodeSize]       - Base node radius (video px, default 4)
  * @param {number}   [options.videoWidth]
@@ -1214,6 +1336,16 @@ export function drawInstanceLabels(ctx, instances, skeleton, viewName, options) 
     if (!instances || instances.length === 0) return;
 
     const trackNames = options.trackNames || [];
+    // Per-instance overrides, indexed the same as `instances`. `trackNames` /
+    // `trackColors` are keyed by trackIdx, which CANNOT express two instances
+    // in one view that share a trackIdx — a real state the raw per-camera
+    // tracker produces (see `getGroupColor`'s writtenThisFrame note, and the
+    // dup-index handling in `drawUnlinkedInstances`) — nor a trackless one,
+    // whose `null` key silently collapses every trackless instance onto one
+    // entry. The color path already tells such instances apart per instance;
+    // these let the label path do the same instead of last-write-wins.
+    const nameByIndex = options.nameByIndex || null;
+    const colorByIndex = options.colorByIndex || null;
     const selectedInstanceIdx = options.selectedInstanceIdx != null ? options.selectedInstanceIdx : -1;
     const baseNodeSize = options.nodeSize != null ? options.nodeSize : 4;
     const baseLabelSize = options.labelSize != null ? options.labelSize : 11;
@@ -1252,37 +1384,23 @@ export function drawInstanceLabels(ctx, instances, skeleton, viewName, options) 
 
         if (!firstCp) continue;
 
-        // Draw track name label
-        const trackName = inst.trackIdx != null && trackNames[inst.trackIdx]
-            ? trackNames[inst.trackIdx]
-            : ('Track ' + (inst.trackIdx != null ? inst.trackIdx : instIdx));
+        // Draw track name label. `nameByIndex`/`colorByIndex` are PER-INSTANCE
+        // and win over the trackIdx-keyed maps — see the option docs above.
         var trackColors = options.trackColors || null;
-        const color = (trackColors && trackColors[inst.trackIdx])
-            ? trackColors[inst.trackIdx]
-            : (options.color || getTrackColor(inst.trackIdx != null ? inst.trackIdx : instIdx));
+        const trackName = (nameByIndex && nameByIndex[instIdx])
+            ? nameByIndex[instIdx]
+            : (inst.trackIdx != null && trackNames[inst.trackIdx]
+                ? trackNames[inst.trackIdx]
+                : ('Track ' + (inst.trackIdx != null ? inst.trackIdx : instIdx)));
+        const color = (colorByIndex && colorByIndex[instIdx])
+            ? colorByIndex[instIdx]
+            : ((trackColors && trackColors[inst.trackIdx])
+                ? trackColors[inst.trackIdx]
+                : (options.color || getTrackColor(inst.trackIdx != null ? inst.trackIdx : instIdx)));
 
         var fontSize = adjustedLabelSize;
         if (fontSize <= 0) continue; // label size 0 = hidden
-        ctx.font = 'bold ' + fontSize + 'px sans-serif';
-        ctx.textBaseline = 'bottom';
-
-        // Background pill for track label
-        const textWidth = ctx.measureText(trackName).width;
-        const pillPad = 3;
-        const pillX = firstCp.x - pillPad;
-        var labelYOffset = fontSize * 1.5;
-        const pillY = firstCp.y - labelYOffset - fontSize - pillPad;
-        ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
-        ctx.beginPath();
-        if (ctx.roundRect) {
-            ctx.roundRect(pillX, pillY, textWidth + pillPad * 2, fontSize + pillPad * 2, 3);
-        } else {
-            ctx.rect(pillX, pillY, textWidth + pillPad * 2, fontSize + pillPad * 2);
-        }
-        ctx.fill();
-
-        ctx.fillStyle = color;
-        ctx.fillText(trackName, firstCp.x, firstCp.y - labelYOffset);
+        drawNamePill(ctx, firstCp, trackName, color, fontSize);
 
         // Draw node name labels for the selected instance
         if (instIdx === selectedInstanceIdx && skeleton && skeleton.nodes) {
@@ -1462,7 +1580,13 @@ export function drawUnlinkedInstances(ctx, unlinkedInstances, skeleton, options)
     const ulColorByIdentity = !!options.colorByIdentity;
     const ulSession = options.session || null;
     const ulFrameIdx = options.frameIdx != null ? options.frameIdx : null;
-    const selectedUnlinkedId = options.selectedUnlinkedId || null;
+    // Plumbed from `InteractionManager.selectedUnlinked` but deliberately not
+    // drawn: clicking an unlinked instance always adds it to
+    // `assignmentSelection` too, so the amber ring below already marks it, and
+    // `addToAssignmentSelection`'s toggle-off now clears both together. Kept as
+    // the hook for ever distinguishing the PRIMARY (Delete-target) selection
+    // from the rest of a multi-camera selection.
+    const selectedUnlinkedId = options.selectedUnlinkedId || null;  // eslint-disable-line no-unused-vars
     const predictedRender = options.predictedRender || null;
     // Defaults TRUE: the live app relies on this badge, so only a caller that
     // explicitly opts out (the overlay video export) loses it.
@@ -1646,6 +1770,29 @@ export function drawUnlinkedInstances(ctx, unlinkedInstances, skeleton, options)
             ctx.textAlign = 'center';
             ctx.textBaseline = 'middle';
             ctx.fillText('?', anchorCp.x - instNodeSize * 2, anchorCp.y - instNodeSize * 2);
+        }
+
+        // Track / identity NAME pill — the same label, at the same anchor, that
+        // `drawInstanceLabels` gives a LINKED instance. Without it, ungrouping an
+        // animal to correct one view's ID (the whole reason to ungroup — luc3d
+        // #201) silently erased its "track_1"/"id_1" name from the video, leaving
+        // the user no way to tell which detached detection matched which
+        // Ungrouped Instances row. Nothing about the DATA changes across an
+        // ungroup: `unlinkGroup` keeps `trackIdx` and retains the identity, so
+        // the name was always resolvable — only the drawing was missing.
+        //
+        // Gated exactly like the linked counterparts so the two states can't
+        // diverge: user instances follow the Visibility panel's "show labels"
+        // (section 4a), predicted ones appear only in ID mode (section 3a,
+        // which is ungated by showLabels — an identity is the point there).
+        if (anchorCp && (isPredicted ? ulColorByIdentity : showLabels)) {
+            var ulName = getInstanceLabelName(instance, ulSession, ul.cameraName,
+                                              ulColorByIdentity, ulFrameIdx);
+            if (ulName) {
+                ctx.globalAlpha = 1.0;
+                drawNamePill(ctx, anchorCp, ulName, color, adjustedLabelSize);
+                ctx.globalAlpha = alpha;
+            }
         }
 
         // Node name labels (never for predicted instances)
@@ -2065,18 +2212,21 @@ export function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, ses
         // user instances). Gated on ID mode so Tracks mode stays uncluttered.
         if (colorByIdentity && session && predictedInstances.length > 0) {
             var pLabelNames = session.tracks ? session.tracks.slice() : [];
-            var pLabelColors = {};
+            var pNameByIdx = new Array(predictedInstances.length);
+            var pColorByIdx = new Array(predictedInstances.length);
             for (var pl = 0; pl < predictedInstances.length; pl++) {
                 var pInst = predictedInstances[pl];
-                var pIdentity = session.getIdentityForTrack(pInst.trackIdx, viewName, _frameIdx);
+                var pIdentity = resolveLabelIdentity(session, pInst, instToGroup.get(pInst),
+                                                     viewName, _frameIdx);
                 if (pIdentity) {
-                    pLabelNames[pInst.trackIdx] = pIdentity.name;
-                    pLabelColors[pInst.trackIdx] = pIdentity.color;
+                    pNameByIdx[pl] = pIdentity.name;
+                    pColorByIdx[pl] = pIdentity.color;
                 }
             }
             drawInstanceLabels(ctx, predictedInstances, skeleton, viewName, Object.assign({}, predictedRender, {
                 trackNames: pLabelNames,
-                trackColors: pLabelColors,
+                nameByIndex: pNameByIdx,
+                colorByIndex: pColorByIdx,
                 labelSize: (userOpts && userOpts.labelSize) || 11,
             }));
         }
@@ -2118,22 +2268,27 @@ export function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, ses
         // 4a. Draw track name labels (user instances only)
         if (userOpts.showLabels && userInstances.length > 0) {
             var labelNames = session && session.tracks ? session.tracks.slice() : [];
-            var labelColors = null;
-            // When coloring by identity, show identity names and colors on labels
+            var nameByIdx = null, colorByIdx = null;
+            // When coloring by identity, show identity names and colors on labels.
+            // Resolution lives in `resolveLabelIdentity` so it stays the same
+            // two steps `getGroupColor` uses — see that function's note.
             if (colorByIdentity && session) {
-                labelColors = {};
+                nameByIdx = new Array(userInstances.length);
+                colorByIdx = new Array(userInstances.length);
                 for (var li = 0; li < userInstances.length; li++) {
                     var lInst = userInstances[li];
-                    var lIdentity = session.getIdentityForTrack(lInst.trackIdx, viewName, _frameIdx);
+                    var lIdentity = resolveLabelIdentity(session, lInst, instToGroup.get(lInst),
+                                                         viewName, _frameIdx);
                     if (lIdentity) {
-                        labelNames[lInst.trackIdx] = lIdentity.name;
-                        labelColors[lInst.trackIdx] = lIdentity.color;
+                        nameByIdx[li] = lIdentity.name;
+                        colorByIdx[li] = lIdentity.color;
                     }
                 }
             }
             drawInstanceLabels(ctx, userInstances, skeleton, viewName, Object.assign({}, userRender, {
                 trackNames: labelNames,
-                trackColors: labelColors,
+                nameByIndex: nameByIdx,
+                colorByIndex: colorByIdx,
             }));
         }
     }

@@ -157,6 +157,30 @@
                 session, f({ identityMode: 'none' }), CTX);
             assertEqual(noId.count, 8, 'the other 8 have no per-frame identity');
         });
+
+        // A TRACKLESS ungrouped instance keeps its identity on the INSTANCE —
+        // frameIdentityMap is keyed by trackIdx and a null track has no key, so
+        // `unlinkGroup` stamps `Instance.identityId` instead (luc3d #201).
+        // Reading only the per-frame map made every such row read as "no
+        // identity": the "delete instances with no ID" sweep would take an
+        // animal the user had just labeled, and filtering FOR that ID missed it.
+        it('a TRACKLESS ungrouped instance matches on its retained instance identity', function () {
+            const { session, fg } = buildSession();
+            const red = session.addIdentity('Red');
+            const trackless = fg.getUnlinkedInstances('cam1')[0].instance;
+            assertTrue(trackless.trackIdx == null, 'precondition: the cam1 ungrouped row is trackless');
+            trackless.identityId = red.id;   // what unlinkGroup retains
+
+            const hit = __CustomDeleteOps.collectDeletionTargets(
+                session, f({ identityMode: 'specific', identityId: red.id }), CTX);
+            assertEqual(hit.count, 1, 'the trackless ungrouped row matches its identity (got ' + hit.count + ')');
+            assertEqual(hit.targets[0].kind, 'ungrouped', 'and it is the ungrouped one');
+
+            const noId = __CustomDeleteOps.collectDeletionTargets(
+                session, f({ identityMode: 'none' }), CTX);
+            assertEqual(noId.count, 8,
+                'it must NOT be swept up by "no identity" — that would delete a labeled animal');
+        });
     });
 
     describe('custom-delete-ops — cascade preview', function () {
