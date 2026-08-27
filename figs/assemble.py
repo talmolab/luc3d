@@ -140,7 +140,7 @@ TITLES = {
     (6, "c"): "Per-session paired difference",
     (6, "d"): "Error composition",
     (6, "e"): "The tracker's 2D and 3D anchor correspondence",
-    (6, "f"): "Fresh anchor parameter sweep on Mouse-Dyad-10M Sessions",
+    (6, "f"): "Staleness horizon sweep on Mouse-Dyad-10M sessions",
 }
 TITLE_PT = 7.5            # panel titles, below the 9 pt letter
 

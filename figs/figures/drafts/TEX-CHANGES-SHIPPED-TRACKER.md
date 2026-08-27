@@ -170,20 +170,42 @@ yours, not a lookup. Line numbers are current.
 
 ---
 
-## 5. What is deliberately still in the file
+## 5. The staleness passages are now a parameter study, not a history
 
-Three passages keep a before/after contrast because they are *about* the
-staleness fix, and removing it would make them incoherent:
+The first pass kept a before/after narrative in the two staleness sections on
+the grounds that they were "about the fix". Eric's call (2026-08-27): *"why
+mention an obsolete tracker at all?"* — and he is right, because `stale` is a
+live parameter of the shipped tracker with default 20, where **0 disables
+eviction**. So the sweep is a study of a knob the reader can set, and nothing in
+the paper needs to refer to a superseded build.
 
-- **Methods, anchor staleness (L334–336)** — the defect being corrected.
-- **Supplementary 5.2 (L372–376)** — the mechanism and the sweep's conclusion.
-- **The Fig 6F caption's no-eviction control (L381)** — panel F *is* the
-  staleness sweep; its control is the point of the panel.
+Rewritten accordingly:
 
-The Fig 6F panel title still reads "Fresh anchor parameter sweep on
-Mouse-Dyad-10M Sessions", which names the mechanism the sweep is about rather
-than a competing arm. Say the word if you would rather it read "Staleness
-horizon sweep".
+- **L334** — Methods subsection retitled *"Anchor staleness and the fresh-anchor
+  tracker"* -> *"The staleness horizon of the 3D anchor"*.
+- **L336** — the whole passage recast. *"The browser port as first written
+  retained … and the browser port reproduced that behavior"* is gone; it now
+  defines $N$, states that $N = 0$ is the no-expiry limit, and keeps Chen's
+  Eq. 11 attenuation as the principle a finite $N$ approximates. The
+  loader-hook/"reproduced the unevicted baseline bit-identically" provenance is
+  gone too, and the distance threshold is *"swept at 50 and 25"* rather than
+  *"reduced from 50 to 25"*.
+- **L374** — *"Because the tracker as originally ported re-triangulated …"* ->
+  *"With the staleness horizon disabled ($N = 0$) …"*, and the headline restated
+  as a comparison between two settings rather than a change the tracker
+  underwent.
+- **L376** — *"from no eviction to any eviction"* -> *"from $N = 0$ to any
+  finite horizon"*.
+- **L381** — Fig 6 caption title *"the fresh-anchor staleness horizon"* -> *"the
+  staleness horizon of the 3D anchor"*; the raw totals now read *"at stale 0, 1,
+  10, 20 and 30"* instead of singling one out as *"(no eviction)"*.
+- **On the artwork**: the Fig 6F key entry *"no eviction"* -> *"stale 0"*
+  (`panels/fig6_07_pr_switches.py`), and the panel title *"Fresh anchor
+  parameter sweep"* -> *"Staleness horizon sweep"* (`assemble.py`). The key now
+  reads as one parameter axis: stale 0, 1, 10, 20, 30.
+
+The file now contains **no** reference to a superseded tracker anywhere — the
+only surviving comparisons are between values of $N$.
 
 ---
 

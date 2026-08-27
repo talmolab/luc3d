@@ -111,7 +111,7 @@ from src.style import (GREY, INK, MUTED, PERIWINKLE, SALMON, TEAL,  # noqa: E402
 #: common to all four candidates, so they belong in the caption; what varies between
 #: them, and the only thing the reader has to tell apart, is the staleness horizon.
 SERIES = [
-    ("shipped", "no eviction", INK),
+    ("shipped", "stale 0", INK),
     ("sync_stale1_dist25", "stale 1", SALMON),
     ("sync_stale10_dist25", "stale 10", TEAL),
     ("sync_stale20_dist25", "stale 20", PERIWINKLE),
