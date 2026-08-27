@@ -79,6 +79,72 @@ slots in any of the 56 sessions, which is what allows the analysis in
 Figure~\ref{fig4} to be reported by sex rather than by track label.
 
 % ---------------------------------------------------------------------
+% PREDICTIONS AS WELL AS REPROJECTIONS -- YES, AND THEY ARE DIFFERENT OBJECTS
+% ---------------------------------------------------------------------
+% Every camera directory ships THREE things beside the video: the SLEAP
+% predictions (<serial>-<timestamp>.slp), the per-view analysis file
+% (.analysis.h5) holding those predictions as arrays, and the calibration. So
+% the corpus carries native per-view 2D detections IN ADDITION to the 2D that
+% the datasheet counts.
+%
+% They are not the same quantity, and the datasheet currently reports only one:
+%
+%   REPROJECTED 2D   100,847,340   = 20,169,468 3D poses x 5 views. A COMPLETE
+%                                    grid -- every frame of the 3D carries both
+%                                    animals, so every view gets a reprojection.
+%                                    This is the datasheet's "2D Poses" row.
+%   NATIVE 2D        100,411,738   MEASURED across all 280 analysis.h5 files
+%                                    (56 sessions x 5 cameras), 97.82% of the
+%                                    102,651,662 frame-by-animal slots those
+%                                    files span. 2,239,924 slots hold no
+%                                    detection.
+%
+% The two totals land within half a per cent of each other, which makes it easy
+% to conflate them, but they mean opposite things. The reprojections are
+% derived from the proofread 3D and are complete by construction. The native
+% predictions are what the detector actually found, and their 2.2 % of empty
+% slots is exactly the detector-miss signal Figure 5 is about. A dataset user
+% training a 2D model wants the predictions; one evaluating 3D wants the
+% reprojections.
+%
+% ONE SESSION IS AN OUTLIER. 20250904_140306 fills only 49.5 % of its slots,
+% against 98.5 % for the next worst. Worth either a note or a look. [VERIFY]
+%
+% Suggested sentence, to sit after the file inventory:
+
+Two kinds of 2D accompany the reconstruction. Each view carries the detector's
+own predictions, 100,411,738 instances over the corpus, which is 97.8 per cent
+of the frame-by-animal slots those files span and leaves the detector's misses
+visible; and each 3D pose reprojects into all five views, giving a complete
+100,847,340. The reprojections are the label set a multi-view method is scored
+against, and the predictions are what a per-view detector is trained on.
+
+% ---------------------------------------------------------------------
+% THE CAMERA VIEWS HAVE NO NAMES
+% ---------------------------------------------------------------------
+% You asked. Mouse-Dyad-10M identifies its five cameras by SERIAL NUMBER only --
+% 21241563, 21369048, 21372315, 21372316 and 22085397 -- in the calibration
+% TOML, in the per-camera directory names and in every filename. There is no
+% descriptive name anywhere in the corpus, and no README mapping serials to
+% positions.
+%
+% That is a gap, and it is conspicuous next to SLAP-2M, whose eight views your
+% paragraph names individually. Someone who downloads Mouse-Dyad-10M gets five
+% directories of digits and no way to know which camera is overhead. The
+% calibration gives each camera's extrinsics, so the geometry is recoverable,
+% but only by someone willing to decompose it.
+%
+% RECOMMENDED: add a serial-to-position mapping, either as a sentence here or as
+% a row in the datasheet. I can generate it from the calibration once you tell me
+% the arena's up axis -- the calibration frame is not gravity-aligned, so I can
+% derive the rig geometry but I cannot label a camera "top" without knowing
+% which way is up. [VERIFY]
+%
+% ALSO: the SLAP-2M sentence in the same subsection lists eight views as "back,
+% mid, side, top, back-left, mid-left, side-left, and top" -- "top" appears
+% twice, so one of the eight is wrong. Presumably "top-left". [VERIFY]
+
+% ---------------------------------------------------------------------
 % [VERIFY] -- THINGS A DATASET PAPER NEEDS THAT I CANNOT SUPPLY
 % ---------------------------------------------------------------------
 % These are the gaps a reviewer of a dataset contribution will ask about. I have
@@ -133,6 +199,13 @@ Figure~\ref{fig4} to be reported by sex rather than by track label.
 %     truth under luc3d-bench/outputs/bmimica. The six that do not are all from
 %     2025-09-08.
 %   * Camera resolution 1280 x 1024, from the calibration TOMLs.
+%   * Cameras are named by SERIAL only (21241563, 21369048, 21372315, 21372316,
+%     22085397); no descriptive view names exist in the corpus.
+%   * Native 2D: 100,411,738 instances over 280 analysis.h5 files, 97.82 % of
+%     102,651,662 slots. Reprojected 2D: 100,847,340, complete by construction.
+%   * Per-session frame counts differ by a few frames ACROSS cameras, and the 3D
+%     is trimmed to the shortest camera (checked on five sessions: 3D frames
+%     equals the per-view minimum every time).
 %
 % TAKEN FROM THE MANUSCRIPT'S OWN ESTABLISHED NUMBERS: the 58 to 76 degree
 % camera elevation and the 230 x 230 x 140 mm arena (Figure 4A caption), 6.9
