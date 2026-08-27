@@ -145,6 +145,75 @@ against, and the predictions are what a per-view detector is trained on.
 % twice, so one of the eight is wrong. Presumably "top-left". [VERIFY]
 
 % ---------------------------------------------------------------------
+% VIDEO -- LENGTH, SIZE AND FRAME RATE, BOTH CORPORA (all measured)
+% ---------------------------------------------------------------------
+% Mouse-Dyad-10M from /root/vast/eric/BMimica, SLAP-2M from
+% /root/talmolab-smb/eric/slap_2m, restricted in both cases to the released
+% sessions. Frame rates read with ffprobe from the files themselves.
+%
+%                             Mouse-Dyad-10M        SLAP-2M
+%   sessions x views          56 x 5                74 x 8
+%   video files               280                   592
+%   frame rate                150.1 fps             30.0 fps
+%   resolution                1280 x 1024           1280 x 1024
+%   codec                     h264                  h265 (hevc), CRF12 denoised
+%   frames per view           10,084,734            1,954,440
+%   frames, all views         50,423,670            15,635,520
+%   duration per view         18.7 h                18.1 h
+%   duration, all views       93.3 h                144.8 h
+%   session length            about 20 min          about 10 min
+%   total size on disk        106 GB                708 GB
+%   median file               374 MB                472 MB
+%   file range                337 to 429 MB         44 MB to 9.7 GB
+%   per session (all views)   1.9 GB                9.6 GB
+%
+% THE COMPARISON WORTH DRAWING. The two corpora hold almost the same wall-clock
+% per view, about 18 hours, and they spend it differently. Mouse-Dyad-10M puts
+% five times the temporal resolution into five views; SLAP-2M spreads a third of
+% the frames over eight. That is why Mouse-Dyad-10M holds 50.4 million frames
+% against SLAP-2M's 15.6 million yet occupies a seventh of the disk -- SLAP-2M
+% stores about 45 KB per frame at h265 CRF12, Mouse-Dyad-10M about 2 KB at h264.
+%
+% AND IT IS WHY FIGURE 4 WORKS. The 0.39 s initiation lag is 59 frames at
+% 150 fps. At SLAP-2M's 30 fps the same lag is 12 frames, and the 0.17 s lower
+% quartile is 5. The manuscript already says "at this recording rate that is 59
+% frames"; naming the two rates side by side in Datasets makes that argument
+% land instead of reading as a stray aside.
+%
+% Suggested sentences:
+
+The five cameras record at $1280 \times 1024$ and 150 frames per second, which is
+five times the rate of SLAP-2M at the same resolution and is what resolves the
+sub-second ordering the analysis of Figure~\ref{fig4} depends on. The released
+video is 280 files, one per session and view, 106~GB in total and about 18.7
+hours per view.
+
+% For the SLAP-2M paragraph, the matching sentence would be:
+
+The eight views record at $1280 \times 1024$ and 30 frames per second, giving
+about 18.1 hours per view and 592 video files at 708~GB, stored as denoised
+h265.
+
+% ---------------------------------------------------------------------
+% THE SLAP-2M VIEW NAMES, SETTLED
+% ---------------------------------------------------------------------
+% The corpus names its view directories back, backL, mid, midL, side, sideL,
+% top and topL. So the manuscript's list -- "back, mid, side, top, back-left,
+% mid-left, side-left, and top" -- has the right eight views but prints "top"
+% twice; the eighth is TOP-LEFT. Suggested replacement:
+%
+%   The 8 camera views (back, backL, mid, midL, side, sideL, top and topL,
+%   where the L suffix denotes the left-hand camera of each pair) were pointed
+%   at the center of the environment.
+%
+% Using the corpus's own directory names rather than prose expansions also means
+% a reader can map a sentence to a folder without guessing.
+%
+% [VERIFY] 84 session directories carry view videos on the share; the paper
+% releases 74. Worth knowing why the other ten are excluded, and whether they
+% ship.
+
+% ---------------------------------------------------------------------
 % [VERIFY] -- THINGS A DATASET PAPER NEEDS THAT I CANNOT SUPPLY
 % ---------------------------------------------------------------------
 % These are the gaps a reviewer of a dataset contribution will ask about. I have
