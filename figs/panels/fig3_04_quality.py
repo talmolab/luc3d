@@ -109,7 +109,7 @@ VARIANT_GLOB = "fig3_quality__*.json"
 #: default. "LUC3D" is dropped from the key text to keep the tagged name inside
 #: the 57.3 mm key band (the hue already says LUC3D: teal is LUC3D everywhere in
 #: Fig 3, per the docstring).
-FRESH_NAME = "greedy, fresh anchor (shipped)"
+FRESH_NAME = "greedy (LUC3D)"
 SHIPPED_NAME = "greedy, previous default"
 
 #: Method -> (deposit key, display name, colour), for the --as-shipped render.

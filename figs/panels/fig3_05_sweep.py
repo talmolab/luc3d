@@ -220,7 +220,7 @@ FRESH_GLOB = "fig3_sweep50__distanceThreshold25-stale20-sync_*.json"
 #: SHIPPED configuration, and the arm that shipped before it is the previous
 #: default. The mechanism words stay; only the status tag moved.
 SHIPPED_NAME = "previous default"
-FRESH_NAME = "fresh anchor (shipped)"
+FRESH_NAME = "greedy (LUC3D)"
 
 
 def _rows(dep, arm):
