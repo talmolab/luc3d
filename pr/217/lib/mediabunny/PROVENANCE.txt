@@ -1,0 +1,39 @@
+mediabunny — vendored browser ESM bundle.
+Source: npm `mediabunny@1.30.0`, file dist/bundles/mediabunny.min.mjs
+(single-file minified ESM; self-contained — no bare/node: imports).
+Pinned to 1.30.0 to match the version sleap-io.js@0.5.3 was built against
+(its dep is `mediabunny: ^1.30.0`), minimizing API drift with the
+MediaBunnyVideoBackend that consumes it.
+
+Used on BOTH sides of the video pipeline:
+
+ * DECODE — sleap-io.js's MediaBunnyVideoBackend, for frame-accurate decode
+   (issue #115: HTML5 <video>.currentTime seeking is not frame-accurate, so the
+   pose overlay sat on a stale video frame). Wired into loading/video.js's
+   OnDemandVideoDecoder as an OPT-IN backend (localStorage/window
+   LUCID_VIDEO_BACKEND = 'mediabunny').
+
+ * ENCODE — ui/video-encode.js, LUCID's only video-encoding seam, behind both
+   "Export Video Overlays" and "Export 3D Video". sleap-io.js has NO browser
+   encoder (its renderVideo() shells out to a native ffmpeg and is Node-only),
+   so LUCID drives mediabunny's muxer directly. This replaced the vendored
+   mp4-muxer 5.2.1 (deleted) and the hand-rolled WebCodecs VideoEncoder pairing.
+
+Importmap: "mediabunny" -> ./lib/mediabunny/mediabunny.min.mjs
+(replaces the old ./lib/sleap-io/mediabunny-stub.js) in index.html and
+tests/test-runner.html.
+
+To bump: `npm pack mediabunny@<ver>`, copy dist/bundles/mediabunny.min.mjs here.
+Verify it stays self-contained (no static bare/node: imports) and still exports
+BOTH halves of the surface LUCID depends on:
+  decode — Input / UrlSource / BlobSource / VideoSampleSink /
+           EncodedPacketSink / ALL_FORMATS
+  encode — Output / Mp4OutputFormat / CanvasSource / BufferTarget /
+           StreamTarget / canEncodeVideo
+Also re-check the encode CONTRACTS ui/video-encode.js relies on, none of which
+are compile-time checked: CanvasSource(canvas, {codec, bitrate,
+keyFrameInterval}) with keyFrameInterval in SECONDS and a per-frame
+add(ts, dur, {keyFrame}) that is OR'd with it; Mp4OutputFormat fastStart
+'reserve' requiring maximumPacketCount in the track metadata; and finalize()/
+cancel() closing the StreamTarget's WritableStream themselves.
+Then run the suite + the real-hardware frame-accuracy check.
