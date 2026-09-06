@@ -1264,9 +1264,9 @@ export function setupMenus() {
 
     document.getElementById('menuHotkeys').addEventListener('click', showHotkeysHelp);
 
-    // Calibrate: opens calibrat3 (browser-based multi-camera ChArUco calibration)
-    // in a new tab. It is a separate static app, not a panel inside luc3d.
-    document.getElementById('menuCalibrate').addEventListener('click', function () {
+    // Calibrate menu: calibrat3 (browser-based multi-camera ChArUco calibration)
+    // is a separate static app, not a panel inside luc3d, so we link out to it.
+    document.getElementById('menuCalibrateNewTab').addEventListener('click', function () {
         closeMenus();
         window.open('https://talmolab.github.io/calibrat3/', '_blank', 'noopener');
     });
