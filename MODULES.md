@@ -3399,18 +3399,29 @@ strip (top), session strip (bottom), per-pane brightness/contrast/rotation
 controls, switch-session UX, move-video-between-sessions modal.
 
 **View strip click behaviour.** Ctrl/Cmd+click multi-selects (for drag-docking
-several views at once). A plain click clears the multi-selection and then:
+several views at once). A plain click clears the multi-selection and then does
+exactly ONE of three things, in order:
 
-- in **single-view mode**, `setSoloView(name)` (`ui/ui-wiring.js`) makes that
-  view the solo'd one, *replacing* the current pane. This used to require a
-  double-click, which docked a SECOND pane beside the solo'd view instead of
-  swapping it, so solo mode quietly stopped being solo;
-- otherwise `activatePanelForView(name)` focuses the existing pane.
+1. in **single-view mode**, `setSoloView(name)` (`ui/ui-wiring.js`) makes that
+   view the solo'd one, *replacing* the current pane (luc3d #173). This used to
+   require a double-click, which docked a SECOND pane beside the solo'd view
+   instead of swapping it, so solo mode quietly stopped being solo;
+2. if the view is already on screen, `activatePanelForView(name)` focuses its
+   pane;
+3. otherwise the view was **closed** (the user hit the pane's X) and
+   `addVideoPanel(name)` **re-opens** it (luc3d #143). There was previously no
+   discoverable way back: double-click did it, but nothing said so, and the
+   workaround people found was to create a new session and close it again just
+   to force a full rebuild.
 
-Double-click still docks a view that isn't on screen, and is a no-op in
-single-view mode (the click handler has already swapped the view — there is no
-second slot to dock into). See **Single-view ("solo") mode** under
-`ui/ui-wiring.js`.
+**There is deliberately no `dblclick` handler.** The click handler covers every
+case, and a double-click is two clicks — the first re-opens or focuses the view,
+the second focuses it again, landing on the same state. A separate dblclick path
+would only be a second route to that state, out of sync the moment one of them
+changes. Note `addVideoPanel` refuses to dock a view twice (it activates the
+existing pane instead), so no click sequence can produce a duplicate pane;
+duplicates come only from the drag/drop docking path and `addAllViewsAsGrid`.
+See **Single-view ("solo") mode** under `ui/ui-wiring.js`.
 
 **`syncDockedViews()` — `fromJSON` builds panels behind `addVideoPanel`'s back.**
 `paneManager.dockedViews` (viewName → pane count) is maintained by

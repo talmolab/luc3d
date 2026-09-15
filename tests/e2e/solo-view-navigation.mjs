@@ -17,7 +17,11 @@
  *     one. This previously took a double-click, and that double-click DOCKED A
  *     SECOND PANE next to the solo'd view instead of swapping it — so the
  *     one-pane assertion is the real content of this check.
- *  4. `g` returns to the grid with the last-viewed camera still selected, and
+ *  4. A single click RE-OPENS a view the user closed with the pane's X
+ *     (luc3d #143). There was no discoverable way back: double-click did it,
+ *     but nothing said so, and the reported workaround was to create a new
+ *     session and close it again just to force a full rebuild.
+ *  5. `g` returns to the grid with the last-viewed camera still selected, and
  *     pressing it AGAIN does nothing — the restore is a full `clearAll()` +
  *     `fromJSON()`, so repeating it used to rebuild every pane and move the
  *     selection to whichever panel dockview happened to activate. Concretely:
@@ -264,6 +268,68 @@ try {
     check(s.stripSelected.join() === 'camA',
         `strip click in the grid focuses that pane (got [${s.stripSelected}])`);
 
+    // =================================================================
+    // 5 — a single click RE-OPENS a view closed with the pane's X (#143)
+    // =================================================================
+    // Close camD the way the user does — the pane's own X, not an internal call.
+    await page.evaluate(async () => {
+        const AS = await import('/ui/app-state.js');
+        const sp = await import('/ui/sessions-panes.js');
+        for (const p of Array.from(AS.paneManager.api.panels)) {
+            const r = sp.panelRenderers.get(p.id);
+            if (r && r.getViewName() === 'camD') { p.api.close(); break; }
+        }
+        await new Promise(r => requestAnimationFrame(r));
+    });
+    s = await snap();
+    check(s.docked.indexOf('camD') < 0 && s.docked.length === 3,
+        `camD is closed (docked [${s.docked}])`);
+    check(!s.dockedViews.some(([n]) => n === 'camD'),
+        `dockedViews drops the closed view (got ${JSON.stringify(s.dockedViews)})`);
+    // The strip's in-dock dot must go out too, otherwise the row still claims
+    // the view is on screen.
+    const dotAfterClose = await page.evaluate(() => {
+        const el = document.querySelector('.view-strip-item[data-view-name="camD"] .strip-status');
+        return el ? el.style.display : '<missing>';
+    });
+    check(dotAfterClose === 'none', `strip in-dock dot cleared for camD (got "${dotAfterClose}")`);
+
+    await page.click('.view-strip-item[data-view-name="camD"]');
+    await page.evaluate(() => new Promise(r => requestAnimationFrame(r)));
+    s = await snap();
+    check(s.docked.indexOf('camD') >= 0 && s.docked.length === 4,
+        `single click RE-OPENS the closed view (docked [${s.docked}])`);
+    check(s.stripSelected.join() === 'camD',
+        `the re-opened view is selected (got [${s.stripSelected}])`);
+    check(s.lastInteracted === 'camD',
+        `lastInteractedView follows the re-opened view (got ${s.lastInteracted})`);
+
+    // Clicking it again must FOCUS, not dock a duplicate.
+    await page.click('.view-strip-item[data-view-name="camA"]');
+    await page.evaluate(() => new Promise(r => requestAnimationFrame(r)));
+    await page.click('.view-strip-item[data-view-name="camD"]');
+    await page.evaluate(() => new Promise(r => requestAnimationFrame(r)));
+    s = await snap();
+    check(s.docked.length === 4 && s.docked.filter(n => n === 'camD').length === 1,
+        `clicking an open view focuses it, never duplicating a pane (docked [${s.docked}])`);
+
+    // A double-click on a closed view must also still work, and must not end up
+    // with two panes — it is just two clicks now.
+    await page.evaluate(async () => {
+        const AS = await import('/ui/app-state.js');
+        const sp = await import('/ui/sessions-panes.js');
+        for (const p of Array.from(AS.paneManager.api.panels)) {
+            const r = sp.panelRenderers.get(p.id);
+            if (r && r.getViewName() === 'camB') { p.api.close(); break; }
+        }
+        await new Promise(r => requestAnimationFrame(r));
+    });
+    await page.dblclick('.view-strip-item[data-view-name="camB"]');
+    await page.evaluate(() => new Promise(r => requestAnimationFrame(r)));
+    s = await snap();
+    check(s.docked.filter(n => n === 'camB').length === 1 && s.docked.length === 4,
+        `double-click re-opens exactly one pane too (docked [${s.docked}])`);
+
     // `g` is a no-op after the restore too, not just before the first solo.
     const afterRestore = await snap();
     for (let i = 0; i < 3; i++) await press('g');
@@ -272,7 +338,10 @@ try {
           s.stripSelected.join() === afterRestore.stripSelected.join(),
         `g repeated after a restore changes nothing (panes [${s.docked}], selected [${s.stripSelected}])`);
 
-    // Re-entering solo starts on that newly focused view.
+    // Re-entering solo starts on the focused view — focus one explicitly so
+    // this does not depend on whatever the checks above left selected.
+    await page.click('.view-strip-item[data-view-name="camA"]');
+    await page.evaluate(() => new Promise(r => requestAnimationFrame(r)));
     await press('v');
     s = await snap();
     check(s.mode === 'single' && s.docked.join() === 'camA',
