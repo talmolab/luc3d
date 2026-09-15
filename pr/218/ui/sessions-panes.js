@@ -970,24 +970,28 @@ export function populateViewStrip() {
                     }
                     return;
                 }
-                // Plain click — clear multi-select and do normal panel focus
+                // Plain click — clear multi-select, then ONE of three things,
+                // in order (luc3d #143, #173):
                 clearMultiSelect();
-                // In single-view ("solo") mode a plain click OPENS that view,
-                // replacing the solo'd one. This used to need a double-click,
-                // which docked a SECOND pane beside the solo'd view rather than
-                // swapping it out.
+                // 1. In single-view ("solo") mode, open that view, replacing
+                //    the solo'd one. This used to need a double-click, which
+                //    docked a SECOND pane beside the solo'd view rather than
+                //    swapping it out.
                 if (setSoloView(view.name)) return;
-                activatePanelForView(view.name);
-            });
-
-            // Double click: only add to dock if NOT already loaded
-            item.addEventListener('dblclick', function () {
-                // Solo mode has no second slot to dock into — the click handler
-                // above already swapped the view.
-                if (state.viewMode === 'single') return;
+                // 2. Already on screen — focus its pane.
                 if (activatePanelForView(view.name)) return;
+                // 3. Closed (the user hit the pane's X) — RE-OPEN it. There was
+                //    no discoverable way back: double-click did it, but nothing
+                //    said so, and the reported workaround was to create a new
+                //    session and close it again just to force a full rebuild.
                 paneManager.addVideoPanel(view.name);
             });
+
+            // No dblclick handler: the click handler above now covers every
+            // case, and a double-click is two clicks — the first re-opens or
+            // focuses the view, the second focuses it again. Adding a separate
+            // dblclick path on top would just be a second way to reach the same
+            // state, out of sync the moment one of them changes.
 
             list.appendChild(item);
 
