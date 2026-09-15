@@ -56,6 +56,10 @@ import {
 // module map) have always imported it from this module.
 export { clampRotation };
 import { drawAllOverlays, setReprojErrorVisible } from './rendering.js';
+// `ui/ui-wiring.js` imports this module, so this is a cycle — hoist-safe
+// because the only read is inside the view strip's click handler, which cannot
+// run during module evaluation.
+import { setSoloView } from './ui-wiring.js';
 import { updateInfoPanel, populateTimelineVisibility } from './info-panel.js';
 // `autoAssignState` is a mutable binding tracked via ESM live binding.
 // The cycle (identity-assignment imports panelRenderers from here) is
@@ -331,19 +335,10 @@ const _paneManagerImpl = {
     },
 
     addVideoPanel(viewName, position) {
-        // Prevent duplicate panels for the same view
+        // Prevent duplicate panels for the same view — activate the existing
+        // panel instead.
         if (this.dockedViews.has(viewName) && this.dockedViews.get(viewName) > 0) {
-            // Already docked — activate the existing panel instead
-            if (this.api) {
-                var panels = Array.from(this.api.panels);
-                for (var pi = 0; pi < panels.length; pi++) {
-                    var renderer = panelRenderers.get(panels[pi].id);
-                    if (renderer && renderer.getViewName() === viewName) {
-                        panels[pi].api.setActive();
-                        return;
-                    }
-                }
-            }
+            activatePanelForView(viewName);
             return;
         }
         var count = this.dockedViews.get(viewName) || 0;
@@ -462,8 +457,62 @@ const _paneManagerImpl = {
         var emptyMsg = document.getElementById('videoDockEmpty');
         if (emptyMsg) emptyMsg.classList.remove('hidden');
     },
+
+    /**
+     * Re-derive `dockedViews` (and the strip's in-dock dots) from the panels
+     * that actually exist. `api.fromJSON()` recreates panels behind
+     * `addVideoPanel`'s back, so after a grid-layout restore the counts read
+     * empty — which left a plain strip click doing nothing and a double-click
+     * docking a DUPLICATE pane for a view that was already on screen.
+     */
+    syncDockedViews() {
+        var counts = new Map();
+        var panels = this.api ? Array.from(this.api.panels) : [];
+        for (var i = 0; i < panels.length; i++) {
+            var renderer = panelRenderers.get(panels[i].id);
+            var viewName = renderer && renderer.getViewName();
+            if (!viewName) continue;
+            counts.set(viewName, (counts.get(viewName) || 0) + 1);
+        }
+        this.dockedViews = counts;
+        for (var vi = 0; vi < state.views.length; vi++) {
+            var name = state.views[vi].name;
+            updateStripItemStatus(name, (counts.get(name) || 0) > 0);
+        }
+    },
 };
 setPaneManager(_paneManagerImpl);
+
+/**
+ * Activate the first docked panel showing `viewName`, which is what drives the
+ * yellow strip highlight, `lastInteractedView` and the 3D camera highlight (see
+ * `onDidActivePanelChange`). Returns false when the view isn't docked, so
+ * callers can decide whether to add a panel instead.
+ */
+export function activatePanelForView(viewName) {
+    if (!paneManager.api) return false;
+    if (!(paneManager.dockedViews.get(viewName) > 0)) return false;
+    var panels = Array.from(paneManager.api.panels);
+    for (var pi = 0; pi < panels.length; pi++) {
+        var renderer = panelRenderers.get(panels[pi].id);
+        if (renderer && renderer.getViewName() === viewName) {
+            panels[pi].api.setActive();
+            return true;
+        }
+    }
+    return false;
+}
+
+/**
+ * Scroll the view strip so `viewName`'s item is visible. `.view-strip-list` is
+ * `overflow-y: auto`, so on a project with more cameras than fit the column the
+ * arrow keys would otherwise move the solo view — and its highlight — somewhere
+ * the user cannot see.
+ */
+export function scrollViewStripTo(viewName) {
+    var item = document.querySelector('.view-strip-item[data-view-name="' + viewName + '"]');
+    if (item && item.scrollIntoView) item.scrollIntoView({ block: 'nearest' });
+}
 
 export function refreshPaneInteractions() {
     // Re-attach interaction manager to current views after panel changes
@@ -923,34 +972,20 @@ export function populateViewStrip() {
                 }
                 // Plain click — clear multi-select and do normal panel focus
                 clearMultiSelect();
-                var count = paneManager.dockedViews.get(view.name) || 0;
-                if (count > 0 && paneManager.api) {
-                    // Find and activate the first panel for this view
-                    var panels = Array.from(paneManager.api.panels);
-                    for (var pi = 0; pi < panels.length; pi++) {
-                        var renderer = panelRenderers.get(panels[pi].id);
-                        if (renderer && renderer.getViewName() === view.name) {
-                            panels[pi].api.setActive();
-                            return;
-                        }
-                    }
-                }
+                // In single-view ("solo") mode a plain click OPENS that view,
+                // replacing the solo'd one. This used to need a double-click,
+                // which docked a SECOND pane beside the solo'd view rather than
+                // swapping it out.
+                if (setSoloView(view.name)) return;
+                activatePanelForView(view.name);
             });
 
             // Double click: only add to dock if NOT already loaded
             item.addEventListener('dblclick', function () {
-                var count = paneManager.dockedViews.get(view.name) || 0;
-                if (count > 0 && paneManager.api) {
-                    // Already in dock — select it instead
-                    var panels = Array.from(paneManager.api.panels);
-                    for (var pi = 0; pi < panels.length; pi++) {
-                        var renderer = panelRenderers.get(panels[pi].id);
-                        if (renderer && renderer.getViewName() === view.name) {
-                            panels[pi].api.setActive();
-                            return;
-                        }
-                    }
-                }
+                // Solo mode has no second slot to dock into — the click handler
+                // above already swapped the view.
+                if (state.viewMode === 'single') return;
+                if (activatePanelForView(view.name)) return;
                 paneManager.addVideoPanel(view.name);
             });
 

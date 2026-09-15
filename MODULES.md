@@ -3296,6 +3296,16 @@ multi-video docking layout.
 - `panelRenderers` — Map of panelId → VideoPaneRenderer.
 - `multiSelectViews`, `clearMultiSelect`.
 - `refreshPaneInteractions`.
+- `scrollViewStripTo(viewName)` — scroll that view's strip item into sight.
+  `.view-strip-list` is `overflow-y: auto`, so on a project with more cameras
+  than fit the column, arrow-cycling the solo view would otherwise move the
+  highlight somewhere off screen. Called by `cycleSingleView`.
+- `activatePanelForView(viewName)` — activate the first docked panel showing a
+  view, returning false when it isn't docked. That `setActive()` is what drives
+  the yellow `strip-selected` highlight, `lastInteractedView` and the 3D camera
+  highlight (see `onDidActivePanelChange`), so it is the single way to say
+  "select this view". Shared by `addVideoPanel`'s duplicate guard, both view
+  strip handlers, and `ui/ui-wiring.js`'s `setGridMode`.
 - `clampRotation` (a **re-export** of `ui/video-filters.js`'s, which is where the
   function now lives — existing importers are unaffected), `syncRotationUI`.
 - `applyVideoFilters(view)` — write the COMBINED brightness+contrast CSS filter
@@ -3331,6 +3341,9 @@ multi-video docking layout.
   `ui/ui-wiring.js` (which has always imported it from this module) is
   unaffected by the move.
 - `./rendering.js` — `drawAllOverlays`, `setReprojErrorVisible`.
+- `./ui-wiring.js` — `setSoloView`. A **cycle** (`ui-wiring.js` imports this
+  module), hoist-safe because the only read is inside the view strip's click
+  handler, which cannot run during module evaluation.
 - `./info-panel.js` — `updateInfoPanel`.
 - `./identity-assignment.js` — `autoAssignState`.
 - `../pose/initialization.js` — `setup3DViewport`.
@@ -3384,6 +3397,31 @@ from within one already-open project `.slp` yet.
 **User-facing features.** Video pane docking (drag/move/resize), view
 strip (top), session strip (bottom), per-pane brightness/contrast/rotation
 controls, switch-session UX, move-video-between-sessions modal.
+
+**View strip click behaviour.** Ctrl/Cmd+click multi-selects (for drag-docking
+several views at once). A plain click clears the multi-selection and then:
+
+- in **single-view mode**, `setSoloView(name)` (`ui/ui-wiring.js`) makes that
+  view the solo'd one, *replacing* the current pane. This used to require a
+  double-click, which docked a SECOND pane beside the solo'd view instead of
+  swapping it, so solo mode quietly stopped being solo;
+- otherwise `activatePanelForView(name)` focuses the existing pane.
+
+Double-click still docks a view that isn't on screen, and is a no-op in
+single-view mode (the click handler has already swapped the view — there is no
+second slot to dock into). See **Single-view ("solo") mode** under
+`ui/ui-wiring.js`.
+
+**`syncDockedViews()` — `fromJSON` builds panels behind `addVideoPanel`'s back.**
+`paneManager.dockedViews` (viewName → pane count) is maintained by
+`addVideoPanel` / `addAllViewsAsGrid` / `onDidRemovePanel`, and it drives both
+the strip's in-dock dot and `activatePanelForView`'s early-out. `api.fromJSON()`
+— used by `setGridMode` to restore the cached grid layout — constructs panels
+directly, so none of that bookkeeping runs and the counts read EMPTY afterwards:
+a plain strip click on a view that is visibly on screen did nothing, and a
+double-click docked a duplicate pane. `syncDockedViews()` re-derives the counts
+(and the dots) by walking `api.panels` through `panelRenderers`, and
+`setGridMode` calls it immediately after `fromJSON`.
 
 **Video display settings — brightness, contrast (issue #149) and rotation.**
 `populateVideoBrightnessTable`, `populateVideoContrastTable` and
@@ -4166,9 +4204,51 @@ stopping at the last frame; the step transport buttons/keys stop it first.
 - Toggles: `toggleInfoPanel`, `updateInfoPanelToggleBtn`,
   `toggle3DViewport`, `toggleTimeline`, `syncTimelineToggleButton`,
   `fitTimelineToData`.
-- View modes: `toggleViewMode`, `cycleSingleView`, `setGridMode`,
-  `updateVideoGridDisplay`, `showViewIndicator`.
+- View modes: `enterSingleViewMode`, `cycleSingleView`, `setSoloView`,
+  `setGridMode`, `updateVideoGridDisplay`, `showViewIndicator`. See
+  **Single-view ("solo") mode** below.
 - Playback: `applyPlaybackRate`, `seekToLabeledFrame`.
+
+**Single-view ("solo") mode.** `v` (`singleViewMode`) calls
+`enterSingleViewMode`, which caches the dockview grid layout
+(`savedGridLayout`), flips `state.viewMode` to `'single'` and shows exactly one
+pane — the one for `interactionManager.lastInteractedView`. Pressing `v` again
+is a deliberate **no-op**: it used to advance to the next camera, so `v` was both
+the mode switch and the cycler and there was no way to press it just to confirm
+you were solo. Cycling moved to two places, both of which walk `state.views` —
+which IS the view strip's order, since `populateViewStrip` renders straight off
+it:
+
+- **`↑` / `↓`** → `cycleSingleView(-1 | +1)`, wrapping at both ends. Wired as a
+  **dedicated** keydown listener, not a catalog-dispatched action: the catalog
+  dispatcher `preventDefault()`s every binding it matches, which would swallow
+  the arrow keys app-wide including in grid mode where they are unbound. The
+  catalog carries a reference-only (`dispatched: false`) `soloCycleView` entry so
+  Settings ▸ Keyboard Shortcuts still lists it. `←` / `→` keep stepping frames.
+  Each step also calls `scrollViewStripTo`, since the strip scrolls once there
+  are more cameras than fit the column.
+- **A single click in the view strip** → `setSoloView(name)` (see
+  `ui/sessions-panes.js`), which returns false outside solo mode so the strip's
+  click handler falls back to its normal focus-that-pane behaviour. This used to
+  need a double-click, and that double-click *added a second pane* beside the
+  solo'd view instead of swapping it.
+
+`g` (`setGridMode`) is likewise a **no-op when already in grid mode**. The
+restore is a full `clearAll()` + `fromJSON()`, which tears down and rebuilds
+every pane, so a repeated `g` used to hand the selection to whichever panel
+dockview activated on the way back — the grid-mode twin of the repeated-`v`
+problem. Coming out of solo it restores the cached layout and then calls
+`activatePanelForView` on whichever view was solo'd, so the grid comes back with
+that camera selected — the yellow `strip-selected` highlight,
+`lastInteractedView` (which is what new instances get created on) and the 3D
+camera highlight all follow from that one `setActive()` via
+`onDidActivePanelChange`. Restoring goes through `api.fromJSON()`, which builds
+panels behind `addVideoPanel`'s back, so `paneManager.syncDockedViews()` runs
+first to re-derive the docked bookkeeping.
+
+Covered end to end by `tests/e2e/solo-view-navigation.mjs` (real keyboard/mouse
+events against the real dock and strip); `tests/test-view-mode.js` only
+simulates the index arithmetic in isolation.
 
 **Visibility panel — the global/session split.** `saveVisSettings` /
 `restoreVisSettings` cache the panel's **global appearance preferences** (the
