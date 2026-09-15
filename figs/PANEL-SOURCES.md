@@ -21,7 +21,7 @@ Build order for any figure is: run the measurement pass (column *measured by*) �
 | **a** | Protocol | `panels/fig2_01_protocol.py` | `out/fig2-protocol.json`, `out/fig2a_scene.json`, `blender-images/renders/fig2a_pose.png` | `blender-images/fig1d_scene.py`, `figs/fig2_protocol.mjs`, `figs/fig2_protocol.mjs, figs/fig2a_scene.py` | — |
 | **b** | Placements vs rig size | `panels/fig2_02_placements_vs_rig.py` | `out/fig2.json` | `figs/fig2_protocol.mjs` | `data/fig2/fig2b_placements_vs_rig.csv` |
 | **c** | Error vs cameras in the solve | `panels/fig2_03_reprojection_accuracy.py` | `out/fig2.json`, `out/fig4_by_views.json` | `figs/fig2_protocol.mjs`, `figs/fig2_solvers_by_views.mjs` | `data/fig2/fig2c_error_by_cameras.csv`, `data/fig2/fig2c_heldout_by_cameras.csv` |
-| **d** | Anchor-pair geometry | `panels/fig2_04_baseline_angle.py` | `out/fig2.json` | `figs/fig2_protocol.mjs` | `data/fig2/fig2d_baseline_angle.csv` |
+| **d** | Anchor-pair geometry | `panels/fig2_04_baseline_angle.py` | `out/fig2.json`, `out/fig5_views.json` | `figs/fig2_protocol.mjs`, `figs/fig4_views.py` | `data/fig2/fig2d_baseline_angle.csv` |
 | **e** | Accuracy vs cameras used | `panels/fig2_06_solver_accuracy.py` | `out/fig4_robust_sessions.json` | — | — |
 | **f** | Triangulation: LUC3D vs Anipose | `panels/fig2_07_per_session.py` | — (drawn) | — | — |
 | **g** | Time per keypoint | `panels/fig2_08_time_per_keypoint.py` | — (drawn) | — | — |
@@ -73,7 +73,19 @@ Supplementary identity figure (the repo's fig11 before the 2026-08-26 renumberin
 | **c** | Per-session paired difference | `panels/fig6_02_by_animals.py` (drawn inside **a**'s composite) | `out/fig3_trackers.json`, `out/fig7_variant_best.json` | `figs/fig3_trackers.py` | `data/fig6/fig6c_by_animals.csv` |
 | **d** | Error composition | `panels/fig6_03_error_decomposition.py` (drawn inside **a**'s composite) | `out/fig3_trackers.json`, `out/fig7_variant_best.json` | `figs/fig3_trackers.py` | `data/fig6/fig6d_error_decomposition.csv` |
 | **e** | The tracker's 2D and 3D anchor correspondence | `panels/fig6_00_chen_style.py` | — (drawn) | — | — |
-| **f** | Fresh anchor parameter sweep on Mouse-Dyad-10M Sessions | `panels/fig6_07_pr_switches.py` | `out/fig8_methods_50.json` | — | — |
+| **f** | Staleness horizon sweep on Mouse-Dyad-10M sessions | `panels/fig6_07_pr_switches.py` | `out/fig8_methods_50.json` | — | — |
+
+## Figure 7
+
+| Panel | Title | Drawn by | Reads | Measured by | Deposits |
+|---|---|---|---|---|---|
+| **a** | Reprojection error, 8-camera rig | `panels/fig7_00_error_cdf.py` | `out/fig7_calibration.json` | — | `data/fig7/fig7ac_error_cdf.csv` |
+| **b** | Per camera, 8-camera rig | `panels/fig7_01_per_camera.py` | `out/fig7_calibration.json` | — | `data/fig7/fig7bd_per_camera.csv` |
+| **c** | Reprojection error, 18-camera rig | `panels/fig7_00_error_cdf.py` | `out/fig7_calibration.json` | — | `data/fig7/fig7ac_error_cdf.csv` |
+| **d** | Per camera, 18-camera rig | `panels/fig7_01_per_camera.py` | `out/fig7_calibration.json` | — | `data/fig7/fig7bd_per_camera.csv` |
+| **e** | What the difference is made of | `panels/fig7_04_mechanism.py` | `out/fig7_calibration.json` | — | `data/fig7/fig7e_mechanism.csv` |
+| **f** | Time to calibrate | `panels/fig7_02_runtime.py` | `out/fig7_calibration.json` | — | `data/fig7/fig7f_runtime.csv` |
+| **g** | Which corners are scored | `panels/fig7_03_robustness.py` | `out/fig7_calibration.json` | — | `data/fig7/fig7g_scoring_set.csv`, `data/fig7/fig7s1_frame_budget.csv` |
 
 ## Panel scripts kept but not placed
 
@@ -90,4 +102,5 @@ These still run under `make_figures.py` and still deposit their CSVs; they are n
 | `panels/fig3_05_sweep.py` | 3D-term ablation: ID-switch RATE and cross-view IDF1 against r = corr3d/corr2d,. |
 | `panels/fig3_06_head_to_head.py` | greedy vs exhaustive, run for real, on identical detections: time per frame. |
 | `panels/fig6_variant_common.py` | Shared machinery for the tracker arms of Fig 7's SLAP-2M panels (b-f since the. |
+| `panels/fig7_common.py` | Shared vocabulary for Fig 7's panels, so they cannot disagree with each other. |
 

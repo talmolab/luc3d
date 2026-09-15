@@ -128,6 +128,11 @@ MUTED = "#6E6E6E"
 # the palette freely; there is nothing there to be consistent with.
 ENTITY = {
     "luc3d": TEAL,
+    #   CALIBRAT3 is this work too -- the browser calibration tool the LUC3D pipeline
+    #   feeds from -- so it takes the same teal. It never shares a panel with LUC3D's
+    #   triangulator (Fig 7 is calibration, Fig 2 is triangulation), so the hue carries
+    #   one meaning per page: "the thing this paper is offering".
+    "calibrat3": TEAL,
     "refined": TEAL,
     "residual": TEAL,
     "sleap": PERIWINKLE,

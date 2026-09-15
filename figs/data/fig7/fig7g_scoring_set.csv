@@ -1,0 +1,9 @@
+dataset,cameras,arm,scored_on,median_px
+cal_test2,8,calibrat3,anipose detections,0.4240894019603729
+cal_test2,8,calibrat3,calibrat3 detections,0.09613825008273125
+cal_test2,8,anipose,anipose detections,0.30688753724098206
+cal_test2,8,anipose,calibrat3 detections,0.5967016518115997
+calib18,18,calibrat3,anipose detections,0.4724162817001343
+calib18,18,calibrat3,calibrat3 detections,0.20538026094436646
+calib18,18,anipose,anipose detections,1.2738233804702759
+calib18,18,anipose,calibrat3 detections,1.3723702430725098

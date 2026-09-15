@@ -82,6 +82,15 @@ ANIPOSE_PY=/root/vast/eric/luc3d-bench/anipose_env/bin/python
 $ANIPOSE_PY figs/fig4_anipose.py --jobs 12 --optim-jobs 12 \
     --optim-sweep 1000 2000 4000 8000 16000 23000   # 4d/4e -> fig4_anipose.json, ~2.2 h
 python3 figs/fig6_detections.py --jobs 12   # bench env; stride 1 = every frame, ~80 s
+# 7, the calibration benchmark: two rigs, two tools, ~1 h on a 64-core box. Runs
+#   Anipose end to end, calibrat3 end to end in headless Chromium (needs
+#   `python3 server.py 8080` in the calibrat3 repo), aniposelib's solver on
+#   calibrat3's corners, then scores every calibration on BOTH tools' detections:
+BENCH=/tmp/calib-bench CALIBRAT3=~/calibrat3 \
+  CAL_TEST2=/root/vast/eric/calibration_test/cal_test2 \
+  CALIB18=/tmp/calib18 bash figs/fig7_calib_bench.sh   # -> out/fig7_calibration.json
+#   Panel 7e is wall clock, so its runs must be SEQUENTIAL on an idle machine -- the
+#   same rule as fig4_measure.mjs above, and for the same reason.
 #    ... see the per-panel scripts' docstrings for the exact input each one needs
 
 # 2. Panels + composites (fast, pure Python).
@@ -338,6 +347,114 @@ should still use every available view (1.22 mm).
   the independent per-view 2D comes from a well-trained network on a rig with good
   calibration, so the views already agree closely. The "independent labelling is
   geometrically inconsistent" story cannot be told from this dataset.
+
+## Fig 7 — the calibration benchmark
+
+Two rigs, two tools, one scorer.
+
+**WHAT IT ACTUALLY SHOWS, which is narrower than "calibrat3 wins".** On the 18-camera
+rig calibrat3 is lower everywhere — both scoring sets, all 18 cameras, 0.47 against
+1.27 px median and 1.17 against 4.92 p95. On the 8-camera rig **the curves cross**:
+Anipose has the better median on its own corners (0.31 against 0.42 px, lower in 5 of 8
+cameras) while calibrat3 is about five times tighter at p95 (0.91 against 5.06) and ten
+times at p99 (2.67 against 25.3). And the median ranking **flips** with the choice of
+scoring set — each solver fits the corners it was given — while the tail does not. The
+defensible claim is therefore about the SHAPE of the error distribution (far fewer
+badly-fit observations) plus a clear win on the harder rig, not a blanket accuracy
+claim. Wall clock is mixed too: calibrat3 is faster on the 8-camera rig (248 against
+473 s) and slower on the 18-camera one (506 against 314 s).
+
+The decisions that are not obvious, and why they went the way they did:
+
+**Nothing on this figure is either tool's own error number.** calibrat3 reports a
+reprojection error in its own interface and aniposelib returns one from
+`calibrate_rows`; neither appears here. Every arm is re-scored by aniposelib's
+triangulation and reprojection on detections it was not fitted to, because the app's own
+metric is exactly what a bug in the app would corrupt first. (This is not hypothetical:
+the calibrat3 session that produced this figure once had a triangulation bug that put a
+4 px floor under its in-app numbers and was invisible from inside the app.)
+
+**The drawn scoring set is ANIPOSE's corners, not ours.** Panel g exists to show the
+ranking is the same on either set, but the panels that carry the result use the set that
+cannot flatter us.
+
+**The third arm is aniposelib's solver on calibrat3's corners**, and it is the only
+panel element that answers *why*. End to end, calibrat3 wins; that could be a better
+detector or a better solve. Feeding aniposelib's own `calibrate_rows` our corners moves
+it to Anipose's curve, not ours — so it is the solve.
+
+**Anipose is stochastic and the benchmark says so.** `bundle_adjust_iter` initialises
+board poses with an unseeded `np.random.choice` and breaks resampling ties with
+`np.random.random`, so one run is one draw. `fig7_calib_anipose_repeats.py` re-runs its
+solver on the same saved detections so the spread is reported rather than assumed.
+calibrat3 is deterministic, which the bench checks by re-running it and comparing the
+saved session byte for byte.
+
+**"Is it just more aggressive outlier rejection?"** The sharpest objection to a-d, and
+the reason panel e exists. Two answers. Structurally, rejection cannot inflate the
+score: the score is aniposelib's, over EVERY observation of ANIPOSE's detections, so
+what calibrat3 discards changes only what it fits — and Anipose rejects too
+(`bundle_adjust_iter` is an iterative reject-and-refit loop). Empirically,
+`fig7_calib_ablation.mjs` re-runs calibrat3's solver on byte-identical corners with the
+final threshold set to 0, which collapses the schedule to one round that keeps every
+point (`ui/stage-extrinsics.js`: `finalThr > 0 ? outlierSchedule(...) : [Infinity]`).
+
+**ANSWERED, on both rigs.** Rejection is worth 0.007 px (8-camera) and 0.03 px
+(18-camera); swapping the intrinsic model is worth 0.11 and 0.54 px — 15x and 18x more.
+calibrat3 without any rejection (0.502 px, 18-camera) still beats its own
+Anipose-intrinsics arm WITH rejection (1.014 px) by 3.6x. The rigid-board term is worth
+exactly zero on both rigs. So the difference is which parameters are solved, not which
+observations are discarded. (calibrat3's in-app metric makes rejection look slightly
+more important — 0.04 px — because the app scores itself on its own detections; read
+independently it nearly vanishes.)
+
+**"Is the richer intrinsic model better, or just more flexible?"** The second half of
+the same objection, and the one the in-sample comparison genuinely cannot answer: more
+free parameters fit their own data better by construction. `fig7_calib_heldout.py`
+scores every arm on frames calibrat3 NEVER used — out of sample for calibrat3 and in
+sample for Anipose, deliberately the unfair direction. Panel e draws in-sample and
+held-out as a filled and an open mark on one row, so the gap between them IS that
+configuration's overfitting. Note the repo already has evidence against reflexive
+over-parameterisation: at the per-camera intrinsics stage the k1-only model beats the
+full five-parameter one on cross-view error (10.27 against 12.74 px on the 18-camera
+rig), because richer distortion models absorb per-camera effects that do not transfer.
+
+**ANSWERED: no generalization gap at all.** Every configuration's held-out median equals
+its all-frames median to within 0.003 px — calibrat3 0.472/0.472, Anipose's intrinsics
+1.013/1.014, intrinsics fixed 1.309/1.304 — over 326,147 observations from 900 frames
+calibrat3 never used. That is the expected result once the arithmetic is looked at: a
+calibration fits at most eleven parameters per camera against 10^5 to 10^6 observations,
+so six free intrinsics is still an enormously over-determined fit and there is no
+capacity to overfit. The concentric ring-on-dot in panel e is that result drawn.
+
+**Per-camera whiskers are p5-p95, not 1.5x IQR.** Tukey's fence is an outlier rule for
+samples of tens. Each camera here has 10^4-10^6 observations, and because reprojection
+error is strictly positive the lower fence lands below zero — so the lower whisker
+stopped being a statistic and simply found the smallest error in the session (~10^-4
+px). On the log axis these panels need, that turned every column into a five-decade
+spike and buried the comparison.
+
+**Panel e is a LINEAR axis** because it is a stacked bar. On a log axis the lower
+segment is measured from the axis floor rather than from zero, so the segments are not
+their values.
+
+**Panel e's runs are sequential on an idle machine**, the same rule `fig4_measure.mjs`
+follows. The accuracy runs were executed concurrently — which costs a calibration
+nothing — and under that load the 18-camera Anipose detection read 517 s wall and 7333 s
+CPU against 248 s and 3660 s clean, with byte-identical detections. Anipose's detector
+is also given cores/cameras OpenCV threads per camera process so it fills the machine
+exactly once: that is its best case here, not a handicap.
+
+**Anipose does not detect every frame**, and no panel claims it does. `detect_video`
+walks the video on an adaptive schedule — every 20th frame until the board is found,
+then every frame while it keeps being found — so it covers essentially every
+board-visible frame. calibrat3's default samples 800.
+
+**Views whose ChArUco corners are collinear are dropped from the third arm only.**
+aniposelib initialises intrinsics with a homography per view, which needs object points
+spanning two dimensions; calibrat3 keeps frames down to 6 corners and so emits views
+with every corner in one board row. OpenCV 5 asserts rather than returning a bad matrix.
+The dropped count is reported with the measurement.
 
 ## Fig 6 — datasets
 

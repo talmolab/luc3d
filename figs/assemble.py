@@ -141,6 +141,14 @@ TITLES = {
     (6, "d"): "Error composition",
     (6, "e"): "The tracker's 2D and 3D anchor correspondence",
     (6, "f"): "Staleness horizon sweep on Mouse-Dyad-10M sessions",
+    # Fig 7 (calibration benchmark; calibrat3 vs Anipose on two real rigs).
+    (7, "a"): "Reprojection error, 8-camera rig",
+    (7, "b"): "Per camera, 8-camera rig",
+    (7, "c"): "Reprojection error, 18-camera rig",
+    (7, "d"): "Per camera, 18-camera rig",
+    (7, "e"): "What the difference is made of",
+    (7, "f"): "Time to calibrate",
+    (7, "g"): "Which corners are scored",
 }
 TITLE_PT = 7.5            # panel titles, below the 9 pt letter
 
@@ -264,6 +272,18 @@ LAYOUTS = {
     # diagram spans both of a's rows; the sweep closes the rectangle full width.
     6: [[("a", "block"), ("e", "chen_style")],
         [("f", "pr_switches")]],
+    # Fig 7 (calibration benchmark, added 2026-09-15). Rows 1 and 2 are the SAME
+    # two panels on two rigs -- pooled distribution at a third, per-camera boxes at
+    # two-thirds -- so the reader can read straight down a camera column from the
+    # 8-camera rig to the 18-camera one. Row 3 answers "why" and "how long".
+    #
+    # fig7s1 (frame budget) is DEPOSITED BUT NOT PLACED -- it reports a null and the
+    # legend quotes it. The scoring-set panel WAS going to share that fate; the
+    # 8-camera measurement made it a result (the median ranking flips with the choice
+    # of corners, the tail does not), so it is drawn as g.
+    7: [[("a", "error_cdf_cal_test2"), ("b", "per_camera_cal_test2")],
+        [("c", "error_cdf_calib18"), ("d", "per_camera_calib18")],
+        [("e", "mechanism"), ("f", "runtime"), ("g", "scoring_set")]],
 }
 
 
