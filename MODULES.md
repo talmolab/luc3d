@@ -41,9 +41,21 @@ the old `app.js` entry point.
 - `setupInteraction()` — instantiates `InteractionManager` with all callback
   wiring (selection, drag, double-click, edit-group, etc.).
 - `setup3DViewport()` — instantiates `Viewport3D` and wires the
-  "Show Camera View"/"Show Initial View" buttons.
+  "Show Camera View"/"Show Initial View" buttons. **Respects the `\` toggle**
+  (`isViewport3DVisible()`, `ui/panel-visibility.js`): it no longer clears the
+  container's `collapsed` class — every session load funnels through here, so
+  it used to re-open a panel the user had deliberately hidden — and when the
+  panel IS collapsed it disposes the old viewport, sets the singleton to
+  `null`, and returns without building a scene or a WebGL context. Releasing
+  rather than keeping the previous viewport matters: leaving it alive would
+  make expanding the panel show the PREVIOUS session's cameras and skeleton.
+  `update3DViewport` rebuilds it from the live session on expand.
 - `update3DViewport(frameIdx)` — pushes current InstanceGroups into the 3D
-  scene; auto-initializes the viewport if calibration is present.
+  scene; auto-initializes the viewport if calibration is present. Returns
+  immediately when the panel is collapsed — including skipping the auto-init,
+  so a hidden viewport costs no WebGL context. Nothing needs remembering: the
+  rebuild is a stateless function of the current frame, and `toggle3DViewport`
+  calls back in here on expand.
 - `navigateToFrame(frameIdx)` — unified frame navigation used by every UI entry
   point (timeline scrub/drag, transport buttons, arrow/Home/End keys). With a
   video controller it defers to `videoController.seekToFrame`; for a video-less
@@ -78,6 +90,7 @@ the old `app.js` entry point.
   `purgeTriangulationDataForGroup`.
 - `../ui/overlays.js` — `getTrackColor`, `getGroupColor`.
 - `../ui/viewport3d.js` — `Viewport3D`.
+- `../ui/panel-visibility.js` — `isViewport3DVisible`, `markViewport3DSkipped`.
 - `../ui/timeline.js` — `Timeline`.
 - `../ui/interaction.js` — `InteractionManager`.
 
@@ -2127,6 +2140,35 @@ highlight when the selected tab currently lives inside it.
   `updateTriangulationBadge`.
 - Session: `ensureSession` (seeds new sessions from `buildRememberedSkeleton`).
 
+**Collapsed panel does nothing.** `updateInfoPanel` and `updateFrameInfo` both
+stop early when `isInfoPanelVisible()` (`ui/panel-visibility.js`) is false,
+marking the panel stale so `refreshInfoPanelAfterShow` (`ui-wiring.js`) rebuilds
+it once on re-show. This is not a micro-optimization: `updateFrameInfo` runs on
+every frame (throttled to 10 Hz during playback) and rebuilds the
+per-instance × per-node × per-camera breakdown plus both instance tables with a
+fresh `<select>` per row, and `updateInfoPanel` additionally calls
+`populateVideosTable`, which walks EVERY frame of the session per video row.
+Three things deliberately stay outside the gate:
+- **The status bar**, which is NOT part of `#infoPanel` and is always on
+  screen. `updateFrameInfo`'s tail writes `#statusError` and calls
+  `updateFrameCounters()`, so gating the whole function would silently freeze
+  the bottom bar. Two private helpers split it: `aggregateReprojectionError`
+  (the three summary numbers — arithmetic over values already in
+  `state.triangulationResults`, cheap) runs first and unconditionally, then
+  `updateStatusBarForFrame` runs on both the hidden and the visible path.
+  `updateInfoPanel`'s hidden branch calls `updateFrameInfo` for the same
+  reason. Only the panel's own DOM is skipped.
+- The reprojection **solve** in `ui/rendering.js`'s per-frame fill. The canvas
+  overlays, the 3D viewport and the `.slp` export all read the same
+  `_grp.reprojections` / `reprojectedInstances` it produces, and the fill only
+  fires once per group — skipping it for a hidden panel would blank the canvas
+  markers and permanently starve the panel of numbers it could never recompute.
+  Only the panel's *consumption* of `state.triangulationResults` is skippable.
+- `rememberSkeleton(state.session.skeleton)`, which the gated branch still
+  calls. It is `populateSkeletonTable`'s one non-DOM side effect, and
+  `buildRememberedSkeleton()` feeds `ensureSession` — a skeleton loaded while
+  the panel was hidden must not leave the next new session with a stale one.
+
 **Skeleton persistence.** `populateSkeletonTable` calls `rememberSkeleton` on every
 refresh — the central point after any editor mutation (add/remove node or edge,
 Load Skeleton) or loaded project — so the current non-empty skeleton is cached for
@@ -2141,6 +2183,7 @@ on reload); see `ui/app-state.js`.
 - `./overlays.js` — `REPROJECTION_COLOR`, `getTrackColor`, `getGroupColor`.
 - `./rendering.js` — `drawAllOverlays`, `updateFrameCounters`.
 - `./interaction.js` — `isInteractiveClickTarget`.
+- `./panel-visibility.js` — `isInfoPanelVisible`, `markInfoPanelStale`.
 - `./app-state.js` — `state`, `timeline`, `interactionManager`,
   `rememberSkeleton`, `buildRememberedSkeleton`.
 - `../import-export/save-load.js` — `setStatus`, `markDirty`.
@@ -3261,6 +3304,15 @@ data sources. Plus visibility-toggle helpers and frame counter updates.
   (the group already holds the authoritative 3D from the sweep); with the method
   honored the two are bit-identical, which
   `tests/e2e/triangulate-all-ba-display.mjs` asserts directly.
+
+  This fill stays **outside** the collapsed-info-panel gate (see
+  `ui/panel-visibility.js`). It is shared, not panel-only: the canvas
+  reprojection markers, the 3D viewport and the `.slp` export all read the
+  `_grp.reprojections` / `reprojectedInstances` it produces, and it fires only
+  once per group — skipping it for a hidden panel would blank the canvas AND
+  permanently deny the panel numbers it could never recompute. The gate lives
+  one level down, in `updateFrameInfo` itself, which is where the panel
+  *consumes* `state.triangulationResults`.
 - `updateFrameCounters()` — updates status-bar frame counters.
 
 **Imports from project modules.**
@@ -4212,13 +4264,40 @@ stopping at the last frame; the step transport buttons/keys stop it first.
   (coordinates + per-node visibility are).
 - Seekbar: `updateSeekbar`, `updateSeekbarVisual`,
   `onPlaybackStateChange`.
-- Toggles: `toggleInfoPanel`, `updateInfoPanelToggleBtn`,
-  `toggle3DViewport`, `toggleTimeline`, `syncTimelineToggleButton`,
-  `fitTimelineToData`.
+- Toggles: `toggleInfoPanel`, `refreshInfoPanelAfterShow`,
+  `updateInfoPanelToggleBtn`, `toggle3DViewport`, `toggleTimeline`,
+  `syncTimelineToggleButton`, `fitTimelineToData`.
 - View modes: `enterSingleViewMode`, `cycleSingleView`, `setSoloView`,
   `setGridMode`, `updateVideoGridDisplay`, `showViewIndicator`. See
   **Single-view ("solo") mode** below.
 - Playback: `applyPlaybackRate`, `seekToLabeledFrame`.
+
+**Panel toggles: independent sizing, and hidden means idle.** `toggleInfoPanel`
+(`I`) and `toggle3DViewport` (`\`) each only flip their own panel's `collapsed`
+class. **Neither resizes the other** — `.video-grid-section` is the only
+`flex: 1` child of `.main-content`, so it absorbs and releases the space on its
+own. `toggleInfoPanel` used to hand the freed width to the 3D viewport as an
+inline `style.width`, plus a temporary `flex` lock on the video grid to stop it
+taking the space, and that produced two bugs: an inline width **outranks**
+`.collapsed { width: 0 }`, so hiding the info panel while the 3D viewport was
+collapsed **re-opened the hidden viewport** at ~300px in the space the panel had
+just vacated; and writing a pixel width to a `width`-transitioned element while
+the flex lock let go on the other side made the 3D viewport jitter on every
+info-panel toggle. Both toggles therefore now *park* any inline width before
+adding `collapsed` and restore it after removing it (`_savedWidth` on
+`#viewport3dContainer`, `_savedWidth`/`_savedMinWidth` on `#infoPanel` — the
+split handles write inline widths there, which would defeat the collapse the
+same way).
+
+Each toggle also drives the work, not just the pixels — see
+`ui/panel-visibility.js`. Hiding the 3D viewport calls
+`Viewport3D.setVisible(false)` (render loop stopped, scene rebuilds deferred)
+and lets `update3DViewport` skip out; showing it calls `setVisible(true)` then
+`update3DViewport(state.currentFrame)`, which also auto-inits the viewport if a
+session load released it while collapsed. Showing the info panel calls
+`refreshInfoPanelAfterShow`, which rebuilds it **only if** a refresh was
+actually skipped (`consumeInfoPanelStale`). Covered by
+`tests/e2e/panel-toggle-independence.mjs`.
 
 **Single-view ("solo") mode.** `v` (`singleViewMode`) calls
 `enterSingleViewMode`, which caches the dockview grid layout
@@ -4426,7 +4505,29 @@ via the options bag.
   `setSelectedInstance`, `setEnvironment`, `clearEnvironment`,
   `addCameraPyramids`, `selectCamera`, `showSelectedCameraView`,
   `showInitialView`, `setMissingVideoCameras`, `highlightCamera`,
-  `resize`, `resetCamera`, `lookAtOrigin`, `fitToScene`, `dispose`.
+  `resize`, `resetCamera`, `lookAtOrigin`, `fitToScene`,
+  `setVisible(visible)` / `isVisible()`, `dispose`.
+- **`setVisible(false)` stops ALL processing** (the `\` toggle's other half —
+  see `ui/panel-visibility.js`). A collapsed container is still a perfectly
+  good render target as far as WebGL is concerned, so the `_animate()` loop
+  used to render the whole scene ~60x/second into pixels nobody composites.
+  Hiding cancels `_rafId` (and the camera fly-in's separate rAF loop, which
+  renders directly and would otherwise keep drawing) and routes every scene
+  rebuild — `setFrame`/`setSelectedInstance`, `addCameraPyramids`,
+  `setEnvironment`/`clearEnvironment`, `highlightCamera`, `fitToScene` — into
+  `_deferred`, a Map of at most one thunk per `DEFER_REPLAY_ORDER` key, so
+  scrubbing 10,000 frames while hidden leaves ONE pending `'frame'` rebuild
+  rather than 10,000. Nothing is disposed, so the scene graph, the WebGL
+  context and the user's orbit pose survive and re-showing is instant.
+  `setVisible(true)` replays the deferred thunks in `DEFER_REPLAY_ORDER`
+  (geometry first, then what reads it back: `'highlight'` needs
+  `addCameraPyramids`' meshes, `'fit'` needs `setFrame`'s skeleton), then
+  resizes — the container was 0x0 while collapsed, so every `resize()` in that
+  window early-returned. `setEnvironment` is the one deferral that captures
+  `this.skeleton` explicitly: callers set an env-specific skeleton, call in,
+  and restore the normal one on the next line. `visible` is a per-instance
+  constructor option (default `true`) rather than a DOM read, because the two
+  export-modal instances must keep rendering regardless of the main panel.
 - Constructor options `skeletonNodeShape` (`'circle'` sphere / `'square'` cube /
   `'triangle'` tetrahedron / `'x'` crossed bars — `updateSkeleton` builds the
   matching node geometry) and `preserveDrawingBuffer` (keeps the WebGL buffer
@@ -4447,6 +4548,62 @@ Otherwise uses the global `THREE` from CDN script tags.
 **User-facing features.** 3D viewport panel — orbit camera, click camera
 frustum to fly to that view, "Show Initial View" reset, environment
 overlay (skeleton meshes around tracks).
+
+**Coverage.** `tests/e2e/panel-toggle-independence.mjs` pins the pause: it
+wraps `renderer.render` and asserts ZERO draws across four frame steps with
+the panel collapsed, then asserts the scene resyncs to the CURRENT frame (not
+the one it was hidden on) when re-shown. `_rafId === 0` alone is not a
+sufficient assertion — the loop is stopped by two independent mechanisms and
+either one on its own zeroes the handle.
+
+---
+
+### ui/panel-visibility.js
+
+**Purpose.** The single answer to "is the 3D viewport / info panel actually on
+screen?", plus the deferred-refresh bookkeeping that makes skipping work while
+hidden safe. Both collapsible right-hand panels used to be pure CSS —
+`toggle3DViewport` / `toggleInfoPanel` flipped a `collapsed` class and no code
+doing 3D rendering or panel population ever learned about it — so a hidden 3D
+viewport kept rendering at full frame rate and a hidden info panel kept
+rebuilding its instance / reprojection-error tables on every frame. Hiding a
+panel is how the user asks for that work to stop, so the collapse state has to
+be readable by the code doing it.
+
+**Key exports.**
+- `isViewport3DVisible()` / `isInfoPanelVisible()` — read `#viewport3dContainer`
+  / `#infoPanelWrapper`. The **DOM is the source of truth** (no mirrored
+  boolean to drift from the class the CSS reacts to). A `collapsed` class, or
+  `display:none` (the 3D container's Three.js-init-failure state), means
+  hidden. A **missing element means visible**: the unit-test runner has no app
+  chrome, and silently skipping every refresh there would turn these gates
+  into invisible test failures.
+- `markInfoPanelStale()` / `consumeInfoPanelStale()` — read-and-clear flag.
+  Every info-panel populate function is a stateless full rebuild from current
+  `state`, so one call on re-show catches up on any number of skipped ones;
+  the flag exists so re-showing a panel that never went stale doesn't pay for
+  a redundant rebuild (`populateVideosTable` walks every frame of the session).
+- `markViewport3DSkipped()`, `skipped` (`{ infoPanel, viewport3d }` counters,
+  also on `window.__lucidPanelVis`) — diagnostics. A visibility gate that
+  looks right and still does the work has no visual signature at all, so the
+  counters are what `tests/e2e/panel-toggle-independence.mjs` reads.
+
+**Imports from project modules.** **None — this is a leaf module by design.**
+`ui/info-panel.js`, `ui/ui-wiring.js` and `pose/initialization.js` all need to
+ask it, and several of those already import each other, so any import here
+would close a cycle.
+
+**Imported by.** `ui/info-panel.js` (gates `updateInfoPanel` /
+`updateFrameInfo`), `ui/ui-wiring.js` (`refreshInfoPanelAfterShow`),
+`pose/initialization.js` (gates `update3DViewport` and `setup3DViewport`).
+
+**Note.** `ui/viewport3d.js` deliberately does NOT import this — it takes a
+per-instance `visible` flag instead, because the export modals mount their own
+`Viewport3D` instances that must render regardless of the main panel's state.
+
+**User-facing features.** Hiding the 3D viewport (`\`) or info panel (`I`)
+actually stops the corresponding rendering / data work instead of only hiding
+its output.
 
 ---
 
