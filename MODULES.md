@@ -1799,6 +1799,30 @@ SLP all-sessions, JSON labels, points3d H5, reproj H5).
   click/Esc/Enter). Used by the By-Cam and per-session flows: on success they
   close their modal and pop "Download Successful"; on error they pop "Download
   Failed: …".
+- `slpIncludeGroupHtml({predId, reprojId, reprojRowId, reprojToggleId})`
+  (module-private) — markup for the **Include** group shared by the Per-Session
+  and By-Cam SLP export modals. Uses the app's standard `.toggle-switch` instead
+  of raw checkboxes, and opens with a **note** (`.slp-inc-note`) reading
+  "✓ UserLabels are automatically saved", above the two switches. Both modals
+  have always written user labels
+  (`instanceFilter.user` is hardcoded `true`), but with only "Predicted
+  Instances" and "Reprojections" visible under a heading reading *Include*,
+  users read the silence as an exclusion and asked whether their own labels were
+  being dropped (luc3d #194).
+
+  **A note, not a third always-on switch** (which is what this shipped as first):
+  a control that cannot be operated misstates what the user can change, reads as
+  "greyed out — am I losing something?", and leaves an inert input for a future
+  caller to mistake for a real option. Nothing about user labels is stateful, so
+  nothing about them is a control.
+
+  Covered by `tests/e2e/export-include-user-labels.mjs`, which pins both the UI
+  contract (the note comes first, contains no control at all, and the group has
+  exactly two option rows; the option ids stay intact and each `.slider` really
+  drives its checkbox — a `.toggle-switch` not wrapped in a `<label>` looks right
+  and is dead) and the claim itself, by running the Per-Session export with
+  Predicted and Reprojections both OFF and reading every user instance back out
+  of the written `.slp`.
 - `showSlpExportModal()` — single-camera SLP export modal (pick one camera per
   session, export to one file). **Retained but no longer wired to the File menu**
   — its old "Export SLEAP File" item was replaced by "Export SLEAP File Per
@@ -1806,16 +1830,38 @@ SLP all-sessions, JSON labels, points3d H5, reproj H5).
 - `showSlpExportPerSessionModal()` — "Export SLEAP File Per Session": bulk export
   for the **open/active session only**. Lists every assigned-camera view in that
   session with a per-row **Download** checkbox (default ON; only checked rows are
-  exported), camera, target directory, and versioned output filename
-  `<stem>_vN.slp`, with Include options — **Predicted Instances** (checkbox), **Reprojections**
-  (checkbox) emitted as UserInstance/PredictedInstance via a toggle; user labels
-  always included. On Export it **always prompts** for a folder
+  exported — an unchecked row gets `tr.slp-ps-off` and dims), camera, target
+  directory, and versioned output filename
+  `<stem>_vN.slp`, with an **Include** group built by `slpIncludeGroupHtml`
+  (shared with By-Cam): the always-saved user-labels note, then **Predicted
+  Instances** (default on) and **Reprojections** (emitted as
+  UserInstance/PredictedInstance via a sub-toggle that enables with it). On
+  Export it **always prompts** for a folder
   (`window.showDirectoryPicker` — it does not silently reuse a cached
   `state.exportDirHandle`) and writes one 2D `.slp` per camera
   into that camera's associated subdirectory (`state.cameraDirMap[cam] || cam`),
   via `exportSlpClientSide(...)`. Versioned names mean source `.slp` files are
   never overwritten. Falls back to flat `downloadBlob` downloads when the File
   System Access API is unavailable. Esc closes the modal.
+
+  **The filename table is themed** (`.slp-ps-filename`, `.slp-ps-dl`). The output
+  field and the Download checkbox were raw form controls, so they rendered as a
+  white box in a system font and a white square on a dark modal. Both are now
+  drawn from the app's tokens, the field in the monospace stack shared with
+  `.data-table .mono` — real names here run ~67 characters
+  (`cam-<stamp>-0000_h265_CRF30_denoised.mp4.predictions_v1.slp`), and monospace
+  is what lines the `_CRF30` / `_vN` segments up down the column. The modal
+  widened to `min(920px, 94vw)` so those names fit un-elided; it was `min-width:
+  720px`, which beats `max-width` in CSS and so pushed the modal off-screen on a
+  narrow window rather than shrinking. The field elides when unfocused and keeps
+  the full name in `title` (the change handler re-syncs it).
+
+  Row cells are **escaped** on the way into the markup (`esc()`). These rows are
+  built by string concatenation, and camera names / directories / filenames all
+  come from user files: an unescaped `"` in a filename closed the `value="…"`
+  attribute early and the field came back **truncated at the quote** — asserted
+  directly in `tests/e2e/export-include-user-labels.mjs`, which reproduces it
+  against the pre-fix build.
 - `showSlpExportByCamModal()` — "Export SLEAP File By Cam": camera×session grid.
   Each camera column exports across all its selected sessions into one SLEAP
   file; the modal **bulk-exports every included column at once** via
@@ -1835,14 +1881,13 @@ SLP all-sessions, JSON labels, points3d H5, reproj H5).
   explanatory `title`) and excluded from the export — checked set-based /
   order-insensitively via `findSkeletonMismatch` and re-evaluated on every cell
   toggle (`updateDownloadStates`). A red warning under the tables
-  (`#slpByCamSkelWarning`) flags blocked columns. Include options (stacked) —
-  **Save PredictedInstances** (checkbox, default on) and, beneath it, **Save
-  Reprojections** (checkbox, emitted as UserInstance/PredictedInstance via a
-  toggle) — are passed to `exportSlpMultiSession` as an `instanceFilter`
-  (`{user:true, predicted, reprojected}`); user labels are always included. The
-  Save Reprojections row is **disabled unless at least one session has
-  reprojections** (any `InstanceGroup.reprojectedInstances` populated, i.e.
-  triangulation/tracking has run). Download All shows per-file
+  (`#slpByCamSkelWarning`) flags blocked columns. The **Include** group is the
+  shared `slpIncludeGroupHtml` one (the always-saved user-labels note, then
+  **Predicted Instances** / **Reprojections**); its two options become the `instanceFilter`
+  (`{user:true, predicted, reprojected}`) passed to `exportSlpMultiSession`. The
+  Reprojections row is **disabled as a unit** (`.slp-inc-row-disabled`) unless at
+  least one session has reprojections (any `InstanceGroup.reprojectedInstances`
+  populated, i.e. triangulation/tracking has run). Download All shows per-file
   progress; **Esc closes the modal**, or cancels an in-progress export mid-run.
   Columns ordered by session frequency, then within-session name order, then
   session recency for session-unique views.
