@@ -38,14 +38,14 @@ from src.style import INK, MUTED, deposit, panel, save, text_legend, use  # noqa
 
 #: Panel letter per dataset. a is the 8-camera rig, c the 18-camera one; each sits at
 #: the head of its own row, with that rig's per-camera panel beside it.
-LETTERS = {"cal_test2": "a", "calib18": "c"}
+LETTERS = {"slap8": "a", "calib18": "c"}
 
 #: (letter, slug) this script draws, SPELLED AS LITERALS. `assemble.stale()` and
 #: `make_docs.py` attribute a panel to its script by searching the source for the exact
 #: text `"a", "error_cdf_cal_test2"`, and this file's `save()` call builds both the
 #: letter and the slug from the dataset key -- so without this constant both tools
 #: report the panels as MISSING and PANEL-SOURCES.md loses the rows.
-PANELS = [("a", "error_cdf_cal_test2"), ("c", "error_cdf_calib18")]
+PANELS = [("a", "error_cdf_slap8"), ("c", "error_cdf_calib18")]
 
 
 
@@ -55,8 +55,11 @@ def curves(ds):
     for key, name, color, filled in ARMS:
         arm = ds["detsets"][MAIN_DETSET]["arms"].get(MAIN_C3 if key == "calibrat3" else key)
         if arm is None:
-            raise SystemExit(f"fig7_calibration.json has no arm {key!r} for this dataset; "
-                             f"re-run the measurement pass (figs/fig7_calib_score.py)")
+            # A MISSING ARM IS SKIPPED, NOT FATAL. The solver-on-our-corners arm exists
+            # only where it was run: the 18-camera rig has it, the 8-camera rig's four
+            # recordings do not. Refusing to draw the panel over an arm it never had
+            # would block the two rigs that DO have their own comparison.
+            continue
         out.append((key, name, color, filled,
                     np.asarray(arm["quantiles"]["v"]), np.asarray(arm["quantiles"]["q"]),
                     arm["overall"]))
@@ -69,6 +72,19 @@ def draw(dskey, ds):
     # low-error arm goes vertical.
     fig, ax = panel("third", "std", key=3)
     rows = []
+    # ONE THIN CURVE PER RECORDING, under the pooled one. The 8-camera rig has FOUR
+    # distinct calibration recordings (the SLAP-2M tree looks like it has dozens, but
+    # every session folder on a date holds a byte-identical copy of that date's one
+    # recording). Drawing them individually turns "n" from a claim in the caption into
+    # something the reader can see: four nearly coincident curves per tool is the
+    # replication, and any recording that behaved differently would separate here.
+    for r in (ds.get("recordings") or {}).values():
+        for key, name, color, filled in ARMS:
+            a = r["arms"].get(key)
+            if a is None:
+                continue
+            ax.plot(a["quantiles"]["v"], a["quantiles"]["q"], color=color, lw=0.5,
+                    alpha=0.55, zorder=2, solid_capstyle="butt")
     for key, name, color, filled, x, y, _ in curves(ds):
         # SOLID for a library's default configuration, DASHED for the same library
         # run on the other tool's corners -- one hue per library, the dash carries
@@ -106,7 +122,23 @@ def draw(dskey, ds):
     # AND carries its dash, and at 8 pt that line is wider than the 57 mm panel. The
     # alternative -- shortening it to fit -- would drop the very words that say what
     # the arm is, on the panel where that arm is the point.
-    text_legend(ax, [(n, c) for _, n, c, _ in ARMS], loc="above", size=6.2, dy=0.048)
+    # SAY HOW MANY RECORDINGS, because the thin per-recording curves sit almost on top
+    # of the pooled one and a reader would otherwise read a single recording. The spread
+    # IS the replication result, so it is quoted rather than left to be squinted at.
+    recs = ds.get("recordings") or {}
+    if recs:
+        held = sum(1 for r in recs.values() if not r.get("tuning"))
+        meds = [r["arms"]["calibrat3_800"]["overall"]["med"] for r in recs.values()
+                if "calibrat3_800" in r["arms"]]
+        ax.text(0.015, 0.985, f"{len(recs)} recordings ({held} held out)\n"
+                              f"calibrat3 median {min(meds):.2f}–{max(meds):.2f} px",
+                transform=ax.transAxes, fontsize=6.0, color=MUTED, va="top", ha="left")
+    # THE KEY NAMES ONLY WHAT THIS PANEL DRAWS. The solver-on-our-corners arm exists for
+    # the 18-camera rig and not for the 8-camera recordings, and a key advertising a
+    # dashed curve that is not on the panel is worse than no key.
+    drawn = {c[0] for c in curves(ds)}
+    text_legend(ax, [(n, c) for k, n, c, _ in ARMS if k in drawn],
+                loc="above", size=6.2, dy=0.048)
     save(fig, 7, LETTERS[dskey], f"error_cdf_{dskey}")
     return pd.concat(rows)
 

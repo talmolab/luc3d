@@ -57,11 +57,11 @@ from matplotlib.colors import to_rgba  # noqa: E402
 from src.data_loader import load  # noqa: E402
 from src.style import MUTED, deposit, panel, save, text_legend, use  # noqa: E402
 
-LETTERS = {"cal_test2": "b", "calib18": "d"}
+LETTERS = {"slap8": "b", "calib18": "d"}
 
 #: (letter, slug) this script draws, spelled as literals -- see the note in
 #: `fig7_00_error_cdf.py` for why a computed `save()` needs them.
-PANELS = [("b", "per_camera_cal_test2"), ("d", "per_camera_calib18")]
+PANELS = [("b", "per_camera_slap8"), ("d", "per_camera_calib18")]
 
 
 #: TWO ARMS HERE, THREE IN a/c. The solver-on-our-corners arm is the figure's

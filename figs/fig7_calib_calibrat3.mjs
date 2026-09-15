@@ -37,7 +37,10 @@ try {
 
     // ---- load -----------------------------------------------------------------
     const tL = Date.now();
-    await page.setInputFiles('#folderInput', SESSION);
+    // 10 min, not Playwright's default 30 s: setInputFiles COPIES the directory's
+    // contents into the browser, and a session of eight 67 MB videos blew the default
+    // (the run then failed before a single frame was decoded).
+    await page.setInputFiles('#folderInput', SESSION, { timeout: 600000 });
     await waitState(() => window.__calibrat3.state.views.length >= 2 && window.__calibrat3.state.totalFrames > 0, null, { timeout: 900000 });
     timing.load_s = (Date.now() - tL) / 1000;
     const info = await page.evaluate(() => ({

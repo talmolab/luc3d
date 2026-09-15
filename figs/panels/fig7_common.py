@@ -56,7 +56,7 @@ ARM_FILLED = {k: f for k, _, _, f in ARMS}
 #: dataset key -> (printed name, number of cameras). The printed names say the rig
 #: size because that is the variable the two sessions differ in that a reader cares
 #: about; the internal keys stay as the measurement wrote them.
-DATASETS = [("cal_test2", "8-camera rig", 8), ("calib18", "18-camera rig", 18)]
+DATASETS = [("slap8", "8-camera rig", 8), ("calib18", "18-camera rig", 18)]
 DS_LABEL = {k: n for k, n, _ in DATASETS}
 
 #: THE SCORING SET DRAWN ON THE MAIN PANELS. Anipose's OWN detections, deliberately:

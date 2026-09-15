@@ -352,6 +352,26 @@ should still use every available view (1.22 mm).
 
 Two rigs, two tools, one scorer.
 
+**THE 8-CAMERA ROW IS FOUR RECORDINGS, NOT TEN SESSIONS, AND THAT MATTERS.** SLAP-2M
+looks like it offers dozens of calibration sessions; it does not. Every session folder on
+a date holds a BYTE-IDENTICAL copy of that date's single calibration recording (md5
+verified), so the whole tree contains FOUR distinct recordings. A first pass that treated
+ten session folders as ten samples returned medians identical to three decimals across
+"different" sessions -- that identity was the bug signature, not a consistent rig. Worse,
+it silently defeated a precaution: session 10072022145420 was excluded because it IS
+cal_test2, the recording calibrat3's defaults were swept on, but every other folder on
+that date holds those same bytes. Of the four distinct recordings, one is that tuning
+recording and THREE are genuinely held out. Panel a draws all four and the legend says
+which is which.
+
+**THE HELD-OUT RECORDINGS BEHAVE LIKE THE TUNING ONE**, which retires the
+model-selection worry for this rig: calibrat3 0.454-0.481 px against 0.425 on the tuning
+recording, Anipose 0.287-0.337 against 0.309. Anipose wins the median on 4/4 recordings
+and calibrat3 the p95 on 4/4, by 5.7-10.9x. (The three held-out recordings are HEVC and
+had to be transcoded to H.264 for the browser; the tuning one is native H.264, so codec
+handling is confounded with held-out status. Both tools read the identical transcoded
+files.)
+
 **WHAT IT ACTUALLY SHOWS, which is narrower than "calibrat3 wins".** On the 18-camera
 rig calibrat3 is lower everywhere — both scoring sets, all 18 cameras, 0.47 against
 1.27 px median and 1.17 against 4.92 p95. On the 8-camera rig **the curves cross**:
@@ -407,6 +427,20 @@ exactly zero on both rigs. So the difference is which parameters are solved, not
 observations are discarded. (calibrat3's in-app metric makes rejection look slightly
 more important — 0.04 px — because the app scores itself on its own detections; read
 independently it nearly vanishes.)
+
+**SETTLED BY SYNTHETIC GROUND TRUTH (panel g).** The objection reprojection error cannot
+answer: a richer model can lower it by ABSORBING board non-planarity and detector bias,
+and it is blind to a global scale error. On a synthetic rig where the board is exactly
+planar and the true cameras are known -- and whose ground truth contains precisely what
+aniposelib cannot express (principal point 19.7 px off centre, fy != fx by up to 7 %,
+k2 = 0.05) -- calibrat3 recovers focal length 45x better (0.05 % against 2.24 %), camera
+centres 57x better (0.12 mm against 6.80 mm on ~500 mm baselines) and rig scale 100x
+better (-0.03 % against +2.95 %). There is no board error to absorb, so the extra
+parameters are modelling the lens. Note also that Δfx is a parameter BOTH tools fit
+freely: constraining cx, cy and k2 does not merely leave those wrong, it drags the focal
+length off by 2.2 % and that propagates into a 3 % rig-scale error. This result is also
+immune to the model-selection leak, since calibrat3's defaults were never swept on
+synthetic data.
 
 **"Is the richer intrinsic model better, or just more flexible?"** The second half of
 the same objection, and the one the in-sample comparison genuinely cannot answer: more

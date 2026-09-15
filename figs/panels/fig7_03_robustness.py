@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Fig 7s1/7g -- the two ways this benchmark could have been rigged, tested.
+Fig 7s1/7s2 -- the two ways this benchmark could have been rigged, tested.
 
 A calibration benchmark has two free choices that a reader is right to distrust,
 because either one can be picked to flatter the tool the authors wrote:
@@ -8,8 +8,11 @@ because either one can be picked to flatter the tool the authors wrote:
 s1 IS NOT PLACED ON THE ARTWORK: it reports a null -- calibrat3 on every frame lands
 within 0.01 px of its own 800-frame default on both rigs -- and a null that fits in one
 clause does not need 57 mm of a page already three rows tall. Its CSV is deposited and
-the legend quotes it. The scoring-set panel IS placed (as g), because the
-measurement turned it from a control into a result; see its own note below.
+the legend quotes it. NEITHER IS PLACED in the final layout: the
+synthetic ground-truth panel took g, on the grounds that "did it recover the camera"
+outranks "which corners was it scored on" when only one slot is free. s2's finding -- the
+median ranking flips with the scoring set, the tail does not -- is quoted in the legend
+and visible as the crossing in panels a and c.
 
 **s1 -- WHOSE FRAMES.** calibrat3 samples the session (800 frames of 2701 / 1800 by
 default). Anipose's `detect_video` walks the whole video on an adaptive schedule --
@@ -18,7 +21,7 @@ being found -- so it covers essentially every board-visible frame. If calibrat3'
 sampling were doing the work, if it were quietly being handed an easier subset, then
 running it on EVERY frame would move its error. This panel runs it both ways.
 
-**g -- WHOSE CORNERS.** Every calibration on this figure is scored on Anipose's own
+**s2 -- WHOSE CORNERS.** Every calibration on this figure is scored on Anipose's own
 detections (see `fig7_common.MAIN_DETSET`), which is the choice that cannot flatter
 us. This panel re-scores every arm on calibrat3's detections instead.
 
@@ -116,7 +119,10 @@ def frames_panel(rec):
             continue
         ys = [med(ds, MAIN_DETSET, MAIN_C3), med(ds, MAIN_DETSET, "calibrat3_all")]
         if ys[1] is None:
-            raise SystemExit(f"no all-frames arm for {dskey}; re-run the measurement pass")
+            # The every-frame arm was only run on the two rigs the sampling question was
+            # asked of; the 8-camera rig's four recordings were measured at the default
+            # alone. A dataset without the arm is skipped, not fatal.
+            continue
         series.append((dsname, ARM_COLOR["calibrat3"], MARKER[dskey], True, ys))
         nd = ds["timing"][MAIN_C3]["detectionFrames"]
         na = ds["timing"]["calibrat3_all"]["detectionFrames"]
@@ -149,7 +155,9 @@ def detset_panel(rec):
             arm = MAIN_C3 if key == "calibrat3" else key
             ys = [med(ds, "anipose", arm), med(ds, "calibrat3", arm)]
             if None in ys:
-                raise SystemExit(f"{dskey}: arm {arm} missing a scoring set")
+                # Only the two rigs were scored on BOTH detection sets; the four
+                # 8-camera recordings were scored on Anipose's corners alone.
+                continue
             series.append((name, color, MARKER[dskey], filled, ys))
             rows += [{"dataset": dskey, "cameras": ncam, "arm": key,
                       "scored_on": "anipose detections", "median_px": ys[0]},
@@ -168,7 +176,7 @@ def detset_panel(rec):
     # dashed arm this panel no longer draws.
     text_legend(ax, [(n, c) for k, n, c, _f in ARMS if k != "anipose_on_ours"],
                 loc="above", size=6.5, dy=0.05)
-    save(fig, 7, "g", "scoring_set")
+    save(fig, 7, "s2", "scoring_set")
     return pd.DataFrame(rows)
 
 
@@ -176,7 +184,7 @@ def main():
     use()
     rec = load("fig7_calibration.json")
     deposit(frames_panel(rec), 7, "fig7s1_frame_budget.csv")
-    deposit(detset_panel(rec), 7, "fig7g_scoring_set.csv")
+    deposit(detset_panel(rec), 7, "fig7s2_scoring_set.csv")
 
 
 if __name__ == "__main__":

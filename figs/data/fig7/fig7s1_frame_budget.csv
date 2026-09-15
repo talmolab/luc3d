@@ -1,5 +1,3 @@
 dataset,cameras,condition,frames,median_px
-cal_test2,8,sampled,901,0.4240894019603729
-cal_test2,8,every frame,2701,0.4284886419773102
 calib18,18,sampled,900,0.4724162817001343
 calib18,18,every frame,1800,0.4727194011211395

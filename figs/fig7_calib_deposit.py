@@ -40,77 +40,82 @@ def box_stats(e):
                 p95=float(np.percentile(e, 95)), p99=float(np.percentile(e, 99)))
 
 
-out_path, dirs = sys.argv[1], sys.argv[2:]
-record = dict(hist_edges=EDGES.tolist(), datasets={})
+def main():
+    out_path, dirs = sys.argv[1], sys.argv[2:]
+    record = dict(hist_edges=EDGES.tolist(), datasets={})
 
-for d in dirs:
-    name = os.path.basename(d.rstrip('/'))
-    spec = json.load(open(os.path.join(d, 'spec.json')))
-    scores = json.load(open(os.path.join(d, 'scores.json')))
-    ds = dict(cameras=[c[0] for c in spec['cameras']], size=spec['size'],
-              n_cameras=len(spec['cameras']), detsets={}, timing={})
+    for d in dirs:
+        name = os.path.basename(d.rstrip('/'))
+        spec = json.load(open(os.path.join(d, 'spec.json')))
+        scores = json.load(open(os.path.join(d, 'scores.json')))
+        ds = dict(cameras=[c[0] for c in spec['cameras']], size=spec['size'],
+                  n_cameras=len(spec['cameras']), detsets={}, timing={})
 
-    for npz_path in sorted(glob.glob(os.path.join(d, 'scores_*.npz'))):
-        detset = os.path.basename(npz_path)[len('scores_'):-len('.npz')]
-        z = np.load(npz_path)
-        arms = {}
-        for key in z.files:
-            label, cam = key.split('|', 1)
-            a = arms.setdefault(label, dict(cameras={}, hist=np.zeros(len(EDGES) - 1),
-                                            pooled=[]))
-            e = z[key]
-            a['cameras'][cam] = box_stats(e)
-            a['hist'] += np.histogram(e, EDGES)[0]
-            a['pooled'].append(e)
-        for label, a in arms.items():
-            pooled = np.concatenate(a['pooled'])
-            a['overall'] = box_stats(pooled)
-            a['overall']['p50'] = a['overall']['med']
-            # the quantile curve the ECDF panel draws, at 1 % resolution plus a fine
-            # tail -- 200 numbers instead of 10^7, and exact at every stop it names
-            qs = np.concatenate([np.arange(0, 99, 1.0), np.linspace(99, 100, 21)])
-            a['quantiles'] = dict(q=qs.tolist(),
-                                  v=np.percentile(pooled, qs).tolist())
-            a['hist'] = a['hist'].astype(int).tolist()
-            del a['pooled']
-        ds['detsets'][detset] = dict(arms=arms, meta=scores.get(detset, {}).get('_meta', {}))
+        for npz_path in sorted(glob.glob(os.path.join(d, 'scores_*.npz'))):
+            detset = os.path.basename(npz_path)[len('scores_'):-len('.npz')]
+            z = np.load(npz_path)
+            arms = {}
+            for key in z.files:
+                label, cam = key.split('|', 1)
+                a = arms.setdefault(label, dict(cameras={}, hist=np.zeros(len(EDGES) - 1),
+                                                pooled=[]))
+                e = z[key]
+                a['cameras'][cam] = box_stats(e)
+                a['hist'] += np.histogram(e, EDGES)[0]
+                a['pooled'].append(e)
+            for label, a in arms.items():
+                pooled = np.concatenate(a['pooled'])
+                a['overall'] = box_stats(pooled)
+                a['overall']['p50'] = a['overall']['med']
+                # the quantile curve the ECDF panel draws, at 1 % resolution plus a fine
+                # tail -- 200 numbers instead of 10^7, and exact at every stop it names
+                qs = np.concatenate([np.arange(0, 99, 1.0), np.linspace(99, 100, 21)])
+                a['quantiles'] = dict(q=qs.tolist(),
+                                      v=np.percentile(pooled, qs).tolist())
+                a['hist'] = a['hist'].astype(int).tolist()
+                del a['pooled']
+            ds['detsets'][detset] = dict(arms=arms, meta=scores.get(detset, {}).get('_meta', {}))
 
-    # wall clock, as each tool actually reported it
-    for t in sorted(glob.glob(os.path.join(d, '*.timing.json'))):
-        tag = os.path.basename(t)[:-len('.timing.json')]
-        ds['timing'][tag] = json.load(open(t))
-    for s, tag in ((os.path.join(d, 'anipose_summary.json'), 'anipose'),
-                   (os.path.join(d, 'anipose_on_ours.summary.json'), 'anipose_on_ours')):
-        if os.path.exists(s):
-            ds['timing'][tag] = json.load(open(s))
-    # --- the "why" pass, if it has been run -------------------------------------
-    # Two separate questions, deposited together because one panel draws both: what the
-    # gap is made of (the ablation, every arm scored by the same third party on Anipose's
-    # detections) and whether it survives out of sample (the same arms scored only on
-    # frames calibrat3 never used).
-    abl_p = os.path.join(d, 'ablation_scores.json')
-    held_p = os.path.join(d, 'heldout.json')
-    if os.path.exists(abl_p):
-        a = json.load(open(abl_p)).get('anipose', {})
-        ds['ablation'] = {'all': {k: v['overall']['median'] for k, v in a.items()
-                                  if k != '_meta'}}
-        if os.path.exists(held_p):
-            h = json.load(open(held_p))
-            ds['ablation']['heldout'] = {k: v['heldout']['median']
-                                         for k, v in h['scores'].items()}
-            ds['ablation']['heldout_meta'] = {k: v for k, v in h.items() if k != 'scores'}
-        else:
-            ds['ablation']['heldout'] = {}
-        print(f'  ablation: {len(ds["ablation"]["all"])} arms, '
-              f'{len(ds["ablation"]["heldout"])} with held-out scores')
-    rep_p = os.path.join(d, 'anipose_repeats.json')
-    if os.path.exists(rep_p):
-        ds['anipose_repeats'] = json.load(open(rep_p))
+        # wall clock, as each tool actually reported it
+        for t in sorted(glob.glob(os.path.join(d, '*.timing.json'))):
+            tag = os.path.basename(t)[:-len('.timing.json')]
+            ds['timing'][tag] = json.load(open(t))
+        for s, tag in ((os.path.join(d, 'anipose_summary.json'), 'anipose'),
+                       (os.path.join(d, 'anipose_on_ours.summary.json'), 'anipose_on_ours')):
+            if os.path.exists(s):
+                ds['timing'][tag] = json.load(open(s))
+        # --- the "why" pass, if it has been run -------------------------------------
+        # Two separate questions, deposited together because one panel draws both: what the
+        # gap is made of (the ablation, every arm scored by the same third party on Anipose's
+        # detections) and whether it survives out of sample (the same arms scored only on
+        # frames calibrat3 never used).
+        abl_p = os.path.join(d, 'ablation_scores.json')
+        held_p = os.path.join(d, 'heldout.json')
+        if os.path.exists(abl_p):
+            a = json.load(open(abl_p)).get('anipose', {})
+            ds['ablation'] = {'all': {k: v['overall']['median'] for k, v in a.items()
+                                      if k != '_meta'}}
+            if os.path.exists(held_p):
+                h = json.load(open(held_p))
+                ds['ablation']['heldout'] = {k: v['heldout']['median']
+                                             for k, v in h['scores'].items()}
+                ds['ablation']['heldout_meta'] = {k: v for k, v in h.items() if k != 'scores'}
+            else:
+                ds['ablation']['heldout'] = {}
+            print(f'  ablation: {len(ds["ablation"]["all"])} arms, '
+                  f'{len(ds["ablation"]["heldout"])} with held-out scores')
+        rep_p = os.path.join(d, 'anipose_repeats.json')
+        if os.path.exists(rep_p):
+            ds['anipose_repeats'] = json.load(open(rep_p))
 
-    record['datasets'][name] = ds
-    print(f'{name}: {len(ds["detsets"])} detection sets, arms '
-          f'{sorted({a for v in ds["detsets"].values() for a in v["arms"]})}, '
-          f'timings {sorted(ds["timing"])}')
+        record['datasets'][name] = ds
+        print(f'{name}: {len(ds["detsets"])} detection sets, arms '
+              f'{sorted({a for v in ds["detsets"].values() for a in v["arms"]})}, '
+              f'timings {sorted(ds["timing"])}')
 
-json.dump(record, open(out_path, 'w'))
-print('wrote', out_path, f'({os.path.getsize(out_path) / 1e3:.0f} kB)')
+    json.dump(record, open(out_path, 'w'))
+    print('wrote', out_path, f'({os.path.getsize(out_path) / 1e3:.0f} kB)')
+
+
+if __name__ == "__main__":
+    main()

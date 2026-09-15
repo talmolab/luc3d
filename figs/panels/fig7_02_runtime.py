@@ -39,7 +39,15 @@ from pathlib import Path
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from fig7_common import ARM_COLOR, DATASETS, MAIN_C3  # noqa: E402
+from fig7_common import ARM_COLOR, MAIN_C3  # noqa: E402
+
+#: THE ONLY TWO SESSIONS WITH A MEANINGFUL WALL CLOCK, and deliberately not
+#: `fig7_common.DATASETS`. Timing is the one measurement here that a busy machine
+#: corrupts, so only these two were re-run sequentially on an idle box (the same
+#: Anipose detection read 517 s under load and 248 s clean, on byte-identical
+#: detections). The 8-camera rig's other three recordings were measured for ACCURACY
+#: with several jobs in flight; plotting their seconds would report the contention.
+DATASETS = [("cal_test2", "8-camera rig", 8), ("calib18", "18-camera rig", 18)]
 from matplotlib.colors import to_rgba  # noqa: E402
 from src.data_loader import load  # noqa: E402
 from src.style import MUTED, deposit, panel, save, text_legend, use  # noqa: E402

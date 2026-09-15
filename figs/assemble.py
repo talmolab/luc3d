@@ -148,7 +148,7 @@ TITLES = {
     (7, "d"): "Per camera, 18-camera rig",
     (7, "e"): "What the difference is made of",
     (7, "f"): "Time to calibrate",
-    (7, "g"): "Which corners are scored",
+    (7, "g"): "Recovered vs known cameras",
 }
 TITLE_PT = 7.5            # panel titles, below the 9 pt letter
 
@@ -277,13 +277,14 @@ LAYOUTS = {
     # two-thirds -- so the reader can read straight down a camera column from the
     # 8-camera rig to the 18-camera one. Row 3 answers "why" and "how long".
     #
-    # fig7s1 (frame budget) is DEPOSITED BUT NOT PLACED -- it reports a null and the
-    # legend quotes it. The scoring-set panel WAS going to share that fate; the
-    # 8-camera measurement made it a result (the median ranking flips with the choice
-    # of corners, the tail does not), so it is drawn as g.
+    # fig7s1 (frame budget) and fig7s2 (scoring set) are DEPOSITED BUT NOT PLACED. g
+    # went to the synthetic ground-truth panel instead: it is the only measurement here
+    # that can ask whether the CAMERA was recovered rather than whether the corners were
+    # fitted, which is what answers the "richer model just absorbs board error" objection
+    # that reprojection error cannot.
     7: [[("a", "error_cdf_cal_test2"), ("b", "per_camera_cal_test2")],
         [("c", "error_cdf_calib18"), ("d", "per_camera_calib18")],
-        [("e", "mechanism"), ("f", "runtime"), ("g", "scoring_set")]],
+        [("e", "mechanism"), ("f", "runtime"), ("g", "ground_truth")]],
 }
 
 

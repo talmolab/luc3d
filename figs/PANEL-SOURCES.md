@@ -80,12 +80,12 @@ Supplementary identity figure (the repo's fig11 before the 2026-08-26 renumberin
 | Panel | Title | Drawn by | Reads | Measured by | Deposits |
 |---|---|---|---|---|---|
 | **a** | Reprojection error, 8-camera rig | `panels/fig7_00_error_cdf.py` | `out/fig7_calibration.json` | — | `data/fig7/fig7ac_error_cdf.csv` |
-| **b** | Per camera, 8-camera rig | `panels/fig7_01_per_camera.py` | `out/fig7_calibration.json` | — | `data/fig7/fig7bd_per_camera.csv` |
+| **b** | — | **MISSING** | | | |
 | **c** | Reprojection error, 18-camera rig | `panels/fig7_00_error_cdf.py` | `out/fig7_calibration.json` | — | `data/fig7/fig7ac_error_cdf.csv` |
 | **d** | Per camera, 18-camera rig | `panels/fig7_01_per_camera.py` | `out/fig7_calibration.json` | — | `data/fig7/fig7bd_per_camera.csv` |
 | **e** | What the difference is made of | `panels/fig7_04_mechanism.py` | `out/fig7_calibration.json` | — | `data/fig7/fig7e_mechanism.csv` |
 | **f** | Time to calibrate | `panels/fig7_02_runtime.py` | `out/fig7_calibration.json` | — | `data/fig7/fig7f_runtime.csv` |
-| **g** | Which corners are scored | `panels/fig7_03_robustness.py` | `out/fig7_calibration.json` | — | `data/fig7/fig7g_scoring_set.csv`, `data/fig7/fig7s1_frame_budget.csv` |
+| **g** | Recovered vs known cameras | `panels/fig7_05_ground_truth.py` | `out/fig7_calibration.json` | — | `data/fig7/fig7g_ground_truth.csv` |
 
 ## Panel scripts kept but not placed
 
@@ -102,5 +102,6 @@ These still run under `make_figures.py` and still deposit their CSVs; they are n
 | `panels/fig3_05_sweep.py` | 3D-term ablation: ID-switch RATE and cross-view IDF1 against r = corr3d/corr2d,. |
 | `panels/fig3_06_head_to_head.py` | greedy vs exhaustive, run for real, on identical detections: time per frame. |
 | `panels/fig6_variant_common.py` | Shared machinery for the tracker arms of Fig 7's SLAP-2M panels (b-f since the. |
+| `panels/fig7_03_robustness.py` | the two ways this benchmark could have been rigged, tested. |
 | `panels/fig7_common.py` | Shared vocabulary for Fig 7's panels, so they cannot disagree with each other. |
 
