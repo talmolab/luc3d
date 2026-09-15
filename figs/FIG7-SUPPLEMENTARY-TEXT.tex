@@ -1,0 +1,29 @@
+% ===========================================================================
+% Supplementary calibration figure. Labels fig1-fig7 are taken, so this is fig8.
+% Copy figs/figures/fig7/fig7.pdf into the manuscript's figs/ as fig8.pdf.
+% Per-panel numbers live in figs/data/fig7/*.csv if any are wanted back.
+% ===========================================================================
+
+\begin{figure}[!htb]
+  \centering
+  \includegraphics[width=1\textwidth]{figs/fig8.pdf}
+  \caption{\textbf{Calibration accuracy of calibrat3 and Anipose.} Both tools were run in their default configurations, and every calibration was then scored by aniposelib, which triangulates each 3D point and reprojects it into every camera that observed it. Neither tool's own reported error enters the figure. A to F are scored on Anipose's detections. \textbf{A}, Cumulative reprojection error on the 8-camera rig, pooled over four calibration recordings; thin lines, one per recording. The curves cross: Anipose has the lower median (0.31 pixels, calibrat3 0.46) and calibrat3 the shorter tail (95th percentile 0.93 and 7.70). \textbf{B}, The same per camera. Boxes, interquartile range; whiskers, 5th to 95th percentile. Anipose is lower at the median in five of the eight cameras and calibrat3 lower at the 95th percentile in all eight. \textbf{C}, As A for the 18-camera rig, where calibrat3 is lower throughout (median 0.47 pixels, Anipose 1.27). Dashed line, aniposelib's solver given calibrat3's corners; it follows Anipose, which places the difference in the solve. \textbf{D}, As B for the 18-camera rig; calibrat3 is lower in all 18 cameras. \textbf{E}, calibrat3's solver re-run on identical detections with one setting changed. Filled circles, all frames; open rings, the frames calibrat3 did not use. Removing outlier rejection costs 0.03 pixels and adopting aniposelib's intrinsic model costs 0.54. \textbf{F}, Time to calibrate one session, each tool run alone on an idle 64-core machine. Pale, detection; solid, the solve. \textbf{G}, Recovered parameters compared with known values on a synthetic rig with an exactly planar board, as a percentage of the true value. The 8-camera rig is 2,701 frames at $1280 \times 1024$ and the 18-camera rig 1,800 frames at $1680 \times 1200$, both showing one $8 \times 11$ ChArUco board with 24.0~mm squares. Anipose is aniposelib 0.8.0.}
+  \label{fig8}
+\end{figure}
+
+
+% ===========================================================================
+% Supplementary text.
+% ===========================================================================
+
+\subsection{Calibration accuracy compared with Anipose}\label{subsec-calib}
+
+calibrat3 and Anipose (aniposelib 0.8.0) were each run end to end in their default configurations on an 8-camera and an 18-camera rig. Every calibration was scored by aniposelib, so neither tool's own error measure enters the comparison, and a point that fails to triangulate under any one calibration is dropped for all of them.
+
+The two rigs give different answers (Supplementary Figure~\ref{fig8}A to D). On the 18-camera rig calibrat3 has the lower median error (0.47 pixels, Anipose 1.27) and is lower in all 18 cameras. On the 8-camera rig the distributions cross: Anipose has the lower median (0.31 pixels, calibrat3 0.46) while calibrat3's 95th percentile is about eight times lower. The crossing is reproduced in each of the four calibration recordings available for that rig, three of which were not used when calibrat3's defaults were chosen.
+
+Re-running calibrat3's solver on identical detections with one setting changed at a time locates the difference in the intrinsic model. Removing outlier rejection moves the median from 0.472 to 0.502 pixels, while replacing calibrat3's six free intrinsic parameters per camera with aniposelib's single focal length and $k_1$ moves it to 1.014. Scoring on only the frames calibrat3 did not use changes no configuration by more than 0.003 pixels.
+
+Reprojection error is the quantity both solvers minimize, and more free parameters can lower it by absorbing board non-planarity; it is also insensitive to a global scale error. On a synthetic rig with an exactly planar board and known cameras, calibrat3 recovers the focal length to 0.05\% and Anipose to 2.24\%, and the reconstructed rig scale differs from truth by 0.03\% and 2.95\%. With no board error to absorb, the additional parameters describe the cameras.
+
+These measurements come from two rigs in one laboratory using one board design. aniposelib's bundle adjustment uses unseeded pseudo-random draws, and five repeats on identical detections span 1.110 to 1.115 pixels on the 18-camera rig; calibrat3's pipeline is deterministic.
