@@ -36,8 +36,15 @@ jobs:
 
             | | |
             |---|---|
-            | **Preview URL** | https://talmolab.github.io/luc3d/pr/${{ github.event.number }}/ |
+            | **Preview URL** | https://luc3d.sleap.ai/pr/${{ github.event.number }}/ |
             | **Commit** | ${{ github.sha }} |
+
+            Compare against the other channels (see `README.md` for the full table):
+
+            | | |
+            |---|---|
+            | **main** | https://luc3d.sleap.ai/ — current release |
+            | **dev** | https://luc3d.sleap.ai/dev/ — tip of `main` |
 
             _This preview will be removed when the PR is closed._
 

@@ -25,10 +25,49 @@ python3 -m http.server 8080 --bind 0.0.0.0
 # App: http://localhost:8080/
 # Tests: http://localhost:8080/tests/test-runner.html
 ```
-## Web Deployment from Main 
+## Web Deployment
+
+<a href="https://luc3d.sleap.ai/" target="_blank" rel="noopener noreferrer">Access Here</a>
+
+The app is served from GitHub Pages at **https://luc3d.sleap.ai/**. That is the
+canonical URL — the old `https://talmolab.github.io/luc3d/` now 301-redirects to
+it.
+
+`.github/workflows/deploy.yml` keeps four independent channels on the `gh-pages`
+branch. There is no build step, so each one is just the repo tree at some ref,
+and the app is sub-path safe (relative importmap), so the same tree works at
+every path:
+
+| URL | Serves | Moves when |
+| --- | --- | --- |
+| <https://luc3d.sleap.ai/> | Newest **full release** — stable | a non-pre-release is published |
+| <https://luc3d.sleap.ai/latest/> | Newest release, **pre-releases included** | any release is published |
+| <https://luc3d.sleap.ai/dev/> | Tip of `main` — bleeding edge | every push to `main` |
+| `https://luc3d.sleap.ai/pr/<n>/` | Per-PR preview | a PR opens or updates (`pr-preview.yml`) |
+
+Both release channels only ever move **forward**: a republished older version
+leaves the site alone, since GitHub does not guarantee releases are published in
+increasing version order.
+
+### Cutting a release
+
+Releases are published by hand, from the GitHub Releases UI or a laptop:
+
 ```bash
-https://talmolab.github.io/luc3d/
+gh release create v0.1.0 --generate-notes           # -> / and /latest/
+gh release create v0.2.0-1 --generate-notes --prerelease   # -> /latest/ only
 ```
+
+Publishing is what triggers the deploy. Doing it from a workflow would not
+work: a release created with the Actions `GITHUB_TOKEN` does not fire
+`release: published`, so the deploy would never run.
+
+Tags must be `vX.Y.Z`, or `vX.Y.Z-N` with a **numeric** pre-release part
+(`v0.2.0-1`, `v0.2.0-2`) — same convention as
+[sleap-app](https://github.com/talmolab/sleap-app). Anything else fails the
+deploy loudly rather than skipping it silently. To re-deploy a channel by hand,
+run **Deploy to GitHub Pages** from the Actions tab and pick the tag in *Use
+workflow from*.
 
 ## Dependencies (CDN only)
 - Three.js 0.147
