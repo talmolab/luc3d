@@ -21,6 +21,40 @@ python3 -m http.server 8080
 # Tests: http://localhost:8080/tests/test-runner.html
 ```
 
+## Deployment
+
+`luc3d.sleap.ai` is a GitHub Pages **custom domain** for this repo, not a separate
+host — `talmolab.github.io/luc3d/` 301-redirects to it, and the `CNAME` file
+`.github/workflows/deploy.yml` rewrites on every deploy is what makes Pages answer
+for that name. Cloudflare proxies it; the origin is Pages.
+
+**`deploy.yml` never writes the site root.** `https://luc3d.sleap.ai/` — the live
+page — is managed by hand and is deliberately outside the workflow's reach; every
+target is a named sub-folder, and an empty/`.`/`/` target path is refused rather
+than silently becoming a root wipe. Keep it that way: adding a root target also
+re-introduces a wipe that can take the live page, the other channels and the PR
+previews with it. Promotion to root is a manual step, after checking `/stable/`.
+
+It maintains four channels on `gh-pages`. There is no build step, so a "build" is
+a copy of the repo at some ref, and the app is **sub-path safe** (relative
+importmap, `document.baseURI` in the test harness) — which is why one tree serves
+correctly from every path. Do not introduce origin-root-relative URLs
+(`/lib/...`); they 404 on every channel.
+
+- `/stable/` — newest **full release**. Moves only on `release: published`.
+- `/latest/` — newest release **including pre-releases**.
+- `/dev/` — every push to `main`.
+- `/pr/<n>/` — PR previews, owned by `pr-preview.yml`. `deploy.yml` never touches them.
+
+Both release channels only ever move forward (a republished older version is a
+no-op). `CNAME` is created only if missing, never rewritten, and no `.nojekyll`
+is added — both rules exist so the workflow's root footprint stays exactly zero.
+
+Releases are cut **by hand** (`gh release create v0.1.0 --generate-notes`).
+That is deliberate: a release created in Actions with `GITHUB_TOKEN` does not
+fire `release: published`, so a helper workflow could not trigger the deploy.
+Tags must be `vX.Y.Z` or `vX.Y.Z-N` (numeric pre-release), matching sleap-app.
+
 ## Dependencies (CDN only)
 - Three.js 0.147
 - dockview-core **pinned to 6.6.1** in THREE places (`index.html` CSS +

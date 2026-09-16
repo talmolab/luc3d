@@ -1,0 +1,298 @@
+name: Deploy to GitHub Pages
+
+# luc3d.sleap.ai is a GitHub Pages CUSTOM DOMAIN for this repo, not a separate
+# host: talmolab.github.io/luc3d/ 301-redirects to it. Cloudflare sits in front
+# of it (proxied DNS), but the origin is Pages.
+#
+# *** THIS WORKFLOW NEVER WRITES THE SITE ROOT. ***
+#
+# https://luc3d.sleap.ai/ -- the live page people actually use -- is managed BY
+# HAND and is deliberately outside this workflow's reach. There is no code path
+# here that writes, deletes or cleans a root-level file; every target is a named
+# sub-folder. That is the whole safety property, so keep it: if you ever add a
+# root target, you are also re-introducing a wipe that can take the live page,
+# the other channels and the PR previews with it.
+#
+# gh-pages serves four channels, all of them sub-folders:
+#
+#   /stable/   -- the newest FULL (non-pre-release) release.
+#                 Moves ONLY when a release is published.
+#   /latest/   -- the newest release INCLUDING pre-releases.
+#   /dev/      -- every push to main. Bleeding edge.
+#   /pr/<n>/   -- per-PR previews, owned by pr-preview.yml. Never touched here.
+#
+# Promoting a release to the live root is a manual step, taken once someone has
+# checked /stable/ and is happy with it.
+#
+# LUCID has no build system, so a "build" is just a copy of the repo at that
+# ref. The app is already sub-path safe -- the importmap is relative (./lib/...)
+# and the test harness resolves against document.baseURI -- which is what lets
+# the identical tree serve correctly from every one of these paths with no
+# rewriting. (This is the one big simplification over sleap-app's deploy.yml,
+# which must rebuild per target to inject VITE_BASE_PATH and stamp
+# __APP_VERSION__.)
+#
+# Releases are published BY HAND -- GitHub's Releases UI, or from a laptop:
+#
+#   gh release create v0.1.0 --generate-notes
+#
+# That is deliberate, not an omission. A release created from inside Actions
+# with the default GITHUB_TOKEN does NOT fire `release: published` (GitHub
+# suppresses workflow chaining from that token), so a "cut a release" helper
+# workflow could never trigger this one without a PAT or extra indirection.
+#
+# Tags must be vX.Y.Z, or vX.Y.Z-N with a NUMERIC pre-release part (v0.2.0-1,
+# v0.2.0-2) -- same convention as sleap-app, so the two repos' releases sort
+# and read the same way. A tag that doesn't parse fails this workflow loudly
+# rather than silently skipping the deploy.
+
+on:
+  push:
+    branches: [main]
+  release:
+    types: [published]
+  # Manual re-deploy from the Actions tab. The ref picked in "Use workflow
+  # from" is what gets deployed -- so to rebuild /stable/ or /latest/ by hand,
+  # select the TAG there, not a branch.
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "Channel to deploy the selected ref to"
+        type: choice
+        default: dev
+        options:
+          - dev
+          - latest
+          - stable
+        required: true
+
+# Serialize deploys so two runs can't race on the gh-pages branch. pr-preview.yml
+# is a separate workflow with its own group and CAN still push concurrently --
+# the push step below retries against a moved remote for exactly that reason.
+concurrency:
+  group: deploy-pages
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      # No `ref:` needed: on a release event GITHUB_REF is already refs/tags/<tag>,
+      # on push it's the pushed commit, and on workflow_dispatch it's whatever ref
+      # was selected in the UI. All three are exactly what we want to publish.
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      # Resolves which channel path(s) this run writes, as a JSON array of
+      # {path, label}. A single release can deploy to TWO paths in one run
+      # (root + /latest/), which is why this is a list and why the push below
+      # happens exactly once per run.
+      #
+      # Event fields are passed through env and never interpolated into the
+      # script body -- a tag name is attacker-influencable text and must not be
+      # able to become shell code.
+      - name: Determine deploy targets
+        id: targets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          EVENT_NAME: ${{ github.event_name }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          RELEASE_IS_PRERELEASE: ${{ github.event.release.prerelease }}
+          DISPATCH_TARGET: ${{ inputs.target }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+
+          TARGETS='[]'
+          add_target() {
+            TARGETS="$(jq -c --arg path "$1" --arg label "$2" \
+              '. + [{path: $path, label: $label}]' <<< "$TARGETS")"
+          }
+
+          if [ "$EVENT_NAME" = "release" ]; then
+            # Fail loud on a tag this workflow can't order. Silently skipping
+            # would leave a published release that never reaches the site, with
+            # nothing in the run log pointing at why.
+            if ! printf '%s' "$RELEASE_TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9]+)?$'; then
+              echo "::error::tag '$RELEASE_TAG' is not vX.Y.Z or vX.Y.Z-N (numeric"\
+                   "pre-release, e.g. v0.2.0-1). Delete the release + tag, retag, republish."
+              exit 1
+            fi
+
+            # One fetch, reused by both queries below. --paginate without --jq
+            # emits several top-level arrays, so stream the elements and re-slurp
+            # them into a single array.
+            gh api "repos/$REPO/releases?per_page=100" --paginate --jq '.[]' \
+              | jq -s '.' > "$RUNNER_TEMP/releases.json"
+
+            # Highest published version, drafts excluded. mode=any counts
+            # pre-releases (that's /latest/); mode=stable ignores them (that's
+            # root). Sort key puts a full release above a pre-release of the
+            # same X.Y.Z, matching sleap-app's ordering.
+            highest() {
+              jq -r --arg mode "$1" '
+                [ .[]
+                  | select(.draft == false)
+                  | select($mode == "any" or .prerelease == false)
+                  | .tag_name as $t
+                  | ($t | capture("^v(?<major>[0-9]+)\\.(?<minor>[0-9]+)\\.(?<patch>[0-9]+)(-(?<pre>[0-9]+))?$"))?
+                  | select(. != null)
+                  | { sortkey: [ (.major|tonumber), (.minor|tonumber), (.patch|tonumber),
+                                 (if .pre == null then 1 else 0 end), (.pre // "0" | tonumber) ],
+                      tag: $t } ]
+                | max_by(.sortkey) | if . == null then "" else .tag end
+              ' "$RUNNER_TEMP/releases.json"
+            }
+
+            HIGHEST_ANY="$(highest any)"
+            HIGHEST_STABLE="$(highest stable)"
+            echo "Release $RELEASE_TAG (prerelease=$RELEASE_IS_PRERELEASE);"\
+                 "highest stable=$HIGHEST_STABLE, highest any=$HIGHEST_ANY"
+
+            # Both channels only ever move FORWARD. GitHub does not guarantee
+            # releases are published in increasing version order -- a backport,
+            # or plain human error, can publish an older version after a newer
+            # one already exists -- so "always deploy on publish" would silently
+            # downgrade the site. Compare against the highest known version
+            # instead of assuming this one is it.
+            if [ "$RELEASE_IS_PRERELEASE" = "true" ]; then
+              echo "Pre-release: leaving /stable/ untouched."
+            elif [ "$RELEASE_TAG" = "$HIGHEST_STABLE" ]; then
+              add_target "stable" "$RELEASE_TAG (stable)"
+            else
+              echo "::notice::$RELEASE_TAG is not the highest stable release"\
+                   "($HIGHEST_STABLE) -- leaving /stable/ untouched."
+            fi
+
+            if [ "$RELEASE_TAG" = "$HIGHEST_ANY" ]; then
+              add_target "latest" "$RELEASE_TAG (latest)"
+            else
+              echo "::notice::$RELEASE_TAG is not the highest release"\
+                   "($HIGHEST_ANY) -- leaving /latest/ untouched."
+            fi
+
+          elif [ "$EVENT_NAME" = "workflow_dispatch" ] && [ "$DISPATCH_TARGET" = "stable" ]; then
+            add_target "stable" "manual-stable $REF_NAME"
+          elif [ "$EVENT_NAME" = "workflow_dispatch" ] && [ "$DISPATCH_TARGET" = "latest" ]; then
+            add_target "latest" "manual-latest $REF_NAME"
+          else
+            # Push to main, or a workflow_dispatch with the default target.
+            add_target "dev" "dev $REF_NAME"
+          fi
+
+          echo "Deploy targets: $TARGETS"
+          echo "$TARGETS" > "$RUNNER_TEMP/targets.json"
+          echo "count=$(jq 'length' <<< "$TARGETS")" >> "$GITHUB_OUTPUT"
+          echo "labels=$(jq -r '[.[].label] | join(", ")' <<< "$TARGETS")" >> "$GITHUB_OUTPUT"
+
+      # Staged OUTSIDE the workspace, because the gh-pages clone below also
+      # lives outside it -- neither can end up copying the other into itself.
+      # One staging copy serves every target: with no build step, all channels
+      # publish byte-identical trees.
+      - name: Stage the site
+        if: steps.targets.outputs.count != '0'
+        run: |
+          set -euo pipefail
+          rm -rf "$RUNNER_TEMP/site"
+          mkdir -p "$RUNNER_TEMP/site"
+          # .github and .claude are repo plumbing with no reason to be served.
+          # Everything else ships, including tests/ (luc3d.sleap.ai/tests/test-runner.html
+          # is a documented entry point) and the vendored lib/.
+          rsync -a \
+            --exclude='.git/' \
+            --exclude='.github/' \
+            --exclude='.claude/' \
+            ./ "$RUNNER_TEMP/site/"
+
+      - name: Deploy to gh-pages
+        if: steps.targets.outputs.count != '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LABELS: ${{ steps.targets.outputs.labels }}
+          DEPLOY_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+
+          SITE="$RUNNER_TEMP/site"
+          WORKDIR="$RUNNER_TEMP/gh-pages"
+          rm -rf "$WORKDIR"
+          mkdir -p "$WORKDIR"
+          cd "$WORKDIR"
+
+          git init -q
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git remote add origin \
+            "https://x-access-token:$GH_TOKEN@github.com/$GITHUB_REPOSITORY.git"
+
+          apply_targets() {
+            local count path
+            count="$(jq 'length' "$RUNNER_TEMP/targets.json")"
+            for i in $(seq 0 $((count - 1))); do
+              path="$(jq -r ".[$i].path" "$RUNNER_TEMP/targets.json")"
+              # Every target is a named sub-folder and only ever touches its
+              # own. An empty path would mean the site ROOT -- the live page,
+              # which this workflow must never write -- so refuse it rather
+              # than letting a future edit silently turn `rm -rf "$path"` into
+              # `rm -rf` of everything.
+              if [ -z "$path" ] || [ "$path" = "." ] || [ "$path" = "/" ]; then
+                echo "::error::refusing to deploy to the site root."
+                return 1
+              fi
+              rm -rf "$path"
+              mkdir -p "$path"
+              cp -R "$SITE/." "$path/"
+            done
+
+            # CNAME is what makes Pages serve this repo at luc3d.sleap.ai;
+            # losing it breaks the domain for everyone. Nothing here deletes it
+            # any more, so it is only CREATED IF MISSING -- an existing root
+            # file is never rewritten, keeping this workflow's root footprint
+            # at exactly zero.
+            #
+            # No .nojekyll: adding one would change how the LIVE root is served
+            # (Jekyll currently drops `_`-prefixed paths). The deployed app has
+            # no such files, so this costs nothing.
+            [ -f CNAME ] || echo "luc3d.sleap.ai" > CNAME
+          }
+
+          # pr-preview.yml pushes to this same branch from a different workflow
+          # with a different concurrency group, so the remote can legitimately
+          # move out from under us mid-run. Re-sync and re-apply rather than
+          # failing the deploy or force-pushing over someone's preview.
+          for attempt in 1 2 3; do
+            if git fetch -q --depth 1 origin gh-pages 2>/dev/null; then
+              git checkout -q -B gh-pages FETCH_HEAD
+              git reset -q --hard FETCH_HEAD
+              git clean -qfdx
+            else
+              echo "gh-pages does not exist yet -- starting it."
+              git checkout -q -B gh-pages
+            fi
+
+            apply_targets
+
+            git add -A
+            if git diff --cached --quiet; then
+              echo "No changes to deploy."
+              exit 0
+            fi
+
+            git commit -q -m "Deploy $LABELS (${DEPLOY_SHA::8})"
+
+            if git push -q origin gh-pages; then
+              echo "Deployed: $LABELS"
+              exit 0
+            fi
+
+            echo "::warning::gh-pages push rejected (attempt $attempt/3) --"\
+                 "a PR preview deploy likely landed first. Re-syncing."
+            sleep 5
+          done
+
+          echo "::error::could not push to gh-pages after 3 attempts."
+          exit 1
