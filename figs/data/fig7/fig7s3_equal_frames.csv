@@ -1,0 +1,19 @@
+dataset,arm,frames_fitted_total,reference_camera,median_px,mean_px,p95_px,n_obs
+calib18,anipose default,12273,Camera0,1.274,1.881,4.93,655552
+calib18,anipose equal frames,6163,Camera0,1.154,1.749,4.39,655552
+calib18,anipose same reference,12273,Camera6,1.274,1.883,4.93,655552
+calib18,anipose equal frames + same reference,6163,Camera6,1.157,1.743,4.38,655552
+calib18,anipose repeat spread (5 runs),12273,Camera0,1.271-1.275,,,655552
+calib18,calibrat3 default,6750,Camera6,0.472,0.593,1.17,655552
+slap8_10072022120554,anipose default,,Camera0,0.309,1.618,5.23,1262846
+slap8_10072022120554,anipose equal frames,,Camera0,0.299,1.727,5.43,1262846
+slap8_10072022120554,calibrat3 default,,,0.424,0.534,0.92,1262846
+slap8_10192022174304,anipose default,,Camera0,0.312,2.436,9.51,1294201
+slap8_10192022174304,anipose equal frames,,Camera0,0.315,2.317,9.25,1294201
+slap8_10192022174304,calibrat3 default,,,0.477,0.548,0.92,1294201
+slap8_10212022155401,anipose default,,Camera0,0.287,1.698,6.19,872499
+slap8_10212022155401,anipose equal frames,,Camera0,0.286,1.733,6.26,872499
+slap8_10212022155401,calibrat3 default,,,0.481,0.565,0.93,872499
+slap8_10302022010116,anipose default,,Camera0,0.337,2.550,10.34,767152
+slap8_10302022010116,anipose equal frames,,Camera0,0.341,2.499,10.18,767152
+slap8_10302022010116,calibrat3 default,,,0.454,0.539,0.95,767152
