@@ -77,7 +77,7 @@ import {
 import { showOverlayExportModal } from './overlay-export-modal.js';
 // Pass 3h: sessions-panes workflow symbols moved out of app.js.
 import {
-    panelRenderers, multiSelectViews,
+    panelRenderers, multiSelectViews, activatePanelForView, scrollViewStripTo,
     refreshPaneInteractions, clearMultiSelect, clampRotation, syncRotationUI,
     populateViewStrip, populateSessionsPanel, populateSessionStrip,
     showMoveVideoModal, removeSession, switchSession,
@@ -1909,7 +1909,7 @@ export function setupUI() {
     setHandler('togglePredicted', function () { toggleVisCheckbox('visPredicted'); });
     setHandler('toggleReproj', function () { toggleVisCheckbox('visReprojections'); });
     setHandler('toggleErrors', function () { toggleVisCheckbox('visErrors'); });
-    setHandler('cycleViewMode', function () { toggleViewMode(); showViewIndicator(); });
+    setHandler('singleViewMode', function () { enterSingleViewMode(); showViewIndicator(); });
     setHandler('gridMode', function () { setGridMode(); showViewIndicator(); });
     // Triangulate uses the Settings default method (DLT/BA).
     setHandler('triangulate', function () { triangulateCurrentFrame(getDefaultTriangulationMethod()); });
@@ -1943,6 +1943,18 @@ export function setupUI() {
     // handlers below; if a catalog action matches it consumes the event.
     document.addEventListener('keydown', function (e) {
         if (dispatchEvent(e)) e.preventDefault();
+    });
+
+    // Single-view ("solo") mode: up / down step through the view strip's order,
+    // wrapping at both ends. Deliberately NOT catalog-dispatched — that
+    // dispatcher preventDefault()s every binding it matches, which would swallow
+    // the arrow keys app-wide including in grid mode, where they are unbound.
+    document.addEventListener('keydown', function (e) {
+        if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable) return;
+        if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
+        if (state.viewMode !== 'single') return;
+        if (e.key === 'ArrowUp') { e.preventDefault(); cycleSingleView(-1); }
+        else if (e.key === 'ArrowDown') { e.preventDefault(); cycleSingleView(1); }
     });
 
     // --- New keyboard shortcuts (Prompt 36) ---
@@ -2719,44 +2731,93 @@ export {
 
 var savedGridLayout = null; // cached dockview layout JSON from grid mode
 
-export function toggleViewMode() {
+/**
+ * Enter single-view ("solo") mode — the dock shows exactly ONE camera.
+ *
+ * Pressing the shortcut again while already solo is a deliberate NO-OP. It used
+ * to advance to the next camera, which made `v` both the mode switch and the
+ * cycler: you could never press it just to be sure you were solo without
+ * landing on a different view. Cycling now lives on the arrow keys
+ * (`cycleSingleView`) and on a single click in the view strip (`setSoloView`).
+ */
+export function enterSingleViewMode() {
     if (state.views.length === 0) return;
-    if (state.viewMode === 'grid') {
-        // Save grid layout before switching to single view
-        if (paneManager.api) {
-            savedGridLayout = paneManager.api.toJSON();
-        }
-        state.viewMode = 'single';
-        // Start at the last-interacted view
-        var startIdx = 0;
-        if (interactionManager && interactionManager.lastInteractedView) {
-            for (var i = 0; i < state.views.length; i++) {
-                if (state.views[i].name === interactionManager.lastInteractedView) {
-                    startIdx = i;
-                    break;
-                }
+    if (state.viewMode === 'single') return;
+    // Save grid layout before switching to single view
+    if (paneManager.api) {
+        savedGridLayout = paneManager.api.toJSON();
+    }
+    state.viewMode = 'single';
+    // Start at the last-interacted view
+    var startIdx = 0;
+    if (interactionManager && interactionManager.lastInteractedView) {
+        for (var i = 0; i < state.views.length; i++) {
+            if (state.views[i].name === interactionManager.lastInteractedView) {
+                startIdx = i;
+                break;
             }
         }
-        state.singleViewIndex = startIdx;
-    } else {
-        // Cycle to next camera
-        state.singleViewIndex = (state.singleViewIndex + 1) % state.views.length;
     }
+    state.singleViewIndex = startIdx;
     updateVideoGridDisplay();
 }
 
+/**
+ * Step the solo view by `direction` (-1 up / +1 down) through the view strip's
+ * order, wrapping at both ends. `state.views` IS that order — `populateViewStrip`
+ * renders the strip straight off it — so this matches what the user sees.
+ *
+ * Only meaningful in single-view mode: in grid mode the arrow keys stay unbound,
+ * so this is a no-op there rather than an implicit way into solo.
+ */
 export function cycleSingleView(direction) {
-    if (state.views.length === 0) return;
-    if (state.viewMode !== 'single') {
-        state.viewMode = 'single';
-        state.singleViewIndex = direction > 0 ? 0 : state.views.length - 1;
-    } else {
-        state.singleViewIndex = (state.singleViewIndex + direction + state.views.length) % state.views.length;
-    }
+    if (state.viewMode !== 'single' || state.views.length === 0) return;
+    var n = state.views.length;
+    var next = (state.singleViewIndex + direction + n) % n;
+    if (next === state.singleViewIndex) return; // only one view — nothing to cycle
+    state.singleViewIndex = next;
     updateVideoGridDisplay();
+    showViewIndicator();
+    scrollViewStripTo(state.views[next].name);
+}
+
+/**
+ * Show `viewName` as the solo view, replacing whichever view is solo'd now.
+ * Returns false (changing nothing) when we are not in single-view mode or the
+ * name is not a loaded view, which is how the view strip's click handler knows
+ * to fall back to its normal "focus that pane" behaviour.
+ */
+export function setSoloView(viewName) {
+    if (state.viewMode !== 'single') return false;
+    for (var i = 0; i < state.views.length; i++) {
+        if (state.views[i].name !== viewName) continue;
+        if (i !== state.singleViewIndex) {
+            state.singleViewIndex = i;
+            updateVideoGridDisplay();
+        } else {
+            // Already solo'd — re-focus it, so clicking the current view in the
+            // strip still restores the selection after the focus moved elsewhere.
+            activatePanelForView(viewName);
+        }
+        showViewIndicator();
+        return true;
+    }
+    return false;
 }
 
 export function setGridMode() {
+    // Already in grid mode: do NOTHING. The restore below is a full
+    // `clearAll()` + `fromJSON()`, which tears down and rebuilds every pane —
+    // so repeating the shortcut used to move the selection to whichever panel
+    // dockview activated on the way back, for no visible reason. The `v`
+    // counterpart is a no-op when already solo for the same reason.
+    if (state.viewMode === 'grid') return;
+    // Whichever view was solo'd keeps the selection highlight once the grid is
+    // back, so `v` … `g` returns you to the pane you were just working in
+    // instead of to whatever panel dockview happens to activate on restore.
+    var soloName = state.views[state.singleViewIndex]
+        ? state.views[state.singleViewIndex].name
+        : null;
     state.viewMode = 'grid';
     if (savedGridLayout && paneManager.api) {
         // Restore saved grid layout
@@ -2769,6 +2830,9 @@ export function setGridMode() {
         }
         paneManager.clearAll();
         paneManager.api.fromJSON(savedGridLayout);
+        // `fromJSON` builds panels behind `addVideoPanel`'s back, so the docked
+        // bookkeeping that method maintains is stale until we re-derive it.
+        paneManager.syncDockedViews();
         var emptyMsg = document.getElementById('videoDockEmpty');
         if (emptyMsg) emptyMsg.classList.add('hidden');
         refreshPaneInteractions();
@@ -2785,6 +2849,7 @@ export function setGridMode() {
     } else {
         updateVideoGridDisplay();
     }
+    if (soloName) activatePanelForView(soloName);
 }
 
 export function updateVideoGridDisplay() {
