@@ -42,8 +42,14 @@ every path:
 | --- | --- | --- |
 | <https://luc3d.sleap.ai/> | Newest **full release** — stable | a non-pre-release is published |
 | <https://luc3d.sleap.ai/latest/> | Newest release, **pre-releases included** | any release is published |
-| <https://luc3d.sleap.ai/dev/> | Tip of `main` — bleeding edge | every push to `main` |
+| <https://luc3d.sleap.ai/dev/> | Tip of `main` — bleeding edge | every push to `main` (or `dev`, see below) |
 | `https://luc3d.sleap.ai/pr/<n>/` | Per-PR preview | a PR opens or updates (`pr-preview.yml`) |
+
+The `dev` branch also deploys to `/dev/`. It exists so the deploy pipeline can
+be exercised for real before `main` adopts it — GitHub runs a push workflow from
+the *pushed* branch's copy of the file. Both branches write the same path, so
+whichever pushed last wins; that's fine for a short-lived staging branch, but if
+`dev` becomes a permanent integration branch, give it its own channel instead.
 
 Both release channels only ever move **forward**: a republished older version
 leaves the site alone, since GitHub does not guarantee releases are published in

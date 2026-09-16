@@ -36,7 +36,9 @@ origin-root-relative URLs (`/lib/...`); they 404 on every channel but root.
 
 - `/` — newest **full release**. Moves only on `release: published`.
 - `/latest/` — newest release **including pre-releases**.
-- `/dev/` — every push to `main`.
+- `/dev/` — every push to `main`. The `dev` branch deploys here too (it exists to
+  exercise this workflow before `main` adopts it); last push wins, so give `dev`
+  its own channel if it ever becomes a permanent integration branch.
 - `/pr/<n>/` — PR previews, owned by `pr-preview.yml`. `deploy.yml` never touches them.
 
 Both release channels only ever move forward (a republished older version is a

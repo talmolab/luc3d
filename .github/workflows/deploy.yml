@@ -37,7 +37,17 @@ name: Deploy to GitHub Pages
 
 on:
   push:
-    branches: [main]
+    # `main` is the real bleeding-edge trigger. `dev` is here so this whole
+    # pipeline -- staging, the gh-pages clone, the apply step, the push -- can
+    # be exercised for real BEFORE `main` adopts it: GitHub runs a push
+    # workflow from the PUSHED branch's copy of the file, so a merge into `dev`
+    # runs this even while `main` still has the old pages.yml.
+    #
+    # Both branches deploy to the SAME /dev/ path, so whichever pushed last
+    # wins. That is harmless for a short-lived staging branch. If `dev` ever
+    # becomes a permanent integration branch, give it its own channel instead
+    # of letting the two quietly overwrite each other.
+    branches: [main, dev]
   release:
     types: [published]
   # Manual re-deploy from the Actions tab. The ref picked in "Use workflow
@@ -169,7 +179,9 @@ jobs:
           elif [ "$EVENT_NAME" = "workflow_dispatch" ] && [ "$DISPATCH_TARGET" = "latest" ]; then
             add_target "latest" "manual-latest $REF_NAME"
           else
-            # Push to main, or a workflow_dispatch with the default target.
+            # Push to main (or the dev staging branch), or a workflow_dispatch
+            # with the default target. REF_NAME is in the label so the gh-pages
+            # commit message says which branch a /dev/ deploy actually came from.
             add_target "dev" "dev $REF_NAME"
           fi
 
