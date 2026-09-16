@@ -3,16 +3,24 @@
 Fig 1b -- what LUC3D does, end to end. (Was 1a until 2026-08-16, when the cage
 render became the figure's opening panel -- Eric.)
 
-Five stages, left to right, with the two that are contributions of this paper marked.
-Everything downstream of "per-view detections" runs in the browser with no install,
+Seven stages, left to right, and as of 2026-09-07 ALL SEVEN are marked as this
+work: the "this work" bracket spans the entire row (Eric: "i want to edit figure 1b
+to include video accquisition ... so that way the 'this work' part includes the whole
+pipeline ... so that means this paper will span the whole pipeline from end-to-end
+now"). Everything downstream of acquisition runs in the browser with no install,
 which is the claim the Fig 1e table's "Install: none / Runs in: browser" row makes
 and this panel visualises.
 
-WHAT IS AND IS NOT OURS. The detector is not: 2D pose comes from SLEAP or any other
-per-view predictor, and LUC3D consumes `.slp`. The contributions are the cross-view
-association (Fig 3) and the reprojection-aided annotation and proofreading loop
-(Figs 2 and 5). Marking them explicitly keeps the schematic from reading as a claim
-over the whole pipeline.
+THE BRACKET NOW SPANS EVERYTHING, WHICH IS A DELIBERATE CLAIM CHANGE. It used to
+stop short on purpose: `videos` and `2D pose` were drawn grey, because the detector
+is SLEAP's and the panel was not to read as a claim over the whole pipeline. The
+scope changed when acquisition and calibration each got a named tool of their own --
+`Panopticon App` for the multi-camera capture and `Calibrat3 App` for the browser
+calibration -- so the paper covers capture, detection, calibration, association,
+triangulation, proofreading and export. The 2D detector is still SLEAP (named in its
+own sub-label, and cited as such in the Results prose); it is inside the bracket
+because it is part of the pipeline this paper presents end to end, not because this
+paper introduces the detector.
 
 Drawn as flat chevrons at one stroke weight, Cheese3D-style: no gradients, no
 drop shadows, no 3D boxes.
@@ -45,6 +53,24 @@ from src.style import MUTED, grid, GREY, INK, SALMON, TEAL, save, use  # noqa: E
 #: by SLEAP at all -- so it joins the contributed run, and the "this work" bracket
 #: (drawn from the contiguous run of contributed stages) now reaches the end of the row.
 #:
+#: ACQUISITION AND 2D POSE ARE OURS TOO (2026-09-07), so every flag below is True and
+#: the bracket spans the full row -- see the module docstring for why the earlier,
+#: deliberately narrower claim was widened. Because the run is contiguous from stage 0
+#: the bracket arithmetic is unchanged; the only thing that moves is that no chevron is
+#: drawn in GREY any more.
+#:
+#: THE TOOLS ARE NAMED (2026-09-07, Eric): acquisition is the `Panopticon App` and
+#: calibration the `Calibrat3 App`, each in place of a generic description --
+#: `videos` read "N cameras" and `calibrate` read "OpenCV.js browser tool" before.
+#: Naming them is what earns those two stages their place inside the bracket, and it
+#: also UN-WRAPS `calibrate`'s sub-label, which is why YLIM and the bracket baseline
+#: move back to their one-line values below.
+#:
+#: `video acquisition` WRAPS TO TWO LINES, on Eric's instruction ("we should call it
+#: 'Video Acquisition' with video on top of acquisition"). It is set lowercase like
+#: every other stage label in the row; the two App names keep their capitals because
+#: they are proper names, not descriptions.
+#:
 #: CALIBRATION: SIDE INPUT -> STAGE, TWICE (2026-08-13, then 2026-08-17). It began
 #: glued to "videos", which implied it arrives with them; review 2026-08-13 ("just
 #: videos and make calibration separate?") made it a labelled arrow entering
@@ -64,13 +90,16 @@ from src.style import MUTED, grid, GREY, INK, SALMON, TEAL, save, use  # noqa: E
 #: needs the calibration. Calibration before re-ID is therefore the real data
 #: dependency, and `.toml` is named on the arrow between those two.
 #:
-#: It also keeps the contributed stages a CONTIGUOUS run, which is what the "this work"
-#: bracket is drawn from: at position 1 the bracket would have to span `2D pose`
-#: (SLEAP's, not ours) to reach the rest.
+#: It also kept the contributed stages a CONTIGUOUS run, which is what the "this work"
+#: bracket is drawn from: at position 1 the bracket would have had to span `2D pose`
+#: (SLEAP's, and at the time not ours) to reach the rest. That constraint is moot since
+#: 2026-09-07 -- every stage is contributed, so any ordering leaves the run contiguous
+#: -- but the DATA DEPENDENCY argument above is not, and it is the reason calibration
+#: stays here rather than drifting next to `triangulate`.
 STAGES = [
-    ("videos", "N cameras", False, "cameras"),
-    ("2D pose", "SLEAP or similar", False, "tiles2d"),
-    ("calibrate", "OpenCV.js\nbrowser tool", True, "checkerboard"),
+    ("video\nacquisition", "Panopticon App", True, "cameras"),
+    ("2D pose", "SLEAP or similar", True, "tiles2d"),
+    ("calibrate", "Calibrat3 App", True, "checkerboard"),
     ("cross-view\nre-ID", "1 identity / animal", True, "tilesid"),
     ("triangulate", "DLT, N ≥ 2 views", True, "volume3d"),
     ("proofread 3D", "3D + reproj.", True, "instances3d"),
@@ -83,15 +112,18 @@ W, H, GAP, NOTCH = 2.05, 1.05, 0.36, 0.24
 
 #: Vertical extent of the drawing, in data units, cut to the INK. Top: the chevron's
 #: top edge at H/2 plus half of its 1.1 pt stroke (0.02 units). Bottom: the baseline
-#: of the "this work" label, which sits at about -2.10 -- measured off the render, not
+#: of the "this work" label, which sits at about -2.18 -- measured off the render, not
 #: guessed. The panel used to declare (-2.22, H/2 + 0.30), i.e. 0.28 units of pure
 #: white above the chevrons, which is 2.8 mm of the figure at the scale below.
-#: `calibrate`'s sub-label WRAPS to a second line, which the "this work" bracket has to
-#: clear -- hence a bottom of -2.45 and a bracket at -2.05, against -2.20 and -1.80 in
-#: the one-line era. The top was H/2 + 0.46 while the `.toml` label sat above the row;
-#: with that label cut (see main()) nothing is drawn above the chevrons again, so the
-#: top is back to the ink: the chevron's top edge plus its stroke and a hair.
-YLIM = (-2.45, H / 2 + 0.06)
+#: `calibrate`'s sub-label WRAPPED to a second line while it read "OpenCV.js browser
+#: tool", which the "this work" bracket had to clear -- hence a bottom of -2.45 and a
+#: bracket at -2.05 in that era. Renaming it to `Calibrat3 App` (2026-09-07) puts every
+#: sub-label back on ONE line, so both return to their one-line values, -2.20 and -1.80;
+#: leaving them at the wrapped values would be 0.25 units, 2.6 mm, of pure white under
+#: the row. The top was H/2 + 0.46 while the `.toml` label sat above the row; with that
+#: label cut (see main()) nothing is drawn above the chevrons again, so the top is back
+#: to the ink: the chevron's top edge plus its stroke and a hair.
+YLIM = (-2.20, H / 2 + 0.06)
 
 #: Millimetres per data unit. THIS, NOT THE PANEL HEIGHT, IS THE FIXED QUANTITY.
 #: `blank()` sets aspect='equal' and the drawing is 14.8 units wide against 2.8 tall,
@@ -228,13 +260,16 @@ def main():
     # looks for file types. If it ever comes back, it belongs ON the arrow (a
     # horizontal rule with the word set into it), not floating above the row.
 
-    # ONE bracket under the three stages this paper contributes, as in the legacy
-    # figure. Per-stage "this paper" tags said the same thing three times and did
-    # not show that the three are a single contiguous contribution.
+    # ONE bracket under the stages this paper contributes, as in the legacy figure.
+    # Per-stage "this paper" tags said the same thing several times over and did not
+    # show that the contributed stages are a single contiguous run. Since 2026-09-07
+    # that run is EVERY stage, so this spans the whole row -- the code is unchanged
+    # because it was always derived from the flags rather than hard-coded, which is
+    # also why it stays correct if a stage is ever handed back.
     ours = [i for i, (_, _, o, _k) in enumerate(STAGES) if o]
     x0 = ours[0] * (W + GAP)
     x1 = ours[-1] * (W + GAP) + W
-    yb = -2.05
+    yb = -1.80
     ax.plot([x0, x0, x1, x1], [yb + 0.14, yb, yb, yb + 0.14], color=TEAL, lw=0.9)
     ax.text((x0 + x1) / 2, yb - 0.10, "this work", ha="center", va="top",
             color=TEAL, fontsize=BRACKET_PT, fontweight="bold")

@@ -124,6 +124,7 @@ tiles are ~30 mm tall, so POSE_LW / POSE_MS below are scaled down together.
 
     python3 figs/panels/fig1_02_tracking.py
 """
+import math
 import sys
 from pathlib import Path
 
@@ -163,8 +164,12 @@ LABEL_PT = 6.5
 #: to 4.5 the pale mint and pale yellow tracks darken so far that hue stops
 #: identifying them, which is the only thing the colour is there for.
 LABEL_CONTRAST = 3.5
-#: Gap between a detection's bbox top and its label baseline, in points.
+#: Clear space kept between a detection's bbox and its label chip, in points.
 LABEL_GAP_PT = 1.8
+#: Chip height in ems of LABEL_PT: the font's ascent-to-descent box (~1.15 em as
+#: PyMuPDF measures it) plus the chip's own 2 x 0.32 em of padding. Used to reserve
+#: the chip's real footprint while searching for a position clear of the animals.
+CHIP_H_EM = 1.80
 #: One typographic point in millimetres.
 MM_PER_PT = 25.4 / 72.0
 
@@ -246,6 +251,13 @@ def short_label(d, stage):
         tail = str(d["identity"]).rsplit("_", 1)[-1]
         return (f"ID {int(tail) + 1}" if tail.isdigit() else tail), d["color"] or "#000000"
     return "?", INK
+
+
+def _overlap(a, b):
+    """Area of the intersection of two (x0, y0, x1, y1) boxes, 0 when disjoint."""
+    dx = min(a[2], b[2]) - max(a[0], b[0])
+    dy = min(a[3], b[3]) - max(a[1], b[1])
+    return max(dx, 0.0) * max(dy, 0.0)
 
 
 def dodge(items, min_dy, min_dx):
@@ -384,45 +396,95 @@ def main():
     fig.canvas.draw()
 
     # --- the per-animal labels ------------------------------------------------
+    # PLACED AGAINST EVERY ANIMAL IN THE TILE, not just above its own bbox. The
+    # earlier pass anchored each chip to the top of its own detection box and then
+    # dodged colliding chips downward. Both mice in this frame are in CONTACT, so
+    # "above mine" is "on top of yours": `T 89` sat on the orange animal, `T 94` on
+    # the salmon one, and `ID 1`/`ID 3` on theirs in the right pair. A label drawn
+    # over the animal it names hides the pose the tile exists to show.
+    #
+    # So each chip now picks from twelve candidate positions around its own box --
+    # above, below, left and right, each at three alignments -- and takes the one
+    # with the least overlap against (a) every animal box in the tile and (b) every
+    # chip already placed. Candidates are clamped into the crop before scoring, so an
+    # off-tile position is judged on where it would actually land rather than
+    # discarded. Ties break toward "above", which is where a reader looks first.
+    worst_cover = 0.0
     for k, (stage, _) in enumerate(STAGES):
         for i, cam in enumerate(CAMS):
             ax = axes[2 * k + i]
-            x0, y0, x1, y1 = crops[2 * k + i]
+            cx0, cy0, cx1, cy1 = crops[2 * k + i]
             # Source pixels per typographic point IN THIS TILE. The two cameras have
             # different crop heights (cam 0 sees 657 px, cam 7 553 px, both printed
             # ~33 mm tall), so one fixed pixel offset would print at two different
             # sizes and one fixed pixel gap would clear the animal in one tile and
             # not the other.
-            px_pt = (x1 - x0) / (ax.get_position().width * w) * MM_PER_PT
-            labs = []
-            for d in details_for(j[stage], cam):
+            px_pt = (cx1 - cx0) / (ax.get_position().width * w) * MM_PER_PT
+            clear = LABEL_GAP_PT * px_pt
+            chip_h = CHIP_H_EM * LABEL_PT * px_pt
+
+            dets = details_for(j[stage], cam)
+            animals = [(d["box"][0] - clear, d["box"][1] - clear,
+                        d["box"][2] + clear, d["box"][3] + clear) for d in dets]
+
+            items = []
+            for d in dets:
                 s, col = short_label(d, stage)
-                # Half the chip's width: Arial bold digits and lower case run about
-                # 0.56 em, plus the chip's own 2 x 0.32 em of padding. It only has to
-                # be good enough to decide whether two labels can sit side by side --
-                # but not GENEROUS, because every pixel of over-estimate turns a pair
-                # that would have fitted into a dodge, and a dodged label drops out of
-                # the dark arena wall and onto its own animal. `t89` and `t82` are
-                # 122 px apart and were being dodged on a 130 px estimate.
-                half = (0.56 * len(s) + 0.64) * LABEL_PT * px_pt / 2
-                cx = min(max(d["centroid"][0], x0 + half), x1 - half)
-                labs.append(dict(x=cx, y=d["box"][1] - LABEL_GAP_PT * px_pt,
-                                 s=s, col=col, w=2 * half))
-            for it in dodge(labs, 1.45 * LABEL_PT * px_pt, 0.15 * LABEL_PT * px_pt):
-                # Kept inside the tile: a label the dodge pushed past the bottom edge
-                # would be clipped mid-glyph, and one above the top edge would land
-                # on the group heading.
-                yy = min(max(it["y"], y0 + 1.55 * LABEL_PT * px_pt),
-                         y1 - 0.4 * LABEL_PT * px_pt)
-                # va="bottom", not "center". The anchor is the top of the animal's own
-                # bbox, and imshow's y axis runs downwards, so "bottom" grows the chip
-                # UPWARD from the anchor -- clear of the animal. Centred on the same
-                # anchor, half of every chip hung over the top of its own mouse.
-                ax.text(it["x"], yy, it["s"], ha="center", va="bottom", zorder=6,
+                # Chip width: Arial bold digits and lower case run about 0.56 em,
+                # plus the chip's own 2 x 0.32 em of padding.
+                cw = (0.56 * len(s) + 0.64) * LABEL_PT * px_pt
+                bx0, by0, bx1, by1 = d["box"]
+                acx, acy = (bx0 + bx1) / 2.0, (by0 + by1) / 2.0
+                cands = []
+                for hx in (acx, bx0 + cw / 2, bx1 - cw / 2):
+                    cands.append((hx, by0 - clear - chip_h / 2, 0.00))   # above
+                    cands.append((hx, by1 + clear + chip_h / 2, 0.60))   # below
+                for vy in (acy, by0 + chip_h / 2, by1 - chip_h / 2):
+                    cands.append((bx0 - clear - cw / 2, vy, 0.35))       # left
+                    cands.append((bx1 + clear + cw / 2, vy, 0.35))       # right
+                items.append(dict(s=s, col=col, cw=cw, cands=cands, acx=acx, acy=acy))
+
+            # Widest first: a long chip has the fewest positions that clear the
+            # animals, so it chooses before the short ones fill the gaps.
+            placed = []
+            for it in sorted(items, key=lambda t: -t["cw"]):
+                best, best_cost = None, None
+                for (qx, qy, bias) in it["cands"]:
+                    # Clamp into the crop: a chip pushed past an edge would be
+                    # clipped mid-glyph, and one above the top edge would land on
+                    # the group heading.
+                    qx = min(max(qx, cx0 + it["cw"] / 2), cx1 - it["cw"] / 2)
+                    qy = min(max(qy, cy0 + chip_h / 2), cy1 - chip_h / 2)
+                    box = (qx - it["cw"] / 2, qy - chip_h / 2,
+                           qx + it["cw"] / 2, qy + chip_h / 2)
+                    area = it["cw"] * chip_h
+                    hit = sum(_overlap(box, a) for a in animals)
+                    lap = sum(_overlap(box, q) for q in placed)
+                    # Overlap dominates: 12 units per chip-area covered, against a
+                    # bias of at most 0.6 and a distance term under 1. Distance keeps
+                    # the chip near the animal it names, which is what ties the two
+                    # together once the colour has been darkened for contrast.
+                    dist = math.hypot(qx - it["acx"], qy - it["acy"]) / max(cx1 - cx0, 1)
+                    cost = 12.0 * (hit + lap) / area + bias + dist
+                    if best_cost is None or cost < best_cost:
+                        best, best_cost = (qx, qy, box), cost
+                qx, qy, box = best
+                placed.append(box)
+                # Reported, not assumed. `clear` is already baked into `animals`, so
+                # this measures the chip against the animal box PLUS its margin: a
+                # non-zero number means a chip is inside the margin, and a number
+                # near 1 means it is sitting on a mouse.
+                raw = [(d["box"][0], d["box"][1], d["box"][2], d["box"][3])
+                       for d in dets]
+                worst_cover = max(worst_cover, sum(_overlap(box, r) for r in raw)
+                                  / (it["cw"] * chip_h))
+                # va="center": the chip is centred on the position the search scored,
+                # so what was measured for overlap is what gets drawn.
+                ax.text(qx, qy, it["s"], ha="center", va="center", zorder=6,
                         color=on_white(it["col"]), fontsize=LABEL_PT,
                         fontweight="bold", clip_on=True,
                         # pad 0.32 em, not 0.18. matplotlib pads the text's TIGHT
-                        # glyph extents (`t82` has no ascender above x-height and no
+                        # glyph extents (`T 82` has no ascender above x-height and no
                         # descender, ~4.7 pt at 6.5 pt type) while PyMuPDF reports
                         # the span box from the font's own ascent/descent (~7.5 pt),
                         # so a chip that looks generous still left the arena wall
@@ -431,6 +493,10 @@ def main():
                         # has to cover the FONT box, not the glyphs.
                         bbox=dict(boxstyle="round,pad=0.32,rounding_size=0.22",
                                   fc="white", ec="none"))
+
+    # A chip drawn over the animal it names hides the pose the tile exists to show,
+    # so the worst case is printed on every build.
+    print(f"  label chips: worst overlap with an animal box {worst_cover:.1%}")
 
     # Group headings sit over their own pair, so the before/after split is readable
     # without reading the caption.

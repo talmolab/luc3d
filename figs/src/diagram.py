@@ -172,6 +172,11 @@ def mouse_pose(ax, bx, by, bw, bh, color=INK, lw=None, dot=0.075):
                             edgecolor="none", zorder=5))
 
 
+#: Width : height of the mini mouse, held constant wherever it is drawn so the same
+#: animal is the same shape in a narrow camera tile and in the wide 3D volume. The
+#: value is the proportion the camera tiles already used, so those glyphs do not move.
+ANIMAL_ASPECT = 0.97
+
 #: How many icon-heights wide the multi-view glyphs are. Three tiles plus their gaps
 #: at a legible size; see the block comment in `icon()`.
 TILES_W = 2.7
@@ -378,10 +383,21 @@ def icon(ax, kind, x, y, s=1.0, color=INK, lw=None):
         gap = tw * 0.22
 
         def animal(ax_, bx, by, bw, bh, fx, fy, col, scale=1.0):
-            """One mini mouse (see `mouse_pose`) centred on (fx, fy) of the tile,
-            at `scale` of the tile's width -- the SAME glyph the proofread-3D icon
-            draws, so a reader follows one animal shape through the whole row."""
-            aw, ah = bw * 0.52 * scale, bh * 0.42 * scale
+            """One mini mouse (see `mouse_pose`) centred on (fx, fy) of the box, at
+            `scale` of the box's height -- the SAME glyph the proofread-3D icon
+            draws, so a reader follows one animal shape through the whole row.
+
+            SIZED FROM THE HEIGHT, AND THE WIDTH FOLLOWS. The width used to be a
+            fraction of the CONTAINING box's width, which is only the same drawing in
+            boxes of the same shape. `volume3d` is one wide box (1.67 icon-heights)
+            rather than three narrow tiles (0.79 each), so its animals came out 2.13x
+            longer along x than the identical glyph two chevrons to the left -- the
+            mice in the triangulate cell read as stretched, which they were. Holding
+            the aspect constant makes every animal in the row the same shape whatever
+            box it sits in, and leaves the tile glyphs where they already were (their
+            old width was 0.408 icon-heights, this gives 0.407)."""
+            ah = bh * 0.42 * scale
+            aw = ah * ANIMAL_ASPECT
             mouse_pose(ax_, bx + fx * bw - aw / 2, by + fy * bh - ah / 2, aw, ah,
                        color=col, lw=lw, dot=0.085)
 
