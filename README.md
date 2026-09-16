@@ -33,26 +33,25 @@ The app is served from GitHub Pages at **https://luc3d.sleap.ai/**. That is the
 canonical URL — the old `https://talmolab.github.io/luc3d/` now 301-redirects to
 it.
 
-`.github/workflows/deploy.yml` keeps four independent channels on the `gh-pages`
-branch. There is no build step, so each one is just the repo tree at some ref,
-and the app is sub-path safe (relative importmap), so the same tree works at
-every path:
+**The live root is managed by hand and no workflow writes it.**
+`.github/workflows/deploy.yml` only ever publishes into named sub-folders, so a
+deploy cannot disturb the page people are using. Promoting a release to the root
+is a deliberate manual step, taken once someone has checked `/stable/`.
+
+There is no build step, so each channel is just the repo tree at some ref, and
+the app is sub-path safe (relative importmap), so the same tree works at every
+path:
 
 | URL | Serves | Moves when |
 | --- | --- | --- |
-| <https://luc3d.sleap.ai/> | Newest **full release** — stable | a non-pre-release is published |
+| <https://luc3d.sleap.ai/> | **The live site** | **never automatically** — promoted by hand |
+| <https://luc3d.sleap.ai/stable/> | Newest **full release** | a non-pre-release is published |
 | <https://luc3d.sleap.ai/latest/> | Newest release, **pre-releases included** | any release is published |
-| <https://luc3d.sleap.ai/dev/> | Tip of `main` — bleeding edge | every push to `main` (or `dev`, see below) |
+| <https://luc3d.sleap.ai/dev/> | Tip of `main` — bleeding edge | every push to `main` |
 | `https://luc3d.sleap.ai/pr/<n>/` | Per-PR preview | a PR opens or updates (`pr-preview.yml`) |
 
-The `dev` branch also deploys to `/dev/`. It exists so the deploy pipeline can
-be exercised for real before `main` adopts it — GitHub runs a push workflow from
-the *pushed* branch's copy of the file. Both branches write the same path, so
-whichever pushed last wins; that's fine for a short-lived staging branch, but if
-`dev` becomes a permanent integration branch, give it its own channel instead.
-
 Both release channels only ever move **forward**: a republished older version
-leaves the site alone, since GitHub does not guarantee releases are published in
+leaves them alone, since GitHub does not guarantee releases are published in
 increasing version order.
 
 ### Cutting a release
@@ -60,7 +59,7 @@ increasing version order.
 Releases are published by hand, from the GitHub Releases UI or a laptop:
 
 ```bash
-gh release create v0.1.0 --generate-notes           # -> / and /latest/
+gh release create v0.1.0 --generate-notes                   # -> /stable/ and /latest/
 gh release create v0.2.0-1 --generate-notes --prerelease   # -> /latest/ only
 ```
 

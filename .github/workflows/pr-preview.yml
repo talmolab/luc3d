@@ -43,8 +43,9 @@ jobs:
 
             | | |
             |---|---|
-            | **main** | https://luc3d.sleap.ai/ — current release |
+            | **main** | https://luc3d.sleap.ai/ — the live site |
             | **dev** | https://luc3d.sleap.ai/dev/ — tip of `main` |
+            | **stable** | https://luc3d.sleap.ai/stable/ — newest release |
 
             _This preview will be removed when the PR is closed._
 

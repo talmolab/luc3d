@@ -28,23 +28,27 @@ host — `talmolab.github.io/luc3d/` 301-redirects to it, and the `CNAME` file
 `.github/workflows/deploy.yml` rewrites on every deploy is what makes Pages answer
 for that name. Cloudflare proxies it; the origin is Pages.
 
-`deploy.yml` maintains four independent channels on `gh-pages`. There is no build
-step, so a "build" is a copy of the repo at some ref, and the app is **sub-path
-safe** (relative importmap, `document.baseURI` in the test harness) — which is why
-one tree serves correctly from `/` and `/dev/` alike. Do not introduce
-origin-root-relative URLs (`/lib/...`); they 404 on every channel but root.
+**`deploy.yml` never writes the site root.** `https://luc3d.sleap.ai/` — the live
+page — is managed by hand and is deliberately outside the workflow's reach; every
+target is a named sub-folder, and an empty/`.`/`/` target path is refused rather
+than silently becoming a root wipe. Keep it that way: adding a root target also
+re-introduces a wipe that can take the live page, the other channels and the PR
+previews with it. Promotion to root is a manual step, after checking `/stable/`.
 
-- `/` — newest **full release**. Moves only on `release: published`.
+It maintains four channels on `gh-pages`. There is no build step, so a "build" is
+a copy of the repo at some ref, and the app is **sub-path safe** (relative
+importmap, `document.baseURI` in the test harness) — which is why one tree serves
+correctly from every path. Do not introduce origin-root-relative URLs
+(`/lib/...`); they 404 on every channel.
+
+- `/stable/` — newest **full release**. Moves only on `release: published`.
 - `/latest/` — newest release **including pre-releases**.
-- `/dev/` — every push to `main`. The `dev` branch deploys here too (it exists to
-  exercise this workflow before `main` adopts it); last push wins, so give `dev`
-  its own channel if it ever becomes a permanent integration branch.
+- `/dev/` — every push to `main`.
 - `/pr/<n>/` — PR previews, owned by `pr-preview.yml`. `deploy.yml` never touches them.
 
 Both release channels only ever move forward (a republished older version is a
-no-op). A root deploy wipes root's own files but preserves `dev`, `latest`, `pr`,
-and rewrites `CNAME` + `.nojekyll` afterwards — **if you add a channel, add it to
-that `find ... ! -name` list too**, or the next stable release deletes it.
+no-op). `CNAME` is created only if missing, never rewritten, and no `.nojekyll`
+is added — both rules exist so the workflow's root footprint stays exactly zero.
 
 Releases are cut **by hand** (`gh release create v0.1.0 --generate-notes`).
 That is deliberate: a release created in Actions with `GITHUB_TOKEN` does not

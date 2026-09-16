@@ -1,25 +1,36 @@
 name: Deploy to GitHub Pages
 
 # luc3d.sleap.ai is a GitHub Pages CUSTOM DOMAIN for this repo, not a separate
-# host: talmolab.github.io/luc3d/ 301-redirects to it, and the CNAME file this
-# workflow rewrites on every deploy is what makes Pages answer for that name.
-# Cloudflare sits in front of it (proxied DNS), but the origin is Pages.
+# host: talmolab.github.io/luc3d/ 301-redirects to it. Cloudflare sits in front
+# of it (proxied DNS), but the origin is Pages.
 #
-# gh-pages serves four independent channels:
+# *** THIS WORKFLOW NEVER WRITES THE SITE ROOT. ***
 #
-#   /          stable -- the newest FULL (non-pre-release) release.
-#                        Moves ONLY when a release is published.
-#   /latest/          -- the newest release INCLUDING pre-releases.
-#   /dev/             -- every push to main. Bleeding edge.
-#   /pr/<n>/          -- per-PR previews, owned by pr-preview.yml.
-#                        Never touched here.
+# https://luc3d.sleap.ai/ -- the live page people actually use -- is managed BY
+# HAND and is deliberately outside this workflow's reach. There is no code path
+# here that writes, deletes or cleans a root-level file; every target is a named
+# sub-folder. That is the whole safety property, so keep it: if you ever add a
+# root target, you are also re-introducing a wipe that can take the live page,
+# the other channels and the PR previews with it.
+#
+# gh-pages serves four channels, all of them sub-folders:
+#
+#   /stable/   -- the newest FULL (non-pre-release) release.
+#                 Moves ONLY when a release is published.
+#   /latest/   -- the newest release INCLUDING pre-releases.
+#   /dev/      -- every push to main. Bleeding edge.
+#   /pr/<n>/   -- per-PR previews, owned by pr-preview.yml. Never touched here.
+#
+# Promoting a release to the live root is a manual step, taken once someone has
+# checked /stable/ and is happy with it.
 #
 # LUCID has no build system, so a "build" is just a copy of the repo at that
 # ref. The app is already sub-path safe -- the importmap is relative (./lib/...)
 # and the test harness resolves against document.baseURI -- which is what lets
-# the identical tree serve correctly from / and from /dev/ with no rewriting.
-# (This is the one big simplification over sleap-app's deploy.yml, which must
-# rebuild per target to inject VITE_BASE_PATH and stamp __APP_VERSION__.)
+# the identical tree serve correctly from every one of these paths with no
+# rewriting. (This is the one big simplification over sleap-app's deploy.yml,
+# which must rebuild per target to inject VITE_BASE_PATH and stamp
+# __APP_VERSION__.)
 #
 # Releases are published BY HAND -- GitHub's Releases UI, or from a laptop:
 #
@@ -37,22 +48,12 @@ name: Deploy to GitHub Pages
 
 on:
   push:
-    # `main` is the real bleeding-edge trigger. `dev` is here so this whole
-    # pipeline -- staging, the gh-pages clone, the apply step, the push -- can
-    # be exercised for real BEFORE `main` adopts it: GitHub runs a push
-    # workflow from the PUSHED branch's copy of the file, so a merge into `dev`
-    # runs this even while `main` still has the old pages.yml.
-    #
-    # Both branches deploy to the SAME /dev/ path, so whichever pushed last
-    # wins. That is harmless for a short-lived staging branch. If `dev` ever
-    # becomes a permanent integration branch, give it its own channel instead
-    # of letting the two quietly overwrite each other.
-    branches: [main, dev]
+    branches: [main]
   release:
     types: [published]
   # Manual re-deploy from the Actions tab. The ref picked in "Use workflow
-  # from" is what gets deployed -- so to rebuild /  or /latest/ by hand, select
-  # the TAG there, not a branch.
+  # from" is what gets deployed -- so to rebuild /stable/ or /latest/ by hand,
+  # select the TAG there, not a branch.
   workflow_dispatch:
     inputs:
       target:
@@ -159,12 +160,12 @@ jobs:
             # downgrade the site. Compare against the highest known version
             # instead of assuming this one is it.
             if [ "$RELEASE_IS_PRERELEASE" = "true" ]; then
-              echo "Pre-release: leaving / (stable) untouched."
+              echo "Pre-release: leaving /stable/ untouched."
             elif [ "$RELEASE_TAG" = "$HIGHEST_STABLE" ]; then
-              add_target "" "$RELEASE_TAG (stable)"
+              add_target "stable" "$RELEASE_TAG (stable)"
             else
               echo "::notice::$RELEASE_TAG is not the highest stable release"\
-                   "($HIGHEST_STABLE) -- leaving / untouched."
+                   "($HIGHEST_STABLE) -- leaving /stable/ untouched."
             fi
 
             if [ "$RELEASE_TAG" = "$HIGHEST_ANY" ]; then
@@ -175,13 +176,11 @@ jobs:
             fi
 
           elif [ "$EVENT_NAME" = "workflow_dispatch" ] && [ "$DISPATCH_TARGET" = "stable" ]; then
-            add_target "" "manual-stable $REF_NAME"
+            add_target "stable" "manual-stable $REF_NAME"
           elif [ "$EVENT_NAME" = "workflow_dispatch" ] && [ "$DISPATCH_TARGET" = "latest" ]; then
             add_target "latest" "manual-latest $REF_NAME"
           else
-            # Push to main (or the dev staging branch), or a workflow_dispatch
-            # with the default target. REF_NAME is in the label so the gh-pages
-            # commit message says which branch a /dev/ deploy actually came from.
+            # Push to main, or a workflow_dispatch with the default target.
             add_target "dev" "dev $REF_NAME"
           fi
 
@@ -235,35 +234,30 @@ jobs:
             count="$(jq 'length' "$RUNNER_TEMP/targets.json")"
             for i in $(seq 0 $((count - 1))); do
               path="$(jq -r ".[$i].path" "$RUNNER_TEMP/targets.json")"
-              if [ -z "$path" ]; then
-                # Root deploy. Remove root's OWN previous output (index.html,
-                # ui/, lib/, ...) but never the sibling channels or the PR
-                # previews -- they live at the same level and a plain wipe
-                # would take them with it.
-                find . -maxdepth 1 -mindepth 1 \
-                  ! -name '.git' \
-                  ! -name 'dev' \
-                  ! -name 'latest' \
-                  ! -name 'pr' \
-                  -exec rm -rf {} +
-                cp -R "$SITE/." .
-              else
-                # Every other channel only ever touches its own folder.
-                rm -rf "$path"
-                mkdir -p "$path"
-                cp -R "$SITE/." "$path/"
+              # Every target is a named sub-folder and only ever touches its
+              # own. An empty path would mean the site ROOT -- the live page,
+              # which this workflow must never write -- so refuse it rather
+              # than letting a future edit silently turn `rm -rf "$path"` into
+              # `rm -rf` of everything.
+              if [ -z "$path" ] || [ "$path" = "." ] || [ "$path" = "/" ]; then
+                echo "::error::refusing to deploy to the site root."
+                return 1
               fi
+              rm -rf "$path"
+              mkdir -p "$path"
+              cp -R "$SITE/." "$path/"
             done
 
-            # Rewritten every deploy, AFTER the root wipe above, so neither can
-            # be lost:
-            #  - CNAME is what makes Pages serve this repo at luc3d.sleap.ai.
-            #    Losing it silently breaks the domain for everyone.
-            #  - .nojekyll disables Pages' Jekyll pass, which otherwise refuses
-            #    to serve anything whose name starts with `_`
-            #    (tests/e2e/_diag-*.mjs, _bench-*.mjs, _real-*.mjs).
-            touch .nojekyll
-            echo "luc3d.sleap.ai" > CNAME
+            # CNAME is what makes Pages serve this repo at luc3d.sleap.ai;
+            # losing it breaks the domain for everyone. Nothing here deletes it
+            # any more, so it is only CREATED IF MISSING -- an existing root
+            # file is never rewritten, keeping this workflow's root footprint
+            # at exactly zero.
+            #
+            # No .nojekyll: adding one would change how the LIVE root is served
+            # (Jekyll currently drops `_`-prefixed paths). The deployed app has
+            # no such files, so this costs nothing.
+            [ -f CNAME ] || echo "luc3d.sleap.ai" > CNAME
           }
 
           # pr-preview.yml pushes to this same branch from a different workflow
