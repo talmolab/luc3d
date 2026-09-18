@@ -24,9 +24,9 @@ python3 -m http.server 8080
 ## Deployment
 
 `luc3d.sleap.ai` is a GitHub Pages **custom domain** for this repo, not a separate
-host — `talmolab.github.io/luc3d/` 301-redirects to it, and the `CNAME` file
-`.github/workflows/deploy.yml` rewrites on every deploy is what makes Pages answer
-for that name. Cloudflare proxies it; the origin is Pages.
+host — `talmolab.github.io/luc3d/` 301-redirects to it, and the `CNAME` file at the
+`gh-pages` root is what makes Pages answer for that name. Cloudflare proxies it;
+the origin is Pages.
 
 **`deploy.yml` never writes the site root.** `https://luc3d.sleap.ai/` — the live
 page — is managed by hand and is deliberately outside the workflow's reach; every

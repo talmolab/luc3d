@@ -200,12 +200,17 @@ jobs:
           rm -rf "$RUNNER_TEMP/site"
           mkdir -p "$RUNNER_TEMP/site"
           # .github and .claude are repo plumbing with no reason to be served.
+          # .gitignore must not ship either: it contains `*.md`, so a copy inside
+          # a channel makes the `git add` below skip every .md file and all of
+          # docs/. The unanchored pattern matches the basename at any depth, so
+          # it catches tests/e2e/.gitignore too.
           # Everything else ships, including tests/ (luc3d.sleap.ai/tests/test-runner.html
           # is a documented entry point) and the vendored lib/.
           rsync -a \
             --exclude='.git/' \
             --exclude='.github/' \
             --exclude='.claude/' \
+            --exclude='.gitignore' \
             ./ "$RUNNER_TEMP/site/"
 
       - name: Deploy to gh-pages
@@ -276,7 +281,14 @@ jobs:
 
             apply_targets
 
-            git add -A
+            # -f because gh-pages still carries a TRACKED root .gitignore left by
+            # the old pages.yml, and ignore rules cascade into subdirectories --
+            # without this it filters every channel's .md files and all of docs/,
+            # which is how /dev/ came to be missing them. This workflow never
+            # writes the root, so it cannot just delete that file.
+            # Safe: `git clean -qfdx` ran above, so the only untracked paths here
+            # are the ones apply_targets just wrote.
+            git add -A -f
             if git diff --cached --quiet; then
               echo "No changes to deploy."
               exit 0
