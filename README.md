@@ -29,50 +29,16 @@ python3 -m http.server 8080 --bind 0.0.0.0
 
 <a href="https://luc3d.sleap.ai/" target="_blank" rel="noopener noreferrer">Access Here</a>
 
-The app is served from GitHub Pages at **https://luc3d.sleap.ai/**. That is the
-canonical URL — the old `https://talmolab.github.io/luc3d/` now 301-redirects to
-it.
-
-**The live root is managed by hand and no workflow writes it.**
-`.github/workflows/deploy.yml` only ever publishes into named sub-folders, so a
-deploy cannot disturb the page people are using. Promoting a release to the root
-is a deliberate manual step, taken once someone has checked `/stable/`.
-
-There is no build step, so each channel is just the repo tree at some ref, and
-the app is sub-path safe (relative importmap), so the same tree works at every
-path:
-
-| URL | Serves | Moves when |
-| --- | --- | --- |
-| <https://luc3d.sleap.ai/> | **The live site** | **never automatically** — promoted by hand |
-| <https://luc3d.sleap.ai/stable/> | Newest **full release** | a non-pre-release is published |
-| <https://luc3d.sleap.ai/latest/> | Newest release, **pre-releases included** | any release is published |
-| <https://luc3d.sleap.ai/dev/> | Tip of `main` — bleeding edge | every push to `main` |
-| `https://luc3d.sleap.ai/pr/<n>/` | Per-PR preview | a PR opens or updates (`pr-preview.yml`) |
-
-Both release channels only ever move **forward**: a republished older version
-leaves them alone, since GitHub does not guarantee releases are published in
-increasing version order.
-
-### Cutting a release
-
-Releases are published by hand, from the GitHub Releases UI or a laptop:
-
-```bash
-gh release create v0.1.0 --generate-notes                   # -> /stable/ and /latest/
-gh release create v0.2.0-1 --generate-notes --prerelease   # -> /latest/ only
+```
+https://luc3d.sleap.ai/          the live site
+https://luc3d.sleap.ai/stable/   newest full release
+https://luc3d.sleap.ai/latest/   newest release, pre-releases included
+https://luc3d.sleap.ai/dev/      tip of main, bleeding edge
+https://luc3d.sleap.ai/pr/<n>/   preview of pull request <n>
 ```
 
-Publishing is what triggers the deploy. Doing it from a workflow would not
-work: a release created with the Actions `GITHUB_TOKEN` does not fire
-`release: published`, so the deploy would never run.
-
-Tags must be `vX.Y.Z`, or `vX.Y.Z-N` with a **numeric** pre-release part
-(`v0.2.0-1`, `v0.2.0-2`) — same convention as
-[sleap-app](https://github.com/talmolab/sleap-app). Anything else fails the
-deploy loudly rather than skipping it silently. To re-deploy a channel by hand,
-run **Deploy to GitHub Pages** from the Actions tab and pick the tag in *Use
-workflow from*.
+Use the live site unless you need something newer. The older
+`talmolab.github.io/luc3d/` address redirects here.
 
 ## Dependencies (CDN only)
 - Three.js 0.147
