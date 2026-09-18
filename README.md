@@ -30,15 +30,34 @@ python3 -m http.server 8080 --bind 0.0.0.0
 <a href="https://luc3d.sleap.ai/" target="_blank" rel="noopener noreferrer">Access Here</a>
 
 ```
-https://luc3d.sleap.ai/          the live site
-https://luc3d.sleap.ai/stable/   newest full release
-https://luc3d.sleap.ai/latest/   newest release, pre-releases included
-https://luc3d.sleap.ai/dev/      tip of main, bleeding edge
-https://luc3d.sleap.ai/pr/<n>/   preview of pull request <n>
+https://luc3d.sleap.ai/
 ```
 
-Use the live site unless you need something newer. The older
-`talmolab.github.io/luc3d/` address redirects here.
+The live site — use this unless you need something newer.
+
+```
+https://luc3d.sleap.ai/stable/
+```
+
+Newest full release.
+
+```
+https://luc3d.sleap.ai/latest/
+```
+
+Newest release, pre-releases included.
+
+```
+https://luc3d.sleap.ai/dev/
+```
+
+Tip of `main`, bleeding edge.
+
+```
+https://luc3d.sleap.ai/pr/<n>/
+```
+
+Preview of pull request `<n>`.
 
 ## Dependencies (CDN only)
 - Three.js 0.147
