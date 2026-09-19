@@ -1303,7 +1303,7 @@ export function updateFrameInfo(frameIdx, instanceGroups) {
             : '';
     }
 
-    // Triangulation method label ('DLT' or 'Bundle Adjustment'). Prefer the
+    // Triangulation method label ('DLT' or 'Refined'). Prefer the
     // per-result method; fall back to the group's recorded method.
     const errorMethodEl = document.getElementById('errorMethod');
     if (errorMethodEl) {
@@ -1322,7 +1322,7 @@ export function updateFrameInfo(frameIdx, instanceGroups) {
             }
         }
         if (method) {
-            errorMethodEl.textContent = method === 'ba' ? 'Bundle Adjustment' : 'DLT';
+            errorMethodEl.textContent = method === 'ba' ? 'Refined' : 'DLT';
             errorMethodEl.style.display = '';
         } else {
             errorMethodEl.style.display = 'none';

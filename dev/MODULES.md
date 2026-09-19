@@ -1201,9 +1201,13 @@ re-add it. Three reasons, spelled out at the "Point refinement" header in
   cameras, low error no longer distinguishes good labels from cameras bent to fit
   bad ones.
 
-Naming note: the user-facing "Bundle Adjustment" label and
-`triangulationMethodLabel` are unchanged — that is the term anipose/SLEAP users
-expect for `optim_points` — but it does not imply camera refinement.
+Naming note: the user-facing label is **"Refined" / "Ref"** (Settings ▸ Default
+Triangulation shows "Refined (Ref)"; the Triangulate / Triangulate All dropdowns
+show "Ref"). It was formerly "Bundle Adjustment" / "BA", after anipose/SLEAP's
+term for `optim_points`, but that name wrongly implied camera refinement. Only
+the display strings changed: the method key is still `'ba'` in `options.method`,
+`group.triangulationMethod`, `localStorage`, and the per-group
+`metadata.lucid.triangulationMethod` written to the `.slp`.
 
 The method is selected via `options.method` on `triangulateAndReproject` and
 threaded through the orchestration functions; the chosen method is recorded on
@@ -1275,7 +1279,7 @@ Regrouping does not invalidate a solve whose 2D inputs are unchanged, only one
 whose membership changed — so the sweeps now ADOPT rather than re-solve in the
 common case, which makes the correct behavior *cheaper* than the old one rather
 than paying BA's ~3x-6x cost per group project-wide. Both sweeps report 3D
-provenance ("N kept existing 3D, N solved via Bundle Adjustment, N via DLT") in
+provenance ("N kept existing 3D, N solved via Refined, N via DLT") in
 their progress text and status line, so a method's cost is visible rather than
 hidden. The one deliberate DLT caller is the O(n×m) Hungarian cost matrix in
 `ui/identity-assignment.js`, whose temporary groups' 3D is discarded and where only
@@ -1325,7 +1329,7 @@ subtitle is populated for loaded projects, not just freshly triangulated ones.
   `guard`; `maxIterations`; `tol`),
   `triangulatePointsBA(allObservations, projMatrices, initialPoints?, options?)`
   (forwards `options` verbatim), `BA_ROBUST_SCALE_PX` (= 15),
-  `triangulationMethodLabel(method)` → `'DLT'` | `'Bundle Adjustment'`.
+  `triangulationMethodLabel(method)` → `'DLT'` | `'Refined'`.
   Module-private: `distortJacobian(camera, ideal)` → 2x2 Brown–Conrady
   derivative, `projectAndJacobianCamera(point, camera)` → native-space
   projection + 2x3 Jacobian.
@@ -3676,8 +3680,9 @@ right panel area (`settings-panel-container`), with a Cancel / Apply footer.
 - `showSettingsModal(initialPanel)` — `initialPanel` ∈ `'triangulation'` |
   `'keyboard'` | `'wizard'` (default `'triangulation'`). Single-instance.
 
-**Behavior.** Three panels: **Default Triangulation** (single-select DLT/BA
-radio rows, initialized from `getDefaultTriangulationMethod()`), **Keyboard
+**Behavior.** Three panels: **Default Triangulation** (single-select DLT /
+Refined radio rows — the `'ba'` method is labelled "Refined (Ref)" — initialized
+from `getDefaultTriangulationMethod()`), **Keyboard
 Shortcuts** (the full `getActions()` catalog grouped by category — editable
 entries get a click-to-capture key chip that records a **chord or a multi-key
 sequence**: keep pressing keys (the primary Ctrl/Cmd modifier is normalized to

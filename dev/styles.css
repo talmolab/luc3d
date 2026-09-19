@@ -1072,7 +1072,7 @@ body {
   display: block;
 }
 
-/* Triangulate / Triangulate All split dropdowns (DLT vs Bundle Adjustment) */
+/* Triangulate / Triangulate All split dropdowns (DLT vs Refined) */
 .tri-dropdown {
   position: relative;
   display: inline-flex;

@@ -173,7 +173,7 @@ export function showSettingsModal(initialPanel) {
         },
         {
             method: 'ba',
-            title: 'Bundle Adjustment (BA)',
+            title: 'Refined (Ref)',
             desc: 'Slower. Minimizes geometric reprojection error.',
         },
     ];
