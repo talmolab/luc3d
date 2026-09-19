@@ -125,8 +125,13 @@ try {
             btn3dLeft: r3.left,
             btnInfoRight: ri.right,
             // Gap from the right-hand button to the window edge, and whether
-            // tightening it pushed anything out of the toolbar.
+            // tightening it pushed anything out of the toolbar. `#tbSessions`
+            // is the reference: it is the toolbar's flush left-edge button.
             gapToEdge: window.innerWidth - ri.right,
+            sessionsGapToEdge: (() => {
+                const s = document.getElementById('tbSessions');
+                return s ? s.getBoundingClientRect().left : null;
+            })(),
             toolbarScrollOverflow:
                 document.querySelector('.toolbar').scrollWidth
                 - document.querySelector('.toolbar').clientWidth,
@@ -144,11 +149,14 @@ try {
     check(s0.btnInfoLeft - s0.btn3dRight < 24,
         `they are adjacent, not merely both right-aligned (gap ${Math.round(s0.btnInfoLeft - s0.btn3dRight)}px < 24px)`);
 
-    // Pushed hard against the window edge: the shared `.toolbar-group` right
-    // padding is dropped and the group pulls into `.toolbar`'s own padding,
-    // so the gutter is a few px rather than the stacked 16px.
-    check(s0.gapToEdge <= 6,
-        `the pair sits flush to the right edge (${s0.gapToEdge}px gutter <= 6px)`);
+    // Flush to the window edge. Pinned against `#tbSessions`, the toolbar's
+    // flush left-edge button, rather than a bare number — that is the
+    // reference the layout is meant to match, so if the toolbar's padding
+    // ever changes, both move together and this stays meaningful.
+    check(s0.gapToEdge <= 1,
+        `the pair sits flush to the right edge (${s0.gapToEdge}px gutter)`);
+    check(s0.sessionsGapToEdge !== null && Math.abs(s0.gapToEdge - s0.sessionsGapToEdge) <= 1,
+        `the right gutter matches #tbSessions' left gutter (${s0.gapToEdge}px vs ${s0.sessionsGapToEdge}px)`);
     check(s0.toolbarScrollOverflow <= 0,
         `tightening the gutter did not overflow the toolbar (scroll overflow ${s0.toolbarScrollOverflow}px)`);
 

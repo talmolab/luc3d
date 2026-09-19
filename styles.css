@@ -990,12 +990,14 @@ body {
 .toolbar-group.panel-toggles {
   margin-left: auto;
   gap: 6px;
-  /* Sit as close to the window edge as the toolbar allows: drop the shared
-     `.toolbar-group` right padding (8px) and pull into half of `.toolbar`'s
-     own 8px, leaving a 4px gutter. The negative margin stays inside the
-     toolbar's padding box (4px < 8px), so nothing overflows. */
+  /* Flush to the window edge, mirroring `#tbSessions` at the left edge:
+     drop the shared `.toolbar-group` right padding (8px) and cancel
+     `.toolbar`'s own 8px. (`#tbSessions` uses a single -16px to cancel both
+     at once; here the padding is already gone, so -8px is the whole of it.)
+     The pull equals the toolbar's padding, so the group lands on the border
+     box and nothing overflows. */
   padding-right: 0;
-  margin-right: -4px;
+  margin-right: -8px;
 }
 
 .toolbar-btn.panel-toggle-btn {
