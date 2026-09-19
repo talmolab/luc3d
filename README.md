@@ -27,42 +27,39 @@ python3 -m http.server 8080 --bind 0.0.0.0
 ```
 ## Web Deployment
 
-<a href="https://luc3d.sleap.ai/" target="_blank" rel="noopener noreferrer">Access Here</a>
+<a href="https://luc3d.sleap.ai/" target="_blank" rel="noopener noreferrer">Access the live site here</a>
 
+Or copy into the browser:
 ```
 https://luc3d.sleap.ai/
 ```
 
-The live site — use this unless you need something newer.
-
+Newest full release.
 ```
 https://luc3d.sleap.ai/stable/
 ```
 
-Newest full release.
+
+Newest release, pre-releases included.
 
 ```
 https://luc3d.sleap.ai/latest/
 ```
 
-Newest release, pre-releases included.
+Contains most recent pushes to `main` branch
 
 ```
 https://luc3d.sleap.ai/dev/
 ```
 
-Tip of `main`, bleeding edge.
 
-```
-https://luc3d.sleap.ai/pr/<n>/
-```
+## Requirements
 
-Preview of pull request `<n>`.
+Chrome or Edge — the app uses the File System Access and WebCodecs APIs, which
+Firefox and Safari do not support.
 
-## Dependencies (CDN only)
-- Three.js 0.147
-- mp4box.js
-- All loaded via script tags in index.html
+Nothing to install; all libraries load automatically (~11 MB on first visit,
+cached afterwards).
 
 ## Tests
 Browser-based tests in `tests/test-runner.html`. Open in browser to run.
