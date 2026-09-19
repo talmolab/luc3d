@@ -129,6 +129,26 @@ export class Viewport3D {
          * are frame-independent scene geometry that must survive that.
          */
         this._planeGroup = null;
+        /** @type {THREE.Group|null} The SELECTED 3D Mesh Object's surface, if
+         * any. A sibling of `_planeGroup`, never a part of it: this is a second,
+         * additive view of the same nodes, and keeping the two groups apart is
+         * what lets the plane drawing stay byte-for-byte what it was. */
+        this._meshObjectGroup = null;
+        /** @type {THREE.Group|null} A GHOST of where "Set Angle Between Two
+         * Planes" would put the plane being rotated, shown while its dialog is
+         * open. A sibling of `_planeGroup` for the same reason
+         * `_meshObjectGroup` is one: it is a second, additive view of the same
+         * nodes, and keeping it out of `_planeGroup` is what lets the real
+         * plane drawing stay exactly what it was. Empty unless the dialog is
+         * open, and it is pure display — nothing here writes a node. */
+        this._angleGroup = null;
+
+        /** @type {THREE.Group|null} Role outlines for the Set Angle dialog: which
+         * plane is being held and which one is about to move. A THIRD group, not
+         * the ghost's, because the two answer different questions and are cleared
+         * at different times — a refused plan drops the ghost while the roles are
+         * still what the user is choosing between. Pure display. */
+        this._planeRoleGroup = null;
 
         /** @type {Array<Object>} The last `setPlanes` payload, kept so a drag can
          * look up the plane's fit (its drag constraint) by id. */
@@ -329,6 +349,18 @@ export class Viewport3D {
         this._planeGroup = new THREE.Group();
         this._planeGroup.name = 'planes';
         this.scene.add(this._planeGroup);
+
+        this._meshObjectGroup = new THREE.Group();
+        this._meshObjectGroup.name = 'meshObject';
+        this.scene.add(this._meshObjectGroup);
+
+        this._angleGroup = new THREE.Group();
+        this._angleGroup.name = 'anglePreview';
+        this.scene.add(this._angleGroup);
+
+        this._planeRoleGroup = new THREE.Group();
+        this._planeRoleGroup.name = 'planeRoles';
+        this.scene.add(this._planeRoleGroup);
 
         // --- Draw camera pyramids ---
         this.addCameraPyramids();
@@ -1782,10 +1814,265 @@ export class Viewport3D {
     }
 
     /**
+     * Draw the selected 3D Mesh Object's surface, or clear it with `null`.
+     *
+     * ADDITIVE: a separate group, a separate call, and nothing here touches
+     * `_planeGroup`. The per-plane translucent fills stay exactly as they were,
+     * so turning an object on shows the welded surface ON TOP of the planes it
+     * was built from rather than replacing them.
+     *
+     * Front and back faces are drawn in DIFFERENT colours on purpose. Winding is
+     * the one property of the exported mesh a user cannot otherwise see, and it
+     * is the property most likely to be wrong — so "I am looking at the inside"
+     * has to be visible in the viewport, not discovered in Blender.
+     *
+     * @param {{color:string, vertices:Float64Array, triangles:Uint32Array,
+     *          faces:number[][]}|null} payload
+     */
+    /**
+     * Show a ghost of where a plane would land.
+     *
+     * ADDITIVE: its own group, its own pair of calls, and nothing here touches
+     * `_planeGroup`. Geometry comes from the caller (the PLANNED points, which
+     * have not been written to any node), while the plane's edge list, polygon
+     * order and colour are read back out of the last `setPlanes` payload — so
+     * the ghost is drawn exactly like the real plane and there is no second
+     * copy of that payload shape to keep in step.
+     *
+     * `depthTest: false` on purpose. The ghost overlaps the solid plane it is
+     * proposing to replace, and the useful thing to see is the DIFFERENCE
+     * between the two; a depth-tested ghost is hidden by the very plane it is
+     * about to move. That is the same reasoning as the dimmed, non-depth-tested
+     * unchosen arrow in the origin picker.
+     *
+     * @param {{planeId:*, points3d:Float64Array, color?:string}} spec
+     */
+    setAnglePreview(spec) {
+        this._clearGroup(this._angleGroup);
+        if (!spec || !spec.points3d) return;
+        const nNodes = points3dNodeCount(spec.points3d);
+        if (nNodes === 0) return;
+
+        // The real plane's payload, for its edges / ring / colour.
+        let src = null;
+        for (let i = 0; i < this._planes.length; i++) {
+            if (this._planes[i] && this._planes[i].id === spec.planeId) { src = this._planes[i]; break; }
+        }
+
+        const ss = this._sceneScale || 1;
+        const color = new THREE.Color(spec.color || (src && src.color) || '#ffffff');
+        const pts = spec.points3d;
+
+        const ghostMat = new THREE.MeshBasicMaterial({
+            color: color,
+            transparent: true,
+            opacity: 0.5,
+            depthWrite: false,
+            depthTest: false,
+        });
+
+        // Corners, as small markers so a plane with no edges still reads.
+        const dotGeo = new THREE.SphereGeometry(this.planeNodeSize * 0.7 * ss, 8, 8);
+        for (let k = 0; k < nNodes; k++) {
+            const pt = getPoint3d(pts, k);
+            if (pt == null || !isFinite(pt[0]) || !isFinite(pt[1]) || !isFinite(pt[2])) continue;
+            const dot = new THREE.Mesh(dotGeo, ghostMat);
+            dot.position.set(pt[0], pt[1], pt[2]);
+            dot.name = 'anglePreviewNode_' + k;
+            dot.renderOrder = 10;
+            this._angleGroup.add(dot);
+        }
+
+        // Edges, in the plane's own edge list where it has one.
+        const edges = (src && src.edges) || [];
+        const edgeRadius = this.skeletonEdgeWeight * 0.9 * ss;
+        for (let e = 0; e < edges.length; e++) {
+            const a = getPoint3d(pts, edges[e][0]);
+            const b = getPoint3d(pts, edges[e][1]);
+            if (a == null || b == null) continue;
+            if (!isFinite(a[0]) || !isFinite(b[0])) continue;
+            const cyl = this._createCylinder(a, b, edgeRadius, ghostMat, 6);
+            cyl.name = 'anglePreviewEdge_' + edges[e][0] + '_' + edges[e][1];
+            cyl.renderOrder = 10;
+            this._angleGroup.add(cyl);
+        }
+
+        // Fill, reusing the real builder so a concave ring is ordered the same
+        // way it is for the solid plane; only the material differs.
+        if (src) {
+            const fill = this._buildPlaneFillMesh(
+                { polygonOrder: src.polygonOrder, color: spec.color || src.color }, pts);
+            if (fill) {
+                fill.material.opacity = 0.22;
+                fill.material.depthTest = false;
+                fill.name = 'anglePreviewFill';
+                fill.renderOrder = 9;
+                this._angleGroup.add(fill);
+            }
+        }
+    }
+
+    /** Remove the ghost. Safe to call when there is none. */
+    clearAnglePreview() {
+        this._clearGroup(this._angleGroup);
+    }
+
+    /**
+     * Outline planes to show the ROLE each is playing, or clear with `null`.
+     *
+     * The Set Angle dialog names two planes in dropdowns; this is what says
+     * WHICH TWO in the scene, and which of them is being held. A user with five
+     * annotated planes cannot otherwise tell "back wall" from "front wall" in
+     * the viewport, and picking the wrong one is silent until the box bends.
+     *
+     * ADDITIVE, like the ghost: its own group, and nothing here touches
+     * `_planeGroup`, so the real planes keep their own colours and the outline
+     * reads as annotation rather than as a recolour. Geometry comes from the
+     * last `setPlanes` payload, so a role outline is always drawn on the plane
+     * as it currently is — the ghost is the one that shows the proposal.
+     *
+     * `depthTest: false` for the same reason the ghost uses it: an outline
+     * hidden behind the plane it outlines conveys nothing. It renders BELOW the
+     * ghost (renderOrder 8 against 9/10), so a proposal is never obscured by
+     * the highlight of the plane it proposes to move.
+     *
+     * @param {{planeId:*, color:string}[]|null} roles
+     */
+    setPlaneRoles(roles) {
+        this._clearGroup(this._planeRoleGroup);
+        if (!roles || !roles.length) return;
+
+        const ss = this._sceneScale || 1;
+        for (let r = 0; r < roles.length; r++) {
+            const role = roles[r];
+            if (!role) continue;
+            let src = null;
+            for (let i = 0; i < this._planes.length; i++) {
+                if (this._planes[i] && this._planes[i].id === role.planeId) {
+                    src = this._planes[i];
+                    break;
+                }
+            }
+            if (!src || !src.points3d) continue;
+            const pts = src.points3d;
+            const nNodes = points3dNodeCount(pts);
+            if (nNodes === 0) continue;
+
+            const mat = new THREE.MeshBasicMaterial({
+                color: new THREE.Color(role.color || '#ffffff'),
+                transparent: true,
+                opacity: 0.85,
+                depthWrite: false,
+                depthTest: false,
+            });
+
+            // Corners first: a plane with no edge list still has to read.
+            const dotGeo = new THREE.SphereGeometry(this.planeNodeSize * 1.35 * ss, 10, 10);
+            for (let k = 0; k < nNodes; k++) {
+                const pt = getPoint3d(pts, k);
+                if (pt == null || !isFinite(pt[0]) || !isFinite(pt[1]) || !isFinite(pt[2])) continue;
+                const dot = new THREE.Mesh(dotGeo, mat);
+                dot.position.set(pt[0], pt[1], pt[2]);
+                dot.name = 'planeRoleNode_' + role.planeId + '_' + k;
+                dot.renderOrder = 8;
+                this._planeRoleGroup.add(dot);
+            }
+
+            // A deliberately FAT outline — this is the plane's border seen
+            // through everything, not another edge drawn next to the real one.
+            const edges = src.edges || [];
+            const edgeRadius = this.skeletonEdgeWeight * 2.2 * ss;
+            for (let e = 0; e < edges.length; e++) {
+                const a = getPoint3d(pts, edges[e][0]);
+                const b = getPoint3d(pts, edges[e][1]);
+                if (a == null || b == null) continue;
+                if (!isFinite(a[0]) || !isFinite(b[0])) continue;
+                const cyl = this._createCylinder(a, b, edgeRadius, mat, 6);
+                cyl.name = 'planeRoleEdge_' + role.planeId + '_' + e;
+                cyl.renderOrder = 8;
+                this._planeRoleGroup.add(cyl);
+            }
+        }
+    }
+
+    /** Remove the role outlines. Safe to call when there are none. */
+    clearPlaneRoles() {
+        this._clearGroup(this._planeRoleGroup);
+    }
+
+    setMeshObject(payload) {
+        this._clearGroup(this._meshObjectGroup);
+        if (!payload || !payload.vertices || !payload.vertices.length) return;
+        if (!payload.triangles || !payload.triangles.length) return;
+
+        const geo = new THREE.BufferGeometry();
+        geo.setAttribute('position',
+            new THREE.Float32BufferAttribute(Array.from(payload.vertices), 3));
+        geo.setIndex(Array.from(payload.triangles));
+        geo.computeVertexNormals();
+
+        const front = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({
+            color: new THREE.Color(payload.color || '#26a69a'),
+            transparent: true,
+            opacity: 0.30,
+            side: THREE.FrontSide,
+            depthWrite: false,
+        }));
+        front.name = 'meshObjectFront';
+        this._meshObjectGroup.add(front);
+
+        // Deliberately drab: the back face is information ("you are inside, or
+        // the normals are inverted"), not decoration.
+        const back = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({
+            color: new THREE.Color('#4a4a4a'),
+            transparent: true,
+            opacity: 0.28,
+            side: THREE.BackSide,
+            depthWrite: false,
+        }));
+        back.name = 'meshObjectBack';
+        this._meshObjectGroup.add(back);
+
+        // Face outlines, so the polygon boundaries read even where two coplanar
+        // faces meet and the fill alone shows nothing.
+        const segs = [];
+        const faces = payload.faces || [];
+        for (let f = 0; f < faces.length; f++) {
+            const ring = faces[f];
+            for (let i = 0; i < ring.length; i++) {
+                const a = ring[i] * 3, b = ring[(i + 1) % ring.length] * 3;
+                segs.push(payload.vertices[a], payload.vertices[a + 1], payload.vertices[a + 2]);
+                segs.push(payload.vertices[b], payload.vertices[b + 1], payload.vertices[b + 2]);
+            }
+        }
+        if (segs.length) {
+            const lineGeo = new THREE.BufferGeometry();
+            lineGeo.setAttribute('position', new THREE.Float32BufferAttribute(segs, 3));
+            const lines = new THREE.LineSegments(lineGeo, new THREE.LineBasicMaterial({
+                color: new THREE.Color(payload.color || '#26a69a'),
+                transparent: true,
+                opacity: 0.85,
+            }));
+            lines.name = 'meshObjectEdges';
+            this._meshObjectGroup.add(lines);
+        }
+    }
+
+    /** Remove the 3D Mesh Object surface from the scene. */
+    clearMeshObject() {
+        this._clearGroup(this._meshObjectGroup);
+    }
+
+    /**
      * Remove every annotated plane from the 3D scene.
      */
     clearPlanes() {
         this._clearGroup(this._planeGroup);
+        // The ghost is a proposal about a plane that no longer exists here, so
+        // it must go with it rather than hang in the scene. Same for the role
+        // outlines, which name planes by id.
+        this._clearGroup(this._angleGroup);
+        this._clearGroup(this._planeRoleGroup);
         this._planes = [];
         this._planeDrag = null;
     }

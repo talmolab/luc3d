@@ -58,9 +58,13 @@ import { Instance } from './pose-data.js';
 import {
     PlaneNode, PlaneNodePool, PLANE_NODE_COLORS, defaultNodeColor, nodeFreezeState,
 } from './plane-nodes.js';
+import {
+    MeshObject3D, MeshObjectSet, MESH_OBJECT_COLORS, defaultMeshObjectColor,
+} from './mesh-object-3d.js';
 
 // Re-exported so callers can reach the whole plane model through one import.
 export { PlaneNode, PlaneNodePool, PLANE_NODE_COLORS, defaultNodeColor, nodeFreezeState };
+export { MeshObject3D, MeshObjectSet, MESH_OBJECT_COLORS, defaultMeshObjectColor };
 
 /** Seed-ring radius, as a fraction of the video's shorter side. */
 export const PLACEMENT_RADIUS_FRAC = 0.12;
@@ -575,6 +579,14 @@ export class PlaneModel {
         this.planes = [];
         /** @type {Map<string, PlaneInstance>} viewName -> that view's 2D. */
         this.placements = new Map();
+        /**
+         * @type {MeshObjectSet} Named groups of planes — see
+         * `pose/mesh-object-3d.js`. Purely ADDITIVE: no method on this class
+         * reads or maintains it, because membership is resolved lazily against
+         * the live planes rather than kept in step with them. In particular
+         * `deletePlane` deliberately does NOT cascade into it.
+         */
+        this.meshObjects = new MeshObjectSet();
         this._nextPlaneId = 1;
         this._nextInstanceId = 1;
     }
@@ -652,6 +664,41 @@ export class PlaneModel {
         // Every view forgets it was placed here.
         this.placements.forEach(function (inst) { inst.placedPlanes.delete(plane.id); });
         return out;
+    }
+
+    /**
+     * Apply a `plane-locked` node's constraint to a proposed position.
+     *
+     * The SINGLE place the soft pin state is honoured. It cannot live on
+     * `PlaneNode` (which is where `locked` is enforced, in `setPoint3d`)
+     * because the constraint is geometric: the node has to be projected onto a
+     * PLANE's fit, and a node has no way to resolve a plane id. The model does.
+     *
+     * The plane id is resolved LAZILY on every call, so a `pinPlaneId` naming a
+     * deleted plane — or one that has no fit yet — simply stops constraining
+     * instead of throwing or pinning the node at a stale position. That is the
+     * same stale-id-is-inert rule `MeshObject3D.planeIds` follows, and it is
+     * what keeps `deletePlane` free of yet another cascade.
+     *
+     * `none` and `locked` both pass through untouched: `none` is unconstrained,
+     * and `locked` never reaches here because `setPoint3d` refuses it first.
+     *
+     * @param {number} nodeId
+     * @param {number[]} xyz - Proposed position.
+     * @returns {number[]} `xyz`, or its projection onto the constraining plane.
+     */
+    constrainPoint3dForNode(nodeId, xyz) {
+        if (!xyz) return xyz;
+        var node = this.pool.getNode(nodeId);
+        if (!node || node.pin !== 'plane-locked') return xyz;
+        if (node.pinPlaneId === null || node.pinPlaneId === undefined) return xyz;
+        var plane = this.getPlane(node.pinPlaneId);
+        if (!plane || !plane.planeFit) return xyz;
+        var c = plane.planeFit.centroid, nv = plane.planeFit.normal;
+        if (!c || !nv) return xyz;
+        var d = (xyz[0] - c[0]) * nv[0] + (xyz[1] - c[1]) * nv[1] + (xyz[2] - c[2]) * nv[2];
+        if (!isFinite(d)) return xyz;
+        return [xyz[0] - d * nv[0], xyz[1] - d * nv[1], xyz[2] - d * nv[2]];
     }
 
     /** Every plane that references node `id`. @param {number} id @returns {PlaneSkeleton[]} */
@@ -1139,25 +1186,47 @@ export function points3dForPlane(plane, pool) {
  * inverse of `points3dForPlane`, and the ONLY way a solve should publish its
  * result.
  *
- * Pinned (`immutable`) nodes are skipped and reported rather than silently
+ * LOCKED (`immutable`) nodes are skipped and reported rather than silently
  * overwritten: they are what a constrained fit is holding fixed, so a writer
  * that clobbered them would quietly undo the constraint it was solving under.
  *
+ * PLANE-LOCKED nodes are written, but through `opts.constrain` first — they may
+ * move, just not off their plane. The hook is threaded here, rather than at
+ * each call site, precisely because this is the one sanctioned publish path:
+ * every solve (triangulate, fit, the angle edit) therefore honours the soft pin
+ * without any of them having to remember to. Callers that have a `PlaneModel`
+ * pass `model.constrainPoint3dForNode.bind(model)`; callers that do not (the
+ * pure tests) pass nothing and get the old behaviour exactly.
+ *
  * @param {PlaneSkeleton} plane @param {PlaneNodePool} pool
  * @param {Float64Array|number[]} flat - Plane-ordered `[x,y,z]` per node.
- * @param {{force?:boolean}} [opts]
- * @returns {{written:number, skippedIds:number[]}} `skippedIds` = pinned nodes.
+ * @param {{force?:boolean, constrain?:function(number, number[]):number[]}} [opts]
+ * @returns {{written:number, skippedIds:number[], constrainedIds:number[]}}
+ *   `skippedIds` = locked nodes; `constrainedIds` = nodes the hook moved.
  */
 export function writePoints3dForPlane(plane, pool, flat, opts) {
-    var out = { written: 0, skippedIds: [] };
+    var out = { written: 0, skippedIds: [], constrainedIds: [] };
     if (!plane || !pool || !flat) return out;
+    var constrain = opts && opts.constrain;
     var n = Math.min(plane.nodeIds.length, (flat.length / 3) | 0);
     for (var i = 0; i < n; i++) {
         var id = plane.nodeIds[i];
         var node = pool.getNode(id);
         if (!node) continue;
         var o = i * 3;
-        if (node.setPoint3d([flat[o], flat[o + 1], flat[o + 2]], opts)) out.written++;
+        var p = [flat[o], flat[o + 1], flat[o + 2]];
+        if (constrain) {
+            var q = constrain(id, p);
+            // Record only a hook that actually MOVED the point, so
+            // `constrainedIds` reports enforcement rather than mere eligibility.
+            if (q && (q[0] !== p[0] || q[1] !== p[1] || q[2] !== p[2])) {
+                out.constrainedIds.push(id);
+                p = q;
+            } else if (q) {
+                p = q;
+            }
+        }
+        if (node.setPoint3d(p, opts)) out.written++;
         else out.skippedIds.push(id);
     }
     return out;

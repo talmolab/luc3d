@@ -160,6 +160,60 @@ export function rotationMatrixToAxisAngle(R) {
 }
 
 /**
+ * Rotation matrix for `angleRad` about `axis`, the exact inverse of
+ * `rotationMatrixToAxisAngle` — so the two are tested against each other and
+ * neither can drift from the module's convention on its own.
+ *
+ * Rodrigues: `R = I + sin(t)·K + (1 - cos(t))·K²`, where `K` is the
+ * skew-symmetric matrix of the UNIT axis. Row-major and applied as `R · v`,
+ * like every other matrix here. The sense is right-handed: looking along `axis`
+ * towards the origin, a positive angle turns counter-clockwise.
+ *
+ * The same formula already appears inline in `Camera.rotationMatrix`
+ * (`pose/pose-data.js`), which bakes the angle into the vector's magnitude for
+ * OpenCV-style `rvec` extrinsics. That one stays where it is; this is the
+ * separate-axis-and-angle form the plane tools need, and it lives here because
+ * this module already owns the convention and has no dependencies.
+ *
+ * @param {number[]} axis - need not be unit; normalized internally.
+ * @param {number} angleRad
+ * @returns {number[][]|null} 3x3 row-major, or null for a zero-length or
+ *   non-finite axis — an arbitrary rotation is never invented.
+ */
+export function rotationAboutAxis(axis, angleRad) {
+    var k = normalize3(axis);
+    if (!k || !isFinite(angleRad)) return null;
+
+    var c = Math.cos(angleRad);
+    var s = Math.sin(angleRad);
+    var t = 1 - c;
+    var x = k[0], y = k[1], z = k[2];
+
+    // Written out rather than multiplying K by K: the closed form is exactly
+    // orthonormal for a unit axis, where two chained matrix products would
+    // accumulate a little error in every entry.
+    return [
+        [t * x * x + c,     t * x * y - s * z, t * x * z + s * y],
+        [t * x * y + s * z, t * y * y + c,     t * y * z - s * x],
+        [t * x * z - s * y, t * y * z + s * x, t * z * z + c],
+    ];
+}
+
+/**
+ * `R · v` for a row-major 3x3 and a 3-vector, with no translation — what
+ * rotating a DIRECTION (a plane normal, say) needs, as opposed to
+ * `applyOriginFrame`, which is an affine map of a POINT.
+ * @param {number[][]} R @param {number[]} v @returns {number[]}
+ */
+export function mulMat3Vec3(R, v) {
+    return [
+        R[0][0] * v[0] + R[0][1] * v[1] + R[0][2] * v[2],
+        R[1][0] * v[0] + R[1][1] * v[1] + R[1][2] * v[2],
+        R[2][0] * v[0] + R[2][1] * v[1] + R[2][2] * v[2],
+    ];
+}
+
+/**
  * Express an old-world point in the frame: `p_new = R · p_old + t`.
  * @param {Object} frame - from `buildOriginFrame`
  * @param {number[]} p

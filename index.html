@@ -841,14 +841,20 @@
                         <details class="plane-details" id="planeNodesDetails" open>
                             <summary>Nodes</summary>
                             <div class="plane-details-body">
-                                <table class="data-table" id="planeNodesTable">
+                                <!-- Every column is named except the chevron,
+                                     which names itself. The icon columns are
+                                     content-sized, so the Name field takes
+                                     whatever is left. Pinned carries an info
+                                     button because what the THREE states MEAN
+                                     is the one thing a padlock cannot say. -->
+                                <table class="data-table plane-nodes-table" id="planeNodesTable">
                                     <thead>
                                         <tr>
+                                            <th style="width:14px"></th>
+                                            <th class="th-center">Color</th>
                                             <th>Name</th>
-                                            <th style="width:34px">Color</th>
-                                            <th style="width:26px" title="Pin: freeze this node's 3D so no solve can move it">Pin</th>
-                                            <th style="width:74px">3D</th>
-                                            <th style="width:30px"></th>
+                                            <th class="th-center th-pin">Pinned<button type="button" class="plane-pin-info" id="planePinInfo"></button></th>
+                                            <th class="th-center">Delete</th>
                                         </tr>
                                     </thead>
                                     <tbody></tbody>
@@ -862,7 +868,7 @@
                                     <input type="text" id="planeNodeNameInput" class="plane-text-input" placeholder="Node name" />
                                     <button class="panel-btn" id="btnAddPlaneNode" title="Mint a node in the project-wide pool. It joins NO plane and creates none — put it in a plane with + Add in the Edit Plane section.">+ Node</button>
                                 </div>
-                                <div class="plane-hint">Nodes are project-wide and belong to no plane until you put them in one. Renaming, recolouring, pinning or deleting one here changes every plane that uses it. To put a node into a plane, use + Add in the Edit Plane section — the same node in two planes is what makes them meet along one line.</div>
+                                <div class="plane-hint">Nodes are project-wide and belong to no plane until you put them in one. Renaming, recolouring, pinning or deleting one here changes every plane that uses it. To put a node into a plane, use + Add in the Edit Plane section — the same node in two planes is what makes them meet along one line. Expand a node for its 3D position in calibration world units and the planes using it: type over x/y/z to place a corner by hand, and every plane using the node moves with it (its 2D on every view is rewritten to match). The padlock is the node's pin state — a Locked node shows its position but does not take a new one.</div>
                             </div>
                         </details>
                     </div>
@@ -908,7 +914,12 @@
                                                 <thead>
                                                     <tr>
                                                         <th>Name</th>
-                                                        <th style="width:34px">Color</th>
+                                                        <!-- Wide enough for the
+                                                             header word: the table
+                                                             is fixed-layout now, so
+                                                             a too-narrow column
+                                                             ellipses "COLOR". -->
+                                                        <th style="width:46px">Color</th>
                                                         <th style="width:30px"></th>
                                                     </tr>
                                                 </thead>
@@ -965,13 +976,19 @@
                         <details class="plane-details" id="planePlanesDetails" open>
                             <summary>Planes</summary>
                             <div class="plane-details-body">
+                                <!-- Fixed column widths (see `table-layout: fixed`
+                                     in styles.css): the panel is ~300px and an
+                                     auto-layout table grows to fit its widest
+                                     cell, which is what gave the section a
+                                     horizontal scrollbar. Name takes whatever
+                                     is left and ellipses. -->
                                 <table class="data-table" id="planeSkeletonsTable">
                                     <thead>
                                         <tr>
-                                            <th style="width:34px"></th>
+                                            <th style="width:26px"></th>
                                             <th>Name</th>
-                                            <th>Nodes</th>
-                                            <th style="width:78px"></th>
+                                            <th style="width:46px">Nodes</th>
+                                            <th style="width:56px"></th>
                                         </tr>
                                     </thead>
                                     <tbody></tbody>
@@ -990,7 +1007,62 @@
                                 <div class="panel-button-row" style="margin-top:6px">
                                     <button class="panel-btn" id="btnSetOrigin" disabled>Set Origin</button>
                                 </div>
+                                <!-- Assert a real-world relationship between two
+                                     planes (0 deg = parallel, 90 = perpendicular).
+                                     Needs TWO fitted planes, so it is gated
+                                     separately from Set Origin. -->
+                                <div class="panel-button-row" style="margin-top:6px">
+                                    <button class="panel-btn" id="btnSetPlaneAngle" disabled>Set Angle Between Planes</button>
+                                </div>
                                 <div class="plane-hint">Drag a row onto a video view to place that plane on it. Expand a row to see where it is placed.</div>
+                            </div>
+                        </details>
+                    </div>
+
+                    <!-- 3D Mesh Objects: a group of PLANES, the way a plane is a group
+                         of NODES. The shape is derived from how the member planes are
+                         connected (which nodes they share) and is never stored — see
+                         pose/mesh-object-geometry.js. Sits below Planes because you
+                         cannot group planes that do not exist yet. -->
+                    <div class="info-section">
+                        <details class="plane-details" id="meshObjectsDetails" open>
+                            <summary>3D Mesh Objects</summary>
+                            <div class="plane-details-body">
+                                <table class="data-table" id="meshObjectsTable">
+                                    <thead>
+                                        <tr>
+                                            <th style="width:30px"></th>
+                                            <th>Name</th>
+                                            <th style="width:52px">Planes</th>
+                                            <th style="width:96px">Shape</th>
+                                            <th style="width:28px"></th>
+                                        </tr>
+                                    </thead>
+                                    <tbody></tbody>
+                                </table>
+                                <div class="table-empty" id="meshObjectsEmpty">No 3D mesh objects yet</div>
+                                <div class="panel-button-row" style="margin-top:6px">
+                                    <button class="panel-btn" id="btnNewMeshObject" title="Group planes into one 3D mesh object">+ New 3D Mesh Object</button>
+                                </div>
+
+                                <!-- Membership editor for the SELECTED object. Hidden
+                                     entirely when nothing is selected: every control in
+                                     it needs an object to act on. -->
+                                <div id="meshObjectEditor" style="display:none;">
+                                    <div class="plane-name-row" style="margin-top:8px">
+                                        <span>Name</span>
+                                        <input type="text" id="meshObjectName" placeholder="cage" />
+                                        <input type="color" id="meshObjectColor" class="plane-node-color" title="Colour for this object in the 3D viewport" />
+                                    </div>
+                                    <div class="mesh-object-report" id="meshObjectReport"></div>
+                                    <label class="mesh-object-flip" title="Invert every face normal. Needed only for an OPEN object, where nothing can decide which side is outside.">
+                                        <input type="checkbox" id="meshObjectFlip" /> Flip normals
+                                    </label>
+                                    <div class="plane-hint" style="margin-top:6px">Planes in this object</div>
+                                    <div class="mesh-object-members" id="meshObjectMembers"></div>
+                                </div>
+
+                                <div class="plane-hint">A 3D mesh object is a group of planes, and its shape comes from the nodes they SHARE — join two planes by adding the same node to both.</div>
                             </div>
                         </details>
                     </div>

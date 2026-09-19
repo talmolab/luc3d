@@ -70,6 +70,17 @@ export class InteractionManager {
      *   click still selects. `indices` restricts a whole-plane translate to
      *   those node indices; null means every point of the instance. Without the
      *   callback a drag is allowed and unrestricted.
+     * @param {Function} [callbacks.isPlaneDataLocked] - () => boolean
+     *   True while something ELSE is reading plane geometry and must not have
+     *   it change underneath — the Set Angle dialog, which stays open over a
+     *   live 3D view. Plane nodes still hit-test, select and hover (so a click
+     *   meant for a corner cannot fall through and grab a pose node instead);
+     *   only the MUTATIONS are refused. The drag path asks `beginPlaneDrag`,
+     *   which refuses for this reason among others; the right-click null toggle
+     *   has no such gate of its own, so it asks this directly. Like
+     *   `beginPlaneDrag`'s `allowed:false`, the callback reports the reason to
+     *   the user itself — a refusal this module cannot explain would read as a
+     *   broken click.
      * @param {Function} [callbacks.onPlaneChanged] - (planeInstance,
      *   movedIndices|null, {moved:boolean}) => void. `moved` distinguishes a
      *   DRAG (the user positioned these points) from a null-toggle (they did
@@ -893,6 +904,16 @@ export class InteractionManager {
                         this.planeNodeIndexSet(viewName));
                 }
                 if (pnIdx < 0) return;
+                // Nulling a plane node invalidates its 3D (`onPlaneChanged` >
+                // `invalidateNode3D`), so it is a geometry edit like a drag —
+                // and like a refused drag, the click still SELECTS, so the node
+                // stays reachable.
+                if (this.callbacks.isPlaneDataLocked &&
+                    this.callbacks.isPlaneDataLocked()) {
+                    this.selectPlane(planeNullHit.plane, -1);
+                    this._requestRedraw();
+                    return;
+                }
                 planeNullHit.plane.toggleNodeNull(pnIdx);
                 this.selectPlane(planeNullHit.plane, -1);
                 if (this.callbacks.onPlaneChanged) {

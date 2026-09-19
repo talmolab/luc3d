@@ -470,7 +470,7 @@ export function clearOrigin() {
 }
 
 // ============================================
-// The result table
+// The result readout
 // ============================================
 
 function fmt(v) {
@@ -513,7 +513,7 @@ export function renderOriginResult() {
     conv.textContent = 'p_new = R · p_old + t';
     host.appendChild(conv);
 
-    host.appendChild(vectorTable([
+    [
         ['Origin (old frame)', f.origin, 'mm'],
         ['Translation t', f.translation, 'mm'],
         ['Rotation vector', f.rotationVector, 'rad'],
@@ -521,17 +521,14 @@ export function renderOriginResult() {
         ['+X axis', f.xAxis, ''],
         ['+Y axis', f.yAxis, ''],
         ['+Z axis', f.zAxis, ''],
-    ]));
+    ].forEach(function (row) {
+        host.appendChild(vectorBlock(row[0], row[1], row[2]));
+    });
 
     var ang = document.createElement('div');
     ang.className = 'origin-angle';
     ang.textContent = 'Rotation angle: ' + f.angleDeg.toFixed(3) + '°';
     host.appendChild(ang);
-
-    var mLabel = document.createElement('div');
-    mLabel.className = 'origin-matrix-label';
-    mLabel.textContent = 'Rotation matrix R (rows = new axes in old coordinates)';
-    host.appendChild(mLabel);
 
     var mt = document.createElement('table');
     mt.className = 'origin-table origin-matrix';
@@ -544,37 +541,69 @@ export function renderOriginResult() {
         }
         mt.appendChild(tr);
     }
-    host.appendChild(mt);
+    // The matrix gets the same name-then-indented-body shape as the vectors, so
+    // its long caption can wrap onto its own lines instead of setting a width
+    // the 3x3 then has to live inside.
+    host.appendChild(namedBlock(
+        'Rotation matrix R (rows = new axes in old coordinates)', '', mt, 'origin-matrix-label'));
 }
 
-function vectorTable(rows) {
-    var table = document.createElement('table');
-    table.className = 'origin-table';
-    var head = document.createElement('tr');
-    ['', 'x', 'y', 'z', ''].forEach(function (h) {
-        var th = document.createElement('th');
-        th.textContent = h;
-        head.appendChild(th);
+/**
+ * One labelled row of the readout: the NAME on its own line, its values
+ * indented underneath.
+ *
+ * The readout used to be a 5-column table (name | x | y | z | unit), which is
+ * wider than this ~300px panel — the unit column was clipped off the right
+ * edge. Stacking is what buys the width back, and it also matches the Nodes
+ * list in the same panel, which stacks a node's x/y/z under its name for the
+ * same reason. Hence the shared `.plane-node-xyz-*` layout classes: one
+ * full-width line of three labelled cells.
+ */
+function namedBlock(label, unit, body, extraNameClass) {
+    var block = document.createElement('div');
+    block.className = 'origin-block';
+
+    var name = document.createElement('div');
+    name.className = 'origin-row-name' + (extraNameClass ? ' ' + extraNameClass : '');
+    name.appendChild(document.createTextNode(label));
+    if (unit) {
+        // The unit rides with the NAME rather than trailing the numbers: it
+        // describes the whole vector, and as a column it was the part that did
+        // not fit.
+        var u = document.createElement('span');
+        u.className = 'origin-unit';
+        u.textContent = unit;
+        name.appendChild(u);
+    }
+    block.appendChild(name);
+
+    var bodyWrap = document.createElement('div');
+    bodyWrap.className = 'origin-block-body';
+    bodyWrap.appendChild(body);
+    block.appendChild(bodyWrap);
+    return block;
+}
+
+function vectorBlock(label, v, unit) {
+    var line = document.createElement('div');
+    line.className = 'plane-node-xyz-line';
+    ['x', 'y', 'z'].forEach(function (axis, i) {
+        var cell = document.createElement('span');
+        cell.className = 'plane-node-xyz-cell';
+        var lab = document.createElement('span');
+        lab.className = 'plane-node-xyz-label';
+        lab.textContent = axis;
+        var val = document.createElement('span');
+        // Deliberately a span, not the Nodes list's <input>: these are computed
+        // outputs of the transform, and a field that looks typeable but is not
+        // would be a lie about what the panel does.
+        val.className = 'origin-xyz-value';
+        val.textContent = fmt(v[i]);
+        cell.appendChild(lab);
+        cell.appendChild(val);
+        line.appendChild(cell);
     });
-    table.appendChild(head);
-    rows.forEach(function (row) {
-        var tr = document.createElement('tr');
-        var name = document.createElement('td');
-        name.className = 'origin-row-name';
-        name.textContent = row[0];
-        tr.appendChild(name);
-        for (var i = 0; i < 3; i++) {
-            var td = document.createElement('td');
-            td.textContent = fmt(row[1][i]);
-            tr.appendChild(td);
-        }
-        var unit = document.createElement('td');
-        unit.className = 'origin-unit';
-        unit.textContent = row[2];
-        tr.appendChild(unit);
-        table.appendChild(tr);
-    });
-    return table;
+    return namedBlock(label, unit, line);
 }
 
 // ============================================

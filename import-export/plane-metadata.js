@@ -12,8 +12,9 @@
 //
 // `metadata.lucid` is PER SESSION, but the plane model is not:
 //
-//   * The node pool, the planes and the origin frame are PROJECT-scoped — a
-//     node has one 3D position, whatever session you are looking at. These are
+//   * The node pool, the planes, the 3D Mesh Objects (named groups of planes)
+//     and the origin frame are PROJECT-scoped — a node has one 3D position,
+//     whatever session you are looking at. These are
 //     written IDENTICALLY into every session's dict so that opening any one
 //     session of a multi-session project restores the same geometry, and read
 //     back by whichever session is ingested first (the rest are the same bytes).
@@ -73,6 +74,7 @@ import { state } from '../ui/app-state.js';
 export const PLANE_METADATA_KEYS = [
     'planeNodes',
     'planes',
+    'meshObjects',
     'planePlacements',
     'planeOrigin',
 ];
@@ -97,6 +99,7 @@ export function writePlaneMetadata(lucid, session) {
     if (project) {
         if (project.planeNodes) lucid.planeNodes = project.planeNodes;
         if (project.planes) lucid.planes = project.planes;
+        if (project.meshObjects) lucid.meshObjects = project.meshObjects;
     }
 
     var origin = serializeOriginFrame(originState.frame);
@@ -175,6 +178,8 @@ export function readPlaneMetadata(session, lucid) {
 export function resetPlaneState() {
     var model = planeState.model;
     if (model) {
+        // Clears the pool, the planes AND the mesh objects — `restorePlaneProject`
+        // replaces all three, so this stays one call as the model grows.
         restorePlaneProject(model, null);
         model.placements = new Map();
         model._nextInstanceId = 1;

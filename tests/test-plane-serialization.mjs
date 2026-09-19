@@ -26,6 +26,7 @@ import {
     serializePlanePlacements, restorePlanePlacements,
     serializeOriginFrame, restoreOriginFrame,
     serializePlaneProject, restorePlaneProject,
+    serializeMeshObjects, restoreMeshObjects,
 } from '../pose/plane-serialization.js';
 
 let passed = 0, failed = 0;
@@ -350,6 +351,175 @@ console.log('\n7. The whole project bundle, into a live model');
     // The end-to-end invariant: the 3D the user solved for is what comes back.
     check(eq(target.pool.getPoint3d(s1.id), [10, 10, 0]),
         'a pinned corner\'s coordinate survives the whole round trip');
+}
+
+// ============================================
+console.log('\n8. 3D Mesh Objects round-trip by ID, and drop what no longer exists');
+// ============================================
+{
+    const m = new PlaneModel();
+    const floor = m.createPlane('floor');
+    const back = m.createPlane('back');
+    const side = m.createPlane('side');
+    const obj = m.meshObjects.createObject('cage');
+    obj.addPlane(side.id);
+    obj.addPlane(floor.id);
+    obj.addPlane(back.id);
+    obj.flipNormals = true;
+    m.meshObjects.createObject('table').addPlane(floor.id);
+
+    const written = wire(serializeMeshObjects(m.meshObjects));
+    check(written.length === 2, 'both objects are written');
+    check(written[0].name === 'cage' && written[0].color === obj.color, 'name and colour');
+    check(eq(written[0].planeIds, [side.id, floor.id, back.id]),
+        'membership is written as IDS, in membership order');
+    check(written[0].flipNormals === true, 'a set flipNormals is written');
+    check(written[1].flipNormals === undefined,
+        'and an unset one is OMITTED — defaults are never written');
+
+    // Restored against the live plane set.
+    const live = [floor.id, back.id, side.id];
+    const back1 = restoreMeshObjects(written, live);
+    check(back1.length === 2, 'both come back');
+    check(back1[0].id === obj.id, 'with the id from the file, not a fresh one');
+    check(eq(back1[0].planeIds, [side.id, floor.id, back.id]), 'and their order');
+    check(back1[0].flipNormals === true && back1[1].flipNormals === false,
+        'flipNormals round-trips, defaulting to false');
+
+    // A plane that is gone is DROPPED, never renumbered onto its neighbour —
+    // the same rule membership and edges follow everywhere else.
+    const partial = restoreMeshObjects(written, [floor.id, back.id]);
+    check(eq(partial[0].planeIds, [floor.id, back.id]),
+        'a member plane missing from the file is dropped, and the rest keep their IDs');
+    check(partial[0].planeIds.indexOf(side.id) < 0, 'the missing one is not present');
+
+    // Garbage tolerance, matching every other reader in this module.
+    check(restoreMeshObjects(null, live).length === 0, 'null restores nothing');
+    check(restoreMeshObjects('nope', live).length === 0, 'a string restores nothing');
+    check(restoreMeshObjects([null, 5, {}], live).length === 0,
+        'entries with no usable id are skipped');
+    check(restoreMeshObjects([{ id: 3 }], live)[0].name === 'Object 3',
+        'a nameless entry gets a generated name');
+    check(restoreMeshObjects([{ id: 3 }, { id: 3 }], live).length === 1,
+        'a duplicate id is skipped rather than renumbered');
+    check(restoreMeshObjects([{ id: 1, planeIds: [999] }], live)[0].planeIds.length === 0,
+        'membership naming an unknown plane is dropped');
+    check(serializeMeshObjects(null) === null, 'a null set writes nothing');
+    check(serializeMeshObjects(m.meshObjects) !== null && serializeMeshObjects({ objects: [] }) === null,
+        'and an empty set writes nothing');
+}
+
+// ============================================
+console.log('\n9. Objects ride the project bundle');
+// ============================================
+{
+    const src = new PlaneModel();
+    const p1 = src.createPlane('floor');
+    const n1 = src.addNode('c1');
+    n1.setPoint3d([1, 2, 3]);
+    src.addNodeToPlane(p1, n1.id);
+    src.meshObjects.createObject('cage').addPlane(p1.id);
+
+    const bundle = wire(serializePlaneProject(src));
+    check(bundle.meshObjects !== undefined, 'meshObjects is part of the project bundle');
+
+    const dst = new PlaneModel();
+    // Pre-existing state must be REPLACED, not merged — same rule as nodes and
+    // planes. A stale object from the previous project surviving a load is the
+    // exact failure `resetPlaneState` exists to prevent.
+    dst.meshObjects.createObject('stale');
+    const res = restorePlaneProject(dst, bundle);
+    check(res.objects === 1, 'the restore reports one object');
+    check(dst.meshObjects.size === 1, 'and the model holds exactly one');
+    check(dst.meshObjects.objects[0].name === 'cage', 'the file\'s, not the stale one');
+    check(dst.meshObjects.objects[0].planeCount(dst) === 1, 'whose membership resolves');
+
+    // A project that never made an object writes no key at all, so the golden
+    // digest cannot move for anyone who has not used the feature.
+    const bare = new PlaneModel();
+    const bp = bare.createPlane('p');
+    bare.addNodeToPlane(bp, bare.addNode('n').id);
+    check(serializePlaneProject(bare).meshObjects === undefined,
+        'a project with no objects writes no meshObjects key');
+    check(serializePlaneProject(new PlaneModel()) === null,
+        'and a wholly empty model still writes nothing at all');
+
+    // Objects alone are worth keeping: a user who named a cage before populating
+    // it must get the name back.
+    const only = new PlaneModel();
+    only.meshObjects.createObject('named but empty');
+    const ob = wire(serializePlaneProject(only));
+    check(ob && ob.meshObjects.length === 1, 'an objects-only project still writes');
+
+    // The teardown path.
+    restorePlaneProject(dst, null);
+    check(dst.meshObjects.size === 0, 'restoring null clears the objects too');
+}
+
+console.log('\n10. Both pin states round-trip, and a legacy file still locks');
+{
+    const m = new PlaneModel();
+    const free = m.addNode('free');
+    const soft = m.addNode('soft');
+    const hard = m.addNode('hard');
+    const pl = m.createPlane('floor');
+    [free, soft, hard].forEach(n => m.addNodeToPlane(pl, n.id));
+    m.pool.setPin(soft.id, 'plane-locked', pl.id);
+    m.pool.setPin(hard.id, 'locked');
+    hard.setPoint3d([1, 2, 3], { force: true });
+
+    const out = serializePlaneNodes(m.pool);
+
+    // --- defaults are never written ---
+    check(out[0].pin === undefined && out[0].immutable === undefined,
+        'an unpinned node writes neither key, so the golden digest cannot move');
+    check(out[0].pinPlaneId === undefined, 'nor a pinPlaneId');
+
+    // --- locked writes BOTH, so a pre-split build still honours the lock ---
+    check(out[2].pin === 'locked', 'a locked node writes pin');
+    check(out[2].immutable === true,
+        'and ALSO writes immutable, so an older build still freezes it');
+
+    // --- plane-locked writes pin + its plane, and deliberately NOT immutable ---
+    check(out[1].pin === 'plane-locked', 'a plane-locked node writes pin');
+    check(out[1].pinPlaneId === pl.id, 'with the plane it is held in');
+    check(out[1].immutable === undefined,
+        'and no immutable, because an older build cannot enforce it and must ' +
+        'not mistake it for a hard freeze');
+
+    // --- the round trip ---
+    const back = restorePlaneNodes(out);
+    check(back.getNode(free.id).pin === 'none', 'unpinned survives');
+    check(back.getNode(soft.id).pin === 'plane-locked', 'plane-locked survives');
+    check(back.getNode(soft.id).pinPlaneId === pl.id, 'and so does its plane id');
+    check(back.getNode(hard.id).pin === 'locked', 'locked survives');
+    check(back.getNode(hard.id).immutable === true, 'and still reads as immutable');
+    check(eq(back.getNode(hard.id).getPoint3d(), [1, 2, 3]),
+        'a locked coordinate is restored despite the node refusing ordinary writes');
+
+    // --- a LEGACY record, carrying only `immutable` ---
+    const legacy = restorePlaneNodes([
+        { id: 1, name: 'old', color: '#fff', immutable: true },
+        { id: 2, name: 'plain', color: '#fff' },
+    ]);
+    check(legacy.getNode(1).pin === 'locked',
+        'a legacy immutable:true loads as locked, which is what it always meant');
+    check(legacy.getNode(2).pin === 'none', 'and a legacy plain node is unpinned');
+
+    // --- a malformed pin must load, not throw ---
+    const bad = restorePlaneNodes([{ id: 1, name: 'x', color: '#fff', pin: 'banana' }]);
+    check(bad.getNode(1).pin === 'none', 'an unrecognized pin state loads as unpinned');
+
+    // --- pin rides the project bundle, and `pinPlaneId` is an ID not an index ---
+    const bundle = serializePlaneProject(m);
+    const m2 = new PlaneModel();
+    restorePlaneProject(m2, bundle);
+    const soft2 = m2.pool.names().indexOf('soft');
+    check(m2.pool.nodeAt(soft2).pin === 'plane-locked', 'pin survives the bundle');
+    check(m2.pool.nodeAt(soft2).pinPlaneId === pl.id,
+        'and its plane id still names the same plane');
+    check(m2.getPlane(pl.id) !== null && m2.getPlane(pl.id) !== undefined,
+        'which exists in the restored model');
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);
