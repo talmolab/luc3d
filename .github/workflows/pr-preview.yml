@@ -39,13 +39,14 @@ jobs:
             | **Preview URL** | https://luc3d.sleap.ai/pr/${{ github.event.number }}/ |
             | **Commit** | ${{ github.sha }} |
 
-            Compare against the other channels (see `README.md` for the full table):
+            Compare against the other channels (see `README.md`):
 
             | | |
             |---|---|
             | **main** | https://luc3d.sleap.ai/ — the live site |
+            | **stable** | https://luc3d.sleap.ai/stable/ — newest full release |
+            | **latest** | https://luc3d.sleap.ai/latest/ — newest release, pre-releases included |
             | **dev** | https://luc3d.sleap.ai/dev/ — tip of `main` |
-            | **stable** | https://luc3d.sleap.ai/stable/ — newest release |
 
             _This preview will be removed when the PR is closed._
 
