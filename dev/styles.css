@@ -1509,29 +1509,6 @@ body {
   gap: 12px;
 }
 
-/* Stacked variant: each option on its own row (e.g. By-Cam modal — Save
-   Reprojections sits beneath Save PredictedInstances). */
-.slp-export-options.slp-export-options-stacked {
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 6px;
-}
-
-.slp-export-options-stacked .slp-opt-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-/* Disabled option row (e.g. no reprojections available to save). */
-.slp-export-options-stacked .slp-opt-disabled {
-  opacity: 0.5;
-}
-
-.slp-export-options-stacked .slp-opt-disabled label {
-  cursor: not-allowed;
-}
-
 .slp-reproj-toggle {
   display: inline-flex;
   border: 1px solid var(--border-color);
@@ -1562,6 +1539,76 @@ body {
   opacity: 0.35;
   cursor: default;
   pointer-events: none;
+}
+
+/* --------------------------------------------------------------------------
+   "Include" group for the SLP export modals (Per Session / By Cam)
+   --------------------------------------------------------------------------
+   Uses the app's standard .toggle-switch instead of raw checkboxes, and opens
+   with a plain NOTE: "UserLabels are automatically saved". Users kept asking
+   whether their own labels were exported when the only visible controls were
+   "Predicted Instances" / "Reprojections" (luc3d #194); the answer is a
+   statement, not a switch, because nothing about it is the user's to change. */
+.slp-inc-group {
+  margin: 10px 0 8px;
+}
+
+.slp-inc-legend {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+}
+
+.slp-inc-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.slp-inc-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 13px;
+}
+
+.slp-inc-name {
+  color: var(--text-primary);
+  cursor: pointer;
+  user-select: none;
+}
+
+/* The always-saved note. Reads as an assurance, not a disabled option: no
+   control affordances, and the check mark carries the "this is already on"
+   meaning a switch would have. */
+.slp-inc-note {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  margin-bottom: 9px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-primary);
+}
+
+.slp-inc-note-mark {
+  flex-shrink: 0;
+  font-weight: 700;
+  color: var(--accent);
+}
+
+/* Unavailable option (e.g. nothing triangulated yet, so no reprojections). */
+.slp-inc-row.slp-inc-row-disabled {
+  opacity: 0.5;
+}
+
+.slp-inc-row.slp-inc-row-disabled .slp-inc-name,
+.slp-inc-row.slp-inc-row-disabled .toggle-switch .slider {
+  cursor: not-allowed;
 }
 
 .slp-export-filename-row {
@@ -1660,8 +1707,19 @@ body {
 }
 
 /* Export SLEAP File Per Session: active session → one file per camera dir. */
+/* Wide enough for a real prediction filename
+   (`cam-<14-digit-stamp>-0000_h265_CRF30_denoised.mp4.predictions_v1.slp` is
+   ~67 characters) to sit in the field without eliding. `width` rather than the
+   old `min-width: 720px`, because a min-width beats max-width in CSS and so
+   pushed the modal off-screen on a narrow window instead of shrinking. */
 .slp-export-persession-modal {
-  min-width: 720px;
+  width: min(920px, 94vw);
+  max-width: 94vw;
+}
+
+/* Eight cameras is routine, so show more of them before scrolling. */
+.slp-export-persession-modal .slp-export-table-container {
+  max-height: 320px;
 }
 
 .slp-export-persession-modal .slp-export-table {
@@ -1687,28 +1745,109 @@ body {
   width: auto;
 }
 
+/* The Output Filename header sits over a left-aligned field, so it opts out of
+   the `th:nth-child(n+3)` right-align the stats-style tables want. */
+.slp-export-persession-modal .slp-export-table th:last-child {
+  text-align: left;
+  padding-left: 10px;
+}
+
 /* Download checkbox column — compact and centered. */
 .slp-export-persession-modal .slp-ps-dl-cell {
   text-align: center;
   padding-right: 12px;
 }
 
+/* The stock checkbox renders as a white box on this dark table — the same
+   mismatch the Include switches fixed. Drawn here instead, in the app's palette. */
 .slp-export-persession-modal .slp-ps-dl {
-  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+  width: 15px;
+  height: 15px;
   margin: 0;
+  border: 1px solid var(--border-color);
+  border-radius: 3px;
+  background: var(--bg-tertiary);
+  cursor: pointer;
+  position: relative;
+  vertical-align: middle;
+  transition: background var(--transition-fast), border-color var(--transition-fast);
+}
+
+.slp-export-persession-modal .slp-ps-dl:hover {
+  border-color: var(--text-muted);
+}
+
+.slp-export-persession-modal .slp-ps-dl:checked {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.slp-export-persession-modal .slp-ps-dl:checked::after {
+  content: "";
+  position: absolute;
+  left: 4px;
+  top: 1px;
+  width: 4px;
+  height: 8px;
+  border: solid #ffffff;
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+
+.slp-export-persession-modal .slp-ps-dl:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 .slp-export-persession-modal .slp-ps-dir {
   color: var(--text-muted);
-  font-family: var(--mono, monospace);
-  font-size: 12px;
+  font-family: "SF Mono", "Fira Code", "Cascadia Code", monospace;
+  font-size: 11px;
   white-space: nowrap;
 }
 
+/* Output filename field. The browser default (white box, system font) was the
+   one thing in this modal that did not look like the rest of the app — and the
+   names here are long and structured (`cam-<timestamp>-0000_h265_CRF30_
+   denoised.mp4.predictions.slp`), so the monospace stack shared with
+   `.data-table .mono` and the Directory cell is what makes them scannable at
+   all: the `_v2` / `_CRF30` segments line up down the column. Elides when
+   unfocused and shows the full name on hover (`title`, kept in sync by the
+   change handler); focus switches to `clip` so editing the tail is not fighting
+   an ellipsis. */
 .slp-export-persession-modal .slp-ps-filename {
   width: 100%;
   min-width: 340px;
   box-sizing: border-box;
+  padding: 5px 9px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  color: var(--text-primary);
+  font-family: "SF Mono", "Fira Code", "Cascadia Code", monospace;
+  font-size: 11px;
+  line-height: 1.55;
+  text-overflow: ellipsis;
+  transition: border-color var(--transition-fast), background var(--transition-fast);
+}
+
+.slp-export-persession-modal .slp-ps-filename:hover {
+  border-color: var(--text-muted);
+}
+
+.slp-export-persession-modal .slp-ps-filename:focus {
+  outline: none;
+  border-color: var(--accent);
+  background: var(--bg-secondary);
+  text-overflow: clip;
+}
+
+/* A row the user unchecked is not being written — dim it so the Download column
+   is readable at a glance instead of one checkbox at a time. Still editable. */
+.slp-export-persession-modal tr.slp-ps-off td:not(.slp-ps-dl-cell) {
+  opacity: 0.45;
 }
 
 .slp-export-all-modal .slp-export-table {
