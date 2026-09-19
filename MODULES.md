@@ -2397,12 +2397,17 @@ info panel, and timeline.
 **Imports from project modules.**
 - `./app-state.js` — `viewport3d`, `timeline`.
 - `./ui-wiring.js` — `syncTimelineToggleButton`,
-  `updateInfoPanelToggleBtn`, `toggleInfoPanel`.
+  `updateInfoPanelToggleBtn`, `toggleInfoPanel`,
+  `update3DViewportToggleBtn`, `toggle3DViewport`.
 
 **Imported by.** `pose/initialization.js`.
 
 **User-facing features.** Drag-to-resize panel boundaries between video
-grid / 3D / info-panel / timeline.
+grid / 3D / info-panel / timeline. Also wires the two toolbar panel-toggle
+buttons (`#infoPanelToggleBtn`, `#viewport3dToggleBtn`) and keeps their labels
+in sync from the `MutationObserver` that watches the 3D container's and info
+wrapper's `class` attributes — so a collapse from any entry point (button, `\`,
+View menu) relabels both buttons, and the initial labels are correct.
 
 ---
 
@@ -4265,7 +4270,8 @@ stopping at the last frame; the step transport buttons/keys stop it first.
 - Seekbar: `updateSeekbar`, `updateSeekbarVisual`,
   `onPlaybackStateChange`.
 - Toggles: `toggleInfoPanel`, `refreshInfoPanelAfterShow`,
-  `updateInfoPanelToggleBtn`, `toggle3DViewport`, `toggleTimeline`,
+  `updateInfoPanelToggleBtn`, `toggle3DViewport`,
+  `update3DViewportToggleBtn`, `lockPanelToggleWidths`, `toggleTimeline`,
   `syncTimelineToggleButton`, `fitTimelineToData`.
 - View modes: `enterSingleViewMode`, `cycleSingleView`, `setSoloView`,
   `setGridMode`, `updateVideoGridDisplay`, `showViewIndicator`. See
@@ -4298,6 +4304,31 @@ session load released it while collapsed. Showing the info panel calls
 `refreshInfoPanelAfterShow`, which rebuilds it **only if** a refresh was
 actually skipped (`consumeInfoPanelStale`). Covered by
 `tests/e2e/panel-toggle-independence.mjs`.
+
+**Toolbar toggle buttons (issue #151).** Both panels have a labelled button at
+the far right of the toolbar, `#viewport3dToggleBtn` ("Hide/Show 3D View") to
+the left of `#infoPanelToggleBtn` ("Hide/Show Panel"), grouped in
+`.toolbar-group.panel-toggles` and outlined (`.panel-toggle-btn`) so they read
+as layout controls rather than as more annotation actions. Previously the 3D
+viewport could only be collapsed from `\` or View ▸ Toggle 3D Viewport, neither
+of which is discoverable. `update3DViewportToggleBtn` /
+`updateInfoPanelToggleBtn` derive each label from the container's `collapsed`
+class rather than from whoever did the toggling, so all three entry points stay
+in sync; both are called from the toggle itself **and** from the
+`MutationObserver` in `ui/layout-controls.js` that already watches those two
+containers' class attributes (which is also what sets the initial labels). Both
+labels for both buttons live in one `PANEL_TOGGLE_BUTTONS` table, which is also
+what `lockPanelToggleWidths` measures.
+
+`lockPanelToggleWidths` (called once from `setupSplitHandles`) pins each button
+to the width of its own **wider** label, because "Hide" and "Show" are not the
+same width in the toolbar's proportional system font: unpinned, the 3D toggle
+measured 90.5px as "Hide 3D View" and 95.8px as "Show 3D View", and since the
+pair is right-aligned, the 5.3px growth on a label swap also shoved the button
+to its left sideways on every toggle. The width is measured from the real
+labels rather than hardcoded, so it stays correct if a label, the font size or
+the button padding changes; the app ships only system fonts, so there is no
+late web-font reflow to re-measure for.
 
 **Single-view ("solo") mode.** `v` (`singleViewMode`) calls
 `enterSingleViewMode`, which caches the dockview grid layout

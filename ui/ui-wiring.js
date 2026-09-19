@@ -2656,11 +2656,83 @@ export function refreshInfoPanelAfterShow() {
     updateInfoPanel();
 }
 
+// The two toolbar panel toggles, each with the label for both of its states.
+// Single source of truth: the updaters below read these, and
+// `lockPanelToggleWidths` sizes each button to whichever of its own two labels
+// is wider so the pair doesn't shimmy when a label swaps.
+const PANEL_TOGGLE_BUTTONS = [
+    { btnId: 'infoPanelToggleBtn', shown: 'Hide Panel', hidden: 'Show Panel' },
+    { btnId: 'viewport3dToggleBtn', shown: 'Hide 3D View', hidden: 'Show 3D View' },
+];
+
+function panelToggleLabels(btnId) {
+    for (var i = 0; i < PANEL_TOGGLE_BUTTONS.length; i++) {
+        if (PANEL_TOGGLE_BUTTONS[i].btnId === btnId) return PANEL_TOGGLE_BUTTONS[i];
+    }
+    return null;
+}
+
+/**
+ * Pin each panel-toggle button to the width of its widest label.
+ *
+ * "Hide"/"Show" don't render to the same width in the toolbar's
+ * proportional system font, so without this the buttons resize on every
+ * toggle — and because they're right-aligned in a flex group, the one to the
+ * left visibly jumps sideways when its neighbour changes width.
+ *
+ * Measured rather than hardcoded so it stays correct if a label, the font
+ * size, or the button padding changes. `getBoundingClientRect()` is a
+ * border-box width (`box-sizing: border-box` is global), which is what
+ * `min-width` wants. Called once from `ui/layout-controls.js` at startup;
+ * the app uses only system fonts, so there's no late web-font reflow to
+ * re-measure for.
+ */
+export function lockPanelToggleWidths() {
+    for (var i = 0; i < PANEL_TOGGLE_BUTTONS.length; i++) {
+        var spec = PANEL_TOGGLE_BUTTONS[i];
+        var btn = document.getElementById(spec.btnId);
+        if (!btn) continue;
+        var restore = btn.textContent;
+        // Clear any previous lock so a re-measure can shrink as well as grow.
+        btn.style.minWidth = '';
+        var widest = 0;
+        var labels = [spec.shown, spec.hidden];
+        for (var j = 0; j < labels.length; j++) {
+            btn.textContent = labels[j];
+            var w = btn.getBoundingClientRect().width;
+            if (w > widest) widest = w;
+        }
+        btn.textContent = restore;
+        if (widest > 0) btn.style.minWidth = Math.ceil(widest) + 'px';
+    }
+}
+
 export function updateInfoPanelToggleBtn() {
     var wrapper = document.getElementById('infoPanelWrapper');
     var btn = document.getElementById('infoPanelToggleBtn');
     if (btn) {
-        btn.textContent = wrapper.classList.contains('collapsed') ? 'Show Panel' : 'Hide Panel';
+        var l = panelToggleLabels('infoPanelToggleBtn');
+        btn.textContent = wrapper.classList.contains('collapsed') ? l.hidden : l.shown;
+    }
+}
+
+/**
+ * Keep the toolbar's 3D-viewer toggle label in sync with the panel's actual
+ * collapse state (issue #151).
+ *
+ * The button is only one of three ways to toggle the viewport — the `\`
+ * shortcut and View ▸ Toggle 3D Viewport are the others — so the label is
+ * driven off the DOM rather than off whoever did the toggling.
+ * `ui/layout-controls.js` also calls this from the `MutationObserver` that
+ * already watches the container's class, which covers the initial label and
+ * any collapse that happens without going through `toggle3DViewport`.
+ */
+export function update3DViewportToggleBtn() {
+    var container = document.getElementById('viewport3dContainer');
+    var btn = document.getElementById('viewport3dToggleBtn');
+    if (container && btn) {
+        var l = panelToggleLabels('viewport3dToggleBtn');
+        btn.textContent = container.classList.contains('collapsed') ? l.hidden : l.shown;
     }
 }
 
@@ -2706,6 +2778,8 @@ export function toggle3DViewport() {
         // never created (or was released by a session load while collapsed).
         update3DViewport(state.currentFrame);
     }
+
+    update3DViewportToggleBtn();
 }
 
 // Block 1 (Prompt 4): toggleTimeline / syncTimelineToggleButton /
