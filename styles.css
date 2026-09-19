@@ -990,6 +990,12 @@ body {
 .toolbar-group.panel-toggles {
   margin-left: auto;
   gap: 6px;
+  /* Sit as close to the window edge as the toolbar allows: drop the shared
+     `.toolbar-group` right padding (8px) and pull into half of `.toolbar`'s
+     own 8px, leaving a 4px gutter. The negative margin stays inside the
+     toolbar's padding box (4px < 8px), so nothing overflows. */
+  padding-right: 0;
+  margin-right: -4px;
 }
 
 .toolbar-btn.panel-toggle-btn {

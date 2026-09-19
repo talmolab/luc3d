@@ -124,6 +124,12 @@ try {
             btnInfoWidth: ri.width,
             btn3dLeft: r3.left,
             btnInfoRight: ri.right,
+            // Gap from the right-hand button to the window edge, and whether
+            // tightening it pushed anything out of the toolbar.
+            gapToEdge: window.innerWidth - ri.right,
+            toolbarScrollOverflow:
+                document.querySelector('.toolbar').scrollWidth
+                - document.querySelector('.toolbar').clientWidth,
         };
     });
 
@@ -137,6 +143,14 @@ try {
     check(s0.sameRow, 'the two toggles sit on the same toolbar row');
     check(s0.btnInfoLeft - s0.btn3dRight < 24,
         `they are adjacent, not merely both right-aligned (gap ${Math.round(s0.btnInfoLeft - s0.btn3dRight)}px < 24px)`);
+
+    // Pushed hard against the window edge: the shared `.toolbar-group` right
+    // padding is dropped and the group pulls into `.toolbar`'s own padding,
+    // so the gutter is a few px rather than the stacked 16px.
+    check(s0.gapToEdge <= 6,
+        `the pair sits flush to the right edge (${s0.gapToEdge}px gutter <= 6px)`);
+    check(s0.toolbarScrollOverflow <= 0,
+        `tightening the gutter did not overflow the toolbar (scroll overflow ${s0.toolbarScrollOverflow}px)`);
 
     // ---------------- 2. Light borders, per the request -------------------
     console.log('    3D border:', s0.border3d, '| info border:', s0.borderInfo);
