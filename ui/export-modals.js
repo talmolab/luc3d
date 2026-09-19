@@ -524,7 +524,7 @@ export async function groupByIdentityAndTriangulateAll(explicitMethod) {
         totalTriangulated + ' across ' + processedFrames + ' frames via ' +
         triangulationMethodLabel(prefMethod) + ' (' +
         reused3d.toLocaleString() + ' kept existing 3D, ' +
-        solvedBa.toLocaleString() + ' solved via Bundle Adjustment, ' +
+        solvedBa.toLocaleString() + ' solved via Refined, ' +
         solvedDlt.toLocaleString() + ' via DLT)', 'success');
     console.log('[groupByIdentity] 3D provenance: reused', reused3d,
         '| solved BA', solvedBa, '| solved DLT', solvedDlt);
@@ -769,7 +769,7 @@ async function groupByTrackAndTriangulateAll(selectedTrackIndices, selectedCamer
     setStatus('Grouped ' + totalGrouped + ' track-groups, triangulated ' + totalTriangulated +
         ' frames via ' + triangulationMethodLabel(prefMethodT) +
         ' (avg error: ' + avgError + 'px; ' + reused3dT.toLocaleString() +
-        ' kept existing 3D, ' + solvedBaT.toLocaleString() + ' solved via Bundle Adjustment, ' +
+        ' kept existing 3D, ' + solvedBaT.toLocaleString() + ' solved via Refined, ' +
         solvedDltT.toLocaleString() + ' via DLT)', 'success');
     console.log('[group-by-track] Done:', totalGrouped, 'groups across', totalTriangulated,
         'frames, avg error:', avgError, '| 3D provenance: reused', reused3dT,
