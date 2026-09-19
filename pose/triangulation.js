@@ -368,9 +368,11 @@ export function triangulatePoints(allObservations, projectionMatrices) {
 //     is free to move the cameras, low error no longer distinguishes "good
 //     labels" from "cameras bent to fit bad labels".
 //
-// The label "Bundle Adjustment" in the UI (and `triangulationMethodLabel`) refers
-// to THIS point stage, cameras fixed. It is the term users of anipose/SLEAP
-// expect for `optim_points`, hence kept, but it does not imply camera refinement.
+// The label "Refined" ("Ref") in the UI (and `triangulationMethodLabel`) refers
+// to THIS point stage, cameras fixed. It was previously called "Bundle
+// Adjustment" after anipose/SLEAP's term for `optim_points`, but that name
+// wrongly implied camera refinement; only the display name changed, the method
+// key is still `'ba'` everywhere in code and in the saved `.slp`.
 //
 // DLT minimizes an *algebraic* error; this minimizes the true pixel error.
 // Three properties matter, and all three were wrong before issue #113:
@@ -1286,7 +1288,7 @@ export function triangulateAndReproject(instanceGroup, cameras, options) {
  * @returns {string}
  */
 export function triangulationMethodLabel(method) {
-    return method === 'ba' ? 'Bundle Adjustment' : 'DLT';
+    return method === 'ba' ? 'Refined' : 'DLT';
 }
 
 // ============================================
