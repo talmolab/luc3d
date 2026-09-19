@@ -33,6 +33,7 @@ import {
 } from '../ui/identity-assignment.js';
 import { getTrackColor, getGroupColor } from '../ui/overlays.js';
 import { Viewport3D } from '../ui/viewport3d.js';
+import { isViewport3DVisible, markViewport3DSkipped } from '../ui/panel-visibility.js';
 import { Timeline } from '../ui/timeline.js';
 import { InteractionManager } from '../ui/interaction.js';
 
@@ -849,20 +850,32 @@ export function setup3DViewport() {
         return;
     }
 
-    // Make sure the viewport3d container is visible
+    // Undo a previous Three.js-init failure's `display:none`, but do NOT clear
+    // `collapsed`: the container starts expanded in index.html, so that class
+    // means the user hid the panel — and every session load funnels through
+    // here, which used to re-open it behind their back.
     var vp3dContainer = document.getElementById('viewport3dContainer');
-    if (vp3dContainer) {
-        vp3dContainer.classList.remove('collapsed');
-        vp3dContainer.style.display = '';
-    }
-    var vp3dMsg = document.getElementById('viewport3dMessage');
-    if (vp3dMsg) vp3dMsg.classList.add('hidden');
+    if (vp3dContainer) vp3dContainer.style.display = '';
 
     // Dispose old viewport to avoid orphaned renderers in the DOM
     if (viewport3d) {
         try { viewport3d.dispose(); } catch (e) { console.warn('[3D] dispose error:', e); }
         setViewport3D(null);
     }
+
+    // Hidden panel: stop here, having released the old viewport. Building a
+    // scene (and a WebGL context) for a collapsed panel is exactly the work
+    // the toggle exists to avoid, and leaving the PREVIOUS session's viewport
+    // alive instead would re-show stale cameras/skeleton on expand.
+    // `update3DViewport` auto-inits from the live session when the user
+    // expands the panel again.
+    if (!isViewport3DVisible()) {
+        markViewport3DSkipped();
+        return;
+    }
+
+    var vp3dMsg = document.getElementById('viewport3dMessage');
+    if (vp3dMsg) vp3dMsg.classList.add('hidden');
 
     try {
         console.log('[3D] Creating Viewport3D with', state.session.cameras.length, 'cameras,',
@@ -933,6 +946,15 @@ export function setup3DViewport() {
 
 
 export function update3DViewport(frameIdx) {
+    // Collapsed panel: no scene rebuild, and crucially no auto-init — a hidden
+    // viewport should not cost a WebGL context. `toggle3DViewport` calls back
+    // in here when the panel is re-shown, and the rebuild is a stateless
+    // function of the CURRENT frame, so nothing needs to be remembered.
+    if (!isViewport3DVisible()) {
+        markViewport3DSkipped();
+        return;
+    }
+
     if (!viewport3d) {
         if (state.session && sessionHasCalibration()) {
             console.log('[3D] Auto-initializing 3D viewport');
