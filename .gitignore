@@ -9,12 +9,12 @@ __pycache__/
 
 # Video files (too large for git)
 *.mp4
+!sample_session/*.mp4
 *.avi
 *.mov
 
 # Local data
 tempdata/
-sample_session/
 prompts/
 verify/
 .claude/
