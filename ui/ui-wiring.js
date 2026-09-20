@@ -51,6 +51,7 @@ import { trackCurrentFrame, trackAll, findMatchForSelected } from '../pose/track
 import { triangulateCurrentFrame, triangulateAllFrames } from '../pose/triangulation.js';
 // User settings: default triangulation method + editable keyboard bindings.
 import { getDefaultTriangulationMethod, setHandler, dispatchEvent, getActions, formatBinding } from './settings.js';
+import { shouldIgnoreShortcut, installFocusRelease } from './keyboard-target.js';
 import { showSettingsModal } from './settings-modal.js';
 // Pass 3i-3: addNewInstanceSmart and update3DViewport moved to pose/initialization.js.
 import { addNewInstanceSmart, update3DViewport, navigateToFrame } from '../pose/initialization.js';
@@ -1591,6 +1592,15 @@ function pasteInstance() {
 }
 
 export function setupUI() {
+    // Hand focus back to the document after a POINTER activates a checkbox,
+    // radio or button, so the key it shares with a shortcut goes to the
+    // shortcut. Clicking the User checkbox used to leave it focused, which made
+    // spacebar toggle it instead of playing the video and — because every
+    // keydown guard read `tagName === 'INPUT'` — killed every other shortcut
+    // too (issue #163). Keyboard focus is left alone: Tab to the checkbox and
+    // Space still toggles it.
+    installFocusRelease(document);
+
     // Transport controls
     document.getElementById('btnFirst').addEventListener('click', function () { if (!hasRealVideo()) stopNoVideoPlayback(); navigateToFrame(0); });
     document.getElementById('btnPrev').addEventListener('click', function () { if (!hasRealVideo()) stopNoVideoPlayback(); navigateToFrame(state.currentFrame - 1); });
@@ -1677,7 +1687,7 @@ export function setupUI() {
     // Enter key dismisses any visible dismiss button
     document.addEventListener('keydown', function (e) {
         if (e.key !== 'Enter') return;
-        if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable) return;
+        if (shouldIgnoreShortcut(e)) return;
         var btn = document.querySelector('button[data-dismiss]:not([style*="display:none"])');
         if (btn && btn.offsetParent !== null) {
             e.preventDefault();
@@ -1686,11 +1696,11 @@ export function setupUI() {
     });
 
     // --- Video Rotation (Shift + R + Arrow chord) ---
-    var _rotState = { active: false, direction: 0, lastTime: 0, rafId: 0, view: null };
+    var _rotState = { active: false, direction: 0, lastTime: 0, rafId: 0, view: null, drawnDeg: null };
     var _rKeyDown = false; // tracks the `R` modifier for the rotation chord
 
     document.addEventListener('keydown', function (e) {
-        if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable) return;
+        if (shouldIgnoreShortcut(e)) return;
         if (e.code === 'KeyR') _rKeyDown = true;
     });
     document.addEventListener('keyup', function (e) {
@@ -1710,6 +1720,19 @@ export function setupUI() {
         return null;
     }
 
+    /**
+     * Redraw the overlays if this gesture has crossed into a new whole degree.
+     * `_rotState.drawnDeg` is what the labels on screen were last drawn for;
+     * null means "nothing drawn yet this gesture", so the first call always
+     * paints.
+     */
+    function redrawForRotationDegree(view) {
+        var deg = Math.round(view.rotation || 0);
+        if (_rotState.drawnDeg === deg) return;
+        _rotState.drawnDeg = deg;
+        drawAllOverlays(state.currentFrame);
+    }
+
     function rotationLoop(now) {
         if (!_rotState.active) return;
         var view = getActiveView();
@@ -1722,14 +1745,22 @@ export function setupUI() {
         // handler below.
         view.rotation = clampRotation((view.rotation || 0) + degrees);
         _rotState.lastTime = now;
-        // Only update the CSS transform — don't redraw overlays during animation
+        // The CSS transform is the cheap part and gets every frame, so the video
+        // stays smooth. The overlays cost a full redraw, so they are spent only
+        // when the WHOLE DEGREE changes — which is the granularity labels are
+        // drawn at (`Math.round(view.rotation)` in ui/rendering.js), so a skipped
+        // redraw could not have changed a label's angle anyway. Before issue
+        // #162 this loop redrew nothing at all and waited for keyup; it has to
+        // repaint now, or the labels would spin with the video for the whole
+        // gesture and only snap upright when the key came up.
         if (videoController) videoController.applyZoom(view);
         syncRotationUI(view);
+        redrawForRotationDegree(view);
         _rotState.rafId = requestAnimationFrame(rotationLoop);
     }
 
     document.addEventListener('keydown', function (e) {
-        if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable) return;
+        if (shouldIgnoreShortcut(e)) return;
         if (e.shiftKey && _rKeyDown && !e.ctrlKey && !e.metaKey && !e.altKey &&
             (e.key === 'ArrowRight' || e.key === 'ArrowLeft')) {
             e.preventDefault();
@@ -1740,6 +1771,8 @@ export function setupUI() {
                 view.rotation = clampRotation((view.rotation || 0) + dir);
                 if (videoController) videoController.applyZoom(view);
                 syncRotationUI(view);
+                _rotState.drawnDeg = null;   // new gesture: force the first paint
+                redrawForRotationDegree(view);
                 _rotState.active = true;
                 _rotState.direction = dir;
                 _rotState.lastTime = performance.now();
@@ -1771,13 +1804,26 @@ export function setupUI() {
                 syncRotationUI(rotated);
                 markDirty();
             }
-            // Redraw overlays once at the final rotation angle
+            // Redraw overlays once at the final rotation angle. Unconditional,
+            // not via `redrawForRotationDegree`: keyup SNAPS `view.rotation`
+            // off its fractional animation value onto the integer the session
+            // stored, and that integer is usually the one already drawn — but
+            // the frame may have advanced, or the snap may have moved the angle
+            // by up to half a degree, so this is the one paint that must not be
+            // skipped.
+            _rotState.drawnDeg = null;
             drawAllOverlays(state.currentFrame);
         }
     });
 
     document.addEventListener('keydown', function (e) {
-        if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable) return;
+        if (shouldIgnoreShortcut(e)) return;
+        // Shift+R+Arrow is the rotation chord — don't also step frames. Checked
+        // BEFORE the video-less branch below, not just inside the real-video
+        // one: this guard used to sit after that branch's `return`, so on a
+        // project with no decoder (skeleton + imported 3D points) every arrow
+        // press of the chord both rotated the view AND advanced the frame.
+        if (e.shiftKey && _rKeyDown) return;
         if (!hasRealVideo()) {
             // Video-less project (skeleton + imported 3D points): support frame
             // stepping + play/pause over the points3d duration even though
@@ -1791,8 +1837,6 @@ export function setupUI() {
             }
             return;
         }
-        // Shift+R+Arrow is the rotation chord — don't also step frames.
-        if (e.shiftKey && _rKeyDown) return;
 
         switch (e.key) {
             case 'ArrowRight':
@@ -1847,7 +1891,7 @@ export function setupUI() {
 
     // --- Identity & Track hotkeys ---
     document.addEventListener('keydown', function (e) {
-        if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+        if (shouldIgnoreShortcut(e)) return;
 
         // Identity assignment: 1-9 (no modifier) — works on groups AND unlinked
         if (!e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey && e.key >= '1' && e.key <= '9') {
@@ -1950,7 +1994,7 @@ export function setupUI() {
     // dispatcher preventDefault()s every binding it matches, which would swallow
     // the arrow keys app-wide including in grid mode, where they are unbound.
     document.addEventListener('keydown', function (e) {
-        if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable) return;
+        if (shouldIgnoreShortcut(e)) return;
         if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
         if (state.viewMode !== 'single') return;
         if (e.key === 'ArrowUp') { e.preventDefault(); cycleSingleView(-1); }
@@ -1974,7 +2018,7 @@ export function setupUI() {
         // timeline handler (`ui/timeline-controller.js`).
 
         // --- Plain key shortcuts (skip when typing in inputs or any modifier held) ---
-        if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable) return;
+        if (shouldIgnoreShortcut(e)) return;
         if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
 
         switch (e.key) {
@@ -2965,7 +3009,14 @@ export function updateVideoGridDisplay() {
 export function showViewIndicator() {
     var existing = document.getElementById('viewModeIndicator');
     if (existing) existing.remove();
-    if (state.viewMode !== 'single' || state.views.length === 0) return;
+    var dockEl = document.getElementById('videoDock');
+    if (state.viewMode !== 'single' || state.views.length === 0) {
+        // The class drives the per-pane legend's top offset (styles.css) —
+        // clear it whenever the chip goes away, or the legend would sit one
+        // slot low in grid mode forever.
+        if (dockEl) dockEl.classList.remove('has-view-indicator');
+        return;
+    }
 
     var indicator = document.createElement('div');
     indicator.id = 'viewModeIndicator';
@@ -2973,10 +3024,13 @@ export function showViewIndicator() {
     indicator.textContent = state.views[state.singleViewIndex].name +
         ' (' + (state.singleViewIndex + 1) + '/' + state.views.length + ')';
 
-    var dockEl = document.getElementById('videoDock');
     if (dockEl) {
         dockEl.style.position = 'relative';
         dockEl.appendChild(indicator);
+        // In single-view mode the sole pane fills the dock, so this chip lands
+        // exactly where a pane's legend wants to be. Tell the legend to step
+        // down instead of hiding under it.
+        dockEl.classList.add('has-view-indicator');
     }
 }
 

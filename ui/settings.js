@@ -17,6 +17,8 @@
 // add/update its entry here so the Settings panel stays complete and truthful.
 // (See CLAUDE.md.)
 
+import { shouldIgnoreShortcut } from './keyboard-target.js';
+
 const STORAGE_KEY = 'lucid.settings.v1';
 
 const DEFAULTS = {
@@ -540,8 +542,7 @@ function _now() {
 // action handled the event (single-chord bindings fire immediately).
 export function dispatchEvent(e) {
     if (!e) return false;
-    const t = e.target;
-    if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return false;
+    if (shouldIgnoreShortcut(e)) return false;
     if (isModifierKey(e.key)) return false; // wait for the real key in a chord
 
     const now = _now();
