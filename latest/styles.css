@@ -920,6 +920,57 @@ body {
   color: #ffffff;
 }
 
+/* Visibility ▸ Display Legend, as pane chrome (ui/view-legend.js).
+   A SIBLING of .canvas-wrapper, deliberately: the wrapper is what applyZoom
+   rotates, so anything inside it tips over with the video. Out here the legend
+   stays upright, is anchored to the pane's top-right rather than the video's
+   (it may overhang a letterbox bar), and is sized in CSS px so every view's
+   legend matches regardless of camera resolution. */
+.video-cell .view-legend {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 7;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 9px;
+  background: rgba(0, 0, 0, 0.6);
+  border-radius: 4px;
+  font-size: 11px;
+  line-height: 1;
+  color: #ffffff;
+  /* The overlay canvas under this is the click target for annotation — the
+     legend must never eat a click meant for a keypoint. */
+  pointer-events: none;
+  user-select: none;
+}
+
+/* Three things want the pane's top-right, and only one of them is always
+   there. Each of the other two pushes the legend down one slot, and both
+   together push it down two. */
+.video-cell.zoomed .view-legend,
+#videoDock.has-view-indicator .view-legend {
+  top: 38px;
+}
+
+#videoDock.has-view-indicator .video-cell.zoomed .view-legend {
+  top: 68px;
+}
+
+.video-cell .view-legend-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  white-space: nowrap;
+}
+
+.video-cell .view-legend-icon {
+  width: 18px;
+  height: 12px;
+  flex-shrink: 0;
+}
+
 /* --------------------------------------------------------------------------
    Toolbar (between video grid and controls)
    -------------------------------------------------------------------------- */
@@ -979,6 +1030,33 @@ body {
 .toolbar-btn.active {
   background: var(--accent-dim);
   color: var(--accent);
+}
+
+/* The two panel-visibility toggles (3D viewer + info panel) sit together at
+   the far right of the toolbar. They get a light outline — unlike the rest of
+   the toolbar's borderless buttons — so they read as a distinct pair of
+   layout controls rather than as more of the annotation actions to their
+   left (issue #151). `box-sizing: border-box` is global, so the border does
+   not change the shared 28px button height. */
+.toolbar-group.panel-toggles {
+  margin-left: auto;
+  gap: 6px;
+  /* Flush to the window edge, mirroring `#tbSessions` at the left edge:
+     drop the shared `.toolbar-group` right padding (8px) and cancel
+     `.toolbar`'s own 8px. (`#tbSessions` uses a single -16px to cancel both
+     at once; here the padding is already gone, so -8px is the whole of it.)
+     The pull equals the toolbar's padding, so the group lands on the border
+     box and nothing overflows. */
+  padding-right: 0;
+  margin-right: -8px;
+}
+
+.toolbar-btn.panel-toggle-btn {
+  border: 1px solid var(--border-light);
+}
+
+.toolbar-btn.panel-toggle-btn:hover {
+  border-color: var(--text-muted);
 }
 
 #tbSessions {
@@ -1045,7 +1123,7 @@ body {
   display: block;
 }
 
-/* Triangulate / Triangulate All split dropdowns (DLT vs Bundle Adjustment) */
+/* Triangulate / Triangulate All split dropdowns (DLT vs Refined) */
 .tri-dropdown {
   position: relative;
   display: inline-flex;
@@ -1482,29 +1560,6 @@ body {
   gap: 12px;
 }
 
-/* Stacked variant: each option on its own row (e.g. By-Cam modal — Save
-   Reprojections sits beneath Save PredictedInstances). */
-.slp-export-options.slp-export-options-stacked {
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 6px;
-}
-
-.slp-export-options-stacked .slp-opt-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-/* Disabled option row (e.g. no reprojections available to save). */
-.slp-export-options-stacked .slp-opt-disabled {
-  opacity: 0.5;
-}
-
-.slp-export-options-stacked .slp-opt-disabled label {
-  cursor: not-allowed;
-}
-
 .slp-reproj-toggle {
   display: inline-flex;
   border: 1px solid var(--border-color);
@@ -1535,6 +1590,76 @@ body {
   opacity: 0.35;
   cursor: default;
   pointer-events: none;
+}
+
+/* --------------------------------------------------------------------------
+   "Include" group for the SLP export modals (Per Session / By Cam)
+   --------------------------------------------------------------------------
+   Uses the app's standard .toggle-switch instead of raw checkboxes, and opens
+   with a plain NOTE: "UserLabels are automatically saved". Users kept asking
+   whether their own labels were exported when the only visible controls were
+   "Predicted Instances" / "Reprojections" (luc3d #194); the answer is a
+   statement, not a switch, because nothing about it is the user's to change. */
+.slp-inc-group {
+  margin: 10px 0 8px;
+}
+
+.slp-inc-legend {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+}
+
+.slp-inc-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.slp-inc-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 13px;
+}
+
+.slp-inc-name {
+  color: var(--text-primary);
+  cursor: pointer;
+  user-select: none;
+}
+
+/* The always-saved note. Reads as an assurance, not a disabled option: no
+   control affordances, and the check mark carries the "this is already on"
+   meaning a switch would have. */
+.slp-inc-note {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  margin-bottom: 9px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-primary);
+}
+
+.slp-inc-note-mark {
+  flex-shrink: 0;
+  font-weight: 700;
+  color: var(--accent);
+}
+
+/* Unavailable option (e.g. nothing triangulated yet, so no reprojections). */
+.slp-inc-row.slp-inc-row-disabled {
+  opacity: 0.5;
+}
+
+.slp-inc-row.slp-inc-row-disabled .slp-inc-name,
+.slp-inc-row.slp-inc-row-disabled .toggle-switch .slider {
+  cursor: not-allowed;
 }
 
 .slp-export-filename-row {
@@ -1633,8 +1758,19 @@ body {
 }
 
 /* Export SLEAP File Per Session: active session → one file per camera dir. */
+/* Wide enough for a real prediction filename
+   (`cam-<14-digit-stamp>-0000_h265_CRF30_denoised.mp4.predictions_v1.slp` is
+   ~67 characters) to sit in the field without eliding. `width` rather than the
+   old `min-width: 720px`, because a min-width beats max-width in CSS and so
+   pushed the modal off-screen on a narrow window instead of shrinking. */
 .slp-export-persession-modal {
-  min-width: 720px;
+  width: min(920px, 94vw);
+  max-width: 94vw;
+}
+
+/* Eight cameras is routine, so show more of them before scrolling. */
+.slp-export-persession-modal .slp-export-table-container {
+  max-height: 320px;
 }
 
 .slp-export-persession-modal .slp-export-table {
@@ -1660,28 +1796,109 @@ body {
   width: auto;
 }
 
+/* The Output Filename header sits over a left-aligned field, so it opts out of
+   the `th:nth-child(n+3)` right-align the stats-style tables want. */
+.slp-export-persession-modal .slp-export-table th:last-child {
+  text-align: left;
+  padding-left: 10px;
+}
+
 /* Download checkbox column — compact and centered. */
 .slp-export-persession-modal .slp-ps-dl-cell {
   text-align: center;
   padding-right: 12px;
 }
 
+/* The stock checkbox renders as a white box on this dark table — the same
+   mismatch the Include switches fixed. Drawn here instead, in the app's palette. */
 .slp-export-persession-modal .slp-ps-dl {
-  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+  width: 15px;
+  height: 15px;
   margin: 0;
+  border: 1px solid var(--border-color);
+  border-radius: 3px;
+  background: var(--bg-tertiary);
+  cursor: pointer;
+  position: relative;
+  vertical-align: middle;
+  transition: background var(--transition-fast), border-color var(--transition-fast);
+}
+
+.slp-export-persession-modal .slp-ps-dl:hover {
+  border-color: var(--text-muted);
+}
+
+.slp-export-persession-modal .slp-ps-dl:checked {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.slp-export-persession-modal .slp-ps-dl:checked::after {
+  content: "";
+  position: absolute;
+  left: 4px;
+  top: 1px;
+  width: 4px;
+  height: 8px;
+  border: solid #ffffff;
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+
+.slp-export-persession-modal .slp-ps-dl:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 .slp-export-persession-modal .slp-ps-dir {
   color: var(--text-muted);
-  font-family: var(--mono, monospace);
-  font-size: 12px;
+  font-family: "SF Mono", "Fira Code", "Cascadia Code", monospace;
+  font-size: 11px;
   white-space: nowrap;
 }
 
+/* Output filename field. The browser default (white box, system font) was the
+   one thing in this modal that did not look like the rest of the app — and the
+   names here are long and structured (`cam-<timestamp>-0000_h265_CRF30_
+   denoised.mp4.predictions.slp`), so the monospace stack shared with
+   `.data-table .mono` and the Directory cell is what makes them scannable at
+   all: the `_v2` / `_CRF30` segments line up down the column. Elides when
+   unfocused and shows the full name on hover (`title`, kept in sync by the
+   change handler); focus switches to `clip` so editing the tail is not fighting
+   an ellipsis. */
 .slp-export-persession-modal .slp-ps-filename {
   width: 100%;
   min-width: 340px;
   box-sizing: border-box;
+  padding: 5px 9px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  color: var(--text-primary);
+  font-family: "SF Mono", "Fira Code", "Cascadia Code", monospace;
+  font-size: 11px;
+  line-height: 1.55;
+  text-overflow: ellipsis;
+  transition: border-color var(--transition-fast), background var(--transition-fast);
+}
+
+.slp-export-persession-modal .slp-ps-filename:hover {
+  border-color: var(--text-muted);
+}
+
+.slp-export-persession-modal .slp-ps-filename:focus {
+  outline: none;
+  border-color: var(--accent);
+  background: var(--bg-secondary);
+  text-overflow: clip;
+}
+
+/* A row the user unchecked is not being written — dim it so the Download column
+   is readable at a glance instead of one checkbox at a time. Still editable. */
+.slp-export-persession-modal tr.slp-ps-off td:not(.slp-ps-dl-cell) {
+  opacity: 0.45;
 }
 
 .slp-export-all-modal .slp-export-table {
@@ -3610,13 +3827,40 @@ kbd {
   border: 1px solid var(--border-color);
   border-radius: 8px;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  /* Opening size only. `ui/modal-geometry.js` measures this on first open,
+     centres the card, and thereafter restores whatever size the user left it
+     at as inline width/height. It also owns the viewport fit (clamping to a
+     24px gutter), so there is deliberately NO max-width/max-height here — a
+     second cap would silently shrink a rect the clamp thought it had granted
+     and leave the card flush against one edge. */
   width: 880px;
-  max-width: 94vw;
   height: 620px;
-  max-height: 90vh;
   display: flex;
   flex-direction: column;
+  /* `resize` needs a non-visible overflow, which this already had. The grip is
+     the browser's own, bottom-right. */
   overflow: hidden;
+  resize: both;
+  min-width: 520px;
+  min-height: 320px;
+}
+
+/* Dragging by the header. No transition on position — the card must track the
+   pointer exactly, not lag behind it. */
+.settings-modal-header {
+  cursor: move;
+  user-select: none;
+}
+
+.settings-modal.modal-dragging {
+  /* Kill hover/selection noise mid-drag. */
+  user-select: none;
+}
+
+/* The × is a click target inside the drag handle, so it opts out of the grab
+   cursor as well as out of the drag itself (see `noDragSelector`). */
+.settings-modal-close {
+  cursor: pointer;
 }
 
 .settings-modal-header {
@@ -3840,17 +4084,88 @@ kbd {
   margin-top: 12px;
 }
 
-/* Tracking Wizard ▸ Node Weights: a scrollable, multi-column table of nodes so
-   long skeletons stay compact. */
+/* Tracking Wizard ▸ Node Weights / Camera Views: a multi-column table that
+   grows to its full height.
+
+   It used to be capped at 240px with its own `overflow-y: auto`, which put a
+   scrollbar inside `.settings-panel-container`'s scrollbar — the wheel did
+   different things a few pixels apart, and rows past the cap were invisible
+   with no hint that the window could simply be made bigger. Now the panel is
+   the one scroller in the card: the table reflows into MORE COLUMNS as the
+   (resizable) modal widens, and its `<details>` section folds away when it is
+   in the way. */
 .settings-node-weight-list {
-  max-height: 240px;
-  overflow-y: auto;
   border: 1px solid var(--border-color);
   border-radius: 4px;
   padding: 2px 10px;
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
   column-gap: 24px;
+}
+
+/* --- Collapsible wizard sections --------------------------------------- */
+.settings-section {
+  margin-bottom: 4px;
+}
+
+.settings-section-summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+  /* The spacing that .settings-kbd-category used to carry itself; it is a flex
+     item inside the summary now, so the summary owns it. */
+  margin: 16px 0 4px;
+}
+
+.settings-section:first-of-type > .settings-section-summary {
+  margin-top: 0;
+}
+
+/* Replace the UA disclosure triangle with one that matches the app. */
+.settings-section-summary::-webkit-details-marker {
+  display: none;
+}
+
+.settings-section-summary::before {
+  content: '';
+  width: 0;
+  height: 0;
+  flex-shrink: 0;
+  border-left: 5px solid var(--text-muted, #888);
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  transition: transform var(--transition-fast);
+}
+
+.settings-section[open] > .settings-section-summary::before {
+  transform: rotate(90deg);
+}
+
+.settings-section-summary:hover .settings-section-title {
+  color: var(--text-primary);
+}
+
+/* The heading already carries .settings-kbd-category; inside a summary it must
+   not also claim the block-level margins that spaced standalone headings. */
+.settings-section-title {
+  margin: 0;
+}
+
+.settings-section-count {
+  font-size: 11px;
+  color: var(--text-muted, #888);
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 0 6px;
+  line-height: 15px;
+}
+
+.settings-section-body {
+  padding-bottom: 6px;
 }
 
 .settings-node-weight-row {

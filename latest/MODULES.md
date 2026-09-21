@@ -41,9 +41,21 @@ the old `app.js` entry point.
 - `setupInteraction()` — instantiates `InteractionManager` with all callback
   wiring (selection, drag, double-click, edit-group, etc.).
 - `setup3DViewport()` — instantiates `Viewport3D` and wires the
-  "Show Camera View"/"Show Initial View" buttons.
+  "Show Camera View"/"Show Initial View" buttons. **Respects the `\` toggle**
+  (`isViewport3DVisible()`, `ui/panel-visibility.js`): it no longer clears the
+  container's `collapsed` class — every session load funnels through here, so
+  it used to re-open a panel the user had deliberately hidden — and when the
+  panel IS collapsed it disposes the old viewport, sets the singleton to
+  `null`, and returns without building a scene or a WebGL context. Releasing
+  rather than keeping the previous viewport matters: leaving it alive would
+  make expanding the panel show the PREVIOUS session's cameras and skeleton.
+  `update3DViewport` rebuilds it from the live session on expand.
 - `update3DViewport(frameIdx)` — pushes current InstanceGroups into the 3D
-  scene; auto-initializes the viewport if calibration is present.
+  scene; auto-initializes the viewport if calibration is present. Returns
+  immediately when the panel is collapsed — including skipping the auto-init,
+  so a hidden viewport costs no WebGL context. Nothing needs remembering: the
+  rebuild is a stateless function of the current frame, and `toggle3DViewport`
+  calls back in here on expand.
 - `navigateToFrame(frameIdx)` — unified frame navigation used by every UI entry
   point (timeline scrub/drag, transport buttons, arrow/Home/End keys). With a
   video controller it defers to `videoController.seekToFrame`; for a video-less
@@ -78,6 +90,7 @@ the old `app.js` entry point.
   `purgeTriangulationDataForGroup`.
 - `../ui/overlays.js` — `getTrackColor`, `getGroupColor`.
 - `../ui/viewport3d.js` — `Viewport3D`.
+- `../ui/panel-visibility.js` — `isViewport3DVisible`, `markViewport3DSkipped`.
 - `../ui/timeline.js` — `Timeline`.
 - `../ui/interaction.js` — `InteractionManager`.
 
@@ -1188,9 +1201,13 @@ re-add it. Three reasons, spelled out at the "Point refinement" header in
   cameras, low error no longer distinguishes good labels from cameras bent to fit
   bad ones.
 
-Naming note: the user-facing "Bundle Adjustment" label and
-`triangulationMethodLabel` are unchanged — that is the term anipose/SLEAP users
-expect for `optim_points` — but it does not imply camera refinement.
+Naming note: the user-facing label is **"Refined" / "Ref"** (Settings ▸ Default
+Triangulation shows "Refined (Ref)"; the Triangulate / Triangulate All dropdowns
+show "Ref"). It was formerly "Bundle Adjustment" / "BA", after anipose/SLEAP's
+term for `optim_points`, but that name wrongly implied camera refinement. Only
+the display strings changed: the method key is still `'ba'` in `options.method`,
+`group.triangulationMethod`, `localStorage`, and the per-group
+`metadata.lucid.triangulationMethod` written to the `.slp`.
 
 The method is selected via `options.method` on `triangulateAndReproject` and
 threaded through the orchestration functions; the chosen method is recorded on
@@ -1262,7 +1279,7 @@ Regrouping does not invalidate a solve whose 2D inputs are unchanged, only one
 whose membership changed — so the sweeps now ADOPT rather than re-solve in the
 common case, which makes the correct behavior *cheaper* than the old one rather
 than paying BA's ~3x-6x cost per group project-wide. Both sweeps report 3D
-provenance ("N kept existing 3D, N solved via Bundle Adjustment, N via DLT") in
+provenance ("N kept existing 3D, N solved via Refined, N via DLT") in
 their progress text and status line, so a method's cost is visible rather than
 hidden. The one deliberate DLT caller is the O(n×m) Hungarian cost matrix in
 `ui/identity-assignment.js`, whose temporary groups' 3D is discarded and where only
@@ -1312,7 +1329,7 @@ subtitle is populated for loaded projects, not just freshly triangulated ones.
   `guard`; `maxIterations`; `tol`),
   `triangulatePointsBA(allObservations, projMatrices, initialPoints?, options?)`
   (forwards `options` verbatim), `BA_ROBUST_SCALE_PX` (= 15),
-  `triangulationMethodLabel(method)` → `'DLT'` | `'Bundle Adjustment'`.
+  `triangulationMethodLabel(method)` → `'DLT'` | `'Refined'`.
   Module-private: `distortJacobian(camera, ideal)` → 2x2 Brown–Conrady
   derivative, `projectAndJacobianCamera(point, camera)` → native-space
   projection + 2x3 Jacobian.
@@ -1786,6 +1803,30 @@ SLP all-sessions, JSON labels, points3d H5, reproj H5).
   click/Esc/Enter). Used by the By-Cam and per-session flows: on success they
   close their modal and pop "Download Successful"; on error they pop "Download
   Failed: …".
+- `slpIncludeGroupHtml({predId, reprojId, reprojRowId, reprojToggleId})`
+  (module-private) — markup for the **Include** group shared by the Per-Session
+  and By-Cam SLP export modals. Uses the app's standard `.toggle-switch` instead
+  of raw checkboxes, and opens with a **note** (`.slp-inc-note`) reading
+  "✓ UserLabels are automatically saved", above the two switches. Both modals
+  have always written user labels
+  (`instanceFilter.user` is hardcoded `true`), but with only "Predicted
+  Instances" and "Reprojections" visible under a heading reading *Include*,
+  users read the silence as an exclusion and asked whether their own labels were
+  being dropped (luc3d #194).
+
+  **A note, not a third always-on switch** (which is what this shipped as first):
+  a control that cannot be operated misstates what the user can change, reads as
+  "greyed out — am I losing something?", and leaves an inert input for a future
+  caller to mistake for a real option. Nothing about user labels is stateful, so
+  nothing about them is a control.
+
+  Covered by `tests/e2e/export-include-user-labels.mjs`, which pins both the UI
+  contract (the note comes first, contains no control at all, and the group has
+  exactly two option rows; the option ids stay intact and each `.slider` really
+  drives its checkbox — a `.toggle-switch` not wrapped in a `<label>` looks right
+  and is dead) and the claim itself, by running the Per-Session export with
+  Predicted and Reprojections both OFF and reading every user instance back out
+  of the written `.slp`.
 - `showSlpExportModal()` — single-camera SLP export modal (pick one camera per
   session, export to one file). **Retained but no longer wired to the File menu**
   — its old "Export SLEAP File" item was replaced by "Export SLEAP File Per
@@ -1793,16 +1834,38 @@ SLP all-sessions, JSON labels, points3d H5, reproj H5).
 - `showSlpExportPerSessionModal()` — "Export SLEAP File Per Session": bulk export
   for the **open/active session only**. Lists every assigned-camera view in that
   session with a per-row **Download** checkbox (default ON; only checked rows are
-  exported), camera, target directory, and versioned output filename
-  `<stem>_vN.slp`, with Include options — **Predicted Instances** (checkbox), **Reprojections**
-  (checkbox) emitted as UserInstance/PredictedInstance via a toggle; user labels
-  always included. On Export it **always prompts** for a folder
+  exported — an unchecked row gets `tr.slp-ps-off` and dims), camera, target
+  directory, and versioned output filename
+  `<stem>_vN.slp`, with an **Include** group built by `slpIncludeGroupHtml`
+  (shared with By-Cam): the always-saved user-labels note, then **Predicted
+  Instances** (default on) and **Reprojections** (emitted as
+  UserInstance/PredictedInstance via a sub-toggle that enables with it). On
+  Export it **always prompts** for a folder
   (`window.showDirectoryPicker` — it does not silently reuse a cached
   `state.exportDirHandle`) and writes one 2D `.slp` per camera
   into that camera's associated subdirectory (`state.cameraDirMap[cam] || cam`),
   via `exportSlpClientSide(...)`. Versioned names mean source `.slp` files are
   never overwritten. Falls back to flat `downloadBlob` downloads when the File
   System Access API is unavailable. Esc closes the modal.
+
+  **The filename table is themed** (`.slp-ps-filename`, `.slp-ps-dl`). The output
+  field and the Download checkbox were raw form controls, so they rendered as a
+  white box in a system font and a white square on a dark modal. Both are now
+  drawn from the app's tokens, the field in the monospace stack shared with
+  `.data-table .mono` — real names here run ~67 characters
+  (`cam-<stamp>-0000_h265_CRF30_denoised.mp4.predictions_v1.slp`), and monospace
+  is what lines the `_CRF30` / `_vN` segments up down the column. The modal
+  widened to `min(920px, 94vw)` so those names fit un-elided; it was `min-width:
+  720px`, which beats `max-width` in CSS and so pushed the modal off-screen on a
+  narrow window rather than shrinking. The field elides when unfocused and keeps
+  the full name in `title` (the change handler re-syncs it).
+
+  Row cells are **escaped** on the way into the markup (`esc()`). These rows are
+  built by string concatenation, and camera names / directories / filenames all
+  come from user files: an unescaped `"` in a filename closed the `value="…"`
+  attribute early and the field came back **truncated at the quote** — asserted
+  directly in `tests/e2e/export-include-user-labels.mjs`, which reproduces it
+  against the pre-fix build.
 - `showSlpExportByCamModal()` — "Export SLEAP File By Cam": camera×session grid.
   Each camera column exports across all its selected sessions into one SLEAP
   file; the modal **bulk-exports every included column at once** via
@@ -1822,14 +1885,13 @@ SLP all-sessions, JSON labels, points3d H5, reproj H5).
   explanatory `title`) and excluded from the export — checked set-based /
   order-insensitively via `findSkeletonMismatch` and re-evaluated on every cell
   toggle (`updateDownloadStates`). A red warning under the tables
-  (`#slpByCamSkelWarning`) flags blocked columns. Include options (stacked) —
-  **Save PredictedInstances** (checkbox, default on) and, beneath it, **Save
-  Reprojections** (checkbox, emitted as UserInstance/PredictedInstance via a
-  toggle) — are passed to `exportSlpMultiSession` as an `instanceFilter`
-  (`{user:true, predicted, reprojected}`); user labels are always included. The
-  Save Reprojections row is **disabled unless at least one session has
-  reprojections** (any `InstanceGroup.reprojectedInstances` populated, i.e.
-  triangulation/tracking has run). Download All shows per-file
+  (`#slpByCamSkelWarning`) flags blocked columns. The **Include** group is the
+  shared `slpIncludeGroupHtml` one (the always-saved user-labels note, then
+  **Predicted Instances** / **Reprojections**); its two options become the `instanceFilter`
+  (`{user:true, predicted, reprojected}`) passed to `exportSlpMultiSession`. The
+  Reprojections row is **disabled as a unit** (`.slp-inc-row-disabled`) unless at
+  least one session has reprojections (any `InstanceGroup.reprojectedInstances`
+  populated, i.e. triangulation/tracking has run). Download All shows per-file
   progress; **Esc closes the modal**, or cancels an in-progress export mid-run.
   Columns ordered by session frequency, then within-session name order, then
   session recency for session-unique views.
@@ -2127,6 +2189,35 @@ highlight when the selected tab currently lives inside it.
   `updateTriangulationBadge`.
 - Session: `ensureSession` (seeds new sessions from `buildRememberedSkeleton`).
 
+**Collapsed panel does nothing.** `updateInfoPanel` and `updateFrameInfo` both
+stop early when `isInfoPanelVisible()` (`ui/panel-visibility.js`) is false,
+marking the panel stale so `refreshInfoPanelAfterShow` (`ui-wiring.js`) rebuilds
+it once on re-show. This is not a micro-optimization: `updateFrameInfo` runs on
+every frame (throttled to 10 Hz during playback) and rebuilds the
+per-instance × per-node × per-camera breakdown plus both instance tables with a
+fresh `<select>` per row, and `updateInfoPanel` additionally calls
+`populateVideosTable`, which walks EVERY frame of the session per video row.
+Three things deliberately stay outside the gate:
+- **The status bar**, which is NOT part of `#infoPanel` and is always on
+  screen. `updateFrameInfo`'s tail writes `#statusError` and calls
+  `updateFrameCounters()`, so gating the whole function would silently freeze
+  the bottom bar. Two private helpers split it: `aggregateReprojectionError`
+  (the three summary numbers — arithmetic over values already in
+  `state.triangulationResults`, cheap) runs first and unconditionally, then
+  `updateStatusBarForFrame` runs on both the hidden and the visible path.
+  `updateInfoPanel`'s hidden branch calls `updateFrameInfo` for the same
+  reason. Only the panel's own DOM is skipped.
+- The reprojection **solve** in `ui/rendering.js`'s per-frame fill. The canvas
+  overlays, the 3D viewport and the `.slp` export all read the same
+  `_grp.reprojections` / `reprojectedInstances` it produces, and the fill only
+  fires once per group — skipping it for a hidden panel would blank the canvas
+  markers and permanently starve the panel of numbers it could never recompute.
+  Only the panel's *consumption* of `state.triangulationResults` is skippable.
+- `rememberSkeleton(state.session.skeleton)`, which the gated branch still
+  calls. It is `populateSkeletonTable`'s one non-DOM side effect, and
+  `buildRememberedSkeleton()` feeds `ensureSession` — a skeleton loaded while
+  the panel was hidden must not leave the next new session with a stale one.
+
 **Skeleton persistence.** `populateSkeletonTable` calls `rememberSkeleton` on every
 refresh — the central point after any editor mutation (add/remove node or edge,
 Load Skeleton) or loaded project — so the current non-empty skeleton is cached for
@@ -2141,6 +2232,7 @@ on reload); see `ui/app-state.js`.
 - `./overlays.js` — `REPROJECTION_COLOR`, `getTrackColor`, `getGroupColor`.
 - `./rendering.js` — `drawAllOverlays`, `updateFrameCounters`.
 - `./interaction.js` — `isInteractiveClickTarget`.
+- `./panel-visibility.js` — `isInfoPanelVisible`, `markInfoPanelStale`.
 - `./app-state.js` — `state`, `timeline`, `interactionManager`,
   `rememberSkeleton`, `buildRememberedSkeleton`.
 - `../import-export/save-load.js` — `setStatus`, `markDirty`.
@@ -2275,6 +2367,10 @@ keypoints, double-click to convert predicted → user, shift-drag to add
 to manual-assignment selection, right-click to null/restore nodes,
 keyboard shortcuts (delete, alt-drag clone, etc.).
 
+**`onKeyDown` guards with `shouldIgnoreShortcut`** (`ui/keyboard-target.js`)
+rather than its own `tagName === 'INPUT'` test, so `Delete` / `n` / `c` survive
+a click on a checkbox (issue #163).
+
 **Grouping/ungrouping shortcuts.** `onKeyDown` handles only the legacy `c`
 confirm-group alias (creates a group from a ready ≥2 assignment selection).
 The primary group (`Shift+G`) and ungroup (`Shift+U`) shortcuts are
@@ -2283,6 +2379,80 @@ delegates to that module's `unlinkGroup` (the complete path: data-model
 `Session.unlinkGroup` + triangulation purge + overlay/3D/timeline/info-panel
 refresh). The old incomplete `InteractionManager._unlinkSelectedGroup` helper
 was **removed** (it had no production callers).
+
+---
+
+### ui/keyboard-target.js
+
+**Purpose.** Decide whether a keystroke belongs to the focused control or to the
+app — the single guard every global `keydown` handler calls (issue #163).
+
+The guard used to be one line, copied into ten separate handlers:
+
+```js
+if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' ||
+    e.target.isContentEditable) return;
+```
+
+meaning "don't steal keys from someone who is typing". But `tagName` is `INPUT`
+for a **checkbox** too — and for a radio, a range slider and a file picker. So
+the moment the user clicked the User / Predicted / Reproj / Errors toolbar
+checkbox, that test went true for every keystroke and **every shortcut in the
+app went dead**, not just the one the checkbox wanted. Spacebar toggled the
+checkbox instead of playing the video, and the only cure was to click back onto
+a video pane.
+
+**The two halves of the fix.**
+1. *Ask what the control consumes, not what tag it is.* A text field consumes
+   the whole alphabet, so it blocks everything. A checkbox consumes exactly
+   `Space`; a range slider exactly the arrows and `Home`/`End`; a button `Space`
+   and `Enter`. Everything else stays live, which is also what keeps the app
+   usable from the keyboard: Tab to a checkbox and you can still step frames.
+2. *Give focus back after a POINTER click.* Fixing the guard alone leaves
+   `Space` genuinely ambiguous, because a focused checkbox does own it — so
+   play/pause would stay broken for exactly the interaction the issue describes.
+   `installFocusRelease` blurs an activate-me control once a pointer has
+   activated it, since the click already delivered everything focus was good
+   for. **Keyboard focus is deliberately left alone** (detected via
+   `:focus-visible`): tab to the checkbox, press `Space`, still get a toggle.
+
+**Key exports.**
+- `shouldIgnoreShortcut(e)` — the guard itself: `isTextEntryTarget(e.target) ||
+  targetOwnsKey(e.target, e)`.
+- `isTextEntryTarget(t)` — free-text targets, which block every shortcut:
+  `<textarea>`, `contenteditable`, the text-ish `<input>` types, `role=textbox`
+  /`searchbox`/`combobox`, **and `<select>`** (it uses the arrows, `Enter` and
+  letter typeahead — nearly the whole shortcut alphabet, so treating it like a
+  text field is simpler and safer than enumerating what it keeps). An `<input>`
+  with a missing or unknown type lands here too, because the DOM reports `text`
+  for both and `text` is the safe default.
+- `targetOwnsKey(t, e)` — whether THIS key is the focused control's own. A
+  modifier chord never is, so `Mod+S` still saves while a checkbox has focus.
+- `isTransientFocusControl(t)` / `releaseTransientFocus(el, doc)` /
+  `installFocusRelease(doc)` — the focus-release half. Text fields, selects and
+  sliders are never released: focus there is the beginning of an interaction,
+  not the end of one.
+
+`:focus-visible` rather than `event.detail` is what separates pointer from
+keyboard: a click on a `<label>` forwards a **synthetic** click to its control
+with `detail: 0`, indistinguishable from a keyboard one — and every toolbar
+checkbox in `index.html` is wrapped in a label.
+
+The release listener defers its `blur()` by a turn of the event loop, for two
+reasons: a `<label>` click forwards to its control and focus lands *after* the
+listener runs, and `input`/`change` fire as part of the activation behavior, so
+blurring mid-dispatch would be reaching into someone else's event.
+
+**Imports from project modules.** None — every predicate reads only
+`tagName` / `type` / `role` / `isContentEditable` off its argument, so it
+bridges into both test runners and unit-tests against plain object stubs.
+
+**Imported by.** `ui/ui-wiring.js`, `ui/settings.js`, `ui/interaction.js`,
+`loading/video.js`.
+
+**Tests.** `tests/test-keyboard-target.js` (the predicates, both runners) and
+`tests/e2e/checkbox-focus-hotkeys.mjs` (the real app: click the checkbox, press
+Space, get playback; Tab to it and Space still toggles).
 
 ---
 
@@ -2354,12 +2524,72 @@ info panel, and timeline.
 **Imports from project modules.**
 - `./app-state.js` — `viewport3d`, `timeline`.
 - `./ui-wiring.js` — `syncTimelineToggleButton`,
-  `updateInfoPanelToggleBtn`, `toggleInfoPanel`.
+  `updateInfoPanelToggleBtn`, `toggleInfoPanel`,
+  `update3DViewportToggleBtn`, `toggle3DViewport`.
 
 **Imported by.** `pose/initialization.js`.
 
 **User-facing features.** Drag-to-resize panel boundaries between video
-grid / 3D / info-panel / timeline.
+grid / 3D / info-panel / timeline. Also wires the two toolbar panel-toggle
+buttons (`#infoPanelToggleBtn`, `#viewport3dToggleBtn`) and keeps their labels
+in sync from the `MutationObserver` that watches the 3D container's and info
+wrapper's `class` attributes — so a collapse from any entry point (button, `\`,
+View menu) relabels both buttons, and the initial labels are correct.
+
+---
+
+### ui/modal-geometry.js
+
+**Purpose.** Remembered size and position for resizable modals.
+
+A modal that opens at a fixed 880x620 in the middle of the screen is fine until
+its content is a table of every node in the skeleton. Then the user wants it
+BIGGER, and wants it to stay that way — reopening at the default every time is
+the same work over and over. This gives a modal card a drag handle, a resize
+grip (CSS `resize: both`, so the grip itself is the browser's) and a
+`localStorage` record of where it ended up.
+
+**Key exports.**
+- `clampGeometry(geom, viewport, opts)` — the load-bearing one, and pure. A
+  remembered rect is restored into a viewport that may be nothing like the one
+  it was recorded in (a smaller window; a laptop screen after the external
+  monitor is gone), and applying it blindly is how a modal ends up off-screen
+  with its header — drag handle AND close button — out of reach. Size clamps to
+  `[min, available]` with available winning, position clamps so the whole card
+  is inside, and `opts.margin` keeps a gutter at the edges. Returns `null` for
+  anything unusable, so the caller falls back to centring instead of applying
+  half a rect.
+- `centerGeometry(w, h, viewport, opts)` — first-open placement.
+- `readGeometry(id, storage)` / `writeGeometry(id, geom, storage)` /
+  `clearGeometry(id, storage)` — the `lucid.modalGeometry.v1` record, keyed by
+  modal id so one modal cannot clobber another. Reads are **not** clamped:
+  clamping on the way in would let one small window permanently shrink the
+  remembered size.
+- `installModalGeometry(card, opts)` — restores, wires the header drag, watches
+  the CSS resize via `ResizeObserver`, re-clamps on window resize, and returns a
+  `dispose()` that also flushes the final rect (a resize that ended inside the
+  200 ms persist debounce would otherwise be lost when the modal closes).
+
+**This module is the ONE owner of the card's rect.** `.settings-modal`
+deliberately has no `max-width`/`max-height`, and `apply()` sets both to `none`
+inline: a stylesheet cap alongside the clamp would silently shrink a width the
+clamp thought it had granted, landing the card flush against one edge with a gap
+on the opposite side.
+
+**Geometry is browser-local display taste**, so it lives in `localStorage` and
+NOT in the `.slp` — the same call CLAUDE.md makes for the Visibility panel's
+global appearance preferences. Where someone likes their Settings window on THIS
+screen says nothing about the project. Blocked or full storage degrades to
+"forgets", never to a throw.
+
+**Imports from project modules.** None — `clampGeometry` is a pure function of
+(rect, viewport), so it bridges into both test runners.
+
+**Imported by.** `ui/settings-modal.js`.
+
+**Tests.** `tests/test-modal-geometry.js` (the clamp and the record, both
+runners) and `tests/e2e/settings-modal-geometry.mjs` (the real modal: resize,
+drag, close, reopen).
 
 ---
 
@@ -3015,7 +3245,61 @@ palettes, and per-frame draw routines. Receives `frameGroup` and
   between frame 0 and frame 1 — confirmed it fails pre-fix, showing both
   animals as the identical color on frame 0, and passes post-fix).
 - Geometry: `videoToCanvas`, `makeVideoToCanvasTransform`,
-  `computeLabelOffset`, `getLineDashPattern`.
+  `computeLabelOffset`, `getLineDashPattern`, `resolveLabelDisplayScale`,
+  `uprightLabelRadians`.
+- **`drawLegend` is now an EXPORT-only path.** The live app no longer paints a
+  legend onto the overlay canvas — `ui/rendering.js` passes `showLegend: false`
+  and the key is DOM chrome in the pane instead (`ui/view-legend.js`), because
+  anything on this canvas rotates with the view and is anchored to the video box
+  rather than the pane. `drawFrameOverlays` keeps the `showLegend` option, and
+  `drawLegend` itself is unchanged, for the overlay-video export, which must
+  burn the legend into encoded frames where there is no DOM.
+- **Labels stay upright when the view is rotated** (issue #162).
+  `options.labelRotation` (DEGREES, threaded through `drawFrameOverlays`'s
+  `geoOpts` from `ui/rendering.js`) reaches `drawSkeleton`,
+  `drawInstanceLabels` and `drawUnlinkedInstances`, and drives two things:
+  - `uprightLabelRadians(options)` -> the module-private `beginUprightFrame`,
+    which pushes a SCREEN-aligned canvas frame around the anchor so the glyphs
+    cancel the view's rotation. A view is rotated by a CSS transform on the
+    whole `.canvas-wrapper` (`applyZoom`), which the overlay canvas's own
+    drawing transform knows nothing about, so every glyph rotated with the
+    video — past ~45 degrees unreadable, at 180 upside down. The video and the
+    skeleton must STAY rotated (the skeleton is pinned to the animal), so
+    cancelling per label is the only option. Covers node names, the
+    track/identity pill (`drawNamePill` — plate AND text, or the text would
+    hang outside its own backing) and the unlinked "?" badge.
+  - `computeLabelOffset`'s new 7th argument, which carries the largest-gap
+    bisector into SCREEN space before the SLEAP shift factors size the label
+    box against it. Without it each label would keep pointing at the gap it had
+    at rotation 0 — i.e. into the skeleton at most angles.
+  `beginUprightFrame` touches the transform ONLY when there is a rotation to
+  cancel (call sites pair it with `uprightOriginX`/`uprightOriginY` for the two
+  coordinate bases), so an unrotated view — every export path, and the common
+  case in the app — draws through exactly the coordinates and canvas state it
+  did before. Covered by `tests/test-labels.js` ("Labels - stay upright when
+  the view is rotated", whose two halves are pinned independently) and end to
+  end by `tests/e2e/label-upright-on-rotation.mjs`.
+- **Label sizing is screen-relative, and rotation-independent.**
+  `resolveLabelDisplayScale(ctx, canvasWidth, options)` answers "backing-store
+  pixels per on-screen CSS pixel", and `drawSkeleton` /
+  `drawInstanceLabels` / `drawUnlinkedInstances` each multiply their
+  `options.labelSize` by it. Node markers and edges are deliberately NOT scaled
+  this way — they are video-relative so they stay pinned to the animal — but a
+  name is chrome and has to hold a fixed point size at any zoom.
+  It prefers `options.labelDisplayScale`, which `drawFrameOverlays` threads
+  through `geoOpts` to all three and `ui/rendering.js` computes from the
+  canvas's LAYOUT width times the zoom scale. The fallback, for callers with no
+  view geometry (the export modals), is the old
+  `canvasWidth / getBoundingClientRect().width`, which is correct only while the
+  canvas carries no rotation: a rect is the AXIS-ALIGNED BOUNDING BOX of the
+  transformed element, so a rotated view reports a box wider (or, at 90°/270°,
+  narrower) than the canvas really is and every label was sized off by that
+  factor — visibly shrinking at 45° and GROWING at 90°. Covered by
+  `tests/test-labels.js` ("Labels - size is independent of zoom and rotation")
+  and end to end by `tests/e2e/label-size-rotation-invariant.mjs`, which drives
+  `drawAllOverlays` over a real wrapper carrying `applyZoom`'s transform at
+  seven angles and three zoom levels (confirmed failing pre-fix, 19px at 45°
+  and 32px at 90° against a correct 24px).
 - Skeleton drawing: `drawSkeleton`, `drawReprojectedSkeleton`,
   `drawReprojectionErrors`, `drawSelectionHighlight`,
   `drawHoverHighlight`, `drawDragPreview`, `drawInstanceLabels`,
@@ -3228,7 +3512,27 @@ data sources. Plus visibility-toggle helpers and frame counter updates.
   for direct callers; the user-facing default comes from here.)
 - `drawAllOverlays(frameIdx)` — main per-frame redraw across every view. Threads
   `state.colorByIdentity` and `state.trailLength` (node-trail length, issue #102)
-  into each `drawFrameOverlays` call. **Playback throttle (issue #115):** the
+  into each `drawFrameOverlays` call. It also computes the per-view
+  **`labelDisplayScale`** (backing-store px per on-screen CSS px) that
+  `overlays.js` sizes node/track labels with: `overlayCanvas.offsetWidth` — the
+  LAYOUT width, which no CSS transform touches — times `view.zoom.scale`, which
+  must stay in because the backing store was just grown by the same factor a few
+  lines above. Deliberately **not** `getBoundingClientRect()`: `applyZoom`
+  rotates the whole `.canvas-wrapper`, and a rect is the transformed element's
+  axis-aligned bounding box, so measuring there made labels shrink at 45° and
+  grow at 90°. See `ui/overlays.js` ▸ `resolveLabelDisplayScale`.
+  It passes **`labelRotation`** alongside it — `Math.round(view.rotation)`, the
+  angle labels cancel so they read horizontally (issue #162). Rounded because
+  the Shift+R+Arrow chord advances `view.rotation` fractionally every animation
+  frame while the repaint that keeps labels upright is triggered off this same
+  rounded value changing (`ui/ui-wiring.js`), so drawing the rounded angle is
+  what makes the two agree; the residual is under half a degree.
+  It passes **`showLegend: false`** unconditionally and calls
+  **`syncViewLegends`** (`ui/view-legend.js`) after the per-view loop instead:
+  the Display Legend key is pane DOM now, outside the rotating
+  `.canvas-wrapper`, so it stays upright and anchored to the VIEW rather than to
+  the video box. Driving it from here means it inherits the overlays' triggers,
+  including the Visibility checkbox handler that already ends in a redraw. **Playback throttle (issue #115):** the
   skeleton overlays + video redraw every frame, but the two *auxiliary* updates —
   `updateFrameInfo` (info-panel DOM + reproj-error aggregation) and
   `timeline.setCurrentFrame` (a full timeline-canvas `redraw()`) — are coalesced
@@ -3261,6 +3565,15 @@ data sources. Plus visibility-toggle helpers and frame counter updates.
   (the group already holds the authoritative 3D from the sweep); with the method
   honored the two are bit-identical, which
   `tests/e2e/triangulate-all-ba-display.mjs` asserts directly.
+
+  This fill stays **outside** the collapsed-info-panel gate (see
+  `ui/panel-visibility.js`). It is shared, not panel-only: the canvas
+  reprojection markers, the 3D viewport and the `.slp` export all read the
+  `_grp.reprojections` / `reprojectedInstances` it produces, and it fires only
+  once per group — skipping it for a hidden panel would blank the canvas AND
+  permanently deny the panel numbers it could never recompute. The gate lives
+  one level down, in `updateFrameInfo` itself, which is where the panel
+  *consumes* `state.triangulationResults`.
 - `updateFrameCounters()` — updates status-bar frame counters.
 
 **Imports from project modules.**
@@ -3544,7 +3857,8 @@ handler elsewhere and listed for reference only.
   its effective binding (single-chord only; for external owners like
   `timeline-controller`).
 - `dispatchEvent(e)` — resolve a `KeyboardEvent` to a dispatched action and run
-  its handler (skips when typing in inputs); returns `true` if handled. Supports
+  its handler (skipped when `shouldIgnoreShortcut(e)` says the key belongs to
+  the focused control); returns `true` if handled. Supports
   **multi-key sequence** bindings (chords separated by spaces, e.g. `"g t"`) via a
   rolling keystroke buffer with a 1.2 s gap reset; single-chord bindings fire
   immediately, the longest matching sequence wins (ties → catalog order). A
@@ -3557,7 +3871,9 @@ handler elsewhere and listed for reference only.
   `navigator.platform`), so the Hot Keys modal and Settings panel show the
   device-appropriate modifier.
 
-**Imports from project modules.** None.
+**Imports from project modules.** `ui/keyboard-target.js` (the focus guard
+`dispatchEvent` applies). That module imports nothing itself, so this one stays
+bridgeable.
 
 **Imported by.** `ui/ui-wiring.js`, `ui/identity-assignment.js`,
 `ui/settings-modal.js`, `pose/tracker.js`.
@@ -3565,6 +3881,30 @@ handler elsewhere and listed for reference only.
 ---
 
 ### ui/settings-modal.js
+
+**Resizable, draggable, and it remembers.** The card carries CSS `resize: both`
+and is dragged by its header (minus the ×, via `noDragSelector` — dragging from
+a button that is about to be clicked would be a trap); `installModalGeometry`
+(`ui/modal-geometry.js`, id `settings`) restores the last size/position on open
+and records the new one on close. It is installed AFTER the overlay is appended,
+because with nothing remembered the card is centred at whatever size the
+stylesheet gave it, which can only be measured once it is laid out.
+
+**The wizard's tables grow; they do not scroll.** Node Weights and Camera Views
+used to be 240px boxes with their own `overflow-y: auto` — a scrollbar inside
+`.settings-panel-container`'s scrollbar, so the wheel did different things a few
+pixels apart and rows past the cap were invisible with no hint that the window
+could be made taller, because it could not. Each of the three wizard sections is
+now a `<details>` built by `buildSection(title, count)`, and the tables render
+every row. `.settings-panel-container` is the ONE scroller in the card. Widening
+the (now resizable) modal reflows the `auto-fill minmax(220px, 1fr)` grid into
+more columns, which is what actually makes a long skeleton fit; folding a
+section away is what keeps the rest of the wizard reachable. See the
+no-scroll-within-scroll convention in CLAUDE.md.
+
+`<details>`/`<summary>` rather than a hand-rolled div + click handler, so the
+disclosure is keyboard-operable and screen-reader-labelled for free — and
+`ui/keyboard-target.js` already knows a `SUMMARY` owns Space/Enter.
 
 **Purpose.** Builds and shows the "Settings" modal (opened from Help ▸
 Settings). Wizard-style layout: a left nav (`settings-nav`) of categories and a
@@ -3574,8 +3914,9 @@ right panel area (`settings-panel-container`), with a Cancel / Apply footer.
 - `showSettingsModal(initialPanel)` — `initialPanel` ∈ `'triangulation'` |
   `'keyboard'` | `'wizard'` (default `'triangulation'`). Single-instance.
 
-**Behavior.** Three panels: **Default Triangulation** (single-select DLT/BA
-radio rows, initialized from `getDefaultTriangulationMethod()`), **Keyboard
+**Behavior.** Three panels: **Default Triangulation** (single-select DLT /
+Refined radio rows — the `'ba'` method is labelled "Refined (Ref)" — initialized
+from `getDefaultTriangulationMethod()`), **Keyboard
 Shortcuts** (the full `getActions()` catalog grouped by category — editable
 entries get a click-to-capture key chip that records a **chord or a multi-key
 sequence**: keep pressing keys (the primary Ctrl/Cmd modifier is normalized to
@@ -4061,6 +4402,67 @@ covered by `tests/test-track-identity-modals.js`; the lazy/durable half of
 
 ---
 
+### ui/view-legend.js
+
+**Purpose.** The Visibility panel's **Display Legend** key, as DOM chrome in
+each video pane rather than pixels painted onto the overlay canvas (issue #162
+follow-up).
+
+The legend was drawn by `drawLegend` (`ui/overlays.js`) into the overlay
+canvas's top-right corner. That put it inside `.canvas-wrapper` — the element
+`applyZoom` rotates — with three consequences: it tipped over with the video
+(upside down in what was now the bottom-left at 180°); "top-right" meant the
+top-right of the VIDEO, so a letterboxed pane pushed it inside the picture with
+empty bar beside it; and a fixed 310 CANVAS px is a different number of SCREEN
+px per camera resolution, so two views disagreed on its size. Appending it to
+the `.video-cell` as a SIBLING of the wrapper fixes all three structurally —
+nothing outside the wrapper can be reached by a view transform — and gets
+crisper text for free (the canvas version rendered at 2x on an offscreen canvas
+to compensate).
+
+**Key exports.**
+- `syncViewLegends(showLegend, opts)` — brings every view's pane into line with
+  the current visibility state. Called from `drawAllOverlays`, so it inherits
+  the overlays' triggers exactly; the Display Legend checkbox handler already
+  ends in a redraw, so the toggle needed no extra wiring. Rebuilds a pane's rows
+  only when the row SET changed (`dataset.legendKey`): this runs on every frame
+  of playback, and replacing the DOM 30 times a second for an unchanging
+  three-row key would be pure churn.
+- `legendItems(opts)` — the rows, in order. Mirrors `drawLegend`'s item list
+  exactly (same rows, same order, same conditions) so the live legend and the
+  exported one cannot disagree.
+
+Swatches are inline SVG built from the same `TRACK_COLORS` / `REPROJECTION_COLOR`
+constants the overlays draw with, so the key cannot drift from what it keys.
+`pointer-events: none` is load-bearing — the overlay canvas underneath is the
+click target for annotation, and the legend sits over its top-right corner.
+
+**`drawLegend` is kept and unchanged.** The overlay-video export has to burn the
+legend into encoded frames, where there is no DOM; that path (`drawTileContent`,
+`ui/overlay-export-modal.js`) already hoisted it out of the view transform for
+the same upright-ness reason, so the two agree on what a legend IS and differ
+only in where it can live.
+
+**Styling.** `.view-legend` / `.view-legend-row` / `.view-legend-icon` in
+`styles.css`, anchored `top:8px; right:8px` on the `.video-cell`. Three things
+want that corner: the legend, the `.unzoom-btn` (only while zoomed) and
+`#viewModeIndicator` (only in single-view mode, and on `#videoDock` rather than
+the pane). Each of the latter two pushes the legend down one slot and both
+together push it two, via `.video-cell.zoomed` and the
+`#videoDock.has-view-indicator` class that `showViewIndicator` toggles.
+
+**Imports.** `ui/app-state.js` (`state`), `ui/overlays.js` (the two color
+constants).
+
+**Imported by.** `ui/rendering.js`.
+
+**Tests.** `tests/e2e/view-legend-pane-chrome.mjs` — asserts it is outside
+`.canvas-wrapper`, upright and fixed to the pane corner at five rotations,
+identically sized across a 1920x1080 and a 640x480 view, absent from the canvas
+paint, and that `drawLegend` still works for the export.
+
+---
+
 ### ui/video-filters.js
 
 **Purpose.** Per-CAMERA video display settings — brightness, contrast (issue
@@ -4212,13 +4614,66 @@ stopping at the last frame; the step transport buttons/keys stop it first.
   (coordinates + per-node visibility are).
 - Seekbar: `updateSeekbar`, `updateSeekbarVisual`,
   `onPlaybackStateChange`.
-- Toggles: `toggleInfoPanel`, `updateInfoPanelToggleBtn`,
-  `toggle3DViewport`, `toggleTimeline`, `syncTimelineToggleButton`,
-  `fitTimelineToData`.
+- Toggles: `toggleInfoPanel`, `refreshInfoPanelAfterShow`,
+  `updateInfoPanelToggleBtn`, `toggle3DViewport`,
+  `update3DViewportToggleBtn`, `lockPanelToggleWidths`, `toggleTimeline`,
+  `syncTimelineToggleButton`, `fitTimelineToData`.
 - View modes: `enterSingleViewMode`, `cycleSingleView`, `setSoloView`,
   `setGridMode`, `updateVideoGridDisplay`, `showViewIndicator`. See
   **Single-view ("solo") mode** below.
 - Playback: `applyPlaybackRate`, `seekToLabeledFrame`.
+
+**Panel toggles: independent sizing, and hidden means idle.** `toggleInfoPanel`
+(`I`) and `toggle3DViewport` (`\`) each only flip their own panel's `collapsed`
+class. **Neither resizes the other** — `.video-grid-section` is the only
+`flex: 1` child of `.main-content`, so it absorbs and releases the space on its
+own. `toggleInfoPanel` used to hand the freed width to the 3D viewport as an
+inline `style.width`, plus a temporary `flex` lock on the video grid to stop it
+taking the space, and that produced two bugs: an inline width **outranks**
+`.collapsed { width: 0 }`, so hiding the info panel while the 3D viewport was
+collapsed **re-opened the hidden viewport** at ~300px in the space the panel had
+just vacated; and writing a pixel width to a `width`-transitioned element while
+the flex lock let go on the other side made the 3D viewport jitter on every
+info-panel toggle. Both toggles therefore now *park* any inline width before
+adding `collapsed` and restore it after removing it (`_savedWidth` on
+`#viewport3dContainer`, `_savedWidth`/`_savedMinWidth` on `#infoPanel` — the
+split handles write inline widths there, which would defeat the collapse the
+same way).
+
+Each toggle also drives the work, not just the pixels — see
+`ui/panel-visibility.js`. Hiding the 3D viewport calls
+`Viewport3D.setVisible(false)` (render loop stopped, scene rebuilds deferred)
+and lets `update3DViewport` skip out; showing it calls `setVisible(true)` then
+`update3DViewport(state.currentFrame)`, which also auto-inits the viewport if a
+session load released it while collapsed. Showing the info panel calls
+`refreshInfoPanelAfterShow`, which rebuilds it **only if** a refresh was
+actually skipped (`consumeInfoPanelStale`). Covered by
+`tests/e2e/panel-toggle-independence.mjs`.
+
+**Toolbar toggle buttons (issue #151).** Both panels have a labelled button at
+the far right of the toolbar, `#viewport3dToggleBtn` ("Hide/Show 3D View") to
+the left of `#infoPanelToggleBtn` ("Hide/Show Panel"), grouped in
+`.toolbar-group.panel-toggles` and outlined (`.panel-toggle-btn`) so they read
+as layout controls rather than as more annotation actions. Previously the 3D
+viewport could only be collapsed from `\` or View ▸ Toggle 3D Viewport, neither
+of which is discoverable. `update3DViewportToggleBtn` /
+`updateInfoPanelToggleBtn` derive each label from the container's `collapsed`
+class rather than from whoever did the toggling, so all three entry points stay
+in sync; both are called from the toggle itself **and** from the
+`MutationObserver` in `ui/layout-controls.js` that already watches those two
+containers' class attributes (which is also what sets the initial labels). Both
+labels for both buttons live in one `PANEL_TOGGLE_BUTTONS` table, which is also
+what `lockPanelToggleWidths` measures.
+
+`lockPanelToggleWidths` (called once from `setupSplitHandles`) pins each button
+to the width of its own **wider** label, because "Hide" and "Show" are not the
+same width in the toolbar's proportional system font: unpinned, the 3D toggle
+measured 90.5px as "Hide 3D View" and 95.8px as "Show 3D View", and since the
+pair is right-aligned, the 5.3px growth on a label swap also shoved the button
+to its left sideways on every toggle. The width is measured from the real
+labels rather than hardcoded, so it stays correct if a label, the font size or
+the button padding changes; the app ships only system fonts, so there is no
+late web-font reflow to re-measure for.
 
 **Single-view ("solo") mode.** `v` (`singleViewMode`) calls
 `enterSingleViewMode`, which caches the dockview grid layout
@@ -4280,6 +4735,30 @@ on keyup**: `setSessionRotation` stores the rounded degree, `view.rotation`
 snaps onto exactly that value (so what renders after the gesture is what a
 reopen will render), and `markDirty()` fires. Persisting per animation frame
 would be 60 Hz of churn on project state.
+
+`redrawForRotationDegree(view)` repaints the overlays when — and only when —
+`Math.round(view.rotation)` changes, tracked in `_rotState.drawnDeg` (null
+starts a gesture, forcing the first paint; keyup clears it so the final,
+snapped angle always repaints). Before issue #162 the loop deliberately
+repainted NOTHING and waited for keyup, which was right while labels rotated
+with the video; now that they cancel the view's rotation, a gesture with no
+repaint would leave every label spinning until the key came up. Whole degrees
+rather than frames because that is the granularity labels are drawn at
+(`ui/rendering.js` passes `Math.round(view.rotation)`), so a skipped repaint
+could not have changed a label's angle — and it is what keeps this off an
+unconditional per-animation-frame redraw of every view.
+
+The chord's "don't also step frames" guard sits **before** the `hasRealVideo()`
+branch in the arrow-key handler. It used to sit after that branch's `return`,
+so on a project with no decoder (skeleton + imported 3D points) every arrow
+press of the chord both rotated the view and advanced the frame.
+
+`showViewIndicator` additionally toggles **`has-view-indicator`** on
+`#videoDock`. Its chip is absolutely positioned at the dock's top-right, which
+in single-view mode — the only mode it appears in — is exactly where the sole
+pane's Display Legend key wants to sit; the class is what makes the legend step
+down a slot instead of hiding under it (styles.css). Removed on every path that
+hides the chip, or the legend would sit low in grid mode forever.
 
 **Imports from project modules.** Nearly every other module — see file
 header for the full list. Notable ones: `app-state.js`,
@@ -4399,6 +4878,16 @@ confirm-group alias (`groupConfirmLegacy`, canvas-context ops in
 `interaction.js`), and `Mod+J`/`Mod+Shift+J` (timeline-controller).
 `Enter`/`Escape` remain hard-coded modal-button special cases.
 
+**One focus guard, not ten copies.** All seven `keydown` listeners here (and the
+ones in `ui/settings.js`, `ui/interaction.js` and `loading/video.js`) now ask
+`shouldIgnoreShortcut(e)` from `ui/keyboard-target.js` instead of each testing
+`e.target.tagName === 'INPUT'` — a test that was also true for a CHECKBOX, so
+clicking a toolbar checkbox killed every shortcut in the app (issue #163).
+`setupUI` additionally calls `installFocusRelease(document)` first thing, which
+hands focus back after a POINTER activates a checkbox, radio or button so the
+key they share with a shortcut goes to the shortcut. Keyboard focus is left
+alone, so tabbing to a checkbox and pressing `Space` still toggles it.
+
 **Block 2 (Prompt 4) visibility wiring + rename migration.** Every
 track-add / track-rename / track-delete / identity-add / identity-rename /
 identity-delete handler that already calls `timeline.refreshTracks` now
@@ -4426,7 +4915,29 @@ via the options bag.
   `setSelectedInstance`, `setEnvironment`, `clearEnvironment`,
   `addCameraPyramids`, `selectCamera`, `showSelectedCameraView`,
   `showInitialView`, `setMissingVideoCameras`, `highlightCamera`,
-  `resize`, `resetCamera`, `lookAtOrigin`, `fitToScene`, `dispose`.
+  `resize`, `resetCamera`, `lookAtOrigin`, `fitToScene`,
+  `setVisible(visible)` / `isVisible()`, `dispose`.
+- **`setVisible(false)` stops ALL processing** (the `\` toggle's other half —
+  see `ui/panel-visibility.js`). A collapsed container is still a perfectly
+  good render target as far as WebGL is concerned, so the `_animate()` loop
+  used to render the whole scene ~60x/second into pixels nobody composites.
+  Hiding cancels `_rafId` (and the camera fly-in's separate rAF loop, which
+  renders directly and would otherwise keep drawing) and routes every scene
+  rebuild — `setFrame`/`setSelectedInstance`, `addCameraPyramids`,
+  `setEnvironment`/`clearEnvironment`, `highlightCamera`, `fitToScene` — into
+  `_deferred`, a Map of at most one thunk per `DEFER_REPLAY_ORDER` key, so
+  scrubbing 10,000 frames while hidden leaves ONE pending `'frame'` rebuild
+  rather than 10,000. Nothing is disposed, so the scene graph, the WebGL
+  context and the user's orbit pose survive and re-showing is instant.
+  `setVisible(true)` replays the deferred thunks in `DEFER_REPLAY_ORDER`
+  (geometry first, then what reads it back: `'highlight'` needs
+  `addCameraPyramids`' meshes, `'fit'` needs `setFrame`'s skeleton), then
+  resizes — the container was 0x0 while collapsed, so every `resize()` in that
+  window early-returned. `setEnvironment` is the one deferral that captures
+  `this.skeleton` explicitly: callers set an env-specific skeleton, call in,
+  and restore the normal one on the next line. `visible` is a per-instance
+  constructor option (default `true`) rather than a DOM read, because the two
+  export-modal instances must keep rendering regardless of the main panel.
 - Constructor options `skeletonNodeShape` (`'circle'` sphere / `'square'` cube /
   `'triangle'` tetrahedron / `'x'` crossed bars — `updateSkeleton` builds the
   matching node geometry) and `preserveDrawingBuffer` (keeps the WebGL buffer
@@ -4447,6 +4958,62 @@ Otherwise uses the global `THREE` from CDN script tags.
 **User-facing features.** 3D viewport panel — orbit camera, click camera
 frustum to fly to that view, "Show Initial View" reset, environment
 overlay (skeleton meshes around tracks).
+
+**Coverage.** `tests/e2e/panel-toggle-independence.mjs` pins the pause: it
+wraps `renderer.render` and asserts ZERO draws across four frame steps with
+the panel collapsed, then asserts the scene resyncs to the CURRENT frame (not
+the one it was hidden on) when re-shown. `_rafId === 0` alone is not a
+sufficient assertion — the loop is stopped by two independent mechanisms and
+either one on its own zeroes the handle.
+
+---
+
+### ui/panel-visibility.js
+
+**Purpose.** The single answer to "is the 3D viewport / info panel actually on
+screen?", plus the deferred-refresh bookkeeping that makes skipping work while
+hidden safe. Both collapsible right-hand panels used to be pure CSS —
+`toggle3DViewport` / `toggleInfoPanel` flipped a `collapsed` class and no code
+doing 3D rendering or panel population ever learned about it — so a hidden 3D
+viewport kept rendering at full frame rate and a hidden info panel kept
+rebuilding its instance / reprojection-error tables on every frame. Hiding a
+panel is how the user asks for that work to stop, so the collapse state has to
+be readable by the code doing it.
+
+**Key exports.**
+- `isViewport3DVisible()` / `isInfoPanelVisible()` — read `#viewport3dContainer`
+  / `#infoPanelWrapper`. The **DOM is the source of truth** (no mirrored
+  boolean to drift from the class the CSS reacts to). A `collapsed` class, or
+  `display:none` (the 3D container's Three.js-init-failure state), means
+  hidden. A **missing element means visible**: the unit-test runner has no app
+  chrome, and silently skipping every refresh there would turn these gates
+  into invisible test failures.
+- `markInfoPanelStale()` / `consumeInfoPanelStale()` — read-and-clear flag.
+  Every info-panel populate function is a stateless full rebuild from current
+  `state`, so one call on re-show catches up on any number of skipped ones;
+  the flag exists so re-showing a panel that never went stale doesn't pay for
+  a redundant rebuild (`populateVideosTable` walks every frame of the session).
+- `markViewport3DSkipped()`, `skipped` (`{ infoPanel, viewport3d }` counters,
+  also on `window.__lucidPanelVis`) — diagnostics. A visibility gate that
+  looks right and still does the work has no visual signature at all, so the
+  counters are what `tests/e2e/panel-toggle-independence.mjs` reads.
+
+**Imports from project modules.** **None — this is a leaf module by design.**
+`ui/info-panel.js`, `ui/ui-wiring.js` and `pose/initialization.js` all need to
+ask it, and several of those already import each other, so any import here
+would close a cycle.
+
+**Imported by.** `ui/info-panel.js` (gates `updateInfoPanel` /
+`updateFrameInfo`), `ui/ui-wiring.js` (`refreshInfoPanelAfterShow`),
+`pose/initialization.js` (gates `update3DViewport` and `setup3DViewport`).
+
+**Note.** `ui/viewport3d.js` deliberately does NOT import this — it takes a
+per-instance `visible` flag instead, because the export modals mount their own
+`Viewport3D` instances that must render regardless of the main panel's state.
+
+**User-facing features.** Hiding the 3D viewport (`\`) or info panel (`I`)
+actually stops the corresponding rendering / data work instead of only hiding
+its output.
 
 ---
 
@@ -5252,8 +5819,10 @@ a zoomed-in image keeps the same region centered instead of jumping.
   `zoomVideo`, `resetZoom`, `zoomToRect`, `zoomAllVideos`,
   `resetAllZoom`, `setupZoomHandlers`.
 
-**Imports from project modules.** None (uses the global `MP4Box` from
-script tag).
+**Imports from project modules.** `ui/keyboard-target.js` only — the
+`shouldIgnoreShortcut` guard its `setupKeyboardHandlers` keydown listener
+applies (issue #163); that module imports nothing itself. Otherwise none (uses
+the global `MP4Box` from script tag).
 
 **Imported by.** `pose/initialization.js`, `import-export/save-load.js`,
 `import-export/slp-import.js`, `loading/session-loader.js`,

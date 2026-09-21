@@ -33,6 +33,7 @@ import { updateInfoPanel, updateFrameInfo, updateTriangulationBadge,
          setupPanelTabs, setupSkeletonEditing, exportSkeletonJSON,
          ensureSession, populateSessionAssignTable, populateUnassignedVideos,
          populateTimelineVisibility } from './info-panel.js';
+import { consumeInfoPanelStale } from './panel-visibility.js';
 // Block 2 (Prompt 4): rename migration for the per-session hidden-track
 // / hidden-identity Sets when the user renames an entity.
 import { renameHiddenTrack, renameHiddenIdentity } from './timeline-visibility.js';
@@ -50,6 +51,7 @@ import { trackCurrentFrame, trackAll, findMatchForSelected } from '../pose/track
 import { triangulateCurrentFrame, triangulateAllFrames } from '../pose/triangulation.js';
 // User settings: default triangulation method + editable keyboard bindings.
 import { getDefaultTriangulationMethod, setHandler, dispatchEvent, getActions, formatBinding } from './settings.js';
+import { shouldIgnoreShortcut, installFocusRelease } from './keyboard-target.js';
 import { showSettingsModal } from './settings-modal.js';
 // Pass 3i-3: addNewInstanceSmart and update3DViewport moved to pose/initialization.js.
 import { addNewInstanceSmart, update3DViewport, navigateToFrame } from '../pose/initialization.js';
@@ -1590,6 +1592,15 @@ function pasteInstance() {
 }
 
 export function setupUI() {
+    // Hand focus back to the document after a POINTER activates a checkbox,
+    // radio or button, so the key it shares with a shortcut goes to the
+    // shortcut. Clicking the User checkbox used to leave it focused, which made
+    // spacebar toggle it instead of playing the video and — because every
+    // keydown guard read `tagName === 'INPUT'` — killed every other shortcut
+    // too (issue #163). Keyboard focus is left alone: Tab to the checkbox and
+    // Space still toggles it.
+    installFocusRelease(document);
+
     // Transport controls
     document.getElementById('btnFirst').addEventListener('click', function () { if (!hasRealVideo()) stopNoVideoPlayback(); navigateToFrame(0); });
     document.getElementById('btnPrev').addEventListener('click', function () { if (!hasRealVideo()) stopNoVideoPlayback(); navigateToFrame(state.currentFrame - 1); });
@@ -1676,7 +1687,7 @@ export function setupUI() {
     // Enter key dismisses any visible dismiss button
     document.addEventListener('keydown', function (e) {
         if (e.key !== 'Enter') return;
-        if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable) return;
+        if (shouldIgnoreShortcut(e)) return;
         var btn = document.querySelector('button[data-dismiss]:not([style*="display:none"])');
         if (btn && btn.offsetParent !== null) {
             e.preventDefault();
@@ -1685,11 +1696,11 @@ export function setupUI() {
     });
 
     // --- Video Rotation (Shift + R + Arrow chord) ---
-    var _rotState = { active: false, direction: 0, lastTime: 0, rafId: 0, view: null };
+    var _rotState = { active: false, direction: 0, lastTime: 0, rafId: 0, view: null, drawnDeg: null };
     var _rKeyDown = false; // tracks the `R` modifier for the rotation chord
 
     document.addEventListener('keydown', function (e) {
-        if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable) return;
+        if (shouldIgnoreShortcut(e)) return;
         if (e.code === 'KeyR') _rKeyDown = true;
     });
     document.addEventListener('keyup', function (e) {
@@ -1709,6 +1720,19 @@ export function setupUI() {
         return null;
     }
 
+    /**
+     * Redraw the overlays if this gesture has crossed into a new whole degree.
+     * `_rotState.drawnDeg` is what the labels on screen were last drawn for;
+     * null means "nothing drawn yet this gesture", so the first call always
+     * paints.
+     */
+    function redrawForRotationDegree(view) {
+        var deg = Math.round(view.rotation || 0);
+        if (_rotState.drawnDeg === deg) return;
+        _rotState.drawnDeg = deg;
+        drawAllOverlays(state.currentFrame);
+    }
+
     function rotationLoop(now) {
         if (!_rotState.active) return;
         var view = getActiveView();
@@ -1721,14 +1745,22 @@ export function setupUI() {
         // handler below.
         view.rotation = clampRotation((view.rotation || 0) + degrees);
         _rotState.lastTime = now;
-        // Only update the CSS transform — don't redraw overlays during animation
+        // The CSS transform is the cheap part and gets every frame, so the video
+        // stays smooth. The overlays cost a full redraw, so they are spent only
+        // when the WHOLE DEGREE changes — which is the granularity labels are
+        // drawn at (`Math.round(view.rotation)` in ui/rendering.js), so a skipped
+        // redraw could not have changed a label's angle anyway. Before issue
+        // #162 this loop redrew nothing at all and waited for keyup; it has to
+        // repaint now, or the labels would spin with the video for the whole
+        // gesture and only snap upright when the key came up.
         if (videoController) videoController.applyZoom(view);
         syncRotationUI(view);
+        redrawForRotationDegree(view);
         _rotState.rafId = requestAnimationFrame(rotationLoop);
     }
 
     document.addEventListener('keydown', function (e) {
-        if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable) return;
+        if (shouldIgnoreShortcut(e)) return;
         if (e.shiftKey && _rKeyDown && !e.ctrlKey && !e.metaKey && !e.altKey &&
             (e.key === 'ArrowRight' || e.key === 'ArrowLeft')) {
             e.preventDefault();
@@ -1739,6 +1771,8 @@ export function setupUI() {
                 view.rotation = clampRotation((view.rotation || 0) + dir);
                 if (videoController) videoController.applyZoom(view);
                 syncRotationUI(view);
+                _rotState.drawnDeg = null;   // new gesture: force the first paint
+                redrawForRotationDegree(view);
                 _rotState.active = true;
                 _rotState.direction = dir;
                 _rotState.lastTime = performance.now();
@@ -1770,13 +1804,26 @@ export function setupUI() {
                 syncRotationUI(rotated);
                 markDirty();
             }
-            // Redraw overlays once at the final rotation angle
+            // Redraw overlays once at the final rotation angle. Unconditional,
+            // not via `redrawForRotationDegree`: keyup SNAPS `view.rotation`
+            // off its fractional animation value onto the integer the session
+            // stored, and that integer is usually the one already drawn — but
+            // the frame may have advanced, or the snap may have moved the angle
+            // by up to half a degree, so this is the one paint that must not be
+            // skipped.
+            _rotState.drawnDeg = null;
             drawAllOverlays(state.currentFrame);
         }
     });
 
     document.addEventListener('keydown', function (e) {
-        if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable) return;
+        if (shouldIgnoreShortcut(e)) return;
+        // Shift+R+Arrow is the rotation chord — don't also step frames. Checked
+        // BEFORE the video-less branch below, not just inside the real-video
+        // one: this guard used to sit after that branch's `return`, so on a
+        // project with no decoder (skeleton + imported 3D points) every arrow
+        // press of the chord both rotated the view AND advanced the frame.
+        if (e.shiftKey && _rKeyDown) return;
         if (!hasRealVideo()) {
             // Video-less project (skeleton + imported 3D points): support frame
             // stepping + play/pause over the points3d duration even though
@@ -1790,8 +1837,6 @@ export function setupUI() {
             }
             return;
         }
-        // Shift+R+Arrow is the rotation chord — don't also step frames.
-        if (e.shiftKey && _rKeyDown) return;
 
         switch (e.key) {
             case 'ArrowRight':
@@ -1846,7 +1891,7 @@ export function setupUI() {
 
     // --- Identity & Track hotkeys ---
     document.addEventListener('keydown', function (e) {
-        if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+        if (shouldIgnoreShortcut(e)) return;
 
         // Identity assignment: 1-9 (no modifier) — works on groups AND unlinked
         if (!e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey && e.key >= '1' && e.key <= '9') {
@@ -1949,7 +1994,7 @@ export function setupUI() {
     // dispatcher preventDefault()s every binding it matches, which would swallow
     // the arrow keys app-wide including in grid mode, where they are unbound.
     document.addEventListener('keydown', function (e) {
-        if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable) return;
+        if (shouldIgnoreShortcut(e)) return;
         if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
         if (state.viewMode !== 'single') return;
         if (e.key === 'ArrowUp') { e.preventDefault(); cycleSingleView(-1); }
@@ -1973,7 +2018,7 @@ export function setupUI() {
         // timeline handler (`ui/timeline-controller.js`).
 
         // --- Plain key shortcuts (skip when typing in inputs or any modifier held) ---
-        if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable) return;
+        if (shouldIgnoreShortcut(e)) return;
         if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
 
         switch (e.key) {
@@ -2437,7 +2482,7 @@ export function setupUI() {
         startEditGroup(selectedGroup);
     });
     // Triangulate / Triangulate All are split buttons: hovering reveals a menu
-    // with DLT (Fast) and BA (Slow & Accurate) (shown purely via CSS :hover) for
+    // with DLT (Fast) and Ref (Slow & Accurate) (shown purely via CSS :hover) for
     // picking a method explicitly, while *clicking the button itself* runs the
     // Settings default method. Choosing a menu item runs that specific method.
     // Implicit triangulation (the keyboard shortcut and the Edit menu) also uses
@@ -2597,44 +2642,112 @@ export function onPlaybackStateChange(isPlaying) {
     }
 }
 
+/**
+ * Show/hide the info panel.
+ *
+ * The freed (or reclaimed) width goes to the VIDEO GRID and nothing else:
+ * `.video-grid-section` is the only `flex: 1` child of `.main-content`, so
+ * collapsing `#infoPanelWrapper` hands it the space automatically and the 3D
+ * viewport keeps the width the user gave it. The two panels' sizes are
+ * independent — toggling one never resizes the other.
+ *
+ * This used to hand the width to the 3D viewport explicitly, via
+ * `viewport3dEl.style.width = offsetWidth + infoPanelWidth`, plus a temporary
+ * `flex` lock on the video grid to stop it absorbing the space. Two bugs came
+ * out of that. The visible one: with the 3D viewport COLLAPSED its
+ * `offsetWidth` is 0, and an inline width beats the `.collapsed { width: 0 }`
+ * rule — so hiding the info panel re-opened the hidden 3D viewport at ~300px
+ * in the space the panel had just vacated. The subtler one: writing a pixel
+ * width to a `width`-transitioned element on one side while the flex lock let
+ * go on the other made the 3D viewport jitter on every info-panel toggle.
+ */
 export function toggleInfoPanel() {
     var wrapper = document.getElementById('infoPanelWrapper');
-    var viewport3dEl = document.getElementById('viewport3dContainer');
-    var infoPanel = document.getElementById('infoPanel');
-    var videoGridSection = document.querySelector('.video-grid-section');
+    var panel = document.getElementById('infoPanel');
     var isCollapsing = !wrapper.classList.contains('collapsed');
 
     if (isCollapsing) {
-        // Record info panel width before collapsing
-        var infoPanelWidth = infoPanel.offsetWidth + 1; // +1 for border
+        // Park any dragged-in width (splitHandle2 writes inline width AND
+        // min-width onto #infoPanel) so the `.collapsed .info-panel { width: 0 }`
+        // rule can win — an inline width outranks it, which would leave a
+        // "hidden" panel still holding its column. Same reason
+        // `toggle3DViewport` parks `_savedWidth`.
+        panel._savedWidth = panel.style.width || '';
+        panel._savedMinWidth = panel.style.minWidth || '';
+        panel.style.width = '';
+        panel.style.minWidth = '';
         wrapper.classList.add('collapsed');
-        // Expand viewport3d to absorb the freed space
-        var currentVpWidth = viewport3dEl.offsetWidth;
-        viewport3dEl.style.width = (currentVpWidth + infoPanelWidth) + 'px';
     } else {
-        // Lock video-grid-section at current width to prevent flex shrinkage
-        var gridWidth = videoGridSection.offsetWidth;
-        videoGridSection.style.flex = '0 0 ' + gridWidth + 'px';
-
-        // Read the target info panel width from CSS before expanding
-        var infoPanelTarget = parseInt(getComputedStyle(document.documentElement)
-            .getPropertyValue('--info-panel-width')) || 300;
-        infoPanelTarget += 1; // +1 for border
-
-        // Shrink viewport3d immediately (before transition starts)
-        var currentVpWidth = viewport3dEl.offsetWidth;
-        viewport3dEl.style.width = Math.max(150, currentVpWidth - infoPanelTarget) + 'px';
-
         wrapper.classList.remove('collapsed');
-        // Unlock video grid after the CSS transition completes (250ms)
-        setTimeout(function () {
-            videoGridSection.style.flex = '';
-        }, 300);
+        if (panel._savedWidth) panel.style.width = panel._savedWidth;
+        if (panel._savedMinWidth) panel.style.minWidth = panel._savedMinWidth;
     }
 
     updateInfoPanelToggleBtn();
-    if (viewport3d) {
-        setTimeout(function () { viewport3d.resize(); }, 350);
+    if (!isCollapsing) refreshInfoPanelAfterShow();
+}
+
+/**
+ * Rebuild the info panel after it becomes visible again, but only if a
+ * refresh was actually skipped while it was hidden (`updateInfoPanel` /
+ * `updateFrameInfo` mark it stale). Every populate function is a stateless
+ * full rebuild from current `state`, so one call catches up on any number of
+ * skipped ones — and skipping the call when nothing went stale avoids a
+ * pointless full-session walk in `populateVideosTable`.
+ */
+export function refreshInfoPanelAfterShow() {
+    if (!consumeInfoPanelStale()) return;
+    updateInfoPanel();
+}
+
+// The two toolbar panel toggles, each with the label for both of its states.
+// Single source of truth: the updaters below read these, and
+// `lockPanelToggleWidths` sizes each button to whichever of its own two labels
+// is wider so the pair doesn't shimmy when a label swaps.
+const PANEL_TOGGLE_BUTTONS = [
+    { btnId: 'infoPanelToggleBtn', shown: 'Hide Panel', hidden: 'Show Panel' },
+    { btnId: 'viewport3dToggleBtn', shown: 'Hide 3D View', hidden: 'Show 3D View' },
+];
+
+function panelToggleLabels(btnId) {
+    for (var i = 0; i < PANEL_TOGGLE_BUTTONS.length; i++) {
+        if (PANEL_TOGGLE_BUTTONS[i].btnId === btnId) return PANEL_TOGGLE_BUTTONS[i];
+    }
+    return null;
+}
+
+/**
+ * Pin each panel-toggle button to the width of its widest label.
+ *
+ * "Hide"/"Show" don't render to the same width in the toolbar's
+ * proportional system font, so without this the buttons resize on every
+ * toggle — and because they're right-aligned in a flex group, the one to the
+ * left visibly jumps sideways when its neighbour changes width.
+ *
+ * Measured rather than hardcoded so it stays correct if a label, the font
+ * size, or the button padding changes. `getBoundingClientRect()` is a
+ * border-box width (`box-sizing: border-box` is global), which is what
+ * `min-width` wants. Called once from `ui/layout-controls.js` at startup;
+ * the app uses only system fonts, so there's no late web-font reflow to
+ * re-measure for.
+ */
+export function lockPanelToggleWidths() {
+    for (var i = 0; i < PANEL_TOGGLE_BUTTONS.length; i++) {
+        var spec = PANEL_TOGGLE_BUTTONS[i];
+        var btn = document.getElementById(spec.btnId);
+        if (!btn) continue;
+        var restore = btn.textContent;
+        // Clear any previous lock so a re-measure can shrink as well as grow.
+        btn.style.minWidth = '';
+        var widest = 0;
+        var labels = [spec.shown, spec.hidden];
+        for (var j = 0; j < labels.length; j++) {
+            btn.textContent = labels[j];
+            var w = btn.getBoundingClientRect().width;
+            if (w > widest) widest = w;
+        }
+        btn.textContent = restore;
+        if (widest > 0) btn.style.minWidth = Math.ceil(widest) + 'px';
     }
 }
 
@@ -2642,10 +2755,47 @@ export function updateInfoPanelToggleBtn() {
     var wrapper = document.getElementById('infoPanelWrapper');
     var btn = document.getElementById('infoPanelToggleBtn');
     if (btn) {
-        btn.textContent = wrapper.classList.contains('collapsed') ? 'Show Panel' : 'Hide Panel';
+        var l = panelToggleLabels('infoPanelToggleBtn');
+        btn.textContent = wrapper.classList.contains('collapsed') ? l.hidden : l.shown;
     }
 }
 
+/**
+ * Keep the toolbar's 3D-viewer toggle label in sync with the panel's actual
+ * collapse state (issue #151).
+ *
+ * The button is only one of three ways to toggle the viewport — the `\`
+ * shortcut and View ▸ Toggle 3D Viewport are the others — so the label is
+ * driven off the DOM rather than off whoever did the toggling.
+ * `ui/layout-controls.js` also calls this from the `MutationObserver` that
+ * already watches the container's class, which covers the initial label and
+ * any collapse that happens without going through `toggle3DViewport`.
+ */
+export function update3DViewportToggleBtn() {
+    var container = document.getElementById('viewport3dContainer');
+    var btn = document.getElementById('viewport3dToggleBtn');
+    if (container && btn) {
+        var l = panelToggleLabels('viewport3dToggleBtn');
+        btn.textContent = container.classList.contains('collapsed') ? l.hidden : l.shown;
+    }
+}
+
+/**
+ * Show/hide the 3D viewport.
+ *
+ * The width goes to (and comes back from) the video grid — `.video-grid-section`
+ * is the only `flex: 1` child of `.main-content` — so the info panel keeps its
+ * own width either way.
+ *
+ * Hiding also STOPS the 3D work, which is the point of the toggle: the user
+ * hides the viewport either to reclaim screen space or to stop paying for 3D
+ * rendering. `Viewport3D.setVisible(false)` pauses the render loop and defers
+ * every scene rebuild; `update3DViewport` (pose/initialization.js) then skips
+ * the per-frame update entirely, and won't create a WebGL context for a
+ * collapsed panel. Re-showing replays the deferred work and re-syncs to the
+ * current frame — the viewport itself is kept alive (not disposed) so the
+ * user's orbit pose survives the round trip.
+ */
 export function toggle3DViewport() {
     const container = document.getElementById('viewport3dContainer');
     var isCollapsing = !container.classList.contains('collapsed');
@@ -2655,16 +2805,25 @@ export function toggle3DViewport() {
         // Clear inline width so the CSS .collapsed { width: 0 } rule takes effect
         container.style.width = '';
         container.classList.add('collapsed');
+        if (viewport3d) viewport3d.setVisible(false);
     } else {
+        // Class off + width back FIRST: everything below reads the container's
+        // collapse state (via ui/panel-visibility.js) or its size.
         container.classList.remove('collapsed');
         // Restore the inline width that was set before collapsing
         if (container._savedWidth) {
             container.style.width = container._savedWidth;
         }
         if (viewport3d) {
+            viewport3d.setVisible(true);
             setTimeout(function () { viewport3d.resize(); }, 300);
         }
+        // Re-sync to the current frame — and auto-init the viewport if it was
+        // never created (or was released by a session load while collapsed).
+        update3DViewport(state.currentFrame);
     }
+
+    update3DViewportToggleBtn();
 }
 
 // Block 1 (Prompt 4): toggleTimeline / syncTimelineToggleButton /
@@ -2850,7 +3009,14 @@ export function updateVideoGridDisplay() {
 export function showViewIndicator() {
     var existing = document.getElementById('viewModeIndicator');
     if (existing) existing.remove();
-    if (state.viewMode !== 'single' || state.views.length === 0) return;
+    var dockEl = document.getElementById('videoDock');
+    if (state.viewMode !== 'single' || state.views.length === 0) {
+        // The class drives the per-pane legend's top offset (styles.css) —
+        // clear it whenever the chip goes away, or the legend would sit one
+        // slot low in grid mode forever.
+        if (dockEl) dockEl.classList.remove('has-view-indicator');
+        return;
+    }
 
     var indicator = document.createElement('div');
     indicator.id = 'viewModeIndicator';
@@ -2858,10 +3024,13 @@ export function showViewIndicator() {
     indicator.textContent = state.views[state.singleViewIndex].name +
         ' (' + (state.singleViewIndex + 1) + '/' + state.views.length + ')';
 
-    var dockEl = document.getElementById('videoDock');
     if (dockEl) {
         dockEl.style.position = 'relative';
         dockEl.appendChild(indicator);
+        // In single-view mode the sole pane fills the dock, so this chip lands
+        // exactly where a pane's legend wants to be. Tell the legend to step
+        // down instead of hiding under it.
+        dockEl.classList.add('has-view-indicator');
     }
 }
 
