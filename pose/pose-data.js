@@ -339,6 +339,32 @@ export class Camera {
     }
 
     /**
+     * Replace the extrinsics IN PLACE, dropping every derived cache.
+     *
+     * `rotationMatrix`, `extrinsicMatrix` and `projectionMatrix` each memoize on
+     * first read and there is no other way to invalidate them, so assigning
+     * `rvec`/`tvec` directly leaves a camera that reports its NEW vectors and
+     * projects with its OLD ones — a divergence nothing would flag. Mutating
+     * rather than replacing the object is deliberate: callers all over the app
+     * hold `Camera` references obtained by name lookup, and swapping in a new
+     * instance would leave some of them on the old extrinsics.
+     *
+     * Written for the origin re-base (`pose/origin-rebase.js`), which moves the
+     * world and therefore every camera in it.
+     *
+     * @param {number[]|number[][]} rvec - Rodrigues triple or a 3x3 rotation,
+     *   the same two shapes the constructor accepts.
+     * @param {number[]} tvec
+     */
+    setExtrinsics(rvec, tvec) {
+        this.rvec = rvec;
+        this.tvec = tvec;
+        this._cachedR = null;
+        this._cachedRt = null;
+        this._cachedP = null;
+    }
+
+    /**
      * Project a single 3D point [x, y, z] to 2D [u, v] using the projection matrix.
      * No distortion applied (for simplicity).
      * @param {number[]} point3d - [x, y, z]

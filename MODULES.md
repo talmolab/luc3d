@@ -81,6 +81,13 @@ the old `app.js` entry point.
   `onPlaybackStateChange`, `fitTimelineToData`.
 - `../ui/info-panel.js` — `setupPanelTabs`, `setupSkeletonEditing`,
   `updateInfoPanel`.
+- `../ui/plane-definition.js` — `setupPlaneDefinition` (called from `init()`
+  right after `setupSkeletonEditing`, and **before** `paneManager.init` — its
+  drop listeners are delegated on the `#videoDock` container, which is static
+  markup, so panes added later are covered without re-wiring) and
+  `planeInteractionCallbacks` (`Object.assign`ed onto the InteractionManager's
+  callback bag in `setupInteraction`, so `ui/interaction.js` needs no import of
+  the plane feature).
 - `../ui/layout-controls.js` — `setupSplitHandles`.
 - `../ui/rendering.js` — `drawAllOverlays`, `setReprojErrorVisible`.
 - `../ui/sessions-panes.js` — `populateViewStrip`, `populateSessionStrip`.
@@ -103,6 +110,847 @@ the old `app.js` entry point.
 (`A` shortcut), 3D viewport auto-init, FPS display, all interaction
 callbacks (selection status bar, drag/move feedback, double-click clone,
 edit-group remove/add).
+
+---
+
+### pose/plane-nodes.js
+
+**Purpose.** The **global pool of plane nodes**. A plane node used to belong to
+exactly one plane (`PlaneSkeleton` owned the node names, the colours and a flat
+per-plane `points3d`), and that representation cannot express the thing the
+feature is for — two planes MEETING along a shared line. Duplicated corners are
+two independent 3D points that drift apart the moment either plane is
+re-solved, silently splitting the annotated intersection. So nodes moved out of
+the planes and into one pool; a plane became an ordered list of node
+references.
+
+**Key exports.**
+- `class PlaneNode` — `id` (stable, NEVER reused), `name`, `color`, `pin`,
+  `pinPlaneId`, `xyz` (`Float64Array(3)`, all-NaN = untriangulated, matching
+  `InstanceGroup.points3d`) and `error` (mean reprojection error, px).
+  `hasPoint3d()` / `getPoint3d()` / `setPoint3d(xyz, {force})` /
+  `clearPoint3d({force})`. **The node's `xyz` is the single source of truth for
+  a plane node's 3D** — nothing else stores one, and every writer funnels
+  through `setPoint3d`, which REFUSES on a `locked` node unless forced. That
+  refusal is the entire locking mechanism.
+- **TWO pin states**, because "do not move this" and "do not move this OFF ITS
+  PLANE" are different promises:
+
+  | `pin` | meaning |
+  |---|---|
+  | `'none'` | unpinned |
+  | `'plane-locked'` | may move, but only within the plane named by `pinPlaneId` |
+  | `'locked'` | the 3D is frozen outright — what the constrained-fit subsystem calls an ANCHOR |
+
+  `plane-locked` is **not** an anchor and must never reach
+  `fitPlaneConstrained`: its position is not fixed, so a fit that held it there
+  would be solving the wrong problem. The two chokepoints every
+  fit/triangulation consumer reads — `planeImmutableMask`
+  (`ui/plane-definition.js`) and `planeNodeImmutability` (`plane-data.js`) —
+  therefore report `locked` ONLY. Nor can `plane-locked` be enforced here: the
+  restriction is geometric and a node cannot resolve a plane's fit, so
+  `PlaneModel.constrainPoint3dForNode` owns it. `pinPlaneId` is resolved LAZILY,
+  so a stale id simply stops constraining and `deletePlane` needs no cascade.
+- `immutable` is now an **accessor** for `pin === 'locked'` (getter and setter).
+  That is what kept the two-state split small: `setPoint3d`'s refusal,
+  `clearPoint3d`, `mutableIds`, `nodeFreezeState` and every one of the ~30
+  readers written against the original boolean work unchanged. The setter
+  collapses `plane-locked` → `'none'` on `false`, which is what "unpin this
+  node" has always meant.
+- `nodePinState(node)` → the tri-state value; the accessor new code should read,
+  since `immutable` cannot tell `plane-locked` from `none`. `normalizePin(v)`
+  coerces anything (including the legacy boolean and a malformed saved value)
+  into a valid state, defaulting to `'none'` rather than throwing — a malformed
+  project file must load. `PIN_STATES` lists them in increasing strictness.
+- `class PlaneNodePool` — the ordered pool. Its order is the canonical index
+  space every `PlaneInstance` is keyed by, so it owns the operations that
+  change it: `addNode(name, {color, immutable, pin, pinPlaneId})`
+  (`pin` wins over `immutable` when both are given), `removeNode(id)`,
+  `moveNode(from, to)` (the last two are LOW LEVEL — go through `PlaneModel`,
+  which keeps the per-view 2D in step). Plus `getNode(id)`, `nodeAt(i)`,
+  `indexOf(id)`, `has(id)`, `ids()`/`names()`/`colors()`, `setImmutable`,
+  `setPin(id, pin, planeId)` (the only way to reach `plane-locked`, since
+  `setImmutable` is a boolean and can only express the two ends; it clears
+  `pinPlaneId` for the other two states so a released node keeps no dangling
+  reference), `freezeState`, `hasPoint3d`/`getPoint3d`/`setPoint3d`/`clearPoint3d` by id,
+  `points3d()` (flat, pool order, freshly allocated) and `mutableIds()`.
+  `adoptNode(node)` is the RESTORE-path twin of `addNode`: it takes an
+  already-built node and KEEPS ITS ID, because plane membership, plane edges and
+  every placement's `nodeIds` ledger are all stored as IDs — re-minting them on
+  load would re-point every one of those references at whatever node landed in
+  that slot. It advances `_nextId` past the adopted ID, so the pool's "IDs are
+  NEVER reused" promise survives a load. Used by `pose/plane-serialization.js`.
+- `nodeFreezeState(node)` → `'mutable' | 'frozen' | 'frozen-unsolved'`, keyed on
+  `locked` alone (a `plane-locked` node reports `'mutable'`, because it does
+  move). **It deliberately kept its three values** rather than widening to the
+  new state: the return value is used verbatim as a CSS class
+  (`'plane-node-' + st`) and keyed by `nodeStateTitle` and `styles.css`, so a
+  fourth value would mean more edit sites for no gain.
+  The flag is settable at ANY time, including before anything is triangulated —
+  marking a known reference up front is reasonable and rejecting it would be
+  obstructive. But a pinned node with no 3D can never ACQUIRE one, because
+  being pinned is exactly what forbids a solve from writing it, so that dead
+  end is NAMED rather than hidden. A constrained fit and the node table both
+  need to tell the three states apart without re-deriving the condition.
+- `PLANE_NODE_COLORS`, `defaultNodeColor(i)`.
+
+**Why per-node `Float64Array(3)` and not one flat pool array.** A flat
+pool-order array would have to be spliced in step with the node list on every
+add/remove/reorder — exactly the index-shifting fragility this module exists to
+remove. Callers that want the flat form ask for it explicitly
+(`points3d()` here, `points3dForPlane()` in `plane-data.js`) and get a fresh
+array in the order they asked for.
+
+**Imports from project modules.** None (deliberately dependency-free).
+
+**`Camera.setExtrinsics(rvec, tvec)`** replaces the extrinsics in place and
+drops the memoized `rotationMatrix` / `extrinsicMatrix` / `projectionMatrix`.
+Those three memoize on first read and there is no other way to invalidate them,
+so assigning `rvec`/`tvec` directly leaves a camera that REPORTS its new pose
+and PROJECTS with its old one — a divergence nothing would flag. It mutates
+rather than replacing the object on purpose: callers all over the app hold
+`Camera` references obtained by name lookup, and swapping in a new instance
+would leave some of them on the old extrinsics. Written for
+`pose/origin-rebase.js`; pinned by `tests/test-origin-rebase.mjs` §7.
+
+**Imported by.** `pose/plane-data.js` (which re-exports all of it),
+`pose/plane-serialization.js`.
+
+**Tests.** `tests/test-plane-nodes.mjs`,
+`tests/test-plane-serialization.mjs` (the `adoptNode` restore path).
+
+---
+
+### pose/plane-data.js
+
+**Purpose.** Data model for user-annotated **planes** — step 1 of re-defining
+the 3D viewer's origin (the end goal being a translation vector + rotation
+matrix that move the world frame onto an annotated plane). Owns the types
+annotation produces and nothing about the solve or the UI, which live in
+`pose/triangulation.js` and `ui/plane-definition.js`.
+
+**Key exports.**
+- `class PlaneSkeleton` — one plane: `nodeIds[]` (an ORDERED LIST OF NODE
+  REFERENCES into the pool), `edges` as pairs of **NODE IDS**, `name`, `color`,
+  `filled`, `triangulation` (`{views, nNodes, meanError}`) and `planeFit`
+  (`{centroid, normal, rms, nPoints}` — **the object a later step turns into
+  the translation + rotation that re-defines the origin**). Membership and
+  edges are IDs, never index pairs: an index pair breaks the instant the pool
+  shifts or a node is shared. `size`, `hasNode`/`indexOfNode`/`addNode(id)`/
+  `removeNode(id)` (which drops the edges through it)/`moveNode`,
+  `addEdge`/`hasEdge`/`removeEdge`/`removeEdgeBetween`, `clearTriangulation()`.
+  **Deliberately NOT a `Skeleton` subclass any more** — `Skeleton` models nodes
+  it OWNS (`addNode(name)` mints one, `removeNode(idx)` renumbers edges by
+  index), both actively wrong for references into a shared pool.
+  **`clearTriangulation()` drops `planeFit` + `triangulation` and NOTHING
+  ELSE.** It cannot reach a node's 3D — the plane holds no reference to the
+  pool. That asymmetry is the point: it is called on every 2D edit, placement
+  change and node-list change, so if it could still null 3D, a pinned node's
+  surveyed coordinate would evaporate the first time the user nudged an
+  unrelated corner in an unrelated view.
+- `class PlaneInstance extends Instance` — **one per VIEW**, covering the whole
+  pool (index = pool index), not one per (view, plane). `ui/interaction.js`
+  drags a plane node through the SAME `hasPoint`/`getX`/`getY`/`setPoint`/
+  `numNodes` path it drags a UserInstance through, and one instance per view
+  keeps that a single implementation. Carries `id`, `viewName`,
+  `type: 'plane'`, `nulledNodes` (Set of POOL INDICES; same field name and
+  meaning as a UserInstance's, so the inherited `hasAnyUsablePoint()` already
+  reads it), **`derivedNodes`** (Set of POOL INDICES whose 2D here was
+  REPROJECTED from the 3D rather than annotated — see below), `placedPlanes`
+  (Set of PLANE IDS — explicit, because with shared nodes "this node has a
+  position here" can no longer tell you which planes the user placed) and
+  **`nodeIds`** (the NODE ID of each column). Frame-independent by design.
+  - `nodeIds` is a LEDGER, not a second addressing scheme: callers still address
+    the instance by POOL INDEX through the inherited accessors. It exists
+    because **a count is not an identity.** An instance can be DETACHED from the
+    model (per-session placement maps), and while detached the pool can have a
+    node spliced out of the MIDDLE or moved. Re-syncing such a map by node COUNT
+    re-seats every column past the edit onto its neighbour's node — silently,
+    with every point still looking valid. Matching by ID is the only repair that
+    can tell those cases apart.
+  - `isNodeNulled(i)` / `toggleNodeNull(i)` / `isPlanePlaced(planeId)`,
+    `centroid(indices?)` (restrict to one plane's nodes for its label).
+  - `isNodeDerived(i)` / `setNodeDerived(i, on)` / `clearDerivedNodes(indices?)`
+    — the REPROJECTED flag. `triangulatePlane` reprojects a solved plane into the
+    views it is not placed on so the user can see (and correct) where it lands
+    there; such a point is exactly the projection of the current 3D, so it is not
+    evidence. Feeding it back would add no information while dragging the
+    reported reprojection error toward zero — a quality readout that improves
+    every time you press the button. So a derived point renders and drags like
+    any other, but is excluded from the solve and from the error average until
+    the user DRAGS it, which clears the flag. Deliberately separate from
+    `nulledNodes`: "turned off" and "never placed" are different facts, and a
+    right-click-off must not silently promote a reprojection to an annotation.
+  - `_indexFlagSets()` — every index-keyed flag set (`nulledNodes`,
+    `derivedNodes`) in one list, which the three index-remapping paths
+    (`resyncToNodeIds` / `removeNodeAt` / `moveNodeAt`) all iterate. A set left
+    un-remapped points at its NEIGHBOUR's node and every point still looks
+    valid — the aliasing failure class this whole model was rebuilt to avoid — so
+    add a new per-(view, node) set here and remapping follows for free.
+  - `appendNode(id)` — one unpositioned column. New slots are left UNPOSITIONED,
+    unlike the per-plane model: a node only becomes visible on a view once a
+    plane referencing it is placed there, and that is where seeding happens.
+  - `resyncToNodeIds(ids)` — re-seat the columns onto `ids` BY NODE ID; a
+    survivor keeps its point and its per-node flags (nulled, derived) wherever it
+    moved to, a dropped
+    node's column goes, a new node arrives unpositioned. The repair path for a
+    detached map, and what `attachPlacements` / `ensureInstance` use.
+  - `seedNodeNear(idx, cx, cy, ordinal, videoW, videoH)` — golden-angle spoke,
+    for a node joining an ALREADY-placed plane (an unpositioned node draws
+    nothing, so there would be nothing to grab).
+  - `removeNodeAt(i)` / `moveNodeAt(from, to)` — mirror the pool's splice/move,
+    carrying the per-node flag sets with their nodes.
+- `class PlaneModel` — pool + planes + `placements` (`Map<viewName,
+  PlaneInstance>`) + `meshObjects` (a `MeshObjectSet`, see
+  `pose/mesh-object-3d.js` — purely ADDITIVE: no method here reads or maintains
+  it, and `deletePlane` deliberately does NOT cascade into it, because membership
+  resolves lazily), and every operation that spans them. Doing any of these
+  piecemeal corrupts the index space: `createPlane`/`getPlane`/`deletePlane`
+  (**deletes NO nodes — every one survives**),
+  `adoptPlane(plane)` (the restore-path twin of `createPlane`, keeping the
+  plane's ID because `PlaneInstance.placedPlanes` stores plane IDs — see
+  `PlaneNodePool.adoptNode`),
+  `planesForNode(id)`, `constrainPoint3dForNode(nodeId, xyz)`,
+  `ensureInstance`/`getInstance`/`views`/`allInstances`,
+  `attachPlacements(map)` (adopt a session-owned map, re-syncing every instance
+  to the pool and pruning placement flags for deleted planes),
+  `addNode`/`deleteNode`/`moveNode` (pool + every view's 2D + every plane's
+  membership and edges), `addNodeToPlane`/`createNodeInPlane`/
+  `removeNodeFromPlane`, `placePlane`/`unplacePlane`/`isPlanePlaced`/
+  `placedViews`/`placedPlanes`, `isNodeVisibleOn`/`visibleNodeIndices`/
+  `planeNodeIndices`, `invalidateNode3D(id)` and `invalidatePlane3D(plane)`.
+- **Deleting a plane deletes no nodes, ever.** Nodes are plane-independent now,
+  so a node no plane references is still a valid pool member the Nodes table
+  lists, and the user's only instrument for removing one is an explicit
+  `deleteNode`. Auto-deleting "orphans" would destroy exactly the nodes worth
+  keeping — a pinned surveyed reference, a corner staged for a plane not built
+  yet — as a side effect of an unrelated action, and deletion is the one path
+  no re-fit can undo. `removeNodeFromPlane` follows the same rule
+  (`deleteIfOrphan` defaults to FALSE, opt-in for a caller that has actually
+  confirmed the intent).
+- **`constrainPoint3dForNode(nodeId, xyz)`** is the SINGLE place the
+  `plane-locked` pin state is honoured: if the node is `plane-locked` and its
+  `pinPlaneId` resolves to a plane with a fit, the point comes back projected
+  onto that plane; otherwise it passes through untouched. It cannot live on
+  `PlaneNode` (where `locked` is enforced, in `setPoint3d`) because the
+  constraint is geometric and a node has no way to resolve a plane id. The
+  plane is resolved LAZILY on every call, so a `pinPlaneId` naming a deleted
+  plane — or one with no fit yet — simply stops constraining rather than
+  throwing or pinning the node at a stale position. That is the same
+  stale-id-is-inert rule `MeshObject3D.planeIds` follows, and it is what keeps
+  `deletePlane` free of yet another cascade.
+- **`force` never rides a cascade.** `setPoint3d`/`clearPoint3d`'s `force` means
+  one narrow thing — explicit user re-entry of a pinned coordinate. Invalidation
+  fires off edits made somewhere else entirely, so it does NOT forward its
+  options to the leaf: `invalidateNode3D` / `invalidatePlane3D` take the
+  separately named `forceClearImmutable`, and a stray `{force:true}` in their
+  options cannot strip a pinned node.
+- Per-plane materializers, all freshly allocated (the pool stays the single
+  source of truth): `points3dForPlane(plane, pool)` → flat `Float64Array(3n)`
+  in PLANE order, all-NaN triple for a node with no 3D — the shape the 3D
+  viewport payload, the fit and the origin frame already read;
+  `writePoints3dForPlane(plane, pool, flat, {force, constrain})` →
+  `{written, skippedIds, constrainedIds}` (the ONLY way a solve should publish;
+  it SKIPS `locked` nodes and says which, so a writer cannot quietly undo the
+  constraint it solved under). The optional `constrain(nodeId, xyz) → xyz` hook
+  is threaded HERE rather than at each call site precisely because this is the
+  one sanctioned publish path — every solve (triangulate, fit, the angle edit)
+  therefore honours a `plane-locked` node without any of them having to
+  remember to. Callers holding a model pass `constrainPoint3dForNode`; callers
+  that do not (the pure tests) pass nothing and get the old behaviour exactly;
+  `nodeErrorsForPlane`, `planeNodes`/`planeNodeNames`/`planeNodeColors`/
+  `planeNodeImmutability` (parallel to `planeNodeColors`; a corner shared
+  between two planes reads pinned in BOTH, which is what lets a frozen shared
+  node hold an intersection line still while either plane is re-fitted. It
+  reports `locked` ONLY — a `plane-locked` node is not an anchor, and feeding it
+  to `fitPlaneConstrained` as one would hold fixed a point whose position is not
+  fixed) /
+  `planeNodeIndices`, `planeEdgesLocal` (plane-order index pairs, for the 3D
+  payload) / `planeEdgesPoolIndices` (for the 2D overlay + interaction hit
+  test), `planeCentroid2d(plane, pool, instance)`.
+- `planeCycleOrderIds(plane)` — the RING the user drew, as node IDs, or `null`
+  when their connections do not form one. A ring is a single simple cycle
+  covering every node the plane references (every node at degree exactly 2, one
+  closed walk); an open chain, a partial or disjoint cycle, a branch, or no
+  edges at all returns null, because those state an outline only partially and
+  guessing the rest is how a fill self-intersects. Purely topological, so it is
+  the ONLY form that can express a **concave** outline (an L-shaped floor) — the
+  user's edges say so explicitly, and nothing may second-guess them.
+- `planePolygonOrderIds(plane)` — the ring when there is one, else MEMBERSHIP
+  order, as node IDs; `planePolygonOrder(plane)` (plane-local indices) and
+  `planePolygonOrderPoolIndices(plane, pool)` are its two index views. The
+  coordinate-free answer, kept for callers that want it — **the fill does not
+  use these** (see below).
+- `convexHullOrder2d(pts)` / `convexHullOrder3d(qs, normal?)` — hull of a point
+  set as indices into it, in ring order. Andrew's monotone chain; interior
+  points, points on a hull edge, and duplicates are dropped, so the result is
+  the outline and nothing else. Fewer than 3 hull vertices (coincident or
+  collinear input) returns the input order unchanged, so a caller's own `< 3`
+  guard reads the way it always did. The 3D form projects onto an in-plane basis
+  first — `normal` (a `planeFit`'s) fixes it, otherwise one is estimated from
+  the two longest independent directions in the set; that only ever decides
+  vertex ORDER, never a coordinate.
+- `planeFillOrderPoolIndices(plane, pool, instance)` (2D, pool indices) /
+  `planeFillOrder3d(plane, pool)` (3D, plane-local indices) — **what the fill
+  actually walks.** The user's ring when they drew one, otherwise the CONVEX
+  HULL of the plane's points. Two things this fixes over membership order: a
+  quad whose corners were not added in ring order fills as a self-intersecting
+  bowtie, and — the reason the hull fallback exists — a node placed in the
+  MIDDLE of a plane is necessarily a REFLEX vertex in membership order, so the
+  fill carves a notch in to it instead of covering it. Under the hull the
+  outline is the outermost nodes and an interior node sits INSIDE the fill.
+  Hulling per VIEW in 2D rather than once in 3D is deliberate: the fill is a 2D
+  silhouette of that view's points, which exist before anything is triangulated.
+  Unpositioned nodes contribute no vertex; a node with 2D but no 3D is a vertex
+  of the 2D fill and not the 3D one.
+- `seedPlanePoints(n, cx, cy, videoW, videoH)` — node 0 at 12 o'clock, the rest
+  evenly around a ring of `PLACEMENT_RADIUS_FRAC` (12%) of the video's shorter
+  side, clamped into the frame. A 4-node plane lands as a recognisable quad to
+  drag onto the real feature, not a pile of coincident dots.
+- `PLANE_COLORS`, `PLACEMENT_RADIUS_FRAC`, and everything re-exported from
+  `pose/plane-nodes.js`.
+
+**Nodes are plane-independent.** A plane REFERENCES nodes; it does not own
+them. The same node may belong to any number of planes, which is what lets two
+planes meet along a shared line — the corners on it are ONE node with ONE 3D
+position, so the line cannot split when either plane is re-triangulated.
+`planeFit` stays per-plane because two planes through the same edge genuinely
+have different fits; the triangulated POINTS are what is shared.
+
+**Placement membership is explicit; un-placing keeps 2D.** Visibility is
+derived from `placedPlanes` (`isNodeVisibleOn`), so nothing consults the points
+to decide what to draw and there is no reference counting to get wrong.
+Un-placing a plane from a view therefore does NOT destroy 2D — re-placing
+restores exactly what the user positioned, and `placePlane` seeds only the
+nodes that have no position yet. Deleting a NODE is what destroys 2D,
+everywhere at once.
+
+**Isolation.** PlaneInstances live on `PlaneModel.placements`, NOT in
+`frameGroups` / `instanceGroups`. Nothing in the existing pose pipeline can
+see them, so `type: 'plane'` never has to be handled by code that switches on
+user/predicted/reprojected.
+
+**Imports from project modules.** `./pose-data.js` — `Instance`;
+`./plane-nodes.js` — the pool (re-exported).
+
+**Imported by.** `ui/plane-definition.js`, `pose/plane-serialization.js`.
+
+**Tests.** `tests/test-plane-nodes.mjs`, `tests/test-plane-serialization.mjs`,
+`tests/e2e/define-plane-mode.mjs`.
+
+---
+
+### pose/plane-serialization.js
+
+**Purpose.** The Define Planes feature's **on-disk form, both ways** — the node
+pool, the planes (membership, edges, fill, the solve summary, the plane fit),
+the per-view 2D and the origin frame, to plain JSON and back. Owns the mapping
+and NOTHING about where the bytes end up; `import-export/plane-metadata.js`
+decides that. DOM-free and UI-free so the round trip is directly testable, which
+matters more here than usual: a subtly wrong restore does not crash, it hands
+back a plane whose corners sit on their NEIGHBOURS' nodes with every point still
+looking perfectly valid.
+
+**The scope split it encodes.** PROJECT-scoped: the pool, the planes, the origin
+frame — one node has one 3D position for the whole project, which is the entire
+reason the pool is global. SESSION-scoped: the `PlaneInstance` per view, because
+a view belongs to a session (stored on `Session.planePlacements`).
+
+**Key exports.**
+- `serializePlaneNodes(pool)` / `restorePlaneNodes(data)` — pool order is
+  preserved because it IS the index space every `PlaneInstance` is keyed by. A
+  node with no 3D **omits `xyz` entirely** rather than writing three numbers:
+  `JSON.stringify(NaN)` is `null`, so a naive round trip returns
+  `[null, null, null]` and every `isFinite` check downstream has to defend
+  against it. A locked node's coordinate is restored with `{force: true}` —
+  being locked is exactly what refuses an ordinary write. Entries with a missing
+  or DUPLICATE id are skipped, never renumbered.
+- **The two pin states, written so BOTH directions degrade correctly.** A
+  `locked` node writes `pin: 'locked'` **and**, redundantly, `immutable: true`,
+  so a build predating the split still freezes it — that key is the only thing
+  such a build reads. A `plane-locked` node writes `pin` plus `pinPlaneId` and
+  deliberately **no** `immutable`, because an older build cannot enforce "stays
+  in its plane" and reading it as a hard freeze would be strictly wrong;
+  treating it as free is the honest fallback. On restore `pin` wins when
+  present, and a legacy record's `immutable: true` means `locked`, which is what
+  it has always meant. Both go through `normalizePin`, so an unrecognized value
+  loads as unpinned rather than refusing the file. An unpinned node writes
+  NEITHER key, per the format's rule that defaults are never written — which is
+  why `tests/e2e/save-golden-digest.mjs` does not move, and why
+  `PLANE_METADATA_KEYS` does not change: this rides the existing `planeNodes`
+  key and needs no version bump.
+- `serializePlanes(planes)` / `restorePlanes(data, pool)` — includes `filled`,
+  `triangulation` and `planeFit`, because those are the plane's STATE, not a
+  cache: a reopened plane that came back un-fit would offer Set Origin no
+  corners and report no error, so the user would have to re-solve to get back
+  what they saved. References to nodes the pool does not hold are **dropped**
+  (the plane comes back one corner short, which is visible) rather than kept
+  dangling (a -1 index reads whatever sits at the end of the points array —
+  a corner in a plausible but wrong place, which is not).
+- `serializeMeshObjects(set)` / `restoreMeshObjects(data, planeIds)` — the named
+  groups of planes. Membership is written VERBATIM, **including IDs whose plane
+  has since been deleted**: membership resolves lazily everywhere else, so
+  scrubbing on the write side would be the one place that quietly decides a plane
+  is gone forever. The READ side drops unresolvable IDs instead, at the point
+  where the live plane set is actually known — which is why `restorePlaneProject`
+  restores objects LAST, after the planes they filter against are installed.
+  `flipNormals` is omitted at its `false` default.
+- `serializePlanePlacements(placements, pool)` / `restorePlanePlacements(data,
+  pool, planeIds)` — points are written as `{n: <nodeId>, xy, off, derived}`,
+  **not** as a dense pool-order array. A dense array can only be re-seated by
+  COUNTING, and counting is exactly the repair that cannot tell "a node was
+  appended" from "a node was spliced out of the middle": every column past the
+  edit comes back on its neighbour's node, still looking like a good point. A
+  view holding no positioned point and no placed plane contributes nothing.
+- `serializeOriginFrame(frame)` / `restoreOriginFrame(data)` — writes only the
+  **two things the user chose** (the origin and the +Z, plus the
+  `sourcePlane`/`sourceNode` labels, which cannot be re-derived once a plane is
+  renamed). `R`, the translation and the axis-angle form are derived
+  deterministically by `buildOriginFrame`, so storing them too would create a
+  second source of truth that a file edit or a version bump could put at odds
+  with the inputs. The rebuild is exact.
+- `serializePlaneProject(model)` / `restorePlaneProject(model, data)` — the
+  project-scoped bundle: pool + planes + mesh objects. `restore` **REPLACES** all
+  three rather than merging: two projects' node IDs are unrelated, so a merge
+  would either collide IDs or renumber them, and renumbering is the one thing
+  this module must never do. (Replacing all three in one call is also what makes
+  `resetPlaneState()` a single call as the model grows.) A plane the user named
+  but has not populated still round-trips, as does an object named before it was
+  populated; only a model with no nodes, no planes AND no objects serializes to
+  `null`.
+
+**Absence is a value.** Every serializer returns `null` when there is nothing to
+say, so a project that never opened the feature writes no keys and its bytes are
+unchanged (`tests/e2e/save-golden-digest.mjs`). Every reader tolerates absent,
+malformed and partial input — a `.slp` from SLEAP, or from a LUCID build older
+than this module, restores an empty model rather than throwing.
+
+**Imports from project modules.** `./plane-nodes.js` — `PlaneNode`,
+`PlaneNodePool`; `./plane-data.js` — `PlaneSkeleton`, `PlaneInstance`;
+`./origin-frame.js` — `buildOriginFrame`.
+
+**Imported by.** `import-export/plane-metadata.js`.
+
+**Tests.** `tests/test-plane-serialization.mjs` (ESM, 74 assertions — identity
+after the trip, the NaN case, a pool that CHANGED between save and load, garbage
+tolerance, the origin rebuild), `tests/e2e/plane-persistence-roundtrip.mjs`
+(the same claims through the real app and a real `.slp`).
+
+---
+
+### pose/origin-frame.js
+
+**Purpose.** The **payload of the whole Define Planes feature**: turns "this
+annotated corner is the origin, and +Z points that way" into the translation +
+rotation that re-express the calibration's world frame in the user's frame.
+Everything upstream (plane skeletons, placements, triangulation, plane fit, 3D
+corner dragging) exists to produce this function's two inputs. DOM-free and
+dependency-free, so it is directly testable and callable from a future save
+path.
+
+**Convention, stated once and used everywhere:**
+
+    p_new = R · p_old + t,    t = −R · origin
+
+`R`'s **rows** are the new frame's axes in old-world coordinates. `t` is the
+mapping's translation, **not** the origin's position — both are reported and
+both are labelled in the UI, because confusing them silently flips a sign. The
+inverse is `p_old = Rᵀ · p_new + origin`.
+
+**Key exports.**
+- `buildOriginFrame(origin, zAxis, xHint)` → `{origin, xAxis, yAxis, zAxis, R,
+  translation, rotationVector, axis, angleRad, angleDeg}` or **null**. Z is the
+  user's choice; X and Y are not, so they are derived deterministically — old
+  world +X projected onto the plane (Gram-Schmidt), falling back to old +Y when
+  Z is within ~26° of X and the projection is ill-conditioned; `Y = Z × X`. That
+  fixes the roll about Z arbitrarily but **consistently**: the same two clicks
+  must not produce a different rotation twice. `xHint` is the hook for a later
+  step that wants a meaningful X (a plane edge, say) — it belongs here rather
+  than as a re-derivation elsewhere. Returns null on non-finite input or a
+  zero-length Z rather than inventing a frame.
+- `rotationMatrixToAxisAngle(R)` → `{axis, angleRad}`. Handles the two cases the
+  generic formula divides by zero on: angle ≈ 0 (returns +X and 0, so the
+  rotation vector is exactly the zero vector) and angle ≈ π (recovered from
+  `R + I = 2nnᵀ`, taking the largest diagonal column for conditioning). **The π
+  case is not exotic here** — it is what picking the "blue" arrow produces.
+- `rotationAboutAxis(axis, angleRad)` → row-major 3×3, or **null** for a
+  zero-length or non-finite axis. Rodrigues, `R = I + sin t·K + (1 − cos t)·K²`,
+  written out in closed form rather than as two matrix products so it is exactly
+  orthonormal for a unit axis. **The exact inverse of
+  `rotationMatrixToAxisAngle`**, which is why it lives here: the two are tested
+  against each other, so neither can drift from this module's convention alone.
+  The same formula also appears inline in `Camera.rotationMatrix`
+  (`pose/pose-data.js`), which bakes the angle into an OpenCV-style `rvec`'s
+  magnitude; that one is coupled to the class and is deliberately left alone.
+- `mulMat3Vec3(R, v)` → `R · v`, no translation — what rotating a DIRECTION (a
+  plane normal) needs, as against `applyOriginFrame`, which is an affine map of
+  a POINT. Confusing the two is how a rotated normal picks up a translation.
+- `applyOriginFrame(frame, p)` / `unapplyOriginFrame(frame, q)`.
+- `rebaseExtrinsics(camR, camT, frame)` → `{R, rvec, tvec}` or **null** — the
+  **calibration half of the origin change**. Applying an origin deliberately
+  moves nothing in the data (see `ui/origin-definition.js`), which leaves the
+  calibration as the one artifact still speaking the old frame; a downstream
+  tool handed the user's 3D and the ORIGINAL `calibration.toml` would reproject
+  against the wrong world. From `p_cam = R_cam·p_old + t_cam` and
+  `p_old = Rᵀ·p_new + origin`: `R_new = R_cam·Rᵀ`,
+  `t_new = R_cam·origin + t_cam`. **The translation is built from
+  `frame.origin`, not `frame.translation`** — the two differ by a rotation, and
+  substituting one produces a calibration that still almost works, which is the
+  worst kind of wrong. Intrinsics and distortion are not its business. Returns
+  both notations because the TOML writer matches the source file's shape.
+- `normalize3` / `cross3` / `dot3`.
+
+**Imports from project modules.** None, deliberately.
+
+**Imported by.** `ui/origin-definition.js`, `pose/origin-rebase.js`
+(`rebaseExtrinsics` + the point/direction transforms), `pose/plane-serialization.js`
+(which persists an applied frame as its two INPUTS — the origin and the chosen
++Z — and rebuilds everything else through `buildOriginFrame` on load, so the
+derived `R` / translation / axis-angle can never contradict them),
+`pose/mesh-object-geometry.js` (`applyOriginFrame` only) and
+`pose/plane-angle.js` (the rotation primitive plus the vector helpers).
+
+**Tests.** `tests/test-origin-frame.mjs` (ESM — the numerical branches the
+wizard rarely reaches: 180°, the near-parallel X fallback, rigidity,
+round-trip, degenerate refusals, §9 the `rotationAboutAxis` ↔
+`rotationMatrixToAxisAngle` round trip over five axes × five angles, asserting
+orthonormality and `det = +1` at each, and §10 `rebaseExtrinsics` — pinned by
+the one invariant that matters, that a point lands on the same camera
+coordinates via (old extrinsics, old point) and (new extrinsics, re-based
+point), plus a negative control that substituting `frame.translation` for
+`frame.origin` gives a different answer) and `tests/e2e/define-plane-mode.mjs`
+§14 end to end.
+
+---
+
+### pose/origin-rebase.js
+
+**Purpose.** Move the **whole project** into the defined origin — the engine
+behind the Danger Zone's `Set as New Calibration`. `ui/origin-definition.js`
+applies an origin to what is DRAWN and to nothing else, deliberately; this
+module is the other choice, taken explicitly, and rewrites every stored 3D
+number so the project IS that frame.
+
+**Three transforms, and they must all happen together:**
+
+| thing | rule |
+|---|---|
+| 3D point | `p' = R·p + t` (affine) |
+| 3D direction (a plane normal) | `n' = R·n` — **no translation** |
+| camera | `R_cam' = R_cam·Rᵀ`, `t_cam' = R_cam·origin + t_cam` |
+
+Do all three and **every 2D pixel is unchanged**: a point's reprojection under
+the new calibration lands exactly where it landed under the old one. That
+invariant is the whole safety argument, and it is what both test files assert
+first. Move the points without the cameras (or vice versa) and every
+reprojection error in the project silently explodes. So the set is not
+negotiable: `InstanceGroup.points3d` across **every** session, the plane node
+pool, each plane's stored fit, and every camera. 2D data — member instances,
+reprojected instances, plane placements — is invariant and is not touched.
+
+**Key exports.**
+- `countRebaseTargets(sessions, model)` → the tally the confirmation dialog
+  lists. Groups are bucketed by their MEMBERS' types (`user` / `predicted` /
+  neither), because `points3d` itself carries no provenance — LUCID writes one
+  `Instance3D` per group either way. `reprojectedInstances` is reported and
+  labelled **unchanged**, because it is not work.
+- `planOriginRebase(sessions, model, frame, opts)` → a plan, `null` when
+  cancelled or the frame is unusable, or `{failed, camera}` when one camera
+  cannot be re-based (which abandons the WHOLE plan — a project with one camera
+  left in the old frame is worse than one that did not move). **Writes
+  nothing:** it builds the replacement buffers beside the live ones, so
+  cancelling is free and exact. Yields every `opts.yieldEvery` (default 2,000)
+  units and asks `opts.shouldCancel()` there.
+- `applyOriginRebase(plan)` → swaps them in, synchronously. Plane nodes are
+  written straight to `node.xyz`, **bypassing `PlaneNode.setPoint3d`'s refusal
+  for a Locked node**: a pin says "do not re-solve this point", not "exempt this
+  point from the world moving".
+
+**Why copy-on-write rather than transform-in-place-and-invert.** The second
+would halve the peak (~175 MB on a 7.3M-point project, in typed arrays outside
+V8's cage — the cheap place for it) but `Rᵀ(R·p + t − t)` is not bit-identical
+to `p`, so a *cancelled* operation would leave every coordinate perturbed in its
+last few ULPs.
+
+**It is an O(groups) in-memory walk even on a lazily-reopened project.**
+`session.instanceGroups` is built in full at load by BOTH reconstructors in
+`import-export/slp-import.js` — it is the grouping + 3D, and only the 2D
+`frameGroups` are windowed. So there is no hydration sweep here and no
+resident-only hazard (#194/#195): nothing this module reads can be absent.
+
+**Imports from project modules.** `./origin-frame.js` (`applyOriginFrame`,
+`mulMat3Vec3`, `rebaseExtrinsics`), `./pose-data.js` (`points3dNodeCount`,
+`hasPoint3d`). DOM-free.
+
+**Imported by.** `ui/origin-rebase.js`.
+
+**Tests.** `tests/test-origin-rebase.mjs` (ESM — over a real `PlaneModel` and
+real `Camera`s: the pixel invariant with an un-rewritten-calibration negative
+control, that planning writes nothing, that a cancel is byte-identical, NaN
+preservation, the Locked node moving anyway, the centroid/normal split with a
+negative control, camera cache invalidation, and the 3x3-notation case) and
+`tests/e2e/set-new-calibration.mjs`.
+
+---
+
+### pose/plane-angle.js
+
+**Purpose.** Set the ANGLE BETWEEN two annotated planes. Every plane's
+`planeFit` is fitted independently through its own triangulated corners, so
+nothing makes two planes that are perpendicular in the real world come out
+perpendicular in the model — a floor and a wall land a degree or two off, and
+that error is then baked into everything derived from them (a mesh object's
+geometry, an exported cage, an origin frame taken from one of them). This
+module lets the user ASSERT the relationship instead: hold one plane fixed and
+rotate the other rigidly until the angle is met.
+
+DOM-free and THREE-free. It imports **only** `origin-frame.js` and
+`plane-data.js`, and deliberately **not** `triangulation.js` — not even for
+`planesInvalidatedByFit`, whose question `PlaneModel.planesForNode` answers from
+the other side — because triangulation.js pulls in DOM and three.js UI modules,
+and a test would then need the loader stubs `tests/test-plane-constrained-fit.mjs`
+has to install. Being importable with no stubs is most of this module's value.
+
+**Hence the optional `fits` argument** on `hingeAxis` and `planAngleEdit`. A
+plane can hold 3D for every corner and still carry no stored `planeFit` —
+pinning a node clears the fit of every plane standing on it, and a plane that
+was triangulated but never Fitted never had one. Such a plane is perfectly
+measurable; it just needs `fitPlaneToPoints3d`, which lives on the other side of
+that import line. So the caller derives the fit (`ui/plane-angle.js` >
+`usableFit`) and passes it in, and everything here treats a derived fit and a
+stored one identically — `newMovingFit` is the rotation of whichever it got.
+
+**The angle is UNSIGNED, and that is not a simplification.**
+`fitPlaneToPoints3d` takes the smallest-eigenvalue eigenvector straight from
+`jacobiEigen` and never stabilizes its sign (only the CONSTRAINED path calls
+`orientNormalLike`). A signed dihedral angle read off two stored normals is
+therefore not reproducible — it is θ or 180 − θ depending on round-off in two
+unrelated fits. The measurement is `acos(|n_f · n_m|)` ∈ [0°, 90°], invariant
+under flipping either normal, which is also exactly what a user means by "the
+angle between these planes". `tests/test-plane-angle.mjs` §7 asserts all four
+sign combinations move the points to the same place.
+
+**The axis is the SHARED EDGE.** Two planes that meet share their corner nodes
+— one `PlaneNode`, one `xyz`, referenced by both — so the line through them is
+the natural hinge: rotating about it leaves every shared corner exactly where it
+was, the planes stay joined, and the fixed plane is not disturbed at all.
+
+| shared, triangulated nodes | axis | `kind` |
+|---|---|---|
+| 2 or more | the line through the two farthest apart | `'edge'` |
+| exactly 1 | through it, along `n_fixed × n_moving` | `'node'` |
+| none | through the moving plane's centroid, same direction | `'centroid'` |
+
+`n_fixed × n_moving` is the direction the planes' intersection line runs, so the
+fallbacks turn about the direction the shared edge would have had; parallel
+normals leave it undetermined and any perpendicular is used (a local `anyPerp`,
+matching triangulation.js's own local copy).
+
+**Key exports.**
+- `planeAngleDeg(nA, nB)` → degrees in [0, 90], or null. 0 = parallel,
+  90 = perpendicular.
+- `sharedNodeIds(planeA, planeB)` → the membership intersection in `planeA`'s
+  order. There is no existing helper — the model only answers the inverse
+  question (`planesForNode`) — and membership is a short `number[]` of IDs, so a
+  filter is both the clearest and the fastest thing.
+- `hingeAxis(fixedPlane, movingPlane, pool, fits?)` → `{point, dir, kind,
+  sharedIds, hingeIds}` or null. `hingeIds` are the corners ON the axis, and so the ones
+  guaranteed not to move.
+- `sharedNodesSpanAPlane(ids, pool)` — three or more shared corners off a line
+  mean the planes already share a PLANE, and no rotation can change their angle
+  without moving the fixed plane too. That is `overconstrained`, refused rather
+  than approximated.
+- `solveAngleRotation(nFixed, nMoving, axisDir, targetDeg)` → radians or null.
+  Rotating `m` about `u` traces a sinusoid in the dot product with `f`:
+  `A + B cos φ + C sin φ` with `A = (m·u)(u·f)`, `B = m_⊥·f`,
+  `C = (u × m_⊥)·f`. So `|(R·m)·f| = cos target` is `A + K cos(φ − δ) = ±T`,
+  solved in closed form — two signs × two arccos branches, up to four
+  candidates, and **the smallest |φ| is returned**. That is what keeps a wall
+  tilting the way it already leans rather than flipping through the floor, and
+  it is the single most load-bearing line in the module (a mutation to `>`
+  reddens 20 assertions). The result is then re-measured and rejected if it
+  misses the target, so a wrong branch fails loudly. `K ≈ 0` means the moving
+  normal lies along the hinge, where rotating cannot change the angle at all.
+- `applyRotationToPoints3d(flat, R, pivot, nodeIds, fixedIds)` → a NEW
+  `Float64Array`; missing nodes stay missing. `fixedIds` are copied through
+  verbatim: points on the axis are fixed mathematically, but only to within
+  round-off, and a shared corner drifting by an ulp is exactly the silent
+  divergence the shared node pool exists to prevent.
+- `rotatePlaneFit(fit, R, pivot)` — the same rigid motion applied to a stored
+  fit. **Rotating rather than re-fitting is deliberate:** a re-fit re-derives
+  the normal's sign from `jacobiEigen` and can flip it, which changes nothing
+  geometrically but silently inverts anything downstream that read the old sign.
+  `rms` / `nPoints` are properties of the annotation and ride through unchanged,
+  as does `constrained` when present (dropping it is a bug
+  `serializePlaneFit` already has, and is not worth repeating).
+- `planAngleEdit(fixedPlane, movingPlane, targetDeg, model, fits?)` → a plan, mirroring
+  `planPlaneFit`. **PURE — it reads the model and writes nothing**, which is
+  what lets the UI preview it, refuse it, or be cancelled with nothing to undo,
+  and which is its own test. Refusal codes: `no_model`, `no_plane`,
+  `same_plane`, `no_fit`, `bad_target`, `degenerate_axis`, `overconstrained`,
+  `unreachable`, and `locked_nodes`.
+- `ANGLE_TOL_DEG`, `HINGE_MIN_LEN`, `COLLINEAR_TOL_FRAC`, `NAME_LIST_CAP`.
+
+**Every warning NAMES what it counts.** A count on its own ("2 other planes")
+tells the user nothing they can act on, so each `warnings[]` entry spells out
+the things it is about:
+- `plane_locked_elsewhere` lists `node (in "plane")` per held node — the node
+  FIRST, the plane holding it second. The old wording put a bare node list in
+  parentheses right after "another plane", which read as if the parenthetical
+  named the plane.
+- `stale_fits` lists `"plane" (shares node, …)` — both which fit is about to be
+  cleared and which moved corner costs it. The shared node is the one the user
+  would have to un-share to avoid the loss.
+- Both are capped at `NAME_LIST_CAP` (3) names inline with a `+N more` tail,
+  because the angle dialog is a narrow floating panel; each carries the
+  untruncated list in a `detail` string, which `ui/plane-angle.js` hangs off the
+  warning line as a `title` tooltip. Singular/plural is exact in both.
+`stalePlaneIds` is unchanged in meaning and shape — the commit path keys off it.
+
+**Pin states decide who may move.** A `locked` node the rotation would move is a
+hard refusal (`locked_nodes`, naming the nodes) — the user pinned that
+coordinate and the angle cannot be honoured with it. Nodes on the HINGE are
+excluded from that check because they do not move: locking a shared corner is
+the documented way to hold an intersection line still, so it must not block the
+very edit it enables. `plane-locked` nodes are allowed: a rigid rotation of the
+whole plane keeps them in that plane by construction. One held in a DIFFERENT
+plane is allowed but warned about, since the commit projects it back and the
+result may then miss the target.
+
+**Imports from project modules.** `./origin-frame.js`, `./plane-data.js`.
+
+**Imported by.** `ui/plane-angle.js`.
+
+**Tests.** `tests/test-plane-angle.mjs` (ESM, 188 assertions over a
+floor-and-wall fixture whose angle is analytic — §10 and §12 pin the warning
+wording, so a warning that stops naming its nodes fails) and
+`tests/e2e/plane-angle.mjs` (the real app; §6b asserts the rendered warning text
+and its tooltip).
+
+---
+
+### pose/mesh-object-3d.js
+
+**Purpose.** The **grouping layer**: a *3D Mesh Object* is a named set of
+PLANES, the way a plane is a named set of nodes. It completes the three-level
+model — a node is a point with one 3D position, a plane is a group of nodes, and
+an object is a group of planes **whose shape is determined by how those planes
+are connected**. Nothing here is geometric; `mesh-object-geometry.js` derives the
+shape on demand.
+
+The class is `MeshObject3D` because a JS identifier may not begin with a digit.
+**Every user-facing string says "3D Mesh Object"** — the table header, the
+buttons, the status messages. Know that before renaming anything.
+
+**Key exports.**
+- `class MeshObject3D` — `id` (stable, never reused), `name`, `color`,
+  `planeIds` (ordered; insertion order is the face order an export will use) and
+  `flipNormals`. `hasPlane` / `addPlane` / `removePlane`,
+  `resolvePlaneIds(model)` / `resolvePlanes(model)` / `planeCount(model)` /
+  `danglingCount(model)`.
+- `class MeshObjectSet` — `objects`, `size`, `isEmpty`, `createObject(name, {color})`,
+  `adoptObject(obj)` (RESTORE path — keeps the file's ID and advances `_nextId`,
+  exactly as `PlaneNodePool.adoptNode` does and for the same reason),
+  `getObject(id)`, `deleteObject`, `renameObject` (refuses a blank name),
+  `recolorObject`, `objectsForPlane(planeId)`, `clear()`.
+- `MESH_OBJECT_COLORS`, `defaultMeshObjectColor(i)` — a palette deliberately
+  disjoint from `PLANE_COLORS` and `PLANE_NODE_COLORS`, because an object's
+  colour overrides its members' when drawn and the two must be tellable apart.
+
+**Why membership resolves LAZILY, and why there is no delete cascade.** Every
+read of membership filters against the live planes (`resolvePlaneIds`). So
+`PlaneModel.deletePlane` does not know objects exist, needs no hook, and cannot
+leave an object holding a dangling reference — the reference is simply never
+dereferenced except through the filter. This is the single design choice that
+makes the whole feature **additive**: no method that predates it changes
+behaviour. The cost is that `planeIds.length` is NOT the face count; call
+`planeCount(model)`.
+
+**Imports from project modules.** None (deliberately dependency-free; the
+`PlaneModel` references are JSDoc types only).
+
+**Imported by.** `pose/plane-data.js` (which owns a `MeshObjectSet` as
+`PlaneModel.meshObjects` and re-exports these symbols),
+`pose/plane-serialization.js`, `ui/mesh-objects.js`.
+
+**Tests.** `tests/test-mesh-object-3d.mjs` (51 assertions — identity, adoption,
+membership order, and §4 the additivity guarantee: a plane model with objects on
+it is byte-identical to one without, including after deleting a member plane).
+
+---
+
+### pose/mesh-object-geometry.js
+
+**Purpose.** Turn "a group of planes" into a **mesh**, derived and never stored.
+The shape is a pure function of the plane model, rebuilt whenever anyone asks —
+the same rule `ui/viewport3d.js` follows when it rebuilds `_planeGroup` every
+update. A stored mesh is a second copy of every vertex that goes stale the moment
+a node is dragged, re-triangulated or pinned.
+
+**How connectivity determines the shape.** All three fall out of the global node
+pool, and none of it needs a merge-by-distance pass:
+1. **Vertices** are the pool nodes the member planes reference — two planes
+   referencing one node produce ONE vertex, so a shared corner welds itself.
+2. **Faces** are the planes, each a ring of vertex indices.
+3. **Edges** are shared automatically: an edge is an unordered pair of vertices,
+   and two faces are adjacent iff they list the same pair. That adjacency graph
+   IS "how the planes are connected"; shells, naked edges, manifoldness and
+   coherent winding are all read off it.
+
+**Key exports.**
+- `buildMeshObjectGeometry(obj, model, {frame, scale, eps})` → `MeshObjectGeometry`:
+  `vertices` (`Float64Array`, 3V), `vertexNodeIds` (V, provenance), `faces`
+  (polygon rings), `facePlaneIds`, `faceNormals` (3F, unit, coherent),
+  `triangles` (`Uint32Array`, ear-clipped) and `connectivity` (`vertices`,
+  `faces`, `shells`, `edgeCount`, `nakedEdges`, `nonManifoldEdges`, `isClosed`,
+  `isOriented`, `degenerateFaces`, `stalledFaces`, `danglingPlaneIds`,
+  `coincident`, `volume`).
+- `faceRingNodeIds(plane, pool)` — the same dispatch `planeFillOrder3d` uses
+  (user edge cycle, else convex hull seeded by `planeFit.normal`) but in NODE
+  IDS, which is the only index space two different planes share.
+- `faceAdjacency`, `orientFacesCoherently`, `meshConnectivity`, `signedVolume`,
+  `earClip2d`, `earClipFace`, `newellNormal`, `coincidentNodeReport`,
+  `connectivitySummary`.
+
+**Winding is the part the annotation does not determine.** A face's ring
+ultimately depends on `planeFit.normal`, a PCA eigenvector whose SIGN IS
+ARBITRARY, so independently-fit planes have unrelated windings — black patches
+and failed booleans downstream. `orientFacesCoherently` fixes the relative half
+by BFS over the adjacency graph using the manifold rule (**two faces sharing an
+edge traverse it in OPPOSITE directions**); `signedVolume` fixes the global half
+for a CLOSED mesh (negative ⇒ flip all ⇒ outward). For an OPEN cage there is no
+enclosed volume and nothing can decide which side is out, which is why
+`MeshObject3D.flipNormals` is user-set and persisted. The canonical correction
+and the user's toggle are **two independent reversals applied in order** — folding
+them into one `||` makes the toggle silently do nothing on any mesh that needed
+the canonical flip.
+
+**Ear clipping, not the viewport's fan.** `viewport3d._buildPlaneFillMesh` fans
+over the ring, which is right for a translucent overlay and self-overlaps on any
+concave face. `earClipFace` projects onto the face's own 2D basis and clips
+there. Its point-in-triangle test is deliberately **non-strict**: a vertex lying
+exactly ON a candidate ear's edge must block it, or the ear is clipped and the
+triangle pokes outside the polygon — a plain L-shaped ring hits this.
+
+**Coordinates.** LUCID's world is Z-up right-handed and **so is Blender's** — no
+axis conversion belongs anywhere in this pipeline. The only transforms applied
+are the user's origin frame (`applyOriginFrame`) and a uniform positive scale
+(non-positive is ignored rather than allowed to mirror the mesh).
+
+**Imports from project modules.** `./plane-data.js` — `planeCycleOrderIds`,
+`convexHullOrder3d`; `./origin-frame.js` — `applyOriginFrame`. DOM-free and
+THREE-free.
+
+**Imported by.** `ui/mesh-objects.js`.
+
+**Tests.** `tests/test-mesh-object-geometry.mjs` (86 assertions — a unit cube
+from six deliberately-inconsistent rings welding to 8 vertices and enclosing +1,
+an open cage, shell counting, ear clipping against a fan negative control,
+coincident-node detection, frame + scale). Its coherence negative control checks
+the **opposite-traversal property directly** rather than comparing volumes,
+because signed volume is taken about the world origin and any face through the
+origin contributes zero however it is wound — a unit cube at `[0,1]³` measures
++1 even with half its rings backwards.
 
 ---
 
@@ -1345,6 +2193,86 @@ subtitle is populated for loaded projects, not just freshly triangulated ones.
   `invert3x3`, `backProjectToRay`, `backProjectToRays`,
   `pointToRayDistance`, `pointsToRayDistances`,
   `computeFundamentalMatrix`, `epipolarError`, `epipolarErrorMatrix`.
+- Plane fitting (View ▸ Define Planes):
+  `fitPlaneToPoints3d(points3d)` → `{centroid, normal, rms, nPoints}|null`, and
+  `projectPoints3dOntoPlane(points3d, plane)` → a NEW flat `points3d` with every
+  present point dropped onto the plane (input untouched, missing nodes stay
+  missing). The fit is **total least squares via PCA** — the normal is the
+  eigenvector of the smallest eigenvalue of the points' 3x3 covariance, reusing
+  the module-private `jacobiEigen` (which returns eigenvectors as ROWS paired
+  with unsorted `eigenvalues[i]`). Perpendicular distance is the right objective
+  because the corners carry error in all three axes; an ordinary least-squares
+  fit of z on (x, y) would privilege an axis and blow up edge-on. Returns
+  **null** for fewer than 3 points, coincident points, or COLLINEAR points —
+  collinear input admits infinitely many planes, so a normal there would be
+  arbitrary and "fitting" to it would silently rotate the annotation to
+  nonsense. Detected via the middle eigenvalue relative to the largest.
+- CONSTRAINED plane fitting (IMMUTABLE / "frozen" plane nodes):
+  `fitPlaneConstrained(points3d, options)`,
+  `projectPoints3dOntoPlaneConstrained(points3d, plane, immutable)`,
+  `mergeFrozenPoints3d(solved, frozen, immutable)`,
+  `summarizePlaneTriangulation(points3d, nodeErrors, immutable)`,
+  `planesInvalidatedByFit(movedNodeIds, planes, excludePlaneId)`,
+  `orientNormalLike(normal, previous)`, `normalizeImmutableMask(immutable, n)`,
+  and the constants `PLANE_COPLANAR_TOL_FRAC` (1e-3), `PLANE_COPLANAR_TOL_FLOOR`,
+  `PLANE_ANCHOR_COND_FRAC` (κ = 1e-3), `PLANE_MUTABLE_DEVIATION_FRAC` (0.05).
+  All PURE and model-agnostic: they take a flat `points3d` plus a plain
+  immutability spec (`Set` of indices | boolean mask | index list, normalized by
+  `normalizeImmutableMask`), never the plane node-pool objects. An immutable
+  node's 3D is FROZEN — not moved by 2D editing, by triangulation, or by the
+  fit — so the fit minimizes the SAME perpendicular residual subject to hard
+  linear constraints: pin the offset with an anchor, restrict the normal to an
+  admissible subspace `N` (3×q), take the smallest eigenvector of `NᵀMN` where
+  `M = Σ(p−a)(p−a)ᵀ` over the MUTABLE points, **scattered about the anchor, not
+  the centroid** (`M = S_c + m(c−a)(c−a)ᵀ` — genuinely a different matrix from
+  the free fit's). q follows the frozen set's rank: rank 0 (1 anchor, or several
+  coincident) ⇒ q=3; rank 1 (2 anchors, or 3+ collinear) ⇒ q=2, solved in closed
+  form as a 2×2 eigenproblem in the basis of `d⊥`; rank 2 (3+ non-collinear) ⇒
+  q=1, the anchors alone determine the plane and the mutable points get **zero**
+  weight (hard constraints, not weighted). Exactly 3 non-collinear anchors use
+  the **exact cross product**, no eigen solve. 4+ are OVER-determined and are
+  free-fit alone first (reusing `fitPlaneToPoints3d`) and rejected unless
+  `rms ≤ max(τ·anchorDiameter, floor)`.
+  **The 0-immutable case deliberately does NOT come through here** — it returns
+  `code: 'not_constrained'` and the caller must use `fitPlaneToPoints3d`, whose
+  floats are pinned by `tests/e2e/define-plane-mode.mjs`.
+  **Every threshold is SCALE-RELATIVE** (a fraction of the point set's
+  diameter): scene units are whatever the calibration used, so an absolute
+  millimetre tolerance would misfire on either a bench rig or an arena.
+  **Result object** — `{ok, code, message, plane, anchorIndices, anchorNames,
+  mutableIndices, mutableNames, warnings[], metrics}`. `code` is
+  machine-readable so the UI decides block-vs-confirm **structurally, never by
+  sniffing the message**: `ok` | `not_constrained` | `no_anchor_3d` |
+  `anchors_collinear` | `anchors_noncoplanar` | `underdetermined`. `warnings[]`
+  carries the non-fatal half — `anchors_collinear_relaxed` (a 3rd+ collinear
+  anchor adds no information, so it relaxes to the 2-anchor line case),
+  `anchors_coincident`, and `mutable_far_from_plane` (the flatten is well
+  defined but drastic — the UI should confirm, not block). Every message is
+  keyed to node NAMES with the plane name for disambiguation, never indices,
+  because the global node pool makes duplicate names likelier.
+  **Fails before mutating**: validation returns without reading or writing
+  anything further, and the flatten is a separate call.
+  **`hasPoint3d` only rejects NaN**, so an ±Infinity anchor would sail through
+  it into `jacobiEigen` (which has no NaN/Inf guard) and yield a garbage
+  eigenvector — anchors are therefore checked with an explicit `isFinite` and
+  return `no_anchor_3d`.
+  `projectPoints3dOntoPlaneConstrained` copies immutable coordinates through
+  **bit-identically** (a raw element copy, NOT "projecting an on-plane point is a
+  no-op" — round-off makes that false, and a frozen point drifting an ulp per
+  re-fit is the exact silent corruption the flag exists to prevent).
+  `summarizePlaneTriangulation` reports `nNodes`/`meanError` over MUTABLE nodes
+  only and the frozen residuals separately as `nAnchors`/`anchorMeanError` plus a
+  per-node `provenance` (`'frozen'`|`'triangulated'`|`'missing'`): a frozen
+  node's residual is an OUT-OF-SAMPLE residual — no DOF were spent fitting it —
+  so folding it into `meanError` misrepresents the solve the user is judging.
+  `planesInvalidatedByFit` does not block a shared-node fit (co-owning a node is
+  ordinary work); it tells the UI whose `planeFit` to drop after a fit moved a
+  node they share. **The user's instrument for pinning a shared intersection
+  line is the immutable flag** — freeze the shared nodes and neither fit moves
+  them. Covered by `tests/test-plane-constrained-fit.mjs`, which checks the 1-
+  and 2-anchor solves against a brute-force search over the admissible normals
+  (a fit that centred on the centroid would still produce a plausible-looking
+  plane through the anchor; only a residual comparison catches it).
 - Group math: `triangulateAndReproject(instanceGroup, cameras, options)`
   (`options.method` = `'dlt'`|`'ba'`, `options.triangulateOnly`,
   `options.robustScale` (BA soft-L1 scale in px), `options.includedCameras`,
@@ -2332,6 +3260,68 @@ edit-group mode, keyboard shortcuts.
 - `isInteractiveClickTarget(target)` — used by other UI to skip
   click-through on form controls.
 
+**Plane annotation (View ▸ Define Planes).** A `PlaneInstance`
+(`pose/plane-data.js`) is edited through the SAME code path as a UserInstance —
+`hasPoint`/`getX`/`getY`/`setPoint`/`numNodes` is the whole interface the drag
+path needs, and PlaneInstance inherits all of it — so plane editing cannot
+drift from pose editing. Added surface:
+- `findNearestPlaneNode(vx, vy, viewName)` — mirrors `findNearestNode`
+  (nodes first, then edges; an edge hit returns `nodeIdx: -1` for
+  `_resolveNearestNode`), with the same zoom-corrected thresholds. It considers
+  only the indices `getPlaneNodeIndices(viewName)` reports as SHOWN there
+  (`planeNodeIndexSet`, also passed to `_resolveNearestNode`'s new `allowed`
+  argument): a plane instance covers the feature's whole node pool, so without
+  the filter a node whose only plane is not placed on this view would take a
+  click while drawing nothing.
+- `selectPlane(plane, nodeIdx)` + `selectedPlane` / `selectedPlaneNodeIdx` /
+  `hoveredPlaneNode`. A plane selection and a pose selection are **mutually
+  exclusive** (each `select*` clears the other) so exactly one thing is ever
+  reported as selected; `clearSelection()` clears both.
+- The `beginPlaneDrag(viewName, nodeIdx, wholePlane)` callback, asked once at
+  mousedown. `allowed:false` refuses the drag (a PINNED node; the feature puts
+  the reason in the status bar) while the click still SELECTS, so the node stays
+  reachable for un-pinning. Its `indices` become `dragInfo.indexFilter`, which
+  both `_onDragMove` and `_onDragUp` honour in whole-instance mode — an
+  Alt+drag must carry the grabbed plane's nodes and leave every other plane's
+  where they are, and the pool-wide instance makes that a real distinction.
+- The `isPlaneDataLocked()` callback, asked in the right-click branch before a
+  plane node is nulled. True while something else is reading plane geometry and
+  must not have it change underneath (the Set Angle dialog, which stays open
+  over a live 3D view); nulling a plane node invalidates its 3D, so it is a
+  geometry edit like a drag. Deliberately NOT folded into `isPlaneEditMode`,
+  which gates hit-testing too: with that false a click meant for a plane corner
+  would fall through and grab a pose node instead. Plane nodes keep selecting
+  and hovering while locked; only the mutations are refused. Like
+  `beginPlaneDrag`'s `allowed:false`, the callback puts the reason in the status
+  bar itself — this module cannot explain a refusal it does not own, and a
+  silent one reads as a broken click.
+- `onPlaneChanged(planeInstance, movedIndices, {moved})` — the second argument
+  names the node indices the edit touched (`[nodeIdx]`, the alt-drag's filter, or
+  null for "unknown"), so the feature can invalidate exactly those nodes' 3D.
+  `moved` separates a DRAG (`true`) from a right-click null-toggle (`false`):
+  only a drag means the user positioned those points, which is what promotes a
+  REPROJECTED corner to a real observation. Toggling one off says nothing about
+  where it is, so it must not.
+- `_startDrag`'s trailing `plane` argument, carried on `dragInfo.plane`.
+  Planes live outside `frameGroups`, so unlike a grouped instance they cannot
+  be re-resolved from `instanceGroupIdx` mid-drag and are held by reference.
+  `onMouseUp` skips its usual `instance.type = 'user'` promotion for a plane —
+  promoting it would put a PlaneInstance into the pose pipeline's vocabulary.
+- Gestures: click to select, drag a node, **Alt+drag** to translate the whole
+  plane (reusing `altDragSource`'s `mode: 'instance'`), **right-click** to
+  toggle a node off into `nulledNodes`.
+- The node hit radius comes from the `getPlaneNodeSize` callback (the shared
+  Plane Appearance ▸ Node Size slider), so what you can grab is always what you
+  can see; `planeHitRadius` is the fallback when no callback is supplied.
+
+**Everything plane-related is gated on `_planeEditable()`** — the
+`isPlaneEditMode` + `getPlaneInstances` callbacks. Outside "Defining Plane
+Mode" every plane branch is dead, so plane nodes can never compete with pose
+nodes for a click during normal annotation; with no callbacks wired the whole
+feature is inert. Inside the mode, planes are checked FIRST on mousedown/hover
+so a plane node on top of a pose instance is still grabbable, and a MISS falls
+through to the normal handling so pose editing keeps working.
+`tests/e2e/define-plane-mode.mjs` pins both directions of that gate.
 **Deselecting an unlinked instance clears the Delete target too.** Two fields
 track an unlinked selection: `assignmentSelection` (what the amber ring and the
 Ungrouped Instances row highlight read) and `selectedUnlinked` (what
@@ -3576,6 +4566,26 @@ data sources. Plus visibility-toggle helpers and frame counter updates.
   *consumes* `state.triangulationResults`.
 - `updateFrameCounters()` — updates status-bar frame counters.
 
+  **Plane placements draw last.** After `drawFrameOverlays` returns for a view,
+  the loop calls `drawPlaneOverlays(view)` (`ui/plane-definition.js`) on the
+  same overlay canvas. The order is load-bearing: `drawFrameOverlays` opens
+  with a `clearRect`, so planes drawn before it would be wiped. Planes are
+  frame-independent (static scene geometry), so this runs on every frame
+  regardless of the current `FrameGroup`, and in every mode — not just
+  Defining Plane Mode. Pinned by `tests/e2e/define-plane-mode.mjs`, which
+  samples overlay pixels.
+
+  **Defining Plane Mode's toolbar lock is re-asserted here.** The toolbar block
+  near the top of `drawAllOverlays` RECOMPUTES `tbGroup.disabled` /
+  `tbEditGroup.disabled` from the pose selection on every overlay draw, and the
+  mode redraws constantly — so `applyPlaneModeToolbarLock()`
+  (`ui/plane-definition.js`) is called right after it rather than only at
+  `enterPlaneMode`, where the lock would survive until the first mouse move. A
+  no-op when the mode is off. Pinned by
+  `tests/e2e/plane-mode-toolbar-lock.mjs` §3, which first proves the draw really
+  does reach that code (without a session `drawAllOverlays` returns early and
+  the assertion would be vacuous).
+
 **Imports from project modules.**
 - `./app-state.js` — `state`, `interactionManager`, `timeline`.
 - `../pose/triangulation.js` — `ensureLazyFrameData`,
@@ -3586,15 +4596,1168 @@ data sources. Plus visibility-toggle helpers and frame counter updates.
   `trackingExcluded` so views excluded in the Tracking Wizard render grey).
 - `./identity-assignment.js` — `editGroupState`, `finishEditGroup`.
 - `./info-panel.js` — `updateFrameInfo`.
+- `./plane-definition.js` — `drawPlaneOverlays`, `applyPlaneModeToolbarLock`.
+  **Circular** (that module imports `drawAllOverlays` back); safe because both
+  call sites are inside function bodies.
 
 **Imported by.** `pose/triangulation.js`, `pose/tracker.js`,
 `pose/initialization.js`, `import-export/save-load.js`,
 `import-export/slp-import.js`, `loading/session-loader.js`,
 `ui/identity-assignment.js`, `ui/export-modals.js`,
-`ui/sessions-panes.js`, `ui/ui-wiring.js`.
+`ui/sessions-panes.js`, `ui/ui-wiring.js`, `ui/plane-definition.js`.
 
 **User-facing features.** Every overlay redraw — after seek, drag,
 re-triangulate, identity assignment, or visibility-toggle change.
+
+---
+
+### ui/plane-definition.js
+
+**Purpose.** "Defining Plane Mode" (**View ▸ Define Planes**) — the annotation
+UI for re-defining the 3D viewer's origin. The end goal of that work is a
+**translation vector + rotation matrix** that move the world frame onto a plane
+the user marks up; this module owns how the user *draws* that plane and owns
+nothing about the solve. The data model (`PlaneNodePool`, `PlaneSkeleton`,
+`PlaneInstance`, `PlaneModel`) lives in `pose/plane-nodes.js` +
+`pose/plane-data.js` and is partly re-exported here.
+
+The pool, the planes and the origin frame live in app-session memory; the
+per-view 2D lives on the active `Session`. **All of it is persisted** by
+`import-export/plane-metadata.js`, so **every plane/node MUTATION calls
+`markDirty()`** — an unsaved rename, re-colour, pin, placement, membership
+change, fill, solve, drag or origin is a real unsaved change and the save dot
+has to say so. The rule is per mutation, **not** per repaint:
+`refreshPlanePanel()` / `syncPlanes3D()` / `redraw()` run for plenty of reasons
+that change nothing on disk (entering the mode, a slider, a hover), and marking
+from them would leave the dot permanently on. The node-size / edge-width /
+3D-corner-size sliders are the deliberate exception — browser-local display
+taste, not written to the project, so they must not mark it dirty.
+
+**Nodes are GLOBAL and a node may be in several planes.** The pool holds every
+plane node in the project; a plane is an ordered list of node IDs plus optional
+edges. That is what lets two planes MEET along a shared line — the corners on
+that line are one node with one 3D position and one 2D point per view, so
+re-solving either plane cannot split the line apart.
+
+**The panel's SHAPE is that model made visible: three SIBLING sections**, not a
+nodes editor nested inside a plane editor. A node outlives the planes that
+reference it, so presenting node creation as a sub-step of editing one plane
+would misstate the model.
+
+1. **Nodes** (`#planeNodesDetails`) — the project-wide pool. A LIST, not a
+   grid: each node is one row — chevron, colour, name, padlock, × — with **no
+   column labels**, and expanding it reveals its 3D position and the planes
+   using it. Everything in it acts on the NODE, so it applies to every plane
+   using it, and there is **no membership column**. Carries `#planeNodeNameInput` + `#btnAddPlaneNode`,
+   `#planeNodesEmpty` and `#planeFrozenWarning`. **`+ Node` mints a POOL node
+   and touches no plane** — it neither creates one nor joins one (it used to do
+   both), and a duplicate name is refused rather than silently minting a second
+   node under a name the user identifies the first one by. A node in zero planes
+   is a valid resting state, rendered `.plane-node-unused`. The × here
+   **destroys** the node project-wide and confirms first when it is shared or
+   pinned, naming the planes it will change.
+2. **Edit Plane** (`#planeEditorDetails`) — WHICH plane, then what THAT plane is
+   made of. Its summary names the plane (`#planeEditorTitle`). Its TOP row is
+   the plane **selector** (`#planeSelect`), which lists every plane (option
+   value = plane id) with **`+ New Plane` pinned LAST**; it sits OUTSIDE
+   `#planeEditorContent` so it stays live with nothing selected, and is a
+   selector ONLY — choosing `+ New Plane` creates and selects one, and the
+   re-render puts the displayed value back on that new plane. Everything below
+   it (`#planeEditorContent`) is swapped for `#planeEditorEmpty` when nothing is
+   selected: the EDITABLE name `#planeSkeletonName` (the one place a plane is
+   renamed — the rename re-renders, so the selector and the Planes table follow
+   live); a members table (`#planeMembersTable`, `NAME | COLOR swatch | ×`)
+   whose × is `removeNodeFromPlane(…, {deleteIfOrphan:false})` — the REFERENCE
+   goes, the node stays in the pool with its 3D, pin and 2D; an
+   **add-an-existing-node** control (`#planeAddNodeSelect` +
+   `#btnAddExistingPlaneNode`) listing every pool node not already in the plane,
+   disabled with a spoken reason when there is none, and now the **only** way a
+   node enters a plane; and `#planeEdgesDetails` (edges are per-plane), whose
+   hint states that connections are OPTIONAL — triangulation and fitting are
+   edge-independent and edges exist for visual reference, and to state a fill
+   outline the convex hull cannot (a CONCAVE one). Without edges the fill hulls
+   the plane's points, so an unconnected plane still fills correctly.
+3. **Planes** (`#planePlanesDetails`) — `#planeSkeletonsTable` (the drag
+   source, with the per-plane expander and placement rows; each row's meta reads
+   `N off, N reprojected`, since a view Triangulate reprojected onto is placed
+   like any other and would otherwise give no clue that its corners are the
+   model's output rather than the user's annotation),
+   `#planeSkeletonsEmpty`, `+ New Plane`, the shared `.plane-action-row`
+   (Triangulate / Fill / Fit) and `Set Origin`. LAST, deliberately: the editor
+   is where the work happens, so it gets the space next to the pool it draws
+   nodes from, and this list reads as the roster you switch between. Selecting
+   here and selecting in `#planeSelect` are **the same one piece of state**
+   (`planeState.selectedPlaneId`), which both controls write and both re-read on
+   the next `refreshPlanePanel` — so they cannot drift apart. Note
+   `#planeEditorEmpty` points UP at the dropdown in section 2 ("pick one in the
+   Plane dropdown above") — that string tracks the selector and must move with
+   it.
+
+**Entering the mode mints NO plane.** `enterPlaneMode` re-selects an existing
+plane so re-entry resumes where it left off, but creates nothing. A phantom
+`plane_1` is indistinguishable from one the user made and forgot, so it gets
+dragged onto a view and triangulated before anyone questions it; an empty
+Planes list plus an empty-stated editor is the honest starting point. Pinned by
+`define-plane-mode.mjs` §1b.
+
+The add-an-existing-node dropdown is the **headline affordance**: picking a node
+another plane already uses is exactly how an intersection is built. It replaced
+the old per-row "In" checkbox, which is gone (and with it `.plane-node-member`),
+and it is now the ONLY route from the pool into a plane — creating a node and
+putting one in a plane are two separate acts, because a node is not owned by a
+plane.
+
+**Key exports.**
+- `planeState` — `{ active, model, selectedPlaneId, nodeSize, edgeWidth,
+  nodeSize3d, expanded }`. `active` is the mode flag; `model` is the
+  `PlaneModel` (pool + planes + per-view 2D); `nodeSize`/`edgeWidth`/
+  `nodeSize3d` are ONE shared value each across every plane (Plane Appearance
+  sliders — reference geometry you size once for legibility against your video,
+  not per-plane styling); `expanded` is the set of plane ids whose placement
+  dropdown is open.
+- `planeModel()` — the model, with its 2D **bound to the active session**.
+  Planes and nodes are project-scoped, but a `PlaneInstance` is 2D on one
+  session's views, so the placements map lives on the `Session` and is adopted
+  through `attachPlacements` whenever the active session changes (identity
+  check, so the re-sync/prune runs once per switch, not once per call). Every
+  accessor below goes through this.
+- `planePool()` / `getPlanes()` / `getPlane(id)` / `getSelectedPlane()` /
+  `createPlane(name)` / `deletePlane(id)`. **Deleting a plane keeps every one
+  of its nodes** — nodes are plane-independent, so a node in no plane is an
+  ordinary pool member that simply is not drawn anywhere, and auto-pruning it
+  would throw away a pinned coordinate or a positioned 2D point as a side
+  effect of tidying up. The Nodes table is the one place a node is destroyed.
+- `planePoints3d(plane)` / `planeNodeNameAt(plane, idx)` / `planeHasAny3d(plane)`
+  — the plane-ordered views of pool state that `ui/origin-definition.js` and the
+  3D payload read.
+- `getPlaneInstance(view)` / `getPlaneInstances(view)` / `placedPlanesOn(view)`
+  / `placedViewsOf(plane)` / `placePlaneOnView(...)` / `unplacePlaneFromView(...)`
+  — ONE `PlaneInstance` per VIEW, indexed by pool order, on
+  `session.planePlacements` (`Map<viewName, PlaneInstance>`). Deliberately
+  **not** keyed by frame: a plane is static scene geometry. Un-placing KEEPS
+  the 2D (visibility is derived from the placed set), so re-placing restores
+  exactly what the user positioned.
+- `triangulatePlane(plane)` — solves the plane's 3D corners across every view it
+  is placed on, writing them onto the NODES (`writePoints3dForPlane`, which
+  refuses pinned ones) plus `plane.triangulation`. Follows
+  `triangulateAndReproject` on the two points that matter for correctness —
+  observations are **undistorted** before the linear DLT (only valid in ideal
+  pinhole coordinates) and error is measured in each camera's **native** pixel
+  space against the raw annotation. Right-click-disabled nodes are excluded per
+  view. Pinned nodes keep their stored 3D (`mergeFrozenPoints3d` discards their
+  DLT result) but their residual IS measured and reported separately
+  (`summarizePlaneTriangulation`) — an out-of-sample residual saying "your
+  pinned anchor no longer agrees with where you clicked". DLT only, no BA: a
+  plane is 3-8 hand-placed corners. Returns `{ok:false, reason}` rather than
+  throwing.
+  - **Requires 2+ HAND-PLACED views, not 2+ placements.** Once triangulation
+    reprojects a plane into the views it was not placed on, those views ARE
+    placed but contribute nothing, so a placement count would let a plane
+    annotated on ONE view return a confident answer built from one ray. The gate
+    counts views with at least one usable (positioned, not nulled, not derived)
+    observation, and `plane.triangulation.views` lists only those — otherwise
+    `refreshTriangulationErrors` would average in a view whose residual is zero
+    by construction.
+  - Then it calls `reprojectPlaneIntoUnplacedViews`, and
+    `triangulatePlaneAndReport` **redraws the 2D overlays** — triangulation now
+    writes 2D, so without that the new placement is real, listed in the panel,
+    and invisible until some unrelated event repaints.
+- `reprojectPlaneIntoUnplacedViews(plane)` — writes the plane's solved 3D into
+  the `PlaneInstance` of every view it is NOT placed on, flags those points
+  `derived`, and places the plane there so it draws. Into the real instance
+  rather than a read-only reprojection overlay because a plane is reference
+  geometry the user is trying to get RIGHT: the useful thing is not only seeing
+  where it lands in the other views but being able to grab a corner there and
+  fix it, and dragging one is what turns it into evidence. Three refusals:
+  - **Never claims to be evidence** — every written point is `derived`, so it is
+    out of the next solve and out of the error average (see `PlaneInstance`).
+  - **Never writes a mirrored ghost** — a point BEHIND a camera still divides
+    through to a finite, plausible pixel (`reprojectPoint` does not check the
+    sign of `w`), so each node is gated on `cameraDepth > 0`. A view with nothing
+    in front of it is left alone and reported in `behindViews`.
+  - **Never overwrites a view the user placed** — those hold the user's own
+    annotation. The one exception is a point that is itself derived: those are
+    REFRESHED wherever they are, because a reprojection left over from a solve
+    two edits ago reads as current, which is worse than none.
+  Off-frame reprojections are still written when the point is in front of the
+  camera (a plane may legitimately extend past the frame edge; clamping would
+  fake a corner). Cameras with no `state.views` entry are skipped — a placement
+  nobody can see. Consequence worth knowing: un-placing a reprojected view is
+  undone by the next Triangulate, by design.
+- `planPlaneFit(plane)` / `applyPlaneFit(plane, plan)` / `fitPlane(plane, opts)`
+  — the **second half** of the origin pipeline, split so the two outcomes that
+  need the user happen before anything is written. With **no pinned node** it
+  is `fitPlaneToPoints3d` + `projectPoints3dOntoPlane`, unchanged; with one or
+  more it is `fitPlaneConstrained` + `projectPoints3dOntoPlaneConstrained`. The
+  free case is deliberately NOT routed through the constrained solver (it would
+  move floats for no benefit, and returns `not_constrained` to stop that by
+  accident). Then the correction goes out to BOTH representations:
+  `syncPlanes3D` for the viewer, and `reprojectPointCamera` into every placed
+  view's 2D — **skipping pinned nodes**, whose 3D did not move and whose
+  annotation is the user's, not the model's. Nodes toggled OFF still get their
+  2D updated; the off flags are preserved. Derived points are rewritten too (so
+  they keep agreeing with the fitted 3D) but excluded from the reported
+  `movedPx`, which answers "how far did the fit move YOUR annotations".
+  `refreshTriangulationErrors` re-derives the per-node errors afterwards, also
+  skipping derived points.
+- **Blocking vs confirming.** `fitPlaneAndReport` dispatches on the result
+  **CODE**, never on the message text. `no_anchor_3d` / `anchors_collinear` /
+  `anchors_noncoplanar` / `underdetermined` BLOCK: the message goes to a dialog
+  and the status bar and **nothing is mutated**. The `mutable_far_from_plane`
+  warning CONFIRMS instead (the fit is valid; only flattening a corner metres
+  onto it is drastic).
+- **Stale-fit propagation.** After a successful fit the nodes that actually
+  MOVED are found by an `Object.is` diff of input vs output (immutable entries
+  are bit-identical and missing ones stay NaN, so the diff is exact), and
+  `planesInvalidatedByFit` names the OTHER planes standing on them. Their
+  `planeFit` is dropped and the user is told which ones went stale — a shared
+  node moved by fitting plane B silently breaks plane A's fit otherwise.
+- `syncPlanes3D()` — pushes every plane that has 3D into `viewport3d.setPlanes`
+  (`points3dForPlane` / `planeEdgesLocal` / `planeFillOrder3d` /
+  `planeNodeColors`, all in the plane's own node order). `polygonOrder` is the
+  FILL's ring — the user's edge cycle or the convex hull — not membership order,
+  so an interior corner is covered by the fill rather than notching it. Full rebuild, so it is
+  also the REMOVE path. No-ops when `viewport3d` is null. Also the one place the
+  3D drag callbacks are wired (idempotent), since the viewport is re-created per
+  session load. The payload's `editable` is
+  `planeState.active && !isOriginModeActive() && !isAngleModalOpen() &&
+  !!plane.planeFit` — the last term is the 3D half of the Set Angle edit lock
+  (see `ui/plane-angle.js`): that dialog is not modal, so the view under it stays
+  orbitable, and a corner dragged while it is open would move the geometry its
+  readout and its ghost were computed from. It then calls
+  the private `syncMeshObject3D()`, which pushes the SELECTED 3D Mesh Object's
+  derived surface into `viewport3d.setMeshObject` (or `null` when nothing is
+  selected). That lives here rather than in `ui/mesh-objects.js` because this is
+  the function every plane mutation already routes through — anywhere else and
+  the object's surface would lag a node drag by a frame.
+- **3D corner dragging** — `onPlaneNodeDragged3D` / `onPlaneNodeDragEnd3D`
+  (private; installed by `syncPlanes3D`). The viewport has already constrained
+  the position to the fitted plane, so these only write it: onto the node, then
+  `reprojectPointCamera` into every placed view. **The 2D follows the 3D here** —
+  the reverse of every other edit path, and the only consistent choice: a fitted
+  corner is *defined* by the plane. A **pinned** node is refused here (once per
+  drag, with the reason in the status bar): the payload marks draggability per
+  PLANE, not per node, so the pin is enforced in the callback. Per-move work is
+  `syncPlanes3D` + `redraw` only; the panel catches up on drag end.
+- **The Nodes list's shape** — `renderNodesTable` / `renderNodeDetailRow` /
+  `renderPinInfoButton`. It is a LIST of nodes, not a grid of their properties,
+  and everything about it follows from that: the colour leads the row because it
+  is how you tell this corner from the others on every view and in 3D; the name
+  is a borderless input that only looks like a field when you go near it; the
+  coordinates are one chevron away rather than always on screen; and the pin is
+  a padlock. Every column is named except the chevron, which names itself, and
+  `Pinned` also carries `#planePinInfo`: what the THREE pin states MEAN is the
+  one thing no icon can say. The delete × is a bare grey glyph rather than the
+  shared red `.panel-btn` — right in a table you visit to remove something,
+  wrong in a list of six nodes you are reading.
+- **The pin picker** — `openPinPopover` / `closePinPopover` /
+  `positionPinPopover` / `onPinPopoverReflow` / `schedulePinPopoverClose` /
+  `setNodePin`, and `ICON_PIN`. The `<select>` that used to sit in every row had
+  to be wide enough for the words "Plane-locked" and carried a second line
+  naming the plane a held node is held in — two lines of chrome per row to say
+  something that is usually "Unlocked". Now: one 15px padlock, coloured by
+  state, and hovering or clicking it floats a three-state picker over the panel.
+  Five things are deliberate:
+  - **It floats** (`position: fixed`, anchored to the icon, appended to
+    `document.body`). In-row would mean reserving three icons' worth of width
+    the row only needs while the pointer is there, and `.plane-panel` scrolls —
+    an absolutely positioned child would be clipped by its `overflow-y: auto`
+    at the first and last row.
+  - **A scroll REPOSITIONS it; it only closes when the icon leaves the panel.**
+    Dismissing on scroll was the first attempt and was wrong twice over: a
+    `scroll` event is delivered on the next frame, so the very scroll that
+    brought a row into view arrived *after* the picker opened and shut it again
+    — the picker could not be opened at all on a row you had just scrolled to.
+    `tests/e2e/define-plane-mode.mjs` §19 pins this.
+  - **Hover opens, a click makes it sticky**, and leaving closes it after a
+    260ms grace — the pointer has to cross a few pixels of row to reach it.
+    Esc and an outside mousedown close it too.
+  - **The current state is shown, dimmed and `disabled`.** It is there to say
+    what you have, not to be picked again.
+  - **`setNodePin` is model logic, not widget logic** — it was the `<select>`'s
+    change handler, and it keeps all three rules: Set Origin Mode refuses,
+    `plane-locked` resolves (or refuses) a holding plane, and every plane
+    standing on the node loses its stored fit, because a pin change changes what
+    a fit is allowed to do.
+- **Typing a position** — `commitNodeXyz` /
+  `applyTypedNodePoint` / `reprojectNodeIntoPlacedViews` / `fmtXyz` (all
+  private). The expanded panel's three fields are the keyboard path to the same
+  place the 3D drag reaches, and it follows the drag exactly: **the 2D follows
+  the 3D**, so every view the node is placed on is rewritten to the exact
+  reprojection of what was typed, the per-node errors are re-derived, and the
+  stored `planeFit`s are left alone (a corner must not move the frame it
+  defines). Four decisions worth knowing:
+  - **Why they are in an expanded row.** The info panel is a fixed 300px; the
+    row's own controls want ~120 of the ~282 it has to spend, and three legible
+    number fields do not fit in what is left at any panel width the app
+    currently has. They also do not belong on screen at rest: nine nodes of
+    nine numbers was most of what made the old list unreadable.
+  - **A field still showing what the panel printed keeps its FULL stored
+    double.** The display is 4 decimals (`fmtXyz`), all three fields are read on
+    every commit (a position is a triple), and re-parsing them all would round
+    the two axes the user never touched — editing z would silently move x.
+  - **Revert-on-invalid, except when there is nothing to revert to.** A node
+    with no 3D is being ENTERED rather than edited, so the first two numbers
+    typed stay put until the third arrives, with the status asking for them.
+  - **`locked` is read-only and `plane-locked` is projected.** A Locked node's
+    fields are `disabled` and its panel carries no commit listener at all (the
+    guard in `commitNodeXyz` covers the pin changing under a live field); a
+    Plane-locked one goes through `constrainPoint3dForNode`, the same model-side
+    enforcement a solve's publish path uses, and the status says the value was
+    projected, because a number that comes back different from the one typed
+    needs explaining.
+- `enterPlaneMode()` / `exitPlaneMode()` / `togglePlaneMode()` /
+  `isPlaneModeActive()` — show/hide the `#planeModeBar` banner and swap the
+  info panel's `.panel-tabs` + `.panel-tab-content` for `#planePanel`. The swap
+  only toggles inline `display`, so `setupPanelTabs`' own layout state is
+  untouched and exiting restores exactly the previously-active tab. Exiting also
+  clears the plane selection/hover, and unwinds both things entered from inside
+  the mode that lock this panel: `exitOriginMode()` and `closeAngleModal()`.
+- `handlePlaneDrop(planeId, viewName, clientX, clientY)` — the drop listener is
+  a thin adapter over this. Converts the cursor position with
+  `interactionManager.canvasToVideo`, so a drop lands where the pointer is under
+  zoom / pan / rotation exactly like a click would.
+- `planeInteractionCallbacks()` — the callback bag `ui/interaction.js` needs
+  (`isPlaneEditMode`, `getPlaneInstances`, **`getPlaneNodeIndices`**,
+  `getPlaneEdges`, `getPlaneNodeSize`, **`beginPlaneDrag`**,
+  `isPlaneDataLocked`, `onPlaneChanged`, `onPlaneSelectionChanged`). Merged into the InteractionManager's callbacks in
+  `pose/initialization.js` so that module keeps no import of the plane feature.
+  Two of these carry the pool model into hit testing: `getPlaneNodeIndices`
+  reports the indices actually SHOWN on a view (an instance covers the whole
+  pool, so a node whose only plane is un-placed would otherwise be grabbable
+  while drawing nothing), and `beginPlaneDrag` refuses a **pinned** node and
+  restricts an Alt+drag to the grabbed plane's nodes (translating every point of
+  the instance would drag unrelated planes along). It also refuses every node
+  while the Set Angle dialog is open — the 2D half of that edit lock, with the
+  reason in the status bar; the click still SELECTS, as with a pinned node.
+  `isPlaneDataLocked` (`isAngleModalOpen`) closes that half's other two doors:
+  the right-click null toggle, which reaches the model without passing through
+  `beginPlaneDrag`, and — in `handlePlaneDrop` — dragging a plane row onto a
+  view, which no `disabled` could stop because a `<tr>` does not take one.
+- `onPlaneChanged(inst, movedIndices, {moved})` — a 2D edit invalidates the 3D of
+  **the nodes that moved**, not the whole plane: a node's 3D is the node's, and
+  clearing a neighbour's would throw away work the edit says nothing about.
+  Pinned nodes are skipped (`invalidateNode3D`), but every plane standing on a
+  moved node still loses its fit. When `moved` is true it also clears those
+  nodes' `derived` flags — a point the user dragged is theirs, whatever put it
+  there. Deliberately NOT done inside `setPoint`: the fit's 2D write-back and the
+  3D corner drag go through the same setter and must not promote the model's own
+  output to evidence.
+- `drawPlaneOverlays(view)` — fills and edges per placed plane, then the NODES
+  once each over the union of those planes (a shared corner is one node with one
+  point, so drawing it twice would only double the anti-aliasing), then the
+  plane name at each plane's own centroid. Called by `drawAllOverlays` **after**
+  `drawFrameOverlays`. Three node states are visually distinct because they mean
+  three different things to the next solve: **solid** = the user's annotation,
+  counted; **hollow grey** = nulled, turned off; **ghosted with a dashed ring** =
+  derived, reprojected into a view the user never annotated, so shown and
+  draggable but not counted. Nulled wins when both apply. A **pinned** node gets
+  an extra white ring on top, because finding out it will not move by dragging it
+  would read as a broken drag rather than a deliberate lock.
+- `refreshPlanePanel()` — rebuilds the panel: `renderEditor` (section header +
+  empty state, plane name, the global Nodes table and its per-node coordinate
+  rows, the frozen-node warning, the
+  selected plane's members table, the add-an-existing-node dropdown, and the
+  connection selects + table), then the planes table, action row, origin button
+  and origin result, and finally `refreshMeshObjectsPanel()` from
+  `ui/mesh-objects.js`. Full DOM rebuild per mutation, deliberately — no
+  incremental diffing. It ends with the private `applyAngleModalLock()`, which
+  disables every control in `#planePanel` while the Set Angle dialog is open
+  (the panel half of that dialog's edit lock). LAST, so it overrides whatever
+  the renders above decided, and re-asked on every render rather than remembered
+  — a rebuild would otherwise leak an enabled button, and unlocking needs no
+  bookkeeping because those renders have just recomputed each control's real
+  state.
+- `setupPlaneDefinition()` — one-time wiring. Called once from
+  `pose/initialization.js`. Calls `setupMeshObjects()`.
+
+**The 3D Mesh Objects table is NOT here.** It lives in `ui/mesh-objects.js`, and
+this module's entire involvement is one import, the `setupMeshObjects()` call
+above, the `refreshMeshObjectsPanel()` call above and the private
+`syncMeshObject3D()`. That separation is deliberate: the objects feature is
+strictly additive, and keeping it out of this file is what makes "nothing
+existing changed" checkable rather than asserted.
+- `PLANE_DRAG_MIME` — `'application/x-lucid-plane-skeleton'`.
+- Re-exports `PlaneModel` / `PlaneSkeleton` / `PlaneInstance` / `PlaneNode` /
+  `PlaneNodePool` / `seedPlanePoints` / `planePolygonOrder` /
+  `points3dForPlane` / `nodeFreezeState` from `pose/plane-data.js`.
+
+**Editing is gated on the mode.** `isPlaneModeActive()` backs the interaction
+manager's `isPlaneEditMode` callback, so **outside** Defining Plane Mode a
+plane draws but never takes a click — plane nodes can never compete with pose
+nodes during normal annotation. Inside the mode planes take priority on
+mousedown, and a MISS falls through to the normal handling, so pose editing
+still works while the mode is on.
+
+**One placement per view per plane.** A second drop of the same plane on the
+same view is refused with a status warning rather than re-seeding, so carefully
+positioned nodes can't be destroyed by a stray drag.
+
+**The drag payload must never be `text/plain`.** `ui/sessions-panes.js` tells
+dockview to `accept()` any drag over the dock whose types include `text/plain`
+and to turn the drop into a **new video panel** named from the payload. A
+plain-text plane payload would be swallowed there as a bogus view name instead
+of placing a plane. Using a private MIME means dockview's
+`onUnhandledDragOverEvent` never accepts, no droptarget overlay appears, and
+this module's delegated listeners on `#videoDock` get the events.
+`tests/e2e/define-plane-mode.mjs` guards both halves: it asserts `dragstart`
+sets *only* the private MIME, and performs a real browser drag that must not
+spawn a dockview panel.
+
+**Imports from project modules.**
+- `../pose/plane-data.js` — `PlaneModel`, `PlaneSkeleton`, `PlaneInstance`,
+  `PlaneNode`, `PlaneNodePool`, `seedPlanePoints`, `planePolygonOrder`,
+  `planeFillOrderPoolIndices`, `planeFillOrder3d`, `planeNodeIndices`,
+  `planeNodeNames`,
+  `planeNodeColors`, `planeEdgesLocal`, `planeEdgesPoolIndices`,
+  `planeCentroid2d`, `points3dForPlane`, `writePoints3dForPlane`,
+  `nodeErrorsForPlane`, `nodeFreezeState`.
+- `../pose/pose-data.js` — `hasPoint3d`, `getPoint3d`.
+- `./app-state.js` — `state`, `interactionManager`, `viewport3d`.
+- `./origin-definition.js` — the Set Origin wizard. **Circular** (that module
+  imports `planeState` / `planeModel` / `getPlane` / `planePoints3d` /
+  `planeNodeNameAt` / `syncPlanes3D` back); call-time use only.
+- `./overlays.js` — `makeVideoToCanvasTransform`.
+- `../import-export/save-load.js` — `setStatus`, `markDirty`.
+- `./rendering.js` — `drawAllOverlays`, and `../pose/triangulation.js` —
+  `triangulatePoints`, `reprojectPointCamera`, `fitPlaneToPoints3d`,
+  `projectPoints3dOntoPlane`, `fitPlaneConstrained`,
+  `projectPoints3dOntoPlaneConstrained`, `mergeFrozenPoints3d`,
+  `summarizePlaneTriangulation`, `planesInvalidatedByFit`. Both **circular**
+  (rendering imports `drawPlaneOverlays` from here, and triangulation imports
+  rendering); safe because every use is inside a function body.
+
+**The mode blocks the pose-annotation toolbar.**
+`applyPlaneModeToolbarLock()` disables `+ Instance` / `- Instance` / `Group` /
+`Edit Group` / `Triangulate` / `Triangulate All` / `Track Frame` / `Track All`
+while the mode is on. All of them act on POSE annotation, which is a different
+object than the plane geometry the mode is for: in the mode a click lands on a
+plane node, the info panel is the plane panel, and `interactionManager`'s
+selection is a plane — so pressing Group or Triangulate would operate on a pose
+selection the user can no longer see or change, producing an edit they did not
+mean and cannot observe. The VISIBILITY controls (User / Predicted / Reproj /
+Errors), Sessions, Color and Hide Panel are deliberately NOT blocked: they
+change what is DRAWN, not what is annotated, and turning Predicted off to see
+the plane you are placing is exactly what the mode is for.
+
+Three details it has to get right:
+- **`disabled` alone is not enough for the two Triangulate buttons.** Each sits
+  inside a `.tri-dropdown` whose menu opens on **hover** (CSS) and whose DLT /
+  BA entries are `div`s with their own click handlers, so `disabled` on the
+  button reaches neither. The wrappers get `.plane-mode-locked`
+  (`pointer-events: none`), which kills the hover-open and the items together.
+- **The lock is re-asserted from `drawAllOverlays`**, because that function
+  rewrites `tbGroup.disabled` / `tbEditGroup.disabled` on every overlay draw.
+- **Each button's prior `disabled` is snapshotted at lock time and restored on
+  exit** — the rule `lockUI` in `ui/origin-definition.js` already follows, so a
+  button disabled for its own reasons (Track All mid-run) does not come back
+  enabled. The snapshot is taken only on the transition; re-taking it on the
+  re-assert would record the LOCKED state and make the restore a no-op.
+
+`styles.css` gained a `.toolbar-btn:disabled` rule at the same time — a disabled
+toolbar button previously had no styling of its own, so it looked exactly like a
+live one and only failed on click.
+
+**Imported by.** `ui/rendering.js` (`drawPlaneOverlays`,
+`applyPlaneModeToolbarLock`), `ui/ui-wiring.js`
+(`togglePlaneMode`, for the View menu item), `pose/initialization.js`
+(`setupPlaneDefinition`, `planeInteractionCallbacks`, `refreshPlanePanel` —
+called next to `syncPlanes3D` in `setup3DViewport`, which is the one place a
+freshly RESTORED plane model reaches the Nodes / Planes tables on every
+project-load path), `ui/origin-definition.js`,
+`import-export/plane-metadata.js` (`planeState`, at call time).
+
+**DOM it owns.** `#planeModeBar` (+ `#planeModeExit`) under the toolbar, and
+`#planePanel` inside `#infoPanel` — **three sibling `.info-section`s**, in this
+order:
+1. `#planeNodesDetails` — the POOL list `#planeNodesTable`
+   (`.plane-nodes-table`), columns **(chevron) / Color / Name / Pinned /
+   Delete**. The three icon columns are content-sized, so their labels set their
+   width and Name takes what is left; `.th-center` centres a label and its
+   control together. `Pinned`'s label carries `#planePinInfo`, the button
+   explaining the three states. There is no membership column and no 3D column:
+   the padlock says what the state badge used to, and the row carries the rest
+   (its `title` is `nodeStateTitle`, and `plane-node-frozen-unsolved` draws an
+   error stripe).
+
+   A node's IDENTITY row is `.plane-node-main`: `.plane-node-expander` (with
+   `.plane-caret`), `.plane-node-color`, `.plane-node-name`,
+   `.plane-node-pin-btn[data-pin]` and `.plane-node-del`. **Select it with
+   `tr.plane-node-main`, never `tbody tr`** — an expanded node adds a second
+   row. That row, `.plane-node-detail`, appears only while the node is in
+   `planeState.expandedNodes`, and holds one `colspan=5` cell ▸
+   `.plane-node-detail-body` ▸ `.plane-node-xyz-line` (three
+   `.plane-node-xyz-cell`: `.plane-node-xyz-label` +
+   `.plane-node-xyz-input[data-axis]`) and `.plane-node-planes`
+   (`.plane-node-plane-chip`, the holding plane's marked
+   `.plane-node-plane-holder` with a `.plane-node-plane-mark`). Both rows carry
+   `data-plane-node-id` and
+   `.plane-node-row.plane-node-{mutable,frozen,frozen-unsolved}` plus
+   `.plane-node-unused` / `.plane-node-shared`, so every state cue runs down the
+   whole node; the open identity row also gets `.plane-node-open`. The picker is
+   `#planePinPopover` (`.plane-pin-popover` ▸ `.plane-pin-option[data-pin]`,
+   the current one `.is-current`), a child of `document.body` rather than of any
+   row. With it: `#planeNodesEmpty`, the
+   `#planeFrozenWarning` line, and `#planeNodeNameInput` + `#btnAddPlaneNode`
+   (pool-only: it creates no plane and joins none).
+2. `#planeEditorDetails` — **Edit Plane**. Summary =
+   `.plane-summary-label` ("Edit Plane") + `#planeEditorTitle` (the plane's
+   name). First in the body, in its own `.plane-name-row.plane-picker-row`:
+   `#planeSelect`, the plane SELECTOR (`+ New Plane` pinned last; a disabled
+   placeholder option holds the value when nothing is selected). It is outside
+   `#planeEditorContent`, which is swapped for `#planeEditorEmpty` when nothing
+   is selected. Inside: `#planeSkeletonName` (the editable name),
+   `#planeMembersDetails` (the members
+   table `#planeMembersTable`, columns **Name / Color swatch / ×**, rows
+   carrying `data-plane-member-id` and `.plane-member-name` /
+   `.plane-member-swatch`; `#planeMembersEmpty`; `#planeAddNodeSelect` +
+   `#btnAddExistingPlaneNode` + `#planeAddNodeHint`) and `#planeEdgesDetails`
+   (`#planeEdgesTable`, `#planeEdgesEmpty`, `#planeEdgeSrcSelect` /
+   `#planeEdgeDstSelect` / `#btnAddPlaneEdge`).
+3. `#planePlanesDetails` — `#planeSkeletonsTable` (the **Planes** table, drag
+   source; `data-plane-skeleton-id`, `.plane-expander` / `.plane-placed-count`,
+   `.plane-placements-row` ▸ `.plane-placements-body` ▸ `.plane-placement-item`
+   / `.plane-tri-summary` / `.plane-tri-node` ▸ `.plane-tri-node-name` /
+   `-xyz` / `-err` / `-pin`, each node line also carrying
+   `data-plane-node-id`), `#planeSkeletonsEmpty`,
+   `#btnNewPlaneSkeleton`, the `.plane-action-row`
+   (`#btnPlaneTriangulate` / `#btnPlaneFill` / `#btnPlaneFit`),
+   `#btnSetOrigin`, `#btnSetPlaneAngle` and — nested inside it —
+   `#planeAppearanceDetails` (**Plane Appearance**: `#planeNodeSize` /
+   `#planeEdgeWeight` / `#planeNodeSize3d`). Appearance is a SUB-section of
+   Planes rather than a section of its own because it styles exactly what the
+   table above it lists and nothing else in the panel; it stays `open` so the
+   sliders are no less discoverable than when they sat at the top level.
+
+It also creates
+the modal `#planeDialog` (`.plane-confirm-overlay` / `.plane-confirm-modal`,
+`#planeDialogMessage`, `#btnPlaneDialogCancel` / `#btnPlaneDialogConfirm` /
+`#btnPlaneDialogDismiss`) for blocking errors and confirmations — **Esc closes
+it, and Esc CANCELS**, per the project's modal rule. Styles live under the
+"Defining Plane Mode" block at the end of `styles.css`.
+
+**Section titles are 14px** (`.plane-details > summary`). The sub-sections —
+those inside Edit Plane, and Plane Appearance inside Planes — stay at 12px via
+`.plane-subdetails`, which is what makes the hierarchy legible without indenting
+them.
+`tests/e2e/define-plane-mode.mjs` §2 asserts both sizes, so a section added with
+the wrong wrapper is caught rather than merely looking odd.
+
+**The pin states are named for the padlock.** `PIN_LABELS` reads
+**Unlocked / Plane-locked / Locked** — it said "Free" while the control was a
+`<select>`, and the three names now have to be the three things a padlock can
+be. The model values (`'none'`, `'plane-locked'`, `'locked'`) did not change,
+and neither did anything on disk.
+
+**Icons are inlined SVG strings** (`ICON_PIN`, `ICON_INFO`, and the older
+`ICON_TRIANGULATE` / `ICON_MESH` / `ICON_FIT`) — no build step and no asset
+requests: an `<img>` per row would be three more round trips and a flash of
+nothing on first paint, and `currentColor` is what lets one padlock take the
+state's colour. The three padlocks were traced from supplied Lucide-style SVGs
+whose files landed in the gitignored `prompts/` scratch folder, so **the
+geometry in `ICON_PIN` is the only surviving copy** — edit it there, not from a
+file. The C2PA provenance blob those exports carried (8KB of base64 each) is
+dropped.
+
+**The panel's width belongs to the tables.** `#infoPanel` is a fixed 300px, so
+the coordinate fields were paid for by the boxes around them: `.plane-panel`,
+the `.info-section` wrapper (which had been inheriting the 14/16 padding meant
+for the tabbed info panel), `.plane-details-body` and the cell padding were all
+trimmed, and the generic `.data-table` 120px cell cap is lifted inside the plane
+panel — it exists to ellipsize read-only text and would have clipped a row of
+inputs. (The Planes table takes the opposite tack for the same reason; see
+**It FITS the 300px panel** below.)
+The sections stay `<details>`: folding one away is how room is made
+VERTICALLY, which is the axis that is cheap here. Those rows also stop
+pretending to be clickable (no hover highlight, default cursor) — they are
+forms, nothing happens when you click one, and a hover that lit up half a node
+was advertising an interaction that does not exist.
+
+**`frozen-unsolved` is said in the open.** A node pinned before it was ever
+triangulated can never acquire a 3D — the pin is exactly what forbids a solve
+from writing one — and it blocks every fit of every plane it belongs to
+(`no_anchor_3d`). So it gets its own badge colour in the Nodes table AND a
+`#planeFrozenWarning` line naming the nodes, not just a tooltip: a tooltip is
+not read by someone who does not already suspect a problem.
+
+**Three shared appearance values, not two.** `planeState.nodeSize` (2D, canvas
+px) and `planeState.nodeSize3d` (3D scene units) are separate because they are
+in unrelated units — one is sized against the video, the other against the
+world — and `nodeSize3d` is separate from the viewport's own
+`skeletonNodeSize` so sizing plane corners never resizes pose nodes.
+`wirePlaneSlider` takes an optional `apply` callback for exactly this: the 3D
+slider re-pushes the scene (`syncPlanes3D`) instead of redrawing the canvases.
+
+**The Planes table.** Columns are expander / Name / Nodes / actions — the count
+of shared nodes rides on the Nodes cell as a `+n` marker, since sharing is the
+thing worth seeing when choosing which plane to work on. The only per-row
+action is **delete**, plus a `3D` badge once the plane is solved. Expanding a
+row reveals that plane's placements inline — one line per view, click to
+select, × to un-place — plus the triangulation, pinned-anchor and plane-fit
+readouts when there are any. There is no separate Placements table. The row is
+the drag handle, so the expander and action cells suspend `tr.draggable` on
+`mouseenter` — otherwise a button press starts a drag.
+
+**It FITS the 300px panel, and two separate things had to give for that.** The
+section used to scroll horizontally and clip the right-hand end of every line
+in an expanded row (panel `scrollWidth` 401 against `clientWidth` 300):
+- **The table grew.** An auto-layout table is sized by its widest cell and
+  simply ignores `width: 100%`, so `#planeSkeletonsTable` (and, for the same
+  reason, `#planeMembersTable` / `#planeEdgesTable`) is `table-layout: fixed`
+  with the `<th>` widths binding — 26 / auto / 46 / 56 px here. The cells'
+  inherited ellipsis is what gives instead, so a long plane name truncates and
+  repeats itself in `tdName.title` (which also carries the row's drag hint,
+  because a cell `title` wins over the row's). `#planeNodesTable` is
+  deliberately NOT fixed: its rows are input fields that size themselves.
+- **`white-space: nowrap` leaked into the sub-row.** `.data-table tbody td`
+  sets it, and it inherits into every div `buildPlacementsRow` puts in the
+  cell, so the three summary sentences could not wrap. They now live inside
+  `.plane-placements-body`, which undoes it — and which also gives the sub-row
+  the `margin-left: 22px` + left rule that an expanded NODE already had, so the
+  two sections read as one widget.
+`.plane-tri-node` went from one nowrap string to a **wrapping flex row** of
+parts (`.plane-tri-node-name` / `-xyz` / `-err` / `-pin`): at 246px of usable
+width a long name plus a coordinate triple plus a residual does not fit on one
+line, and wrapping keeps all of it on screen where truncating would not. Only
+the name ever ellipses, and the whole line is repeated in the row's `title`.
+The trailing word **"pinned" became the `ICON_PIN.locked` padlock** — the same
+one the Nodes list uses — which buys back a third of a coordinate's width; the
+word survives in that tooltip. Nothing else was shortened: coordinates are
+still 1 decimal and residuals 2. Pinned by `define-plane-mode.mjs` §18b, which
+builds a worst-case row (long plane name, long node names, four view names,
+four-digit coordinates, a constrained fit, two pins) and asserts
+`scrollWidth <= clientWidth` on the panel, the table, the section and the
+expanded cell, plus that no descendant's right edge passes the panel's.
+
+**The shared action row** (`#btnPlaneTriangulate` / `#btnPlaneFill` /
+`#btnPlaneFit`, below the table) acts on the **selected** plane and is disabled
+outright when nothing is selected. When something IS selected the buttons stay
+enabled even if the action's precondition fails — clicking then reports WHY in
+the status bar, which teaches more than a dead button. `renderActionRow()` owns
+their enabled/active state and titles.
+
+**`#btnSetOrigin`** sits below that row and hands off to
+`ui/origin-definition.js`. It is gated on there being a FITTED plane anywhere —
+not on the panel selection — because the wizard picks its corner in the 3D
+scene from any fitted plane; gating it on the selection would disable it for a
+perfectly valid project. `renderOriginButton()` owns that.
+
+**`#btnSetPlaneAngle`** sits below THAT and hands off to `ui/plane-angle.js`,
+gated the same way but on **two** planes and on a USABLE fit rather than a
+stored one (`anglePlanes()` — see that module), since an angle is a relationship
+and a plane that has been triangulated has a plane whether or not anyone pressed
+Fit. `renderAngleButton()` (imported, and called from `refreshPlanePanel`) owns
+it.
+
+**Triangulate says which nodes it could not move.** `showLockedNodesDialog`
+raises a modal naming a plane's `locked` nodes whenever `Triangulate` skipped
+any, and `triangulatePlane` refuses outright (with `lockedNodeNames` on the
+result) when EVERY node is locked, rather than reporting a success that moved
+nothing. The skip itself is old, correct behaviour — `setPoint3d` refusing a
+locked write is the entire locking mechanism — what changed is the REPORTING:
+it used to be a parenthetical inside a green success line ("… (2 pinned,
+kept)"), which reads as a detail rather than as "the thing you asked for did
+not happen to these corners". That matters far more now that
+**Set Angle Between Two Planes locks nodes automatically**, so a user can
+arrive holding locks they never set by hand. **`Fit` deliberately does NOT get
+this dialog:** holding pinned nodes fixed is what a CONSTRAINED FIT is *for* —
+the plane is solved to pass exactly through them, so they are honoured rather
+than skipped, and `reportFit` already says how many were held. A modal there
+would nag about the feature working as designed.
+
+`showPlaneDialog` and `refreshTriangulationErrors` are exported (rather than
+module-private) so `ui/plane-angle.js` can reuse the one error-modal idiom and
+the error re-derivation instead of growing a second copy of either.
+
+**Tests.** `tests/e2e/define-plane-mode.mjs`, `tests/e2e/plane-mode-toolbar-lock.mjs`
+(the toolbar lock: the redraw race, the dropdown hole, the visibility
+carve-out and the restore-on-exit rule), `tests/e2e/plane-persistence-roundtrip.mjs`
+(the dirty flag, driven through the real panel handlers) and
+`tests/e2e/plane-angle.mjs` (the locked-node dialog, and that unlocking hands
+the corners back to the solver).
+
+---
+
+### ui/origin-definition.js
+
+**Purpose.** "Set Origin Mode" — the wizard that collects the two inputs
+`pose/origin-frame.js` needs, applies the result, and reports it.
+
+**The wizard.** Three steps, because both inputs are picked in the 3D scene and
+each must be committed before the next is meaningful:
+
+| step | action | result |
+|---|---|---|
+| `node` | click a corner of a **fitted** plane | the new origin |
+| `axis` | click the red (+n) or blue (−n) arrow | the new +Z |
+| `confirm` | Cancel (back to `node`) / Continue | applies |
+
+**Only fitted planes offer corners.** An un-fit plane has no normal, so it has
+no +Z to offer and picking it would dead-end the wizard. Enforced in the
+viewport via `userData.planeFitted` (independent of `planeEditable`: dragging is
+OFF during the wizard, but those same corners stay pickable), and again by
+refusing to enter the mode at all when nothing is fitted.
+
+**Both candidate arrows are always drawn.** The choice is between a normal and
+its negation; showing one would hide that there IS a choice. Choosing dims the
+loser rather than removing it, and the axis picker stays armed through
+`confirm`, so switching is one click and needs no cancel.
+
+**Key exports.** `originState`, `enterOriginMode` / `exitOriginMode` /
+`isOriginModeActive`, `fittedPlanes()`, `pickOriginNode(planeId, nodeIdx)` /
+`pickOriginAxis('positive'|'negative')`, `cancelOriginPick` / `applyOrigin` /
+`clearOrigin` / `confirmClearOrigin`, `exportUpdatedCalibration()`,
+`renderWizard` / `renderOriginResult`, `setupOriginDefinition`,
+`attachOriginCallbacks(vp)`.
+
+**The UI lock.** `lockUI` walks the menu bar, toolbar, info panel, viewport and
+timeline and records each button's **prior** `disabled` state, restoring it
+exactly on exit — blanket-enabling would bring back buttons that were disabled
+for their own reasons (the plane action row with nothing selected). Esc, the
+mode's Exit button and the wizard's Cancel/Continue are the exceptions and the
+only way out. The menu bar's dropdowns are `div`s, so `disabled` cannot reach
+them: `body.origin-mode-lock` blocks them in CSS instead. `exitPlaneMode`
+unwinds this mode first, or leaving would strand every button disabled.
+
+**Applying an origin does not move any data.** `viewport3d.setOriginFrame` moves
+the displayed grid + axes — and the ORBIT with them, so dragging and zooming
+re-center on the new origin (`_rebaseControls`, see `ui/viewport3d.js`); cameras,
+skeletons and planes stay in calibration world coordinates. Re-baking them would silently change every 3D number the rest
+of the app reads and reports — and the transform, not a rewritten point cloud,
+is the deliverable.
+
+The frame **is** persisted: `import-export/plane-metadata.js` writes it as its
+two INPUTS — the origin and the chosen +Z — and `pose/origin-frame.js` rebuilds
+`R`, the translation and the axis-angle form deterministically on load, so the
+derived quantities can never contradict the inputs. Applying or clearing an
+origin therefore calls `markDirty()`; entering and leaving the mode does not, as
+a wizard the user backed out of changed nothing.
+
+**Arrow length is scaled to the PLANE** (`arrowLengthFor`: 70% of the plane's
+reach from the picked corner), not to the camera baseline — a fixed length is
+invisible on a room-sized plane and off-screen on a small one.
+
+**`fittedPlanes()` asks the POINTS, not the plane.** A plane keeps its
+`planeFit` until something clears it, but its corners' 3D can be invalidated
+independently (they live on the nodes), so the filter requires at least one
+node with a 3D position — otherwise the wizard would dead-end on a corner that
+no longer exists. `pickOriginNode`'s `nodeIdx` is an index into the PLANE's own
+node order (what the 3D payload was laid out in), not a pool index; the two
+differ as soon as a node is shared.
+
+**Imports from project modules.** `./app-state.js` (`state`, `viewport3d`),
+`../import-export/save-load.js` (`setStatus`, `markDirty`),
+`../pose/origin-frame.js` (`buildOriginFrame`, `rebaseExtrinsics`),
+`../pose/pose-data.js` (`getPoint3d`, `hasPoint3d`, `Camera`),
+`../import-export/file-io.js` (`exportCalibrationTOML`, `downloadTOML`), and
+**circularly** `./plane-definition.js` (`planeState`, `planeModel`, `getPlane`,
+`planePoints3d`, `planeNodeNameAt`, `syncPlanes3D`, `showPlaneDialog`) and
+`./origin-rebase.js` (`showSetCalibrationModal` — this module owns the button,
+that one owns what it does) — call-time use only, same rule as the other cycles
+in this directory. Plane 3D lives on the shared
+node pool now, so this module reads it through `planePoints3d(plane)` (a
+plane-ordered materialization) and node names through `planeNodeNameAt`,
+never off the plane object.
+
+**Imported by.** `ui/plane-definition.js`, `ui/origin-rebase.js`,
+`import-export/plane-metadata.js` (`originState`, at call time).
+
+**DOM it owns.** `#originModeBar` (+ `#originModeExit`), the
+`#originInstruction` overlay inside `.viewport3d-container`
+(`#originDragHandle`, `#originStepText`, `#originLegend`, `#originConfirmRow`
+with `#btnOriginCancel` / `#btnOriginContinue`), and, in the plane panel,
+`#originResultSection` / `#originResultDetails` / `#originResult` plus
+`#originDangerSection` / `#originDangerDetails` (`#btnExportCalibration`,
+`#btnSetCalibration`, `#btnClearOrigin`). The overlay is `pointer-events: none`
+except for its button row and its drag grip, so it can never steal a pick from
+the canvas below.
+
+**The overlay is draggable** (`setupInstructionDrag` / `placeBox` /
+`applyBoxPosition`), because it floats over the very corner or arrow the wizard
+is asking the user to click. Only the grip (`#originDragHandle`) takes pointer
+events — making the whole box draggable would have meant giving it
+`pointer-events: auto` and swallowing picks across its full footprint. The
+position is page-session state (module-level `boxPos`, container-relative px,
+not persisted) and is re-clamped every time the box is shown, since the 3D
+viewport is resizable and a spot that was inside it can stop being so while the
+box is hidden. Placing it explicitly also clears the stylesheet's centring
+`translateX(-50%)`, which would otherwise offset the box from the cursor.
+
+**Two collapsible blocks, not one section.** The readout lives in
+`#originResultDetails` ("Defined Origin", **open** by default — it is what the
+user just asked for) and the three actions that reach OUTSIDE the 3D view live
+below it in `#originDangerDetails` ("Danger Zone", **collapsed** by default).
+Both appear and disappear together with `originState.frame`, because all three
+actions are relative to a defined origin: without one, export and Set would
+write the calibration back out unchanged and Reset has nothing to reset.
+Collapsing the readout matters because it is a dozen labelled vectors plus a
+3×3 in a ~300px column, permanently in the way of everything below it.
+
+- **`Export New Calibration`** → `exportUpdatedCalibration()`, which downloads
+  `calibration-updated.toml`: every camera's extrinsics through
+  `rebaseExtrinsics`, written with the existing `exportCalibrationTOML` /
+  `downloadTOML`. This is the other half of the deliverable — applying an origin
+  deliberately moves no annotated point, which is only coherent if whoever
+  consumes that 3D also gets a calibration that agrees on where the world is.
+  Intrinsics, distortion, size and camera ORDER ride through untouched, so a
+  diff against the original shows the origin change and nothing else; and the
+  rotation keeps the NOTATION it arrived in (a 3×3 for an anipose-style
+  calibration, a Rodrigues triple otherwise), since silently changing
+  representation would make the file stop matching its siblings in a rig's
+  config directory. It returns the TOML string, which is what the e2e asserts on.
+- **`Set as New Calibration`** → `ui/origin-rebase.js`, which overwrites
+  `calibration.toml` AND re-bases every 3D number in the project so the world
+  becomes the defined origin. The committing twin of Export; see that module's
+  entry for the ordering that makes a cancel safe.
+- **`Reset to Calibration Origin`** moved here from the readout and now goes
+  through `confirmClearOrigin`, which raises `showPlaneDialog` first. `clearOrigin`
+  itself stays unguarded — the load path (`plane-metadata.js`) and the tests must
+  reach it without a dialog, and the confirmation is about an unrecoverable
+  CLICK, not about the operation. Unrecoverable literally: the frame is derived
+  from a corner and an arrow picked in the 3D view and nothing records which, so
+  "undo" means walking the wizard again and hoping for the same corner.
+
+**The Defined Origin readout is stacked, not tabular** (`renderOriginResult` →
+`vectorBlock` → `namedBlock`; the old `vectorTable` is gone). Each of the seven
+vectors is a `.origin-block`: its NAME on one line — with the unit (`mm`/`rad`)
+as a muted `.origin-unit` span beside it — and its x/y/z on a
+`.origin-block-body` line **indented** underneath, and the 3×3 `R` gets the same
+shape with its caption as the name. The panel is ~300px and the previous
+five-column table (`name | x | y | z | unit`) was wider than that, so the unit
+column was clipped off the right edge; stacking is what buys the width back.
+The layout classes are the Nodes list's own `.plane-node-xyz-line` /
+`-cell` / `-label`, deliberately shared so the two readouts in the one panel
+line up — **a coupling to keep in mind when those rules change.** What is NOT
+shared: the value is a `.origin-xyz-value` span, not `.plane-node-xyz-input`,
+because these are computed outputs and a box that looks typeable would lie; and
+nothing here expands or collapses, since it is seven fixed vectors rather than a
+list that grows with the project. Precision is unchanged at 3 decimals
+throughout — it already fits.
+
+**Tests.** `tests/e2e/define-plane-mode.mjs` §14 — which covers both blocks
+(the readout collapses to its summary; the Danger Zone appears with the frame,
+ships collapsed, and holds the three actions stacked and un-truncated), the
+export (the emitted TOML is round-tripped back through `parseCalibrationTOML`
+and a probe point must land on the same camera coordinates as it did under the
+ORIGINAL calibration in the OLD frame, with a negative control showing the
+unrewritten file does not), and the Reset warning (opening it, Esc and Cancel
+all keep the frame; only Confirm clears). It also measures
+`#originResult`'s `scrollWidth` vs `clientWidth` (and its widest descendant, and
+the whole `.plane-panel`) **twice**: once on the fixture and once after
+restaging the frame with six-figure mm coordinates and a long corner name — the
+fixture's two-figure numbers fit even the old table, so only the wide case
+actually pins the overflow fix. `tests/e2e/_diag-origin-panel.mjs` (untracked,
+`_diag-` = not part of any suite) screenshots both blocks — the readout to
+`$OUT` and the (force-opened) Danger Zone to `$OUT-danger.png`, separately,
+because the panel's own scroll clips the second out of the first's frame;
+`WIDE=1` stages the same wide-coordinate case.
+
+---
+
+### ui/origin-rebase.js
+
+**Purpose.** The dialogs, the progress bar, the Cancel button and the file write
+for **`Set as New Calibration`** — the committing twin of `Export New
+Calibration`. The maths and the plan are `pose/origin-rebase.js`'s.
+
+**The order of operations is not arbitrary.**
+
+1. Confirm, with the inventory (`countRebaseTargets`).
+2. **Get the file handle, still inside the click.** `showSaveFilePicker` needs
+   transient user activation and activation expires in a few seconds, so asking
+   for it *after* a minute of re-basing throws `SecurityError`. It has to come
+   first even though it reads oddly.
+3. Plan — the slow part — behind a blocking progress modal with Cancel.
+4. Write the file.
+5. Only then swap the buffers in.
+
+Every failure mode therefore leaves the project untouched: a cancel drops the
+plan, and so does a failed write. Step 5 is the one irreversible moment and it
+is synchronous, so it cannot fail part-way.
+
+**Write access.** `Load Calibration` goes through a plain `<input type=file>`,
+which hands back bytes and no write handle, and a session-folder load gives no
+handles at all — so there is nothing to inherit and the user points at the file
+once per page session (`calibHandle`, not persisted; `resetCalibrationHandle()`
+is the test seam). Without the File System Access API it degrades to a plain
+download. With more than one session loaded, all of them are re-based but only
+the ACTIVE session's cameras go into the file, and the dialog says so.
+
+**Blocking means blocking.** The progress modal's scrim stops the pointer and a
+capture-phase `keydown` swallower stops the app's shortcuts, which are bound on
+`document` and would otherwise happily scrub the timeline or start a
+triangulation on top of a re-base. Esc is passed through as Cancel, per the
+project's modal rule.
+
+**Key exports.** `showSetCalibrationModal()`, `runSetCalibration(sessions)`,
+`resetCalibrationHandle()`.
+
+**After the swap** (`finishRebase`) the defined origin is **cleared**, not kept:
+the project is now expressed in that frame, so the offset from it is zero and a
+table still reporting the old rotation would describe a transform that has
+already happened. The grid goes back to the world axes for the same reason.
+`state.triangulationResults` (and each session's) is dropped rather than
+transformed — it is derived from 3D that just moved — and the 3D viewport is
+rebuilt, not merely re-framed, because the skeletons in it are built from
+`points3d`.
+
+**Imports from project modules.** `./app-state.js`, `../import-export/save-load.js`,
+`../import-export/file-io.js` (`exportCalibrationTOML`, `downloadTOML`),
+`../pose/origin-rebase.js`, `./rendering.js`, `../pose/initialization.js`, and
+**circularly** `./origin-definition.js` + `./plane-definition.js`, call-time use
+only.
+
+**Imported by.** `ui/origin-definition.js` (which owns the button).
+
+**Tests.** `tests/e2e/set-new-calibration.mjs` — the modal's inventory, Cancel at
+the confirmation, Cancel mid-flight (asserting no file was written and not one
+coordinate moved), and the commit: the file goes to a stand-in
+`FileSystemFileHandle` (headless Chromium exposes `showSaveFilePicker` but
+rejects it instantly with `AbortError`, the same reason
+`video-encode-streaming.mjs` supplies its own), every probe point keeps its
+pixel, and the origin collapses.
+
+---
+
+### ui/plane-angle.js
+
+**Purpose.** The dialog and the commit for **Set Angle Between Two Planes** —
+the UI half of `pose/plane-angle.js`. That module plans purely; this one asks,
+previews and writes, the same split `planPlaneFit` / `applyPlaneFit` uses and
+for the same reason: the geometry must be inspectable and refusable before
+anything is written.
+
+**Why a modal rather than a mode.** Set Origin is a wizard because its inputs
+are PICKED in the 3D view (a corner, then an axis arrow). This action's inputs
+are two planes and a number, which a form states better than a sequence of
+clicks — and they could not be picked in 3D as things stand: plane FILL meshes
+carry no `userData`, so only corners are raycastable and there is no "click a
+plane" gesture to reuse.
+
+**What the commit does, in order, because the order is load-bearing.**
+1. write the rotated 3D through `writePoints3dForPlane` — the one sanctioned
+   publish path, which skips LOCKED nodes and routes PLANE-LOCKED ones through
+   `PlaneModel.constrainPoint3dForNode`.
+2. install the ROTATED fit (`rotatePlaneFit`) rather than re-fitting, so the
+   normal's sign cannot flip.
+3. reproject the moved corners into every 2D view the plane is placed on,
+   exactly as `applyPlaneFit` does, so the annotation agrees with the 3D. Only
+   the corners that MOVED are rewritten — a hinge corner's 2D is the user's
+   observation of a point that did not move. The reprojection reads each node's
+   ACTUAL position, not the plan's, because the constrain hook may have moved a
+   plane-locked node off it.
+4. clear the stored fit of any OTHER plane whose nodes moved.
+5. **Hold the moved nodes PLANE-LOCKED to the plane that moved.** This is what
+   makes the angle durable: without it the next Triangulate on that plane
+   re-solves those corners from 2D and silently throws the angle away.
+   Plane-locked rather than Locked because what the user asserted is the
+   plane's ORIENTATION, not where each corner sits on it — a held corner is
+   still re-solved and `constrainPoint3dForNode` projects the answer back onto
+   the plane, so the annotation goes on improving while the angle survives,
+   instead of every later solve of this plane being a no-op the user has to
+   unpin their way out of. A node the user had already Locked is left Locked:
+   that is a stronger promise they made deliberately. It happens LAST because
+   step 1 writes through the same constrain hook and until step 2 the stored
+   fit is still the OLD one — a node pinned any earlier would have had its
+   rotation projected straight back onto the plane it was being rotated off.
+
+   **Durability has one hole, and it is the plane's fit.** A plane-locked node
+   constrains against `pinPlaneId`'s CURRENT `planeFit`; if that fit is later
+   cleared (pinning any node of that plane, or fitting a neighbour that shares
+   a corner — `applyPlaneFit` nulls the fits of planes whose nodes moved) the
+   constraint goes quietly inert and the next solve is free again. Triangulate
+   itself does not clear a fit, which is the case that matters here.
+
+**Which planes it offers: usable, not fitted.** `fittedPlanes()` — what Set
+Origin asks — is the wrong question here, and asking it listed **2 of a user's
+5** annotated planes. A plane loses its stored `planeFit` for reasons that say
+nothing about whether it HAS a plane: pinning a node clears the fit of every
+plane standing on it (and this action's own auto-lock does exactly that), and a
+plane that was triangulated but never Fitted never had one. Set Origin genuinely
+needs the stored fit, because it offers that plane's corners as an origin; this
+action only needs to know WHERE the plane is, which the triangulated corners
+already say. So `usableFit` returns the stored fit or derives one with
+`fitPlaneToPoints3d`, and **nothing is written** — deriving is a measurement,
+and opening a dialog must not mutate the project. The PLAIN fit, not the
+constrained one: this value is rotated with the points, and a TLS fit is exactly
+equivariant under a rigid motion where an anchor-constrained fit is not.
+
+**Key exports.**
+- `usableFit(plane, model)` → the plane's stored fit, else one derived now, else
+  null (fewer than 3 solved corners, or they are coincident or collinear).
+- `anglePlanes()` → every plane with a usable fit, in model order.
+- `showPlaneAngleModal()` — the dialog: two plane `<select>`s (picking the same
+  plane in both swaps them rather than producing a dead form), a swap button, a
+  readout of the current angle and the hinge, a target field, the plan's
+  warnings (each line is the warning's `message`, with its optional `detail` —
+  the untruncated node/plane list the narrow line had to cap — set as the
+  line's `title` tooltip), Cancel / Apply. **Esc cancels**, via a capture-phase `keydown`
+  listener, per the app-wide modal convention. Refuses up front with
+  `showPlaneDialog` when fewer than two planes are usable, rather than opening a
+  form that cannot be completed. The derived fits are handed to `planAngleEdit`
+  as its `fits` argument, since that module may not import `fitPlaneToPoints3d`.
+
+**It is the one plane dialog that is NOT modal.** Alone among them, its inputs
+are two planes the user has to ORBIT to tell apart — "back wall" and "front
+wall" are indistinguishable in a dropdown — and the thing it is asking about is
+in the 3D view. So:
+- the backdrop draws no scrim and takes `pointer-events: none`, with the dialog
+  itself taking the pointer back, leaving the 3D view live underneath;
+- `parkBesideViewport` opens it to the LEFT of `#viewport3dContainer` instead of
+  centred over it (falling back to the screen's left edge, never off it), and
+  the header still drags it anywhere;
+- the two chosen planes wear matching coloured outlines in the scene
+  (`viewport3d.setPlaneRoles`), keyed to a swatch beside each dropdown —
+  `ROLE_FIXED_COLOR` `#4da3ff` for the one held, `ROLE_MOVING_COLOR` `#ffd24d`
+  for the one that moves. Deliberately not the planes' own colours, which would
+  make the roles mean something different in every project.
+- **Apply re-plans before committing.** A live 3D view means the scene could
+  have changed since the last input change, and `lastPlan` would then describe
+  geometry that no longer exists. The plan is pure, so re-running it is free.
+
+Esc still cancels: that listener is on the document and owes nothing to the
+backdrop.
+
+**But "live view" is not "live data" — the EDIT LOCK.** Everything the dialog
+says (the current angle, the hinge, the ghost's shape) is read from plane
+geometry, so letting that geometry change underneath it produces a readout
+describing a scene that no longer exists and a ghost drawn from corners that
+have moved. While the dialog is open, plane data is therefore frozen in all
+three places it can be edited from:
+- `refreshPlanePanel` ends in `applyAngleModalLock`, which disables every
+  `button` / `select` / `input` in `#planePanel` and puts `plane-angle-lock` on
+  `<body>` (the class does what `disabled` cannot: dim the panel so the lock is
+  visible, and stop the `<summary>` elements folding sections away);
+- `syncPlanes3D` pushes `editable: false`, which makes 3D corners inert — no
+  drag, and no `move` cursor advertising one;
+- `beginPlaneDrag` refuses a 2D corner drag with a status line saying why, and
+  its two siblings close the paths that do not go through it: the
+  `isPlaneDataLocked` callback (the right-click null toggle, which invalidates
+  the node's 3D) and a guard in `handlePlaneDrop` (dropping a plane row onto a
+  view — a `<tr>` takes no `disabled`).
+
+All three ask `isAngleModalOpen()` on every render rather than being toggled by
+hand, so there is no lock state to get out of step and a mid-dialog re-render
+cannot leak an unlocked control. Unlocking needs no bookkeeping either: those
+renders recompute each control's real disabled state, so not re-disabling it is
+correct. What stays live: orbiting, zooming, panning, selection, the ghost
+preview, the dialog's own Cancel and Apply (they are in `document.body`, not in
+the locked panel) — and pose annotation, which cannot touch a plane.
+`exitPlaneMode` calls `closeAngleModal`, the same way it unwinds Set Origin
+Mode: a dialog that holds this panel locked must not outlive it.
+- `applyAngleEdit(plan, fixedPlane, movingPlane)` → `{ok, movedPx,
+  skippedNames, constrainedNames, heldNames, stalePlaneNames, achievedDeg}`.
+  One `markDirty()`, then the panel's mutation quartet.
+- `renderAngleButton()` — enable/disable `#btnSetPlaneAngle` with the reason in
+  its `title`, modelled on `renderOriginButton`. **Two** usable planes, not one:
+  an angle is a relationship.
+- `setupPlaneAngle()` — wire the button; called once from
+  `setupPlaneDefinition`.
+- `closeAngleModal()` — tear the dialog down, clear the ghost and the role
+  outlines, and lift the edit lock. Exported for `exitPlaneMode`.
+- `isAngleModalOpen()` — read by the three edit-lock guards above.
+
+**The live plan.** Every input change re-runs `planAngleEdit` and stores the
+result; Apply commits exactly that stored plan, so Apply can never act on a
+staler state than the readout shows. The plan is pure, so doing this per
+keystroke writes nothing.
+
+**The target field.** Commit-on-`change` with **revert-on-invalid**, the panel's
+convention — and the EMPTY case is checked before `Number`, which would read
+`''` as 0, a silent, plausible and wrong answer ("make these planes parallel").
+`keydown` is `stopPropagation`'d so the app's hotkeys do not fire while typing.
+
+**DOM it owns.** `#planeAngleOverlay` (`.plane-confirm-overlay`, reused
+wholesale), `.plane-angle-modal`, `#planeAngleFixed`, `#planeAngleMoving`,
+`#btnPlaneAngleSwap`, `#planeAngleReadout`, `#planeAngleTarget`,
+`#planeAngleWarn`, `#btnPlaneAngleCancel`, `#btnPlaneAngleApply`. The panel
+button `#btnSetPlaneAngle` is static markup in `index.html`, in its own
+`.panel-button-row` after `#btnSetOrigin`; it is caught automatically by origin
+mode's `lockUI` selector (`.plane-panel button`) and so must **not** be added to
+`UNLOCKED_IDS`. Styles: `styles.css` § "Set Angle Between Two Planes".
+
+**No keyboard shortcut**, so no `ACTION_CATALOG` entry — matching Set Origin.
+
+**Imports from project modules.** `./plane-definition.js` (circular, call-time
+only — `planeModel`, `planeState`, `refreshPlanePanel`, `syncPlanes3D`,
+`showPlaneDialog`, `refreshTriangulationErrors`), `../pose/plane-data.js`
+(`writePoints3dForPlane`, `points3dForPlane`), `../pose/triangulation.js`
+(`reprojectPointCamera`, `fitPlaneToPoints3d`), `../pose/plane-angle.js`,
+`./app-state.js`, `../import-export/save-load.js`, `./rendering.js`.
+
+**Imported by.** `ui/plane-definition.js` (`setupPlaneAngle`,
+`renderAngleButton`, `isAngleModalOpen`, `closeAngleModal`).
+
+**Tests.** `tests/e2e/plane-angle.mjs` — the button's gating, the dialog, the
+ghost preview, Apply, the auto-hold, and (§8) that a plane whose stored fit was
+cleared by a pin is still offered, (§9) that the dialog parks beside the 3D view
+and leaves it clickable with both planes outlined, (§10) the edit lock — that
+corners are draggable in 2D and 3D before the dialog opens and neither is while
+it is open, that all 63 of the panel's controls go disabled while the dialog's
+own two stay live, that the ghost still follows the typed angle while the data
+is frozen, that closing restores each control to its OWN state rather than
+blanket-enabling, and that leaving Defining Plane Mode closes the dialog. §5b keeps the Triangulate
+locked-nodes modal covered, which is now the only place it is asserted. §4/§5
+are the pair that make the hold observable: with the corners held, a Triangulate against PERTURBED 2D
+moves them and still lands them at 90°; set Free, the same solve walks them off
+the plane. Both measure the angle from the CORNERS (`__pointAngle`), not from
+the stored fit — a stored fit is not re-derived when a node moves, so measuring
+it would have reported 90° either way.
+
+---
+
+### ui/mesh-objects.js
+
+**Purpose.** The **3D Mesh Objects table** — a third table under Nodes and
+Planes, for the third layer of the model (a node is a point, a plane is a group
+of nodes, an object is a group of planes). Create, name, recolour and delete an
+object; check planes in and out of it; toggle Flip normals; and read a
+connectivity report of the shape those planes imply.
+
+Deliberately its OWN module rather than more of `ui/plane-definition.js`. That
+file already owns the mode, the placements, the drags and two tables; this
+feature is strictly additive, so keeping it separate is what makes the "nothing
+existing changes" claim checkable — `plane-definition.js` gains one import, one
+`setupMeshObjects()` call and one `refreshMeshObjectsPanel()` call, and that is
+the whole of its involvement.
+
+**Key exports.** `meshObjectState` (`{selectedObjectId}` — panel-local, NOT
+persisted), `getSelectedMeshObject()`, `meshObjectGeometry(obj)` (builds in the
+applied origin frame at scale 1, so reported numbers match the viewport),
+`refreshMeshObjectsPanel()`, `createMeshObject(name)`, `deleteObject(obj)`,
+`setupMeshObjects()`.
+
+**Everything shown is DERIVED.** The Shape badge, the report and the member list
+are recomputed from the model on every render — the underlying 3D can move at any
+moment (a node drag, a re-triangulate, a fit, an origin change), and
+`buildMeshObjectGeometry` is cheap at this scale while being wrong is not.
+
+**The report is written to be actionable.** The counts are there, but what a user
+needs is the next move: an open object says what a naked edge IS, a multi-shell
+one says that joining requires SHARING a node, and coincident-but-unshared nodes
+are named as pairs — the "I thought I joined it" case, which is invisible in the
+viewport because the two corners are drawn on top of each other.
+
+**What this module may NOT do.** Nothing here creates, deletes or edits a node or
+a plane. An object is a grouping: dissolving it cannot destroy its members, and
+un-checking a plane must not delete it. The panel's only destructive action is
+the object's own ×, which removes the grouping and nothing else. That constraint
+is what keeps 3D Mesh Objects from being able to break a workflow that predates
+them.
+
+**Imports from project modules.** `./plane-definition.js` — `planeModel`,
+`refreshPlanePanel`, `syncPlanes3D` (circular, and safe for the same reason the
+rest of this feature's cycles are: every use is inside a function body);
+`./origin-definition.js` — `originState`; `../pose/mesh-object-geometry.js`;
+`../import-export/save-load.js` — `setStatus`, `markDirty`.
+
+**Imported by.** `ui/plane-definition.js`.
+
+**Tests.** `tests/e2e/mesh-object-roundtrip.mjs` (the panel driving the model
+through real DOM handlers, the dirty flag per mutation, the derived shape
+tracking membership, save → reopen by ID, the PROJECT scope, and three negative
+controls: untouched projects write no key, the feature is additive, and deleting
+an object keeps its planes and nodes).
 
 ---
 
@@ -4622,6 +6785,9 @@ stopping at the last frame; the step transport buttons/keys stop it first.
   `setGridMode`, `updateVideoGridDisplay`, `showViewIndicator`. See
   **Single-view ("solo") mode** below.
 - Playback: `applyPlaybackRate`, `seekToLabeledFrame`.
+- View ▸ **Define Planes** (`menuDefinePlanes`) → `togglePlaneMode()`
+  (`ui/plane-definition.js`) — enters/leaves "Defining Plane Mode". A mode, not
+  a modal, so it has no Esc binding; the banner's Exit button is the way out.
 
 **Panel toggles: independent sizing, and hidden means idle.** `toggleInfoPanel`
 (`I`) and `toggle3DViewport` (`\`) each only flip their own panel's `collapsed`
@@ -4768,7 +6934,8 @@ header for the full list. Notable ones: `app-state.js`,
 `initialization.js`, `identity-assignment.js`, `export-modals.js`,
 `sessions-panes.js`, `settings.js`, `settings-modal.js`,
 `video-filters.js` (`setSessionRotation`; `clampRotation` still comes in via
-`sessions-panes.js`, which re-exports it).
+`sessions-panes.js`, which re-exports it), `plane-definition.js`
+(`togglePlaneMode`).
 
 **Imported by.** `pose/initialization.js`, `ui/info-panel.js`,
 `ui/layout-controls.js`, `loading/session-loader.js`,
@@ -4913,10 +7080,14 @@ via the options bag.
 **Key exports.**
 - `Viewport3D` — class. Selected methods: `setFrame(instanceGroups)`,
   `setSelectedInstance`, `setEnvironment`, `clearEnvironment`,
+  `setPlanes`, `clearPlanes`, `setMeshObject`, `clearMeshObject`,
+  `setAnglePreview`, `clearAnglePreview`, `setPlaneRoles`, `clearPlaneRoles`,
+  `setOriginPickMode`, `setOriginCandidates`,
+  `clearOriginCandidates`, `setOriginFrame`, `clearOriginFrame`,
   `addCameraPyramids`, `selectCamera`, `showSelectedCameraView`,
   `showInitialView`, `setMissingVideoCameras`, `highlightCamera`,
-  `resize`, `resetCamera`, `lookAtOrigin`, `fitToScene`,
-  `setVisible(visible)` / `isVisible()`, `dispose`.
+  `resize`, `resetCamera`, `lookAtOrigin`, `fitToScene`, `originPivot`,
+  `originUp`, `setVisible(visible)` / `isVisible()`, `dispose`.
 - **`setVisible(false)` stops ALL processing** (the `\` toggle's other half —
   see `ui/panel-visibility.js`). A collapsed container is still a perfectly
   good render target as far as WebGL is concerned, so the `_animate()` loop
@@ -4938,6 +7109,177 @@ via the options bag.
   and restore the normal one on the next line. `visible` is a per-instance
   constructor option (default `true`) rather than a DOM read, because the two
   export-modal instances must keep rendering regardless of the main panel.
+
+**Scene groups.** Nine `THREE.Group` siblings under the scene: `_cameraGroup`,
+`_skeletonGroup`, `_envGroup`, `_planeGroup`, `_meshObjectGroup`,
+`_angleGroup` (the Set Angle ghost), `_planeRoleGroup` (the Set Angle role
+outlines), `_originGroup` (the Set Origin candidate arrows) and `_framePivot`
+(the grid floor + axis helper).
+**`updateSkeleton` clears ONLY `_skeletonGroup`**, every frame — that is the
+entire mechanism by which the environment overlay and annotated planes persist.
+Anything frame-independent must be a sibling, never a child of
+`_skeletonGroup`.
+
+**Plane corners size independently of pose nodes.** `setPlanes` uses
+`this.planeNodeSize` (the panel's "3D Node Size" slider, pushed in by
+`syncPlanes3D`), not `skeletonNodeSize` — sizing reference geometry for
+legibility must not resize the pose annotation.
+
+**`setPlanes(planes)` / `clearPlanes()`** — user-annotated planes from
+View ▸ Define Planes (`ui/plane-definition.js`'s `syncPlanes3D`). Full rebuild
+per call, like `setEnvironment`. Payload per plane:
+`{id, name, color, nodeColors, nodeImmutable, edges, polygonOrder, filled,
+editable, planeFit, points3d}`. Nodes
+are spheres in their own per-node colour (the cross-view correspondence cue),
+edges reuse `_createCylinder`, and `filled` adds a fan-triangulated
+`BufferGeometry` mesh built by `_buildPlaneFillMesh` — `DoubleSide` because a
+plane is viewable from either face, `depthWrite: false` so the translucent fill
+never occludes nodes behind it. The fan walks `polygonOrder`, so it covers the
+real outline rather than an index-order bowtie, and a corner in the middle of a
+plane is covered by the fill instead of being a vertex of it. A fan is only
+valid over a convex ring, which a hull always is; a user-drawn CONCAVE ring can
+still fan wrong, which is the price of honouring their edges. **`points3d` needs no
+transform**: the Three camera is Z-up and the scene is already in the
+calibration's world frame, so coordinates go straight into `position.set`, the
+same as skeleton nodes and camera centres.
+
+**`setAnglePreview(spec)` / `clearAnglePreview()`** — a GHOST of where
+**Set Angle Between Two Planes** would put the plane being rotated, shown live
+while its dialog is open and cleared on Cancel, Esc and Apply. ADDITIVE in the
+same way `setMeshObject` is: its own group, its own pair of calls, and nothing
+in it touches `_planeGroup`. Geometry comes from the caller — the PLANNED
+points, which have not been written to any node — while the plane's edge list,
+polygon ring and colour are read back out of the last `setPlanes` payload by
+`spec.planeId`, so the ghost is drawn exactly like the real plane and there is
+no second copy of that payload shape to keep in step. The fill reuses
+`_buildPlaneFillMesh`, so a concave ring is ordered the same way it is for the
+solid plane and only the material differs. **`depthTest: false` on purpose:**
+the ghost overlaps the plane it proposes to replace, the useful thing to see is
+the DIFFERENCE between the two, and a depth-tested ghost is hidden by the very
+plane it is about to move — the same reasoning as the dimmed, non-depth-tested
+unchosen arrow in the origin picker. `clearPlanes()` clears it too, since a
+proposal about a plane that is no longer here must not hang in the scene. It is
+pure display: nothing here writes a node or marks the project dirty.
+
+**`setPlaneRoles(roles)` / `clearPlaneRoles()`** — fat, see-through-everything
+outlines saying WHICH planes the Set Angle dialog's two dropdowns are naming,
+and which of them is being held. `roles` is `[{planeId, color}]`; `null` or `[]`
+clears. A THIRD group rather than the ghost's, because the two answer different
+questions and are cleared at different times — a refused plan drops the ghost
+while the roles are still what the user is choosing between. Geometry comes
+from the last `setPlanes` payload (the plane AS IT IS; the ghost is the one
+showing the proposal), corners are drawn as well as edges so a plane with no
+edge list still reads, and `renderOrder` 8 puts it under the ghost's 9/10 so a
+proposal is never obscured by the highlight of the plane it would move.
+`clearPlanes()` clears it too. Pure display.
+**`setMeshObject(payload)` / `clearMeshObject()`** — the SELECTED 3D Mesh
+Object's welded surface, pushed by `syncPlanes3D`. ADDITIVE: its own
+`_meshObjectGroup`, a sibling of `_planeGroup`, which the per-plane fills above
+never touch — turning an object on draws the surface ON TOP of the planes it was
+built from rather than replacing them. Payload `{color, vertices, triangles,
+faces}` from `pose/mesh-object-geometry.js`; `null` clears.
+
+Front and back faces are drawn in **different colours** on purpose (the object's
+own, and a drab grey). Winding is the one property of the exported mesh a user
+cannot otherwise see — the plane fills are `DoubleSide` — and it is the property
+most likely to be wrong, so "I am looking at the inside" has to be visible here
+rather than discovered in Blender. Face outlines are drawn as `LineSegments` so
+polygon boundaries read where two coplanar faces meet.
+
+**Dragging a plane corner in 3D** (`_setupPlaneEditing` and friends;
+callbacks `onPlaneNodeDragged(planeId, nodeIdx, [x,y,z])` /
+`onPlaneNodeDragEnd(planeId, nodeIdx)`, wired by `syncPlanes3D`). Two rules,
+both enforced here rather than by the caller:
+1. **Only a FIT plane is draggable, and never a PINNED corner.** `setPlanes`
+   stamps `userData.planeEditable = editable && planeFit && !nodeImmutable[k]`
+   on each corner mesh and the raycast only ever collects those, so a
+   merely-triangulated plane's corners are inert — a corner with no plane has no
+   constrained direction to move in. The `nodeImmutable` term matters because
+   `planeEditable` also gates the **hover cursor** (`_pickPlaneNode`, used by
+   both the drag and the `'move'` cursor): without it a pinned corner would
+   advertise a drag that `onPlaneNodeDragged` then refuses. Note
+   `userData.planeFitted` deliberately does NOT follow it down — a pinned corner
+   is a *preferred* Set Origin anchor and must stay pickable.
+2. **A corner can only move WITHIN its fitted plane.** The drag resolves the
+   pointer ray against a `THREE.Plane` built from the fit's normal + centroid,
+   so the result is on the plane by construction — there is no "move then
+   re-project" step that could drift. Near-parallel rays (`|cos| < 1e-3`, an
+   edge-on view) are refused rather than flung to a huge coordinate.
+
+The fit itself is held **fixed** for the drag and not re-derived after it:
+centroid + normal are what a later step turns into the origin's translation +
+rotation, so a corner nudge must not move the frame it defines (and re-fitting
+mid-drag would let the plane chase the corner being dragged).
+
+The `pointerdown` listener is **capture-phase on `container`, not on the
+canvas** — OrbitControls registered its own canvas `pointerdown` first, and at
+the target element capture and bubble listeners fire in *registration* order, so
+a canvas capture listener would still run second and the orbit would already
+have started. From an ancestor the capture phase genuinely precedes the target,
+which lets it `stopPropagation()`. `controls.enabled` is also flipped for the
+duration. `_suppressCameraClick` swallows the one `click` that follows a drag
+released over a camera pyramid, which would otherwise jump the view into that
+camera's perspective. `dispose()` removes the container listener — it outlives
+the viewport, so leaving it attached would keep a disposed instance firing.
+
+**Set Origin support** (`setOriginPickMode` / `setOriginCandidates` /
+`setOriginFrame`, driven by `ui/origin-definition.js`).
+- `setOriginPickMode('node'|'axis'|null)` arms picking. While armed the click
+  handler **consumes the click even on a miss** — a stray click must not select
+  a camera and swing the view away from the corner being aimed at. `'node'`
+  only ever collects meshes flagged `userData.planeFitted`.
+- `setOriginCandidates({origin, normal, length, chosen})` draws both ±normal
+  arrows as real shaft+head **meshes** — not `ArrowHelper`, whose `Line` shaft
+  raycasts against a distance threshold rather than geometry and is unreliable
+  to click. `chosen` dims the loser instead of removing it. `length` comes from
+  the caller because it must scale to the plane, not the camera baseline.
+- `setOriginFrame(frame)` moves `_framePivot` (grid + axes) onto the user's
+  frame via `makeBasis` — basis **columns**, since a parent transform maps
+  frame-local coordinates out into world. Only the frame and the ORBIT move; no
+  data group is touched.
+
+**The orbit follows the applied origin** (`originPivot` / `originUp` /
+`_rebaseControls`, plus `_frameDirection`). Interaction is part of the display:
+re-basing only the grid would leave drag, pan and wheel keyed on a calibration
+origin that is no longer drawn anywhere, so the whole scene would swing about an
+invisible point. `_rebaseControls` moves `controls.target` onto the frame's
+origin and `camera.up` onto its +Z, and translates the camera by the same delta
+so the **view does not jump** — direction and distance survive, only the pivot
+changes. Zoom needs nothing extra: OrbitControls dollies along the camera→target
+ray, so moving the target moves the zoom centre with it. `setOriginFrame(null)`
+is symmetric, putting the orbit back on the calibration origin and world +Z.
+
+**Why the controls get REBUILT, not just re-aimed.** r147's OrbitControls bakes
+the orbit axis in at construction: `update` captures a quaternion from
+`camera.up` once, when its closure is defined, so a later `camera.up = …` re-aims
+the camera and nothing else. `_createControls` therefore owns construction (and
+the `'change'` → `_checkDeclutter` listener, so a rebuild keeps it) and records
+the axis actually in force as `_controlsUp`; `_rebaseControls` rebuilds only when
+the axis really moved — a re-applied frame or a Reset View is a plain
+`controls.update()`. `minDistance`/`maxDistance`/`enabled` carry across.
+
+**`resetCamera` / `fitToScene` / `showInitialView` are frame-relative.** The
+canned viewing angles (`(500,-500,400)`, `(1,-1,0.8)`) are stated in FRAME
+coordinates and rotated out through `_frameDirection`, so "the default view"
+means the same angle onto the user's grid as onto the calibration's. With a frame
+applied `fitToScene` also fits **around the frame's origin** rather than the
+point cloud's centroid, measuring its radius from that same point: framing one
+point while orbiting another is exactly what makes the first drag after a fit
+swing the scene off-centre.
+
+**Picking calls `scene.updateMatrixWorld()` first.** Raycasting reads
+`matrixWorld`, which is otherwise only refreshed by `render()`. The origin
+arrows are built in response to the PREVIOUS click, so a click arriving before
+the next frame would raycast against stale (identity) transforms and silently
+miss. Same guard in `_pickPlaneNode`, where `setPlanes` rebuilds mid-drag.
+
+**`fitToScene` counts plane nodes.** Its point set is camera positions +
+`node_*` inside `_skeletonGroup` + **`planeNode_*` inside `_planeGroup`** +
+the origin. Without the plane term the view stays on the cameras and an
+annotated plane — the whole reason for the mode — sits off screen. The
+`planeNode_` prefix deliberately does not match the `node_` test, so nothing is
+double-counted, and `_planeGroup` is empty until a plane is triangulated, so
+framing is unchanged for projects with no planes.
 - Constructor options `skeletonNodeShape` (`'circle'` sphere / `'square'` cube /
   `'triangle'` tetrahedron / `'x'` crossed bars — `updateSkeleton` builds the
   matching node geometry) and `preserveDrawingBuffer` (keeps the WebGL buffer
@@ -5898,6 +8240,83 @@ the v2 and v3 project-JSON shapes) — and the three readers —
 
 ---
 
+### import-export/plane-metadata.js
+
+**Purpose.** The `metadata.lucid` ↔ plane-state mapping, and the reason plane
+edits now mark the project dirty. The Define Planes pipeline (nodes, planes,
+per-view 2D, triangulation, plane fit, origin frame) is project state — it
+describes *this* project's cage, floor and reference geometry — but until this
+module none of it reached the project file, which is why `ui/plane-definition.js`
+deliberately did **not** call `markDirty()`: flagging a project dirty for state a
+save would silently drop is worse than losing it. Same shape and the same three
+invariants as `import-export/visibility-metadata.js`; one module owns the key
+list so a writer and a reader cannot drift.
+
+**The scope split, and why one payload is written N times.** `metadata.lucid` is
+per SESSION, but the plane model is not:
+- The **node pool, the planes, the 3D Mesh Objects and the origin frame are
+  PROJECT-scoped** — a node has one 3D position whatever session you are looking
+  at, and "these planes are the cage" is a statement about the project's geometry
+  rather than about any one recording. They are written
+  IDENTICALLY into every session's dict, so opening any one session of a
+  multi-session project restores the same geometry, and read back by whichever
+  session is ingested first (the rest hold the same bytes). Duplication is the
+  price of a per-session container; the payload is a few dozen nodes, not a
+  frame table.
+- The **per-view 2D is SESSION-scoped**, because a view belongs to a session. It
+  lives on `Session.planePlacements`, exactly where `planeModel()` picks it up.
+
+**Key exports.**
+- `PLANE_METADATA_KEYS` — `planeNodes`, `planes`, `meshObjects`,
+  `planePlacements`, `planeOrigin`. Exported so the slim-metadata / golden-digest
+  guards can assert a project that never opened the feature carries none of them.
+- `writePlaneMetadata(lucid, session)` — mutate a `metadata.lucid` dict in place;
+  returns the same dict. Reads the pool / planes off the module singleton and the
+  2D off `session.planePlacements`, so saving a BACKGROUND session writes its own
+  placements rather than whichever map the model happens to have attached.
+- `readPlaneMetadata(session, lucid)` — placements land on `session`; the
+  project-scoped half lands on the shared model **only when it is still empty**.
+  That guard is what makes ingesting N sessions idempotent: the first session
+  carrying plane state restores it, the rest are skipped rather than appended
+  (which would double every node).
+- `resetPlaneState()` — empty the model (pool, planes AND mesh objects, all three
+  via one `restorePlaneProject(model, null)`), drop the applied origin and the
+  plane selection. **Every load path must call it**, because the corollary of the
+  empty-model guard is that skipping it does not merge the two projects — it
+  keeps the OLD one and silently discards the NEW one's planes. Called by
+  `newProject`, the JSON load, the eager `.slp` import, the lazy reopen and the
+  demo-session load.
+
+**What is deliberately NOT written.** The plane panel's node size, edge width and
+3D corner size are browser-local display taste — the same category as the
+Visibility panel's global appearance preferences, and kept out of the `.slp` for
+the same reason. So are the editor's transient selections. The one thing restored
+beyond the data is the plane SELECTION being re-pointed at a plane that still
+exists, since a selection naming a deleted plane renders an empty editor.
+
+**Imports from project modules.** `../pose/plane-serialization.js` (all the
+actual mapping); `../ui/plane-definition.js` — `planeState`;
+`../ui/origin-definition.js` — `originState`; `../ui/app-state.js` — `state`.
+The two `ui/` imports are circular by design and safe for the same reason the
+rest of this feature's cycles are: every use is inside a function body, so the
+bindings resolve at call time.
+
+**Imported by.** The four writers — `import-export/file-io.js`
+(`buildSlpLabelsAllViews`), `import-export/slp-streaming-write.js`
+(`buildSessionRefGraph`), and `import-export/save-load.js` (`saveProject`, both
+the v2 and v3 project-JSON shapes) — and the three readers —
+`import-export/slp-import.js` (`handleLoadSlpFile`), `loading/session-loader.js`
+(`handleLoadProjectSlpLazy`), and `import-export/save-load.js`
+(`_restoreProjectV2`). Plus `pose/initialization.js` for `resetPlaneState` on the
+demo-session load.
+
+**Tests.** `tests/e2e/plane-persistence-roundtrip.mjs` (real app, both `.slp`
+writers, the dirty-flag half, the session-scope split, the untouched-project
+control and the replace-not-merge control) over
+`tests/test-plane-serialization.mjs` (the mapping itself).
+
+---
+
 ### import-export/skeleton-json.js
 
 **Purpose.** Pure, DOM-free (de)serialization for standalone `.skeleton.json`
@@ -6087,7 +8506,9 @@ exports via the eager path; partially-resident refuses and says so).
 
 **Imported by.** `import-export/save-load.js`,
 `import-export/slp-import.js`, `loading/session-loader.js`,
-`ui/export-modals.js`, `ui/ui-wiring.js`.
+`ui/export-modals.js`, `ui/ui-wiring.js`, `ui/origin-definition.js`
+(`exportCalibrationTOML` + `downloadTOML`, for `calibration-updated.toml`) and
+`ui/origin-rebase.js` (the same two, for the in-place `calibration.toml`).
 
 **User-facing features.** Underlies File menu Load Calibration / Load
 Videos / Export TOML / Export SLP / Export H5; spawns SLP-parse worker.

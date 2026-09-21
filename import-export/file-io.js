@@ -18,6 +18,7 @@ import { getOrComputeReprojectedInstance, sweepLazyFrameWindows } from '../pose/
 // Only pulls in the two dependency-free `ui/` leaf modules — safe for this
 // module's graph.
 import { writeVisibilityMetadata } from './visibility-metadata.js';
+import { writePlaneMetadata } from './plane-metadata.js';
 
 // ============================================
 // Generic file picker
@@ -2136,6 +2137,10 @@ export function buildSlpLabelsAllViews(session, views, videoFiles) {
     // when it holds a non-default value, so an untouched project's bytes are
     // unchanged (tests/e2e/save-golden-digest.mjs).
     writeVisibilityMetadata(sioSession.metadata.lucid, session);
+    // Define Planes state: the project-scoped pool/planes/origin (identical in
+    // every session's dict) plus THIS session's per-view 2D. Same omit-the-
+    // defaults rule, so a project that never opened the feature is unchanged.
+    writePlaneMetadata(sioSession.metadata.lucid, session);
     session.cameras.forEach(function (cam, i) {
         sioSession.addVideo(sioVideos[i], sioCameras[i]);
     });

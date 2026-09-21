@@ -54,6 +54,7 @@ import { recomputeUploadedCameras } from '../loading/session-loader.js';
 import { populateViewStrip, populateSessionStrip } from '../ui/sessions-panes.js';
 import { getLoadingProgressModal } from '../ui/loading-progress-modal.js';
 import { readVisibilityMetadata } from './visibility-metadata.js';
+import { readPlaneMetadata, resetPlaneState } from './plane-metadata.js';
 
 /**
  * SLP import parse dispatcher (PR 5.1). Routes real `.slp` files through
@@ -857,6 +858,11 @@ export async function handleLoadSlpFile(slpFile) {
         state.views = [];
         state.videoFiles = [];
         state.sessions = [];
+        // Plane state is project-scoped and lives on a module singleton, so
+        // it does NOT go away with `state.sessions`. `readPlaneMetadata`
+        // only restores into an EMPTY model, so without this the previous
+        // project's planes would survive and the new one's be dropped.
+        resetPlaneState();
         // Reset decoder pool + cold reserve on new project load. Old decoders
         // point at the previous project's files and must be released to avoid
         // dangling mp4box references / leaked file handles.
@@ -1034,6 +1040,9 @@ export async function handleLoadSlpFile(slpFile) {
         var session = new Session(cameras, sessSkeleton, sessTracks);
         session.name = sessName;
         readVisibilityMetadata(session, earlyVisibility);
+        // Define Planes state — pool/planes/origin from the first session that
+        // carries them, this session's per-view 2D onto this session.
+        readPlaneMetadata(session, earlyVisibility);
 
         // Populate FrameGroups from worker's frames array (yield every 20K for UI)
         var BATCH = 20000;

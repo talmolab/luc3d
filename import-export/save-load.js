@@ -44,6 +44,7 @@ import {
 import { SioLazyLoader } from '../loading/sio-lazy-loader.js';
 import { getLoadingProgressModal } from '../ui/loading-progress-modal.js';
 import { writeVisibilityMetadata, readVisibilityMetadata } from './visibility-metadata.js';
+import { writePlaneMetadata, readPlaneMetadata, resetPlaneState } from './plane-metadata.js';
 
 /**
  * Confirmation modal shown when the user starts loading a real session while
@@ -152,6 +153,11 @@ export function newProject(force) {
     // Clear views and video files
     state.views = [];
     state.videoFiles = [];
+
+    // Define Planes state is project-scoped and lives on a module singleton,
+    // so it survives `state.session = null` — clear it explicitly or a new
+    // project opens carrying the previous one's nodes, planes and origin.
+    resetPlaneState();
 
     // Clear 3D viewport (remove skeletons and camera pyramids)
     if (viewport3d) {
@@ -1060,7 +1066,10 @@ export function saveProject() {
                 // omit-the-defaults rule as the `.slp` writers — the project
                 // JSON puts them at the session-dict level rather than under a
                 // `metadata.lucid`.
-                return writeVisibilityMetadata(sessData, sess);
+                writeVisibilityMetadata(sessData, sess);
+                // Define Planes state, at the same session-dict level and under
+                // the same keys the `.slp` writers use.
+                return writePlaneMetadata(sessData, sess);
             }),
         };
 
@@ -1105,6 +1114,7 @@ export function saveProject() {
     // Session-scoped Visibility-panel state (see the v3 branch above). `_restoreProjectV2`
     // reads these at this same level for both the v2 and v3 shapes.
     writeVisibilityMetadata(projectData, state.session);
+    writePlaneMetadata(projectData, state.session);
 
     // Serialize each frame
     for (const [frameIdx, fg] of state.session.frameGroups) {
@@ -1255,6 +1265,11 @@ export async function handleLoadProject(prePickedFile) {
         const data = JSON.parse(text);
 
         // 1. Restore session data (cameras, skeleton, instances, groups)
+        // Define Planes state is project-scoped and lives on a module
+        // singleton, so it does not go away with the old sessions.
+        // `readPlaneMetadata` only restores into an EMPTY model, so without
+        // this the previous project's planes survive and this file's are lost.
+        resetPlaneState();
         var cameras;
         if (data.version === 3) {
             cameras = _restoreProjectV3(data);
@@ -1665,6 +1680,9 @@ function _restoreProjectV2(data) {
     // Session-scoped Visibility-panel state. Shared by the v2 (whole document)
     // and v3 (per-session dict) shapes — both put these keys at this level.
     readVisibilityMetadata(session, data);
+    // Define Planes state. Project-scoped keys are ingested by whichever
+    // session is read first; placements land on this one.
+    readPlaneMetadata(session, data);
     // Legacy global identity map (removed). Captured here and migrated to
     // per-frame entries after frame groups load (see end of this function).
     var legacyGlobalIdentities = data.trackIdentityMap || null;
