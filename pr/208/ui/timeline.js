@@ -1683,10 +1683,19 @@ export class Timeline {
                         idCamFrames[segKey].add(frameIdx);
                     }
                 }
-                // Unlinked instances
+                // Unlinked instances. Resolved with the UNLINKED resolver, not
+                // the track-keyed one: a TRACKLESS ungrouped instance keeps its
+                // identity on the instance (`Instance.identityId`, stamped by
+                // `unlinkGroup` — a null track cannot be keyed in
+                // frameIdentityMap; luc3d #201). Asking `getIdentityIdForTrack`
+                // for a null track reads the shared per-camera "-1" slot
+                // instead, so every trackless ungrouped detection was missing
+                // from the ID timeline even though the canvas and the Ungrouped
+                // Instances row both showed its identity.
                 for (var [camName2, ulList] of fg.unlinkedInstances) {
                     for (var u = 0; u < ulList.length; u++) {
-                        var idId2 = session.getIdentityIdForTrack(camName2, ulList[u].instance.trackIdx, frameIdx);
+                        var idId2 = session.getIdentityIdForUnlinkedInstance(
+                            camName2, ulList[u].instance, frameIdx);
                         if (idId2 == null) {
                             if (session.isExplicitNoIdentity &&
                                 session.isExplicitNoIdentity(camName2, ulList[u].instance.trackIdx, frameIdx)) {

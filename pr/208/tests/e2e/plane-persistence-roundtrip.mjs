@@ -177,6 +177,17 @@ try {
         activate(sessions[0], SPECS[0]);
         P.planeModel();
 
+        // Group the two planes into a 3D Mesh Object. This file's section 2
+        // asserts EVERY key in PLANE_METADATA_KEYS is written, so the fixture
+        // has to exercise each one — `meshObjects` included. The object's own
+        // behaviour is covered in depth by `mesh-object-roundtrip.mjs`; what
+        // matters here is only that it rides the same writers and the same
+        // PROJECT-scoped path as the rest.
+        const cage = model.meshObjects.createObject('cage');
+        cage.addPlane(floor.id);
+        cage.addPlane(wall.id);
+        cage.flipNormals = true;
+
         // The origin: a corner of the fitted floor, +Z along its normal.
         const originFrame = (await import('/pose/origin-frame.js'))
             .buildOriginFrame([10, 10, 0], [0, 0, 1]);
@@ -235,9 +246,24 @@ try {
             P.planeState.selectedPlaneId = floor.id;
             P.refreshPlanePanel();
             const fire = (el, type) => el.dispatchEvent(new Event(type, { bubbles: true }));
-            const nameInput = document.querySelector('#planeNodesTable .plane-text-input');
+            const nameInput = document.querySelector('#planeNodesTable .plane-node-name');
             const colorInput = document.querySelector('#planeNodesTable .plane-node-color');
-            const pinInput = document.querySelector('#planeNodesTable .plane-node-pin');
+            // The Pin control is a padlock ICON with a three-state picker, not
+            // a checkbox and no longer a <select>: "don't move this" and "don't
+            // move this off its plane" are different promises, and three states
+            // need three choices. Driven the way a user drives it — click the
+            // padlock, then click a state.
+            const pickPin = (pin) => {
+                const btn = document.querySelector('#planeNodesTable .plane-node-pin-btn');
+                if (!btn) return false;
+                btn.click();
+                const opt = document.querySelector(
+                    '#planePinPopover .plane-pin-option[data-pin="' + pin + '"]');
+                if (!opt) return false;
+                opt.click();
+                return true;
+            };
+            const pinInput = document.querySelector('#planeNodesTable .plane-node-pin-btn');
             res.panelDirty = {};
             if (nameInput) {
                 saveLoad.clearDirty();
@@ -255,11 +281,12 @@ try {
             }
             if (pinInput) {
                 saveLoad.clearDirty();
-                pinInput.checked = !pinInput.checked;
-                fire(pinInput, 'change');
+                res.panelDirty.pinPicked = pickPin('locked');
                 res.panelDirty.pin = AS.state.isDirty === true;
-                pinInput.checked = !pinInput.checked;
-                fire(pinInput, 'change');
+                res.panelDirty.pinTook = model.pool.nodeAt(0).pin === 'locked';
+                // And back, so the rest of the file sees an unpinned pool.
+                pickPin('none');
+                res.panelDirty.pinReleased = model.pool.nodeAt(0).pin === 'none';
             }
             // The fill button is a plane-state edit too.
             const fillBtn = document.getElementById('btnPlaneFill');
@@ -297,6 +324,10 @@ try {
                     id: p.id, name: p.name, color: p.color, nodeIds: p.nodeIds.slice(),
                     edges: p.edges.map(e => [e[0], e[1]]), filled: p.filled,
                     triangulation: p.triangulation, planeFit: p.planeFit,
+                })),
+                meshObjects: m.meshObjects.objects.map(o => ({
+                    id: o.id, name: o.name, color: o.color,
+                    planeIds: o.planeIds.slice(), flipNormals: o.flipNormals,
                 })),
                 origin: O.originState.frame && {
                     origin: O.originState.frame.origin,
@@ -487,7 +518,10 @@ try {
     check(out.panelDirty.renameTook === true, 'the Nodes-table name input actually renames');
     check(out.panelDirty.rename === true, 'and marks the project dirty');
     check(out.panelDirty.color === true, 'the node colour picker marks it dirty on commit');
-    check(out.panelDirty.pin === true, 'the pin checkbox marks it dirty');
+    check(out.panelDirty.pinPicked === true, 'the padlock opens a picker with all three states');
+    check(out.panelDirty.pin === true, 'the pin control marks it dirty');
+    check(out.panelDirty.pinTook === true, 'and the three-state pin actually applied');
+    check(out.panelDirty.pinReleased === true, 'and releases back to unlocked');
     check(out.panelDirty.fill === true, 'the Fill button marks it dirty');
 
     // =====================================================================
@@ -527,6 +561,8 @@ try {
             'the two SHARED corners are still shared — the planes still meet');
         check(floorAfter && floorAfter.planeFit !== null,
             'a fitted plane comes back FIT, so Set Origin can still offer its corners');
+        check(eq(after.meshObjects, before.meshObjects),
+            'and the 3D Mesh Object — id, name, colour, membership and flipNormals');
     }
 
     console.log('\n-- 4. the origin frame --');

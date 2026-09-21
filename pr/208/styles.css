@@ -920,6 +920,57 @@ body {
   color: #ffffff;
 }
 
+/* Visibility ▸ Display Legend, as pane chrome (ui/view-legend.js).
+   A SIBLING of .canvas-wrapper, deliberately: the wrapper is what applyZoom
+   rotates, so anything inside it tips over with the video. Out here the legend
+   stays upright, is anchored to the pane's top-right rather than the video's
+   (it may overhang a letterbox bar), and is sized in CSS px so every view's
+   legend matches regardless of camera resolution. */
+.video-cell .view-legend {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 7;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 9px;
+  background: rgba(0, 0, 0, 0.6);
+  border-radius: 4px;
+  font-size: 11px;
+  line-height: 1;
+  color: #ffffff;
+  /* The overlay canvas under this is the click target for annotation — the
+     legend must never eat a click meant for a keypoint. */
+  pointer-events: none;
+  user-select: none;
+}
+
+/* Three things want the pane's top-right, and only one of them is always
+   there. Each of the other two pushes the legend down one slot, and both
+   together push it down two. */
+.video-cell.zoomed .view-legend,
+#videoDock.has-view-indicator .view-legend {
+  top: 38px;
+}
+
+#videoDock.has-view-indicator .video-cell.zoomed .view-legend {
+  top: 68px;
+}
+
+.video-cell .view-legend-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  white-space: nowrap;
+}
+
+.video-cell .view-legend-icon {
+  width: 18px;
+  height: 12px;
+  flex-shrink: 0;
+}
+
 /* --------------------------------------------------------------------------
    Toolbar (between video grid and controls)
    -------------------------------------------------------------------------- */
@@ -989,6 +1040,33 @@ body {
   color: var(--accent);
 }
 
+/* The two panel-visibility toggles (3D viewer + info panel) sit together at
+   the far right of the toolbar. They get a light outline — unlike the rest of
+   the toolbar's borderless buttons — so they read as a distinct pair of
+   layout controls rather than as more of the annotation actions to their
+   left (issue #151). `box-sizing: border-box` is global, so the border does
+   not change the shared 28px button height. */
+.toolbar-group.panel-toggles {
+  margin-left: auto;
+  gap: 6px;
+  /* Flush to the window edge, mirroring `#tbSessions` at the left edge:
+     drop the shared `.toolbar-group` right padding (8px) and cancel
+     `.toolbar`'s own 8px. (`#tbSessions` uses a single -16px to cancel both
+     at once; here the padding is already gone, so -8px is the whole of it.)
+     The pull equals the toolbar's padding, so the group lands on the border
+     box and nothing overflows. */
+  padding-right: 0;
+  margin-right: -8px;
+}
+
+.toolbar-btn.panel-toggle-btn {
+  border: 1px solid var(--border-light);
+}
+
+.toolbar-btn.panel-toggle-btn:hover {
+  border-color: var(--text-muted);
+}
+
 #tbSessions {
   width: 64px;
   padding: 0;
@@ -1053,7 +1131,7 @@ body {
   display: block;
 }
 
-/* Triangulate / Triangulate All split dropdowns (DLT vs Bundle Adjustment) */
+/* Triangulate / Triangulate All split dropdowns (DLT vs Refined) */
 .tri-dropdown {
   position: relative;
   display: inline-flex;
@@ -1499,29 +1577,6 @@ body {
   gap: 12px;
 }
 
-/* Stacked variant: each option on its own row (e.g. By-Cam modal — Save
-   Reprojections sits beneath Save PredictedInstances). */
-.slp-export-options.slp-export-options-stacked {
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 6px;
-}
-
-.slp-export-options-stacked .slp-opt-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-/* Disabled option row (e.g. no reprojections available to save). */
-.slp-export-options-stacked .slp-opt-disabled {
-  opacity: 0.5;
-}
-
-.slp-export-options-stacked .slp-opt-disabled label {
-  cursor: not-allowed;
-}
-
 .slp-reproj-toggle {
   display: inline-flex;
   border: 1px solid var(--border-color);
@@ -1552,6 +1607,76 @@ body {
   opacity: 0.35;
   cursor: default;
   pointer-events: none;
+}
+
+/* --------------------------------------------------------------------------
+   "Include" group for the SLP export modals (Per Session / By Cam)
+   --------------------------------------------------------------------------
+   Uses the app's standard .toggle-switch instead of raw checkboxes, and opens
+   with a plain NOTE: "UserLabels are automatically saved". Users kept asking
+   whether their own labels were exported when the only visible controls were
+   "Predicted Instances" / "Reprojections" (luc3d #194); the answer is a
+   statement, not a switch, because nothing about it is the user's to change. */
+.slp-inc-group {
+  margin: 10px 0 8px;
+}
+
+.slp-inc-legend {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+}
+
+.slp-inc-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.slp-inc-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 13px;
+}
+
+.slp-inc-name {
+  color: var(--text-primary);
+  cursor: pointer;
+  user-select: none;
+}
+
+/* The always-saved note. Reads as an assurance, not a disabled option: no
+   control affordances, and the check mark carries the "this is already on"
+   meaning a switch would have. */
+.slp-inc-note {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  margin-bottom: 9px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-primary);
+}
+
+.slp-inc-note-mark {
+  flex-shrink: 0;
+  font-weight: 700;
+  color: var(--accent);
+}
+
+/* Unavailable option (e.g. nothing triangulated yet, so no reprojections). */
+.slp-inc-row.slp-inc-row-disabled {
+  opacity: 0.5;
+}
+
+.slp-inc-row.slp-inc-row-disabled .slp-inc-name,
+.slp-inc-row.slp-inc-row-disabled .toggle-switch .slider {
+  cursor: not-allowed;
 }
 
 .slp-export-filename-row {
@@ -1650,8 +1775,19 @@ body {
 }
 
 /* Export SLEAP File Per Session: active session → one file per camera dir. */
+/* Wide enough for a real prediction filename
+   (`cam-<14-digit-stamp>-0000_h265_CRF30_denoised.mp4.predictions_v1.slp` is
+   ~67 characters) to sit in the field without eliding. `width` rather than the
+   old `min-width: 720px`, because a min-width beats max-width in CSS and so
+   pushed the modal off-screen on a narrow window instead of shrinking. */
 .slp-export-persession-modal {
-  min-width: 720px;
+  width: min(920px, 94vw);
+  max-width: 94vw;
+}
+
+/* Eight cameras is routine, so show more of them before scrolling. */
+.slp-export-persession-modal .slp-export-table-container {
+  max-height: 320px;
 }
 
 .slp-export-persession-modal .slp-export-table {
@@ -1677,28 +1813,109 @@ body {
   width: auto;
 }
 
+/* The Output Filename header sits over a left-aligned field, so it opts out of
+   the `th:nth-child(n+3)` right-align the stats-style tables want. */
+.slp-export-persession-modal .slp-export-table th:last-child {
+  text-align: left;
+  padding-left: 10px;
+}
+
 /* Download checkbox column — compact and centered. */
 .slp-export-persession-modal .slp-ps-dl-cell {
   text-align: center;
   padding-right: 12px;
 }
 
+/* The stock checkbox renders as a white box on this dark table — the same
+   mismatch the Include switches fixed. Drawn here instead, in the app's palette. */
 .slp-export-persession-modal .slp-ps-dl {
-  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+  width: 15px;
+  height: 15px;
   margin: 0;
+  border: 1px solid var(--border-color);
+  border-radius: 3px;
+  background: var(--bg-tertiary);
+  cursor: pointer;
+  position: relative;
+  vertical-align: middle;
+  transition: background var(--transition-fast), border-color var(--transition-fast);
+}
+
+.slp-export-persession-modal .slp-ps-dl:hover {
+  border-color: var(--text-muted);
+}
+
+.slp-export-persession-modal .slp-ps-dl:checked {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.slp-export-persession-modal .slp-ps-dl:checked::after {
+  content: "";
+  position: absolute;
+  left: 4px;
+  top: 1px;
+  width: 4px;
+  height: 8px;
+  border: solid #ffffff;
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+
+.slp-export-persession-modal .slp-ps-dl:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 .slp-export-persession-modal .slp-ps-dir {
   color: var(--text-muted);
-  font-family: var(--mono, monospace);
-  font-size: 12px;
+  font-family: "SF Mono", "Fira Code", "Cascadia Code", monospace;
+  font-size: 11px;
   white-space: nowrap;
 }
 
+/* Output filename field. The browser default (white box, system font) was the
+   one thing in this modal that did not look like the rest of the app — and the
+   names here are long and structured (`cam-<timestamp>-0000_h265_CRF30_
+   denoised.mp4.predictions.slp`), so the monospace stack shared with
+   `.data-table .mono` and the Directory cell is what makes them scannable at
+   all: the `_v2` / `_CRF30` segments line up down the column. Elides when
+   unfocused and shows the full name on hover (`title`, kept in sync by the
+   change handler); focus switches to `clip` so editing the tail is not fighting
+   an ellipsis. */
 .slp-export-persession-modal .slp-ps-filename {
   width: 100%;
   min-width: 340px;
   box-sizing: border-box;
+  padding: 5px 9px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  color: var(--text-primary);
+  font-family: "SF Mono", "Fira Code", "Cascadia Code", monospace;
+  font-size: 11px;
+  line-height: 1.55;
+  text-overflow: ellipsis;
+  transition: border-color var(--transition-fast), background var(--transition-fast);
+}
+
+.slp-export-persession-modal .slp-ps-filename:hover {
+  border-color: var(--text-muted);
+}
+
+.slp-export-persession-modal .slp-ps-filename:focus {
+  outline: none;
+  border-color: var(--accent);
+  background: var(--bg-secondary);
+  text-overflow: clip;
+}
+
+/* A row the user unchecked is not being written — dim it so the Download column
+   is readable at a glance instead of one checkbox at a time. Still editable. */
+.slp-export-persession-modal tr.slp-ps-off td:not(.slp-ps-dl-cell) {
+  opacity: 0.45;
 }
 
 .slp-export-all-modal .slp-export-table {
@@ -3627,13 +3844,40 @@ kbd {
   border: 1px solid var(--border-color);
   border-radius: 8px;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  /* Opening size only. `ui/modal-geometry.js` measures this on first open,
+     centres the card, and thereafter restores whatever size the user left it
+     at as inline width/height. It also owns the viewport fit (clamping to a
+     24px gutter), so there is deliberately NO max-width/max-height here — a
+     second cap would silently shrink a rect the clamp thought it had granted
+     and leave the card flush against one edge. */
   width: 880px;
-  max-width: 94vw;
   height: 620px;
-  max-height: 90vh;
   display: flex;
   flex-direction: column;
+  /* `resize` needs a non-visible overflow, which this already had. The grip is
+     the browser's own, bottom-right. */
   overflow: hidden;
+  resize: both;
+  min-width: 520px;
+  min-height: 320px;
+}
+
+/* Dragging by the header. No transition on position — the card must track the
+   pointer exactly, not lag behind it. */
+.settings-modal-header {
+  cursor: move;
+  user-select: none;
+}
+
+.settings-modal.modal-dragging {
+  /* Kill hover/selection noise mid-drag. */
+  user-select: none;
+}
+
+/* The × is a click target inside the drag handle, so it opts out of the grab
+   cursor as well as out of the drag itself (see `noDragSelector`). */
+.settings-modal-close {
+  cursor: pointer;
 }
 
 .settings-modal-header {
@@ -3857,17 +4101,88 @@ kbd {
   margin-top: 12px;
 }
 
-/* Tracking Wizard ▸ Node Weights: a scrollable, multi-column table of nodes so
-   long skeletons stay compact. */
+/* Tracking Wizard ▸ Node Weights / Camera Views: a multi-column table that
+   grows to its full height.
+
+   It used to be capped at 240px with its own `overflow-y: auto`, which put a
+   scrollbar inside `.settings-panel-container`'s scrollbar — the wheel did
+   different things a few pixels apart, and rows past the cap were invisible
+   with no hint that the window could simply be made bigger. Now the panel is
+   the one scroller in the card: the table reflows into MORE COLUMNS as the
+   (resizable) modal widens, and its `<details>` section folds away when it is
+   in the way. */
 .settings-node-weight-list {
-  max-height: 240px;
-  overflow-y: auto;
   border: 1px solid var(--border-color);
   border-radius: 4px;
   padding: 2px 10px;
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
   column-gap: 24px;
+}
+
+/* --- Collapsible wizard sections --------------------------------------- */
+.settings-section {
+  margin-bottom: 4px;
+}
+
+.settings-section-summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+  /* The spacing that .settings-kbd-category used to carry itself; it is a flex
+     item inside the summary now, so the summary owns it. */
+  margin: 16px 0 4px;
+}
+
+.settings-section:first-of-type > .settings-section-summary {
+  margin-top: 0;
+}
+
+/* Replace the UA disclosure triangle with one that matches the app. */
+.settings-section-summary::-webkit-details-marker {
+  display: none;
+}
+
+.settings-section-summary::before {
+  content: '';
+  width: 0;
+  height: 0;
+  flex-shrink: 0;
+  border-left: 5px solid var(--text-muted, #888);
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  transition: transform var(--transition-fast);
+}
+
+.settings-section[open] > .settings-section-summary::before {
+  transform: rotate(90deg);
+}
+
+.settings-section-summary:hover .settings-section-title {
+  color: var(--text-primary);
+}
+
+/* The heading already carries .settings-kbd-category; inside a summary it must
+   not also claim the block-level margins that spaced standalone headings. */
+.settings-section-title {
+  margin: 0;
+}
+
+.settings-section-count {
+  font-size: 11px;
+  color: var(--text-muted, #888);
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 0 6px;
+  line-height: 15px;
+}
+
+.settings-section-body {
+  padding-bottom: 6px;
 }
 
 .settings-node-weight-row {
@@ -4084,10 +4399,65 @@ kbd {
 
 /* Mirrors .panel-tab-content's box so swapping the tabs for this panel does
    not change the info panel's scroll behaviour. */
+/* THE PANEL'S WIDTH BELONGS TO THE TABLES. The info panel is a fixed 300px and
+   the Nodes table now has to show three coordinates, so every nested box that
+   used to take a bite out of the width gives it back: the panel's own padding,
+   the `.info-section` wrapper (which was inheriting the 14/16 meant for the
+   tabbed info panel), the `<details>` body, and the cell padding. The sections
+   stay collapsible — folding one away is how you make room VERTICALLY, which is
+   the axis that is actually cheap here. */
 .plane-panel {
   flex: 1;
   overflow-y: auto;
-  padding: 8px;
+  padding: 6px 3px;
+}
+
+.plane-panel .info-section {
+  padding: 6px 0;
+}
+
+/* Every section of this panel is a <details> now — Plane Appearance was the last
+   bare <h3> and moved inside Planes — so an <h3> here would be an oversight
+   rather than a style. The rule stays as the safety net for one added by
+   mistake: it dresses it as a section title instead of letting the tabbed info
+   panel's small uppercase caption leak in. */
+.plane-panel .info-section > h3 {
+  padding: 7px 8px;
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--text-primary);
+}
+
+/* The width trim above zeroed the section's horizontal padding, which the
+   tables want (they set their own) but these rows do not — the label sat on
+   the panel's left edge and the value on its right. Inset them to the same 8px
+   as the <h3> above them rather than padding `.info-section`, which also wraps
+   the Defined Origin readout that is sized to the panel's full inner width. */
+.plane-panel .vis-slider-row {
+  padding: 0 8px;
+}
+
+.plane-panel .data-table thead th,
+.plane-panel .data-table tbody td {
+  padding: 4px 3px;
+  /* The generic rule caps a cell at 120px with an ellipsis, which is right for
+     the read-only info tables and wrong for a row of input fields — it would
+     clip the full-width coordinate line. */
+  max-width: none;
+}
+
+/* These rows are forms, not a selectable list: nothing happens when you click
+   one, and a node is TWO rows now, so a hover that lit up half a node was
+   advertising an interaction that does not exist. */
+.plane-panel .data-table tbody tr {
+  cursor: default;
+}
+
+.plane-panel .data-table tbody tr:hover {
+  background: none;
 }
 
 .plane-details {
@@ -4096,11 +4466,15 @@ kbd {
   background: var(--bg-secondary);
 }
 
+/* Section titles. Bigger than the 12px the rest of the panel uses: these are
+   the four things the panel IS, and at body size they read as another row of
+   controls. The sub-sections inside Edit Plane stay at 12px, so the hierarchy
+   is legible without indentation. */
 .plane-details > summary {
   cursor: pointer;
   user-select: none;
-  padding: 6px 8px;
-  font-size: 12px;
+  padding: 7px 8px;
+  font-size: 14px;
   font-weight: 600;
   color: var(--text-primary);
   list-style: none;
@@ -4128,7 +4502,7 @@ kbd {
 }
 
 .plane-details-body {
-  padding: 6px 8px 8px;
+  padding: 6px 4px 8px;
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -4139,6 +4513,7 @@ kbd {
 }
 
 .plane-subdetails > summary {
+  font-size: 12px;
   font-weight: 500;
   color: var(--text-secondary);
 }
@@ -4211,6 +4586,29 @@ kbd {
   width: 12px;
   height: 12px;
   margin-right: 0;
+}
+
+/* The panel is ~300px wide and these tables hold names, counts, badges and
+   buttons. An auto-layout table is sized by its widest cell and simply grows
+   past `width: 100%`, which is what gave the whole Define Plane panel a
+   horizontal scrollbar; fixed layout makes the `<th>` widths binding, so the
+   cells' inherited ellipsis is what gives instead.
+   `#planeNodesTable` is deliberately NOT here: its rows are input fields that
+   size themselves, and its detail row is a full-width form. */
+#planeSkeletonsTable,
+#planeMembersTable,
+#planeEdgesTable {
+  table-layout: fixed;
+}
+
+/* A header cell has no ellipsis of its own, and "NODES" is wider than the
+   numbers under it. */
+#planeSkeletonsTable thead th,
+#planeMembersTable thead th,
+#planeEdgesTable thead th {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* Draggable plane-skeleton rows. */
@@ -4377,7 +4775,24 @@ kbd {
 
 .plane-placements-row > td {
   background: var(--bg-primary);
-  padding: 4px 6px 6px 24px !important;
+  padding: 2px 3px 4px !important;
+}
+
+/* Indented under its plane and ruled off on the left, the same shape
+   `.plane-node-detail-body` gives an expanded node — the two sections are the
+   same widget and should read that way.
+   `white-space: normal` is the load-bearing line: the cell inherits `nowrap`
+   from `.data-table tbody td`, and that is what used to push the summary
+   sentences past the panel's right edge. */
+.plane-placements-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  margin-left: 22px;
+  padding: 2px 0 2px 8px;
+  border-left: 1px solid var(--border-color);
+  white-space: normal;
 }
 
 .plane-placement-item {
@@ -4424,16 +4839,64 @@ kbd {
   border-top: 1px solid var(--border-color);
   font-size: 10px;
   color: var(--text-secondary);
+  /* Whole sentences, so they wrap rather than truncate: there is no width to
+     spare here and no word of them is expendable. `anywhere` because a view
+     list or a normal triple is one long unbreakable-looking token. */
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
+/* A node's readout is a flex row of separate parts — swatch, name,
+   coordinates, residual, padlock — so it WRAPS onto a second line at narrow
+   widths instead of running off the edge, and only the name ever ellipses. */
 .plane-tri-node {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 1px 5px;
+  min-width: 0;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 10px;
   color: var(--text-muted);
   padding-left: 2px;
-  white-space: nowrap;
+}
+
+/* The shared swatch carries a right margin for inline use; in a gapped flex
+   row that would double the spacing. */
+.plane-tri-node .plane-swatch {
+  flex: 0 0 auto;
+  margin-right: 0;
+}
+
+.plane-tri-node-name {
+  flex: 0 1 auto;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-secondary);
+}
+
+/* Shrinkable as a last resort — a coordinate triple normally fits on its own
+   line, and the full text is in the row's tooltip when it does not. */
+.plane-tri-node-xyz,
+.plane-tri-node-err {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plane-tri-node-pin {
+  display: inline-flex;
+  flex: 0 0 auto;
+  color: var(--accent);
+}
+
+.plane-tri-node-pin svg {
+  width: 11px;
+  height: 11px;
 }
 
 /* A pinned node's reprojection residual is OUT of sample, so it is reported
@@ -4460,43 +4923,367 @@ kbd {
   box-shadow: inset 2px 0 0 var(--accent);
 }
 
-.plane-node-pin {
-  margin: 0;
-  vertical-align: middle;
-  cursor: pointer;
+/* Pinned but never triangulated: a dead end, because pinning is exactly what
+   stops a solve from filling the node in. The Pin control can say "Locked" but
+   not "and there is no 3D to hold", so the row says it — this is the only
+   per-row cue left now that the 3D column is gone. After the shared rule on
+   purpose: a node in this state is worth flagging over a node merely shared. */
+.plane-node-row.plane-node-frozen-unsolved {
+  box-shadow: inset 2px 0 0 var(--error-color);
 }
 
-.plane-node-pin:disabled {
-  cursor: default;
-  opacity: 0.4;
+/* --- The coordinate line ------------------------------------------------- */
+
+/* A node's second row. Joined to the identity row above it: that row drops its
+   bottom rule, this one keeps it, so the separator falls between NODES rather
+   than through the middle of one. */
+/* An OPEN node's identity row drops its rule, so the node and its panel read
+   as one block; a closed one keeps it, because then it is the whole node. */
+.plane-panel #planeNodesTable tbody tr.plane-node-main.plane-node-open > td {
+  border-bottom: none;
 }
 
-.plane-node-state {
-  display: inline-block;
-  padding: 0 3px;
-  border-radius: 3px;
-  font-size: 9px;
-  line-height: 14px;
+.plane-node-detail > td {
+  padding-top: 0 !important;
+  padding-bottom: 6px !important;
+}
+
+.plane-node-xyz-line {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+
+/* --- The node row ------------------------------------------------------- */
+
+/* Taller and quieter than a data row: this is a list of nodes you scan, not a
+   grid of values you compare. */
+.plane-nodes-table tbody td {
+  padding-top: 6px !important;
+  padding-bottom: 6px !important;
+}
+
+.plane-nodes-table thead th {
+  border-bottom: 1px solid var(--border-color);
   white-space: nowrap;
-  color: var(--text-muted);
-  border: 1px solid transparent;
 }
 
-.plane-node-state-frozen {
+/* The three icon columns are content-sized, so their labels are what set their
+   width — centre the label and the control under it together, or a 40px
+   "PINNED" over a 20px padlock reads as two different columns. */
+.plane-nodes-table .th-center,
+.plane-nodes-table tbody td:nth-child(2),
+.plane-nodes-table tbody td:nth-child(4),
+.plane-nodes-table tbody td:nth-child(5) {
+  text-align: center;
+}
+
+/* The info button rides beside the word rather than under it. */
+.plane-nodes-table .th-pin {
+  display: table-cell;
+}
+
+.plane-nodes-table .th-pin .plane-pin-info {
+  margin-left: 3px;
+  vertical-align: middle;
+}
+
+.plane-node-expander {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  border-radius: 3px;
+}
+
+.plane-node-expander:hover {
+  background: var(--bg-button);
+  color: var(--text-primary);
+}
+
+.plane-node-expander .plane-caret {
+  display: inline-block;
+  font-size: 7px;
+  transition: transform var(--transition-fast);
+}
+
+.plane-node-expander.open .plane-caret {
+  transform: rotate(90deg);
+}
+
+/* The name. Plain text at rest — a row of boxed fields is what made this list
+   read as a form — and an input the moment you go near it. */
+.plane-node-name {
+  width: 100%;
+  min-width: 0;
+  padding: 2px 4px;
+  font-size: 12px;
+  font-weight: 500;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  color: var(--text-primary);
+}
+
+.plane-node-row:hover .plane-node-name {
+  border-color: var(--border-color);
+}
+
+.plane-node-name:focus {
+  background: var(--bg-tertiary);
+  border-color: var(--accent);
+  outline: none;
+}
+
+/* Rounded square, like the mock: it is the node's identity, so it leads the
+   row and is the same colour everywhere the node is drawn. */
+.plane-node-color {
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+}
+
+/* Bare glyph, not a button: quiet until you reach for it. The shared delete
+   button is a red `.panel-btn`, which is right in a table you visit to remove
+   something and wrong in a list of six nodes you are reading — six boxed red ×
+   down the edge was most of what made this list shout. */
+.plane-node-del {
+  color: var(--text-muted) !important;
+  background: transparent !important;
+  border-color: transparent !important;
+}
+
+.plane-node-del:hover {
+  color: var(--error-color) !important;
+  background: var(--bg-button) !important;
+}
+
+/* --- The expanded panel -------------------------------------------------- */
+
+/* Indented under its node and ruled off on the left, so a long list of open
+   nodes still reads as nodes with detail rather than as twice as many rows. */
+.plane-node-detail-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-left: 22px;
+  padding: 2px 0 2px 8px;
+  border-left: 1px solid var(--border-color);
+}
+
+.plane-node-planes {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.plane-node-planes-label {
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  font-size: 9px;
+}
+
+.plane-node-plane-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 5px;
+  background: var(--bg-tertiary);
+  border-radius: 8px;
+  color: var(--text-secondary);
+}
+
+.plane-node-plane-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+}
+
+.plane-node-plane-holder {
+  color: var(--text-primary);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+.plane-node-plane-mark {
+  display: inline-flex;
   color: var(--accent);
+}
+
+.plane-node-plane-mark svg {
+  width: 11px;
+  height: 11px;
+}
+
+.plane-node-planes-none {
+  font-style: italic;
+}
+
+.plane-node-planes-stale {
+  color: var(--error-color);
+}
+
+.plane-node-xyz-cell {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+
+.plane-node-xyz-label {
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  flex: 0 0 auto;
+}
+
+/* Monospaced and right-aligned: these are read down the column as much as they
+   are read across a row, and proportional digits make that harder. */
+.plane-node-xyz-input {
+  flex: 1;
+  min-width: 0;
+  width: 100%;
+  padding: 2px 3px;
+  font-family: "SF Mono", "Fira Code", "Cascadia Code", monospace;
+  font-size: 10px;
+  text-align: right;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  color: var(--text-primary);
+  border-radius: 3px;
+}
+
+.plane-node-xyz-input:focus {
+  outline: none;
   border-color: var(--accent);
 }
 
-/* Pinned but never triangulated — a dead end, because pinning is exactly what
-   stops a solve from filling it in. Loud on purpose: the state cannot resolve
-   itself and blocks every fit of every plane the node belongs to. */
-.plane-node-state-frozen-unsolved {
-  color: var(--error-color);
-  border-color: var(--error-color);
-  font-weight: 600;
+/* A Locked node's position is not typed over — see the Pin column. Shown, not
+   hidden: the coordinate is the most interesting thing about a locked node. */
+.plane-node-xyz-input:disabled {
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  cursor: not-allowed;
 }
 
-/* Panel-level explanation of the above, so it is read without hovering. */
+/* --- The pin control: one padlock, three states -------------------------- */
+
+/* Icon-only, and it has to stay legible at 15px while carrying the row's most
+   important fact. Colour does the work: a locked node is warm, a held one is
+   the accent, an unlocked one is quiet. */
+.plane-node-pin-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: 3px;
+  cursor: pointer;
+  color: var(--text-muted);
+}
+
+.plane-node-pin-btn:hover,
+.plane-node-pin-btn:focus-visible {
+  background: var(--bg-button);
+  color: var(--text-primary);
+  outline: none;
+}
+
+.plane-node-pin-btn.plane-node-pin-locked {
+  color: var(--warning-color);
+}
+
+.plane-node-pin-btn.plane-node-pin-plane-locked {
+  color: var(--accent);
+}
+
+/* The picker. Floats over the panel (see `openPinPopover` for why it is not in
+   the row), and reads left-to-right in increasing strictness — the same order
+   as `PIN_STATES`, so the control and the model agree. */
+.plane-pin-popover {
+  position: fixed;
+  z-index: 1200;
+  display: flex;
+  gap: 2px;
+  padding: 3px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 5px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.5);
+}
+
+.plane-pin-option {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: 3px;
+  cursor: pointer;
+  color: var(--text-secondary);
+}
+
+.plane-pin-option:hover:not(:disabled) {
+  background: var(--bg-button);
+  color: var(--text-primary);
+}
+
+/* The state already in force: shown so you can see what you have, dimmed and
+   not clickable because picking it again would do nothing. */
+.plane-pin-option.is-current {
+  opacity: 0.35;
+  cursor: default;
+  background: var(--bg-secondary);
+}
+
+.plane-pin-option.plane-node-pin-locked:not(.is-current):hover {
+  color: var(--warning-color);
+}
+
+.plane-pin-option.plane-node-pin-plane-locked:not(.is-current):hover {
+  color: var(--accent);
+}
+
+/* The column's explanation, in the header where the word "Pin" used to be. */
+.plane-pin-info {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: 50%;
+  color: var(--text-muted);
+  cursor: help;
+}
+
+.plane-pin-info:hover {
+  color: var(--text-primary);
+}
+
+
+/* Pinned but never triangulated is a dead end — pinning is exactly what stops
+   a solve from filling the node in. The row carries the state as a class; this
+   is the panel-level explanation of it, so it is read without hovering. */
 .plane-warning {
   margin-top: 6px;
   padding: 5px 6px;
@@ -4518,6 +5305,122 @@ kbd {
   color: var(--accent);
   border: 1px solid var(--accent);
   vertical-align: middle;
+}
+
+/* --- 3D Mesh Objects table (ui/mesh-objects.js) --------------------------- */
+
+/* `.plane-name-row input` is `flex: 1`, which stretches the colour swatch to
+   match the name field. The swatch is a fixed-size chip, so opt it out. */
+.plane-name-row input.plane-node-color {
+  flex: 0 0 auto;
+}
+
+/* "-1" marker next to an object's plane count: member planes that were deleted.
+   Warning-coloured rather than accent, because unlike `.plane-shared-count` it
+   reports something the user probably did not intend. */
+.mesh-object-dangling {
+  margin-left: 4px;
+  padding: 0 3px;
+  border-radius: 3px;
+  font-size: 9px;
+  line-height: 14px;
+  color: var(--warning-color);
+  border: 1px solid var(--warning-color);
+  vertical-align: middle;
+}
+
+/* The Shape column's one-word verdict. */
+.mesh-object-badge {
+  display: inline-block;
+  padding: 0 4px;
+  border-radius: 3px;
+  font-size: 9px;
+  line-height: 15px;
+  white-space: nowrap;
+  border: 1px solid currentColor;
+}
+
+.mesh-object-badge-ok { color: var(--success-color); }
+.mesh-object-badge-warn { color: var(--warning-color); }
+.mesh-object-badge-error { color: var(--error-color); }
+
+/* The connectivity read-out under the name row. */
+.mesh-object-report {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.mesh-object-line {
+  padding: 4px 6px;
+  border-radius: 4px;
+  font-size: 10px;
+  line-height: 1.45;
+  border: 1px solid transparent;
+  color: var(--text-secondary);
+}
+
+.mesh-object-line-info {
+  background: rgba(127, 127, 127, 0.08);
+  border-color: var(--border-color);
+}
+
+.mesh-object-line-ok {
+  background: rgba(70, 167, 88, 0.08);
+  border-color: var(--success-color);
+}
+
+.mesh-object-line-warn {
+  background: rgba(245, 166, 35, 0.08);
+  border-color: var(--warning-color);
+}
+
+.mesh-object-line-error {
+  background: rgba(229, 72, 77, 0.08);
+  border-color: var(--error-color);
+}
+
+.mesh-object-flip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+/* Membership: every plane in the project, checked when it is a member. A list
+   rather than a dropdown because the question "which planes are in this object"
+   is answered by seeing them all at once. */
+.mesh-object-members {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 180px;
+  overflow-y: auto;
+}
+
+.mesh-object-member {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 4px;
+  border-radius: 3px;
+  font-size: 11px;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.mesh-object-member:hover {
+  background: rgba(127, 127, 127, 0.12);
+}
+
+.mesh-object-member-count {
+  margin-left: auto;
+  font-size: 9px;
+  color: var(--text-muted);
 }
 
 /* --- Blocking / confirming dialog (ui/plane-definition.js) ---------------- */
@@ -4580,6 +5483,169 @@ kbd {
 
 .plane-confirm-modal button:hover {
   filter: brightness(1.15);
+}
+
+/* ============================================
+   Set Angle Between Two Planes (ui/plane-angle.js)
+   ============================================ */
+
+/* Reuses .plane-confirm-overlay / .plane-confirm-modal wholesale, so the
+   dialog looks like the rest of the plane panel's dialogs and inherits their
+   button styling; only the form rows below are new. */
+.plane-angle-modal {
+  min-width: 440px;
+}
+
+/* NO scrim, and the backdrop does not take the pointer. Alone among the plane
+   dialogs, this one is NOT modal: its inputs are two planes the user needs to
+   orbit the 3D view to tell apart, so the view stays live underneath and a
+   0.6-black dim over it would be a lie as well as an obstruction. The modal
+   itself takes the pointer back. Esc still cancels — that listener is on the
+   document and owes nothing to this. */
+#planeAngleOverlay {
+  background: none;
+  pointer-events: none;
+}
+
+#planeAngleOverlay .plane-confirm-modal {
+  pointer-events: auto;
+}
+
+/* The edit lock. "Live view, frozen data": the dialog reads plane geometry to
+   draw its ghost, so the panel that edits that geometry is out of service while
+   it is open. Every control in there is `disabled` by `applyAngleModalLock` —
+   this is the part `disabled` cannot do: dim the section so the lock is visible
+   rather than a dead click, and stop the <summary> elements folding sections
+   away under a dialog positioned against them. The panel still SCROLLS, so a
+   long node table can be read while the dialog is up. */
+body.plane-angle-lock .plane-panel {
+  opacity: 0.55;
+}
+
+body.plane-angle-lock .plane-panel summary {
+  pointer-events: none;
+}
+
+/* The dot that ties a dropdown to the outline that plane wears in 3D. */
+.plane-angle-swatch {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 6px;
+  vertical-align: middle;
+}
+
+/* The title doubles as a drag handle, so the dialog can be moved off the 3D
+   view — the same affordance the Set Origin instruction box has. */
+.plane-angle-drag {
+  cursor: move;
+  user-select: none;
+}
+
+.plane-angle-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  font-size: 12px;
+}
+
+.plane-angle-row label {
+  flex: 0 0 96px;
+  color: var(--text-secondary);
+}
+
+.plane-angle-row .plane-select {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.plane-angle-input {
+  width: 74px;
+  padding: 3px 6px;
+  border-radius: 4px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font-size: 12px;
+  text-align: right;
+}
+
+.plane-angle-suffix {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.plane-angle-swap {
+  flex: 0 0 auto;
+  padding: 2px 8px !important;
+  font-size: 13px !important;
+  line-height: 1.2;
+}
+
+/* The current angle and the hinge. Monospaced so a changing number does not
+   shift the line's width as the user types. */
+.plane-angle-readout {
+  margin: 10px 0;
+  padding: 8px 10px;
+  border-radius: 4px;
+  background: var(--bg-tertiary);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--text-primary);
+}
+
+.plane-angle-hint {
+  font-size: 11px;
+  color: var(--text-muted);
+  line-height: 1.5;
+  margin-top: 4px;
+}
+
+.plane-angle-warn:not(:empty) {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.plane-angle-error,
+.plane-angle-warning {
+  font-size: 11px;
+  line-height: 1.5;
+  padding: 6px 8px;
+  border-radius: 4px;
+  white-space: pre-wrap;
+}
+
+.plane-angle-error {
+  background: rgba(239, 68, 68, 0.15);
+  border: 1px solid rgba(239, 68, 68, 0.45);
+  color: #fca5a5;
+}
+
+.plane-angle-warning {
+  background: rgba(251, 191, 36, 0.12);
+  border: 1px solid rgba(251, 191, 36, 0.35);
+  color: #fcd34d;
+}
+
+.plane-confirm-modal button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Pin-state badges in the Nodes table, in the existing .badge family. */
+.data-table .badge-locked {
+  background: rgba(239, 68, 68, 0.35);
+  color: #fca5a5;
+}
+
+.data-table .badge-plane-locked {
+  background: rgba(251, 191, 36, 0.3);
+  color: #fcd34d;
 }
 
 /* ============================================
@@ -4697,58 +5763,127 @@ body.origin-mode-lock .timeline-container {
   color: #ffb877;
 }
 
-/* --- the result table --- */
+/* --- the result readout --- */
+
+/* The panel is ~300px wide. This used to be a 5-column table
+   (name | x | y | z | unit) that was wider than the panel, so the unit column
+   was clipped off the right edge. Each row is now its NAME with the values
+   indented underneath — the same shape, and deliberately the same
+   `.plane-node-xyz-*` layout classes, as the Nodes list further up the panel.
+   Unlike a node, nothing here collapses: these are seven short computed
+   vectors, not a list that grows with the project. */
 
 .origin-source {
-  font-size: 10px;
+  font-size: 11px;
   color: var(--text-secondary);
   margin-bottom: 3px;
 }
 
-.origin-convention,
-.origin-matrix-label {
+.origin-convention {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 10px;
+  font-size: 11px;
   color: var(--text-muted);
-  margin-bottom: 4px;
+  margin-bottom: 7px;
+}
+
+/* Blocks are separated by more than a name is from its own values (4px below),
+   so the gap does the grouping: each name reads as the heading of the line
+   beneath it rather than as one more item in a flat list. */
+.origin-block + .origin-block,
+.origin-angle + .origin-block {
+  margin-top: 9px;
+}
+
+/* Full width and on its own line, so a long label wraps rather than setting a
+   width the values then have to squeeze in beside. */
+.origin-row-name {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-primary);
+  margin-bottom: 2px;
+}
+
+/* Not a column any more: the unit describes the whole vector, and as a fifth
+   column it was the part that fell off the edge. */
+.origin-unit {
+  margin-left: 4px;
+  font-size: 10px;
+  font-weight: 400;
+  color: var(--text-muted);
+}
+
+/* Indented under its name and ruled off on the left, matching
+   `.plane-node-detail-body`; a shallower indent because there is no expander
+   gutter to clear here. The right padding is not symmetry — without it the z
+   value sits on the panel's edge, which is what makes the line look like it is
+   falling out of the panel rather than hanging off its name. */
+.origin-block-body {
+  margin-left: 4px;
+  padding: 2px 8px 2px 8px;
+  border-left: 2px solid var(--border-color);
+}
+
+/* The Nodes list gives each axis an input box, which is what keeps its "x" tied
+   to the number beside it. With no box the pair has to be held together by
+   position instead: the label is glued to the right-packed value, and the three
+   pairs are spread across the line. Spread rather than equal thirds because a
+   `flex: 1` third leaves dead space in FRONT of the x pair, which detaches the
+   whole line from the name above it — the pairs should start at the rule. */
+.origin-block-body .plane-node-xyz-line {
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.origin-block-body .plane-node-xyz-cell {
+  flex: 0 1 auto;
+  justify-content: flex-end;
+}
+
+/* The min-width is what lets the pairs stay glued AND the columns stay square:
+   with all three cells the same width, `space-between` spaces them evenly, so
+   the x/y/z values line up down the list as well as across. Letting the value
+   FILL its third instead would align the columns too, but it parks each axis
+   letter next to the PREVIOUS value, which is the one thing this readout
+   cannot afford to be ambiguous about. */
+.origin-block-body .origin-xyz-value {
+  min-width: 58px;
+}
+
+.origin-block-body .plane-node-xyz-label {
+  font-size: 10px;
+}
+
+/* The read-only twin of `.plane-node-xyz-input`: same monospaced column of
+   digits, but no box — nothing here is typeable. It may shrink (and ellipsise)
+   rather than push the line wider than the panel. */
+.origin-xyz-value {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  text-align: right;
+  color: var(--text-primary);
 }
 
 .origin-matrix-label {
   margin-top: 8px;
-  font-family: inherit;
 }
 
 .origin-table {
   width: 100%;
   border-collapse: collapse;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 10px;
-}
-
-.origin-table th {
-  color: var(--text-muted);
-  font-weight: 500;
-  text-align: right;
-  padding: 1px 4px;
+  font-size: 11px;
 }
 
 .origin-table td {
   text-align: right;
-  padding: 1px 4px;
+  padding: 3px 4px;
   color: var(--text-primary);
   white-space: nowrap;
-}
-
-.origin-table .origin-row-name {
-  text-align: left;
-  color: var(--text-secondary);
-  font-family: inherit;
-}
-
-.origin-table .origin-unit {
-  color: var(--text-muted);
-  text-align: left;
-  width: 22px;
 }
 
 .origin-matrix td {
@@ -4757,7 +5892,129 @@ body.origin-mode-lock .timeline-container {
 }
 
 .origin-angle {
-  margin-top: 5px;
-  font-size: 10px;
+  margin-top: 9px;
+  font-size: 11px;
   color: var(--text-secondary);
+}
+
+/* The readout sits inside a <details> now, so its first child no longer needs
+   the top margin the <h3> used to supply. */
+.plane-details-body > .origin-result {
+  padding: 0 4px;
+}
+
+/* ============================================
+   Danger Zone
+   ============================================
+
+   The three actions that reach outside the 3D view: two that rewrite the
+   calibration every downstream tool reads, and one that throws the defined
+   origin away. Tinted rather than merely labelled — this block sits at the
+   bottom of a panel the user scrolls past constantly, and "Reset" next to
+   "Export" is exactly the pair a misclick lands between.
+
+   The tint is on the BORDER and the summary only. A red body would make the
+   two harmless-looking buttons (a download, a disabled placeholder) read as
+   destructive too, which spends the warning on the wrong click. */
+.origin-danger-section .plane-details-danger {
+  border-color: color-mix(in srgb, var(--error-color) 45%, var(--border-color));
+}
+
+.plane-details-danger > summary {
+  color: var(--error-color);
+}
+
+.plane-details-danger > summary::before {
+  color: var(--error-color);
+}
+
+.plane-details-danger > summary:hover {
+  background: color-mix(in srgb, var(--error-color) 12%, transparent);
+}
+
+/* Each action gets its own full-width row: `.panel-button-row` is a flex row
+   that would otherwise put all three side by side, and at ~300px the labels
+   would truncate into "Export New Cal…" / "Set as New C…", which is precisely
+   the pair you do not want a user guessing between. */
+.plane-details-danger .panel-button-row + .panel-button-row {
+  margin-top: 6px;
+}
+
+.panel-btn-danger {
+  border-color: color-mix(in srgb, var(--error-color) 55%, var(--border-color));
+  color: var(--error-color);
+}
+
+.panel-btn-danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--error-color) 18%, var(--surface-lighter));
+}
+
+/* ============================================
+   Set as New Calibration — the confirm + progress dialogs
+   ============================================
+
+   Both reuse `.plane-confirm-overlay` / `.plane-confirm-modal`, so the scrim,
+   the z-index and the Esc behaviour are the panel's existing ones. Only the
+   inventory table and the caution line are new. See ui/origin-rebase.js. */
+.origin-rebase-modal {
+  min-width: 440px;
+  max-width: 560px;
+}
+
+.origin-rebase-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 12px 0;
+  font-size: 12px;
+}
+
+.origin-rebase-table td {
+  padding: 3px 0;
+  color: var(--text-primary);
+}
+
+.origin-rebase-num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  /* The counts are the point of the table and get compared against each other,
+     so they line up on a monospace column rather than on the label. */
+  font-family: var(--font-mono, ui-monospace, monospace);
+}
+
+/* The provenance breakdown is subordinate to the total above it. */
+.origin-rebase-sub td {
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+/* Rows that are context, not work: 2D counts, and the reprojections that do
+   not move at all. Dimmed so they cannot be misread as things being rewritten. */
+.origin-rebase-quiet td {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.origin-rebase-caution {
+  margin: 12px 0 4px;
+  padding: 8px 10px;
+  border-radius: 4px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--error-color);
+  background: color-mix(in srgb, var(--error-color) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--error-color) 35%, transparent);
+}
+
+/* The progress modal's bar borrows the multi-frame one's geometry; this is the
+   only rule it needs of its own, since it has no `.multi-frame-progress`
+   ancestor to inherit the label spacing from. */
+.origin-rebase-modal .multi-frame-progress {
+  margin: 14px 0 4px;
+}
+
+.origin-rebase-modal .progress-label {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+  font-variant-numeric: tabular-nums;
 }

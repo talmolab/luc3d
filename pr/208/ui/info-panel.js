@@ -10,6 +10,7 @@ import { getInstanceGroupsForFrame } from '../pose/triangulation.js';
 import { REPROJECTION_COLOR, getTrackColor, getGroupColor } from './overlays.js';
 import { drawAllOverlays, updateFrameCounters } from './rendering.js';
 import { isInteractiveClickTarget } from './interaction.js';
+import { isInfoPanelVisible, markInfoPanelStale } from './panel-visibility.js';
 import { state, timeline, interactionManager, rememberSkeleton, buildRememberedSkeleton,
          setProjectSkeleton, getProjectSkeleton } from './app-state.js';
 import { setStatus, markDirty } from '../import-export/save-load.js';
@@ -938,6 +939,26 @@ export function exportSkeletonJSON(skeleton) {
 // ============================================
 
 export function updateInfoPanel() {
+    // Collapsed panel: skip the whole rebuild. This is not a cheap refresh —
+    // `populateVideosTable` walks every frame of the session per video row,
+    // and `updateFrameInfo` below rebuilds the instance/reprojection tables
+    // with a fresh <select> per row. All of it is a stateless full rebuild
+    // from `state`, so one call from `refreshInfoPanelAfterShow` (ui-wiring)
+    // catches up completely no matter how many were skipped.
+    if (!isInfoPanelVisible()) {
+        markInfoPanelStale();
+        if (!state.session) return;
+        // `populateSkeletonTable`'s one non-DOM side effect still has to
+        // happen: `buildRememberedSkeleton()` feeds `ensureSession()`, so a
+        // skeleton loaded while the panel is hidden must not go unremembered
+        // and leave the next new session with a stale one.
+        if (state.session.skeleton) rememberSkeleton(state.session.skeleton);
+        // And the status bar, which is outside the panel and always visible —
+        // `updateFrameInfo` gates itself down to exactly that when hidden.
+        updateFrameInfo(state.currentFrame, getInstanceGroupsForFrame(state.currentFrame));
+        return;
+    }
+
     if (!state.session) {
         document.getElementById('infoCameras').textContent = '-';
         document.getElementById('infoSkeleton').textContent = '-';
@@ -1163,12 +1184,23 @@ export function populateUnassignedVideos(sessionVideos) {
     }
 }
 
-export function updateFrameInfo(frameIdx, instanceGroups) {
-    // Reprojection error display
+/**
+ * Aggregate a frame's stored reprojection errors into the two headline
+ * averages: the distorted-space mean and the undistorted-space mean.
+ *
+ * Split out of `updateFrameInfo` because the STATUS BAR needs the distorted
+ * mean even when the info panel is collapsed — arithmetic over numbers already
+ * in `state.triangulationResults`, cheap next to the DOM rebuilds it feeds.
+ * (The extraction also dropped a `maxError` local the old inline version
+ * computed and never read.)
+ *
+ * @param {number} frameIdx
+ * @returns {{meanError: number|null, meanErrorUndist: number|null}}
+ */
+function aggregateReprojectionError(frameIdx) {
     const results = state.triangulationResults.get(frameIdx);
     let meanError = null;
     let meanErrorUndist = null;
-    let maxError = 0;
 
     if (results) {
         let totalErr = 0;
@@ -1181,7 +1213,6 @@ export function updateFrameInfo(frameIdx, instanceGroups) {
                     for (const err of r.errors[camName]) {
                         if (err != null) {
                             totalErr += err;
-                            if (err > maxError) maxError = err;
                             totalCount++;
                         }
                     }
@@ -1203,6 +1234,47 @@ export function updateFrameInfo(frameIdx, instanceGroups) {
         if (totalCount > 0) meanError = totalErr / totalCount;
         if (totalCountUndist > 0) meanErrorUndist = totalErrUndist / totalCountUndist;
     }
+
+    return { meanError, meanErrorUndist };
+}
+
+/**
+ * The bottom status bar's two frame-dependent readouts. Lives OUTSIDE
+ * `#infoPanel` and is always on screen, so this runs whether or not the panel
+ * is collapsed.
+ *
+ * @param {number|null} meanError
+ */
+function updateStatusBarForFrame(meanError) {
+    document.getElementById('statusError').textContent = 'Error: ' +
+        (meanError != null ? meanError.toFixed(2) + ' px' : '-');
+    updateFrameCounters();
+}
+
+export function updateFrameInfo(frameIdx, instanceGroups) {
+    // Reprojection error display
+    const { meanError, meanErrorUndist } = aggregateReprojectionError(frameIdx);
+
+    // Collapsed panel: stop here, having done the status bar. Everything below
+    // builds DOM inside `#infoPanel` — the per-instance × per-node × per-camera
+    // error breakdown and both instance tables, each with a fresh <select> per
+    // row — and `drawAllOverlays` calls this on every frame (throttled to 10 Hz
+    // during playback), so it is the most expensive DOM work in the app.
+    //
+    // The reprojection SOLVE is deliberately NOT gated: it stays in
+    // `drawAllOverlays`, because the canvas overlays, the 3D viewport and the
+    // .slp export all read the same numbers, and it fires only once per group.
+    // Only the panel's consumption of them is skippable.
+    if (!isInfoPanelVisible()) {
+        markInfoPanelStale();
+        updateStatusBarForFrame(meanError);
+        return;
+    }
+
+    // The raw per-group results, still needed below for the method label, the
+    // per-camera rows and the per-instance breakdown (the aggregate above only
+    // carries the three summary numbers).
+    const results = state.triangulationResults.get(frameIdx);
 
     // Renders a "<value> px" (colour-coded) headline value into an element, or
     // "-" when there is no value.
@@ -1231,7 +1303,7 @@ export function updateFrameInfo(frameIdx, instanceGroups) {
             : '';
     }
 
-    // Triangulation method label ('DLT' or 'Bundle Adjustment'). Prefer the
+    // Triangulation method label ('DLT' or 'Refined'). Prefer the
     // per-result method; fall back to the group's recorded method.
     const errorMethodEl = document.getElementById('errorMethod');
     if (errorMethodEl) {
@@ -1250,7 +1322,7 @@ export function updateFrameInfo(frameIdx, instanceGroups) {
             }
         }
         if (method) {
-            errorMethodEl.textContent = method === 'ba' ? 'Bundle Adjustment' : 'DLT';
+            errorMethodEl.textContent = method === 'ba' ? 'Refined' : 'DLT';
             errorMethodEl.style.display = '';
         } else {
             errorMethodEl.style.display = 'none';
@@ -2132,11 +2204,8 @@ export function updateFrameInfo(frameIdx, instanceGroups) {
         ulEmpty.style.display = '';
     }
 
-    // Status bar
-    document.getElementById('statusError').textContent = 'Error: ' +
-        (meanError != null ? meanError.toFixed(2) + ' px' : '-');
-
-    updateFrameCounters();
+    // Status bar (also done on the collapsed-panel early-return above)
+    updateStatusBarForFrame(meanError);
 }
 
 export function updateTriangulationBadge(type, text) {

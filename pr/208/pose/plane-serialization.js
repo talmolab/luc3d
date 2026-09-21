@@ -46,6 +46,7 @@
 
 import { PlaneNode, PlaneNodePool } from './plane-nodes.js';
 import { PlaneSkeleton, PlaneInstance } from './plane-data.js';
+import { MeshObject3D } from './mesh-object-3d.js';
 import { buildOriginFrame } from './origin-frame.js';
 
 /** Finite number, or `null`. @private */
@@ -79,7 +80,21 @@ export function serializePlaneNodes(pool) {
     if (!pool || !pool.nodes.length) return null;
     return pool.nodes.map(function (node) {
         var out = { id: node.id, name: node.name, color: node.color };
-        if (node.immutable) out.immutable = true;
+        // Two pin states, written so that both directions degrade correctly.
+        //
+        // `immutable: true` is ALSO written for a locked node, redundantly with
+        // `pin`, so a build that predates the split still honours the lock —
+        // that key is the only thing such a build looks at. A `plane-locked`
+        // node deliberately writes no `immutable`, because an older build
+        // cannot enforce "stays in its plane" and reading it as a hard freeze
+        // would be strictly wrong; treating it as free is the honest fallback.
+        if (node.pin === 'locked') { out.pin = 'locked'; out.immutable = true; }
+        else if (node.pin === 'plane-locked') {
+            out.pin = 'plane-locked';
+            if (node.pinPlaneId !== null && node.pinPlaneId !== undefined) {
+                out.pinPlaneId = node.pinPlaneId;
+            }
+        }
         // Omitted rather than written as three nulls — see the module note.
         if (node.hasPoint3d()) out.xyz = [node.xyz[0], node.xyz[1], node.xyz[2]];
         if (num(node.error) !== null) out.error = node.error;
@@ -105,11 +120,16 @@ export function restorePlaneNodes(data) {
         if (!d || typeof d !== 'object') continue;
         var id = num(d.id);
         if (id === null || id !== Math.floor(id) || id < 1) continue;
+        // `pin` wins when present; otherwise a legacy record's `immutable:
+        // true` means `locked`, which is what it has always meant. Both go
+        // through `normalizePin` in the constructor, so an unrecognized value
+        // loads as unpinned rather than refusing the file.
         var node = new PlaneNode(
             id,
             typeof d.name === 'string' ? d.name : ('n' + id),
             typeof d.color === 'string' ? d.color : '#ffffff',
-            !!d.immutable);
+            d.pin !== undefined ? d.pin : !!d.immutable,
+            num(d.pinPlaneId));
         var xyz = vec3(d.xyz);
         // `force` because a pinned node refuses ordinary writes, and this IS
         // the pinned coordinate the user saved.
@@ -376,6 +396,81 @@ export function restoreOriginFrame(data) {
     return frame;
 }
 
+/**
+ * Serialize the 3D Mesh Objects — the named groups of planes.
+ *
+ * PROJECT-scoped, like the pool and the planes, and for the same reason: an
+ * object is a statement about the project's geometry ("these three planes are
+ * the cage"), not about any one recording.
+ *
+ * `planeIds` is written VERBATIM, including IDs whose plane has since been
+ * deleted. That looks like sloppiness and is the opposite: membership is
+ * resolved lazily everywhere else (see `MeshObject3D.resolvePlaneIds`), so
+ * scrubbing here would be the ONE place that quietly decides a plane is gone
+ * forever. `restoreMeshObjects` drops unresolvable IDs instead, at the point
+ * where the live plane set is actually known.
+ *
+ * @param {import('./mesh-object-3d.js').MeshObjectSet} set
+ * @returns {Object[]|null} null when there are no objects.
+ */
+export function serializeMeshObjects(set) {
+    if (!set || !set.objects || !set.objects.length) return null;
+    return set.objects.map(function (obj) {
+        var out = {
+            id: obj.id,
+            name: obj.name,
+            color: obj.color,
+            planeIds: obj.planeIds.slice(),
+        };
+        // Defaults are never written — see the module note.
+        if (obj.flipNormals) out.flipNormals = true;
+        return out;
+    });
+}
+
+/**
+ * Rebuild the 3D Mesh Objects, keeping the file's IDs and dropping membership
+ * that names a plane which is not in `planeIds`.
+ *
+ * The drop mirrors `restorePlanes` dropping unknown node IDs, and for the same
+ * reason: an object listing a plane that no longer exists would report a face
+ * count it cannot draw. Here the surrounding restore has just rebuilt the plane
+ * set, so "not in the file" and "deleted before the save" are the same thing.
+ *
+ * @param {*} data - `serializeMeshObjects` output, or anything at all
+ * @param {number[]} planeIds - Every plane ID that now exists
+ * @returns {MeshObject3D[]}
+ */
+export function restoreMeshObjects(data, planeIds) {
+    var out = [];
+    if (!Array.isArray(data)) return out;
+    var live = new Set(planeIds || []);
+    var seen = new Set();
+    for (var i = 0; i < data.length; i++) {
+        var d = data[i];
+        if (!d || typeof d !== 'object') continue;
+        var id = num(d.id);
+        if (id === null || id !== Math.floor(id) || id < 1 || seen.has(id)) continue;
+        seen.add(id);
+
+        var obj = new MeshObject3D(
+            id,
+            (typeof d.name === 'string' && d.name) ? d.name : ('Object ' + id),
+            (typeof d.color === 'string' && d.color) ? d.color : '#26a69a'
+        );
+        if (Array.isArray(d.planeIds)) {
+            for (var k = 0; k < d.planeIds.length; k++) {
+                var pid = num(d.planeIds[k]);
+                if (pid === null || !live.has(pid)) continue;
+                obj.addPlane(pid);
+            }
+        }
+        obj.flipNormals = !!d.flipNormals;
+        out.push(obj);
+    }
+    return out;
+}
+
 // ============================================
 // The project-scoped bundle
 // ============================================
@@ -392,17 +487,20 @@ export function restoreOriginFrame(data) {
  * planes writes nothing.
  *
  * @param {import('./plane-data.js').PlaneModel} model
- * @returns {{planeNodes:Object[]|undefined, planes:Object[]|undefined}|null}
+ * @returns {{planeNodes:Object[]|undefined, planes:Object[]|undefined,
+ *            meshObjects:Object[]|undefined}|null}
  *   null when there is no plane state at all.
  */
 export function serializePlaneProject(model) {
     if (!model) return null;
     var nodes = serializePlaneNodes(model.pool);
     var planes = serializePlanes(model.planes);
-    if (!nodes && !planes) return null;
+    var objects = serializeMeshObjects(model.meshObjects);
+    if (!nodes && !planes && !objects) return null;
     var out = {};
     if (nodes) out.planeNodes = nodes;
     if (planes) out.planes = planes;
+    if (objects) out.meshObjects = objects;
     return out;
 }
 
@@ -420,11 +518,11 @@ export function serializePlaneProject(model) {
  * live at the time.
  *
  * @param {import('./plane-data.js').PlaneModel} model
- * @param {*} data - `{planeNodes, planes}`, or anything at all
- * @returns {{nodes:number, planes:number}} how much was restored
+ * @param {*} data - `{planeNodes, planes, meshObjects}`, or anything at all
+ * @returns {{nodes:number, planes:number, objects:number}} how much was restored
  */
 export function restorePlaneProject(model, data) {
-    if (!model) return { nodes: 0, planes: 0 };
+    if (!model) return { nodes: 0, planes: 0, objects: 0 };
     var src = (data && typeof data === 'object') ? data : {};
     var pool = restorePlaneNodes(src.planeNodes);
     var planes = restorePlanes(src.planes, pool);
@@ -435,5 +533,16 @@ export function restorePlaneProject(model, data) {
     for (var i = 0; i < planes.length; i++) {
         if (planes[i].id >= model._nextPlaneId) model._nextPlaneId = planes[i].id + 1;
     }
-    return { nodes: pool.size, planes: planes.length };
+
+    // Objects last: membership is filtered against the plane set this call just
+    // installed, so restoring them earlier would drop every reference.
+    var objects = restoreMeshObjects(src.meshObjects, planes.map(function (p) {
+        return p.id;
+    }));
+    if (model.meshObjects) {
+        model.meshObjects.clear();
+        for (var k = 0; k < objects.length; k++) model.meshObjects.adoptObject(objects[k]);
+    }
+
+    return { nodes: pool.size, planes: planes.length, objects: objects.length };
 }

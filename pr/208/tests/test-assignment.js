@@ -967,4 +967,61 @@
         });
     });
 
+    // ================================================================
+    // Deselect must clear BOTH selection fields
+    //
+    // Two different fields track an unlinked selection: `assignmentSelection`
+    // (what the amber ring and the Ungrouped Instances row highlight read) and
+    // `selectedUnlinked` (what `_deleteSelected` acts on). Toggling an instance
+    // off used to splice only the first, leaving the instance armed for Delete
+    // with nothing anywhere on screen saying it was still selected.
+    // ================================================================
+
+    describe('Assignment - deselect clears the Delete target too', function () {
+
+        it('toggling an unlinked instance off clears selectedUnlinked', function () {
+            var env = buildEnv();
+            try {
+                env.mgr.setAssignmentMode(true);
+                env.mgr.selectedUnlinked = env.unlinked1;
+                env.mgr.addToAssignmentSelection(env.unlinked1);
+                assertEqual(env.mgr.assignmentSelection.length, 1, 'selected');
+
+                env.mgr.addToAssignmentSelection(env.unlinked1); // toggles off
+                assertEqual(env.mgr.assignmentSelection.length, 0,
+                    'no longer in the assignment selection');
+                assertNull(env.mgr.selectedUnlinked,
+                    'and no longer the Delete target — the two must not drift apart');
+            } finally {
+                env.cleanup();
+            }
+        });
+
+        it('a full click-click on the same unlinked instance leaves nothing selected', function () {
+            var env = buildEnv();
+            try {
+                // unlinked1's first node is at video (100, 100); the canvas is
+                // 1:1 with the video and pinned at viewport (0, 0) by
+                // createMockCanvas, so client coords are the video coords.
+                function clickIt() {
+                    env.canvas1.dispatchEvent(makeMouseEvent('mousedown', 100, 100));
+                    document.dispatchEvent(makeMouseEvent('mouseup', 100, 100));
+                }
+
+                clickIt();
+                assertEqual(env.mgr.assignmentSelection.length, 1, 'first click selects');
+                assertTrue(env.mgr.selectedUnlinked === env.unlinked1,
+                    'first click arms it for Delete');
+
+                clickIt();
+                assertEqual(env.mgr.assignmentSelection.length, 0, 'second click deselects');
+                assertNull(env.mgr.selectedUnlinked,
+                    'second click disarms Delete — otherwise Delete would remove an ' +
+                    'instance with no visible selection');
+            } finally {
+                env.cleanup();
+            }
+        });
+    });
+
 })();

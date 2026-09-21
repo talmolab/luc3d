@@ -17,6 +17,8 @@
 // add/update its entry here so the Settings panel stays complete and truthful.
 // (See CLAUDE.md.)
 
+import { shouldIgnoreShortcut } from './keyboard-target.js';
+
 const STORAGE_KEY = 'lucid.settings.v1';
 
 const DEFAULTS = {
@@ -77,7 +79,8 @@ const ACTION_CATALOG = [
     { id: 'toggleInfoPanel', label: 'Toggle info panel', category: 'View', binding: 'i', editable: true, dispatched: true },
     { id: 'toggle3D', label: 'Toggle 3D viewport', category: 'View', binding: '\\', editable: true, dispatched: true },
     { id: 'toggleTimeline', label: 'Collapse / show timeline', category: 'View', binding: 'Mod+J', editable: false, dispatched: false },
-    { id: 'cycleViewMode', label: 'Cycle single-view mode', category: 'View', binding: 'v', editable: true, dispatched: true },
+    { id: 'singleViewMode', label: 'Single-view (solo) mode', category: 'View', binding: 'v', editable: true, dispatched: true },
+    { id: 'soloCycleView', label: 'Previous / next view (single-view mode)', category: 'View', binding: '↑ / ↓', editable: false, dispatched: false },
     { id: 'gridMode', label: 'Grid view', category: 'View', binding: 'g', editable: true, dispatched: true },
     { id: 'zoomIn', label: 'Zoom in videos', category: 'View', binding: '+ / =', editable: false, dispatched: false },
     { id: 'zoomOut', label: 'Zoom out videos', category: 'View', binding: '− / _', editable: false, dispatched: false },
@@ -316,14 +319,19 @@ const TRACKING_THRESHOLDS = [
         desc: 'Normalizer for the 2D displacement term of the cross-view tracker (velocity_threshold, normalized image units). Bench value 10.',
     },
     {
-        id: 'distanceThreshold', label: 'Distance threshold (mm)', default: 50,
+        id: 'distanceThreshold', label: 'Distance threshold (mm)', default: 25,
         min: 0.1, max: 1000, step: 1,
-        desc: 'Normalizer for the 3D point-to-ray term of the cross-view tracker (distance_threshold, world units/mm). Bench value 50.',
+        desc: 'Normalizer for the 3D point-to-ray term of the cross-view tracker (distance_threshold, world units/mm). 25 = the validated stale-anchor-fix value (was 50); tightening it alongside `stale` measurably cuts sustained ID switches (figs/fig8-bench, 2026-08-14).',
     },
     {
         id: 'timePenalty', label: 'Time penalty', default: 0.1,
         min: 0, max: 10, step: 0.05,
         desc: 'Exponential decay exp(-time_penalty·Δt) applied over frame gaps in the cross-view tracker (time_penalty). Bench value 0.1.',
+    },
+    {
+        id: 'stale', label: 'Stale detection eviction (frames)', default: 20,
+        min: 0, max: 500, step: 1,
+        desc: 'The stale-anchor fix (pose/cross-view-tracker.js, 2026-08-14): evict a target\'s per-camera detection once it is older than this many frames, before that frame\'s matching runs, so a target cannot be re-triangulated from one fresh view fused with several ancient ones after an occlusion. 0 = off (reproduces the pre-fix, unbounded-staleness reference behavior). Validated default 20; measured to cut sustained ID switches roughly in half to 5x on both benchmark corpora when paired with a lower distance threshold.',
     },
     {
         id: 'reprojErrorThreshold', label: 'Reprojection error threshold (px)', default: 0,
@@ -343,6 +351,7 @@ TRACKING_THRESHOLDS.forEach(function (t) { _thrById.set(t.id, t); });
 const WIZARD_THRESHOLD_IDS = new Set([
     'filterMinVisibleNodes', 'filterMinInstanceScore',
     'corr2dWeight', 'corr3dWeight', 'velocityThreshold', 'distanceThreshold', 'timePenalty',
+    'stale',
     'reprojErrorThreshold',
 ]);
 
@@ -533,8 +542,7 @@ function _now() {
 // action handled the event (single-chord bindings fire immediately).
 export function dispatchEvent(e) {
     if (!e) return false;
-    const t = e.target;
-    if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return false;
+    if (shouldIgnoreShortcut(e)) return false;
     if (isModifierKey(e.key)) return false; // wait for the real key in a chord
 
     const now = _now();

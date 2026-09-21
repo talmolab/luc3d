@@ -23,10 +23,26 @@
 //   2. IDENTITY IS AN ID, NEVER AN INDEX. IDs are handed out monotonically and
 //      never reused. Edges and plane membership are stored as IDs, so deleting
 //      or reordering a node cannot silently re-point an edge at its neighbour.
-//   3. IMMUTABILITY IS A NODE PROPERTY. A node the user has pinned (a surveyed
+//   3. PINNING IS A NODE PROPERTY. A node the user has pinned (a surveyed
 //      reference, a corner already used to define the origin) must not be moved
 //      by a later solve — and since the coordinate lives here rather than on a
 //      plane, no plane-level invalidation can destroy it either.
+//
+//      There are TWO pin states, because "do not move this" and "do not move
+//      this OFF ITS PLANE" are different promises:
+//
+//        'locked'       the 3D is frozen outright. `setPoint3d` refuses it, so
+//                       no solve, drag or fit can move it. This is the state
+//                       the whole constrained-fit subsystem calls an ANCHOR.
+//        'plane-locked' the node may move, but only within one plane. It is
+//                       NOT an anchor: a constrained fit must not hold it
+//                       fixed, because its position is not fixed. The
+//                       restriction is geometric, so it cannot live here — a
+//                       node cannot resolve its own plane's fit. `PlaneModel`
+//                       enforces it (`constrainPoint3dForNode`).
+//
+//      `immutable` is kept as an accessor for `pin === 'locked'` so the ~30
+//      readers written before the split keep working unchanged.
 //
 // The 3D representation is a per-node `Float64Array(3)` rather than one flat
 // array on the pool. A flat pool-order array would have to be spliced in step
@@ -68,19 +84,30 @@ export class PlaneNode {
      * @param {number} id - Stable, never reused within a `PlaneNodePool`.
      * @param {string} name
      * @param {string} color - CSS colour, used in 2D and 3D alike.
-     * @param {boolean} [immutable=false]
+     * @param {boolean|'none'|'plane-locked'|'locked'} [pin=false] - The pin
+     *   state. A BOOLEAN is accepted (and means `locked`) so every caller and
+     *   saved file written before the two-state split still works.
+     * @param {number|null} [pinPlaneId=null]
      */
-    constructor(id, name, color, immutable) {
+    constructor(id, name, color, pin, pinPlaneId) {
         this.id = id;
         this.name = name;
         this.color = color;
         /**
-         * @type {boolean} The user pinned this node's 3D: a solve may READ it
-         * but must never MOVE it. Settable at any time, including before the
-         * node has any 3D at all — see `nodeFreezeState` for why that state is
-         * worth naming rather than forbidding.
+         * @type {'none'|'plane-locked'|'locked'} How the user pinned this
+         * node's 3D. Settable at any time, including before the node has any
+         * 3D at all — see `nodeFreezeState` for why that is worth naming
+         * rather than forbidding. See the module header for what each state
+         * promises; `immutable` below is the back-compatible view of it.
          */
-        this.immutable = !!immutable;
+        this.pin = normalizePin(pin);
+        /**
+         * @type {number|null} For `plane-locked`, the plane this node must stay
+         * in. Held as an ID and resolved LAZILY against the model, so deleting
+         * that plane needs no cascade — a stale ID simply stops constraining,
+         * the same way `MeshObject3D.planeIds` tolerates one.
+         */
+        this.pinPlaneId = (pinPlaneId === undefined) ? null : pinPlaneId;
         /**
          * @type {Float64Array} `[x,y,z]`; all-NaN means "not triangulated",
          * the same convention `InstanceGroup.points3d` uses.
@@ -93,6 +120,30 @@ export class PlaneNode {
          * error however many planes reference it.
          */
         this.error = null;
+    }
+
+    /**
+     * `true` when this node is frozen outright.
+     *
+     * An ACCESSOR rather than a field: the two-state split kept this name so
+     * that `setPoint3d`'s refusal, `clearPoint3d`, `mutableIds`,
+     * `nodeFreezeState` and every caller written against the original boolean
+     * keep working with no edit. It reads `locked` only — `plane-locked` is
+     * deliberately NOT immutable, because such a node does move.
+     * @returns {boolean}
+     */
+    get immutable() {
+        return this.pin === 'locked';
+    }
+
+    /**
+     * Assigning the old boolean still works. `false` collapses `plane-locked`
+     * to `none`, which is what "unpin this node" has always meant — the one
+     * existing writer (`PlaneNodePool.setImmutable`) is a plain untick.
+     * @param {boolean} v
+     */
+    set immutable(v) {
+        this.pin = v ? 'locked' : 'none';
     }
 
     /** Is this node triangulated? All three coords must be finite. @returns {boolean} */
@@ -139,6 +190,37 @@ export class PlaneNode {
         this.error = null;
         return true;
     }
+}
+
+/** The pin states, in increasing strictness. @type {string[]} */
+export const PIN_STATES = ['none', 'plane-locked', 'locked'];
+
+/**
+ * Coerce anything into a valid pin state.
+ *
+ * Accepts a boolean so the pre-split signature (`new PlaneNode(id, n, c, true)`)
+ * and every saved file that only carries `immutable: true` keep meaning exactly
+ * what they used to. Anything unrecognized becomes `'none'` rather than
+ * throwing: a malformed project file must load, per the format's rule that
+ * reads tolerate absent, malformed and partial input.
+ *
+ * @param {*} pin
+ * @returns {'none'|'plane-locked'|'locked'}
+ */
+export function normalizePin(pin) {
+    if (pin === true) return 'locked';
+    if (typeof pin === 'string' && PIN_STATES.indexOf(pin) >= 0) return pin;
+    return 'none';
+}
+
+/**
+ * A node's pin state — the accessor new code should read, rather than the
+ * `immutable` boolean, which cannot distinguish `plane-locked` from `none`.
+ * @param {PlaneNode} node
+ * @returns {'none'|'plane-locked'|'locked'}
+ */
+export function nodePinState(node) {
+    return node ? normalizePin(node.pin) : 'none';
 }
 
 /**
@@ -192,7 +274,9 @@ export class PlaneNodePool {
     /**
      * Append a node.
      * @param {string} name
-     * @param {{color?:string, immutable?:boolean}} [opts]
+     * @param {{color?:string, immutable?:boolean,
+     *          pin?:'none'|'plane-locked'|'locked', pinPlaneId?:number}} [opts]
+     *   `pin` wins over `immutable` when both are given.
      * @returns {PlaneNode}
      */
     addNode(name, opts) {
@@ -201,7 +285,8 @@ export class PlaneNodePool {
             this._nextId++,
             name || ('n' + this._nextId),
             o.color || defaultNodeColor(this._colorSeq++),
-            !!o.immutable
+            o.pin !== undefined ? o.pin : !!o.immutable,
+            o.pinPlaneId
         );
         this.nodes.push(node);
         this._byId.set(node.id, node);
@@ -306,6 +391,26 @@ export class PlaneNodePool {
         var node = this.getNode(id);
         if (!node) return false;
         node.immutable = !!immutable;
+        return true;
+    }
+
+    /**
+     * Set a node's pin state directly, which is the only way to reach
+     * `plane-locked` — `setImmutable` is a boolean and can only express the
+     * two ends. `planeId` is meaningful for `plane-locked` alone and is
+     * cleared for the other two, so a released node cannot keep a dangling
+     * reference to the plane it used to be held in.
+     * @param {number} id
+     * @param {'none'|'plane-locked'|'locked'} pin
+     * @param {number|null} [planeId]
+     * @returns {boolean} Applied?
+     */
+    setPin(id, pin, planeId) {
+        var node = this.getNode(id);
+        if (!node) return false;
+        node.pin = normalizePin(pin);
+        node.pinPlaneId = (node.pin === 'plane-locked' && planeId !== undefined)
+            ? planeId : null;
         return true;
     }
 

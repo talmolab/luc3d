@@ -30,8 +30,9 @@ const THRESHOLD_DEFAULTS = {
     corr2dWeight: 1,
     corr3dWeight: 6,
     velocityThreshold: 10,
-    distanceThreshold: 50,
+    distanceThreshold: 25,
     timePenalty: 0.1,
+    stale: 20,
 };
 
 const SETTINGS_STUB = `

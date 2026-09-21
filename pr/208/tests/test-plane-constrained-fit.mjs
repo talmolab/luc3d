@@ -529,6 +529,42 @@ group('planesInvalidatedByFit');
 }
 
 // ========================================================================
+group('a plane-locked node is NOT an anchor');
+{
+    // Four points on z = 0 apart from one lifted off it, so a free fit and a
+    // constrained fit give visibly different answers and the test can tell
+    // which one ran.
+    const pts = new Float64Array([
+        0, 0, 0,
+        10, 0, 0,
+        10, 10, 0,
+        0, 10, 4,
+    ]);
+
+    // The whole point of the two-state split: `planeImmutableMask` and
+    // `planeNodeImmutability` report `locked` only, so a plane-locked node
+    // arrives here as MUTABLE and the fit stays a free total-least-squares
+    // problem. If a future edit let `plane-locked` widen that mask, the fit
+    // would hold a node fixed whose position is not fixed, and this goes red.
+    const noneFrozen = [false, false, false, false];
+    const res = fitPlaneConstrained(pts, { immutable: noneFrozen, unit: 'mm' });
+    eq(res.ok, false, 'no locked nodes: the constrained fit declines');
+    eq(res.code, 'not_constrained',
+        'and says so by code, so the caller falls back to the free fit');
+
+    // Sanity: with a genuinely locked node it DOES constrain, which is what
+    // makes the assertion above meaningful rather than vacuous.
+    const oneFrozen = [true, false, false, false];
+    const res2 = fitPlaneConstrained(pts, { immutable: oneFrozen, unit: 'mm' });
+    eq(res2.ok, true, 'one locked node: the constrained fit engages');
+    ok(res2.plane && Math.abs(
+        (0 - res2.plane.centroid[0]) * res2.plane.normal[0] +
+        (0 - res2.plane.centroid[1]) * res2.plane.normal[1] +
+        (0 - res2.plane.centroid[2]) * res2.plane.normal[2]) < 1e-9,
+        'and the fitted plane passes exactly through the locked point');
+}
+
+// ========================================================================
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed) { console.error('\nFailures:'); failures.forEach(f => console.error('  - ' + f)); }
 process.exit(failed ? 1 : 0);

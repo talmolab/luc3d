@@ -41,14 +41,19 @@
 
 import { state, viewport3d } from './app-state.js';
 import { setStatus, markDirty } from '../import-export/save-load.js';
-import { buildOriginFrame } from '../pose/origin-frame.js';
-import { getPoint3d, hasPoint3d } from '../pose/pose-data.js';
+import { buildOriginFrame, rebaseExtrinsics } from '../pose/origin-frame.js';
+import { getPoint3d, hasPoint3d, Camera } from '../pose/pose-data.js';
+import { exportCalibrationTOML, downloadTOML } from '../import-export/file-io.js';
 // Circular by design (plane-definition imports this module's `enterOriginMode`
 // for its button). Safe: every use is inside a function body, so the binding
 // resolves at call time.
 import {
     planeState, planeModel, getPlane, planePoints3d, planeNodeNameAt, syncPlanes3D,
+    showPlaneDialog,
 } from './plane-definition.js';
+// Circular for the same reason and under the same rule: this module owns the
+// button, that one owns what the button does.
+import { showSetCalibrationModal } from './origin-rebase.js';
 
 export const originState = {
     /** @type {boolean} True while Set Origin Mode is active. */
@@ -460,6 +465,29 @@ export function applyOrigin() {
     return frame;
 }
 
+/**
+ * Reset, behind a warning.
+ *
+ * The Danger Zone's entry point. `clearOrigin` itself stays unguarded so the
+ * load path and the tests can reach it without a dialog — the confirmation is
+ * about an unrecoverable CLICK, not about the operation.
+ *
+ * Unrecoverable is the operative word: the frame is derived from a corner and
+ * an arrow the user picked in the 3D view, and nothing records which ones, so
+ * rebuilding it means walking the wizard again and hoping for the same corner.
+ */
+export function confirmClearOrigin() {
+    if (!originState.frame) return;
+    var f = originState.frame;
+    showPlaneDialog({
+        title: 'Reset to Calibration Origin?',
+        message: 'This discards the origin defined at "' + f.sourceNode + '" on plane "' +
+            f.sourcePlane + '" and puts the 3D view back on the calibration frame',
+        confirmLabel: 'Reset Origin',
+        onConfirm: clearOrigin,
+    });
+}
+
 /** Drop the user frame and put the grid back on the calibration origin. */
 export function clearOrigin() {
     if (originState.frame) markDirty();
@@ -470,7 +498,64 @@ export function clearOrigin() {
 }
 
 // ============================================
-// The result table
+// Danger Zone — the actions that leave this app
+// ============================================
+
+/**
+ * Write `calibration-updated.toml`: every camera's extrinsics re-expressed in
+ * the defined origin.
+ *
+ * This is the other half of the deliverable. Applying an origin deliberately
+ * does NOT move any annotated point (see the module note), so the 3D the user
+ * exports is still in calibration-world coordinates — which is only coherent if
+ * whoever consumes it also gets a calibration that agrees on where the world
+ * is. Rewriting the calibration is how the origin leaves this app; rewriting
+ * the points would silently change every number the rest of LUCID reports.
+ *
+ * Intrinsics, distortion, image size and camera ORDER all ride through
+ * untouched — the file differs from its input in exactly two keys per camera,
+ * so a diff against the original shows the origin change and nothing else.
+ *
+ * The rotation keeps the SHAPE it arrived in: a calibration that stored a 3x3
+ * (anipose) gets a 3x3 back, one that stored a Rodrigues triple gets a triple.
+ * Both are read by `Camera.rotationMatrix`, but silently changing the
+ * representation would make the file stop matching its siblings in a rig's
+ * config directory.
+ */
+export function exportUpdatedCalibration() {
+    var f = originState.frame;
+    if (!f) {
+        setStatus('Define an origin first — there is nothing to re-base the calibration onto', 'warning');
+        return null;
+    }
+    var cams = state.session && state.session.cameras;
+    if (!cams || !cams.length) {
+        setStatus('No calibration loaded to export', 'error');
+        return null;
+    }
+
+    var out = [];
+    for (var i = 0; i < cams.length; i++) {
+        var c = cams[i];
+        var reb = rebaseExtrinsics(c.rotationMatrix, c.tvec, f);
+        if (!reb) {
+            setStatus('Camera "' + c.name + '" has extrinsics that cannot be re-based', 'error');
+            return null;
+        }
+        var asMatrix = Array.isArray(c.rvec) && Array.isArray(c.rvec[0]);
+        out.push(new Camera(c.name, c.matrix, c.dist,
+            asMatrix ? reb.R : reb.rvec, reb.tvec, c.size));
+    }
+
+    var toml = exportCalibrationTOML(out);
+    downloadTOML(toml, 'calibration-updated.toml');
+    setStatus('Exported calibration-updated.toml — ' + out.length +
+        ' camera' + (out.length === 1 ? '' : 's') + ' re-based on "' + f.sourceNode + '"', 'success');
+    return toml;
+}
+
+// ============================================
+// The result readout
 // ============================================
 
 function fmt(v) {
@@ -492,15 +577,22 @@ function fmtVec(v) {
 export function renderOriginResult() {
     var section = document.getElementById('originResultSection');
     var host = document.getElementById('originResult');
+    // All three Danger Zone actions are relative to a defined origin — export
+    // and Set would write the calibration back out unchanged, and Reset has
+    // nothing to reset — so the block shares the readout's visibility gate
+    // rather than offering three no-ops.
+    var danger = document.getElementById('originDangerSection');
     if (!section || !host) return;
 
     var f = originState.frame;
     if (!f) {
         section.style.display = 'none';
+        if (danger) danger.style.display = 'none';
         host.innerHTML = '';
         return;
     }
     section.style.display = '';
+    if (danger) danger.style.display = '';
     host.innerHTML = '';
 
     var src = document.createElement('div');
@@ -513,7 +605,7 @@ export function renderOriginResult() {
     conv.textContent = 'p_new = R · p_old + t';
     host.appendChild(conv);
 
-    host.appendChild(vectorTable([
+    [
         ['Origin (old frame)', f.origin, 'mm'],
         ['Translation t', f.translation, 'mm'],
         ['Rotation vector', f.rotationVector, 'rad'],
@@ -521,17 +613,14 @@ export function renderOriginResult() {
         ['+X axis', f.xAxis, ''],
         ['+Y axis', f.yAxis, ''],
         ['+Z axis', f.zAxis, ''],
-    ]));
+    ].forEach(function (row) {
+        host.appendChild(vectorBlock(row[0], row[1], row[2]));
+    });
 
     var ang = document.createElement('div');
     ang.className = 'origin-angle';
     ang.textContent = 'Rotation angle: ' + f.angleDeg.toFixed(3) + '°';
     host.appendChild(ang);
-
-    var mLabel = document.createElement('div');
-    mLabel.className = 'origin-matrix-label';
-    mLabel.textContent = 'Rotation matrix R (rows = new axes in old coordinates)';
-    host.appendChild(mLabel);
 
     var mt = document.createElement('table');
     mt.className = 'origin-table origin-matrix';
@@ -544,37 +633,69 @@ export function renderOriginResult() {
         }
         mt.appendChild(tr);
     }
-    host.appendChild(mt);
+    // The matrix gets the same name-then-indented-body shape as the vectors, so
+    // its long caption can wrap onto its own lines instead of setting a width
+    // the 3x3 then has to live inside.
+    host.appendChild(namedBlock(
+        'Rotation matrix R (rows = new axes in old coordinates)', '', mt, 'origin-matrix-label'));
 }
 
-function vectorTable(rows) {
-    var table = document.createElement('table');
-    table.className = 'origin-table';
-    var head = document.createElement('tr');
-    ['', 'x', 'y', 'z', ''].forEach(function (h) {
-        var th = document.createElement('th');
-        th.textContent = h;
-        head.appendChild(th);
+/**
+ * One labelled row of the readout: the NAME on its own line, its values
+ * indented underneath.
+ *
+ * The readout used to be a 5-column table (name | x | y | z | unit), which is
+ * wider than this ~300px panel — the unit column was clipped off the right
+ * edge. Stacking is what buys the width back, and it also matches the Nodes
+ * list in the same panel, which stacks a node's x/y/z under its name for the
+ * same reason. Hence the shared `.plane-node-xyz-*` layout classes: one
+ * full-width line of three labelled cells.
+ */
+function namedBlock(label, unit, body, extraNameClass) {
+    var block = document.createElement('div');
+    block.className = 'origin-block';
+
+    var name = document.createElement('div');
+    name.className = 'origin-row-name' + (extraNameClass ? ' ' + extraNameClass : '');
+    name.appendChild(document.createTextNode(label));
+    if (unit) {
+        // The unit rides with the NAME rather than trailing the numbers: it
+        // describes the whole vector, and as a column it was the part that did
+        // not fit.
+        var u = document.createElement('span');
+        u.className = 'origin-unit';
+        u.textContent = unit;
+        name.appendChild(u);
+    }
+    block.appendChild(name);
+
+    var bodyWrap = document.createElement('div');
+    bodyWrap.className = 'origin-block-body';
+    bodyWrap.appendChild(body);
+    block.appendChild(bodyWrap);
+    return block;
+}
+
+function vectorBlock(label, v, unit) {
+    var line = document.createElement('div');
+    line.className = 'plane-node-xyz-line';
+    ['x', 'y', 'z'].forEach(function (axis, i) {
+        var cell = document.createElement('span');
+        cell.className = 'plane-node-xyz-cell';
+        var lab = document.createElement('span');
+        lab.className = 'plane-node-xyz-label';
+        lab.textContent = axis;
+        var val = document.createElement('span');
+        // Deliberately a span, not the Nodes list's <input>: these are computed
+        // outputs of the transform, and a field that looks typeable but is not
+        // would be a lie about what the panel does.
+        val.className = 'origin-xyz-value';
+        val.textContent = fmt(v[i]);
+        cell.appendChild(lab);
+        cell.appendChild(val);
+        line.appendChild(cell);
     });
-    table.appendChild(head);
-    rows.forEach(function (row) {
-        var tr = document.createElement('tr');
-        var name = document.createElement('td');
-        name.className = 'origin-row-name';
-        name.textContent = row[0];
-        tr.appendChild(name);
-        for (var i = 0; i < 3; i++) {
-            var td = document.createElement('td');
-            td.textContent = fmt(row[1][i]);
-            tr.appendChild(td);
-        }
-        var unit = document.createElement('td');
-        unit.className = 'origin-unit';
-        unit.textContent = row[2];
-        tr.appendChild(unit);
-        table.appendChild(tr);
-    });
-    return table;
+    return namedBlock(label, unit, line);
 }
 
 // ============================================
@@ -595,8 +716,20 @@ export function setupOriginDefinition() {
     var cont = document.getElementById('btnOriginContinue');
     if (cont) cont.addEventListener('click', applyOrigin);
 
+    // Reset goes through the warning, not straight to `clearOrigin` — it is the
+    // one button here that destroys something the user cannot get back by
+    // clicking again.
     var clear = document.getElementById('btnClearOrigin');
-    if (clear) clear.addEventListener('click', clearOrigin);
+    if (clear) clear.addEventListener('click', confirmClearOrigin);
+
+    var exportCal = document.getElementById('btnExportCalibration');
+    if (exportCal) exportCal.addEventListener('click', exportUpdatedCalibration);
+
+    // The committing twin of Export: it writes the calibration over the file on
+    // disk AND re-bases every 3D point in the project. Its dialogs, progress
+    // bar and file write live in `ui/origin-rebase.js`.
+    var setCal = document.getElementById('btnSetCalibration');
+    if (setCal) setCal.addEventListener('click', showSetCalibrationModal);
 
     setupInstructionDrag();
 

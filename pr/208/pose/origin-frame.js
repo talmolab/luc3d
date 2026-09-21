@@ -160,6 +160,60 @@ export function rotationMatrixToAxisAngle(R) {
 }
 
 /**
+ * Rotation matrix for `angleRad` about `axis`, the exact inverse of
+ * `rotationMatrixToAxisAngle` — so the two are tested against each other and
+ * neither can drift from the module's convention on its own.
+ *
+ * Rodrigues: `R = I + sin(t)·K + (1 - cos(t))·K²`, where `K` is the
+ * skew-symmetric matrix of the UNIT axis. Row-major and applied as `R · v`,
+ * like every other matrix here. The sense is right-handed: looking along `axis`
+ * towards the origin, a positive angle turns counter-clockwise.
+ *
+ * The same formula already appears inline in `Camera.rotationMatrix`
+ * (`pose/pose-data.js`), which bakes the angle into the vector's magnitude for
+ * OpenCV-style `rvec` extrinsics. That one stays where it is; this is the
+ * separate-axis-and-angle form the plane tools need, and it lives here because
+ * this module already owns the convention and has no dependencies.
+ *
+ * @param {number[]} axis - need not be unit; normalized internally.
+ * @param {number} angleRad
+ * @returns {number[][]|null} 3x3 row-major, or null for a zero-length or
+ *   non-finite axis — an arbitrary rotation is never invented.
+ */
+export function rotationAboutAxis(axis, angleRad) {
+    var k = normalize3(axis);
+    if (!k || !isFinite(angleRad)) return null;
+
+    var c = Math.cos(angleRad);
+    var s = Math.sin(angleRad);
+    var t = 1 - c;
+    var x = k[0], y = k[1], z = k[2];
+
+    // Written out rather than multiplying K by K: the closed form is exactly
+    // orthonormal for a unit axis, where two chained matrix products would
+    // accumulate a little error in every entry.
+    return [
+        [t * x * x + c,     t * x * y - s * z, t * x * z + s * y],
+        [t * x * y + s * z, t * y * y + c,     t * y * z - s * x],
+        [t * x * z - s * y, t * y * z + s * x, t * z * z + c],
+    ];
+}
+
+/**
+ * `R · v` for a row-major 3x3 and a 3-vector, with no translation — what
+ * rotating a DIRECTION (a plane normal, say) needs, as opposed to
+ * `applyOriginFrame`, which is an affine map of a POINT.
+ * @param {number[][]} R @param {number[]} v @returns {number[]}
+ */
+export function mulMat3Vec3(R, v) {
+    return [
+        R[0][0] * v[0] + R[0][1] * v[1] + R[0][2] * v[2],
+        R[1][0] * v[0] + R[1][1] * v[1] + R[1][2] * v[2],
+        R[2][0] * v[0] + R[2][1] * v[1] + R[2][2] * v[2],
+    ];
+}
+
+/**
  * Express an old-world point in the frame: `p_new = R · p_old + t`.
  * @param {Object} frame - from `buildOriginFrame`
  * @param {number[]} p
@@ -187,4 +241,73 @@ export function unapplyOriginFrame(frame, q) {
         R[0][1] * q[0] + R[1][1] * q[1] + R[2][1] * q[2] + o[1],
         R[0][2] * q[0] + R[1][2] * q[1] + R[2][2] * q[2] + o[2],
     ];
+}
+
+/**
+ * Re-express a camera's extrinsics in the frame — the calibration half of the
+ * origin change.
+ *
+ * `setOriginFrame` moves only what is DRAWN; the annotation keeps its
+ * calibration-world coordinates, on purpose (see `ui/origin-definition.js`).
+ * That leaves one artifact still speaking the old frame: the calibration
+ * itself. A downstream tool handed the user's 3D points and the ORIGINAL
+ * `calibration.toml` would reproject them against the wrong world, so the file
+ * has to be rewritten rather than the points.
+ *
+ * The derivation, since getting it backwards silently produces a calibration
+ * that still almost works (it reprojects, just onto the wrong world):
+ *
+ *     p_cam = R_cam · p_old + t_cam          (what the file says today)
+ *     p_old = Rᵀ · p_new + origin            (`unapplyOriginFrame`)
+ *   ⇒ p_cam = (R_cam · Rᵀ) · p_new + (R_cam · origin + t_cam)
+ *
+ * So the new rotation is `R_cam · Rᵀ` and the new translation is
+ * `R_cam · origin + t_cam`. Note the translation is built from `frame.origin`,
+ * NOT from `frame.translation` — the two differ by a rotation (`t = −R·origin`)
+ * and substituting one for the other is the mistake this comment exists to
+ * prevent.
+ *
+ * Intrinsics and distortion are untouched: an origin change moves the world,
+ * not the lens.
+ *
+ * @param {number[][]} camR - 3x3 world→camera rotation (`Camera.rotationMatrix`)
+ * @param {number[]} camT - 3-element world→camera translation (`Camera.tvec`)
+ * @param {Object} frame - from `buildOriginFrame`
+ * @returns {{R:number[][], rvec:number[], tvec:number[]}|null} null on
+ *   non-finite or malformed input — a wrong calibration is worse than none.
+ */
+export function rebaseExtrinsics(camR, camT, frame) {
+    if (!camR || camR.length < 3 || !camT || camT.length < 3) return null;
+    if (!frame || !frame.R || !frame.origin) return null;
+    for (var i = 0; i < 3; i++) {
+        if (!camR[i] || camR[i].length < 3) return null;
+        for (var j = 0; j < 3; j++) if (!isFinite(camR[i][j])) return null;
+        if (!isFinite(camT[i])) return null;
+    }
+
+    var R = frame.R, o = frame.origin;
+
+    // R_new = camR · Rᵀ. Rᵀ's (k, c) entry is R[c][k], hence the transposed
+    // index on the right-hand factor.
+    var Rn = [[0, 0, 0], [0, 0, 0], [0, 0, 0]];
+    for (var r = 0; r < 3; r++) {
+        for (var c = 0; c < 3; c++) {
+            var s = 0;
+            for (var k = 0; k < 3; k++) s += camR[r][k] * R[c][k];
+            Rn[r][c] = s;
+        }
+    }
+
+    var tn = [
+        camR[0][0] * o[0] + camR[0][1] * o[1] + camR[0][2] * o[2] + camT[0],
+        camR[1][0] * o[0] + camR[1][1] * o[1] + camR[1][2] * o[2] + camT[1],
+        camR[2][0] * o[0] + camR[2][1] * o[1] + camR[2][2] * o[2] + camT[2],
+    ];
+
+    var aa = rotationMatrixToAxisAngle(Rn);
+    return {
+        R: Rn,
+        rvec: [aa.axis[0] * aa.angleRad, aa.axis[1] * aa.angleRad, aa.axis[2] * aa.angleRad],
+        tvec: tn,
+    };
 }

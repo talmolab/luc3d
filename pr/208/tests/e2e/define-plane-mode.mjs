@@ -140,6 +140,33 @@ try {
         window.__nodesOf = (plane) =>
             plane.nodeIds.map(id => P.planeModel().pool.getNode(id));
         window.__namesOf = (plane) => window.__nodesOf(plane).map(n => n && n.name);
+        /** A pool node's IDENTITY row in the Nodes list, found by name. */
+        window.__nodeRow = (name) =>
+            Array.from(document.querySelectorAll('#planeNodesTable tbody tr.plane-node-main'))
+                .find(r => r.querySelector('.plane-node-name').value === name) || null;
+        /** That node's expanded panel row, or null when it is collapsed. */
+        window.__nodeDetail = (name) => {
+            const row = window.__nodeRow(name);
+            const next = row && row.nextElementSibling;
+            return (next && next.classList.contains('plane-node-detail')) ? next : null;
+        };
+        window.__expandNode = (name) => {
+            if (!window.__nodeDetail(name)) window.__nodeRow(name).querySelector('.plane-node-expander').click();
+            return window.__nodeDetail(name);
+        };
+        /**
+         * Change a node's pin THROUGH THE REAL CONTROL: click the padlock to
+         * open the picker, then click the state you want. There is no <select>
+         * any more — the state is an icon and the picker is a popover.
+         */
+        window.__setPin = (name, pin) => {
+            window.__nodeRow(name).querySelector('.plane-node-pin-btn').click();
+            const opt = document.querySelector(
+                '#planePinPopover .plane-pin-option[data-pin="' + pin + '"]');
+            if (!opt) return false;
+            opt.click();
+            return true;
+        };
         /** Write a plane's 2D on a view from PLANE-ordered points. */
         window.__setPts = (plane, view, pts) => {
             const inst = P.getPlaneInstance(view);
@@ -357,6 +384,46 @@ try {
     check(m.expandedHeights.every((h, i) => h > m.collapsedHeights[i]),
         `expanding restores each section (got ${JSON.stringify(m.expandedHeights)})`);
 
+    // Plane Appearance moved INSIDE Planes. It styles exactly what the Planes
+    // table lists and nothing else in the panel, so it is a sub-section there
+    // rather than a fourth top-level section — and it is the last bare <h3> the
+    // panel had, so nothing in here should be one any more.
+    m = await page.evaluate(() => {
+        const app = document.getElementById('planeAppearanceDetails');
+        const planes = document.getElementById('planePlanesDetails');
+        const panel = document.getElementById('planePanel');
+        return {
+            exists: !!app,
+            insidePlanes: !!app && planes.contains(app),
+            summary: app ? app.querySelector('summary').textContent.trim() : null,
+            open: !!app && app.open,
+            // Dressed as a SUB-section (12px), like the two inside Edit Plane —
+            // not as a top-level one (14px), which would claim a rank it no
+            // longer has.
+            titlePx: app ? parseFloat(getComputedStyle(app.querySelector('summary')).fontSize) : null,
+            topTitlePx: parseFloat(getComputedStyle(planes.querySelector('summary')).fontSize),
+            sliders: ['planeNodeSize', 'planeEdgeWeight', 'planeNodeSize3d']
+                .map(id => !!(app && app.querySelector('#' + id))),
+            labels: app ? Array.from(app.querySelectorAll('.vis-slider-row > span:first-child'))
+                .map(e => e.textContent.trim()) : [],
+            // The sliders still work from their new home.
+            values: ['planeNodeSize', 'planeEdgeWeight', 'planeNodeSize3d']
+                .map(id => document.getElementById(id).value),
+            strayH3: panel ? panel.querySelectorAll('.info-section > h3').length : -1,
+        };
+    });
+    check(m.exists && m.insidePlanes && m.summary === 'Plane Appearance',
+        `Plane Appearance is a sub-section of Planes (got '${m.summary}')`);
+    check(m.open, 'and stays expanded, so the sliders are no less findable than before');
+    check(m.titlePx === 12 && m.topTitlePx === 14,
+        `titled as a sub-section, not a top-level one (${m.titlePx}px vs ${m.topTitlePx}px)`);
+    check(m.sliders.every(Boolean) && eq(m.labels, ['2D Node Size', 'Edge Weight', '3D Node Size']),
+        `all three sliders moved with it (got ${JSON.stringify(m.labels)})`);
+    check(eq(m.values, ['13', '3', '4']),
+        `and kept their defaults (got ${JSON.stringify(m.values)})`);
+    check(m.strayH3 === 0,
+        `every section of the panel is now a <details> — no bare <h3> left (got ${m.strayH3})`);
+
     // =================================================================
     // 3 — the editor builds a plane
     // =================================================================
@@ -443,7 +510,7 @@ try {
             memberRows: document.querySelectorAll('#planeMembersTable tbody tr').length,
             membersEmptyShown:
                 getComputedStyle(document.getElementById('planeMembersEmpty')).display !== 'none',
-            unusedRows: document.querySelectorAll('#planeNodesTable tbody tr.plane-node-unused').length,
+            unusedRows: document.querySelectorAll('#planeNodesTable tbody tr.plane-node-main.plane-node-unused').length,
             // …and all four are offered to + Add, which is now the ONLY way in.
             addOptions: Array.from(document.querySelectorAll('#planeAddNodeSelect option'))
                 .map(o => o.textContent.split('  (')[0]),
@@ -485,7 +552,7 @@ try {
     m = await page.evaluate(async () => {
         const P = await import('/ui/plane-definition.js');
         const plane = P.getSelectedPlane();
-        const rows = Array.from(document.querySelectorAll('#planeNodesTable tbody tr'));
+        const rows = Array.from(document.querySelectorAll('#planeNodesTable tbody tr.plane-node-main'));
         return {
             name: plane.name,
             nodes: window.__namesOf(plane),
@@ -498,8 +565,25 @@ try {
             nodeRows: rows.length,
             // The Nodes table is the POOL and acts on the NODE only — there is
             // no membership column any more; membership is the members table.
+            // Every column is named except the chevron, which names itself.
+            // The pin column's label carries an info button, because what the
+            // three states MEAN is the one thing an icon cannot say.
             headers: Array.from(document.querySelectorAll('#planeNodesTable thead th'))
                 .map(h => h.textContent.trim()),
+            headerCols: document.querySelectorAll('#planeNodesTable thead th').length,
+            pinInfoTitle: (document.getElementById('planePinInfo') || {}).title || '',
+            // The panel's SECTION titles, which have to read as one set: the
+            // four <details> summaries plus Plane Appearance, which is the one
+            // section with no <details> of its own and so has to be dressed to
+            // match. Sub-sections inside Edit Plane stay smaller on purpose.
+            sectionTitles: Array.from(document.querySelectorAll(
+                '#planePanel > .info-section > .plane-details > summary, ' +
+                '#planePanel > .info-section > h3'))
+                .map(el => [el.textContent.trim().split('  ')[0],
+                            getComputedStyle(el).fontSize]),
+            subTitles: Array.from(document.querySelectorAll(
+                '#planePanel .plane-subdetails > summary'))
+                .map(el => [el.textContent.trim(), getComputedStyle(el).fontSize]),
             noMembershipCheckbox: document.querySelectorAll('#planeNodesTable .plane-node-member').length,
             // The selected plane's own nodes, in the plane's order.
             memberHeaders: Array.from(document.querySelectorAll('#planeMembersTable thead th'))
@@ -531,8 +615,16 @@ try {
     check(m.edgesAreIds, 'connections are stored as node IDs, not index pairs');
     check(m.poolSize === 4, `the four nodes are in the global pool (got ${m.poolSize})`);
     check(m.nodeRows === 4, `node table has 4 rows (got ${m.nodeRows})`);
-    check(eq(m.headers, ['Name', 'Color', 'Pin', '3D', '']),
-        `the Nodes table is the pool, with Color / Pin / 3D and NO membership column (got ${JSON.stringify(m.headers)})`);
+    check(m.headerCols === 5 && eq(m.headers, ['', 'Color', 'Name', 'Pinned', 'Delete']),
+        `the Nodes list names its columns (got ${JSON.stringify(m.headers)})`);
+    check(m.sectionTitles.length >= 5 && m.sectionTitles.every(t => t[1] === '14px'),
+        `every section title is 14px (got ${JSON.stringify(m.sectionTitles)})`);
+    check(m.subTitles.length >= 2 && m.subTitles.every(t => t[1] === '12px'),
+        `and the sub-sections inside Edit Plane stay smaller (got ${JSON.stringify(m.subTitles)})`);
+    check(/unlocked \(mutable\)/.test(m.pinInfoTitle) &&
+          /locked \(immutable\)/.test(m.pinInfoTitle) &&
+          /plane-locked \(mutable within defined plane\)/.test(m.pinInfoTitle),
+        `the pin column's info button defines all three states (got "${m.pinInfoTitle}")`);
     check(m.noMembershipCheckbox === 0,
         `no per-row "In" checkbox survives in the pool table (got ${m.noMembershipCheckbox})`);
     check(eq(m.memberHeaders, ['Name', 'Color', '']),
@@ -562,7 +654,7 @@ try {
             newRowDraggable: document.querySelectorAll('#planeSkeletonsTable tbody tr')[1].draggable,
             // The pool is global, so the new plane's Nodes table still lists
             // the four nodes…
-            nodeRows: document.querySelectorAll('#planeNodesTable tbody tr').length,
+            nodeRows: document.querySelectorAll('#planeNodesTable tbody tr.plane-node-main').length,
             // …while the new plane's OWN members table is empty, and every one
             // of those four is offered by the add-an-existing-node dropdown —
             // which is what makes sharing a node reachable in one click.
@@ -849,7 +941,7 @@ try {
         const P = await import('/ui/plane-definition.js');
         const R = await import('/ui/rendering.js');
         const AS = await import('/ui/app-state.js');
-        const rows = Array.from(document.querySelectorAll('#planeNodesTable tbody tr'));
+        const rows = Array.from(document.querySelectorAll('#planeNodesTable tbody tr.plane-node-main'));
         const pickers = rows.map(r => r.querySelector('input[type=color]'));
         const plane = window.__plane(0);
         const pool = P.planeModel().pool;
@@ -1186,7 +1278,7 @@ try {
         out.memberRowsWhenNone = document.querySelectorAll('#planeMembersTable tbody tr').length;
         out.addDisabledWhenNone = document.getElementById('btnAddExistingPlaneNode').disabled;
         // The pool is NOT gated on a selection — nodes exist without a plane.
-        out.poolStillListed = document.querySelectorAll('#planeNodesTable tbody tr').length;
+        out.poolStillListed = document.querySelectorAll('#planeNodesTable tbody tr.plane-node-main').length;
         P.planeState.selectedPlaneId = P.planeModel().planes[0].id;
         P.refreshPlanePanel();
         return out;
@@ -1969,7 +2061,7 @@ try {
         out.nodesBefore = nodesBefore;
         // …and they are still listed and editable, which is the only place they
         // can now be destroyed.
-        out.nodeRowsAfterDelete = document.querySelectorAll('#planeNodesTable tbody tr').length;
+        out.nodeRowsAfterDelete = document.querySelectorAll('#planeNodesTable tbody tr.plane-node-main').length;
         out.visibleAfterDelete = P.planeModel().visibleNodeIndices('camB').length;
         return out;
     });
@@ -2411,12 +2503,34 @@ try {
         'the wizard overlay, picker and arrows are all torn down');
     check(/Origin set/.test(m.status), `it reports to the status bar (got "${m.status}")`);
 
-    // --- the result table ---
+    // --- the result readout ---
     m = await page.evaluate(async () => {
         const O = await import('/ui/origin-definition.js');
         const shown = getComputedStyle(document.getElementById('originResultSection')).display !== 'none';
-        const rows = Array.from(document.querySelectorAll('#originResult .origin-table:not(.origin-matrix) tr'))
-            .map(tr => tr.children[0].textContent);
+        // Name first, values indented underneath — the Nodes list's shape. The
+        // name node holds the label as its own text and the unit as a child
+        // span, so read them apart.
+        const blocks = Array.from(document.querySelectorAll('#originResult .origin-block'))
+            .map(b => {
+                const nameEl = b.querySelector('.origin-row-name');
+                const unitEl = nameEl.querySelector('.origin-unit');
+                return {
+                    name: nameEl.firstChild ? nameEl.firstChild.textContent : '',
+                    unit: unitEl ? unitEl.textContent : '',
+                    // The values live in a body that is INDENTED past the name.
+                    indented: (() => {
+                        const body = b.querySelector('.origin-block-body');
+                        if (!body) return false;
+                        return body.getBoundingClientRect().left >
+                            nameEl.getBoundingClientRect().left + 3;
+                    })(),
+                    axes: Array.from(b.querySelectorAll('.plane-node-xyz-label'))
+                        .map(l => l.textContent),
+                    values: Array.from(b.querySelectorAll('.origin-xyz-value'))
+                        .map(v => v.textContent),
+                };
+            });
+        const rows = blocks.map(b => b.name);
         const matrixCells = document.querySelectorAll('#originResult .origin-matrix td').length;
         const text = document.getElementById('originResult').textContent;
         const f = O.originState.frame;
@@ -2427,16 +2541,270 @@ try {
         for (let r = 0; r < 3; r++) for (let c = 0; c < 3; c++) {
             worst = Math.max(worst, Math.abs(cells[r * 3 + c] - f.R[r][c]));
         }
-        return { shown, rows, matrixCells, text, worst, angleDeg: f.angleDeg };
+        // The panel is ~300px and this readout was a table wider than it, with
+        // the unit column clipped off the right edge. Nothing here may scroll
+        // sideways — measured on the host AND on the widest descendant, since a
+        // child that overflows its parent does not always grow the parent's
+        // own scrollWidth.
+        const host = document.getElementById('originResult');
+        const panel = document.querySelector('.plane-panel');
+        const measure = () => {
+            const hostBox = host.getBoundingClientRect();
+            let widest = 0, widestWho = '';
+            host.querySelectorAll('*').forEach(el => {
+                const r = el.getBoundingClientRect();
+                if (r.right - hostBox.left > widest) {
+                    widest = r.right - hostBox.left;
+                    widestWho = el.className || el.tagName;
+                }
+            });
+            return {
+                scrollW: host.scrollWidth, clientW: host.clientWidth,
+                widest: Math.round(widest), widestWho, hostW: Math.round(hostBox.width),
+                panelScrollW: panel ? panel.scrollWidth : 0,
+                panelClientW: panel ? panel.clientWidth : 0,
+            };
+        };
+        const fit = measure();
+
+        // …and again with the coordinates a REAL project carries. This fixture
+        // is a 200mm test rig, so its two-figure numbers fit almost any layout;
+        // a room calibrated in mm is five and six figures, and that is what the
+        // old five-column table clipped. Re-render over the same frame object
+        // (nothing else reads it between here and the restore) so the widths
+        // under test are the widths the user would see.
+        const saved = { origin: f.origin, translation: f.translation, sourceNode: f.sourceNode };
+        f.origin = [-12345.678, -98765.432, 123456.789];
+        f.translation = [-12345.678, -98765.432, 123456.789];
+        f.sourceNode = 'north-west bench corner';
+        O.renderOriginResult();
+        const wide = measure();
+        Object.assign(f, saved);
+        O.renderOriginResult();
+
+        return { shown, blocks, rows, matrixCells, text, worst, angleDeg: f.angleDeg, fit, wide };
     });
     check(m.shown, 'the result section appears in the panel');
     check(m.rows.includes('Origin (old frame)') && m.rows.includes('Translation t'),
         `both the origin AND the mapping's translation are listed, labelled (got ${JSON.stringify(m.rows)})`);
     check(m.rows.includes('Rotation vector'), 'the rotation vector is listed');
+    const originBlock = m.blocks.find(b => b.name === 'Origin (old frame)');
+    const rotBlock = m.blocks.find(b => b.name === 'Rotation vector');
+    check(originBlock && originBlock.unit === 'mm' && rotBlock && rotBlock.unit === 'rad',
+        `the units survive the restructure (got '${originBlock && originBlock.unit}' / ` +
+        `'${rotBlock && rotBlock.unit}')`);
+    check(originBlock && originBlock.values.length === 3 &&
+        eq(originBlock.axes.map(a => a.toLowerCase()), ['x', 'y', 'z']),
+        `each row's three coordinates are labelled x/y/z (got ${JSON.stringify(originBlock && originBlock.axes)})`);
+    check(m.blocks.length >= 7 && m.blocks.every(b => b.indented),
+        `every row's values sit INDENTED under its name (${m.blocks.filter(b => !b.indented).length} not)`);
     check(m.matrixCells === 9, `the 3x3 rotation matrix is rendered (got ${m.matrixCells} cells)`);
     check(m.worst < 1e-3, `the rendered matrix matches the computed one (worst ${m.worst.toExponential(2)})`);
     check(/p_new = R/.test(m.text), 'the convention is stated, so the two vectors cannot be confused');
     check(/Rotation angle/.test(m.text), `the angle is reported (${m.angleDeg.toFixed(2)}deg)`);
+    check(m.fit.scrollW <= m.fit.clientW,
+        `the readout does not scroll horizontally (scrollWidth ${m.fit.scrollW} vs clientWidth ${m.fit.clientW})`);
+    check(m.fit.widest <= m.fit.hostW + 1,
+        `and nothing inside it overhangs the panel (widest ${m.fit.widest}px of ${m.fit.hostW}px — ${m.fit.widestWho})`);
+    check(m.wide.scrollW <= m.wide.clientW && m.wide.widest <= m.wide.hostW + 1,
+        `nor with six-figure mm coordinates and a long corner name — the case the old ` +
+        `five-column table clipped (scrollWidth ${m.wide.scrollW} vs ${m.wide.clientW}, ` +
+        `widest ${m.wide.widest}px of ${m.wide.hostW}px — ${m.wide.widestWho})`);
+    check(m.wide.panelScrollW <= m.wide.panelClientW,
+        `so the Define Plane panel itself has no horizontal scroll (${m.wide.panelScrollW} vs ${m.wide.panelClientW})`);
+
+    // --- the collapsible block, and the Danger Zone ---
+    //
+    // The readout is a dozen labelled vectors plus a 3x3 in a ~300px column, so
+    // it collapses; and the three actions that reach OUTSIDE the 3D view live
+    // in their own block below it, collapsed by default.
+    m = await page.evaluate(async () => {
+        const out = {};
+        const det = document.getElementById('originResultDetails');
+        const host = document.getElementById('originResult');
+        out.isDetails = !!det && det.tagName === 'DETAILS';
+        out.openByDefault = !!det && det.open;
+        out.summary = det ? det.querySelector('summary').textContent.trim() : null;
+        out.readoutInside = !!det && det.contains(host);
+        // Collapsing really hides it — a <summary> that only looks clickable
+        // would pass a text assertion and fail the user. Measured on the
+        // <details> itself against its summary, like section 2 does: a closed
+        // <details> keeps a box for its hidden content in Chrome, so the
+        // CHILD's own height does not go to zero.
+        out.summaryHeight = det.querySelector('summary').offsetHeight;
+        out.heightOpen = det.offsetHeight;
+        det.open = false;
+        out.heightClosed = det.offsetHeight;
+        det.open = true;
+
+        const danger = document.getElementById('originDangerSection');
+        const dd = document.getElementById('originDangerDetails');
+        out.dangerShown = !!danger && getComputedStyle(danger).display !== 'none';
+        out.dangerSummary = dd ? dd.querySelector('summary').textContent.trim() : null;
+        // Collapsed by default: a Danger Zone the user scrolls past with its
+        // buttons exposed is a Danger Zone in name only.
+        out.dangerCollapsed = !!dd && !dd.open;
+        dd.open = true;
+
+        out.buttons = Array.from(danger.querySelectorAll('button'))
+            .map(b => ({ id: b.id, label: b.textContent.trim(), disabled: b.disabled }));
+        // Reset MOVED here — it must no longer sit in the readout block.
+        const clear = document.getElementById('btnClearOrigin');
+        out.resetInDanger = danger.contains(clear);
+        out.resetOutOfResult = !document.getElementById('originResultSection').contains(clear);
+        // Each action on its own full-width row: side by side at this width the
+        // two calibration labels truncate to "Export New Cal…" / "Set as New C…".
+        const tops = Array.from(danger.querySelectorAll('button'))
+            .map(b => Math.round(b.getBoundingClientRect().top));
+        out.stacked = new Set(tops).size === tops.length;
+        out.noClip = Array.from(danger.querySelectorAll('button'))
+            .every(b => b.scrollWidth <= b.clientWidth + 1);
+        return out;
+    });
+    check(m.isDetails && m.openByDefault && m.summary === 'Defined Origin',
+        `the readout is a collapsible block titled "Defined Origin", open by default (got '${m.summary}')`);
+    check(m.readoutInside && m.heightOpen > m.heightClosed &&
+          m.heightClosed <= m.summaryHeight + 2,
+        `collapsing it shrinks the block to its summary (${m.heightOpen}px -> ` +
+        `${m.heightClosed}px, summary ${m.summaryHeight}px)`);
+    check(m.dangerShown && m.dangerSummary === 'Danger Zone',
+        `a separate "Danger Zone" block appears with the origin (got '${m.dangerSummary}')`);
+    check(m.dangerCollapsed, 'and is COLLAPSED by default');
+    check(eq(m.buttons.map(b => b.id),
+             ['btnExportCalibration', 'btnSetCalibration', 'btnClearOrigin']),
+        `it holds the three origin actions in order (got ${JSON.stringify(m.buttons.map(b => b.id))})`);
+    check(eq(m.buttons.map(b => b.label),
+             ['Export New Calibration', 'Set as New Calibration', 'Reset to Calibration Origin']),
+        `labelled as asked (got ${JSON.stringify(m.buttons.map(b => b.label))})`);
+    check(m.buttons.every(b => !b.disabled),
+        'all three actions are live once an origin exists');
+    check(m.resetInDanger && m.resetOutOfResult, 'Reset moved out of the readout and into the Danger Zone');
+    check(m.stacked && m.noClip, 'the three buttons stack, so none of the labels truncate');
+
+    // --- Export New Calibration ---
+    //
+    // The one assertion worth making about the file: a 3D point must land on
+    // the same camera coordinates whether you use (old calibration, old-world
+    // point) or (new calibration, new-frame point). Everything else is
+    // bookkeeping, so it is checked by round-tripping the emitted TOML back
+    // through the app's own parser rather than by string matching.
+    m = await page.evaluate(async () => {
+        const O = await import('/ui/origin-definition.js');
+        const AS = await import('/ui/app-state.js');
+        const FIO = await import('/import-export/file-io.js');
+        const OF = await import('/pose/origin-frame.js');
+        const out = {};
+
+        const before = AS.state.session.cameras;
+        const toml = O.exportUpdatedCalibration();
+        out.returned = typeof toml === 'string' && toml.length > 0;
+
+        const after = FIO.parseCalibrationTOML(toml);
+        out.count = after.length;
+        out.names = after.map(c => c.name);
+        // Intrinsics, distortion, size and ORDER ride through untouched: a diff
+        // against the original must show the extrinsics and nothing else.
+        out.intrinsicsKept = after.every((c, i) =>
+            JSON.stringify(c.matrix) === JSON.stringify(before[i].matrix) &&
+            JSON.stringify(c.dist) === JSON.stringify(before[i].dist) &&
+            JSON.stringify(c.size) === JSON.stringify(before[i].size));
+        // Rotation keeps the SHAPE it arrived in (these fixtures are Rodrigues
+        // triples, so a 3x3 coming back would mean the writer changed notation).
+        out.rvecShape = after.map(c => Array.isArray(c.rvec[0]) ? 'matrix' : 'vector');
+
+        const f = O.originState.frame;
+        const probes = [[0, 0, 0], [30, -20, 210], [-140, 75, 90], [5, 5, 1000]];
+        const proj = (cam, p) => {
+            const R = cam.rotationMatrix, t = cam.tvec;
+            return [0, 1, 2].map(i =>
+                R[i][0] * p[0] + R[i][1] * p[1] + R[i][2] * p[2] + t[i]);
+        };
+        let worst = 0, worstIfUnchanged = 0;
+        for (let i = 0; i < after.length; i++) {
+            for (const p of probes) {
+                const q = OF.applyOriginFrame(f, p);
+                const a = proj(before[i], p);
+                const b = proj(after[i], q);
+                const c = proj(before[i], q);   // the ORIGINAL file, used wrongly
+                for (let k = 0; k < 3; k++) {
+                    worst = Math.max(worst, Math.abs(a[k] - b[k]));
+                    worstIfUnchanged = Math.max(worstIfUnchanged, Math.abs(a[k] - c[k]));
+                }
+            }
+        }
+        out.worst = worst;
+        out.worstIfUnchanged = worstIfUnchanged;
+        return out;
+    });
+    check(m.returned, 'Export New Calibration produces a TOML document');
+    check(m.count === 2 && eq(m.names, ['camA', 'camB']),
+        `every camera is written, in order (got ${JSON.stringify(m.names)})`);
+    check(m.intrinsicsKept,
+        'intrinsics, distortion and image size are untouched — an origin change moves the world, not the lens');
+    check(eq(m.rvecShape, ['vector', 'vector']),
+        `the rotation keeps the notation it arrived in (got ${JSON.stringify(m.rvecShape)})`);
+    check(m.worst < 1e-6,
+        `the new calibration sees a re-based point exactly where the old one saw the original (worst ${m.worst.toExponential(2)} mm)`);
+    check(m.worstIfUnchanged > 1,
+        `NEGATIVE CONTROL: the ORIGINAL calibration does not (off by ${m.worstIfUnchanged.toFixed(1)} mm), so the rewrite is doing real work`);
+
+    // --- Reset is behind a warning ---
+    //
+    // The frame comes from a corner and an arrow picked in the 3D view and
+    // nothing records which; an accidental click costs the user the wizard
+    // again. Esc cancels, per the project's modal rule.
+    m = await page.evaluate(async () => {
+        const O = await import('/ui/origin-definition.js');
+        const P = await import('/ui/plane-definition.js');
+        const out = {};
+
+        document.getElementById('btnClearOrigin').click();
+        const dlg = document.getElementById('planeDialog');
+        out.opened = !!dlg;
+        out.title = dlg ? dlg.querySelector('h3').textContent : null;
+        out.message = dlg ? dlg.querySelector('.plane-confirm-message').textContent : null;
+        out.confirmLabel = document.getElementById('btnPlaneDialogConfirm')
+            ? document.getElementById('btnPlaneDialogConfirm').textContent : null;
+        // Opening the warning must not already have done the thing.
+        out.frameStillSet = !!O.originState.frame;
+
+        // Esc cancels — an accidental dismissal can never apply it.
+        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+        out.escClosed = !document.getElementById('planeDialog');
+        out.frameAfterEsc = !!O.originState.frame;
+
+        // Cancel likewise.
+        document.getElementById('btnClearOrigin').click();
+        document.getElementById('btnPlaneDialogCancel').click();
+        out.frameAfterCancel = !!O.originState.frame;
+
+        // Confirm is the only path through.
+        document.getElementById('btnClearOrigin').click();
+        document.getElementById('btnPlaneDialogConfirm').click();
+        out.frameAfterConfirm = O.originState.frame === null;
+        out.dangerHidden = getComputedStyle(document.getElementById('originDangerSection')).display === 'none';
+
+        // Put it back for the sections below, which need an applied frame.
+        const sk = P.planeModel().planes[P.planeModel().planes.length - 1];
+        O.enterOriginMode();
+        O.pickOriginNode(sk.id, 0);
+        O.pickOriginAxis('positive');
+        O.applyOrigin();
+        out.restored = !!O.originState.frame;
+        return out;
+    });
+    check(m.opened && /Reset to Calibration Origin/.test(m.title || ''),
+        `Reset opens a warning rather than firing (got '${m.title}')`);
+    check(/^This discards the origin defined at "[^"]+" on plane "[^"]+" and puts the 3D view back on the calibration frame$/
+            .test((m.message || '').trim()),
+        `the warning is the one sentence, naming the corner and the plane (got '${m.message}')`);
+    check(m.confirmLabel === 'Reset Origin',
+        `the confirm button names the action (got '${m.confirmLabel}')`);
+    check(m.escClosed && m.frameStillSet && m.frameAfterEsc && m.frameAfterCancel,
+        'neither opening the warning, Esc nor Cancel discards the origin');
+    check(m.frameAfterConfirm && m.dangerHidden,
+        'confirming clears it, and the Danger Zone goes with the readout');
+    check(m.restored, 'the fixture re-applies an origin for the sections below');
 
     // --- Cancel, Esc, and Reset ---
     m = await page.evaluate(async () => {
@@ -2591,8 +2959,7 @@ try {
         // The Nodes table is the POOL; membership of the SELECTED plane is its
         // own members table, and the add-an-existing-node dropdown is how a
         // user builds a shared corner by hand. B is selected here.
-        const rowOf = (name) => Array.from(document.querySelectorAll('#planeNodesTable tbody tr'))
-            .find(r => r.querySelector('input[type=text]').value === name);
+        const rowOf = (name) => window.__nodeRow(name);
         const memberNames = () =>
             Array.from(document.querySelectorAll('#planeMembersTable tbody tr'))
                 .map(r => r.children[0].textContent.trim());
@@ -2697,20 +3064,27 @@ try {
         const A = model.planes.find(p => p.name === 'wallA');
         P.planeState.selectedPlaneId = A.id;
         P.refreshPlanePanel();
-        // Pin through the real checkbox, so the panel path is what is tested.
-        const row = Array.from(document.querySelectorAll('#planeNodesTable tbody tr'))
-            .find(r => r.querySelector('input[type=text]').value === 's0');
-        const pin = row.querySelector('.plane-node-pin');
-        pin.checked = true;
-        pin.dispatchEvent(new Event('change', { bubbles: true }));
+        // Pin through the real control, so the panel path is what is tested:
+        // click the padlock to open the picker, then pick Locked. Three states
+        // need three choices — "don't move this" and "don't move this off its
+        // plane" are different promises — and `locked` is the one that freezes
+        // the 3D outright.
+        const opened = window.__setPin('s0', 'locked');
         const node = model.pool.getNode(A.nodeIds[1]);
         return {
+            opened: opened,
+            iconState: window.__nodeRow('s0').querySelector('.plane-node-pin-btn')
+                .getAttribute('data-pin'),
+            popoverGone: !document.getElementById('planePinPopover'),
             pinned: node.immutable,
             at: P.getPlaneInstance('camA').getPoint(model.pool.indexOf(node.id)),
             xyz: node.getPoint3d(),
         };
     }, TRUTH15);
-    check(pinTarget.pinned, 'the Pin checkbox pins the node');
+    check(pinTarget.opened, 'the padlock opens a picker offering all three states');
+    check(pinTarget.pinned, 'and picking Locked locks the node');
+    check(pinTarget.iconState === 'locked', 'the row\'s icon now shows that state');
+    check(pinTarget.popoverGone, 'the picker closes once a state is picked');
     {
         const from = await toClient('camA', pinTarget.at[0], pinTarget.at[1]);
         const to = await toClient('camA', pinTarget.at[0] + 60, pinTarget.at[1] + 40);
@@ -2745,13 +3119,14 @@ try {
         const A = model.planes.find(p => p.name === 'wallA');
         const ghost = model.createNodeInPlane('ghost', A, { immutable: true });
         P.refreshPlanePanel();
-        const row = Array.from(document.querySelectorAll('#planeNodesTable tbody tr'))
-            .find(r => r.querySelector('input[type=text]').value === 'ghost');
+        const row = window.__nodeRow('ghost');
         const warn = document.getElementById('planeFrozenWarning');
         return {
             state: P.nodeFreezeState(ghost),
-            badgeClass: row.querySelector('.plane-node-state').className,
-            badgeText: row.querySelector('.plane-node-state').textContent,
+            // The 3D column is gone; the row itself now carries the state, as a
+            // class (styled with an error stripe) and in its title.
+            badgeClass: row.className,
+            badgeText: row.title,
             warnShown: getComputedStyle(warn).display !== 'none',
             warnText: warn.textContent,
             ghostId: ghost.id,
@@ -2759,9 +3134,10 @@ try {
     });
     check(m.state === 'frozen-unsolved',
         `a node pinned before triangulation is 'frozen-unsolved' (got '${m.state}')`);
-    check(/frozen-unsolved/.test(m.badgeClass),
+    check(/plane-node-frozen-unsolved/.test(m.badgeClass),
         `the table marks that state distinctly (got "${m.badgeClass}")`);
-    check(/no 3D/i.test(m.badgeText), `and says so in words (got "${m.badgeText}")`);
+    check(/never triangulated/i.test(m.badgeText),
+        `and says so in words (got "${(m.badgeText || '').slice(0, 120)}")`);
     check(m.warnShown && /ghost/.test(m.warnText) && /block/i.test(m.warnText),
         `the panel explains the dead end in the open, not only in a tooltip (got "${(m.warnText || '').slice(0, 120)}")`);
 
@@ -2932,8 +3308,7 @@ try {
         };
         // The × in the Nodes table, which for a SHARED node must confirm first.
         P.refreshPlanePanel();
-        const row = Array.from(document.querySelectorAll('#planeNodesTable tbody tr'))
-            .find(r => r.querySelector('input[type=text]').value === shared.name);
+        const row = window.__nodeRow(shared.name);
         row.querySelector('td:last-child button').click();
         const dlg = document.getElementById('planeDialog');
         const out = {
@@ -2983,6 +3358,511 @@ try {
         `every view's instance still spans the pool (${m.instanceLen}/${m.otherViewLen} vs ${m.pool})`);
     check(eq(m.aNames, ['a0', 's1', 'a1']) && eq(m.bNames, ['b0', 's1', 'b1']),
         `the surviving names resolve in both planes (got ${JSON.stringify(m.aNames)} / ${JSON.stringify(m.bNames)})`);
+
+    // =================================================================
+    // 18 — the Nodes table's x/y/z line: reading and TYPING a position
+    // =================================================================
+    console.log('\n18. Typing a node position');
+
+    // The panel's own display format, duplicated here on purpose: if it ever
+    // stops matching `fmtXyz`, the precision check below is what notices.
+    const fmt = (v) => String(Number(v.toFixed(4)));
+
+    await page.evaluate(() => {
+        // The coordinates live in the node's EXPANDED panel, so every reader
+        // expands first — and re-expands after a panel rebuild, which collapses
+        // nothing but does throw the old row away.
+        window.__xyzInputs = (name) => Array.from(
+            window.__expandNode(name).querySelectorAll('.plane-node-xyz-input'));
+        window.__typeXyz = (name, axis, text) => {
+            const inp = window.__xyzInputs(name)[axis];
+            inp.value = text;
+            inp.dispatchEvent(new Event('change', { bubbles: true }));
+        };
+    });
+
+    // 18pre — the panel is CLOSED until asked for, which is the point of it.
+    m = await page.evaluate(async () => {
+        const P = await import('/ui/plane-definition.js');
+        P.planeState.expandedNodes.clear();
+        P.refreshPlanePanel();
+        const out = {
+            closedDetails: document.querySelectorAll('#planeNodesTable tbody tr.plane-node-detail').length,
+            mainRows: document.querySelectorAll('#planeNodesTable tbody tr.plane-node-main').length,
+            caretBefore: window.__nodeRow('a0').querySelector('.plane-node-expander').className,
+        };
+        window.__expandNode('a0');
+        out.openDetails = document.querySelectorAll('#planeNodesTable tbody tr.plane-node-detail').length;
+        out.caretAfter = window.__nodeRow('a0').querySelector('.plane-node-expander').className;
+        out.openRowClass = window.__nodeRow('a0').className;
+        // Collapsing again leaves no trace.
+        window.__nodeRow('a0').querySelector('.plane-node-expander').click();
+        out.reclosedDetails = document.querySelectorAll('#planeNodesTable tbody tr.plane-node-detail').length;
+        return out;
+    });
+    check(m.closedDetails === 0 && m.mainRows > 1,
+        `every node starts collapsed — ${m.mainRows} rows, no coordinates on screen`);
+    check(m.openDetails === 1, 'the chevron opens exactly one panel');
+    check(!/open/.test(m.caretBefore) && /open/.test(m.caretAfter),
+        'and the chevron turns with it');
+    check(/plane-node-open/.test(m.openRowClass),
+        'the open row is marked, so it can join its panel visually');
+    check(m.reclosedDetails === 0, 'clicking again closes it');
+
+    // 18a — one line per node, showing what is stored.
+    m = await page.evaluate(async () => {
+        const P = await import('/ui/plane-definition.js');
+        const model = P.planeModel();
+        P.refreshPlanePanel();
+        const node = model.pool.nodes.find(n => n.name === 'a0');
+        return {
+            mainRows: document.querySelectorAll('#planeNodesTable tbody tr.plane-node-main').length,
+            poolSize: model.pool.size,
+            // The coordinate line spans the whole row, which is the only way
+            // three legible number fields fit a 300px panel.
+            colSpan: window.__expandNode('a0').querySelector('td').colSpan,
+            labels: Array.from(window.__expandNode('a0')
+                .querySelectorAll('.plane-node-xyz-label')).map(l => l.textContent),
+            shown: window.__xyzInputs('a0').map(i => i.value),
+            stored: node.getPoint3d(),
+            // The pair reads as ONE node: same state classes top and bottom.
+            mainClass: window.__nodeRow('a0').className,
+            xyzClass: window.__nodeDetail('a0').className,
+            // And the panel says which planes use the node — the whole point
+            // of a project-wide pool, and previously only in a tooltip.
+            planeChips: Array.from(window.__nodeDetail('a0')
+                .querySelectorAll('.plane-node-plane-chip')).map(c => c.textContent.trim()),
+        };
+    });
+    check(m.mainRows === m.poolSize,
+        `one identity row per node (${m.mainRows} for ${m.poolSize} nodes)`);
+    check(m.colSpan === 5, 'the coordinate line spans the row');
+    check(eq(m.labels, ['x', 'y', 'z']), `and is labelled x/y/z (got ${JSON.stringify(m.labels)})`);
+    check(eq(m.shown, m.stored.map(fmt)),
+        `it shows the stored position (got ${JSON.stringify(m.shown)} for ${JSON.stringify(m.stored.map(v => Number(v.toFixed(4))))})`);
+    check(/plane-node-shared/.test(m.mainClass) === /plane-node-shared/.test(m.xyzClass),
+        'both rows of a node carry the same state cues');
+    check(eq(m.planeChips, ['wallA']),
+        `the panel names the planes using the node (got ${JSON.stringify(m.planeChips)})`);
+
+    // 18b — typing x moves the node, and the 2D follows the 3D.
+    m = await page.evaluate(async () => {
+        const P = await import('/ui/plane-definition.js');
+        const T = await import('/pose/triangulation.js');
+        const AS = await import('/ui/app-state.js');
+        const model = P.planeModel();
+        const node = model.pool.nodes.find(n => n.name === 'a0');
+        const idx = model.pool.indexOf(node.id);
+        const before = { xyz: node.getPoint3d(), at: P.getPlaneInstance('camA').getPoint(idx) };
+        AS.state.isDirty = false;
+
+        window.__typeXyz('a0', 0, '123.5');
+
+        const cam = AS.state.session.cameras.find(c => c.name === 'camA');
+        const after = node.getPoint3d();
+        return {
+            before: before,
+            xyz: after,
+            // The 2D is rewritten to the exact reprojection of the typed 3D —
+            // the same rule the 3D corner drag follows.
+            at: P.getPlaneInstance('camA').getPoint(idx),
+            want: T.reprojectPointCamera(after, cam),
+            moved2d: P.getPlaneInstance('camA').getPoint(idx)[0] !== before.at[0],
+            status: document.getElementById('statusText').textContent,
+            dirty: AS.state.isDirty === true,
+            // Still shows what was typed after the panel rebuilt itself.
+            shown: window.__xyzInputs('a0').map(i => i.value),
+        };
+    });
+    check(m.xyz[0] === 123.5, `typing x writes it (got ${m.xyz[0]})`);
+    check(m.xyz[1] === m.before.xyz[1] && m.xyz[2] === m.before.xyz[2],
+        'and leaves y and z exactly as they were');
+    check(Math.abs(m.at[0] - m.want[0]) < 1e-9 && Math.abs(m.at[1] - m.want[1]) < 1e-9,
+        'the 2D on a placed view is rewritten to the reprojection of the typed 3D');
+    check(m.moved2d, 'which actually moved it');
+    check(/Set "a0"/.test(m.status) && /camA/.test(m.status),
+        `the status says what was set and where the 2D changed (got "${m.status}")`);
+    check(m.dirty, 'and the project is dirty');
+    check(m.shown[0] === '123.5', 'the field shows the committed value after the rebuild');
+
+    // 18c — editing one axis must not round the other two.
+    m = await page.evaluate(async () => {
+        const P = await import('/ui/plane-definition.js');
+        const model = P.planeModel();
+        const node = model.pool.nodes.find(n => n.name === 'a0');
+        // More decimals than the display shows, so a naive "re-parse all three
+        // fields" commit would silently truncate it.
+        node.setPoint3d([node.xyz[0], 12.3456789012, node.xyz[2]], { force: true });
+        P.refreshPlanePanel();
+        const shownY = window.__xyzInputs('a0')[1].value;
+        window.__typeXyz('a0', 2, '77');
+        return { shownY: shownY, y: node.xyz[1], z: node.xyz[2] };
+    });
+    check(m.shownY === '12.3457', `the display rounds to 4 decimals (got "${m.shownY}")`);
+    check(m.z === 77, 'the edited axis takes the typed value');
+    check(m.y === 12.3456789012,
+        `and the untouched axis keeps its FULL stored double, not the 4 decimals on screen (got ${m.y})`);
+
+    // 18d — revert-on-invalid, the panel's convention.
+    m = await page.evaluate(async () => {
+        const P = await import('/ui/plane-definition.js');
+        const model = P.planeModel();
+        const node = model.pool.nodes.find(n => n.name === 'a0');
+        const before = node.getPoint3d();
+        window.__typeXyz('a0', 0, 'over there');
+        return {
+            xyz: node.getPoint3d(), before: before,
+            shown: window.__xyzInputs('a0').map(i => i.value),
+            status: document.getElementById('statusText').textContent,
+        };
+    });
+    check(eq(m.xyz, m.before), 'a non-number writes nothing');
+    check(m.shown[0] === fmt(m.before[0]), 'the field reverts to the stored value');
+    check(/three finite numbers/.test(m.status), `and says why (got "${m.status}")`);
+
+    // 18e — a LOCKED node shows its position but does not take a new one.
+    m = await page.evaluate(async () => {
+        const P = await import('/ui/plane-definition.js');
+        const model = P.planeModel();
+        const node = model.pool.nodes.find(n => n.name === 'a0');
+        model.pool.setPin(node.id, 'locked');
+        P.refreshPlanePanel();
+        const inputs = window.__xyzInputs('a0');
+        const out = {
+            disabled: inputs.map(i => i.disabled),
+            shown: inputs.map(i => i.value),
+            stored: node.getPoint3d(),
+            title: inputs[0].title,
+        };
+        // Reach past `disabled` the way nothing in the UI can. A locked row
+        // carries no commit listener at all, so this has to do nothing.
+        inputs[0].disabled = false;
+        window.__typeXyz('a0', 0, '999');
+        out.afterDomTyping = node.getPoint3d();
+
+        // And the commit guard's own case: the pin changed UNDER a field that
+        // was rendered live, so the listener exists and must refuse by itself.
+        model.pool.setPin(node.id, 'none');
+        P.refreshPlanePanel();
+        const live = window.__xyzInputs('a0');
+        model.pool.setPin(node.id, 'locked');
+        live[0].value = '999';
+        live[0].dispatchEvent(new Event('change', { bubbles: true }));
+        out.afterGuard = node.getPoint3d();
+        out.guardStatus = document.getElementById('statusText').textContent;
+        out.guardShown = live[0].value;
+
+        model.pool.setPin(node.id, 'none');
+        P.refreshPlanePanel();
+        return out;
+    });
+    check(eq(m.disabled, [true, true, true]),
+        'a Locked node\'s three coordinate fields are all disabled');
+    check(eq(m.shown, m.stored.map(fmt)), 'but still SHOW the position');
+    check(eq(m.afterDomTyping, m.stored),
+        'and a row rendered Locked has no commit path at all');
+    check(eq(m.afterGuard, m.stored),
+        'a pin changed under a live field is refused by the commit itself');
+    check(/Locked/.test(m.guardStatus) && /set the pin to unlocked/.test(m.guardStatus),
+        `saying so, in the padlock's own words (got "${m.guardStatus}")`);
+    check(m.guardShown === fmt(m.stored[0]), 'and the field goes back to the stored value');
+    check(/set the pin to unlocked/i.test(m.title), 'the field itself says how to unlock it');
+
+    // 18f — a node with NO 3D is being entered, so partial input survives.
+    m = await page.evaluate(async () => {
+        const P = await import('/ui/plane-definition.js');
+        const model = P.planeModel();
+        const ghost = model.pool.nodes.find(n => n.name === 'centre');
+        model.pool.setPin(ghost.id, 'none');
+        ghost.clearPoint3d({ force: true });
+        P.refreshPlanePanel();
+        const out = { empty: window.__xyzInputs('centre').map(i => i.value) };
+
+        window.__typeXyz('centre', 0, '10');
+        out.afterX = { has3d: ghost.hasPoint3d(), shown: window.__xyzInputs('centre').map(i => i.value),
+                       status: document.getElementById('statusText').textContent };
+        window.__typeXyz('centre', 1, '20');
+        out.afterY = { has3d: ghost.hasPoint3d(), shown: window.__xyzInputs('centre').map(i => i.value) };
+        window.__typeXyz('centre', 2, '30');
+        out.afterZ = { has3d: ghost.hasPoint3d(), xyz: ghost.getPoint3d(),
+                       status: document.getElementById('statusText').textContent };
+        return out;
+    });
+    check(eq(m.empty, ['', '', '']), 'an untriangulated node shows three empty fields');
+    check(!m.afterX.has3d && eq(m.afterX.shown, ['10', '', '']),
+        'one coordinate is not a position — nothing is written, and the typed value STAYS');
+    check(/Enter x, y and z/.test(m.afterX.status),
+        `the status asks for the other two (got "${m.afterX.status}")`);
+    check(!m.afterY.has3d && eq(m.afterY.shown, ['10', '20', '']),
+        'two is still not a position, and both survive');
+    check(m.afterZ.has3d && eq(m.afterZ.xyz, [10, 20, 30]),
+        `the third completes it (got ${JSON.stringify(m.afterZ.xyz)})`);
+    check(/Set "centre"/.test(m.afterZ.status), 'and it commits like any other edit');
+
+    // 18g — PLANE-LOCKED: the typed point lands on the plane, and says so.
+    m = await page.evaluate(async () => {
+        const P = await import('/ui/plane-definition.js');
+        const T = await import('/pose/triangulation.js');
+        const model = P.planeModel();
+        const A = model.planes.find(p => p.name === 'wallA');
+        // Give the plane a fit without moving anything — the constraint is
+        // enforced against the STORED fit, so there has to be one.
+        const fit = T.fitPlaneToPoints3d(P.planePoints3d(A));
+        A.planeFit = { centroid: fit.centroid, normal: fit.normal, rms: fit.rms, nPoints: fit.nPoints };
+        const node = model.pool.nodes.find(n => n.name === 'a0');
+        model.pool.setPin(node.id, 'plane-locked', A.id);
+        P.refreshPlanePanel();
+
+        const c = A.planeFit.centroid, nv = A.planeFit.normal;
+        const off = [c[0] + nv[0] * 50, c[1] + nv[1] * 50, c[2] + nv[2] * 50];
+        window.__typeXyz('a0', 0, String(off[0]));
+        window.__typeXyz('a0', 1, String(off[1]));
+        window.__typeXyz('a0', 2, String(off[2]));
+        const got = node.getPoint3d();
+        return {
+            typed: off,
+            got: got,
+            // Distance from the plane it is held in.
+            dist: Math.abs((got[0] - c[0]) * nv[0] + (got[1] - c[1]) * nv[1] + (got[2] - c[2]) * nv[2]),
+            status: document.getElementById('statusText').textContent,
+            fitKept: !!A.planeFit,
+            // The holding plane's chip wears its own padlock — where the Pin
+            // select's second line went when the control became an icon.
+            holderChip: (window.__nodeDetail('a0')
+                .querySelector('.plane-node-plane-holder') || {}).textContent,
+            holderMarks: window.__nodeDetail('a0')
+                .querySelectorAll('.plane-node-plane-mark').length,
+        };
+    });
+    check(m.dist < 1e-9,
+        `a Plane-locked node lands ON its plane however far off it is typed (${m.dist} away)`);
+    check(Math.abs(m.got[0] - m.typed[0]) > 1e-6, 'so the stored point is NOT what was typed');
+    check(/Plane-locked/.test(m.status) && /projected/.test(m.status),
+        `and the status explains the difference (got "${m.status}")`);
+    check(m.fitKept,
+        'the plane keeps its fit — a corner nudge must not move the frame it defines');
+    check(m.holderChip === 'wallA' && m.holderMarks === 1,
+        `and the panel marks WHICH plane holds it (got "${m.holderChip}", ${m.holderMarks} mark)`);
+
+    // =================================================================
+    // 18h — the Planes section fits the panel: no horizontal scroll
+    // =================================================================
+    // The panel is ~300px and the expanded sub-row is the widest thing in it
+    // (a view list, a normal triple, a coordinate per node). An auto-layout
+    // table grows to its widest cell and the cell's inherited `white-space:
+    // nowrap` reaches every div inside it, so both used to push the whole panel
+    // into a horizontal scroll and clip the right-hand end of every line.
+    // Built deliberately worst-case — long plane name, long node names, long
+    // view names, four-digit coordinates, a fit and a pin — so the assertion
+    // has something to fail on.
+    console.log('\n18h. The Planes section fits the panel width');
+    m = await page.evaluate(async () => {
+        const P = await import('/ui/plane-definition.js');
+        const model = P.planeModel();
+        const wide = P.createPlane('a deliberately very long plane name indeed');
+        ['north-west corner marker', 'north-east corner marker',
+            'south-east corner marker', 'south-west corner marker']
+            .forEach(n => model.createNodeInPlane(n, wide));
+        const nodes = wide.nodeIds.map(id => model.pool.getNode(id));
+        const TRUTH = [[-1234.5, -1234.5, 1234.5], [1234.5, -1234.5, 1234.5],
+            [1234.5, 1234.5, 1234.5], [-1234.5, 1234.5, 1234.5]];
+        nodes.forEach((n, k) => n.setPoint3d(TRUTH[k]));
+        ['camA', 'camB'].forEach(v => P.placePlaneOnView(wide, v, 320, 240));
+        wide.triangulation = {
+            views: ['camA', 'camB', 'topLeftCorner', 'bottomRightCorner'],
+            nNodes: 4, meanError: 0.123, nAnchors: 2, anchorMeanError: 0.456,
+        };
+        wide.planeFit = {
+            centroid: [1111.1, 2222.2, 3333.3], normal: [-0.9721, 0.2345, -0.0331],
+            rms: 0.987, nPoints: 4, constrained: true,
+        };
+        model.pool.setPin(nodes[0].id, 'locked');
+        model.pool.setPin(nodes[1].id, 'locked');
+        P.planeState.expanded.add(wide.id);
+        P.planeState.selectedPlaneId = wide.id;
+        P.refreshPlanePanel();
+
+        const box = (sel) => {
+            const e = document.querySelector(sel);
+            return e ? { scrollWidth: e.scrollWidth, clientWidth: e.clientWidth } : null;
+        };
+        const out = {
+            panel: box('#planePanel'),
+            table: box('#planeSkeletonsTable'),
+            section: box('#planePlanesDetails'),
+            cell: box('.plane-placements-row > td'),
+            // The sub-row really is populated, or the measurement is vacuous.
+            summaries: document.querySelectorAll(
+                '.plane-placements-row .plane-tri-summary').length,
+            nodeLines: document.querySelectorAll(
+                '.plane-placements-row .plane-tri-node').length,
+            pinIcons: document.querySelectorAll('.plane-tri-node-pin').length,
+            indented: !!document.querySelector('.plane-placements-body'),
+            // Nothing inside the panel may stick out past its content box.
+            overhang: (() => {
+                const p = document.getElementById('planePanel');
+                const right = p.getBoundingClientRect().left + p.clientWidth;
+                return Array.from(p.querySelectorAll('*'))
+                    .filter(e => e.getBoundingClientRect().right > right + 0.5)
+                    .map(e => e.tagName + '.' + (e.className || '').toString().slice(0, 40))
+                    // A single overflowing cell drags its whole subtree over
+                    // with it; the first few name the culprit.
+                    .slice(0, 6);
+            })(),
+        };
+        // Put the panel back the way section 19 expects to find it.
+        P.deletePlane(wide.id);
+        nodes.forEach(n => model.deleteNode(n.id));
+        P.planeState.expanded.clear();
+        P.planeState.selectedPlaneId = model.planes.length ? model.planes[0].id : null;
+        P.refreshPlanePanel();
+        return out;
+    });
+    check(m.summaries === 3 && m.nodeLines === 4 && m.pinIcons === 2,
+        `the expanded sub-row is fully populated for the measurement ` +
+        `(${m.summaries} summaries, ${m.nodeLines} node lines, ${m.pinIcons} padlocks)`);
+    check(m.indented, 'placements are wrapped in an indented body, like an expanded node');
+    check(m.panel.scrollWidth <= m.panel.clientWidth,
+        `the Define Plane panel does not scroll horizontally ` +
+        `(scrollWidth ${m.panel.scrollWidth} vs clientWidth ${m.panel.clientWidth})`);
+    check(m.table.scrollWidth <= m.table.clientWidth,
+        `nor does the Planes table (${m.table.scrollWidth} vs ${m.table.clientWidth})`);
+    check(m.section.scrollWidth <= m.section.clientWidth,
+        `nor the Planes section (${m.section.scrollWidth} vs ${m.section.clientWidth})`);
+    check(m.cell.scrollWidth <= m.cell.clientWidth,
+        `nor the expanded placements cell (${m.cell.scrollWidth} vs ${m.cell.clientWidth})`);
+    check(m.overhang.length === 0,
+        `nothing in the panel sticks out past its right edge (got ${JSON.stringify(m.overhang)})`);
+
+    // =================================================================
+    // 19 — the pin picker: hover, pick, refuse, dismiss
+    // =================================================================
+    console.log('\n19. The pin picker');
+
+    // Leave a0 unlocked and in a plane, so all three states are reachable.
+    await page.evaluate(async () => {
+        const P = await import('/ui/plane-definition.js');
+        P.planeModel().pool.nodes.forEach(n => P.planeModel().pool.setPin(n.id, 'none'));
+        P.planeState.expandedNodes.clear();
+        P.refreshPlanePanel();
+    });
+
+    // HOVER opens it — no click needed, which is what the control promises.
+    // Park the pointer away from the list first. The panel was just rebuilt, and
+    // a cursor already sitting where the new padlock landed gets `:hover` for
+    // free but never a `mouseenter` — so hovering "again" from the same pixel
+    // would test nothing. A real pointer arrives from somewhere else.
+    await page.mouse.move(8, 8);
+    await page.hover('#planeNodesTable tbody tr.plane-node-main .plane-node-pin-btn');
+    // A hover scrolls the row into view, and the `scroll` event lands on the
+    // NEXT frame — after the picker has opened. This wait is what caught that:
+    // dismissing on scroll made the picker impossible to open on a row you had
+    // just scrolled to, so it repositions instead.
+    await page.waitForTimeout(150);
+    m = await page.evaluate(() => {
+        const pop = document.getElementById('planePinPopover');
+        const opts = pop ? Array.from(pop.querySelectorAll('.plane-pin-option')) : [];
+        const row = window.__nodeRow('a0');
+        const btn = row.querySelector('.plane-node-pin-btn');
+        const br = btn.getBoundingClientRect();
+        const pr = pop ? pop.getBoundingClientRect() : null;
+        return {
+            opened: !!pop,
+            order: opts.map(o => o.getAttribute('data-pin')),
+            // Each state gets its own icon, not a relabelled one.
+            icons: opts.map(o => (o.querySelector('svg') || {}).innerHTML || ''),
+            disabled: opts.map(o => o.disabled),
+            current: opts.map(o => o.classList.contains('is-current')),
+            currentTitle: (opts.find(o => o.classList.contains('is-current')) || {}).title,
+            otherTitle: (opts.find(o => !o.classList.contains('is-current')) || {}).title,
+            // It floats over the panel rather than widening the row — the name
+            // field keeps the width it had before the pointer arrived.
+            floats: pop ? getComputedStyle(pop).position : null,
+            insideRow: pop ? row.contains(pop) : null,
+            nearButton: pr ? Math.abs(pr.right - br.right) < 40 : null,
+        };
+    });
+    check(m.opened, 'hovering the padlock opens the picker');
+    check(eq(m.order, ['none', 'plane-locked', 'locked']),
+        `it offers all three states, in increasing strictness (got ${JSON.stringify(m.order)})`);
+    check(new Set(m.icons).size === 3 && m.icons.every(i => i.length > 0),
+        'each state has its own icon');
+    check(eq(m.current, [true, false, false]) && eq(m.disabled, [true, false, false]),
+        `the current state is marked and not clickable (current ${JSON.stringify(m.current)}, disabled ${JSON.stringify(m.disabled)})`);
+    check(/current/.test(m.currentTitle || '') && /^Set to /.test(m.otherTitle || ''),
+        `and the titles say which is which (got "${m.currentTitle}" / "${m.otherTitle}")`);
+    check(m.floats === 'fixed' && m.insideRow === false && m.nearButton,
+        'the picker floats next to the icon rather than expanding inside the row');
+
+    // Esc dismisses it, per the app-wide convention, and changes nothing.
+    await page.keyboard.press('Escape');
+    m = await page.evaluate(async () => {
+        const P = await import('/ui/plane-definition.js');
+        return {
+            gone: !document.getElementById('planePinPopover'),
+            pin: P.planeModel().pool.nodes.find(n => n.name === 'a0').pin,
+        };
+    });
+    check(m.gone, 'Esc dismisses the picker');
+    check(m.pin === 'none', 'and picks nothing');
+
+    // Picking plane-locked on a node that IS in a plane: it takes, and the
+    // plane it is held in is resolved for the user rather than asked about.
+    m = await page.evaluate(async () => {
+        const P = await import('/ui/plane-definition.js');
+        const model = P.planeModel();
+        const node = model.pool.nodes.find(n => n.name === 'a0');
+        const A = model.planes.find(p => p.name === 'wallA');
+        A.planeFit = A.planeFit || { centroid: [0, 0, 0], normal: [0, 0, 1], rms: 0, nPoints: 4 };
+        const took = window.__setPin('a0', 'plane-locked');
+        return {
+            took: took,
+            pin: node.pin,
+            heldIn: (model.getPlane(node.pinPlaneId) || {}).name,
+            icon: window.__nodeRow('a0').querySelector('.plane-node-pin-btn').getAttribute('data-pin'),
+            status: document.getElementById('statusText').textContent,
+            // Changing a pin changes what a fit is ALLOWED to do, so the fit
+            // solved under the old rules must not be left looking valid.
+            fitCleared: A.planeFit === null,
+        };
+    });
+    check(m.took && m.pin === 'plane-locked', 'picking Plane-locked takes');
+    check(m.heldIn === 'wallA', `and resolves the plane it is held in (got ${m.heldIn})`);
+    check(m.icon === 'plane-locked', 'the row icon follows the state');
+    check(/Plane-locked/.test(m.status) && /wallA/.test(m.status),
+        `the status names the state and the plane (got "${m.status}")`);
+    check(m.fitCleared, 'and the plane\'s stored fit is dropped, as any pin change does');
+
+    // Plane-locked on a node in NO plane is refused, with the reason: "stays in
+    // its plane" has no meaning there.
+    m = await page.evaluate(async () => {
+        const P = await import('/ui/plane-definition.js');
+        const model = P.planeModel();
+        const loose = model.pool.nodes.find(n => model.planesForNode(n.id).length === 0);
+        P.refreshPlanePanel();
+        const before = loose.pin;
+        window.__setPin(loose.name, 'plane-locked');
+        return {
+            name: loose.name, before: before, after: loose.pin,
+            status: document.getElementById('statusText').textContent,
+            icon: window.__nodeRow(loose.name).querySelector('.plane-node-pin-btn')
+                .getAttribute('data-pin'),
+        };
+    });
+    check(m.before === 'none' && m.after === 'none',
+        `a node in no plane cannot be Plane-locked (${m.name}: ${m.before} -> ${m.after})`);
+    check(/no plane/.test(m.status), `and is told why (got "${m.status}")`);
+    check(m.icon === 'none', 'its icon does not change');
+
+    // Moving the pointer away closes it without picking anything.
+    await page.mouse.move(8, 8);
+    await page.hover('#planeNodesTable tbody tr.plane-node-main .plane-node-pin-btn');
+    m = await page.evaluate(() => !!document.getElementById('planePinPopover'));
+    check(m, 'hover re-opens the picker');
+    await page.hover('#planeNodeNameInput');
+    await page.waitForTimeout(450);
+    m = await page.evaluate(() => !!document.getElementById('planePinPopover'));
+    check(!m, 'and moving away closes it again');
 
 } finally {
     if (browser) await browser.close();

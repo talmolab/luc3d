@@ -105,6 +105,12 @@
                     <div class="menu-dropdown-item" id="menuGroupByIdentity">Group by Identity &amp; Triangulate All</div>
                 </div>
             </div>
+            <div class="menu-item" data-menu="calibrate">
+                Calibrate
+                <div class="menu-dropdown" id="menuCalibrate">
+                    <div class="menu-dropdown-item" id="menuCalibrateNewTab">Calibrate in New Tab</div>
+                </div>
+            </div>
             <div class="menu-item" data-menu="tracks">
                 Tracks
                 <div class="menu-dropdown" id="menuTracks">
@@ -179,14 +185,14 @@
                     <button class="toolbar-btn" id="tbTriangulate" title="Triangulate selected group (t)">Triangulate <span class="tri-caret">▾</span></button>
                     <div class="tri-dropdown-menu">
                         <div class="tri-dropdown-item" data-method="dlt">DLT <span class="tri-dropdown-hint">Fast</span></div>
-                        <div class="tri-dropdown-item" data-method="ba">BA <span class="tri-dropdown-hint">Slow &amp; Accurate</span></div>
+                        <div class="tri-dropdown-item" data-method="ba">Ref <span class="tri-dropdown-hint">Slow &amp; Accurate</span></div>
                     </div>
                 </div>
                 <div class="tri-dropdown" id="triangulateAllDropdown">
                     <button class="toolbar-btn" id="tbTriangulateAll" title="Triangulate all frames with instance groups">Triangulate All <span class="tri-caret">▾</span></button>
                     <div class="tri-dropdown-menu">
                         <div class="tri-dropdown-item" data-method="dlt">DLT <span class="tri-dropdown-hint">Fast</span></div>
-                        <div class="tri-dropdown-item" data-method="ba">BA <span class="tri-dropdown-hint">Slow &amp; Accurate</span></div>
+                        <div class="tri-dropdown-item" data-method="ba">Ref <span class="tri-dropdown-hint">Slow &amp; Accurate</span></div>
                     </div>
                 </div>
             </div>
@@ -209,7 +215,10 @@
                 <button class="toolbar-btn active" id="colorByTracks" title="Color instances by track">Tracks</button>
                 <button class="toolbar-btn" id="colorById" title="Color instances by identity">ID</button>
             </div>
-            <button class="toolbar-btn" id="infoPanelToggleBtn" style="margin-left:auto;" title="Toggle info panel (I)">Hide Panel</button>
+            <div class="toolbar-group panel-toggles">
+                <button class="toolbar-btn panel-toggle-btn" id="viewport3dToggleBtn" title="Toggle 3D viewer (\)">Hide 3D View</button>
+                <button class="toolbar-btn panel-toggle-btn" id="infoPanelToggleBtn" title="Toggle info panel (I)">Hide Panel</button>
+            </div>
         </div>
 
         <!-- Defining Plane Mode banner (View ▸ Define Planes). Hidden unless the
@@ -841,14 +850,20 @@
                         <details class="plane-details" id="planeNodesDetails" open>
                             <summary>Nodes</summary>
                             <div class="plane-details-body">
-                                <table class="data-table" id="planeNodesTable">
+                                <!-- Every column is named except the chevron,
+                                     which names itself. The icon columns are
+                                     content-sized, so the Name field takes
+                                     whatever is left. Pinned carries an info
+                                     button because what the THREE states MEAN
+                                     is the one thing a padlock cannot say. -->
+                                <table class="data-table plane-nodes-table" id="planeNodesTable">
                                     <thead>
                                         <tr>
+                                            <th style="width:14px"></th>
+                                            <th class="th-center">Color</th>
                                             <th>Name</th>
-                                            <th style="width:34px">Color</th>
-                                            <th style="width:26px" title="Pin: freeze this node's 3D so no solve can move it">Pin</th>
-                                            <th style="width:74px">3D</th>
-                                            <th style="width:30px"></th>
+                                            <th class="th-center th-pin">Pinned<button type="button" class="plane-pin-info" id="planePinInfo"></button></th>
+                                            <th class="th-center">Delete</th>
                                         </tr>
                                     </thead>
                                     <tbody></tbody>
@@ -862,7 +877,7 @@
                                     <input type="text" id="planeNodeNameInput" class="plane-text-input" placeholder="Node name" />
                                     <button class="panel-btn" id="btnAddPlaneNode" title="Mint a node in the project-wide pool. It joins NO plane and creates none — put it in a plane with + Add in the Edit Plane section.">+ Node</button>
                                 </div>
-                                <div class="plane-hint">Nodes are project-wide and belong to no plane until you put them in one. Renaming, recolouring, pinning or deleting one here changes every plane that uses it. To put a node into a plane, use + Add in the Edit Plane section — the same node in two planes is what makes them meet along one line.</div>
+                                <div class="plane-hint">Nodes are project-wide and belong to no plane until you put them in one. Renaming, recolouring, pinning or deleting one here changes every plane that uses it. To put a node into a plane, use + Add in the Edit Plane section — the same node in two planes is what makes them meet along one line. Expand a node for its 3D position in calibration world units and the planes using it: type over x/y/z to place a corner by hand, and every plane using the node moves with it (its 2D on every view is rewritten to match). The padlock is the node's pin state — a Locked node shows its position but does not take a new one.</div>
                             </div>
                         </details>
                     </div>
@@ -908,7 +923,12 @@
                                                 <thead>
                                                     <tr>
                                                         <th>Name</th>
-                                                        <th style="width:34px">Color</th>
+                                                        <!-- Wide enough for the
+                                                             header word: the table
+                                                             is fixed-layout now, so
+                                                             a too-narrow column
+                                                             ellipses "COLOR". -->
+                                                        <th style="width:46px">Color</th>
                                                         <th style="width:30px"></th>
                                                     </tr>
                                                 </thead>
@@ -965,13 +985,19 @@
                         <details class="plane-details" id="planePlanesDetails" open>
                             <summary>Planes</summary>
                             <div class="plane-details-body">
+                                <!-- Fixed column widths (see `table-layout: fixed`
+                                     in styles.css): the panel is ~300px and an
+                                     auto-layout table grows to fit its widest
+                                     cell, which is what gave the section a
+                                     horizontal scrollbar. Name takes whatever
+                                     is left and ellipses. -->
                                 <table class="data-table" id="planeSkeletonsTable">
                                     <thead>
                                         <tr>
-                                            <th style="width:34px"></th>
+                                            <th style="width:26px"></th>
                                             <th>Name</th>
-                                            <th>Nodes</th>
-                                            <th style="width:78px"></th>
+                                            <th style="width:46px">Nodes</th>
+                                            <th style="width:56px"></th>
                                         </tr>
                                     </thead>
                                     <tbody></tbody>
@@ -990,43 +1016,131 @@
                                 <div class="panel-button-row" style="margin-top:6px">
                                     <button class="panel-btn" id="btnSetOrigin" disabled>Set Origin</button>
                                 </div>
+                                <!-- Assert a real-world relationship between two
+                                     planes (0 deg = parallel, 90 = perpendicular).
+                                     Needs TWO fitted planes, so it is gated
+                                     separately from Set Origin. -->
+                                <div class="panel-button-row" style="margin-top:6px">
+                                    <button class="panel-btn" id="btnSetPlaneAngle" disabled>Set Angle Between Planes</button>
+                                </div>
                                 <div class="plane-hint">Drag a row onto a video view to place that plane on it. Expand a row to see where it is placed.</div>
+
+                                <!-- Shared across every plane, by design: one node
+                                     size and one edge weight for all of them (see
+                                     ui/plane-definition.js). A sub-section of Planes
+                                     rather than a section of its own, because it
+                                     styles exactly what the table above lists and
+                                     nothing else in the panel. -->
+                                <details class="plane-details plane-subdetails" id="planeAppearanceDetails" open>
+                                    <summary>Plane Appearance</summary>
+                                    <div class="plane-details-body">
+                                        <div class="vis-slider-row">
+                                            <span>2D Node Size</span>
+                                            <input type="range" id="planeNodeSize" min="1" max="20" value="13" step="1">
+                                            <span class="vis-val" id="planeNodeSizeVal">13</span>
+                                        </div>
+                                        <div class="vis-slider-row">
+                                            <span>Edge Weight</span>
+                                            <input type="range" id="planeEdgeWeight" min="1" max="12" value="3" step="1">
+                                            <span class="vis-val" id="planeEdgeWeightVal">3</span>
+                                        </div>
+                                        <!-- Sizes plane corners in the 3D scene ONLY.
+                                             Pose skeleton nodes keep their own size
+                                             (`skeletonNodeSize`). -->
+                                        <div class="vis-slider-row">
+                                            <span>3D Node Size</span>
+                                            <input type="range" id="planeNodeSize3d" min="1" max="20" value="4" step="1">
+                                            <span class="vis-val" id="planeNodeSize3dVal">4</span>
+                                        </div>
+                                    </div>
+                                </details>
                             </div>
                         </details>
                     </div>
 
-                    <!-- Shared across every plane, by design: one node size and one
-                         edge weight for all of them (see ui/plane-definition.js). -->
+                    <!-- 3D Mesh Objects: a group of PLANES, the way a plane is a group
+                         of NODES. The shape is derived from how the member planes are
+                         connected (which nodes they share) and is never stored — see
+                         pose/mesh-object-geometry.js. Sits below Planes because you
+                         cannot group planes that do not exist yet. -->
                     <div class="info-section">
-                        <h3>Plane Appearance</h3>
-                        <div class="vis-slider-row">
-                            <span>2D Node Size</span>
-                            <input type="range" id="planeNodeSize" min="1" max="20" value="13" step="1">
-                            <span class="vis-val" id="planeNodeSizeVal">13</span>
-                        </div>
-                        <div class="vis-slider-row">
-                            <span>Edge Weight</span>
-                            <input type="range" id="planeEdgeWeight" min="1" max="12" value="3" step="1">
-                            <span class="vis-val" id="planeEdgeWeightVal">3</span>
-                        </div>
-                        <!-- Sizes plane corners in the 3D scene ONLY. Pose skeleton
-                             nodes keep their own size (`skeletonNodeSize`). -->
-                        <div class="vis-slider-row">
-                            <span>3D Node Size</span>
-                            <input type="range" id="planeNodeSize3d" min="1" max="20" value="4" step="1">
-                            <span class="vis-val" id="planeNodeSize3dVal">4</span>
-                        </div>
+                        <details class="plane-details" id="meshObjectsDetails" open>
+                            <summary>3D Mesh Objects</summary>
+                            <div class="plane-details-body">
+                                <table class="data-table" id="meshObjectsTable">
+                                    <thead>
+                                        <tr>
+                                            <th style="width:30px"></th>
+                                            <th>Name</th>
+                                            <th style="width:52px">Planes</th>
+                                            <th style="width:96px">Shape</th>
+                                            <th style="width:28px"></th>
+                                        </tr>
+                                    </thead>
+                                    <tbody></tbody>
+                                </table>
+                                <div class="table-empty" id="meshObjectsEmpty">No 3D mesh objects yet</div>
+                                <div class="panel-button-row" style="margin-top:6px">
+                                    <button class="panel-btn" id="btnNewMeshObject" title="Group planes into one 3D mesh object">+ New 3D Mesh Object</button>
+                                </div>
+
+                                <!-- Membership editor for the SELECTED object. Hidden
+                                     entirely when nothing is selected: every control in
+                                     it needs an object to act on. -->
+                                <div id="meshObjectEditor" style="display:none;">
+                                    <div class="plane-name-row" style="margin-top:8px">
+                                        <span>Name</span>
+                                        <input type="text" id="meshObjectName" placeholder="cage" />
+                                        <input type="color" id="meshObjectColor" class="plane-node-color" title="Colour for this object in the 3D viewport" />
+                                    </div>
+                                    <div class="mesh-object-report" id="meshObjectReport"></div>
+                                    <label class="mesh-object-flip" title="Invert every face normal. Needed only for an OPEN object, where nothing can decide which side is outside.">
+                                        <input type="checkbox" id="meshObjectFlip" /> Flip normals
+                                    </label>
+                                    <div class="plane-hint" style="margin-top:6px">Planes in this object</div>
+                                    <div class="mesh-object-members" id="meshObjectMembers"></div>
+                                </div>
+
+                                <div class="plane-hint">A 3D mesh object is a group of planes, and its shape comes from the nodes they SHARE — join two planes by adding the same node to both.</div>
+                            </div>
+                        </details>
                     </div>
 
                     <!-- The output of the whole feature: the transform from the
                          calibration's world frame to the user's. Populated by
-                         ui/origin-definition.js; hidden until an origin is set. -->
+                         ui/origin-definition.js; hidden until an origin is set.
+                         Collapsible because it is a dozen labelled vectors plus a
+                         3x3 — read once, then in the way of everything below it. -->
                     <div class="info-section" id="originResultSection" style="display:none;">
-                        <h3>Defined Origin</h3>
-                        <div class="origin-result" id="originResult"></div>
-                        <div class="panel-button-row" style="margin-top:6px">
-                            <button class="panel-btn" id="btnClearOrigin">Reset to Calibration Origin</button>
-                        </div>
+                        <details class="plane-details" id="originResultDetails" open>
+                            <summary>Defined Origin</summary>
+                            <div class="plane-details-body">
+                                <div class="origin-result" id="originResult"></div>
+                            </div>
+                        </details>
+                    </div>
+
+                    <!-- Danger Zone: the actions that leave this app — they rewrite
+                         the calibration every downstream tool reads, or throw the
+                         defined origin away. Collapsed by default and visible only
+                         once an origin exists, since all three are meaningless
+                         without one. See ui/origin-definition.js. -->
+                    <div class="info-section origin-danger-section" id="originDangerSection" style="display:none;">
+                        <details class="plane-details plane-details-danger" id="originDangerDetails">
+                            <summary>Danger Zone</summary>
+                            <div class="plane-details-body">
+                                <div class="plane-hint">These actions apply the origin OUTSIDE the 3D view. Annotated points keep their calibration-world coordinates either way — it is the calibration that moves.</div>
+                                <div class="panel-button-row">
+                                    <button class="panel-btn" id="btnExportCalibration" title="Download calibration-updated.toml: every camera's extrinsics re-expressed in the defined origin">Export New Calibration</button>
+                                </div>
+                                <div class="panel-button-row">
+                                    <button class="panel-btn panel-btn-danger" id="btnSetCalibration" title="Overwrite calibration.toml and re-base every 3D point in the project onto the defined origin">Set as New Calibration</button>
+                                </div>
+                                <div class="panel-button-row">
+                                    <button class="panel-btn panel-btn-danger" id="btnClearOrigin">Reset to Calibration Origin</button>
+                                </div>
+                            </div>
+                        </details>
                     </div>
                 </div>
 

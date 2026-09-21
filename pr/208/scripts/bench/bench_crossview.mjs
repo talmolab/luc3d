@@ -55,6 +55,7 @@ function parseArgs(argv) {
         else if (a === '--max-frames') o.maxFrames = parseInt(take());
         else if (a === '--no-exclude-tail') o.excludeTail = false;
         else if (a === '--no-cap') o.noCap = true;   // don't enforce maxTargets (uncapped births)
+        else if (a === '--dump-3d') o.dump3d = take();   // Phase 0 diagnostic, opt-in
     }
     return o;
 }
@@ -128,7 +129,7 @@ async function main() {
     globalThis.window = globalThis;
 
     register('./hooks.mjs', import.meta.url);
-    const { Camera, Instance, FrameGroup, Session } =
+    const { Camera, Instance, FrameGroup, Session, readPoint3d, points3dNodeCount } =
         await import(pathToFileURL(path.join(POSE_DIR, 'pose-data.js')).href);
     const { runCrossViewTracker } = await import(pathToFileURL(path.join(POSE_DIR, 'tracker.js')).href);
     await h5.ready;
@@ -204,6 +205,48 @@ async function main() {
 
     // 6. Extract per-frame assignments from the committed InstanceGroups:
     //    ["cam:slot", identityId] for every grouped detection.
+    //
+    //    --dump-3d additionally streams one fixed-width row per committed group
+    //    (see DUMP3D_COLS) so the switch-correction Phase 0 diagnostics can measure
+    //    chain-link margins, re-entry decisions and shape cues against GT WITHOUT
+    //    re-deriving geometry in another language. Opt-in: with the flag absent this
+    //    block does nothing and the emitted JSON is unchanged.
+    const DUMP3D_COLS = ['frame', 'identityId', 'cx', 'cy', 'cz', 'nCams', 'nVisible',
+                         'bodyLen', 'earDist', 'trunkX', 'trunkY', 'trunkZ',
+                         'reprojMean', 'reprojMax'];
+    const NODE = Object.fromEntries(NODE_NAMES.map((n, i) => [n, i]));
+    const dumpRows = opts.dump3d ? [] : null;
+    const p3 = [0, 0, 0], q3 = [0, 0, 0];
+    const dist3 = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+    const nodeDist = (pts, ka, kb) =>
+        (readPoint3d(pts, ka, p3) && readPoint3d(pts, kb, q3)) ? dist3(p3, q3) : NaN;
+    const camByName = new Map(benchCams.map(c => [c.name, c]));
+    // Per-camera mean reprojection residual in undistorted pixels: cam.project() is
+    // distortion-free, so the observation is undistorted to match it. This is the
+    // BUNDLE-consistency signal — a group that bundles instances belonging to two
+    // different animals (or two halves of one) fits its own 3D poorly, whereas merely
+    // MISNAMING a group leaves every residual untouched.
+    const reprojStats = (group, pts) => {
+        const per = [];
+        group.instances.forEach((inst, camName) => {
+            const cam = camByName.get(camName);
+            if (!cam) return;
+            const obs = inst.toPointsArray();
+            let sum = 0, k2 = 0;
+            const nk = Math.min(obs.length, points3dNodeCount(pts));
+            for (let k = 0; k < nk; k++) {
+                if (obs[k] == null || !readPoint3d(pts, k, p3)) continue;
+                const u = cam.undistortPoint(obs[k]);
+                const pr = cam.project(p3);
+                sum += Math.hypot(u[0] - pr[0], u[1] - pr[1]);
+                k2++;
+            }
+            if (k2) per.push(sum / k2);
+        });
+        return per.length ? [per.reduce((a, b) => a + b, 0) / per.length, Math.max(...per)]
+                          : [NaN, NaN];
+    };
+
     const frames = [];
     for (const fi of session.frameIndices) {
         const groups = session.instanceGroups.get(fi) || [];
@@ -213,8 +256,38 @@ async function main() {
             g.instances.forEach((inst, camName) => {
                 assignments.push([`${camName}:${inst.trackIdx}`, g.identityId]);
             });
+            if (!dumpRows || g.points3d == null) continue;
+            let sx = 0, sy = 0, sz = 0, nv = 0;
+            const nk = points3dNodeCount(g.points3d);
+            for (let k = 0; k < nk; k++) {
+                if (!readPoint3d(g.points3d, k, p3)) continue;
+                sx += p3[0]; sy += p3[1]; sz += p3[2]; nv++;
+            }
+            const trunk = readPoint3d(g.points3d, NODE.Trunk, p3)
+                ? [p3[0], p3[1], p3[2]] : [NaN, NaN, NaN];
+            const rp = reprojStats(g, g.points3d);
+            dumpRows.push([
+                fi, g.identityId,
+                nv ? sx / nv : NaN, nv ? sy / nv : NaN, nv ? sz / nv : NaN,
+                g.instances.size, nv,
+                nodeDist(g.points3d, NODE.Nose, NODE.TTI),
+                nodeDist(g.points3d, NODE.Ear_R, NODE.Ear_L),
+                trunk[0], trunk[1], trunk[2], rp[0], rp[1],
+            ]);
         }
         if (assignments.length) frames.push({ frame: fi, assignments });
+    }
+
+    if (dumpRows) {
+        const buf = new Float64Array(dumpRows.length * DUMP3D_COLS.length);
+        for (let i = 0; i < dumpRows.length; i++) buf.set(dumpRows[i], i * DUMP3D_COLS.length);
+        fs.mkdirSync(path.dirname(opts.dump3d), { recursive: true });
+        fs.writeFileSync(opts.dump3d, Buffer.from(buf.buffer, buf.byteOffset, buf.byteLength));
+        fs.writeFileSync(opts.dump3d + '.json', JSON.stringify({
+            columns: DUMP3D_COLS, dtype: 'float64', order: 'C',
+            rows: dumpRows.length, cameras, nodeNames: NODE_NAMES,
+        }, null, 1));
+        process.stderr.write(`[crossview] dumped ${dumpRows.length} group-rows → ${opts.dump3d}\n`);
     }
 
     const identities = (session.identities || []).map(id => ({ id: id.id, name: id.name }));

@@ -80,9 +80,22 @@ function _identityMatches(session, camName, inst, frameIdx, filters) {
     // everywhere else (the #155/#168 class). This is the same call
     // `groupByIdentityAndTriangulateAll` buckets by, so the dialog and the
     // grouping can never disagree.
+    // A TRACKLESS instance has no key in that per-frame map (it would collide
+    // with every other trackless one in the camera), so an ungrouped trackless
+    // row keeps its identity on the instance instead — `unlinkGroup` stamps it
+    // there (luc3d #201). Reading only the map classified every such row as
+    // "no identity", which meant `identityMode: 'none'` matched — and DELETED —
+    // instances that plainly carry an ID, while filtering FOR that ID skipped
+    // them. `getIdentityIdForUnlinkedInstance` is the map for a tracked
+    // instance and the instance field for a trackless one, so it is the same
+    // answer as today wherever a track exists.
     var idVal = null;
-    if (t != null && session.getIdentityIdForTrack) {
-        idVal = session.getIdentityIdForTrack(camName, t, frameIdx);
+    if (t != null) {
+        if (session.getIdentityIdForTrack) {
+            idVal = session.getIdentityIdForTrack(camName, t, frameIdx);
+        }
+    } else if (inst && inst.identityId != null && inst.identityId >= 0) {
+        idVal = inst.identityId;
     }
     if (filters.identityMode === 'none') return idVal == null;
     return idVal === filters.identityId;

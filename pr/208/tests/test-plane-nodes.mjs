@@ -23,7 +23,9 @@ import {
     planeFillOrderPoolIndices, planeFillOrder3d,
     planeEdgesLocal, planeEdgesPoolIndices, planeNodeIndices, planeNodeNames,
     planeCentroid2d, seedPlanePoints, nodeFreezeState, defaultNodeColor,
+    planeNodeImmutability,
 } from '../pose/plane-data.js';
+import { PlaneNode, nodePinState, normalizePin, PIN_STATES } from '../pose/plane-nodes.js';
 
 let passed = 0, failed = 0;
 const check = (cond, msg) => {
@@ -710,6 +712,155 @@ console.log('\n18. Derived (reprojected) 2D flags are per-(view, node) and trave
     check(inst.clearDerivedNodes([i2]) === 0, 'clearing it again reports nothing');
     check(inst.clearDerivedNodes() === 1, 'clearing all reports the remainder');
     check(inst.derivedNodes.size === 0, 'and the set is empty');
+}
+
+console.log('\n19. Two pin states: `locked` freezes, `plane-locked` restricts');
+{
+    // --- normalizePin tolerates the legacy boolean and refuses nonsense ---
+    check(normalizePin(true) === 'locked', 'the legacy `true` means locked');
+    check(normalizePin(false) === 'none', 'the legacy `false` means unpinned');
+    check(normalizePin(undefined) === 'none', 'absent means unpinned');
+    check(normalizePin('plane-locked') === 'plane-locked', 'a valid state passes through');
+    check(normalizePin('banana') === 'none', 'an unknown state loads as unpinned, not a throw');
+    check(eq(PIN_STATES, ['none', 'plane-locked', 'locked']), 'the states are ordered by strictness');
+
+    // --- `immutable` is now an accessor, and reads ONLY `locked` ---
+    const n = new PlaneNode(1, 'a', '#fff');
+    check(n.pin === 'none' && n.immutable === false, 'a fresh node is unpinned');
+    n.pin = 'locked';
+    check(n.immutable === true, 'locked reads as immutable');
+    n.pin = 'plane-locked';
+    check(n.immutable === false,
+        'plane-locked is NOT immutable — such a node does move');
+    check(nodePinState(n) === 'plane-locked', 'nodePinState sees what immutable cannot');
+
+    // The setter still works for every pre-split caller.
+    n.immutable = true;
+    check(n.pin === 'locked', 'assigning immutable = true sets locked');
+    n.pin = 'plane-locked';
+    n.immutable = false;
+    check(n.pin === 'none', 'unticking a plane-locked node releases it entirely');
+
+    // The legacy constructor argument is unchanged.
+    check(new PlaneNode(2, 'b', '#fff', true).pin === 'locked',
+        'the 4th constructor arg still accepts a boolean');
+    check(new PlaneNode(3, 'c', '#fff', 'plane-locked').pin === 'plane-locked',
+        'and now accepts a state string');
+
+    // --- setPoint3d: the refusal is for `locked` ONLY ---
+    const free = new PlaneNode(10, 'free', '#fff');
+    check(free.setPoint3d([1, 2, 3]) === true && near(free.xyz[0], 1),
+        'an unpinned node accepts a write');
+
+    const soft = new PlaneNode(11, 'soft', '#fff', 'plane-locked');
+    check(soft.setPoint3d([4, 5, 6]) === true && near(soft.xyz[1], 5),
+        'a plane-locked node accepts a write (the plane restriction is the model’s job)');
+
+    const hard = new PlaneNode(12, 'hard', '#fff', 'locked');
+    check(hard.setPoint3d([7, 8, 9]) === false && !hard.hasPoint3d(),
+        'a locked node refuses a write');
+    check(hard.setPoint3d([7, 8, 9], { force: true }) === true && near(hard.xyz[2], 9),
+        'and still yields to an explicit force');
+
+    // --- pool-level: setPin is the only way to reach the middle state ---
+    const m = new PlaneModel();
+    const a = m.addNode('a'), b = m.addNode('b'), c = m.addNode('c');
+    check(m.pool.setPin(b.id, 'plane-locked', 77) === true, 'setPin applies');
+    check(b.pin === 'plane-locked' && b.pinPlaneId === 77, 'state and plane id are stored');
+    m.pool.setPin(b.id, 'locked', 77);
+    check(b.pin === 'locked' && b.pinPlaneId === null,
+        'a non-plane-locked state clears pinPlaneId, so nothing dangles');
+    check(m.pool.setPin(9999, 'locked') === false, 'setPin on a missing node reports false');
+
+    // --- the two chokepoints every fit/triangulation consumer reads must
+    //     report `locked` only, or a plane-locked node would be solved as a
+    //     hard anchor and the fit would be wrong.
+    m.pool.setPin(a.id, 'locked');
+    m.pool.setPin(b.id, 'plane-locked', 1);
+    m.pool.setPin(c.id, 'none');
+    check(eq(m.pool.mutableIds(), [b.id, c.id]),
+        'mutableIds() counts a plane-locked node as mutable');
+    check(nodeFreezeState(a) === 'frozen-unsolved' && nodeFreezeState(b) === 'mutable',
+        'nodeFreezeState keeps its three values and keys on locked alone');
+
+    const pl = m.createPlane('p');
+    m.addNodeToPlane(pl, a.id); m.addNodeToPlane(pl, b.id); m.addNodeToPlane(pl, c.id);
+    check(eq(planeNodeImmutability(pl, m.pool), [true, false, false]),
+        'planeNodeImmutability reports only the locked node');
+}
+
+console.log('\n20. A plane-locked node is projected onto its plane, lazily');
+{
+    const m = new PlaneModel();
+    const p = m.createPlane('floor');
+    const n0 = m.addNode('n0');
+    m.addNodeToPlane(p, n0.id);
+    // The z = 0 plane.
+    p.planeFit = { centroid: [0, 0, 0], normal: [0, 0, 1], rms: 0, nPoints: 4 };
+
+    // Unpinned: nothing is touched.
+    check(eq(m.constrainPoint3dForNode(n0.id, [1, 2, 3]), [1, 2, 3]),
+        'an unpinned node passes through unchanged');
+
+    // plane-locked to that plane: the off-plane component is removed.
+    m.pool.setPin(n0.id, 'plane-locked', p.id);
+    check(eq(m.constrainPoint3dForNode(n0.id, [1, 2, 3]), [1, 2, 0]),
+        'a plane-locked node is projected onto its plane');
+    check(eq(m.constrainPoint3dForNode(n0.id, [1, 2, 0]), [1, 2, 0]),
+        'a point already in the plane is left exactly alone');
+
+    // A stale or fit-less plane id stops constraining rather than throwing.
+    m.pool.setPin(n0.id, 'plane-locked', 9999);
+    check(eq(m.constrainPoint3dForNode(n0.id, [1, 2, 3]), [1, 2, 3]),
+        'a pinPlaneId naming no plane is inert, not an error');
+    m.pool.setPin(n0.id, 'plane-locked', p.id);
+    p.planeFit = null;
+    check(eq(m.constrainPoint3dForNode(n0.id, [1, 2, 3]), [1, 2, 3]),
+        'a plane with no fit yet is inert too');
+    p.planeFit = { centroid: [0, 0, 0], normal: [0, 0, 1], rms: 0, nPoints: 4 };
+
+    // Deleting the constraining plane must need no cascade.
+    m.deletePlane(p.id);
+    check(m.pool.getNode(n0.id) !== undefined, 'the node survives its plane');
+    check(eq(m.constrainPoint3dForNode(n0.id, [1, 2, 3]), [1, 2, 3]),
+        'and the constraint simply stops applying');
+}
+
+console.log('\n21. writePoints3dForPlane honours both pin states');
+{
+    const m = new PlaneModel();
+    const p = m.createPlane('wall');
+    const free = m.addNode('free'), soft = m.addNode('soft'), hard = m.addNode('hard');
+    [free, soft, hard].forEach(nd => m.addNodeToPlane(p, nd.id));
+    p.planeFit = { centroid: [0, 0, 0], normal: [0, 0, 1], rms: 0, nPoints: 3 };
+    m.pool.setPin(soft.id, 'plane-locked', p.id);
+    m.pool.setPin(hard.id, 'locked');
+
+    const flat = new Float64Array([1, 1, 5, 2, 2, 5, 3, 3, 5]);
+    const res = writePoints3dForPlane(p, m.pool, flat, {
+        constrain: (id, xyz) => m.constrainPoint3dForNode(id, xyz),
+    });
+
+    check(res.written === 2, 'the two movable nodes were written');
+    check(eq(res.skippedIds, [hard.id]), 'the locked node was skipped and reported');
+    check(eq(res.constrainedIds, [soft.id]),
+        'the plane-locked node was reported as constrained');
+    check(eq(free.getPoint3d(), [1, 1, 5]), 'the free node got exactly what was asked');
+    check(eq(soft.getPoint3d(), [2, 2, 0]),
+        'the plane-locked node was flattened onto its plane, not refused');
+    check(hard.hasPoint3d() === false, 'the locked node was not written at all');
+
+    // Without the hook, behaviour is exactly what it was before the split.
+    const m2 = new PlaneModel();
+    const p2 = m2.createPlane('w2');
+    const s2 = m2.addNode('s2');
+    m2.addNodeToPlane(p2, s2.id);
+    m2.pool.setPin(s2.id, 'plane-locked', p2.id);
+    p2.planeFit = { centroid: [0, 0, 0], normal: [0, 0, 1], rms: 0, nPoints: 3 };
+    const res2 = writePoints3dForPlane(p2, m2.pool, new Float64Array([1, 1, 9]));
+    check(res2.written === 1 && eq(s2.getPoint3d(), [1, 1, 9]),
+        'with no constrain hook the write is unconstrained, as before');
+    check(eq(res2.constrainedIds, []), 'and nothing is reported as constrained');
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

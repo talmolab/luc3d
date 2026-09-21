@@ -638,5 +638,59 @@
 
             cleanup(tl, container);
         });
+
+        // A TRACKLESS ungrouped instance carries its identity on the instance
+        // (`Instance.identityId`, stamped by `unlinkGroup`) because
+        // frameIdentityMap is keyed by trackIdx and a null track has no key
+        // (luc3d #201). `_buildIdentitySegments` asked the TRACK-keyed resolver
+        // for those rows, which reads the shared per-camera "-1" slot instead —
+        // so the animal was drawn and named on the canvas, listed with its ID
+        // in the Ungrouped Instances table, and simply absent from the ID
+        // Timeline.
+        it('a TRACKLESS ungrouped instance appears in the ID timeline via its retained identity', function () {
+            var container = createContainer(900, 320);
+            var tl = new Timeline(container, { totalFrames: 10 });
+
+            var skel = new Skeleton('s', ['a', 'b'], [[0, 1]]);
+            var cam = new Camera('cam1',
+                [[600, 0, 320], [0, 600, 240], [0, 0, 1]],
+                [0, 0, 0, 0, 0],
+                [[1, 0, 0], [0, 1, 0], [0, 0, 1]],
+                [0, 0, 0],
+                [640, 480]);
+            var session = new Session([cam], skel, ['track_0']);
+            session._uploadedCameras = ['cam1'];
+
+            var ident = session.addIdentity('Red');
+            var fg = new FrameGroup(0);
+            session.addFrameGroup(fg);
+            var ul = session.addUnlinkedInstance(0, 'cam1',
+                new Instance([[100, 100], [200, 200]], null, 'user', 1));
+            ul.instance.identityId = ident.id;   // what unlinkGroup retains
+
+            assertTrue(ul.instance.trackIdx == null, 'precondition: trackless');
+            assertEqual(session.getIdentityIdForUnlinkedInstance('cam1', ul.instance, 0), ident.id,
+                'precondition: the canonical resolver finds the retained identity');
+
+            tl.setData(session);
+            tl.setDisplayMode('identities');
+
+            var idRow = null;
+            for (var ri = 0; ri < (tl._trackSegments || []).length; ri++) {
+                var row = tl._trackSegments[ri];
+                if (row._isIdentity && row.cameraName === 'cam1' && !row._isNoId) { idRow = row; break; }
+            }
+            assertNotNull(idRow, 'an identity row for cam1 should exist');
+
+            var covers0 = false;
+            for (var si2 = 0; si2 < (idRow.segments || []).length; si2++) {
+                var sg = idRow.segments[si2];
+                if (0 >= sg.start && 0 <= sg.end) covers0 = true;
+            }
+            assertTrue(covers0,
+                'frame 0 must be covered — the trackless ungrouped instance holds a real identity');
+
+            cleanup(tl, container);
+        });
     });
 })();
