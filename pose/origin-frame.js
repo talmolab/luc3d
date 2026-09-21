@@ -242,3 +242,72 @@ export function unapplyOriginFrame(frame, q) {
         R[0][2] * q[0] + R[1][2] * q[1] + R[2][2] * q[2] + o[2],
     ];
 }
+
+/**
+ * Re-express a camera's extrinsics in the frame — the calibration half of the
+ * origin change.
+ *
+ * `setOriginFrame` moves only what is DRAWN; the annotation keeps its
+ * calibration-world coordinates, on purpose (see `ui/origin-definition.js`).
+ * That leaves one artifact still speaking the old frame: the calibration
+ * itself. A downstream tool handed the user's 3D points and the ORIGINAL
+ * `calibration.toml` would reproject them against the wrong world, so the file
+ * has to be rewritten rather than the points.
+ *
+ * The derivation, since getting it backwards silently produces a calibration
+ * that still almost works (it reprojects, just onto the wrong world):
+ *
+ *     p_cam = R_cam · p_old + t_cam          (what the file says today)
+ *     p_old = Rᵀ · p_new + origin            (`unapplyOriginFrame`)
+ *   ⇒ p_cam = (R_cam · Rᵀ) · p_new + (R_cam · origin + t_cam)
+ *
+ * So the new rotation is `R_cam · Rᵀ` and the new translation is
+ * `R_cam · origin + t_cam`. Note the translation is built from `frame.origin`,
+ * NOT from `frame.translation` — the two differ by a rotation (`t = −R·origin`)
+ * and substituting one for the other is the mistake this comment exists to
+ * prevent.
+ *
+ * Intrinsics and distortion are untouched: an origin change moves the world,
+ * not the lens.
+ *
+ * @param {number[][]} camR - 3x3 world→camera rotation (`Camera.rotationMatrix`)
+ * @param {number[]} camT - 3-element world→camera translation (`Camera.tvec`)
+ * @param {Object} frame - from `buildOriginFrame`
+ * @returns {{R:number[][], rvec:number[], tvec:number[]}|null} null on
+ *   non-finite or malformed input — a wrong calibration is worse than none.
+ */
+export function rebaseExtrinsics(camR, camT, frame) {
+    if (!camR || camR.length < 3 || !camT || camT.length < 3) return null;
+    if (!frame || !frame.R || !frame.origin) return null;
+    for (var i = 0; i < 3; i++) {
+        if (!camR[i] || camR[i].length < 3) return null;
+        for (var j = 0; j < 3; j++) if (!isFinite(camR[i][j])) return null;
+        if (!isFinite(camT[i])) return null;
+    }
+
+    var R = frame.R, o = frame.origin;
+
+    // R_new = camR · Rᵀ. Rᵀ's (k, c) entry is R[c][k], hence the transposed
+    // index on the right-hand factor.
+    var Rn = [[0, 0, 0], [0, 0, 0], [0, 0, 0]];
+    for (var r = 0; r < 3; r++) {
+        for (var c = 0; c < 3; c++) {
+            var s = 0;
+            for (var k = 0; k < 3; k++) s += camR[r][k] * R[c][k];
+            Rn[r][c] = s;
+        }
+    }
+
+    var tn = [
+        camR[0][0] * o[0] + camR[0][1] * o[1] + camR[0][2] * o[2] + camT[0],
+        camR[1][0] * o[0] + camR[1][1] * o[1] + camR[1][2] * o[2] + camT[1],
+        camR[2][0] * o[0] + camR[2][1] * o[1] + camR[2][2] * o[2] + camT[2],
+    ];
+
+    var aa = rotationMatrixToAxisAngle(Rn);
+    return {
+        R: Rn,
+        rvec: [aa.axis[0] * aa.angleRad, aa.axis[1] * aa.angleRad, aa.axis[2] * aa.angleRad],
+        tvec: tn,
+    };
+}

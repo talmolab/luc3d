@@ -41,14 +41,19 @@
 
 import { state, viewport3d } from './app-state.js';
 import { setStatus, markDirty } from '../import-export/save-load.js';
-import { buildOriginFrame } from '../pose/origin-frame.js';
-import { getPoint3d, hasPoint3d } from '../pose/pose-data.js';
+import { buildOriginFrame, rebaseExtrinsics } from '../pose/origin-frame.js';
+import { getPoint3d, hasPoint3d, Camera } from '../pose/pose-data.js';
+import { exportCalibrationTOML, downloadTOML } from '../import-export/file-io.js';
 // Circular by design (plane-definition imports this module's `enterOriginMode`
 // for its button). Safe: every use is inside a function body, so the binding
 // resolves at call time.
 import {
     planeState, planeModel, getPlane, planePoints3d, planeNodeNameAt, syncPlanes3D,
+    showPlaneDialog,
 } from './plane-definition.js';
+// Circular for the same reason and under the same rule: this module owns the
+// button, that one owns what the button does.
+import { showSetCalibrationModal } from './origin-rebase.js';
 
 export const originState = {
     /** @type {boolean} True while Set Origin Mode is active. */
@@ -460,6 +465,29 @@ export function applyOrigin() {
     return frame;
 }
 
+/**
+ * Reset, behind a warning.
+ *
+ * The Danger Zone's entry point. `clearOrigin` itself stays unguarded so the
+ * load path and the tests can reach it without a dialog — the confirmation is
+ * about an unrecoverable CLICK, not about the operation.
+ *
+ * Unrecoverable is the operative word: the frame is derived from a corner and
+ * an arrow the user picked in the 3D view, and nothing records which ones, so
+ * rebuilding it means walking the wizard again and hoping for the same corner.
+ */
+export function confirmClearOrigin() {
+    if (!originState.frame) return;
+    var f = originState.frame;
+    showPlaneDialog({
+        title: 'Reset to Calibration Origin?',
+        message: 'This discards the origin defined at "' + f.sourceNode + '" on plane "' +
+            f.sourcePlane + '" and puts the 3D view back on the calibration frame',
+        confirmLabel: 'Reset Origin',
+        onConfirm: clearOrigin,
+    });
+}
+
 /** Drop the user frame and put the grid back on the calibration origin. */
 export function clearOrigin() {
     if (originState.frame) markDirty();
@@ -467,6 +495,63 @@ export function clearOrigin() {
     if (viewport3d) viewport3d.setOriginFrame(null);
     renderOriginResult();
     setStatus('Origin reset to the calibration frame');
+}
+
+// ============================================
+// Danger Zone — the actions that leave this app
+// ============================================
+
+/**
+ * Write `calibration-updated.toml`: every camera's extrinsics re-expressed in
+ * the defined origin.
+ *
+ * This is the other half of the deliverable. Applying an origin deliberately
+ * does NOT move any annotated point (see the module note), so the 3D the user
+ * exports is still in calibration-world coordinates — which is only coherent if
+ * whoever consumes it also gets a calibration that agrees on where the world
+ * is. Rewriting the calibration is how the origin leaves this app; rewriting
+ * the points would silently change every number the rest of LUCID reports.
+ *
+ * Intrinsics, distortion, image size and camera ORDER all ride through
+ * untouched — the file differs from its input in exactly two keys per camera,
+ * so a diff against the original shows the origin change and nothing else.
+ *
+ * The rotation keeps the SHAPE it arrived in: a calibration that stored a 3x3
+ * (anipose) gets a 3x3 back, one that stored a Rodrigues triple gets a triple.
+ * Both are read by `Camera.rotationMatrix`, but silently changing the
+ * representation would make the file stop matching its siblings in a rig's
+ * config directory.
+ */
+export function exportUpdatedCalibration() {
+    var f = originState.frame;
+    if (!f) {
+        setStatus('Define an origin first — there is nothing to re-base the calibration onto', 'warning');
+        return null;
+    }
+    var cams = state.session && state.session.cameras;
+    if (!cams || !cams.length) {
+        setStatus('No calibration loaded to export', 'error');
+        return null;
+    }
+
+    var out = [];
+    for (var i = 0; i < cams.length; i++) {
+        var c = cams[i];
+        var reb = rebaseExtrinsics(c.rotationMatrix, c.tvec, f);
+        if (!reb) {
+            setStatus('Camera "' + c.name + '" has extrinsics that cannot be re-based', 'error');
+            return null;
+        }
+        var asMatrix = Array.isArray(c.rvec) && Array.isArray(c.rvec[0]);
+        out.push(new Camera(c.name, c.matrix, c.dist,
+            asMatrix ? reb.R : reb.rvec, reb.tvec, c.size));
+    }
+
+    var toml = exportCalibrationTOML(out);
+    downloadTOML(toml, 'calibration-updated.toml');
+    setStatus('Exported calibration-updated.toml — ' + out.length +
+        ' camera' + (out.length === 1 ? '' : 's') + ' re-based on "' + f.sourceNode + '"', 'success');
+    return toml;
 }
 
 // ============================================
@@ -492,15 +577,22 @@ function fmtVec(v) {
 export function renderOriginResult() {
     var section = document.getElementById('originResultSection');
     var host = document.getElementById('originResult');
+    // All three Danger Zone actions are relative to a defined origin — export
+    // and Set would write the calibration back out unchanged, and Reset has
+    // nothing to reset — so the block shares the readout's visibility gate
+    // rather than offering three no-ops.
+    var danger = document.getElementById('originDangerSection');
     if (!section || !host) return;
 
     var f = originState.frame;
     if (!f) {
         section.style.display = 'none';
+        if (danger) danger.style.display = 'none';
         host.innerHTML = '';
         return;
     }
     section.style.display = '';
+    if (danger) danger.style.display = '';
     host.innerHTML = '';
 
     var src = document.createElement('div');
@@ -624,8 +716,20 @@ export function setupOriginDefinition() {
     var cont = document.getElementById('btnOriginContinue');
     if (cont) cont.addEventListener('click', applyOrigin);
 
+    // Reset goes through the warning, not straight to `clearOrigin` — it is the
+    // one button here that destroys something the user cannot get back by
+    // clicking again.
     var clear = document.getElementById('btnClearOrigin');
-    if (clear) clear.addEventListener('click', clearOrigin);
+    if (clear) clear.addEventListener('click', confirmClearOrigin);
+
+    var exportCal = document.getElementById('btnExportCalibration');
+    if (exportCal) exportCal.addEventListener('click', exportUpdatedCalibration);
+
+    // The committing twin of Export: it writes the calibration over the file on
+    // disk AND re-bases every 3D point in the project. Its dialogs, progress
+    // bar and file write live in `ui/origin-rebase.js`.
+    var setCal = document.getElementById('btnSetCalibration');
+    if (setCal) setCal.addEventListener('click', showSetCalibrationModal);
 
     setupInstructionDrag();
 

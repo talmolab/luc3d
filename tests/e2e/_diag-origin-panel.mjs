@@ -108,4 +108,22 @@ try {
   const box = await el.boundingBox();
   await page.screenshot({ path: OUT, clip: { x: box.x - 4, y: box.y - 4, width: box.width + 8, height: box.height + 8 } });
   console.log('saved', OUT);
+
+  // The Danger Zone is a separate block below the readout, and it ships
+  // COLLAPSED — open it and shoot it on its own, or the panel's own scroll
+  // clips it out of the readout's frame.
+  await page.evaluate(() => {
+    const dd = document.getElementById('originDangerDetails');
+    if (dd) dd.open = true;
+    const sec = document.getElementById('originDangerSection');
+    if (sec) sec.scrollIntoView({ block: 'end' });
+  });
+  await page.waitForTimeout(300);
+  const dEl = await page.$('#originDangerSection');
+  if (dEl) {
+    const dBox = await dEl.boundingBox();
+    const dOut = OUT.replace(/\.png$/, '') + '-danger.png';
+    await page.screenshot({ path: dOut, clip: { x: dBox.x - 4, y: dBox.y - 4, width: dBox.width + 8, height: dBox.height + 8 } });
+    console.log('saved', dOut);
+  }
 } finally { await browser.close(); server.kill(); }

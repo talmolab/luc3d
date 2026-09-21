@@ -384,6 +384,46 @@ try {
     check(m.expandedHeights.every((h, i) => h > m.collapsedHeights[i]),
         `expanding restores each section (got ${JSON.stringify(m.expandedHeights)})`);
 
+    // Plane Appearance moved INSIDE Planes. It styles exactly what the Planes
+    // table lists and nothing else in the panel, so it is a sub-section there
+    // rather than a fourth top-level section — and it is the last bare <h3> the
+    // panel had, so nothing in here should be one any more.
+    m = await page.evaluate(() => {
+        const app = document.getElementById('planeAppearanceDetails');
+        const planes = document.getElementById('planePlanesDetails');
+        const panel = document.getElementById('planePanel');
+        return {
+            exists: !!app,
+            insidePlanes: !!app && planes.contains(app),
+            summary: app ? app.querySelector('summary').textContent.trim() : null,
+            open: !!app && app.open,
+            // Dressed as a SUB-section (12px), like the two inside Edit Plane —
+            // not as a top-level one (14px), which would claim a rank it no
+            // longer has.
+            titlePx: app ? parseFloat(getComputedStyle(app.querySelector('summary')).fontSize) : null,
+            topTitlePx: parseFloat(getComputedStyle(planes.querySelector('summary')).fontSize),
+            sliders: ['planeNodeSize', 'planeEdgeWeight', 'planeNodeSize3d']
+                .map(id => !!(app && app.querySelector('#' + id))),
+            labels: app ? Array.from(app.querySelectorAll('.vis-slider-row > span:first-child'))
+                .map(e => e.textContent.trim()) : [],
+            // The sliders still work from their new home.
+            values: ['planeNodeSize', 'planeEdgeWeight', 'planeNodeSize3d']
+                .map(id => document.getElementById(id).value),
+            strayH3: panel ? panel.querySelectorAll('.info-section > h3').length : -1,
+        };
+    });
+    check(m.exists && m.insidePlanes && m.summary === 'Plane Appearance',
+        `Plane Appearance is a sub-section of Planes (got '${m.summary}')`);
+    check(m.open, 'and stays expanded, so the sliders are no less findable than before');
+    check(m.titlePx === 12 && m.topTitlePx === 14,
+        `titled as a sub-section, not a top-level one (${m.titlePx}px vs ${m.topTitlePx}px)`);
+    check(m.sliders.every(Boolean) && eq(m.labels, ['2D Node Size', 'Edge Weight', '3D Node Size']),
+        `all three sliders moved with it (got ${JSON.stringify(m.labels)})`);
+    check(eq(m.values, ['13', '3', '4']),
+        `and kept their defaults (got ${JSON.stringify(m.values)})`);
+    check(m.strayH3 === 0,
+        `every section of the panel is now a <details> — no bare <h3> left (got ${m.strayH3})`);
+
     // =================================================================
     // 3 — the editor builds a plane
     // =================================================================
@@ -2572,6 +2612,199 @@ try {
         `widest ${m.wide.widest}px of ${m.wide.hostW}px — ${m.wide.widestWho})`);
     check(m.wide.panelScrollW <= m.wide.panelClientW,
         `so the Define Plane panel itself has no horizontal scroll (${m.wide.panelScrollW} vs ${m.wide.panelClientW})`);
+
+    // --- the collapsible block, and the Danger Zone ---
+    //
+    // The readout is a dozen labelled vectors plus a 3x3 in a ~300px column, so
+    // it collapses; and the three actions that reach OUTSIDE the 3D view live
+    // in their own block below it, collapsed by default.
+    m = await page.evaluate(async () => {
+        const out = {};
+        const det = document.getElementById('originResultDetails');
+        const host = document.getElementById('originResult');
+        out.isDetails = !!det && det.tagName === 'DETAILS';
+        out.openByDefault = !!det && det.open;
+        out.summary = det ? det.querySelector('summary').textContent.trim() : null;
+        out.readoutInside = !!det && det.contains(host);
+        // Collapsing really hides it — a <summary> that only looks clickable
+        // would pass a text assertion and fail the user. Measured on the
+        // <details> itself against its summary, like section 2 does: a closed
+        // <details> keeps a box for its hidden content in Chrome, so the
+        // CHILD's own height does not go to zero.
+        out.summaryHeight = det.querySelector('summary').offsetHeight;
+        out.heightOpen = det.offsetHeight;
+        det.open = false;
+        out.heightClosed = det.offsetHeight;
+        det.open = true;
+
+        const danger = document.getElementById('originDangerSection');
+        const dd = document.getElementById('originDangerDetails');
+        out.dangerShown = !!danger && getComputedStyle(danger).display !== 'none';
+        out.dangerSummary = dd ? dd.querySelector('summary').textContent.trim() : null;
+        // Collapsed by default: a Danger Zone the user scrolls past with its
+        // buttons exposed is a Danger Zone in name only.
+        out.dangerCollapsed = !!dd && !dd.open;
+        dd.open = true;
+
+        out.buttons = Array.from(danger.querySelectorAll('button'))
+            .map(b => ({ id: b.id, label: b.textContent.trim(), disabled: b.disabled }));
+        // Reset MOVED here — it must no longer sit in the readout block.
+        const clear = document.getElementById('btnClearOrigin');
+        out.resetInDanger = danger.contains(clear);
+        out.resetOutOfResult = !document.getElementById('originResultSection').contains(clear);
+        // Each action on its own full-width row: side by side at this width the
+        // two calibration labels truncate to "Export New Cal…" / "Set as New C…".
+        const tops = Array.from(danger.querySelectorAll('button'))
+            .map(b => Math.round(b.getBoundingClientRect().top));
+        out.stacked = new Set(tops).size === tops.length;
+        out.noClip = Array.from(danger.querySelectorAll('button'))
+            .every(b => b.scrollWidth <= b.clientWidth + 1);
+        return out;
+    });
+    check(m.isDetails && m.openByDefault && m.summary === 'Defined Origin',
+        `the readout is a collapsible block titled "Defined Origin", open by default (got '${m.summary}')`);
+    check(m.readoutInside && m.heightOpen > m.heightClosed &&
+          m.heightClosed <= m.summaryHeight + 2,
+        `collapsing it shrinks the block to its summary (${m.heightOpen}px -> ` +
+        `${m.heightClosed}px, summary ${m.summaryHeight}px)`);
+    check(m.dangerShown && m.dangerSummary === 'Danger Zone',
+        `a separate "Danger Zone" block appears with the origin (got '${m.dangerSummary}')`);
+    check(m.dangerCollapsed, 'and is COLLAPSED by default');
+    check(eq(m.buttons.map(b => b.id),
+             ['btnExportCalibration', 'btnSetCalibration', 'btnClearOrigin']),
+        `it holds the three origin actions in order (got ${JSON.stringify(m.buttons.map(b => b.id))})`);
+    check(eq(m.buttons.map(b => b.label),
+             ['Export New Calibration', 'Set as New Calibration', 'Reset to Calibration Origin']),
+        `labelled as asked (got ${JSON.stringify(m.buttons.map(b => b.label))})`);
+    check(m.buttons.every(b => !b.disabled),
+        'all three actions are live once an origin exists');
+    check(m.resetInDanger && m.resetOutOfResult, 'Reset moved out of the readout and into the Danger Zone');
+    check(m.stacked && m.noClip, 'the three buttons stack, so none of the labels truncate');
+
+    // --- Export New Calibration ---
+    //
+    // The one assertion worth making about the file: a 3D point must land on
+    // the same camera coordinates whether you use (old calibration, old-world
+    // point) or (new calibration, new-frame point). Everything else is
+    // bookkeeping, so it is checked by round-tripping the emitted TOML back
+    // through the app's own parser rather than by string matching.
+    m = await page.evaluate(async () => {
+        const O = await import('/ui/origin-definition.js');
+        const AS = await import('/ui/app-state.js');
+        const FIO = await import('/import-export/file-io.js');
+        const OF = await import('/pose/origin-frame.js');
+        const out = {};
+
+        const before = AS.state.session.cameras;
+        const toml = O.exportUpdatedCalibration();
+        out.returned = typeof toml === 'string' && toml.length > 0;
+
+        const after = FIO.parseCalibrationTOML(toml);
+        out.count = after.length;
+        out.names = after.map(c => c.name);
+        // Intrinsics, distortion, size and ORDER ride through untouched: a diff
+        // against the original must show the extrinsics and nothing else.
+        out.intrinsicsKept = after.every((c, i) =>
+            JSON.stringify(c.matrix) === JSON.stringify(before[i].matrix) &&
+            JSON.stringify(c.dist) === JSON.stringify(before[i].dist) &&
+            JSON.stringify(c.size) === JSON.stringify(before[i].size));
+        // Rotation keeps the SHAPE it arrived in (these fixtures are Rodrigues
+        // triples, so a 3x3 coming back would mean the writer changed notation).
+        out.rvecShape = after.map(c => Array.isArray(c.rvec[0]) ? 'matrix' : 'vector');
+
+        const f = O.originState.frame;
+        const probes = [[0, 0, 0], [30, -20, 210], [-140, 75, 90], [5, 5, 1000]];
+        const proj = (cam, p) => {
+            const R = cam.rotationMatrix, t = cam.tvec;
+            return [0, 1, 2].map(i =>
+                R[i][0] * p[0] + R[i][1] * p[1] + R[i][2] * p[2] + t[i]);
+        };
+        let worst = 0, worstIfUnchanged = 0;
+        for (let i = 0; i < after.length; i++) {
+            for (const p of probes) {
+                const q = OF.applyOriginFrame(f, p);
+                const a = proj(before[i], p);
+                const b = proj(after[i], q);
+                const c = proj(before[i], q);   // the ORIGINAL file, used wrongly
+                for (let k = 0; k < 3; k++) {
+                    worst = Math.max(worst, Math.abs(a[k] - b[k]));
+                    worstIfUnchanged = Math.max(worstIfUnchanged, Math.abs(a[k] - c[k]));
+                }
+            }
+        }
+        out.worst = worst;
+        out.worstIfUnchanged = worstIfUnchanged;
+        return out;
+    });
+    check(m.returned, 'Export New Calibration produces a TOML document');
+    check(m.count === 2 && eq(m.names, ['camA', 'camB']),
+        `every camera is written, in order (got ${JSON.stringify(m.names)})`);
+    check(m.intrinsicsKept,
+        'intrinsics, distortion and image size are untouched — an origin change moves the world, not the lens');
+    check(eq(m.rvecShape, ['vector', 'vector']),
+        `the rotation keeps the notation it arrived in (got ${JSON.stringify(m.rvecShape)})`);
+    check(m.worst < 1e-6,
+        `the new calibration sees a re-based point exactly where the old one saw the original (worst ${m.worst.toExponential(2)} mm)`);
+    check(m.worstIfUnchanged > 1,
+        `NEGATIVE CONTROL: the ORIGINAL calibration does not (off by ${m.worstIfUnchanged.toFixed(1)} mm), so the rewrite is doing real work`);
+
+    // --- Reset is behind a warning ---
+    //
+    // The frame comes from a corner and an arrow picked in the 3D view and
+    // nothing records which; an accidental click costs the user the wizard
+    // again. Esc cancels, per the project's modal rule.
+    m = await page.evaluate(async () => {
+        const O = await import('/ui/origin-definition.js');
+        const P = await import('/ui/plane-definition.js');
+        const out = {};
+
+        document.getElementById('btnClearOrigin').click();
+        const dlg = document.getElementById('planeDialog');
+        out.opened = !!dlg;
+        out.title = dlg ? dlg.querySelector('h3').textContent : null;
+        out.message = dlg ? dlg.querySelector('.plane-confirm-message').textContent : null;
+        out.confirmLabel = document.getElementById('btnPlaneDialogConfirm')
+            ? document.getElementById('btnPlaneDialogConfirm').textContent : null;
+        // Opening the warning must not already have done the thing.
+        out.frameStillSet = !!O.originState.frame;
+
+        // Esc cancels — an accidental dismissal can never apply it.
+        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+        out.escClosed = !document.getElementById('planeDialog');
+        out.frameAfterEsc = !!O.originState.frame;
+
+        // Cancel likewise.
+        document.getElementById('btnClearOrigin').click();
+        document.getElementById('btnPlaneDialogCancel').click();
+        out.frameAfterCancel = !!O.originState.frame;
+
+        // Confirm is the only path through.
+        document.getElementById('btnClearOrigin').click();
+        document.getElementById('btnPlaneDialogConfirm').click();
+        out.frameAfterConfirm = O.originState.frame === null;
+        out.dangerHidden = getComputedStyle(document.getElementById('originDangerSection')).display === 'none';
+
+        // Put it back for the sections below, which need an applied frame.
+        const sk = P.planeModel().planes[P.planeModel().planes.length - 1];
+        O.enterOriginMode();
+        O.pickOriginNode(sk.id, 0);
+        O.pickOriginAxis('positive');
+        O.applyOrigin();
+        out.restored = !!O.originState.frame;
+        return out;
+    });
+    check(m.opened && /Reset to Calibration Origin/.test(m.title || ''),
+        `Reset opens a warning rather than firing (got '${m.title}')`);
+    check(/^This discards the origin defined at "[^"]+" on plane "[^"]+" and puts the 3D view back on the calibration frame$/
+            .test((m.message || '').trim()),
+        `the warning is the one sentence, naming the corner and the plane (got '${m.message}')`);
+    check(m.confirmLabel === 'Reset Origin',
+        `the confirm button names the action (got '${m.confirmLabel}')`);
+    check(m.escClosed && m.frameStillSet && m.frameAfterEsc && m.frameAfterCancel,
+        'neither opening the warning, Esc nor Cancel discards the origin');
+    check(m.frameAfterConfirm && m.dangerHidden,
+        'confirming clears it, and the Danger Zone goes with the readout');
+    check(m.restored, 'the fixture re-applies an origin for the sections below');
 
     // --- Cancel, Esc, and Reset ---
     m = await page.evaluate(async () => {

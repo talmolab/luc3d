@@ -3,9 +3,9 @@
 Multi-view pose annotation GUI. No build system — pure vanilla JS served as static files.
 
 ## Architecture
-ES modules, vanilla JS (no build step). `index.html` loads `app.js` as `<script type="module">`; `app.js` is a 2-line entry point that imports from `pose/`. The 55 modules are grouped into four directories:
-- `pose/` — data model, cross-view tracking, DLT triangulation, plane annotation model (planes + the global plane-node pool), 3D mesh objects (groups of planes) and their derived geometry, plane/origin serialization, origin transform, plane-to-plane angle, app initialization (13 files)
-- `ui/` — UI state, canvas rendering, mouse/keyboard interaction, info panel, modals, timeline, 3D viewport, video encoding, video display settings, plane definition, 3D mesh objects, origin definition, plane angle, settings (27 files)
+ES modules, vanilla JS (no build step). `index.html` loads `app.js` as `<script type="module">`; `app.js` is a 2-line entry point that imports from `pose/`. The 57 modules are grouped into four directories:
+- `pose/` — data model, cross-view tracking, DLT triangulation, plane annotation model (planes + the global plane-node pool), 3D mesh objects (groups of planes) and their derived geometry, plane/origin serialization, origin transform, whole-project origin re-base, plane-to-plane angle, app initialization (14 files)
+- `ui/` — UI state, canvas rendering, mouse/keyboard interaction, info panel, modals, timeline, 3D viewport, video encoding, video display settings, plane definition, 3D mesh objects, origin definition, origin re-base, plane angle, settings (28 files)
 - `loading/` — video decoding, session loading, SLP/package readers, web workers (6 files)
 - `import-export/` — file I/O, save/load, SLP import/merge, visibility metadata, plane metadata (9 files)
 - `demo-data.js` — synthetic skeleton and camera data
@@ -403,6 +403,69 @@ Rules, each with a test pinning it:
 Coverage: `tests/test-plane-serialization.mjs` (unit, the mapping) and
 `tests/e2e/plane-persistence-roundtrip.mjs` (real app, both `.slp` writers, the
 dirty flag, the scope split, and both negative controls).
+
+## The defined origin moves the CALIBRATION, never the points
+
+Set Origin (`ui/origin-definition.js`, maths in `pose/origin-frame.js`) applies
+its frame to what is DRAWN — the grid, the axes and the orbit — and to nothing
+else. Cameras, skeletons and plane nodes keep their calibration-world
+coordinates, deliberately: re-baking the point cloud would silently change every
+3D number the rest of the app reads, saves and reports, and the transform is the
+deliverable, not a rewritten cloud.
+
+That leaves exactly one artifact still speaking the old frame, and it is the
+reason the panel's **Danger Zone** exists:
+
+- **`Export New Calibration`** writes `calibration-updated.toml` — every
+  camera's extrinsics through `rebaseExtrinsics` (`R_new = R_cam·Rᵀ`,
+  `t_new = R_cam·origin + t_cam`). A downstream tool handed the user's 3D and
+  the ORIGINAL calibration would reproject against the wrong world. Intrinsics,
+  distortion, image size and camera ORDER are untouched, and the rotation keeps
+  the notation it arrived in, so a diff against the input shows the origin
+  change and nothing else.
+  **`t_new` is built from `frame.origin`, not `frame.translation`** — the two
+  differ by a rotation (`t = −R·origin`), and substituting one yields a
+  calibration that still almost works, which is the worst kind of wrong.
+- **`Set as New Calibration`** COMMITS: it overwrites `calibration.toml` AND
+  re-bases every 3D number in the project, so the world becomes the defined
+  origin (`pose/origin-rebase.js` + `ui/origin-rebase.js`). Three things about
+  it are load-bearing:
+  - **Points and cameras move together, so no pixel moves.** 3D points take
+    `p' = R·p + t`, plane NORMALS take `R·n` with no translation, cameras take
+    `R_cam·Rᵀ` / `R_cam·origin + t_cam`. Every reprojection lands exactly where
+    it did. Move one without the others and every reprojection error in the
+    project silently explodes.
+  - **Plan, write, then apply.** The plan builds replacement buffers beside the
+    live ones and writes nothing, so a cancel — or a failed file write — leaves
+    the project byte-identical. Transforming in place and inverting on cancel is
+    rejected: `Rᵀ(R·p + t − t)` is not bit-identical to `p`.
+  - **The file handle is asked for inside the Continue click**, before the slow
+    part, because `showSaveFilePicker` needs transient user activation and that
+    expires within seconds. `Load Calibration` uses a plain `<input type=file>`
+    and yields no write handle, so there is nothing to inherit.
+  A pin does NOT exempt a plane node: it says "do not re-solve this point", not
+  "exempt this point from the world moving". Afterwards the defined origin is
+  CLEARED — the project is that frame now, so there is no offset left to report.
+- **`Reset to Calibration Origin`** goes through a warning modal
+  (`confirmClearOrigin`). `clearOrigin` itself stays unguarded because the load
+  path and the tests must reach it without a dialog — the confirmation is about
+  an unrecoverable CLICK. The frame is derived from a corner and an arrow picked
+  in the 3D view and nothing records which, so there is no undo short of walking
+  the wizard again.
+
+The whole block, and the collapsible Defined Origin readout above it, appear and
+disappear with `originState.frame`: without an origin all three actions are
+no-ops, and offering them would be a lie about what the panel does.
+
+Coverage: `tests/test-origin-frame.mjs` §10 (the re-based camera sees a re-based
+point exactly where the old one saw the original, plus the
+`frame.translation` negative control), `tests/test-origin-rebase.mjs` (the
+project-wide rewrite: the pixel invariant, that planning writes nothing, that a
+cancel is byte-identical, and the centroid-vs-normal split),
+`tests/e2e/define-plane-mode.mjs` §14 (both panel blocks, the TOML round trip,
+and the Reset warning's Esc/Cancel/Confirm) and
+`tests/e2e/set-new-calibration.mjs` (the inventory dialog, both cancels, and the
+commit).
 
 ## Two pin states, and Set Angle Between Two Planes
 

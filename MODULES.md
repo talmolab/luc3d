@@ -190,6 +190,16 @@ array in the order they asked for.
 
 **Imports from project modules.** None (deliberately dependency-free).
 
+**`Camera.setExtrinsics(rvec, tvec)`** replaces the extrinsics in place and
+drops the memoized `rotationMatrix` / `extrinsicMatrix` / `projectionMatrix`.
+Those three memoize on first read and there is no other way to invalidate them,
+so assigning `rvec`/`tvec` directly leaves a camera that REPORTS its new pose
+and PROJECTS with its old one — a divergence nothing would flag. It mutates
+rather than replacing the object on purpose: callers all over the app hold
+`Camera` references obtained by name lookup, and swapping in a new instance
+would leave some of them on the old extrinsics. Written for
+`pose/origin-rebase.js`; pinned by `tests/test-origin-rebase.mjs` §7.
+
 **Imported by.** `pose/plane-data.js` (which re-exports all of it),
 `pose/plane-serialization.js`.
 
@@ -563,11 +573,24 @@ inverse is `p_old = Rᵀ · p_new + origin`.
   plane normal) needs, as against `applyOriginFrame`, which is an affine map of
   a POINT. Confusing the two is how a rotated normal picks up a translation.
 - `applyOriginFrame(frame, p)` / `unapplyOriginFrame(frame, q)`.
+- `rebaseExtrinsics(camR, camT, frame)` → `{R, rvec, tvec}` or **null** — the
+  **calibration half of the origin change**. Applying an origin deliberately
+  moves nothing in the data (see `ui/origin-definition.js`), which leaves the
+  calibration as the one artifact still speaking the old frame; a downstream
+  tool handed the user's 3D and the ORIGINAL `calibration.toml` would reproject
+  against the wrong world. From `p_cam = R_cam·p_old + t_cam` and
+  `p_old = Rᵀ·p_new + origin`: `R_new = R_cam·Rᵀ`,
+  `t_new = R_cam·origin + t_cam`. **The translation is built from
+  `frame.origin`, not `frame.translation`** — the two differ by a rotation, and
+  substituting one produces a calibration that still almost works, which is the
+  worst kind of wrong. Intrinsics and distortion are not its business. Returns
+  both notations because the TOML writer matches the source file's shape.
 - `normalize3` / `cross3` / `dot3`.
 
 **Imports from project modules.** None, deliberately.
 
-**Imported by.** `ui/origin-definition.js`, `pose/plane-serialization.js`
+**Imported by.** `ui/origin-definition.js`, `pose/origin-rebase.js`
+(`rebaseExtrinsics` + the point/direction transforms), `pose/plane-serialization.js`
 (which persists an applied frame as its two INPUTS — the origin and the chosen
 +Z — and rebuilds everything else through `buildOriginFrame` on load, so the
 derived `R` / translation / axis-angle can never contradict them),
@@ -576,10 +599,84 @@ derived `R` / translation / axis-angle can never contradict them),
 
 **Tests.** `tests/test-origin-frame.mjs` (ESM — the numerical branches the
 wizard rarely reaches: 180°, the near-parallel X fallback, rigidity,
-round-trip, degenerate refusals, and §9 the `rotationAboutAxis` ↔
+round-trip, degenerate refusals, §9 the `rotationAboutAxis` ↔
 `rotationMatrixToAxisAngle` round trip over five axes × five angles, asserting
-orthonormality and `det = +1` at each) and `tests/e2e/define-plane-mode.mjs`
+orthonormality and `det = +1` at each, and §10 `rebaseExtrinsics` — pinned by
+the one invariant that matters, that a point lands on the same camera
+coordinates via (old extrinsics, old point) and (new extrinsics, re-based
+point), plus a negative control that substituting `frame.translation` for
+`frame.origin` gives a different answer) and `tests/e2e/define-plane-mode.mjs`
 §14 end to end.
+
+---
+
+### pose/origin-rebase.js
+
+**Purpose.** Move the **whole project** into the defined origin — the engine
+behind the Danger Zone's `Set as New Calibration`. `ui/origin-definition.js`
+applies an origin to what is DRAWN and to nothing else, deliberately; this
+module is the other choice, taken explicitly, and rewrites every stored 3D
+number so the project IS that frame.
+
+**Three transforms, and they must all happen together:**
+
+| thing | rule |
+|---|---|
+| 3D point | `p' = R·p + t` (affine) |
+| 3D direction (a plane normal) | `n' = R·n` — **no translation** |
+| camera | `R_cam' = R_cam·Rᵀ`, `t_cam' = R_cam·origin + t_cam` |
+
+Do all three and **every 2D pixel is unchanged**: a point's reprojection under
+the new calibration lands exactly where it landed under the old one. That
+invariant is the whole safety argument, and it is what both test files assert
+first. Move the points without the cameras (or vice versa) and every
+reprojection error in the project silently explodes. So the set is not
+negotiable: `InstanceGroup.points3d` across **every** session, the plane node
+pool, each plane's stored fit, and every camera. 2D data — member instances,
+reprojected instances, plane placements — is invariant and is not touched.
+
+**Key exports.**
+- `countRebaseTargets(sessions, model)` → the tally the confirmation dialog
+  lists. Groups are bucketed by their MEMBERS' types (`user` / `predicted` /
+  neither), because `points3d` itself carries no provenance — LUCID writes one
+  `Instance3D` per group either way. `reprojectedInstances` is reported and
+  labelled **unchanged**, because it is not work.
+- `planOriginRebase(sessions, model, frame, opts)` → a plan, `null` when
+  cancelled or the frame is unusable, or `{failed, camera}` when one camera
+  cannot be re-based (which abandons the WHOLE plan — a project with one camera
+  left in the old frame is worse than one that did not move). **Writes
+  nothing:** it builds the replacement buffers beside the live ones, so
+  cancelling is free and exact. Yields every `opts.yieldEvery` (default 2,000)
+  units and asks `opts.shouldCancel()` there.
+- `applyOriginRebase(plan)` → swaps them in, synchronously. Plane nodes are
+  written straight to `node.xyz`, **bypassing `PlaneNode.setPoint3d`'s refusal
+  for a Locked node**: a pin says "do not re-solve this point", not "exempt this
+  point from the world moving".
+
+**Why copy-on-write rather than transform-in-place-and-invert.** The second
+would halve the peak (~175 MB on a 7.3M-point project, in typed arrays outside
+V8's cage — the cheap place for it) but `Rᵀ(R·p + t − t)` is not bit-identical
+to `p`, so a *cancelled* operation would leave every coordinate perturbed in its
+last few ULPs.
+
+**It is an O(groups) in-memory walk even on a lazily-reopened project.**
+`session.instanceGroups` is built in full at load by BOTH reconstructors in
+`import-export/slp-import.js` — it is the grouping + 3D, and only the 2D
+`frameGroups` are windowed. So there is no hydration sweep here and no
+resident-only hazard (#194/#195): nothing this module reads can be absent.
+
+**Imports from project modules.** `./origin-frame.js` (`applyOriginFrame`,
+`mulMat3Vec3`, `rebaseExtrinsics`), `./pose-data.js` (`points3dNodeCount`,
+`hasPoint3d`). DOM-free.
+
+**Imported by.** `ui/origin-rebase.js`.
+
+**Tests.** `tests/test-origin-rebase.mjs` (ESM — over a real `PlaneModel` and
+real `Camera`s: the pixel invariant with an un-rewritten-calibration negative
+control, that planning writes nothing, that a cancel is byte-identical, NaN
+preservation, the Locked node moving anyway, the centroid/normal split with a
+negative control, camera cache invalidation, and the 3x3-notation case) and
+`tests/e2e/set-new-calibration.mjs`.
 
 ---
 
@@ -4497,21 +4594,25 @@ order:
    `-xyz` / `-err` / `-pin`, each node line also carrying
    `data-plane-node-id`), `#planeSkeletonsEmpty`,
    `#btnNewPlaneSkeleton`, the `.plane-action-row`
-   (`#btnPlaneTriangulate` / `#btnPlaneFill` / `#btnPlaneFit`) and
-   `#btnSetOrigin`.
+   (`#btnPlaneTriangulate` / `#btnPlaneFill` / `#btnPlaneFit`),
+   `#btnSetOrigin`, `#btnSetPlaneAngle` and — nested inside it —
+   `#planeAppearanceDetails` (**Plane Appearance**: `#planeNodeSize` /
+   `#planeEdgeWeight` / `#planeNodeSize3d`). Appearance is a SUB-section of
+   Planes rather than a section of its own because it styles exactly what the
+   table above it lists and nothing else in the panel; it stays `open` so the
+   sliders are no less discoverable than when they sat at the top level.
 
-Then Plane Appearance (`#planeNodeSize` / `#planeEdgeWeight` /
-`#planeNodeSize3d`). It also creates
+It also creates
 the modal `#planeDialog` (`.plane-confirm-overlay` / `.plane-confirm-modal`,
 `#planeDialogMessage`, `#btnPlaneDialogCancel` / `#btnPlaneDialogConfirm` /
 `#btnPlaneDialogDismiss`) for blocking errors and confirmations — **Esc closes
 it, and Esc CANCELS**, per the project's modal rule. Styles live under the
 "Defining Plane Mode" block at the end of `styles.css`.
 
-**Section titles are 14px** (`.plane-details > summary`, plus
-`.plane-panel .info-section > h3` for Plane Appearance, which has no `<details>`
-of its own and has to be dressed to match). The sub-sections inside Edit Plane
-stay at 12px, which is what makes the hierarchy legible without indenting them.
+**Section titles are 14px** (`.plane-details > summary`). The sub-sections —
+those inside Edit Plane, and Plane Appearance inside Planes — stay at 12px via
+`.plane-subdetails`, which is what makes the hierarchy legible without indenting
+them.
 `tests/e2e/define-plane-mode.mjs` §2 asserts both sizes, so a section added with
 the wrong wrapper is caught rather than merely looking odd.
 
@@ -4678,7 +4779,8 @@ loser rather than removing it, and the axis picker stays armed through
 **Key exports.** `originState`, `enterOriginMode` / `exitOriginMode` /
 `isOriginModeActive`, `fittedPlanes()`, `pickOriginNode(planeId, nodeIdx)` /
 `pickOriginAxis('positive'|'negative')`, `cancelOriginPick` / `applyOrigin` /
-`clearOrigin`, `renderWizard` / `renderOriginResult`, `setupOriginDefinition`,
+`clearOrigin` / `confirmClearOrigin`, `exportUpdatedCalibration()`,
+`renderWizard` / `renderOriginResult`, `setupOriginDefinition`,
 `attachOriginCallbacks(vp)`.
 
 **The UI lock.** `lockUI` walks the menu bar, toolbar, info panel, viewport and
@@ -4717,25 +4819,31 @@ node order (what the 3D payload was laid out in), not a pool index; the two
 differ as soon as a node is shared.
 
 **Imports from project modules.** `./app-state.js` (`state`, `viewport3d`),
-`../import-export/save-load.js` (`setStatus`, `markDirty`), `../pose/origin-frame.js`,
-`../pose/pose-data.js` (`getPoint3d`, `hasPoint3d`), and **circularly**
-`./plane-definition.js` (`planeState`, `planeModel`, `getPlane`,
-`planePoints3d`, `planeNodeNameAt`, `syncPlanes3D`) — call-time use only,
-same rule as the other cycles in this directory. Plane 3D lives on the shared
+`../import-export/save-load.js` (`setStatus`, `markDirty`),
+`../pose/origin-frame.js` (`buildOriginFrame`, `rebaseExtrinsics`),
+`../pose/pose-data.js` (`getPoint3d`, `hasPoint3d`, `Camera`),
+`../import-export/file-io.js` (`exportCalibrationTOML`, `downloadTOML`), and
+**circularly** `./plane-definition.js` (`planeState`, `planeModel`, `getPlane`,
+`planePoints3d`, `planeNodeNameAt`, `syncPlanes3D`, `showPlaneDialog`) and
+`./origin-rebase.js` (`showSetCalibrationModal` — this module owns the button,
+that one owns what it does) — call-time use only, same rule as the other cycles
+in this directory. Plane 3D lives on the shared
 node pool now, so this module reads it through `planePoints3d(plane)` (a
 plane-ordered materialization) and node names through `planeNodeNameAt`,
 never off the plane object.
 
-**Imported by.** `ui/plane-definition.js`,
+**Imported by.** `ui/plane-definition.js`, `ui/origin-rebase.js`,
 `import-export/plane-metadata.js` (`originState`, at call time).
 
 **DOM it owns.** `#originModeBar` (+ `#originModeExit`), the
 `#originInstruction` overlay inside `.viewport3d-container`
 (`#originDragHandle`, `#originStepText`, `#originLegend`, `#originConfirmRow`
-with `#btnOriginCancel` / `#btnOriginContinue`), and `#originResultSection` /
-`#originResult` / `#btnClearOrigin` in the plane panel. The overlay is
-`pointer-events: none` except for its button row and its drag grip, so it can
-never steal a pick from the canvas below.
+with `#btnOriginCancel` / `#btnOriginContinue`), and, in the plane panel,
+`#originResultSection` / `#originResultDetails` / `#originResult` plus
+`#originDangerSection` / `#originDangerDetails` (`#btnExportCalibration`,
+`#btnSetCalibration`, `#btnClearOrigin`). The overlay is `pointer-events: none`
+except for its button row and its drag grip, so it can never steal a pick from
+the canvas below.
 
 **The overlay is draggable** (`setupInstructionDrag` / `placeBox` /
 `applyBoxPosition`), because it floats over the very corner or arrow the wizard
@@ -4747,6 +4855,40 @@ not persisted) and is re-clamped every time the box is shown, since the 3D
 viewport is resizable and a spot that was inside it can stop being so while the
 box is hidden. Placing it explicitly also clears the stylesheet's centring
 `translateX(-50%)`, which would otherwise offset the box from the cursor.
+
+**Two collapsible blocks, not one section.** The readout lives in
+`#originResultDetails` ("Defined Origin", **open** by default — it is what the
+user just asked for) and the three actions that reach OUTSIDE the 3D view live
+below it in `#originDangerDetails` ("Danger Zone", **collapsed** by default).
+Both appear and disappear together with `originState.frame`, because all three
+actions are relative to a defined origin: without one, export and Set would
+write the calibration back out unchanged and Reset has nothing to reset.
+Collapsing the readout matters because it is a dozen labelled vectors plus a
+3×3 in a ~300px column, permanently in the way of everything below it.
+
+- **`Export New Calibration`** → `exportUpdatedCalibration()`, which downloads
+  `calibration-updated.toml`: every camera's extrinsics through
+  `rebaseExtrinsics`, written with the existing `exportCalibrationTOML` /
+  `downloadTOML`. This is the other half of the deliverable — applying an origin
+  deliberately moves no annotated point, which is only coherent if whoever
+  consumes that 3D also gets a calibration that agrees on where the world is.
+  Intrinsics, distortion, size and camera ORDER ride through untouched, so a
+  diff against the original shows the origin change and nothing else; and the
+  rotation keeps the NOTATION it arrived in (a 3×3 for an anipose-style
+  calibration, a Rodrigues triple otherwise), since silently changing
+  representation would make the file stop matching its siblings in a rig's
+  config directory. It returns the TOML string, which is what the e2e asserts on.
+- **`Set as New Calibration`** → `ui/origin-rebase.js`, which overwrites
+  `calibration.toml` AND re-bases every 3D number in the project so the world
+  becomes the defined origin. The committing twin of Export; see that module's
+  entry for the ordering that makes a cancel safe.
+- **`Reset to Calibration Origin`** moved here from the readout and now goes
+  through `confirmClearOrigin`, which raises `showPlaneDialog` first. `clearOrigin`
+  itself stays unguarded — the load path (`plane-metadata.js`) and the tests must
+  reach it without a dialog, and the confirmation is about an unrecoverable
+  CLICK, not about the operation. Unrecoverable literally: the frame is derived
+  from a corner and an arrow picked in the 3D view and nothing records which, so
+  "undo" means walking the wizard again and hoping for the same corner.
 
 **The Defined Origin readout is stacked, not tabular** (`renderOriginResult` →
 `vectorBlock` → `namedBlock`; the old `vectorTable` is gone). Each of the seven
@@ -4765,14 +4907,88 @@ nothing here expands or collapses, since it is seven fixed vectors rather than a
 list that grows with the project. Precision is unchanged at 3 decimals
 throughout — it already fits.
 
-**Tests.** `tests/e2e/define-plane-mode.mjs` §14, which also measures
+**Tests.** `tests/e2e/define-plane-mode.mjs` §14 — which covers both blocks
+(the readout collapses to its summary; the Danger Zone appears with the frame,
+ships collapsed, and holds the three actions stacked and un-truncated), the
+export (the emitted TOML is round-tripped back through `parseCalibrationTOML`
+and a probe point must land on the same camera coordinates as it did under the
+ORIGINAL calibration in the OLD frame, with a negative control showing the
+unrewritten file does not), and the Reset warning (opening it, Esc and Cancel
+all keep the frame; only Confirm clears). It also measures
 `#originResult`'s `scrollWidth` vs `clientWidth` (and its widest descendant, and
 the whole `.plane-panel`) **twice**: once on the fixture and once after
 restaging the frame with six-figure mm coordinates and a long corner name — the
 fixture's two-figure numbers fit even the old table, so only the wide case
 actually pins the overflow fix. `tests/e2e/_diag-origin-panel.mjs` (untracked,
-`_diag-` = not part of any suite) screenshots the section; `WIDE=1` stages the
-same wide-coordinate case.
+`_diag-` = not part of any suite) screenshots both blocks — the readout to
+`$OUT` and the (force-opened) Danger Zone to `$OUT-danger.png`, separately,
+because the panel's own scroll clips the second out of the first's frame;
+`WIDE=1` stages the same wide-coordinate case.
+
+---
+
+### ui/origin-rebase.js
+
+**Purpose.** The dialogs, the progress bar, the Cancel button and the file write
+for **`Set as New Calibration`** — the committing twin of `Export New
+Calibration`. The maths and the plan are `pose/origin-rebase.js`'s.
+
+**The order of operations is not arbitrary.**
+
+1. Confirm, with the inventory (`countRebaseTargets`).
+2. **Get the file handle, still inside the click.** `showSaveFilePicker` needs
+   transient user activation and activation expires in a few seconds, so asking
+   for it *after* a minute of re-basing throws `SecurityError`. It has to come
+   first even though it reads oddly.
+3. Plan — the slow part — behind a blocking progress modal with Cancel.
+4. Write the file.
+5. Only then swap the buffers in.
+
+Every failure mode therefore leaves the project untouched: a cancel drops the
+plan, and so does a failed write. Step 5 is the one irreversible moment and it
+is synchronous, so it cannot fail part-way.
+
+**Write access.** `Load Calibration` goes through a plain `<input type=file>`,
+which hands back bytes and no write handle, and a session-folder load gives no
+handles at all — so there is nothing to inherit and the user points at the file
+once per page session (`calibHandle`, not persisted; `resetCalibrationHandle()`
+is the test seam). Without the File System Access API it degrades to a plain
+download. With more than one session loaded, all of them are re-based but only
+the ACTIVE session's cameras go into the file, and the dialog says so.
+
+**Blocking means blocking.** The progress modal's scrim stops the pointer and a
+capture-phase `keydown` swallower stops the app's shortcuts, which are bound on
+`document` and would otherwise happily scrub the timeline or start a
+triangulation on top of a re-base. Esc is passed through as Cancel, per the
+project's modal rule.
+
+**Key exports.** `showSetCalibrationModal()`, `runSetCalibration(sessions)`,
+`resetCalibrationHandle()`.
+
+**After the swap** (`finishRebase`) the defined origin is **cleared**, not kept:
+the project is now expressed in that frame, so the offset from it is zero and a
+table still reporting the old rotation would describe a transform that has
+already happened. The grid goes back to the world axes for the same reason.
+`state.triangulationResults` (and each session's) is dropped rather than
+transformed — it is derived from 3D that just moved — and the 3D viewport is
+rebuilt, not merely re-framed, because the skeletons in it are built from
+`points3d`.
+
+**Imports from project modules.** `./app-state.js`, `../import-export/save-load.js`,
+`../import-export/file-io.js` (`exportCalibrationTOML`, `downloadTOML`),
+`../pose/origin-rebase.js`, `./rendering.js`, `../pose/initialization.js`, and
+**circularly** `./origin-definition.js` + `./plane-definition.js`, call-time use
+only.
+
+**Imported by.** `ui/origin-definition.js` (which owns the button).
+
+**Tests.** `tests/e2e/set-new-calibration.mjs` — the modal's inventory, Cancel at
+the confirmation, Cancel mid-flight (asserting no file was written and not one
+coordinate moved), and the commit: the file goes to a stand-in
+`FileSystemFileHandle` (headless Chromium exposes `showSaveFilePicker` but
+rejects it instantly with `AbortError`, the same reason
+`video-encode-streaming.mjs` supplies its own), every probe point keeps its
+pixel, and the origin collapses.
 
 ---
 
@@ -7293,7 +7509,9 @@ exports via the eager path; partially-resident refuses and says so).
 
 **Imported by.** `import-export/save-load.js`,
 `import-export/slp-import.js`, `loading/session-loader.js`,
-`ui/export-modals.js`, `ui/ui-wiring.js`.
+`ui/export-modals.js`, `ui/ui-wiring.js`, `ui/origin-definition.js`
+(`exportCalibrationTOML` + `downloadTOML`, for `calibration-updated.toml`) and
+`ui/origin-rebase.js` (the same two, for the in-place `calibration.toml`).
 
 **User-facing features.** Underlies File menu Load Calibration / Load
 Videos / Export TOML / Export SLP / Export H5; spawns SLP-parse worker.

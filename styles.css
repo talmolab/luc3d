@@ -4101,9 +4101,11 @@ kbd {
   padding: 6px 0;
 }
 
-/* Plane Appearance is the one section with no <details> of its own, so its <h3>
-   has to be dressed as one of the section titles rather than as the small
-   uppercase caption the tabbed info panel uses. */
+/* Every section of this panel is a <details> now — Plane Appearance was the last
+   bare <h3> and moved inside Planes — so an <h3> here would be an oversight
+   rather than a style. The rule stays as the safety net for one added by
+   mistake: it dresses it as a section title instead of letting the tabbed info
+   panel's small uppercase caption leak in. */
 .plane-panel .info-section > h3 {
   padding: 7px 8px;
   margin: 0;
@@ -5578,4 +5580,126 @@ body.origin-mode-lock .timeline-container {
   margin-top: 9px;
   font-size: 11px;
   color: var(--text-secondary);
+}
+
+/* The readout sits inside a <details> now, so its first child no longer needs
+   the top margin the <h3> used to supply. */
+.plane-details-body > .origin-result {
+  padding: 0 4px;
+}
+
+/* ============================================
+   Danger Zone
+   ============================================
+
+   The three actions that reach outside the 3D view: two that rewrite the
+   calibration every downstream tool reads, and one that throws the defined
+   origin away. Tinted rather than merely labelled — this block sits at the
+   bottom of a panel the user scrolls past constantly, and "Reset" next to
+   "Export" is exactly the pair a misclick lands between.
+
+   The tint is on the BORDER and the summary only. A red body would make the
+   two harmless-looking buttons (a download, a disabled placeholder) read as
+   destructive too, which spends the warning on the wrong click. */
+.origin-danger-section .plane-details-danger {
+  border-color: color-mix(in srgb, var(--error-color) 45%, var(--border-color));
+}
+
+.plane-details-danger > summary {
+  color: var(--error-color);
+}
+
+.plane-details-danger > summary::before {
+  color: var(--error-color);
+}
+
+.plane-details-danger > summary:hover {
+  background: color-mix(in srgb, var(--error-color) 12%, transparent);
+}
+
+/* Each action gets its own full-width row: `.panel-button-row` is a flex row
+   that would otherwise put all three side by side, and at ~300px the labels
+   would truncate into "Export New Cal…" / "Set as New C…", which is precisely
+   the pair you do not want a user guessing between. */
+.plane-details-danger .panel-button-row + .panel-button-row {
+  margin-top: 6px;
+}
+
+.panel-btn-danger {
+  border-color: color-mix(in srgb, var(--error-color) 55%, var(--border-color));
+  color: var(--error-color);
+}
+
+.panel-btn-danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--error-color) 18%, var(--surface-lighter));
+}
+
+/* ============================================
+   Set as New Calibration — the confirm + progress dialogs
+   ============================================
+
+   Both reuse `.plane-confirm-overlay` / `.plane-confirm-modal`, so the scrim,
+   the z-index and the Esc behaviour are the panel's existing ones. Only the
+   inventory table and the caution line are new. See ui/origin-rebase.js. */
+.origin-rebase-modal {
+  min-width: 440px;
+  max-width: 560px;
+}
+
+.origin-rebase-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 12px 0;
+  font-size: 12px;
+}
+
+.origin-rebase-table td {
+  padding: 3px 0;
+  color: var(--text-primary);
+}
+
+.origin-rebase-num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  /* The counts are the point of the table and get compared against each other,
+     so they line up on a monospace column rather than on the label. */
+  font-family: var(--font-mono, ui-monospace, monospace);
+}
+
+/* The provenance breakdown is subordinate to the total above it. */
+.origin-rebase-sub td {
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+/* Rows that are context, not work: 2D counts, and the reprojections that do
+   not move at all. Dimmed so they cannot be misread as things being rewritten. */
+.origin-rebase-quiet td {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.origin-rebase-caution {
+  margin: 12px 0 4px;
+  padding: 8px 10px;
+  border-radius: 4px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--error-color);
+  background: color-mix(in srgb, var(--error-color) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--error-color) 35%, transparent);
+}
+
+/* The progress modal's bar borrows the multi-frame one's geometry; this is the
+   only rule it needs of its own, since it has no `.multi-frame-progress`
+   ancestor to inherit the label spacing from. */
+.origin-rebase-modal .multi-frame-progress {
+  margin: 14px 0 4px;
+}
+
+.origin-rebase-modal .progress-label {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+  font-variant-numeric: tabular-nums;
 }

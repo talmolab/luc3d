@@ -15,7 +15,7 @@
 
 import {
     buildOriginFrame, rotationMatrixToAxisAngle, rotationAboutAxis, mulMat3Vec3,
-    applyOriginFrame, unapplyOriginFrame, normalize3, cross3, dot3,
+    applyOriginFrame, unapplyOriginFrame, rebaseExtrinsics, normalize3, cross3, dot3,
 } from '../pose/origin-frame.js';
 
 let passed = 0, failed = 0;
@@ -243,6 +243,87 @@ console.log('\n9. rotationAboutAxis is the inverse of rotationMatrixToAxisAngle'
     check(rotationAboutAxis([1, 0, 0], NaN) === null, 'a non-finite angle is refused');
     check(rotationAboutAxis(null, 1) === null, 'a missing axis is refused');
     check(rotationAboutAxis([NaN, 0, 1], 1) === null, 'a non-finite axis is refused');
+}
+
+console.log('\n10. rebaseExtrinsics — the calibration half of the origin change');
+{
+    // The invariant that makes the whole thing correct, and the only one worth
+    // testing: a point projects to the SAME camera coordinates whether you use
+    //   (old extrinsics, old-world point)  or  (new extrinsics, new-frame point).
+    // Everything else about the rewrite is bookkeeping.
+    const project = (R, t, p) => [
+        R[0][0] * p[0] + R[0][1] * p[1] + R[0][2] * p[2] + t[0],
+        R[1][0] * p[0] + R[1][1] * p[1] + R[1][2] * p[2] + t[1],
+        R[2][0] * p[0] + R[2][1] * p[1] + R[2][2] * p[2] + t[2],
+    ];
+
+    // A camera that is neither axis-aligned nor at the origin, so a dropped or
+    // transposed rotation cannot pass by coincidence.
+    const camR = rotationAboutAxis([0.3, -0.8, 0.5], 1.17);
+    const camT = [140, -35, 900];
+    // …and a frame that both moves and turns.
+    const f = buildOriginFrame([-10.5, 11.25, 1216.5], [0.2, -0.31, 0.93]);
+
+    const reb = rebaseExtrinsics(camR, camT, f);
+    check(reb !== null, 'a well-formed camera and frame give a result');
+
+    const probes = [
+        [0, 0, 0], [1, 2, 3], [-400, 250, 90], [12.5, -7.25, 1300], [1e4, -1e4, 1e4],
+    ];
+    let worst = 0;
+    for (const p of probes) {
+        const before = project(camR, camT, p);
+        const after = project(reb.R, reb.tvec, applyOriginFrame(f, p));
+        for (let i = 0; i < 3; i++) worst = Math.max(worst, Math.abs(before[i] - after[i]));
+    }
+    check(worst < 1e-8,
+        `the re-based camera sees every probe point unmoved (worst ${worst.toExponential(2)} mm)`);
+
+    // The new rotation is still a rotation — a camera whose extrinsics have
+    // drifted off SO(3) reprojects subtly wrong everywhere rather than failing.
+    const Rn = reb.R;
+    check([0, 1, 2].every(i => near(dot3(Rn[i], Rn[i]), 1, 1e-12))
+        && near(dot3(Rn[0], Rn[1]), 0, 1e-12)
+        && near(dot3(Rn[1], Rn[2]), 0, 1e-12)
+        && near(dot3(Rn[0], Rn[2]), 0, 1e-12),
+        'the re-based rotation is orthonormal');
+
+    // `rvec` and `R` are the same rotation in two notations, because the TOML
+    // writer picks between them based on the source file's shape.
+    check(vnear(mulMat3Vec3(rotationAboutAxis(reb.rvec, Math.hypot(...reb.rvec)), [0.4, 0.5, 0.77]),
+                mulMat3Vec3(Rn, [0.4, 0.5, 0.77]), 1e-12),
+        'the returned rvec and R are the same rotation');
+
+    // The translation is built from `frame.origin`, NOT `frame.translation` —
+    // the two differ by a rotation and substituting one silently offsets every
+    // camera. Pinned by the closed form.
+    check(vnear(reb.tvec, [
+        camR[0][0] * f.origin[0] + camR[0][1] * f.origin[1] + camR[0][2] * f.origin[2] + camT[0],
+        camR[1][0] * f.origin[0] + camR[1][1] * f.origin[1] + camR[1][2] * f.origin[2] + camT[1],
+        camR[2][0] * f.origin[0] + camR[2][1] * f.origin[1] + camR[2][2] * f.origin[2] + camT[2],
+    ], 1e-9), 't_new = camR * origin + t_old');
+    check(!vnear(reb.tvec, [
+        camR[0][0] * f.translation[0] + camR[0][1] * f.translation[1] + camR[0][2] * f.translation[2] + camT[0],
+        camR[1][0] * f.translation[0] + camR[1][1] * f.translation[1] + camR[1][2] * f.translation[2] + camT[1],
+        camR[2][0] * f.translation[0] + camR[2][1] * f.translation[1] + camR[2][2] * f.translation[2] + camT[2],
+    ], 1e-6), 'NEGATIVE CONTROL: using frame.translation instead gives a different answer');
+
+    // An identity frame must leave the calibration byte-for-byte alone, or
+    // "define an origin at the calibration origin" would perturb every camera.
+    const idf = buildOriginFrame([0, 0, 0], [0, 0, 1]);
+    const same = rebaseExtrinsics(camR, camT, idf);
+    check(vnear(same.tvec, camT, 1e-12)
+        && [0, 1, 2].every(i => vnear(same.R[i], camR[i], 1e-12)),
+        'the identity frame leaves the extrinsics unchanged');
+
+    // Degenerate input is refused rather than returning a plausible-looking
+    // calibration — a wrong calibration is worse than no file.
+    check(rebaseExtrinsics(null, camT, f) === null, 'a missing rotation is refused');
+    check(rebaseExtrinsics(camR, null, f) === null, 'a missing translation is refused');
+    check(rebaseExtrinsics(camR, camT, null) === null, 'a missing frame is refused');
+    check(rebaseExtrinsics(camR, [NaN, 0, 0], f) === null, 'a non-finite translation is refused');
+    check(rebaseExtrinsics([[1, 0, 0], [0, 1, 0], [0, 0]], camT, f) === null,
+        'a malformed rotation row is refused');
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);
