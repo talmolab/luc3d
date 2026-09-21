@@ -920,6 +920,57 @@ body {
   color: #ffffff;
 }
 
+/* Visibility ▸ Display Legend, as pane chrome (ui/view-legend.js).
+   A SIBLING of .canvas-wrapper, deliberately: the wrapper is what applyZoom
+   rotates, so anything inside it tips over with the video. Out here the legend
+   stays upright, is anchored to the pane's top-right rather than the video's
+   (it may overhang a letterbox bar), and is sized in CSS px so every view's
+   legend matches regardless of camera resolution. */
+.video-cell .view-legend {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 7;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 9px;
+  background: rgba(0, 0, 0, 0.6);
+  border-radius: 4px;
+  font-size: 11px;
+  line-height: 1;
+  color: #ffffff;
+  /* The overlay canvas under this is the click target for annotation — the
+     legend must never eat a click meant for a keypoint. */
+  pointer-events: none;
+  user-select: none;
+}
+
+/* Three things want the pane's top-right, and only one of them is always
+   there. Each of the other two pushes the legend down one slot, and both
+   together push it down two. */
+.video-cell.zoomed .view-legend,
+#videoDock.has-view-indicator .view-legend {
+  top: 38px;
+}
+
+#videoDock.has-view-indicator .video-cell.zoomed .view-legend {
+  top: 68px;
+}
+
+.video-cell .view-legend-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  white-space: nowrap;
+}
+
+.video-cell .view-legend-icon {
+  width: 18px;
+  height: 12px;
+  flex-shrink: 0;
+}
+
 /* --------------------------------------------------------------------------
    Toolbar (between video grid and controls)
    -------------------------------------------------------------------------- */
@@ -3776,13 +3827,40 @@ kbd {
   border: 1px solid var(--border-color);
   border-radius: 8px;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  /* Opening size only. `ui/modal-geometry.js` measures this on first open,
+     centres the card, and thereafter restores whatever size the user left it
+     at as inline width/height. It also owns the viewport fit (clamping to a
+     24px gutter), so there is deliberately NO max-width/max-height here — a
+     second cap would silently shrink a rect the clamp thought it had granted
+     and leave the card flush against one edge. */
   width: 880px;
-  max-width: 94vw;
   height: 620px;
-  max-height: 90vh;
   display: flex;
   flex-direction: column;
+  /* `resize` needs a non-visible overflow, which this already had. The grip is
+     the browser's own, bottom-right. */
   overflow: hidden;
+  resize: both;
+  min-width: 520px;
+  min-height: 320px;
+}
+
+/* Dragging by the header. No transition on position — the card must track the
+   pointer exactly, not lag behind it. */
+.settings-modal-header {
+  cursor: move;
+  user-select: none;
+}
+
+.settings-modal.modal-dragging {
+  /* Kill hover/selection noise mid-drag. */
+  user-select: none;
+}
+
+/* The × is a click target inside the drag handle, so it opts out of the grab
+   cursor as well as out of the drag itself (see `noDragSelector`). */
+.settings-modal-close {
+  cursor: pointer;
 }
 
 .settings-modal-header {
@@ -4006,17 +4084,88 @@ kbd {
   margin-top: 12px;
 }
 
-/* Tracking Wizard ▸ Node Weights: a scrollable, multi-column table of nodes so
-   long skeletons stay compact. */
+/* Tracking Wizard ▸ Node Weights / Camera Views: a multi-column table that
+   grows to its full height.
+
+   It used to be capped at 240px with its own `overflow-y: auto`, which put a
+   scrollbar inside `.settings-panel-container`'s scrollbar — the wheel did
+   different things a few pixels apart, and rows past the cap were invisible
+   with no hint that the window could simply be made bigger. Now the panel is
+   the one scroller in the card: the table reflows into MORE COLUMNS as the
+   (resizable) modal widens, and its `<details>` section folds away when it is
+   in the way. */
 .settings-node-weight-list {
-  max-height: 240px;
-  overflow-y: auto;
   border: 1px solid var(--border-color);
   border-radius: 4px;
   padding: 2px 10px;
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
   column-gap: 24px;
+}
+
+/* --- Collapsible wizard sections --------------------------------------- */
+.settings-section {
+  margin-bottom: 4px;
+}
+
+.settings-section-summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+  /* The spacing that .settings-kbd-category used to carry itself; it is a flex
+     item inside the summary now, so the summary owns it. */
+  margin: 16px 0 4px;
+}
+
+.settings-section:first-of-type > .settings-section-summary {
+  margin-top: 0;
+}
+
+/* Replace the UA disclosure triangle with one that matches the app. */
+.settings-section-summary::-webkit-details-marker {
+  display: none;
+}
+
+.settings-section-summary::before {
+  content: '';
+  width: 0;
+  height: 0;
+  flex-shrink: 0;
+  border-left: 5px solid var(--text-muted, #888);
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  transition: transform var(--transition-fast);
+}
+
+.settings-section[open] > .settings-section-summary::before {
+  transform: rotate(90deg);
+}
+
+.settings-section-summary:hover .settings-section-title {
+  color: var(--text-primary);
+}
+
+/* The heading already carries .settings-kbd-category; inside a summary it must
+   not also claim the block-level margins that spaced standalone headings. */
+.settings-section-title {
+  margin: 0;
+}
+
+.settings-section-count {
+  font-size: 11px;
+  color: var(--text-muted, #888);
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 0 6px;
+  line-height: 15px;
+}
+
+.settings-section-body {
+  padding-bottom: 6px;
 }
 
 .settings-node-weight-row {

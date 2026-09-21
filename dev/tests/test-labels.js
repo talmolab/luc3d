@@ -913,4 +913,320 @@
         });
     });
 
+    // ================================================================
+    // Test suite: rotation-invariant label sizing
+    // ================================================================
+
+    describe('Labels - size is independent of zoom and rotation', function () {
+
+        // Capture every explicit `ctx.font = ...` assignment. Reading `ctx.font`
+        // after the draw is not enough: the draw path is wrapped in
+        // save()/restore(), which puts the default font back.
+        function spyFontAssignments(ctx) {
+            // Real browser: shadow the prototype accessor so the underlying
+            // context still gets the value. Stub environments (the `vm` runner)
+            // have no such accessor — record into a plain own property there.
+            var desc = (typeof CanvasRenderingContext2D !== 'undefined')
+                ? Object.getOwnPropertyDescriptor(CanvasRenderingContext2D.prototype, 'font')
+                : null;
+            var fonts = [];
+            var stored = '10px sans-serif';
+            Object.defineProperty(ctx, 'font', {
+                configurable: true,
+                get: function () { return desc ? desc.get.call(ctx) : stored; },
+                set: function (v) {
+                    fonts.push(v);
+                    if (desc) desc.set.call(ctx, v); else stored = v;
+                },
+            });
+            return {
+                fonts: fonts,
+                restore: function () { delete ctx.font; },
+                // The label font is the only bold one drawSkeleton sets.
+                labelPx: function () {
+                    for (var i = 0; i < fonts.length; i++) {
+                        var m = /^bold (\d+)px/.exec(fonts[i]);
+                        if (m) return parseInt(m[1], 10);
+                    }
+                    return null;
+                },
+            };
+        }
+
+        // The `vm` sandbox runner (tests/run-node.js) hands every 2D context one
+        // shared stub canvas, so `ctx.canvas` is not the element under test and
+        // the getBoundingClientRect() fallback cannot be exercised there. The
+        // rect-dependent cases below run in the browser runner
+        // (tests/test-runner.html, or headless via tests/e2e/run-unit-tests.mjs).
+        function hasRealCanvasBacking(c) {
+            return c.ctx && c.ctx.canvas === c.canvas;
+        }
+
+        function drawAndGetLabelPx(c, extraOpts) {
+            var skeleton = new Skeleton('test', ['nose'], []);
+            var instance = new Instance([[320, 240]], 0, 'user', 1.0);
+            var spy = spyFontAssignments(c.ctx);
+            var opts = {
+                videoWidth: 640, videoHeight: 480,
+                canvasWidth: 640, canvasHeight: 480,
+                nodeSize: 4,
+                labelSize: 11,
+                showLabels: true,
+            };
+            for (var k in extraOpts) opts[k] = extraOpts[k];
+            drawSkeleton(c.ctx, instance, skeleton, opts);
+            var px = spy.labelPx();
+            spy.restore();
+            return px;
+        }
+
+        it('resolveLabelDisplayScale prefers an explicit scale over the bounding rect', function () {
+            if (typeof resolveLabelDisplayScale !== 'function') return;
+
+            var c = makeCanvas(640, 480, 320, 240);
+            if (!hasRealCanvasBacking(c)) { c.cleanup(); return; }
+            try {
+                assertApprox(resolveLabelDisplayScale(c.ctx, 640, {}), 2,
+                    0.05, 'Unrotated fallback is backing width / rect width');
+                assertEqual(resolveLabelDisplayScale(c.ctx, 640, { labelDisplayScale: 3 }), 3,
+                    'An explicit scale wins');
+                assertApprox(resolveLabelDisplayScale(c.ctx, 640, { labelDisplayScale: 0 }), 2,
+                    0.05, 'A non-positive scale falls back');
+            } finally {
+                c.cleanup();
+            }
+        });
+
+        it('falls back to 1 when the canvas has no layout box', function () {
+            if (typeof resolveLabelDisplayScale !== 'function') return;
+
+            var c = makeCanvas(640, 480); // never attached to the DOM
+            if (!hasRealCanvasBacking(c)) { c.cleanup(); return; }
+            assertEqual(resolveLabelDisplayScale(c.ctx, 640, {}), 1,
+                'A zero-width rect must not produce Infinity or NaN');
+            c.cleanup();
+        });
+
+        it('a rotated view gets the same label size as an unrotated one', function () {
+            if (typeof drawSkeleton !== 'function') return;
+            if (typeof resolveLabelDisplayScale !== 'function') return;
+
+            // Same canvas geometry in both cases: 640x480 backing store shown
+            // at 320x240 CSS px, so labels must come out at 11 CSS px = 22
+            // backing px either way.
+            var flat = makeCanvas(640, 480, 320, 240);
+            var rotated = makeCanvas(640, 480, 320, 240);
+            rotated.canvas.style.transform = 'rotate(37deg)';
+            if (!hasRealCanvasBacking(flat)) { flat.cleanup(); rotated.cleanup(); return; }
+            try {
+                var scale = 2; // 640 backing px / 320 CSS px, rotation-independent
+
+                var flatPx = drawAndGetLabelPx(flat, { labelDisplayScale: scale });
+                var rotatedPx = drawAndGetLabelPx(rotated, { labelDisplayScale: scale });
+
+                assertEqual(flatPx, 22, 'Unrotated label is baseLabelSize * displayScale');
+                assertEqual(rotatedPx, flatPx,
+                    'Rotation must not change the label size');
+
+                // And show the fallback really is the thing being worked
+                // around: getBoundingClientRect() reports the rotated
+                // element's AABB, which is wider, so the un-plumbed path
+                // under-sizes the label.
+                var rotatedRectW = rotated.canvas.getBoundingClientRect().width;
+                assertGreaterThan(rotatedRectW, 320,
+                    'A rotated element has a wider bounding box than its layout box');
+                var rotatedFallbackPx = drawAndGetLabelPx(rotated, {});
+                assertTrue(rotatedFallbackPx < flatPx,
+                    'Without an explicit scale the rotated label shrinks (the bug)');
+            } finally {
+                flat.cleanup();
+                rotated.cleanup();
+            }
+        });
+
+        it('zoom does not change the label size', function () {
+            if (typeof drawSkeleton !== 'function') return;
+
+            // rendering.js grows the backing store by the zoom scale, and the
+            // CSS transform blows the same element up by that same factor, so
+            // the ratio it passes (backing px per on-screen CSS px) is
+            // zoom-invariant: 640/320 at zoom 1, 1280/640 at zoom 2. Both must
+            // therefore produce the SAME backing-pixel font, which lands as the
+            // same size on screen.
+            var c1 = makeCanvas(640, 480, 320, 240);
+            var c2 = makeCanvas(1280, 960, 320, 240);
+            try {
+                var px1 = drawAndGetLabelPx(c1, { labelDisplayScale: 640 / 320 });
+                var px2 = drawAndGetLabelPx(c2, {
+                    canvasWidth: 1280, canvasHeight: 960,
+                    labelDisplayScale: 1280 / (320 * 2),
+                });
+                assertEqual(px1, 22, 'Zoom 1: 11 CSS px -> 22 backing px');
+                assertEqual(px2, px1, 'Zoom 2 draws the same backing-pixel font');
+            } finally {
+                c1.cleanup();
+                c2.cleanup();
+            }
+        });
+    });
+
+    // ================================================================
+    // Test suite: labels stay horizontal when the view is rotated (#162)
+    // ================================================================
+
+    describe('Labels - stay upright when the view is rotated', function () {
+
+        // The live app rotates the canvas ELEMENT with CSS, so the only thing
+        // that can make a label horizontal again is a counter-rotation in the
+        // drawing transform. Record the transform in force at each fillText,
+        // plus the point the text actually lands at once that transform is
+        // applied — that composition is what the user sees.
+        function spyPlacedText(ctx) {
+            var placed = [];
+            var origFill = ctx.fillText.bind(ctx);
+            ctx.fillText = function (t, x, y) {
+                var m = ctx.getTransform ? ctx.getTransform() : null;
+                placed.push({
+                    text: String(t),
+                    // Rotation the glyphs are drawn with, in degrees.
+                    rotationDeg: m ? Math.round(Math.atan2(m.b, m.a) * 180 / Math.PI) : 0,
+                    // Where the anchor lands in canvas space.
+                    x: m ? (m.a * x + m.c * y + m.e) : x,
+                    y: m ? (m.b * x + m.d * y + m.f) : y,
+                });
+                return origFill(t, x, y);
+            };
+            return {
+                placed: placed,
+                restore: function () { ctx.fillText = origFill; },
+                find: function (t) {
+                    for (var i = 0; i < placed.length; i++) {
+                        if (placed[i].text === t) return placed[i];
+                    }
+                    return null;
+                },
+            };
+        }
+
+        function drawOneLabel(c, labelRotation) {
+            // A two-node skeleton with the edge pointing straight DOWN the
+            // canvas, so the largest gap — and therefore the label — is on the
+            // opposite side and the placement is unambiguous.
+            var skeleton = new Skeleton('test', ['nose', 'tail'], [[0, 1]]);
+            var instance = new Instance([[320, 200], [320, 400]], 0, 'user', 1.0);
+            var spy = spyPlacedText(c.ctx);
+            drawSkeleton(c.ctx, instance, skeleton, {
+                videoWidth: 640, videoHeight: 480,
+                canvasWidth: 640, canvasHeight: 480,
+                nodeSize: 4,
+                labelSize: 12,
+                labelDisplayScale: 1,
+                labelRotation: labelRotation,
+                showLabels: true,
+            });
+            spy.restore();
+            return spy;
+        }
+
+        it('draws glyphs with no rotation for an unrotated view', function () {
+            if (typeof drawSkeleton !== 'function') return;
+            var c = makeCanvas(640, 480);
+            try {
+                var nose = drawOneLabel(c, 0).find('nose');
+                assertNotNull(nose, 'the nose label is drawn');
+                assertEqual(nose.rotationDeg, 0, 'no counter-rotation when the view is flat');
+            } finally { c.cleanup(); }
+        });
+
+        it('counter-rotates the glyphs by the view rotation', function () {
+            if (typeof drawSkeleton !== 'function') return;
+            var c = makeCanvas(640, 480);
+            try {
+                // The canvas element is rotated +R by CSS, so the glyphs must be
+                // drawn at -R for the two to cancel on screen.
+                [30, 90, 180, -45].forEach(function (rot) {
+                    var nose = drawOneLabel(c, rot).find('nose');
+                    assertNotNull(nose, 'the nose label is drawn at ' + rot + 'deg');
+                    var net = ((nose.rotationDeg + rot) % 360 + 360) % 360;
+                    assertEqual(net, 0,
+                        'view ' + rot + 'deg + glyphs ' + nose.rotationDeg + 'deg = upright on screen');
+                });
+            } finally { c.cleanup(); }
+        });
+
+        it('keeps the label anchored to its own node', function () {
+            if (typeof drawSkeleton !== 'function') return;
+            var c = makeCanvas(640, 480);
+            try {
+                // Whatever the rotation, the label must stay beside the node it
+                // names — the counter-rotation is about orientation, and must not
+                // fling the text across the canvas.
+                [0, 30, 90, 180, 270].forEach(function (rot) {
+                    var nose = drawOneLabel(c, rot).find('nose');
+                    var dist = Math.sqrt(Math.pow(nose.x - 320, 2) + Math.pow(nose.y - 200, 2));
+                    assertTrue(dist < 60,
+                        'at ' + rot + 'deg the label sits within 60px of its node (got ' +
+                        Math.round(dist) + 'px)');
+                });
+            } finally { c.cleanup(); }
+        });
+
+        it('places the label in the gap as it appears ON SCREEN', function () {
+            if (typeof computeLabelOffset !== 'function') return;
+
+            // Node 0 at the origin with its only edge pointing straight down
+            // (+y in canvas space). The largest gap therefore bisects straight
+            // UP, and the label should hang above the node — and keep hanging
+            // above it on screen at every view rotation, which means its
+            // canvas-space direction has to swing round by -R.
+            var c = makeCanvas(640, 480);
+            try {
+                var pts = [{ x: 0, y: 0 }, { x: 0, y: 100 }];
+                var skeleton = { nodes: ['a', 'b'], edges: [[0, 1]] };
+                c.ctx.font = 'bold 12px sans-serif';
+
+                var flat = computeLabelOffset(0, pts, skeleton, 'a', 12, c.ctx, 0);
+                assertTrue(flat.dy < 0, 'unrotated: the label goes above the node (dy=' + flat.dy + ')');
+
+                // At 180 the whole skeleton is upside down on screen, so the
+                // edge now points UP on screen and the gap is DOWNWARD on
+                // screen — which is -y in the screen-aligned frame the label is
+                // drawn in.
+                var flipped = computeLabelOffset(0, pts, skeleton, 'a', 12, c.ctx, 180);
+                assertTrue(flipped.dy > 0,
+                    'at 180deg the screen-space gap is the other way (dy=' + flipped.dy + ')');
+
+                // And the rotation genuinely swings the direction rather than
+                // being ignored: 90deg must differ from both.
+                var quarter = computeLabelOffset(0, pts, skeleton, 'a', 12, c.ctx, 90);
+                assertTrue(Math.abs(quarter.dx - flat.dx) > 0.5 || Math.abs(quarter.dy - flat.dy) > 0.5,
+                    'at 90deg the placement differs from the unrotated one');
+            } finally { c.cleanup(); }
+        });
+
+        it('rotation 0 draws through the untouched canvas transform', function () {
+            if (typeof drawSkeleton !== 'function') return;
+
+            // The export paths never pass a rotation, so they must keep taking
+            // the exact code they took before #162: absolute coordinates, no
+            // transform touched. Pinned by comparing the raw fillText args
+            // against the composed position — they agree only under identity.
+            var c = makeCanvas(640, 480);
+            try {
+                var raw = [];
+                var orig = c.ctx.fillText.bind(c.ctx);
+                c.ctx.fillText = function (t, x, y) { raw.push({ t: String(t), x: x, y: y }); return orig(t, x, y); };
+                var spy = drawOneLabel(c, 0);
+                c.ctx.fillText = orig;
+
+                var placedNose = spy.find('nose');
+                var rawNose = null;
+                for (var i = 0; i < raw.length; i++) if (raw[i].t === 'nose') { rawNose = raw[i]; break; }
+                assertNotNull(rawNose, 'the nose label reached fillText');
+                assertApprox(rawNose.x, placedNose.x, 1e-6, 'x is absolute, not frame-relative');
+                assertApprox(rawNose.y, placedNose.y, 1e-6, 'y is absolute, not frame-relative');
+            } finally { c.cleanup(); }
+        });
+    });
+
 })();
