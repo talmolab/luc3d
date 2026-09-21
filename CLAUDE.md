@@ -3,10 +3,10 @@
 Multi-view pose annotation GUI. No build system — pure vanilla JS served as static files.
 
 ## Architecture
-ES modules, vanilla JS (no build step). `index.html` loads `app.js` as `<script type="module">`; `app.js` is a 2-line entry point that imports from `pose/`. The 57 modules are grouped into four directories:
+ES modules, vanilla JS (no build step). `index.html` loads `app.js` as `<script type="module">`; `app.js` is a 2-line entry point that imports from `pose/`. The 62 modules are grouped into four directories:
 - `pose/` — data model, cross-view tracking, DLT triangulation, plane annotation model (planes + the global plane-node pool), 3D mesh objects (groups of planes) and their derived geometry, plane/origin serialization, origin transform, whole-project origin re-base, plane-to-plane angle, app initialization (14 files)
-- `ui/` — UI state, canvas rendering, mouse/keyboard interaction, info panel, modals, timeline, 3D viewport, video encoding, video display settings, plane definition, 3D mesh objects, origin definition, origin re-base, plane angle, settings (28 files)
-- `loading/` — video decoding, session loading, SLP/package readers, web workers (6 files)
+- `ui/` — UI state, canvas rendering, mouse/keyboard interaction, info panel, modals, timeline, 3D viewport, panel visibility, video encoding, video display settings, keyboard-target arbitration, modal geometry, view legend, plane definition, 3D mesh objects, origin definition, origin re-base, plane angle, settings (32 files)
+- `loading/` — video decoding, session loading, SLP/package readers, per-camera SLP choice, web workers (7 files)
 - `import-export/` — file I/O, save/load, SLP import/merge, visibility metadata, plane metadata (9 files)
 - `demo-data.js` — synthetic skeleton and camera data
 - `styles.css` — all styling
@@ -20,6 +20,40 @@ python3 -m http.server 8080
 # App: http://localhost:8080/
 # Tests: http://localhost:8080/tests/test-runner.html
 ```
+
+## Deployment
+
+`luc3d.sleap.ai` is a GitHub Pages **custom domain** for this repo, not a separate
+host — `talmolab.github.io/luc3d/` 301-redirects to it, and the `CNAME` file at the
+`gh-pages` root is what makes Pages answer for that name. Cloudflare proxies it;
+the origin is Pages.
+
+**`deploy.yml` never writes the site root.** `https://luc3d.sleap.ai/` — the live
+page — is managed by hand and is deliberately outside the workflow's reach; every
+target is a named sub-folder, and an empty/`.`/`/` target path is refused rather
+than silently becoming a root wipe. Keep it that way: adding a root target also
+re-introduces a wipe that can take the live page, the other channels and the PR
+previews with it. Promotion to root is a manual step, after checking `/stable/`.
+
+It maintains four channels on `gh-pages`. There is no build step, so a "build" is
+a copy of the repo at some ref, and the app is **sub-path safe** (relative
+importmap, `document.baseURI` in the test harness) — which is why one tree serves
+correctly from every path. Do not introduce origin-root-relative URLs
+(`/lib/...`); they 404 on every channel.
+
+- `/stable/` — newest **full release**. Moves only on `release: published`.
+- `/latest/` — newest release **including pre-releases**.
+- `/dev/` — every push to `main`.
+- `/pr/<n>/` — PR previews, owned by `pr-preview.yml`. `deploy.yml` never touches them.
+
+Both release channels only ever move forward (a republished older version is a
+no-op). `CNAME` is created only if missing, never rewritten, and no `.nojekyll`
+is added — both rules exist so the workflow's root footprint stays exactly zero.
+
+Releases are cut **by hand** (`gh release create v0.1.0 --generate-notes`).
+That is deliberate: a release created in Actions with `GITHUB_TOKEN` does not
+fire `release: published`, so a helper workflow could not trigger the deploy.
+Tags must be `vX.Y.Z` or `vX.Y.Z-N` (numeric pre-release), matching sleap-app.
 
 ## Dependencies (CDN only)
 - Three.js 0.147
@@ -629,6 +663,14 @@ and `tests/e2e/mesh-object-roundtrip.mjs` (the panel, the round trip, the scope,
 and three negative controls).
 
 ## UI Conventions
+**No scroll-within-scroll.** A panel or modal gets ONE scroller. Do not give an
+inner widget its own `max-height` + `overflow-y: auto` inside something that
+already scrolls: the wheel then does different things a few pixels apart, and
+content past the inner cap is invisible with no hint that it exists. Let the
+widget grow to its full height and, when that makes the page unwieldy, make the
+section collapsible (a `<details>`, as the Tracking Wizard's node/camera tables
+do) or the container resizable — not scrollable twice.
+
 **Defining Plane Mode blocks the pose-annotation toolbar.** `+ Instance`,
 `- Instance`, `Group`, `Edit Group`, `Triangulate`, `Triangulate All`,
 `Track Frame` and `Track All` are disabled while the mode is on
@@ -655,7 +697,7 @@ There are **three** test populations, each with its own runner. Run all three �
 they cover disjoint code, and a green run of one says nothing about the others.
 
 ```bash
-node tests/e2e/run-unit-tests.mjs     # tests/*.js  (browser suite, headless) — 1407 assertions
+node tests/e2e/run-unit-tests.mjs     # tests/*.js  (browser suite, headless) — 1494 assertions
 node tests/run-mjs-tests.mjs          # tests/test-*.mjs  (native-ESM Node tests)
 node tests/e2e/<name>.mjs             # tests/e2e/*.mjs  (Playwright, one file per behavior)
 ```

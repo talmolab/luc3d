@@ -25,15 +25,41 @@ python3 -m http.server 8080 --bind 0.0.0.0
 # App: http://localhost:8080/
 # Tests: http://localhost:8080/tests/test-runner.html
 ```
-## Web Deployment from Main 
-```bash
-https://talmolab.github.io/luc3d/
+## Web Deployment
+
+<a href="https://luc3d.sleap.ai/" target="_blank" rel="noopener noreferrer">Access the live site here</a>
+
+Or copy into the browser:
+```
+https://luc3d.sleap.ai/
 ```
 
-## Dependencies (CDN only)
-- Three.js 0.147
-- mp4box.js
-- All loaded via script tags in index.html
+Newest full release.
+```
+https://luc3d.sleap.ai/stable/
+```
+
+
+Newest release, pre-releases included.
+
+```
+https://luc3d.sleap.ai/latest/
+```
+
+Contains most recent pushes to `main` branch
+
+```
+https://luc3d.sleap.ai/dev/
+```
+
+
+## Requirements
+
+Chrome or Edge — the app uses the File System Access and WebCodecs APIs, which
+Firefox and Safari do not support.
+
+Nothing to install; all libraries load automatically (~11 MB on first visit,
+cached afterwards).
 
 ## Tests
 Browser-based tests in `tests/test-runner.html`. Open in browser to run.

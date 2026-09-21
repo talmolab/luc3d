@@ -12,6 +12,7 @@ import {
     triangulateAndReproject, storeReprojectedInstances,
 } from '../pose/triangulation.js';
 import { drawFrameOverlays } from './overlays.js';
+import { syncViewLegends } from './view-legend.js';
 import { isCameraTracked } from './settings.js';
 // Plane placements draw on the same overlay canvas, so they must run AFTER
 // drawFrameOverlays (which opens with a clearRect). Circular import — safe
@@ -244,6 +245,32 @@ export function drawAllOverlays(frameIdx) {
             view.overlayCanvas.height = targetH;
         }
 
+        // Backing pixels per CSS pixel, for labels (the one screen-relative
+        // size). Derived from the canvas's LAYOUT width times the zoom scale —
+        // deliberately NOT getBoundingClientRect(), which reports the rotated
+        // element's axis-aligned bounding box and so would shrink every label
+        // whenever Video Rotation is non-zero. The zoom factor must stay in:
+        // the backing store already grew by `zs` above, so dropping it would
+        // make labels grow with zoom instead of holding a fixed point size.
+        var cssW = view.overlayCanvas.offsetWidth;
+        if (!cssW) {
+            // Detached / not laid out yet. Only an explicit px inline width is
+            // usable here — the stylesheet gives `.overlay-canvas` width:100%,
+            // and parseFloat('100%') would happily hand back 100.
+            var inlineW = view.overlayCanvas.style.width || '';
+            if (/px\s*$/.test(inlineW)) cssW = parseFloat(inlineW) || 0;
+        }
+        var displayW = cssW * zs;
+        var labelDisplayScale = displayW > 0 ? targetW / displayW : 1;
+
+        // Labels cancel the view's rotation so they read horizontally (issue
+        // #162). Quantized to whole degrees: the Shift+R+Arrow chord advances
+        // `view.rotation` by a FRACTIONAL amount every animation frame, and the
+        // redraw that keeps labels upright is triggered off this same rounded
+        // value changing (ui/ui-wiring.js), so drawing the rounded angle is
+        // what makes the two agree. The residual is under half a degree.
+        var labelRotation = Math.round(view.rotation || 0);
+
         // Convert FrameGroup instances to the format expected by drawFrameOverlays
         let overlayFrameGroup = null;
         if (frameGroup) {
@@ -270,7 +297,11 @@ export function drawAllOverlays(frameIdx) {
         drawFrameOverlays(view.overlayCtx, view.name, overlayFrameGroup, instanceGroups, state.session, {
             colorByIdentity: state.colorByIdentity,
             trailLength: state.trailLength,
-            showLegend: vis.showLegend,
+            // NOT vis.showLegend: the live legend is pane chrome now
+            // (`syncViewLegends`, below), because anything painted on this
+            // canvas rotates with the view. `drawFrameOverlays` keeps the
+            // option for the overlay-video export, which has no DOM to use.
+            showLegend: false,
             showUser: vis.showUser,
             showPredicted: vis.showPredicted,
             showReprojected: vis.showReprojected,
@@ -283,6 +314,8 @@ export function drawAllOverlays(frameIdx) {
             videoHeight: view.videoHeight,
             canvasWidth: view.overlayCanvas.width,
             canvasHeight: view.overlayCanvas.height,
+            labelDisplayScale: labelDisplayScale,
+            labelRotation: labelRotation,
             selectedInstanceGroup: selectedInstanceGroup,
             selectedReprojected: interactionManager ? interactionManager.selectedReprojected : false,
             selectedNodeIdx: selectedNodeIdx,
@@ -301,6 +334,16 @@ export function drawAllOverlays(frameIdx) {
         // are drawn on every frame regardless of the current FrameGroup.
         drawPlaneOverlays(view);
     }
+
+    // The legend lives in the pane, outside the rotating `.canvas-wrapper`, so
+    // it stays upright and anchored to the VIEW rather than to the video box.
+    // Driven from here so it follows exactly the triggers the overlays do — the
+    // Display Legend checkbox handler already ends in a redraw.
+    syncViewLegends(vis.showLegend, {
+        showDetected: vis.showUser || vis.showPredicted,
+        showReprojected: vis.showReprojected,
+        showErrors: vis.showErrors,
+    });
 
     // Update info panel with current frame stats + the timeline playhead.
     // During playback these are THROTTLED to ~10 Hz: `updateFrameInfo` rebuilds

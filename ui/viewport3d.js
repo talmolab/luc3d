@@ -20,6 +20,25 @@
 import { points3dNodeCount, getPoint3d } from '../pose/pose-data.js';
 
 // ============================================
+// Deferred work (hidden viewport)
+// ============================================
+
+/**
+ * Order in which work deferred by `setVisible(false)` is replayed on re-show.
+ *
+ * Every content-mutating method on this class is a stateless FULL rebuild from
+ * the instance's current fields, so replaying the latest call of each is
+ * equivalent to having run them all — but the order matters, because some read
+ * back what others build: `highlightCamera` recolours the meshes
+ * `addCameraPyramids` creates, and `fitToScene` measures the skeleton
+ * `setFrame` creates. Geometry first, then whatever inspects it.
+ *
+ * Keys not listed here still run (after these, in insertion order), so adding
+ * a new deferred key can't silently drop it — only leave it unordered.
+ */
+const DEFER_REPLAY_ORDER = ['cameras', 'environment', 'frame', 'highlight', 'fit'];
+
+// ============================================
 // Viewport3D class
 // ============================================
 
@@ -235,6 +254,19 @@ export class Viewport3D {
         /** @type {ResizeObserver|null} */
         this._resizeObserver = null;
 
+        /** @type {boolean} Whether this viewport is on screen. When false the
+         *  render loop is stopped and every scene rebuild is deferred (see
+         *  `setVisible`). Per-instance rather than read from the DOM because
+         *  the export modals build their own Viewport3D instances that must
+         *  keep rendering regardless of the main panel's collapse state. */
+        this._visible = options.visible !== undefined ? !!options.visible : true;
+
+        /** @type {Map<string, function():void>} Latest deferred rebuild per
+         *  key, replayed by `setVisible(true)`. Keyed (not queued) so scrubbing
+         *  10,000 frames with the viewport hidden leaves ONE pending 'frame'
+         *  thunk, not 10,000. */
+        this._deferred = new Map();
+
         this._init();
     }
 
@@ -378,7 +410,94 @@ export class Viewport3D {
         this._resizeObserver.observe(this.container);
 
         // --- Start render loop ---
-        this._animate();
+        // Skipped when constructed hidden; `setVisible(true)` starts it.
+        if (this._visible) this._animate();
+    }
+
+    // ============================================
+    // Visibility (collapse / expand)
+    // ============================================
+
+    /**
+     * Run `fn` now if this viewport is on screen; otherwise remember it under
+     * `key` and run it when the viewport is shown again.
+     *
+     * @param {string} key - Bucket name; see `DEFER_REPLAY_ORDER`.
+     * @param {function():void} fn
+     * @returns {boolean} true if `fn` ran, false if it was deferred.
+     * @private
+     */
+    _whenVisible(key, fn) {
+        if (this._visible) { fn(); return true; }
+        this._deferred.set(key, fn);
+        return false;
+    }
+
+    /** Whether this viewport is currently on screen. */
+    isVisible() {
+        return this._visible;
+    }
+
+    /**
+     * Show or hide this viewport's processing.
+     *
+     * Hiding does NOT dispose anything — the scene graph, the WebGL context
+     * and the user's orbit pose all survive, so re-showing is instant. What it
+     * does is stop feeding the GPU (the render loop ran unconditionally at
+     * ~60fps into a zero-width canvas, since WebGL neither knows nor cares
+     * that CSS collapsed its container) and defer every scene rebuild, so
+     * scrubbing / triangulating / loading with the panel collapsed allocates
+     * no Three.js geometry at all.
+     *
+     * Re-showing replays the latest deferred rebuild of each kind and resizes
+     * (the container was 0x0 while collapsed, so every `resize()` attempted in
+     * that window was a silent no-op).
+     *
+     * @param {boolean} visible
+     */
+    setVisible(visible) {
+        visible = !!visible;
+        if (visible === this._visible) return;
+        this._visible = visible;
+
+        if (!visible) {
+            if (this._rafId) {
+                cancelAnimationFrame(this._rafId);
+                this._rafId = 0;
+            }
+            // The camera-perspective fly-in owns a second, independent rAF
+            // loop that renders directly — stopping only `_rafId` would leave
+            // it drawing to the hidden canvas for the rest of its 500ms.
+            if (this._perspectiveAnimId) {
+                cancelAnimationFrame(this._perspectiveAnimId);
+                this._perspectiveAnimId = null;
+                this._animatingPerspective = false;
+            }
+            return;
+        }
+
+        if (this._disposed) return;
+
+        const pending = this._deferred;
+        this._deferred = new Map();
+        const run = (key, fn) => {
+            try { fn(); }
+            catch (e) { console.warn('[3D] deferred "' + key + '" failed on re-show:', e); }
+        };
+        for (let i = 0; i < DEFER_REPLAY_ORDER.length; i++) {
+            const key = DEFER_REPLAY_ORDER[i];
+            const fn = pending.get(key);
+            if (fn) { pending.delete(key); run(key, fn); }
+        }
+        for (const [key, fn] of pending) run(key, fn);
+
+        // Guarded like the replays above: a throw here must not leave the
+        // render loop stopped, which would look exactly like the panel failing
+        // to come back.
+        try { this.resize(); }
+        catch (e) { console.warn('[3D] resize on re-show failed:', e); }
+
+        if (!this._rafId) this._animate();
     }
 
     /**
@@ -415,6 +534,14 @@ export class Viewport3D {
      *   - Add a text label sprite with the camera name
      */
     addCameraPyramids() {
+        // Hidden: defer. Rebuilds from `this.cameras` + the display props, all
+        // of which the caller has already assigned, so the replay on re-show
+        // produces exactly what this call would have.
+        if (!this._visible) {
+            this._deferred.set('cameras', () => this.addCameraPyramids());
+            return;
+        }
+
         // Clear any existing camera visualizations
         this._clearGroup(this._cameraGroup);
 
@@ -1095,6 +1222,21 @@ export class Viewport3D {
         this._animatingPerspective = true;
         this.controls.enabled = false;
 
+        // Hidden: snap to the end state. There is no fly-in to watch, and this
+        // animation drives its OWN rAF loop that calls renderer.render()
+        // directly — running it would defeat the paused main loop.
+        if (!this._visible) {
+            this._animatingPerspective = false;
+            this.controls.enabled = true;
+            this.threeCamera.position.copy(endPos);
+            this.threeCamera.up.copy(endUp).normalize();
+            this.threeCamera.fov = targetFov;
+            this.threeCamera.updateProjectionMatrix();
+            this.controls.target.copy(endTarget);
+            this.controls.update();
+            return;
+        }
+
         const self = this;
         function animate() {
             const elapsed = performance.now() - startTime;
@@ -1289,6 +1431,22 @@ export class Viewport3D {
      * @param {Array<InstanceGroup>} instanceGroups - Groups whose points3d to freeze as environment
      */
     setEnvironment(instanceGroups) {
+        // Hidden: defer. This one has to capture `this.skeleton` explicitly —
+        // callers set an env-specific skeleton, call in, then restore the
+        // normal one on the next line (`ui/ui-wiring.js`'s Set Env handler),
+        // so a thunk reading `this.skeleton` later would build env edges from
+        // the wrong skeleton.
+        if (!this._visible) {
+            const envSkeleton = this.skeleton;
+            this._deferred.set('environment', () => {
+                const saved = this.skeleton;
+                this.skeleton = envSkeleton;
+                try { this.setEnvironment(instanceGroups); }
+                finally { this.skeleton = saved; }
+            });
+            return;
+        }
+
         this._clearGroup(this._envGroup);
 
         if (!instanceGroups || instanceGroups.length === 0) {
@@ -1361,6 +1519,12 @@ export class Viewport3D {
      * Clear the persistent environment overlay.
      */
     clearEnvironment() {
+        // Same 'environment' key as setEnvironment, so a clear issued while
+        // hidden supersedes a pending set rather than being replayed after it.
+        if (!this._visible) {
+            this._deferred.set('environment', () => this.clearEnvironment());
+            return;
+        }
         this._clearGroup(this._envGroup);
         console.log('[3D] environment cleared');
     }
@@ -2136,7 +2300,7 @@ export class Viewport3D {
      *        current frame, each with .points3d and .trackIdx.
      */
     setFrame(instanceGroups) {
-        this.updateSkeleton(instanceGroups);
+        this._whenVisible('frame', () => this.updateSkeleton(instanceGroups));
     }
 
     /**
@@ -2147,9 +2311,11 @@ export class Viewport3D {
      * @param {InstanceGroup[]} [instanceGroups] - If provided, re-renders skeletons
      */
     setSelectedInstance(idx, instanceGroups) {
+        // The index itself is plain bookkeeping and always applies — only the
+        // rebuild that renders the highlight is deferrable.
         this.selectedInstanceIdx = idx;
         if (instanceGroups) {
-            this.updateSkeleton(instanceGroups);
+            this._whenVisible('frame', () => this.updateSkeleton(instanceGroups));
         }
     }
 
@@ -2169,6 +2335,12 @@ export class Viewport3D {
 
     highlightCamera(cameraName) {
         if (!this._cameraGroup) return;
+        // Hidden: defer. Reads back the meshes `addCameraPyramids` builds, so
+        // `DEFER_REPLAY_ORDER` runs 'cameras' before this on re-show.
+        if (!this._visible) {
+            this._deferred.set('highlight', () => this.highlightCamera(cameraName));
+            return;
+        }
         var missingSet = this._missingVideoCameras || new Set();
         this._cameraGroup.traverse(function (child) {
             if (child.material && child.material.visible !== false) {
@@ -2265,6 +2437,15 @@ export class Viewport3D {
      * the Three.js camera accordingly.
      */
     fitToScene() {
+        // Hidden: defer. Measures the skeleton meshes `setFrame` builds, so
+        // `DEFER_REPLAY_ORDER` runs 'frame' before this on re-show. Deferring
+        // also means the fit uses the real container aspect rather than the
+        // stale one left over from the collapse.
+        if (!this._visible) {
+            this._deferred.set('fit', () => this.fitToScene());
+            return;
+        }
+
         const points = [];
 
         // Collect camera world positions
@@ -2393,10 +2574,22 @@ export class Viewport3D {
     dispose() {
         this._disposed = true;
 
+        // Drop deferred rebuilds — their thunks close over instance-group
+        // arrays, and a disposed viewport will never replay them.
+        if (this._deferred) this._deferred.clear();
+
         // Stop animation loop
         if (this._rafId) {
             cancelAnimationFrame(this._rafId);
             this._rafId = 0;
+        }
+
+        // …and the camera fly-in's independent loop, which calls
+        // renderer.render() directly and would throw on the nulled renderer.
+        if (this._perspectiveAnimId) {
+            cancelAnimationFrame(this._perspectiveAnimId);
+            this._perspectiveAnimId = null;
+            this._animatingPerspective = false;
         }
 
         // Stop resize observer
@@ -2458,7 +2651,13 @@ export class Viewport3D {
      * @private
      */
     _animate() {
-        if (this._disposed) return;
+        // A collapsed container is still a perfectly good WebGL render target
+        // as far as the GPU is concerned, so "hidden" has to stop the loop
+        // explicitly. `_rafId = 0` so `setVisible(true)` knows to restart it.
+        if (this._disposed || !this._visible) {
+            this._rafId = 0;
+            return;
+        }
 
         this._rafId = requestAnimationFrame(() => this._animate());
 

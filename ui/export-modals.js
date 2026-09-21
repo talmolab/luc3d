@@ -368,7 +368,13 @@ export async function groupByIdentityAndTriangulateAll(explicitMethod) {
                 if (!allInstancesByCam[camName2]) allInstancesByCam[camName2] = [];
                 allInstancesByCam[camName2].push(ulInst);
 
-                var identityId2 = session.getIdentityIdForTrack(camName2, ulInst.trackIdx, frameIdx);
+                // Unlinked rows take the UNLINKED resolver — a trackless one
+                // keeps its identity on the instance, not in the trackIdx-keyed
+                // map (luc3d #201) — so grouping by identity can re-form
+                // exactly what an ungroup took apart.
+                var identityId2 = session.getIdentityIdForUnlinkedInstance
+                    ? session.getIdentityIdForUnlinkedInstance(camName2, ulInst, frameIdx)
+                    : session.getIdentityIdForTrack(camName2, ulInst.trackIdx, frameIdx);
                 if (identityId2 == null) continue;
                 if (!idBuckets[identityId2]) idBuckets[identityId2] = {};
                 if (!idBuckets[identityId2][camName2]) idBuckets[identityId2][camName2] = ulInst;
@@ -518,7 +524,7 @@ export async function groupByIdentityAndTriangulateAll(explicitMethod) {
         totalTriangulated + ' across ' + processedFrames + ' frames via ' +
         triangulationMethodLabel(prefMethod) + ' (' +
         reused3d.toLocaleString() + ' kept existing 3D, ' +
-        solvedBa.toLocaleString() + ' solved via Bundle Adjustment, ' +
+        solvedBa.toLocaleString() + ' solved via Refined, ' +
         solvedDlt.toLocaleString() + ' via DLT)', 'success');
     console.log('[groupByIdentity] 3D provenance: reused', reused3d,
         '| solved BA', solvedBa, '| solved DLT', solvedDlt);
@@ -763,7 +769,7 @@ async function groupByTrackAndTriangulateAll(selectedTrackIndices, selectedCamer
     setStatus('Grouped ' + totalGrouped + ' track-groups, triangulated ' + totalTriangulated +
         ' frames via ' + triangulationMethodLabel(prefMethodT) +
         ' (avg error: ' + avgError + 'px; ' + reused3dT.toLocaleString() +
-        ' kept existing 3D, ' + solvedBaT.toLocaleString() + ' solved via Bundle Adjustment, ' +
+        ' kept existing 3D, ' + solvedBaT.toLocaleString() + ' solved via Refined, ' +
         solvedDltT.toLocaleString() + ' via DLT)', 'success');
     console.log('[group-by-track] Done:', totalGrouped, 'groups across', totalTriangulated,
         'frames, avg error:', avgError, '| 3D provenance: reused', reused3dT,
@@ -1188,6 +1194,57 @@ function showExportResultPopup(message, ok) {
     timer = setTimeout(dismiss, ok ? 1800 : 4500);
 }
 
+/**
+ * Markup for the "Include" option group shared by the Per-Session and By-Cam SLP
+ * export modals.
+ *
+ * Both modals always write the session's USER labels and only let the user opt
+ * in/out of predicted instances and reprojections — but with those two the only
+ * visible controls, users could not tell whether their own labels made it into
+ * the file (luc3d #194). So the group opens with a plain NOTE — "UserLabels are
+ * automatically saved" — above the two switches.
+ *
+ * A note, not a third (locked) switch: a control that cannot be operated is a
+ * lie about what the user can do, and it invites both a misread ("why is this
+ * greyed out — am I losing something?") and a future caller reading it as if it
+ * were a real option. Nothing here is stateful, so nothing here is a control.
+ *
+ * @param {Object} o
+ * @param {string} o.predId          id for the "Predicted Instances" checkbox
+ * @param {string} o.reprojId        id for the "Reprojections" checkbox
+ * @param {string} o.reprojRowId     id for the Reprojections row (disabled as a unit)
+ * @param {string} o.reprojToggleId  id for the UserInstance/PredictedInstance toggle
+ * @returns {string} HTML
+ */
+function slpIncludeGroupHtml(o) {
+    function sw(id, checked) {
+        return '<label class="toggle-switch toggle-switch-sm">'
+            + '<input type="checkbox" id="' + id + '"' + (checked ? ' checked' : '') + '>'
+            + '<span class="slider"></span></label>';
+    }
+    return '<div class="slp-inc-group">' +
+        '<span class="slp-inc-legend">Include</span>' +
+        '<div class="slp-inc-note">' +
+        '<span class="slp-inc-note-mark" aria-hidden="true">✓</span>' +
+        '<span>UserLabels are automatically saved</span>' +
+        '</div>' +
+        '<div class="slp-inc-rows">' +
+        '<div class="slp-inc-row">' +
+        sw(o.predId, true) +
+        '<label class="slp-inc-name" for="' + o.predId + '">Predicted Instances</label>' +
+        '</div>' +
+        '<div class="slp-inc-row" id="' + o.reprojRowId + '">' +
+        sw(o.reprojId, false) +
+        '<label class="slp-inc-name" for="' + o.reprojId + '">Reprojections</label>' +
+        '<span class="slp-reproj-toggle" id="' + o.reprojToggleId + '">' +
+        '<span class="slp-toggle-option slp-toggle-active" data-value="user">UserInstance</span>' +
+        '<span class="slp-toggle-option" data-value="predicted">PredictedInstance</span>' +
+        '</span>' +
+        '</div>' +
+        '</div>' +
+        '</div>';
+}
+
 // ============================================
 // Export SLEAP by Camera Modal
 // ============================================
@@ -1409,16 +1466,12 @@ export function showSlpExportByCamModal() {
         '</div>' +
         '</div>' +
         '<div class="slp-bycam-skel-warning" id="slpByCamSkelWarning" style="display:none"></div>' +
-        '<div class="slp-export-options slp-export-options-stacked">' +
-        '<label class="slp-opt-row"><input type="checkbox" id="slpByCamIncPred" checked> Save PredictedInstances</label>' +
-        '<div class="slp-opt-row" id="slpByCamReprojRow">' +
-        '<label><input type="checkbox" id="slpByCamReproj"> Save Reprojections</label>' +
-        '<span class="slp-reproj-toggle" id="slpByCamReprojToggle">' +
-        '<span class="slp-toggle-option slp-toggle-active" data-value="user">UserInstance</span>' +
-        '<span class="slp-toggle-option" data-value="predicted">PredictedInstance</span>' +
-        '</span>' +
-        '</div>' +
-        '</div>' +
+        slpIncludeGroupHtml({
+            predId: 'slpByCamIncPred',
+            reprojId: 'slpByCamReproj',
+            reprojRowId: 'slpByCamReprojRow',
+            reprojToggleId: 'slpByCamReprojToggle',
+        }) +
         '<div class="slp-bycam-all-row">' +
         '<button id="slpByCamDownloadAll" class="slp-bycam-all-btn">Download All</button>' +
         '</div>' +
@@ -1605,7 +1658,7 @@ export function showSlpExportByCamModal() {
         reprojCheckbox.disabled = true;
         var reprojRow = document.getElementById('slpByCamReprojRow');
         if (reprojRow) {
-            reprojRow.classList.add('slp-opt-disabled');
+            reprojRow.classList.add('slp-inc-row-disabled');
             reprojRow.title = 'No reprojections available — triangulate or track a session first.';
         }
     }
@@ -1817,15 +1870,28 @@ export function showSlpExportPerSessionModal() {
     var modal = document.createElement('div');
     modal.className = 'multi-frame-modal slp-export-modal slp-export-persession-modal';
 
+    // Camera names, directories and filenames all come from user files, so they
+    // go through the markup escaped — a name containing a quote would otherwise
+    // break out of the `value`/`title` attribute.
+    function esc(v) {
+        return String(v).replace(/&/g, '&amp;').replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+
     var rowsHtml = '';
     for (var ri = 0; ri < entries.length; ri++) {
         var en = entries[ri];
         rowsHtml +=
             '<tr>' +
             '<td class="slp-ps-dl-cell"><input type="checkbox" class="slp-ps-dl" data-idx="' + ri + '" checked></td>' +
-            '<td>' + en.camName + '</td>' +
-            '<td class="slp-ps-dir" title="' + en.dirName + '">' + en.dirName + '/</td>' +
-            '<td><input type="text" class="slp-ps-filename" data-idx="' + ri + '" value="' + en.outputName + '"></td>' +
+            '<td>' + esc(en.camName) + '</td>' +
+            '<td class="slp-ps-dir" title="' + esc(en.dirName) + '">' + esc(en.dirName) + '/</td>' +
+            // spellcheck off: the red squiggle under every `_h265_CRF30_denoised`
+            // segment is noise, not a typo. `title` carries the full name, since
+            // the field elides names too long for the column.
+            '<td><input type="text" class="slp-ps-filename" data-idx="' + ri + '"'
+            + ' spellcheck="false" autocomplete="off" autocapitalize="off"'
+            + ' title="' + esc(en.outputName) + '" value="' + esc(en.outputName) + '"></td>' +
             '</tr>';
     }
 
@@ -1839,15 +1905,12 @@ export function showSlpExportPerSessionModal() {
         '<tbody>' + rowsHtml + '</tbody>' +
         '</table>' +
         '</div>' +
-        '<div class="slp-export-options" style="margin-top:10px;">' +
-        '<label style="font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-muted);display:block;margin-bottom:6px;">Include</label>' +
-        '<label style="margin-right:14px;cursor:pointer;"><input type="checkbox" id="slpPsIncPred" checked> Predicted Instances</label>' +
-        '<label style="margin-right:8px;cursor:pointer;"><input type="checkbox" id="slpPsIncReproj"> Reprojections</label>' +
-        '<span class="slp-reproj-toggle" id="slpPsReprojToggle">' +
-        '<span class="slp-toggle-option slp-toggle-active" data-value="user">UserInstance</span>' +
-        '<span class="slp-toggle-option" data-value="predicted">PredictedInstance</span>' +
-        '</span>' +
-        '</div>' +
+        slpIncludeGroupHtml({
+            predId: 'slpPsIncPred',
+            reprojId: 'slpPsIncReproj',
+            reprojRowId: 'slpPsIncReprojRow',
+            reprojToggleId: 'slpPsReprojToggle',
+        }) +
         '<div class="slp-export-error" id="slpPsError"></div>' +
         '<div class="modal-actions">' +
         '<button id="slpPsCancel">Cancel</button>' +
@@ -1866,14 +1929,19 @@ export function showSlpExportPerSessionModal() {
         input.addEventListener('change', function () {
             var idx = parseInt(input.getAttribute('data-idx'));
             entries[idx].outputName = input.value.trim() || entries[idx].outputName;
+            input.value = entries[idx].outputName;
+            input.title = entries[idx].outputName;   // hover shows the elided tail
         });
     });
 
-    // Per-row Download toggle — only checked rows are exported.
+    // Per-row Download toggle — only checked rows are exported. The row dims
+    // when off so the column reads at a glance.
     modal.querySelectorAll('.slp-ps-dl').forEach(function (cb) {
         cb.addEventListener('change', function () {
             var idx = parseInt(cb.getAttribute('data-idx'));
             entries[idx].download = cb.checked;
+            var row = cb.closest('tr');
+            if (row) row.classList.toggle('slp-ps-off', !cb.checked);
             clearError();
         });
     });

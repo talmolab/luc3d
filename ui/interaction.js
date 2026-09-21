@@ -16,6 +16,7 @@
 
 import { Instance } from '../pose/pose-data.js';
 import { getOrComputeReprojectedInstance } from '../pose/triangulation.js';
+import { shouldIgnoreShortcut } from './keyboard-target.js';
 
 // ============================================
 // InteractionManager
@@ -766,6 +767,15 @@ export class InteractionManager {
                 if (this.assignmentSelection[i].id === unlinked.id) {
                     // Toggle off: clicking the same instance removes it
                     this.assignmentSelection.splice(i, 1);
+                    // …and it stops being THE selection. `selectedUnlinked` is
+                    // what `_deleteSelected` acts on, while the amber ring is
+                    // driven by `assignmentSelection` — leaving the two out of
+                    // step meant a toggled-off instance was still armed for
+                    // Delete with nothing on screen (and no highlighted row in
+                    // the Ungrouped Instances table) to say so.
+                    if (this.selectedUnlinked && this.selectedUnlinked.id === unlinked.id) {
+                        this.selectedUnlinked = null;
+                    }
                     this._requestRedraw();
                     if (this.callbacks.onAssignmentSelectionChanged) {
                         this.callbacks.onAssignmentSelectionChanged(this.assignmentSelection.length);
@@ -1565,10 +1575,9 @@ export class InteractionManager {
      * @param {KeyboardEvent} e
      */
     onKeyDown(e) {
-        // Do not intercept when the user is typing in an input
-        if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable)) {
-            return;
-        }
+        // Do not intercept a key that belongs to whatever has focus (a text
+        // field takes every key; a checkbox takes only Space) — see #163.
+        if (shouldIgnoreShortcut(e)) return;
 
         const state = this._getState();
         if (!state) return;

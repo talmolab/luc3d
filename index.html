@@ -105,6 +105,12 @@
                     <div class="menu-dropdown-item" id="menuGroupByIdentity">Group by Identity &amp; Triangulate All</div>
                 </div>
             </div>
+            <div class="menu-item" data-menu="calibrate">
+                Calibrate
+                <div class="menu-dropdown" id="menuCalibrate">
+                    <div class="menu-dropdown-item" id="menuCalibrateNewTab">Calibrate in New Tab</div>
+                </div>
+            </div>
             <div class="menu-item" data-menu="tracks">
                 Tracks
                 <div class="menu-dropdown" id="menuTracks">
@@ -179,14 +185,14 @@
                     <button class="toolbar-btn" id="tbTriangulate" title="Triangulate selected group (t)">Triangulate <span class="tri-caret">▾</span></button>
                     <div class="tri-dropdown-menu">
                         <div class="tri-dropdown-item" data-method="dlt">DLT <span class="tri-dropdown-hint">Fast</span></div>
-                        <div class="tri-dropdown-item" data-method="ba">BA <span class="tri-dropdown-hint">Slow &amp; Accurate</span></div>
+                        <div class="tri-dropdown-item" data-method="ba">Ref <span class="tri-dropdown-hint">Slow &amp; Accurate</span></div>
                     </div>
                 </div>
                 <div class="tri-dropdown" id="triangulateAllDropdown">
                     <button class="toolbar-btn" id="tbTriangulateAll" title="Triangulate all frames with instance groups">Triangulate All <span class="tri-caret">▾</span></button>
                     <div class="tri-dropdown-menu">
                         <div class="tri-dropdown-item" data-method="dlt">DLT <span class="tri-dropdown-hint">Fast</span></div>
-                        <div class="tri-dropdown-item" data-method="ba">BA <span class="tri-dropdown-hint">Slow &amp; Accurate</span></div>
+                        <div class="tri-dropdown-item" data-method="ba">Ref <span class="tri-dropdown-hint">Slow &amp; Accurate</span></div>
                     </div>
                 </div>
             </div>
@@ -209,7 +215,10 @@
                 <button class="toolbar-btn active" id="colorByTracks" title="Color instances by track">Tracks</button>
                 <button class="toolbar-btn" id="colorById" title="Color instances by identity">ID</button>
             </div>
-            <button class="toolbar-btn" id="infoPanelToggleBtn" style="margin-left:auto;" title="Toggle info panel (I)">Hide Panel</button>
+            <div class="toolbar-group panel-toggles">
+                <button class="toolbar-btn panel-toggle-btn" id="viewport3dToggleBtn" title="Toggle 3D viewer (\)">Hide 3D View</button>
+                <button class="toolbar-btn panel-toggle-btn" id="infoPanelToggleBtn" title="Toggle info panel (I)">Hide Panel</button>
+            </div>
         </div>
 
         <!-- Defining Plane Mode banner (View ▸ Define Planes). Hidden unless the

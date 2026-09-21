@@ -93,6 +93,23 @@ async function parseSlp(file) {
         var h5path = '/work/' + file.name;
         var f = new h5wasm.File(h5path, 'r');
 
+        // FAIL LOUDLY on a file HDF5 could not open. `new h5wasm.File` does NOT
+        // throw for non-HDF5 bytes — it hands back a File wrapping an invalid
+        // id (the tell is HDF5-DIAG "H5Fclose(): not a file ID" on the way out).
+        // Every `f.get()` below is individually try/caught and returns null, so
+        // parsing continued to the end and posted a perfectly ordinary RESULT
+        // with 0 frames. A truncated or non-SLP file therefore reached the
+        // session-folder loader as a successful parse of nothing, and that
+        // camera's view came up empty with nothing said anywhere. An SLP always
+        // has root keys (`metadata`, `videos_json`, `frames`, …), so an empty —
+        // or unreadable — root is not a valid file to carry on with.
+        var rootKeys = null;
+        try { rootKeys = f.keys(); } catch (e) { rootKeys = null; }
+        if (!rootKeys || rootKeys.length === 0) {
+            try { f.close(); } catch (e) { /* invalid id — nothing to close */ }
+            throw new Error('Not a readable HDF5/SLP file (no root datasets): ' + file.name);
+        }
+
         progress('Reading metadata...');
 
         // --- Detect analysis H5 format ---

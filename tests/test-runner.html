@@ -103,6 +103,7 @@
     <script src="test-overlays.js"></script>
     <script src="test-node-shape.js"></script>
     <script src="test-unlinked-badge.js"></script>
+    <script src="test-unlinked-track-label.js"></script>
     <script src="test-integration.js"></script>
 
     <!-- Phase 5 test files -->
@@ -150,6 +151,12 @@
     <!-- Label rendering tests -->
     <script src="test-labels.js"></script>
 
+    <!-- Which control owns a keystroke (issue #163) -->
+    <script src="test-keyboard-target.js"></script>
+
+    <!-- Remembered modal size/position -->
+    <script src="test-modal-geometry.js"></script>
+
     <!-- Assignment mode tests -->
     <script src="test-assignment.js"></script>
     <script src="test-occlusion-node-availability.js"></script>
@@ -175,6 +182,11 @@
 
     <!-- Import trackIdx resolver (trackless user + predicted) tests -->
     <script src="test-import-track-resolve.js"></script>
+    <!-- Which `.slp` a camera directory is loaded from, and which lazy cameras a
+         FrameGroup still needs — the two rules behind "reload after replacing the
+         .slp files only brought back some of the views". -->
+    <script src="test-percam-slp-choice.js"></script>
+    <script src="test-lazy-camera-hydration.js"></script>
     <script src="test-occlusion-derive.js"></script>
 
     <!-- Tempdata triangulation pipeline tests -->
@@ -336,6 +348,13 @@
         // Pure (DOM-free) import-trackIdx resolver. Extracted from
         // session-loader.js (which pulls app.js) precisely so it's bridgeable.
         import * as __ImportTrackResolve from '../import-export/import-track-resolve.js';
+        // Pure per-camera `.slp` selection rule. Extracted from
+        // session-loader.js (which pulls app.js) precisely so it's bridgeable —
+        // same move as import-track-resolve.js above. Namespaced rather than
+        // spread: `chooseCameraSlp` is specific enough to be a global, but the
+        // module may grow siblings that are not.
+        import * as __PerCamSlpChoice from '../loading/percam-slp-choice.js';
+        window.__PerCamSlpChoice = __PerCamSlpChoice;
         // Dependency-free (no app.js in its import graph; uses window.SleapIO +
         // document.baseURI only inside open()). Bridged for the lazy-release tests.
         import * as __SioLazy from '../loading/sio-lazy-loader.js';
@@ -355,6 +374,13 @@
         // store). Imports NO project modules — safe to bridge, and the only way
         // to unit-test the #149 contrast math (its DOM caller,
         // ui/sessions-panes.js, transitively pulls app.js).
+        // Which control owns a keystroke (issue #163). Imports no project
+        // modules — every predicate reads only `tagName`/`type`/`role` off its
+        // argument, so it unit-tests against plain object stubs in both runners.
+        import * as __KeyboardTarget from '../ui/keyboard-target.js';
+        // Remembered size/position for resizable modals. Imports no project
+        // modules; `clampGeometry` is a pure function of (rect, viewport).
+        import * as __ModalGeometry from '../ui/modal-geometry.js';
         import * as __VideoFilters from '../ui/video-filters.js';
         // Per-session timeline hidden sets + their `.slp` serialization. Also
         // imports no project modules. Namespaced rather than spread: names like
@@ -373,7 +399,8 @@
                               __LoadingProgressModal,
                               __TimelineCtrl, __TrackIdentityOps,
                               __ImportTrackResolve, __SioLazy,
-                              __VideoFilters);
+                              __VideoFilters, __KeyboardTarget,
+                              __ModalGeometry);
 
         // sleap-io.js bridge for the SLP export post-pass test — mirrors the
         // window.SleapIO bridge in index.html so test-slp-export-postpass.js can

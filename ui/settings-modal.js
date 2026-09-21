@@ -9,6 +9,21 @@
 //
 // Styling lives in a separate CSS file; this module only assigns the agreed
 // class names. Only one modal instance may exist at a time.
+//
+// The card is resizable (CSS `resize: both`) and draggable by its header, and
+// remembers where it was left — see `ui/modal-geometry.js`. That matters most
+// for the Tracking Wizard, whose node/camera tables are as long as the skeleton
+// is; widening the modal reflows them into more columns instead of making the
+// user scroll.
+//
+// ## No scroll-within-scroll
+//
+// `.settings-panel-container` is the ONE scroller in the card. The node and
+// camera tables used to be height-capped boxes with their own `overflow-y`,
+// which put a scrollbar inside a scrollbar: the wheel did different things a
+// few pixels apart, and rows below the cap were invisible with no hint that the
+// modal could simply be made taller. They now grow to their full height inside
+// a collapsible section, so the panel scrolls and nothing else does.
 
 import {
     getDefaultTriangulationMethod,
@@ -25,6 +40,7 @@ import {
 } from './settings.js';
 import { getActiveSession, state, timeline } from './app-state.js';
 import { drawAllOverlays } from './rendering.js';
+import { installModalGeometry } from './modal-geometry.js';
 
 // True when the running device is macOS/iOS, so the primary Ctrl-or-Cmd modifier
 // is recorded as the cross-platform `Mod` token (matching the catalog defaults).
@@ -57,6 +73,45 @@ function chordFromEvent(e) {
     if (e.shiftKey) parts.push('Shift');
     parts.push(e.key);
     return parts.join('+');
+}
+
+/**
+ * A wizard section as a native `<details>`: heading that folds, body inside.
+ *
+ * `<details>`/`<summary>` rather than a hand-rolled div + click handler so the
+ * disclosure is keyboard-operable and screen-reader-labelled for free — and so
+ * `ui/keyboard-target.js` already knows a `SUMMARY` owns Space/Enter.
+ *
+ * @param {string} title
+ * @param {number|null} count  shown beside the title when there is a list
+ * @returns {{root: HTMLElement, body: HTMLElement}}
+ */
+function buildSection(title, count) {
+    const root = document.createElement('details');
+    root.className = 'settings-section';
+    root.open = true;
+
+    const summary = document.createElement('summary');
+    summary.className = 'settings-section-summary';
+
+    const label = document.createElement('span');
+    label.className = 'settings-kbd-category settings-section-title';
+    label.textContent = title;
+    summary.appendChild(label);
+
+    if (count !== null && count !== undefined) {
+        const badge = document.createElement('span');
+        badge.className = 'settings-section-count';
+        badge.textContent = String(count);
+        summary.appendChild(badge);
+    }
+    root.appendChild(summary);
+
+    const body = document.createElement('div');
+    body.className = 'settings-section-body';
+    root.appendChild(body);
+
+    return { root: root, body: body };
 }
 
 // Show the Settings modal. `initialPanel` is one of 'triangulation' |
@@ -173,7 +228,7 @@ export function showSettingsModal(initialPanel) {
         },
         {
             method: 'ba',
-            title: 'Bundle Adjustment (BA)',
+            title: 'Refined (Ref)',
             desc: 'Slower. Minimizes geometric reprojection error.',
         },
     ];
@@ -373,10 +428,8 @@ export function showSettingsModal(initialPanel) {
     // CrossViewTracker's association cost (2D reprojection + 3D point-to-ray).
     // 1 = full weight, 0 = the node is dropped from matching. Edits mutate
     // working.nodeWeights; committed on Apply.
-    const nwCategory = document.createElement('div');
-    nwCategory.className = 'settings-kbd-category';
-    nwCategory.textContent = 'Node Weights';
-    wizPanel.appendChild(nwCategory);
+    const nwSection = buildSection('Node Weights', skeletonNodes.length || null);
+    wizPanel.appendChild(nwSection.root);
 
     const nwHint = document.createElement('div');
     nwHint.className = 'settings-kbd-hint';
@@ -385,19 +438,21 @@ export function showSettingsModal(initialPanel) {
     nwHint.textContent = 'Weight of each skeleton node in the cross-view matching cost (0–1). ' +
         '1 = fully considered (2D reprojection + 3D point-to-ray); 0 = ignored during tracking. ' +
         'Changes apply when you click Apply.';
-    wizPanel.appendChild(nwHint);
+    nwSection.body.appendChild(nwHint);
 
     if (skeletonNodes.length === 0) {
         const nwEmpty = document.createElement('div');
         nwEmpty.className = 'settings-kbd-hint';
         nwEmpty.textContent = 'Load a session with a skeleton to configure node weights.';
-        wizPanel.appendChild(nwEmpty);
+        nwSection.body.appendChild(nwEmpty);
     } else {
-        // Compact, scrollable multi-column table so long skeletons don't push the
-        // rest of the wizard off-screen.
+        // A multi-column table that grows to its full height — no inner
+        // scrollbar. Widening the modal reflows it into more columns, which is
+        // what makes a long skeleton fit; folding the section away is what
+        // keeps the rest of the wizard reachable.
         const nwList = document.createElement('div');
         nwList.className = 'settings-node-weight-list';
-        wizPanel.appendChild(nwList);
+        nwSection.body.appendChild(nwList);
 
         skeletonNodes.forEach(function (name) {
             const row = document.createElement('div');
@@ -450,10 +505,8 @@ export function showSettingsModal(initialPanel) {
     // in cross-view tracking. 1 = included; 0 = excluded from the association math
     // (the view stays visible/editable in the GUI). Excluded rows are greyed out.
     // Edits mutate working.cameraWeights; committed on Apply.
-    const cvCategory = document.createElement('div');
-    cvCategory.className = 'settings-kbd-category';
-    cvCategory.textContent = 'Camera Views';
-    wizPanel.appendChild(cvCategory);
+    const cvSection = buildSection('Camera Views', cameraNames.length || null);
+    wizPanel.appendChild(cvSection.root);
 
     const cvHint = document.createElement('div');
     cvHint.className = 'settings-kbd-hint';
@@ -462,17 +515,17 @@ export function showSettingsModal(initialPanel) {
     cvHint.textContent = 'Whether each camera view is used in tracking (1 = included, 0 = excluded). ' +
         'Excluded views are dropped from the association math but stay visible in the GUI. ' +
         'At least 2 views must stay included. Changes apply when you click Apply.';
-    wizPanel.appendChild(cvHint);
+    cvSection.body.appendChild(cvHint);
 
     if (cameraNames.length === 0) {
         const cvEmpty = document.createElement('div');
         cvEmpty.className = 'settings-kbd-hint';
         cvEmpty.textContent = 'Load a session with cameras to choose which views are tracked.';
-        wizPanel.appendChild(cvEmpty);
+        cvSection.body.appendChild(cvEmpty);
     } else {
         const cvList = document.createElement('div');
         cvList.className = 'settings-node-weight-list';
-        wizPanel.appendChild(cvList);
+        cvSection.body.appendChild(cvList);
 
         cameraNames.forEach(function (name) {
             const row = document.createElement('div');
@@ -523,10 +576,8 @@ export function showSettingsModal(initialPanel) {
     // tracker. Each renders a labelled number field (range/step from the catalog)
     // with an inline description. Edits mutate working.thresholds; clamped to the
     // catalog range on blur and on Apply.
-    const thCategory = document.createElement('div');
-    thCategory.className = 'settings-kbd-category';
-    thCategory.textContent = 'Tracking Thresholds';
-    wizPanel.appendChild(thCategory);
+    const thSection = buildSection('Tracking Thresholds', thresholdDefs.length || null);
+    wizPanel.appendChild(thSection.root);
 
     const thHint = document.createElement('div');
     thHint.className = 'settings-kbd-hint';
@@ -534,7 +585,7 @@ export function showSettingsModal(initialPanel) {
     thHint.style.marginBottom = '8px';
     thHint.textContent = 'Thresholds the cross-view tracker uses when matching instances across views. ' +
         'Defaults are tuned values — change them only if tracking under/over-matches. Changes apply when you click Apply.';
-    wizPanel.appendChild(thHint);
+    thSection.body.appendChild(thHint);
 
     thresholdDefs.forEach(function (def) {
         const row = document.createElement('div');
@@ -575,7 +626,7 @@ export function showSettingsModal(initialPanel) {
 
         row.appendChild(labelWrap);
         row.appendChild(input);
-        wizPanel.appendChild(row);
+        thSection.body.appendChild(row);
     });
 
     // Docs link at the bottom of the thresholds.
@@ -622,8 +673,13 @@ export function showSettingsModal(initialPanel) {
     selectPanel(startPanel);
 
     // --- Close / commit behavior ------------------------------------------
+    // Set once the card is in the DOM (geometry has to be measured), so
+    // teardown has to tolerate a null.
+    let disposeGeometry = null;
+
     function teardown() {
         document.removeEventListener('keydown', onDocKeyDown, true);
+        if (disposeGeometry) { disposeGeometry(); disposeGeometry = null; }
         overlay.remove();
     }
 
@@ -672,4 +728,18 @@ export function showSettingsModal(initialPanel) {
     });
 
     document.body.appendChild(overlay);
+
+    // Restore the remembered size/position, and keep it remembered. Must come
+    // after the append: with no stored geometry the card is centred at whatever
+    // size the stylesheet gave it, which can only be measured once it is laid
+    // out. The header is the drag handle, minus the close button — dragging
+    // from an × that is about to be clicked would be a trap.
+    disposeGeometry = installModalGeometry(card, {
+        id: 'settings',
+        handle: header,
+        noDragSelector: '.settings-modal-close',
+        minW: 520,
+        minH: 320,
+        margin: 24,
+    });
 }
