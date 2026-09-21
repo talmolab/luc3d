@@ -2367,6 +2367,10 @@ keypoints, double-click to convert predicted → user, shift-drag to add
 to manual-assignment selection, right-click to null/restore nodes,
 keyboard shortcuts (delete, alt-drag clone, etc.).
 
+**`onKeyDown` guards with `shouldIgnoreShortcut`** (`ui/keyboard-target.js`)
+rather than its own `tagName === 'INPUT'` test, so `Delete` / `n` / `c` survive
+a click on a checkbox (issue #163).
+
 **Grouping/ungrouping shortcuts.** `onKeyDown` handles only the legacy `c`
 confirm-group alias (creates a group from a ready ≥2 assignment selection).
 The primary group (`Shift+G`) and ungroup (`Shift+U`) shortcuts are
@@ -2375,6 +2379,80 @@ delegates to that module's `unlinkGroup` (the complete path: data-model
 `Session.unlinkGroup` + triangulation purge + overlay/3D/timeline/info-panel
 refresh). The old incomplete `InteractionManager._unlinkSelectedGroup` helper
 was **removed** (it had no production callers).
+
+---
+
+### ui/keyboard-target.js
+
+**Purpose.** Decide whether a keystroke belongs to the focused control or to the
+app — the single guard every global `keydown` handler calls (issue #163).
+
+The guard used to be one line, copied into ten separate handlers:
+
+```js
+if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' ||
+    e.target.isContentEditable) return;
+```
+
+meaning "don't steal keys from someone who is typing". But `tagName` is `INPUT`
+for a **checkbox** too — and for a radio, a range slider and a file picker. So
+the moment the user clicked the User / Predicted / Reproj / Errors toolbar
+checkbox, that test went true for every keystroke and **every shortcut in the
+app went dead**, not just the one the checkbox wanted. Spacebar toggled the
+checkbox instead of playing the video, and the only cure was to click back onto
+a video pane.
+
+**The two halves of the fix.**
+1. *Ask what the control consumes, not what tag it is.* A text field consumes
+   the whole alphabet, so it blocks everything. A checkbox consumes exactly
+   `Space`; a range slider exactly the arrows and `Home`/`End`; a button `Space`
+   and `Enter`. Everything else stays live, which is also what keeps the app
+   usable from the keyboard: Tab to a checkbox and you can still step frames.
+2. *Give focus back after a POINTER click.* Fixing the guard alone leaves
+   `Space` genuinely ambiguous, because a focused checkbox does own it — so
+   play/pause would stay broken for exactly the interaction the issue describes.
+   `installFocusRelease` blurs an activate-me control once a pointer has
+   activated it, since the click already delivered everything focus was good
+   for. **Keyboard focus is deliberately left alone** (detected via
+   `:focus-visible`): tab to the checkbox, press `Space`, still get a toggle.
+
+**Key exports.**
+- `shouldIgnoreShortcut(e)` — the guard itself: `isTextEntryTarget(e.target) ||
+  targetOwnsKey(e.target, e)`.
+- `isTextEntryTarget(t)` — free-text targets, which block every shortcut:
+  `<textarea>`, `contenteditable`, the text-ish `<input>` types, `role=textbox`
+  /`searchbox`/`combobox`, **and `<select>`** (it uses the arrows, `Enter` and
+  letter typeahead — nearly the whole shortcut alphabet, so treating it like a
+  text field is simpler and safer than enumerating what it keeps). An `<input>`
+  with a missing or unknown type lands here too, because the DOM reports `text`
+  for both and `text` is the safe default.
+- `targetOwnsKey(t, e)` — whether THIS key is the focused control's own. A
+  modifier chord never is, so `Mod+S` still saves while a checkbox has focus.
+- `isTransientFocusControl(t)` / `releaseTransientFocus(el, doc)` /
+  `installFocusRelease(doc)` — the focus-release half. Text fields, selects and
+  sliders are never released: focus there is the beginning of an interaction,
+  not the end of one.
+
+`:focus-visible` rather than `event.detail` is what separates pointer from
+keyboard: a click on a `<label>` forwards a **synthetic** click to its control
+with `detail: 0`, indistinguishable from a keyboard one — and every toolbar
+checkbox in `index.html` is wrapped in a label.
+
+The release listener defers its `blur()` by a turn of the event loop, for two
+reasons: a `<label>` click forwards to its control and focus lands *after* the
+listener runs, and `input`/`change` fire as part of the activation behavior, so
+blurring mid-dispatch would be reaching into someone else's event.
+
+**Imports from project modules.** None — every predicate reads only
+`tagName` / `type` / `role` / `isContentEditable` off its argument, so it
+bridges into both test runners and unit-tests against plain object stubs.
+
+**Imported by.** `ui/ui-wiring.js`, `ui/settings.js`, `ui/interaction.js`,
+`loading/video.js`.
+
+**Tests.** `tests/test-keyboard-target.js` (the predicates, both runners) and
+`tests/e2e/checkbox-focus-hotkeys.mjs` (the real app: click the checkbox, press
+Space, get playback; Tab to it and Space still toggles).
 
 ---
 
@@ -2457,6 +2535,61 @@ buttons (`#infoPanelToggleBtn`, `#viewport3dToggleBtn`) and keeps their labels
 in sync from the `MutationObserver` that watches the 3D container's and info
 wrapper's `class` attributes — so a collapse from any entry point (button, `\`,
 View menu) relabels both buttons, and the initial labels are correct.
+
+---
+
+### ui/modal-geometry.js
+
+**Purpose.** Remembered size and position for resizable modals.
+
+A modal that opens at a fixed 880x620 in the middle of the screen is fine until
+its content is a table of every node in the skeleton. Then the user wants it
+BIGGER, and wants it to stay that way — reopening at the default every time is
+the same work over and over. This gives a modal card a drag handle, a resize
+grip (CSS `resize: both`, so the grip itself is the browser's) and a
+`localStorage` record of where it ended up.
+
+**Key exports.**
+- `clampGeometry(geom, viewport, opts)` — the load-bearing one, and pure. A
+  remembered rect is restored into a viewport that may be nothing like the one
+  it was recorded in (a smaller window; a laptop screen after the external
+  monitor is gone), and applying it blindly is how a modal ends up off-screen
+  with its header — drag handle AND close button — out of reach. Size clamps to
+  `[min, available]` with available winning, position clamps so the whole card
+  is inside, and `opts.margin` keeps a gutter at the edges. Returns `null` for
+  anything unusable, so the caller falls back to centring instead of applying
+  half a rect.
+- `centerGeometry(w, h, viewport, opts)` — first-open placement.
+- `readGeometry(id, storage)` / `writeGeometry(id, geom, storage)` /
+  `clearGeometry(id, storage)` — the `lucid.modalGeometry.v1` record, keyed by
+  modal id so one modal cannot clobber another. Reads are **not** clamped:
+  clamping on the way in would let one small window permanently shrink the
+  remembered size.
+- `installModalGeometry(card, opts)` — restores, wires the header drag, watches
+  the CSS resize via `ResizeObserver`, re-clamps on window resize, and returns a
+  `dispose()` that also flushes the final rect (a resize that ended inside the
+  200 ms persist debounce would otherwise be lost when the modal closes).
+
+**This module is the ONE owner of the card's rect.** `.settings-modal`
+deliberately has no `max-width`/`max-height`, and `apply()` sets both to `none`
+inline: a stylesheet cap alongside the clamp would silently shrink a width the
+clamp thought it had granted, landing the card flush against one edge with a gap
+on the opposite side.
+
+**Geometry is browser-local display taste**, so it lives in `localStorage` and
+NOT in the `.slp` — the same call CLAUDE.md makes for the Visibility panel's
+global appearance preferences. Where someone likes their Settings window on THIS
+screen says nothing about the project. Blocked or full storage degrades to
+"forgets", never to a throw.
+
+**Imports from project modules.** None — `clampGeometry` is a pure function of
+(rect, viewport), so it bridges into both test runners.
+
+**Imported by.** `ui/settings-modal.js`.
+
+**Tests.** `tests/test-modal-geometry.js` (the clamp and the record, both
+runners) and `tests/e2e/settings-modal-geometry.mjs` (the real modal: resize,
+drag, close, reopen).
 
 ---
 
@@ -3112,7 +3245,61 @@ palettes, and per-frame draw routines. Receives `frameGroup` and
   between frame 0 and frame 1 — confirmed it fails pre-fix, showing both
   animals as the identical color on frame 0, and passes post-fix).
 - Geometry: `videoToCanvas`, `makeVideoToCanvasTransform`,
-  `computeLabelOffset`, `getLineDashPattern`.
+  `computeLabelOffset`, `getLineDashPattern`, `resolveLabelDisplayScale`,
+  `uprightLabelRadians`.
+- **`drawLegend` is now an EXPORT-only path.** The live app no longer paints a
+  legend onto the overlay canvas — `ui/rendering.js` passes `showLegend: false`
+  and the key is DOM chrome in the pane instead (`ui/view-legend.js`), because
+  anything on this canvas rotates with the view and is anchored to the video box
+  rather than the pane. `drawFrameOverlays` keeps the `showLegend` option, and
+  `drawLegend` itself is unchanged, for the overlay-video export, which must
+  burn the legend into encoded frames where there is no DOM.
+- **Labels stay upright when the view is rotated** (issue #162).
+  `options.labelRotation` (DEGREES, threaded through `drawFrameOverlays`'s
+  `geoOpts` from `ui/rendering.js`) reaches `drawSkeleton`,
+  `drawInstanceLabels` and `drawUnlinkedInstances`, and drives two things:
+  - `uprightLabelRadians(options)` -> the module-private `beginUprightFrame`,
+    which pushes a SCREEN-aligned canvas frame around the anchor so the glyphs
+    cancel the view's rotation. A view is rotated by a CSS transform on the
+    whole `.canvas-wrapper` (`applyZoom`), which the overlay canvas's own
+    drawing transform knows nothing about, so every glyph rotated with the
+    video — past ~45 degrees unreadable, at 180 upside down. The video and the
+    skeleton must STAY rotated (the skeleton is pinned to the animal), so
+    cancelling per label is the only option. Covers node names, the
+    track/identity pill (`drawNamePill` — plate AND text, or the text would
+    hang outside its own backing) and the unlinked "?" badge.
+  - `computeLabelOffset`'s new 7th argument, which carries the largest-gap
+    bisector into SCREEN space before the SLEAP shift factors size the label
+    box against it. Without it each label would keep pointing at the gap it had
+    at rotation 0 — i.e. into the skeleton at most angles.
+  `beginUprightFrame` touches the transform ONLY when there is a rotation to
+  cancel (call sites pair it with `uprightOriginX`/`uprightOriginY` for the two
+  coordinate bases), so an unrotated view — every export path, and the common
+  case in the app — draws through exactly the coordinates and canvas state it
+  did before. Covered by `tests/test-labels.js` ("Labels - stay upright when
+  the view is rotated", whose two halves are pinned independently) and end to
+  end by `tests/e2e/label-upright-on-rotation.mjs`.
+- **Label sizing is screen-relative, and rotation-independent.**
+  `resolveLabelDisplayScale(ctx, canvasWidth, options)` answers "backing-store
+  pixels per on-screen CSS pixel", and `drawSkeleton` /
+  `drawInstanceLabels` / `drawUnlinkedInstances` each multiply their
+  `options.labelSize` by it. Node markers and edges are deliberately NOT scaled
+  this way — they are video-relative so they stay pinned to the animal — but a
+  name is chrome and has to hold a fixed point size at any zoom.
+  It prefers `options.labelDisplayScale`, which `drawFrameOverlays` threads
+  through `geoOpts` to all three and `ui/rendering.js` computes from the
+  canvas's LAYOUT width times the zoom scale. The fallback, for callers with no
+  view geometry (the export modals), is the old
+  `canvasWidth / getBoundingClientRect().width`, which is correct only while the
+  canvas carries no rotation: a rect is the AXIS-ALIGNED BOUNDING BOX of the
+  transformed element, so a rotated view reports a box wider (or, at 90°/270°,
+  narrower) than the canvas really is and every label was sized off by that
+  factor — visibly shrinking at 45° and GROWING at 90°. Covered by
+  `tests/test-labels.js` ("Labels - size is independent of zoom and rotation")
+  and end to end by `tests/e2e/label-size-rotation-invariant.mjs`, which drives
+  `drawAllOverlays` over a real wrapper carrying `applyZoom`'s transform at
+  seven angles and three zoom levels (confirmed failing pre-fix, 19px at 45°
+  and 32px at 90° against a correct 24px).
 - Skeleton drawing: `drawSkeleton`, `drawReprojectedSkeleton`,
   `drawReprojectionErrors`, `drawSelectionHighlight`,
   `drawHoverHighlight`, `drawDragPreview`, `drawInstanceLabels`,
@@ -3325,7 +3512,27 @@ data sources. Plus visibility-toggle helpers and frame counter updates.
   for direct callers; the user-facing default comes from here.)
 - `drawAllOverlays(frameIdx)` — main per-frame redraw across every view. Threads
   `state.colorByIdentity` and `state.trailLength` (node-trail length, issue #102)
-  into each `drawFrameOverlays` call. **Playback throttle (issue #115):** the
+  into each `drawFrameOverlays` call. It also computes the per-view
+  **`labelDisplayScale`** (backing-store px per on-screen CSS px) that
+  `overlays.js` sizes node/track labels with: `overlayCanvas.offsetWidth` — the
+  LAYOUT width, which no CSS transform touches — times `view.zoom.scale`, which
+  must stay in because the backing store was just grown by the same factor a few
+  lines above. Deliberately **not** `getBoundingClientRect()`: `applyZoom`
+  rotates the whole `.canvas-wrapper`, and a rect is the transformed element's
+  axis-aligned bounding box, so measuring there made labels shrink at 45° and
+  grow at 90°. See `ui/overlays.js` ▸ `resolveLabelDisplayScale`.
+  It passes **`labelRotation`** alongside it — `Math.round(view.rotation)`, the
+  angle labels cancel so they read horizontally (issue #162). Rounded because
+  the Shift+R+Arrow chord advances `view.rotation` fractionally every animation
+  frame while the repaint that keeps labels upright is triggered off this same
+  rounded value changing (`ui/ui-wiring.js`), so drawing the rounded angle is
+  what makes the two agree; the residual is under half a degree.
+  It passes **`showLegend: false`** unconditionally and calls
+  **`syncViewLegends`** (`ui/view-legend.js`) after the per-view loop instead:
+  the Display Legend key is pane DOM now, outside the rotating
+  `.canvas-wrapper`, so it stays upright and anchored to the VIEW rather than to
+  the video box. Driving it from here means it inherits the overlays' triggers,
+  including the Visibility checkbox handler that already ends in a redraw. **Playback throttle (issue #115):** the
   skeleton overlays + video redraw every frame, but the two *auxiliary* updates —
   `updateFrameInfo` (info-panel DOM + reproj-error aggregation) and
   `timeline.setCurrentFrame` (a full timeline-canvas `redraw()`) — are coalesced
@@ -3650,7 +3857,8 @@ handler elsewhere and listed for reference only.
   its effective binding (single-chord only; for external owners like
   `timeline-controller`).
 - `dispatchEvent(e)` — resolve a `KeyboardEvent` to a dispatched action and run
-  its handler (skips when typing in inputs); returns `true` if handled. Supports
+  its handler (skipped when `shouldIgnoreShortcut(e)` says the key belongs to
+  the focused control); returns `true` if handled. Supports
   **multi-key sequence** bindings (chords separated by spaces, e.g. `"g t"`) via a
   rolling keystroke buffer with a 1.2 s gap reset; single-chord bindings fire
   immediately, the longest matching sequence wins (ties → catalog order). A
@@ -3663,7 +3871,9 @@ handler elsewhere and listed for reference only.
   `navigator.platform`), so the Hot Keys modal and Settings panel show the
   device-appropriate modifier.
 
-**Imports from project modules.** None.
+**Imports from project modules.** `ui/keyboard-target.js` (the focus guard
+`dispatchEvent` applies). That module imports nothing itself, so this one stays
+bridgeable.
 
 **Imported by.** `ui/ui-wiring.js`, `ui/identity-assignment.js`,
 `ui/settings-modal.js`, `pose/tracker.js`.
@@ -3671,6 +3881,30 @@ handler elsewhere and listed for reference only.
 ---
 
 ### ui/settings-modal.js
+
+**Resizable, draggable, and it remembers.** The card carries CSS `resize: both`
+and is dragged by its header (minus the ×, via `noDragSelector` — dragging from
+a button that is about to be clicked would be a trap); `installModalGeometry`
+(`ui/modal-geometry.js`, id `settings`) restores the last size/position on open
+and records the new one on close. It is installed AFTER the overlay is appended,
+because with nothing remembered the card is centred at whatever size the
+stylesheet gave it, which can only be measured once it is laid out.
+
+**The wizard's tables grow; they do not scroll.** Node Weights and Camera Views
+used to be 240px boxes with their own `overflow-y: auto` — a scrollbar inside
+`.settings-panel-container`'s scrollbar, so the wheel did different things a few
+pixels apart and rows past the cap were invisible with no hint that the window
+could be made taller, because it could not. Each of the three wizard sections is
+now a `<details>` built by `buildSection(title, count)`, and the tables render
+every row. `.settings-panel-container` is the ONE scroller in the card. Widening
+the (now resizable) modal reflows the `auto-fill minmax(220px, 1fr)` grid into
+more columns, which is what actually makes a long skeleton fit; folding a
+section away is what keeps the rest of the wizard reachable. See the
+no-scroll-within-scroll convention in CLAUDE.md.
+
+`<details>`/`<summary>` rather than a hand-rolled div + click handler, so the
+disclosure is keyboard-operable and screen-reader-labelled for free — and
+`ui/keyboard-target.js` already knows a `SUMMARY` owns Space/Enter.
 
 **Purpose.** Builds and shows the "Settings" modal (opened from Help ▸
 Settings). Wizard-style layout: a left nav (`settings-nav`) of categories and a
@@ -4168,6 +4402,67 @@ covered by `tests/test-track-identity-modals.js`; the lazy/durable half of
 
 ---
 
+### ui/view-legend.js
+
+**Purpose.** The Visibility panel's **Display Legend** key, as DOM chrome in
+each video pane rather than pixels painted onto the overlay canvas (issue #162
+follow-up).
+
+The legend was drawn by `drawLegend` (`ui/overlays.js`) into the overlay
+canvas's top-right corner. That put it inside `.canvas-wrapper` — the element
+`applyZoom` rotates — with three consequences: it tipped over with the video
+(upside down in what was now the bottom-left at 180°); "top-right" meant the
+top-right of the VIDEO, so a letterboxed pane pushed it inside the picture with
+empty bar beside it; and a fixed 310 CANVAS px is a different number of SCREEN
+px per camera resolution, so two views disagreed on its size. Appending it to
+the `.video-cell` as a SIBLING of the wrapper fixes all three structurally —
+nothing outside the wrapper can be reached by a view transform — and gets
+crisper text for free (the canvas version rendered at 2x on an offscreen canvas
+to compensate).
+
+**Key exports.**
+- `syncViewLegends(showLegend, opts)` — brings every view's pane into line with
+  the current visibility state. Called from `drawAllOverlays`, so it inherits
+  the overlays' triggers exactly; the Display Legend checkbox handler already
+  ends in a redraw, so the toggle needed no extra wiring. Rebuilds a pane's rows
+  only when the row SET changed (`dataset.legendKey`): this runs on every frame
+  of playback, and replacing the DOM 30 times a second for an unchanging
+  three-row key would be pure churn.
+- `legendItems(opts)` — the rows, in order. Mirrors `drawLegend`'s item list
+  exactly (same rows, same order, same conditions) so the live legend and the
+  exported one cannot disagree.
+
+Swatches are inline SVG built from the same `TRACK_COLORS` / `REPROJECTION_COLOR`
+constants the overlays draw with, so the key cannot drift from what it keys.
+`pointer-events: none` is load-bearing — the overlay canvas underneath is the
+click target for annotation, and the legend sits over its top-right corner.
+
+**`drawLegend` is kept and unchanged.** The overlay-video export has to burn the
+legend into encoded frames, where there is no DOM; that path (`drawTileContent`,
+`ui/overlay-export-modal.js`) already hoisted it out of the view transform for
+the same upright-ness reason, so the two agree on what a legend IS and differ
+only in where it can live.
+
+**Styling.** `.view-legend` / `.view-legend-row` / `.view-legend-icon` in
+`styles.css`, anchored `top:8px; right:8px` on the `.video-cell`. Three things
+want that corner: the legend, the `.unzoom-btn` (only while zoomed) and
+`#viewModeIndicator` (only in single-view mode, and on `#videoDock` rather than
+the pane). Each of the latter two pushes the legend down one slot and both
+together push it two, via `.video-cell.zoomed` and the
+`#videoDock.has-view-indicator` class that `showViewIndicator` toggles.
+
+**Imports.** `ui/app-state.js` (`state`), `ui/overlays.js` (the two color
+constants).
+
+**Imported by.** `ui/rendering.js`.
+
+**Tests.** `tests/e2e/view-legend-pane-chrome.mjs` — asserts it is outside
+`.canvas-wrapper`, upright and fixed to the pane corner at five rotations,
+identically sized across a 1920x1080 and a 640x480 view, absent from the canvas
+paint, and that `drawLegend` still works for the export.
+
+---
+
 ### ui/video-filters.js
 
 **Purpose.** Per-CAMERA video display settings — brightness, contrast (issue
@@ -4441,6 +4736,30 @@ snaps onto exactly that value (so what renders after the gesture is what a
 reopen will render), and `markDirty()` fires. Persisting per animation frame
 would be 60 Hz of churn on project state.
 
+`redrawForRotationDegree(view)` repaints the overlays when — and only when —
+`Math.round(view.rotation)` changes, tracked in `_rotState.drawnDeg` (null
+starts a gesture, forcing the first paint; keyup clears it so the final,
+snapped angle always repaints). Before issue #162 the loop deliberately
+repainted NOTHING and waited for keyup, which was right while labels rotated
+with the video; now that they cancel the view's rotation, a gesture with no
+repaint would leave every label spinning until the key came up. Whole degrees
+rather than frames because that is the granularity labels are drawn at
+(`ui/rendering.js` passes `Math.round(view.rotation)`), so a skipped repaint
+could not have changed a label's angle — and it is what keeps this off an
+unconditional per-animation-frame redraw of every view.
+
+The chord's "don't also step frames" guard sits **before** the `hasRealVideo()`
+branch in the arrow-key handler. It used to sit after that branch's `return`,
+so on a project with no decoder (skeleton + imported 3D points) every arrow
+press of the chord both rotated the view and advanced the frame.
+
+`showViewIndicator` additionally toggles **`has-view-indicator`** on
+`#videoDock`. Its chip is absolutely positioned at the dock's top-right, which
+in single-view mode — the only mode it appears in — is exactly where the sole
+pane's Display Legend key wants to sit; the class is what makes the legend step
+down a slot instead of hiding under it (styles.css). Removed on every path that
+hides the chip, or the legend would sit low in grid mode forever.
+
 **Imports from project modules.** Nearly every other module — see file
 header for the full list. Notable ones: `app-state.js`,
 `timeline-controller.js`, `pose-data.js`, `triangulation.js`,
@@ -4558,6 +4877,16 @@ zoom (`+`/`-`/`0`), `Shift+R`+rotate, `Delete` plus the legacy `c`
 confirm-group alias (`groupConfirmLegacy`, canvas-context ops in
 `interaction.js`), and `Mod+J`/`Mod+Shift+J` (timeline-controller).
 `Enter`/`Escape` remain hard-coded modal-button special cases.
+
+**One focus guard, not ten copies.** All seven `keydown` listeners here (and the
+ones in `ui/settings.js`, `ui/interaction.js` and `loading/video.js`) now ask
+`shouldIgnoreShortcut(e)` from `ui/keyboard-target.js` instead of each testing
+`e.target.tagName === 'INPUT'` — a test that was also true for a CHECKBOX, so
+clicking a toolbar checkbox killed every shortcut in the app (issue #163).
+`setupUI` additionally calls `installFocusRelease(document)` first thing, which
+hands focus back after a POINTER activates a checkbox, radio or button so the
+key they share with a shortcut goes to the shortcut. Keyboard focus is left
+alone, so tabbing to a checkbox and pressing `Space` still toggles it.
 
 **Block 2 (Prompt 4) visibility wiring + rename migration.** Every
 track-add / track-rename / track-delete / identity-add / identity-rename /
@@ -5490,8 +5819,10 @@ a zoomed-in image keeps the same region centered instead of jumping.
   `zoomVideo`, `resetZoom`, `zoomToRect`, `zoomAllVideos`,
   `resetAllZoom`, `setupZoomHandlers`.
 
-**Imports from project modules.** None (uses the global `MP4Box` from
-script tag).
+**Imports from project modules.** `ui/keyboard-target.js` only — the
+`shouldIgnoreShortcut` guard its `setupKeyboardHandlers` keydown listener
+applies (issue #163); that module imports nothing itself. Otherwise none (uses
+the global `MP4Box` from script tag).
 
 **Imported by.** `pose/initialization.js`, `import-export/save-load.js`,
 `import-export/slp-import.js`, `loading/session-loader.js`,
