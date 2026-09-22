@@ -2553,6 +2553,71 @@ body {
   margin-bottom: 10px;
 }
 
+/* A collapsible info-panel section: <details class="info-section
+   info-collapsible">, heading in the <summary>, content after it. Native
+   <details>/<summary> rather than a hand-rolled div + click handler, matching
+   the Settings wizard's sections (ui/settings-modal.js buildSection): the
+   disclosure is then keyboard-operable and screen-reader-labelled for free,
+   and ui/keyboard-target.js already knows a SUMMARY owns Space/Enter. */
+.info-collapsible > summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+
+/* Replace the UA disclosure triangle with one that matches the app. */
+.info-collapsible > summary::-webkit-details-marker {
+  display: none;
+}
+
+.info-collapsible > summary::before {
+  content: '';
+  width: 0;
+  height: 0;
+  flex-shrink: 0;
+  border-left: 5px solid var(--text-muted);
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  transition: transform var(--transition-fast);
+}
+
+.info-collapsible[open] > summary::before {
+  transform: rotate(90deg);
+}
+
+/* The h3 keeps its type styling but not its block margin — the summary is a
+   flex row and owns the spacing, which only exists when the body is showing. */
+.info-collapsible > summary h3 {
+  margin: 0;
+}
+
+.info-collapsible[open] > summary {
+  margin-bottom: 10px;
+}
+
+.info-collapsible > summary:hover h3 {
+  color: var(--text-primary);
+}
+
+.info-collapsible > summary:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Row count, so a collapsed section still says how much it is hiding. */
+.info-collapsible-count {
+  font-size: 11px;
+  color: var(--text-muted);
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 0 6px;
+  line-height: 15px;
+}
+
 /* Session info */
 .session-info-row {
   display: flex;

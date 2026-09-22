@@ -2218,6 +2218,24 @@ Three things deliberately stay outside the gate:
   `buildRememberedSkeleton()` feeds `ensureSession` — a skeleton loaded while
   the panel was hidden must not leave the next new session with a stale one.
 
+**Collapsible Skeleton sections.** The Skeleton tab's **Nodes** and **Edges** are
+`<details class="info-section info-collapsible">` (`index.html`), so either table
+can be folded away — the Nodes list runs to one row per node and otherwise pushes
+Edges off the bottom of the panel. Native `<details>`/`<summary>` rather than a
+hand-rolled toggle, matching `ui/settings-modal.js`'s `buildSection`: the
+disclosure is keyboard-operable and screen-reader-labelled for free, and
+`ui/keyboard-target.js` already treats a focused `SUMMARY` as owning Space/Enter,
+so toggling a section cannot fall through to the transport's Space shortcut.
+`populateSkeletonTable` keeps the `#skeletonNodesCount` / `#skeletonEdgesCount`
+summary badges in sync (a collapsed section still says how much it hides);
+`import-export/save-load.js`'s clear-project path resets them to `0` alongside
+the tbodies. `setupSkeletonEditing` wires `persistSectionState` on both, storing
+open/closed in `localStorage.skeletonSectionsOpen` — browser-local display taste,
+never project state, so it does NOT go in the `.slp`; every access is
+try/caught, and a browser that refuses storage just gets the markup's default
+`open`. This is the collapsible-section remedy the "no scroll-within-scroll"
+convention in `CLAUDE.md` prescribes.
+
 **Skeleton persistence.** `populateSkeletonTable` calls `rememberSkeleton` on every
 refresh — the central point after any editor mutation (add/remove node or edge,
 Load Skeleton) or loaded project — so the current non-empty skeleton is cached for
