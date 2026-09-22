@@ -14,6 +14,28 @@
   box-sizing: border-box;
 }
 
+/* No native up/down spinner on ANY number field, app-wide.
+   Chromium paints the spinner inside the field, on top of the text, so on the
+   narrow numeric inputs this app uses it crowds or clips the value the moment
+   the pointer is over it. Every field here is typed into, not clicked up one
+   step at a time, and the arrow keys still step the value natively.
+   This was already being done twice, per-class (`.no-spinner` for the 3D
+   viewer fields, `.settings-num-input` for Settings); both scoped copies are
+   gone now that the base rule covers every field. Deliberately does NOT touch
+   `.vis3d-stepper`, the 3D viewer's hand-built replacement arrows — those are
+   a real widget, not browser chrome. */
+input[type="number"] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
+input[type="number"]::-webkit-outer-spin-button,
+input[type="number"]::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  appearance: none;
+  margin: 0;
+}
+
 :root {
   --bg-primary: #1a1a1a;
   --bg-secondary: #222222;
@@ -3759,13 +3781,6 @@ kbd {
     border-color: #667eea;
 }
 
-/* Hide number input spinner buttons */
-.no-spinner::-webkit-outer-spin-button,
-.no-spinner::-webkit-inner-spin-button {
-    -webkit-appearance: none;
-    margin: 0;
-}
-
 /* Custom stepper arrows for 3D viewer inputs */
 .vis3d-stepper {
     display: inline-flex;
@@ -4286,18 +4301,6 @@ kbd {
 .settings-num-input:focus {
   outline: none;
   border-color: var(--accent);
-}
-
-/* No up/down spinner arrows on the number fields. */
-.settings-num-input::-webkit-outer-spin-button,
-.settings-num-input::-webkit-inner-spin-button {
-  -webkit-appearance: none;
-  margin: 0;
-}
-
-.settings-num-input {
-  -moz-appearance: textfield;
-  appearance: textfield;
 }
 
 .settings-docs-note {
