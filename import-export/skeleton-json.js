@@ -274,17 +274,42 @@ function parseJsonPickleSkeleton(data) {
         nodeNames = sharedOrder;
     } else if (isCompleteOrder(nodeOnlyOrder)) {
         nodeNames = nodeOnlyOrder;
-    } else if (allNodes.length) {
-        // `nodes` is unusable (bare networkx indices, or ids naming nothing).
-        // Edge-traversal order still has every node exactly once — sleap_io's
-        // own fallback.
-        nodeNames = allNodes;
     } else {
-        // No links either, so no names exist anywhere to recover.
-        nodeNames = nodeRefs.map(function (entry, i) {
-            var id = entry && entry.id;
-            return 'node_' + (typeof id === 'number' ? id : i);
-        });
+        // Neither space names every node. Resolve per entry and fill the gaps
+        // with placeholders, KEEPING the array's length: a file written by the
+        // old exporter that dropped edgeless nodes' names (see the regression
+        // note in tests/test-skeleton-json.js) leaves a py/id pointing at
+        // nothing, and its name is simply not in the file — but the node still
+        // counts, because a session's per-instance point arrays are sized by
+        // the node count. Losing one would shift every point after it.
+        var best = [];
+        var named = 0;
+        for (var bi = 0; bi < nodeRefs.length; bi++) {
+            var bid = nodeRefs[bi] && nodeRefs[bi].id;
+            var bname = null;
+            if (typeof bid === 'string') bname = bid;
+            else if (bid && typeof bid === 'object') {
+                bname = jsonPickleNodeName(bid);
+                if (bname == null && bid['py/id'] != null) {
+                    var bentry = memo[bid['py/id'] - 1];
+                    if (bentry && bentry.node !== undefined) bname = bentry.node;
+                }
+            }
+            if (bname != null) named++;
+            best.push(bname != null ? bname : ('node_' + bi));
+        }
+        if (named === 0 && allNodes.length) {
+            // The array carries nothing usable (bare networkx indices). The
+            // links still name every node — sleap_io's traversal-order fallback.
+            nodeNames = allNodes;
+        } else {
+            // Anything the array failed to mention but the links did name is
+            // still a real node; keep it rather than silently dropping it.
+            for (var ai = 0; ai < allNodes.length; ai++) {
+                if (best.indexOf(allNodes[ai]) < 0) best.push(allNodes[ai]);
+            }
+            nodeNames = best;
+        }
     }
 
     // Build edges (only type=1; skip symmetries)
