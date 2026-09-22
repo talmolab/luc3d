@@ -114,10 +114,14 @@ function loadSettings() {
                 nodeWeights: (parsed.nodeWeights && typeof parsed.nodeWeights === 'object') ? parsed.nodeWeights : {},
                 cameraWeights: (parsed.cameraWeights && typeof parsed.cameraWeights === 'object') ? parsed.cameraWeights : {},
                 trackingThresholds: (parsed.trackingThresholds && typeof parsed.trackingThresholds === 'object') ? parsed.trackingThresholds : {},
+                smoothingParams: (parsed.smoothingParams && typeof parsed.smoothingParams === 'object') ? parsed.smoothingParams : {},
             };
         }
     } catch (e) { /* corrupt/blocked storage — fall back to defaults */ }
-    return { triangulationMethod: DEFAULTS.triangulationMethod, keybindings: {}, nodeWeights: {}, cameraWeights: {}, trackingThresholds: {} };
+    return {
+        triangulationMethod: DEFAULTS.triangulationMethod, keybindings: {},
+        nodeWeights: {}, cameraWeights: {}, trackingThresholds: {}, smoothingParams: {},
+    };
 }
 
 function persist() {
@@ -393,6 +397,89 @@ export function getTrackingThresholds() {
     var out = {};
     TRACKING_THRESHOLDS.forEach(function (t) { out[t.id] = getTrackingThreshold(t.id); });
     return out;
+}
+
+// --- Temporal Smoothing (luc3d #134) ---------------------------------------
+//
+// Hyperparameters for `pose/temporal-smoothing.js`, surfaced in Settings ▸
+// Temporal Smoothing. Deliberately a SEPARATE catalog from TRACKING_THRESHOLDS
+// rather than more entries in it: these are post-triangulation filter
+// parameters, not cross-view tracker knobs, and the Tracking Wizard's
+// "Tracking Thresholds" section renders every threshold the catalog exposes.
+//
+// Note the `smooth*` prefix rather than `filter*`. `filter` is already taken in
+// this file for DETECTION filtering (`filterMinVisibleNodes`,
+// `filterMinInstanceScore`), so a `filter*` smoothing parameter would read as
+// one of those.
+//
+// Both kernels default to 0 = off, matching `reprojErrorThreshold`: shipping
+// this must not change the 3D of any existing project until someone asks for it.
+export const SMOOTHING_PARAMS = [
+    {
+        id: 'smoothMedianWindow', label: 'Median window (frames)', default: 0,
+        min: 0, max: 101, step: 2,
+        desc: 'Despiking stage, applied FIRST. Replaces each 3D coordinate with the median over this many frames, removing isolated outliers without averaging. Coerced to the next odd value so the window stays centered on the frame being written. 0 = off. Note that a median filter erases any feature narrower than about half the window, so keep it short for fast motion.',
+    },
+    {
+        id: 'smoothGaussianWindow', label: 'Gaussian window (frames)', default: 0,
+        min: 0, max: 101, step: 2,
+        desc: 'Smoothing stage, applied AFTER the median. Weighted average over this many frames with sigma = (window-1)/6, so the window spans +/-3 sigma and the current frame counts most. Removes broadband jitter. Coerced to the next odd value. 0 = off.',
+    },
+    {
+        id: 'smoothMaxGap', label: 'Max gap to smooth across (frames)', default: 5,
+        min: 0, max: 1000, step: 1,
+        desc: 'An absence longer than this splits the trajectory into separate segments, and no window ever spans the break. This is what stops a filter from drawing a straight line through an occlusion or through the frames where the animal left. Shorter absences stay inside a segment as holes, which the filter skips over. Missing points are never filled in either case.',
+    },
+    {
+        id: 'smoothMinSegment', label: 'Minimum segment length (frames)', default: 5,
+        min: 1, max: 1000, step: 1,
+        desc: 'A segment shorter than this is left untouched rather than smoothed from too few samples. The analogue of aniposelib\'s refusal to optimize below 20 finite 3D points.',
+    },
+];
+
+const _smoothById = new Map();
+SMOOTHING_PARAMS.forEach(function (p) { _smoothById.set(p.id, p); });
+
+// Catalog snapshot for the Temporal Smoothing panel, effective values resolved.
+export function getSmoothingParamDefs() {
+    return SMOOTHING_PARAMS.map(function (p) {
+        return {
+            id: p.id, label: p.label, default: p.default,
+            value: getSmoothingParam(p.id),
+            min: p.min, max: p.max, step: p.step, desc: p.desc,
+        };
+    });
+}
+
+// Effective value for one smoothing parameter.
+export function getSmoothingParam(id) {
+    var def = _smoothById.get(id);
+    if (!def) return null;
+    var v = clampThreshold(def, _settings.smoothingParams[id]);
+    return v == null ? def.default : v;
+}
+
+// Effective values as an { id: value } map — the form `smoothSession` reads.
+export function getSmoothingParams() {
+    var out = {};
+    SMOOTHING_PARAMS.forEach(function (p) { out[p.id] = getSmoothingParam(p.id); });
+    return out;
+}
+
+// Commit an { id: value } override map (from the Temporal Smoothing panel's
+// Apply). Clamped to range; entries equal to the default are dropped.
+export function setSmoothingParams(map) {
+    var next = {};
+    if (map && typeof map === 'object') {
+        Object.keys(map).forEach(function (id) {
+            var def = _smoothById.get(id);
+            if (!def) return;
+            var v = clampThreshold(def, map[id]);
+            if (v != null && v !== def.default) next[id] = v;
+        });
+    }
+    _settings.smoothingParams = next;
+    persist();
 }
 
 // Commit an { id: value } override map (from the Tracking Wizard's Apply button).

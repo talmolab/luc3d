@@ -1190,6 +1190,14 @@ body {
   color: var(--text-muted);
 }
 
+/* Divider between the triangulation solvers and the post-triangulation
+   Temporal Smoothing pass — they are different operations, not two solvers. */
+.tri-dropdown-sep {
+  height: 1px;
+  margin: 4px 0;
+  background: var(--border-color);
+}
+
 /* Multi-frame assignment modal */
 .multi-frame-modal-overlay {
   position: fixed;

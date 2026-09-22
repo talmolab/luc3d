@@ -50,7 +50,10 @@ import { trackCurrentFrame, trackAll, findMatchForSelected } from '../pose/track
 // Pass 3i-2: triangulation orchestration moved out of app.js.
 import { triangulateCurrentFrame, triangulateAllFrames } from '../pose/triangulation.js';
 // User settings: default triangulation method + editable keyboard bindings.
-import { getDefaultTriangulationMethod, setHandler, dispatchEvent, getActions, formatBinding } from './settings.js';
+import { getDefaultTriangulationMethod, setHandler, dispatchEvent, getActions, formatBinding,
+         getSmoothingParams } from './settings.js';
+// luc3d #134: post-triangulation temporal smoothing of the 3D tracks.
+import { smoothSession, resolveSmoothingParams } from '../pose/temporal-smoothing.js';
 import { shouldIgnoreShortcut, installFocusRelease } from './keyboard-target.js';
 import { showSettingsModal } from './settings-modal.js';
 // Pass 3i-3: addNewInstanceSmart and update3DViewport moved to pose/initialization.js.
@@ -2487,6 +2490,54 @@ export function setupUI() {
     // Settings default method. Choosing a menu item runs that specific method.
     // Implicit triangulation (the keyboard shortcut and the Edit menu) also uses
     // the Settings default method.
+    // Temporal Smoothing (luc3d #134) — the post-triangulation pass behind both
+    // dropdowns' third item. `currentFrameOnly` mirrors the Triangulate /
+    // Triangulate All split: the whole trajectory is always READ (a filter needs
+    // neighbours on both sides), but only the current frame is WRITTEN.
+    //
+    // Runs synchronously. It touches only `points3d` on the already-resident
+    // `session.instanceGroups` — no 2D hydration, no lazy sweep — so even the
+    // whole-project case is a few seconds, and a progress modal would flash.
+    function runTemporalSmoothing(currentFrameOnly) {
+        var session = state.session;
+        if (!session) { setStatus('No session loaded'); return; }
+
+        var params = getSmoothingParams();
+        var cfg = resolveSmoothingParams(params);
+        if (!cfg.enabled) {
+            setStatus('Temporal smoothing is off — set a median or Gaussian window in Settings ▸ Temporal Smoothing');
+            showSettingsModal('smoothing');
+            return;
+        }
+
+        var writeFrames = currentFrameOnly ? new Set([state.currentFrame]) : null;
+        var stats = smoothSession(session, params, { writeFrames: writeFrames });
+
+        if (stats.frames === 0) {
+            setStatus(currentFrameOnly
+                ? 'Temporal smoothing: nothing to smooth on this frame'
+                : 'Temporal smoothing: no triangulated tracks to smooth');
+            return;
+        }
+
+        var parts = [];
+        if (cfg.medianWindow) parts.push('median ' + cfg.medianWindow);
+        if (cfg.gaussianWindow) parts.push('Gaussian ' + cfg.gaussianWindow);
+        setStatus('Smoothed ' + stats.frames + ' frame' + (stats.frames === 1 ? '' : 's') +
+            ' across ' + stats.tracks + ' track' + (stats.tracks === 1 ? '' : 's') +
+            ' (' + parts.join(' + ') + ')');
+
+        markDirty();
+        drawAllOverlays(state.currentFrame);
+        update3DViewport();
+        updateInfoPanel();
+    }
+
+    // NOTE: the menu item's `data-method` is passed through VERBATIM. It used to
+    // be normalized here with `=== 'ba' ? 'ba' : 'dlt'`, which silently mapped
+    // every unrecognized value onto DLT — so adding the 'smooth' item would have
+    // run a triangulation instead of the smoothing pass, with no error. Each
+    // `onPick` now owns the mapping and must handle anything it does not expect.
     function wireTriDropdown(dropdownId, buttonId, onPick) {
         var dropdown = document.getElementById(dropdownId);
         if (!dropdown) return;
@@ -2502,14 +2553,15 @@ export function setupUI() {
         dropdown.querySelectorAll('.tri-dropdown-item').forEach(function (item) {
             item.addEventListener('click', function (e) {
                 e.stopPropagation();
-                onPick(item.getAttribute('data-method') === 'ba' ? 'ba' : 'dlt');
+                onPick(item.getAttribute('data-method'));
             });
         });
     }
 
     // Triangulate current frame with the chosen (or default) method.
     wireTriDropdown('triangulateDropdown', 'tbTriangulate', function (method) {
-        triangulateCurrentFrame(method);
+        if (method === 'smooth') { runTemporalSmoothing(true); return; }
+        triangulateCurrentFrame(method === 'ba' ? 'ba' : 'dlt');
     });
 
     // Triangulate all frames. DLT keeps the existing "group by identity first"
@@ -2519,7 +2571,9 @@ export function setupUI() {
     // (or Settings ▸ Default Triangulation when given none), so without this an
     // explicit "DLT" pick would silently run as BA under a BA default.
     wireTriDropdown('triangulateAllDropdown', 'tbTriangulateAll', function (method) {
-        if (method === 'ba') {
+        if (method === 'smooth') {
+            runTemporalSmoothing(false);
+        } else if (method === 'ba') {
             triangulateAllFrames('ba');
         } else if (state.session && state.session.identities.length > 0) {
             groupByIdentityAndTriangulateAll('dlt');
