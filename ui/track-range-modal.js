@@ -28,6 +28,27 @@ import {
 // window rather than "everything from here on".
 var DEFAULT_RANGE_LENGTH = 100;
 
+/*
+ * ---------------------------------------------------------------------------
+ * Frame numbering: 0-based inside, 1-based on screen
+ * ---------------------------------------------------------------------------
+ * Every frame number LUCID shows the user is 1-based — the `#currentFrame`
+ * readout is `frameIdx + 1`, so are the copy/paste status lines, and Export
+ * Video Overlays' range modal does the same `+ 1` on its inputs. Every index
+ * it stores is 0-based.
+ *
+ * This modal originally showed raw indices, so it was the one dialog in the
+ * app disagreeing with the transport by one: the toolbar said frame 683 and
+ * this said 682.
+ *
+ * Both conversions live here, and the rule for the rest of the file is: the
+ * number inputs and the endpoint labels hold DISPLAY values, everything else
+ * (the range sliders, `bounds`, whatever goes to `trackFrameRange`) holds
+ * indices. `readForm` is the single crossing point.
+ */
+function toDisplay(frameIdx) { return frameIdx + 1; }
+function toIndex(displayValue) { return displayValue - 1; }
+
 /**
  * Show the Track Frame Range dialog. Cancel / Esc close it with no side
  * effects; Continue / Enter validate the range and hand off to
@@ -82,19 +103,19 @@ export function showTrackRangeModal(opts) {
         '" max="' + bounds.max + '" value="' + defEnd + '">' +
         '</div>' +
         '<div class="track-range-bounds">' +
-        '  <span>' + bounds.min.toLocaleString() + '</span>' +
-        '  <span>' + bounds.max.toLocaleString() + '</span>' +
+        '  <span>' + toDisplay(bounds.min).toLocaleString() + '</span>' +
+        '  <span>' + toDisplay(bounds.max).toLocaleString() + '</span>' +
         '</div>' +
         '<div class="track-range-fields">' +
         '<label class="track-range-field">' +
         '<span>Start frame</span>' +
-        '<input type="number" id="trackRangeStart" step="1" min="' + bounds.min +
-        '" max="' + bounds.max + '" value="' + defStart + '">' +
+        '<input type="number" id="trackRangeStart" step="1" min="' + toDisplay(bounds.min) +
+        '" max="' + toDisplay(bounds.max) + '" value="' + toDisplay(defStart) + '">' +
         '</label>' +
         '<label class="track-range-field">' +
         '<span>End frame</span>' +
-        '<input type="number" id="trackRangeEnd" step="1" min="' + bounds.min +
-        '" max="' + bounds.max + '" value="' + defEnd + '">' +
+        '<input type="number" id="trackRangeEnd" step="1" min="' + toDisplay(bounds.min) +
+        '" max="' + toDisplay(bounds.max) + '" value="' + toDisplay(defEnd) + '">' +
         '</label>' +
         '<label class="track-range-field">' +
         '<span>Animals</span>' +
@@ -123,16 +144,19 @@ export function showTrackRangeModal(opts) {
 
     // Parsed, validated form state. `error` non-null ⇒ Continue is disabled and
     // the message is shown inline; the dialog never closes on bad input.
+    //
+    // THE display→index crossing point: the fields hold 1-based numbers, and
+    // `start`/`end` come back as 0-based indices ready for `trackFrameRange`.
     function readForm() {
-        var s = parseInt(startInput.value, 10);
-        var e = parseInt(endInput.value, 10);
+        var s = toIndex(parseInt(startInput.value, 10));
+        var e = toIndex(parseInt(endInput.value, 10));
         if (!isFinite(s) || !isFinite(e)) {
             return { error: 'Enter a start and end frame.' };
         }
         if (s < bounds.min || e < bounds.min || s > bounds.max || e > bounds.max) {
             return {
-                error: 'Frames must be between ' + bounds.min.toLocaleString() +
-                    ' and ' + bounds.max.toLocaleString() + '.',
+                error: 'Frames must be between ' + toDisplay(bounds.min).toLocaleString() +
+                    ' and ' + toDisplay(bounds.max).toLocaleString() + '.',
             };
         }
         if (e < s) return { error: 'The end frame must not be before the start frame.' };
@@ -174,18 +198,20 @@ export function showTrackRangeModal(opts) {
         updateSliderFill();
     }
 
-    // Slider -> number fields. The two thumbs share a track and can be dragged
-    // past each other, so the one being dragged pushes the other rather than
-    // letting the range invert (which would otherwise be caught by readForm
-    // and disable Continue mid-drag, which feels broken).
+    // Slider -> number fields. The two thumbs share one track, so a drag can
+    // carry one past the other. Each thumb STOPS at the other instead: the
+    // start thumb cannot go beyond the current end, and vice versa. (It used
+    // to push the other thumb along, which silently moved an endpoint the user
+    // had already set — dragging start rightwards would drag end with it and
+    // quietly extend the range past where they had placed it.)
     function onSliderInput(which) {
         var lo = parseInt(sliderStart.value, 10);
         var hi = parseInt(sliderEnd.value, 10);
         if (lo > hi) {
-            if (which === 'start') sliderEnd.value = lo; else sliderStart.value = hi;
+            if (which === 'start') sliderStart.value = hi; else sliderEnd.value = lo;
         }
-        startInput.value = sliderStart.value;
-        endInput.value = sliderEnd.value;
+        startInput.value = toDisplay(parseInt(sliderStart.value, 10));
+        endInput.value = toDisplay(parseInt(sliderEnd.value, 10));
         refresh();
     }
 

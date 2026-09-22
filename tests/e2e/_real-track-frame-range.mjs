@@ -211,8 +211,9 @@ try {
 
     console.log(`[${el()}] Track Frame Range:`, JSON.stringify(r, null, 2));
     check(!/error/i.test(r.status), `Track Frame Range on real data reported no error ("${r.status}")`);
-    check(new RegExp('\\(' + LO + '\\D+' + HI + '\\)').test(r.status),
-        `status names the real range it tracked ("${r.status}")`);
+    // Status text is 1-based, like every frame number the app shows.
+    check(new RegExp('\\(' + (LO + 1) + '\\D+' + (HI + 1) + '\\)').test(r.status),
+        `status names the real range it tracked, 1-based (expected ${LO + 1}-${HI + 1} in: "${r.status}")`);
     check(r.outsideUnchanged,
         `every frame outside ${LO}–${HI} is byte-identical after the range run ` +
         `(${r.outsideIdCount.toLocaleString()} identity entries across ${r.outsideGroupFrames.toLocaleString()} grouped frames)`);

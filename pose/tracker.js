@@ -28,6 +28,19 @@ import { loadAllLazyFrames, sweepLazyFrameWindows } from './triangulation.js';
 import { drawAllOverlays } from '../ui/rendering.js';
 import { updateInfoPanel } from '../ui/info-panel.js';
 
+/**
+ * A frame index as the USER sees it: 1-based.
+ *
+ * Every frame number the app shows is 1-based — the `#currentFrame` readout
+ * (`frameIdx + 1`), the copy/paste status lines, the Export Video Overlays
+ * range modal — while every index it stores is 0-based. These status strings
+ * were printing the raw index, so "frame 682" in the status bar meant the
+ * frame the transport was calling 683.
+ */
+function displayFrame(frameIdx) {
+    return (frameIdx + 1).toLocaleString();
+}
+
 // Explicit "no identity" per-frame value. Written for visible instances that
 // landed in no group this frame so that getIdentity*ForTrack returns null for
 // them (Issue #6 — prevents residual duplicate identity colors).
@@ -1087,7 +1100,7 @@ export function trackCurrentFrame() {
     }
     var fg = session.getFrameGroup(state.currentFrame);
     if (!fg) {
-        setStatus('No frame data at frame ' + state.currentFrame, 'error');
+        setStatus('No frame data at frame ' + displayFrame(state.currentFrame), 'error');
         return;
     }
 
@@ -1117,7 +1130,7 @@ export function trackCurrentFrame() {
         updateInfoPanel();
         if (timeline) timeline.refreshTracks(state.session, { cap: true });
         if (lr.numTargets > 0) {
-            setStatus('Frame ' + state.currentFrame + ': ' + lr.numIdentities +
+            setStatus('Frame ' + displayFrame(state.currentFrame) + ': ' + lr.numIdentities +
                 ' identities / ' + lr.numTargets + ' cross-view targets', 'success');
         } else {
             setStatus('No cross-view matches found (need instances in 2+ views)', 'warning');
@@ -1328,14 +1341,15 @@ async function runTrackingPass(range) {
         lo = Math.max(bounds.min, Math.min(range.start, range.end));
         hi = Math.min(bounds.max, Math.max(range.start, range.end));
         if (hi < lo) {
-            setStatus('Frame range ' + range.start + '–' + range.end +
-                ' lies outside this session (' + bounds.min + '–' + bounds.max + ')', 'error');
+            setStatus('Frame range ' + displayFrame(range.start) + '–' + displayFrame(range.end) +
+                ' lies outside this session (' + displayFrame(bounds.min) +
+                '–' + displayFrame(bounds.max) + ')', 'error');
             return bail;
         }
         if (!windowed) {
             frameIndices = frameIndices.filter(function (f) { return f >= lo && f <= hi; });
             if (frameIndices.length === 0) {
-                setStatus('No frame data in ' + lo + '–' + hi, 'warning');
+                setStatus('No frame data in ' + displayFrame(lo) + '–' + displayFrame(hi), 'warning');
                 return bail;
             }
         }
@@ -1348,7 +1362,7 @@ async function runTrackingPass(range) {
     console.log('[' + label + '] numAnimals:', effectiveNumAnimals,
         trackerNumAnimals ? '(user-set)' : '(auto-detected from max instances per view)',
         'frames:', totalFrameCount, windowed ? '(windowed)' : '',
-        isRange ? '(range ' + lo + '–' + hi + ')' : '');
+        isRange ? '(range ' + lo + '–' + hi + ', 0-based)' : '');
     console.time('[' + label + '] total');
 
     // Clear old identities/groups for a fresh run. A range clears only its own
@@ -1394,7 +1408,8 @@ async function runTrackingPass(range) {
         if (timeline) timeline.refreshTracks(state.session, { cap: true });
         console.timeEnd('[' + label + '] total');
         setStatus('Assigned ' + lres.numIdentities + ' identities across ' +
-            totalFrameCount + ' frames' + (isRange ? ' (' + lo + '–' + hi + ')' : '') +
+            totalFrameCount + ' frames' +
+            (isRange ? ' (' + displayFrame(lo) + '–' + displayFrame(hi) + ')' : '') +
             ' — use Tracks ▸ Propagate IDs → Tracks to apply', 'success');
         // Report the span actually swept. For Track All that is whatever the
         // project turned out to hold; for a range it is the clamped, normalized

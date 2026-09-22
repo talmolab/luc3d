@@ -936,7 +936,11 @@ differently is driven by that argument, and all three differences matter:
   Track All passes no pool (it cleared the list first, so `addIdentity` is
   already the reuse path there).
 
-Range endpoints are clamped to the session's real extent
+Every frame number in these status strings is **1-based** (`displayFrame()`),
+matching the `#currentFrame` readout and the rest of the app; the stored
+indices stay 0-based, and the `console.log` deliberately keeps printing raw
+indices (marked `0-based`) since that line is for reading against the data
+structures. Range endpoints are clamped to the session's real extent
 (`trackableFrameBounds`, which prefers `lazyLoader.nFrames` over the resident-only
 `frameIndices` — the same trap the fresh-open guard fell into) and normalized if
 reversed; a non-integer endpoint is refused outright, because every comparison
@@ -4501,12 +4505,26 @@ the app-wide modal convention. On a successful run the viewer is parked on the
   first frame with no history from before it, which the modal's body text says
   outright — identities inside the range need not line up with the frames around
   it. See `runTrackingPass` in `pose/tracker.js`.
+- **Frame numbers are 0-based inside, 1-based on screen.** Every frame number
+  LUCID shows is 1-based (the `#currentFrame` readout is `frameIdx + 1`, so are
+  the copy/paste status lines and Export Video Overlays' range modal); every
+  index it stores is 0-based. This modal first shipped showing raw indices, so
+  it was the one dialog disagreeing with the transport by one. `toDisplay` /
+  `toIndex` hold both conversions and `readForm` is the single crossing point:
+  the number inputs and the endpoint labels carry DISPLAY values, the range
+  sliders and `bounds` carry indices. `pose/tracker.js` has its own
+  `displayFrame()` for the matching status strings.
 - **The slider spans `[bounds.min, bounds.max]`, not `[0, max]`.** A sparse
   non-lazy project starts at its first labelled frame, not 0, so
   `updateSliderFill` takes percentages across the real extent; assuming 0 would
-  misplace the bar on exactly those projects. The two thumbs share a track, so
-  dragging one past the other PUSHES the other rather than inverting the range
-  (an inverted range would trip `readForm` and disable Continue mid-drag).
+  misplace the bar on exactly those projects.
+- **Neither thumb may pass or drag the other.** The two share one track, so a
+  drag can carry one past the other; each STOPS at the other instead. It briefly
+  pushed the other thumb along, which silently moved an endpoint the user had
+  already set — dragging start rightwards dragged end with it and quietly
+  extended the range. Typed input is handled differently on purpose: an
+  inverted range there is reported ("The end frame must not be before the start
+  frame.") and disables Continue, rather than silently rewriting what was typed.
 - **`onTracked` is injected, not imported.** The navigator (`navigateToFrame`)
   lives in `pose/initialization.js`, which imports `ui/ui-wiring.js`, which
   imports this module — importing it here would close that loop. `ui-wiring.js`
