@@ -1,9 +1,10 @@
 // ui/settings-modal.js
 // Builds and shows the LUCID "Settings" modal.
 //
-// The modal has three panels (selected via a left nav): the default
-// triangulation method, an editable list of keyboard shortcuts, and a
-// placeholder Tracking Wizard panel. All edits are kept in a local working
+// The modal has four panels (selected via a left nav): the default
+// triangulation method, an editable list of keyboard shortcuts, the Tracking
+// Wizard, and Temporal Smoothing (the post-triangulation 3D filter's
+// hyperparameters, luc3d #134). All edits are kept in a local working
 // state object and the visual DOM only — nothing is committed to settings.js
 // until the user clicks Apply. Cancel / close / backdrop / Escape discard.
 //
@@ -37,6 +38,8 @@ import {
     setCameraWeights,
     getTrackingThresholdDefs,
     setTrackingThresholds,
+    getSmoothingParamDefs,
+    setSmoothingParams,
 } from './settings.js';
 import { getActiveSession, state, timeline } from './app-state.js';
 import { drawAllOverlays } from './rendering.js';
@@ -73,6 +76,60 @@ function chordFromEvent(e) {
     if (e.shiftKey) parts.push('Shift');
     parts.push(e.key);
     return parts.join('+');
+}
+
+/**
+ * A labelled number field for one catalog parameter, bound to a working map.
+ *
+ * Shared by the Tracking Wizard's thresholds and the Temporal Smoothing panel —
+ * both render the same `{ id, label, desc, min, max, step }` catalog shape, and
+ * both clamp on blur so a typed out-of-range value is corrected in place rather
+ * than silently at Apply.
+ *
+ * @param {{id:string,label:string,desc:string,min:number,max:number,step:number}} def
+ * @param {Object.<string, number>} bag working map mutated on edit
+ * @returns {HTMLElement}
+ */
+function buildNumberRow(def, bag) {
+    const row = document.createElement('div');
+    row.className = 'settings-threshold-row';
+
+    const labelWrap = document.createElement('div');
+    labelWrap.className = 'settings-threshold-label-wrap';
+    const rowTitle = document.createElement('div');
+    rowTitle.className = 'settings-threshold-title';
+    rowTitle.textContent = def.label;
+    const rowDesc = document.createElement('div');
+    rowDesc.className = 'settings-threshold-desc';
+    rowDesc.textContent = def.desc;
+    labelWrap.appendChild(rowTitle);
+    labelWrap.appendChild(rowDesc);
+
+    const input = document.createElement('input');
+    input.type = 'number';
+    input.className = 'settings-num-input';
+    input.min = String(def.min);
+    input.max = String(def.max);
+    input.step = String(def.step);
+    input.value = String(bag[def.id]);
+    input.setAttribute('aria-label', def.label);
+
+    input.addEventListener('input', function () {
+        const v = parseFloat(input.value);
+        if (isFinite(v)) bag[def.id] = v;
+    });
+    input.addEventListener('blur', function () {
+        let v = parseFloat(input.value);
+        if (!isFinite(v)) v = bag[def.id];
+        if (v < def.min) v = def.min;
+        if (v > def.max) v = def.max;
+        bag[def.id] = v;
+        input.value = String(v);
+    });
+
+    row.appendChild(labelWrap);
+    row.appendChild(input);
+    return row;
 }
 
 /**
@@ -115,9 +172,10 @@ function buildSection(title, count) {
 }
 
 // Show the Settings modal. `initialPanel` is one of 'triangulation' |
-// 'keyboard' | 'wizard' and defaults to 'triangulation'.
+// 'keyboard' | 'wizard' | 'smoothing' and defaults to 'triangulation'.
 export function showSettingsModal(initialPanel) {
-    const startPanel = (initialPanel === 'keyboard' || initialPanel === 'wizard')
+    const VALID_PANELS = ['keyboard', 'wizard', 'smoothing'];
+    const startPanel = VALID_PANELS.indexOf(initialPanel) >= 0
         ? initialPanel
         : 'triangulation';
 
@@ -132,6 +190,7 @@ export function showSettingsModal(initialPanel) {
         nodeWeights: {},
         cameraWeights: {},
         thresholds: {},
+        smoothing: {},
     };
     const actions = getActions();
     // Only editable actions are user-rebindable; the working map tracks those.
@@ -157,6 +216,10 @@ export function showSettingsModal(initialPanel) {
     // Seed the working tracking-threshold map from the catalog's effective values.
     const thresholdDefs = getTrackingThresholdDefs();
     thresholdDefs.forEach(function (def) { working.thresholds[def.id] = def.value; });
+
+    // Seed the working temporal-smoothing map the same way (luc3d #134).
+    const smoothingDefs = getSmoothingParamDefs();
+    smoothingDefs.forEach(function (def) { working.smoothing[def.id] = def.value; });
 
     // --- Build DOM --------------------------------------------------------
     const overlay = document.createElement('div');
@@ -196,6 +259,7 @@ export function showSettingsModal(initialPanel) {
         { panel: 'triangulation', label: 'Default Triangulation' },
         { panel: 'keyboard', label: 'Keyboard Shortcuts' },
         { panel: 'wizard', label: 'Tracking Wizard' },
+        { panel: 'smoothing', label: 'Temporal Smoothing' },
     ];
 
     const navItems = {};
@@ -588,45 +652,7 @@ export function showSettingsModal(initialPanel) {
     thSection.body.appendChild(thHint);
 
     thresholdDefs.forEach(function (def) {
-        const row = document.createElement('div');
-        row.className = 'settings-threshold-row';
-
-        const labelWrap = document.createElement('div');
-        labelWrap.className = 'settings-threshold-label-wrap';
-        const thTitle = document.createElement('div');
-        thTitle.className = 'settings-threshold-title';
-        thTitle.textContent = def.label;
-        const thDesc = document.createElement('div');
-        thDesc.className = 'settings-threshold-desc';
-        thDesc.textContent = def.desc;
-        labelWrap.appendChild(thTitle);
-        labelWrap.appendChild(thDesc);
-
-        const input = document.createElement('input');
-        input.type = 'number';
-        input.className = 'settings-num-input';
-        input.min = String(def.min);
-        input.max = String(def.max);
-        input.step = String(def.step);
-        input.value = String(working.thresholds[def.id]);
-        input.setAttribute('aria-label', def.label);
-
-        input.addEventListener('input', function () {
-            const v = parseFloat(input.value);
-            if (isFinite(v)) working.thresholds[def.id] = v;
-        });
-        input.addEventListener('blur', function () {
-            let v = parseFloat(input.value);
-            if (!isFinite(v)) v = working.thresholds[def.id];
-            if (v < def.min) v = def.min;
-            if (v > def.max) v = def.max;
-            working.thresholds[def.id] = v;
-            input.value = String(v);
-        });
-
-        row.appendChild(labelWrap);
-        row.appendChild(input);
-        thSection.body.appendChild(row);
+        thSection.body.appendChild(buildNumberRow(def, working.thresholds));
     });
 
     // Docs link at the bottom of the thresholds.
@@ -642,6 +668,50 @@ export function showSettingsModal(initialPanel) {
 
     panelContainer.appendChild(wizPanel);
     panels.wizard = wizPanel;
+
+    // 4) Temporal Smoothing panel (luc3d #134).
+    //
+    // The post-triangulation filter's hyperparameters. Kept as its own panel
+    // rather than a fourth section of the Tracking Wizard because it is NOT a
+    // tracking parameter: it runs after triangulation, over 3D that the tracker
+    // has already finished with. Run it from Triangulate ▸ Temporal Smoothing
+    // (current frame) or Triangulate All ▸ Temporal Smoothing (whole project).
+    const smPanel = document.createElement('div');
+    smPanel.className = 'settings-panel';
+    smPanel.dataset.panel = 'smoothing';
+    const smTitle = document.createElement('div');
+    smTitle.className = 'settings-panel-title';
+    smTitle.textContent = 'Temporal Smoothing';
+    smPanel.appendChild(smTitle);
+
+    const smHint = document.createElement('div');
+    smHint.className = 'settings-kbd-hint';
+    smHint.style.marginTop = '0';
+    smHint.style.marginBottom = '8px';
+    smHint.textContent = 'Filters the triangulated 3D tracks through time to remove frame-to-frame jitter. ' +
+        'Each skeleton node is filtered independently along the frame axis; 2D user labels and predictions are ' +
+        'never modified, and the reprojection overlays follow the smoothed 3D. Both stages are off (0) by ' +
+        'default — run the pass from Triangulate ▸ Temporal Smoothing. Changes apply when you click Apply.';
+    smPanel.appendChild(smHint);
+
+    const smSection = buildSection('Filter Parameters', smoothingDefs.length || null);
+    smPanel.appendChild(smSection.root);
+    smoothingDefs.forEach(function (def) {
+        smSection.body.appendChild(buildNumberRow(def, working.smoothing));
+    });
+
+    // The two dials of luc3d #134 pull against each other and the interaction is
+    // the opposite of what tuning two sliders suggests, so say so here.
+    const smNote = document.createElement('div');
+    smNote.className = 'settings-kbd-hint';
+    smNote.textContent = 'Tip: raising the Tracking Wizard\'s "Reprojection error threshold" drops unreliable ' +
+        'views, which removes a cause of jitter — but it also nulls nodes that fall below two reliable views, ' +
+        'creating more gaps. Gap edges are where a filter is least accurate, so turning both dials up hard is ' +
+        'worse than either alone. Try the threshold first, then smooth what is left.';
+    smPanel.appendChild(smNote);
+
+    panelContainer.appendChild(smPanel);
+    panels.smoothing = smPanel;
 
     // Footer.
     const footer = document.createElement('div');
@@ -694,6 +764,7 @@ export function showSettingsModal(initialPanel) {
         setNodeWeights(working.nodeWeights);
         setCameraWeights(working.cameraWeights);
         setTrackingThresholds(working.thresholds);
+        setSmoothingParams(working.smoothing);
         teardown();
         // Reflect committed camera-inclusion changes immediately: excluded views
         // grey out in both the video overlays and the timeline.
