@@ -654,8 +654,11 @@
 
                 <!-- ==================== Skeleton Tab ==================== -->
                 <div class="panel-tab-content" id="tabSkeleton">
-                    <div class="info-section">
-                        <h3>Nodes</h3>
+                    <details class="info-section info-collapsible" id="skeletonNodesSection" open>
+                        <summary>
+                            <h3>Nodes</h3>
+                            <span class="info-collapsible-count" id="skeletonNodesCount">0</span>
+                        </summary>
                         <table class="data-table" id="skeletonNodesTable">
                             <thead>
                                 <tr>
@@ -671,10 +674,13 @@
                                 style="flex:1;padding:3px;font-size:12px;background:var(--bg-tertiary);border:1px solid var(--border);color:var(--text-primary);border-radius:3px;" />
                             <button class="panel-btn" id="btnAddNode" title="Add skeleton node">+ Node</button>
                         </div>
-                    </div>
+                    </details>
 
-                    <div class="info-section">
-                        <h3>Edges</h3>
+                    <details class="info-section info-collapsible" id="skeletonEdgesSection" open>
+                        <summary>
+                            <h3>Edges</h3>
+                            <span class="info-collapsible-count" id="skeletonEdgesCount">0</span>
+                        </summary>
                         <table class="data-table" id="skeletonEdgesTable">
                             <thead>
                                 <tr>
@@ -692,7 +698,7 @@
                                 style="flex:1;padding:3px;font-size:12px;background:var(--bg-tertiary);border:1px solid var(--border);color:var(--text-primary);border-radius:3px;"></select>
                             <button class="panel-btn" id="btnAddEdge" title="Add skeleton edge">+ Edge</button>
                         </div>
-                    </div>
+                    </details>
 
                     <div style="margin-top:10px;display:flex;gap:6px">
                         <button class="panel-btn" id="btnLoadSkeleton" title="Load skeleton from JSON file" style="flex:1">Load Skeleton</button>

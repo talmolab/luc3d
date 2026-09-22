@@ -2275,6 +2275,24 @@ Three things deliberately stay outside the gate:
   `buildRememberedSkeleton()` feeds `ensureSession` — a skeleton loaded while
   the panel was hidden must not leave the next new session with a stale one.
 
+**Collapsible Skeleton sections.** The Skeleton tab's **Nodes** and **Edges** are
+`<details class="info-section info-collapsible">` (`index.html`), so either table
+can be folded away — the Nodes list runs to one row per node and otherwise pushes
+Edges off the bottom of the panel. Native `<details>`/`<summary>` rather than a
+hand-rolled toggle, matching `ui/settings-modal.js`'s `buildSection`: the
+disclosure is keyboard-operable and screen-reader-labelled for free, and
+`ui/keyboard-target.js` already treats a focused `SUMMARY` as owning Space/Enter,
+so toggling a section cannot fall through to the transport's Space shortcut.
+`populateSkeletonTable` keeps the `#skeletonNodesCount` / `#skeletonEdgesCount`
+summary badges in sync (a collapsed section still says how much it hides);
+`import-export/save-load.js`'s clear-project path resets them to `0` alongside
+the tbodies. `setupSkeletonEditing` wires `persistSectionState` on both, storing
+open/closed in `localStorage.skeletonSectionsOpen` — browser-local display taste,
+never project state, so it does NOT go in the `.slp`; every access is
+try/caught, and a browser that refuses storage just gets the markup's default
+`open`. This is the collapsible-section remedy the "no scroll-within-scroll"
+convention in `CLAUDE.md` prescribes.
+
 **Skeleton persistence.** `populateSkeletonTable` calls `rememberSkeleton` on every
 refresh — the central point after any editor mutation (add/remove node or edge,
 Load Skeleton) or loaded project — so the current non-empty skeleton is cached for
@@ -6073,7 +6091,34 @@ unit-testable without a browser.
   lost their names on re-import and came back as `node_<i>`.
 - `parseSkeletonJSON(jsonText)` — parses jsonpickle Format 1, plus the simpler
   `{skeleton:{…}}` and direct node/edge-array formats; returns a `Skeleton` or
-  null.
+  null. Accepts SLEAP's **list-wrapped** GUI export (`[{…}]`) and the `nx_graph`
+  nesting as well as a bare object.
+
+**Reading SLEAP's own exports (issue #205).** The jsonpickle branch lives in the
+module-private `parseJsonPickleSkeleton`, which has to reconstruct jsonpickle's
+`py/id` memo table — and the two writers in the wild disagree about it:
+
+- SLEAP / `sleap_io` re-emit a node's **full `py/object` at every appearance** in
+  `links` and use `py/id` only in `nodes`, so a node takes ONE memo slot however
+  many edges it touches.
+- `buildSkeletonJSON` emits the full object once, then `py/id` back-references.
+
+Deduplicating by name satisfies both. Counting every `py/object` (the pre-#205
+behaviour) was right only for LUCID's own files: on a SLEAP export with a hub
+node the table gained a bogus slot per repeat, and since a SLEAP export's `nodes`
+array is *nothing but* `py/id` references — no names at all — everything past the
+first repeat resolved to the wrong node, yielding a silently duplicated/missing/
+placeholder skeleton rather than an error.
+
+Node **order** has its own wrinkle: SLEAP's encoder numbers node `py/id`s without
+counting the EdgeType's slot while its decoder counts it, so the `nodes` array is
+off by one from the table it nominally indexes. `sleap_io` gives up and returns
+edge-traversal order; we re-read the array in the node-only space, recovering the
+order SLEAP actually displays — so the JSON path agrees with the `.slp` path.
+Both interpretations must yield a complete permutation to be accepted, else we
+fall back to traversal order as `sleap_io` does. Edge types are resolved against
+the shared table first and SLEAP's **separate** edge-type id space (1 = regular,
+2 = symmetry) only on a miss; symmetries are dropped, their nodes kept.
 
 **Imports from project modules.** `../pose/pose-data.js` — `Skeleton`.
 
