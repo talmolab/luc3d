@@ -944,7 +944,12 @@ against `NaN` is false and it would otherwise sail past the ordering check and
 sweep nothing while reporting a `NaN` range. Like Track All, a range run does NOT propagate to tracks.
 `getTrackerNumAnimals` / `setTrackerNumAnimals` expose the animal count so the
 modal can collect it inline; `runTrackingPass` skips the native `promptNumAnimals()`
-on the range path so a `prompt()` never stacks on top of the dialog. Covered by
+on the range path so a `prompt()` never stacks on top of the dialog.
+`runTrackingPass` **returns** `{ok, start, end, identities, frames}` — `ok:false`
+for every bail-out, and on success the CLAMPED, normalized span actually swept.
+Callers cannot recompute that span (the request is clamped to the project extent
+and reversed input is normalized), and the modal uses `end` to park the viewer
+on the last frame tracked. Covered by
 `tests/e2e/track-frame-range.mjs` (range scoping, identity recycling, clamping,
 the windowed sweep, and the toolbar → modal → loading-overlay path; its three
 core assertions were each confirmed to fail under a deliberate mutation).
@@ -4474,12 +4479,16 @@ item; the `#tbTrackFrame` button itself stays wired to `trackCurrentFrame` in
 `pose/tracker.js`'s own IIFE). It sits between `ui-wiring.js` and `tracker.js`,
 which `ui-wiring.js` already imported directly — so it introduces no new cycle.
 
-**User-facing features.** Start frame (pre-filled with the current frame), End
-frame (pre-filled to a 100-frame window, clamped to the project), and **Animals**
-(pre-filled with the current count; blank = auto-detect). A live summary line
-reports the range size and the effective animal count; a live error line explains
-an invalid range and disables Continue rather than closing on bad input. `Enter`
-is Continue and `Esc` is Cancel, per the app-wide modal convention.
+**User-facing features.** A **dual range slider** over the session extent
+(the same `.range-slider-container` markup as Export Video Overlays' "Choose
+Frames for Triangulation"), two-way bound to Start frame (pre-filled with the
+current frame) and End frame (pre-filled to a 100-frame window, clamped to the
+project), plus **Animals** (pre-filled with the current count; blank =
+auto-detect). A live summary line reports the range size and the effective
+animal count; a live error line explains an invalid range and disables Continue
+rather than closing on bad input. `Enter` is Continue and `Esc` is Cancel, per
+the app-wide modal convention. On a successful run the viewer is parked on the
+**last frame tracked**, so the run ends looking at its own result.
 
 **Notes / caveats.**
 - **It collects the animal count on purpose.** `pose/tracker.js` otherwise asks
@@ -4492,8 +4501,31 @@ is Continue and `Esc` is Cancel, per the app-wide modal convention.
   first frame with no history from before it, which the modal's body text says
   outright — identities inside the range need not line up with the frames around
   it. See `runTrackingPass` in `pose/tracker.js`.
+- **The slider spans `[bounds.min, bounds.max]`, not `[0, max]`.** A sparse
+  non-lazy project starts at its first labelled frame, not 0, so
+  `updateSliderFill` takes percentages across the real extent; assuming 0 would
+  misplace the bar on exactly those projects. The two thumbs share a track, so
+  dragging one past the other PUSHES the other rather than inverting the range
+  (an inverted range would trip `readForm` and disable Continue mid-drag).
+- **`onTracked` is injected, not imported.** The navigator (`navigateToFrame`)
+  lives in `pose/initialization.js`, which imports `ui/ui-wiring.js`, which
+  imports this module — importing it here would close that loop. `ui-wiring.js`
+  already holds both ends and passes it in, so this module stays a leaf. It
+  parks the viewer using the range `trackFrameRange` REPORTS, not the typed
+  values, since the request is clamped to the project extent and reversed input
+  is normalized.
+- **This modal is why `--accent-color` is now defined.** Six declarations
+  referenced it and nothing ever defined it; an undefined custom property is
+  invalid at computed-value time, which resolves to the property's INITIAL
+  value rather than falling back to an earlier declaration — so
+  `.range-slider-fill` and every `.multi-frame-modal button.primary` painted
+  `transparent` (measured). Adding this slider would have inherited the
+  invisible fill, so `:root` now aliases `--accent-color: var(--accent)`, which
+  also repairs the Export Video Overlays slider and every modal primary button.
 - Covered by `tests/e2e/track-frame-range.mjs` (phase 4 drives the real toolbar
-  dropdown → modal → Continue → loading overlay).
+  dropdown → modal → Continue → loading overlay; phase 5 covers the slider, its
+  two-way binding, thumb crossing, the painted fill, and the park-on-last-frame
+  behaviour).
 
 ---
 
@@ -4905,7 +4937,10 @@ markup and CSS-only hover reveal, but NOT `wireTriDropdown` — its button keeps
 its own click handler in `pose/tracker.js`'s IIFE (`trackCurrentFrame`,
 unchanged), and `ui-wiring.js` wires only the one menu item,
 `#tbTrackFrameRange`, to `showTrackRangeModal()`
-(`ui/track-range-modal.js`). The menu is revealed purely by `:hover`, which is
+(`ui/track-range-modal.js`) — passing `navigateToFrame` in as `onTracked` so the
+modal can park the viewer on the last frame a run tracked, injected because
+`navigateToFrame` lives in `initialization.js`, which imports this module, which
+imports the modal. The menu is revealed purely by `:hover`, which is
 worth knowing when driving it from a test: a modal opening over the toolbar
 drops hover, so a second click on the item has to re-hover the button first (see
 `tests/e2e/track-frame-range.mjs`).

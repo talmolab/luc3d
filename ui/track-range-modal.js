@@ -32,8 +32,17 @@ var DEFAULT_RANGE_LENGTH = 100;
  * Show the Track Frame Range dialog. Cancel / Esc close it with no side
  * effects; Continue / Enter validate the range and hand off to
  * `trackFrameRange`, which shows the Track All loading overlay.
+ *
+ * @param {{onTracked?: (frameIdx:number)=>void}} [opts]
+ *   `onTracked` is called with the LAST frame tracked once a run succeeds, so
+ *   the viewer can be parked on the run's own result. It is injected rather
+ *   than imported: the navigator lives in `pose/initialization.js`, which
+ *   imports `ui/ui-wiring.js`, which imports this module — importing it here
+ *   would close that loop. `ui-wiring.js` already holds both ends, so it passes
+ *   `navigateToFrame` in and this module stays a leaf.
  */
-export function showTrackRangeModal() {
+export function showTrackRangeModal(opts) {
+    var onTracked = (opts && opts.onTracked) || null;
     var session = getActiveSession();
     if (!session || !session.cameras || session.cameras.length === 0) {
         setStatus('No session with cameras loaded', 'error');
@@ -60,6 +69,22 @@ export function showTrackRangeModal() {
         'restarts at the first frame of the range and carries no history in ' +
         'from before it, so identities inside the range are assigned ' +
         'independently of the frames around it.</p>' +
+        // Dual slider, mirroring Export Video Overlays' "Choose Frames for
+        // Triangulation" (`.range-slider-container`, ui/export-modals.js). Two
+        // stacked <input type=range> with pointer-events only on the thumbs,
+        // over a shared track plus a fill div spanning the selection.
+        '<div class="range-slider-container">' +
+        '  <div class="range-slider-track"></div>' +
+        '  <div class="range-slider-fill" id="trackRangeFill"></div>' +
+        '  <input type="range" id="trackRangeSliderStart" min="' + bounds.min +
+        '" max="' + bounds.max + '" value="' + defStart + '">' +
+        '  <input type="range" id="trackRangeSliderEnd" min="' + bounds.min +
+        '" max="' + bounds.max + '" value="' + defEnd + '">' +
+        '</div>' +
+        '<div class="track-range-bounds">' +
+        '  <span>' + bounds.min.toLocaleString() + '</span>' +
+        '  <span>' + bounds.max.toLocaleString() + '</span>' +
+        '</div>' +
         '<div class="track-range-fields">' +
         '<label class="track-range-field">' +
         '<span>Start frame</span>' +
@@ -92,6 +117,9 @@ export function showTrackRangeModal() {
     var summaryEl = modal.querySelector('#trackRangeSummary');
     var errorEl = modal.querySelector('#trackRangeError');
     var continueBtn = modal.querySelector('#trackRangeContinue');
+    var sliderStart = modal.querySelector('#trackRangeSliderStart');
+    var sliderEnd = modal.querySelector('#trackRangeSliderEnd');
+    var sliderFill = modal.querySelector('#trackRangeFill');
 
     // Parsed, validated form state. `error` non-null ⇒ Continue is disabled and
     // the message is shown inline; the dialog never closes on bad input.
@@ -121,6 +149,20 @@ export function showTrackRangeModal() {
         return n.toLocaleString() + ' ' + word + (n === 1 ? '' : 's');
     }
 
+    // Paint the fill bar between the two thumbs. Percentages are taken across
+    // [bounds.min, bounds.max], NOT [0, max]: a session's first frame is not
+    // always 0 (a sparse non-lazy project starts wherever its first labelled
+    // frame is), and assuming 0 would misplace the bar on exactly those.
+    function updateSliderFill() {
+        var span = bounds.max - bounds.min;
+        var lo = parseInt(sliderStart.value, 10);
+        var hi = parseInt(sliderEnd.value, 10);
+        var leftPct = span > 0 ? ((lo - bounds.min) / span) * 100 : 0;
+        var rightPct = span > 0 ? ((hi - bounds.min) / span) * 100 : 100;
+        sliderFill.style.left = leftPct + '%';
+        sliderFill.style.width = Math.max(0, rightPct - leftPct) + '%';
+    }
+
     function refresh() {
         var f = readForm();
         errorEl.textContent = f.error || '';
@@ -129,6 +171,33 @@ export function showTrackRangeModal() {
             ? ''
             : plural(f.end - f.start + 1, 'frame') + ' · ' +
               (f.animals != null ? plural(f.animals, 'animal') : 'animal count auto-detected');
+        updateSliderFill();
+    }
+
+    // Slider -> number fields. The two thumbs share a track and can be dragged
+    // past each other, so the one being dragged pushes the other rather than
+    // letting the range invert (which would otherwise be caught by readForm
+    // and disable Continue mid-drag, which feels broken).
+    function onSliderInput(which) {
+        var lo = parseInt(sliderStart.value, 10);
+        var hi = parseInt(sliderEnd.value, 10);
+        if (lo > hi) {
+            if (which === 'start') sliderEnd.value = lo; else sliderStart.value = hi;
+        }
+        startInput.value = sliderStart.value;
+        endInput.value = sliderEnd.value;
+        refresh();
+    }
+
+    // Number fields -> slider. Typed values can be anything, so clamp to the
+    // session extent before they reach the slider (an out-of-range value would
+    // be silently clamped by the range input and the two would disagree).
+    function syncSlidersFromInputs() {
+        var f = readForm();
+        if (f.error) { refresh(); return; }
+        sliderStart.value = Math.min(Math.max(f.start, bounds.min), bounds.max);
+        sliderEnd.value = Math.min(Math.max(f.end, bounds.min), bounds.max);
+        refresh();
     }
 
     function close() {
@@ -136,7 +205,7 @@ export function showTrackRangeModal() {
         overlay.remove();
     }
 
-    function proceed() {
+    async function proceed() {
         var f = readForm();
         if (f.error) { refresh(); return; }
         // A blank Animals field is an explicit auto-detect, so write it through
@@ -144,9 +213,16 @@ export function showTrackRangeModal() {
         // previously-set count.
         setTrackerNumAnimals(f.animals);
         close();
-        // Not awaited: trackFrameRange owns the loading overlay and reports its
-        // own outcome through setStatus, exactly as the Track All button does.
-        trackFrameRange(f.start, f.end);
+        // trackFrameRange owns the loading overlay and reports its own outcome
+        // through setStatus, exactly as the Track All button does.
+        var res = await trackFrameRange(f.start, f.end);
+        // Park the viewer on the LAST frame tracked, so the run ends looking at
+        // its own result instead of wherever the user happened to be. Uses the
+        // range the tracker reports rather than `f.end`, since the request is
+        // clamped to the project extent and reversed input is normalized — the
+        // frame actually reached is not always the one that was typed. Skipped
+        // when the run bailed, so a failed range leaves the viewer put.
+        if (res && res.ok && res.end != null && onTracked) onTracked(res.end);
     }
 
     function onKey(e) {
@@ -155,9 +231,12 @@ export function showTrackRangeModal() {
     }
     document.addEventListener('keydown', onKey);
 
-    [startInput, endInput, animalsInput].forEach(function (el) {
-        el.addEventListener('input', refresh);
+    animalsInput.addEventListener('input', refresh);
+    [startInput, endInput].forEach(function (el) {
+        el.addEventListener('input', syncSlidersFromInputs);
     });
+    sliderStart.addEventListener('input', function () { onSliderInput('start'); });
+    sliderEnd.addEventListener('input', function () { onSliderInput('end'); });
     modal.querySelector('#trackRangeCancel').addEventListener('click', close);
     continueBtn.addEventListener('click', proceed);
     // Clicking the backdrop (not the dialog) dismisses, like the other modals.

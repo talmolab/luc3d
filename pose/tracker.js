@@ -1234,20 +1234,28 @@ function clearTrackingStateInRange(session, lo, hi) {
  * Tracks ▸ Propagate IDs → Tracks.
  *
  * @param {{start:number, end:number}|null} range  null ⇒ the whole project
+ * @returns {Promise<{ok:boolean, start:?number, end:?number, identities:number,
+ *                     frames:number}>}
+ *   `ok` is false for every bail-out (no session, too few views, bad range, a
+ *   thrown run). On success `start`/`end` are the CLAMPED, normalized frames
+ *   actually swept — the caller cannot recompute them, since the request is
+ *   clamped to the project extent and reversed input is normalized. The Track
+ *   Frame Range modal uses `end` to park the viewer on the last tracked frame.
  */
 async function runTrackingPass(range) {
+    var bail = { ok: false, start: null, end: null, identities: 0, frames: 0 };
     var isRange = !!range;
     var label = isRange ? 'TrackRange' : 'TrackAll';           // console prefix
     var human = isRange ? 'Track Frame Range' : 'Track All';   // user-facing name
     var session = getActiveSession();
     if (!session || !session.cameras || session.cameras.length === 0) {
         setStatus('No session with cameras loaded', 'error');
-        return;
+        return bail;
     }
 
     if (session.cameras.length < 2) {
         setStatus('Need at least 2 cameras', 'warning');
-        return;
+        return bail;
     }
 
     // Honor per-view tracking inclusion from the Tracking Wizard: excluded views
@@ -1255,7 +1263,7 @@ async function runTrackingPass(range) {
     var cameras = session.cameras.filter(function (c) { return isCameraTracked(c.name); });
     if (cameras.length < 2) {
         setStatus('Need at least 2 views included in tracking (check the Tracking Wizard ▸ Camera Views)', 'warning');
-        return;
+        return bail;
     }
 
     // Lazy sessions (large .slp session folders, #132) keep only a resident window
@@ -1280,14 +1288,14 @@ async function runTrackingPass(range) {
     var hasFrames = windowed ? loader.nFrames > 0 : frameIndices.length > 0;
     if (!hasFrames) {
         setStatus('No frames to track', 'error');
-        return;
+        return bail;
     }
 
     // Prompt for number of animals. Track Frame Range collects it in its own
     // modal (blank there is an explicit "auto-detect"), so it never stacks a
     // native prompt() on top of the dialog the user just filled in.
     if (!isRange && trackerNumAnimals == null) {
-        if (!promptNumAnimals()) return;
+        if (!promptNumAnimals()) return bail;
     }
 
     if (loader && !windowed) {
@@ -1299,7 +1307,7 @@ async function runTrackingPass(range) {
             hideLoading();
             console.error('[' + label + '] failed to load all lazy frames:', e);
             setStatus(human + ': could not load all frames — ' + e.message, 'error');
-            return;
+            return bail;
         }
         frameIndices = session.frameIndices;   // now the full project, not the window
     }
@@ -1309,26 +1317,26 @@ async function runTrackingPass(range) {
     var lo = null, hi = null;
     if (isRange) {
         var bounds = trackableFrameBounds(session);
-        if (!bounds) { setStatus('No frames to track', 'error'); return; }
+        if (!bounds) { setStatus('No frames to track', 'error'); return bail; }
         // Guard NaN/non-integers explicitly: every comparison against NaN is
         // false, so an unvalidated endpoint would sail past the `hi < lo` check
         // below and the run would sweep nothing while reporting a NaN range.
         if (!Number.isInteger(range.start) || !Number.isInteger(range.end)) {
             setStatus('Invalid frame range', 'error');
-            return;
+            return bail;
         }
         lo = Math.max(bounds.min, Math.min(range.start, range.end));
         hi = Math.min(bounds.max, Math.max(range.start, range.end));
         if (hi < lo) {
             setStatus('Frame range ' + range.start + '–' + range.end +
                 ' lies outside this session (' + bounds.min + '–' + bounds.max + ')', 'error');
-            return;
+            return bail;
         }
         if (!windowed) {
             frameIndices = frameIndices.filter(function (f) { return f >= lo && f <= hi; });
             if (frameIndices.length === 0) {
                 setStatus('No frame data in ' + lo + '–' + hi, 'warning');
-                return;
+                return bail;
             }
         }
     }
@@ -1388,10 +1396,21 @@ async function runTrackingPass(range) {
         setStatus('Assigned ' + lres.numIdentities + ' identities across ' +
             totalFrameCount + ' frames' + (isRange ? ' (' + lo + '–' + hi + ')' : '') +
             ' — use Tracks ▸ Propagate IDs → Tracks to apply', 'success');
+        // Report the span actually swept. For Track All that is whatever the
+        // project turned out to hold; for a range it is the clamped, normalized
+        // window, which is what the caller needs to park the viewer on.
+        return {
+            ok: true,
+            start: isRange ? lo : (windowed ? 0 : frameIndices[0]),
+            end: isRange ? hi : (windowed ? loader.nFrames - 1 : frameIndices[frameIndices.length - 1]),
+            identities: lres.numIdentities,
+            frames: totalFrameCount,
+        };
     } catch (e) {
         hideLoading();
         console.error('[' + label + '] error:', e, e.stack);
         setStatus(human + ' error: ' + e.message, 'error');
+        return bail;
     }
 }
 

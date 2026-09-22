@@ -48,6 +48,15 @@ input[type="number"]::-webkit-inner-spin-button {
   --accent: #667eea;
   --accent-hover: #7b91f5;
   --accent-dim: rgba(102, 126, 234, 0.25);
+  /* Alias, because six declarations already reference `--accent-color` and it
+     was never defined anywhere. An undefined custom property is "invalid at
+     computed-value time", which does NOT fall back to an earlier declaration —
+     the property resolves to its INITIAL value. So `.multi-frame-modal
+     button.primary` and `.range-slider-fill` were painting `transparent`
+     backgrounds (measured), i.e. every modal's primary button and the Export
+     Video Overlays range slider's fill bar were invisible. Aliased rather than
+     hard-coded so the two can never drift apart. */
+  --accent-color: var(--accent);
   --border-color: #3a3a3a;
   --border-light: #444444;
   --error-color: #e74c3c;
@@ -1404,6 +1413,17 @@ body {
   font-size: 12px;
   color: var(--text-secondary);
   min-height: 14px;
+}
+
+/* Endpoint labels under the dual slider, so the track's extent is readable
+   without dragging a thumb to find out where it ends. */
+.track-range-bounds {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: -10px;
+  margin-bottom: 12px;
 }
 
 /* Dual range slider */

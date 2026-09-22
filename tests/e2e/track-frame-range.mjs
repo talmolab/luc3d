@@ -343,6 +343,76 @@ try {
     check(!afterEsc.open, 'Esc closes the modal');
     check(afterEsc.status === 'SENTINEL' && afterEsc.groups === 0, 'Esc ran no tracking');
 
+    // ---- the dual slider, and its two-way binding to the number fields ----
+    await openRangeModal();
+    const sliderPresent = await page.evaluate(() => ({
+        container: !!document.querySelector('.range-slider-container'),
+        start: !!document.getElementById('trackRangeSliderStart'),
+        end: !!document.getElementById('trackRangeSliderEnd'),
+        fill: !!document.getElementById('trackRangeFill'),
+        // The fill must actually be painted. `--accent-color` was referenced by
+        // six declarations and never defined; an undefined custom property is
+        // invalid at computed-value time, so the fill resolved to `transparent`
+        // and the bar was invisible — including on the Export Video Overlays
+        // slider this one mirrors.
+        fillBg: getComputedStyle(document.getElementById('trackRangeFill')).backgroundColor,
+        min: document.getElementById('trackRangeSliderStart').min,
+        max: document.getElementById('trackRangeSliderEnd').max,
+    }));
+    console.log('  phase 5 (slider):', JSON.stringify(sliderPresent));
+    check(sliderPresent.container && sliderPresent.start && sliderPresent.end && sliderPresent.fill,
+        'the modal has a dual range slider like Export Video Overlays');
+    check(sliderPresent.min === '0' && sliderPresent.max === String(NF - 1),
+        `the slider spans the session extent (${sliderPresent.min}–${sliderPresent.max})`);
+    check(sliderPresent.fillBg !== 'rgba(0, 0, 0, 0)' && sliderPresent.fillBg !== 'transparent',
+        `the slider fill is actually painted, not transparent (${sliderPresent.fillBg})`);
+
+    // slider -> inputs
+    const fromSlider = await page.evaluate(() => {
+        const s = document.getElementById('trackRangeSliderStart');
+        const e = document.getElementById('trackRangeSliderEnd');
+        s.value = '7'; s.dispatchEvent(new Event('input', { bubbles: true }));
+        e.value = '21'; e.dispatchEvent(new Event('input', { bubbles: true }));
+        return {
+            start: document.getElementById('trackRangeStart').value,
+            end: document.getElementById('trackRangeEnd').value,
+            fillLeft: document.getElementById('trackRangeFill').style.left,
+            fillWidth: document.getElementById('trackRangeFill').style.width,
+            summary: document.getElementById('trackRangeSummary').textContent,
+        };
+    });
+    console.log('  phase 5 (slider -> inputs):', JSON.stringify(fromSlider));
+    check(fromSlider.start === '7' && fromSlider.end === '21',
+        `dragging the slider updates the number fields (${fromSlider.start}–${fromSlider.end})`);
+    check(/15 frames/.test(fromSlider.summary), `and the summary (${fromSlider.summary})`);
+    check(parseFloat(fromSlider.fillLeft) > 0 && parseFloat(fromSlider.fillWidth) > 0,
+        `the fill bar spans the selection (left ${fromSlider.fillLeft}, width ${fromSlider.fillWidth})`);
+
+    // inputs -> slider
+    await page.fill('#trackRangeStart', '2');
+    await page.fill('#trackRangeEnd', '9');
+    const fromInputs = await page.evaluate(() => ({
+        sliderStart: document.getElementById('trackRangeSliderStart').value,
+        sliderEnd: document.getElementById('trackRangeSliderEnd').value,
+    }));
+    check(fromInputs.sliderStart === '2' && fromInputs.sliderEnd === '9',
+        `typing in the number fields moves the slider (${fromInputs.sliderStart}–${fromInputs.sliderEnd})`);
+
+    // The two thumbs share a track; dragging one past the other must push it
+    // rather than invert the range and disable Continue mid-drag.
+    const crossed = await page.evaluate(() => {
+        const s = document.getElementById('trackRangeSliderStart');
+        s.value = '25'; s.dispatchEvent(new Event('input', { bubbles: true }));
+        return {
+            sliderEnd: document.getElementById('trackRangeSliderEnd').value,
+            disabled: document.getElementById('trackRangeContinue').disabled,
+        };
+    });
+    check(crossed.sliderEnd === '25' && !crossed.disabled,
+        `dragging start past end pushes end instead of inverting (end now ${crossed.sliderEnd}, Continue enabled)`);
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(150);
+
     // Continue must run the range and show the Track All loading overlay.
     await openRangeModal();
     await page.fill('#trackRangeStart', '12');
@@ -380,6 +450,13 @@ try {
     check(!/error/i.test(afterRun.status), `the modal-driven run reported no error (status: "${afterRun.status}")`);
     check(afterRun.frames.length === 6 && afterRun.frames[0] === 12 && afterRun.frames[5] === 17,
         `the modal-driven run tracked exactly the frames it was given (${JSON.stringify(afterRun.frames)})`);
+    // The run must leave the viewer on its own result, not wherever the user
+    // happened to be (frame 4, set before phase 4 opened the modal).
+    await page.waitForFunction(() => window.__ASMOD.state.currentFrame === 17, { timeout: 5000 })
+        .catch(() => { });
+    const parked = await page.evaluate(() => window.__ASMOD.state.currentFrame);
+    check(parked === 17,
+        `the viewer is parked on the LAST frame tracked (currentFrame ${parked}, expected 17 — was 4 before the run)`);
 
     await browser.close();
 } finally {
