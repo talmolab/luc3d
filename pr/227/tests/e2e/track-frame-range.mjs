@@ -170,8 +170,9 @@ try {
     check(a.afterAll.identities === 2, `precondition: Track All found both animals (${a.afterAll.identities} identities)`);
     check(a.afterAll.groupFrames === NF, `precondition: Track All grouped every frame (${a.afterAll.groupFrames}/${NF})`);
     check(!/error/i.test(a.status), `Track Frame Range reported no error (status: "${a.status}")`);
-    check(new RegExp(`\\(${LO}[^0-9][^)]*${HI}\\)`).test(a.status) || a.status.includes(`${LO}`),
-        `status names the range it tracked (status: "${a.status}")`);
+    // Status text is 1-based, like every other frame number the app shows.
+    check(a.status.includes(`(${LO + 1}–${HI + 1})`),
+        `status names the range it tracked, 1-based (expected "(${LO + 1}–${HI + 1})" in: "${a.status}")`);
     check(/10 frames/.test(a.status), `status reports the RANGE's frame count, not the project's (status: "${a.status}")`);
     check(a.outsideUnchanged,
         `frames outside [${LO}, ${HI}] are byte-identical before and after the range run (${a.outsideIdCount} identity entries + their groups)`);
@@ -323,7 +324,8 @@ try {
         hasContinue: !!document.getElementById('trackRangeContinue'),
     }));
     console.log('  phase 4 (modal):', JSON.stringify(prefill));
-    check(prefill.start === '4', `the modal pre-fills Start with the current frame (got "${prefill.start}")`);
+    check(prefill.start === '5',
+        `the modal pre-fills Start with the current frame, 1-based (currentFrame 4 -> "${prefill.start}", expected "5")`);
     check(Number(prefill.end) > Number(prefill.start), `the modal pre-fills a non-empty End (got "${prefill.end}")`);
     check(prefill.animals === '2', `the modal pre-fills the known animal count (got "${prefill.animals}")`);
     check(prefill.hasCancel && prefill.hasContinue, 'the modal has both a Cancel and a Continue button');
@@ -382,8 +384,9 @@ try {
         };
     });
     console.log('  phase 5 (slider -> inputs):', JSON.stringify(fromSlider));
-    check(fromSlider.start === '7' && fromSlider.end === '21',
-        `dragging the slider updates the number fields (${fromSlider.start}–${fromSlider.end})`);
+    // Sliders hold 0-based indices; the number fields show 1-based.
+    check(fromSlider.start === '8' && fromSlider.end === '22',
+        `dragging the slider to indices 7–21 shows 1-based 8–22 in the fields (got ${fromSlider.start}–${fromSlider.end})`);
     check(/15 frames/.test(fromSlider.summary), `and the summary (${fromSlider.summary})`);
     check(parseFloat(fromSlider.fillLeft) > 0 && parseFloat(fromSlider.fillWidth) > 0,
         `the fill bar spans the selection (left ${fromSlider.fillLeft}, width ${fromSlider.fillWidth})`);
@@ -395,21 +398,38 @@ try {
         sliderStart: document.getElementById('trackRangeSliderStart').value,
         sliderEnd: document.getElementById('trackRangeSliderEnd').value,
     }));
-    check(fromInputs.sliderStart === '2' && fromInputs.sliderEnd === '9',
-        `typing in the number fields moves the slider (${fromInputs.sliderStart}–${fromInputs.sliderEnd})`);
+    check(fromInputs.sliderStart === '1' && fromInputs.sliderEnd === '8',
+        `typing 1-based 2–9 moves the slider to indices 1–8 (got ${fromInputs.sliderStart}–${fromInputs.sliderEnd})`);
 
-    // The two thumbs share a track; dragging one past the other must push it
-    // rather than invert the range and disable Continue mid-drag.
+    // The two thumbs share one track. Neither may pass the other, and neither
+    // may DRAG the other along: an endpoint the user already set must stay put.
     const crossed = await page.evaluate(() => {
         const s = document.getElementById('trackRangeSliderStart');
         s.value = '25'; s.dispatchEvent(new Event('input', { bubbles: true }));
         return {
+            sliderStart: document.getElementById('trackRangeSliderStart').value,
             sliderEnd: document.getElementById('trackRangeSliderEnd').value,
+            startInput: document.getElementById('trackRangeStart').value,
             disabled: document.getElementById('trackRangeContinue').disabled,
         };
     });
-    check(crossed.sliderEnd === '25' && !crossed.disabled,
-        `dragging start past end pushes end instead of inverting (end now ${crossed.sliderEnd}, Continue enabled)`);
+    check(crossed.sliderStart === '8',
+        `the start thumb stops at the end thumb instead of passing it (start now ${crossed.sliderStart}, end is 8)`);
+    check(crossed.sliderEnd === '8',
+        `and the end thumb did NOT get pushed along (still ${crossed.sliderEnd})`);
+    check(crossed.startInput === '9' && !crossed.disabled,
+        `the clamped value shows 1-based in the field (${crossed.startInput}) and Continue stays enabled`);
+
+    // Symmetric: the end thumb stops at the start thumb.
+    const crossedEnd = await page.evaluate(() => {
+        const st = document.getElementById('trackRangeSliderStart');
+        const en = document.getElementById('trackRangeSliderEnd');
+        st.value = '6'; st.dispatchEvent(new Event('input', { bubbles: true }));
+        en.value = '0'; en.dispatchEvent(new Event('input', { bubbles: true }));
+        return { sliderStart: st.value, sliderEnd: en.value };
+    });
+    check(crossedEnd.sliderEnd === '6' && crossedEnd.sliderStart === '6',
+        `the end thumb stops at the start thumb (start ${crossedEnd.sliderStart}, end ${crossedEnd.sliderEnd})`);
     await page.keyboard.press('Escape');
     await page.waitForTimeout(150);
 
@@ -448,15 +468,18 @@ try {
     console.log('  phase 4 (after Continue):', JSON.stringify(afterRun));
     check(!afterRun.open, 'the modal closes when Continue runs');
     check(!/error/i.test(afterRun.status), `the modal-driven run reported no error (status: "${afterRun.status}")`);
-    check(afterRun.frames.length === 6 && afterRun.frames[0] === 12 && afterRun.frames[5] === 17,
-        `the modal-driven run tracked exactly the frames it was given (${JSON.stringify(afterRun.frames)})`);
+    // Typed 12–17 are 1-based, so the frames tracked are indices 11–16.
+    check(afterRun.frames.length === 6 && afterRun.frames[0] === 11 && afterRun.frames[5] === 16,
+        `1-based 12–17 tracked indices 11–16 (${JSON.stringify(afterRun.frames)})`);
+    check(afterRun.status.includes('(12–17)'),
+        `and the status reports it back 1-based (status: "${afterRun.status}")`);
     // The run must leave the viewer on its own result, not wherever the user
     // happened to be (frame 4, set before phase 4 opened the modal).
-    await page.waitForFunction(() => window.__ASMOD.state.currentFrame === 17, { timeout: 5000 })
+    await page.waitForFunction(() => window.__ASMOD.state.currentFrame === 16, { timeout: 5000 })
         .catch(() => { });
     const parked = await page.evaluate(() => window.__ASMOD.state.currentFrame);
-    check(parked === 17,
-        `the viewer is parked on the LAST frame tracked (currentFrame ${parked}, expected 17 — was 4 before the run)`);
+    check(parked === 16,
+        `the viewer is parked on the LAST frame tracked (currentFrame index ${parked}, expected 16 = 1-based 17 – was 4 before the run)`);
 
     await browser.close();
 } finally {
