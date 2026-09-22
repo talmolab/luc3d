@@ -166,6 +166,42 @@
             assertDeepEqual(out.nodes, BUG_NODES);
             assertDeepEqual(edgeNames(out), BUG_EDGE_NAMES);
         });
+
+        it('keeps the node COUNT when a legacy file has a dangling py/id', function () {
+            // Files written by the pre-fix exporter reference an edgeless node
+            // by a py/id that was never emitted, so its name is genuinely not
+            // in the file (real example: lucid_folders/skeletons/hand-arm.json,
+            // nodes [1,2,4,5] where 3 is the EdgeType and 5 is nothing). The
+            // node still has to survive as a placeholder — a session's
+            // per-instance point arrays are sized by the node count, so
+            // dropping one shifts every point after it.
+            const legacy = {
+                directed: true,
+                graph: { name: 'skeleton', num_edges_inserted: 2 },
+                multigraph: true,
+                links: [
+                    {
+                        edge_insert_idx: 0, key: 0,
+                        source: { 'py/object': 'sleap.skeleton.Node', 'py/state': { 'py/tuple': ['shoulder', 1.0] } },
+                        target: { 'py/object': 'sleap.skeleton.Node', 'py/state': { 'py/tuple': ['elbow', 1.0] } },
+                        type: { 'py/reduce': [{ 'py/type': 'sleap.skeleton.EdgeType' }, { 'py/tuple': [1] }] }
+                    },
+                    {
+                        edge_insert_idx: 1, key: 0,
+                        source: { 'py/id': 2 },
+                        target: { 'py/object': 'sleap.skeleton.Node', 'py/state': { 'py/tuple': ['wrist', 1.0] } },
+                        type: { 'py/id': 3 }
+                    }
+                ],
+                // py/id 5 was never assigned to anything.
+                nodes: [{ id: { 'py/id': 1 } }, { id: { 'py/id': 2 } },
+                { id: { 'py/id': 4 } }, { id: { 'py/id': 5 } }]
+            };
+            const out = parseSkeletonJSON(JSON.stringify(legacy));
+            assertEqual(out.nodes.length, 4, 'the 4th node must not be dropped');
+            assertDeepEqual(out.nodes, ['shoulder', 'elbow', 'wrist', 'node_3']);
+            assertDeepEqual(edgeNames(out), [['shoulder', 'elbow'], ['elbow', 'wrist']]);
+        });
     });
 
     describe('skeleton-json SLEAP import (issue #205)', function () {

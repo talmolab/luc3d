@@ -14,6 +14,28 @@
   box-sizing: border-box;
 }
 
+/* No native up/down spinner on ANY number field, app-wide.
+   Chromium paints the spinner inside the field, on top of the text, so on the
+   narrow numeric inputs this app uses it crowds or clips the value the moment
+   the pointer is over it. Every field here is typed into, not clicked up one
+   step at a time, and the arrow keys still step the value natively.
+   This was already being done twice, per-class (`.no-spinner` for the 3D
+   viewer fields, `.settings-num-input` for Settings); both scoped copies are
+   gone now that the base rule covers every field. Deliberately does NOT touch
+   `.vis3d-stepper`, the 3D viewer's hand-built replacement arrows — those are
+   a real widget, not browser chrome. */
+input[type="number"] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
+input[type="number"]::-webkit-outer-spin-button,
+input[type="number"]::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  appearance: none;
+  margin: 0;
+}
+
 :root {
   --bg-primary: #1a1a1a;
   --bg-secondary: #222222;
@@ -26,6 +48,15 @@
   --accent: #667eea;
   --accent-hover: #7b91f5;
   --accent-dim: rgba(102, 126, 234, 0.25);
+  /* Alias, because six declarations already reference `--accent-color` and it
+     was never defined anywhere. An undefined custom property is "invalid at
+     computed-value time", which does NOT fall back to an earlier declaration —
+     the property resolves to its INITIAL value. So `.multi-frame-modal
+     button.primary` and `.range-slider-fill` were painting `transparent`
+     backgrounds (measured), i.e. every modal's primary button and the Export
+     Video Overlays range slider's fill bar were invisible. Aliased rather than
+     hard-coded so the two can never drift apart. */
+  --accent-color: var(--accent);
   --border-color: #3a3a3a;
   --border-light: #444444;
   --error-color: #e74c3c;
@@ -1333,6 +1364,66 @@ body {
 
 .multi-frame-modal button:hover {
   filter: brightness(1.15);
+}
+
+.multi-frame-modal button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  filter: none;
+}
+
+/* Shared inline validation line for modals (red, reserves its own height so
+   showing/hiding a message never shifts the buttons underneath). */
+.modal-error {
+  color: #e5484d;
+  font-size: 12px;
+  margin: 8px 0 0;
+  min-height: 14px;
+}
+
+/* Track Frame Range modal (#212) */
+.track-range-fields {
+  display: flex;
+  gap: 12px;
+}
+
+.track-range-field {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.track-range-field input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 6px 8px;
+  font-size: 13px;
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+}
+
+.track-range-summary {
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  min-height: 14px;
+}
+
+/* Endpoint labels under the dual slider, so the track's extent is readable
+   without dragging a thumb to find out where it ends. */
+.track-range-bounds {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: -10px;
+  margin-bottom: 12px;
 }
 
 /* Dual range slider */
@@ -3775,13 +3866,6 @@ kbd {
     border-color: #667eea;
 }
 
-/* Hide number input spinner buttons */
-.no-spinner::-webkit-outer-spin-button,
-.no-spinner::-webkit-inner-spin-button {
-    -webkit-appearance: none;
-    margin: 0;
-}
-
 /* Custom stepper arrows for 3D viewer inputs */
 .vis3d-stepper {
     display: inline-flex;
@@ -4302,18 +4386,6 @@ kbd {
 .settings-num-input:focus {
   outline: none;
   border-color: var(--accent);
-}
-
-/* No up/down spinner arrows on the number fields. */
-.settings-num-input::-webkit-outer-spin-button,
-.settings-num-input::-webkit-inner-spin-button {
-  -webkit-appearance: none;
-  margin: 0;
-}
-
-.settings-num-input {
-  -moz-appearance: textfield;
-  appearance: textfield;
 }
 
 .settings-docs-note {

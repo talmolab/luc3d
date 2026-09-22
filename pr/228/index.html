@@ -197,7 +197,12 @@
             <span class="triangulation-badge" id="triangulationBadge" style="display:none"></span>
             <div class="toolbar-separator"></div>
             <div class="toolbar-group">
-                <button class="toolbar-btn" id="tbTrackFrame" title="Track current frame (Shift+T)">Track Frame</button>
+                <div class="tri-dropdown" id="trackFrameDropdown">
+                    <button class="toolbar-btn" id="tbTrackFrame" title="Track current frame (Shift+T)">Track Frame <span class="tri-caret">▾</span></button>
+                    <div class="tri-dropdown-menu">
+                        <div class="tri-dropdown-item" id="tbTrackFrameRange">Track Frame Range… <span class="tri-dropdown-hint">Start–End</span></div>
+                    </div>
+                </div>
                 <button class="toolbar-btn" id="tbTrackAll" title="Track all frames (Ctrl+Shift+T)">Track All</button>
             </div>
             <div class="toolbar-separator"></div>
