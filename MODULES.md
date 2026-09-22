@@ -2277,6 +2277,79 @@ reused by passing the bare extrinsic + normalized points:
 
 ---
 
+### pose/temporal-smoothing.js
+
+**Purpose.** Post-triangulation temporal filtering of the 3D tracks — the
+smoothing half of luc3d #134 ("3d projection would benefit from anipose's
+temporal smoothing and RPE flags"). The RPE half of that issue already shipped
+as the Tracking Wizard's `reprojErrorThreshold` in `triangulateAndReproject`
+(`pose/triangulation.js`). Reads and writes `InstanceGroup.points3d` ONLY;
+`Instance._xy` (`'user'` and `'predicted'` 2D) is never modified.
+
+**Where it sits.** AFTER triangulation, never inside tracking, and never on 2D.
+Pipeline: track → proofread identities → triangulate → smooth. Smoothing before
+identities are proofread smooths ACROSS an ID swap, welding two animals'
+trajectories together; `CrossViewTracker` is causal and frame-by-frame while a
+smoother is non-causal; and the tracker's hyperparameters are measured against
+benchmark corpora that changing its 3D state would invalidate. 2D filtering was
+rejected because the low-acceleration prior is physically true in 3D and only
+approximately true under perspective projection, and because interpolating a
+missing view fabricates an observation that then votes in triangulation as if
+it were real data.
+
+**Algorithm.** Two independently switchable stages over each node's 1D
+coordinate signals (15 nodes = 45 signals per identity; nodes never enter each
+other's windows):
+1. **Median** (despike) — nonlinear, rank-based, removes impulses.
+2. **Gaussian** (smooth) — weighted mean, `sigma = (window-1)/6`, removes
+   broadband noise.
+Order is fixed: Gaussian-first would smear an isolated outlier across its
+window, after which the median can no longer remove it. Windows are coerced to
+ODD (`normalizeWindow`) so they stay centered — an even window is a half-frame
+phase shift against the video.
+
+**Missing data.** Two regimes, deliberately distinguished. ISOLATED HOLES (gap
+<= `smoothMaxGap`) are skipped with the Gaussian weights renormalized over
+present samples. SEGMENT BOUNDARIES (longer gaps, and the ends of the
+trajectory) shrink the window SYMMETRICALLY — a one-sided window is an
+extrapolation, biased toward whichever side still has data by roughly
+`velocity x half-window` (~15 mm at 10 mm/frame with a 7-window), which reads
+as the skeleton lurching at every occlusion edge. Presence is decided ONCE at
+the SKELETON level and applied to all 45 signals, because a single 1D signal
+cannot distinguish "occluded in 4 of 5 cameras" from "the animal left", and
+per-node segmentation would deform the skeleton. Gaps are NEVER filled — a NaN
+input is a NaN output — unlike anipose's `filter_3d.py`, which `np.interp`s
+across gaps of any length before filtering. This also keeps the gap structure
+invariant across the two stages, so segments are computed once and reused.
+
+**Not a lazy sweep.** `session.instanceGroups` is fully resident
+(`sweepLazyFrameWindows` releases `frameGroups`, never `instanceGroups`, and
+the SLP 2.8 columnar reader materializes every group's 3D on load — luc3d
+#189), so this walks the map directly and hydrates no 2D. It therefore cannot
+fall into the resident-only bug class of luc3d #194/#195.
+
+**Provenance.** Sets `InstanceGroup.smoothed = true` and clears the derived
+reprojection caches (`group.reprojections`, `group.reprojectedInstances`), which
+refill lazily. `triangulationMethod` is deliberately UNTOUCHED: smoothing is
+orthogonal to which solver produced the points (a group can be BA-solved AND
+smoothed), and a third value there would erase the solver identity
+`resolveTriangulationMethod` exists to preserve.
+
+**Exports.** `normalizeWindow`, `sigmaForWindow`, `buildSegments`, `medianOf`,
+`smoothSignalInto`, `resolveSmoothingParams`, `collectTrajectories`,
+`smoothTrajectory`, `smoothSession`.
+
+**Imports.** `pose/pose-data.js` (`POINT3D_STRIDE`, `points3dNodeCount`) only —
+no UI imports, so the module stays unit-testable in plain Node.
+
+**Imported by.** `ui/ui-wiring.js` (`smoothSession`, `resolveSmoothingParams`).
+
+**Tests.** `tests/test-temporal-smoothing.mjs` (88 assertions). Verified by
+mutation: removing the symmetric shrink, zero-padding instead of renormalizing,
+and filling gaps each fail with the specific artifact they represent.
+
+---
+
 ### pose/triangulation.js
 
 **Purpose.** DLT triangulation, bundle-adjustment refinement, reprojection
@@ -8301,6 +8374,19 @@ Shortcuts and the Hot Keys modal where people look for them.
   but still resolve via `getTrackingThreshold`. `getTrackingThresholds` returns
   the effective `{ id: value }` map the tracker snapshots per run; values clamp to
   range and entries equal to the default are dropped.
+- `SMOOTHING_PARAMS` / `getSmoothingParamDefs()` / `getSmoothingParam(id)` /
+  `getSmoothingParams()` / `setSmoothingParams(map)` — the Temporal Smoothing
+  hyperparameters (luc3d #134): `smoothMedianWindow`, `smoothGaussianWindow`
+  (both default **0 = off**, matching `reprojErrorThreshold`, so shipping the
+  feature changes no existing project's 3D), `smoothMaxGap` (5),
+  `smoothMinSegment` (5). A SEPARATE catalog from `TRACKING_THRESHOLDS`, not more
+  entries in it: these are post-triangulation filter parameters rather than
+  cross-view tracker knobs, and the Tracking Wizard's Thresholds section renders
+  every threshold the catalog exposes. Note the `smooth*` prefix — `filter*` is
+  already taken here for DETECTION filtering (`filterMinVisibleNodes`,
+  `filterMinInstanceScore`). Same clamp + drop-if-default persistence as the
+  thresholds, under `_settings.smoothingParams`. Read by `ui/ui-wiring.js` and
+  passed to `smoothSession` (`pose/temporal-smoothing.js`).
 - `getActions()` — catalog snapshot `[{ id, label, category, binding,
   defaultBinding, editable, dispatched }]` with effective bindings, for the modal.
 - `getBinding(id)` — effective binding string (user override or catalog default).
@@ -8364,9 +8450,10 @@ right panel area (`settings-panel-container`), with a Cancel / Apply footer.
 
 **Key exports.**
 - `showSettingsModal(initialPanel)` — `initialPanel` ∈ `'triangulation'` |
-  `'keyboard'` | `'wizard'` (default `'triangulation'`). Single-instance.
+  `'keyboard'` | `'wizard'` | `'smoothing'` (default `'triangulation'`).
+  Single-instance.
 
-**Behavior.** Three panels: **Default Triangulation** (single-select DLT /
+**Behavior.** Four panels: **Default Triangulation** (single-select DLT /
 Refined radio rows — the `'ba'` method is labelled "Refined (Ref)" — initialized
 from `getDefaultTriangulationMethod()`), **Keyboard
 Shortcuts** (the full `getActions()` catalog grouped by category — editable
@@ -8374,7 +8461,7 @@ entries get a click-to-capture key chip that records a **chord or a multi-key
 sequence**: keep pressing keys (the primary Ctrl/Cmd modifier is normalized to
 `Mod` via `chordFromEvent`) until you click anywhere to set, or Esc to cancel,
 with duplicate-binding rejection; fixed entries
-render a greyed, dashed reference chip), and **Tracking Wizard** (three sections:
+render a greyed, dashed reference chip), **Tracking Wizard** (three sections:
 **Node Weights** — one row per node of the active session's skeleton with a
 number field, range `0–1`, step `0.01`, seeded from `getNodeWeight(name)`; a `0`
 drops the node from the CrossViewTracker's association cost and greys the row
@@ -8388,10 +8475,23 @@ CrossViewTracker's free parameters only; legacy luc3d thresholds are filtered
 out), range/step from the catalog — or, for a `kind: 'toggle'` entry (the match
 gate, the two after-tracking ID-switch checks, the WebNN opt-in), an on/off
 switch stored as `1`/`0` (`makeToggle`). Covered by
-`tests/e2e/settings-wizard-toggles.mjs`. All edits mutate a local `working`
+`tests/e2e/settings-wizard-toggles.mjs`), and **Temporal Smoothing** (luc3d
+#134 — one **Filter Parameters** section rendering `getSmoothingParamDefs()`:
+median window, Gaussian window, max gap, minimum segment. Its own panel rather
+than a fourth Tracking Wizard section because it is not a tracking parameter —
+it runs after triangulation, on 3D the tracker has finished with. The panel
+carries a note that raising the Tracking Wizard's reprojection-error threshold
+creates more gaps and therefore more of the gap edges where the filter is least
+accurate, so both dials up hard is worse than either alone. The pass itself is
+run from the Triangulate / Triangulate All dropdowns, not from here).
+The Tracking Thresholds and Temporal Smoothing rows share one
+`buildParamRow(def, bag)` helper — both render the same
+`{ id, label, desc, min, max, step }` catalog shape, both clamp on blur, and a
+`kind: 'toggle'` def renders the switch instead of the number field.
+All edits mutate a local `working`
 state only (only editable bindings are tracked); nothing commits until **Apply**
 (`setDefaultTriangulationMethod` + `applyBindings` + `setNodeWeights` +
-`setCameraWeights` + `setTrackingThresholds`), which then repaints overlays +
+`setCameraWeights` + `setTrackingThresholds` + `setSmoothingParams`), which then repaints overlays +
 timeline so excluded views grey immediately. Cancel / close `×` / backdrop click
 / Escape discard. A
 capture-phase document keydown listener makes the modal fully capture the
@@ -8401,15 +8501,17 @@ teardown.
 **Imports from project modules.** `./settings.js` (`getDefaultTriangulationMethod`,
 `setDefaultTriangulationMethod`, `getActions`, `applyBindings`, `formatBinding`,
 `getNodeWeight`, `setNodeWeights`, `getCameraWeight`, `setCameraWeights`,
-`getTrackingThresholdDefs`, `setTrackingThresholds`); `./app-state.js`
+`getTrackingThresholdDefs`, `setTrackingThresholds`, `getSmoothingParamDefs`,
+`setSmoothingParams`); `./app-state.js`
 (`getActiveSession`, `state`, `timeline`); `./rendering.js` (`drawAllOverlays`,
 for the post-Apply repaint).
 
 **Imported by.** `ui/ui-wiring.js`.
 
 **User-facing features.** Settings modal — choose default triangulation method,
-remap keyboard shortcuts, set per-node tracking weights, and exclude camera views
-from tracking (Tracking Wizard, also reachable via Tracks ▸ Tracking Wizard).
+remap keyboard shortcuts, set per-node tracking weights, exclude camera views
+from tracking (Tracking Wizard, also reachable via Tracks ▸ Tracking Wizard),
+and tune the Temporal Smoothing filter (luc3d #134).
 
 ---
 
@@ -9504,6 +9606,24 @@ imports the modal. The menu is revealed purely by `:hover`, which is
 worth knowing when driving it from a test: a modal opening over the toolbar
 drops hover, so a second click on the item has to re-hover the button first (see
 `tests/e2e/track-frame-range.mjs`).
+
+Both menus carry a third item below a separator, **Temporal Smoothing** (luc3d
+#134), handled by the private `runTemporalSmoothing(currentFrameOnly)`. It reads
+`getSmoothingParams()`, and when both kernels are off says so and opens
+Settings ▸ Temporal Smoothing rather than silently doing nothing; otherwise it
+calls `smoothSession` (`pose/temporal-smoothing.js`), then `markDirty` +
+`drawAllOverlays` + `update3DViewport` + `updateInfoPanel`. Under `Triangulate`
+it passes `writeFrames: new Set([state.currentFrame])` — the whole trajectory is
+still READ, since a filter needs neighbours on both sides, but only the current
+frame is WRITTEN, mirroring the current-frame/all-frames split. It runs
+synchronously with no progress modal: the pass touches only `points3d` on the
+already-resident `session.instanceGroups`, hydrating no 2D.
+
+`wireTriDropdown` now passes the menu item's `data-method` through **verbatim**.
+It previously normalized with `=== 'ba' ? 'ba' : 'dlt'`, which silently mapped
+any unrecognized value onto DLT — so the new `smooth` item would have run a
+triangulation instead, with no error. Each `onPick` owns the mapping and must
+handle values it does not expect.
 
 **Track / Identity menu modals.** The `Tracks` menu's New / Rename / Delete
 actions for both tracks and identities open shared private modal helpers in
