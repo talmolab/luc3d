@@ -901,6 +901,54 @@ population), `tests/test-cross-view-tracker.mjs` (algorithm), and
 `tests/test-tracker-collision-guard.mjs` (`commitTrackedFrame`'s raw-trackIdx
 collision guard).
 
+**Track Frame Range (#212).** `trackFrameRange(startFrame, endFrame)` tracks a
+contiguous span — the middle ground between Track Frame (one frame) and Track
+All (the whole video), so a user can re-run tracking over a narrow window around
+a known ID switch while changing Tracking Wizard settings (node weights, camera
+views, the 3D correspondence weight) instead of paying for a full pass over a
+long recording. Reached from the Track Frame split button's hover dropdown via
+`ui/track-range-modal.js`; **the toolbar button itself still tracks the current
+frame**, unchanged.
+
+`trackAll` and `trackFrameRange` are both one-liners over a shared
+`runTrackingPass(range)` (`range === null` ⇒ Track All). Everything the two do
+differently is driven by that argument, and all three differences matter:
+
+- **Which frames are swept.** Windowed lazy sessions pass `start`/`end` through
+  `sweepTrackAllFrames` into `sweepLazyFrameWindows` (whose `opts.start`/
+  `opts.end` had no caller before this); non-lazy sessions filter
+  `frameIndices`. The frame COUNT reported in the status line and the progress
+  overlay is the range's, not the project's.
+- **What prior state is cleared.** Track All wipes `identities` /
+  `frameIdentityMap` / `instanceGroups` wholesale. A range must not: it clears
+  only entries whose frame lies inside `[lo, hi]` (`clearTrackingStateInRange`,
+  which decodes `frameIdentityMap` keys through `Session.frameIdentityEntries()`
+  rather than re-deriving the packed key layout). Getting this wrong is the
+  invisible-damage failure class this codebase keeps hitting — the range the
+  user is looking at would still look right while everything else was destroyed.
+- **Whether identities are recycled.** A range run starts the tracker from
+  scratch at `lo` and carries NO history in from before it, so its targets are
+  fresh objects every run. Without recycling, each re-run would mint a new
+  `id_N` per animal and the identity list would grow without bound — fatal for
+  the iterate-on-settings workflow the feature exists for. `runTrackingPass`
+  therefore hands `commitTrackedFrame` an `identityPool` of the session's
+  existing identity ids, consumed in order before `addIdentity` mints anything.
+  Track All passes no pool (it cleared the list first, so `addIdentity` is
+  already the reuse path there).
+
+Range endpoints are clamped to the session's real extent
+(`trackableFrameBounds`, which prefers `lazyLoader.nFrames` over the resident-only
+`frameIndices` — the same trap the fresh-open guard fell into) and normalized if
+reversed; a non-integer endpoint is refused outright, because every comparison
+against `NaN` is false and it would otherwise sail past the ordering check and
+sweep nothing while reporting a `NaN` range. Like Track All, a range run does NOT propagate to tracks.
+`getTrackerNumAnimals` / `setTrackerNumAnimals` expose the animal count so the
+modal can collect it inline; `runTrackingPass` skips the native `promptNumAnimals()`
+on the range path so a `prompt()` never stacks on top of the dialog. Covered by
+`tests/e2e/track-frame-range.mjs` (range scoping, identity recycling, clamping,
+the windowed sweep, and the toolbar → modal → loading-overlay path; its three
+core assertions were each confirmed to fail under a deliberate mutation).
+
 **Legacy `matchFrameInstances` (bench-only).** The original per-frame matcher +
 4-signal reorder is retained and exported but **no longer used by the app** —
 only by the benchmark harness (`scripts/bench/speed_test.mjs`,
@@ -4402,6 +4450,53 @@ covered by `tests/test-track-identity-modals.js`; the lazy/durable half of
 
 ---
 
+### ui/track-range-modal.js
+
+**Purpose.** The **Track Frame Range** dialog (#212) — the start/end picker
+behind the Track Frame split button's hover dropdown. Exists so tracking can be
+re-run over a narrow window around a known ID switch while iterating on Tracking
+Wizard settings, instead of re-running a whole long recording.
+
+**Key exports.**
+- `showTrackRangeModal()` — builds the modal (standard
+  `.multi-frame-modal-overlay` / `.multi-frame-modal` markup), validates
+  inline, and on **Continue** calls `trackFrameRange(start, end)`
+  (`pose/tracker.js`), which owns the loading overlay and the status line from
+  there. Cancel, `Esc` and a backdrop click all close it with no side effects.
+
+**Imports from project modules.** `ui/app-state.js` (`state`,
+`getActiveSession`), `import-export/save-load.js` (`setStatus`),
+`pose/tracker.js` (`trackFrameRange`, `trackableFrameBounds`,
+`getTrackerNumAnimals`, `setTrackerNumAnimals`).
+
+**Imported by.** `ui/ui-wiring.js` (wires `#tbTrackFrameRange`, the dropdown
+item; the `#tbTrackFrame` button itself stays wired to `trackCurrentFrame` in
+`pose/tracker.js`'s own IIFE). It sits between `ui-wiring.js` and `tracker.js`,
+which `ui-wiring.js` already imported directly — so it introduces no new cycle.
+
+**User-facing features.** Start frame (pre-filled with the current frame), End
+frame (pre-filled to a 100-frame window, clamped to the project), and **Animals**
+(pre-filled with the current count; blank = auto-detect). A live summary line
+reports the range size and the effective animal count; a live error line explains
+an invalid range and disables Continue rather than closing on bad input. `Enter`
+is Continue and `Esc` is Cancel, per the app-wide modal convention.
+
+**Notes / caveats.**
+- **It collects the animal count on purpose.** `pose/tracker.js` otherwise asks
+  with a native `prompt()`, which would pop up ON TOP of this dialog the first
+  time anyone used it. `runTrackingPass` skips that prompt on the range path, so
+  a blank Animals field here is an explicit "auto-detect" — and the field is
+  written through on every Continue, so clearing it really does turn
+  auto-detect back on instead of silently keeping the old count.
+- **The range is tracked in isolation.** A range run restarts the tracker at its
+  first frame with no history from before it, which the modal's body text says
+  outright — identities inside the range need not line up with the frames around
+  it. See `runTrackingPass` in `pose/tracker.js`.
+- Covered by `tests/e2e/track-frame-range.mjs` (phase 4 drives the real toolbar
+  dropdown → modal → Continue → loading overlay).
+
+---
+
 ### ui/view-legend.js
 
 **Purpose.** The Visibility panel's **Display Legend** key, as DOM chrome in
@@ -4767,6 +4862,8 @@ header for the full list. Notable ones: `app-state.js`,
 `file-io.js`, `session-loader.js`, `video.js`, `tracker.js`,
 `initialization.js`, `identity-assignment.js`, `export-modals.js`,
 `sessions-panes.js`, `settings.js`, `settings-modal.js`,
+`track-range-modal.js` (`showTrackRangeModal`, wired to the Track Frame split
+button's `#tbTrackFrameRange` dropdown item — #212),
 `video-filters.js` (`setSessionRotation`; `clampRotation` still comes in via
 `sessions-panes.js`, which re-exports it).
 
@@ -4802,6 +4899,16 @@ default method. The **environment-skeleton** solve (Load Environment) likewise
 takes it, via `resolveTriangulationMethod(group)` on a brand-new group; it used
 to hardcode DLT, so a BA user's environment 3D silently disagreed with the method
 they had selected.
+
+**Track Frame is a split button too (#212).** It reuses the same `.tri-dropdown`
+markup and CSS-only hover reveal, but NOT `wireTriDropdown` — its button keeps
+its own click handler in `pose/tracker.js`'s IIFE (`trackCurrentFrame`,
+unchanged), and `ui-wiring.js` wires only the one menu item,
+`#tbTrackFrameRange`, to `showTrackRangeModal()`
+(`ui/track-range-modal.js`). The menu is revealed purely by `:hover`, which is
+worth knowing when driving it from a test: a modal opening over the toolbar
+drops hover, so a second click on the item has to re-hover the button first (see
+`tests/e2e/track-frame-range.mjs`).
 
 **Track / Identity menu modals.** The `Tracks` menu's New / Rename / Delete
 actions for both tracks and identities open shared private modal helpers in
