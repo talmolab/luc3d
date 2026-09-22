@@ -2537,7 +2537,11 @@ export function setupUI() {
     if (trackRangeItem) {
         trackRangeItem.addEventListener('click', function (e) {
             e.stopPropagation();
-            showTrackRangeModal();
+            // `navigateToFrame` is injected rather than imported by the modal:
+            // it lives in initialization.js, which imports THIS module, which
+            // imports the modal — so importing it there would close the loop.
+            // Parks the viewer on the last frame the run actually tracked.
+            showTrackRangeModal({ onTracked: navigateToFrame });
         });
     }
 
