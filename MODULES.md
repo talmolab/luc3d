@@ -7390,14 +7390,33 @@ proposal is never obscured by the highlight of the plane it would move.
 `clearPlanes()` clears it too. Pure display.
 **`setMeshMembership(payload)` / `clearMeshMembership()`** — MEMBERSHIP
 highlighting for the SELECTED 3D Mesh Object, pushed by `syncPlanes3D`. Payload
-`{color, planeIds}`; `null` clears. ADDITIVE: its own `_meshMembershipGroup`, a
+`{planeIds}`; `null` clears. ADDITIVE: its own `_meshMembershipGroup`, a
 sibling of `_planeGroup` that the per-plane fills above never touch.
 
 **It draws the member PLANES, not a derived body**, and that is the design. An
 object IS its member planes — the same cage already on screen — so each member's
-corners and edges are simply redrawn, fatter, in the object's colour. Two
-consequences worth stating:
+FACE is filled and its corners and edges redrawn, fatter, in `MESH_MEMBER_COLOR`
+(one fixed yellow). Four consequences worth stating:
 
+- **The face is the part that reads.** Corners and an outline alone left every
+  plane wearing its own colour, so on a five-walled cage "is this wall in the
+  object?" came down to a few dots. The face is built by
+  `_buildPlaneFillGeometry` — the same ring-walking fan as the plane's own fill,
+  split out of `_buildPlaneFillMesh` so a highlight can never disagree in shape
+  with the surface it highlights — at opacity 0.45 against the fill's 0.28, and
+  it is drawn whatever the plane's own `filled` flag says, because what is being
+  shown is MEMBERSHIP and not the plane's display setting. `depthTest` stays ON
+  for the face (a filled face ignoring depth paints a cage's back walls over its
+  front) and OFF for the corners and outline (so an occluded member still
+  announces itself).
+- **The colour is fixed, not the object's.** A highlight has to be legible
+  against whatever colours the user gave their planes, and an object drawn in a
+  colour of its own competes with five plane colours at once. The payload
+  therefore carries **no colour field at all** — an unused one would be an
+  invitation to wire the object's colour back in. Only one object is selected at
+  a time, so a shared highlight colour is never ambiguous; the object's colour
+  stays its identity in the table swatch, the editor and the `.glb`
+  `baseColorFactor`.
 - **It cannot drift.** Positions are read out of `this._planes`, the very
   payload the plane drawing was built from, so a highlight is always exactly on
   top of its plane. The previous version pushed the object's DERIVED geometry
@@ -7414,10 +7433,10 @@ consequences worth stating:
   edges, `Flip normals`), which is where a user acts on it anyway.
 
 A member plane that was deleted simply has nothing to light up — the same lazy
-resolution the model uses, no cascade and no throw. `renderOrder` 7 and a
-thinner outline put it UNDER the Set Angle role outlines (8), so an open angle
-dialog still reads over a highlight on the same plane; `depthTest: false`, so
-confirming that the FAR wall is a member works through the cage's own fills.
+resolution the model uses, no cascade and no throw. `renderOrder` 7 puts the
+whole highlight ABOVE the plane fills (0) and UNDER the Set Angle role outlines
+(8), so it covers the plane it lights up while an open angle dialog still reads
+over it.
 
 **Dragging a plane corner in 3D** (`_setupPlaneEditing` and friends;
 callbacks `onPlaneNodeDragged(planeId, nodeIdx, [x,y,z])` /

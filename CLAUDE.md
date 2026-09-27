@@ -655,8 +655,21 @@ without, including after deleting a member plane.
 
 **Selecting an object HIGHLIGHTS its planes; it does not draw a second body.**
 An object IS the cage already on screen, so `viewport3d.setMeshMembership`
-redraws each member plane's own corners and edges, fatter, in the object's
-colour — and `syncMeshObject3D` passes it **plane IDS, never geometry**. That is
+fills each member plane's FACE and redraws its corners and edges, fatter, in
+**one fixed yellow** — and `syncMeshObject3D` passes it **plane IDS, never
+geometry**.
+
+Two details that look like taste and are not. The face is what makes a member
+read as a member: an outline alone left the plane wearing its own colour, so on
+a five-walled cage the answer to "is this wall in the object?" was a few corner
+dots. And the yellow is fixed rather than the object's own colour, because a
+highlight has to be legible against whatever colours the user gave their
+planes — the payload deliberately carries NO colour field, so there is nothing
+inviting the object's colour back in. Only one object is selected at a time, so
+a shared highlight colour is never ambiguous; the object's colour remains its
+identity in the table swatch and the `.glb`. The face respects depth (or a
+cage's back walls paint over its front); the outline ignores depth, so an
+occluded member still announces itself. That is
 not a style choice. The derived geometry is built in the user's **origin frame**
 (the panel quotes volumes in it, and both exporters write it), while the
 viewport group that would draw it hangs off `scene` rather than `_framePivot`
