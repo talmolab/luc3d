@@ -909,21 +909,43 @@ pool, and none of it needs a merge-by-distance pass:
   (user edge cycle, else convex hull seeded by `planeFit.normal`) but in NODE
   IDS, which is the only index space two different planes share.
 - `faceAdjacency`, `orientFacesCoherently`, `meshConnectivity`, `signedVolume`,
-  `earClip2d`, `earClipFace`, `newellNormal`, `coincidentNodeReport`,
-  `connectivitySummary`.
+  `areaVectorZ`, `earClip2d`, `earClipFace`, `newellNormal`,
+  `coincidentNodeReport`, `connectivitySummary`.
 
 **Winding is the part the annotation does not determine.** A face's ring
 ultimately depends on `planeFit.normal`, a PCA eigenvector whose SIGN IS
 ARBITRARY, so independently-fit planes have unrelated windings — black patches
 and failed booleans downstream. `orientFacesCoherently` fixes the relative half
 by BFS over the adjacency graph using the manifold rule (**two faces sharing an
-edge traverse it in OPPOSITE directions**); `signedVolume` fixes the global half
-for a CLOSED mesh (negative ⇒ flip all ⇒ outward). For an OPEN cage there is no
-enclosed volume and nothing can decide which side is out, which is why
-`MeshObject3D.flipNormals` is user-set and persisted. The canonical correction
-and the user's toggle are **two independent reversals applied in order** — folding
-them into one `||` makes the toggle silently do nothing on any mesh that needed
-the canonical flip.
+edge traverse it in OPPOSITE directions**). The global half is then ONE BIT,
+and there is a rule for each topology:
+
+- **CLOSED** — `signedVolume`. Negative ⇒ flip all ⇒ outward.
+- **OPEN** — no enclosed volume, so the convention is **+Z is up**:
+  `areaVectorZ` (the Z of `Σ (b−a) × (c−a)`, i.e. the area-weighted vertical
+  component of the normal field) must come out non-negative. For a cage that
+  means **the floor faces up**, because a vertical wall's area vector is
+  horizontal and contributes nothing — the floor alone decides. Coherent winding
+  then couples the rest, so the walls end up on their INWARD faces, the surfaces
+  enclosing the arena. Unlike `signedVolume` this is origin-INDEPENDENT, which
+  is what makes it legitimate on an open surface, and the axis is that of the
+  frame the vertices are already in (so with an origin defined, "up" is the
+  user's up — the same frame the exporters write). Only an all-vertical surface
+  has no vertical component to read; `UPRIGHT_EPS` (relative to
+  `surfaceAreaScale`, so it means the same at any unit scale) catches that and
+  leaves the orientation alone.
+
+This replaced a real coin flip: the open default used to fall out of the PCA
+sign of whichever ring happened to be first, so the same cage exported either
+way depending on the order its planes were created in.
+`tests/test-mesh-object-geometry.mjs` §3b feeds one cage in four ring
+orders/windings and demands one answer — it was confirmed to FAIL on the
+previous build (one arrangement gave `n.z = −1`).
+
+`MeshObject3D.flipNormals` remains the user's override, persisted. The canonical
+correction and the toggle are **two independent reversals applied in order** —
+folding them into one `||` makes the toggle silently do nothing on any mesh that
+needed the canonical flip.
 
 **Ear clipping, not the viewport's fan.** `viewport3d._buildPlaneFillMesh` fans
 over the ring, which is right for a translucent overlay and self-overlaps on any

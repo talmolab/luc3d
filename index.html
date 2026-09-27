@@ -1105,7 +1105,7 @@
                                         <input type="color" id="meshObjectColor" class="plane-node-color" title="Colour for this object in the 3D viewport" />
                                     </div>
                                     <div class="mesh-object-report" id="meshObjectReport"></div>
-                                    <label class="mesh-object-flip" title="Invert every face normal. Needed only for an OPEN object, where nothing can decide which side is outside.">
+                                    <label class="mesh-object-flip" title="Invert every face normal. An open object is oriented +Z up by default (for a cage: floor facing up, walls facing inward); this is how to get the reverse. A closed object is oriented outward and needs no override.">
                                         <input type="checkbox" id="meshObjectFlip" /> Flip normals
                                     </label>
                                     <div class="plane-hint" style="margin-top:6px">Planes in this object</div>

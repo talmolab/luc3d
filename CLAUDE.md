@@ -641,12 +641,20 @@ without, including after deleting a member plane.
 **Two things the annotation does not determine**, both handled explicitly:
 - **Winding.** A face's ring depends on `planeFit.normal`, a PCA eigenvector
   whose SIGN IS ARBITRARY. `orientFacesCoherently` fixes the relative half (two
-  faces sharing an edge traverse it in OPPOSITE directions); `signedVolume` fixes
-  the global half for a CLOSED mesh. An OPEN cage has no enclosed volume, so
-  nothing can decide which side is out — that is why `flipNormals` is user-set
-  and persisted. The canonical correction and the user's toggle are **two
-  independent reversals applied in order**; folding them into one `||` makes the
-  toggle silently do nothing on any mesh that needed the canonical flip.
+  faces sharing an edge traverse it in OPPOSITE directions). The global half is
+  then one bit, decided per topology: a CLOSED mesh by `signedVolume` (negative
+  is inward, which is simply wrong), an OPEN one by the convention **+Z is up**
+  — `areaVectorZ` orients the surface so its area-weighted normal field points
+  along +Z. For a cage that means the FLOOR FACES UP, since vertical walls
+  contribute nothing to that sum, and coherent winding then couples the rest, so
+  the walls end up on their INWARD faces. That replaced a genuine coin flip: the
+  open default used to fall out of the PCA sign of whichever ring came first, so
+  the same cage exported either way depending on the order its planes were
+  created in. Only an all-vertical surface has no vertical component to read and
+  is left undecided. `flipNormals` remains the user's override, persisted; the
+  canonical correction and the toggle are **two independent reversals applied in
+  order**, and folding them into one `||` makes the toggle silently do nothing on
+  any mesh that needed the canonical flip.
 - **Concave faces.** The viewport's fan (`_buildPlaneFillMesh`) is right for a
   translucent overlay and self-overlaps on a concave ring, so the geometry module
   ear-clips instead. Its point-in-triangle test is **non-strict** on purpose: a
