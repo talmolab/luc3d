@@ -28,6 +28,19 @@ import { loadAllLazyFrames, sweepLazyFrameWindows } from './triangulation.js';
 import { drawAllOverlays } from '../ui/rendering.js';
 import { updateInfoPanel } from '../ui/info-panel.js';
 
+/**
+ * A frame index as the USER sees it: 1-based.
+ *
+ * Every frame number the app shows is 1-based — the `#currentFrame` readout
+ * (`frameIdx + 1`), the copy/paste status lines, the Export Video Overlays
+ * range modal — while every index it stores is 0-based. These status strings
+ * were printing the raw index, so "frame 682" in the status bar meant the
+ * frame the transport was calling 683.
+ */
+function displayFrame(frameIdx) {
+    return (frameIdx + 1).toLocaleString();
+}
+
 // Explicit "no identity" per-frame value. Written for visible instances that
 // landed in no group this frame so that getIdentity*ForTrack returns null for
 // them (Issue #6 — prevents residual duplicate identity colors).
@@ -829,6 +842,23 @@ function promptNumAnimals() {
     return true;
 }
 
+/**
+ * The user's animal count, or null for "auto-detect from the resident sample".
+ * Exported so the Track Frame Range modal can show the current value and set it
+ * inline instead of stacking a native `prompt()` on top of a modal dialog.
+ * @returns {number|null}
+ */
+export function getTrackerNumAnimals() { return trackerNumAnimals; }
+
+/**
+ * Set the animal count used as `maxTargets` by every tracking entry point.
+ * @param {number|null} n  A positive integer, or null/NaN for auto-detect.
+ */
+export function setTrackerNumAnimals(n) {
+    trackerNumAnimals = (typeof n === 'number' && isFinite(n) && n >= 1)
+        ? Math.floor(n) : null;
+}
+
 // ============================================
 // CrossViewTracker engine — the app's only temporal tracker
 // (pose/cross-view-tracker.js). trackCurrentFrame/trackAll drive it.
@@ -906,7 +936,7 @@ function buildTrackerDetections(frameGroup, cameras, frameIdx) {
 // explicit "no identity" (-1) instead of letting either identity win — the
 // 2D lookup then correctly misses and falls through to `group.identityId`,
 // exactly like the info panel and 3D viewport already do.
-export function commitTrackedFrame(session, trk, frameIdx, trackToIdentity) {
+export function commitTrackedFrame(session, trk, frameIdx, trackToIdentity, identityPool) {
     var fg = session.getFrameGroup(frameIdx);
     if (!fg) return;
     var writtenThisFrame = new Map();   // "camName:trackIdx" -> identityId
@@ -920,8 +950,21 @@ export function commitTrackedFrame(session, trk, frameIdx, trackToIdentity) {
 
         var identityId = trackToIdentity.get(target.trackId);
         if (identityId == null) {
-            var ident = session.addIdentity('id_' + session.identities.length);
-            identityId = ident.id;
+            // `identityPool` (Track Frame Range only) hands out the identities
+            // the session ALREADY has, in order, before minting new ones. A
+            // range run starts the tracker from scratch, so its targets are new
+            // objects every time — without the pool, re-running the same range
+            // to compare settings (the whole point of #212) would add a fresh
+            // id_N per animal per run and the identity list would grow without
+            // bound. Track All passes no pool: it clears identities first, so
+            // `addIdentity` below is already the reuse path there.
+            var pooled = (identityPool && identityPool.length) ? identityPool.shift() : null;
+            if (pooled != null) {
+                identityId = pooled;
+            } else {
+                var ident = session.addIdentity('id_' + session.identities.length);
+                identityId = ident.id;
+            }
             trackToIdentity.set(target.trackId, identityId);
         }
 
@@ -957,7 +1000,7 @@ export function commitTrackedFrame(session, trk, frameIdx, trackToIdentity) {
 
 // Build a reusable tracking-run context shared across frames (the tracker
 // instance + the target→Identity map). Snapshots thresholds/hyperparams once.
-function createTrackerRun(session, cameras, maxTargets) {
+function createTrackerRun(session, cameras, maxTargets, identityPool) {
     _thresholds = getTrackingThresholds();     // snapshot for thr()
     var hp = crossViewHyperparams();
     // LUCID extension: cap live targets at the user's animal count when provided
@@ -966,7 +1009,11 @@ function createTrackerRun(session, cameras, maxTargets) {
     // LUCID extension: per-node association weights from the Tracking Wizard
     // (indexed to the session skeleton). null ⇒ every node weighted 1.
     hp.nodeWeights = getNodeWeightArray(session.skeleton && session.skeleton.nodes);
-    return { trk: new CrossViewTracker(hp), trackToIdentity: new Map(), cameras: cameras };
+    return {
+        trk: new CrossViewTracker(hp), trackToIdentity: new Map(), cameras: cameras,
+        // Identities to hand out before minting new ones — see commitTrackedFrame.
+        identityPool: identityPool ? identityPool.slice() : null,
+    };
 }
 
 // Advance a run by one frame: build detections, associate, and commit.
@@ -975,7 +1022,7 @@ function stepTrackerFrame(session, run, fi) {
     if (!fg) return;
     var detsByCam = buildTrackerDetections(fg, run.cameras, fi);
     run.trk.trackFrame(detsByCam, run.cameras);
-    commitTrackedFrame(session, run.trk, fi, run.trackToIdentity);
+    commitTrackedFrame(session, run.trk, fi, run.trackToIdentity, run.identityPool);
 }
 
 // Drive the CrossViewTracker over `frameIndices`, populating identities, the
@@ -987,8 +1034,8 @@ function stepTrackerFrame(session, run, fi) {
 // tracking and by the bench/test harnesses that read the return value directly.
 // For a repaint-friendly Track All with a live counter, use
 // `runCrossViewTrackerProgress`.
-export function runCrossViewTracker(session, cameras, frameIndices, propagate, maxTargets) {
-    var run = createTrackerRun(session, cameras, maxTargets);
+export function runCrossViewTracker(session, cameras, frameIndices, propagate, maxTargets, identityPool) {
+    var run = createTrackerRun(session, cameras, maxTargets, identityPool);
     for (var f = 0; f < frameIndices.length; f++) {
         stepTrackerFrame(session, run, frameIndices[f]);
     }
@@ -1001,8 +1048,8 @@ export function runCrossViewTracker(session, cameras, frameIndices, propagate, m
 // live "done/total" counter — a synchronous loop can never paint mid-run. The
 // awaited `onProgress(done, total)` callback returns a macrotask-yielding promise
 // (setTimeout 0), which is what actually lets the browser render each update.
-export async function runCrossViewTrackerProgress(session, cameras, frameIndices, propagate, maxTargets, onProgress) {
-    var run = createTrackerRun(session, cameras, maxTargets);
+export async function runCrossViewTrackerProgress(session, cameras, frameIndices, propagate, maxTargets, onProgress, identityPool) {
+    var run = createTrackerRun(session, cameras, maxTargets, identityPool);
     var total = frameIndices.length;
     // Repaint ~every 5% of frames (≈20 updates total). Each update yields to the
     // event loop for a browser repaint, which is expensive on a large run — so we
@@ -1018,9 +1065,15 @@ export async function runCrossViewTrackerProgress(session, cameras, frameIndices
     return { numIdentities: session.identities.length, numTargets: run.trk.targets.length };
 }
 
-async function sweepTrackAllFrames(session, cameras, maxTargets, onProgress, windowSize) {
-    var run = createTrackerRun(session, cameras, maxTargets);
-    var total = session.lazyLoader.nFrames;
+// `opts`: { window, start, end, identityPool }. `start`/`end` (inclusive) scope
+// the sweep to a frame range for Track Frame Range; omit both for Track All.
+async function sweepTrackAllFrames(session, cameras, maxTargets, onProgress, opts) {
+    opts = opts || {};
+    var run = createTrackerRun(session, cameras, maxTargets, opts.identityPool);
+    var nFrames = session.lazyLoader.nFrames;
+    var from = opts.start != null ? Math.max(0, opts.start) : 0;
+    var to = opts.end != null ? Math.min(nFrames - 1, opts.end) : nFrames - 1;
+    var total = Math.max(0, to - from + 1);
     var done = 0;
     var stride = Math.max(1, Math.ceil(total / 20));
     // The hydrate-window/process/release/GC mechanics live in
@@ -1035,7 +1088,7 @@ async function sweepTrackAllFrames(session, cameras, maxTargets, onProgress, win
         if (onProgress && (done % stride === 0 || done === total)) {
             return onProgress(done, total);
         }
-    }, { window: windowSize || 2000 });
+    }, { window: opts.window || 2000, start: from, end: to });
     return { numIdentities: session.identities.length, numTargets: run.trk.targets.length };
 }
 
@@ -1047,7 +1100,7 @@ export function trackCurrentFrame() {
     }
     var fg = session.getFrameGroup(state.currentFrame);
     if (!fg) {
-        setStatus('No frame data at frame ' + state.currentFrame, 'error');
+        setStatus('No frame data at frame ' + displayFrame(state.currentFrame), 'error');
         return;
     }
 
@@ -1077,7 +1130,7 @@ export function trackCurrentFrame() {
         updateInfoPanel();
         if (timeline) timeline.refreshTracks(state.session, { cap: true });
         if (lr.numTargets > 0) {
-            setStatus('Frame ' + state.currentFrame + ': ' + lr.numIdentities +
+            setStatus('Frame ' + displayFrame(state.currentFrame) + ': ' + lr.numIdentities +
                 ' identities / ' + lr.numTargets + ' cross-view targets', 'success');
         } else {
             setStatus('No cross-view matches found (need instances in 2+ views)', 'warning');
@@ -1141,16 +1194,81 @@ export function findMatchForSelected() {
     // TODO: Visual highlight of matched instances (phase 2)
 }
 
-export async function trackAll() {
+/**
+ * Lowest and highest trackable frame index for a session.
+ *
+ * On a windowed lazy project `frameIndices` is only the RESIDENT window (a
+ * handful of frames on a fresh open — the same trap `trackAll`'s fresh-open
+ * guard fell into), so the loader's true frame count wins whenever it has one.
+ *
+ * @param {Object} session
+ * @returns {{min:number, max:number}|null} null when the session has no frames
+ */
+export function trackableFrameBounds(session) {
+    if (!session) return null;
+    var loader = session.lazyLoader;
+    if (loader && loader.nFrames > 0) return { min: 0, max: loader.nFrames - 1 };
+    var idxs = session.frameIndices;
+    if (!idxs.length) return null;
+    return { min: idxs[0], max: idxs[idxs.length - 1] };
+}
+
+// Drop every `instanceGroups` / `frameIdentityMap` entry inside [lo, hi] so a
+// range re-run starts from a clean slate for those frames only. Track All wipes
+// both maps wholesale instead; a range must not touch frames outside itself.
+function clearTrackingStateInRange(session, lo, hi) {
+    for (var fi of Array.from(session.instanceGroups.keys())) {
+        if (fi >= lo && fi <= hi) session.instanceGroups.delete(fi);
+    }
+    // Keys are packed Numbers (or legacy strings) — decode through the Session's
+    // own codec rather than re-deriving the bit layout here. Collect first: the
+    // generator walks the Map we are about to mutate.
+    var doomed = [];
+    for (var rec of session.frameIdentityEntries()) {
+        if (rec.frameIdx >= lo && rec.frameIdx <= hi) doomed.push(rec.key);
+    }
+    for (var d = 0; d < doomed.length; d++) session.frameIdentityMap.delete(doomed[d]);
+}
+
+/**
+ * Shared engine behind **Track All** and **Track Frame Range** (#212).
+ *
+ * The two differ in exactly three ways, all driven by `range`:
+ *   1. which frames are swept (whole project vs `[start, end]` inclusive);
+ *   2. what prior state is cleared (everything vs only the range — a range run
+ *      must leave the identities and grouping of frames outside it alone);
+ *   3. whether the identity pool is recycled (a range reuses the session's
+ *      existing identities in order, so repeatedly re-running the same range
+ *      under different Tracking Wizard settings — the #212 workflow — does not
+ *      mint a new id_N per animal per run).
+ *
+ * Neither propagates to tracks (`propagate = false`): the tracker assigns IDs
+ * and the user chooses when/which direction to propagate via
+ * Tracks ▸ Propagate IDs → Tracks.
+ *
+ * @param {{start:number, end:number}|null} range  null ⇒ the whole project
+ * @returns {Promise<{ok:boolean, start:?number, end:?number, identities:number,
+ *                     frames:number}>}
+ *   `ok` is false for every bail-out (no session, too few views, bad range, a
+ *   thrown run). On success `start`/`end` are the CLAMPED, normalized frames
+ *   actually swept — the caller cannot recompute them, since the request is
+ *   clamped to the project extent and reversed input is normalized. The Track
+ *   Frame Range modal uses `end` to park the viewer on the last tracked frame.
+ */
+async function runTrackingPass(range) {
+    var bail = { ok: false, start: null, end: null, identities: 0, frames: 0 };
+    var isRange = !!range;
+    var label = isRange ? 'TrackRange' : 'TrackAll';           // console prefix
+    var human = isRange ? 'Track Frame Range' : 'Track All';   // user-facing name
     var session = getActiveSession();
     if (!session || !session.cameras || session.cameras.length === 0) {
         setStatus('No session with cameras loaded', 'error');
-        return;
+        return bail;
     }
 
     if (session.cameras.length < 2) {
         setStatus('Need at least 2 cameras', 'warning');
-        return;
+        return bail;
     }
 
     // Honor per-view tracking inclusion from the Tracking Wizard: excluded views
@@ -1158,7 +1276,7 @@ export async function trackAll() {
     var cameras = session.cameras.filter(function (c) { return isCameraTracked(c.name); });
     if (cameras.length < 2) {
         setStatus('Need at least 2 views included in tracking (check the Tracking Wizard ▸ Camera Views)', 'warning');
-        return;
+        return bail;
     }
 
     // Lazy sessions (large .slp session folders, #132) keep only a resident window
@@ -1183,12 +1301,14 @@ export async function trackAll() {
     var hasFrames = windowed ? loader.nFrames > 0 : frameIndices.length > 0;
     if (!hasFrames) {
         setStatus('No frames to track', 'error');
-        return;
+        return bail;
     }
 
-    // Prompt for number of animals
-    if (trackerNumAnimals == null) {
-        if (!promptNumAnimals()) return;
+    // Prompt for number of animals. Track Frame Range collects it in its own
+    // modal (blank there is an explicit "auto-detect"), so it never stacks a
+    // native prompt() on top of the dialog the user just filled in.
+    if (!isRange && trackerNumAnimals == null) {
+        if (!promptNumAnimals()) return bail;
     }
 
     if (loader && !windowed) {
@@ -1198,28 +1318,69 @@ export async function trackAll() {
             await loadAllLazyFrames(function (msg) { showLoading(msg); });
         } catch (e) {
             hideLoading();
-            console.error('[TrackAll] failed to load all lazy frames:', e);
-            setStatus('Track All: could not load all frames — ' + e.message, 'error');
-            return;
+            console.error('[' + label + '] failed to load all lazy frames:', e);
+            setStatus(human + ': could not load all frames — ' + e.message, 'error');
+            return bail;
         }
         frameIndices = session.frameIndices;   // now the full project, not the window
     }
 
-    var effectiveNumAnimals = trackerNumAnimals || computeMaxInstancesPerView(session);
-    var totalFrameCount = windowed ? loader.nFrames : frameIndices.length;
-    console.log('[TrackAll] numAnimals:', effectiveNumAnimals,
-        trackerNumAnimals ? '(user-set)' : '(auto-detected from max instances per view)',
-        'frames:', totalFrameCount, windowed ? '(windowed)' : '');
-    console.time('[TrackAll] total');
+    // Resolve and clamp the range against the project's real extent. Done AFTER
+    // the materialization above so the non-windowed bounds see every frame.
+    var lo = null, hi = null;
+    if (isRange) {
+        var bounds = trackableFrameBounds(session);
+        if (!bounds) { setStatus('No frames to track', 'error'); return bail; }
+        // Guard NaN/non-integers explicitly: every comparison against NaN is
+        // false, so an unvalidated endpoint would sail past the `hi < lo` check
+        // below and the run would sweep nothing while reporting a NaN range.
+        if (!Number.isInteger(range.start) || !Number.isInteger(range.end)) {
+            setStatus('Invalid frame range', 'error');
+            return bail;
+        }
+        lo = Math.max(bounds.min, Math.min(range.start, range.end));
+        hi = Math.min(bounds.max, Math.max(range.start, range.end));
+        if (hi < lo) {
+            setStatus('Frame range ' + displayFrame(range.start) + '–' + displayFrame(range.end) +
+                ' lies outside this session (' + displayFrame(bounds.min) +
+                '–' + displayFrame(bounds.max) + ')', 'error');
+            return bail;
+        }
+        if (!windowed) {
+            frameIndices = frameIndices.filter(function (f) { return f >= lo && f <= hi; });
+            if (frameIndices.length === 0) {
+                setStatus('No frame data in ' + displayFrame(lo) + '–' + displayFrame(hi), 'warning');
+                return bail;
+            }
+        }
+    }
 
-    // Clear old identities/groups for a fresh run
-    session.identities = [];
-    session.frameIdentityMap = new Map();
-    session.instanceGroups = new Map();
+    var effectiveNumAnimals = trackerNumAnimals || computeMaxInstancesPerView(session);
+    var totalFrameCount = windowed
+        ? (isRange ? hi - lo + 1 : loader.nFrames)
+        : frameIndices.length;
+    console.log('[' + label + '] numAnimals:', effectiveNumAnimals,
+        trackerNumAnimals ? '(user-set)' : '(auto-detected from max instances per view)',
+        'frames:', totalFrameCount, windowed ? '(windowed)' : '',
+        isRange ? '(range ' + lo + '–' + hi + ', 0-based)' : '');
+    console.time('[' + label + '] total');
+
+    // Clear old identities/groups for a fresh run. A range clears only its own
+    // frames and RECYCLES the existing identities (see runTrackingPass's doc);
+    // Track All wipes everything and lets commitTrackedFrame mint id_0…id_N.
+    var identityPool = null;
+    if (isRange) {
+        identityPool = session.identities.map(function (id) { return id.id; });
+        clearTrackingStateInRange(session, lo, hi);
+    } else {
+        session.identities = [];
+        session.frameIdentityMap = new Map();
+        session.instanceGroups = new Map();
+    }
 
     showLoading('Assigning identities: 0/' + totalFrameCount + ' frames…');
 
-    // Drive the CrossViewTracker across all frames and populate IDENTITIES +
+    // Drive the CrossViewTracker across the frames and populate IDENTITIES +
     // per-frame identity map + InstanceGroups only. Deliberately does NOT propagate
     // to tracks (propagate=false): the tracker assigns IDs, and the user chooses
     // when/which direction to propagate via Tracks ▸ Propagate IDs → Tracks (or
@@ -1237,20 +1398,55 @@ export async function trackAll() {
             return new Promise(function (r) { setTimeout(r, 0); });
         };
         var lres = windowed
-            ? await sweepTrackAllFrames(session, cameras, effectiveNumAnimals, onProgress)
-            : await runCrossViewTrackerProgress(session, cameras, frameIndices, false, effectiveNumAnimals, onProgress);
+            ? await sweepTrackAllFrames(session, cameras, effectiveNumAnimals, onProgress,
+                { start: lo, end: hi, identityPool: identityPool })
+            : await runCrossViewTrackerProgress(session, cameras, frameIndices, false,
+                effectiveNumAnimals, onProgress, identityPool);
         hideLoading();
         drawAllOverlays(state.currentFrame);
         updateInfoPanel();
         if (timeline) timeline.refreshTracks(state.session, { cap: true });
-        console.timeEnd('[TrackAll] total');
+        console.timeEnd('[' + label + '] total');
         setStatus('Assigned ' + lres.numIdentities + ' identities across ' +
-            totalFrameCount + ' frames — use Tracks ▸ Propagate IDs → Tracks to apply', 'success');
+            totalFrameCount + ' frames' +
+            (isRange ? ' (' + displayFrame(lo) + '–' + displayFrame(hi) + ')' : '') +
+            ' — use Tracks ▸ Propagate IDs → Tracks to apply', 'success');
+        // Report the span actually swept. For Track All that is whatever the
+        // project turned out to hold; for a range it is the clamped, normalized
+        // window, which is what the caller needs to park the viewer on.
+        return {
+            ok: true,
+            start: isRange ? lo : (windowed ? 0 : frameIndices[0]),
+            end: isRange ? hi : (windowed ? loader.nFrames - 1 : frameIndices[frameIndices.length - 1]),
+            identities: lres.numIdentities,
+            frames: totalFrameCount,
+        };
     } catch (e) {
         hideLoading();
-        console.error('[TrackAll] error:', e, e.stack);
-        setStatus('Track All error: ' + e.message, 'error');
+        console.error('[' + label + '] error:', e, e.stack);
+        setStatus(human + ' error: ' + e.message, 'error');
+        return bail;
     }
+}
+
+export async function trackAll() {
+    return runTrackingPass(null);
+}
+
+/**
+ * Track a contiguous frame range (#212) — the middle ground between Track Frame
+ * and Track All, for testing tracker settings against a known ID switch without
+ * re-running a whole long video.
+ *
+ * The run starts the tracker from scratch at `startFrame` (it carries NO history
+ * in from earlier frames), so identity assignment inside the range is
+ * independent of the frames around it.
+ *
+ * @param {number} startFrame  inclusive, clamped to the session's extent
+ * @param {number} endFrame    inclusive, clamped; order is normalized
+ */
+export async function trackFrameRange(startFrame, endFrame) {
+    return runTrackingPass({ start: startFrame, end: endFrame });
 }
 
 // Wire up tracker buttons

@@ -8,6 +8,8 @@
  * Dependencies: mp4box.all.min.js (MP4Box)
  */
 
+import { shouldIgnoreShortcut } from '../ui/keyboard-target.js';
+
 // ---------------------------------------------------------------------------
 // Logging helper
 // ---------------------------------------------------------------------------
@@ -1786,9 +1788,7 @@ export class VideoController {
     setupKeyboardHandlers() {
         var self = this;
         document.addEventListener("keydown", function (e) {
-            if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA" || e.target.isContentEditable) {
-                return;
-            }
+            if (shouldIgnoreShortcut(e)) return;
 
             switch (e.key) {
                 case "ArrowRight":

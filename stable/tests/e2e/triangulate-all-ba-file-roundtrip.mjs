@@ -413,8 +413,8 @@ try {
     `reopen: the Info Panel still shows BA's error, "${out.reopen.shown}" === ` +
     `"${out.reopen.expectShown}" (a DLT re-derive would show "${out.reopen.expectShownDlt}") — ` +
     `this is the assertion that fails when triangulationMethod is not persisted`);
-  check(out.reopen.methodLabel === 'Bundle Adjustment',
-    `reopen: and labels it "Bundle Adjustment" (got "${out.reopen.methodLabel}")`);
+  check(out.reopen.methodLabel === 'Refined',
+    `reopen: and labels it "Refined" (got "${out.reopen.methodLabel}")`);
   check(out.again.vsFirst === 0,
     `re-export from the REOPENED project agrees with the first export bit for bit ` +
     `(worst |delta| ${out.again.vsFirst})`);

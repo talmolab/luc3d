@@ -273,6 +273,97 @@ export function makeVideoToCanvasTransform(videoWidth, videoHeight, canvasWidth,
     return transform;
 }
 
+/**
+ * Backing-canvas pixels per CSS pixel, for sizing text that must come out the
+ * same number of SCREEN pixels no matter how the canvas is displayed.
+ *
+ * Labels are the one thing drawn in screen-relative units: node/edge sizes are
+ * video-relative (they scale with the video, which is what an annotator wants),
+ * but a name is chrome and has to stay readable at a fixed point size.
+ *
+ * Callers that know the view's real display geometry should pass
+ * `options.labelDisplayScale`. The fallback below is only correct for an
+ * UNROTATED canvas: `getBoundingClientRect()` returns the AXIS-ALIGNED BOUNDING
+ * BOX of the element after CSS transforms, and `applyZoom` rotates the whole
+ * `.canvas-wrapper`, so a rotated view reports a width that is not its own —
+ * wider off-axis (labels came out too small, worst at 45 degrees) and, at
+ * 90/270 on a landscape video, the video's HEIGHT instead (labels came out too
+ * big). Measured on a 640x480 view asking for 12 CSS px: 19 px at 45 degrees
+ * and 32 px at 90, against a correct 24. Zoom alone is fine — a uniform scale
+ * leaves the rect exact — which is why this went unnoticed until rotation.
+ *
+ * @param {CanvasRenderingContext2D} ctx
+ * @param {number} cw - backing-store width being drawn into
+ * @param {object} options - draw options; `labelDisplayScale` wins when finite
+ * @returns {number}
+ */
+export function resolveLabelDisplayScale(ctx, cw, options) {
+    const given = options ? options.labelDisplayScale : null;
+    if (given != null && isFinite(given) && given > 0) return given;
+    let rectW = 0;
+    const canvas = ctx && ctx.canvas;
+    if (canvas && typeof canvas.getBoundingClientRect === 'function') {
+        rectW = canvas.getBoundingClientRect().width || 0;
+    }
+    return cw / (rectW || cw);
+}
+
+/**
+ * Radians to rotate the canvas by so that text drawn in it comes out
+ * HORIZONTAL on screen (issue #162).
+ *
+ * The live app rotates a view by putting a CSS transform on the whole
+ * `.canvas-wrapper` (`applyZoom`, loading/video.js) — the overlay canvas's own
+ * transform is untouched, so every glyph drawn into it is rotated with the
+ * video and, past about 45 degrees, stops being readable (at 180 it is upside
+ * down). Undoing that per label is the only option: the video itself must stay
+ * rotated, and so must the skeleton, which is pinned to the animal.
+ *
+ * Negative of `options.labelRotation` because we are cancelling the view's
+ * rotation, not repeating it. Canvas y points DOWN, so a positive angle is
+ * clockwise in both frames and no sign juggling is needed beyond this.
+ *
+ * @param {object} options - draw options; `labelRotation` is in DEGREES
+ * @returns {number} radians, 0 when the view is unrotated
+ */
+export function uprightLabelRadians(options) {
+    const deg = options ? options.labelRotation : 0;
+    if (!deg || !isFinite(deg)) return 0;
+    return -deg * Math.PI / 180;
+}
+
+/**
+ * Push a canvas frame centred on (ax, ay) whose axes are SCREEN-aligned, so
+ * text drawn at small offsets from the origin reads horizontally however the
+ * view is rotated.
+ *
+ * ALWAYS pushes state — every call must be paired with a `ctx.restore()` — but
+ * touches the TRANSFORM only when there is a rotation to cancel, so an
+ * unrotated view (every export path, and the common case in the app) draws
+ * through exactly the coordinates and canvas state it did before issue #162.
+ * That is why call sites pair this with `uprightOriginX/Y`: the origin to
+ * measure offsets from is the anchor when nothing was translated, and (0, 0)
+ * once it was.
+ *
+ * @param {CanvasRenderingContext2D} ctx
+ * @param {number} rad - from `uprightLabelRadians`
+ * @param {number} ax - anchor x, in canvas pixels
+ * @param {number} ay - anchor y, in canvas pixels
+ */
+function beginUprightFrame(ctx, rad, ax, ay) {
+    ctx.save();
+    if (rad) {
+        ctx.translate(ax, ay);
+        ctx.rotate(rad);
+    }
+}
+
+/** The x a `beginUprightFrame(ctx, rad, ax, ay)` call's offsets hang off. */
+function uprightOriginX(rad, ax) { return rad ? 0 : ax; }
+
+/** The y a `beginUprightFrame(ctx, rad, ax, ay)` call's offsets hang off. */
+function uprightOriginY(rad, ay) { return rad ? 0 : ay; }
+
 // ============================================
 // Color helpers
 // ============================================
@@ -373,15 +464,25 @@ export function complementaryColor(hex) {
  * Finds the largest arc gap between connected edges and places the label
  * at the bisector angle of that gap.
  *
+ * The returned offset is relative to the node, in the frame the label is drawn
+ * in — which for a rotated view is the SCREEN-aligned one `beginUprightFrame`
+ * pushes, not canvas space. That is why `rotationDeg` exists: the gap is found
+ * among canvas-space edge angles, but the label box it has to fit in is
+ * axis-aligned on screen, so the bisector is carried into screen space
+ * (`+ rotationDeg`) before the shift factors size the box against it.
+ * Rotating the glyphs without this would keep each label pointing at the gap
+ * it had at rotation 0 — i.e. into the skeleton for most angles.
+ *
  * @param {number} nodeIdx - Index of the node
  * @param {Array} canvasPoints - Array of {x, y} or null for each node
  * @param {Object} skeleton - Skeleton with .edges
  * @param {string} labelText - The label text (for measuring width)
  * @param {number} fontSize - Font size in canvas pixels
  * @param {CanvasRenderingContext2D} ctx - Canvas context (for text measurement)
+ * @param {number} [rotationDeg] - the view's rotation; 0 / omitted = unrotated
  * @returns {{dx: number, dy: number}} Offset from node position
  */
-export function computeLabelOffset(nodeIdx, canvasPoints, skeleton, labelText, fontSize, ctx) {
+export function computeLabelOffset(nodeIdx, canvasPoints, skeleton, labelText, fontSize, ctx, rotationDeg) {
     var cp = canvasPoints[nodeIdx];
     if (!cp) return { dx: fontSize * 0.3, dy: -fontSize * 0.3 };
 
@@ -404,35 +505,42 @@ export function computeLabelOffset(nodeIdx, canvasPoints, skeleton, labelText, f
         }
     }
 
-    // Default: place to the upper-right if no neighbors
-    if (angles.length === 0) {
-        // SLEAP default: shift_angle=0 → shift_factor_x = 0.6-0.5=0.1, shift_factor_y = 0-0.5=-0.5
-        return { dx: labelWidth * 0.1, dy: labelHeight * -0.5 };
-    }
+    // The view's rotation, taking a canvas-space direction to the screen-space
+    // one it appears at. Canvas y is down and CSS `rotate()` is clockwise, so
+    // both are clockwise-positive and this is a plain addition.
+    var rot = (rotationDeg && isFinite(rotationDeg)) ? rotationDeg * Math.PI / 180 : 0;
 
-    // Sort angles and find the largest arc gap (SLEAP algorithm)
-    angles.sort(function (a, b) { return a - b; });
-
-    // Append first angle + 2π for wrap-around
-    angles.push(angles[0] + Math.PI * 2);
-
-    var bestGapSize = 0;
+    // Default: no neighbors, so no gap to find — angle 0, i.e. upper-right.
+    // (SLEAP default: shift_angle=0 → shift_factor_x = 0.6-0.5 = 0.1,
+    // shift_factor_y = 0-0.5 = -0.5, which the shared formula below reproduces
+    // exactly for bisector 0.)
     var bestBisector = 0;
-    for (var i = 0; i < angles.length - 1; i++) {
-        var gapSize = angles[i + 1] - angles[i];
-        var bisector = (angles[i + 1] + angles[i]) / 2;
-        if (gapSize > bestGapSize) {
-            bestGapSize = gapSize;
-            bestBisector = bisector;
-        }
-    }
 
-    // Normalize bisector to [0, 2π)
-    bestBisector = bestBisector % (2 * Math.PI);
+    if (angles.length > 0) {
+        // Sort angles and find the largest arc gap (SLEAP algorithm)
+        angles.sort(function (a, b) { return a - b; });
+
+        // Append first angle + 2π for wrap-around
+        angles.push(angles[0] + Math.PI * 2);
+
+        var bestGapSize = 0;
+        for (var i = 0; i < angles.length - 1; i++) {
+            var gapSize = angles[i + 1] - angles[i];
+            var bisector = (angles[i + 1] + angles[i]) / 2;
+            if (gapSize > bestGapSize) {
+                bestGapSize = gapSize;
+                bestBisector = bisector;
+            }
+        }
+
+        // Normalize bisector to [0, 2π)
+        bestBisector = bestBisector % (2 * Math.PI);
+    }
 
     // SLEAP shift factors: (cos(angle) * 0.6) - 0.5
-    var shiftX = (Math.cos(bestBisector) * 0.6) - 0.5;
-    var shiftY = (Math.sin(bestBisector) * 0.6) - 0.5;
+    var placeAngle = bestBisector + rot;
+    var shiftX = (Math.cos(placeAngle) * 0.6) - 0.5;
+    var shiftY = (Math.sin(placeAngle) * 0.6) - 0.5;
 
     return { dx: labelWidth * shiftX, dy: labelHeight * shiftY };
 }
@@ -563,8 +671,12 @@ export function drawSkeleton(ctx, instance, skeleton, options) {
 
     // Screen-relative label sizing: scale baseLabelSize so labels appear the
     // same visual size regardless of canvas backing resolution.
-    const displayScale = cw / (ctx.canvas.getBoundingClientRect().width || cw);
+    const displayScale = resolveLabelDisplayScale(ctx, cw, options);
     const adjustedLabelSize = Math.round(baseLabelSize * displayScale);
+
+    // Keep label text horizontal on screen for a rotated view (issue #162).
+    const labelRotationDeg = options.labelRotation || 0;
+    const uprightRad = uprightLabelRadians(options);
 
     const nodeShape = options.nodeShape || 'circle';
     const nodeSize = baseNodeSize;
@@ -670,9 +782,7 @@ export function drawSkeleton(ctx, instance, skeleton, options) {
             var isNulled = nulledNodes && nulledNodes.has(li);
             var node = skeleton.nodes ? skeleton.nodes[li] : undefined;
             var name = typeof node === 'string' ? node : (node && node.name ? node.name : 'node_' + li);
-            var labelOff = computeLabelOffset(li, canvasPoints, skeleton, name, fontSize, ctx);
-            var tx = lp.x + labelOff.dx;
-            var ty = lp.y + labelOff.dy;
+            var labelOff = computeLabelOffset(li, canvasPoints, skeleton, name, fontSize, ctx, labelRotationDeg);
             if (isNulled) {
                 ctx.globalAlpha = 0.4 * labelAlpha;
                 ctx.fillStyle = '#888888';
@@ -682,8 +792,14 @@ export function drawSkeleton(ctx, instance, skeleton, options) {
                 ctx.fillStyle = '#ffffff';
                 ctx.strokeStyle = 'rgba(0, 0, 0, 0.8)';
             }
+            // Offsets are relative to the node inside the upright frame, so the
+            // label reads horizontally and still sits in the skeleton's gap.
+            beginUprightFrame(ctx, uprightRad, lp.x, lp.y);
+            var tx = uprightOriginX(uprightRad, lp.x) + labelOff.dx;
+            var ty = uprightOriginY(uprightRad, lp.y) + labelOff.dy;
             ctx.strokeText(name, tx, ty);
             ctx.fillText(name, tx, ty);
+            ctx.restore();
         }
         ctx.globalAlpha = savedAlpha;
     }
@@ -1202,22 +1318,32 @@ export function drawDragPreview(ctx, points, dragNodeIdx, dragPos, skeleton, opt
  * `drawUnlinkedInstances`). Anything that reads as a difference between the
  * two states has to come from the NAME, not from the geometry.
  *
- * Saves/restores `textAlign` + `textBaseline` because the unlinked caller
- * interleaves this with the "?" badge (which sets `center`) and per-node
- * labels (`left`); `drawInstanceLabels` was relying on the canvas default
- * `start` still being in effect, which held only for the first instance in
- * its own loop.
+ * Drawn inside `beginUprightFrame`, so for a rotated view the pill sits
+ * directly above its anchor ON SCREEN and reads horizontally (issue #162) —
+ * plate and text together, since a plate that did not follow would leave the
+ * text hanging outside it.
+ *
+ * The frame's `save()`/`restore()` is also what protects the caller's
+ * `textAlign` / `textBaseline` / `fillStyle` (it replaces a narrower manual
+ * save of the two text properties): the unlinked caller interleaves this with
+ * the "?" badge, which sets `center`, and per-node labels, which set `left`,
+ * while `drawInstanceLabels` was relying on the canvas default `start` still
+ * being in effect — true only for the first instance in its own loop.
  *
  * @param {CanvasRenderingContext2D} ctx
  * @param {{x:number,y:number}} cp - anchor (the instance's first visible point)
  * @param {string} text
  * @param {string} color
  * @param {number} fontSize - already display-scaled; <= 0 draws nothing
+ * @param {number} [uprightRad] - from `uprightLabelRadians`; 0 = unrotated view
  */
-function drawNamePill(ctx, cp, text, color, fontSize) {
+function drawNamePill(ctx, cp, text, color, fontSize, uprightRad) {
     if (!cp || !text || !(fontSize > 0)) return;
-    const prevAlign = ctx.textAlign;
-    const prevBaseline = ctx.textBaseline;
+
+    const rad = uprightRad || 0;
+    beginUprightFrame(ctx, rad, cp.x, cp.y);
+    const ox = uprightOriginX(rad, cp.x);
+    const oy = uprightOriginY(rad, cp.y);
     ctx.font = 'bold ' + fontSize + 'px sans-serif';
     ctx.textAlign = 'left';
     ctx.textBaseline = 'bottom';
@@ -1225,8 +1351,8 @@ function drawNamePill(ctx, cp, text, color, fontSize) {
     const textWidth = ctx.measureText(text).width;
     const pillPad = 3;
     const labelYOffset = fontSize * 1.5;
-    const pillX = cp.x - pillPad;
-    const pillY = cp.y - labelYOffset - fontSize - pillPad;
+    const pillX = ox - pillPad;
+    const pillY = oy - labelYOffset - fontSize - pillPad;
     ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
     ctx.beginPath();
     if (ctx.roundRect) {
@@ -1237,10 +1363,9 @@ function drawNamePill(ctx, cp, text, color, fontSize) {
     ctx.fill();
 
     ctx.fillStyle = color;
-    ctx.fillText(text, cp.x, cp.y - labelYOffset);
+    ctx.fillText(text, ox, oy - labelYOffset);
 
-    ctx.textAlign = prevAlign;
-    ctx.textBaseline = prevBaseline;
+    ctx.restore();
 }
 
 /**
@@ -1362,8 +1487,12 @@ export function drawInstanceLabels(ctx, instances, skeleton, viewName, options) 
     const scale = toCanvas ? toCanvas.scale : 1;
 
     // Screen-relative label sizing
-    const displayScale = cw / (ctx.canvas.getBoundingClientRect().width || cw);
+    const displayScale = resolveLabelDisplayScale(ctx, cw, options);
     const adjustedLabelSize = Math.round(baseLabelSize * displayScale);
+
+    // Keep label text horizontal on screen for a rotated view (issue #162).
+    const labelRotationDeg = options.labelRotation || 0;
+    const uprightRad = uprightLabelRadians(options);
 
     const nodeSize = baseNodeSize;
 
@@ -1400,7 +1529,7 @@ export function drawInstanceLabels(ctx, instances, skeleton, viewName, options) 
 
         var fontSize = adjustedLabelSize;
         if (fontSize <= 0) continue; // label size 0 = hidden
-        drawNamePill(ctx, firstCp, trackName, color, fontSize);
+        drawNamePill(ctx, firstCp, trackName, color, fontSize, uprightRad);
 
         // Draw node name labels for the selected instance
         if (instIdx === selectedInstanceIdx && skeleton && skeleton.nodes) {
@@ -1437,9 +1566,14 @@ export function drawInstanceLabels(ctx, instances, skeleton, viewName, options) 
                         ctx.fillStyle = '#ffffff';
                         ctx.strokeStyle = 'rgba(0, 0, 0, 0.8)';
                     }
-                    var loff = computeLabelOffset(n, instCanvasPoints, skeleton, nodeName, nodeFontSize, ctx);
-                    ctx.strokeText(nodeName, cp.x + loff.dx, cp.y + loff.dy);
-                    ctx.fillText(nodeName, cp.x + loff.dx, cp.y + loff.dy);
+                    var loff = computeLabelOffset(n, instCanvasPoints, skeleton, nodeName,
+                                                  nodeFontSize, ctx, labelRotationDeg);
+                    beginUprightFrame(ctx, uprightRad, cp.x, cp.y);
+                    var lx = uprightOriginX(uprightRad, cp.x) + loff.dx;
+                    var ly = uprightOriginY(uprightRad, cp.y) + loff.dy;
+                    ctx.strokeText(nodeName, lx, ly);
+                    ctx.fillText(nodeName, lx, ly);
+                    ctx.restore();
                 }
             }
             ctx.globalAlpha = 1.0;
@@ -1604,8 +1738,12 @@ export function drawUnlinkedInstances(ctx, unlinkedInstances, skeleton, options)
     const scale = toCanvas ? toCanvas.scale : 1;
 
     // Screen-relative label sizing
-    const displayScale = cw / (ctx.canvas.getBoundingClientRect().width || cw);
+    const displayScale = resolveLabelDisplayScale(ctx, cw, options);
     const adjustedLabelSize = Math.round(baseLabelSize * displayScale);
+
+    // Keep label text horizontal on screen for a rotated view (issue #162).
+    const labelRotationDeg = options.labelRotation || 0;
+    const uprightRad = uprightLabelRadians(options);
 
     const nodeSize = baseNodeSize;
     const lineWidth = baseLineWidth;
@@ -1761,15 +1899,23 @@ export function drawUnlinkedInstances(ctx, unlinkedInstances, skeleton, options)
         if (anchorCp && showUnlinkedBadge) {
             const badgeSize = 10;
             ctx.globalAlpha = 0.9;
+            // Inside the upright frame the disc keeps the same screen position
+            // relative to the instance at every rotation (it is a circle, so it
+            // is the POSITION the frame is buying here, not the shape) and the
+            // "?" stays the right way up inside it.
+            beginUprightFrame(ctx, uprightRad, anchorCp.x, anchorCp.y);
+            const bx = uprightOriginX(uprightRad, anchorCp.x) - instNodeSize * 2;
+            const by = uprightOriginY(uprightRad, anchorCp.y) - instNodeSize * 2;
             ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
             ctx.beginPath();
-            ctx.arc(anchorCp.x - instNodeSize * 2, anchorCp.y - instNodeSize * 2, badgeSize, 0, Math.PI * 2);
+            ctx.arc(bx, by, badgeSize, 0, Math.PI * 2);
             ctx.fill();
             ctx.fillStyle = '#fbbf24';
             ctx.font = 'bold ' + badgeSize + 'px sans-serif';
             ctx.textAlign = 'center';
             ctx.textBaseline = 'middle';
-            ctx.fillText('?', anchorCp.x - instNodeSize * 2, anchorCp.y - instNodeSize * 2);
+            ctx.fillText('?', bx, by);
+            ctx.restore();
         }
 
         // Track / identity NAME pill — the same label, at the same anchor, that
@@ -1790,7 +1936,7 @@ export function drawUnlinkedInstances(ctx, unlinkedInstances, skeleton, options)
                                               ulColorByIdentity, ulFrameIdx);
             if (ulName) {
                 ctx.globalAlpha = 1.0;
-                drawNamePill(ctx, anchorCp, ulName, color, adjustedLabelSize);
+                drawNamePill(ctx, anchorCp, ulName, color, adjustedLabelSize, uprightRad);
                 ctx.globalAlpha = alpha;
             }
         }
@@ -1812,9 +1958,8 @@ export function drawUnlinkedInstances(ctx, unlinkedInstances, skeleton, options)
                     var isLabelNulled = nulledNodes && nulledNodes.has(li);
                     var node2 = skeleton.nodes ? skeleton.nodes[li] : undefined;
                     var lname = typeof node2 === 'string' ? node2 : (node2 && node2.name ? node2.name : 'node_' + li);
-                    var labelOff2 = computeLabelOffset(li, canvasPoints, skeleton, lname, fontSize, ctx);
-                    var ltx = lp.x + labelOff2.dx;
-                    var lty = lp.y + labelOff2.dy;
+                    var labelOff2 = computeLabelOffset(li, canvasPoints, skeleton, lname,
+                                                       fontSize, ctx, labelRotationDeg);
                     if (isLabelNulled) {
                         ctx.globalAlpha = 0.4;
                         ctx.fillStyle = '#888888';
@@ -1824,8 +1969,12 @@ export function drawUnlinkedInstances(ctx, unlinkedInstances, skeleton, options)
                         ctx.fillStyle = '#ffffff';
                         ctx.strokeStyle = 'rgba(0, 0, 0, 0.8)';
                     }
+                    beginUprightFrame(ctx, uprightRad, lp.x, lp.y);
+                    var ltx = uprightOriginX(uprightRad, lp.x) + labelOff2.dx;
+                    var lty = uprightOriginY(uprightRad, lp.y) + labelOff2.dy;
                     ctx.strokeText(lname, ltx, lty);
                     ctx.fillText(lname, ltx, lty);
+                    ctx.restore();
                 }
             }
         }
@@ -2045,6 +2194,13 @@ export function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, ses
         videoHeight: videoH,
         canvasWidth: canvasW,
         canvasHeight: canvasH,
+        // Rotation-safe screen-relative label sizing; see
+        // `resolveLabelDisplayScale`. Undefined falls back to the bounding rect.
+        labelDisplayScale: options.labelDisplayScale,
+        // The view's rotation in DEGREES, so labels can cancel it and stay
+        // horizontal (issue #162). Undefined / 0 = unrotated, and every label
+        // path then takes exactly the code it took before.
+        labelRotation: options.labelRotation,
     };
 
     // Build per-type render option sets with geometry info

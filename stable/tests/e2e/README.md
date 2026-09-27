@@ -51,6 +51,26 @@ Override the base URL with `BASE=http://host:port`. Exit code `0` = pass.
   loader, which rebuilt flat poses and dropped all of it; passes with the shared
   `restoreGroupingAndUnlink` path.)
 
+- **`export-include-user-labels.mjs`** — the "Export SLEAP File Per Session" and
+  "Export SLEAP File By Cam" modals must SAY that user labels are always written
+  (luc3d #194). Both always passed `instanceFilter.user = true`, but with only
+  "Predicted Instances" and "Reprojections" visible under a heading reading
+  *Include*, users read the silence as an exclusion; the group now says
+  "✓ UserLabels are automatically saved". Pins the UI contract — the note comes
+  first and is PROSE (an always-on switch was tried and is wrong: a
+  control that cannot be operated misstates what the user can change), the group
+  has exactly two option rows, the option ids the export handlers read survive,
+  and each `.slider` actually drives its checkbox (a `.toggle-switch` not wrapped
+  in a `<label>` renders identically and never toggles) — and then the claim
+  itself: a Per-Session export with Predicted and Reprojections both OFF is read
+  back and every user instance is still there. Also covers the Per-Session
+  filename table: the output field and Download checkbox are asserted by
+  COMPUTED STYLE to use the app's dark tokens and monospace stack rather than
+  the browser defaults (a white box in Arial), unchecked rows dim, `title` stays
+  in sync with an edited name, and a filename containing a `"` reaches the field
+  intact — pre-fix it was truncated at the quote, because the rows are built by
+  string concatenation. Confirmed red against the pre-fix modals.
+
 - **`save-session-3d-typed-sink.mjs`** — guards the `luc3d #185` local patch to
   the vendored writer, which accumulates `/session_data/points_3d` and
   `pred_points_3d` into a pre-sized `Float64Array` instead of one boxed

@@ -47,6 +47,8 @@ import { OnDemandVideoDecoder, VideoController } from '../loading/video.js';
 
 // Pass 3i-1: tracker functions moved out of app.js.
 import { trackCurrentFrame, trackAll, findMatchForSelected } from '../pose/tracker.js';
+// Track Frame Range (#212): the Track Frame split button's dropdown entry.
+import { showTrackRangeModal } from './track-range-modal.js';
 // Pass 3i-2: triangulation orchestration moved out of app.js.
 import { triangulateCurrentFrame, triangulateAllFrames } from '../pose/triangulation.js';
 // User settings: default triangulation method + editable keyboard bindings.
@@ -2527,6 +2529,21 @@ export function setupUI() {
             triangulateAllFrames('dlt');
         }
     });
+
+    // Track Frame is a split button too (#212): clicking it still tracks the
+    // current frame (wired in pose/tracker.js alongside Track All), while
+    // hovering reveals "Track Frame Range…", which opens the start/end dialog.
+    var trackRangeItem = document.getElementById('tbTrackFrameRange');
+    if (trackRangeItem) {
+        trackRangeItem.addEventListener('click', function (e) {
+            e.stopPropagation();
+            // `navigateToFrame` is injected rather than imported by the modal:
+            // it lives in initialization.js, which imports THIS module, which
+            // imports the modal — so importing it there would close the loop.
+            // Parks the viewer on the last frame the run actually tracked.
+            showTrackRangeModal({ onTracked: navigateToFrame });
+        });
+    }
 
     // Context menu for instance groups
     document.getElementById('ctxUnlinkGroup').addEventListener('click', function () {

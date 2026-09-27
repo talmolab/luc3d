@@ -217,6 +217,12 @@ export function newProject(force) {
     if (skelBody) skelBody.innerHTML = '';
     var edgesBody = document.querySelector('#skeletonEdgesTable tbody');
     if (edgesBody) edgesBody.innerHTML = '';
+    // ...and the collapsible sections' row-count badges, which would otherwise
+    // keep advertising the rows we just removed.
+    var skelCount = document.getElementById('skeletonNodesCount');
+    if (skelCount) skelCount.textContent = '0';
+    var edgeCount = document.getElementById('skeletonEdgesCount');
+    if (edgeCount) edgeCount.textContent = '0';
     var srcSelect = document.getElementById('edgeSrcSelect');
     if (srcSelect) srcSelect.innerHTML = '';
     var dstSelect = document.getElementById('edgeDstSelect');

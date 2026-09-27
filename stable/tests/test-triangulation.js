@@ -448,7 +448,7 @@
     describe('Bundle Adjustment - triangulationMethodLabel', function () {
         it('maps method keys to human labels', function () {
             if (typeof triangulationMethodLabel !== 'function') return;
-            assertEqual(triangulationMethodLabel('ba'), 'Bundle Adjustment');
+            assertEqual(triangulationMethodLabel('ba'), 'Refined');
             assertEqual(triangulationMethodLabel('dlt'), 'DLT');
             assertEqual(triangulationMethodLabel(undefined), 'DLT');
         });
