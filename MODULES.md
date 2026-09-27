@@ -5745,11 +5745,26 @@ the object's own ×, which removes the grouping and nothing else. That constrain
 is what keeps 3D Mesh Objects from being able to break a workflow that predates
 them.
 
+**Export.** `Export .stl` / `Export .glb` (`#btnExportMeshStl` /
+`#btnExportMeshGlb`) sit in the editor, because they act on the SELECTED
+object. Both write the geometry `meshObjectGeometry` already reports on —
+origin frame applied, scale 1 — so the file and the badge above it cannot
+describe different shapes, and the calibration's own millimetres reach the file
+unscaled. They are DISABLED, with the reason in the tooltip, until the object
+has triangulated faces: both writers would refuse, and saying so on the button
+beats letting the click land and reporting a failure afterwards. Neither marks
+the project dirty — an export writes a file, not a change, the same reason the
+appearance sliders do not. The formats themselves, and the one sanctioned axis
+conversion, are `import-export/mesh-export.js`.
+
 **Imports from project modules.** `./plane-definition.js` — `planeModel`,
 `refreshPlanePanel`, `syncPlanes3D` (circular, and safe for the same reason the
 rest of this feature's cycles are: every use is inside a function body);
 `./origin-definition.js` — `originState`; `../pose/mesh-object-geometry.js`;
-`../import-export/save-load.js` — `setStatus`, `markDirty`.
+`../import-export/save-load.js` — `setStatus`, `markDirty`;
+`../import-export/mesh-export.js` — `meshObjectToSTL`, `meshObjectToGLB`,
+`isExportable`, `meshFilenameStem`; `../import-export/file-io.js` —
+`downloadBytes`.
 
 **Imported by.** `ui/plane-definition.js`.
 
@@ -8240,6 +8255,70 @@ the v2 and v3 project-JSON shapes) — and the three readers —
 
 ---
 
+### import-export/mesh-export.js
+
+**Purpose.** A 3D mesh object as a file another program can open: **binary
+STL** for CAD and **binary glTF (.glb)** for Blender. Both take the same
+`MeshObjectGeometry` that `pose/mesh-object-geometry.js` derives, so neither
+format re-derives anything and a shape that is wrong in one is wrong in both
+rather than wrong in different ways. DOM-free and pure — geometry in, bytes
+out; `ui/mesh-objects.js` owns the buttons and the download.
+
+**The one sanctioned axis conversion.** The project rule is that LUCID's world
+is Z-up, Blender's is too, and no axis conversion belongs in the plane/mesh
+pipeline. That rule is about the PIPELINE, and it does not survive contact with
+glTF, whose spec FIXES the up axis at +Y (glTF 2.0 3.5):
+
+| format | axes | why |
+|---|---|---|
+| STL | verbatim Z-up | the format defines no up axis; CAD treats Z as up |
+| GLB | `(x, y, z)` -> `(x, z, -y)` | the spec mandates +Y up; Blender's importer applies the inverse, landing it back Z-up |
+
+Write Z-up into a .glb instead and the file is off-spec: Blender still rotates
+it, so the cage arrives lying on its side, and three.js / Babylon / Sketchfab /
+QuickLook all show it tipped over. The conversion is a -90 degree rotation
+about X, determinant +1 — a rotation, **not** a mirror — so triangle winding
+survives and **no winding flip accompanies it**. Adding one later would
+silently invert every normal.
+
+**Key exports.**
+- `meshObjectToSTL(geometry, {name})` -> `Uint8Array | null`. Binary, not
+  ASCII: ~5x smaller and exact to the last float32 bit. The 80-byte header
+  deliberately does not begin with `solid`, which is what makes lenient parsers
+  guess ASCII and read garbage. STL repeats every corner per triangle, so the
+  node-level welding is invisible in the file — by the format's design.
+- `meshObjectToGLB(geometry, {name, color})` -> `Uint8Array | null`. One
+  self-contained file (JSON chunk + BIN chunk, spec padding: spaces for JSON,
+  zeros for BIN). Vertices stay **welded** and indexed. **No NORMAL attribute,
+  deliberately** — glTF then mandates flat shading, which is right for a
+  faceted cage; supplying normals would mean either splitting every shared
+  vertex (undoing the welding) or smoothing across hard edges that are real.
+  The colour is converted sRGB -> **linear**, because `baseColorFactor` is
+  linear and passing the picker's hex through makes every export paler than the
+  swatch.
+- `isExportable(geometry)` — what the buttons gate on.
+- `meshFilenameStem(name)` — object names are free text, and a slash in a
+  download name is a path the browser will not write.
+
+**Both return `null` rather than an empty file.** An empty export opens, shows
+nothing, and reads as "my annotation is broken" rather than "I exported an
+object with no triangulated faces yet".
+
+**Precision.** Positions are float32 in both formats — not a choice, it is what
+the formats define. LUCID's float64 millimetres keep ~1e-4 mm at ~1e3 mm, so a
+re-imported mesh is not bit-identical to the project's numbers. The project
+file stays the source of truth.
+
+**Imports from project modules.** None. **Imported by.** `ui/mesh-objects.js`.
+
+**Tests.** `tests/test-mesh-export.mjs` (the byte layouts, with a negative
+control on each axis claim) and `tests/e2e/mesh-object-export.mjs` (the buttons
+and the downloaded bytes). The axis behaviour was additionally confirmed
+against **real Blender** in `--background` mode: both files put the tracked
+corner at (0, 0, 300).
+
+---
+
 ### import-export/plane-metadata.js
 
 **Purpose.** The `metadata.lucid` ↔ plane-state mapping, and the reason plane
@@ -8489,7 +8568,10 @@ exports via the eager path; partially-resident refuses and says so).
   identity / occlusion) verified in-browser.
 - H5 build/parse: `buildPoints3dH5`, `buildReprojH5`,
   `buildPoints3dExportData`, `parsePoints3dH5`, `h5FileToBlob`.
-- Misc: `downloadJSON`, `instancePointsMatch`, `instanceMatchesPoints`
+- Misc: `downloadJSON`, `downloadBytes` (the binary sibling, for the STL/GLB
+  mesh exports; the Blob is handed the VIEW, never `bytes.buffer`, which on a
+  subarray would write the neighbouring bytes too), `instancePointsMatch`,
+  `instanceMatchesPoints`
   (the same comparison with a LUCID `Instance` on the left, read through the flat
   typed accessors so the SLP-load dedup passes don't allocate a boxed points array
   per candidate).

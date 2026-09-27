@@ -3,11 +3,11 @@
 Multi-view pose annotation GUI. No build system — pure vanilla JS served as static files.
 
 ## Architecture
-ES modules, vanilla JS (no build step). `index.html` loads `app.js` as `<script type="module">`; `app.js` is a 2-line entry point that imports from `pose/`. The 62 modules are grouped into four directories:
+ES modules, vanilla JS (no build step). `index.html` loads `app.js` as `<script type="module">`; `app.js` is a 2-line entry point that imports from `pose/`. The 63 modules are grouped into four directories:
 - `pose/` — data model, cross-view tracking, DLT triangulation, plane annotation model (planes + the global plane-node pool), 3D mesh objects (groups of planes) and their derived geometry, plane/origin serialization, origin transform, whole-project origin re-base, plane-to-plane angle, app initialization (14 files)
 - `ui/` — UI state, canvas rendering, mouse/keyboard interaction, info panel, modals, timeline, 3D viewport, panel visibility, video encoding, video display settings, keyboard-target arbitration, modal geometry, view legend, plane definition, 3D mesh objects, origin definition, origin re-base, plane angle, settings (32 files)
 - `loading/` — video decoding, session loading, SLP/package readers, per-camera SLP choice, web workers (7 files)
-- `import-export/` — file I/O, save/load, SLP import/merge, visibility metadata, plane metadata (9 files)
+- `import-export/` — file I/O, save/load, SLP import/merge, visibility metadata, plane metadata, 3D mesh export (10 files)
 - `demo-data.js` — synthetic skeleton and camera data
 - `styles.css` — all styling
 
@@ -657,10 +657,41 @@ without, including after deleting a member plane.
 conversion belongs in this pipeline. The only transforms are the applied origin
 frame and a uniform positive scale.
 
+**Export (`import-export/mesh-export.js`) is the ONE place that rule is
+suspended, and only for glTF.** The Danger-Zone-free pair of buttons in the
+block — `Export .stl` and `Export .glb` — write the same derived geometry two
+ways:
+- **Binary STL, verbatim.** The format defines no up axis and CAD treats Z as
+  up, which is already what we have. Triangles only: no colour, no units, and
+  every corner repeated per triangle, so the node-level welding is invisible in
+  the file by the format's design.
+- **Binary glTF, converted to Y-up** — `(x, y, z)` → `(x, z, -y)` — because the
+  glTF spec FIXES the up axis at +Y. Blender's importer applies the inverse, so
+  the object lands back Z-up exactly as annotated; write Z-up into a .glb
+  instead and Blender still rotates it, so the cage arrives on its side and
+  every conformant viewer shows it tipped over. The conversion is a −90°
+  rotation about X with determinant +1 — a rotation, NOT a mirror — so winding
+  survives and **no winding flip accompanies it**. Adding one would silently
+  invert every normal. Vertices stay WELDED and no NORMAL attribute is written,
+  which is what makes glTF mandate flat shading — right for a faceted cage, and
+  the only way to keep the welding a real one.
+Both formats store positions as float32 because both define it that way, so a
+re-imported mesh is not bit-identical to the project's float64 millimetres. The
+project file stays the source of truth. Scale is 1: the calibration's own
+millimetres reach the file, and nothing here invents a unit the calibration
+never stated.
+
 Coverage: `tests/test-mesh-object-3d.mjs` (the model + the additivity guarantee),
-`tests/test-mesh-object-geometry.mjs` (the derivation, with negative controls)
-and `tests/e2e/mesh-object-roundtrip.mjs` (the panel, the round trip, the scope,
-and three negative controls).
+`tests/test-mesh-object-geometry.mjs` (the derivation, with negative controls),
+`tests/test-mesh-export.mjs` (both formats at the BYTE level — container
+layout, chunk padding, welding, sRGB→linear colour, and the Y-up conversion
+with a negative control) and the two real-app files,
+`tests/e2e/mesh-object-roundtrip.mjs` (the panel, the round trip, the scope, and
+three negative controls) and `tests/e2e/mesh-object-export.mjs` (the buttons,
+the downloaded bytes, and the same corner asserted Z-up in the .stl AND Y-up in
+the .glb, so a writer treating them alike fails one of them). The axis claim was
+additionally confirmed against **real Blender** (`--background`, gltf + stl
+importers): both files put the tracked corner at (0, 0, 300).
 
 ## UI Conventions
 **No scroll-within-scroll.** A panel or modal gets ONE scroller. Do not give an

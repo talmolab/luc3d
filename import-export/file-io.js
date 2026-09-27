@@ -827,9 +827,31 @@ export function downloadJSON(data, filename) {
 }
 
 /**
+ * Download raw bytes as a file.
+ *
+ * The binary sibling of `downloadJSON` / `downloadTOML`, for formats that are
+ * not text at all (binary STL, .glb). `bytes.buffer` is deliberately NOT
+ * handed to the Blob: a typed array can be a VIEW onto a larger buffer, and
+ * passing the whole buffer would silently write the neighbouring bytes too.
+ *
+ * @param {Uint8Array|ArrayBuffer} bytes
+ * @param {string} filename
+ * @param {string} [mime] - defaults to a generic binary stream
+ */
+export function downloadBytes(bytes, filename, mime) {
+    const blob = new Blob([bytes], { type: mime || 'application/octet-stream' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+}
+
+/**
  * Download data as a TOML file.
  * @param {string} tomlContent - TOML string
- * @param {string} filename - Download filename
+ * @param {string} filename - Target filename
  */
 export function downloadTOML(tomlContent, filename) {
     const blob = new Blob([tomlContent], { type: 'text/plain' });

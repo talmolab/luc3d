@@ -1099,6 +1099,17 @@
                                     </label>
                                     <div class="plane-hint" style="margin-top:6px">Planes in this object</div>
                                     <div class="mesh-object-members" id="meshObjectMembers"></div>
+
+                                    <!-- Export acts on the SELECTED object, so it lives
+                                         in the editor with everything else that does.
+                                         Two formats for two audiences: STL is written in
+                                         LUCID's own Z-up millimetres for CAD, GLB is
+                                         converted to the Y-up the glTF spec mandates so
+                                         Blender's importer lands it back upright. -->
+                                    <div class="panel-button-row" style="margin-top:8px">
+                                        <button class="panel-btn" id="btnExportMeshStl" title="Binary STL — triangles only, no colour or units, in the calibration's millimetres (Z-up, as CAD expects)">Export .stl</button>
+                                        <button class="panel-btn" id="btnExportMeshGlb" title="Binary glTF — welded vertices and this object's colour, converted to the Y-up glTF requires so Blender imports it upright">Export .glb</button>
+                                    </div>
                                 </div>
 
                                 <div class="plane-hint">A 3D mesh object is a group of planes, and its shape comes from the nodes they SHARE — join two planes by adding the same node to both.</div>
