@@ -582,9 +582,46 @@ export function showCameraDetail(cam) {
 // Skeleton table
 // ============================================
 
+// Whether the Skeleton tab's Nodes / Edges sections are expanded. Browser-local
+// display taste, not project state, so it lives in localStorage alongside the
+// Visibility panel's global appearance prefs — never in the .slp.
+const SKELETON_SECTIONS_KEY = 'skeletonSectionsOpen';
+
+/**
+ * Wire a collapsible <details> section so its open/closed state survives a
+ * reload. Storage is best-effort: a browser that refuses it (private mode,
+ * blocked site data) just gets the markup's default `open`.
+ */
+function persistSectionState(id) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    let saved = null;
+    try {
+        saved = JSON.parse(localStorage.getItem(SKELETON_SECTIONS_KEY) || '{}');
+    } catch (e) { saved = null; }
+    if (saved && typeof saved[id] === 'boolean') el.open = saved[id];
+    el.addEventListener('toggle', function () {
+        try {
+            const cur = JSON.parse(localStorage.getItem(SKELETON_SECTIONS_KEY) || '{}');
+            cur[id] = el.open;
+            localStorage.setItem(SKELETON_SECTIONS_KEY, JSON.stringify(cur));
+        } catch (e) { /* storage unavailable — the section still works */ }
+    });
+}
+
+function setSectionCount(id, n) {
+    const el = document.getElementById(id);
+    if (el) el.textContent = String(n);
+}
+
 export function populateSkeletonTable() {
     if (!state.session) return;
     const sk = state.session.skeleton;
+
+    // Keep the summary badges accurate — a collapsed section still has to say
+    // how much it is hiding.
+    setSectionCount('skeletonNodesCount', sk.nodes.length);
+    setSectionCount('skeletonEdgesCount', sk.edges.length);
 
     // Remember this skeleton for the current app session so newly loaded videos
     // inherit it (rememberSkeleton ignores empty skeletons, so viewing a blank
@@ -822,6 +859,10 @@ export function promptImportSkeletonForAllSessions(onDone) {
 }
 
 export function setupSkeletonEditing() {
+    // Collapsible Nodes / Edges sections — restore last state, remember changes.
+    persistSectionState('skeletonNodesSection');
+    persistSectionState('skeletonEdgesSection');
+
     // Add Node button
     document.getElementById('btnAddNode').addEventListener('click', function () {
         ensureSession();
