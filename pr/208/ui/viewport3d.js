@@ -148,15 +148,27 @@ export class Viewport3D {
          * are frame-independent scene geometry that must survive that.
          */
         this._planeGroup = null;
-        /** @type {THREE.Group|null} The SELECTED 3D Mesh Object's surface, if
-         * any. A sibling of `_planeGroup`, never a part of it: this is a second,
-         * additive view of the same nodes, and keeping the two groups apart is
-         * what lets the plane drawing stay byte-for-byte what it was. */
-        this._meshObjectGroup = null;
+        /** @type {THREE.Group|null} MEMBERSHIP highlighting for the selected 3D
+         * Mesh Object: the member planes' own outlines, redrawn in the object's
+         * colour. A sibling of `_planeGroup`, never a part of it, so the plane
+         * drawing stays byte-for-byte what it was.
+         *
+         * This deliberately does NOT draw the derived surface as a separate
+         * body. An object IS its member planes — the same cage already on
+         * screen — so a second surface beside them is at best a duplicate and
+         * at worst a lie: the derived geometry is built in the user's ORIGIN
+         * frame (the panel quotes volumes in it, and the exporters write it),
+         * while this group, like every data group, hangs off `scene` rather
+         * than `_framePivot` and so is drawn in CALIBRATION world. Putting
+         * framed vertices in an unframed group drew the object displaced and
+         * rotated away from the cage it was built from. Highlighting the real
+         * planes cannot drift, because it re-reads the very points the plane
+         * drawing used. */
+        this._meshMembershipGroup = null;
         /** @type {THREE.Group|null} A GHOST of where "Set Angle Between Two
          * Planes" would put the plane being rotated, shown while its dialog is
          * open. A sibling of `_planeGroup` for the same reason
-         * `_meshObjectGroup` is one: it is a second, additive view of the same
+         * `_meshMembershipGroup` is one: it is a second, additive view of the same
          * nodes, and keeping it out of `_planeGroup` is what lets the real
          * plane drawing stay exactly what it was. Empty unless the dialog is
          * open, and it is pure display — nothing here writes a node. */
@@ -382,9 +394,9 @@ export class Viewport3D {
         this._planeGroup.name = 'planes';
         this.scene.add(this._planeGroup);
 
-        this._meshObjectGroup = new THREE.Group();
-        this._meshObjectGroup.name = 'meshObject';
-        this.scene.add(this._meshObjectGroup);
+        this._meshMembershipGroup = new THREE.Group();
+        this._meshMembershipGroup.name = 'meshMembership';
+        this.scene.add(this._meshMembershipGroup);
 
         this._angleGroup = new THREE.Group();
         this._angleGroup.name = 'anglePreview';
@@ -2164,67 +2176,90 @@ export class Viewport3D {
         this._clearGroup(this._planeRoleGroup);
     }
 
-    setMeshObject(payload) {
-        this._clearGroup(this._meshObjectGroup);
-        if (!payload || !payload.vertices || !payload.vertices.length) return;
-        if (!payload.triangles || !payload.triangles.length) return;
+    /**
+     * Light up the planes that belong to the selected 3D Mesh Object.
+     *
+     * The answer to "which planes did I put in this object?", drawn on the
+     * planes themselves: each member's corners and edges are redrawn, fatter,
+     * in the object's colour. Adding a plane in the panel lights it up here,
+     * which is the whole feedback loop the membership editor needs.
+     *
+     * Why a highlight and not the derived surface: see `_meshMembershipGroup`.
+     * The short version is that an object is not a separate body, it IS these
+     * planes, and the derived geometry lives in a different coordinate frame
+     * than this group is drawn in.
+     *
+     * Positions come from `this._planes` — the payload the plane drawing
+     * itself was built from — so a highlight can never sit anywhere but
+     * exactly on top of its plane, whatever happens to the origin frame.
+     *
+     * Drawn UNDER the Set Angle role outlines (renderOrder 7 against 8) and
+     * slightly thinner, so an open angle dialog still reads over a membership
+     * highlight covering the same plane.
+     *
+     * @param {{color?:string, planeIds?:Array}|null} payload - null clears.
+     */
+    setMeshMembership(payload) {
+        this._clearGroup(this._meshMembershipGroup);
+        if (!payload || !payload.planeIds || !payload.planeIds.length) return;
 
-        const geo = new THREE.BufferGeometry();
-        geo.setAttribute('position',
-            new THREE.Float32BufferAttribute(Array.from(payload.vertices), 3));
-        geo.setIndex(Array.from(payload.triangles));
-        geo.computeVertexNormals();
-
-        const front = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({
+        const ss = this._sceneScale || 1;
+        const mat = new THREE.MeshBasicMaterial({
             color: new THREE.Color(payload.color || '#26a69a'),
             transparent: true,
-            opacity: 0.30,
-            side: THREE.FrontSide,
+            opacity: 0.8,
             depthWrite: false,
-        }));
-        front.name = 'meshObjectFront';
-        this._meshObjectGroup.add(front);
+            // Seen through the cage's own translucent fills: confirming that
+            // the FAR wall is a member is exactly what this is for.
+            depthTest: false,
+        });
 
-        // Deliberately drab: the back face is information ("you are inside, or
-        // the normals are inverted"), not decoration.
-        const back = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({
-            color: new THREE.Color('#4a4a4a'),
-            transparent: true,
-            opacity: 0.28,
-            side: THREE.BackSide,
-            depthWrite: false,
-        }));
-        back.name = 'meshObjectBack';
-        this._meshObjectGroup.add(back);
+        const dotGeo = new THREE.SphereGeometry(this.planeNodeSize * 1.15 * ss, 10, 10);
+        const edgeRadius = this.skeletonEdgeWeight * 1.6 * ss;
 
-        // Face outlines, so the polygon boundaries read even where two coplanar
-        // faces meet and the fill alone shows nothing.
-        const segs = [];
-        const faces = payload.faces || [];
-        for (let f = 0; f < faces.length; f++) {
-            const ring = faces[f];
-            for (let i = 0; i < ring.length; i++) {
-                const a = ring[i] * 3, b = ring[(i + 1) % ring.length] * 3;
-                segs.push(payload.vertices[a], payload.vertices[a + 1], payload.vertices[a + 2]);
-                segs.push(payload.vertices[b], payload.vertices[b + 1], payload.vertices[b + 2]);
+        for (let r = 0; r < payload.planeIds.length; r++) {
+            const planeId = payload.planeIds[r];
+            let src = null;
+            for (let i = 0; i < this._planes.length; i++) {
+                if (this._planes[i] && this._planes[i].id === planeId) {
+                    src = this._planes[i];
+                    break;
+                }
             }
-        }
-        if (segs.length) {
-            const lineGeo = new THREE.BufferGeometry();
-            lineGeo.setAttribute('position', new THREE.Float32BufferAttribute(segs, 3));
-            const lines = new THREE.LineSegments(lineGeo, new THREE.LineBasicMaterial({
-                color: new THREE.Color(payload.color || '#26a69a'),
-                transparent: true,
-                opacity: 0.85,
-            }));
-            lines.name = 'meshObjectEdges';
-            this._meshObjectGroup.add(lines);
+            // A member plane that was deleted simply has nothing to light up.
+            // Same lazy resolution the model itself uses — no cascade, no throw.
+            if (!src || !src.points3d) continue;
+            const pts = src.points3d;
+            const nNodes = points3dNodeCount(pts);
+            if (nNodes === 0) continue;
+
+            for (let k = 0; k < nNodes; k++) {
+                const pt = getPoint3d(pts, k);
+                if (pt == null || !isFinite(pt[0]) || !isFinite(pt[1]) || !isFinite(pt[2])) continue;
+                const dot = new THREE.Mesh(dotGeo, mat);
+                dot.position.set(pt[0], pt[1], pt[2]);
+                dot.name = 'meshMemberNode_' + planeId + '_' + k;
+                dot.renderOrder = 7;
+                this._meshMembershipGroup.add(dot);
+            }
+
+            const edges = src.edges || [];
+            for (let e = 0; e < edges.length; e++) {
+                const a = getPoint3d(pts, edges[e][0]);
+                const b = getPoint3d(pts, edges[e][1]);
+                if (a == null || b == null) continue;
+                if (!isFinite(a[0]) || !isFinite(b[0])) continue;
+                const cyl = this._createCylinder(a, b, edgeRadius, mat, 6);
+                cyl.name = 'meshMemberEdge_' + planeId + '_' + e;
+                cyl.renderOrder = 7;
+                this._meshMembershipGroup.add(cyl);
+            }
         }
     }
 
-    /** Remove the 3D Mesh Object surface from the scene. */
-    clearMeshObject() {
-        this._clearGroup(this._meshObjectGroup);
+    /** Remove the membership highlighting. Safe to call when there is none. */
+    clearMeshMembership() {
+        this._clearGroup(this._meshMembershipGroup);
     }
 
     /**

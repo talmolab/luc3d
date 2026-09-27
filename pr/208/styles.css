@@ -5531,12 +5531,12 @@ kbd {
 /* Membership: every plane in the project, checked when it is a member. A list
    rather than a dropdown because the question "which planes are in this object"
    is answered by seeing them all at once. */
+/* No inner scroller, deliberately: this list is the object's OWN members, so
+   it is a handful of rows, and the panel it sits in already scrolls. */
 .mesh-object-members {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  max-height: 180px;
-  overflow-y: auto;
 }
 
 .mesh-object-member {
@@ -5547,17 +5547,41 @@ kbd {
   border-radius: 3px;
   font-size: 11px;
   color: var(--text-primary);
-  cursor: pointer;
 }
 
 .mesh-object-member:hover {
   background: rgba(127, 127, 127, 0.12);
 }
 
+/* A member whose plane was deleted. Still listed, because its × is the only
+   way to clear the stale id out of the object. */
+.mesh-object-member-dangling .mesh-object-member-name {
+  color: var(--text-muted);
+  font-style: italic;
+}
+
 .mesh-object-member-count {
   margin-left: auto;
   font-size: 9px;
   color: var(--text-muted);
+}
+
+/* `.panel-btn` is `flex: 1`, which is right in a button row and wrong for a
+   single x at the end of a flex row — it would stretch across the gap the
+   count just pushed open. */
+.mesh-object-member .panel-btn {
+  flex: 0 0 auto;
+}
+
+/* The selected object's row, matching the Planes table's selection exactly —
+   the editor below acts on this row, so it has to be obvious which one. */
+#meshObjectsTable tbody tr {
+  cursor: pointer;
+}
+
+#meshObjectsTable tbody tr.plane-selected {
+  background: var(--accent-dim);
+  box-shadow: inset 2px 0 0 var(--accent);
 }
 
 /* --- Blocking / confirming dialog (ui/plane-definition.js) ---------------- */
