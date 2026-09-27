@@ -289,8 +289,10 @@ function renderReport(obj) {
             'Two planes belong to the same shell only when they SHARE a node.', 'warn'));
     } else {
         box.appendChild(line('Open — ' + c.nakedEdges + ' edge(s) belong to only one face. ' +
-            'Fine for a cage with no lid; normals are consistent but which side ' +
-            'is "outside" is a guess, so use Flip normals if it looks wrong.', 'warn'));
+            'Fine for a cage with no lid. With no enclosed volume to read, the ' +
+            'normals are oriented +Z up — for a cage that is the floor facing ' +
+            'up and the walls facing inward. Use Flip normals for the reverse.',
+        'warn'));
     }
 
     if (c.nonManifoldEdges) {

@@ -30,10 +30,18 @@
 // unrelated windings. In Blender that means black patches, failed booleans and a
 // wrong "inside". `orientFacesCoherently` fixes the relative half with the
 // manifold rule (two faces sharing an edge traverse it in OPPOSITE directions),
-// and `signedVolume` fixes the global half for a CLOSED mesh. For an OPEN one —
-// a cage with no lid — there is no enclosed volume and nothing can decide which
-// side is out, so the object carries a user-set `flipNormals` instead of this
-// module guessing.
+// and the global half is then one bit, decided per topology:
+//
+//   * CLOSED — `signedVolume`. Negative means inward, which is simply wrong.
+//   * OPEN — a cage with no lid encloses nothing, so volume says nothing. The
+//     convention is **+Z is up**: `areaVectorZ` orients the surface so its
+//     area-weighted normal field points along +Z, which for a cage means the
+//     FLOOR FACES UP (vertical walls contribute nothing to that sum). Coherent
+//     winding then couples the rest — a floor facing up puts the walls' normals
+//     on their INWARD faces, i.e. the surfaces enclosing the arena.
+//
+// Only a surface with no vertical component at all — all faces vertical — is
+// left undecided, and `flipNormals` is the user's override in every case.
 //
 // **Which side of a concave face is inside.** The fan in
 // `viewport3d._buildPlaneFillMesh` is right for a translucent overlay and wrong
@@ -190,6 +198,75 @@ export function signedVolume(vertices, triangles) {
     }
     return v;
 }
+
+/**
+ * The Z component of the surface's AREA VECTOR: `Σ (b−a) × (c−a)` over every
+ * triangle, taking `[2]`.
+ *
+ * Each term is `2·area·normal`, so this is the area-weighted vertical component
+ * of the normal field. It answers the one question a closed mesh answers with
+ * `signedVolume` and an open one cannot: **which way up is this surface facing?**
+ * Positive means the normals, on the whole, point along +Z.
+ *
+ * Unlike `signedVolume` this is origin-INDEPENDENT (every term is a difference
+ * of vertices), which is what makes it legitimate on an open surface.
+ *
+ * For a cage — a floor plus vertical walls — the walls contribute nothing at
+ * all, because a vertical face's area vector is horizontal. The floor alone
+ * therefore decides, which is exactly the intent: "up" is the floor's outward
+ * side. A surface of only vertical faces returns ~0 and is genuinely
+ * undecidable; callers must treat that as "no answer" rather than as negative.
+ *
+ * @param {Float64Array|number[]} vertices - 3V, flat.
+ * @param {Uint32Array|number[]} triangles - 3T, flat.
+ * @returns {number}
+ */
+export function areaVectorZ(vertices, triangles) {
+    var z = 0;
+    for (var t = 0; t + 2 < triangles.length; t += 3) {
+        var i0 = triangles[t] * 3, i1 = triangles[t + 1] * 3, i2 = triangles[t + 2] * 3;
+        var abx = vertices[i1] - vertices[i0];
+        var aby = vertices[i1 + 1] - vertices[i0 + 1];
+        var acx = vertices[i2] - vertices[i0];
+        var acy = vertices[i2 + 1] - vertices[i0 + 1];
+        z += abx * acy - aby * acx;
+    }
+    return z;
+}
+
+/**
+ * Twice the total surface area: `Σ |(b−a) × (c−a)|`.
+ *
+ * Exists only to make `areaVectorZ`'s threshold RELATIVE. The area vector has
+ * units of area, so a fixed cutoff would mean different things in millimetres
+ * and metres; dividing by this gives a dimensionless "what fraction of the
+ * surface's area vector is vertical", which means the same thing at any scale.
+ * @private
+ */
+function surfaceAreaScale(vertices, triangles) {
+    var s = 0;
+    for (var t = 0; t + 2 < triangles.length; t += 3) {
+        var i0 = triangles[t] * 3, i1 = triangles[t + 1] * 3, i2 = triangles[t + 2] * 3;
+        var ab = [vertices[i1] - vertices[i0], vertices[i1 + 1] - vertices[i0 + 1],
+            vertices[i1 + 2] - vertices[i0 + 2]];
+        var ac = [vertices[i2] - vertices[i0], vertices[i2 + 1] - vertices[i0 + 1],
+            vertices[i2 + 2] - vertices[i0 + 2]];
+        var c = cross3(ab, ac);
+        s += Math.sqrt(c[0] * c[0] + c[1] * c[1] + c[2] * c[2]);
+    }
+    return s > 0 ? s : 1;
+}
+
+/**
+ * How vertical the area vector must be before "+Z is up" is allowed to decide.
+ *
+ * A pure degeneracy guard, NOT a confidence threshold: a cage whose floor is
+ * small next to its walls still has a perfectly well-defined up, and should get
+ * it. This only catches the genuinely undecidable case — a surface of purely
+ * vertical faces, where the vertical component is zero up to rounding.
+ * @private
+ */
+var UPRIGHT_EPS = 1e-9;
 
 // ============================================
 // Ear clipping
@@ -650,11 +727,34 @@ export function buildMeshObjectGeometry(obj, model, opts) {
     // happens depends on the arbitrary order the rings arrived in, so it shows up
     // for some projects and not others.
     //
-    //   1. Canonical. A closed mesh with inward normals is unambiguously wrong,
-    //      so it is corrected here rather than left for the user to notice.
+    //   1. Canonical. Two rules, one per topology:
+    //      * CLOSED — a mesh with inward normals is unambiguously wrong, and
+    //        `signedVolume` says so outright.
+    //      * OPEN — there is no enclosed volume, so instead the convention is
+    //        **+Z is up**: orient the surface so its area-weighted normal field
+    //        points along +Z. For a cage that is the floor facing up, since
+    //        vertical walls contribute nothing to `areaVectorZ`. This replaces
+    //        what used to be a coin flip — the default fell out of the
+    //        arbitrary PCA sign of whichever ring happened to be first, so the
+    //        same cage could export either way on two different projects.
+    //        A surface of only vertical faces has no vertical component to read
+    //        and is left alone (see `UPRIGHT_EPS`); `flipNormals` is the answer
+    //        there, and it is the only case left where it must be.
     //   2. The user's override, applied ON TOP of the canonical result, so the
     //      toggle always means "the opposite of whatever the default was".
-    var canonicalFlip = topo.isClosed && volume < 0;
+    //
+    // NOTE the axis is the axis of the frame the vertices are ALREADY in (see
+    // the `frame` option above) — with an origin defined, "up" is the up the
+    // user established, not the calibration's. That is the same frame the
+    // exporters write, so the file and this decision cannot disagree.
+    var canonicalFlip;
+    if (topo.isClosed) {
+        canonicalFlip = volume < 0;
+    } else {
+        var upness = areaVectorZ(vertices, built.triangles);
+        var scale = surfaceAreaScale(vertices, built.triangles);
+        canonicalFlip = upness < -UPRIGHT_EPS * scale;
+    }
     var reversals = (canonicalFlip ? 1 : 0) + (obj.flipNormals ? 1 : 0);
     if (reversals % 2 === 1) {
         for (var f = 0; f < faces.length; f++) faces[f].reverse();

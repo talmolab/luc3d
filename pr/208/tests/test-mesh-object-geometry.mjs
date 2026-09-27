@@ -28,7 +28,7 @@ import { buildOriginFrame } from '../pose/origin-frame.js';
 import {
     buildMeshObjectGeometry, faceRingNodeIds, faceAdjacency,
     orientFacesCoherently, meshConnectivity, signedVolume, earClip2d, earClipFace,
-    coincidentNodeReport, newellNormal, connectivitySummary,
+    coincidentNodeReport, newellNormal, connectivitySummary, areaVectorZ,
 } from '../pose/mesh-object-geometry.js';
 
 let passed = 0, failed = 0;
@@ -272,6 +272,128 @@ console.log('\n--- 3. An OPEN cage: floor + two walls, as annotated in the app -
         if (near(flipped.faceNormals[i], -g.faceNormals[i], 1e-9)) inverted++;
     }
     check(inverted === g.faceNormals.length, 'flipNormals inverts every face normal');
+}
+
+// ============================================
+console.log('\n--- 3b. An OPEN object is oriented +Z up, not by coin flip ---');
+// ============================================
+// The convention: with no enclosed volume to read, the surface is oriented so
+// its area-weighted normal field points along +Z. For a cage that means the
+// FLOOR FACES UP — vertical walls contribute nothing to the vertical component,
+// so the floor alone decides.
+//
+// What this replaced is the point of the test. The default used to fall out of
+// the PCA sign of whichever ring happened to be first, so the SAME cage could
+// export either way depending on the order its planes were created in. Every
+// case below therefore feeds the identical geometry in several ring orders and
+// windings and demands one answer.
+{
+    const corners = [
+        [0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0],   // 0-3 floor
+        [0, 1, 1], [1, 1, 1],                          // 4,5 top of back wall
+        [0, 0, 1],                                     // 6   top of side wall
+    ];
+    const FLOOR = [0, 1, 2, 3];
+    const BACK = [3, 2, 5, 4];
+    const SIDE = [0, 3, 4, 6];
+
+    // The floor is face 0 in each arrangement, so its normal is the one to read.
+    const floorNormalZ = (rings) => {
+        const { model, obj } = buildFrom(corners, rings);
+        const g = buildMeshObjectGeometry(obj, model);
+        const i = g.facePlaneIds.indexOf(g.facePlaneIds[0]);   // face 0's slot
+        return g.faceNormals[i * 3 + 2];
+    };
+
+    // Four arrangements of the same cage: the floor ring reversed, the walls
+    // reordered, both. A coin-flip default disagrees across these; a rule does
+    // not.
+    const arrangements = [
+        ['as drawn', [FLOOR, BACK, SIDE]],
+        ['floor ring reversed', [FLOOR.slice().reverse(), BACK, SIDE]],
+        ['walls first', [BACK, SIDE, FLOOR]],
+        ['walls first, floor reversed', [SIDE, BACK, FLOOR.slice().reverse()]],
+    ];
+    for (const [label, rings] of arrangements) {
+        const { model, obj } = buildFrom(corners, rings);
+        const g = buildMeshObjectGeometry(obj, model);
+        const fi = rings.findIndex(r => r.length === 4 && r.every(v => FLOOR.includes(v)));
+        check(g.faceNormals[fi * 3 + 2] > 0.99,
+            label + ': the floor faces UP (+Z), n.z = ' +
+            g.faceNormals[fi * 3 + 2].toFixed(6));
+    }
+
+    // The walls follow, and that is a CONSEQUENCE rather than a second choice:
+    // coherent winding couples every face, so a floor facing up puts the walls
+    // on their inward faces. Asserted so the coupling is documented and cannot
+    // change silently.
+    {
+        const { model, obj } = buildFrom(corners, [FLOOR, BACK, SIDE]);
+        const g = buildMeshObjectGeometry(obj, model);
+        // Back wall lies at y=1; its inward face points -Y. Side wall at x=0;
+        // inward points +X.
+        check(g.faceNormals[1 * 3 + 1] < -0.99,
+            'the back wall then faces INWARD (-Y), because winding is coherent');
+        check(g.faceNormals[2 * 3] > 0.99, 'and the side wall inward (+X)');
+    }
+
+    // flipNormals still layers on top, and means "the opposite of the default"
+    // — the two reversals must stay independent.
+    {
+        const { model, obj } = buildFrom(corners, [FLOOR, BACK, SIDE]);
+        obj.flipNormals = true;
+        const g = buildMeshObjectGeometry(obj, model);
+        check(g.faceNormals[2] < -0.99, 'flipNormals puts the floor back DOWN (-Z)');
+    }
+
+    // A mesh built UPSIDE DOWN is corrected. Mirroring z is the cleanest way to
+    // produce one: it inverts the handedness of every ring.
+    {
+        const flippedCorners = corners.map(([x, y, z]) => [x, y, -z]);
+        const { model, obj } = buildFrom(flippedCorners, [FLOOR, BACK, SIDE]);
+        const g = buildMeshObjectGeometry(obj, model);
+        check(g.faceNormals[2] > 0.99,
+            'a cage whose walls hang BELOW its floor still comes out floor-up');
+    }
+
+    // The undecidable case: every face vertical, so there is no vertical
+    // component to read. It must not crash, must stay coherent, and must leave
+    // flipNormals as the answer.
+    {
+        const wallsOnly = [
+            [0, 0, 0], [1, 0, 0], [1, 0, 1], [0, 0, 1],   // y=0 wall
+            [1, 1, 0], [1, 1, 1],                          // x=1 wall
+        ];
+        const rings = [[0, 1, 2, 3], [1, 4, 5, 2]];
+        const { model, obj } = buildFrom(wallsOnly, rings);
+        const g = buildMeshObjectGeometry(obj, model);
+        check(g.faces.length === 2, 'two vertical faces build');
+        check(isCoherent(g.faces) === true, 'and are still coherently oriented');
+        check(g.faceNormals.every(Number.isFinite),
+            'with finite normals — no division by a zero vertical component');
+        const before = Array.from(g.faceNormals);
+        obj.flipNormals = true;
+        const after = buildMeshObjectGeometry(obj, model).faceNormals;
+        let inv = 0;
+        for (let i = 0; i < before.length; i++) {
+            if (near(after[i], -before[i], 1e-9)) inv++;
+        }
+        check(inv === before.length,
+            'and flipNormals still works, which is the only lever left here');
+    }
+
+    // NEGATIVE CONTROL: the rule must not touch a CLOSED mesh, whose volume
+    // test is strictly better. An outward cube has a POSITIVE area-vector Z of
+    // zero — the top and bottom cancel — so a rule applied blindly would be
+    // reading noise and could flip a correct cube.
+    {
+        const { model, obj } = buildFrom(CUBE_CORNERS, CUBE_FACES);
+        const g = buildMeshObjectGeometry(obj, model);
+        check(near(g.connectivity.volume, 1, 1e-9),
+            'a closed cube is still decided by VOLUME, and stays outward');
+        check(near(areaVectorZ(g.vertices, g.triangles), 0, 1e-9),
+            'even though its own area-vector Z is 0 — the closed case never asks');
+    }
 }
 
 // ============================================
