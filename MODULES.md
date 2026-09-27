@@ -4901,10 +4901,13 @@ plane.
   orbitable, and a corner dragged while it is open would move the geometry its
   readout and its ghost were computed from. It then calls
   the private `syncMeshObject3D()`, which pushes the SELECTED 3D Mesh Object's
-  derived surface into `viewport3d.setMeshObject` (or `null` when nothing is
-  selected). That lives here rather than in `ui/mesh-objects.js` because this is
-  the function every plane mutation already routes through — anywhere else and
-  the object's surface would lag a node drag by a frame.
+  member plane IDS into `viewport3d.setMeshMembership` (or `null` when nothing
+  is selected). That lives here rather than in `ui/mesh-objects.js` because this
+  is the function every plane mutation already routes through — anywhere else
+  and the highlight would lag a node drag by a frame. **IDs, never geometry:**
+  the derived geometry is built in the user's ORIGIN frame while the viewport
+  group that draws it is in CALIBRATION world, so passing it drew the object
+  displaced and rotated away from its own cage.
 - **3D corner dragging** — `onPlaneNodeDragged3D` / `onPlaneNodeDragEnd3D`
   (private; installed by `syncPlanes3D`). The viewport has already constrained
   the position to the fitted plane, so these only write it: onto the node, then
@@ -5786,7 +5789,7 @@ it would have reported 90° either way.
 **Purpose.** The **3D Mesh Objects table** — a third table under Nodes and
 Planes, for the third layer of the model (a node is a point, a plane is a group
 of nodes, an object is a group of planes). Create, name, recolour and delete an
-object; check planes in and out of it; toggle Flip normals; and read a
+object; add and remove its member planes; toggle Flip normals; and read a
 connectivity report of the shape those planes imply.
 
 Deliberately its OWN module rather than more of `ui/plane-definition.js`. That
@@ -5813,12 +5816,24 @@ one says that joining requires SHARING a node, and coincident-but-unshared nodes
 are named as pairs — the "I thought I joined it" case, which is invisible in the
 viewport because the two corners are drawn on top of each other.
 
+**Membership is edited by PICK-AND-ADD**, the same idiom Edit Plane uses to put
+an existing node in a plane: `renderMembers` lists the planes IN the object, one
+row each with an × to take it back out, and `renderAddPlaneSelect` offers a
+`<select>` of the NON-members plus `+ Add` (`#meshObjectAddPlaneSelect` /
+`#btnAddMeshObjectPlane`). It replaced a checkbox against every plane in the
+project, which made the list grow with the PROJECT rather than with the object
+and never said which planes were actually in it without reading every row. An
+empty picker is a real state — every plane is already a member — and it is said
+in words with the button disabled, not left as a dead dropdown. A member whose
+plane was since deleted still gets a (greyed) row, because its × is the only way
+to clear the stale id.
+
 **What this module may NOT do.** Nothing here creates, deletes or edits a node or
 a plane. An object is a grouping: dissolving it cannot destroy its members, and
-un-checking a plane must not delete it. The panel's only destructive action is
-the object's own ×, which removes the grouping and nothing else. That constraint
-is what keeps 3D Mesh Objects from being able to break a workflow that predates
-them.
+removing a plane from an object must not delete the plane. The panel's only
+destructive action is the object's own ×, which removes the grouping and nothing
+else. That constraint is what keeps 3D Mesh Objects from being able to break a
+workflow that predates them.
 
 **Export.** `Export .stl` / `Export .glb` (`#btnExportMeshStl` /
 `#btnExportMeshGlb`) sit in the editor, because they act on the SELECTED
@@ -5843,11 +5858,19 @@ rest of this feature's cycles are: every use is inside a function body);
 
 **Imported by.** `ui/plane-definition.js`.
 
+**Selection is visible.** The selected object's row carries `.plane-selected`
+and `#meshObjectsTable tbody tr.plane-selected` styles it exactly as the Planes
+table styles its own selection. The class was always applied; the rule was
+missing, so the editor below appeared to be attached to nothing.
+
 **Tests.** `tests/e2e/mesh-object-roundtrip.mjs` (the panel driving the model
-through real DOM handlers, the dirty flag per mutation, the derived shape
-tracking membership, save → reopen by ID, the PROJECT scope, and three negative
-controls: untouched projects write no key, the feature is additive, and deleting
-an object keeps its planes and nodes).
+through real DOM handlers, the pick-and-add membership editor and the selected
+row's marking, the dirty flag per mutation, the derived shape tracking
+membership, save → reopen by ID, the PROJECT scope, and three negative controls:
+untouched projects write no key, the feature is additive, and deleting an object
+keeps its planes and nodes); `tests/e2e/mesh-membership-highlight.mjs` (what the
+3D viewport actually draws for a selection); `tests/e2e/mesh-object-export.mjs`
+(the two export buttons).
 
 ---
 
@@ -7273,7 +7296,7 @@ via the options bag.
 **Key exports.**
 - `Viewport3D` — class. Selected methods: `setFrame(instanceGroups)`,
   `setSelectedInstance`, `setEnvironment`, `clearEnvironment`,
-  `setPlanes`, `clearPlanes`, `setMeshObject`, `clearMeshObject`,
+  `setPlanes`, `clearPlanes`, `setMeshMembership`, `clearMeshMembership`,
   `setAnglePreview`, `clearAnglePreview`, `setPlaneRoles`, `clearPlaneRoles`,
   `setOriginPickMode`, `setOriginCandidates`,
   `clearOriginCandidates`, `setOriginFrame`, `clearOriginFrame`,
@@ -7304,7 +7327,7 @@ via the options bag.
   export-modal instances must keep rendering regardless of the main panel.
 
 **Scene groups.** Nine `THREE.Group` siblings under the scene: `_cameraGroup`,
-`_skeletonGroup`, `_envGroup`, `_planeGroup`, `_meshObjectGroup`,
+`_skeletonGroup`, `_envGroup`, `_planeGroup`, `_meshMembershipGroup`,
 `_angleGroup` (the Set Angle ghost), `_planeRoleGroup` (the Set Angle role
 outlines), `_originGroup` (the Set Origin candidate arrows) and `_framePivot`
 (the grid floor + axis helper).
@@ -7339,7 +7362,7 @@ same as skeleton nodes and camera centres.
 **`setAnglePreview(spec)` / `clearAnglePreview()`** — a GHOST of where
 **Set Angle Between Two Planes** would put the plane being rotated, shown live
 while its dialog is open and cleared on Cancel, Esc and Apply. ADDITIVE in the
-same way `setMeshObject` is: its own group, its own pair of calls, and nothing
+same way `setMeshMembership` is: its own group, its own pair of calls, and nothing
 in it touches `_planeGroup`. Geometry comes from the caller — the PLANNED
 points, which have not been written to any node — while the plane's edge list,
 polygon ring and colour are read back out of the last `setPlanes` payload by
@@ -7365,19 +7388,36 @@ showing the proposal), corners are drawn as well as edges so a plane with no
 edge list still reads, and `renderOrder` 8 puts it under the ghost's 9/10 so a
 proposal is never obscured by the highlight of the plane it would move.
 `clearPlanes()` clears it too. Pure display.
-**`setMeshObject(payload)` / `clearMeshObject()`** — the SELECTED 3D Mesh
-Object's welded surface, pushed by `syncPlanes3D`. ADDITIVE: its own
-`_meshObjectGroup`, a sibling of `_planeGroup`, which the per-plane fills above
-never touch — turning an object on draws the surface ON TOP of the planes it was
-built from rather than replacing them. Payload `{color, vertices, triangles,
-faces}` from `pose/mesh-object-geometry.js`; `null` clears.
+**`setMeshMembership(payload)` / `clearMeshMembership()`** — MEMBERSHIP
+highlighting for the SELECTED 3D Mesh Object, pushed by `syncPlanes3D`. Payload
+`{color, planeIds}`; `null` clears. ADDITIVE: its own `_meshMembershipGroup`, a
+sibling of `_planeGroup` that the per-plane fills above never touch.
 
-Front and back faces are drawn in **different colours** on purpose (the object's
-own, and a drab grey). Winding is the one property of the exported mesh a user
-cannot otherwise see — the plane fills are `DoubleSide` — and it is the property
-most likely to be wrong, so "I am looking at the inside" has to be visible here
-rather than discovered in Blender. Face outlines are drawn as `LineSegments` so
-polygon boundaries read where two coplanar faces meet.
+**It draws the member PLANES, not a derived body**, and that is the design. An
+object IS its member planes — the same cage already on screen — so each member's
+corners and edges are simply redrawn, fatter, in the object's colour. Two
+consequences worth stating:
+
+- **It cannot drift.** Positions are read out of `this._planes`, the very
+  payload the plane drawing was built from, so a highlight is always exactly on
+  top of its plane. The previous version pushed the object's DERIVED geometry
+  instead, which `pose/mesh-object-geometry.js` builds in the user's **origin
+  frame** — while this group, like every data group, hangs off `scene` rather
+  than `_framePivot` and is drawn in **calibration world**. Defining an origin
+  therefore made the object float away from the cage, translated and rotated by
+  the frame. Pinned by `tests/e2e/mesh-membership-highlight.mjs`, which asserts
+  exact equality with a frame set and shows the derived vertex to be elsewhere
+  as its control.
+- **Winding is no longer shown here.** The old two-tone front/back surface made
+  "I am looking at the inside" visible; membership highlighting does not. That
+  information stays in the panel's connectivity report (open/closed, naked
+  edges, `Flip normals`), which is where a user acts on it anyway.
+
+A member plane that was deleted simply has nothing to light up — the same lazy
+resolution the model uses, no cascade and no throw. `renderOrder` 7 and a
+thinner outline put it UNDER the Set Angle role outlines (8), so an open angle
+dialog still reads over a highlight on the same plane; `depthTest: false`, so
+confirming that the FAR wall is a member works through the cage's own fills.
 
 **Dragging a plane corner in 3D** (`_setupPlaneEditing` and friends;
 callbacks `onPlaneNodeDragged(planeId, nodeIdx, [x,y,z])` /

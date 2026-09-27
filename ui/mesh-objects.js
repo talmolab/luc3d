@@ -197,6 +197,7 @@ function renderEditor() {
 
     renderReport(obj);
     renderMembers(obj, model);
+    renderAddPlaneSelect(obj, model);
     renderExportButtons(obj);
 }
 
@@ -323,49 +324,104 @@ function renderReport(obj) {
     }
 }
 
-/** @private */
+/**
+ * The planes IN this object, one row each, with an × to take one back out.
+ *
+ * A list of members rather than a checkbox against every plane in the project:
+ * membership is the thing being edited, so it is what the panel shows, and the
+ * list stays the length of the object instead of the length of the project.
+ * Planes are ADDED through the picker below it (`renderAddPlaneSelect`), the
+ * same pick-and-add idiom Edit Plane uses to put an existing node in a plane.
+ *
+ * A member whose plane has since been deleted still gets a row — greyed, named
+ * by id — because it is still in `planeIds` and its × is the only way to clear
+ * it. Silently hiding it would leave the count in the table saying "−1" with
+ * nothing on screen to act on.
+ * @private
+ */
 function renderMembers(obj, model) {
     var box = document.getElementById('meshObjectMembers');
+    var empty = document.getElementById('meshObjectMembersEmpty');
     if (!box) return;
     box.textContent = '';
 
-    if (!model.planes.length) {
-        box.appendChild(line('No planes in this project yet.', 'info'));
-        return;
-    }
+    var ids = obj.planeIds;
+    if (empty) empty.style.display = ids.length ? 'none' : '';
+    if (box) box.style.display = ids.length ? '' : 'none';
 
-    model.planes.forEach(function (plane) {
-        var row = document.createElement('label');
+    ids.forEach(function (planeId) {
+        var plane = model.getPlane(planeId);
+        var row = document.createElement('div');
         row.className = 'mesh-object-member';
-
-        var cb = document.createElement('input');
-        cb.type = 'checkbox';
-        cb.checked = obj.hasPlane(plane.id);
-        cb.addEventListener('change', function () {
-            var changed = cb.checked ? obj.addPlane(plane.id) : obj.removePlane(plane.id);
-            if (changed) {
-                markDirty();
-                notifyViewport();
-            }
-        });
+        if (!plane) row.classList.add('mesh-object-member-dangling');
 
         var swatch = document.createElement('span');
         swatch.className = 'plane-swatch';
-        swatch.style.background = plane.color;
+        swatch.style.background = plane ? plane.color : 'transparent';
 
         var label = document.createElement('span');
-        label.textContent = plane.name;
+        label.className = 'mesh-object-member-name';
+        label.textContent = plane ? plane.name : '(deleted plane #' + planeId + ')';
 
         var count = document.createElement('span');
         count.className = 'mesh-object-member-count';
-        count.textContent = plane.nodeIds.length + ' nodes';
+        count.textContent = plane ? plane.nodeIds.length + ' nodes' : 'no longer exists';
 
-        row.appendChild(cb);
         row.appendChild(swatch);
         row.appendChild(label);
         row.appendChild(count);
+        row.appendChild(makeDeleteButton(
+            plane
+                ? 'Remove "' + plane.name + '" from this object. The plane itself is NOT deleted.'
+                : 'Forget this deleted plane.',
+            function () {
+                if (obj.removePlane(planeId)) {
+                    markDirty();
+                    notifyViewport();
+                }
+            }
+        ));
         box.appendChild(row);
     });
+}
+
+/**
+ * The picker for adding a plane, offering only NON-members.
+ *
+ * Mirrors Edit Plane's "+ Add" for an existing node, down to keying the
+ * options by plane ID rather than name — names are user-editable and can
+ * collide. An empty list is a real state (every plane is already in this
+ * object, or there are no planes yet) and it is said in words rather than left
+ * as a dead dropdown.
+ * @private
+ */
+function renderAddPlaneSelect(obj, model) {
+    var select = document.getElementById('meshObjectAddPlaneSelect');
+    var btn = document.getElementById('btnAddMeshObjectPlane');
+    var hint = document.getElementById('meshObjectAddPlaneHint');
+    if (select) select.textContent = '';
+
+    var candidates = model.planes.filter(function (p) { return !obj.hasPlane(p.id); });
+
+    if (select) {
+        candidates.forEach(function (plane) {
+            var opt = document.createElement('option');
+            opt.value = String(plane.id);
+            opt.textContent = plane.name + '  (' + plane.nodeIds.length + ' nodes)';
+            select.appendChild(opt);
+        });
+        select.disabled = candidates.length === 0;
+    }
+    if (btn) btn.disabled = candidates.length === 0;
+    if (hint) {
+        if (!model.planes.length) {
+            hint.textContent = 'No planes in this project yet — define one above first.';
+        } else if (!candidates.length) {
+            hint.textContent = 'Every plane in the project is already in "' + obj.name + '".';
+        } else {
+            hint.textContent = '';
+        }
+    }
 }
 
 /** @private */
@@ -508,6 +564,28 @@ export function setupMeshObjects() {
             }
         });
         colorInput.addEventListener('change', function () { markDirty(); });
+    }
+
+    var addPlane = document.getElementById('btnAddMeshObjectPlane');
+    if (addPlane) {
+        addPlane.addEventListener('click', function () {
+            var obj = getSelectedMeshObject();
+            if (!obj) { setStatus('No 3D mesh object selected', 'warning'); return; }
+            var select = document.getElementById('meshObjectAddPlaneSelect');
+            // `getPlane` matches with ===, and the DOM hands back a string.
+            var id = select ? parseInt(select.value, 10) : NaN;
+            var plane = isNaN(id) ? null : planeModel().getPlane(id);
+            if (!plane) {
+                setStatus('Pick a plane to add — define one above if there are none',
+                    'warning');
+                return;
+            }
+            if (obj.addPlane(plane.id)) {
+                setStatus('Added "' + plane.name + '" to "' + obj.name + '"');
+                markDirty();
+                notifyViewport();
+            }
+        });
     }
 
     var flip = document.getElementById('meshObjectFlip');

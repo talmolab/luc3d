@@ -198,8 +198,7 @@ import { setStatus, markDirty } from '../import-export/save-load.js';
 // plane panel. Circular (it imports `planeModel`/`refreshPlanePanel` from
 // here), and safe for the same reason the cycles above are: call-time use.
 import {
-    setupMeshObjects, refreshMeshObjectsPanel,
-    getSelectedMeshObject, meshObjectGeometry,
+    setupMeshObjects, refreshMeshObjectsPanel, getSelectedMeshObject,
 } from './mesh-objects.js';
 // Circular (rendering.js imports `drawPlaneOverlays` from here, and
 // triangulation.js imports rendering.js). Safe because every use below is
@@ -1412,24 +1411,27 @@ export function syncPlanes3D() {
 }
 
 /**
- * Push the SELECTED 3D Mesh Object's surface into the viewport, or clear it.
+ * Light up the SELECTED 3D Mesh Object's member planes, or clear the highlight.
  *
  * Additive, and separated from the payload loop above so the plane drawing is
  * unchanged. Lives here rather than in `ui/mesh-objects.js` because this is the
  * function every plane mutation already calls — routing it through one place is
- * what keeps the object's surface from lagging a node drag by a frame.
+ * what keeps the highlight from lagging a node drag by a frame.
+ *
+ * Only IDS cross this boundary. The viewport resolves them against the plane
+ * payload it was just handed, so the highlight is drawn from the same numbers
+ * as the planes and cannot land anywhere else; passing derived geometry instead
+ * is what previously drew the object adrift of its own cage, since that
+ * geometry is built in the user's origin frame and this group is not.
  * @private
  */
 function syncMeshObject3D() {
-    if (!viewport3d || !viewport3d.setMeshObject) return;
+    if (!viewport3d || !viewport3d.setMeshMembership) return;
     var obj = getSelectedMeshObject();
-    if (!obj) { viewport3d.setMeshObject(null); return; }
-    var geom = meshObjectGeometry(obj);
-    viewport3d.setMeshObject({
+    if (!obj) { viewport3d.setMeshMembership(null); return; }
+    viewport3d.setMeshMembership({
         color: obj.color,
-        vertices: geom.vertices,
-        triangles: geom.triangles,
-        faces: geom.faces,
+        planeIds: obj.resolvePlaneIds(planeModel()),
     });
 }
 

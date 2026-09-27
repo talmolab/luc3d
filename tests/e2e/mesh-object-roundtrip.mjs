@@ -7,9 +7,12 @@
  * pin the model and the geometry away from the DOM; this file pins the parts
  * only the real app can show:
  *
- *  1. The panel drives the model — creating, naming, colouring, checking planes
- *     in and out and flipping normals all go through the real handlers, and each
- *     marks the project unsaved.
+ *  1. The panel drives the model — creating, naming, colouring, adding and
+ *     removing member planes and flipping normals all go through the real
+ *     handlers, and each marks the project unsaved.
+ *  1b. Membership is edited by PICK-AND-ADD: the picker offers only non-members
+ *     and empties as the object fills, and a member row's x removes the plane
+ *     from the object without deleting the plane.
  *  2. The table reports the SHAPE, not just the membership: the badge and the
  *     report change when the planes stop being joined.
  *  3. Save -> reopen brings the objects back by ID, through a real `.slp`, with
@@ -64,6 +67,8 @@ try {
         const AS = await import('/ui/app-state.js');
         const P = await import('/ui/plane-definition.js');
         const MO = await import('/ui/mesh-objects.js');
+        const OF = await import('/pose/origin-frame.js');
+        const origin = await import('/ui/origin-definition.js');
         const PM = await import('/import-export/plane-metadata.js');
         const fileio = await import('/import-export/file-io.js');
         const saveLoad = await import('/import-export/save-load.js');
@@ -169,18 +174,66 @@ try {
         fire(colorInput, 'change');
         res.recolored = obj.color;
 
-        // Membership: one checkbox per plane in the project.
-        const boxes = () => Array.from(
-            document.querySelectorAll('#meshObjectMembers input[type=checkbox]'));
-        res.memberRowCount = boxes().length;
+        // Membership: a picker of NON-members plus "+ Add", and one row per
+        // member with an × to take it back out.
+        const addSelect = () => document.getElementById('meshObjectAddPlaneSelect');
+        const addBtn = () => document.getElementById('btnAddMeshObjectPlane');
+        const memberRows = () => Array.from(
+            document.querySelectorAll('#meshObjectMembers .mesh-object-member'));
+        const addPlaneById = (id) => {
+            addSelect().value = String(id);
+            addBtn().click();
+        };
+
+        // Empty object: nothing listed, every plane on offer.
+        res.emptyMemberRows = memberRows().length;
+        res.emptyMembersHidden =
+            document.getElementById('meshObjectMembersEmpty').style.display !== 'none';
+        res.candidatesWhenEmpty = addSelect().options.length;
 
         saveLoad.clearDirty();
-        boxes()[0].checked = true; fire(boxes()[0], 'change');
+        addPlaneById(floor.id);
         res.dirtyAfterMembership = AS.state.isDirty;
-        boxes()[1].checked = true; fire(boxes()[1], 'change');
-        boxes()[2].checked = true; fire(boxes()[2], 'change');
+        res.memberRowCountAfterOne = memberRows().length;
+        // The picker must SHRINK: a plane already in the object is not on offer.
+        res.candidatesAfterOne = addSelect().options.length;
+
+        addPlaneById(back.id);
+        addPlaneById(side.id);
         res.membership = obj.planeIds.slice();
         res.expectedMembership = [floor.id, back.id, side.id];
+        res.memberRowCount = memberRows().length;
+        res.candidatesWhenFull = addSelect().options.length;
+        res.addDisabledWhenFull = addBtn().disabled;
+        res.fullHint = document.getElementById('meshObjectAddPlaneHint').textContent;
+
+        // The × removes membership and nothing else — the plane survives.
+        const planeCountBeforeRemove = P.planeModel().planes.length;
+        memberRows()[1].querySelector('button').click();
+        res.membershipAfterRemove = obj.planeIds.slice();
+        res.planeSurvivedRemove = P.planeModel().planes.length === planeCountBeforeRemove &&
+            !!P.planeModel().getPlane(back.id);
+        // …and it comes back on offer.
+        res.candidatesAfterRemove = addSelect().options.length;
+        addPlaneById(back.id);
+        // Membership is an ordered list and Add APPENDS, so a re-added plane
+        // lands at the end rather than back in its old slot.
+        res.membershipReadded = obj.planeIds.slice();
+        res.expectedReadded = [floor.id, side.id, back.id];
+        // Put the original order back the same way, so what follows sees the
+        // membership it was written against.
+        memberRows()[1].querySelector('button').click();   // drop `side`
+        addPlaneById(side.id);
+        res.membershipRestored = obj.planeIds.slice();
+
+        // The selected row is marked as such, so the editor below is visibly
+        // attached to one object.
+        res.selectedRowMarked = !!document.querySelector(
+            '#meshObjectsTable tbody tr.plane-selected');
+        res.selectedRowIsTheOne = (() => {
+            const tr = document.querySelector('#meshObjectsTable tbody tr.plane-selected');
+            return tr ? tr.getAttribute('data-mesh-object-id') === String(obj.id) : false;
+        })();
 
         // =============================================================
         // 2. The table reports the SHAPE
@@ -205,14 +258,14 @@ try {
             };
         })();
 
-        // Un-check the side wall: the remaining two still share an edge, so it
-        // is still ONE shell — membership changed, topology tracked it.
-        boxes()[2].checked = false; fire(boxes()[2], 'change');
+        // Take the side wall back out: the remaining two still share an edge,
+        // so it is still ONE shell — membership changed, topology tracked it.
+        memberRows()[2].querySelector('button').click();
         res.twoFaceGeom = (() => {
             const g = MO.meshObjectGeometry(obj);
             return { faces: g.faces.length, shells: g.connectivity.shells, vertices: g.vertices.length / 3 };
         })();
-        boxes()[2].checked = true; fire(boxes()[2], 'change');
+        addPlaneById(side.id);
 
         // Flip normals is stored on the object, because for an OPEN cage
         // nothing can derive which side is outside.
@@ -240,13 +293,20 @@ try {
         P.refreshPlanePanel();
 
         // =============================================================
-        // 4. The 3D viewport gets the surface only while selected
+        // 4. The 3D viewport highlights the members only while selected
         // =============================================================
         // A bare page has no Viewport3D — one is only built by `setup3DViewport`
         // on a real session load, and it needs WebGL. What is worth pinning here
-        // is the WIRING: that `syncPlanes3D` pushes the selected object's derived
-        // geometry and pushes NULL when nothing is selected. The THREE side of
-        // `setMeshObject` is exercised by the viewport's own e2e coverage.
+        // is the WIRING: that `syncPlanes3D` pushes the selected object's member
+        // plane IDS and pushes NULL when nothing is selected. The THREE side of
+        // `setMeshMembership` is exercised by the viewport's own e2e coverage.
+        //
+        // IDs, not geometry, and that is the point of the test. Derived geometry
+        // is built in the user's ORIGIN frame; the viewport group that would
+        // draw it hangs off the scene, in CALIBRATION world. Pushing the former
+        // into the latter drew the object translated and rotated away from the
+        // very planes it was built from. The negative control below sets an
+        // origin frame and asserts the payload does not move.
         {
             const realVp = AS.viewport3d;
             res.hadRealViewport = !!realVp;
@@ -254,12 +314,12 @@ try {
             AS.setViewport3D({
                 setPlanes() {},
                 setOriginFrame() {},
-                setMeshObject(p) {
+                setMeshMembership(p) {
                     captured.push(p === null ? null : {
                         color: p.color,
-                        vertices: p.vertices.length / 3,
-                        triangles: p.triangles.length / 3,
-                        faces: p.faces.length,
+                        planeIds: p.planeIds.slice(),
+                        // A payload carrying vertices at all would be the bug.
+                        keys: Object.keys(p).sort(),
                     });
                 },
             });
@@ -268,6 +328,27 @@ try {
             P.syncPlanes3D();                                   // nothing selected
             MO.meshObjectState.selectedObjectId = obj.id;
             P.syncPlanes3D();                                   // selected again
+
+            // --- The regression: an origin frame must not move the payload ---
+            // A frame with a translation AND a rotation, so a leaked transform
+            // could not coincidentally come out equal.
+            const frame = OF.buildOriginFrame([137, -42, 19], [0, 1, 0.5]);
+            const before = JSON.stringify(captured[captured.length - 1]);
+            origin.originState.frame = frame;
+            P.syncPlanes3D();
+            res.framedPayloadUnchanged =
+                JSON.stringify(captured[captured.length - 1]) === before;
+            // …while the geometry the PANEL and the exporters quote does move,
+            // which is what makes the two genuinely different frames rather
+            // than the frame simply being ignored everywhere.
+            const framedGeom = MO.meshObjectGeometry(obj);
+            origin.originState.frame = null;
+            const unframedGeom = MO.meshObjectGeometry(obj);
+            res.geometryDoesMoveWithFrame =
+                framedGeom.vertices[0] !== unframedGeom.vertices[0] ||
+                framedGeom.vertices[1] !== unframedGeom.vertices[1] ||
+                framedGeom.vertices[2] !== unframedGeom.vertices[2];
+
             res.captured = captured;
             AS.setViewport3D(realVp);
         }
@@ -414,10 +495,30 @@ try {
     check(out.editorVisible === true, 'so its editor is shown');
     check(out.renamed === 'cage', 'the name input renames it');
     check(out.recolored === '#ff8800', 'the colour input recolours it');
-    check(out.memberRowCount === 3, 'the membership list has a row per plane in the project');
-    check(out.dirtyAfterMembership === true, 'checking a plane in marks the project unsaved');
+    check(out.emptyMemberRows === 0, 'a new object lists no member planes');
+    check(out.emptyMembersHidden === true, 'and says so instead of showing an empty list');
+    check(out.candidatesWhenEmpty === 3, 'every plane in the project is on offer to add');
+    check(out.dirtyAfterMembership === true, '+ Add marks the project unsaved');
+    check(out.memberRowCountAfterOne === 1, 'and puts one row in the member list');
+    check(out.candidatesAfterOne === 2,
+        'a plane already in the object drops out of the picker');
+    check(out.memberRowCount === 3, 'the member list has a row per MEMBER, not per plane');
     check(eq(out.membership, out.expectedMembership),
-        'and membership is stored as PLANE IDS, in the order they were checked');
+        'and membership is stored as PLANE IDS, in the order they were added');
+    check(out.candidatesWhenFull === 0, 'with every plane added the picker is empty');
+    check(out.addDisabledWhenFull === true, 'so + Add is disabled rather than dead');
+    check(/already in "cage"/.test(out.fullHint), 'and the reason is said in words');
+    check(eq(out.membershipAfterRemove, [out.expectedMembership[0], out.expectedMembership[2]]),
+        'a member row\'s x removes that plane from the object');
+    check(out.planeSurvivedRemove === true,
+        'and does NOT delete the plane itself — the one thing this panel may never do');
+    check(out.candidatesAfterRemove === 1, 'the removed plane returns to the picker');
+    check(eq(out.membershipReadded, out.expectedReadded),
+        're-adding APPENDS rather than restoring the old slot');
+    check(eq(out.membershipRestored, out.expectedMembership),
+        'and the original order is reachable through the same two controls');
+    check(out.selectedRowMarked === true, 'the selected object\'s row is marked selected');
+    check(out.selectedRowIsTheOne === true, 'and it is the row the editor is editing');
     check(out.dirtyAfterFlip === true, 'flipping normals marks the project unsaved');
     check(out.flipStored === true, 'and is stored on the object');
 
@@ -435,7 +536,7 @@ try {
         'and explains what a naked edge IS, rather than only naming it');
     check(/naked/.test(out.joinedBadge || ''), 'while the badge stays terse');
 
-    check(out.twoFaceGeom.faces === 2, 'un-checking a plane drops its face');
+    check(out.twoFaceGeom.faces === 2, 'removing a plane from the object drops its face');
     check(out.twoFaceGeom.shells === 1, 'the remaining two still share an edge, so still one shell');
     check(out.twoFaceGeom.vertices === 6, 'and the vertex set shrinks to the six they use');
 
@@ -447,15 +548,22 @@ try {
     check(/SHARE a node/.test(out.disjointReport), 'and says what joining actually requires');
 
     // =========================================================
-    console.log('\n--- 4. The viewport surface follows the selection ---');
+    console.log('\n--- 4. The viewport highlight follows the selection ---');
     // =========================================================
-    check(out.captured.length === 3, 'syncPlanes3D pushes the object on every call');
-    check(out.captured[0] && out.captured[0].vertices === 7 && out.captured[0].faces === 3,
-        'a selected object is pushed with its derived geometry: ' + JSON.stringify(out.captured[0]));
+    check(out.captured.length === 4, 'syncPlanes3D pushes the object on every call');
+    check(out.captured[0] && eq(out.captured[0].planeIds, out.expectedMembership),
+        'a selected object is pushed as its member plane IDS: ' + JSON.stringify(out.captured[0]));
+    check(out.captured[0] && eq(out.captured[0].keys, ['color', 'planeIds']),
+        'and NOTHING else — geometry in the payload is the bug this replaced');
     check(out.captured[0] && out.captured[0].color === '#ff8800', 'in the object\'s colour');
-    check(out.captured[0] && out.captured[0].triangles === 6, 'ear-clipped to 6 triangles (3 quads)');
     check(out.captured[1] === null, 'and NULL is pushed when nothing is selected');
-    check(eq(out.captured[0], out.captured[2]), 're-selecting pushes the same geometry again');
+    check(eq(out.captured[0], out.captured[2]), 're-selecting pushes the same thing again');
+    check(out.framedPayloadUnchanged === true,
+        'defining an ORIGIN does not move the payload — the highlight is drawn on the ' +
+        'planes themselves, in calibration world, so it cannot drift from them');
+    check(out.geometryDoesMoveWithFrame === true,
+        'while the geometry the panel and the exporters quote DOES move with it ' +
+        '(negative control: the two really are different frames)');
 
     // =========================================================
     console.log('\n--- 5. Save -> reopen ---');

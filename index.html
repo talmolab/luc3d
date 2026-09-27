@@ -1110,6 +1110,16 @@
                                     </label>
                                     <div class="plane-hint" style="margin-top:6px">Planes in this object</div>
                                     <div class="mesh-object-members" id="meshObjectMembers"></div>
+                                    <div class="table-empty" id="meshObjectMembersEmpty">No planes in this object yet</div>
+                                    <!-- Pick-and-add, the same shape as Edit Plane's
+                                         "+ Add" for an existing node: the list offers
+                                         only what is NOT already a member, so it empties
+                                         as the object is filled in. -->
+                                    <div class="panel-button-row" style="margin-top:6px">
+                                        <select id="meshObjectAddPlaneSelect" class="plane-select"></select>
+                                        <button class="panel-btn" id="btnAddMeshObjectPlane" title="Add the selected plane to this object. Its nodes join the object's shape, and any it shares with a plane already here becomes a seam.">+ Add</button>
+                                    </div>
+                                    <div class="plane-hint" id="meshObjectAddPlaneHint"></div>
 
                                     <!-- Export acts on the SELECTED object, so it lives
                                          in the editor with everything else that does.

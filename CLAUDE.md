@@ -653,6 +653,20 @@ without, including after deleting a member plane.
   vertex exactly ON a candidate ear's edge must block it, or the clipped triangle
   pokes outside the polygon (a plain L-shape hits this).
 
+**Selecting an object HIGHLIGHTS its planes; it does not draw a second body.**
+An object IS the cage already on screen, so `viewport3d.setMeshMembership`
+redraws each member plane's own corners and edges, fatter, in the object's
+colour — and `syncMeshObject3D` passes it **plane IDS, never geometry**. That is
+not a style choice. The derived geometry is built in the user's **origin frame**
+(the panel quotes volumes in it, and both exporters write it), while the
+viewport group that would draw it hangs off `scene` rather than `_framePivot`
+and is therefore in **calibration world**. Putting the one in the other drew the
+object translated and rotated away from the very planes it was built from the
+moment an origin was defined. Reading positions back out of the plane payload
+makes that class of bug unrepresentable. The cost is that winding is no longer
+visible in 3D; it stays in the panel's connectivity report, which is where the
+`Flip normals` fix lives anyway.
+
 **Coordinates: LUCID's world is Z-up right-handed and so is Blender's.** No axis
 conversion belongs in this pipeline. The only transforms are the applied origin
 frame and a uniform positive scale.
@@ -685,11 +699,16 @@ Coverage: `tests/test-mesh-object-3d.mjs` (the model + the additivity guarantee)
 `tests/test-mesh-object-geometry.mjs` (the derivation, with negative controls),
 `tests/test-mesh-export.mjs` (both formats at the BYTE level — container
 layout, chunk padding, welding, sRGB→linear colour, and the Y-up conversion
-with a negative control) and the two real-app files,
-`tests/e2e/mesh-object-roundtrip.mjs` (the panel, the round trip, the scope, and
-three negative controls) and `tests/e2e/mesh-object-export.mjs` (the buttons,
-the downloaded bytes, and the same corner asserted Z-up in the .stl AND Y-up in
-the .glb, so a writer treating them alike fails one of them). The axis claim was
+with a negative control) and the three real-app files,
+`tests/e2e/mesh-object-roundtrip.mjs` (the panel, the pick-and-add membership
+editor, the round trip, the scope, and three negative controls),
+`tests/e2e/mesh-object-export.mjs` (the buttons, the downloaded bytes, and the
+same corner asserted Z-up in the .stl AND Y-up in the .glb, so a writer treating
+them alike fails one of them) and `tests/e2e/mesh-membership-highlight.mjs`
+(a REAL WebGL viewport: the highlight covers the members and only the members,
+and every corner sits exactly on its plane node with an origin frame set —
+the derived vertex being elsewhere is the control that keeps that from passing
+on a build that simply ignores the frame). The axis claim was
 additionally confirmed against **real Blender** (`--background`, gltf + stl
 importers): both files put the tracked corner at (0, 0, 300).
 
