@@ -35,6 +35,10 @@ import { planeModel, refreshPlanePanel, syncPlanes3D } from './plane-definition.
 import { originState } from './origin-definition.js';
 import { buildMeshObjectGeometry, connectivitySummary } from '../pose/mesh-object-geometry.js';
 import { setStatus, markDirty } from '../import-export/save-load.js';
+import {
+    meshObjectToSTL, meshObjectToGLB, isExportable, meshFilenameStem,
+} from '../import-export/mesh-export.js';
+import { downloadBytes } from '../import-export/file-io.js';
 
 /**
  * Panel-local selection. Not persisted — which row is open is transient editor
@@ -193,6 +197,60 @@ function renderEditor() {
 
     renderReport(obj);
     renderMembers(obj, model);
+    renderExportButtons(obj);
+}
+
+/**
+ * Enable the two export buttons only when there is a shape to write.
+ *
+ * An object whose planes are not triangulated yet has no triangles, so both
+ * writers would refuse. Saying so on the button — greyed out, with the reason
+ * in the tooltip — beats letting the click land and reporting a failure the
+ * user could have been shown in advance.
+ * @private
+ */
+function renderExportButtons(obj) {
+    var stl = document.getElementById('btnExportMeshStl');
+    var glb = document.getElementById('btnExportMeshGlb');
+    if (!stl && !glb) return;
+    var ok = isExportable(meshObjectGeometry(obj));
+    [stl, glb].forEach(function (btn) {
+        if (!btn) return;
+        btn.disabled = !ok;
+        btn.title = ok ? btn.dataset.readyTitle || btn.title
+            : 'Nothing to export yet — "' + obj.name + '" has no triangulated faces. ' +
+              'Triangulate its planes first.';
+        if (ok && !btn.dataset.readyTitle) btn.dataset.readyTitle = btn.title;
+    });
+}
+
+/**
+ * Write the selected object out, in `format` ('stl' | 'glb').
+ *
+ * The geometry is the SAME one the panel reports on — origin frame applied,
+ * scale 1 — so the file and the badge above it cannot describe different
+ * shapes. Scale 1 means the calibration's own millimetres reach the file
+ * unscaled; nothing here invents a unit the calibration never stated.
+ * @private
+ */
+function exportSelected(format) {
+    var obj = getSelectedMeshObject();
+    if (!obj) return;
+    var geometry = meshObjectGeometry(obj);
+    var bytes = format === 'stl'
+        ? meshObjectToSTL(geometry, { name: obj.name })
+        : meshObjectToGLB(geometry, { name: obj.name, color: obj.color });
+    if (!bytes) {
+        setStatus('Nothing to export — "' + obj.name + '" has no triangulated faces yet');
+        return;
+    }
+    var filename = meshFilenameStem(obj.name) + '.' + format;
+    downloadBytes(bytes, filename, format === 'stl'
+        ? 'model/stl' : 'model/gltf-binary');
+    var c = geometry.connectivity;
+    setStatus('Exported "' + obj.name + '" as ' + filename + ' — ' +
+        (geometry.triangles.length / 3) + ' triangles, ' + c.vertices + ' vertices' +
+        (format === 'glb' ? ' (Y-up, as glTF requires)' : ' (Z-up millimetres)'));
 }
 
 /**
@@ -462,4 +520,11 @@ export function setupMeshObjects() {
             notifyViewport();
         });
     }
+
+    // Export writes a file and changes nothing, so neither button marks the
+    // project dirty — the same reason the appearance sliders do not.
+    var stl = document.getElementById('btnExportMeshStl');
+    if (stl) stl.addEventListener('click', function () { exportSelected('stl'); });
+    var glb = document.getElementById('btnExportMeshGlb');
+    if (glb) glb.addEventListener('click', function () { exportSelected('glb'); });
 }
