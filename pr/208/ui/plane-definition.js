@@ -1430,7 +1430,6 @@ function syncMeshObject3D() {
     var obj = getSelectedMeshObject();
     if (!obj) { viewport3d.setMeshMembership(null); return; }
     viewport3d.setMeshMembership({
-        color: obj.color,
         planeIds: obj.resolvePlaneIds(planeModel()),
     });
 }

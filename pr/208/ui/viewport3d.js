@@ -38,6 +38,21 @@ import { points3dNodeCount, getPoint3d } from '../pose/pose-data.js';
  */
 const DEFER_REPLAY_ORDER = ['cameras', 'environment', 'frame', 'highlight', 'fit'];
 
+/**
+ * The colour a SELECTED 3D Mesh Object's member planes are lit up in.
+ *
+ * One fixed yellow, deliberately NOT the object's own colour. The highlight
+ * has to be legible against whatever colours the user gave their planes, and
+ * an object drawn in a colour of its own would be competing with five plane
+ * colours at once — so it gets a colour no plane palette entry uses, at an
+ * opacity above the plane fills' own 0.28. Only one object can be selected at
+ * a time, so a shared highlight colour is never ambiguous.
+ *
+ * The object's colour is still its identity everywhere it is not competing for
+ * attention: the table swatch, the editor and the `.glb` `baseColorFactor`.
+ */
+const MESH_MEMBER_COLOR = '#ffe600';
+
 // ============================================
 // Viewport3D class
 // ============================================
@@ -1671,6 +1686,29 @@ export class Viewport3D {
      * @private
      */
     _buildPlaneFillMesh(plane, pts) {
+        const geo = this._buildPlaneFillGeometry(plane, pts);
+        if (!geo) return null;
+        const mesh = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({
+            color: new THREE.Color(plane.color),
+            transparent: true,
+            opacity: 0.28,
+            side: THREE.DoubleSide,
+            depthWrite: false,
+        }));
+        mesh.name = 'planeFill';
+        return mesh;
+    }
+
+    /**
+     * The fan geometry behind `_buildPlaneFillMesh`, without a material.
+     *
+     * Split out so the 3D Mesh Object membership highlight covers exactly the
+     * same triangles as the plane's own fill — one ring-walking rule, so a
+     * highlight can never disagree in shape with the surface it highlights.
+     * Returns null for fewer than 3 usable corners.
+     * @private
+     */
+    _buildPlaneFillGeometry(plane, pts) {
         const order = (plane.polygonOrder && plane.polygonOrder.length)
             ? plane.polygonOrder
             : null;
@@ -1693,15 +1731,7 @@ export class Viewport3D {
         }
         const geo = new THREE.BufferGeometry();
         geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-        const mesh = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({
-            color: new THREE.Color(plane.color),
-            transparent: true,
-            opacity: 0.28,
-            side: THREE.DoubleSide,
-            depthWrite: false,
-        }));
-        mesh.name = 'planeFill';
-        return mesh;
+        return geo;
     }
 
     // ============================================
@@ -2180,9 +2210,14 @@ export class Viewport3D {
      * Light up the planes that belong to the selected 3D Mesh Object.
      *
      * The answer to "which planes did I put in this object?", drawn on the
-     * planes themselves: each member's corners and edges are redrawn, fatter,
-     * in the object's colour. Adding a plane in the panel lights it up here,
-     * which is the whole feedback loop the membership editor needs.
+     * planes themselves: each member's FACE is filled, and its corners and
+     * edges redrawn fatter, in one fixed yellow (`MESH_MEMBER_COLOR`). Adding
+     * a plane in the panel lights it up here, which is the whole feedback loop
+     * the membership editor needs.
+     *
+     * The face is the load-bearing part. An outline alone left each plane
+     * wearing its own colour, so on a five-walled cage the answer to "is this
+     * wall a member?" came down to a few corner dots.
      *
      * Why a highlight and not the derived surface: see `_meshMembershipGroup`.
      * The short version is that an object is not a separate body, it IS these
@@ -2197,20 +2232,43 @@ export class Viewport3D {
      * slightly thinner, so an open angle dialog still reads over a membership
      * highlight covering the same plane.
      *
-     * @param {{color?:string, planeIds?:Array}|null} payload - null clears.
+     * The payload carries NO colour, on purpose: the highlight colour is fixed
+     * here (see `MESH_MEMBER_COLOR`) and an unused `color` field would be an
+     * invitation to wire the object's own colour back in, which is the thing
+     * that made membership hard to see.
+     *
+     * @param {{planeIds?:Array}|null} payload - null clears.
      */
     setMeshMembership(payload) {
         this._clearGroup(this._meshMembershipGroup);
         if (!payload || !payload.planeIds || !payload.planeIds.length) return;
 
         const ss = this._sceneScale || 1;
-        const mat = new THREE.MeshBasicMaterial({
-            color: new THREE.Color(payload.color || '#26a69a'),
+        const color = new THREE.Color(MESH_MEMBER_COLOR);
+
+        // The SURFACE. This is what makes a member read as a member: an
+        // outline alone left the plane wearing its own colour, so on a cage of
+        // five coloured walls the answer to "is this one in the object?" was a
+        // few corner dots. `depthTest` stays ON here, unlike the outline below
+        // — a filled face that ignored depth would paint the cage's back walls
+        // over its front ones and the shape would stop reading as a shape.
+        const faceMat = new THREE.MeshBasicMaterial({
+            color: color,
             transparent: true,
-            opacity: 0.8,
+            opacity: 0.45,
+            side: THREE.DoubleSide,
             depthWrite: false,
-            // Seen through the cage's own translucent fills: confirming that
-            // the FAR wall is a member is exactly what this is for.
+        });
+
+        // Corners and outline. `depthTest: false` so an occluded member still
+        // announces itself — confirming that the FAR wall is in the object is
+        // exactly what this is for, and an outline is thin enough to do that
+        // without destroying the sense of depth a filled face would.
+        const lineMat = new THREE.MeshBasicMaterial({
+            color: color,
+            transparent: true,
+            opacity: 0.9,
+            depthWrite: false,
             depthTest: false,
         });
 
@@ -2233,10 +2291,23 @@ export class Viewport3D {
             const nNodes = points3dNodeCount(pts);
             if (nNodes === 0) continue;
 
+            // Regardless of the plane's own `filled` flag: what is being shown
+            // is membership, not the plane's display setting, and a member the
+            // user had left unfilled still has to look like a member.
+            const faceGeo = this._buildPlaneFillGeometry(src, pts);
+            if (faceGeo) {
+                const face = new THREE.Mesh(faceGeo, faceMat);
+                face.name = 'meshMemberFace_' + planeId;
+                // Above the plane's own fill (renderOrder 0), which is drawn in
+                // the plane's colour on the very same triangles.
+                face.renderOrder = 7;
+                this._meshMembershipGroup.add(face);
+            }
+
             for (let k = 0; k < nNodes; k++) {
                 const pt = getPoint3d(pts, k);
                 if (pt == null || !isFinite(pt[0]) || !isFinite(pt[1]) || !isFinite(pt[2])) continue;
-                const dot = new THREE.Mesh(dotGeo, mat);
+                const dot = new THREE.Mesh(dotGeo, lineMat);
                 dot.position.set(pt[0], pt[1], pt[2]);
                 dot.name = 'meshMemberNode_' + planeId + '_' + k;
                 dot.renderOrder = 7;
@@ -2249,7 +2320,7 @@ export class Viewport3D {
                 const b = getPoint3d(pts, edges[e][1]);
                 if (a == null || b == null) continue;
                 if (!isFinite(a[0]) || !isFinite(b[0])) continue;
-                const cyl = this._createCylinder(a, b, edgeRadius, mat, 6);
+                const cyl = this._createCylinder(a, b, edgeRadius, lineMat, 6);
                 cyl.name = 'meshMemberEdge_' + planeId + '_' + e;
                 cyl.renderOrder = 7;
                 this._meshMembershipGroup.add(cyl);

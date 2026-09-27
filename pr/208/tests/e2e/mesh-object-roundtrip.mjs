@@ -316,7 +316,6 @@ try {
                 setOriginFrame() {},
                 setMeshMembership(p) {
                     captured.push(p === null ? null : {
-                        color: p.color,
                         planeIds: p.planeIds.slice(),
                         // A payload carrying vertices at all would be the bug.
                         keys: Object.keys(p).sort(),
@@ -553,9 +552,9 @@ try {
     check(out.captured.length === 4, 'syncPlanes3D pushes the object on every call');
     check(out.captured[0] && eq(out.captured[0].planeIds, out.expectedMembership),
         'a selected object is pushed as its member plane IDS: ' + JSON.stringify(out.captured[0]));
-    check(out.captured[0] && eq(out.captured[0].keys, ['color', 'planeIds']),
-        'and NOTHING else — geometry in the payload is the bug this replaced');
-    check(out.captured[0] && out.captured[0].color === '#ff8800', 'in the object\'s colour');
+    check(out.captured[0] && eq(out.captured[0].keys, ['planeIds']),
+        'and NOTHING else — geometry in the payload is the bug this replaced, and a ' +
+        'colour would invite the object\'s own back into the highlight');
     check(out.captured[1] === null, 'and NULL is pushed when nothing is selected');
     check(eq(out.captured[0], out.captured[2]), 're-selecting pushes the same thing again');
     check(out.framedPayloadUnchanged === true,

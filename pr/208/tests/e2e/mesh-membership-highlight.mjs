@@ -3,8 +3,9 @@
  *
  * A 3D Mesh Object is a GROUP OF PLANES, and every one of those planes is
  * already on screen. So selecting an object does not add a body to the scene:
- * it lights up the planes that belong to it, in the object's colour, on the
- * planes themselves.
+ * it lights up the planes that belong to it — filling each member's face and
+ * redrawing its corners and edges in one fixed yellow, on the planes
+ * themselves.
  *
  * This file needs a real `Viewport3D` — a WebGL context and a live scene graph
  * — because what it pins is where THREE actually puts the highlight. The
@@ -16,6 +17,12 @@
  *
  *  1. Selecting an object highlights its MEMBERS and nothing else, and
  *     deselecting clears the highlight entirely.
+ *  1b. The member FACES are filled — an outline alone left each plane wearing
+ *     its own colour, so on a cage of coloured walls "is this one a member?"
+ *     came down to a few corner dots. The fill is in a fixed yellow, NOT the
+ *     object's colour (which the fixture sets to something else to prove it),
+ *     it respects depth while the outline does not, and the planes' own fills
+ *     are left untouched.
  *  2. THE REGRESSION. Every highlight sits EXACTLY on its plane's own corner,
  *     to the last bit, even with a defined origin. The first version of this
  *     feature drew the object's DERIVED geometry instead, which is built in
@@ -146,12 +153,23 @@ try {
         ring(wall, [d, c, e, f]);       // shares the d-c edge with the floor
         ring(lone, [g1, g2, g3]);       // shares nothing, and is NOT a member
 
+        // The planes carry their own fills, in their own colours — the
+        // realistic case, and what makes "the highlight is additive" a real
+        // claim rather than one asserted over an empty scene. `lone` is left
+        // UNFILLED so the highlight is also shown to fill a member the user
+        // never filled.
+        floor.filled = true;
+        wall.filled = true;
+
         // An object holding the floor and the wall only.
         document.getElementById('btnNewMeshObject').click();
         const obj = MO.getSelectedMeshObject();
+        // Give the OBJECT a colour, so the highlight being a fixed yellow is
+        // shown to be deliberate rather than a default nobody set.
         const colorInput = document.getElementById('meshObjectColor');
         colorInput.value = '#ff8800';
         colorInput.dispatchEvent(new Event('input', { bubbles: true }));
+        res.objectColor = obj.color;
 
         const addSelect = () => document.getElementById('meshObjectAddPlaneSelect');
         const addBtn = () => document.getElementById('btnAddMeshObjectPlane');
@@ -191,6 +209,23 @@ try {
             const grp = group();
             return grp ? grp.children.filter(ch => /^meshMemberEdge_/.test(ch.name)).length : 0;
         };
+        // The FACES — the part that makes a member look like a member. Each
+        // carries the plane id in its name and a triangle count in its
+        // geometry, so "filled" can be asserted rather than assumed.
+        const faces = () => {
+            const grp = group();
+            if (!grp) return [];
+            return grp.children
+                .filter(ch => /^meshMemberFace_/.test(ch.name))
+                .map(ch => ({
+                    planeId: Number(ch.name.split('_')[1]),
+                    tris: ch.geometry.getAttribute('position').count / 3,
+                    color: '#' + ch.material.color.getHexString(),
+                    opacity: ch.material.opacity,
+                    depthTest: ch.material.depthTest,
+                    doubleSided: ch.material.side === 2,
+                }));
+        };
 
         P.syncPlanes3D();
         const lit = highlightNodes();
@@ -200,6 +235,30 @@ try {
         res.litNodeCount = lit.length;          // 4 floor + 4 wall
         res.litEdgeCount = edgeCount();         // 4 + 4
         res.litColor = lit.length ? lit[0].color : null;
+
+        const litFaces = faces();
+        res.faceCount = litFaces.length;
+        res.facePlaneIds = litFaces.map(x => x.planeId).sort((x, y) => x - y);
+        res.faceTris = litFaces.map(x => x.tris).sort();      // a quad fans to 2
+        res.faceColors = Array.from(new Set(litFaces.map(x => x.color)));
+        res.faceOpacity = litFaces.length ? litFaces[0].opacity : null;
+        res.faceDepthTest = litFaces.length ? litFaces[0].depthTest : null;
+        res.faceDoubleSided = litFaces.every(x => x.doubleSided);
+        // The outline deliberately IGNORES depth while the face respects it.
+        res.edgeDepthTest = (() => {
+            const grp = group();
+            const e = grp.children.find(ch => /^meshMemberEdge_/.test(ch.name));
+            return e ? e.material.depthTest : null;
+        })();
+        // The planes' OWN fills are untouched — the highlight is additive.
+        res.planeOwnFillColors = (() => {
+            const pg = AS.viewport3d.scene.children.find(ch => ch.name === 'planes');
+            const out = [];
+            pg.traverse(ch => {
+                if (ch.name === 'planeFill') out.push('#' + ch.material.color.getHexString());
+            });
+            return out.sort();
+        })();
 
         // =================================================================
         // THE REGRESSION: a defined origin must not move the highlight.
@@ -258,6 +317,16 @@ try {
         res.afterAddLit = Array.from(new Set(highlightNodes().map(h => h.planeId)))
             .sort((x, y) => x - y);
         res.expectedAfterAdd = [floor.id, wall.id, lone.id].sort((x, y) => x - y);
+        // `lone` has `filled === false`, so it has no fill of its own. It still
+        // gets a highlight face: what is being shown is MEMBERSHIP, not the
+        // plane's display setting.
+        res.afterAddFaces = faces().map(x => x.planeId).sort((x, y) => x - y);
+        res.loneIsFilledByPlane = (() => {
+            const pg = AS.viewport3d.scene.children.find(ch => ch.name === 'planes');
+            let n = 0;
+            pg.traverse(ch => { if (ch.name === 'planeFill') n++; });
+            return n;    // still 2 — `lone` never gained a fill of its own
+        })();
 
         const rows = () => Array.from(
             document.querySelectorAll('#meshObjectMembers .mesh-object-member'));
@@ -287,7 +356,30 @@ try {
             'a plane that is NOT a member is left alone — the negative control');
         check(out.litNodeCount === 8, 'every member corner is marked (4 + 4)');
         check(out.litEdgeCount === 8, 'and every member edge (4 + 4)');
-        check(out.litColor === '#ff8800', 'in the OBJECT\'s colour, not the planes\' own');
+
+        console.log('\n--- 1b. The member FACES are filled, which is what reads ---');
+        check(out.faceCount === 2, 'each member plane gets a filled face');
+        check(eq(out.facePlaneIds, out.expectedLitPlaneIds),
+            'for the members and only the members');
+        check(eq(out.faceTris, [2, 2]), 'fanned over the plane\'s own ring (a quad -> 2 tris)');
+        check(eq(out.faceColors, ['#ffe600']),
+            'in ONE fixed yellow: ' + JSON.stringify(out.faceColors));
+        check(out.litColor === '#ffe600', 'and the corners and outline match it');
+        check(out.objectColor === '#ff8800',
+            'NOT the object\'s own colour, which is set to something else entirely — ' +
+            'a highlight has to be legible against whatever the planes are wearing');
+        check(out.faceOpacity > 0.28,
+            'more opaque than the plane fills it covers (' + out.faceOpacity + ' > 0.28)');
+        check(out.faceDoubleSided === true, 'and double-sided, like the fill it sits on');
+        check(out.faceDepthTest === true,
+            'the FACE respects depth, or the cage\'s back walls would paint over its front');
+        check(out.edgeDepthTest === false,
+            'while the outline ignores it, so an occluded member still announces itself');
+        check(out.planeOwnFillColors.length === 2 &&
+            out.planeOwnFillColors.every(c => c !== '#ffe600'),
+            'NEGATIVE CONTROL: the planes\' own two fills are still there in their own ' +
+            'colours — the highlight is ADDITIVE, not a recolour (' +
+            JSON.stringify(out.planeOwnFillColors) + ')');
 
         console.log('\n--- 2. THE REGRESSION: an origin must not move the highlight ---');
         check(out.frameBuilt === true, 'a frame with a translation and a rotation was built');
@@ -301,6 +393,12 @@ try {
 
         console.log('\n--- 3. Editing membership changes what is lit ---');
         check(eq(out.afterAddLit, out.expectedAfterAdd), '+ Add lights the plane up');
+        check(eq(out.afterAddFaces, out.expectedAfterAdd),
+            'including a face for a member the user never FILLED — membership is what ' +
+            'is being shown, not the plane\'s own display setting');
+        check(out.loneIsFilledByPlane === 2,
+            'and that plane still has no fill of its own (2, unchanged) — the highlight ' +
+            'did not reach into the plane drawing to make one');
         check(eq(out.afterRemoveLit, out.expectedLitPlaneIds), 'and a member\'s x puts it out');
         check(out.clearedNodeCount === 0 && out.clearedEdgeCount === 0,
             'deselecting clears the highlight');
