@@ -2401,9 +2401,9 @@ edit-group mode, keyboard shortcuts.
   `findNearestNode`, `findNearestUnlinkedNode`, `setAssignmentMode`,
   `setEditGroupMode`, `addToAssignmentSelection`,
   `getAssignmentSelectedIds`, `onMouseDown`/`onMouseMove`/`onMouseUp`/
-  `onMouseLeave`, `onKeyDown`, `_addNewInstance` (used by smart-add; lays out a
-  new skeleton via an inline BFS fan-out from the highest-degree root, with a
-  vertical-line fallback when there are no edges).
+  `onMouseLeave`/`onWheel`, `onKeyDown`, `_addNewInstance` (used by smart-add;
+  lays out a new skeleton via an inline BFS fan-out from the highest-degree
+  root, with a vertical-line fallback when there are no edges).
 - `isInteractiveClickTarget(target)` — used by other UI to skip
   click-through on form controls.
 
@@ -2425,6 +2425,55 @@ Delete-target selection within a multi-camera one.) Regression tests:
 — the state transition and a full click-click through real `MouseEvent`s, both
 confirmed to fail pre-fix.
 
+**Alt + wheel rotates a whole instance about the node under the cursor**
+(issue #198), the counterpart to Alt+drag's whole-instance translate. Ported
+from SLEAP's `QtNode.mousePressEvent`/`wheelEvent`
+(`sleap/gui/widgets/video.py`), including its rate: **6 degrees per wheel
+notch**, clockwise on a scroll up. One `_applyInstanceTransform` does the
+rigid rotate-then-translate for every path, always recomputed from a points
+snapshot taken when the gesture started, so a long burst cannot accumulate
+drift and a rotation composes with a simultaneous drag.
+
+Two entry points, because SLEAP's has a trackpad problem:
+- **Button held (SLEAP's own gesture).** Alt+press a node starts the existing
+  whole-instance drag; `_onDragWheel` then turns it about `dragInfo.pivot` (the
+  grabbed node — SLEAP's `setTransformOriginPoint`). Document-level and in the
+  capture phase, so the cursor may wander and the rotation still beats
+  wheel-to-zoom. A pure rotation never clears the drag deadzone, so `onMouseUp`
+  treats a non-zero `rotationDeg` as a change in its own right.
+- **No button (LUCID addition).** `onWheel` on the overlay canvas handles
+  Alt+wheel while merely hovering a node. SLEAP requires the button down, which
+  on a macOS trackpad means click-and-hold while two-finger scrolling; hold-free
+  Alt+wheel is what makes the feature usable there. The gesture latches in
+  `_rotateGesture` and commits on a ~200 ms idle
+  (`_scheduleRotateCommit`/`_commitRotateGesture`), on the next click, or on
+  `detach()` — so `onNodeMoved` (dirty flag, re-triangulation, 3D rebuild) runs
+  once per burst rather than per tick, exactly as a drag commits once on
+  release.
+
+**The lettering does not turn with the skeleton.** Only the points move. Every
+piece of label text — node names and the track/identity pill, in
+`drawInstanceLabels` and `drawUnlinkedInstances` — is drawn inside
+`ui/overlays.js`'s screen-aligned `beginUprightFrame`, which cancels the
+VIEW's rotation (issue #162) and never sees the instance's; what does follow
+the turned skeleton is the label's *placement*, since `computeLabelOffset`
+picks the widest gap between a node's edges. Pinned by the `Instance Rotate -
+node names stay horizontal` tests, which read the canvas transform in force at
+each `fillText` and assert transform-rotation + view-rotation is zero — they
+were confirmed to go red against a deliberately injected label rotation, so
+they pin the invariant rather than just current behavior.
+
+`wheelNotches` folds `deltaMode` in (Chrome ~100 px/notch, Firefox 3
+lines/notch) and **ignores `deltaX`** — SLEAP sums Qt's x and y deltas, but on a
+trackpad the incidental horizontal component then fights the vertical one.
+Anything else (no Alt, or Alt over empty space, or a reprojected instance) is
+left un-consumed so `loading/video.js`'s wheel-to-zoom on the enclosing
+`.video-cell` still works; that disambiguation is the whole point of the
+`stopPropagation`. Coverage: `tests/test-instance-rotate.js` (22 assertions
+against the real manager) and `tests/e2e/alt-wheel-rotate-instance.mjs`, which
+drives real Chromium wheel input at the real app and asserts rotation and zoom
+never both fire.
+
 **Zoom-aware thresholds.** `_displayToVideo(state, viewName)` returns how many
 video pixels span one CSS pixel on screen given the view's current `zoom.scale`.
 Hit-test padding (`findNearestNode`/`findNearestUnlinkedNode`) and the drag-start
@@ -2438,7 +2487,8 @@ drag at high zoom and blocked fine node adjustments.
 **Imported by.** `pose/initialization.js`, `ui/info-panel.js`.
 
 **User-facing features.** Click-to-select skeleton nodes, drag to move
-keypoints, double-click to convert predicted → user, shift-drag to add
+keypoints, Alt+drag to move a whole instance, Alt+wheel to rotate one about a
+node, double-click to convert predicted → user, shift-drag to add
 to manual-assignment selection, right-click to null/restore nodes,
 keyboard shortcuts (delete, alt-drag clone, etc.).
 
@@ -3895,7 +3945,11 @@ Keyboard Shortcuts panel — see the keyboard-shortcuts note in `CLAUDE.md`.
 dispatched entries, or a free-form display string (e.g. `← / →`, `1 – 9`) for
 fixed reference entries. `dispatched:true` → matched live and needs a runtime
 handler via `setHandler`; `dispatched:false` → handled by its own dedicated
-handler elsewhere and listed for reference only.
+handler elsewhere and listed for reference only. The two **mouse gestures** on
+an instance — `moveInstance` (`Alt+Drag`) and `rotateInstance` (`Alt+Wheel`,
+issue #198) — are in the catalog for the same reason: they have no key to
+rebind, so they are reference-only, but they belong in Settings ▸ Keyboard
+Shortcuts and the Hot Keys modal where people look for them.
 
 **Key exports.**
 - `getDefaultTriangulationMethod()` / `setDefaultTriangulationMethod(method)` —
