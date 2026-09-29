@@ -10,8 +10,15 @@
  * listeners on the same wheel event. This drives the real app with real
  * Chromium wheel input and asserts they do not both fire:
  *
- *   - Alt+wheel over a node  → the instance turns, the zoom does NOT change.
+ *   - Alt+wheel over a node   → the instance turns, the zoom does NOT change.
  *   - plain wheel over a node → the zoom changes, the instance does NOT turn.
+ *   - Alt+wheel over EMPTY canvas, and over the cell's letterbox margin where
+ *     no overlay canvas is under the cursor at all → nothing happens. While
+ *     Option is held the wheel belongs to rotation, so a scroll that strays
+ *     off the skeleton cannot zoom the view out from under a rotation in
+ *     progress. The margin case only `loading/video.js`'s own `altKey` guard
+ *     can cover, which is why it is asserted here and not in the unit suite.
+ *   - releasing Alt hands zoom straight back.
  *
  * It also pins the 6-degrees-per-notch rate and the clockwise-on-scroll-up
  * sense against a real browser's wheel deltas rather than a synthesized one.
@@ -163,7 +170,7 @@ try {
     check(near(s.pts[1][0], ARM[0], 1e-6) && near(s.pts[1][1], ARM[1], 1e-6),
         'plain wheel leaves the instance alone');
 
-    // ---- 4. Alt + wheel over empty canvas must still zoom ----------------
+    // ---- 4. Alt + wheel over empty canvas must do NOTHING ---------------
     const beforeEmpty = await snap();
     const [ex, ey] = await screenOf(560, 420); // far from either node
     await page.mouse.move(ex, ey);
@@ -173,10 +180,50 @@ try {
     await page.waitForTimeout(200);
 
     s = await snap();
-    check(s.zoom > beforeEmpty.zoom,
-        `Alt+wheel over empty space still zooms (scale ${s.zoom} > ${beforeEmpty.zoom})`);
+    check(near(s.zoom, beforeEmpty.zoom, 1e-9),
+        `Alt+wheel over empty canvas does NOT zoom (scale ${s.zoom}, was ${beforeEmpty.zoom})`);
     check(near(s.pts[1][0], ARM[0], 1e-6),
-        'Alt+wheel over empty space leaves the instance alone');
+        'Alt+wheel over empty canvas leaves the instance alone');
+
+    // ---- 5. ...including the letterbox margin outside the overlay canvas -
+    // The rotation listener is on the overlay canvas, which does not fill the
+    // cell. Only `loading/video.js`'s own altKey guard covers this gap.
+    const margin = await page.evaluate(async () => {
+        const AS = await import('/ui/app-state.js');
+        const c = AS.state.views[0].overlayCanvas;
+        const cell = c.closest('.video-cell');
+        if (!cell) return null;
+        const cr = cell.getBoundingClientRect();
+        const kr = c.getBoundingClientRect();
+        // A point inside the cell but outside the canvas, if there is one.
+        if (kr.top - cr.top > 6) return [kr.left + kr.width / 2, cr.top + 3];
+        if (kr.left - cr.left > 6) return [cr.left + 3, kr.top + kr.height / 2];
+        if (cr.bottom - kr.bottom > 6) return [kr.left + kr.width / 2, cr.bottom - 3];
+        if (cr.right - kr.right > 6) return [cr.right - 3, kr.top + kr.height / 2];
+        return null;
+    });
+    if (margin) {
+        const beforeMargin = await snap();
+        await page.mouse.move(margin[0], margin[1]);
+        await page.keyboard.down('Alt');
+        await page.mouse.wheel(0, -100);
+        await page.keyboard.up('Alt');
+        await page.waitForTimeout(200);
+        s = await snap();
+        check(near(s.zoom, beforeMargin.zoom, 1e-9),
+            `Alt+wheel in the cell's letterbox margin does NOT zoom (scale ${s.zoom}, was ${beforeMargin.zoom})`);
+    } else {
+        console.log("  - (no letterbox margin in this layout; margin case not exercised)");
+    }
+
+    // ---- 6. Releasing Alt hands zoom straight back ----------------------
+    const beforeRestore = await snap();
+    await page.mouse.move(px, py);
+    await page.mouse.wheel(0, -100); // no Alt held
+    await page.waitForTimeout(200);
+    s = await snap();
+    check(s.zoom > beforeRestore.zoom,
+        `zoom works again as soon as Alt is released (scale ${s.zoom} > ${beforeRestore.zoom})`);
 
     check(errs.length === 0, 'no page errors: ' + (errs[0] || 'none'));
 

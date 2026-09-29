@@ -213,7 +213,11 @@
     });
 
     // ==================================================================
-    describe('Instance Rotate - when it must stay out of the way', function () {
+    // Holding Alt hands the wheel to rotation for as long as the key is
+    // down. Zoom stands aside even where there is nothing to turn, so a
+    // scroll that strays off the skeleton mid-gesture cannot yank the view
+    // out from under it. Releasing Alt gives zoom straight back.
+    describe('Instance Rotate - Alt suspends wheel-to-zoom', function () {
         let fx;
         beforeEach(function () { cleanupCanvases(); fx = makeFixture(); });
 
@@ -224,17 +228,47 @@
             assertApprox(fx.inst.getY(1), 100, 1e-9, 'nothing moved');
         });
 
-        it('ignores Alt+wheel over empty space so Alt+scroll still zooms there', function () {
+        it('swallows Alt+wheel over empty space rather than zooming', function () {
             const e = wheelAt(fx.canvas, 400, 400, -NOTCH_PX);
-            assertFalse(e.defaultPrevented, 'no node under the cursor');
-            assertApprox(fx.inst.getX(1), 140, 1e-9, 'nothing moved');
+            assertTrue(e.defaultPrevented,
+                'Alt+wheel must not reach the zoom handler, even off-skeleton');
+            assertApprox(fx.inst.getX(1), 140, 1e-9, 'and nothing moved');
         });
 
-        it('will not turn a reprojected instance', function () {
+        it('keeps rotating, and never zooms, when the cursor strays off the skeleton', function () {
+            wheelAt(fx.canvas, 100, 100, -NOTCH_PX * 15); // 90 degrees
+            // The cursor wanders far off the skeleton, Alt still down. The
+            // gesture is latched, so this keeps turning the same instance
+            // about the same pivot — as in SLEAP, where the wheel reaches the
+            // armed node wherever the pointer happens to be. What it must
+            // never do is fall through to zoom.
+            const e = wheelAt(fx.canvas, 600, 460, -NOTCH_PX);
+            assertTrue(e.defaultPrevented, 'no zoom mid-gesture');
+            const rad = 96 * Math.PI / 180; // 90 + one more notch
+            assertApprox(fx.inst.getX(1), 100 + 40 * Math.cos(rad), 1e-6,
+                'the latched gesture carried on turning');
+            assertApprox(fx.inst.getY(1), 100 + 40 * Math.sin(rad), 1e-6,
+                'the latched gesture carried on turning');
+            assertApprox(fx.inst.getX(0), 100, 1e-9, 'pivot still the same node');
+            assertApprox(fx.inst.getY(0), 100, 1e-9, 'pivot still the same node');
+        });
+
+        it('does not start a rotation off-skeleton once the gesture has lapsed', async function () {
+            wheelAt(fx.canvas, 100, 100, -NOTCH_PX);
+            await afterCommit(); // gesture commits, latch released
+            const turned = [fx.inst.getX(1), fx.inst.getY(1)];
+            const e = wheelAt(fx.canvas, 600, 460, -NOTCH_PX);
+            assertTrue(e.defaultPrevented, 'Alt still owns the wheel');
+            assertApprox(fx.inst.getX(1), turned[0], 1e-9, 'nothing turned');
+            assertApprox(fx.inst.getY(1), turned[1], 1e-9, 'nothing turned');
+        });
+
+        it('will not turn a reprojected instance, and will not zoom either', function () {
             fx.inst.type = 'reprojected';
             const e = wheelAt(fx.canvas, 100, 100, -NOTCH_PX);
-            assertFalse(e.defaultPrevented, 'reprojected instances are not editable');
-            assertApprox(fx.inst.getX(1), 140, 1e-9, 'nothing moved');
+            assertTrue(e.defaultPrevented, 'Alt still owns the wheel');
+            assertApprox(fx.inst.getX(1), 140, 1e-9,
+                'reprojected instances are not editable');
         });
     });
 
