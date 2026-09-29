@@ -176,6 +176,10 @@ import { makeVideoToCanvasTransform } from './overlays.js';
 import { persistSectionStates } from './section-state.js';
 import { setInfoTip } from './info-tip.js';
 import { showPlaneDialog } from './plane-dialog.js';
+// The Visibility panel's `Planes` toggles. Read by `syncPlanes3D` here and by
+// the 2D overlay, which is what keeps the two representations agreeing about
+// what "planes are off" means.
+import { planeVisibility } from './plane-visibility.js';
 // Imported as well as re-exported below: `export { x } from` makes the name
 // importable FROM here but does not bind it in this module's own scope, and
 // `enterPlaneMode` / `exitPlaneMode` call this one directly.
@@ -1328,6 +1332,16 @@ export function syncPlanes3D() {
     viewport3d.onPlaneNodeDragEnd = onPlaneNodeDragEnd3D;
     viewport3d.planeNodeSize = planeState.nodeSize3d;
     attachOriginCallbacks(viewport3d);
+
+    // The Visibility panel's `Planes` section, forced all-on inside the mode.
+    // The two flags go onto the VIEWPORT rather than being filtered out of the
+    // payload below, because `_planes` is also what a drag, the selected-node
+    // marker, the mesh-object highlight and the angle dialog's role outlines
+    // resolve their ids against — dropping entries would break those instead
+    // of hiding meshes.
+    var vis = planeVisibility(planeState.active);
+    viewport3d.showPlaneSurfaces = vis.planes3d;
+    viewport3d.showPlaneNodes = vis.nodes3d;
 
     var model = planeModel();
     var pool = model.pool;
