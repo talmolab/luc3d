@@ -42,6 +42,7 @@ import {
 // lookup keeps them functional.
 import { drawAllOverlays, setReprojErrorVisible } from '../ui/rendering.js';
 import { updateInfoPanel, promptImportSkeletonForAllSessions } from '../ui/info-panel.js';
+import { noteSessionCalibrationDivergence } from '../ui/calibration-notice.js';
 // Pass 3i-3: setup3DViewport moved to pose/initialization.js.
 import { setup3DViewport } from '../pose/initialization.js';
 // Pass 3e-1: fitTimelineToData moved to ui-wiring.js.
@@ -1627,9 +1628,15 @@ export async function handleLoadSlpFile(slpFile) {
         setStatus('SLP loaded (' + statusParts.join(', ') + ')', 'success');
 
         // One skeleton per project: a multi-session .slp otherwise carries a
-        // per-session skeleton each. Prompt for a single unifying skeleton file.
+        // per-session skeleton each. Prompt for a single unifying skeleton file,
+        // and only once that is answered check whether the sessions' embedded
+        // calibrations agree — a `.slp` carries one per session, so merging two
+        // separately-calibrated recordings lands here too. See
+        // `ui/calibration-notice.js`.
         if (state.sessions.length > 1) {
-            promptImportSkeletonForAllSessions();
+            promptImportSkeletonForAllSessions(function () {
+                noteSessionCalibrationDivergence(state.sessions);
+            });
         }
     } catch (err) {
         console.error('[load-slp] FATAL:', err);

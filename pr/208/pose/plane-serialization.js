@@ -88,13 +88,13 @@ export function serializePlaneNodes(pool) {
         // node deliberately writes no `immutable`, because an older build
         // cannot enforce "stays in its plane" and reading it as a hard freeze
         // would be strictly wrong; treating it as free is the honest fallback.
+        //
+        // No plane id rides along: `plane-locked` holds a node in every plane
+        // it is a MEMBER of, and membership is already in the file under
+        // `planes`. A `pinPlaneId` written by an earlier build named one of
+        // those planes, so dropping it changes nothing a reader can observe.
         if (node.pin === 'locked') { out.pin = 'locked'; out.immutable = true; }
-        else if (node.pin === 'plane-locked') {
-            out.pin = 'plane-locked';
-            if (node.pinPlaneId !== null && node.pinPlaneId !== undefined) {
-                out.pinPlaneId = node.pinPlaneId;
-            }
-        }
+        else if (node.pin === 'plane-locked') out.pin = 'plane-locked';
         // Omitted rather than written as three nulls — see the module note.
         if (node.hasPoint3d()) out.xyz = [node.xyz[0], node.xyz[1], node.xyz[2]];
         if (num(node.error) !== null) out.error = node.error;
@@ -123,13 +123,15 @@ export function restorePlaneNodes(data) {
         // `pin` wins when present; otherwise a legacy record's `immutable:
         // true` means `locked`, which is what it has always meant. Both go
         // through `normalizePin` in the constructor, so an unrecognized value
-        // loads as unpinned rather than refusing the file.
+        // loads as unpinned rather than refusing the file. A legacy
+        // `pinPlaneId` is READ AND DISCARDED — the plane it named is one of
+        // the planes the file already lists this node in, and those are what
+        // hold it now.
         var node = new PlaneNode(
             id,
             typeof d.name === 'string' ? d.name : ('n' + id),
             typeof d.color === 'string' ? d.color : '#ffffff',
-            d.pin !== undefined ? d.pin : !!d.immutable,
-            num(d.pinPlaneId));
+            d.pin !== undefined ? d.pin : !!d.immutable);
         var xyz = vec3(d.xyz);
         // `force` because a pinned node refuses ordinary writes, and this IS
         // the pinned coordinate the user saved.
@@ -422,8 +424,6 @@ export function serializeMeshObjects(set) {
             color: obj.color,
             planeIds: obj.planeIds.slice(),
         };
-        // Defaults are never written — see the module note.
-        if (obj.flipNormals) out.flipNormals = true;
         return out;
     });
 }
@@ -465,7 +465,9 @@ export function restoreMeshObjects(data, planeIds) {
                 obj.addPlane(pid);
             }
         }
-        obj.flipNormals = !!d.flipNormals;
+        // A `flipNormals` written by an older build is IGNORED, not adopted:
+        // winding is derived now, and re-applying a stale override would flip
+        // exactly the objects whose orientation the derivation already fixed.
         out.push(obj);
     }
     return out;

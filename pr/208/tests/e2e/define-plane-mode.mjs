@@ -571,7 +571,14 @@ try {
             headers: Array.from(document.querySelectorAll('#planeNodesTable thead th'))
                 .map(h => h.textContent.trim()),
             headerCols: document.querySelectorAll('#planeNodesTable thead th').length,
-            pinInfoTitle: (document.getElementById('planePinInfo') || {}).title || '',
+            // The explanation moved out of `title` and into the ⓘ popover
+            // (`ui/info-tip.js`), which reads `data-infotip` and mirrors it to
+            // `aria-label`. `title` is deliberately REMOVED there, or the
+            // native tooltip would repeat the sentence a second later
+            // somewhere else — so the accessible name is what to assert.
+            pinInfoTitle: (document.getElementById('planePinInfo') || {})
+                .getAttribute?.('aria-label') || '',
+            pinInfoNativeTitle: (document.getElementById('planePinInfo') || {}).title || '',
             // The panel's SECTION titles, which have to read as one set: the
             // four <details> summaries plus Plane Appearance, which is the one
             // section with no <details> of its own and so has to be dressed to
@@ -623,8 +630,11 @@ try {
         `and the sub-sections inside Edit Plane stay smaller (got ${JSON.stringify(m.subTitles)})`);
     check(/unlocked \(mutable\)/.test(m.pinInfoTitle) &&
           /locked \(immutable\)/.test(m.pinInfoTitle) &&
-          /plane-locked \(mutable within defined plane\)/.test(m.pinInfoTitle),
+          /plane-locked/.test(m.pinInfoTitle) &&
+          /within the planes it is in/.test(m.pinInfoTitle),
         `the pin column's info button defines all three states (got "${m.pinInfoTitle}")`);
+    check(m.pinInfoNativeTitle === '',
+        'and carries no `title`, so the native tooltip cannot say it twice');
     check(m.noMembershipCheckbox === 0,
         `no per-row "In" checkbox survives in the pool table (got ${m.noMembershipCheckbox})`);
     check(eq(m.memberHeaders, ['Name', 'Color', '']),
@@ -832,8 +842,18 @@ try {
             onCamA: P.placedPlanesOn('camA').length,
             onCamB: P.placedPlanesOn('camB').length,
             // Placements live in the plane row's expander, not a table.
-            expanderCount: document.querySelector('#planeSkeletonsTable tbody tr .plane-placed-count').textContent,
+            // The expander is a bare caret now — the placed-view count that
+            // used to ride beside it was a second, differently-defined view
+            // number one column from the Views fraction.
+            expanderText: document.querySelector(
+                '#planeSkeletonsTable tbody tr .plane-expander').textContent.trim(),
             expanderEnabled: !document.querySelector('#planeSkeletonsTable tbody tr .plane-expander').disabled,
+            // Views is annotated / total; a freshly dropped plane is
+            // hand-placed on this one view out of the session's two.
+            viewsCell: (() => {
+                const tr = document.querySelector('#planeSkeletonsTable tbody tr');
+                return tr && tr.children[3] ? tr.children[3].textContent.trim() : null;
+            })(),
             headers: Array.from(document.querySelectorAll('#planeSkeletonsTable thead th'))
                 .map(h => h.textContent.trim()),
             noPlacementsTable: !document.getElementById('planePlacementsTable'),
@@ -852,10 +872,13 @@ try {
         `seed is centred on the drop point (got ${JSON.stringify(m.centroid)})`);
     check(m.onCamA === 0, 'the other view gets nothing');
     check(m.onCamB === 1, 'the dropped-on view has exactly one plane placed');
-    check(m.expanderCount === '1', `the row's expander shows the placement count (got "${m.expanderCount}")`);
+    check(m.expanderText === '▶',
+        `the row's expander is a bare caret (got "${m.expanderText}")`);
     check(m.expanderEnabled, 'the expander is enabled once something is placed');
-    check(eq(m.headers, ['', 'Name', 'Nodes', '']),
-        `Links and Placed columns are gone (got ${JSON.stringify(m.headers)})`);
+    check(m.viewsCell === '1/2',
+        `Views counts the hand-placed view out of the session's two (got "${m.viewsCell}")`);
+    check(eq(m.headers, ['', 'Name', 'Nodes', 'Views', '']),
+        `columns are expander / Name / Nodes / Views / delete (got ${JSON.stringify(m.headers)})`);
     check(m.noPlacementsTable, 'the standalone Placements table is gone');
 
     // 4c — re-dropping the same plane on the same view is REFUSED, and must
@@ -1611,18 +1634,57 @@ try {
         }));
         out.noCameraSelected = vp.selectedCamera === camBefore;
 
-        // --- RULE 1: an un-fit plane is inert ---
+        // --- RULE 1: what makes a plane inert is having NO PLANE, not having
+        // no STORED fit. Gating the drag on `planeFit` meant a well-annotated
+        // plane could refuse to be touched in 3D just because a node was
+        // pinned (which clears the fit of every plane standing on it) — the
+        // same mistake `usableFit` fixed for Set Angle. The surface is derived
+        // from the plane's own solved corners when there is no stored one.
         const fitSaved = sk.planeFit;
         sk.planeFit = null;
         P.syncPlanes3D();
-        out.unfitNotEditable = nodeMeshes().every(c2 => c2.userData.planeEditable !== true);
+        out.unfitStillEditable = nodeMeshes().every(c2 => c2.userData.planeEditable === true);
         const s2 = screenOf(K);
         const beforeUnfit = Array.from(pd.getPoint3d(pts(), K));
         fire('pointerdown', s2.x, s2.y);
-        out.unfitNotGrabbed = !vp._planeDrag;
+        out.unfitGrabbed = !!vp._planeDrag;
         fire('pointermove', s2.x + 70, s2.y + 45);
         fire('pointerup', s2.x + 70, s2.y + 45);
-        out.unfitUnmoved = beforeUnfit.every((v, i) => v === pd.getPoint3d(pts(), K)[i]);
+        const afterUnfit = Array.from(pd.getPoint3d(pts(), K));
+        out.unfitMoved = Math.hypot(afterUnfit[0] - beforeUnfit[0],
+            afterUnfit[1] - beforeUnfit[1], afterUnfit[2] - beforeUnfit[2]);
+        // And it travelled IN the derived plane, which is the same plane the
+        // stored fit described — the corners have not moved since the Fit, so
+        // a derivation that disagreed with `Fit` would show up right here.
+        const derived = P.planeModel().usableFitForPlane(sk);
+        out.derivedMatchesStoredFit = !!derived && Math.abs(
+            Math.abs(derived.normal[0] * fitSaved.normal[0] +
+                derived.normal[1] * fitSaved.normal[1] +
+                derived.normal[2] * fitSaved.normal[2]) - 1) < 1e-6;
+        out.unfitOffDerived = Math.abs(
+            (afterUnfit[0] - derived.centroid[0]) * derived.normal[0] +
+            (afterUnfit[1] - derived.centroid[1]) * derived.normal[1] +
+            (afterUnfit[2] - derived.centroid[2]) * derived.normal[2]);
+
+        // A plane with nothing to derive a plane FROM is still inert, and that
+        // is the real rule: two corners admit a pencil of planes, so choosing
+        // one would invent geometry. Its own plane group, so the flags read
+        // here belong to it and not to the fitted one above.
+        const thin = P.createPlane('thin');
+        const tn = [P.planeModel().addNode('tn0'), P.planeModel().addNode('tn1')];
+        tn[0].setPoint3d([0, 0, 0]);
+        tn[1].setPoint3d([120, 0, 0]);
+        tn.forEach(nd => thin.addNode(nd.id));
+        P.syncPlanes3D();
+        const thinGroup = vp._planeGroup.children.find(g => g.children.some(
+            c2 => c2.userData && c2.userData.planeId === thin.id));
+        out.thinDrawn = !!thinGroup;
+        out.thinNotEditable = !!thinGroup && thinGroup.children
+            .filter(c2 => c2.name.startsWith('planeNode_'))
+            .every(c2 => c2.userData.planeEditable !== true);
+        P.planeModel().deletePlane(thin.id);
+        tn.forEach(nd => P.planeModel().deleteNode(nd.id));
+        P.syncPlanes3D();
 
         // --- and so is a fitted plane outside Defining Plane Mode ---
         sk.planeFit = fitSaved;
@@ -1666,8 +1728,15 @@ try {
         `2D is the exact reprojection of the dragged 3D in every view (worst ${m.worst2dMismatch.toExponential(2)} px)`);
     check(m.meshMatches, 'the 3D scene shows the corner at its new position');
     check(m.noCameraSelected, 'a drag released over the scene is not read as a camera click');
-    check(m.unfitNotEditable && m.unfitNotGrabbed && m.unfitUnmoved,
-        'a plane that has NOT been fit cannot be dragged in 3D');
+    check(m.unfitStillEditable && m.unfitGrabbed && m.unfitMoved > 1,
+        `an un-Fit plane with solved corners IS draggable, on a derived surface (moved ${
+            (m.unfitMoved || 0).toFixed(1)} mm)`);
+    check(m.derivedMatchesStoredFit,
+        'and the derived plane is the same plane `Fit` had stored');
+    check(m.unfitOffDerived < 1e-9,
+        `the corner stayed on it (off by ${(m.unfitOffDerived || 0).toExponential(2)} mm)`);
+    check(m.thinDrawn && m.thinNotEditable,
+        'a plane with only TWO solved corners has no plane to derive, so it stays inert');
     check(m.outsideModeNotEditable, 'a fitted plane is inert outside Defining Plane Mode');
     check(m.backInModeEditable, 're-entering the mode makes it draggable again');
     check(m.pinnedUnmoved3d, 'a PINNED corner cannot be dragged in the 3D viewport');
@@ -2173,7 +2242,7 @@ try {
     });
     check(m.active && m.step === 'node', `clicking Set Origin enters the mode at step 'node' (got '${m.step}')`);
     check(m.barShown && m.planeBarHidden, 'the Set Origin banner replaces the plane banner');
-    check(m.instructionShown && /Click a corner of a fitted plane/.test(m.stepText),
+    check(m.instructionShown && /Click any node of a fitted plane/.test(m.stepText),
         `the 3D view carries the instruction (got "${m.stepText}")`);
     check(m.confirmHidden, 'Cancel/Continue stay hidden until there is something to confirm');
     check(m.pickMode === 'node', `the viewport is armed for node picking (got '${m.pickMode}')`);
@@ -2696,7 +2765,23 @@ try {
         const out = {};
 
         const before = AS.state.session.cameras;
-        const toml = O.exportUpdatedCalibration();
+        // Capture the name the download actually carries, not just the one the
+        // status line claims. Both origin actions write the SAME file name,
+        // because for a given origin they produce byte-identical TOML.
+        const realClick = HTMLAnchorElement.prototype.click;
+        let downloadedAs = null;
+        HTMLAnchorElement.prototype.click = function () {
+            if (this.download) downloadedAs = this.download;
+        };
+        let toml;
+        try {
+            toml = O.exportUpdatedCalibration();
+        } finally {
+            HTMLAnchorElement.prototype.click = realClick;
+        }
+        out.downloadedAs = downloadedAs;
+        out.sharedName = (await import('/loading/calibration-pick.js')).REBASED_CALIBRATION_NAME;
+        out.status = (document.getElementById('statusText') || {}).textContent || '';
         out.returned = typeof toml === 'string' && toml.length > 0;
 
         const after = FIO.parseCalibrationTOML(toml);
@@ -2737,6 +2822,12 @@ try {
         return out;
     });
     check(m.returned, 'Export New Calibration produces a TOML document');
+    check(m.downloadedAs === 'calibration-rebased.toml' &&
+          m.downloadedAs === m.sharedName,
+        `written to a NEW file, the same one Set as New Calibration writes ` +
+        `(got '${m.downloadedAs}')`);
+    check(!/calibration-updated/.test(m.status) && /calibration-rebased/.test(m.status),
+        `and the status names it (got '${m.status.slice(0, 60)}...')`);
     check(m.count === 2 && eq(m.names, ['camA', 'camB']),
         `every camera is written, in order (got ${JSON.stringify(m.names)})`);
     check(m.intrinsicsKept,
@@ -3610,7 +3701,7 @@ try {
         const fit = T.fitPlaneToPoints3d(P.planePoints3d(A));
         A.planeFit = { centroid: fit.centroid, normal: fit.normal, rms: fit.rms, nPoints: fit.nPoints };
         const node = model.pool.nodes.find(n => n.name === 'a0');
-        model.pool.setPin(node.id, 'plane-locked', A.id);
+        model.pool.setPin(node.id, 'plane-locked');
         P.refreshPlanePanel();
 
         const c = A.planeFit.centroid, nv = A.planeFit.normal;
@@ -3637,7 +3728,7 @@ try {
     check(m.dist < 1e-9,
         `a Plane-locked node lands ON its plane however far off it is typed (${m.dist} away)`);
     check(Math.abs(m.got[0] - m.typed[0]) > 1e-6, 'so the stored point is NOT what was typed');
-    check(/Plane-locked/.test(m.status) && /projected/.test(m.status),
+    check(/Plane-locked/.test(m.status) && /nearest point/.test(m.status),
         `and the status explains the difference (got "${m.status}")`);
     check(m.fitKept,
         'the plane keeps its fit — a corner nudge must not move the frame it defines');
@@ -3818,7 +3909,10 @@ try {
         return {
             took: took,
             pin: node.pin,
-            heldIn: (model.getPlane(node.pinPlaneId) || {}).name,
+            // The pin nominates no plane — what holds the node is what it is
+            // IN — so the panel and the status answer from membership.
+            inPlanes: model.planesForNode(node.id).map(p => p.name).join(','),
+            hasPinPlaneId: node.pinPlaneId !== undefined,
             icon: window.__nodeRow('a0').querySelector('.plane-node-pin-btn').getAttribute('data-pin'),
             status: document.getElementById('statusText').textContent,
             // Changing a pin changes what a fit is ALLOWED to do, so the fit
@@ -3827,7 +3921,9 @@ try {
         };
     });
     check(m.took && m.pin === 'plane-locked', 'picking Plane-locked takes');
-    check(m.heldIn === 'wallA', `and resolves the plane it is held in (got ${m.heldIn})`);
+    check(m.inPlanes === 'wallA' && m.hasPinPlaneId === false,
+        `and no plane is nominated — the planes holding it are simply the ones ` +
+        `it is in (got ${m.inPlanes})`);
     check(m.icon === 'plane-locked', 'the row icon follows the state');
     check(/Plane-locked/.test(m.status) && /wallA/.test(m.status),
         `the status names the state and the plane (got "${m.status}")`);

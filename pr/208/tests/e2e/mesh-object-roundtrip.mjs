@@ -13,8 +13,11 @@
  *  1b. Membership is edited by PICK-AND-ADD: the picker offers only non-members
  *     and empties as the object fills, and a member row's x removes the plane
  *     from the object without deleting the plane.
- *  2. The table reports the SHAPE, not just the membership: the badge and the
- *     report change when the planes stop being joined.
+ *  2. The SHAPE is derived correctly and the REPORT says what is actionable
+ *     about it — that planes have stopped being joined, that two corners only
+ *     look joined. The table itself lists membership and nothing else: the
+ *     Shape column is gone, along with its `open — 6 naked` badge, because
+ *     "naked edge" was a verdict in a term the panel never defined.
  *  3. Save -> reopen brings the objects back by ID, through a real `.slp`, with
  *     membership pointing at the same planes.
  *  4. The scope is PROJECT: the key is written into every session's
@@ -238,14 +241,23 @@ try {
         // =============================================================
         // 2. The table reports the SHAPE
         // =============================================================
-        const badgeText = () => {
-            const row = document.querySelector('#meshObjectsTable tbody tr .mesh-object-badge');
-            return row ? row.textContent : null;
+        // The Shape column and its badge are GONE; this is the negative
+        // control that keeps them gone.
+        const badgeCount = () =>
+            document.querySelectorAll('#meshObjectsTable .mesh-object-badge').length;
+        const headerCells = () =>
+            [...document.querySelectorAll('#meshObjectsTable thead th')]
+                .map(th => th.textContent.trim());
+        const bodyCells = () => {
+            const tr = document.querySelector('#meshObjectsTable tbody tr');
+            return tr ? tr.children.length : null;
         };
         const reportText = () =>
             document.getElementById('meshObjectReport').textContent;
 
-        res.joinedBadge = badgeText();
+        res.badgeCount = badgeCount();
+        res.headerCells = headerCells();
+        res.bodyCellCount = bodyCells();
         res.joinedReport = reportText();
         res.joinedGeom = (() => {
             const g = MO.meshObjectGeometry(obj);
@@ -267,13 +279,11 @@ try {
         })();
         addPlaneById(side.id);
 
-        // Flip normals is stored on the object, because for an OPEN cage
-        // nothing can derive which side is outside.
-        saveLoad.clearDirty();
-        const flipBox = document.getElementById('meshObjectFlip');
-        flipBox.checked = true; fire(flipBox, 'change');
-        res.dirtyAfterFlip = AS.state.isDirty;
-        res.flipStored = obj.flipNormals;
+        // There is NO flip-normals control, and no stored override behind one:
+        // winding is derived (signedVolume when closed, +Z-up when open), so a
+        // second source of truth for it would only ever disagree.
+        res.flipControl = !!document.getElementById('meshObjectFlip');
+        res.flipOnObject = Object.prototype.hasOwnProperty.call(obj, 'flipNormals');
 
         // =============================================================
         // 3. A DISJOINT object is reported as such
@@ -384,7 +394,6 @@ try {
             id: robj.id,
             name: robj.name,
             color: robj.color,
-            flipNormals: robj.flipNormals,
             planeIds: robj.planeIds.slice(),
             planeCount: robj.planeCount(back2),
             dangling: robj.danglingCount(back2),
@@ -518,22 +527,37 @@ try {
         'and the original order is reachable through the same two controls');
     check(out.selectedRowMarked === true, 'the selected object\'s row is marked selected');
     check(out.selectedRowIsTheOne === true, 'and it is the row the editor is editing');
-    check(out.dirtyAfterFlip === true, 'flipping normals marks the project unsaved');
-    check(out.flipStored === true, 'and is stored on the object');
+    check(out.flipControl === false,
+        'there is no Flip normals control — winding is derived, not asked for');
+    check(out.flipOnObject === false, 'and no flipNormals field behind it');
 
     // =========================================================
-    console.log('\n--- 2. The table reports the derived SHAPE ---');
+    console.log('\n--- 2. The derived SHAPE, and what the panel says about it ---');
     // =========================================================
     check(out.joinedGeom.vertices === 7,
         'the cage welds to seven vertices — the shared corners are one node each');
     check(out.joinedGeom.faces === 3, 'three faces');
     check(out.joinedGeom.shells === 1, 'ONE shell: the three planes are genuinely joined');
     check(out.joinedGeom.closed === false, 'open, as a cage with no lid must be');
-    check(/open/.test(out.joinedBadge || ''), 'the badge says open: ' + out.joinedBadge);
     check(/7 vertices/.test(out.joinedReport), 'the report states the vertex count');
-    check(/belong to only one face/.test(out.joinedReport),
-        'and explains what a naked edge IS, rather than only naming it');
-    check(/naked/.test(out.joinedBadge || ''), 'while the badge stays terse');
+    // The report used to carry a paragraph on which way the normals ended up.
+    // Winding is DERIVED and has no control (`pose/mesh-object-geometry.js`), so
+    // that was the longest line in the box and the one nobody could act on.
+    check(!/normal/i.test(out.joinedReport),
+        'and says nothing about normals — winding is derived, not a decision');
+    check(!/^\s*Open\b/m.test(out.joinedReport),
+        'nor a line stating "open": the ordinary state of a cage with no lid is ' +
+        'not a finding');
+
+    // The Shape column is GONE, badge and all. `open — 6 naked` was a verdict
+    // in a term the panel never defined anywhere, and removing the sentence
+    // that had defined it left the badge as bare jargon.
+    check(out.badgeCount === 0, 'no shape badge is rendered anywhere in the table');
+    check(!out.headerCells.some(t => /shape/i.test(t)),
+        'and no Shape header: ' + JSON.stringify(out.headerCells));
+    check(out.bodyCellCount === 4,
+        'a row is swatch / name / planes / delete — four cells (got ' +
+        out.bodyCellCount + ')');
 
     check(out.twoFaceGeom.faces === 2, 'removing a plane from the object drops its face');
     check(out.twoFaceGeom.shells === 1, 'the remaining two still share an edge, so still one shell');
@@ -577,7 +601,6 @@ try {
     check(out.reopened.id === out.originalId, 'with the ID from the file, not a fresh one');
     check(out.reopened.name === 'cage', 'its name');
     check(out.reopened.color === '#ff8800', 'its colour');
-    check(out.reopened.flipNormals === true, 'and its flipNormals');
     check(eq(out.reopened.planeIds, out.originalPlaneIds),
         'membership points at the same plane IDs, in order');
     check(out.reopened.dangling === 0, 'every member resolves');

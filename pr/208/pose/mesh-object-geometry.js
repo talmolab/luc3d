@@ -41,7 +41,7 @@
 //     on their INWARD faces, i.e. the surfaces enclosing the arena.
 //
 // Only a surface with no vertical component at all — all faces vertical — is
-// left undecided, and `flipNormals` is the user's override in every case.
+// left undecided and keeps whatever the coherent pass produced.
 //
 // **Which side of a concave face is inside.** The fan in
 // `viewport3d._buildPlaneFillMesh` is right for a translucent overlay and wrong
@@ -720,28 +720,25 @@ export function buildMeshObjectGeometry(obj, model, opts) {
     var built = triangulateFaces(faces, vertices);
     var volume = topo.isClosed ? signedVolume(vertices, built.triangles) : 0;
 
-    // Two INDEPENDENT decisions, applied in this order. Folding them into one
-    // `||` looks equivalent and is not: when a mesh needs the canonical flip AND
-    // the user has set `flipNormals`, both conditions are true, they collapse to
-    // a SINGLE reversal, and the toggle silently does nothing. Whether that
-    // happens depends on the arbitrary order the rings arrived in, so it shows up
-    // for some projects and not others.
+    // The global orientation decision, DERIVED — there is no user override, and
+    // deliberately so: every case a toggle could answer is a case this can
+    // answer from the geometry, and a persisted override would silently fight
+    // the rule below on the objects it already gets right.
     //
-    //   1. Canonical. Two rules, one per topology:
-    //      * CLOSED — a mesh with inward normals is unambiguously wrong, and
-    //        `signedVolume` says so outright.
-    //      * OPEN — there is no enclosed volume, so instead the convention is
-    //        **+Z is up**: orient the surface so its area-weighted normal field
-    //        points along +Z. For a cage that is the floor facing up, since
-    //        vertical walls contribute nothing to `areaVectorZ`. This replaces
-    //        what used to be a coin flip — the default fell out of the
-    //        arbitrary PCA sign of whichever ring happened to be first, so the
-    //        same cage could export either way on two different projects.
-    //        A surface of only vertical faces has no vertical component to read
-    //        and is left alone (see `UPRIGHT_EPS`); `flipNormals` is the answer
-    //        there, and it is the only case left where it must be.
-    //   2. The user's override, applied ON TOP of the canonical result, so the
-    //      toggle always means "the opposite of whatever the default was".
+    // Two rules, one per topology:
+    //   * CLOSED — a mesh with inward normals is unambiguously wrong, and
+    //     `signedVolume` says so outright.
+    //   * OPEN — there is no enclosed volume, so instead the convention is
+    //     **+Z is up**: orient the surface so its area-weighted normal field
+    //     points along +Z. For a cage that is the floor facing up, since
+    //     vertical walls contribute nothing to `areaVectorZ`, and coherent
+    //     winding then couples the rest, putting the walls on their INWARD
+    //     faces. This replaced a coin flip — the default used to fall out of
+    //     the arbitrary PCA sign of whichever ring happened to be first, so the
+    //     same cage could export either way on two different projects.
+    //     A surface of only vertical faces has no vertical component to read
+    //     and is left alone (see `UPRIGHT_EPS`); it is the one shape with no
+    //     defined answer, and it is left as the coherent pass produced it.
     //
     // NOTE the axis is the axis of the frame the vertices are ALREADY in (see
     // the `frame` option above) — with an origin defined, "up" is the up the
@@ -755,8 +752,7 @@ export function buildMeshObjectGeometry(obj, model, opts) {
         var scale = surfaceAreaScale(vertices, built.triangles);
         canonicalFlip = upness < -UPRIGHT_EPS * scale;
     }
-    var reversals = (canonicalFlip ? 1 : 0) + (obj.flipNormals ? 1 : 0);
-    if (reversals % 2 === 1) {
+    if (canonicalFlip) {
         for (var f = 0; f < faces.length; f++) faces[f].reverse();
         built = triangulateFaces(faces, vertices);
         volume = topo.isClosed ? signedVolume(vertices, built.triangles) : 0;

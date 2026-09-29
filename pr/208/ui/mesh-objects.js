@@ -15,8 +15,7 @@
 //
 // ## Everything shown here is DERIVED
 //
-// The table's Shape column, the report and the member list are recomputed from
-// the model on every render. Nothing about the geometry is cached, because the
+// The report and the member list are recomputed from the model on every render. Nothing about the geometry is cached, because the
 // underlying 3D can move under us at any moment — a node drag, a re-triangulate,
 // a plane fit, an origin change. `buildMeshObjectGeometry` is cheap at this
 // scale (dozens of vertices) and being wrong is expensive, so it is called
@@ -135,17 +134,13 @@ function renderTable(tbody) {
             tdCount.appendChild(mark);
         }
 
-        // ONE build per row: the badge, its tooltip and (for the selected row)
-        // the report all read the same connectivity.
-        var conn = meshObjectGeometry(obj).connectivity;
-        var tdShape = document.createElement('td');
-        var summary = connectivitySummary(conn);
-        var badge = document.createElement('span');
-        badge.className = 'mesh-object-badge mesh-object-badge-' + summary.level;
-        badge.textContent = summary.text;
-        badge.title = shapeTooltip(conn);
-        tdShape.appendChild(badge);
-
+        // NO Shape column. It carried a `open — 6 naked` badge, and "naked
+        // edge" is a term the panel never defined — a verdict in jargon is not a
+        // verdict. What is ACTIONABLE about connectivity (planes that are not
+        // joined, corners that only look joined, non-manifold edges) is in the
+        // selected object's report, in words. A side effect worth having: the
+        // table no longer derives every object's full geometry on every repaint
+        // just to print one word.
         var tdActions = document.createElement('td');
         tdActions.className = 'plane-actions';
         tdActions.appendChild(makeDeleteButton(
@@ -156,24 +151,10 @@ function renderTable(tbody) {
         tr.appendChild(tdSwatch);
         tr.appendChild(tdName);
         tr.appendChild(tdCount);
-        tr.appendChild(tdShape);
         tr.appendChild(tdActions);
         tr.addEventListener('click', function () { selectObject(obj.id); });
         tbody.appendChild(tr);
     });
-}
-
-/** Long-form connectivity, for the badge's tooltip. @private */
-function shapeTooltip(c) {
-    var lines = [
-        c.faces + ' face(s)',
-        c.edgeCount + ' edge(s)',
-        c.shells + ' shell(s)',
-    ];
-    if (c.nakedEdges) lines.push(c.nakedEdges + ' naked edge(s) — the object is open');
-    if (c.nonManifoldEdges) lines.push(c.nonManifoldEdges + ' non-manifold edge(s)');
-    if (c.isClosed) lines.push('closed; volume ' + c.volume.toFixed(4));
-    return lines.join('\n');
 }
 
 /** @private */
@@ -191,9 +172,6 @@ function renderEditor() {
 
     var colorInput = document.getElementById('meshObjectColor');
     if (colorInput) colorInput.value = normalizeHex(obj.color);
-
-    var flip = document.getElementById('meshObjectFlip');
-    if (flip) flip.checked = !!obj.flipNormals;
 
     renderReport(obj);
     renderMembers(obj, model);
@@ -257,11 +235,16 @@ function exportSelected(format) {
 /**
  * The connectivity read-out.
  *
- * Written to be actionable rather than exhaustive: the counts are there, but
- * what the user needs is the NEXT MOVE, so a naked-edge object says how to close
- * it and a coincident pair names the two nodes to merge. Those hints are the
- * whole point of the report — the raw numbers are diagnosable only by someone
- * who already knows what a naked edge is.
+ * Written to be actionable rather than exhaustive, and it says NOTHING the
+ * reader cannot act on. The counts are there, but what the user needs is the
+ * next move: a multi-shell object says that joining requires SHARING a node, and
+ * a coincident pair names the two nodes to merge. Those are the whole point —
+ * the raw numbers are diagnosable only by someone who already knows the terms.
+ *
+ * Which is also why an ordinary single-shell OPEN object gets no line: "open"
+ * is the normal state of a cage with no lid, not a finding, and saying it in
+ * terms like "naked edge" made the panel owe the reader a definition it never
+ * paid. Same reason there is no Shape column any more.
  * @private
  */
 function renderReport(obj) {
@@ -281,18 +264,17 @@ function renderReport(obj) {
         'info'
     ));
 
+    // Winding is DERIVED and has no user control (see
+    // `pose/mesh-object-geometry.js`), so the report does not discuss it — a
+    // read-out the reader cannot act on is noise, and it was the longest thing
+    // in the box. A single-shell open object says nothing here at all: the
+    // counts line above is the whole story, and "open" is the ordinary state
+    // for a cage with no lid rather than a finding.
     if (c.isClosed) {
-        box.appendChild(line('Closed — volume ' + fmt(c.volume) +
-            '. Normals point outward.', 'ok'));
+        box.appendChild(line('Closed — volume ' + fmt(c.volume) + '.', 'ok'));
     } else if (c.shells > 1) {
         box.appendChild(line(summary.text + ' — these planes are not all joined. ' +
             'Two planes belong to the same shell only when they SHARE a node.', 'warn'));
-    } else {
-        box.appendChild(line('Open — ' + c.nakedEdges + ' edge(s) belong to only one face. ' +
-            'Fine for a cage with no lid. With no enclosed volume to read, the ' +
-            'normals are oriented +Z up — for a cage that is the floor facing ' +
-            'up and the walls facing inward. Use Flip normals for the reverse.',
-        'warn'));
     }
 
     if (c.nonManifoldEdges) {
@@ -587,17 +569,6 @@ export function setupMeshObjects() {
                 markDirty();
                 notifyViewport();
             }
-        });
-    }
-
-    var flip = document.getElementById('meshObjectFlip');
-    if (flip) {
-        flip.addEventListener('change', function () {
-            var obj = getSelectedMeshObject();
-            if (!obj) return;
-            obj.flipNormals = flip.checked;
-            markDirty();
-            notifyViewport();
         });
     }
 

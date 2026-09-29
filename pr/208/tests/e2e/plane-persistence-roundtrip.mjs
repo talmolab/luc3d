@@ -186,7 +186,6 @@ try {
         const cage = model.meshObjects.createObject('cage');
         cage.addPlane(floor.id);
         cage.addPlane(wall.id);
-        cage.flipNormals = true;
 
         // The origin: a corner of the fitted floor, +Z along its normal.
         const originFrame = (await import('/pose/origin-frame.js'))
@@ -327,7 +326,7 @@ try {
                 })),
                 meshObjects: m.meshObjects.objects.map(o => ({
                     id: o.id, name: o.name, color: o.color,
-                    planeIds: o.planeIds.slice(), flipNormals: o.flipNormals,
+                    planeIds: o.planeIds.slice(),
                 })),
                 origin: O.originState.frame && {
                     origin: O.originState.frame.origin,
@@ -562,7 +561,7 @@ try {
         check(floorAfter && floorAfter.planeFit !== null,
             'a fitted plane comes back FIT, so Set Origin can still offer its corners');
         check(eq(after.meshObjects, before.meshObjects),
-            'and the 3D Mesh Object — id, name, colour, membership and flipNormals');
+            'and the 3D Mesh Object — id, name, colour and membership');
     }
 
     console.log('\n-- 4. the origin frame --');

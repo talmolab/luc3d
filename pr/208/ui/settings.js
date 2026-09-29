@@ -90,6 +90,7 @@ const ACTION_CATALOG = [
     { id: 'togglePredicted', label: 'Toggle Predicted keypoints', category: 'View', binding: 'p', editable: true, dispatched: true },
     { id: 'toggleReproj', label: 'Toggle Reprojections', category: 'View', binding: 'r', editable: true, dispatched: true },
     { id: 'toggleErrors', label: 'Toggle Errors', category: 'View', binding: 'e', editable: true, dispatched: true },
+    { id: 'definePlanes', label: 'Toggle Defining Plane Mode', category: 'View', binding: 'Mod+Shift+P', editable: true, dispatched: true },
 
     // --- Help ---
     { id: 'showHotkeys', label: 'Show keyboard shortcuts help', category: 'Help', binding: '?', editable: true, dispatched: true },

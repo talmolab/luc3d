@@ -1,8 +1,8 @@
 // ui/origin-definition.js — "Set Origin Mode", the last step of the pipeline.
 //
 // Everything upstream (View ▸ Define Planes: nodes, planes, placements,
-// triangulation, plane fit, 3D corner dragging) exists to produce a fitted
-// plane. This module turns one corner of one fitted plane plus a choice of
+// triangulation, plane fit, 3D node dragging) exists to produce a fitted
+// plane. This module turns one NODE of one fitted plane plus a choice of
 // which way +Z points into the **translation + rotation** that re-express the
 // calibration's world frame in the user's frame — the thing this branch is for.
 // The math itself is in `pose/origin-frame.js`; this file is the wizard.
@@ -10,11 +10,19 @@
 // A three-step wizard, because the two inputs are picked in the 3D scene and
 // each one has to be committed before the next is meaningful:
 //
-//   'node'    click a corner of a FITTED plane            -> the new origin
+//   'node'    click any node of a FITTED plane            -> the new origin
 //   'axis'    click the red (+n) or blue (-n) arrow       -> the new +Z
 //   'confirm' Cancel (back to 'node') / Continue (apply)
 //
-// Only fitted planes offer corners. An un-fit plane has no normal, so it has no
+// ANY node of the plane will do, not just one on its outline. A plane is a
+// group of nodes and the fit is a surface through all of them, so a node in
+// the middle of the floor is as good an origin as one at its edge — and on a
+// real cage it is often the better one, since that is where a physical mark
+// tends to be. Nothing here or in the viewport ever asked for an outline
+// node; the wizard's own wording used to, which is the only place the
+// restriction ever existed.
+//
+// Only fitted planes offer nodes. An un-fit plane has no normal, so it has no
 // +Z to offer and picking it would dead-end the wizard — the restriction is
 // enforced in the viewport (`userData.planeFitted`), not just hinted at here.
 //
@@ -44,6 +52,7 @@ import { setStatus, markDirty } from '../import-export/save-load.js';
 import { buildOriginFrame, rebaseExtrinsics } from '../pose/origin-frame.js';
 import { getPoint3d, hasPoint3d, Camera } from '../pose/pose-data.js';
 import { exportCalibrationTOML, downloadTOML } from '../import-export/file-io.js';
+import { REBASED_CALIBRATION_NAME } from '../loading/calibration-pick.js';
 // Circular by design (plane-definition imports this module's `enterOriginMode`
 // for its button). Safe: every use is inside a function body, so the binding
 // resolves at call time.
@@ -60,11 +69,11 @@ export const originState = {
     active: false,
     /** @type {'node'|'axis'|'confirm'} Wizard step; meaningless when inactive. */
     step: 'node',
-    /** @type {number|null} Plane the picked corner belongs to. */
+    /** @type {number|null} Plane the picked node belongs to. */
     planeId: null,
-    /** @type {number|null} Node index of the picked corner. */
+    /** @type {number|null} Index of the picked node, in PLANE order. */
     nodeIdx: null,
-    /** @type {number[]|null} The picked corner, in old-world coordinates. */
+    /** @type {number[]|null} The picked node, in old-world coordinates. */
     originPoint: null,
     /** @type {number[]|null} The fitted plane's normal at pick time. */
     normal: null,
@@ -81,7 +90,7 @@ export const originState = {
 };
 
 const STEP_TEXT = {
-    node: 'Click a corner of a fitted plane in the 3D view. That corner becomes the new origin.',
+    node: 'Click any node of a fitted plane in the 3D view. That node becomes the new origin.',
     axis: 'Click the red or the blue arrow to choose which way +Z points.',
     confirm: 'Continue re-bases the 3D frame on this origin, or Cancel to pick again.',
 };
@@ -101,12 +110,12 @@ export function isOriginModeActive() {
 }
 
 /**
- * Every plane that has been fit — the only ones offering a corner.
+ * Every plane that has been fit — the only ones offering a node.
  *
  * A plane's 3D lives on the shared node pool now, so "has 3D" is asked of the
  * materialized points rather than of a field on the plane: a plane whose nodes
  * were all invalidated still holds its `planeFit` until something clears it,
- * and offering its corners would dead-end the wizard on a point that no longer
+ * and offering its nodes would dead-end the wizard on a point that no longer
  * exists.
  */
 export function fittedPlanes() {
@@ -124,7 +133,7 @@ export function enterOriginMode() {
     if (originState.active) return;
     // Refuse rather than open a wizard whose first step can never be completed.
     if (fittedPlanes().length === 0) {
-        setStatus('Fit a plane first — Set Origin needs a fitted plane to pick a corner from', 'warning');
+        setStatus('Fit a plane first — Set Origin needs a fitted plane to pick a node from', 'warning');
         return;
     }
 
@@ -140,7 +149,7 @@ export function enterOriginMode() {
     document.addEventListener('keydown', onOriginKeyDown, true);
 
     // Dragging off, picking on: `syncPlanes3D` reads `originState.active` for
-    // the payload's `editable`, so a corner cannot be dragged out from under
+    // the payload's `editable`, so a node cannot be dragged out from under
     // the click that is about to select it.
     syncPlanes3D();
     renderWizard();
@@ -232,7 +241,7 @@ function lockUI(on) {
 // Dragging the instruction overlay
 // ============================================
 //
-// The box sits over the 3D view and can cover the very corner or arrow the
+// The box sits over the 3D view and can cover the very node or arrow the
 // wizard is asking the user to click, so it can be dragged aside. Only the grip
 // takes pointer events — the box keeps `pointer-events: none`, so moving it
 // never costs a pick anywhere else.
@@ -366,11 +375,11 @@ export function renderWizard() {
 
 /**
  * Arrow length for the +Z candidates: 70% of the plane's own reach from the
- * picked corner.
+ * picked node.
  *
  * Scaled to the PLANE, not to the camera baseline — a fixed length is invisible
  * on a room-sized plane and shoots off screen on a small one. Returns 0 (the
- * viewport's fallback) if the plane has no other usable corner to measure with.
+ * viewport's fallback) if the plane has no other usable node to measure with.
  */
 function arrowLengthFor(plane, points3d, origin) {
     var far = 0;
@@ -384,7 +393,8 @@ function arrowLengthFor(plane, points3d, origin) {
 }
 
 /**
- * Step 1 result: a corner of a fitted plane.
+ * Step 1 result: a node of a fitted plane — ANY of its nodes, not only one
+ * on its outline.
  *
  * `nodeIdx` is an index into the PLANE's own node order — the same order the 3D
  * payload was laid out in, which is what the viewport picked from — not a pool
@@ -406,7 +416,7 @@ export function pickOriginNode(planeId, nodeIdx) {
     originState.chosen = null;
     originState.step = 'axis';
     renderWizard();
-    setStatus('Origin corner: "' + planeNodeNameAt(plane, nodeIdx) +
+    setStatus('Origin node: "' + planeNodeNameAt(plane, nodeIdx) +
         '" on plane "' + plane.name + '" — ' + STEP_TEXT.axis);
     return true;
 }
@@ -446,7 +456,7 @@ export function applyOrigin() {
 
     var frame = buildOriginFrame(originState.originPoint, z);
     if (!frame) {
-        setStatus('Could not build a frame from that corner and direction', 'warning');
+        setStatus('Could not build a frame from that node and direction', 'warning');
         return null;
     }
 
@@ -472,9 +482,9 @@ export function applyOrigin() {
  * load path and the tests can reach it without a dialog — the confirmation is
  * about an unrecoverable CLICK, not about the operation.
  *
- * Unrecoverable is the operative word: the frame is derived from a corner and
+ * Unrecoverable is the operative word: the frame is derived from a node and
  * an arrow the user picked in the 3D view, and nothing records which ones, so
- * rebuilding it means walking the wizard again and hoping for the same corner.
+ * rebuilding it means walking the wizard again and hoping for the same node.
  */
 export function confirmClearOrigin() {
     if (!originState.frame) return;
@@ -502,8 +512,13 @@ export function clearOrigin() {
 // ============================================
 
 /**
- * Write `calibration-updated.toml`: every camera's extrinsics re-expressed in
+ * Write `REBASED_CALIBRATION_NAME`: every camera's extrinsics re-expressed in
  * the defined origin.
+ *
+ * Same file name `Set as New Calibration` writes, and deliberately so: for a
+ * given origin the two produce byte-identical TOML (same cameras, same
+ * `rebaseExtrinsics`, same writer). What differs is whether the project moved
+ * to match, which is a property of the project rather than of the file.
  *
  * This is the other half of the deliverable. Applying an origin deliberately
  * does NOT move any annotated point (see the module note), so the 3D the user
@@ -548,8 +563,8 @@ export function exportUpdatedCalibration() {
     }
 
     var toml = exportCalibrationTOML(out);
-    downloadTOML(toml, 'calibration-updated.toml');
-    setStatus('Exported calibration-updated.toml — ' + out.length +
+    downloadTOML(toml, REBASED_CALIBRATION_NAME);
+    setStatus('Exported ' + REBASED_CALIBRATION_NAME + ' — ' + out.length +
         ' camera' + (out.length === 1 ? '' : 's') + ' re-based on "' + f.sourceNode + '"', 'success');
     return toml;
 }

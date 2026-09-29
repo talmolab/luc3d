@@ -2673,7 +2673,12 @@ body {
   gap: 8px;
   cursor: pointer;
   list-style: none;
-  user-select: none;
+  /* SELECTABLE. A section heading is content the user may want to quote, and a
+     heading nobody can drag over is an invisible dead patch in the middle of an
+     otherwise selectable panel. The cost is that a double-click both selects
+     the word and toggles the section twice — a no-op, and cheaper than the
+     text being unreachable. See the Selectable text note above .status-bar. */
+  user-select: text;
 }
 
 /* Replace the UA disclosure triangle with one that matches the app. */
@@ -3264,8 +3269,41 @@ input[type="range"]::-moz-range-track {
   border-radius: 4px;
 }
 
+/* A selection has to be VISIBLE to be worth making. The UA default is a
+   translucent system blue tuned for light pages; over this theme's near-black
+   panels it reads as a faint smudge, which is a poor answer to "did I select
+   the right line?". The accent at full strength, with an explicit foreground so
+   the contrast does not depend on whatever colour the text already had. */
+::selection {
+  background: var(--accent);
+  color: #fff;
+}
+
 /* --------------------------------------------------------------------------
    Status Bar
+   --------------------------------------------------------------------------
+
+   SELECTABLE TEXT, and the note the other `user-select: text` overrides point
+   at.
+
+   Anything in a panel, a modal or this bar is something the user may need to
+   put somewhere else — a reprojection error to paste into a message, a file
+   name from the SLP chooser, the text of a save failure. Those are exactly the
+   strings that are hardest to retype and most valuable verbatim, and this bar
+   is where every error lands. So the default across panels and dialogs is that
+   text can be dragged over and copied.
+
+   `user-select: none` is kept for one thing only: a surface whose whole job is
+   to be dragged or repeatedly clicked, where a stray selection is debris rather
+   than a feature — the menu bar, the toolbars, the view strip, the video
+   overlays, the ✓/✗ toggle cells in the SLP chooser, and every modal drag
+   handle (dragging a dialog by its title would otherwise smear a selection
+   across it).
+
+   The other half of "copy-able" is the keyboard: `Mod+C` is bound to Copy
+   selected instance and the dispatcher `preventDefault()`s it, which cancelled
+   the browser's own copy. `shouldIgnoreShortcut` in `ui/keyboard-target.js`
+   hands the chord back whenever a selection exists.
    -------------------------------------------------------------------------- */
 
 .status-bar {
@@ -3279,7 +3317,7 @@ input[type="range"]::-moz-range-track {
   font-size: 11px;
   color: var(--text-muted);
   flex-shrink: 0;
-  user-select: none;
+  user-select: text;
 }
 
 .status-bar .status-left,
@@ -4280,7 +4318,7 @@ kbd {
   gap: 8px;
   cursor: pointer;
   list-style: none;
-  user-select: none;
+  user-select: text;   /* selectable — see .status-bar */
   /* The spacing that .settings-kbd-category used to carry itself; it is a flex
      item inside the summary now, so the summary owns it. */
   margin: 16px 0 4px;
@@ -4609,7 +4647,7 @@ kbd {
    is legible without indentation. */
 .plane-details > summary {
   cursor: pointer;
-  user-select: none;
+  user-select: text;   /* selectable — see .status-bar */
   padding: 7px 8px;
   font-size: 14px;
   font-weight: 600;
@@ -4645,6 +4683,62 @@ kbd {
   gap: 8px;
 }
 
+/* MAJOR sections — the handful of things this panel IS (Nodes, Edit Plane,
+   Planes, 3D Mesh Objects, Defined Origin, Danger Zone), as opposed to the
+   sub-sections nested inside them.
+
+   Both levels are a bordered `.plane-details` box, and at a glance that made
+   them peers: "Plane Appearance" inside Planes looked exactly as top-level as
+   "3D Mesh Objects" beside it. In a panel this tall, with everything scrolling
+   past in one column, the nesting is the only thing telling you where one
+   section ends and the next begins.
+
+   So the majors get their 1px border RECOLOURED to the accent — the whole way
+   around, not just a bar under the title. A marked header alone tells you where
+   a section STARTS; it is where one ends that is ambiguous when a tall open
+   section is followed by another, which is most of this panel. Recolouring the
+   existing border rather than adding a second outline is what keeps that from
+   costing content width: the panel is ~300px wide and already full of
+   boxes-within-boxes. The sub-sections keep the plain grey border, so the
+   hierarchy is one glance rather than a reading. */
+.plane-panel > .info-section > .plane-details {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border-color));
+}
+
+/* The header still gets its own tint, so a section says what it is whether it
+   is open or folded away — the outline says where it reaches, the strip says
+   which part of it you click. */
+.plane-panel > .info-section > .plane-details > summary {
+  background: var(--bg-tertiary);
+  border-radius: 3px 3px 0 0;
+}
+
+/* Folded, the summary IS the whole box, so it keeps all four rounded corners
+   rather than leaving two square ones against nothing. */
+.plane-panel > .info-section > .plane-details:not([open]) > summary {
+  border-radius: 3px;
+}
+
+/* Hover already tints the row (`.plane-details > summary:hover`), which against
+   the strip above would be a no-op; lift it one step instead so the target
+   still responds. */
+.plane-panel > .info-section > .plane-details > summary:hover {
+  background: var(--bg-button);
+}
+
+/* Danger Zone is a major section too, and is outlined the same way in its own
+   colour — the whole point of the red is that this block does not look like its
+   neighbours, so it must not pick up the accent here. It already sets exactly
+   this border via `.origin-danger-section .plane-details-danger`; repeated
+   because THIS selector is more specific and would otherwise win. */
+.plane-panel > .info-section > .plane-details-danger {
+  border-color: color-mix(in srgb, var(--error-color) 45%, var(--border-color));
+}
+
+.plane-panel > .info-section > .plane-details-danger > summary:hover {
+  background: color-mix(in srgb, var(--error-color) 12%, var(--bg-tertiary));
+}
+
 .plane-subdetails {
   background: var(--bg-primary);
 }
@@ -4661,6 +4755,18 @@ kbd {
   gap: 6px;
   font-size: 11px;
   color: var(--text-secondary);
+}
+
+/* A FIXED label column, so every row's control starts at the same x. The
+   labels used to be content-sized and happened to align because "Plane" and
+   "Name" are both five characters; "Select Plane" and "Edit Name" are not, and
+   content sizing would have staggered the two fields by ~18px. 72px fits the
+   longest of them at this 11px size with a pixel to spare — `nowrap` plus
+   `flex-basis` rather than `width` so a longer label grows the column instead
+   of wrapping inside it. */
+.plane-name-row > span {
+  flex: 0 0 72px;
+  white-space: nowrap;
 }
 
 .plane-name-row input,
@@ -4717,6 +4823,16 @@ kbd {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* The node names sit IN from the table's left edge rather than against it.
+   `.plane-node-shared` paints a 2px accent bar INSIDE the row, so at the
+   inherited 6px of cell padding a shared node's name cleared it by four pixels
+   and the column read as flush with the edge. The header comes along, or the
+   column label and its values stop lining up. */
+#planeMembersTable thead th:first-child,
+#planeMembersTable tbody td:first-child {
+  padding-left: 12px;
 }
 
 .plane-member-swatch {
@@ -4834,9 +4950,6 @@ kbd {
   transform: rotate(90deg);
 }
 
-.plane-placed-count {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-}
 
 .plane-actions {
   white-space: nowrap;
@@ -4888,18 +5001,6 @@ kbd {
 }
 
 /* "this plane has 3D" marker in the table row. */
-.plane-solved-badge {
-  display: inline-block;
-  margin-right: 4px;
-  padding: 0 3px;
-  border-radius: 3px;
-  font-size: 9px;
-  font-weight: 600;
-  line-height: 14px;
-  color: var(--success-color);
-  border: 1px solid var(--success-color);
-  vertical-align: middle;
-}
 
 .plane-fit-summary {
   border-top: none;
@@ -5060,6 +5161,17 @@ kbd {
   box-shadow: inset 2px 0 0 var(--accent);
 }
 
+/* SELECTED: the node the 3D view is ringing. A background rather than another
+   left bar, because both bars are spoken for — `plane-node-shared` and
+   `plane-node-frozen-unsolved` each claim the same 2px inset — and selection
+   has to be legible ON TOP of either of them rather than replacing it. Set on
+   the cells, not the row, so it reaches past the row background the table's
+   own striping paints. Both of a node's rows carry the class, so an expanded
+   node highlights as one block. */
+.plane-node-row.plane-node-selected > td {
+  background: var(--accent-dim);
+}
+
 /* Pinned but never triangulated: a dead end, because pinning is exactly what
    stops a solve from filling the node in. The Pin control can say "Locked" but
    not "and there is no 3D to hold", so the row says it — this is the only
@@ -5120,7 +5232,9 @@ kbd {
   display: table-cell;
 }
 
-.plane-nodes-table .th-pin .plane-pin-info {
+/* A column header's ⓘ, wherever the header is — the Nodes table's Pinned
+   column and the Planes table's Views column. */
+.data-table th .plane-pin-info {
   margin-left: 3px;
   vertical-align: middle;
 }
@@ -5398,8 +5512,47 @@ kbd {
   color: var(--accent);
 }
 
-/* The column's explanation, in the header where the word "Pin" used to be. */
-.plane-pin-info {
+/* The ⓘ popover — one element, reused, moved to the pointer by
+   `ui/info-tip.js`. `position: fixed` because every info icon in the app is
+   inside something that scrolls or clips (the plane panel, a table, a modal),
+   and an absolutely positioned child would be cut off by the first
+   `overflow: auto` above it. The z-index clears the modals for the same
+   reason: an explanation is useless underneath the thing it explains.
+
+   `max-width` is what makes it readable — these are sentences, and without a
+   cap a long one becomes a single line spanning the window. `pointer-events:
+   none` keeps it from stealing the `mouseout` that dismisses it: the tip
+   follows the cursor, so without this it would slide under the pointer, take
+   the hover, fire `mouseout` on the icon and flicker itself away. */
+.info-tip {
+  position: fixed;
+  z-index: 10000;
+  max-width: 260px;
+  padding: 6px 9px;
+  border: 1px solid var(--border-light);
+  border-radius: 4px;
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font-size: 11px;
+  line-height: 1.45;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.5);
+  pointer-events: none;
+}
+
+.info-tip[hidden] {
+  display: none;
+}
+
+/* The two ⓘ buttons: the Pinned column's, in the header where the word "Pin"
+   used to be, and a major section's, beside its heading.
+
+   The section one replaced a `.plane-hint` paragraph at the FOOT of each
+   section — a wall of prose in a ~300px column, permanently between one table
+   and the next, read once and then scenery. Sixteen pixels beside the heading
+   asks the question where it comes up and, unlike the paragraph, is still there
+   when the section is folded. */
+.plane-pin-info,
+.plane-section-info {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -5413,8 +5566,25 @@ kbd {
   cursor: help;
 }
 
-.plane-pin-info:hover {
+.plane-pin-info:hover,
+.plane-section-info:hover {
   color: var(--text-primary);
+}
+
+/* `middle`, not the flex baseline: the heading is 14px and the icon 13, so
+   baseline-aligning them sits the circle low enough to read as a footnote
+   marker. The margin keeps it off the last letter of the heading without
+   letting a click on the gap count as a click on the icon. */
+.plane-details > summary .plane-section-info {
+  margin-left: 5px;
+  vertical-align: middle;
+}
+
+/* A sub-section's heading is 12px, so its ⓘ comes down to match. */
+.plane-subdetails > summary .plane-section-info {
+  width: 14px;
+  height: 14px;
+  margin-left: 4px;
 }
 
 
@@ -5433,16 +5603,6 @@ kbd {
 }
 
 /* "+2 shared" marker next to a plane's node count. */
-.plane-shared-count {
-  margin-left: 4px;
-  padding: 0 3px;
-  border-radius: 3px;
-  font-size: 9px;
-  line-height: 14px;
-  color: var(--accent);
-  border: 1px solid var(--accent);
-  vertical-align: middle;
-}
 
 /* --- 3D Mesh Objects table (ui/mesh-objects.js) --------------------------- */
 
@@ -5465,21 +5625,6 @@ kbd {
   border: 1px solid var(--warning-color);
   vertical-align: middle;
 }
-
-/* The Shape column's one-word verdict. */
-.mesh-object-badge {
-  display: inline-block;
-  padding: 0 4px;
-  border-radius: 3px;
-  font-size: 9px;
-  line-height: 15px;
-  white-space: nowrap;
-  border: 1px solid currentColor;
-}
-
-.mesh-object-badge-ok { color: var(--success-color); }
-.mesh-object-badge-warn { color: var(--warning-color); }
-.mesh-object-badge-error { color: var(--error-color); }
 
 /* The connectivity read-out under the name row. */
 .mesh-object-report {
@@ -5516,16 +5661,6 @@ kbd {
 .mesh-object-line-error {
   background: rgba(229, 72, 77, 0.08);
   border-color: var(--error-color);
-}
-
-.mesh-object-flip {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-top: 8px;
-  font-size: 11px;
-  color: var(--text-secondary);
-  cursor: pointer;
 }
 
 /* Membership: every plane in the project, checked when it is a member. A list
@@ -6117,9 +6252,34 @@ body.origin-mode-lock .timeline-container {
    Both reuse `.plane-confirm-overlay` / `.plane-confirm-modal`, so the scrim,
    the z-index and the Esc behaviour are the panel's existing ones. Only the
    inventory table and the caution line are new. See ui/origin-rebase.js. */
-.origin-rebase-modal {
+/* `.calib-notice-modal` (ui/calibration-notice.js) shares this geometry rather
+   than repeating it: it is the same kind of dialog — a stack of titled blocks
+   whose height depends on the project — and it reuses the block classes below
+   for the same reason. It carries no caution and no todo list: it is a note
+   saying which sessions loaded which calibration, and nothing else. */
+.origin-rebase-modal,
+.calib-notice-modal {
   min-width: 440px;
   max-width: 560px;
+  /* Three tables plus two cautions is tall — ~975px on a multi-session
+     project — so on a laptop the Continue button would sit below the fold
+     with no way to reach it. ONE scroller, on the modal: the tables inside
+     never get their own, per the no-scroll-within-scroll rule. */
+  max-height: calc(100vh - 64px);
+  overflow-y: auto;
+}
+
+/* ...and Cancel / Continue STICK to the bottom of that scrollport, so the
+   two buttons are visible the moment the modal opens instead of waiting
+   below the fold. Still one scroller — sticky does not add another, it just
+   keeps this row out of the scrolled flow. */
+.origin-rebase-modal .modal-actions,
+.calib-notice-modal .modal-actions {
+  position: sticky;
+  bottom: -20px;
+  margin: 0 -22px -20px;
+  padding: 12px 22px 20px;
+  background: var(--bg-secondary);
 }
 
 .origin-rebase-table {
@@ -6148,11 +6308,183 @@ body.origin-mode-lock .timeline-container {
   font-size: 11px;
 }
 
+/* One level further in: the group buckets under `pose keypoints`. Dimmer
+   again, so three indent levels are told apart by weight and not only by the
+   em-spaces in the label, which a proportional font renders inconsistently. */
+.origin-rebase-sub2 td {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
 /* Rows that are context, not work: 2D counts, and the reprojections that do
    not move at all. Dimmed so they cannot be misread as things being rewritten. */
 .origin-rebase-quiet td {
   color: var(--text-muted);
   font-size: 11px;
+}
+
+/* One titled table. The dialog has two of these — what the re-base rewrites
+   and what it leaves alone — plus a third for the per-session split, because
+   a single table answering both questions in one column left the reader
+   working out which row was which. */
+.origin-rebase-block {
+  margin: 14px 0 0;
+}
+
+.origin-rebase-block-title {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border-color, #444);
+}
+
+/* The two headline blocks FOLD: `ui/origin-rebase.js` builds them as
+   `<details open>` with the title as the `<summary>`, so a user who has read
+   the inventory once can collapse it and get at Continue without scrolling.
+   Expanded every time the dialog opens — the state is deliberately not
+   persisted, because the two-table split is the claim the user is being asked
+   to trust and must never be hidden by a fold they made in another project.
+
+   Scoped to `summary` so the plain `<div>` title that
+   `ui/calibration-notice.js` reuses this class on, and the dialog's own
+   non-folding `By session` block, are untouched.
+
+   No `max-height` / `overflow-y` anywhere in here: the modal above is the ONE
+   scroller, per the no-scroll-within-scroll rule. */
+summary.origin-rebase-block-title {
+  cursor: pointer;
+  /* The browser's own marker is suppressed rather than merely left in place,
+     because the triangle below is drawn in BOTH states and two disclosure
+     indicators on one row read as a glitch. `list-style` covers Firefox and
+     modern Chrome; the `::-webkit-details-marker` rule below covers Safari and
+     older WebKit, which ignore it. `display: flex` also blockifies the
+     `::before` so it can be rotated. */
+  list-style: none;
+  display: flex;
+  /* CENTER, not baseline: a rotated glyph's baseline is not where its ink is,
+     so baseline alignment left the caret sitting low and reading as a stray
+     mark beside the title rather than as part of it. */
+  align-items: center;
+  gap: 6px;
+}
+
+summary.origin-rebase-block-title::-webkit-details-marker {
+  display: none;
+}
+
+summary.origin-rebase-block-title::before {
+  /* One glyph rotated, not two different ones, so the indicator keeps its
+     metrics and the title does not shift a pixel as the section folds. */
+  /* Sized and coloured to match the title text it belongs to. At 9px in
+     `--text-muted` this glyph was ~4px of dim ink: it read as a bullet, looked
+     the same open as closed, and the only thing telling a foldable block from
+     the non-foldable `By session` one was that dot. A disclosure control has to
+     be visible or it is not a control. */
+  content: '\25B8';
+  font-size: 11px;
+  line-height: 1;
+  color: var(--text-secondary);
+  /* Rotate about the glyph's own centre, or the caret drifts sideways as it
+     turns and the title shifts with it. */
+  transform-origin: 50% 50%;
+  transition: transform 0.12s ease;
+}
+
+details[open] > summary.origin-rebase-block-title::before {
+  transform: rotate(90deg);
+}
+
+.origin-rebase-block-note {
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text-muted);
+  margin: 5px 0 2px;
+}
+
+/* One distinct calibration and the sessions that loaded it
+   (ui/calibration-notice.js). The counts sit on the TITLE row, so everything
+   below the title is nothing but folder names — the only strings in that modal
+   the user acts on. */
+.calib-notice-group-title {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.calib-notice-group-count {
+  /* The group counts get compared against each other down the stack, so they
+     line up on a monospace column, like `.origin-rebase-num`. */
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-variant-numeric: tabular-nums;
+  /* Overriding the uppercase title treatment: this half is a measurement, not
+     a heading. */
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 400;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.calib-notice-sessions {
+  margin: 6px 0 2px;
+}
+
+/* One folder name per line, monospace: these are paths the user is about to go
+   and find on disk, and a proportional font makes two long timestamped names
+   differing in one digit hard to tell apart. */
+.calib-notice-session {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-primary);
+  word-break: break-all;
+}
+
+.calib-notice-more {
+  font-family: inherit;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+/* The second table is the reassurance, not the warning, so its numbers do not
+   compete with the first table's for attention. */
+#originRebaseKeeps td,
+#originRebaseBySession td {
+  color: var(--text-secondary);
+}
+
+/* One session's row in the "By session" block: the checkbox that says whether
+   it moves, and the session name. A `<label>`, so the NAME is part of the hit
+   target — these are long timestamped folder names and a 13px box is not. */
+.origin-rebase-session {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  cursor: pointer;
+  /* The names are folders the user goes and finds on disk, and two timestamped
+     ones can differ in a single digit — same reason
+     `.calib-notice-session` is monospace. */
+  font-family: var(--font-mono, ui-monospace, monospace);
+  word-break: break-all;
+}
+
+.origin-rebase-session input {
+  flex: 0 0 auto;
+  margin: 0;
+  cursor: pointer;
+}
+
+/* The ACTIVE session: checked and disabled, because its cameras are what the
+   new calibration file describes. Not a choice, so not a pointer — the reason
+   is in the block note, which is where a disabled control's explanation has to
+   live since a disabled input's own tooltip never fires. */
+.origin-rebase-session-pinned,
+.origin-rebase-session-pinned input {
+  cursor: default;
 }
 
 .origin-rebase-caution {
@@ -6164,6 +6496,32 @@ body.origin-mode-lock .timeline-container {
   color: var(--error-color);
   background: color-mix(in srgb, var(--error-color) 10%, transparent);
   border: 1px solid color-mix(in srgb, var(--error-color) 35%, transparent);
+}
+
+/* The LASTING warning, as opposed to the red one above it, which is about the
+   next 90 seconds. Amber rather than a second red box: two identical alarms
+   stacked read as one wall of red and the eye takes neither, and these two say
+   genuinely different things — "do not close the tab" expires when the
+   operation does, "your old calibration.toml now disagrees with this project"
+   does not. */
+.origin-rebase-caution.origin-rebase-caution-warn {
+  color: var(--warning-color);
+  background: color-mix(in srgb, var(--warning-color) 10%, transparent);
+  border-color: color-mix(in srgb, var(--warning-color) 35%, transparent);
+}
+
+/* The two obligations the completion modal leaves the user with. Numbered,
+   because they are steps to take and not a description of what happened. */
+.origin-rebase-todo {
+  margin: 12px 0 4px;
+  padding-left: 20px;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text-primary);
+}
+
+.origin-rebase-todo li + li {
+  margin-top: 8px;
 }
 
 /* The progress modal's bar borrows the multi-frame one's geometry; this is the

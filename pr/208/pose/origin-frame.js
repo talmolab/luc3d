@@ -1,9 +1,9 @@
 // pose/origin-frame.js — the payload of the whole Define Planes feature.
 //
-// Turns "this annotated corner is the origin, and +Z points THAT way" into the
+// Turns "this annotated node is the origin, and +Z points THAT way" into the
 // translation + rotation that re-express the calibration's world frame in the
 // user's frame. Everything upstream (plane skeletons, placements,
-// triangulation, plane fit, 3D corner dragging) exists to produce the two
+// triangulation, plane fit, 3D node dragging) exists to produce the two
 // inputs this module consumes: a point and a direction.
 //
 // DOM-free and dependency-free on purpose — this is the part worth testing

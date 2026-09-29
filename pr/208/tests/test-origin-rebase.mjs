@@ -18,9 +18,11 @@
  * ESM, so `tests/run-mjs-tests.mjs` picks it up automatically.
  */
 
-import { countRebaseTargets, planOriginRebase, applyOriginRebase } from '../pose/origin-rebase.js';
+import { countRebaseTargets, subsetRebaseTally, planOriginRebase,
+    applyOriginRebase } from '../pose/origin-rebase.js';
 import { buildOriginFrame, rotationAboutAxis, applyOriginFrame } from '../pose/origin-frame.js';
-import { Camera, Instance, InstanceGroup, makePoints3d, setPoint3d, getPoint3d } from '../pose/pose-data.js';
+import { Camera, FrameGroup, Instance, InstanceGroup, UnlinkedInstance,
+    makePoints3d, setPoint3d, getPoint3d } from '../pose/pose-data.js';
 import { PlaneModel } from '../pose/plane-data.js';
 
 let passed = 0, failed = 0;
@@ -88,13 +90,42 @@ function buildProject() {
     const gNo3d = new InstanceGroup(4, 3);
     gNo3d.addInstance('camA', new Instance([[1, 2]], 2, 'user', 1));
 
+    // The UNLINKED pool: 2D that no InstanceGroup references. On a real
+    // imported `.slp` this is the bulk of the file, and it is disjoint from the
+    // group members above (`restoreGroupingAndUnlink` moves exactly the
+    // instances nothing references into here).
+    const fg0 = new FrameGroup(0);
+    fg0.addUnlinkedInstance('camA', new UnlinkedInstance(
+        new Instance([[70, 80]], 1, 'predicted', 0.7), 'camA'));
+    fg0.addUnlinkedInstance('camA', new UnlinkedInstance(
+        new Instance([[71, 81]], 1, 'predicted', 0.7), 'camA'));
+    fg0.addUnlinkedInstance('camB', new UnlinkedInstance(
+        new Instance([[72, 82]], 0, 'user', 1), 'camB'));
+
+    // The planes' own 2D, which is SESSION-scoped (unlike the node pool) and
+    // does not move. A minimal stand-in for `PlaneInstance`: the tally only
+    // asks `numNodes` and `hasPoint`.
+    var placed = function (flags) {
+        return { numNodes: flags.length, hasPoint: function (i) { return !!flags[i]; } };
+    };
+
     const sessA = {
+        name: 'A',
         cameras: [camA, camB],
         instanceGroups: new Map([[0, [gUser, gPred]], [7, [gNo3d]]]),
+        frameGroups: new Map([[0, fg0]]),
+        // 3 placed + 2 placed = 5 points across two views.
+        planePlacements: new Map([
+            ['camA', placed([1, 1, 1, 0])],
+            ['camB', placed([1, 0, 1, 0])],
+        ]),
     };
     const sessB = {
+        name: 'B',
         cameras: [camC],
         instanceGroups: new Map([[3, [gBare]]]),
+        frameGroups: new Map(),
+        planePlacements: new Map([['camC', placed([1, 0, 0, 0])]]),
     };
 
     const model = new PlaneModel();
@@ -143,13 +174,105 @@ console.log('\n1. countRebaseTargets buckets by provenance');
         `one group of each provenance (got ${t.userGroups}/${t.predictedGroups}/${t.untypedGroups})`);
     check(t.keypoints3d === 5,
         `only FINITE keypoints are counted — the NaN node is not work (got ${t.keypoints3d})`);
-    check(t.userInstances === 3 && t.predictedInstances === 3,
-        `2D members are tallied including the group with no 3D (got ${t.userInstances}/${t.predictedInstances})`);
+    check(t.userKeypoints3d + t.predictedKeypoints3d + t.untypedKeypoints3d === t.keypoints3d,
+        `the per-provenance keypoint counts partition the total (got ` +
+        `${t.userKeypoints3d}/${t.predictedKeypoints3d}/${t.untypedKeypoints3d} of ${t.keypoints3d})`);
+    check(t.userMembers === 3 && t.predictedMembers === 3,
+        `2D group MEMBERS are tallied including the group with no 3D (got ${t.userMembers}/${t.predictedMembers})`);
+    check(t.userInstances === 4 && t.predictedInstances === 5,
+        `and the 2D totals add the UNLINKED pool, which is where an imported ` +
+        `.slp's predictions live (got ${t.userInstances}/${t.predictedInstances})`);
+    check(t.instanceScope === 'resident',
+        `an eager project is counted from the resident model (got '${t.instanceScope}')`);
     check(t.reprojectedInstances === 2, `reprojections are reported (got ${t.reprojectedInstances})`);
     check(t.planeNodes === 3, `only triangulated pool nodes count (got ${t.planeNodes})`);
     check(t.planeFits === 1, `the un-fit plane is not counted (got ${t.planeFits})`);
     check(t.work === t.groups + t.planeNodes + t.planeFits + t.cameras,
         'the progress total is the number of things the plan loop visits');
+    check(t.points3d === t.keypoints3d + t.planeNodes,
+        `points3d is EVERY 3D point that moves, pose and plane (got ${t.points3d})`);
+    check(t.planePoints2d === 6,
+        `the planes' own 2D is counted in POINTS, across every view (got ${t.planePoints2d})`);
+}
+
+console.log('\n1d. perSession: the multi-session breakdown');
+{
+    // A multi-session project can carry a DIFFERENT calibration.toml per
+    // session, so the dialog needs the split: every session is re-based, but
+    // only one calibration file comes out. What is SESSION-scoped appears per
+    // session; the plane pool and the plane fits are project-scoped and must
+    // NOT be split, or the dialog invents a division the data does not have.
+    const p = buildProject();
+    const t = countRebaseTargets(p.sessions, p.model);
+    check(t.perSession.length === 2, `one record per session (got ${t.perSession.length})`);
+    check(t.perSession[0].name === 'A' && t.perSession[1].name === 'B',
+        `each named (got ${JSON.stringify(t.perSession.map(x => x.name))})`);
+    check(t.perSession[0].cameras === 2 && t.perSession[1].cameras === 1,
+        `cameras are per session (got ${t.perSession.map(x => x.cameras).join('/')})`);
+    check(t.perSession[0].planePoints2d === 5 && t.perSession[1].planePoints2d === 1,
+        `and so are plane placements (got ${t.perSession.map(x => x.planePoints2d).join('/')})`);
+    check(!('planeNodes' in t.perSession[0]) && !('planeFits' in t.perSession[0]),
+        'while the plane pool and the fits are NOT split — they are project-scoped');
+
+    // Every per-session field must sum to its total, or the two views of one
+    // project disagree and the breakdown is worse than not having it.
+    const sum = (k) => t.perSession.reduce((a, x) => a + x[k], 0);
+    for (const k of ['cameras', 'groups', 'keypoints3d', 'userKeypoints3d',
+        'predictedKeypoints3d', 'untypedKeypoints3d', 'userGroups', 'predictedGroups',
+        'untypedGroups', 'userInstances', 'predictedInstances', 'reprojectedInstances',
+        'userMembers', 'predictedMembers', 'planePoints2d']) {
+        check(sum(k) === t[k], `perSession sums to the total for ${k} (${sum(k)} vs ${t[k]})`);
+    }
+}
+
+console.log('\n1b. A project with planes and no pose annotation still has points to move');
+{
+    // The reported bug: `keypoints3d` is honestly 0 here, and the dialog quoted
+    // it under a heading that says "3D points to update" — directly above the
+    // plane nodes it was about to rewrite. A plane node IS a 3D point.
+    const p = buildProject();
+    for (const sess of p.sessions) sess.instanceGroups.clear();
+    const t = countRebaseTargets(p.sessions, p.model);
+    check(t.keypoints3d === 0 && t.groups === 0, 'no pose 3D, by construction');
+    check(t.planeNodes === 3, `the pool still has its triangulated nodes (got ${t.planeNodes})`);
+    check(t.points3d === 3,
+        `so the headline number is 3, not 0 (got ${t.points3d})`);
+    check(t.work > 0, 'and the re-base is real work, not a no-op');
+    check(t.planePoints2d === 6,
+        'and the planes 2D is untouched by the pose being absent — different scope, ' +
+        `different question (got ${t.planePoints2d})`);
+}
+
+console.log('\n1c. A lazy project is counted from the STORE, not the resident window');
+{
+    // The resident-only hazard, in the shape CLAUDE.md warns about: on a lazily
+    // reopened project `frameGroups` holds a handful of frames (31 of 180,210
+    // on the real one), so counting it reports a plausible, tiny number. The
+    // columnar store is the complete enumeration, and it covers grouped and
+    // ungrouped rows alike — so the group members must NOT be added on top.
+    const p = buildProject();
+    let visited = 0;
+    p.sessions[0].lazyLoader = {
+        forEachInstanceRow(visit) {
+            for (let i = 0; i < 900; i++) {
+                visit('camA', i, -1, { offsetInFrame: 0, storeRow: i, instanceRow: i,
+                    type: i % 3 === 0 ? 'user' : 'predicted' });
+                visited++;
+            }
+        },
+    };
+    const t = countRebaseTargets(p.sessions, p.model);
+    check(t.instanceScope === 'store', `the store answered (got '${t.instanceScope}')`);
+    check(visited === 900, 'every store row was visited');
+    // 300 user + 600 predicted from the store; session B is eager and adds its
+    // own members (it has none) — nothing from session A's resident model.
+    check(t.userInstances === 300 && t.predictedInstances === 600,
+        `the totals are the store's, with no resident double-count ` +
+        `(got ${t.userInstances}/${t.predictedInstances})`);
+    check(t.userMembers === 3 && t.predictedMembers === 3,
+        `the grouped subtotal is still reported beside it (got ${t.userMembers}/${t.predictedMembers})`);
+    check(t.keypoints3d === 5 && t.planeNodes === 3,
+        'and the 3D walk is untouched — instanceGroups is project-wide either way');
 }
 
 console.log('\n2. Planning writes NOTHING (what makes Cancel exact)');
@@ -338,6 +461,128 @@ console.log('\n10. Progress is reported monotonically to the declared total');
     check(seen.every(([, t]) => t === plan.tally.work), 'the total is the tally it announced');
     check(seen[seen.length - 1][0] === plan.tally.work,
         `the bar reaches 100% (got ${seen[seen.length - 1][0]}/${plan.tally.work})`);
+}
+
+console.log('\n11. A SUBSET of the sessions: subsetRebaseTally re-folds the same answer');
+{
+    // The dialog lets the user deselect sessions, and its headline numbers have
+    // to follow. Recomputing with `countRebaseTargets` on the filtered array is
+    // what the COMMIT does; the dialog re-folds instead, because a re-count
+    // re-walks a lazy project's whole columnar store on every checkbox click.
+    // The two therefore have to agree EXACTLY, field for field — this is the
+    // assertion that keeps them from drifting.
+    const p = buildProject();
+    const full = countRebaseTargets(p.sessions, p.model);
+    const folded = subsetRebaseTally(full, (ps, i) => i === 0);
+    const counted = countRebaseTargets([p.sessions[0]], p.model);
+
+    const FIELDS = ['sessions', 'cameras', 'groups', 'userGroups', 'predictedGroups',
+        'untypedGroups', 'keypoints3d', 'userKeypoints3d', 'predictedKeypoints3d',
+        'untypedKeypoints3d', 'userInstances', 'predictedInstances',
+        'reprojectedInstances', 'userMembers', 'predictedMembers', 'planePoints2d',
+        'planeNodes', 'planeFits', 'points3d', 'work', 'instanceScope'];
+    const differs = FIELDS.filter(k => folded[k] !== counted[k]);
+    check(differs.length === 0,
+        `a re-fold over session A equals a fresh count of session A ` +
+        `(differing: ${JSON.stringify(differs)})`);
+    check(folded.perSession.length === 1 && folded.perSession[0].name === 'A',
+        `and lists only the kept session (got ${JSON.stringify(folded.perSession.map(x => x.name))})`);
+
+    // NEGATIVE CONTROL: the subset must actually be smaller, or the equality
+    // above is being satisfied by a re-fold that quietly ignored the predicate.
+    check(folded.cameras === 2 && full.cameras === 3 &&
+          folded.keypoints3d === 4 && full.keypoints3d === 5,
+        `the subset is genuinely a subset (${folded.cameras}/${full.cameras} cameras, ` +
+        `${folded.keypoints3d}/${full.keypoints3d} keypoints)`);
+
+    // The PROJECT-scoped half rides along whole. Plane nodes and plane fits
+    // live in one `PlaneModel`, move exactly once, and move with the active
+    // session — which the dialog does not let the user deselect. Splitting them
+    // would invent a division the data does not have.
+    check(folded.planeNodes === full.planeNodes && folded.planeFits === full.planeFits,
+        `plane nodes and fits are not reduced by dropping a session ` +
+        `(${folded.planeNodes}/${folded.planeFits})`);
+    check(folded.points3d === folded.keypoints3d + folded.planeNodes,
+        `and the headline is still the sum of its sub-rows (got ${folded.points3d})`);
+}
+
+console.log('\n11b. Re-basing a SUBSET leaves the omitted session where it was');
+{
+    // The point of the choice: a session that is not handed to
+    // `planOriginRebase` keeps BOTH its 3D and its cameras, so it stays
+    // internally consistent — every one of its pixels is where it was, for the
+    // same reason the whole-project case works, and for the opposite reason.
+    const p = buildProject();
+    const camA = p.cams[0], camC = p.cams[2];
+    const bareBefore = Array.from(p.groups.gBare.points3d);
+    const camCBefore = { r: camC.rvec.slice(), t: camC.tvec.slice() };
+    const userBefore = getPoint3d(p.groups.gUser.points3d, 0);
+    const pixBefore = {
+        // session A's own point in session A's own camera…
+        aa: toPixel(camA, userBefore),
+        // …and session B's point in session B's camera.
+        bb: toPixel(camC, getPoint3d(p.groups.gBare.points3d, 0)),
+    };
+
+    // Session A only. Session B is not in the array, so nothing touches it.
+    const plan = await planOriginRebase([p.sessions[0]], p.model, FRAME);
+    check(plan && !plan.failed, 'a plan for one session comes back');
+    check(plan.groups.length === 2 && plan.cameras.length === 2,
+        `covering only that session's 3D and cameras (${plan.groups.length} groups, ` +
+        `${plan.cameras.length} cameras)`);
+    check(plan.nodes.length === 3 && plan.fits.length === 1,
+        `while the project-scoped plane model is still planned in full ` +
+        `(${plan.nodes.length} nodes, ${plan.fits.length} fits)`);
+    check(plan.tally.sessions === 1 && plan.tally.cameras === 2,
+        `and the plan's tally describes the subset, which is what the status line quotes ` +
+        `(${plan.tally.sessions} session, ${plan.tally.cameras} cameras)`);
+    applyOriginRebase(plan);
+
+    check(Array.from(p.groups.gBare.points3d).every((v, i) =>
+            (Number.isNaN(v) && Number.isNaN(bareBefore[i])) || v === bareBefore[i]),
+        'the omitted session\'s 3D is bit-identical — not re-based, not perturbed');
+    check(camC.rvec.every((v, i) => v === camCBefore.r[i]) &&
+          camC.tvec.every((v, i) => v === camCBefore.t[i]),
+        'and so are its cameras, so the two moved together by not moving at all');
+    check(Math.abs(toPixel(camC, getPoint3d(p.groups.gBare.points3d, 0))[0] - pixBefore.bb[0]) < 1e-9,
+        'every pixel in the omitted session is exactly where it was');
+
+    // …while the chosen session DID move, both halves of it.
+    const userAfter = getPoint3d(p.groups.gUser.points3d, 0);
+    check(!near(userAfter[2], userBefore[2], 1e-6),
+        `the chosen session's 3D moved (z ${userBefore[2]} -> ${userAfter[2].toFixed(3)})`);
+    check(Math.abs(toPixel(camA, userAfter)[0] - pixBefore.aa[0]) < 1e-6 &&
+          Math.abs(toPixel(camA, userAfter)[1] - pixBefore.aa[1]) < 1e-6,
+        'and its pixels did not — points and cameras moved together, as always');
+
+    // THE HAZARD, made concrete: the plane pool is project-scoped and moved
+    // with the active session, so the omitted session's 3D is now expressed in
+    // a different frame from it. Nothing on screen contradicts that, which is
+    // why the dialog has to say it — and why the next load's
+    // `compareSessionCalibrations` note exists.
+    const d = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+    const dBefore = d(bareBefore.slice(0, 3), [-40.678, -30.234, 216.588]);
+    const dAfter = d(getPoint3d(p.groups.gBare.points3d, 0), Array.from(p.pool[0].xyz));
+    check(Math.abs(dAfter - dBefore) > 1,
+        `and the project now measures a DIFFERENT distance between that session's 3D ` +
+        `and the project-wide plane pool — two frames in one project ` +
+        `(${dBefore.toFixed(1)} mm -> ${dAfter.toFixed(1)} mm)`);
+}
+
+console.log('\n11c. NEGATIVE CONTROL: the omitted session moves when it IS included');
+{
+    // 11b would pass on a build where `gBare` simply never moves — because it
+    // is member-less, or because the plane's session walk skips a session with
+    // no `frameGroups`. Handing in both sessions has to move it.
+    const p = buildProject();
+    const bareBefore = Array.from(p.groups.gBare.points3d);
+    const camCBefore = p.cams[2].tvec.slice();
+    applyOriginRebase(await planOriginRebase(p.sessions, p.model, FRAME));
+    check(!near(p.groups.gBare.points3d[2], bareBefore[2], 1e-6),
+        `the same point DOES move when its session is included ` +
+        `(z ${bareBefore[2]} -> ${p.groups.gBare.points3d[2].toFixed(3)})`);
+    check(!near(p.cams[2].tvec[2], camCBefore[2], 1e-6),
+        'and so does its camera');
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

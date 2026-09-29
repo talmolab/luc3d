@@ -66,7 +66,7 @@ function isCoherent(faces) {
 }
 
 /** Build a model + object from corner positions and face rings of corner indices. */
-function buildFrom(corners, faceRings, opts) {
+function buildFrom(corners, faceRings) {
     const model = new PlaneModel();
     const nodeIds = corners.map((p, i) => {
         const n = model.addNode('c' + i);
@@ -85,7 +85,6 @@ function buildFrom(corners, faceRings, opts) {
     const set = new MeshObjectSet();
     const obj = set.createObject('o');
     model.planes.forEach((p) => obj.addPlane(p.id));
-    if (opts && opts.flipNormals) obj.flipNormals = true;
     return { model, obj, nodeIds };
 }
 
@@ -172,39 +171,28 @@ console.log('\n--- 1. A closed cube welds, closes and orients outward ---');
 }
 
 // ============================================
-console.log('\n--- 2. flipNormals inverts a closed object ---');
+console.log('\n--- 2. A CLOSED object comes out outward, whatever the input winding ---');
 // ============================================
 {
-    const { model, obj } = buildFrom(CUBE_CORNERS, CUBE_FACES, { flipNormals: true });
-    const g = buildMeshObjectGeometry(obj, model);
-    check(near(g.connectivity.volume, -1, 1e-9), 'volume is −1 with flipNormals set');
-    check(g.connectivity.isClosed === true, 'still closed — flipping is not a topology change');
-
-    const plain = buildMeshObjectGeometry(
-        buildFrom(CUBE_CORNERS, CUBE_FACES).obj,
-        buildFrom(CUBE_CORNERS, CUBE_FACES).model
-    );
-    check(plain.faces.length === g.faces.length, 'same face count either way');
-
-    // THE invariant, and the regression this section exists for. The seed face
-    // of the coherence walk keeps whatever winding it came in with, so whether
-    // the canonical pass has to flip the whole mesh depends on the ARBITRARY
-    // order the rings happened to arrive in. The result must not: the output
-    // sign has to depend on `flipNormals` and nothing else.
+    // THE invariant. The seed face of the coherence walk keeps whatever winding
+    // it came in with, so whether the canonical pass has to flip the whole mesh
+    // depends on the ARBITRARY order the rings happened to arrive in. The
+    // OUTPUT must not depend on it at all: there is no user override any more,
+    // so `signedVolume` is the whole answer for a closed mesh and it has to be
+    // right from either starting point.
     //
     // Reversing every input ring is what flips which side of that branch is
-    // taken, so these four builds cover both. The bug this catches folded the
-    // canonical correction and the user's toggle into one `||`, which collapses
-    // to a single reversal when both fire — and `flipNormals` silently did
-    // nothing for exactly the inputs that needed the canonical flip.
+    // taken, so these two builds cover both sides of it.
     const REVERSED = CUBE_FACES.map((r) => r.slice().reverse());
+    let faceCount = null;
     for (const [label, rings] of [['as given', CUBE_FACES], ['all reversed', REVERSED]]) {
-        const off = buildFrom(CUBE_CORNERS, rings);
-        const on = buildFrom(CUBE_CORNERS, rings, { flipNormals: true });
-        const vOff = buildMeshObjectGeometry(off.obj, off.model).connectivity.volume;
-        const vOn = buildMeshObjectGeometry(on.obj, on.model).connectivity.volume;
-        check(near(vOff, 1, 1e-9), 'rings ' + label + ': default is +1 (outward)');
-        check(near(vOn, -1, 1e-9), 'rings ' + label + ': flipNormals is −1 (inward)');
+        const { model, obj } = buildFrom(CUBE_CORNERS, rings);
+        const g = buildMeshObjectGeometry(obj, model);
+        check(near(g.connectivity.volume, 1, 1e-9),
+            'rings ' + label + ': volume is +1 — outward, not inward');
+        check(g.connectivity.isClosed === true, 'rings ' + label + ': still closed');
+        if (faceCount === null) faceCount = g.faces.length;
+        check(g.faces.length === faceCount, 'rings ' + label + ': same face count');
     }
 }
 
@@ -264,14 +252,16 @@ console.log('\n--- 3. An OPEN cage: floor + two walls, as annotated in the app -
     check(summary.level === 'warn' && /open/.test(summary.text),
         'the badge reads open, at warn level');
 
-    // flipNormals is the user's only lever on an open object, so it must work.
-    obj.flipNormals = true;
-    const flipped = buildMeshObjectGeometry(obj, model);
-    let inverted = 0;
+    // Building the same object twice must give the same answer, byte for byte:
+    // with the override gone, the derivation is the only thing deciding, so any
+    // instability in it would show up here rather than in an export.
+    const again = buildMeshObjectGeometry(obj, model);
+    let same = 0;
     for (let i = 0; i < g.faceNormals.length; i++) {
-        if (near(flipped.faceNormals[i], -g.faceNormals[i], 1e-9)) inverted++;
+        if (near(again.faceNormals[i], g.faceNormals[i], 1e-12)) same++;
     }
-    check(inverted === g.faceNormals.length, 'flipNormals inverts every face normal');
+    check(same === g.faceNormals.length,
+        'and rebuilding it gives the identical normals — the decision is derived, not stored');
 }
 
 // ============================================
@@ -337,15 +327,6 @@ console.log('\n--- 3b. An OPEN object is oriented +Z up, not by coin flip ---');
         check(g.faceNormals[2 * 3] > 0.99, 'and the side wall inward (+X)');
     }
 
-    // flipNormals still layers on top, and means "the opposite of the default"
-    // — the two reversals must stay independent.
-    {
-        const { model, obj } = buildFrom(corners, [FLOOR, BACK, SIDE]);
-        obj.flipNormals = true;
-        const g = buildMeshObjectGeometry(obj, model);
-        check(g.faceNormals[2] < -0.99, 'flipNormals puts the floor back DOWN (-Z)');
-    }
-
     // A mesh built UPSIDE DOWN is corrected. Mirroring z is the cleanest way to
     // produce one: it inverts the handedness of every ring.
     {
@@ -357,8 +338,9 @@ console.log('\n--- 3b. An OPEN object is oriented +Z up, not by coin flip ---');
     }
 
     // The undecidable case: every face vertical, so there is no vertical
-    // component to read. It must not crash, must stay coherent, and must leave
-    // flipNormals as the answer.
+    // component to read. It must not crash and must stay coherent; there is no
+    // right answer for which side is "out", so it keeps what the coherent pass
+    // produced rather than being flipped on noise.
     {
         const wallsOnly = [
             [0, 0, 0], [1, 0, 0], [1, 0, 1], [0, 0, 1],   // y=0 wall
@@ -371,15 +353,17 @@ console.log('\n--- 3b. An OPEN object is oriented +Z up, not by coin flip ---');
         check(isCoherent(g.faces) === true, 'and are still coherently oriented');
         check(g.faceNormals.every(Number.isFinite),
             'with finite normals — no division by a zero vertical component');
+        // Undecidable must mean STABLE, not random: an all-vertical surface has
+        // `areaVectorZ` ~ 0, and a rule reading that as a sign would flip the
+        // object on floating-point noise between two builds of the same data.
         const before = Array.from(g.faceNormals);
-        obj.flipNormals = true;
         const after = buildMeshObjectGeometry(obj, model).faceNormals;
-        let inv = 0;
+        let same = 0;
         for (let i = 0; i < before.length; i++) {
-            if (near(after[i], -before[i], 1e-9)) inv++;
+            if (near(after[i], before[i], 1e-12)) same++;
         }
-        check(inv === before.length,
-            'and flipNormals still works, which is the only lever left here');
+        check(same === before.length,
+            'and rebuilding gives the SAME normals — undecidable is left alone, not coin-flipped');
     }
 
     // NEGATIVE CONTROL: the rule must not touch a CLOSED mesh, whose volume

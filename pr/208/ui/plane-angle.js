@@ -59,8 +59,8 @@ import {
     planeModel, planeState, refreshPlanePanel, syncPlanes3D,
     showPlaneDialog, refreshTriangulationErrors,
 } from './plane-definition.js';
-import { writePoints3dForPlane, points3dForPlane } from '../pose/plane-data.js';
-import { reprojectPointCamera, fitPlaneToPoints3d } from '../pose/triangulation.js';
+import { writePoints3dForPlane, usablePlaneFit } from '../pose/plane-data.js';
+import { reprojectPointCamera } from '../pose/triangulation.js';
 import { planAngleEdit, planeAngleDeg } from '../pose/plane-angle.js';
 import { state, viewport3d } from './app-state.js';
 import { setStatus, markDirty } from '../import-export/save-load.js';
@@ -110,6 +110,11 @@ var angleOverlay = null;
  * equivariant under a rigid motion — rotate the corners, and the fit of the
  * rotated corners IS the rotated fit. An anchor-constrained fit is not.
  *
+ * The derivation itself now lives in the model, as `usablePlaneFit`
+ * (`pose/plane-data.js`), because `constrainPoint3dForNode` needs the same
+ * answer and the two must not be able to disagree about where a plane is. This
+ * stays as the name the dialog and its tests were written against.
+ *
  * @param {PlaneSkeleton} plane
  * @param {PlaneModel} model
  * @returns {Object|null} null when the plane has fewer than 3 solved corners,
@@ -119,7 +124,7 @@ export function usableFit(plane, model) {
     if (!plane) return null;
     if (plane.planeFit) return plane.planeFit;
     if (!model) return null;
-    return fitPlaneToPoints3d(points3dForPlane(plane, model.pool));
+    return usablePlaneFit(plane, model.pool);
 }
 
 /**
@@ -228,8 +233,9 @@ export function applyAngleEdit(plan, fixedPlane, movingPlane) {
     //    `locked`. What the user asserted is the PLANE's orientation, not where
     //    each corner sits on it, and those are different promises: a
     //    plane-locked corner is still re-solved from 2D, and
-    //    `constrainPoint3dForNode` projects the answer back onto this plane's
-    //    fit. So Triangulate goes on refining the annotation while the angle
+    //    `constrainPoint3dForNode` projects the answer back onto the planes it
+    //    belongs to, this one among them. So Triangulate goes on refining the
+    //    annotation while the angle
     //    survives, instead of the corners being frozen outright and every later
     //    solve of this plane being a no-op the user has to unpin their way out
     //    of. A node the user had already Locked is left Locked: that is a
@@ -244,7 +250,9 @@ export function applyAngleEdit(plan, fixedPlane, movingPlane) {
     for (var L = 0; L < plan.movedNodeIds.length; L++) {
         var nd = pool.getNode(plan.movedNodeIds[L]);
         if (!nd || nd.pin === 'locked') continue;
-        pool.setPin(nd.id, 'plane-locked', movingPlane.id);
+        // No plane is nominated: the pin holds the node in every plane it is
+        // in, and a corner this action moved is by definition in this one.
+        pool.setPin(nd.id, 'plane-locked');
         heldNames.push(nd.name);
     }
 
@@ -614,9 +622,12 @@ export function showPlaneAngleModal() {
         var pair = currentPlanes();
         var raw = target.value.trim();
         var deg = Number(raw);
-        // Derived here rather than inside the planner: the planner cannot
-        // import `fitPlaneToPoints3d` without losing its stub-free
-        // testability, so the UI hands it the fits. See `usableFit`.
+        // Derived here rather than inside the planner, which takes the fits as
+        // an argument so it can be tested against hand-written ones. That
+        // originally had to be so — `fitPlaneToPoints3d` lived in the
+        // UI-coupled `pose/triangulation.js`; it is now reachable from
+        // `pose/plane-fit.js`, so this is an injection seam kept on purpose
+        // rather than a constraint. See `usableFit`.
         var fits = fitsFor(pair.fixed, pair.moving, model);
         var pl = (raw === '' || !isFinite(deg))
             ? { ok: false, code: 'bad_target', warnings: [],
