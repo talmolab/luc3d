@@ -1,0 +1,10 @@
+# aniposelib 0.8.0 solver re-run on byte-identical saved corners, Mouse-Dyad-10M 20251002_150512.
+# bundle_adjust_iter initialises board poses and breaks resampling ties with unseeded
+# pseudo-random draws, so one run is one draw.
+draw,reported_error,outcome,seconds
+original,1.417205834853335e+21,diverged,
+repeat0,0.101376,converged,903
+repeat1,3.28324e+19,diverged,331
+repeat2,0.103094,converged,76
+repeat3,923.426,diverged,244
+repeat4,0.101225,converged,77

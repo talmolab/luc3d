@@ -47,7 +47,10 @@ from fig7_common import ARM_COLOR, MAIN_C3  # noqa: E402
 #: Anipose detection read 517 s under load and 248 s clean, on byte-identical
 #: detections). The 8-camera rig's other three recordings were measured for ACCURACY
 #: with several jobs in flight; plotting their seconds would report the contention.
-DATASETS = [("cal_test2", "8-camera rig", 8), ("calib18", "18-camera rig", 18)]
+#: ASCENDING BY CAMERA COUNT (Eric, 2026-09-17): 5, then 8, then 18, so the axis
+#: reads as a progression in rig size rather than in the order the rigs were run.
+DATASETS = [("md10", "Mouse-Dyad\n5 cam", 5), ("slap8", "SLAP-2M\n8 cam", 8),
+            ("calib18", "18-camera\n18 cam", 18)]
 from matplotlib.colors import to_rgba  # noqa: E402
 from src.data_loader import load  # noqa: E402
 from src.style import MUTED, deposit, panel, save, text_legend, use  # noqa: E402
@@ -59,7 +62,7 @@ TOOLS = [("calibrat3", "calibrat3"), ("anipose", "Anipose")]
 
 #: frames in each session, for the tick labels -- the other variable the time scales
 #: with, and the one that says why the 8-camera bar is not simply the smaller job.
-FRAMES = {"cal_test2": 2701, "calib18": 1800}
+FRAMES = {"slap8": 2701, "md10": 2998, "calib18": 1800}
 OFFSET = {"calibrat3": -0.19, "anipose": 0.19}
 WIDTH = 0.34
 
@@ -80,7 +83,7 @@ def main():
     use()
     rec = load("fig7_calibration.json")
     # QUARTER: four bars and two group labels fit; see the layout note in assemble.py.
-    fig, ax = panel("quarter", "std", key=2)
+    fig, ax = panel("third", 41, key=2)
 
     rows, tops = [], []
     for gi, (dskey, dsname, ncam) in enumerate(DATASETS):
@@ -105,7 +108,7 @@ def main():
 
     hi = max(t for _, t, _ in tops)
     for x, top, color in tops:
-        ax.text(x, top + hi * 0.03, f"{top:.0f}", ha="center", va="bottom", fontsize=7,
+        ax.text(x, top + hi * 0.04, f"{top:.0f}", ha="center", va="bottom", fontsize=7,
                 fontweight="bold", color=color)
 
     ax.set_ylim(0, hi * 1.35)
@@ -127,8 +130,8 @@ def main():
             fontsize=6.5, color=MUTED, va="top", ha="left")
 
     df = pd.DataFrame(rows)
-    deposit(df, 7, "fig7f_runtime.csv")
-    save(fig, 7, "f", "runtime")
+    deposit(df, 7, "fig7h_runtime.csv")
+    save(fig, 7, "h", "runtime")
 
 
 if __name__ == "__main__":

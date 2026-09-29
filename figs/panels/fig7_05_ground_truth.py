@@ -17,12 +17,12 @@ can be settled on real data:
 The synthetic session settles both: the board is exactly planar (so there is no board
 error to absorb) and the true intrinsics and poses are known. Its ground truth is built
 to contain precisely what aniposelib's model cannot express -- a principal point a median
-19.7 px off the image centre, fy != fx by up to 7 %, and k2 = 0.05.
+19.7 px off the image center, fy != fx by up to 7 %, and k2 = 0.05.
 
 WHAT IS AND IS NOT INFORMATIVE HERE. Δcx,cy and Δk2 for Anipose mostly recover the values
 it PINS, so they are near-tautological and are drawn pale. The load-bearing bars are the
 ones both tools estimate freely: the focal length, and the two 3D quantities -- camera
-centre after a similarity fit, and the scale error.
+center after a similarity fit, and the scale error.
 
 A LOG AXIS WITH TWO UNITS ON IT would be dishonest, so the panel is split: the left group
 is dimensionless (%), the right is what it costs in 3D.
@@ -41,7 +41,7 @@ from matplotlib.colors import to_rgba  # noqa: E402
 from src.data_loader import load  # noqa: E402
 from src.style import MUTED, deposit, panel, save, text_legend, use  # noqa: E402
 
-PANELS = [("g", "ground_truth")]
+PANELS = [("i", "ground_truth")]
 
 #: (deposit key, printed label, is it a parameter the arm FITS FREELY?). The pinned ones
 #: are drawn pale: reporting that a pinned parameter is wrong by its pinned amount is
@@ -50,11 +50,11 @@ PANELS = [("g", "ground_truth")]
 #: carries one unit. The pinned ones (principal point, k2) are deliberately NOT drawn:
 #: reporting that a pinned parameter is wrong by exactly its pinned amount is true and
 #: uninformative, and it would be the tallest bar on the panel. They are in the CSV and
-#: the legend quotes them. Camera-centre error is expressed against the median true
+#: the legend quotes them. Camera-center error is expressed against the median true
 #: camera-pair distance, so "how far off is the rig" is comparable with "how wrong is
 #: the focal length"; the absolute millimetres are deposited beside it.
 METRICS = [("d_fx", "focal\nlength", True),
-           ("centre_pct", "camera\ncentre", True),
+           ("centre_pct", "camera\ncenter", True),
            ("scale_pct", "rig\nscale", True)]
 ARMS = [("calibrat3", "calibrat3"), ("anipose", "Anipose")]
 OFFSET = {"calibrat3": -0.19, "anipose": 0.19}
@@ -68,7 +68,7 @@ def main():
         raise SystemExit("fig7_calibration.json has no `synthetic` block; run "
                          "figs/fig7_calib_deposit_extra.py")
 
-    fig, ax = panel("quarter", "std", key=2)
+    fig, ax = panel("third", 41, key=2)
     rows = []
     for arm, aname in ARMS:
         a = syn["arms"].get(arm)
@@ -90,8 +90,8 @@ def main():
     ax.set_ylabel("error vs ground truth (%)")
     ax.axvline(0.5, color=MUTED, lw=0.6, ls=(0, (2, 2)), zorder=1)
     text_legend(ax, [(n, ARM_COLOR[k]) for k, n in ARMS], loc="above", size=6.5, dy=0.05)
-    deposit(pd.DataFrame(rows), 7, "fig7g_ground_truth.csv")
-    save(fig, 7, "g", "ground_truth")
+    deposit(pd.DataFrame(rows), 7, "fig7i_ground_truth.csv")
+    save(fig, 7, "i", "ground_truth")
 
 
 if __name__ == "__main__":

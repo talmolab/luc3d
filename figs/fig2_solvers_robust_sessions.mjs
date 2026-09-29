@@ -86,6 +86,7 @@ const t0 = Date.now();
 for (const b of data.blocks) {
     const { cameras, Ps } = calSets[b.calibration || 0];
     let n = 0, sumB = 0, sumA = 0;
+    let nR = 0, sumBR = 0, sumAR = 0;   // REFINED arm (added 2026-09-29), see below
     const hi = Math.min(NK, b.offset + b.count);
     for (let k = b.offset; k < hi; k++) {
         const raw = obsAt(k);
@@ -114,12 +115,43 @@ for (const b of data.blocks) {
             const s = strata[name];
             if (worst >= s[0] && worst < s[1]) { s[2]++; s[3] += before; s[4] += after; }
         }
+        // REFINED arm (added 2026-09-29 so Fig 2E bottom shows both solvers). The same
+        // operation with the refined solver throughout: solve from all views (seeded by
+        // the DLT, as the app does), drop the view that fits the REFINED solution worst,
+        // re-solve refined from the rest (seeded by the DLT of the kept views), and score
+        // both on the kept views with the same nativeError. Runs strictly AFTER the DLT
+        // arm, so the DLT numbers and their gate are unchanged.
+        const Xba = tri.triangulatePointBA(raw, Ps, Xdlt, { cameras });
+        if (Xba) {
+            let wR = 0, wIdx = -1;
+            for (let ci = 0; ci < C; ci++) {
+                if (!raw[ci]) continue;
+                const ideal = tri.reprojectPoint(Xba, Ps[ci]);
+                if (!ideal) continue;
+                const q = cameras[ci].distortPoint(ideal);
+                const dv = Math.hypot(q[0] - raw[ci][0], q[1] - raw[ci][1]);
+                if (dv > wR) { wR = dv; wIdx = ci; }
+            }
+            if (wIdx >= 0) {
+                const keptR = raw.map((p, ci) => (ci === wIdx ? null : p));
+                const keptRU = und.map((p, ci) => (ci === wIdx ? null : p));
+                const seed = tri.triangulatePointDLT(keptRU, Ps);
+                const XbaDrop = seed ? tri.triangulatePointBA(keptR, Ps, seed, { cameras }) : null;
+                const bR = nativeError(Xba, keptR, cameras, Ps);
+                const aR = nativeError(XbaDrop, keptR, cameras, Ps);
+                if (bR != null && aR != null) { nR++; sumBR += bR; sumAR += aR; }
+            }
+        }
     }
     perSession.push({ session: b.session, n,
                       all_views_px: n ? sumB / n : null,
-                      worst_dropped_px: n ? sumA / n : null });
+                      worst_dropped_px: n ? sumA / n : null,
+                      n_refined: nR,
+                      refined_all_views_px: nR ? sumBR / nR : null,
+                      refined_worst_dropped_px: nR ? sumAR / nR : null });
     console.log(`${b.session}: n=${n} before=${(sumB / n).toFixed(3)} ` +
-                `after=${(sumA / n).toFixed(3)} (${((Date.now() - t0) / 1000) | 0}s)`);
+                `after=${(sumA / n).toFixed(3)}  refined ${(sumBR / nR).toFixed(3)} -> ` +
+                `${(sumAR / nR).toFixed(3)} (${((Date.now() - t0) / 1000) | 0}s)`);
 }
 
 // GATE against the deposit's pooled strata means.
@@ -143,7 +175,9 @@ fs.writeFileSync(path.join(HERE, 'out', 'fig4_robust_sessions.json'), JSON.strin
     generated_by: 'figs/fig2_solvers_robust_sessions.mjs',
     claim: 'Per-session mean reprojection error in the kept views: the all-view DLT ' +
            'solution vs the same solve with the worst-fitting view dropped. Session ' +
-           'capture of the same computation fig4.json pools into disagreement strata.',
+           'capture of the same computation fig4.json pools into disagreement strata. ' +
+           'refined_*: the same operation with the refined solver throughout (worst view ' +
+           'chosen by the refined residual), added 2026-09-29.',
     gate: { passed: ok, ...gate },
     per_session: perSession,
 }, null, 1));

@@ -1,0 +1,34 @@
+# Fig 7 re-measured with BOTH detectors on OpenCV 4.13.
+# The published figure ran calibrat3 on OpenCV.js 4.13.0 and aniposelib on OpenCV 5.0.0.
+# OpenCV 5 moved the ChArUco corner origin by +0.5 px in x and y, which charged calibrat3
+# a half-pixel penalty it did not owe. See calibrat3/CHARUCO-OPENCV5-CONVENTION.md.
+rig,session,cameras,arm,median_px,mean_px,p95_px,n_obs,note
+md10,20250514_134355,5,calibrat3,0.071,0.078,0.16,1024032,held out
+md10,20250514_134355,5,anipose,0.084,0.095,0.21,1024032,held out
+md10,20250711_144058,5,calibrat3,0.078,0.088,0.19,1006547,held out
+md10,20250711_144058,5,anipose,0.095,0.109,0.24,1006547,held out
+md10,20250904_115350,5,calibrat3,0.066,0.073,0.15,968540,held out
+md10,20250904_115350,5,anipose,0.080,0.092,0.20,968540,held out
+md10,20251002_150512,5,calibrat3,0.060,0.066,0.14,621911,held out
+md10,20251002_150512,5,anipose,0.096,0.115,0.27,621911,converged draw; 3 of 6 draws diverged
+md10,20260420_143828,5,calibrat3,0.063,0.070,0.14,608760,held out
+md10,20260420_143828,5,anipose,0.103,0.121,0.28,608760,held out
+slap8,10072022120554,8,calibrat3,0.089,0.210,0.50,1265930,tuning recording
+slap8,10072022120554,8,anipose,0.315,1.757,5.46,1265930,tuning recording
+slap8,10192022174304,8,calibrat3,0.109,0.210,0.50,1322947,held out
+slap8,10192022174304,8,anipose,0.320,2.622,10.56,1322947,held out
+slap8,10212022155401,8,calibrat3,0.105,0.226,0.58,878988,held out
+slap8,10212022155401,8,anipose,0.295,1.848,6.82,878988,held out
+slap8,10302022010116,8,calibrat3,0.110,0.236,0.67,780590,held out
+slap8,10302022010116,8,anipose,0.356,2.758,11.64,780590,held out
+calib18,calib18,18,calibrat3,0.212,0.345,0.81,645451,
+calib18,calib18,18,anipose,1.280,1.914,4.84,645451,
+# calib18 ablation, re-scored on unified-OpenCV corners (calibrat3 calibrations unchanged;
+# only the scoring detection set moved from OpenCV 5.0 to 4.13).
+calib18_ablation,calib18,18,default,0.212,0.338,0.80,644539,
+calib18_ablation,calib18,18,no-rejection,0.252,0.344,0.87,644539,
+calib18_ablation,calib18,18,anipose-model,0.868,2.190,6.14,644539,
+calib18_ablation,calib18,18,anipose-model-no-rejection,1.275,1.641,4.13,644539,
+calib18_ablation,calib18,18,intrinsics-fixed,1.235,1.750,4.95,644539,
+calib18_ablation,calib18,18,no-board-term,0.212,0.338,0.80,644539,
+calib18_ablation,calib18,18,anipose,1.278,1.882,4.80,644539,

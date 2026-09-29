@@ -1,0 +1,8 @@
+rig,arm,label,median_px_all,median_px_heldout
+calib18,anipose,Anipose,1.277665376663208,1.274224206811221
+calib18,abl_intrinsics-fixed,"calibrat3, intrinsics fixed",1.2354936599731445,1.231784520603649
+calib18,abl_anipose-model,"calibrat3, Anipose's intrinsics",0.8681397438049316,0.8661763427621993
+calib18,abl_anipose-model-no-rejection,…and no rejection,1.2753682136535645,1.2726922439344073
+calib18,abl_no-board-term,"calibrat3, no board term",0.21185940504074097,0.21131914208345054
+calib18,abl_no-rejection,"calibrat3, no rejection",0.25192615389823914,0.2513459001688083
+calib18,abl_default,"calibrat3, default",0.2118663489818573,0.21131804162518664

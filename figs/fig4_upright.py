@@ -53,6 +53,7 @@ EDGES = [[3, 5], [3, 7], [3, 8], [3, 9], [3, 12], [3, 13], [3, 6], [5, 0],
          [5, 14], [5, 10], [5, 11], [5, 1], [5, 2], [3, 4]]
 
 REAR_FRAC, NEAR_BL = 0.75, 2.0
+REAR_MODE, REAR_ABS_MM = None, 60.0     # see session_upright; controls only
 MIN_EVENT_S, MERGE_GAP_S = 0.25, 0.15
 WIN_S = 2.0
 SPEED_WIN_S = 0.20        # smoothing for the speed estimate
@@ -143,7 +144,16 @@ def session_upright(t, fps, names, code, session):
                                                  axis=-1)))
                for sl in (slice(0, half), slice(half, F))] for a in range(2)]
 
-    rear = np.stack([neck[:, a, 2] / L[a] > REAR_FRAC for a in range(2)], axis=1)
+    # REAR_MODE is a hook for the height-threshold controls (figs/fig4_controls.py):
+    # None is the published per-animal rule, "abs" an absolute neck height in mm shared
+    # by both animals (REAR_ABS_MM), "shared" the per-animal fraction applied to the
+    # pair's mean body length. Nothing else in the detector changes.
+    if REAR_MODE == "abs":
+        rear = np.stack([neck[:, a, 2] > REAR_ABS_MM for a in range(2)], axis=1)
+    elif REAR_MODE == "shared":
+        rear = np.stack([neck[:, a, 2] / Lm > REAR_FRAC for a in range(2)], axis=1)
+    else:
+        rear = np.stack([neck[:, a, 2] / L[a] > REAR_FRAC for a in range(2)], axis=1)
     _v = neck - tti
     ang = np.degrees(np.arctan2(_v[:, :, 2], np.linalg.norm(_v[:, :, :2], axis=-1)))
     sep = np.linalg.norm(tti[:, 0, :] - tti[:, 1, :], axis=-1) / Lm
@@ -256,7 +266,13 @@ def session_upright(t, fps, names, code, session):
         for a in range(2):
             cand = [bs for bs in own[a] if bs[0] <= s < bs[1]]
             onsets.append(cand[-1][0] if cand else None)
-        if None in onsets:
+        # AN EXACT TIE HAS NO INITIATOR (2026-09-20). The earlier rule credited a
+        # tie to slot 1, which in this corpus is always the female. A slot-swap
+        # control (figs/fig4_slot_swap_control.py) found the four displays where the
+        # two bouts start on the same frame were the only place the pipeline was not
+        # symmetric in the two slots. They are now `None`, like a display whose bouts
+        # cannot be identified, and drop out of every initiator count.
+        if None in onsets or onsets[0] == onsets[1]:
             init_a, lag_s = None, None
         else:
             init_a = 0 if onsets[0] < onsets[1] else 1

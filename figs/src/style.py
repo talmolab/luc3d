@@ -401,7 +401,10 @@ def panel(span="third", row="std", *, left: bool = False, bottom: bool = False,
         # the key is inside the data area and lands on the curves it names -- the
         # single most common collision in the first pass, and one no text-vs-text
         # check can see. `key` is the number of entries.
-        fig.get_layout_engine().set(rect=(0, 0, 1, 1 - (0.052 * key + 0.02)))
+        # Reserve 2.7 mm per entry plus 1.04 mm, in mm rather than a height
+        # fraction, so the band still holds the key on a squashed row.
+        # At h = 52 mm this is exactly the old 0.052 * key + 0.02.
+        fig.get_layout_engine().set(rect=(0, 0, 1, 1 - (2.7 * key + 1.04) / h))
     sns.despine(ax=ax, left=left, bottom=bottom, top=True, right=True)
     if left:
         ax.tick_params(axis="y", length=3)
@@ -467,7 +470,12 @@ def text_legend(ax, entries, loc="above", *, dy=0.105, size=None,
         transform = ax.figure.transFigure
         x = 0.14 if loc == "above" else 0.98
         y = 0.985
-        dy = 0.052
+        # 2.7 mm line pitch, not a fixed figure fraction. These are FIGURE
+        # coordinates, so a fraction shrinks with the panel: at the 52 mm standard
+        # row 0.052 is 2.7 mm, but on a squashed row it collapsed and the entries
+        # overlapped (lint_text: 'calibrat3' x 'Anipose'). 2.7/52 == 0.0519, so
+        # every existing panel is unchanged.
+        dy = 2.7 / (ax.figure.get_figheight() * 25.4)
         va = "top"
         up = False
     transform = ax.transAxes if transform is None else transform

@@ -271,7 +271,7 @@ def main(variant=False, corrected=True, fresh_arm=False):
         wlo = vals[vals >= q1 - 1.5 * (q3 - q1)].min()
         whi = vals[vals <= q3 + 1.5 * (q3 - q1)].max()
         up = med > 0
-        ax.annotate(f"{med:+.3f}", (i, whi if up else wlo),
+        ax.annotate((f"{med:+.3f}" if round(med, 3) != 0 else "0.000"), (i, whi if up else wlo),
                     textcoords="offset points", xytext=(0, 5 if up else -5),
                     color=color, fontsize=COMPACT_FS, ha="center",
                     va="bottom" if up else "top")

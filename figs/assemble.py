@@ -119,7 +119,7 @@ TITLES = {
     (4, "a"): "3D pose and 2D camera views for social rearing behavior",
     (4, "b"): "Both rise, noses converge — female reaches higher",
     (4, "c"): "One animal is up first",
-    (4, "d"): "Female is still; male is travelling",
+    (4, "d"): "Female is still; male is traveling",
     (4, "e"): "Male is pursuing female",
     (4, "f"): "Female initiates displays",
     (4, "g"): "Female rears first; male mostly joins in",
@@ -142,13 +142,15 @@ TITLES = {
     (6, "e"): "The tracker's 2D and 3D anchor correspondence",
     (6, "f"): "Staleness horizon sweep on Mouse-Dyad-10M sessions",
     # Fig 7 (calibration benchmark; calibrat3 vs Anipose on two real rigs).
-    (7, "a"): "Reprojection error, 8-camera rig",
-    (7, "b"): "Per camera, 8-camera rig",
-    (7, "c"): "Reprojection error, 18-camera rig",
-    (7, "d"): "Per camera, 18-camera rig",
-    (7, "e"): "What the difference is made of",
-    (7, "f"): "Time to calibrate",
-    (7, "g"): "Recovered vs known cameras",
+    (7, "a"): "Reprojection error, SLAP-2M rig",
+    (7, "b"): "Per camera, SLAP-2M rig",
+    (7, "c"): "Reprojection error, Mouse-Dyad-10M rig",
+    (7, "d"): "Per camera, Mouse-Dyad-10M rig",
+    (7, "e"): "Reprojection error, 18-camera rig",
+    (7, "f"): "Per camera, 18-camera rig",
+    (7, "g"): "Solver ablation, 18-camera rig",
+    (7, "h"): "Time to calibrate",
+    (7, "i"): "Recovered vs known cameras",
 }
 TITLE_PT = 7.5            # panel titles, below the 9 pt letter
 
@@ -282,9 +284,10 @@ LAYOUTS = {
     # that can ask whether the CAMERA was recovered rather than whether the corners were
     # fitted, which is what answers the "richer model just absorbs board error" objection
     # that reprojection error cannot.
-    7: [[("a", "error_cdf_cal_test2"), ("b", "per_camera_cal_test2")],
-        [("c", "error_cdf_calib18"), ("d", "per_camera_calib18")],
-        [("e", "mechanism"), ("f", "runtime"), ("g", "ground_truth")]],
+    7: [[("a", "error_cdf_slap8"), ("b", "per_camera_slap8")],
+        [("c", "error_cdf_md10"), ("d", "per_camera_md10")],
+        [("e", "error_cdf_calib18"), ("f", "per_camera_calib18")],
+        [("g", "mechanism"), ("h", "runtime"), ("i", "ground_truth")]],
 }
 
 

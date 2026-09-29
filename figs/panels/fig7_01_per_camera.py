@@ -49,6 +49,7 @@ import sys
 from pathlib import Path
 
 import numpy as np
+import matplotlib.ticker as mticker
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -57,11 +58,11 @@ from matplotlib.colors import to_rgba  # noqa: E402
 from src.data_loader import load  # noqa: E402
 from src.style import MUTED, deposit, panel, save, text_legend, use  # noqa: E402
 
-LETTERS = {"slap8": "b", "calib18": "d"}
+LETTERS = {"slap8": "b", "md10": "d", "calib18": "f"}
 
 #: (letter, slug) this script draws, spelled as literals -- see the note in
 #: `fig7_00_error_cdf.py` for why a computed `save()` needs them.
-PANELS = [("b", "per_camera_slap8"), ("d", "per_camera_calib18")]
+PANELS = [("b", "per_camera_slap8"), ("d", "per_camera_md10"), ("f", "per_camera_calib18")]
 
 
 #: TWO ARMS HERE, THREE IN a/c. The solver-on-our-corners arm is the figure's
@@ -88,7 +89,7 @@ def draw(dskey, ds):
     # 2 of this figure are the same comparison on two rigs, so they are built the same
     # way -- CDF at a third, per-camera at two-thirds -- and the reader's eye can move
     # straight down from one rig's camera column to the other's.
-    fig, ax = panel("two-thirds", "std", key=2)
+    fig, ax = panel("two-thirds", 41, key=2)
 
     rows = []
     for arm in ARMS:
@@ -118,6 +119,10 @@ def draw(dskey, ds):
                capprops=dict(color=color, lw=0.7))
 
     ax.set_yscale("log")
+    # Minor tick LABELS off: a 41 mm row fits the decade labels and nothing else,
+    # and on the 5-camera rig the whole range sits inside one decade so matplotlib
+    # labels 2x/3x/4x and they collide (lint_text: "3 x 10" x "4 x 10").
+    ax.yaxis.set_minor_formatter(mticker.NullFormatter())
     ax.set_xlim(-0.6, len(cams) - 0.4)
     # The y label names the whisker convention, because "box and whisker" on a log
     # axis is ambiguous and a reader who assumes Tukey would misread the spread.
@@ -144,7 +149,7 @@ def main():
     use()
     rec = load("fig7_calibration.json")
     out = [draw(k, rec["datasets"][k]) for k in LETTERS if k in rec["datasets"]]
-    deposit(pd.concat(out), 7, "fig7bd_per_camera.csv")
+    deposit(pd.concat(out), 7, "fig7bdf_per_camera.csv")
 
 
 if __name__ == "__main__":

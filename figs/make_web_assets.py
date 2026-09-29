@@ -28,8 +28,14 @@ at build time.
 FIGURE NUMBERING NOW MATCHES THE REPO'S (2026-08-26 renumbering, Eric): the
 figure directories were renamed to the manuscript's own 1-6 (the old fig13 is
 fig3, fig5 is fig4, fig6 is fig5, fig11 is fig6; the old fig3/fig4/fig7-fig13
-compositions were removed from the branch). FIGURES is now the identity map,
-kept as a table so a future renumber has one place to change.
+compositions were removed from the branch). Fig 7 (calibrat3 against Anipose on
+three rigs) was added 2026-09 and is numbered natively. FIGURES is the identity
+map, kept as a table so a future renumber has one place to change.
+
+NOTE the manuscript draft (figures/drafts/luc3d_newest.tex) carries a GUI
+screenshot as its own Figure 7, so the calibration figure is \ref{fig8} THERE
+while it is figures/fig7 here and Figure 7 on the page. The page does not show
+the screenshot. Match by content, not by number, when reading captions.
 
     python3 figs/make_web_assets.py                       # default page repo path
     python3 figs/make_web_assets.py --page-repo /path/to/luc3d-page
@@ -58,6 +64,7 @@ FIGURES = [
     (4, "fig4"),
     (5, "fig5"),
     (6, "fig6"),
+    (7, "fig7"),
 ]
 
 #: The dpi the composites are rendered at by `assemble.py` (its PNG proof). Recorded
@@ -71,6 +78,17 @@ def git_commit(path: Path) -> str:
                               capture_output=True, text=True, check=True).stdout.strip()
     except Exception:
         return "unknown"
+
+
+def git_dirty(path: Path) -> bool:
+    """True if anything under figs/figures/ differs from HEAD (so artwork_commit
+    alone does not identify what was exported)."""
+    try:
+        out = subprocess.run(["git", "-C", str(path), "status", "--porcelain", "--",
+                              "figures"], capture_output=True, text=True, check=True).stdout
+        return bool(out.strip())
+    except Exception:
+        return False
 
 
 def digest(p: Path) -> str:
@@ -99,6 +117,7 @@ def main() -> int:
         "generated_by": "figs/make_web_assets.py",
         "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "artwork_commit": git_commit(FIGS),
+        "artwork_dirty": git_dirty(FIGS),
         "proof_dpi": PROOF_DPI,
         "note": "PNGs are assemble.py's 300 dpi proofs, imported through Astro's "
                 "image pipeline; the vector PDF is served from public/pdf/ for the "

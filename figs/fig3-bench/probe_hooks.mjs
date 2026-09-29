@@ -17,7 +17,7 @@
 // UI stubs (ui/settings.js, ui/app-state.js, ...) before this one sees them, so the log
 // is the set of REAL modules loaded, which is exactly the set the claim is about.
 import fs from 'node:fs';
-import { load as hook8Load } from '../fig8-bench/hooks8.mjs';
+import { load as hook8Load } from '../fig6-bench/hooks6.mjs';   // was ../fig8-bench/hooks8.mjs, renamed in the supplementary renumbering
 
 const LOG = process.env.PROBE_LOADLOG;
 

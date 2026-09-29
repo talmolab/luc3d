@@ -38,14 +38,14 @@ from src.style import INK, MUTED, deposit, panel, save, text_legend, use  # noqa
 
 #: Panel letter per dataset. a is the 8-camera rig, c the 18-camera one; each sits at
 #: the head of its own row, with that rig's per-camera panel beside it.
-LETTERS = {"slap8": "a", "calib18": "c"}
+LETTERS = {"slap8": "a", "md10": "c", "calib18": "e"}
 
 #: (letter, slug) this script draws, SPELLED AS LITERALS. `assemble.stale()` and
 #: `make_docs.py` attribute a panel to its script by searching the source for the exact
 #: text `"a", "error_cdf_cal_test2"`, and this file's `save()` call builds both the
 #: letter and the slug from the dataset key -- so without this constant both tools
 #: report the panels as MISSING and PANEL-SOURCES.md loses the rows.
-PANELS = [("a", "error_cdf_slap8"), ("c", "error_cdf_calib18")]
+PANELS = [("a", "error_cdf_slap8"), ("c", "error_cdf_md10"), ("e", "error_cdf_calib18")]
 
 
 
@@ -70,7 +70,7 @@ def draw(dskey, ds):
     # KEY=3 RESERVES THE BAND ABOVE THE AXES for the three arm names. Without it the
     # stack lands on the curves' own upper-left corner, which is exactly where the
     # low-error arm goes vertical.
-    fig, ax = panel("third", "std", key=3)
+    fig, ax = panel("third", 41, key=3)
     rows = []
     # ONE THIN CURVE PER RECORDING, under the pooled one. The 8-camera rig has FOUR
     # distinct calibration recordings (the SLAP-2M tree looks like it has dozens, but
@@ -100,10 +100,17 @@ def draw(dskey, ds):
     ax.set_yticks([0, 25, 50, 75, 100])
     ax.set_xlabel("reprojection error (px)")
     ax.set_ylabel("observations ≤ error (%)")
+    # 4.42 mm line pitch (== 0.085 of the 52 mm standard row), expressed against the
+    # real height so the three stat lines do not pile up on a squashed row.
+    STAT_DY = 6.4 / (fig.get_figheight() * 25.4)
+
     # The median rule is the one annotation that turns a shape into a number a reader
     # can quote. Grey, thin, behind the data: it is a reading aid, not a result.
     ax.axhline(50, color=MUTED, lw=0.6, ls=(0, (1.5, 1.5)), zorder=1)
-    ax.text(0.054, 52, "median", color=MUTED, fontsize=6.5, va="bottom")
+    # The rule is NOT labelled. The y axis already reads 50, and at a 41 mm row every
+    # placement collides: left-anchored it sits on the curves (the Mouse-Dyad rig is
+    # past 50% by 0.1 px), right-anchored it hits the median | p95 block. The caption
+    # names it instead.
 
     # MEDIAN AND p95, not the median alone -- on the 8-camera rig THE CURVES CROSS:
     # Anipose is lower at the median and several times worse above it, so a panel that
@@ -111,11 +118,11 @@ def draw(dskey, ds):
     # be a dead heat and stay silent about the half that is not. The two numbers are
     # the two places a reader's eye already lands on a CDF.
     for i, (key, name, color, filled, x, y, o) in enumerate(curves(ds)):
-        ax.text(0.97, 0.06 + 0.085 * (len(ARMS) - 1 - i),
+        ax.text(0.97, 0.06 + STAT_DY * (len(ARMS) - 1 - i),
                 f"{'– – ' if not filled else ''}{o['med']:.2f} | {o['p95']:.2f}",
                 transform=ax.transAxes, color=color, fontweight="bold", fontsize=7,
                 ha="right", va="bottom")
-    ax.text(0.97, 0.06 + 0.085 * len(ARMS), "median | p95 (px)", transform=ax.transAxes,
+    ax.text(0.97, 0.06 + STAT_DY * len(ARMS), "median | p95 (px)", transform=ax.transAxes,
             color=MUTED, fontsize=6.5, ha="right", va="bottom")
 
     # 6.2 pt, not the house 8: the third entry names a library AND a configuration
@@ -125,14 +132,10 @@ def draw(dskey, ds):
     # SAY HOW MANY RECORDINGS, because the thin per-recording curves sit almost on top
     # of the pooled one and a reader would otherwise read a single recording. The spread
     # IS the replication result, so it is quoted rather than left to be squinted at.
-    recs = ds.get("recordings") or {}
-    if recs:
-        held = sum(1 for r in recs.values() if not r.get("tuning"))
-        meds = [r["arms"]["calibrat3_800"]["overall"]["med"] for r in recs.values()
-                if "calibrat3_800" in r["arms"]]
-        ax.text(0.015, 0.985, f"{len(recs)} recordings ({held} held out)\n"
-                              f"calibrat3 median {min(meds):.2f}–{max(meds):.2f} px",
-                transform=ax.transAxes, fontsize=6.0, color=MUTED, va="top", ha="left")
+    # REMOVED 2026-09-17 (Eric): the recording count and the per-recording median range
+    # collided with the "median" rule label and the curves at the shorter row height.
+    # Both numbers live in the caption and in data/fig7/fig7ace_error_cdf.csv; the thin
+    # per-recording lines still show the spread.
     # THE KEY NAMES ONLY WHAT THIS PANEL DRAWS. The solver-on-our-corners arm exists for
     # the 18-camera rig and not for the 8-camera recordings, and a key advertising a
     # dashed curve that is not on the panel is worse than no key.
@@ -152,7 +155,7 @@ def main():
         if ds is None:
             raise SystemExit(f"fig7_calibration.json has no dataset {dskey!r}")
         out.append(draw(dskey, ds))
-    deposit(pd.concat(out), 7, "fig7ac_error_cdf.csv")
+    deposit(pd.concat(out), 7, "fig7ace_error_cdf.csv")
 
 
 if __name__ == "__main__":

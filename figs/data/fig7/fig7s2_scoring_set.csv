@@ -1,5 +1,1 @@
-dataset,cameras,arm,scored_on,median_px
-calib18,18,calibrat3,anipose detections,0.4724162817001343
-calib18,18,calibrat3,calibrat3 detections,0.20538026094436646
-calib18,18,anipose,anipose detections,1.2738233804702759
-calib18,18,anipose,calibrat3 detections,1.3723702430725098
+

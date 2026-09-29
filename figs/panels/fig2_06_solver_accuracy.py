@@ -36,6 +36,7 @@ vertical room:
     python3 figs/panels/fig2_06_solver_accuracy.py
 """
 import sys
+import numpy as np
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -71,24 +72,38 @@ def draw_accuracy(ax, df):
                color=COLOR[key], fontweight="bold", fontsize=6.5, ha="left", va="top")
 
 
-def draw_worst_camera(ax, df, ci, d, tcrit):
-    x = [0, 1]
-    color = TEAL   # same series as the top axis' "refined" -- see docstring.
-    mean_b, mean_a = float(df.all_views_px.mean()), float(df.worst_dropped_px.mean())
-    ax.plot(x, [mean_b, mean_a], color=color, lw=1.8, zorder=4)
-    ax.errorbar(x, [mean_b, mean_a],
-                yerr=[[mean_b - ci["all_views_px"][0], mean_a - ci["worst_dropped_px"][0]],
-                      [ci["all_views_px"][1] - mean_b, ci["worst_dropped_px"][1] - mean_a]],
-                fmt="none", ecolor=INK, elinewidth=0.9, capsize=2.4, capthick=0.9, zorder=4)
-    ax.plot(x, [mean_b, mean_a], "o", color=color, ms=5, mec="white", mew=0.9, zorder=5)
+def draw_worst_camera(ax, df, tcrit):
+    """Both solvers (2026-09-29, Eric: "lets use both solvers for 2e"). Each solver's
+    all-view solve vs the same solver with its own worst-fitting view dropped, scored on
+    the kept views (`figs/fig2_solvers_robust_sessions.mjs`: DLT columns unchanged,
+    `refined_*` columns added). Mean over sessions with a t-based 95% CI, as before.
+    Colours as the top axis: SALMON = DLT, TEAL = refined."""
+    x = np.array([0, 1])
+    series = [("DLT", SALMON, "all_views_px", "worst_dropped_px", -0.06),
+              ("refined", TEAL, "refined_all_views_px", "refined_worst_dropped_px", 0.06)]
+    lo_all, hi_all, notes = [], [], []
+    for name, color, cb, ca, dx in series:
+        if cb not in df or df[cb].isna().all():
+            sys.exit(f"fig2e: no {name} series in fig4_robust_sessions.json -- re-run "
+                     "figs/fig2_solvers_robust_sessions.mjs")
+        m = np.array([df[cb].mean(), df[ca].mean()])
+        h = np.array([tcrit * df[cb].sem(), tcrit * df[ca].sem()])
+        ax.errorbar(x + dx, m, yerr=h, fmt="none", ecolor=color, elinewidth=0.9,
+                    capsize=2.4, capthick=0.9, zorder=4)
+        ax.plot(x + dx, m, color=color, lw=1.8, zorder=4)
+        ax.plot(x + dx, m, "o", color=color, ms=5, mec="white", mew=0.9, zorder=5)
+        lo_all.append((m - h).min()); hi_all.append((m + h).max())
+        d = df[ca] - df[cb]
+        notes.append((name, color, float(d.mean()), int((d < 0).sum()), len(df)))
     ax.set_xticks(x)
     ax.set_xticklabels(["all views", "worst dropped"], fontsize=6.5)
     ax.set_xlim(-0.35, 1.35)
     ax.set_ylabel("kept-view (px)", fontsize=7)
-    ax.set_ylim(1.0, ci["all_views_px"][1] * 1.12)
-    ax.text(0.5, 0.02, f"paired {d.mean():+.3f} px, lower in "
-                      f"{int((d < 0).sum())}/{len(df)} sessions",
-           transform=ax.transAxes, ha="center", va="bottom", fontsize=6, color=INK)
+    lo, hi = min(lo_all), max(hi_all)
+    ax.set_ylim(lo - 1.6 * (hi - lo), hi + 0.15 * (hi - lo))
+    for k, (name, color, dm, nl, n) in enumerate(notes):
+        ax.text(0.5, 0.03 + 0.17 * (len(notes) - 1 - k), f"{name} {dm:+.3f} px, lower in {nl}/{n}",
+                transform=ax.transAxes, ha="center", va="bottom", fontsize=6, color=color)
 
 
 def main():
@@ -102,15 +117,11 @@ def main():
     df_c = fig4c.pd.DataFrame(ps)
     from scipy import stats
     tcrit = float(stats.t.ppf(0.975, len(df_c) - 1))
-    ci = {c: (float(df_c[c].mean() - tcrit * df_c[c].sem()),
-             float(df_c[c].mean() + tcrit * df_c[c].sem()))
-         for c in ("all_views_px", "worst_dropped_px")}
-    d = df_c.worst_dropped_px - df_c.all_views_px
 
     fig, (ax_top, ax_bot) = grid(2, 1, span="third", row="std")
     fig.get_layout_engine().set(rect=(0, 0, 1, 0.86), hspace=0.12)
     draw_accuracy(ax_top, df_b)
-    draw_worst_camera(ax_bot, df_c, ci, d, tcrit)
+    draw_worst_camera(ax_bot, df_c, tcrit)
     save(fig, 2, "e", "solver_accuracy")
 
 

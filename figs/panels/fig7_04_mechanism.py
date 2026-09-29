@@ -62,7 +62,7 @@ ROWS = [
     ("abl_anipose-model-no-rejection", "…and no rejection"),
     ("abl_no-board-term", "calibrat3, no board term"),
     ("abl_no-rejection", "calibrat3, no rejection"),
-    ("abl_default", "calibrat3, as shipped"),
+    ("abl_default", "calibrat3, default"),
 ]
 
 
@@ -77,7 +77,11 @@ def main():
 
     # HALF, not two-thirds: row 3 carries three panels once the scoring-set result
     # earned a place on the artwork (88 + 42 + 42 + 2 gutters = 180 mm).
-    fig, ax = panel("half", "std", key=2)
+    # THIRD width, not half: at half the x axis ran to 86.9 mm while a, c and e end at
+    # 56.3 mm, so the bottom row did not line up with the three rig rows above it
+    # (Eric, 2026-09-17). At a third the axis ends at the same place, and the width
+    # freed lets h and i become thirds too. key=0: the panel no longer has a legend.
+    fig, ax = panel("third", 41, key=0)
     # A CONFIGURATION THE SOLVER DECLINED IS A MISSING ROW, NOT A DEAD BUILD. runSba
     # keeps the initial calibration when a refinement would make the re-triangulated
     # error worse, and writes no TOML; that is a legitimate outcome of an ablation
@@ -106,23 +110,38 @@ def main():
         # picture of "no generalization gap": same x, nothing hidden. Were a
         # configuration overfitting, its ring would simply sit to the right of its dot
         # and the connector would appear.
-        if h is not None:
-            ax.plot([a, h], [y, y], color=color, lw=0.8, alpha=0.55, zorder=2)
-            ax.plot([h], [y], marker="o", ms=8.0, lw=0, zorder=3, color=color,
-                    markerfacecolor="none", markeredgecolor=color, markeredgewidth=1.1)
-        ax.plot([a], [y], marker="o", ms=4.0, lw=0, zorder=4, color=color)
+        # HELD-OUT IS NOT DRAWN. It agrees with all-frames to 0.004 px, so the ring was
+        # concentric with its dot and read as a slightly fatter marker. The number is in
+        # the Results and in this panel's CSV, where it can be checked.
+        ax.plot([a], [y], marker="o", ms=4.5, lw=0, zorder=4, color=color)
         rows.append({"rig": RIG, "arm": key, "label": label,
                      "median_px_all": a, "median_px_heldout": h})
 
     ax.set_yticks(ys)
     ax.set_yticklabels([lbl for _, lbl in present], fontsize=7)
+    # Row labels wear their arm's colour, so "which of these is Anipose" is answered
+    # without reading. Same encoding as every other panel in the figure.
+    for tick, (key, _) in zip(ax.get_yticklabels(), present):
+        tick.set_color(ARM_COLOR["anipose"] if key == "anipose" else ARM_COLOR["calibrat3"])
     ax.set_ylim(-0.7, len(present) - 0.3)
     ax.tick_params(axis="y", length=0, pad=2.0)
     ax.set_xscale("log")
     ax.xaxis.set_major_locator(LogLocator(base=10, subs=(1.0, 2.0, 5.0), numticks=12))
     ax.xaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{v:g}"))
     ax.xaxis.set_minor_formatter(NullFormatter())
-    ax.set_xlabel("reprojection error, median (px)")
+    # SHORT LABEL: at a third width the axis is 23 mm and lint_text reported the long
+    # form clipped and silently truncated. Every value on this axis is a median.
+    ax.set_xlabel("median error (px)")
+    # SHORT AXIS. The log locator would otherwise run the axis out to the next round
+    # decade and leave the dots strung across the panel, which is a long way for the
+    # eye to carry a row label (Eric, 2026-09-17). Clipped to the data with a small
+    # margin, and a faint leader drawn on each row for the same reason.
+    lo = min(v for v in abl["all"].values() if v is not None)
+    hi_x = max(v for v in abl["all"].values() if v is not None)
+    ax.set_xlim(lo / 1.18, hi_x * 1.12)
+    for y in ys:
+        ax.plot([lo / 1.18, hi_x * 1.12], [y, y], color=MUTED, lw=0.35, alpha=0.30,
+                zorder=0, solid_capstyle="butt")
     # A rule at Anipose's value, so every row is read as a distance from the comparator
     # rather than as an absolute a reader has to hold in mind.
     ref = abl["all"].get("anipose")
@@ -130,14 +149,11 @@ def main():
         ax.axvline(ref, color=ARM_COLOR["anipose"], lw=0.7, ls=(0, (2.5, 1.5)), zorder=1)
     # The coincidence IS the result, so it is stated rather than left to be noticed:
     # a reader who sees only rings would otherwise assume the dots failed to draw.
-    gaps = [abs(abl["heldout"][k] - abl["all"][k]) for k, _ in present
-            if k in abl["heldout"]]
-    note = ("● all frames   ○ held out"
-            + (f"  (coincide: max gap {max(gaps):.3f} px)" if gaps and max(gaps) < 0.02
-               else "  (open = frames calibrat3 never saw)"))
-    text_legend(ax, [(note, INK)], loc="above", size=6.2, dy=0.048)
-    deposit(pd.DataFrame(rows), 7, "fig7e_mechanism.csv")
-    save(fig, 7, "e", "mechanism")
+    # No legend: one series of dots, coloured by arm, with the comparator drawn as a
+    # rule. Naming "all frames" and "held out" described a distinction the panel had
+    # stopped showing once the rings came off.
+    deposit(pd.DataFrame(rows), 7, "fig7g_mechanism.csv")
+    save(fig, 7, "g", "mechanism")
 
 
 if __name__ == "__main__":

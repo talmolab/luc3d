@@ -99,6 +99,17 @@ SHIPPED_KEY = "slap2m"
 REF_KEY = "slap2m_pre131_reference"
 FRESH_KEY = "slap2m_fresh_anchor"
 ARMS_KEY = "slap2m_arm_comparison"
+#: The FAIR comparison (2026-09-28, `figs/fig6_slap2m_fair.py`): all three trackers on
+#: the keeptrack pool, SLEAP capped at the session's animal count, ByteTrack
+#: never-retire + the no-GT stitch to that count. This is what Supp. Fig 6 B-D draws
+#: by default; `--pre-fair` renders the previous `slap2m_fresh_anchor` arm
+#: (predictions_h5s pool, uncapped SLEAP, 60-frame ByteTrack) under a `_prefair` slug.
+FAIR_KEY = "slap2m_fair"
+
+
+def _pre_fair():
+    import sys as _s
+    return "--pre-fair" in _s.argv
 
 #: Names on the artwork. Short enough for a key line (~50 characters at bold 8 pt in
 #: an 88 mm panel; `lint_text.truncated()` is the backstop) and each says what the arm
@@ -188,7 +199,12 @@ def arms(variant, corrected=True, fresh=False):
     t = load(VARIANT_SRC)
     _require_substituted(t)
     if fresh:
-        return t[FRESH_KEY], None, None, None
+        if _pre_fair():
+            return t[FRESH_KEY], None, None, None
+        if FAIR_KEY not in t:
+            sys.exit(f"{VARIANT_SRC} has no `{FAIR_KEY}` block -- run "
+                     f"figs/fig6_slap2m_fair.py --stage install (or pass --pre-fair)")
+        return t[FAIR_KEY], None, None, None
     return t[SHIPPED_KEY], None, None, None
 
 
@@ -204,6 +220,8 @@ def slug(base, variant, corrected=True, fresh=False):
     # `fresh` no longer takes a suffix -- it IS the manuscript panel (see
     # `flags`). `--no-fresh` writes the retired arm under `_prevdefault` so it
     # still cannot overwrite the placed PDF/PNG/CSV.
+    if fresh and _pre_fair():
+        return f"{base}_prefair"
     return base if fresh else f"{base}_prevdefault"
 
 
@@ -239,6 +257,10 @@ def pool_note():
     over the 42 multi-animal sessions; on keeptrack the same arm is
     flat-to-marginally-worse (+1.3% relative) while switches still fall 30%.
     """
+    if not _pre_fair():
+        return ("pool: keeptrack_h5s, all three trackers (fair re-run, "
+                "figs/fig6_slap2m_fair.py): SLEAP capped at the animal count, ByteTrack "
+                "never-retire + stitch to the animal count")
     return ("pool: predictions_h5s. On keeptrack_h5s the same 74 sessions score 0.899 "
             "within view and the fresh anchor's mislabelled-mass gain does NOT "
             "reproduce (flat to +1.3% worse; switches still -30%)")

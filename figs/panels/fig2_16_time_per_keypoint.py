@@ -90,27 +90,32 @@ OPTIM_AMORTISED_FRAMES = 4000
 
 
 def build() -> pd.DataFrame:
-    m = load("fig4.json")["methods"]
-    t = load("fig4_anipose.json")["timing"]
-    a, o = t["anipose"], t["anipose_optim"]
-    amort = [r["us_per_keypoint"] for r in o["sweep"]
-             if r["n_frames"] >= OPTIM_AMORTISED_FRAMES]
-    return pd.DataFrame([
-        {"solver": "DLT", "label": "DLT", "who": "ours", "kind": "linear",
-         "us_per_keypoint": m["dlt"]["us_per_keypoint"], "lo": None, "hi": None,
-         "config": "LUC3D, closed form"},
-        {"solver": "Anipose", "label": "Anipose", "who": "anipose", "kind": "linear",
-         "us_per_keypoint": a["us_per_keypoint"], "lo": None, "hi": None,
-         "config": "CameraGroup.triangulate (optim: false, ransac: false)"},
-        {"solver": "refined", "label": "refined", "who": "ours", "kind": "non-linear",
-         "us_per_keypoint": m["ba"]["us_per_keypoint"], "lo": None, "hi": None,
-         "config": "LUC3D refinement, soft-L1 + L1 polish, DLT-seeded"},
-        {"solver": "Anipose optim", "label": "Anipose\noptim", "who": "anipose",
-         "kind": "non-linear", "us_per_keypoint": o["us_per_keypoint"],
-         "lo": min(amort), "hi": max(amort),
-         "config": "CameraGroup.optim_points (optim: true), n-dependent"},
-    ])
+    """All four bars from ONE sitting (2026-09-29, `figs/fig2g_retime_all.py`).
 
+    The previous build mixed protocols: LUC3D from a single pass over ~17 M keypoints
+    (`fig4.json`), Anipose linear best-of-3 at n = 200,000, and Anipose optim ONE run
+    per size with aniposelib's defaults (smoothing on) on a shared, loaded host --
+    228.8 us/kp, about 1.6x slower than every re-timing since. The re-timing runs all
+    four interleaved in rounds (so external load hits all four equally), best round
+    per bar, single-threaded, same inputs and scopes: linear/DLT/refined at n =
+    200,000; Anipose optim at n = 345,000 (23,000 frames x 15 joints, one global solve)
+    with smoothing OFF, the variant used for accuracy (Methods). No whisker: the old
+    one was the range over session sizes and was never described in the caption.
+    """
+    d = load("fig2g_retime_all.json")
+    b = d["best_us_per_keypoint"]
+    row = lambda solver, label, who, kind, key, cfg: {
+        "solver": solver, "label": label, "who": who, "kind": kind,
+        "us_per_keypoint": b[key], "lo": None, "hi": None, "config": cfg}
+    return pd.DataFrame([
+        row("DLT", "DLT", "ours", "linear", "luc3d_dlt", "LUC3D, closed form"),
+        row("Anipose", "Anipose", "anipose", "linear", "anipose_linear",
+            "CameraGroup.triangulate (optim: false, ransac: false)"),
+        row("refined", "refined", "ours", "non-linear", "luc3d_refined",
+            "LUC3D refinement, soft-L1 + L1 polish, DLT-seeded"),
+        row("Anipose optim", "Anipose\noptim", "anipose", "non-linear", "anipose_optim_nosmooth",
+            "CameraGroup.optim_points (optim: true), scale_smooth=0, n = 345,000"),
+    ])
 
 def main():
     use()
