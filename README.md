@@ -35,8 +35,8 @@ https://luc3d.sleap.ai/
 ```
 
 The live site is the newest full release, updated whenever a release is
-published — pushes to `main` and pre-releases do not change it. The same build
-is also reachable by name:
+published — pushes to `main` and pre-releases do not change it. `/stable/` is an
+alias that redirects here:
 ```
 https://luc3d.sleap.ai/stable/
 ```

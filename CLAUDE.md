@@ -34,18 +34,24 @@ the origin is Pages.
 tree serves correctly from every path. Do not introduce origin-root-relative URLs
 (`/lib/...`); they 404 on every channel but root.
 
-- `/` — **the live page.** Newest **full release**, identical to `/stable/`.
-- `/stable/` — the same build as root, under a stable-by-name URL.
-- `/latest/` — newest release **including pre-releases**.
-- `/dev/` — every push to `main`.
+- `/` — **the live page.** Newest **full release**; the only place it is served.
+- `/stable/` — an **alias** that redirects to root. A lone `index.html`, not a
+  copy, so a deep link under it (`…/stable/tests/…`) 404s.
+- `/latest/` — newest release **including pre-releases**. A real copy.
+- `/dev/` — every push to `main`. A real copy.
 - `/pr/<n>/` — PR previews, owned by `pr-preview.yml`. `deploy.yml` never touches them.
 
 **Only a full release moves root.** A push to `main` goes to `/dev/` alone; a
 pre-release goes to `/latest/` alone; republishing an older release moves nothing
-(release channels only ever move forward). Root and `/stable/` are gated on the
-*identical* condition and written from the same staged tree in the same run, so
-they cannot disagree. `workflow_dispatch` with target `root` is the manual
-promote escape hatch.
+(release channels only ever move forward). The same run refreshes the `/stable/`
+alias, so the two can never point at different builds — there is only one build.
+`workflow_dispatch` with target `root` is the manual promote escape hatch.
+
+A target with a non-empty `redirect` is written as an alias (one `index.html`
+whose target is **relative**, so it stays correct under the custom domain,
+`talmolab.github.io/luc3d/` or a PR preview) instead of a copy of the app.
+GitHub Pages cannot issue a real HTTP redirect — no `.htaccess`, no
+`_redirects` — so a meta-refresh/JS stub is the only mechanism available.
 
 **Root is the only target that wipes — two rules keep that safe.** Every other
 channel owns its folder and can only damage itself, but root's previous output

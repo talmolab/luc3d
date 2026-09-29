@@ -6,11 +6,12 @@ name: Deploy to GitHub Pages
 #
 # gh-pages serves five channels:
 #
-#   /          -- THE LIVE PAGE. The newest FULL (non-pre-release) release,
-#                 identical to /stable/. See the warning below.
-#   /stable/   -- the same build as root, under a stable-by-name URL.
-#   /latest/   -- the newest release INCLUDING pre-releases.
-#   /dev/      -- every push to main. Bleeding edge.
+#   /          -- THE LIVE PAGE. The newest FULL (non-pre-release) release.
+#                 The only place that build is actually served.
+#   /stable/   -- an ALIAS that redirects to root. One index.html, no copy of
+#                 the app, so a deep link under it (…/stable/tests/…) 404s.
+#   /latest/   -- the newest release INCLUDING pre-releases. A real copy.
+#   /dev/      -- every push to main. Bleeding edge. A real copy.
 #   /pr/<n>/   -- per-PR previews, owned by pr-preview.yml. Never touched here.
 #
 # Only a full release moves root. A push to main goes to /dev/ alone; a
@@ -121,13 +122,15 @@ jobs:
           set -euo pipefail
 
           TARGETS='[]'
-          # path, label, is_root. `root` is a SEPARATE flag rather than an
-          # empty path on purpose: apply_targets still refuses an empty path
-          # outright, so only a caller that deliberately passes true can reach
-          # the live page.
+          # path, label, is_root, redirect. `root` is a SEPARATE flag rather
+          # than an empty path on purpose: apply_targets still refuses an empty
+          # path outright, so only a caller that deliberately passes true can
+          # reach the live page. A non-empty `redirect` makes the target an
+          # ALIAS -- a lone index.html pointing elsewhere -- instead of a copy.
           add_target() {
             TARGETS="$(jq -c --arg path "$1" --arg label "$2" --argjson root "${3:-false}" \
-              '. + [{path: $path, label: $label, root: $root}]' <<< "$TARGETS")"
+              --arg redirect "${4:-}" \
+              '. + [{path: $path, label: $label, root: $root, redirect: $redirect}]' <<< "$TARGETS")"
           }
 
           if [ "$EVENT_NAME" = "release" ]; then
@@ -183,7 +186,7 @@ jobs:
               # in the same apply loop. The keep-list makes order irrelevant,
               # but relying on only one of the two would be careless.
               add_target "" "$RELEASE_TAG (root)" true
-              add_target "stable" "$RELEASE_TAG (stable)"
+              add_target "stable" "$RELEASE_TAG (stable alias)" false "../"
             else
               echo "::notice::$RELEASE_TAG is not the highest stable release"\
                    "($HIGHEST_STABLE) -- leaving the live root and /stable/ untouched."
@@ -199,7 +202,7 @@ jobs:
           elif [ "$EVENT_NAME" = "workflow_dispatch" ] && [ "$DISPATCH_TARGET" = "root" ]; then
             add_target "" "manual-root $REF_NAME" true
           elif [ "$EVENT_NAME" = "workflow_dispatch" ] && [ "$DISPATCH_TARGET" = "stable" ]; then
-            add_target "stable" "manual-stable $REF_NAME"
+            add_target "stable" "manual-stable alias" false "../"
           elif [ "$EVENT_NAME" = "workflow_dispatch" ] && [ "$DISPATCH_TARGET" = "latest" ]; then
             add_target "latest" "manual-latest $REF_NAME"
           else
@@ -258,11 +261,12 @@ jobs:
             "https://x-access-token:$GH_TOKEN@github.com/$GITHUB_REPOSITORY.git"
 
           apply_targets() {
-            local count path is_root
+            local count path is_root redirect
             count="$(jq 'length' "$RUNNER_TEMP/targets.json")"
             for i in $(seq 0 $((count - 1))); do
               path="$(jq -r ".[$i].path" "$RUNNER_TEMP/targets.json")"
               is_root="$(jq -r ".[$i].root // false" "$RUNNER_TEMP/targets.json")"
+              redirect="$(jq -r ".[$i].redirect // empty" "$RUNNER_TEMP/targets.json")"
 
               if [ "$is_root" = "true" ]; then
                 # THE LIVE PAGE. Remove root's OWN previous output while
@@ -294,8 +298,41 @@ jobs:
                 echo "::error::refusing to deploy to the site root without an explicit root flag."
                 return 1
               fi
+
               rm -rf "$path"
               mkdir -p "$path"
+
+              if [ -n "$redirect" ]; then
+                # An ALIAS, not a copy: this channel is just a name pointing at
+                # another path, so it holds one index.html and nothing else.
+                # The rm -rf above is what clears a previous full copy.
+                #
+                # GitHub Pages cannot issue a real HTTP redirect (no .htaccess,
+                # no _redirects), so this is the only mechanism available. The
+                # target is RELATIVE so it stays correct under any base -- the
+                # custom domain, talmolab.github.io/luc3d/, or a PR preview.
+                #
+                # location.replace() fires first and leaves no history entry,
+                # so Back does not bounce the visitor straight back here; the
+                # meta refresh is the no-JS fallback; the link is the last
+                # resort if both are blocked.
+                #
+                # Only index.html exists, so a DEEP link under this path
+                # (…/stable/tests/…) 404s. That is the accepted cost of making
+                # this an alias rather than a second copy.
+                printf '%s\n' \
+                  '<!DOCTYPE html>' \
+                  '<html lang="en">' \
+                  '<meta charset="utf-8">' \
+                  '<title>Redirecting to LUCID</title>' \
+                  "<link rel=\"canonical\" href=\"$redirect\">" \
+                  "<meta http-equiv=\"refresh\" content=\"0; url=$redirect\">" \
+                  "<script>location.replace('$redirect' + location.search + location.hash);</script>" \
+                  "<p>This is an alias. Continue to <a href=\"$redirect\">luc3d.sleap.ai</a>.</p>" \
+                  > "$path/index.html"
+                continue
+              fi
+
               cp -R "$SITE/." "$path/"
             done
 
