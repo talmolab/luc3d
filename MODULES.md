@@ -5070,8 +5070,55 @@ into it.
   Fills and edges are per PLANE; NODES are drawn once each over the union, since
   a corner two planes share is one node with one 2D point.
 
+**What is drawn outside the mode is the user's to choose**, through the
+Visibility panel's `Planes` section: `planeVisibility`
+(`ui/plane-visibility.js`) gates the plane BODY (fill, edges, plane name) and
+the NODES separately, and forces every part on while the mode is active. It
+decides WHETHER a plane is drawn, never HOW — the fill still comes from
+`plane.filled` alone, so a shown plane looks the same in both modes.
+
 **Imported by** `ui/plane-definition.js` (re-exported, which is how
-`ui/rendering.js` still reaches it unchanged).
+`ui/rendering.js` still reaches it unchanged). **Imports** `planeVisibility`
+from `ui/plane-visibility.js` beside the hub bindings.
+
+### ui/plane-visibility.js
+
+**Purpose.** Which PARTS of the annotated planes are drawn, in which
+representation — the one reader of the Visibility panel's `Planes` section.
+
+**Key exports.**
+- `PLANE_VIS_IDS` — the four checkbox ids (`visPlanes2D`, `visPlanes3D`,
+  `visPlaneNodes2D`, `visPlaneNodes3D`), keyed by the field each produces.
+  Exported so `ui/ui-wiring.js`'s `visCheckIds` persistence list and the tests
+  name them from here: a toggle missing from that list still works and silently
+  forgets, which is invisible until the next reload.
+- `planeVisibility(modeActive)` → `{planes2d, planes3d, nodes2d, nodes3d}`.
+
+Three things it decides, and each has a reason:
+- **Defining Plane Mode overrides all four.** The panel's tables, the 2D
+  placement drags and the 3D corner drags all act on parts the user has to be
+  able to see, so honouring a toggle inside the mode would hide the thing being
+  edited. These toggles are about the DEFAULT mode, where a plane is scenery.
+- **They decide WHETHER a plane is drawn, never HOW.** A shown plane keeps its
+  own colour, edges and `Fill`, so the two representations and the two modes
+  cannot disagree about what a plane looks like. There is deliberately no fill
+  override: `plane.filled` is project state written to the `.slp`, the `Fill`
+  button is the one thing that sets it, and a plane gaining a fill because it
+  became visible is the same confusion `mesh-membership-highlight.mjs` pins
+  against for the mesh-object highlight ("no fill of its own"). The four
+  toggles themselves ride `localStorage.visibilitySettings` with the panel's
+  other global appearance prefs — browser-local display taste, not project
+  state, so `save-golden-digest.mjs` cannot move.
+- **A missing checkbox reads as ON.** The headless runners build a partial DOM,
+  and a harness that silently renders nothing and passes is far harder to spot
+  than a stray plane.
+
+**NO IMPORTS, deliberately** — it is read from inside the plane panel's
+`plane-definition` ↔ `plane-overlays` cycle and from `ui/ui-wiring.js`, and a
+module with no edges of its own cannot be the one that closes a loop.
+**Imported by** `ui/plane-overlays.js` (2D), `ui/plane-definition.js`
+(`syncPlanes3D`) and `ui/ui-wiring.js` (the ids, for persistence and the
+change listeners). Covered by `tests/e2e/plane-visibility-toggles.mjs`.
 
 ### ui/plane-nodes-panel.js
 
@@ -5463,7 +5510,12 @@ plane.
   so an interior corner is covered by the fill rather than notching it. Full rebuild, so it is
   also the REMOVE path. No-ops when `viewport3d` is null. Also the one place the
   3D drag callbacks are wired (idempotent), since the viewport is re-created per
-  session load. The payload's `editable` is
+  session load, and the one place the Visibility panel's `Planes` toggles reach
+  3D: it sets `viewport3d.showPlaneSurfaces` / `showPlaneNodes` from
+  `planeVisibility(planeState.active)`. The payload itself is unchanged by them
+  — `filled` is still `plane.filled` alone, and every plane with 3D is still in
+  it, because `_planes` is what a drag, the node marker and the mesh highlight
+  resolve ids against. The payload's `editable` is
   `planeState.active && !isOriginModeActive() && !isAngleModalOpen() &&
   !!model.usableFitForPlane(plane)`, and that last term is a **USABLE** fit, not
   a stored one: gating the drag on a stored `planeFit` was the same mistake
@@ -5728,6 +5780,10 @@ spawn a dockview panel.
 - `./info-tip.js` — `setInfoTip` (the Pinned column's ⓘ, the Planes table's
   Views column and the ⓘ in each major section's `<summary>`:
   `PLANE_SECTION_INFO` / `wireSectionInfoButtons`).
+- `./plane-visibility.js` — `planeVisibility`, read by `syncPlanes3D` to push
+  `showPlaneSurfaces` / `showPlaneNodes` into the viewport. The same module
+  backs the 2D half in `ui/plane-overlays.js`, which is what keeps the two
+  representations agreeing about what "planes are off" means.
 - `../import-export/save-load.js` — `setStatus`, `markDirty`.
 - `./rendering.js` — `drawAllOverlays`, and `../pose/triangulation.js` —
   `triangulatePoints`, `reprojectPointCamera`, `fitPlaneToPoints3d`,
@@ -8094,7 +8150,7 @@ simulates the index arithmetic in isolation.
 **Visibility panel — the global/session split.** `saveVisSettings` /
 `restoreVisSettings` cache the panel's **global appearance preferences** (the
 `visSliderIds` / `visCheckIds` / `visStyleIds` lists — User, Predicted,
-Reprojections, Display Legend and 3D Viewer) in
+Reprojections, Planes, Display Legend and 3D Viewer) in
 `localStorage.visibilitySettings`. Those are browser-local display taste, shared
 across every session, and are deliberately **not** written into the `.slp`:
 baking them into the project file would make opening a colleague's project
@@ -8102,6 +8158,14 @@ silently reassign your node sizes and 3D widgets. The panel's *session-scoped*
 settings — per-camera video brightness / contrast / rotation and the timeline
 hidden sets — take the opposite route and persist per session via
 `import-export/visibility-metadata.js`; they never touch localStorage.
+
+The **`Planes` section**'s four toggles (`PLANE_VIS_IDS`, imported from
+`ui/plane-visibility.js` rather than re-typed, so this file cannot drift from
+the module that reads them) are wired apart from the other checkbox toggles for
+two reasons: they need BOTH repaints — `drawAllOverlays` for the 2D overlays and
+`syncPlanes3D` for the 3D scene, which is rebuilt rather than redrawn — and no
+pose selection can point at a plane, so the deselect sweep the other toggles
+share has nothing to do for them.
 
 **Hold-to-rotate (`Shift+R` + `←`/`→`).** `rotationLoop` advances
 `view.rotation` by a fractional `60 * dt` every frame so the animation stays
@@ -8349,6 +8413,17 @@ Anything frame-independent must be a sibling, never a child of
 `this.planeNodeSize` (the panel's "3D Node Size" slider, pushed in by
 `syncPlanes3D`), not `skeletonNodeSize` — sizing reference geometry for
 legibility must not resize the pose annotation.
+
+**`showPlaneSurfaces` / `showPlaneNodes`** (both default `true`) decide which
+meshes `setPlanes` builds: the plane BODY — its edges and its fill — and its
+CORNERS, independently. They are the Visibility panel's "Planes in 3D Views" /
+"Nodes in 3D Views" toggles, pushed in by `syncPlanes3D` and forced on inside
+Defining Plane Mode (`ui/plane-visibility.js`). They **never filter `_planes`**:
+the ids in it are what a live drag, `setSelectedPlaneNode`'s marker,
+`setMeshMembership`'s highlight and `setPlaneRoles`' outlines all resolve
+against, so hiding a plane must cost meshes and nothing else. With the corners
+off nothing is pickable, which is correct — the payload is only `editable`
+inside the mode, where both flags are on.
 
 **`setPlanes(planes)` / `clearPlanes()`** — user-annotated planes from
 View ▸ Define Planes (`ui/plane-definition.js`'s `syncPlanes3D`). Full rebuild
@@ -9708,8 +9783,8 @@ holds two kinds of state:
   project's* videos and entities, so they belong in the project file. That is
   everything this module handles.
 - **Global appearance preferences** — the User / Predicted / Reprojections /
-  Display Legend / 3D Viewer sliders, styles and toggles. Those are browser-local
-  display taste, shared across every session, and stay in
+  Planes / Display Legend / 3D Viewer sliders, styles and toggles. Those are
+  browser-local display taste, shared across every session, and stay in
   `localStorage.visibilitySettings` (see `ui/ui-wiring.js`). They are **not**
   written here on purpose: baking them into the `.slp` would make opening a
   colleague's project silently reassign your node sizes and 3D widgets.

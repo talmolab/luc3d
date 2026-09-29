@@ -221,6 +221,23 @@ export class Viewport3D {
          * the panel's "3D Node Size" slider. Deliberately not `skeletonNodeSize`:
          * sizing plane corners must not resize pose nodes. */
         this.planeNodeSize = options.planeNodeSize !== undefined ? options.planeNodeSize : 4;
+        /**
+         * @type {boolean} Draw each plane's BODY — its fill and its edges. The
+         * Visibility panel's "Planes in 3D Views" toggle, pushed in by
+         * `syncPlanes3D`; forced on inside Defining Plane Mode.
+         */
+        this.showPlaneSurfaces = options.showPlaneSurfaces !== undefined
+            ? options.showPlaneSurfaces : true;
+        /**
+         * @type {boolean} Draw each plane's CORNERS. The Visibility panel's
+         * "Nodes in 3D Views" toggle, independent of `showPlaneSurfaces` — a
+         * node outlives the planes referencing it, so the two are not one
+         * switch. With the corners off nothing is pickable, which is correct:
+         * the payload is only `editable` inside the mode, where both are forced
+         * on.
+         */
+        this.showPlaneNodes = options.showPlaneNodes !== undefined
+            ? options.showPlaneNodes : true;
         /** @type {{planeId:number, nodeIdx:number, moved:boolean, pointerId:number}|null}
          * Non-null only while a plane corner is being dragged in 3D. */
         this._planeDrag = null;
@@ -1597,6 +1614,12 @@ export class Viewport3D {
      * scenery. The payload is kept in `_planes` so a drag in progress can look
      * up its constraint plane by id across the rebuilds it triggers.
      *
+     * `showPlaneSurfaces` / `showPlaneNodes` (the Visibility panel's `Planes`
+     * toggles) decide which meshes this builds. They never filter `_planes`:
+     * the ids in it are what the selected-node marker, the mesh-object
+     * highlight, the angle dialog's role outlines and a live drag all resolve
+     * against, so hiding a plane must cost meshes and nothing else.
+     *
      * @param {Array<{id:number, name:string, color:string,
      *                nodeIds?:number[],
      *                nodeColors?:string[], nodeImmutable?:boolean[],
@@ -1629,75 +1652,86 @@ export class Viewport3D {
             const planeGroup3D = new THREE.Group();
             planeGroup3D.name = 'plane_' + plane.id;
 
-            // One shared sphere geometry per plane; materials differ per node
-            // because plane nodes carry their own colour (the cross-view
-            // correspondence cue).
-            const sphereGeo = new THREE.SphereGeometry(nodeRadius, 12, 12);
+            // The corners, unless the Visibility panel has them switched off.
+            // The payload is still kept whole in `_planes`, so the marker, the
+            // mesh highlight and a drag's plane lookup are unaffected — this
+            // hides meshes, it does not forget planes.
+            if (this.showPlaneNodes) {
+                // One shared sphere geometry per plane; materials differ per node
+                // because plane nodes carry their own colour (the cross-view
+                // correspondence cue).
+                const sphereGeo = new THREE.SphereGeometry(nodeRadius, 12, 12);
 
-            // Only a plane WITH A FIT can have its corners dragged — a corner
-            // with no plane to slide along has no constrained direction to
-            // move in. `planeFit` may be a derived one (see the caller); this
-            // asks whether there is a surface, not who supplied it.
-            const draggable = !!(plane.editable && plane.planeFit);
+                // Only a plane WITH A FIT can have its corners dragged — a corner
+                // with no plane to slide along has no constrained direction to
+                // move in. `planeFit` may be a derived one (see the caller); this
+                // asks whether there is a surface, not who supplied it.
+                const draggable = !!(plane.editable && plane.planeFit);
 
-            for (let k = 0; k < nNodes; k++) {
-                const pt = getPoint3d(pts, k);
-                if (pt == null) continue;
-                if (!isFinite(pt[0]) || !isFinite(pt[1]) || !isFinite(pt[2])) continue;
-                const color = (plane.nodeColors && plane.nodeColors[k]) || plane.color;
-                const mesh = new THREE.Mesh(sphereGeo, new THREE.MeshPhongMaterial({
-                    color: new THREE.Color(color),
-                    shininess: 60,
-                }));
-                mesh.position.set(pt[0], pt[1], pt[2]);
-                mesh.name = 'planeNode_' + k;
-                mesh.userData.planeId = plane.id;
-                mesh.userData.nodeIdx = k;
-                // A PINNED node is never draggable, however fitted its plane
-                // is. `planeEditable` gates the hover cursor as well as the
-                // drag (`_pickPlaneNode`), so leaving it true here would offer
-                // a `move` cursor over a corner the edit path then refuses —
-                // an affordance advertising an action that cannot happen.
-                const pinned = !!(plane.nodeImmutable && plane.nodeImmutable[k]);
-                mesh.userData.planeEditable = draggable && !pinned;
-                mesh.userData.planeImmutable = pinned;
-                // Independent of `draggable`: Set Origin Mode turns dragging OFF
-                // but still needs these exact corners to be pickable. A pinned
-                // corner is a PREFERRED origin anchor, so this must not follow
-                // `planeEditable` down.
-                //
-                // `fitted`, NOT `planeFit`: the wizard's question is whether
-                // the user has declared this plane's frame, which is what
-                // `fittedPlanes()` counts. `planeFit` above may be derived, and
-                // a plane nobody has Fit must not silently become eligible to
-                // define the project's origin. A payload that omits `fitted`
-                // falls back to the old meaning so an older caller is unchanged.
-                mesh.userData.planeFitted = plane.fitted !== undefined
-                    ? !!plane.fitted : !!plane.planeFit;
-                planeGroup3D.add(mesh);
+                for (let k = 0; k < nNodes; k++) {
+                    const pt = getPoint3d(pts, k);
+                    if (pt == null) continue;
+                    if (!isFinite(pt[0]) || !isFinite(pt[1]) || !isFinite(pt[2])) continue;
+                    const color = (plane.nodeColors && plane.nodeColors[k]) || plane.color;
+                    const mesh = new THREE.Mesh(sphereGeo, new THREE.MeshPhongMaterial({
+                        color: new THREE.Color(color),
+                        shininess: 60,
+                    }));
+                    mesh.position.set(pt[0], pt[1], pt[2]);
+                    mesh.name = 'planeNode_' + k;
+                    mesh.userData.planeId = plane.id;
+                    mesh.userData.nodeIdx = k;
+                    // A PINNED node is never draggable, however fitted its plane
+                    // is. `planeEditable` gates the hover cursor as well as the
+                    // drag (`_pickPlaneNode`), so leaving it true here would offer
+                    // a `move` cursor over a corner the edit path then refuses —
+                    // an affordance advertising an action that cannot happen.
+                    const pinned = !!(plane.nodeImmutable && plane.nodeImmutable[k]);
+                    mesh.userData.planeEditable = draggable && !pinned;
+                    mesh.userData.planeImmutable = pinned;
+                    // Independent of `draggable`: Set Origin Mode turns dragging OFF
+                    // but still needs these exact corners to be pickable. A pinned
+                    // corner is a PREFERRED origin anchor, so this must not follow
+                    // `planeEditable` down.
+                    //
+                    // `fitted`, NOT `planeFit`: the wizard's question is whether
+                    // the user has declared this plane's frame, which is what
+                    // `fittedPlanes()` counts. `planeFit` above may be derived, and
+                    // a plane nobody has Fit must not silently become eligible to
+                    // define the project's origin. A payload that omits `fitted`
+                    // falls back to the old meaning so an older caller is unchanged.
+                    mesh.userData.planeFitted = plane.fitted !== undefined
+                        ? !!plane.fitted : !!plane.planeFit;
+                    planeGroup3D.add(mesh);
+                }
             }
 
-            const edgeMaterial = new THREE.MeshPhongMaterial({
-                color: new THREE.Color(plane.color),
-                shininess: 30,
-                transparent: true,
-                opacity: 0.9,
-            });
-            const edges = plane.edges || [];
-            for (let e = 0; e < edges.length; e++) {
-                const a = getPoint3d(pts, edges[e][0]);
-                const b = getPoint3d(pts, edges[e][1]);
-                if (a == null || b == null) continue;
-                if (!isFinite(a[0]) || !isFinite(a[1]) || !isFinite(a[2])) continue;
-                if (!isFinite(b[0]) || !isFinite(b[1]) || !isFinite(b[2])) continue;
-                const cyl = this._createCylinder(a, b, edgeRadius, edgeMaterial, 6);
-                cyl.name = 'planeEdge_' + edges[e][0] + '_' + edges[e][1];
-                planeGroup3D.add(cyl);
-            }
+            // The plane's BODY — its edges and its fill. One flag for both: they
+            // are the plane's own shape, while the corners above are the shared
+            // pool's nodes, which is the split the two toggles make.
+            if (this.showPlaneSurfaces) {
+                const edgeMaterial = new THREE.MeshPhongMaterial({
+                    color: new THREE.Color(plane.color),
+                    shininess: 30,
+                    transparent: true,
+                    opacity: 0.9,
+                });
+                const edges = plane.edges || [];
+                for (let e = 0; e < edges.length; e++) {
+                    const a = getPoint3d(pts, edges[e][0]);
+                    const b = getPoint3d(pts, edges[e][1]);
+                    if (a == null || b == null) continue;
+                    if (!isFinite(a[0]) || !isFinite(a[1]) || !isFinite(a[2])) continue;
+                    if (!isFinite(b[0]) || !isFinite(b[1]) || !isFinite(b[2])) continue;
+                    const cyl = this._createCylinder(a, b, edgeRadius, edgeMaterial, 6);
+                    cyl.name = 'planeEdge_' + edges[e][0] + '_' + edges[e][1];
+                    planeGroup3D.add(cyl);
+                }
 
-            if (plane.filled) {
-                const fill = this._buildPlaneFillMesh(plane, pts);
-                if (fill) planeGroup3D.add(fill);
+                if (plane.filled) {
+                    const fill = this._buildPlaneFillMesh(plane, pts);
+                    if (fill) planeGroup3D.add(fill);
+                }
             }
 
             this._planeGroup.add(planeGroup3D);

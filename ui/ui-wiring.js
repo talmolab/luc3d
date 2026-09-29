@@ -38,7 +38,10 @@ import { consumeInfoPanelStale } from './panel-visibility.js';
 // / hidden-identity Sets when the user renames an entity.
 import { renameHiddenTrack, renameHiddenIdentity } from './timeline-visibility.js';
 // View ▸ Define Planes — "Defining Plane Mode".
-import { togglePlaneMode } from './plane-definition.js';
+import { togglePlaneMode, syncPlanes3D } from './plane-definition.js';
+// The Visibility panel's `Planes` section — the four ids, named from the one
+// module that reads them so this file cannot drift from it.
+import { PLANE_VIS_IDS } from './plane-visibility.js';
 import { newProject, markDirty, clearDirty, quickSave, saveAs, saveProjectSlp, saveProject,
          handleLoadProject, showLoading, hideLoading, setStatus } from '../import-export/save-load.js';
 import { handleLoadSlpFile, handleAddSlp, handleLoadPoints3dH5 } from '../import-export/slp-import.js';
@@ -2192,6 +2195,25 @@ export function setupUI() {
         }
     });
 
+    // The `Planes` section: the annotated planes and their nodes, in 2D and in
+    // 3D. Wired apart from the block above because they need BOTH repaints —
+    // `drawAllOverlays` for the 2D overlays and `syncPlanes3D` for the 3D
+    // scene, which is rebuilt rather than redrawn — and because no selection
+    // can point at a plane, so the deselect sweep above has nothing to do here
+    // (`interactionManager.selectedPlane` is a Defining-Plane-Mode selection,
+    // and in that mode all four toggles are overridden on anyway).
+    var planeVisCheckIds = Object.keys(PLANE_VIS_IDS).map(function(k) {
+        return PLANE_VIS_IDS[k];
+    });
+    planeVisCheckIds.forEach(function(id) {
+        var el = document.getElementById(id);
+        if (!el) return;
+        el.addEventListener('change', function() {
+            drawAllOverlays(state.currentFrame);
+            syncPlanes3D();
+        });
+    });
+
     // Line style buttons
     document.querySelectorAll('.line-style-btn').forEach(function(btn) {
         btn.addEventListener('click', function() {
@@ -2243,7 +2265,7 @@ export function setupUI() {
     var visCheckIds = ['visLegend', 'visUser', 'visPredicted', 'visReprojections', 'visErrors',
         'visUnlinkedBadge',
         'vis3dLabelShow', 'vis3dSphereShow', 'vis3dPyramidShow',
-        'vis3dNodeShow', 'vis3dEdgeShow'];
+        'vis3dNodeShow', 'vis3dEdgeShow'].concat(planeVisCheckIds);
     var visStyleIds = [
         'visUserPreLineStyle', 'visUserPostLineStyle',
         'visPredPreLineStyle', 'visPredPostLineStyle',

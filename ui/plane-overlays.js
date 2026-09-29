@@ -17,6 +17,7 @@ import {
     planeEdgesPoolIndices, planeFillOrderPoolIndices, planeCentroid2d,
 } from '../pose/plane-data.js';
 import { planeModel, planeState } from './plane-definition.js';
+import { planeVisibility } from './plane-visibility.js';
 
 const PLANE_LABEL_SIZE = 11;
 const NULLED_COLOR = '#777777';
@@ -35,6 +36,15 @@ const PINNED_RING = 'rgba(255,255,255,0.9)';
  * the SELECTION and HOVER decorations are mode-gated, since those advertise an
  * interaction that only exists inside the mode.
  *
+ * What is drawn outside the mode is the user's to choose, through the Visibility
+ * panel's `Planes` section — `planeVisibility` (`ui/plane-visibility.js`) reads
+ * it and forces every part on while the mode is active. The plane body (fill,
+ * edges, plane name) and the NODES are separately switchable, so the two `if`s
+ * below are not one: a node outlives the planes referencing it, and wanting the
+ * corners without five filled walls on top of the frame is the ordinary case.
+ * What it never changes is HOW a shown plane is drawn — colour, edges and
+ * `Fill` are the annotation's, in every mode.
+ *
  * Fills and edges are per PLANE; NODES are drawn once each, over the union of
  * the placed planes' nodes — a corner two planes share is one node with one 2D
  * point, so drawing it twice would just double the anti-aliasing.
@@ -50,6 +60,9 @@ export function drawPlaneOverlays(view) {
     if (!inst) return;
     var placed = model.placedPlanes(view.name);
     if (!placed.length) return;
+
+    var vis = planeVisibility(planeState.active);
+    if (!vis.planes2d && !vis.nodes2d) return;
 
     var videoW = view.videoWidth || view.overlayCanvas.width;
     var videoH = view.videoHeight || view.overlayCanvas.height;
@@ -70,41 +83,51 @@ export function drawPlaneOverlays(view) {
     ctx.save();
 
     // --- fills and edges, per plane ---
-    for (var p = 0; p < placed.length; p++) {
-        var plane = placed[p];
-        var edgeColor = plane.color || '#4dd0e1';
-        if (plane.filled) fillPolygon(ctx, plane, pool, inst, tf, edgeColor);
+    if (vis.planes2d) {
+        for (var p = 0; p < placed.length; p++) {
+            var plane = placed[p];
+            var edgeColor = plane.color || '#4dd0e1';
+            // `plane.filled` and nothing else. The visibility toggles decide
+            // WHETHER a plane is drawn, never HOW — a plane that gained a fill
+            // by becoming visible would look different outside the mode from
+            // inside it, and `Fill` is the one control that sets this.
+            if (plane.filled) fillPolygon(ctx, plane, pool, inst, tf, edgeColor);
 
-        var edges = planeEdgesPoolIndices(plane, pool);
-        // A selected view draws a wider, semi-transparent halo under its edges.
-        if (isSelected) {
-            ctx.lineWidth = lineWidth + 5;
-            ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+            var edges = planeEdgesPoolIndices(plane, pool);
+            // A selected view draws a wider, semi-transparent halo under its edges.
+            if (isSelected) {
+                ctx.lineWidth = lineWidth + 5;
+                ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+                strokeEdges(ctx, edges, inst, tf);
+            }
+            ctx.lineWidth = lineWidth;
+            ctx.strokeStyle = edgeColor;
             strokeEdges(ctx, edges, inst, tf);
         }
-        ctx.lineWidth = lineWidth;
-        ctx.strokeStyle = edgeColor;
-        strokeEdges(ctx, edges, inst, tf);
     }
 
     // --- nodes, once each ---
-    drawPlaneNodes(ctx, model, inst, tf, hovered, view.name);
+    if (vis.nodes2d) drawPlaneNodes(ctx, model, inst, tf, hovered, view.name);
 
     // --- plane name at each plane's own centroid ---
-    ctx.font = 'bold ' + PLANE_LABEL_SIZE + 'px sans-serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    for (var q = 0; q < placed.length; q++) {
-        var c = planeCentroid2d(placed[q], pool, inst);
-        if (!c) continue;
-        var cp = tf(c[0], c[1]);
-        ctx.lineWidth = 3;
-        ctx.strokeStyle = 'rgba(0,0,0,0.8)';
-        ctx.strokeText(placed[q].name, cp.x, cp.y);
-        ctx.fillStyle = isSelected ? '#ffffff' : (placed[q].color || '#4dd0e1');
-        ctx.fillText(placed[q].name, cp.x, cp.y);
+    // With the body: the label names the plane, so leaving it behind would put
+    // five floating words over a view with no planes in it.
+    if (vis.planes2d) {
+        ctx.font = 'bold ' + PLANE_LABEL_SIZE + 'px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        for (var q = 0; q < placed.length; q++) {
+            var c = planeCentroid2d(placed[q], pool, inst);
+            if (!c) continue;
+            var cp = tf(c[0], c[1]);
+            ctx.lineWidth = 3;
+            ctx.strokeStyle = 'rgba(0,0,0,0.8)';
+            ctx.strokeText(placed[q].name, cp.x, cp.y);
+            ctx.fillStyle = isSelected ? '#ffffff' : (placed[q].color || '#4dd0e1');
+            ctx.fillText(placed[q].name, cp.x, cp.y);
+        }
+        ctx.textAlign = 'start';
     }
-    ctx.textAlign = 'start';
 
     ctx.restore();
 }

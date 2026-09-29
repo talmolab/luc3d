@@ -3,12 +3,12 @@
 Multi-view pose annotation GUI. No build system — pure vanilla JS served as static files.
 
 ## Architecture
-ES modules, vanilla JS (no build step). `index.html` loads `app.js` as `<script type="module">`; `app.js` is a 2-line entry point that imports from `pose/`. The 77 modules are grouped into four directories:
+ES modules, vanilla JS (no build step). `index.html` loads `app.js` as `<script type="module">`; `app.js` is a 2-line entry point that imports from `pose/`. The 78 modules are grouped into four directories:
 - `pose/` — data model, cross-view tracking, DLT triangulation, plane annotation model (planes + the global plane-node pool), 3D mesh objects (groups of planes) and their derived geometry, plane/origin serialization, origin transform, whole-project origin re-base, cross-session calibration comparison, plane-to-plane angle, the least-squares plane fit, app initialization
   (16 files)
-- `ui/` — UI state, canvas rendering, mouse/keyboard interaction, info panel, modals, timeline, 3D viewport, panel visibility, video encoding, video display settings, keyboard-target arbitration, modal geometry, view legend, plane definition, 3D mesh objects, origin definition, origin re-base, cross-session calibration notice, plane angle, frame-range tracking, collapsible section state, info tooltips, settings — the Define Planes
+- `ui/` — UI state, canvas rendering, mouse/keyboard interaction, info panel, modals, timeline, 3D viewport, panel visibility, video encoding, video display settings, keyboard-target arbitration, modal geometry, view legend, plane definition, 3D mesh objects, origin definition, origin re-base, cross-session calibration notice, plane angle, frame-range tracking, collapsible section state, info tooltips, plane visibility, settings — the Define Planes
   panel is split across `plane-definition.js` (the hub) plus its three
-  section modules and three helpers (42 files)
+  section modules and three helpers (43 files)
 - `loading/` — video decoding, session loading, SLP/package readers, per-camera SLP choice, calibration-file selection, web workers (8 files)
 - `import-export/` — file I/O, save/load, SLP import/merge, visibility metadata, plane metadata, 3D mesh export (10 files)
 - `demo-data.js` — synthetic skeleton and camera data
@@ -374,7 +374,7 @@ Three rules hold, and there are tests pinning each:
   no other `.slp` import/export path changes.
 
 The panel's **global appearance preferences** (User / Predicted / Reprojections /
-Display Legend / 3D Viewer) deliberately stay in
+Planes / Display Legend / 3D Viewer) deliberately stay in
 `localStorage.visibilitySettings` — they are browser-local display taste, not
 project state. Do not move them into the `.slp`.
 
@@ -1281,6 +1281,43 @@ node creation as a sub-step of editing one plane would misstate the model.
 `tests/e2e/define-plane-mode.mjs` §2 asserts the section body's whole child
 list, so a part that appears, disappears or moves fails there rather than merely
 looking odd.
+
+**Outside Defining Plane Mode, the Visibility panel's `Planes` section says what
+is drawn.** An annotated cage is scene geometry, so it is drawn in EVERY mode —
+right when you are checking a pose against the floor, wrong when five filled
+walls sit on top of the frame you are labelling. Four toggles
+(`ui/plane-visibility.js`, one reader for both representations): planes in 2D,
+planes in 3D, nodes in 2D, nodes in 3D. Four rules hold:
+- **All four are ON by default.** Planes were always drawn before the section
+  existed, so any other default silently hides existing users' work.
+- **Defining Plane Mode overrides all four.** The panel's tables, the 2D
+  placement drags and the 3D corner drags act on parts the user has to be able
+  to see, so honouring a toggle inside the mode would hide the thing being
+  edited. `planeVisibility(modeActive)` is where that override lives, once,
+  rather than at each of the two call sites.
+- **Planes and nodes are separate, and so are 2D and 3D.** A node outlives the
+  planes referencing it and may be in several at once, so wanting the corners
+  without the walls is the ordinary case — and the 3D view is often where the
+  cage is the whole point while the 2D views are where it is in the way. In 3D
+  the two flags are `viewport3d.showPlaneSurfaces` / `showPlaneNodes`, pushed by
+  `syncPlanes3D`; they hide MESHES and never filter `_planes`, which is what a
+  live drag, the selected-node marker and the mesh-object highlight resolve ids
+  against.
+- **They decide WHETHER a plane is drawn, never HOW.** A shown plane keeps its
+  own colour, edges and `Fill`, so the two representations and the two modes
+  cannot disagree about what a plane looks like. There is deliberately **no
+  fill override** — a plane that gained a fill by becoming visible is the same
+  confusion `mesh-membership-highlight.mjs` pins against for the mesh-object
+  highlight ("no fill of its own"), and `plane.filled` is project state that
+  only the `Fill` button sets. A cage that reads badly unfilled is a reason to
+  click `Fill`, not a reason for the renderer to guess. The four toggles
+  themselves ride `localStorage.visibilitySettings` with the panel's other
+  global appearance prefs, so nothing here reaches the `.slp` and
+  `save-golden-digest.mjs` must not move.
+Covered by `tests/e2e/plane-visibility-toggles.mjs`, which counts pixels of two
+colours on a real overlay canvas and meshes in a real WebGL scene, asserts each
+toggle repaints BY ITSELF, and pins that a filled and an unfilled plane are
+drawn exactly as annotated in both modes.
 
 **The Planes table shows `Views: annotated / total`, and ANNOTATED is not
 PLACED.** `annotatedViewStats` (`ui/plane-definition.js`) counts the views where

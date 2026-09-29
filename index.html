@@ -549,6 +549,45 @@
                             <span class="slider"></span>
                         </label>
                     </div>
+                    <!-- Planes. The planes the user annotated are scene geometry
+                         and are drawn in EVERY mode, so these four say which of
+                         their parts survive OUTSIDE Defining Plane Mode. Inside
+                         the mode all four are forced on (ui/plane-visibility.js):
+                         the panel edits parts the user has to be able to see.
+                         Planes and nodes are separate because a node outlives
+                         the planes referencing it, and 2D/3D are separate
+                         because they are two different kinds of clutter —
+                         filled walls over the frame being labelled, versus a
+                         cage in the 3D view that is the whole point of it. -->
+                    <h3>Planes</h3>
+                    <div class="vis-slider-row">
+                        <span title="Draw the annotated planes (View > Define Planes) over the 2D views, filled. Always on inside Defining Plane Mode.">Planes in 2D Views</span>
+                        <label class="toggle-switch" style="margin-left:auto;">
+                            <input type="checkbox" id="visPlanes2D" checked>
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                    <div class="vis-slider-row">
+                        <span title="Draw the annotated planes in the 3D viewer, filled. Always on inside Defining Plane Mode.">Planes in 3D Views</span>
+                        <label class="toggle-switch" style="margin-left:auto;">
+                            <input type="checkbox" id="visPlanes3D" checked>
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                    <div class="vis-slider-row">
+                        <span title="Draw the plane NODES — the corner dots and their names — over the 2D views. Independent of the planes themselves. Always on inside Defining Plane Mode.">Nodes in 2D Views</span>
+                        <label class="toggle-switch" style="margin-left:auto;">
+                            <input type="checkbox" id="visPlaneNodes2D" checked>
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                    <div class="vis-slider-row">
+                        <span title="Draw the plane nodes as corners in the 3D viewer. Independent of the planes themselves. Always on inside Defining Plane Mode.">Nodes in 3D Views</span>
+                        <label class="toggle-switch" style="margin-left:auto;">
+                            <input type="checkbox" id="visPlaneNodes3D" checked>
+                            <span class="slider"></span>
+                        </label>
+                    </div>
                     <h3>Display Legend</h3>
                     <div class="vis-slider-row">
                         <span>Show</span>
