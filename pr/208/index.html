@@ -845,19 +845,21 @@
                      Plane Mode is active (View ▸ Define Planes). Populated by
                      ui/plane-definition.js.
 
-                     THREE SIBLING SECTIONS, in the order the work happens:
-                     Nodes (the project-wide pool) -> Edit Plane (what THAT
-                     plane is made of) -> Planes (the list). Node creation is
-                     deliberately NOT nested inside the plane editor: a node
+                     TWO SIBLING SECTIONS, in the order the work happens:
+                     Nodes (the project-wide pool) -> Planes (the roster, and
+                     the editor for whichever plane is selected). Node creation
+                     is deliberately NOT nested inside the plane editor: a node
                      outlives the planes that use it and may belong to several
                      at once, so presenting it as a sub-step of editing one
-                     plane would misstate the model. -->
+                     plane would misstate the model. That is the one split this
+                     panel keeps; picking a plane and editing it were two
+                     sections and are now one, because they are one job. -->
                 <div class="plane-panel" id="planePanel" style="display:none;">
 
                     <!-- 1 — NODES: the PROJECT-WIDE pool. Everything in this
                          table acts on the NODE, so it applies to every plane
                          using it. + Node ONLY mints a pool node — putting one
-                         into a plane is + Add in the Edit Plane section. -->
+                         into a plane is + Add in the Planes section. -->
                     <div class="info-section">
                         <details class="plane-details" id="planeNodesDetails" open>
                             <summary>Nodes<button type="button" class="plane-section-info" id="planeNodesInfo"></button></summary>
@@ -887,43 +889,89 @@
                                 <div class="plane-warning" id="planeFrozenWarning" style="display:none;"></div>
                                 <div class="panel-button-row" style="margin-top:6px">
                                     <input type="text" id="planeNodeNameInput" class="plane-text-input" placeholder="Node name" />
-                                    <button class="panel-btn" id="btnAddPlaneNode" title="Mint a node in the project-wide pool. It joins NO plane and creates none — put it in a plane with + Add in the Edit Plane section.">+ Node</button>
+                                    <button class="panel-btn" id="btnAddPlaneNode" title="Mint a node in the project-wide pool. It joins NO plane and creates none — put it in a plane with + Add in the Planes section.">+ Node</button>
                                 </div>
                             </div>
                         </details>
                     </div>
 
-                    <!-- 2 — EDIT PLANE: what THIS plane is made of. Its
-                         members are references into the pool above, so the ×
-                         here takes the node OUT OF THIS PLANE only and the node
-                         itself survives; and the Add node dropdown offers every
-                         pool node not already in it, which is how one node comes
-                         to be in two planes. Connections are per-plane, so they
-                         live here too. -->
+                    <!-- 2 — PLANES: the roster AND the editor for whichever
+                         plane is selected, in ONE section. They used to be two
+                         — "Edit Plane" above "Planes" — and the split made the
+                         reader hold a plane in their head while scrolling
+                         between the list that picks it and the controls that
+                         act on it.
+
+                         Top to bottom: the roster, `+ New Plane`, then the
+                         selected plane's name and its three foldable parts
+                         (Nodes In This Plane / Node Connections / Actions), and
+                         Plane Appearance last because it styles every plane in
+                         the table rather than the selected one.
+
+                         A plane is an ordered set of nodes from the Nodes pool
+                         above, plus optional connections. Deleting a plane
+                         KEEPS its nodes — the Nodes table is the only place a
+                         node is destroyed. Its members are references into that
+                         pool, so the × in Nodes In This Plane takes the node out
+                         of THIS plane only and the node itself survives. -->
                     <div class="info-section">
-                        <details class="plane-details" id="planeEditorDetails" open>
-                            <summary><span class="plane-summary-label">Edit Plane</span><span class="plane-summary-name" id="planeEditorTitle"></span></summary>
+                        <details class="plane-details" id="planePlanesDetails" open>
+                            <summary><span class="plane-summary-label">Planes</span><span class="plane-summary-name" id="planeEditorTitle"></span><button type="button" class="plane-section-info" id="planePlanesInfo"></button></summary>
                             <div class="plane-details-body">
-                                <!-- WHICH plane is edited. Sits ABOVE the empty
-                                     state and OUTSIDE #planeEditorContent so it
-                                     stays live with nothing selected: its pinned
-                                     "+ New Plane" entry is a primary way to make
-                                     the first plane. It is a SELECTOR only —
-                                     renaming is the Name field below. -->
-                                <div class="plane-name-row plane-picker-row">
-                                    <span>Select Plane</span>
-                                    <select id="planeSelect" class="plane-select" title="Pick the plane to edit, or + New Plane to make one"></select>
+                                <!-- THE roster, and the only selector: a row
+                                     click picks the plane everything below
+                                     edits. Also the drag source — a row dropped
+                                     onto a video view places that plane there.
+                                     Fixed column widths (see
+                                     `table-layout: fixed` in styles.css): the
+                                     panel is ~300px and an auto-layout table
+                                     grows to fit its widest cell, which is what
+                                     gave the section a horizontal scrollbar.
+                                     Name takes whatever is left and ellipses. -->
+                                <table class="data-table" id="planeSkeletonsTable">
+                                    <thead>
+                                        <tr>
+                                            <th style="width:20px"></th>
+                                            <th>Name</th>
+                                            <th style="width:46px">Nodes</th>
+                                            <!-- 62px: "VIEWS" measures 37px at the
+                                                 header's 10px/0.5px uppercase, plus
+                                                 the 16px ⓘ and its 3px margin, plus
+                                                 6px of cell padding. Under 62 the
+                                                 header ellipses to "VIEWS…". -->
+                                            <th style="width:62px">Views<button type="button" class="plane-pin-info" id="planeViewsInfo"></button></th>
+                                            <th style="width:28px"></th>
+                                        </tr>
+                                    </thead>
+                                    <tbody></tbody>
+                                </table>
+                                <div class="table-empty" id="planeSkeletonsEmpty">No planes yet</div>
+
+                                <!-- CREATE, ruled off from the editor below it:
+                                     everything under the rule acts on the
+                                     SELECTED plane, and this is the one control
+                                     that makes one. It sits OUTSIDE
+                                     #planeEditorContent so it stays live with
+                                     nothing selected — with no planes at all it
+                                     is the only thing here that does anything,
+                                     so it cannot be empty-stated away. It does
+                                     not select, either: the roster above does
+                                     that, the same way a 3D Mesh Object is
+                                     chosen by clicking its row. -->
+                                <div class="panel-button-row plane-create-row">
+                                    <button class="panel-btn" id="btnNewPlaneSkeleton" title="Create a new plane and edit it below">+ New Plane</button>
                                 </div>
-                                <!-- The rest of the section is empty-stated rather
-                                     than shown half-dead: every control in it needs
-                                     a plane to act on. -->
-                                <div class="table-empty" id="planeEditorEmpty" style="display:none;">No plane selected — pick one in the Select Plane dropdown above, or choose + New Plane there.</div>
+
+                                <!-- Everything below needs a plane to act on, so
+                                     it is empty-stated as a whole rather than
+                                     shown half-dead. -->
+                                <div class="table-empty" id="planeEditorEmpty" style="display:none;">No plane selected — click a plane in the table above, or + New Plane.</div>
                                 <div id="planeEditorContent">
-                                    <!-- The EDITABLE name. The dropdown above only
-                                         chooses a plane; this is where one is
-                                         renamed, and the rename updates both. -->
+                                    <!-- The plane's name, the only place it is
+                                         renamed — the same label 3D Mesh Objects
+                                         uses for the same control. -->
                                     <div class="plane-name-row">
-                                        <span>Edit Name</span>
+                                        <span>Name</span>
                                         <input type="text" id="planeSkeletonName" placeholder="plane_1" />
                                     </div>
 
@@ -978,74 +1026,49 @@
                                             </div>
                                         </div>
                                     </details>
-                                </div>
-                            </div>
-                        </details>
-                    </div>
 
-                    <!-- 3 — PLANES: each one is an ordered set of nodes from the
-                         Nodes pool, plus optional connections. Deleting a plane
-                         KEEPS its nodes — the Nodes table is the only place a
-                         node is destroyed.
-                         Sits BELOW the Edit Plane editor deliberately: the
-                         editor is where the work happens, so it gets the space
-                         nearest the pool it draws nodes from, and this list
-                         reads as the roster you switch between. -->
-                    <div class="info-section">
-                        <details class="plane-details" id="planePlanesDetails" open>
-                            <summary>Planes<button type="button" class="plane-section-info" id="planePlanesInfo"></button></summary>
-                            <div class="plane-details-body">
-                                <!-- Fixed column widths (see `table-layout: fixed`
-                                     in styles.css): the panel is ~300px and an
-                                     auto-layout table grows to fit its widest
-                                     cell, which is what gave the section a
-                                     horizontal scrollbar. Name takes whatever
-                                     is left and ellipses. -->
-                                <table class="data-table" id="planeSkeletonsTable">
-                                    <thead>
-                                        <tr>
-                                            <th style="width:20px"></th>
-                                            <th>Name</th>
-                                            <th style="width:46px">Nodes</th>
-                                            <!-- 62px: "VIEWS" measures 37px at the
-                                                 header's 10px/0.5px uppercase, plus
-                                                 the 16px ⓘ and its 3px margin, plus
-                                                 6px of cell padding. Under 62 the
-                                                 header ellipses to "VIEWS…". -->
-                                            <th style="width:62px">Views<button type="button" class="plane-pin-info" id="planeViewsInfo"></button></th>
-                                            <th style="width:28px"></th>
-                                        </tr>
-                                    </thead>
-                                    <tbody></tbody>
-                                </table>
-                                <div class="table-empty" id="planeSkeletonsEmpty">No planes yet</div>
-                                <div class="panel-button-row" style="margin-top:6px">
-                                    <button class="panel-btn" id="btnNewPlaneSkeleton" title="Create a new plane">+ New Plane</button>
-                                </div>
-                                <!-- Act on the SELECTED plane; disabled when none is
-                                     selected. Populated with icons by ui/plane-definition.js. -->
-                                <div class="panel-button-row plane-action-row" style="margin-top:6px">
-                                    <button class="panel-btn" id="btnPlaneTriangulate" disabled>Triangulate</button>
-                                    <button class="panel-btn" id="btnPlaneFill" disabled>Fill</button>
-                                    <button class="panel-btn" id="btnPlaneFit" disabled>Fit</button>
-                                </div>
-                                <div class="panel-button-row" style="margin-top:6px">
-                                    <button class="panel-btn" id="btnSetOrigin" disabled>Set Origin</button>
-                                </div>
-                                <!-- Assert a real-world relationship between two
-                                     planes (0 deg = parallel, 90 = perpendicular).
-                                     Needs TWO fitted planes, so it is gated
-                                     separately from Set Origin. -->
-                                <div class="panel-button-row" style="margin-top:6px">
-                                    <button class="panel-btn" id="btnSetPlaneAngle" disabled>Set Angle Between Planes</button>
+                                    <!-- Everything that RUNS on the selected
+                                         plane, in one place — it used to be
+                                         three loose button rows under the Planes
+                                         table, where they read as actions on the
+                                         table rather than on one plane. Foldable
+                                         like its two siblings, so a user editing
+                                         membership can put the solve controls
+                                         away. Each button is still gated on its
+                                         own precondition (Set Origin needs a
+                                         fit, Set Angle two of them), so the
+                                         section is never a list of live buttons
+                                         that do nothing. -->
+                                    <details class="plane-details plane-subdetails" id="planeActionsDetails" open>
+                                        <summary>Actions</summary>
+                                        <div class="plane-details-body">
+                                            <!-- Populated with icons by ui/plane-definition.js. -->
+                                            <div class="panel-button-row plane-action-row">
+                                                <button class="panel-btn" id="btnPlaneTriangulate" disabled>Triangulate</button>
+                                                <button class="panel-btn" id="btnPlaneFill" disabled>Fill</button>
+                                                <button class="panel-btn" id="btnPlaneFit" disabled>Fit</button>
+                                            </div>
+                                            <div class="panel-button-row" style="margin-top:6px">
+                                                <button class="panel-btn" id="btnSetOrigin" disabled>Set Origin</button>
+                                            </div>
+                                            <!-- Assert a real-world relationship between two
+                                                 planes (0 deg = parallel, 90 = perpendicular).
+                                                 Needs TWO fitted planes, so it is gated
+                                                 separately from Set Origin. -->
+                                            <div class="panel-button-row" style="margin-top:6px">
+                                                <button class="panel-btn" id="btnSetPlaneAngle" disabled>Set Angle Between Planes</button>
+                                            </div>
+                                        </div>
+                                    </details>
                                 </div>
 
                                 <!-- Shared across every plane, by design: one node
                                      size and one edge weight for all of them (see
-                                     ui/plane-definition.js). A sub-section of Planes
-                                     rather than a section of its own, because it
-                                     styles exactly what the table above lists and
-                                     nothing else in the panel. -->
+                                     ui/plane-definition.js). Last in the section
+                                     and OUTSIDE #planeEditorContent, because it
+                                     styles what the roster lists rather than the
+                                     one plane being edited — so it stays usable
+                                     with nothing selected. -->
                                 <details class="plane-details plane-subdetails" id="planeAppearanceDetails" open>
                                     <summary>Plane Appearance</summary>
                                     <div class="plane-details-body">
@@ -1111,7 +1134,7 @@
                                     <div class="plane-hint" style="margin-top:6px">Planes in this object</div>
                                     <div class="mesh-object-members" id="meshObjectMembers"></div>
                                     <div class="table-empty" id="meshObjectMembersEmpty">No planes in this object yet</div>
-                                    <!-- Pick-and-add, the same shape as Edit Plane's
+                                    <!-- Pick-and-add, the same shape as the Planes section's
                                          "+ Add" for an existing node: the list offers
                                          only what is NOT already a member, so it empties
                                          as the object is filled in. -->

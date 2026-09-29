@@ -4643,7 +4643,7 @@ kbd {
 
 /* Section titles. Bigger than the 12px the rest of the panel uses: these are
    the four things the panel IS, and at body size they read as another row of
-   controls. The sub-sections inside Edit Plane stay at 12px, so the hierarchy
+   controls. The sub-sections inside Planes stay at 12px, so the hierarchy
    is legible without indentation. */
 .plane-details > summary {
   cursor: pointer;
@@ -4683,7 +4683,7 @@ kbd {
   gap: 8px;
 }
 
-/* MAJOR sections — the handful of things this panel IS (Nodes, Edit Plane,
+/* MAJOR sections — the handful of things this panel IS (Nodes, Planes,
    Planes, 3D Mesh Objects, Defined Origin, Danger Zone), as opposed to the
    sub-sections nested inside them.
 
@@ -4758,12 +4758,11 @@ kbd {
 }
 
 /* A FIXED label column, so every row's control starts at the same x. The
-   labels used to be content-sized and happened to align because "Plane" and
-   "Name" are both five characters; "Select Plane" and "Edit Name" are not, and
-   content sizing would have staggered the two fields by ~18px. 72px fits the
-   longest of them at this 11px size with a pixel to spare — `nowrap` plus
-   `flex-basis` rather than `width` so a longer label grows the column instead
-   of wrapping inside it. */
+   panel has two of these rows — this plane's Name and a 3D Mesh Object's —
+   and a content-sized label would let each be positioned by its own text, so
+   the two sections' fields would start at different x. 72px fits both labels at
+   this 11px size with room to spare; `nowrap` plus `flex-basis` rather than
+   `width` so a longer label grows the column instead of wrapping inside it. */
 .plane-name-row > span {
   flex: 0 0 72px;
   white-space: nowrap;
@@ -4789,27 +4788,28 @@ kbd {
   font-style: italic;
 }
 
-/* The Edit Plane section's body is swapped out wholesale for its empty state,
-   so it needs its own flex column — otherwise the wrapper collapses the
-   `.plane-details-body` gap between the name row, the members table and the
-   connections. */
+/* The per-plane part of the Planes section is swapped out wholesale for its
+   empty state, so it needs its own flex column — otherwise the wrapper
+   collapses the `.plane-details-body` gap between the name row, the members
+   table, the connections and the actions. */
 #planeEditorContent {
   display: flex;
   flex-direction: column;
   gap: 8px;
 }
 
-/* The plane SELECTOR row. Ruled off from the body below it because it is the
-   one control in the section that stays live with nothing selected — it picks
-   (or mints) the plane everything under the rule then acts on. */
-.plane-picker-row {
+/* The `+ New Plane` row, between the roster and the editor. Ruled off from
+   the editor below it because that is where the section changes subject: above
+   the rule is every plane, below it is the one being edited — and this button,
+   which makes one, is the last thing that works with none selected. */
+.plane-create-row {
   padding-bottom: 8px;
   border-bottom: 1px solid var(--border-color);
 }
 
-/* "Edit Plane — floor". The label is fixed; the name is the selected
-   plane's, so with three sibling sections the reader can tell at a glance which
-   plane the controls below act on. */
+/* "Planes — floor". The label is fixed; the name is the selected plane's, so
+   a reader who has scrolled the roster out of view — or folded the section —
+   can still tell which plane the editor below acts on. */
 .plane-summary-name {
   margin-left: 6px;
   font-weight: 400;

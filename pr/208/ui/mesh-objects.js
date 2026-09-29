@@ -315,7 +315,8 @@ function renderReport(obj) {
  * membership is the thing being edited, so it is what the panel shows, and the
  * list stays the length of the object instead of the length of the project.
  * Planes are ADDED through the picker below it (`renderAddPlaneSelect`), the
- * same pick-and-add idiom Edit Plane uses to put an existing node in a plane.
+ * same pick-and-add idiom the Planes section uses to put an existing node in a
+ * plane.
  *
  * A member whose plane has since been deleted still gets a row — greyed, named
  * by id — because it is still in `planeIds` and its × is the only way to clear
@@ -372,7 +373,7 @@ function renderMembers(obj, model) {
 /**
  * The picker for adding a plane, offering only NON-members.
  *
- * Mirrors Edit Plane's "+ Add" for an existing node, down to keying the
+ * Mirrors the Planes section's "+ Add" for an existing node, down to keying the
  * options by plane ID rather than name — names are user-editable and can
  * collide. An empty list is a real state (every plane is already in this
  * object, or there are no planes yet) and it is said in words rather than left

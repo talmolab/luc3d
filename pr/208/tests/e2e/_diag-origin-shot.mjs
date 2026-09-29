@@ -59,7 +59,7 @@ await page.click('#btnPlaneFit');
 await page.evaluate(async () => {
     const AS = await import('/ui/app-state.js');
     AS.viewport3d.fitToScene();
-    document.getElementById('planeEditorDetails').open = false;
+    document.getElementById('planeMembersDetails').open = false;
 });
 
 // Step 1: pick the corner.

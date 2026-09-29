@@ -12,9 +12,10 @@
 //                      which plane the editor is editing.
 //   - Mode enter/exit — shows the "Defining Plane Mode" banner and swaps the
 //                      info panel's tab bar for the Define Plane panel.
-//   - The Define Plane panel — THREE sibling sections: the global Nodes pool,
-//                      the Edit Plane editor (which plane, its name, its member
-//                      nodes, its connections), and the Planes list.
+//   - The Define Plane panel — TWO sibling sections: the global Nodes pool,
+//                      and Planes (the roster, plus the editor for whichever
+//                      plane is selected: its name, its member nodes, its
+//                      connections and the actions that run on it).
 //   - Drag-and-drop  — dragging a plane row onto a video view PLACES that plane
 //                      there: its nodes get 2D points seeded in a ring around
 //                      the drop point.
@@ -31,33 +32,41 @@
 // two planes MEET along a shared line — the corners on that line are one node
 // with one 3D position, so re-solving either plane cannot split the line apart.
 //
-// The panel's SHAPE is that model made visible, which is why it is three
-// SIBLING sections rather than a nodes editor nested inside a plane editor:
+// The panel's SHAPE is that model made visible, which is why the pool is its
+// own section rather than a nodes editor nested inside a plane editor:
 //
 //   1. Nodes            — the project-wide pool. Name / colour / pin / delete
 //                         all act on the NODE, so they apply to every plane
 //                         using it. No membership column: a node is not owned
 //                         by a plane. `+ Node` mints a POOL node and touches no
 //                         plane at all — it neither creates one nor joins one.
-//   2. Edit Plane       — WHICH plane (the selector at the top, with a pinned
-//                         `+ New Plane` entry), then what THAT plane is made
-//                         of: its name, the nodes in it (× removes the
-//                         REFERENCE, never the node), an "add an existing node"
-//                         dropdown, and its connections.
-//   3. Planes           — the list, the drag source, and the actions that run
-//                         on the selected plane (Triangulate / Fill / Fit /
-//                         Set Origin).
+//   2. Planes           — the roster AND the editor, in that order: the list
+//                         (also the drag source, and the only thing that
+//                         SELECTS), `+ New Plane`, then the selected plane's
+//                         name and three foldable parts — Nodes In This Plane
+//                         (× removes the REFERENCE, never the node, and an
+//                         "add an existing node" dropdown puts one in), Node
+//                         Connections, and Actions (Triangulate / Fill / Fit /
+//                         Set Origin / Set Angle Between Planes). Plane
+//                         Appearance goes last, outside the per-plane part,
+//                         because it styles every plane in the list.
 //
-// Section 2's `+ Add` dropdown is the headline affordance: picking a node
-// another plane already uses is exactly how an intersection is built, and it
-// must stay at least as cheap as the checkbox it replaced. It is also the ONLY
-// way a node enters a plane — creating a node and putting one in a plane are
-// deliberately two separate acts, because a node is not owned by a plane.
+// Those two were three: picking a plane and editing it were separate sections,
+// so the reader had to hold a plane in their head while scrolling between the
+// list that picks it and the controls that act on it. One section, one plane.
 //
-// SELECTING vs RENAMING are two controls, not one. The top row's `<select>`
-// only chooses which plane is edited (and its last entry mints one); the Name
-// field in the body is where a plane is renamed. Merging them into one text
-// box made "type here" mean both "find" and "rename" depending on state.
+// `+ Add` is the headline affordance: picking a node another plane already uses
+// is exactly how an intersection is built, and it must stay at least as cheap
+// as the checkbox it replaced. It is also the ONLY way a node enters a plane —
+// creating a node and putting one in a plane are deliberately two separate
+// acts, because a node is not owned by a plane.
+//
+// SELECTING and RENAMING are still two controls, and they are now in two
+// different registers rather than two stacked rows: the ROSTER selects (a row
+// click, the one writer of `planeState.selectedPlaneId` besides `createPlane`)
+// and the Name field below renames. Merging them into one text box made "type
+// here" mean both "find" and "rename" depending on state; a `<select>` above
+// the Name field merely made the reader tell two labelled rows apart.
 //
 // ## PINNED (IMMUTABLE) NODES
 //
@@ -118,21 +127,6 @@ import { PIN_STATES } from '../pose/plane-nodes.js';
 import { hasPoint3d, getPoint3d } from '../pose/pose-data.js';
 
 /**
- * User-facing names for the three pin states.
- *
- * "Unlocked" rather than the "Free" this said while the control was a
- * `<select>`: the control is a padlock now, and the three names have to be the
- * three things a padlock can be. It also matches the wording of the Pin
- * column's own explanation.
- * @private
- */
-const PIN_LABELS = {
-    'none': 'Unlocked',
-    'plane-locked': 'Plane-locked',
-    'locked': 'Locked',
-};
-
-/**
  * The three pin states, as icons.
  *
  * Traced from the three padlock SVGs supplied for this control (Lucide-style
@@ -150,7 +144,7 @@ const PIN_LABELS = {
  * stands on.
  * @private
  */
-const ICON_PIN = (function () {
+export const ICON_PIN = (function () {
     var open = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" ' +
         'stroke="currentColor" stroke-width="2" stroke-linecap="round" ' +
         'stroke-linejoin="round" aria-hidden="true">';
@@ -170,31 +164,42 @@ const ICON_PIN = (function () {
 }());
 
 /** The Pin column's explanation button. @private */
-const ICON_INFO =
+export const ICON_INFO =
     '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" ' +
     'stroke="currentColor" stroke-width="2" stroke-linecap="round" ' +
     'aria-hidden="true"><circle cx="12" cy="12" r="9"/>' +
     '<path d="M12 11.2v5"/>' +
     '<circle cx="12" cy="7.6" r="1.1" fill="currentColor" stroke="none"/></svg>';
 
-/** What each state promises, as the control's tooltip. @private */
-const PIN_TITLES = {
-    'none': 'Unlocked (mutable): triangulation, fitting and dragging may all ' +
-        'move this node\u2019s 3D position.',
-    'plane-locked': 'Plane-locked (mutable within its planes): this node may ' +
-        'move, but only within EVERY plane it belongs to — one plane\u2019s ' +
-        'surface, the line two of them share, or the single point three meet ' +
-        'at. It is not an anchor, so a fit is still free to move it, but a ' +
-        'solve that would take it off projects it back on.',
-    'locked': 'Locked (immutable): this 3D position is frozen. Nothing — 2D editing, ' +
-        'triangulation, fitting or dragging — may move it, and a fit is ' +
-        'constrained to pass through it. Set Angle Between Planes locks the ' +
-        'nodes it moves, so the angle survives a later solve.',
-};
 import { state, interactionManager, viewport3d } from './app-state.js';
 import { makeVideoToCanvasTransform } from './overlays.js';
 import { persistSectionStates } from './section-state.js';
 import { setInfoTip } from './info-tip.js';
+import { showPlaneDialog } from './plane-dialog.js';
+// Imported as well as re-exported below: `export { x } from` makes the name
+// importable FROM here but does not bind it in this module's own scope, and
+// `enterPlaneMode` / `exitPlaneMode` call this one directly.
+import { applyPlaneModeToolbarLock } from './plane-toolbar-lock.js';
+// Section 1 of the panel, the Nodes pool. Imported (not merely re-exported)
+// because
+// `refreshPlanePanel` and the setup wiring call these directly.
+import {
+    renderNodesTable, renderPinInfoButton, renderFrozenWarning,
+    // Shared with the 3D corner drag below, which reports where a
+    // plane-locked node was pulled back to.
+    planeLockWhere,
+} from './plane-nodes-panel.js';
+// The ROSTER half of section 2 — the Planes table and the actions that run on
+// the selected plane. Imported, not merely re-exported: the panel refresh below
+// calls these directly.
+import {
+    renderActionRow, renderPlanesTable, renderOriginButton,
+    // The three action-button glyphs: the one-time wiring below sets their
+    // innerHTML, so the hub needs the strings as well as the renderers.
+    ICON_TRIANGULATE, ICON_MESH, ICON_FIT,
+} from './plane-list-panel.js';
+// The EDITOR half of section 2, below the roster in the same <details>.
+import { renderEditor } from './plane-editor-panel.js';
 import { setStatus, markDirty } from '../import-export/save-load.js';
 // The 3D Mesh Objects table lives in its own module and is purely additive —
 // this import and the two calls below are the whole of its coupling to the
@@ -399,7 +404,7 @@ export function planeHasAny3d(plane) {
  * `projectPoints3dOntoPlaneConstrained` all take.
  * @param {PlaneSkeleton} plane @returns {boolean[]}
  */
-function planeImmutableMask(plane) {
+export function planeImmutableMask(plane) {
     var pool = planePool();
     return plane.nodeIds.map(function (id) {
         var node = pool.getNode(id);
@@ -1296,80 +1301,10 @@ function reportFit(plane, res) {
 // The plane dialog (blocking error / confirmation)
 // ============================================
 
-/**
- * A small modal for the outcomes the status bar cannot carry: a blocking error
- * (OK only) and a confirmation (Cancel / confirm) for anything irreversible —
- * a fit that would move a corner metres, or deleting a node several planes are
- * standing on.
- *
- * Closes on Esc, per the project's modal rule — Esc CANCELS, so an accidental
- * dismissal can never apply the thing the user was still deciding about.
- *
- * @param {{title:string, message:string, confirmLabel?:string,
- *          onConfirm?:function}} opts
- */
-export function showPlaneDialog(opts) {
-    var overlay = document.createElement('div');
-    overlay.className = 'plane-confirm-overlay';
-    overlay.id = 'planeDialog';
-
-    var modal = document.createElement('div');
-    modal.className = 'plane-confirm-modal';
-
-    var h = document.createElement('h3');
-    h.textContent = opts.title;
-    modal.appendChild(h);
-
-    var body = document.createElement('div');
-    body.className = 'plane-confirm-message';
-    body.id = 'planeDialogMessage';
-    body.textContent = opts.message;
-    modal.appendChild(body);
-
-    var actions = document.createElement('div');
-    actions.className = 'modal-actions';
-
-    function close() {
-        document.removeEventListener('keydown', onKey, true);
-        if (overlay.parentNode) overlay.remove();
-    }
-    function onKey(e) {
-        if (e.key !== 'Escape') return;
-        e.preventDefault();
-        e.stopPropagation();
-        close();
-    }
-
-    if (opts.onConfirm) {
-        var cancel = document.createElement('button');
-        cancel.id = 'btnPlaneDialogCancel';
-        cancel.textContent = 'Cancel';
-        cancel.addEventListener('click', close);
-        actions.appendChild(cancel);
-
-        var ok = document.createElement('button');
-        ok.id = 'btnPlaneDialogConfirm';
-        ok.className = 'primary';
-        ok.textContent = opts.confirmLabel || 'Continue';
-        ok.addEventListener('click', function () {
-            close();
-            opts.onConfirm();
-        });
-        actions.appendChild(ok);
-    } else {
-        var dismiss = document.createElement('button');
-        dismiss.id = 'btnPlaneDialogDismiss';
-        dismiss.className = 'primary';
-        dismiss.textContent = 'OK';
-        dismiss.addEventListener('click', close);
-        actions.appendChild(dismiss);
-    }
-
-    modal.appendChild(actions);
-    overlay.appendChild(modal);
-    document.body.appendChild(overlay);
-    document.addEventListener('keydown', onKey, true);
-}
+// Moved to `ui/plane-dialog.js` — it touches no plane state, and four
+// modules share it. Re-exported here so every existing importer and every
+// test that reaches it through this path is unaffected.
+export { showPlaneDialog } from './plane-dialog.js';
 
 // ============================================
 // Pushing planes into the 3D viewport
@@ -1500,7 +1435,7 @@ function syncMeshObject3D() {
  * panel says so instead.
  * @private
  */
-function syncSelectedNode3D() {
+export function syncSelectedNode3D() {
     if (!viewport3d || !viewport3d.setSelectedPlaneNode) return;
     var id = planeState.selectedNodeId;
     viewport3d.setSelectedPlaneNode(id == null ? null : { nodeId: id });
@@ -1709,93 +1644,9 @@ export function isPlaneModeActive() {
 // The annotation toolbar, while the mode is on
 // ============================================
 
-/**
- * The toolbar buttons Defining Plane Mode blocks.
- *
- * All of them act on POSE annotation — instances, groups, pose triangulation,
- * tracking — which is a different object than the plane geometry the mode is
- * for. In the mode a click lands on a plane node, the info panel is the plane
- * panel, and `interactionManager`'s selection is a plane; pressing Group or
- * Triangulate here operates on a pose selection the user can no longer see or
- * change, so the result is an edit they did not mean to make and cannot
- * observe. Blocked rather than merely ignored, because a button that silently
- * does nothing is indistinguishable from one that is broken.
- *
- * The VISIBILITY controls are deliberately absent from this list, and so are
- * Sessions, Color and Hide Panel. Those change what is DRAWN, not what is
- * annotated — turning Predicted off to see the plane you are placing is
- * exactly the kind of thing this mode is for.
- *
- * @type {string[]}
- */
-const PLANE_LOCKED_TOOLBAR_IDS = [
-    'tbAddInstance', 'tbDeleteInstance',
-    'tbGroup', 'tbEditGroup', 'tbTriangulate', 'tbTriangulateAll',
-    'tbTrackFrame', 'tbTrackAll',
-];
-
-/**
- * The dropdown WRAPPERS whose menus must be locked with their button.
- *
- * `#tbTriangulate` / `#tbTriangulateAll` each sit inside a `.tri-dropdown`
- * whose menu opens on **hover** (CSS) and whose DLT / BA entries are `div`s
- * with their own click handlers. `disabled` on the button reaches neither, so
- * without this the button greys out while its menu still triangulates.
- *
- * @type {string[]}
- */
-const PLANE_LOCKED_DROPDOWN_IDS = ['triangulateDropdown', 'triangulateAllDropdown'];
-
-/** Suffix appended to a locked button's tooltip, so "why?" is answered in place. */
-const LOCKED_TITLE_SUFFIX = ' — not available in Defining Plane Mode';
-
-/**
- * Apply (or lift) the mode's toolbar lock.
- *
- * Idempotent, and safe to call as often as you like — which it has to be,
- * because `drawAllOverlays` RECOMPUTES `tbGroup.disabled` / `tbEditGroup.disabled`
- * from the pose selection on every overlay draw, and the mode redraws
- * constantly. So this is re-asserted from there too rather than only on entry;
- * setting `disabled` once at `enterPlaneMode` would survive exactly until the
- * first mouse move.
- *
- * Each button's PRIOR `disabled` is recorded at lock time and restored on exit,
- * the same rule `lockUI` in `ui/origin-definition.js` follows: several of these
- * are disabled for their own reasons (Edit Group with a reprojected instance
- * selected, Track All mid-run), and blanket-enabling on exit would misreport
- * what is clickable. For `tbGroup` / `tbEditGroup` the snapshot is belt and
- * braces only — `drawAllOverlays` OWNS those two and re-derives them on the
- * redraw `exitPlaneMode` triggers, so a stale snapshot cannot stick.
- */
-export function applyPlaneModeToolbarLock() {
-    var on = planeState.active;
-    for (var i = 0; i < PLANE_LOCKED_TOOLBAR_IDS.length; i++) {
-        var btn = document.getElementById(PLANE_LOCKED_TOOLBAR_IDS[i]);
-        if (!btn) continue;
-        if (on) {
-            // Snapshot once, on the transition — re-snapshotting on the
-            // re-assert from `drawAllOverlays` would record the LOCKED state
-            // and make the restore a no-op.
-            if (!btn.classList.contains('plane-mode-locked')) {
-                btn.dataset.planeUnlockedTitle = btn.title || '';
-                btn.dataset.planeUnlockedDisabled = btn.disabled ? '1' : '';
-                btn.title = (btn.title || btn.textContent.trim()) + LOCKED_TITLE_SUFFIX;
-                btn.classList.add('plane-mode-locked');
-            }
-            btn.disabled = true;
-        } else if (btn.classList.contains('plane-mode-locked')) {
-            btn.classList.remove('plane-mode-locked');
-            btn.title = btn.dataset.planeUnlockedTitle || '';
-            btn.disabled = btn.dataset.planeUnlockedDisabled === '1';
-            delete btn.dataset.planeUnlockedTitle;
-            delete btn.dataset.planeUnlockedDisabled;
-        }
-    }
-    for (var d = 0; d < PLANE_LOCKED_DROPDOWN_IDS.length; d++) {
-        var wrap = document.getElementById(PLANE_LOCKED_DROPDOWN_IDS[d]);
-        if (wrap) wrap.classList.toggle('plane-mode-locked', on);
-    }
-}
+// Moved to `ui/plane-toolbar-lock.js`. Re-exported so `ui/rendering.js`
+// and the tests keep reaching it through this module's path.
+export { applyPlaneModeToolbarLock } from './plane-toolbar-lock.js';
 
 export function enterPlaneMode() {
     if (planeState.active) return;
@@ -1810,8 +1661,8 @@ export function enterPlaneMode() {
     // No plane is minted on entry. An empty Planes list is the honest starting
     // state; a phantom `plane_1` nobody asked for is something the user then
     // has to notice and delete, and it would be indistinguishable from one
-    // they created and forgot. The Edit Plane section carries its own
-    // empty state, so the panel is not a dead end without it.
+    // they created and forgot. The editor half of the Planes section carries
+    // its own empty state, so the panel is not a dead end without it.
     // An EXISTING plane is still re-selected, so re-entering the mode resumes
     // where it left off.
     var model = planeModel();
@@ -1926,7 +1777,7 @@ function applyAngleModalLock() {
     for (var i = 0; i < controls.length; i++) controls[i].disabled = true;
 }
 
-function makeDeleteButton(title, onClick) {
+export function makeDeleteButton(title, onClick) {
     var btn = document.createElement('button');
     btn.textContent = '×';
     btn.className = 'panel-btn';
@@ -1939,1632 +1790,30 @@ function makeDeleteButton(title, onClick) {
     return btn;
 }
 
-function setEmptyState(tableId, emptyId, isEmpty) {
+export function setEmptyState(tableId, emptyId, isEmpty) {
     var table = document.getElementById(tableId);
     var empty = document.getElementById(emptyId);
     if (table) table.style.display = isEmpty ? 'none' : '';
     if (empty) empty.style.display = isEmpty ? '' : 'none';
 }
 
-// --- Section 1: the global Nodes table --------------------------------------
-
-/**
- * Section 2 — Edit Plane: WHICH plane is being edited, and what it is made of
- * (its name, which nodes are in it, and its connections).
- *
- * Everything BELOW the selector is empty-stated as a whole rather than shown
- * half-dead, because every control in it needs a plane to act on: a name field
- * with nothing to name and an "add node" dropdown with nowhere to add to are
- * worse than an explanation. The SELECTOR itself stays live either way — with
- * no plane it is the shortest path to making one.
- */
-function renderEditor() {
-    var plane = getSelectedPlane();
-
-    // Name the plane in the section header — with three sibling sections the
-    // reader needs to know WHICH plane the controls below belong to without
-    // cross-referencing the Planes table.
-    var title = document.getElementById('planeEditorTitle');
-    if (title) title.textContent = plane ? plane.name : '— none selected';
-
-    renderPlaneSelect(plane);
-
-    var body = document.getElementById('planeEditorContent');
-    var empty = document.getElementById('planeEditorEmpty');
-    if (body) body.style.display = plane ? '' : 'none';
-    if (empty) empty.style.display = plane ? 'none' : '';
-
-    var nameInput = document.getElementById('planeSkeletonName');
-    if (nameInput) {
-        nameInput.value = plane ? plane.name : '';
-        nameInput.disabled = !plane;
-    }
-
-    renderNodesTable();
-    renderFrozenWarning();
-    renderPlaneMembers(plane);
-    renderAddNodeSelect(plane);
-    renderEdgeSelects(plane);
-    renderEditorEdges(plane);
-}
-
-/**
- * The `<option>` value of the pinned "+ New Plane" entry. A string that can
- * never be a plane id, so `parseInt` on a real selection cannot collide with
- * it. @private
- */
-const NEW_PLANE_OPTION = 'new';
-
-/** The `<option>` value meaning "nothing selected". @private */
-const NO_PLANE_OPTION = '';
-
-/**
- * Fill the plane SELECTOR at the top of the Edit Plane section.
- *
- * Every plane, in creation order, plus "+ New Plane" pinned LAST. Last rather
- * than first because the list is what the control is for — a creation entry at
- * the top pushes the planes down and is hit by every mis-aimed click meant for
- * the first one.
- *
- * This control cannot rename anything: the option text is a plane's name but
- * the option VALUE is its id, so a rename (in the Name field below) simply
- * relabels an entry rather than moving the selection. With no plane selected a
- * placeholder holds the displayed value — a disabled one, so the user cannot
- * choose "nothing" back once they are editing a plane.
- *
- * @param {PlaneSkeleton|null} plane - The selected plane.
- */
-function renderPlaneSelect(plane) {
-    var select = document.getElementById('planeSelect');
-    if (!select) return;
-    select.textContent = '';
-
-    var planes = getPlanes();
-    if (!plane) {
-        var ph = document.createElement('option');
-        ph.value = NO_PLANE_OPTION;
-        ph.disabled = true;
-        ph.textContent = planes.length ? '— select a plane —' : '— no planes yet —';
-        select.appendChild(ph);
-    }
-    planes.forEach(function (p) {
-        var opt = document.createElement('option');
-        opt.value = String(p.id);
-        opt.textContent = p.name;
-        select.appendChild(opt);
-    });
-
-    var mint = document.createElement('option');
-    mint.value = NEW_PLANE_OPTION;
-    mint.textContent = '+ New Plane';
-    select.appendChild(mint);
-
-    // Assigned AFTER the options exist, or the browser has nothing to match.
-    select.value = plane ? String(plane.id) : NO_PLANE_OPTION;
-}
-
-/**
- * Section 1 — the Nodes table: the GLOBAL POOL, on its own, as a top-level
- * section.
- *
- * It is deliberately NOT inside the plane editor. A node outlives the planes
- * that reference it and may belong to several at once, so presenting node
- * creation as a sub-step of editing one plane misstates the model. Everything
- * in this table acts on the NODE — renaming, recolouring, pinning and deleting
- * all apply to every plane using it — and there is no membership column: which
- * plane a node is IN is the Edit Plane section's business.
- */
-function renderNodesTable() {
-    var tbody = document.querySelector('#planeNodesTable tbody');
-    if (!tbody) return;
-    // A rebuild throws away the button the popover is anchored to, so it has to
-    // go with it rather than float over the new rows.
-    closePinPopover();
-    tbody.textContent = '';
-
-    var model = planeModel();
-    var pool = model.pool;
-    var nodes = pool.nodes;
-    setEmptyState('planeNodesTable', 'planeNodesEmpty', nodes.length === 0);
-    renderPinInfoButton();
-
-    // A deleted node cannot stay selected: its row is gone and so is the
-    // corner the marker was sitting on. Checked here rather than in the delete
-    // path because every route that removes a node ends in this rebuild.
-    if (planeState.selectedNodeId != null && !pool.getNode(planeState.selectedNodeId)) {
-        planeState.selectedNodeId = null;
-        syncSelectedNode3D();
-    }
-
-    nodes.forEach(function (node) {
-        var tr = document.createElement('tr');
-        tr.setAttribute('data-plane-node-id', String(node.id));
-        var st = nodeFreezeState(node);
-        var usedBy = model.planesForNode(node.id);
-        var expanded = planeState.expandedNodes.has(node.id);
-        // `plane-node-main` marks the IDENTITY row — the one a node's name,
-        // colour, pin and delete button live on. `plane-node-row` stays on both
-        // rows, because every state cue styled off it (shared, unused,
-        // dead-end) has to run down the whole node.
-        tr.className = 'plane-node-row plane-node-main plane-node-' + st +
-            // A node in no plane is NOT an error — planes are deleted without
-            // taking their nodes, so this is a normal resting state. It is
-            // dimmed only because nothing draws it on any view yet.
-            (usedBy.length === 0 ? ' plane-node-unused' : '') +
-            (usedBy.length > 1 ? ' plane-node-shared' : '') +
-            (node.id === planeState.selectedNodeId ? ' plane-node-selected' : '') +
-            (expanded ? ' plane-node-open' : '');
-
-        // --- Expander: reveals this node's coordinates ---
-        var tdExpand = document.createElement('td');
-        var expandBtn = document.createElement('button');
-        expandBtn.className = 'plane-node-expander' + (expanded ? ' open' : '');
-        expandBtn.innerHTML = '<span class="plane-caret">▶</span>';
-        expandBtn.title = expanded
-            ? 'Hide this node’s 3D position'
-            : 'Show this node’s 3D position and the planes using it';
-        expandBtn.addEventListener('click', function (e) {
-            e.stopPropagation();
-            if (planeState.expandedNodes.has(node.id)) planeState.expandedNodes.delete(node.id);
-            else planeState.expandedNodes.add(node.id);
-            // Just this table: expanding a node changes nothing else in the
-            // panel, and a full refresh would throw away a name being typed in
-            // some other row.
-            renderNodesTable();
-        });
-        tdExpand.appendChild(expandBtn);
-
-        // Per-node colour, FIRST in the row: it is how you tell this corner
-        // apart from the others on every view and in 3D, so it reads as the
-        // node's identity rather than as one of its properties. Scoped to the
-        // NODE, so the colour is the same everywhere.
-        var tdColor = document.createElement('td');
-        var color = document.createElement('input');
-        color.type = 'color';
-        color.className = 'plane-node-color';
-        color.value = node.color;
-        color.title = 'Colour for "' + node.name + '" on every view and in every plane';
-        color.addEventListener('input', function () {
-            node.color = color.value;
-            redraw();
-        });
-        color.addEventListener('change', function () {
-            node.color = color.value;
-            markDirty();
-            syncPlanes3D();
-            refreshPlanePanel();
-            redraw();
-        });
-        color.addEventListener('click', function (e) { e.stopPropagation(); });
-        tdColor.appendChild(color);
-
-        // --- Name (renames the node everywhere it is used) ---
-        var tdName = document.createElement('td');
-        var input = document.createElement('input');
-        input.type = 'text';
-        input.value = node.name;
-        // Plain text until you go for it: a row of boxed fields is what made
-        // this list read as a form rather than as a list of nodes. The input is
-        // full-width, so the whole row is a rename target.
-        input.className = 'plane-node-name';
-        input.title = 'Node name, shared by every plane using it';
-        input.addEventListener('change', function () {
-            var newName = input.value.trim();
-            if (!newName) { input.value = node.name; return; }
-            node.name = newName;
-            markDirty();
-            refreshPlanePanel();
-            redraw();
-        });
-        tdName.appendChild(input);
-
-        // --- Pin: one icon, three states ---
-        // An icon rather than the <select> this used to be. The select had to
-        // be wide enough for the words "Plane-locked", and it carried a second
-        // line naming the plane a held node is held in — two lines of chrome in
-        // every row to say something that is usually "Free". The state is now a
-        // padlock you can read at a glance and change in one click, and the
-        // words live in its tooltip and in the expanded panel.
-        var tdPin = document.createElement('td');
-        var pinBtn = document.createElement('button');
-        pinBtn.className = 'plane-node-pin-btn plane-node-pin-' + node.pin;
-        pinBtn.innerHTML = ICON_PIN[node.pin] || ICON_PIN.none;
-        pinBtn.setAttribute('data-pin', node.pin);
-        pinBtn.setAttribute('aria-label', 'Pin: ' + PIN_LABELS[node.pin]);
-        pinBtn.title = PIN_LABELS[node.pin] + ' — ' +
-            (PIN_TITLES[node.pin] || PIN_TITLES.none) +
-            (node.pin === 'plane-locked' ? ' ' + heldInText(node, model) : '') +
-            '\nClick to change.';
-        pinBtn.addEventListener('mouseenter', function () { openPinPopover(pinBtn, node); });
-        pinBtn.addEventListener('mouseleave', function () { schedulePinPopoverClose(); });
-        pinBtn.addEventListener('click', function (e) {
-            e.stopPropagation();
-            // Click PINS it open, so the picker is usable without holding the
-            // pointer steady — and a second click dismisses it.
-            if (pinPopover && pinPopover.nodeId === node.id && pinPopover.sticky) closePinPopover();
-            else openPinPopover(pinBtn, node, true);
-        });
-        pinBtn.addEventListener('keydown', function (e) {
-            if (e.key !== 'Enter' && e.key !== ' ') return;
-            e.preventDefault();
-            openPinPopover(pinBtn, node, true);
-        });
-        tdPin.appendChild(pinBtn);
-
-        // The long form of the node's 3D state stays reachable on the row, as
-        // it has since the 3D column went away.
-        tr.title = nodeStateTitle(node, st, model);
-
-        var tdDel = document.createElement('td');
-        var delBtn = makeDeleteButton(
-            'Delete "' + node.name + '" from the PROJECT: every plane using it, ' +
-            'its 3D, and its 2D on every view. To take it out of ONE plane, use ' +
-            'the × in Nodes In This Plane instead.',
-            function () { deleteNodeWithConfirm(node, usedBy); });
-        // Quiet until you reach for it. The shared delete button is red at
-        // rest, which is right in a table you visit to remove something and
-        // wrong in a list of six nodes you are reading — six red × down the
-        // edge is most of what made this list shout. The inline colour has to
-        // be cleared for the hover rule to reach it.
-        delBtn.classList.add('plane-node-del');
-        delBtn.style.color = '';
-        tdDel.appendChild(delBtn);
-
-        tr.appendChild(tdExpand);
-        tr.appendChild(tdColor);
-        tr.appendChild(tdName);
-        tr.appendChild(tdPin);
-        tr.appendChild(tdDel);
-        tbody.appendChild(tr);
-        // The coordinates are one click away rather than always on screen:
-        // nine nodes of nine numbers is the clutter the list had, and a
-        // position is something you check or set deliberately.
-        if (expanded) tbody.appendChild(renderNodeDetailRow(node, st, usedBy, model));
-    });
-}
-
-/**
- * The set a plane-locked node may move in, named.
- *
- * The pin holds a node in every plane it belongs to, so the answer is not a
- * plane name but the INTERSECTION of however many planes it is in — which is
- * why the rank is what picks the word. Rank 1 with several planes means they
- * are effectively the same surface; naming them all is more use than picking
- * one of them arbitrarily.
- * @param {{rank:number, planes:{name:string}[]}} lock
- * @returns {string|null} null when nothing currently constrains the node.
- * @private
- */
-function planeLockWhere(lock) {
-    if (!lock || !lock.rank || !lock.planes.length) return null;
-    var list = quotedList(lock.planes.map(function (p) { return p.name; }));
-    if (lock.rank >= 3) return 'the point where ' + list + ' meet';
-    if (lock.rank === 2) return 'the line where ' + list + ' meet';
-    return lock.planes.length > 1 ? 'the plane ' + list + ' share' : list;
-}
-
-/** `\u201ca\u201d`, `\u201ca\u201d and \u201cb\u201d`, `\u201ca\u201d, \u201cb\u201d and \u201cc\u201d`. @private */
-function quotedList(names) {
-    var q = names.map(function (n) { return '\u201c' + n + '\u201d'; });
-    if (q.length <= 1) return q[0] || '';
-    return q.slice(0, -1).join(', ') + ' and ' + q[q.length - 1];
-}
-
-/** Where a plane-locked node is held, as a sentence. @private */
-function heldInText(node, model) {
-    var lock = model.planeLockForNode(node.id);
-    var where = planeLockWhere(lock);
-    if (!where) {
-        return 'None of its planes can say where it is yet — each needs three ' +
-            'other solved corners — so the restriction is inert.';
-    }
-    return 'Held to ' + where +
-        (lock.rank >= 3 ? ', which is one position: it cannot move.' : '.');
-}
-
-/**
- * Enable the Pin column's info button and give it its explanation.
- *
- * The three states are the one thing in this panel that cannot be inferred from
- * what is on screen — a padlock shows WHICH state is in force but not what the
- * three of them mean — so the column carries the definition rather than leaving
- * it to be discovered one tooltip at a time.
- * @private
- */
-function renderPinInfoButton() {
-    var btn = document.getElementById('planePinInfo');
-    if (!btn || btn.dataset.wired) return;
-    btn.innerHTML = ICON_INFO;
-    // A button, so it is reachable by keyboard. The text shows BESIDE THE
-    // POINTER (`ui/info-tip.js`) rather than going to `setStatus`, which
-    // painted it in the status bar at the bottom-left of the window — the
-    // furthest point on screen from the icon just clicked, and a bar that also
-    // carries save results and errors. `setInfoTip` also takes `title` away,
-    // so the native tooltip cannot repeat it a second later somewhere else.
-    setInfoTip(btn, 'Nodes can be unlocked (mutable), locked (immutable), or ' +
-        'plane-locked \u2014 free to move, but only within the planes it is in');
-    btn.dataset.wired = '1';
-}
-
-// ============================================
-// The pin picker
-// ============================================
+// --- Section 1: the global Nodes table -------------------------------------
 //
-// One popover, reused. It FLOATS (position: fixed, anchored to the icon) rather
-// than expanding inside the row, for two reasons: the row would otherwise have
-// to reserve three icons' worth of width it only needs while the pointer is
-// there, and `.plane-panel` scrolls — an absolutely positioned child would be
-// clipped by its `overflow-y: auto` the moment it reached the top or bottom row.
+// Moved to `ui/plane-nodes-panel.js`: the Nodes table, the padlock picker,
+// the typed x/y/z editor and node deletion. `refreshPlanePanel` below still
+// drives them, and they are not re-exported because nothing outside this
+// module ever called them.
+
+// --- Section 2: Planes, in two modules -------------------------------------
 //
-// Fixed positioning does not follow a scroll, so a scroll has to be answered.
-// It REPOSITIONS rather than dismissing, and only closes once the icon itself
-// has scrolled out of the panel. Dismissing was the first attempt and it was
-// wrong twice over: a `scroll` event is delivered on the next frame, so a
-// scroll that brought the row into view in the first place arrived AFTER the
-// popover opened and shut it again — the picker could not be opened at all on
-// a row you had just scrolled to.
-
-/** @type {{el:HTMLElement, anchor:HTMLElement, nodeId:number, sticky:boolean}|null} @private */
-var pinPopover = null;
-/** @type {number|null} @private */
-var pinPopoverTimer = null;
-
-/** @private */
-function closePinPopover() {
-    if (pinPopoverTimer !== null) { clearTimeout(pinPopoverTimer); pinPopoverTimer = null; }
-    if (!pinPopover) return;
-    if (pinPopover.el.parentNode) pinPopover.el.remove();
-    document.removeEventListener('keydown', onPinPopoverKey, true);
-    document.removeEventListener('mousedown', onPinPopoverOutside, true);
-    window.removeEventListener('resize', onPinPopoverReflow);
-    var panel = document.getElementById('planePanel');
-    if (panel) panel.removeEventListener('scroll', onPinPopoverReflow);
-    pinPopover = null;
-}
-
-/**
- * Put the popover next to its icon, above it where there is room.
- *
- * Above and right-aligned: the icon sits at the right edge of a panel on the
- * right edge of the window, so leftwards and upwards is the only direction with
- * space. Clamped to the viewport, and flipped below when the row is near the
- * top.
- * @private
- */
-function positionPinPopover(el, anchor) {
-    var r = anchor.getBoundingClientRect();
-    var w = el.offsetWidth || 78;
-    var h = el.offsetHeight || 26;
-    var left = Math.min(window.innerWidth - w - 6, Math.max(6, r.right - w));
-    var top = r.top - h - 4;
-    if (top < 4) top = r.bottom + 4;
-    el.style.left = Math.round(left) + 'px';
-    el.style.top = Math.round(top) + 'px';
-}
-
-/**
- * Follow the icon through a scroll or a resize, and let go when it leaves.
- * @private
- */
-function onPinPopoverReflow() {
-    if (!pinPopover) return;
-    var anchor = pinPopover.anchor;
-    if (!anchor.isConnected) { closePinPopover(); return; }
-    var panel = document.getElementById('planePanel');
-    var ar = anchor.getBoundingClientRect();
-    if (panel) {
-        // Out of the panel's own window: the icon is no longer on screen, so a
-        // picker floating where it used to be would point at nothing.
-        var pr = panel.getBoundingClientRect();
-        if (ar.bottom < pr.top || ar.top > pr.bottom) { closePinPopover(); return; }
-    }
-    positionPinPopover(pinPopover.el, anchor);
-}
-
-/**
- * Close, but not instantly: the pointer has to cross a few pixels of row to get
- * from the icon to the picker, and closing on the way would make the control
- * unusable.
- * @private
- */
-function schedulePinPopoverClose() {
-    if (!pinPopover || pinPopover.sticky) return;
-    if (pinPopoverTimer !== null) clearTimeout(pinPopoverTimer);
-    pinPopoverTimer = setTimeout(closePinPopover, 260);
-}
-
-/** @private */
-function onPinPopoverKey(e) {
-    if (e.key !== 'Escape') return;
-    e.preventDefault();
-    e.stopPropagation();
-    closePinPopover();
-}
-
-/** @private */
-function onPinPopoverOutside(e) {
-    if (!pinPopover) return;
-    if (pinPopover.el.contains(e.target)) return;
-    if (e.target && e.target.closest && e.target.closest('.plane-node-pin-btn')) return;
-    closePinPopover();
-}
-
-/**
- * Show the three states for one node, with the current one dimmed.
- *
- * The current state is shown and NOT clickable: it is already in force, so it
- * is there to say "this is what you have" rather than to be picked again.
- * @param {HTMLElement} anchor @param {PlaneNode} node @param {boolean} [sticky]
- * @private
- */
-function openPinPopover(anchor, node, sticky) {
-    if (pinPopoverTimer !== null) { clearTimeout(pinPopoverTimer); pinPopoverTimer = null; }
-    if (pinPopover && pinPopover.nodeId === node.id) {
-        if (sticky) pinPopover.sticky = true;
-        return;
-    }
-    closePinPopover();
-
-    var model = planeModel();
-    var el = document.createElement('div');
-    el.className = 'plane-pin-popover';
-    el.id = 'planePinPopover';
-    el.setAttribute('role', 'group');
-    el.setAttribute('data-node-id', String(node.id));
-
-    PIN_STATES.forEach(function (stt) {
-        var opt = document.createElement('button');
-        var current = node.pin === stt;
-        opt.className = 'plane-pin-option plane-node-pin-' + stt + (current ? ' is-current' : '');
-        opt.innerHTML = ICON_PIN[stt];
-        opt.setAttribute('data-pin', stt);
-        opt.setAttribute('aria-label', PIN_LABELS[stt]);
-        opt.title = current
-            ? PIN_LABELS[stt] + ' (current)' +
-              (stt === 'plane-locked' ? ' — ' + heldInText(node, model) : '')
-            : 'Set to ' + PIN_LABELS[stt] + ' — ' + PIN_TITLES[stt];
-        opt.disabled = current;
-        opt.addEventListener('click', function (e) {
-            e.stopPropagation();
-            closePinPopover();
-            setNodePin(node, stt);
-        });
-        el.appendChild(opt);
-    });
-
-    document.body.appendChild(el);
-    positionPinPopover(el, anchor);
-
-    el.addEventListener('mouseenter', function () {
-        if (pinPopoverTimer !== null) { clearTimeout(pinPopoverTimer); pinPopoverTimer = null; }
-    });
-    el.addEventListener('mouseleave', function () { schedulePinPopoverClose(); });
-    document.addEventListener('keydown', onPinPopoverKey, true);
-    document.addEventListener('mousedown', onPinPopoverOutside, true);
-    window.addEventListener('resize', onPinPopoverReflow);
-    var panel = document.getElementById('planePanel');
-    if (panel) panel.addEventListener('scroll', onPinPopoverReflow);
-
-    pinPopover = { el: el, anchor: anchor, nodeId: node.id, sticky: !!sticky };
-}
-
-/**
- * Put a node into one of the three pin states.
- *
- * Was the `<select>`'s change handler; extracted when the control became an
- * icon, because the rules are about the MODEL and not about the widget:
- *   - Set Origin Mode refuses the change (`lockUI` reaches `button.disabled`,
- *     but this path is reachable from the popover, so it says so itself).
- *   - `plane-locked` is refused for a node in no plane, where "stays in its
- *     planes" has no meaning. It nominates none: the pin holds the node in
- *     every plane it belongs to, so adding it to a wall later simply adds that
- *     wall to what holds it.
- *   - Any stored fit of a plane standing on this node is dropped: changing a
- *     pin changes what a fit is ALLOWED to do, so a fit solved under the old
- *     rules must not be left looking valid.
- * @param {PlaneNode} node
- * @param {'none'|'plane-locked'|'locked'} value
- * @returns {boolean} True when the pin changed.
- * @private
- */
-function setNodePin(node, value) {
-    var model = planeModel();
-    if (isOriginModeActive()) {
-        setStatus('Leave Set Origin Mode before changing a pin', 'warning');
-        return false;
-    }
-    var planes = model.planesForNode(node.id);
-    if (value === 'plane-locked' && !planes.length) {
-        setStatus('"' + node.name + '" is in no plane, so it cannot be ' +
-            'Plane-locked — add it to a plane first', 'warning');
-        return false;
-    }
-    model.pool.setPin(node.id, value);
-    for (var i = 0; i < planes.length; i++) planes[i].planeFit = null;
-    markDirty();
-    syncPlanes3D();
-    refreshPlanePanel();
-    redraw();
-    // What holds the node is asked AFTER the change — this function just
-    // cleared the stored fits, so the answer comes from derived planes, which
-    // is the same answer every other reader of the pin now gets.
-    //
-    // A plane the node is in but that cannot yet say where it is still gets
-    // NAMED, with the reason: "Plane-locked" alone would leave the user looking
-    // for a restriction the panel is not showing.
-    var msg = '"' + node.name + '" is now ' + PIN_LABELS[value];
-    if (value === 'plane-locked') {
-        var where = planeLockWhere(model.planeLockForNode(node.id));
-        msg += where ? ' to ' + where
-            : ' in ' + quotedList(planes.map(function (q) { return q.name; })) +
-              ', but ' + (planes.length > 1 ? 'none of them has' : 'it does not have') +
-              ' three other solved corners yet, so nothing holds it';
-    }
-    setStatus(msg);
-    return true;
-}
-
-/**
- * A node's expanded panel: its 3D position, and the planes using it.
- *
- * Indented under the node and given its own row, so the list above stays a list
- * of nodes. Two things live here, and they are the two the row cannot hold:
- *   - the POSITION, three editable fields. A full-width line, because three
- *     legible number fields do not fit beside a name, a swatch and two icons in
- *     a 300px panel at any reasonable field width.
- *   - the PLANES using this node, which is the whole point of a project-wide
- *     pool and was previously only in a tooltip. For a `plane-locked` node
- *     EVERY plane currently holding it is marked here with its own padlock —
- *     where the Pin select's second line went, and how two marks say the
- *     corner is down to a line.
- *
- * Editing writes the NODE's 3D — the single source of truth for every plane
- * using it — so typing a surveyed corner here moves it in every plane at once.
- *
- * @param {PlaneNode} node
- * @param {string} st - `nodeFreezeState(node)`, so the pair matches.
- * @param {PlaneSkeleton[]} usedBy
- * @param {PlaneModel} model
- * @returns {HTMLTableRowElement}
- * @private
- */
-function renderNodeDetailRow(node, st, usedBy, model) {
-    var tr = document.createElement('tr');
-    tr.setAttribute('data-plane-node-id', String(node.id));
-    tr.className = 'plane-node-row plane-node-detail plane-node-' + st +
-        (usedBy.length === 0 ? ' plane-node-unused' : '') +
-        (usedBy.length > 1 ? ' plane-node-shared' : '') +
-        (node.id === planeState.selectedNodeId ? ' plane-node-selected' : '');
-
-    var td = document.createElement('td');
-    td.colSpan = 5;
-    var body = document.createElement('div');
-    body.className = 'plane-node-detail-body';
-
-    var line = document.createElement('div');
-    line.className = 'plane-node-xyz-line';
-    var locked = node.immutable;
-    var stored = node.getPoint3d();
-    var inputs = [];
-    for (var k = 0; k < 3; k++) {
-        var cell = document.createElement('span');
-        cell.className = 'plane-node-xyz-cell';
-        var lab = document.createElement('span');
-        lab.className = 'plane-node-xyz-label';
-        lab.textContent = XYZ_AXES[k];
-        var inp = document.createElement('input');
-        inp.type = 'text';
-        inp.inputMode = 'decimal';
-        inp.className = 'plane-node-xyz-input';
-        inp.value = stored ? fmtXyz(stored[k]) : '';
-        inp.placeholder = '—';
-        inp.setAttribute('data-axis', XYZ_AXES[k]);
-        // A Locked node is read-only HERE too, which is what the pin promises:
-        // a field that took a value and then refused to keep it would be worse
-        // than one that cannot be typed in.
-        inp.disabled = locked;
-        inp.title = locked
-            ? '"' + node.name + '" is Locked, so its position cannot be typed ' +
-              'over. Set the pin to unlocked (or plane-locked) to edit it.'
-            : XYZ_AXES[k].toUpperCase() + ' of "' + node.name + '" in ' +
-              'calibration world units — the same frame the cameras were ' +
-              'calibrated in. Editing it moves this corner in every plane ' +
-              'using the node, and rewrites its 2D on every view it is placed ' +
-              'on to match.';
-        cell.appendChild(lab);
-        cell.appendChild(inp);
-        line.appendChild(cell);
-        inputs.push(inp);
-    }
-    if (!locked) {
-        inputs.forEach(function (inp2) {
-            // Commit on `change` (blur or Enter) with revert-on-invalid, the
-            // panel's convention. NOT on `input`: a half-typed "-" or "1e" is
-            // not a position, and writing per keystroke would reproject the 2D
-            // on every one.
-            inp2.addEventListener('change', function () { commitNodeXyz(node, inputs); });
-        });
-    }
-    body.appendChild(line);
-
-    var planesLine = document.createElement('div');
-    planesLine.className = 'plane-node-planes';
-    if (usedBy.length === 0) {
-        planesLine.classList.add('plane-node-planes-none');
-        planesLine.textContent = 'In no plane yet — use + Add in Edit Plane';
-        planesLine.title = 'A node in no plane is a normal resting state: ' +
-            'deleting a plane keeps its nodes. Nothing draws it on any view ' +
-            'until some plane uses it.';
-    } else {
-        var lead = document.createElement('span');
-        lead.className = 'plane-node-planes-label';
-        lead.textContent = usedBy.length > 1 ? 'Shared by' : 'In';
-        planesLine.appendChild(lead);
-        var lock = model.planeLockForNode(node.id);
-        var holderIds = lock.planes.map(function (p) { return p.id; });
-        usedBy.forEach(function (plane) {
-            var chip = document.createElement('span');
-            chip.className = 'plane-node-plane-chip';
-            var dot = document.createElement('span');
-            dot.className = 'plane-node-plane-dot';
-            dot.style.background = plane.color;
-            chip.appendChild(dot);
-            chip.appendChild(document.createTextNode(plane.name));
-            // EVERY plane that can currently say where this node is gets the
-            // padlock, not one nominated plane: the pin holds it in all of
-            // them at once, and two marks is exactly how the user reads that
-            // the corner is down to a line. A plane with no usable fit yet
-            // cannot hold anything, so it is left plain rather than promising
-            // a restriction that is not in force.
-            var isHolder = holderIds && holderIds.indexOf(plane.id) >= 0;
-            if (isHolder) {
-                chip.classList.add('plane-node-plane-holder');
-                var mark = document.createElement('span');
-                mark.className = 'plane-node-plane-mark';
-                mark.innerHTML = ICON_PIN['plane-locked'];
-                chip.appendChild(mark);
-                chip.title = '"' + node.name + '" is Plane-locked: it may move, ' +
-                    'but only within "' + plane.name + '"' +
-                    (lock.planes.length > 1 ? ' and the other planes marked here.' : '.');
-            } else {
-                chip.title = '"' + node.name + '" is one of "' + plane.name + '"’s nodes' +
-                    (node.pin === 'plane-locked'
-                        ? ' — it cannot hold the node until three of its other ' +
-                          'corners are solved'
-                        : '');
-            }
-            planesLine.appendChild(chip);
-        });
-        if (node.pin === 'plane-locked' && !lock.rank) {
-            var stale = document.createElement('span');
-            stale.className = 'plane-node-planes-stale';
-            stale.textContent = 'nothing holds it yet';
-            stale.title = 'None of this node’s planes has three other solved ' +
-                'corners, so none of them can say where it is and the ' +
-                'restriction is inert.';
-            planesLine.appendChild(stale);
-        }
-    }
-    body.appendChild(planesLine);
-
-    td.appendChild(body);
-    tr.appendChild(td);
-    return tr;
-}
-
-/** The three axes, in storage order. @private */
-const XYZ_AXES = ['x', 'y', 'z'];
-
-/**
- * A coordinate as the panel shows it.
- *
- * Four decimals, trailing zeros trimmed. The stored value is a double and the
- * display is lossy, which is why `commitNodeXyz` compares against this exact
- * string rather than re-parsing every field — see the note there.
- * @param {number} v @returns {string}
- * @private
- */
-function fmtXyz(v) {
-    if (!isFinite(v)) return '';
-    return String(Number(v.toFixed(4)));
-}
-
-/**
- * Commit a typed 3D position for a pool node.
- *
- * All three fields are read, not just the one that fired: a position is a
- * triple, and a node with no 3D at all is being ENTERED rather than edited, so
- * the first two numbers typed have to survive until the third arrives.
- *
- * @param {PlaneNode} node
- * @param {HTMLInputElement[]} inputs - x, y, z, in that order.
- * @private
- */
-function commitNodeXyz(node, inputs) {
-    var stored = node.getPoint3d();
-    if (node.immutable) {
-        // Belt and braces: the inputs are `disabled`, so this is only reachable
-        // if the pin changed under an open field.
-        showStoredXyz(node, inputs);
-        setStatus('"' + node.name + '" is Locked — set the pin to unlocked to ' +
-            'type a new position', 'warning');
-        return;
-    }
-
-    var vals = [];
-    var bad = false;
-    for (var k = 0; k < 3; k++) {
-        var raw = String(inputs[k].value).trim();
-        // A field still showing exactly what we printed keeps its FULL stored
-        // double. Re-parsing it would round the two axes the user never touched
-        // to the four decimals the display shows, so editing z would silently
-        // move x.
-        if (stored && raw === fmtXyz(stored[k])) { vals.push(stored[k]); continue; }
-        var v = (raw === '') ? NaN : Number(raw);
-        if (!isFinite(v)) bad = true;
-        vals.push(v);
-    }
-
-    if (bad) {
-        if (stored) {
-            setStatus('A position needs three finite numbers — "' + node.name +
-                '" is unchanged', 'warning');
-            showStoredXyz(node, inputs);
-        } else {
-            // Nothing to revert to, and nothing to write yet. Leave what is
-            // typed alone: this is a node being given its first position.
-            setStatus('Enter x, y and z to place "' + node.name + '" in 3D');
-        }
-        return;
-    }
-    applyTypedNodePoint(node, vals);
-}
-
-/** Put the node's stored position back in its fields. @private */
-function showStoredXyz(node, inputs) {
-    var stored = node.getPoint3d();
-    for (var k = 0; k < 3; k++) inputs[k].value = stored ? fmtXyz(stored[k]) : '';
-}
-
-/**
- * Write a hand-entered 3D position, and make the rest of the app agree with it.
- *
- * The same sequence as a 3D corner drag (`onPlaneNodeDragged3D`), and for the
- * same reason: **the 2D follows the 3D here.** The user has just asserted where
- * this corner IS, so every view it is placed on is rewritten to the exact
- * reprojection of that assertion — the reverse of every other edit path, and
- * the only consistent choice for an edit whose input is the 3D itself.
- *
- * PLANE-LOCKED is honoured through `constrainPoint3dForNode`, the model-side
- * enforcement a solve's publish path uses, so a held node lands on the nearest
- * point that satisfies every plane it is in rather than where it was typed —
- * and the status line says which, because a number that comes back different
- * from the one typed needs explaining.
- *
- * The stored `planeFit`s are deliberately NOT cleared. This is a corner nudge,
- * and the rule for those is the one in `syncPlanes3D`/the 3D drag: a corner
- * must not move the frame it defines, or the plane chases the point.
- *
- * @param {PlaneNode} node
- * @param {number[]} xyz
- * @private
- */
-function applyTypedNodePoint(node, xyz) {
-    var model = planeModel();
-    var held = model.constrainPoint3dForNode(node.id, xyz);
-    var projected = held[0] !== xyz[0] || held[1] !== xyz[1] || held[2] !== xyz[2];
-    if (!node.setPoint3d(held)) {
-        setStatus('"' + node.name + '" refused the write — it is Locked', 'warning');
-        return;
-    }
-
-    var views = reprojectNodeIntoPlacedViews(node, model);
-    var planes = model.planesForNode(node.id);
-    for (var i = 0; i < planes.length; i++) refreshTriangulationErrors(planes[i]);
-
-    markDirty();
-    syncPlanes3D();
-    refreshPlanePanel();
-    redraw();
-
-    var where = '(' + fmtXyz(held[0]) + ', ' + fmtXyz(held[1]) + ', ' +
-        fmtXyz(held[2]) + ')';
-    var msg = 'Set "' + node.name + '" to ' + where;
-    if (projected) {
-        var lockWhere = planeLockWhere(model.planeLockForNode(node.id));
-        msg += ' — Plane-locked' + (lockWhere ? ' to ' + lockWhere : '') +
-            ', so it was moved to the nearest point there';
-    }
-    if (views.length) msg += ' — 2D updated on ' + views.join(', ');
-    setStatus(msg, 'success');
-}
-
-/**
- * Rewrite a node's 2D on every view it is actually drawn on.
- *
- * "Drawn on" is asked of the PLANES: a pool node shows up on a view only when
- * some plane containing it is placed there, which is the same question
- * `visibleNodeIndices` answers for hit testing.
- * @param {PlaneNode} node @param {PlaneModel} model
- * @returns {string[]} The view names written.
- * @private
- */
-function reprojectNodeIntoPlacedViews(node, model) {
-    var out = [];
-    var session = state.session;
-    var poolIdx = model.pool.indexOf(node.id);
-    var xyz = node.getPoint3d();
-    if (!session || !session.cameras || poolIdx < 0 || !xyz) return out;
-    var planes = model.planesForNode(node.id);
-    for (var c = 0; c < session.cameras.length; c++) {
-        var cam = session.cameras[c];
-        var placed = false;
-        for (var p = 0; p < planes.length; p++) {
-            if (model.isPlanePlaced(planes[p], cam.name)) { placed = true; break; }
-        }
-        if (!placed) continue;
-        var inst = model.getInstance(cam.name);
-        if (!inst || poolIdx >= inst.numNodes) continue;
-        var uv = reprojectPointCamera(xyz, cam);
-        if (!uv || !isFinite(uv[0]) || !isFinite(uv[1])) continue;
-        inst.setPoint(poolIdx, uv[0], uv[1]);
-        inst.modified = true;
-        out.push(cam.name);
-    }
-    return out;
-}
-
-/**
- * Delete a pool node, asking first when it is load-bearing.
- *
- * Deleting a node is the one destructive act in this panel that reaches
- * BEYOND the plane being edited: it takes the node out of every plane that
- * references it and destroys its 2D on every view. When it is shared, or
- * pinned (a coordinate the user entered deliberately and no solve can
- * reproduce), the confirmation names exactly what is going.
- *
- * A node used by one plane and not pinned is deleted straight away — the ×
- * next to it is unambiguous, and the non-destructive alternative (taking it out
- * of one plane) is the × in the selected plane's own members table.
- *
- * @param {PlaneNode} node
- * @param {PlaneSkeleton[]} usedBy - Planes referencing it.
- */
-function deleteNodeWithConfirm(node, usedBy) {
-    var model = planeModel();
-    var doIt = function () {
-        model.deleteNode(node.id);
-        markDirty();
-        syncPlanes3D();
-        refreshPlanePanel();
-        redraw();
-    };
-    var pinned = node.immutable;
-    if (usedBy.length < 2 && !pinned) { doIt(); return; }
-
-    var parts = [];
-    if (usedBy.length > 1) {
-        parts.push('"' + node.name + '" is shared by ' + usedBy.length + ' planes (' +
-            usedBy.map(function (p) { return p.name; }).join(', ') +
-            '). Deleting it removes that corner from all of them — if they meet ' +
-            'along it, they stop meeting.');
-    }
-    if (pinned) {
-        parts.push('It is PINNED' +
-            (node.hasPoint3d() ? ' at (' + node.getPoint3d().map(function (v) {
-                return v.toFixed(1);
-            }).join(', ') + ')' : '') +
-            '. That coordinate is an input no solve can reproduce, so deleting ' +
-            'it cannot be undone by re-triangulating.');
-    }
-    parts.push('Its 2D points on every view go with it.');
-    showPlaneDialog({
-        title: 'Delete node "' + node.name + '"?',
-        message: parts.join(' '),
-        confirmLabel: 'Delete node',
-        onConfirm: doIt,
-    });
-}
-
-/** Long-form explanation, including the coordinates when there are any. @private */
-function nodeStateTitle(node, st, model) {
-    var used = model.planesForNode(node.id);
-    var where = used.length
-        ? 'In ' + used.length + ' plane(s): ' +
-          used.map(function (p) { return p.name; }).join(', ')
-        // Not an error: planes are deleted without their nodes, so a node can
-        // legitimately belong to nothing. It just is not drawn anywhere.
-        : 'In no plane, so it is drawn on no view — put it in one with + Add ' +
-          'in the Edit Plane section';
-    if (st === 'frozen-unsolved') {
-        return where + '. PINNED BUT NEVER TRIANGULATED — a dead end: pinning is ' +
-            'exactly what forbids a solve from giving it a 3D position. Unpin it, ' +
-            'triangulate, then pin it again.';
-    }
-    if (!node.hasPoint3d()) return where + '. No 3D yet — triangulate the plane.';
-    var q = node.getPoint3d();
-    return where + '. 3D (' + q[0].toFixed(1) + ', ' + q[1].toFixed(1) + ', ' +
-        q[2].toFixed(1) + ')' +
-        (node.error != null ? ' — ' + node.error.toFixed(2) + ' px reprojection' : '') +
-        (st === 'frozen' ? '. Pinned: frozen against every solve.' : '');
-}
-
-/**
- * Name the pinned-but-untriangulated nodes in the panel itself.
- *
- * This state cannot resolve itself: the pin is what stops a solve from ever
- * writing a 3D position, so a user who pins a node before triangulating gets a
- * node that silently contributes nothing and blocks every fit of every plane it
- * belongs to (`no_anchor_3d`). A tooltip is not read by someone who does not
- * already suspect a problem, so it is said in the open.
- */
-function renderFrozenWarning() {
-    var host = document.getElementById('planeFrozenWarning');
-    if (!host) return;
-    var pool = planePool();
-    var stuck = pool.nodes.filter(function (n) {
-        return nodeFreezeState(n) === 'frozen-unsolved';
-    });
-    if (!stuck.length) {
-        host.style.display = 'none';
-        host.textContent = '';
-        return;
-    }
-    host.style.display = '';
-    host.textContent = (stuck.length === 1 ? 'Node ' : 'Nodes ') +
-        stuck.map(function (n) { return '"' + n.name + '"'; }).join(', ') +
-        (stuck.length === 1 ? ' is' : ' are') +
-        ' pinned but have no 3D position. Pinning is what stops triangulation ' +
-        'from giving them one, so they will stay empty and will block any fit ' +
-        'of a plane they belong to. Unpin, triangulate, then pin again.';
-}
-
-/**
- * The Edit Plane members table: the nodes IN the selected plane, in the plane's
- * own order.
- *
- * The × here is a REFERENCE removal — `removeNodeFromPlane` with
- * `deleteIfOrphan:false`, so the node stays in the pool with its 3D, its pin
- * and its 2D on every view even if this was the last plane using it. Destroying
- * a node is the Nodes table's × and asks first; keeping the two apart is what stops
- * "take this corner out of this wall" from silently meaning "throw the corner
- * away".
- *
- * The colour is a read-only swatch rather than a second picker: colour is a
- * property of the NODE, so it is edited in one place (the Nodes table) and shown
- * here only as the cross-view correspondence cue it is.
- */
-function renderPlaneMembers(plane) {
-    var tbody = document.querySelector('#planeMembersTable tbody');
-    if (!tbody) return;
-    tbody.textContent = '';
-
-    var ids = plane ? plane.nodeIds : [];
-    setEmptyState('planeMembersTable', 'planeMembersEmpty', ids.length === 0);
-    if (!plane) return;
-
-    var model = planeModel();
-    var pool = model.pool;
-    ids.forEach(function (id) {
-        var node = pool.getNode(id);
-        if (!node) return;
-        var tr = document.createElement('tr');
-        tr.setAttribute('data-plane-member-id', String(id));
-        var usedBy = model.planesForNode(id);
-        // Same marker as the pool table, so a corner shared with another plane
-        // reads the same wherever the user meets it.
-        if (usedBy.length > 1) tr.className = 'plane-node-row plane-node-shared';
-
-        var tdName = document.createElement('td');
-        tdName.className = 'plane-member-name';
-        tdName.textContent = node.name;
-        tdName.title = usedBy.length > 1
-            ? '"' + node.name + '" is shared with ' +
-              usedBy.filter(function (p) { return p.id !== plane.id; })
-                  .map(function (p) { return p.name; }).join(', ')
-            : 'Only "' + plane.name + '" uses this node';
-
-        var tdColor = document.createElement('td');
-        var swatch = document.createElement('span');
-        swatch.className = 'plane-swatch plane-member-swatch';
-        swatch.style.background = node.color;
-        swatch.title = 'Colour is a property of the node — change it in the Nodes table';
-        tdColor.appendChild(swatch);
-
-        var tdDel = document.createElement('td');
-        tdDel.appendChild(makeDeleteButton(
-            'Take "' + node.name + '" out of plane "' + plane.name +
-            '" only. The node stays in the project' +
-            (usedBy.length > 1 ? ' and in the other plane(s) using it' : '') +
-            ' — delete it in the Nodes table if you want it gone.',
-            function () {
-                model.removeNodeFromPlane(plane, id, { deleteIfOrphan: false });
-                markDirty();
-                syncPlanes3D();
-                refreshPlanePanel();
-                redraw();
-            }));
-
-        tr.appendChild(tdName);
-        tr.appendChild(tdColor);
-        tr.appendChild(tdDel);
-        tbody.appendChild(tr);
-    });
-}
-
-/**
- * Fill the "add an existing node" dropdown with every POOL node that is not
- * already in the selected plane.
- *
- * This is the headline affordance of the whole model: adding the SAME node to a
- * second plane is how two planes come to meet along a shared line, so it is a
- * visible control with its own button rather than a checkbox buried in a row.
- * An empty list is a real state (every node is already in this plane), and it
- * is stated in words instead of leaving a dead dropdown.
- */
-function renderAddNodeSelect(plane) {
-    var select = document.getElementById('planeAddNodeSelect');
-    var btn = document.getElementById('btnAddExistingPlaneNode');
-    var hint = document.getElementById('planeAddNodeHint');
-    if (select) select.textContent = '';
-
-    var model = planeModel();
-    var pool = model.pool;
-    var candidates = plane
-        ? pool.nodes.filter(function (n) { return !plane.hasNode(n.id); })
-        : [];
-
-    if (select) {
-        // Values are NODE IDS — names are user-editable and can collide, and
-        // pool indices shift under a delete.
-        candidates.forEach(function (node) {
-            var opt = document.createElement('option');
-            opt.value = String(node.id);
-            var used = model.planesForNode(node.id);
-            opt.textContent = node.name +
-                (used.length ? '  (in ' + used.map(function (p) { return p.name; }).join(', ') + ')' : '');
-            select.appendChild(opt);
-        });
-        select.disabled = candidates.length === 0;
-    }
-    if (btn) btn.disabled = !plane || candidates.length === 0;
-    if (hint) {
-        if (!plane) hint.textContent = '';
-        else if (pool.size === 0) {
-            hint.textContent = 'No nodes exist yet — create one with + Node above.';
-        } else if (candidates.length === 0) {
-            hint.textContent = 'Every node in the project is already in "' + plane.name +
-                '". Create a new one with + Node above.';
-        } else {
-            // Nothing in the ordinary case. The two branches above are real
-            // dead ends — the dropdown is empty and says why — whereas with
-            // candidates in it the control explains itself, and a standing
-            // paragraph under a working picker is just a paragraph.
-            hint.textContent = '';
-        }
-    }
-}
-
-/** Fill the two connection dropdowns from the SELECTED plane's nodes. @private */
-function renderEdgeSelects(plane) {
-    var srcSelect = document.getElementById('planeEdgeSrcSelect');
-    var dstSelect = document.getElementById('planeEdgeDstSelect');
-    if (srcSelect) srcSelect.textContent = '';
-    if (dstSelect) dstSelect.textContent = '';
-    if (!plane) return;
-    var pool = planePool();
-    // Values are NODE IDS, not indices: an edge is stored as an id pair so it
-    // cannot silently re-point at a neighbour when the pool or the plane's own
-    // order changes, and the option value has to speak the same language.
-    plane.nodeIds.forEach(function (id) {
-        var node = pool.getNode(id);
-        if (!node) return;
-        if (srcSelect) {
-            var o1 = document.createElement('option');
-            o1.value = String(id);
-            o1.textContent = node.name;
-            srcSelect.appendChild(o1);
-        }
-        if (dstSelect) {
-            var o2 = document.createElement('option');
-            o2.value = String(id);
-            o2.textContent = node.name;
-            dstSelect.appendChild(o2);
-        }
-    });
-    // Default the destination to the second node so the common
-    // "connect the next one" case is one click.
-    if (dstSelect && plane.nodeIds.length > 1) dstSelect.value = String(plane.nodeIds[1]);
-}
-
-function renderEditorEdges(plane) {
-    var tbody = document.querySelector('#planeEdgesTable tbody');
-    if (!tbody) return;
-    tbody.textContent = '';
-
-    var edges = plane ? plane.edges : [];
-    setEmptyState('planeEdgesTable', 'planeEdgesEmpty', edges.length === 0);
-    if (!plane) return;
-    var pool = planePool();
-
-    edges.forEach(function (edge, edgeIdx) {
-        var tr = document.createElement('tr');
-        var src = pool.getNode(edge[0]);
-        var dst = pool.getNode(edge[1]);
-
-        var tdSrc = document.createElement('td');
-        tdSrc.textContent = src ? src.name : '?';
-        var tdDst = document.createElement('td');
-        tdDst.textContent = dst ? dst.name : '?';
-
-        var tdDel = document.createElement('td');
-        tdDel.appendChild(makeDeleteButton('Remove connection', function () {
-            plane.removeEdge(edgeIdx);
-            markDirty();
-            syncPlanes3D();
-            refreshPlanePanel();
-            redraw();
-        }));
-
-        tr.appendChild(tdSrc);
-        tr.appendChild(tdDst);
-        tr.appendChild(tdDel);
-        tbody.appendChild(tr);
-    });
-}
-
-// --- Planes table (drag source) --------------------------------------------
-
-// Inline SVG icons. Drawn rather than taken from a font so the triangulate and
-// fill actions read as what they do at 12 px.
-const ICON_TRIANGULATE =
-    '<svg viewBox="0 0 14 14" width="12" height="12" aria-hidden="true">' +
-    '<polygon points="7,2 12.5,11.5 1.5,11.5" fill="none" stroke="currentColor" stroke-width="1.4"/>' +
-    '<circle cx="7" cy="2" r="1.5" fill="currentColor"/>' +
-    '<circle cx="12.5" cy="11.5" r="1.5" fill="currentColor"/>' +
-    '<circle cx="1.5" cy="11.5" r="1.5" fill="currentColor"/></svg>';
-const ICON_MESH =
-    '<svg viewBox="0 0 14 14" width="12" height="12" aria-hidden="true">' +
-    '<polygon points="2,2 12,3.5 11,12 3,10.5" fill="currentColor" fill-opacity="0.45" ' +
-    'stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/>' +
-    '<line x1="2" y1="2" x2="11" y2="12" stroke="currentColor" stroke-width="1"/></svg>';
-// Scattered points collapsing onto a line — a plane seen edge-on.
-const ICON_FIT =
-    '<svg viewBox="0 0 14 14" width="12" height="12" aria-hidden="true">' +
-    '<line x1="1.5" y1="9.5" x2="12.5" y2="4.5" stroke="currentColor" stroke-width="1.4"/>' +
-    '<circle cx="3.5" cy="7.2" r="1.3" fill="currentColor"/>' +
-    '<circle cx="7" cy="8" r="1.3" fill="currentColor"/>' +
-    '<circle cx="10.5" cy="4.2" r="1.3" fill="currentColor"/></svg>';
-
-/**
- * Enable/disable + relabel the shared Triangulate / Fill / Fit row.
- *
- * All three act on the SELECTED plane, so they are disabled outright when
- * nothing is selected. When something IS selected they stay enabled even if the
- * action's precondition fails (too few views, too few nodes) — clicking then
- * reports WHY in the status bar, which teaches more than a dead button.
- */
-function renderActionRow() {
-    var plane = getSelectedPlane();
-    var triBtn = document.getElementById('btnPlaneTriangulate');
-    var fillBtn = document.getElementById('btnPlaneFill');
-    var fitBtn = document.getElementById('btnPlaneFit');
-    if (!triBtn || !fillBtn || !fitBtn) return;
-
-    [triBtn, fillBtn, fitBtn].forEach(function (b) { b.disabled = !plane; });
-    if (!plane) {
-        triBtn.title = fillBtn.title = fitBtn.title = 'Select a plane first';
-        triBtn.classList.remove('active');
-        fillBtn.classList.remove('active');
-        fitBtn.classList.remove('active');
-        fillBtn.style.color = '';
-        return;
-    }
-
-    var nPlaced = placedViewsOf(plane).length;
-
-    triBtn.classList.toggle('active', !!plane.triangulation);
-    triBtn.title = plane.triangulation
-        ? 'Re-triangulate "' + plane.name + '" (currently ' + plane.triangulation.nNodes +
-          ' node(s) from ' + plane.triangulation.views.join(', ') + ')'
-        : 'Triangulate "' + plane.name + '" across the ' + nPlaced +
-          ' view(s) it is placed on, and show it in the 3D viewer';
-
-    fillBtn.classList.toggle('active', !!plane.filled);
-    fillBtn.style.color = plane.filled ? plane.color : '';
-    fillBtn.title = (plane.filled ? 'Unfill' : 'Fill') + ' the "' + plane.name +
-        '" polygon with its colour';
-
-    var nPinned = planeImmutableMask(plane).filter(Boolean).length;
-    fitBtn.classList.toggle('active', !!plane.planeFit);
-    fitBtn.title = 'Fit a plane of best fit to "' + plane.name + '" and flatten its ' +
-        'points onto it, updating the 3D viewer and every 2D view' +
-        (nPinned ? ' — constrained to pass through its ' + nPinned + ' pinned node(s)' : '') +
-        (plane.planeFit ? ' (last fit moved points ' + plane.planeFit.rms.toFixed(2) +
-            ' mm RMS)' : '');
-}
-
-/**
- * Set Origin needs a FITTED plane, not a selected one — the wizard picks its
- * corner in the 3D scene, from any fitted plane, so gating it on the panel
- * selection would disable it for a perfectly valid project.
- */
-function renderOriginButton() {
-    var btn = document.getElementById('btnSetOrigin');
-    if (!btn) return;
-    var nFit = fittedPlanes().length;
-    btn.disabled = nFit === 0;
-    btn.title = nFit === 0
-        ? 'Fit a plane first — Set Origin picks a node of a fitted plane'
-        : 'Re-define the 3D origin from any node of one of the ' + nFit +
-          ' fitted plane(s)';
-}
-
-/**
- * How many views this plane has been ANNOTATED on, out of every view in the
- * session.
- *
- * "Annotated" and "placed" are different questions, and the gap between them is
- * the whole reason this column exists: `Triangulate` reprojects a plane into the
- * views it was never placed on, so afterwards it IS placed everywhere while the
- * user may only ever have drawn it twice. A corner the solve put there is the
- * model's own output — it carries no new information and is excluded from the
- * next solve — so counting it would turn this into a number that always reads
- * full and never says anything.
- *
- * A view counts when at least one of the plane's corners there is hand-placed:
- * present, not switched off, and not reprojected. That is the SAME test
- * `triangulatePlane` applies to decide which views may contribute (`usableViews`
- * there), so the fraction and the solver cannot disagree about what counts.
- *
- * A shared node hand-placed for a neighbouring plane counts for this one too,
- * deliberately: one node is one 2D point per view, so the evidence is genuinely
- * there for both.
- *
- * @param {PlaneSkeleton} plane
- * @returns {{annotated:number, total:number}} `total` is 0 with no calibration
- *   loaded, which the caller renders as a dash rather than "0/0".
- * @private
- */
-function annotatedViewStats(plane) {
-    var session = state.session;
-    var cams = (session && session.cameras) ? session.cameras : [];
-    if (!cams.length) return { annotated: 0, total: 0 };
-
-    var model = planeModel();
-    var poolIdx = planeNodeIndices(plane, model.pool);
-    var annotated = 0;
-    for (var c = 0; c < cams.length; c++) {
-        var name = cams[c].name;
-        if (!model.isPlanePlaced(plane, name)) continue;
-        var inst = model.getInstance(name);
-        if (!inst) continue;
-        for (var k = 0; k < poolIdx.length; k++) {
-            var pi = poolIdx[k];
-            if (pi >= 0 && inst.hasPoint(pi) &&
-                !inst.isNodeNulled(pi) && !inst.isNodeDerived(pi)) { annotated++; break; }
-        }
-    }
-    return { annotated: annotated, total: cams.length };
-}
-
-function renderPlanesTable() {
-    var tbody = document.querySelector('#planeSkeletonsTable tbody');
-    if (!tbody) return;
-    tbody.textContent = '';
-
-    var model = planeModel();
-    var pool = model.pool;
-    setEmptyState('planeSkeletonsTable', 'planeSkeletonsEmpty', model.planes.length === 0);
-
-    model.planes.forEach(function (plane) {
-        var views = model.placedViews(plane);
-        var tr = document.createElement('tr');
-        tr.setAttribute('data-plane-skeleton-id', String(plane.id));
-        if (plane.id === planeState.selectedPlaneId) tr.classList.add('plane-selected');
-
-        // A plane with no nodes has nothing to draw, so make it undraggable
-        // rather than letting a drop produce an invisible placement.
-        var draggable = plane.nodeIds.length > 0;
-        tr.draggable = draggable;
-        tr.title = draggable
-            ? 'Drag onto a video view to place; click to edit'
-            : 'Add at least one node before placing this plane';
-
-        // --- Expander: reveals where this plane is placed ---
-        var expanded = planeState.expanded.has(plane.id);
-        var tdExpand = document.createElement('td');
-        var expandBtn = document.createElement('button');
-        expandBtn.className = 'plane-expander' + (expanded ? ' open' : '');
-        // Caret only. It used to carry the placed-view count as a bare number
-        // beside it, which sat one column away from the Views fraction and was
-        // a DIFFERENT number (placed, not annotated) with nothing to say so —
-        // two unlabelled view counts per row is one too many. The placements
-        // themselves are still listed by expanding the row.
-        expandBtn.innerHTML = '<span class="plane-caret">▶</span>';
-        expandBtn.title = views.length
-            ? (expanded ? 'Hide placements' : 'Show the ' + views.length + ' placement(s)')
-            : 'Not placed on any view yet';
-        expandBtn.disabled = views.length === 0;
-        expandBtn.addEventListener('click', function (e) {
-            e.stopPropagation();
-            if (planeState.expanded.has(plane.id)) planeState.expanded.delete(plane.id);
-            else planeState.expanded.add(plane.id);
-            refreshPlanePanel();
-        });
-        tdExpand.appendChild(expandBtn);
-
-        var tdName = document.createElement('td');
-        var swatch = document.createElement('span');
-        swatch.className = 'plane-swatch';
-        swatch.style.background = plane.color;
-        tdName.appendChild(swatch);
-        tdName.appendChild(document.createTextNode(plane.name));
-        // The column is fixed-width now, so a long name ellipses. Repeat it
-        // here — a cell title wins over the row's, so the row's drag hint has
-        // to come along or it would be lost exactly on the name.
-        tdName.title = plane.name + '\n' + tr.title;
-
-        var tdNodes = document.createElement('td');
-        tdNodes.className = 'mono';
-        tdNodes.textContent = String(plane.nodeIds.length);
-        // Shared nodes are the reason the pool exists — say how many, here,
-        // where the user is choosing which plane to work on.
-        var nShared = plane.nodeIds.filter(function (id) {
-            return model.planesForNode(id).length > 1;
-        }).length;
-        // No `+N` badge. It meant "of which N are shared", but `+` reads as an
-        // ADDITION — `4 +4` looked like 9 on a plane that has four corners. The
-        // count stays in the cell's tooltip, where it can use words.
-        tdNodes.title = nShared
-            ? plane.nodeIds.length + ' nodes, ' + nShared +
-                ' of them shared with another plane'
-            : plane.nodeIds.length + ' nodes, none shared with another plane';
-
-        // --- Views: annotated / total, the progress of the 2D work ---
-        var stats = annotatedViewStats(plane);
-        var tdViews = document.createElement('td');
-        tdViews.className = 'mono';
-        tdViews.textContent = stats.total
-            ? stats.annotated + '/' + stats.total
-            : '—';
-        tdViews.title = stats.total
-            ? 'Hand-annotated on ' + stats.annotated + ' of ' + stats.total +
-                ' view(s). Corners the solve reprojected do not count.'
-            : 'No calibration loaded, so there are no views yet';
-
-        // --- Actions: delete only. Triangulate / Fill / Fit are in the shared
-        // action row below the table, where they act on the SELECTED plane
-        // rather than being repeated on every row.
-        var tdActions = document.createElement('td');
-        tdActions.className = 'plane-actions';
-
-        // NO `3D` badge. Two letters in a box, in a column with no header, are
-        // not a word — and whether a plane has been solved is answerable from
-        // the panel in several better places (its 3D in the viewport, the node
-        // coordinates, the triangulation summary when it is selected).
-
-        tdActions.appendChild(makeDeleteButton(
-            'Delete this plane (nodes another plane also uses are kept)', function () {
-                deletePlane(plane.id);
-                refreshPlanePanel();
-                redraw();
-            }));
-
-        // The row is the drag handle, so the browser would start a drag from a
-        // button press too. Suspending `draggable` while the cursor is over the
-        // controls keeps them clickable without giving up row-wide dragging.
-        [tdExpand, tdActions].forEach(function (cell) {
-            cell.addEventListener('mouseenter', function () { tr.draggable = false; });
-            cell.addEventListener('mouseleave', function () { tr.draggable = draggable; });
-        });
-
-        tr.addEventListener('click', function () {
-            planeState.selectedPlaneId = plane.id;
-            refreshPlanePanel();
-        });
-
-        tr.addEventListener('dragstart', function (e) {
-            if (!draggable) { e.preventDefault(); return; }
-            // Private MIME only — see the module note: a `text/plain` payload
-            // would be grabbed by dockview's video-panel drop handler.
-            e.dataTransfer.setData(PLANE_DRAG_MIME, String(plane.id));
-            e.dataTransfer.effectAllowed = 'copy';
-        });
-
-        tr.appendChild(tdExpand);
-        tr.appendChild(tdName);
-        tr.appendChild(tdNodes);
-        tr.appendChild(tdViews);
-        tr.appendChild(tdActions);
-        tbody.appendChild(tr);
-
-        if (expanded && views.length) {
-            tbody.appendChild(buildPlacementsRow(plane, views, pool));
-        }
-    });
-}
-
-/**
- * The expanded sub-row for a plane: one line per view it is placed on
- * (click to select, × to un-place), plus the triangulation readout when there
- * is one — a Triangulate button whose result you cannot see would be a dead end.
- */
-function buildPlacementsRow(plane, views, pool) {
-    var model = planeModel();
-    var tr = document.createElement('tr');
-    tr.className = 'plane-placements-row';
-    tr.setAttribute('data-plane-placements-for', String(plane.id));
-
-    var td = document.createElement('td');
-    td.colSpan = 4;
-    // Everything goes inside a body div indented under its plane row, the same
-    // shape `renderNodeDetailRow` uses — and, more importantly, the only place
-    // the cell's inherited `white-space: nowrap` (from `.data-table tbody td`)
-    // can be undone. That inheritance is what used to push the summary lines
-    // past the panel's right edge and give the whole panel a horizontal scroll.
-    var body = document.createElement('div');
-    body.className = 'plane-placements-body';
-    td.appendChild(body);
-
-    var selected = interactionManager ? interactionManager.selectedPlane : null;
-    var poolIdx = planeNodeIndices(plane, pool);
-
-    views.forEach(function (viewName) {
-        var inst = model.getInstance(viewName);
-        var row = document.createElement('div');
-        row.className = 'plane-placement-item';
-        row.setAttribute('data-plane-view', viewName);
-        if (inst && inst === selected) row.classList.add('plane-selected');
-
-        var name = document.createElement('span');
-        name.className = 'plane-placement-view';
-        name.textContent = viewName;
-        row.appendChild(name);
-
-        var off = 0, derived = 0;
-        for (var i = 0; i < poolIdx.length; i++) {
-            if (poolIdx[i] < 0 || !inst) continue;
-            if (inst.isNodeNulled(poolIdx[i])) off++;
-            else if (inst.isNodeDerived(poolIdx[i])) derived++;
-        }
-        var meta = document.createElement('span');
-        meta.className = 'plane-placement-meta';
-        // A view the plane was REPROJECTED onto is placed like any other, so
-        // without this the list gives no clue that its corners are the model's
-        // output rather than the user's annotation — and that they do not count
-        // as evidence in the next solve.
-        var bits = [];
-        if (off) bits.push(off + ' off');
-        if (derived) bits.push(derived + ' reprojected');
-        meta.textContent = bits.join(', ');
-        if (derived) {
-            meta.title = derived + ' corner(s) here were reprojected from the 3D, ' +
-                'not annotated on this view — drag one to make it count as an ' +
-                'observation in the next triangulation';
-        }
-        row.appendChild(meta);
-
-        var del = makeDeleteButton(
-            'Un-place "' + plane.name + '" from ' + viewName +
-            ' (its 2D points are kept, so re-placing restores them)',
-            function () {
-                unplacePlaneFromView(plane, viewName);
-                refreshPlanePanel();
-                redraw();
-            });
-        row.appendChild(del);
-
-        row.addEventListener('click', function () {
-            if (interactionManager && inst) interactionManager.selectPlane(inst, -1);
-            refreshPlanePanel();
-            redraw();
-        });
-        body.appendChild(row);
-    });
-
-    if (plane.triangulation) {
-        var t = plane.triangulation;
-        var summary = document.createElement('div');
-        summary.className = 'plane-tri-summary';
-        summary.textContent = '3D: ' + t.nNodes + '/' + plane.nodeIds.length +
-            ' nodes from ' + t.views.join(', ') +
-            (t.meanError != null ? ' — mean err ' + t.meanError.toFixed(2) + ' px' : '');
-        // These lines WRAP now rather than running off the edge, so the whole
-        // sentence is on screen; the title is kept for a view list long enough
-        // to still be worth reading in one piece.
-        summary.title = summary.textContent;
-        body.appendChild(summary);
-
-        if (t.nAnchors) {
-            var anchors = document.createElement('div');
-            anchors.className = 'plane-tri-summary plane-anchor-summary';
-            // A pinned node's residual is OUT of sample — no degree of freedom
-            // was spent fitting it — so it is reported apart from the solve's
-            // own error rather than diluting it.
-            anchors.textContent = t.nAnchors + ' pinned node(s) held fixed' +
-                (t.anchorMeanError != null
-                    ? ' — they reproject ' + t.anchorMeanError.toFixed(2) + ' px off'
-                    : '');
-            anchors.title = anchors.textContent;
-            body.appendChild(anchors);
-        }
-
-        if (plane.planeFit) {
-            var f = plane.planeFit;
-            var fit = document.createElement('div');
-            fit.className = 'plane-tri-summary plane-fit-summary';
-            fit.textContent = (f.constrained ? 'Fitted (constrained) — normal (' : 'Fitted plane — normal (') +
-                f.normal.map(function (q) { return q.toFixed(3); }).join(', ') +
-                '), was ' + f.rms.toFixed(2) + ' mm RMS off-plane';
-            fit.title = fit.textContent + '\nCentroid (' +
-                f.centroid.map(function (q) { return q.toFixed(1); }).join(', ') + ')';
-            body.appendChild(fit);
-        }
-
-        var points3d = points3dForPlane(plane, pool);
-        var errors = nodeErrorsForPlane(plane, pool);
-        for (var n = 0; n < plane.nodeIds.length; n++) {
-            var node = pool.getNode(plane.nodeIds[n]);
-            var nodeName = node ? node.name : '?';
-            var line = document.createElement('div');
-            line.className = 'plane-tri-node';
-            line.setAttribute('data-plane-node-id', String(plane.nodeIds[n]));
-            var sw = document.createElement('span');
-            sw.className = 'plane-swatch';
-            sw.style.background = node ? node.color : '#888';
-            line.appendChild(sw);
-
-            // One flex row per node, in parts rather than as one string, so it
-            // can WRAP at the panel's width instead of running off it — and so
-            // the name is the only piece that ever ellipses. The whole line is
-            // repeated in the tooltip either way.
-            var nameEl = document.createElement('span');
-            nameEl.className = 'plane-tri-node-name';
-            nameEl.textContent = nodeName;
-            line.appendChild(nameEl);
-
-            var full = nodeName;
-            var xyzEl = document.createElement('span');
-            xyzEl.className = 'plane-tri-node-xyz';
-            if (hasPoint3d(points3d, n)) {
-                var q = getPoint3d(points3d, n);
-                xyzEl.textContent = '(' + q[0].toFixed(1) + ', ' + q[1].toFixed(1) +
-                    ', ' + q[2].toFixed(1) + ')';
-                full += '  ' + xyzEl.textContent;
-                line.appendChild(xyzEl);
-                if (errors[n] != null) {
-                    var errEl = document.createElement('span');
-                    errEl.className = 'plane-tri-node-err';
-                    errEl.textContent = errors[n].toFixed(2) + ' px';
-                    line.appendChild(errEl);
-                    full += '  ' + errEl.textContent + ' reprojection error';
-                }
-            } else {
-                xyzEl.textContent = '—';
-                full += '  — (no 3D yet)';
-                line.appendChild(xyzEl);
-            }
-            if (node && node.immutable) {
-                // The padlock the Nodes list already uses, in place of the word
-                // "pinned": eight characters is a third of the width a
-                // coordinate needs, and the word is still in the tooltip.
-                var pinEl = document.createElement('span');
-                pinEl.className = 'plane-tri-node-pin';
-                pinEl.innerHTML = ICON_PIN.locked;
-                line.appendChild(pinEl);
-                full += '  — pinned (Locked)';
-            }
-            line.title = full;
-            body.appendChild(line);
-        }
-    }
-
-    tr.appendChild(td);
-    return tr;
-}
-
-function redraw() {
+// One <details> in the markup, two modules here, split by what they render:
+// `ui/plane-list-panel.js` draws the ROSTER (the table, the drag source, the
+// Views fraction, the placements sub-row and the action row), and
+// `ui/plane-editor-panel.js` draws the SELECTED plane below it (the name, the
+// member list, the add-node picker, the edge pickers). `refreshPlanePanel`
+// below drives both.
+
+export function redraw() {
     drawAllOverlays(state.currentFrame);
 }
 
@@ -3867,234 +2116,9 @@ function onPlaneChanged(inst, movedIndices, opts) {
 // Overlay rendering
 // ============================================
 
-const PLANE_LABEL_SIZE = 11;
-const NULLED_COLOR = '#777777';
-/** Alpha for a filled polygon — enough to read the plane, not enough to hide the video under it. */
-const PLANE_FILL_ALPHA = 0.28;
-/** Ring colour marking a pinned (immutable) node — it cannot be dragged. */
-const PINNED_RING = 'rgba(255,255,255,0.9)';
-
-/**
- * Draw every placed plane on `view`'s overlay canvas.
- *
- * Called from `drawAllOverlays` AFTER `drawFrameOverlays`, which begins with a
- * `clearRect` — drawing before it would be wiped. Planes are drawn in every
- * mode, not just Defining Plane Mode: they are scene geometry the user
- * annotated, and hiding them outside the mode would make them look lost. Only
- * the SELECTION and HOVER decorations are mode-gated, since those advertise an
- * interaction that only exists inside the mode.
- *
- * Fills and edges are per PLANE; NODES are drawn once each, over the union of
- * the placed planes' nodes — a corner two planes share is one node with one 2D
- * point, so drawing it twice would just double the anti-aliasing.
- *
- * @param {{name:string, overlayCtx:CanvasRenderingContext2D,
- *          overlayCanvas:HTMLCanvasElement, videoWidth:number,
- *          videoHeight:number}} view
- */
-export function drawPlaneOverlays(view) {
-    if (!view || !view.overlayCtx || !view.overlayCanvas) return;
-    var model = planeModel();
-    var inst = model.getInstance(view.name);
-    if (!inst) return;
-    var placed = model.placedPlanes(view.name);
-    if (!placed.length) return;
-
-    var videoW = view.videoWidth || view.overlayCanvas.width;
-    var videoH = view.videoHeight || view.overlayCanvas.height;
-    if (!videoW || !videoH) return;
-
-    var ctx = view.overlayCtx;
-    var pool = model.pool;
-    var tf = makeVideoToCanvasTransform(
-        videoW, videoH, view.overlayCanvas.width, view.overlayCanvas.height
-    );
-
-    var isSelected = !!(planeState.active && interactionManager &&
-        interactionManager.selectedPlane === inst);
-    var hovered = (planeState.active && interactionManager)
-        ? interactionManager.hoveredPlaneNode : null;
-    var lineWidth = planeState.edgeWidth;
-
-    ctx.save();
-
-    // --- fills and edges, per plane ---
-    for (var p = 0; p < placed.length; p++) {
-        var plane = placed[p];
-        var edgeColor = plane.color || '#4dd0e1';
-        if (plane.filled) fillPolygon(ctx, plane, pool, inst, tf, edgeColor);
-
-        var edges = planeEdgesPoolIndices(plane, pool);
-        // A selected view draws a wider, semi-transparent halo under its edges.
-        if (isSelected) {
-            ctx.lineWidth = lineWidth + 5;
-            ctx.strokeStyle = 'rgba(255,255,255,0.35)';
-            strokeEdges(ctx, edges, inst, tf);
-        }
-        ctx.lineWidth = lineWidth;
-        ctx.strokeStyle = edgeColor;
-        strokeEdges(ctx, edges, inst, tf);
-    }
-
-    // --- nodes, once each ---
-    drawPlaneNodes(ctx, model, inst, tf, hovered, view.name);
-
-    // --- plane name at each plane's own centroid ---
-    ctx.font = 'bold ' + PLANE_LABEL_SIZE + 'px sans-serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    for (var q = 0; q < placed.length; q++) {
-        var c = planeCentroid2d(placed[q], pool, inst);
-        if (!c) continue;
-        var cp = tf(c[0], c[1]);
-        ctx.lineWidth = 3;
-        ctx.strokeStyle = 'rgba(0,0,0,0.8)';
-        ctx.strokeText(placed[q].name, cp.x, cp.y);
-        ctx.fillStyle = isSelected ? '#ffffff' : (placed[q].color || '#4dd0e1');
-        ctx.fillText(placed[q].name, cp.x, cp.y);
-    }
-    ctx.textAlign = 'start';
-
-    ctx.restore();
-}
-
-/**
- * Draw the visible nodes of a view.
- *
- * A PINNED node gets an extra white ring: it is the one node under the cursor
- * that will refuse to move, and finding that out only by dragging it would read
- * as a broken drag rather than as a deliberate lock.
- *
- * Three states are visually distinct because they mean three different things
- * to the next solve: solid = your annotation, counted; hollow grey = you turned
- * it off; ghosted with a dashed ring = REPROJECTED from the 3D into a view you
- * never annotated, so it is shown and draggable but not counted.
- */
-function drawPlaneNodes(ctx, model, inst, tf, hovered, viewName) {
-    var pool = model.pool;
-    var radius = planeState.nodeSize;
-    var visible = model.visibleNodeIndices(viewName);
-
-    ctx.font = PLANE_LABEL_SIZE + 'px sans-serif';
-    ctx.textBaseline = 'middle';
-    for (var i = 0; i < visible.length; i++) {
-        var n = visible[i];
-        if (!inst.hasPoint(n)) continue;
-        var node = pool.nodeAt(n);
-        if (!node) continue;
-        var pt = tf(inst.getX(n), inst.getY(n));
-        var nulled = inst.isNodeNulled(n);
-        var derived = !nulled && inst.isNodeDerived(n);
-        var nodeColor = nulled ? NULLED_COLOR : node.color;
-        var isHovered = !!(hovered && hovered.viewName === viewName &&
-            hovered.planeId === inst.id && hovered.nodeIdx === n);
-
-        if (isHovered) {
-            ctx.beginPath();
-            ctx.arc(pt.x, pt.y, radius + 4, 0, Math.PI * 2);
-            ctx.fillStyle = 'rgba(255,255,255,0.3)';
-            ctx.fill();
-        }
-
-        ctx.beginPath();
-        ctx.arc(pt.x, pt.y, radius, 0, Math.PI * 2);
-        if (nulled) {
-            // Hollow = excluded from the later solve, matching how a nulled
-            // pose node reads.
-            ctx.fillStyle = 'rgba(0,0,0,0.55)';
-            ctx.fill();
-            ctx.lineWidth = 1.5;
-            ctx.strokeStyle = nodeColor;
-            ctx.stroke();
-        } else if (derived) {
-            // REPROJECTED here, not annotated here: ghosted fill + a dashed
-            // ring. It is a real, draggable point — dragging it is what turns
-            // it into an observation — so it must read as neither a solid
-            // annotation nor a nulled one. Nulled wins when both apply: "you
-            // turned this off" is the more actionable fact.
-            ctx.save();
-            ctx.globalAlpha = 0.35;
-            ctx.fillStyle = nodeColor;
-            ctx.fill();
-            ctx.restore();
-            ctx.setLineDash([3, 2.5]);
-            ctx.lineWidth = 1.5;
-            ctx.strokeStyle = nodeColor;
-            ctx.stroke();
-            ctx.setLineDash([]);
-        } else {
-            ctx.fillStyle = nodeColor;
-            ctx.fill();
-            ctx.lineWidth = 1.5;
-            ctx.strokeStyle = 'rgba(0,0,0,0.75)';
-            ctx.stroke();
-        }
-
-        if (node.immutable) {
-            ctx.beginPath();
-            ctx.arc(pt.x, pt.y, radius + 2.5, 0, Math.PI * 2);
-            ctx.lineWidth = 1.5;
-            ctx.strokeStyle = PINNED_RING;
-            ctx.stroke();
-        }
-
-        if (node.name) {
-            var lx = pt.x + radius + 3;
-            ctx.lineWidth = 3;
-            ctx.strokeStyle = 'rgba(0,0,0,0.8)';
-            ctx.strokeText(node.name, lx, pt.y);
-            ctx.fillStyle = nodeColor;
-            ctx.fillText(node.name, lx, pt.y);
-        }
-    }
-}
-
-/**
- * Fill one plane's polygon. Vertex order comes from
- * `planeFillOrderPoolIndices`: the user's connections when they form a closed
- * ring, otherwise the CONVEX HULL of this view's positioned nodes. Membership
- * order would draw a self-intersecting bowtie for any quad whose corners were
- * not added in ring order, and would turn a node placed in the MIDDLE of a
- * plane into a reflex vertex that carves a notch out of the fill instead of
- * being covered by it.
- *
- * Nulled nodes are still vertices here: toggling a corner off means "don't use
- * this observation in the solve", not "this corner isn't part of the plane",
- * and dropping it would distort the outline.
- */
-function fillPolygon(ctx, plane, pool, inst, tf, color) {
-    var order = planeFillOrderPoolIndices(plane, pool, inst);
-    var pts = [];
-    for (var i = 0; i < order.length; i++) {
-        var k = order[i];
-        if (k >= 0 && inst.hasPoint(k)) pts.push(tf(inst.getX(k), inst.getY(k)));
-    }
-    if (pts.length < 3) return;
-
-    ctx.save();
-    ctx.globalAlpha = PLANE_FILL_ALPHA;
-    ctx.fillStyle = color;
-    ctx.beginPath();
-    ctx.moveTo(pts[0].x, pts[0].y);
-    for (var j = 1; j < pts.length; j++) ctx.lineTo(pts[j].x, pts[j].y);
-    ctx.closePath();
-    ctx.fill();
-    ctx.restore();
-}
-
-/** Stroke edges given as POOL-index pairs. */
-function strokeEdges(ctx, edges, inst, tf) {
-    for (var e = 0; e < edges.length; e++) {
-        var a = edges[e][0], b = edges[e][1];
-        if (a < 0 || b < 0 || !inst.hasPoint(a) || !inst.hasPoint(b)) continue;
-        var pa = tf(inst.getX(a), inst.getY(a));
-        var pb = tf(inst.getX(b), inst.getY(b));
-        ctx.beginPath();
-        ctx.moveTo(pa.x, pa.y);
-        ctx.lineTo(pb.x, pb.y);
-        ctx.stroke();
-    }
-}
+// Moved to `ui/plane-overlays.js`. Re-exported so `ui/rendering.js` and
+// the tests keep reaching it through this module's path.
+export { drawPlaneOverlays } from './plane-overlays.js';
 
 // ============================================
 // Wiring
@@ -4110,8 +2134,9 @@ function strokeEdges(ctx, edges, inst, tf) {
 var PLANE_SECTIONS_KEY = 'planeSectionsOpen';
 
 // Every collapsible section in the panel, majors and the sub-sections inside
-// them. Restoring only the majors would half-solve it: Edit Plane is the
-// tallest section in the panel and most of that height is Members and Edges.
+// them. Restoring only the majors would half-solve it: Planes is by far the
+// tallest section in the panel and most of that height is its four
+// sub-sections.
 //
 // `originDangerDetails` is deliberately ABSENT. It ships collapsed because it
 // holds the three actions that rewrite the calibration every downstream tool
@@ -4120,10 +2145,10 @@ var PLANE_SECTIONS_KEY = 'planeSectionsOpen';
 // It costs one click to reopen and that click is the point.
 var PLANE_SECTION_IDS = [
     'planeNodesDetails',
-    'planeEditorDetails',
+    'planePlanesDetails',
     'planeMembersDetails',
     'planeEdgesDetails',
-    'planePlanesDetails',
+    'planeActionsDetails',
     'planeAppearanceDetails',
     'meshObjectsDetails',
     'originResultDetails',
@@ -4201,50 +2226,15 @@ export function setupPlaneDefinition() {
 
     setupMeshObjects();
 
-    // --- The plane SELECTOR: which plane the editor edits ---
-    // Selection is one-way state (`planeState.selectedPlaneId`) that both this
-    // dropdown and the Planes table write and both re-read on the next
-    // `refreshPlanePanel`, so the two can never disagree without one of them
-    // failing to render at all.
-    var planeSelect = document.getElementById('planeSelect');
-    if (planeSelect) {
-        planeSelect.addEventListener('change', function () {
-            // Set Origin Mode locks every BUTTON, but this is a <select> that
-            // `lockUI` cannot reach — and it would both create state and run a
-            // full panel rebuild, which re-enables the very buttons the lock
-            // just turned off. Refused here, and only the dropdown is
-            // re-rendered so the displayed value goes back.
-            if (isOriginModeActive()) {
-                setStatus('Finish or leave Set Origin Mode before changing planes', 'warning');
-                renderPlaneSelect(getSelectedPlane());
-                return;
-            }
-            if (planeSelect.value === NEW_PLANE_OPTION) {
-                // `createPlane` selects the new plane, and the re-render puts
-                // the dropdown on it — "+ New Plane" must never be left showing
-                // as the current value, because it is an action, not a plane.
-                var made = createPlane();
-                setStatus('Created plane "' + made.name + '" — add nodes to it with + Add',
-                    'success');
-                refreshPlanePanel();
-                return;
-            }
-            var id = parseInt(planeSelect.value, 10);
-            if (isNaN(id) || !getPlane(id)) return;
-            planeState.selectedPlaneId = id;
-            refreshPlanePanel();
-        });
-    }
-
     var nameInput = document.getElementById('planeSkeletonName');
     if (nameInput) {
         // The one place a plane is RENAMED. `refreshPlanePanel` rebuilds the
-        // selector and the Planes table from the model, so both follow.
+        // Planes table and the section header from the model, so both follow.
         nameInput.addEventListener('change', function () {
             var plane = getSelectedPlane();
             if (!plane) return;
-            // Same reason as the selector above: an <input> outruns `lockUI`,
-            // and its refresh would re-enable the locked action row.
+            // An <input> outruns `lockUI`, which only reaches buttons, and
+            // this handler's refresh would re-enable the locked action row.
             if (isOriginModeActive()) {
                 nameInput.value = plane.name;
                 setStatus('Finish or leave Set Origin Mode before renaming a plane', 'warning');
@@ -4274,7 +2264,7 @@ export function setupPlaneDefinition() {
         // meant a stray click on an empty panel silently produced a plane the
         // user then had to notice and delete. A node in zero planes is a valid
         // resting state the Nodes table already renders (dimmed, "unused") —
-        // `+ Add` in the Edit Plane section is what places it.
+        // `+ Add` in the Planes section is what places it.
         addNodeBtn.addEventListener('click', function () {
             var model = planeModel();
             var name = nodeInput ? nodeInput.value.trim() : '';
@@ -4287,14 +2277,14 @@ export function setupPlaneDefinition() {
                 // meant. The existing node is not touched — a node joins a plane
                 // through + Add, deliberately, and only ever there.
                 setStatus('A node called "' + name + '" already exists — nodes are ' +
-                    'project-wide. Put it in a plane with + Add in Edit Plane.', 'warning');
+                    'project-wide. Put it in a plane with + Add in Planes.', 'warning');
                 return;
             }
             var node = model.addNode(name);
             markDirty();
             if (nodeInput) nodeInput.value = '';
             setStatus('Created node "' + node.name + '" in the project pool — it is in ' +
-                'no plane yet; add it to one with + Add in Edit Plane');
+                'no plane yet; add it to one with + Add in Planes');
             refreshPlanePanel();
             redraw();
         });
@@ -4367,11 +2357,21 @@ export function setupPlaneDefinition() {
         });
     }
 
+    // --- + New Plane: the section's one create affordance ---
+    // It sits directly under the roster, above the editor: a new plane is empty
+    // and the next thing to do with it is name it and add nodes, which is what
+    // everything below the button is for. `createPlane` SELECTS it, so the
+    // refresh below opens it in the editor.
+    //
+    // No Set Origin Mode refusal here, unlike the rename field beside it: this
+    // is a <button>, so `lockUI` disables it and the click never lands.
     var newPlaneBtn = document.getElementById('btnNewPlaneSkeleton');
     if (newPlaneBtn) {
         newPlaneBtn.addEventListener('click', function () {
-            createPlane();
+            var made = createPlane();
             refreshPlanePanel();
+            setStatus('Created plane "' + made.name +
+                '" — name it and add nodes with + Add', 'success');
         });
     }
 
