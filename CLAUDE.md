@@ -441,6 +441,43 @@ Coverage: `tests/test-plane-serialization.mjs` (unit, the mapping) and
 `tests/e2e/plane-persistence-roundtrip.mjs` (real app, both `.slp` writers, the
 dirty flag, the scope split, and both negative controls).
 
+## Triangulation must not depend on where the origin is
+
+`triangulatePointDLT` minimizes an **algebraic** error, and `‖x‖ = 1` on a
+HOMOGENEOUS 4-vector is not a geometric constraint — it weights `(X,Y,Z)`
+against `W`, so moving the world origin re-weights the cost and moves the
+answer. Solved in the raw calibration frame, that made triangulation depend on
+where the origin happens to be, which **`Set as New Calibration` moves by
+~1.2 m** while promising it changes no geometry. Measured on the real cage
+session: identical 2D came out 0.26 mm apart at the median, 17 mm at p99,
+metres in the tail — and because `CrossViewTracker._retriangulate` scores
+cross-view association against exactly those points, **21% of frames came out
+grouped differently, three times worse by reprojection (16.5 px → 51.8 px),
+purely from swapping the calibration file.**
+
+It is now solved in a frame derived from the **cameras alone** — centroid of
+their centres, unit = their mean distance from it. That frame moves with the
+cameras, so the normalized system differs only by an orthogonal factor, `‖x‖=1`
+is untouched, and the null vector maps exactly. Four rules:
+- **The normalizing frame must come from the cameras ONLY.** From the
+  observations, or from a first-pass answer, and it depends on the thing being
+  solved for — the invariance argument collapses.
+- **The tracker does not use the `ba` / "Refined" method.** It calls
+  `triangulatePoints` (DLT) unconditionally, so the Settings toggle fixes
+  Triangulate / Triangulate All and never Track All. Fix the estimator, not the
+  setting.
+- **A noiseless fixture cannot test this.** When the rays meet exactly, `A·x=0`
+  has an exact null vector and every positive re-weighting finds it. Inject
+  noise, or you have written a test that passes on the broken build — which is
+  exactly what the first version of this one did.
+- **Everything else in the tracker's cost is already invariant** — the
+  reprojection term, the point-to-ray term and the fundamental matrix (to
+  1e-19). Keep it that way: a new cost term may read the rays, the pixels or
+  `points3d`, never absolute world coordinates.
+Covered by `tests/e2e/triangulation-frame-invariant.mjs`, confirmed to fail on
+the pre-fix build (7 checks red; a mis-associated point moves 6.01 mm instead
+of 2.4e-13 mm).
+
 ## The defined origin moves the CALIBRATION, never the points
 
 Set Origin (`ui/origin-definition.js`, maths in `pose/origin-frame.js`) applies

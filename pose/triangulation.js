@@ -123,6 +123,76 @@ function svd3x4(A) {
 // ============================================
 
 /**
+ * The camera centre of a 3x4 projection matrix, or null if it is degenerate.
+ *
+ * `P = [M | p4]` and the centre is the null vector, `C = -M^-1 p4`. Used only
+ * to build the normalizing frame below — nothing else reads it.
+ * @private
+ */
+function cameraCentreFromP(P) {
+    const a = P[0][0], b = P[0][1], c = P[0][2];
+    const d = P[1][0], e = P[1][1], f = P[1][2];
+    const g = P[2][0], h = P[2][1], i = P[2][2];
+    const det = a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g);
+    if (!isFinite(det) || Math.abs(det) < 1e-12) return null;
+    const x = P[0][3], y = P[1][3], z = P[2][3];
+    const C = [
+        -(((e * i - f * h) * x) + (-(b * i - c * h) * y) + ((b * f - c * e) * z)) / det,
+        -((-(d * i - f * g) * x) + ((a * i - c * g) * y) + (-(a * f - c * d) * z)) / det,
+        -(((d * h - e * g) * x) + (-(a * h - b * g) * y) + ((a * e - b * d) * z)) / det,
+    ];
+    return (isFinite(C[0]) && isFinite(C[1]) && isFinite(C[2])) ? C : null;
+}
+
+/**
+ * Cache of normalizing frames, keyed on the caller's `projectionMatrices`
+ * ARRAY. `triangulatePoints` passes the same array for every keypoint of a
+ * group, so this computes one 3x3 inverse per camera per group rather than per
+ * point. Weak, so a released camera set is collectable.
+ * @private
+ */
+const _dltFrameCache = new WeakMap();
+
+/**
+ * The similarity that `triangulatePointDLT` solves in: centre on the camera
+ * centroid, scale by their mean distance from it.
+ *
+ * Derived from the CAMERAS ONLY — never from the observations or the answer —
+ * which is precisely what makes it transform covariantly with the world frame
+ * and so makes the solve frame-invariant (see the note on the DLT itself).
+ * @private
+ */
+function dltNormalizingFrame(projectionMatrices) {
+    if (_dltFrameCache.has(projectionMatrices)) {
+        return _dltFrameCache.get(projectionMatrices);
+    }
+    const centres = [];
+    for (let i = 0; i < projectionMatrices.length; i++) {
+        const P = projectionMatrices[i];
+        if (!P) continue;
+        const C = cameraCentreFromP(P);
+        if (C) centres.push(C);
+    }
+    let frame = null;
+    if (centres.length > 0) {
+        let cx = 0, cy = 0, cz = 0;
+        for (let i = 0; i < centres.length; i++) {
+            cx += centres[i][0]; cy += centres[i][1]; cz += centres[i][2];
+        }
+        cx /= centres.length; cy /= centres.length; cz /= centres.length;
+        let s = 0;
+        for (let i = 0; i < centres.length; i++) {
+            s += Math.hypot(centres[i][0] - cx, centres[i][1] - cy, centres[i][2] - cz);
+        }
+        s /= centres.length;
+        if (!isFinite(s) || s < 1e-9) s = 1;          // coincident centres
+        if (isFinite(cx) && isFinite(cy) && isFinite(cz)) frame = { cx, cy, cz, s };
+    }
+    _dltFrameCache.set(projectionMatrices, frame);
+    return frame;
+}
+
+/**
  * Triangulate a single 3D point from 2+ 2D observations using DLT.
  *
  * DLT formulation: for each observation (x_i, y_i) and projection matrix P_i,
@@ -133,6 +203,38 @@ function svd3x4(A) {
  * The system Ax = 0 is solved via SVD (smallest right singular vector).
  * The solution x is a homogeneous 4-vector; we convert to 3D by dividing
  * by the last component.
+ *
+ * ## IT IS SOLVED IN A NORMALIZED WORLD FRAME, AND THAT IS LOAD-BEARING
+ *
+ * DLT minimizes an ALGEBRAIC error, and `‖x‖ = 1` on a HOMOGENEOUS 4-vector is
+ * not a geometric constraint: it weights the direction part `(X,Y,Z)` against
+ * the scale part `W`, so moving the world origin re-weights the cost and moves
+ * the minimizer. Solving in the raw calibration frame therefore made this
+ * function depend on WHERE THE ORIGIN HAPPENS TO BE — and
+ * `Set as New Calibration`, whose whole contract is that it re-expresses the
+ * world and changes no geometry, moved it by ~1.2 m. Measured on a real
+ * 6-camera session: identical 2D triangulated 0.26 mm apart at the median but
+ * 17 mm at p99 and metres in the tail, and because `CrossViewTracker` scores
+ * its cross-view association against exactly these points (`_retriangulate`),
+ * 21% of frames came out grouped DIFFERENTLY — three times worse by
+ * reprojection — purely from swapping the calibration file.
+ *
+ * So the system is built in a frame derived from the CAMERAS: origin at their
+ * centroid, unit = their mean distance from it (`dltNormalizingFrame`). Under
+ * a rigid change of world frame `X' = R(X - o)` the camera centres move with
+ * everything else, so that frame moves with them, and the normalized `A`
+ * differs only by `diag(Rᵀ, 1)` on its columns — an ORTHOGONAL factor, which
+ * leaves `‖x‖ = 1` alone. The null vector therefore maps exactly, and the
+ * answer is exactly the rigidly-transformed answer. Scaling is the same
+ * argument plus ordinary conditioning (Hartley).
+ *
+ * The frame must depend on the cameras ALONE. Deriving it from the
+ * observations, or from a first-pass answer, would make it depend on the very
+ * thing being solved for and the invariance argument collapses.
+ *
+ * If no camera centre can be recovered (degenerate projection matrices) this
+ * falls back to solving in the raw frame, which is the old behaviour — a worse
+ * answer is better than no answer.
  *
  * @param {(number[]|null)[]} observations - 2D points [[x1,y1], [x2,y2], ...]
  *   null entries mean the point is not visible in that camera.
@@ -153,8 +255,16 @@ export function triangulatePointDLT(observations, projectionMatrices) {
         return null;
     }
 
-    // Build the A matrix (2*N x 4) where N = number of valid observations
-    const numRows = validIndices.length * 2;
+    // The camera-derived similarity this is solved in (see the note above).
+    // Null only when no projection matrix yields a centre, in which case every
+    // `nrm` below is the identity and this is the original raw-frame solve.
+    const nf = dltNormalizingFrame(projectionMatrices);
+    const s = nf ? nf.s : 1;
+    const cx = nf ? nf.cx : 0, cy = nf ? nf.cy : 0, cz = nf ? nf.cz : 0;
+
+    // Build the A matrix (2*N x 4) where N = number of valid observations.
+    // Rows are formed from P·T, where T maps a normalized point back to the
+    // world (X = s·X' + c) — so the unknown being solved for is X'.
     const A = [];
 
     for (let idx = 0; idx < validIndices.length; idx++) {
@@ -163,20 +273,26 @@ export function triangulatePointDLT(observations, projectionMatrices) {
         const y = observations[i][1];
         const P = projectionMatrices[i];
 
+        // Row r of P·T: [s*P[r][0], s*P[r][1], s*P[r][2],
+        //                P[r][0]*cx + P[r][1]*cy + P[r][2]*cz + P[r][3]]
+        const p0w = P[0][0] * cx + P[0][1] * cy + P[0][2] * cz + P[0][3];
+        const p1w = P[1][0] * cx + P[1][1] * cy + P[1][2] * cz + P[1][3];
+        const p2w = P[2][0] * cx + P[2][1] * cy + P[2][2] * cz + P[2][3];
+
         // Row 1: x * P[2] - P[0]
         A[2 * idx] = [
-            x * P[2][0] - P[0][0],
-            x * P[2][1] - P[0][1],
-            x * P[2][2] - P[0][2],
-            x * P[2][3] - P[0][3]
+            s * (x * P[2][0] - P[0][0]),
+            s * (x * P[2][1] - P[0][1]),
+            s * (x * P[2][2] - P[0][2]),
+            x * p2w - p0w
         ];
 
         // Row 2: y * P[2] - P[1]
         A[2 * idx + 1] = [
-            y * P[2][0] - P[1][0],
-            y * P[2][1] - P[1][1],
-            y * P[2][2] - P[1][2],
-            y * P[2][3] - P[1][3]
+            s * (y * P[2][0] - P[1][0]),
+            s * (y * P[2][1] - P[1][1]),
+            s * (y * P[2][2] - P[1][2]),
+            y * p2w - p1w
         ];
     }
 
@@ -190,7 +306,12 @@ export function triangulatePointDLT(observations, projectionMatrices) {
         return null;
     }
 
-    return [xHomog[0] / w, xHomog[1] / w, xHomog[2] / w];
+    // Back out of the normalized frame: X = s·X' + c
+    return [
+        s * (xHomog[0] / w) + cx,
+        s * (xHomog[1] / w) + cy,
+        s * (xHomog[2] / w) + cz,
+    ];
 }
 
 /**

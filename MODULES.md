@@ -2121,6 +2121,22 @@ of 3D `Target`s, one camera-view at a time, via Hungarian assignment on a cost
 that sums a 2D reprojection term and a 3D point-to-ray term. Still no Kalman
 filter, no velocity model (matches the reference).
 
+**"All geometry is coordinate-agnostic" — true of everything it imports EXCEPT
+the triangulation.** The file header makes that claim, and it holds for
+`reprojectPoint`, `backProjectToRays`, `pointsToRayDistances` and
+`epipolarErrorMatrix` (the fundamental matrix is the relative pose, invariant to
+1e-19 under a re-base). It did NOT hold for `triangulatePoints`, which
+`_retriangulate` calls to build `target.points3d` — the single frame-dependent
+input to both cost terms, which are otherwise geometric given that 3D. A ~1.2 m
+re-base moved it by up to 15 mm, and since `_adjacency3d` divides millimetre
+distances by `distanceThreshold` (default **1.0**), that is a cost swing of ~15
+per node. 21% of frames came out grouped differently. Fixed in
+`triangulatePointDLT` (see `pose/triangulation.js`), not here — the tracker was
+right to assume invariance; the estimator was not delivering it. Note the
+tracker calls `triangulatePoints` (DLT) unconditionally and never
+`triangulatePointsBA`, so the Settings "Refined" method does **not** reach this
+path.
+
 **Stale-anchor fix (2026-08-14).** The reference keeps one detection per camera
 FOREVER (never expired) and re-fuses mid-frame, mutating the shared target list
 one camera's Hungarian at a time — so after an occlusion a target's 3D anchor
@@ -2210,6 +2226,43 @@ reused by passing the bare extrinsic + normalized points:
 math, fundamental-matrix / epipolar utilities, Hungarian assignment. Also
 hosts the lazy-H5 frame loader and the user-facing triangulation orchestration
 (single-frame, all-frames, multi-frame range).
+
+**`triangulatePointDLT` SOLVES IN A CAMERA-DERIVED FRAME, and that is
+load-bearing.** DLT minimizes an ALGEBRAIC error, and `‖x‖ = 1` on a
+HOMOGENEOUS 4-vector is not geometric: it weights the direction part `(X,Y,Z)`
+against the scale part `W`, so moving the world origin re-weights the cost and
+moves the minimizer. Solving in the raw calibration frame therefore made the
+answer depend on WHERE THE ORIGIN HAPPENS TO BE — which
+`Set as New Calibration`, whose whole contract is that it re-expresses the world
+and changes no geometry, moves by ~1.2 m. Measured on the real 6-camera cage
+session: identical 2D came out 0.26 mm apart at the median but 17 mm at p99 and
+metres in the tail, and because `CrossViewTracker._retriangulate` scores
+cross-view association against exactly these points, **21% of frames came out
+grouped differently — three times worse by reprojection (16.5 px vs 51.8 px) —
+purely from swapping the calibration file.**
+
+The system is now built in a frame derived from the CAMERAS alone
+(`dltNormalizingFrame`: centroid of the camera centres, unit = their mean
+distance from it, cached per `projectionMatrices` array). Under a rigid change
+of world frame the camera centres move with everything else, so the normalizing
+frame moves with them, the normalized `A` differs only by an ORTHOGONAL factor
+`diag(Rᵀ, 1)` on its columns, `‖x‖ = 1` is untouched, and the null vector maps
+exactly. Two rules follow:
+- **The frame must depend on the cameras ONLY.** Deriving it from the
+  observations, or from a first-pass answer, makes it depend on the thing being
+  solved for and the invariance argument collapses.
+- **Degenerate projection matrices fall back to the raw frame**, which is the
+  old behaviour — a worse answer beats no answer.
+
+Measured effect of the change on the trusted (un-rebased) baseline: the median
+point moves 0.048 mm and the median per-point reprojection error moves
+**+0.0064 px**, while total squared reprojection error over 95k points falls
+**74%** (7.96e10 → 2.05e10) and the worst outlier goes 201,637 px → 7,387 px —
+the ordinary conditioning win Hartley normalization buys. Pinned by
+`tests/e2e/triangulation-frame-invariant.mjs`, which was confirmed to FAIL on
+the pre-fix build. **A noiseless fixture cannot pin this**: when the rays meet
+exactly, `A·x = 0` has an exact null vector and every positive re-weighting
+finds it, so the test injects noise deliberately.
 
 **3D points are flat (luc3d #189).** The array-level entry points speak the
 `Float64Array(3N)` `points3d` representation (see `pose/pose-data.js`):
