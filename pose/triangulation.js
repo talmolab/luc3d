@@ -2,12 +2,20 @@
  * triangulation.js - Triangulation and reprojection for multi-view 3D reconstruction
  *
  * Implements DLT (Direct Linear Transform) triangulation in pure JavaScript.
- * Uses the Jacobi eigenvalue algorithm for solving the 4x4 symmetric eigenproblem.
+ * Uses the Jacobi eigenvalue algorithm for solving the 4x4 symmetric
+ * eigenproblem, imported from `pose/plane-fit.js` along with the least-squares
+ * plane fit that moved there (and is re-exported from here unchanged).
  */
 
 import { mat3x3Multiply, Camera, FrameGroup, Instance, UnlinkedInstance, InstanceGroup,
          makePoints3d, points3dNodeCount, hasPoint3d, getPoint3d, readPoint3d,
          setPoint3d, clearPoint3d, someValidPoint3d, countPoints3d } from './pose-data.js';
+// The Jacobi eigensolver and the least-squares plane fit live in
+// `pose/plane-fit.js`, so `pose/plane-data.js` can reach the fit without
+// importing this module — and the whole UI with it. `fitPlaneToPoints3d` is
+// re-exported unchanged, because every existing caller and test reads it here.
+import { jacobiEigen, fitPlaneToPoints3d } from './plane-fit.js';
+export { fitPlaneToPoints3d };
 import { state, timeline, viewport3d } from '../ui/app-state.js';
 // Pass 3i-2: triangulation orchestration moved out of app.js
 import { setReprojErrorVisible, drawAllOverlays } from '../ui/rendering.js';
@@ -64,128 +72,6 @@ function matTranspose(A) {
         }
     }
     return T;
-}
-
-/**
- * Jacobi eigenvalue algorithm for an NxN symmetric matrix.
- *
- * Iteratively applies Givens (Jacobi) rotations to drive off-diagonal elements
- * to zero. Converges for any real symmetric matrix. Particularly efficient and
- * robust for small matrices (4x4 in our case).
- *
- * @param {number[][]} M - NxN symmetric matrix (will not be modified)
- * @param {number} [maxIter=100] - Maximum number of sweeps
- * @param {number} [tol=1e-12] - Convergence tolerance for off-diagonal norm
- * @returns {{ eigenvalues: number[], eigenvectors: number[][] }}
- *   eigenvalues[i] is the i-th eigenvalue.
- *   eigenvectors[i] is the i-th eigenvector (column i of the rotation matrix).
- */
-function jacobiEigen(M, maxIter, tol) {
-    if (maxIter === undefined) maxIter = 100;
-    if (tol === undefined) tol = 1e-12;
-
-    const n = M.length;
-
-    // Deep copy M into A (we will modify A in-place)
-    const A = [];
-    for (let i = 0; i < n; i++) {
-        A[i] = M[i].slice();
-    }
-
-    // V accumulates the product of all rotation matrices -> eigenvectors
-    // Start with identity
-    const V = [];
-    for (let i = 0; i < n; i++) {
-        V[i] = new Array(n).fill(0);
-        V[i][i] = 1;
-    }
-
-    for (let iter = 0; iter < maxIter; iter++) {
-        // Compute off-diagonal Frobenius norm
-        let offDiagNorm = 0;
-        for (let i = 0; i < n; i++) {
-            for (let j = i + 1; j < n; j++) {
-                offDiagNorm += A[i][j] * A[i][j];
-            }
-        }
-        offDiagNorm = Math.sqrt(2 * offDiagNorm); // factor of 2 because symmetric
-
-        if (offDiagNorm < tol) {
-            break; // Converged
-        }
-
-        // Sweep: zero out each off-diagonal element (i < j)
-        for (let p = 0; p < n; p++) {
-            for (let q = p + 1; q < n; q++) {
-                if (Math.abs(A[p][q]) < tol * 1e-2) {
-                    continue; // Skip tiny elements
-                }
-
-                // Compute rotation angle
-                const app = A[p][p];
-                const aqq = A[q][q];
-                const apq = A[p][q];
-
-                let theta;
-                if (Math.abs(app - aqq) < 1e-15) {
-                    theta = Math.PI / 4;
-                } else {
-                    theta = 0.5 * Math.atan2(2 * apq, app - aqq);
-                }
-
-                const c = Math.cos(theta);
-                const s = Math.sin(theta);
-
-                // Apply rotation to A: A' = G^T A G
-                // Only rows/cols p and q change
-
-                // First, compute new values for rows p and q
-                const newRowP = new Array(n);
-                const newRowQ = new Array(n);
-                for (let j = 0; j < n; j++) {
-                    newRowP[j] = c * A[p][j] + s * A[q][j];
-                    newRowQ[j] = -s * A[p][j] + c * A[q][j];
-                }
-                for (let j = 0; j < n; j++) {
-                    A[p][j] = newRowP[j];
-                    A[q][j] = newRowQ[j];
-                }
-
-                // Now columns p and q
-                const newColP = new Array(n);
-                const newColQ = new Array(n);
-                for (let i = 0; i < n; i++) {
-                    newColP[i] = c * A[i][p] + s * A[i][q];
-                    newColQ[i] = -s * A[i][p] + c * A[i][q];
-                }
-                for (let i = 0; i < n; i++) {
-                    A[i][p] = newColP[i];
-                    A[i][q] = newColQ[i];
-                }
-
-                // Accumulate rotation into V
-                for (let i = 0; i < n; i++) {
-                    const vip = V[i][p];
-                    const viq = V[i][q];
-                    V[i][p] = c * vip + s * viq;
-                    V[i][q] = -s * vip + c * viq;
-                }
-            }
-        }
-    }
-
-    // Extract eigenvalues from diagonal of A, eigenvectors from columns of V
-    const eigenvalues = new Array(n);
-    const eigenvectors = [];
-    for (let i = 0; i < n; i++) {
-        eigenvalues[i] = A[i][i];
-        eigenvectors[i] = new Array(n);
-        for (let j = 0; j < n; j++) {
-            eigenvectors[i][j] = V[j][i]; // column i of V
-        }
-    }
-
-    return { eigenvalues: eigenvalues, eigenvectors: eigenvectors };
 }
 
 /**
@@ -1464,83 +1350,10 @@ export function hungarianAlgorithm(costMatrix) {
 // Plane fitting (View ▸ Define Planes)
 // ============================================
 
-/**
- * Least-squares plane of best fit through a flat `points3d` set.
- *
- * Total-least-squares via PCA: the plane through the centroid whose normal is
- * the eigenvector of the SMALLEST eigenvalue of the points' 3x3 covariance.
- * That minimizes the sum of squared PERPENDICULAR distances, which is the
- * right objective here — the corners carry error in all three axes (they come
- * out of triangulation), so an ordinary least-squares fit of z on (x, y) would
- * both privilege an arbitrary axis and blow up for a plane seen edge-on.
- *
- * Rejects degenerate input. Three or more points always admit *a* plane, but
- * COLLINEAR points admit infinitely many — the normal is then arbitrary within
- * a pencil, and "fitting" to it would silently rotate the annotation to
- * nonsense. The middle eigenvalue is the spread along the plane's minor
- * in-plane axis, so comparing it against the largest detects exactly that case.
- *
- * @param {Float64Array} points3d - Flat [X,Y,Z] per node; all-NaN = missing.
- * @returns {{centroid:number[], normal:number[], rms:number, nPoints:number}|null}
- *   null when fewer than 3 nodes are present, all coincide, or they are collinear.
- */
-export function fitPlaneToPoints3d(points3d) {
-    const n = points3dNodeCount(points3d);
-    const p = [0, 0, 0];
+// `fitPlaneToPoints3d` moved to `pose/plane-fit.js` and is re-exported at the
+// top of this file. `fitPlaneConstrained` below is the anchored variant and
+// stays here — it is only ever called from the UI.
 
-    let cx = 0, cy = 0, cz = 0, count = 0;
-    for (let k = 0; k < n; k++) {
-        if (!readPoint3d(points3d, k, p)) continue;
-        cx += p[0]; cy += p[1]; cz += p[2];
-        count++;
-    }
-    if (count < 3) return null;
-    cx /= count; cy /= count; cz /= count;
-
-    // Covariance of the centered points (symmetric — only 6 unique terms).
-    let xx = 0, xy = 0, xz = 0, yy = 0, yz = 0, zz = 0;
-    for (let k = 0; k < n; k++) {
-        if (!readPoint3d(points3d, k, p)) continue;
-        const dx = p[0] - cx, dy = p[1] - cy, dz = p[2] - cz;
-        xx += dx * dx; xy += dx * dy; xz += dx * dz;
-        yy += dy * dy; yz += dy * dz; zz += dz * dz;
-    }
-
-    // jacobiEigen returns eigenvectors as ROWS already paired with
-    // `eigenvalues[i]`, and does NOT sort them — find the extremes ourselves.
-    const eig = jacobiEigen([[xx, xy, xz], [xy, yy, yz], [xz, yz, zz]]);
-    let minIdx = 0, maxIdx = 0;
-    for (let i = 1; i < 3; i++) {
-        if (Math.abs(eig.eigenvalues[i]) < Math.abs(eig.eigenvalues[minIdx])) minIdx = i;
-        if (Math.abs(eig.eigenvalues[i]) > Math.abs(eig.eigenvalues[maxIdx])) maxIdx = i;
-    }
-    if (minIdx === maxIdx) return null;          // all eigenvalues equal — no structure
-    const midIdx = 3 - minIdx - maxIdx;
-
-    const largest = Math.abs(eig.eigenvalues[maxIdx]);
-    if (!(largest > 0)) return null;                                      // coincident
-    if (Math.abs(eig.eigenvalues[midIdx]) / largest < 1e-10) return null; // collinear
-
-    const v = eig.eigenvectors[minIdx];
-    const len = Math.sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
-    if (!(len > 1e-12)) return null;
-    const normal = [v[0] / len, v[1] / len, v[2] / len];
-
-    // RMS perpendicular distance — how planar the annotation already was.
-    let sq = 0;
-    for (let k = 0; k < n; k++) {
-        if (!readPoint3d(points3d, k, p)) continue;
-        const d = (p[0] - cx) * normal[0] + (p[1] - cy) * normal[1] + (p[2] - cz) * normal[2];
-        sq += d * d;
-    }
-
-    return {
-        centroid: [cx, cy, cz],
-        normal: normal,
-        rms: Math.sqrt(sq / count),
-        nPoints: count,
-    };
-}
 
 /**
  * Orthogonally project every present point onto `plane`, returning a NEW flat

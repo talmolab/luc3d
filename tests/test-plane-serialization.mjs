@@ -365,7 +365,6 @@ console.log('\n8. 3D Mesh Objects round-trip by ID, and drop what no longer exis
     obj.addPlane(side.id);
     obj.addPlane(floor.id);
     obj.addPlane(back.id);
-    obj.flipNormals = true;
     m.meshObjects.createObject('table').addPlane(floor.id);
 
     const written = wire(serializeMeshObjects(m.meshObjects));
@@ -373,9 +372,13 @@ console.log('\n8. 3D Mesh Objects round-trip by ID, and drop what no longer exis
     check(written[0].name === 'cage' && written[0].color === obj.color, 'name and colour');
     check(eq(written[0].planeIds, [side.id, floor.id, back.id]),
         'membership is written as IDS, in membership order');
-    check(written[0].flipNormals === true, 'a set flipNormals is written');
-    check(written[1].flipNormals === undefined,
-        'and an unset one is OMITTED — defaults are never written');
+    // Winding is DERIVED, so there is no orientation key to write. Asserted
+    // rather than assumed: an object carrying a stored flip would be a second
+    // source of truth for something `buildMeshObjectGeometry` already decides.
+    check(Object.keys(written[0]).sort().join() === 'color,id,name,planeIds',
+        'an object writes exactly id/name/color/planeIds: ' + Object.keys(written[0]).sort().join());
+    check(written[0].flipNormals === undefined && written[1].flipNormals === undefined,
+        'in particular no flipNormals — the feature is gone, not defaulted');
 
     // Restored against the live plane set.
     const live = [floor.id, back.id, side.id];
@@ -383,8 +386,19 @@ console.log('\n8. 3D Mesh Objects round-trip by ID, and drop what no longer exis
     check(back1.length === 2, 'both come back');
     check(back1[0].id === obj.id, 'with the id from the file, not a fresh one');
     check(eq(back1[0].planeIds, [side.id, floor.id, back.id]), 'and their order');
-    check(back1[0].flipNormals === true && back1[1].flipNormals === false,
-        'flipNormals round-trips, defaulting to false');
+    check(back1[0].flipNormals === undefined && back1[1].flipNormals === undefined,
+        'and nothing restores a flipNormals onto them');
+
+    // A file written by an OLDER build still carries `flipNormals: true`. It
+    // must be ignored, not adopted: winding is derived now, so re-applying a
+    // stale override would invert exactly the objects the derivation gets right.
+    const legacy = restoreMeshObjects(
+        [{ id: 91, name: 'old', color: '#ff0000', planeIds: [floor.id], flipNormals: true }],
+        live
+    );
+    check(legacy.length === 1 && legacy[0].name === 'old', 'a legacy object still loads');
+    check(legacy[0].flipNormals === undefined,
+        'and its stale flipNormals is dropped, not carried onto the new model');
 
     // A plane that is gone is DROPPED, never renumbered onto its neighbour —
     // the same rule membership and edges follow everywhere else.
@@ -464,7 +478,7 @@ console.log('\n10. Both pin states round-trip, and a legacy file still locks');
     const hard = m.addNode('hard');
     const pl = m.createPlane('floor');
     [free, soft, hard].forEach(n => m.addNodeToPlane(pl, n.id));
-    m.pool.setPin(soft.id, 'plane-locked', pl.id);
+    m.pool.setPin(soft.id, 'plane-locked');
     m.pool.setPin(hard.id, 'locked');
     hard.setPoint3d([1, 2, 3], { force: true });
 
@@ -473,16 +487,18 @@ console.log('\n10. Both pin states round-trip, and a legacy file still locks');
     // --- defaults are never written ---
     check(out[0].pin === undefined && out[0].immutable === undefined,
         'an unpinned node writes neither key, so the golden digest cannot move');
-    check(out[0].pinPlaneId === undefined, 'nor a pinPlaneId');
+    check(out[0].pinPlaneId === undefined, 'nor anything else');
 
     // --- locked writes BOTH, so a pre-split build still honours the lock ---
     check(out[2].pin === 'locked', 'a locked node writes pin');
     check(out[2].immutable === true,
         'and ALSO writes immutable, so an older build still freezes it');
 
-    // --- plane-locked writes pin + its plane, and deliberately NOT immutable ---
+    // --- plane-locked writes pin ALONE, and deliberately NOT immutable ---
     check(out[1].pin === 'plane-locked', 'a plane-locked node writes pin');
-    check(out[1].pinPlaneId === pl.id, 'with the plane it is held in');
+    check(out[1].pinPlaneId === undefined,
+        'and NO plane id — the planes holding it are its membership, which the ' +
+        'file already records under `planes`');
     check(out[1].immutable === undefined,
         'and no immutable, because an older build cannot enforce it and must ' +
         'not mistake it for a hard freeze');
@@ -491,7 +507,6 @@ console.log('\n10. Both pin states round-trip, and a legacy file still locks');
     const back = restorePlaneNodes(out);
     check(back.getNode(free.id).pin === 'none', 'unpinned survives');
     check(back.getNode(soft.id).pin === 'plane-locked', 'plane-locked survives');
-    check(back.getNode(soft.id).pinPlaneId === pl.id, 'and so does its plane id');
     check(back.getNode(hard.id).pin === 'locked', 'locked survives');
     check(back.getNode(hard.id).immutable === true, 'and still reads as immutable');
     check(eq(back.getNode(hard.id).getPoint3d(), [1, 2, 3]),
@@ -510,16 +525,27 @@ console.log('\n10. Both pin states round-trip, and a legacy file still locks');
     const bad = restorePlaneNodes([{ id: 1, name: 'x', color: '#fff', pin: 'banana' }]);
     check(bad.getNode(1).pin === 'none', 'an unrecognized pin state loads as unpinned');
 
-    // --- pin rides the project bundle, and `pinPlaneId` is an ID not an index ---
+    // --- a LEGACY `pinPlaneId` is read and DISCARDED ---
+    // Earlier builds nominated one plane for the pin to hold a node in. That
+    // plane is one of the planes the file already lists the node in, and those
+    // are what hold it now, so the key carries no information — adopting it
+    // would resurrect a second source of truth about the same thing.
+    const oldPin = restorePlaneNodes([
+        { id: 1, name: 'held', color: '#fff', pin: 'plane-locked', pinPlaneId: 42 },
+    ]);
+    check(oldPin.getNode(1).pin === 'plane-locked',
+        'a legacy plane-locked record still loads plane-locked');
+    check(oldPin.getNode(1).pinPlaneId === undefined,
+        'and its pinPlaneId is dropped rather than kept as a second source of truth');
+
+    // --- pin rides the project bundle ---
     const bundle = serializePlaneProject(m);
     const m2 = new PlaneModel();
     restorePlaneProject(m2, bundle);
     const soft2 = m2.pool.names().indexOf('soft');
     check(m2.pool.nodeAt(soft2).pin === 'plane-locked', 'pin survives the bundle');
-    check(m2.pool.nodeAt(soft2).pinPlaneId === pl.id,
-        'and its plane id still names the same plane');
-    check(m2.getPlane(pl.id) !== null && m2.getPlane(pl.id) !== undefined,
-        'which exists in the restored model');
+    check(m2.getPlane(pl.id).hasNode(m2.pool.nodeAt(soft2).id),
+        'and the plane holding it is its membership, restored with the plane');
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

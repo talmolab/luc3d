@@ -91,6 +91,25 @@ function floorAndWall(beta) {
     return { m, floor, wall, h0, h1, f2, f3, w2, w3 };
 }
 
+/**
+ * A third plane holding some of the wall's corners.
+ *
+ * It exists because "held in another plane" is MEMBERSHIP now, and the other
+ * plane cannot be the floor: three corners shared with the wall would make the
+ * two planes coplanar and `planAngleEdit` refuses that outright, long before
+ * any pin is looked at.
+ */
+function addToShelf(m, name, nodes) {
+    const shelf = m.createPlane(name);
+    nodes.forEach(n => m.addNodeToPlane(shelf, n.id));
+    ['s0', 's1', 's2'].forEach((nm, i) => {
+        const n = m.addNode(name + nm);
+        n.setPoint3d([20 + i, 20, 4 * i]);
+        m.addNodeToPlane(shelf, n.id);
+    });
+    return shelf;
+}
+
 /** The angle a plan's RESULT actually achieves, measured from the moved points. */
 function achievedAngle(plan, floorNormal) {
     // Read the moved plane's normal off three of its points rather than off the
@@ -422,17 +441,23 @@ console.log('\n10. A PLANE-LOCKED node is allowed through');
     // node along with its plane, so the constraint is satisfied by construction
     // and there is nothing to warn about.
     const own = floorAndWall(60);
-    own.m.pool.setPin(own.w2.id, 'plane-locked', own.wall.id);
+    own.m.pool.setPin(own.w2.id, 'plane-locked');
     const p1 = planAngleEdit(own.floor, own.wall, 90, own.m);
     check(p1.ok === true, 'plane-locked to the moving plane is allowed');
     check(near(achievedAngle(p1, [0, 0, 1]), 90, 1e-9), 'and the target is reached');
     check(!p1.warnings.some(w => w.code === 'plane_locked_elsewhere'),
         'with no warning, because its own plane moved with it');
 
-    // Plane-locked to a DIFFERENT plane: allowed, but warned about, because the
-    // commit will project it back and the result may miss the target.
+    // Plane-locked and also a member of a DIFFERENT plane: allowed, but warned
+    // about, because the commit will project it back onto that plane too and
+    // the result may miss the target. "Held elsewhere" is MEMBERSHIP — the pin
+    // nominates no plane, so sharing the corner with the floor is what puts
+    // this node in the warning.
+    // The third plane is NOT the floor: three shared corners would make the
+    // two named planes coplanar and the edit is refused before any of this.
     const other = floorAndWall(60);
-    other.m.pool.setPin(other.w2.id, 'plane-locked', other.floor.id);
+    addToShelf(other.m, 'shelf', [other.w2]);
+    other.m.pool.setPin(other.w2.id, 'plane-locked');
     const p2 = planAngleEdit(other.floor, other.wall, 90, other.m);
     check(p2.ok === true, 'plane-locked to another plane is still allowed');
     const w = p2.warnings.find(x => x.code === 'plane_locked_elsewhere');
@@ -443,38 +468,47 @@ console.log('\n10. A PLANE-LOCKED node is allowed through');
     // bare node list in parentheses straight after "another plane", which read
     // as if it named the plane; pairing each node with the plane holding it is
     // what makes that impossible to misread.
-    check(!!w && /w2 \(in "floor"\)/.test(w.message),
+    check(!!w && /w2 \(in "shelf"\)/.test(w.message),
         'pairing the node with the plane that holds it');
-    check(!!w && w.message.indexOf('w2') < w.message.indexOf('floor'),
+    check(!!w && w.message.indexOf('w2') < w.message.indexOf('shelf'),
         'node first, holding plane second — so the list cannot be read as planes');
-    check(!!w && /w2 \(in "floor"\)/.test(w.detail || ''),
+    check(!!w && /w2 \(in "shelf"\)/.test(w.detail || ''),
         'and the untruncated list rides along in `detail` for the tooltip');
 
     // More names than the narrow panel can show: capped on the line, whole in
     // `detail`. A count with no names is exactly the failure this pins.
     const many = floorAndWall(60);
-    ['e1', 'e2', 'e3', 'e4'].forEach((nm, i) => {
+    const extra = ['e1', 'e2', 'e3', 'e4'].map((nm, i) => {
         const n = many.m.addNode(nm);
         n.setPoint3d([1 + i, 2, 3]);          // off the hinge, so it moves
         many.m.addNodeToPlane(many.wall, n.id);
-        many.m.pool.setPin(n.id, 'plane-locked', many.floor.id);
+        many.m.pool.setPin(n.id, 'plane-locked');
+        return n;
     });
+    addToShelf(many.m, 'shelf', extra);        // what makes them held elsewhere
     many.wall.planeFit = floorAndWall(60).wall.planeFit;   // addNodeToPlane cleared it
     const pm = planAngleEdit(many.floor, many.wall, 90, many.m);
     const wm = pm.warnings.find(x => x.code === 'plane_locked_elsewhere');
     check(!!wm && /4 nodes are/.test(wm.message), 'plural for four nodes');
-    check(!!wm && /e1 \(in "floor"\)/.test(wm.message), 'the first names are inline');
+    check(!!wm && /e1 \(in "shelf"\)/.test(wm.message), 'the first names are inline');
     check(!!wm && /\+1 more/.test(wm.message), 'the overflow is counted, not dropped');
     check(!!wm && !/e4/.test(wm.message), 'and the capped name is off the line');
-    check(!!wm && /e4 \(in "floor"\)/.test(wm.detail || ''),
+    check(!!wm && /e4 \(in "shelf"\)/.test(wm.detail || ''),
         'but present in `detail`, so the tooltip still answers "which ones?"');
 
-    // A stale pinPlaneId must not produce a spurious warning.
+    // Deleting the other plane must stop the warning, with no cascade: the
+    // node is plane-locked to what it is IN, and it is no longer in anything
+    // but the plane being rotated.
     const stale = floorAndWall(60);
-    stale.m.pool.setPin(stale.w2.id, 'plane-locked', 9999);
+    const gone = addToShelf(stale.m, 'gone', [stale.w2]);
+    stale.m.pool.setPin(stale.w2.id, 'plane-locked');
+    check(planAngleEdit(stale.floor, stale.wall, 90, stale.m).warnings
+        .some(x => x.code === 'plane_locked_elsewhere'),
+        'a second plane produces the warning (the control)');
+    stale.m.deletePlane(gone.id);
     const p3 = planAngleEdit(stale.floor, stale.wall, 90, stale.m);
     check(p3.ok === true && !p3.warnings.some(x => x.code === 'plane_locked_elsewhere'),
-        'a pinPlaneId naming no plane is inert');
+        'and deleting that plane makes it inert again, with no cascade');
 }
 
 console.log('\n11. Refusals: same plane, no fit, bad target, overconstrained');

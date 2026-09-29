@@ -53,6 +53,17 @@ const DEFER_REPLAY_ORDER = ['cameras', 'environment', 'frame', 'highlight', 'fit
  */
 const MESH_MEMBER_COLOR = '#ffe600';
 
+/**
+ * The colour the SELECTED plane node is ringed in.
+ *
+ * White, and deliberately not any plane-node palette entry: a node wears its
+ * own colour in 2D, in 3D and in the panel's swatch, so a selection drawn in
+ * that colour would be invisible on the one node it is about. Fixed rather
+ * than derived for the same reason `MESH_MEMBER_COLOR` is — only one node is
+ * selected at a time, so one colour is never ambiguous.
+ */
+const NODE_SELECT_COLOR = '#ffffff';
+
 // ============================================
 // Viewport3D class
 // ============================================
@@ -180,6 +191,13 @@ export class Viewport3D {
          * planes cannot drift, because it re-reads the very points the plane
          * drawing used. */
         this._meshMembershipGroup = null;
+        /** @type {THREE.Group|null} A ring marker around the ONE plane node selected in
+         * the Define Planes panel's Nodes table. A sibling of `_planeGroup` for
+         * the same reason `_meshMembershipGroup` is one: it is an additive view
+         * of a corner already drawn, and keeping it out of `_planeGroup` leaves
+         * the plane drawing exactly what it was. Pure display — nothing here
+         * writes a node. */
+        this._nodeSelectGroup = null;
         /** @type {THREE.Group|null} A GHOST of where "Set Angle Between Two
          * Planes" would put the plane being rotated, shown while its dialog is
          * open. A sibling of `_planeGroup` for the same reason
@@ -412,6 +430,10 @@ export class Viewport3D {
         this._meshMembershipGroup = new THREE.Group();
         this._meshMembershipGroup.name = 'meshMembership';
         this.scene.add(this._meshMembershipGroup);
+
+        this._nodeSelectGroup = new THREE.Group();
+        this._nodeSelectGroup.name = 'nodeSelection';
+        this.scene.add(this._nodeSelectGroup);
 
         this._angleGroup = new THREE.Group();
         this._angleGroup.name = 'anglePreview';
@@ -1576,11 +1598,13 @@ export class Viewport3D {
      * up its constraint plane by id across the rebuilds it triggers.
      *
      * @param {Array<{id:number, name:string, color:string,
+     *                nodeIds?:number[],
      *                nodeColors?:string[], nodeImmutable?:boolean[],
      *                edges?:Array<number[]>,
      *                polygonOrder?:number[], filled?:boolean,
      *                editable?:boolean,
      *                planeFit?:{centroid:number[], normal:number[]},
+     *                fitted?:boolean,
      *                points3d:Float64Array}>} planes
      */
     setPlanes(planes) {
@@ -1610,8 +1634,10 @@ export class Viewport3D {
             // correspondence cue).
             const sphereGeo = new THREE.SphereGeometry(nodeRadius, 12, 12);
 
-            // Only a FIT plane's corners can be dragged — a corner with no
-            // plane to slide along has no constrained direction to move in.
+            // Only a plane WITH A FIT can have its corners dragged — a corner
+            // with no plane to slide along has no constrained direction to
+            // move in. `planeFit` may be a derived one (see the caller); this
+            // asks whether there is a surface, not who supplied it.
             const draggable = !!(plane.editable && plane.planeFit);
 
             for (let k = 0; k < nNodes; k++) {
@@ -1639,7 +1665,15 @@ export class Viewport3D {
                 // but still needs these exact corners to be pickable. A pinned
                 // corner is a PREFERRED origin anchor, so this must not follow
                 // `planeEditable` down.
-                mesh.userData.planeFitted = !!plane.planeFit;
+                //
+                // `fitted`, NOT `planeFit`: the wizard's question is whether
+                // the user has declared this plane's frame, which is what
+                // `fittedPlanes()` counts. `planeFit` above may be derived, and
+                // a plane nobody has Fit must not silently become eligible to
+                // define the project's origin. A payload that omits `fitted`
+                // falls back to the old meaning so an older caller is unchanged.
+                mesh.userData.planeFitted = plane.fitted !== undefined
+                    ? !!plane.fitted : !!plane.planeFit;
                 planeGroup3D.add(mesh);
             }
 
@@ -1735,17 +1769,19 @@ export class Viewport3D {
     }
 
     // ============================================
-    // Set Origin Mode (pick a corner, pick a +Z, re-base the frame)
+    // Set Origin Mode (pick a node, pick a +Z, re-base the frame)
     // ============================================
 
     /**
      * Resolve a click while Set Origin Mode is armed.
      *
-     * In `'node'` mode only corners of FITTED planes are candidates — a corner
-     * with no fitted plane has no +Z to offer, so letting it be picked would
-     * dead-end the wizard. The flag comes from `setPlanes`' `planeFitted`
-     * userData, which is deliberately independent of `planeEditable`: dragging
-     * is off during the wizard, but those same corners stay pickable.
+     * In `'node'` mode EVERY node of a FITTED plane is a candidate — every one
+     * of them, not just those on the outline: the raycast collects each corner
+     * mesh `setPlanes` built, which is one per `plane.nodeIds` entry. A node of
+     * an un-fit plane has no +Z to offer, so letting it be picked would dead-end
+     * the wizard. The flag comes from `setPlanes`' `planeFitted` userData, which
+     * is deliberately independent of `planeEditable`: dragging is off during the
+     * wizard, but those same nodes stay pickable.
      * @private
      */
     _handleOriginPick(e) {
@@ -2334,6 +2370,111 @@ export class Viewport3D {
     }
 
     /**
+     * Mark the plane node selected in the Nodes table, or clear the mark.
+     *
+     * The answer to "which corner is the row I am looking at?", drawn on the
+     * corner itself: three white rings around it, in the three coordinate
+     * planes. ONE marker, even for a node several planes share — a pool node
+     * has one position, which is what a shared corner IS, and a second marker
+     * on top of the first would only z-fight with it.
+     *
+     * RINGS, and their middle is EMPTY. A corner is about a dozen pixels
+     * across at a normal zoom, so anything solid drawn over it — a ball, or a
+     * wireframe sphere, whose lines close up into one at that size — hides the
+     * node's own colour, which is how the user knows they landed on the right
+     * one. A ring is read from its outline and leaves the middle alone.
+     *
+     * Three of them, at right angles, rather than one facing the camera. One
+     * ring would have to be re-aimed on every orbit — per-frame work, in a
+     * class this viewport otherwise keeps free of it — and a ring seen edge-on
+     * is a line. Three cannot all be edge-on at once, so the marker reads as a
+     * ring from every direction the user can orbit to.
+     *
+     * A POOL NODE ID crosses this boundary, not a position. The viewport
+     * resolves it against the plane payload it was just handed (`nodeIds`,
+     * parallel to `nodeColors`), so the cage is built from the very numbers the
+     * corner was drawn from and cannot land anywhere else — the same rule
+     * `setMeshMembership` follows, and for the same reason: a position computed
+     * anywhere else may be in the user's ORIGIN frame, while this group hangs
+     * off `scene` and is drawn in CALIBRATION world.
+     *
+     * A node in no plane, or one with no 3D yet, simply has nothing on screen
+     * to mark and is left alone. That is not a failure: the 3D view draws
+     * planes, so a node no plane references is not in it.
+     *
+     * `depthTest: false`, like the membership outline: a corner behind a filled
+     * wall is exactly the one worth finding, and a wireframe is open enough to
+     * say so without flattening the scene. Drawn UNDER the Set Angle role
+     * outlines (renderOrder 7 against 8).
+     *
+     * @param {{nodeId:number}|null} payload - null clears.
+     */
+    setSelectedPlaneNode(payload) {
+        this._clearGroup(this._nodeSelectGroup);
+        if (!payload || payload.nodeId == null) return;
+
+        const found = this._findPlaneNodePoint(payload.nodeId);
+        if (!found) return;
+
+        const ss = this._sceneScale || 1;
+        const r = this.planeNodeSize * 2.6 * ss;
+        const geo = new THREE.TorusGeometry(r, r * 0.09, 6, 40);
+        const mat = new THREE.MeshBasicMaterial({
+            color: new THREE.Color(NODE_SELECT_COLOR),
+            transparent: true,
+            opacity: 0.95,
+            depthWrite: false,
+            depthTest: false,
+        });
+        // A torus is built in the XY plane, so two of the three are rotated a
+        // quarter turn onto the other two axes.
+        const spins = [[0, 0, 0], [Math.PI / 2, 0, 0], [0, Math.PI / 2, 0]];
+        const marker = new THREE.Group();
+        for (let i = 0; i < spins.length; i++) {
+            const ring = new THREE.Mesh(geo, mat);
+            ring.rotation.set(spins[i][0], spins[i][1], spins[i][2]);
+            ring.renderOrder = 7;
+            marker.add(ring);
+        }
+        marker.position.set(found.pt[0], found.pt[1], found.pt[2]);
+        // The plane it was found through is in the name for debugging only —
+        // the position is the node's, whichever plane draws it.
+        marker.name = 'planeNodeSelected_' + found.planeId + '_' + found.k;
+        this._nodeSelectGroup.add(marker);
+    }
+
+    /**
+     * Where the plane payload draws a given POOL node, or null if nothing does.
+     *
+     * The first plane that carries the id wins, and there is nothing to choose
+     * between them: every plane referencing a node draws it at that node's one
+     * position, which is what a shared corner IS.
+     *
+     * @param {number} nodeId
+     * @returns {{planeId:number, k:number, pt:number[]}|null}
+     * @private
+     */
+    _findPlaneNodePoint(nodeId) {
+        for (let i = 0; i < this._planes.length; i++) {
+            const src = this._planes[i];
+            if (!src || !src.nodeIds || !src.points3d) continue;
+            for (let k = 0; k < src.nodeIds.length; k++) {
+                if (src.nodeIds[k] !== nodeId) continue;
+                const pt = getPoint3d(src.points3d, k);
+                if (pt == null) continue;
+                if (!isFinite(pt[0]) || !isFinite(pt[1]) || !isFinite(pt[2])) continue;
+                return { planeId: src.id, k: k, pt: pt };
+            }
+        }
+        return null;
+    }
+
+    /** Remove the node marker. Safe to call when there is none. */
+    clearSelectedPlaneNode() {
+        this._clearGroup(this._nodeSelectGroup);
+    }
+
+    /**
      * Remove every annotated plane from the 3D scene.
      */
     clearPlanes() {
@@ -2343,6 +2484,9 @@ export class Viewport3D {
         // outlines, which name planes by id.
         this._clearGroup(this._angleGroup);
         this._clearGroup(this._planeRoleGroup);
+        // The marker names a node by id and is resolved through `_planes`, which
+        // is about to be empty — so it has nothing left to sit on.
+        this._clearGroup(this._nodeSelectGroup);
         this._planes = [];
         this._planeDrag = null;
     }

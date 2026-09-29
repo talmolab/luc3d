@@ -83,18 +83,10 @@ export class MeshObject3D {
         /** @type {number[]} Plane IDs, in insertion order. May contain IDs of
          * planes that have since been deleted — see the module note. */
         this.planeIds = [];
-        /**
-         * @type {boolean} Invert every face normal after the coherent-orientation
-         * pass.
-         *
-         * Stored on the OBJECT rather than passed per-call because it is a
-         * property of the shape, not of the viewer: an OPEN object (a cage with
-         * no lid) has no enclosed volume, so nothing can decide which side is
-         * "out" — the signed-volume test that settles it for a closed mesh is
-         * meaningless. Only the user knows, so their answer has to persist with
-         * the object or they would re-answer it on every load.
-         */
-        this.flipNormals = false;
+        // NO `flipNormals`. Winding is DERIVED — `signedVolume` for a closed
+        // object, the +Z-up convention for an open one — so there is nothing
+        // here for a user override to be the other half of. See
+        // `pose/mesh-object-geometry.js`.
     }
 
     /** Is `planeId` a member? @param {number} planeId @returns {boolean} */

@@ -61,6 +61,11 @@ import {
 import {
     MeshObject3D, MeshObjectSet, MESH_OBJECT_COLORS, defaultMeshObjectColor,
 } from './mesh-object-3d.js';
+// The ONE plane fit in the app, in its own DOM-free module so this one can
+// enforce a `plane-locked` node without importing `pose/triangulation.js`.
+import {
+    fitPlaneToPoints3d, planeIntersectionBasis, projectOntoPlaneIntersection,
+} from './plane-fit.js';
 
 // Re-exported so callers can reach the whole plane model through one import.
 export { PlaneNode, PlaneNodePool, PLANE_NODE_COLORS, defaultNodeColor, nodeFreezeState };
@@ -667,38 +672,91 @@ export class PlaneModel {
     }
 
     /**
+     * What a `plane-locked` node is allowed to move in.
+     *
+     * The pin holds a node in EVERY plane it belongs to, not in one nominated
+     * plane, and that is the whole geometry of it: a corner shared by a floor
+     * and a wall may slide along the line they meet in, and one shared by a
+     * floor and two walls has a single position available and is locked in all
+     * but name. Membership IS the constraint, so there is no second record of
+     * which plane a node is held in that could disagree with the planes it is
+     * actually in — a node added to a wall is held by that wall from the next
+     * call, and a plane deleted stops holding anything with no cascade.
+     *
+     * Each plane contributes a USABLE fit, not necessarily a stored one — see
+     * `usablePlaneFit`, and note it is passed `nodeId` so no plane can be
+     * derived from the very point being moved. Requiring a stored `planeFit`
+     * here is what made the pin inert in practice: pinning a node is itself
+     * what clears the fits of the planes holding it.
+     *
+     * A plane with no usable fit (fewer than three other solved corners, or
+     * collinear ones) simply does not constrain. Neither does one whose normal
+     * repeats a direction already accounted for; `planeIntersectionBasis` says
+     * why.
+     *
+     * @param {number} nodeId
+     * @returns {{rank:number, planes:PlaneSkeleton[],
+     *            basis:{dirs:number[][], offsets:number[], used:number[]}}}
+     *   `rank` is how many directions the node is pinned in — 0 free, 1 a
+     *   plane, 2 a line, 3 a point. `planes` is every plane that holds it and
+     *   has a usable fit, in plane order, whether or not its direction proved
+     *   independent.
+     */
+    planeLockForNode(nodeId) {
+        var out = { rank: 0, planes: [], basis: null };
+        var node = this.pool.getNode(nodeId);
+        if (!node || node.pin !== 'plane-locked') return out;
+
+        var planes = this.planesForNode(nodeId);
+        var fits = [];
+        for (var i = 0; i < planes.length; i++) {
+            var fit = usablePlaneFit(planes[i], this.pool, nodeId);
+            if (!fit) continue;
+            fits.push(fit);
+            out.planes.push(planes[i]);
+        }
+        out.basis = planeIntersectionBasis(fits);
+        out.rank = out.basis.dirs.length;
+        return out;
+    }
+
+    /**
      * Apply a `plane-locked` node's constraint to a proposed position.
      *
      * The SINGLE place the soft pin state is honoured. It cannot live on
      * `PlaneNode` (which is where `locked` is enforced, in `setPoint3d`)
-     * because the constraint is geometric: the node has to be projected onto a
-     * PLANE's fit, and a node has no way to resolve a plane id. The model does.
+     * because the constraint is geometric: the node has to be projected onto
+     * the planes it belongs to, and a node cannot resolve a plane. The model
+     * can.
      *
-     * The plane id is resolved LAZILY on every call, so a `pinPlaneId` naming a
-     * deleted plane — or one that has no fit yet — simply stops constraining
-     * instead of throwing or pinning the node at a stale position. That is the
-     * same stale-id-is-inert rule `MeshObject3D.planeIds` follows, and it is
-     * what keeps `deletePlane` free of yet another cascade.
+     * The answer is the NEAREST allowed position to the one proposed, so an
+     * edit that already satisfies the planes is taken verbatim and re-applying
+     * the constraint to a committed position is a no-op.
      *
      * `none` and `locked` both pass through untouched: `none` is unconstrained,
      * and `locked` never reaches here because `setPoint3d` refuses it first.
      *
      * @param {number} nodeId
      * @param {number[]} xyz - Proposed position.
-     * @returns {number[]} `xyz`, or its projection onto the constraining plane.
+     * @returns {number[]} `xyz`, or the nearest point satisfying its planes.
      */
     constrainPoint3dForNode(nodeId, xyz) {
         if (!xyz) return xyz;
-        var node = this.pool.getNode(nodeId);
-        if (!node || node.pin !== 'plane-locked') return xyz;
-        if (node.pinPlaneId === null || node.pinPlaneId === undefined) return xyz;
-        var plane = this.getPlane(node.pinPlaneId);
-        if (!plane || !plane.planeFit) return xyz;
-        var c = plane.planeFit.centroid, nv = plane.planeFit.normal;
-        if (!c || !nv) return xyz;
-        var d = (xyz[0] - c[0]) * nv[0] + (xyz[1] - c[1]) * nv[1] + (xyz[2] - c[2]) * nv[2];
-        if (!isFinite(d)) return xyz;
-        return [xyz[0] - d * nv[0], xyz[1] - d * nv[1], xyz[2] - d * nv[2]];
+        var lock = this.planeLockForNode(nodeId);
+        if (!lock.rank) return xyz;
+        return projectOntoPlaneIntersection(xyz, lock.basis) || xyz;
+    }
+
+    /**
+     * A plane's usable fit — stored, else derived from all of its own solved
+     * corners. The no-exclusion form, for callers asking about the PLANE
+     * rather than about one node's constraint: the 3D viewport's drag surface,
+     * and the Set Angle dialog.
+     * @param {PlaneSkeleton|number} planeOrId
+     * @returns {{centroid:number[], normal:number[]}|null}
+     */
+    usableFitForPlane(planeOrId) {
+        return usablePlaneFit(this._plane(planeOrId), this.pool);
     }
 
     /** Every plane that references node `id`. @param {number} id @returns {PlaneSkeleton[]} */
@@ -1179,6 +1237,56 @@ export function points3dForPlane(plane, pool) {
         }
     }
     return out;
+}
+
+/**
+ * A plane to project onto: the one `Fit` stored, else one derived from the
+ * plane's own solved corners. Writes nothing.
+ *
+ * A stored `planeFit` is the plane's declared identity and always wins. Without
+ * one the geometry is still perfectly well defined — three solved corners are a
+ * plane — so refusing to answer is a choice, and it was the wrong one: pinning
+ * a node CLEARS the `planeFit` of every plane holding it
+ * (`setPinState` in `ui/plane-definition.js`), so plane-locking a node wiped
+ * the fit of the very plane it was being locked to and the lock was inert from
+ * the moment it was created. `ui/plane-angle.js`'s `usableFit` exists for the
+ * same reason and now delegates here.
+ *
+ * **`excludeNodeId` is what keeps the answer stable.** The derived fit is a
+ * least-squares plane through the points it is given, so including the node
+ * being constrained lets the plane CHASE it: type a wildly off-plane Z and the
+ * derivation tilts toward it, the projection lands somewhere between the two,
+ * and every repeated edit drifts further. Excluding it makes the plane the
+ * OTHER corners define — which is also what the user means by "keep A in the
+ * plane" — and makes projecting an already-projected point a no-op. A stored
+ * fit needs no exclusion: it does not move when a corner is nudged.
+ *
+ * @param {PlaneSkeleton} plane
+ * @param {PlaneNodePool} pool
+ * @param {number} [excludeNodeId] - Left out of a DERIVED fit only.
+ * @returns {{centroid:number[], normal:number[]}|null} null when there is no
+ *   stored fit and fewer than 3 OTHER corners are solved (or they are
+ *   coincident or collinear).
+ */
+export function usablePlaneFit(plane, pool, excludeNodeId) {
+    if (!plane) return null;
+    var stored = plane.planeFit;
+    if (stored && stored.centroid && stored.normal) return stored;
+    if (!pool) return null;
+
+    var ids = plane.nodeIds;
+    var pts = new Float64Array(ids.length * 3);
+    for (var i = 0; i < ids.length; i++) {
+        var node = (excludeNodeId !== undefined && excludeNodeId !== null &&
+            ids[i] === excludeNodeId) ? null : pool.getNode(ids[i]);
+        var o = i * 3;
+        if (node) {
+            pts[o] = node.xyz[0]; pts[o + 1] = node.xyz[1]; pts[o + 2] = node.xyz[2];
+        } else {
+            pts[o] = NaN; pts[o + 1] = NaN; pts[o + 2] = NaN;
+        }
+    }
+    return fitPlaneToPoints3d(pts);
 }
 
 /**

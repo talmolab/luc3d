@@ -62,13 +62,18 @@
 // need the loader stubs `tests/test-plane-constrained-fit.mjs` has to install.
 // Being importable with no stubs is most of this module's value.
 //
-// That is also why `hingeAxis` and `planAngleEdit` take an optional `fits`
-// argument. A plane can hold 3D for every corner and still carry no stored
-// `planeFit` — pinning a node clears the fit of every plane standing on it —
-// and such a plane is perfectly measurable; it just needs `fitPlaneToPoints3d`,
-// which lives on the other side of that line. So the caller derives the fit
-// (`ui/plane-angle.js` > `usableFit`) and passes it in, and everything here
-// treats a derived fit and a stored one identically.
+// `hingeAxis` and `planAngleEdit` take an optional `fits` argument for a
+// related reason. A plane can hold 3D for every corner and still carry no
+// stored `planeFit` — pinning a node clears the fit of every plane standing on
+// it — and such a plane is perfectly measurable; it just needs a fit computed.
+// That used to be on the other side of this line (`fitPlaneToPoints3d` lived in
+// `pose/triangulation.js`); it is now in the stub-free `pose/plane-fit.js`, so
+// the argument survives as a TEST SEAM rather than a necessity —
+// `tests/test-plane-angle.mjs` feeds it hand-written fits, including all four
+// normal-sign combinations, which no derivation would hand it. The caller
+// derives the real one (`ui/plane-angle.js` > `usableFit`, now the model's
+// `usablePlaneFit`) and passes it in, and everything here treats a derived fit
+// and a stored one identically.
 
 import { normalize3, cross3, dot3, rotationAboutAxis, mulMat3Vec3 } from './origin-frame.js';
 import { points3dForPlane } from './plane-data.js';
@@ -134,11 +139,14 @@ function anyPerp(d) {
  * A plane can hold 3D for every corner and still have `planeFit === null` —
  * pinning a node deliberately clears the fit of every plane standing on it, and
  * a plane that was triangulated but never fitted never had one. Such a plane
- * still HAS a best-fit plane; nothing here can compute it, because
- * `fitPlaneToPoints3d` lives in `pose/triangulation.js` and importing that
- * would cost this module its no-stubs testability (see the header). So the
- * caller derives it and passes it in, and the geometry below neither knows nor
- * cares which of the two it got.
+ * still HAS a best-fit plane; the caller derives it and passes it in, and the
+ * geometry below neither knows nor cares which of the two it got. That split
+ * was originally forced — `fitPlaneToPoints3d` lived in the UI-coupled
+ * `pose/triangulation.js`, so importing it would have cost this module its
+ * no-stubs testability (see the header). It now lives in the stub-free
+ * `pose/plane-fit.js`, so the argument is kept as a test seam: the geometry is
+ * checked against hand-written fits, including all four normal-sign
+ * combinations, which no derivation would produce.
  *
  * @param {PlaneSkeleton} plane
  * @param {Object|null|undefined} override
@@ -604,23 +612,34 @@ export function planAngleEdit(fixedPlane, movingPlane, targetDeg, model, fits) {
     }
 
     // Nodes held in a DIFFERENT plane are reported, not refused: the commit
-    // runs them through `constrainPoint3dForNode`, so they land back in their
-    // own plane and the rotation is no longer exactly rigid for them.
+    // runs them through `constrainPoint3dForNode`, so they land back in the
+    // planes they belong to and the rotation is no longer exactly rigid for
+    // them.
     //
-    // Each name is paired with the plane it is held IN. The old wording put a
-    // bare node list in parentheses right after "another plane", which read as
-    // if the parenthetical named the PLANE — so the one warning that did name
-    // its nodes was the one most likely to be misread.
+    // "A different plane" is MEMBERSHIP, not a nominated id — a plane-locked
+    // node is held in every plane it is in, so a corner this rotation shares
+    // with a wall is pulled back onto that wall. A node whose only plane is
+    // the moving one is not reported: it rides along, and the rotated fit is
+    // the plane it is held in.
+    //
+    // Each name is paired with the planes holding it elsewhere. The old
+    // wording put a bare node list in parentheses right after "another plane",
+    // which read as if the parenthetical named the PLANE — so the one warning
+    // that did name its nodes was the one most likely to be misread.
     var constrainedNames = [];    // node names alone, for callers and tests
     var constrainedLabels = [];   // 'node (in "plane")', for the message
     for (var c2 = 0; c2 < movedNodeIds.length; c2++) {
         var cn = pool.getNode(movedNodeIds[c2]);
-        if (!cn || cn.pin !== 'plane-locked' || cn.pinPlaneId === null ||
-            cn.pinPlaneId === movingPlane.id) continue;
-        var holder = model.getPlane(cn.pinPlaneId);
-        if (!holder) continue;
+        if (!cn || cn.pin !== 'plane-locked') continue;
+        var holders = model.planesForNode(cn.id);
+        var holderNames = [];
+        for (var h2 = 0; h2 < holders.length; h2++) {
+            if (holders[h2].id !== movingPlane.id) holderNames.push(holders[h2].name);
+        }
+        if (!holderNames.length) continue;
         constrainedNames.push(cn.name);
-        constrainedLabels.push(cn.name + ' (in "' + holder.name + '")');
+        constrainedLabels.push(cn.name + ' (in ' +
+            holderNames.map(function (nm) { return '"' + nm + '"'; }).join(', ') + ')');
     }
     if (constrainedNames.length) {
         var oneNode = constrainedNames.length === 1;

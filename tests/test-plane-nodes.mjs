@@ -23,7 +23,7 @@ import {
     planeFillOrderPoolIndices, planeFillOrder3d,
     planeEdgesLocal, planeEdgesPoolIndices, planeNodeIndices, planeNodeNames,
     planeCentroid2d, seedPlanePoints, nodeFreezeState, defaultNodeColor,
-    planeNodeImmutability,
+    planeNodeImmutability, usablePlaneFit,
 } from '../pose/plane-data.js';
 import { PlaneNode, nodePinState, normalizePin, PIN_STATES } from '../pose/plane-nodes.js';
 
@@ -765,18 +765,20 @@ console.log('\n19. Two pin states: `locked` freezes, `plane-locked` restricts');
     // --- pool-level: setPin is the only way to reach the middle state ---
     const m = new PlaneModel();
     const a = m.addNode('a'), b = m.addNode('b'), c = m.addNode('c');
-    check(m.pool.setPin(b.id, 'plane-locked', 77) === true, 'setPin applies');
-    check(b.pin === 'plane-locked' && b.pinPlaneId === 77, 'state and plane id are stored');
-    m.pool.setPin(b.id, 'locked', 77);
-    check(b.pin === 'locked' && b.pinPlaneId === null,
-        'a non-plane-locked state clears pinPlaneId, so nothing dangles');
+    check(m.pool.setPin(b.id, 'plane-locked') === true, 'setPin applies');
+    check(b.pin === 'plane-locked', 'the state is stored');
+    check(b.pinPlaneId === undefined,
+        'and NO plane is nominated — membership is the constraint, so there is ' +
+        'no second record of it to go stale');
+    m.pool.setPin(b.id, 'locked');
+    check(b.pin === 'locked', 'and the state can be changed again');
     check(m.pool.setPin(9999, 'locked') === false, 'setPin on a missing node reports false');
 
     // --- the two chokepoints every fit/triangulation consumer reads must
     //     report `locked` only, or a plane-locked node would be solved as a
     //     hard anchor and the fit would be wrong.
     m.pool.setPin(a.id, 'locked');
-    m.pool.setPin(b.id, 'plane-locked', 1);
+    m.pool.setPin(b.id, 'plane-locked');
     m.pool.setPin(c.id, 'none');
     check(eq(m.pool.mutableIds(), [b.id, c.id]),
         'mutableIds() counts a plane-locked node as mutable');
@@ -802,21 +804,28 @@ console.log('\n20. A plane-locked node is projected onto its plane, lazily');
     check(eq(m.constrainPoint3dForNode(n0.id, [1, 2, 3]), [1, 2, 3]),
         'an unpinned node passes through unchanged');
 
-    // plane-locked to that plane: the off-plane component is removed.
-    m.pool.setPin(n0.id, 'plane-locked', p.id);
+    // plane-locked, and a member of exactly one plane: the off-plane
+    // component is removed.
+    m.pool.setPin(n0.id, 'plane-locked');
     check(eq(m.constrainPoint3dForNode(n0.id, [1, 2, 3]), [1, 2, 0]),
         'a plane-locked node is projected onto its plane');
     check(eq(m.constrainPoint3dForNode(n0.id, [1, 2, 0]), [1, 2, 0]),
         'a point already in the plane is left exactly alone');
+    check(m.planeLockForNode(n0.id).rank === 1,
+        'one plane pins it in one direction');
 
-    // A stale or fit-less plane id stops constraining rather than throwing.
-    m.pool.setPin(n0.id, 'plane-locked', 9999);
-    check(eq(m.constrainPoint3dForNode(n0.id, [1, 2, 3]), [1, 2, 3]),
-        'a pinPlaneId naming no plane is inert, not an error');
-    m.pool.setPin(n0.id, 'plane-locked', p.id);
+    // A node in NO plane has nothing to be held in, and says so rather than
+    // throwing — the same stale-reference-is-inert rule, now asked of
+    // membership instead of a nominated id.
+    const loose = m.addNode('loose');
+    m.pool.setPin(loose.id, 'plane-locked');
+    check(eq(m.constrainPoint3dForNode(loose.id, [1, 2, 3]), [1, 2, 3]),
+        'a plane-locked node in no plane is inert, not an error');
+    check(m.planeLockForNode(loose.id).rank === 0, 'and reports rank 0');
+
     p.planeFit = null;
     check(eq(m.constrainPoint3dForNode(n0.id, [1, 2, 3]), [1, 2, 3]),
-        'a plane with no fit yet is inert too');
+        'a plane with no fit AND nothing to derive one from is inert too');
     p.planeFit = { centroid: [0, 0, 0], normal: [0, 0, 1], rms: 0, nPoints: 4 };
 
     // Deleting the constraining plane must need no cascade.
@@ -826,6 +835,196 @@ console.log('\n20. A plane-locked node is projected onto its plane, lazily');
         'and the constraint simply stops applying');
 }
 
+console.log('\n20b. The constraint does not need a STORED fit');
+{
+    // This is the configuration a real project is in, and the reason the pin
+    // used to do nothing: `setPinState` clears the `planeFit` of every plane
+    // holding the node whose pin changed, so plane-locking a node is itself
+    // what removes the fit of the plane it is being locked to. Requiring a
+    // stored fit made the pin inert from the moment it was created.
+    const m = new PlaneModel();
+    const p = m.createPlane('floor');
+    const held = m.addNode('held');
+    const a = m.addNode('a'), b = m.addNode('b'), c = m.addNode('c');
+    [held, a, b, c].forEach(nd => m.addNodeToPlane(p, nd.id));
+    // The z = 10 plane, named by three corners the moving node is not one of.
+    held.setPoint3d([0, 0, 10]);
+    a.setPoint3d([5, 0, 10]);
+    b.setPoint3d([0, 5, 10]);
+    c.setPoint3d([5, 5, 10]);
+    m.pool.setPin(held.id, 'plane-locked');
+    check(p.planeFit == null, 'the plane has no stored fit (the precondition)');
+
+    const got = m.constrainPoint3dForNode(held.id, [1, 2, 999]);
+    check(Math.abs(got[0] - 1) < 1e-9 && Math.abs(got[1] - 2) < 1e-9 &&
+          Math.abs(got[2] - 10) < 1e-9,
+        'a fit derived from the OTHER corners holds the node on the plane');
+
+    // Idempotence: commit the projected position and project it again. This is
+    // what the exclusion buys, and it is not cosmetic — a fit derived from a
+    // set INCLUDING the moving node lets the plane CHASE it, so the projection
+    // lands between the two and every repeat edit drifts further out.
+    held.setPoint3d(got);
+    const again = m.constrainPoint3dForNode(held.id, got);
+    check(Math.hypot(again[0] - got[0], again[1] - got[1], again[2] - got[2]) < 1e-9 &&
+          Math.abs(again[2] - 10) < 1e-9,
+        're-projecting a committed position is a no-op, still on z = 10');
+
+    // The exclusion, measured directly, with the moving node parked absurdly
+    // far off the plane. Both halves are asserted from the SAME state, so
+    // neither can pass by accident: the unexcluded derivation follows the node
+    // and the excluded one does not. On the real project that gap is ~647 mm.
+    held.setPoint3d([0, 0, 1000]);
+    const chased = usablePlaneFit(p, m.pool);              // includes `held`
+    const clean = usablePlaneFit(p, m.pool, held.id);      // excludes it
+    check(Math.abs(chased.centroid[2] - 10) > 100,
+        'an unexcluded derivation is dragged off by the node being moved');
+    check(Math.abs(clean.centroid[2] - 10) < 1e-9,
+        'excluding it pins the derivation to the other corners');
+    check(Math.abs(m.constrainPoint3dForNode(held.id, [1, 2, 1000])[2] - 10) < 1e-9,
+        'and the constraint uses the excluded one, from any starting position');
+    held.setPoint3d(got);
+
+    // Too little to derive from: inert, never a guess. Two corners admit a
+    // pencil of planes and picking one would silently invent geometry.
+    const thin = m.createPlane('thin');
+    const t0 = m.addNode('t0'), t1 = m.addNode('t1');
+    m.addNodeToPlane(thin, t0.id); m.addNodeToPlane(thin, t1.id);
+    t0.setPoint3d([0, 0, 0]); t1.setPoint3d([1, 0, 0]);
+    m.pool.setPin(t0.id, 'plane-locked');
+    check(eq(m.constrainPoint3dForNode(t0.id, [9, 9, 9]), [9, 9, 9]),
+        'one other corner is not a plane, so nothing is constrained');
+
+    // Collinear corners are refused for the same reason.
+    const line = m.createPlane('line');
+    const l0 = m.addNode('l0'), l1 = m.addNode('l1'), l2 = m.addNode('l2'),
+          l3 = m.addNode('l3');
+    [l0, l1, l2, l3].forEach(nd => m.addNodeToPlane(line, nd.id));
+    l0.setPoint3d([0, 0, 0]);
+    l1.setPoint3d([1, 0, 0]); l2.setPoint3d([2, 0, 0]); l3.setPoint3d([3, 0, 0]);
+    m.pool.setPin(l0.id, 'plane-locked');
+    check(eq(m.constrainPoint3dForNode(l0.id, [9, 9, 9]), [9, 9, 9]),
+        'collinear corners admit infinitely many planes, so none is chosen');
+
+    // A STORED fit still wins outright, and is used WITHOUT the exclusion: it
+    // is the plane's declared identity and does not move when a corner is
+    // nudged (`onPlaneNodeDragged3D` and `applyTypedNodePoint` both say so).
+    p.planeFit = { centroid: [0, 0, 0], normal: [0, 0, 1], rms: 0, nPoints: 4 };
+    check(eq(m.constrainPoint3dForNode(held.id, [1, 2, 3]), [1, 2, 0]),
+        'a stored fit overrides the derivation');
+    check(m.usableFitForPlane(p) === p.planeFit,
+        'usableFitForPlane hands back the stored object itself, not a copy');
+}
+
+console.log('\n20c. The pin holds a node in EVERY plane it is in');
+{
+    // The rule: a plane-locked node is constrained by the planes it is a
+    // MEMBER of, so two planes leave it a line and three leave it a point.
+    // Nothing nominates a plane — there is no `pinPlaneId` — which is what
+    // makes "add this corner to a wall" tighten the constraint by itself.
+    //
+    // Three axis planes, each with three corners BESIDES the shared one so
+    // every fit survives the exclusion of the node being moved.
+    const m = new PlaneModel();
+    const A = m.addNode('A');
+    A.setPoint3d([0, 0, 0]);
+    const mk = (name, pts) => {
+        const pl = m.createPlane(name);
+        m.addNodeToPlane(pl, A.id);
+        pts.forEach((xyz, i) => {
+            const nd = m.addNode(name + i);
+            nd.setPoint3d(xyz);
+            m.addNodeToPlane(pl, nd.id);
+        });
+        return pl;
+    };
+    const floor = mk('floor', [[10, 0, 0], [0, 10, 0], [10, 10, 0]]);   // z = 0
+    m.pool.setPin(A.id, 'plane-locked');
+
+    const one = m.planeLockForNode(A.id);
+    check(one.rank === 1 && one.planes.length === 1 && one.planes[0] === floor,
+        'one plane: rank 1, and it names the plane doing the holding');
+    check(eq(m.constrainPoint3dForNode(A.id, [5, 7, 9]), [5, 7, 0]),
+        'and the node may move anywhere on it');
+
+    // --- two planes: a line ---------------------------------------------
+    const wall = mk('wall', [[0, 10, 0], [0, 0, 10], [0, 10, 10]]);     // x = 0
+    const two = m.planeLockForNode(A.id);
+    check(two.rank === 2, 'adding it to a second plane drops it to a line');
+    check(two.planes.length === 2 && two.planes.indexOf(floor) >= 0 &&
+          two.planes.indexOf(wall) >= 0,
+        'and both planes are named as holders');
+    const online = m.constrainPoint3dForNode(A.id, [5, 7, 9]);
+    check(Math.abs(online[0]) < 1e-9 && Math.abs(online[1] - 7) < 1e-9 &&
+          Math.abs(online[2]) < 1e-9,
+        'the edit lands on the nearest point of the line the two planes share');
+    check(eq(m.constrainPoint3dForNode(A.id, online), online),
+        're-applying it to a point already on that line is a no-op');
+    check(eq(m.constrainPoint3dForNode(A.id, [0, -4, 0]), [0, -4, 0]),
+        'and an edit that is already on the line is taken verbatim');
+
+    // Nothing was re-pinned to get there: membership alone did it.
+    check(A.pin === 'plane-locked',
+        'the pin state never changed — only what the node belongs to');
+
+    // --- three planes: a point ------------------------------------------
+    const back = mk('back', [[10, 0, 0], [0, 0, 10], [10, 0, 10]]);     // y = 0
+    const three = m.planeLockForNode(A.id);
+    check(three.rank === 3, 'a third, independent plane fixes it outright');
+    const pt = m.constrainPoint3dForNode(A.id, [5, 7, 9]);
+    check(Math.hypot(pt[0], pt[1], pt[2]) < 1e-9,
+        'every edit resolves to the single point the three planes meet at');
+    check(eq(m.constrainPoint3dForNode(A.id, [-99, 4, 1e6]), pt),
+        'so the proposed position is ignored entirely — it is locked in all but name');
+
+    // --- a fourth plane cannot make it rank 4 ---------------------------
+    const lid = mk('lid', [[10, 0, 5], [0, 10, 5], [10, 10, 5]]);       // z = 5
+    check(m.planeLockForNode(A.id).rank === 3,
+        'a fourth plane adds no direction — three is the most a point can be pinned in');
+
+    // --- a plane that cannot say where the node is does not hold it -----
+    // `thin` has two corners besides A, which is one short of a plane.
+    m.deletePlane(lid.id); m.deletePlane(back.id); m.deletePlane(wall.id);
+    const thin = m.createPlane('thin');
+    m.addNodeToPlane(thin, A.id);
+    [[1, 0, 0], [0, 1, 0]].forEach((xyz, i) => {
+        const nd = m.addNode('t' + i);
+        nd.setPoint3d(xyz);
+        m.addNodeToPlane(thin, nd.id);
+    });
+    const withThin = m.planeLockForNode(A.id);
+    check(withThin.rank === 1 && withThin.planes.length === 1 &&
+          withThin.planes[0] === floor,
+        'a plane with too few other solved corners is left out of the holders');
+    check(eq(m.constrainPoint3dForNode(A.id, [5, 7, 9]), [5, 7, 0]),
+        'so the node is still only held by the floor');
+
+    // --- a near-duplicate plane says nothing new ------------------------
+    // Tilted 0.03° off the floor: it DOES intersect it, in a line hundreds of
+    // millimetres away, and snapping a held corner onto that line would be a
+    // worse answer than admitting the plane repeats one already in hand.
+    m.deletePlane(thin.id);
+    const eps = Math.tan(0.03 * Math.PI / 180);
+    const near0 = m.createPlane('near');
+    m.addNodeToPlane(near0, A.id);
+    [[10, 0, 10 * eps], [0, 10, 0], [10, 10, 10 * eps]].forEach((xyz, i) => {
+        const nd = m.addNode('q' + i);
+        nd.setPoint3d(xyz);
+        m.addNodeToPlane(near0, nd.id);
+    });
+    check(m.planeLockForNode(A.id).rank === 1,
+        'a plane a thirtieth of a degree off another adds no independent direction');
+    const stillFlat = m.constrainPoint3dForNode(A.id, [5, 7, 9]);
+    check(Math.abs(stillFlat[2]) < 1e-6,
+        'so the node stays on the floor instead of being flung onto a far-off line');
+
+    // --- an unpinned node is never constrained, however many planes -----
+    m.pool.setPin(A.id, 'none');
+    check(m.planeLockForNode(A.id).rank === 0 &&
+          eq(m.constrainPoint3dForNode(A.id, [5, 7, 9]), [5, 7, 9]),
+        'and none of it applies to a node that is not plane-locked');
+}
+
 console.log('\n21. writePoints3dForPlane honours both pin states');
 {
     const m = new PlaneModel();
@@ -833,7 +1032,7 @@ console.log('\n21. writePoints3dForPlane honours both pin states');
     const free = m.addNode('free'), soft = m.addNode('soft'), hard = m.addNode('hard');
     [free, soft, hard].forEach(nd => m.addNodeToPlane(p, nd.id));
     p.planeFit = { centroid: [0, 0, 0], normal: [0, 0, 1], rms: 0, nPoints: 3 };
-    m.pool.setPin(soft.id, 'plane-locked', p.id);
+    m.pool.setPin(soft.id, 'plane-locked');
     m.pool.setPin(hard.id, 'locked');
 
     const flat = new Float64Array([1, 1, 5, 2, 2, 5, 3, 3, 5]);
@@ -855,7 +1054,7 @@ console.log('\n21. writePoints3dForPlane honours both pin states');
     const p2 = m2.createPlane('w2');
     const s2 = m2.addNode('s2');
     m2.addNodeToPlane(p2, s2.id);
-    m2.pool.setPin(s2.id, 'plane-locked', p2.id);
+    m2.pool.setPin(s2.id, 'plane-locked');
     p2.planeFit = { centroid: [0, 0, 0], normal: [0, 0, 1], rms: 0, nPoints: 3 };
     const res2 = writePoints3dForPlane(p2, m2.pool, new Float64Array([1, 1, 9]));
     check(res2.written === 1 && eq(s2.getPoint3d(), [1, 1, 9]),

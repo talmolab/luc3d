@@ -62,7 +62,7 @@ try {
       plane.filled = true;
     }
     P.planeState.selectedPlaneId = wall.id;
-    model.pool.setPin(model.pool.nodeAt(2).id, 'plane-locked', floor.id);
+    model.pool.setPin(model.pool.nodeAt(2).id, 'plane-locked');
     P.planeState.expanded.add(wall.id);
     P.enterPlaneMode();
     P.refreshPlanePanel(); P.syncPlanes3D();

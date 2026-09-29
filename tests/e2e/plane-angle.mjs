@@ -375,9 +375,11 @@ try {
         out.ghost = window.__vp()._angleGroup.children.length;
         out.angle = window.__angle(floor, wall);
         out.pins = window.__pinsOf(wall);
+        // Which planes hold them is their MEMBERSHIP, not a nominated id — a
+        // corner this rotation moved is in the moving plane by definition.
         out.heldIn = window.__nodesOf(wall)
             .filter(n => n.pin === 'plane-locked')
-            .map(n => { const p = model.getPlane(n.pinPlaneId); return p ? p.name : null; });
+            .map(n => model.planeLockForNode(n.id).planes.map(p => p.name).join('+'));
         out.xyz = window.__xyzOf(wall);
         out.names = window.__namesOf(wall);
         out.floorPins = window.__pinsOf(floor);
@@ -600,11 +602,23 @@ try {
         // Held in the FIXED plane, so the rotation cannot honour it and the
         // commit would project the node back — the warned case, not the
         // refused one.
+        // Held in a THIRD plane the rotation does not touch, so the commit
+        // projects the node back into it and the result may miss the target —
+        // the warned case, not the refused one. It cannot be the FIXED plane:
+        // three corners shared with the wall would make the two coplanar and
+        // the edit is refused outright, before any pin is looked at.
         const w2 = window.__nodesOf(wall)[2];
-        model.pool.setPin(w2.id, 'plane-locked', floor.id);
+        const shelf = P.createPlane('shelf');
+        shelf.addNode(w2.id);
+        [[300, 300, 0], [340, 300, 40], [300, 340, 40]].forEach((xyz, i) => {
+            const nd = model.addNode('sh' + i);
+            nd.setPoint3d(xyz);
+            shelf.addNode(nd.id);
+        });
+        model.pool.setPin(w2.id, 'plane-locked');
         await window.__ensureFits();
 
-        const out = { node: w2.name, fixedName: floor.name };
+        const out = { node: w2.name, holderName: shelf.name, shelfId: shelf.id };
         document.getElementById('btnSetPlaneAngle').click();
         const fx = document.getElementById('planeAngleFixed');
         const mv = document.getElementById('planeAngleMoving');
@@ -619,11 +633,12 @@ try {
         out.applyDisabled = document.getElementById('btnPlaneAngleApply').disabled;
         document.getElementById('btnPlaneAngleCancel').click();
         model.pool.setPin(w2.id, 'none');
+        model.deletePlane(shelf.id);
         await window.__ensureFits();
         return out;
     });
     check(!m.applyDisabled, 'the edit is warned about, not refused');
-    check(new RegExp(m.node + ' \\(in "' + m.fixedName + '"\\)').test(m.warn || ''),
+    check(new RegExp(m.node + ' \\(in "' + m.holderName + '"\\)').test(m.warn || ''),
         'the rendered warning names the NODE and the plane holding it (got "' +
         String(m.warn).replace(/\n+/g, ' | ').slice(0, 200) + '")');
     check(/1 node is Plane-locked/.test(m.warn || ''), 'with the singular wording');

@@ -156,7 +156,8 @@
                     <div class="menu-dropdown-item" id="menuResetView">Reset 3D View</div>
                     <div class="menu-dropdown-item" id="menuFitScene">Fit 3D to Scene</div>
                     <div class="menu-separator"></div>
-                    <div class="menu-dropdown-item" id="menuDefinePlanes">Define Planes</div>
+                    <div class="menu-dropdown-item" id="menuDefinePlanes">Define Planes <span
+                            class="shortcut-hint">Ctrl/Cmd+Shift+P</span></div>
                 </div>
             </div>
             <div class="menu-item" id="menuHotkeys" style="cursor:pointer;">Hot Keys</div>
@@ -859,7 +860,7 @@
                          into a plane is + Add in the Edit Plane section. -->
                     <div class="info-section">
                         <details class="plane-details" id="planeNodesDetails" open>
-                            <summary>Nodes</summary>
+                            <summary>Nodes<button type="button" class="plane-section-info" id="planeNodesInfo"></button></summary>
                             <div class="plane-details-body">
                                 <!-- Every column is named except the chevron,
                                      which names itself. The icon columns are
@@ -888,7 +889,6 @@
                                     <input type="text" id="planeNodeNameInput" class="plane-text-input" placeholder="Node name" />
                                     <button class="panel-btn" id="btnAddPlaneNode" title="Mint a node in the project-wide pool. It joins NO plane and creates none — put it in a plane with + Add in the Edit Plane section.">+ Node</button>
                                 </div>
-                                <div class="plane-hint">Nodes are project-wide and belong to no plane until you put them in one. Renaming, recolouring, pinning or deleting one here changes every plane that uses it. To put a node into a plane, use + Add in the Edit Plane section — the same node in two planes is what makes them meet along one line. Expand a node for its 3D position in calibration world units and the planes using it: type over x/y/z to place a corner by hand, and every plane using the node moves with it (its 2D on every view is rewritten to match). The padlock is the node's pin state — a Locked node shows its position but does not take a new one.</div>
                             </div>
                         </details>
                     </div>
@@ -911,19 +911,19 @@
                                      the first plane. It is a SELECTOR only —
                                      renaming is the Name field below. -->
                                 <div class="plane-name-row plane-picker-row">
-                                    <span>Plane</span>
+                                    <span>Select Plane</span>
                                     <select id="planeSelect" class="plane-select" title="Pick the plane to edit, or + New Plane to make one"></select>
                                 </div>
                                 <!-- The rest of the section is empty-stated rather
                                      than shown half-dead: every control in it needs
                                      a plane to act on. -->
-                                <div class="table-empty" id="planeEditorEmpty" style="display:none;">No plane selected — pick one in the Plane dropdown above, or choose + New Plane there.</div>
+                                <div class="table-empty" id="planeEditorEmpty" style="display:none;">No plane selected — pick one in the Select Plane dropdown above, or choose + New Plane there.</div>
                                 <div id="planeEditorContent">
                                     <!-- The EDITABLE name. The dropdown above only
                                          chooses a plane; this is where one is
                                          renamed, and the rename updates both. -->
                                     <div class="plane-name-row">
-                                        <span>Name</span>
+                                        <span>Edit Name</span>
                                         <input type="text" id="planeSkeletonName" placeholder="plane_1" />
                                     </div>
 
@@ -958,7 +958,7 @@
                                     </details>
 
                                     <details class="plane-details plane-subdetails" id="planeEdgesDetails" open>
-                                        <summary>Node Connections</summary>
+                                        <summary>Node Connections<button type="button" class="plane-section-info" id="planeEdgesInfo"></button></summary>
                                         <div class="plane-details-body">
                                             <table class="data-table" id="planeEdgesTable">
                                                 <thead>
@@ -976,7 +976,6 @@
                                                 <select id="planeEdgeDstSelect" class="plane-select"></select>
                                                 <button class="panel-btn" id="btnAddPlaneEdge" title="Connect two nodes of this plane">+ Link</button>
                                             </div>
-                                            <div class="plane-hint">Connections are OPTIONAL: triangulation and fitting are edge-independent. They exist for visual reference, and to decide the order the polygon is filled in.</div>
                                         </div>
                                     </details>
                                 </div>
@@ -994,7 +993,7 @@
                          reads as the roster you switch between. -->
                     <div class="info-section">
                         <details class="plane-details" id="planePlanesDetails" open>
-                            <summary>Planes</summary>
+                            <summary>Planes<button type="button" class="plane-section-info" id="planePlanesInfo"></button></summary>
                             <div class="plane-details-body">
                                 <!-- Fixed column widths (see `table-layout: fixed`
                                      in styles.css): the panel is ~300px and an
@@ -1005,10 +1004,16 @@
                                 <table class="data-table" id="planeSkeletonsTable">
                                     <thead>
                                         <tr>
-                                            <th style="width:26px"></th>
+                                            <th style="width:20px"></th>
                                             <th>Name</th>
                                             <th style="width:46px">Nodes</th>
-                                            <th style="width:56px"></th>
+                                            <!-- 62px: "VIEWS" measures 37px at the
+                                                 header's 10px/0.5px uppercase, plus
+                                                 the 16px ⓘ and its 3px margin, plus
+                                                 6px of cell padding. Under 62 the
+                                                 header ellipses to "VIEWS…". -->
+                                            <th style="width:62px">Views<button type="button" class="plane-pin-info" id="planeViewsInfo"></button></th>
+                                            <th style="width:28px"></th>
                                         </tr>
                                     </thead>
                                     <tbody></tbody>
@@ -1034,7 +1039,6 @@
                                 <div class="panel-button-row" style="margin-top:6px">
                                     <button class="panel-btn" id="btnSetPlaneAngle" disabled>Set Angle Between Planes</button>
                                 </div>
-                                <div class="plane-hint">Drag a row onto a video view to place that plane on it. Expand a row to see where it is placed.</div>
 
                                 <!-- Shared across every plane, by design: one node
                                      size and one edge weight for all of them (see
@@ -1076,7 +1080,7 @@
                          cannot group planes that do not exist yet. -->
                     <div class="info-section">
                         <details class="plane-details" id="meshObjectsDetails" open>
-                            <summary>3D Mesh Objects</summary>
+                            <summary>3D Mesh Objects<button type="button" class="plane-section-info" id="meshObjectsInfo"></button></summary>
                             <div class="plane-details-body">
                                 <table class="data-table" id="meshObjectsTable">
                                     <thead>
@@ -1084,7 +1088,6 @@
                                             <th style="width:30px"></th>
                                             <th>Name</th>
                                             <th style="width:52px">Planes</th>
-                                            <th style="width:96px">Shape</th>
                                             <th style="width:28px"></th>
                                         </tr>
                                     </thead>
@@ -1105,9 +1108,6 @@
                                         <input type="color" id="meshObjectColor" class="plane-node-color" title="Colour for this object in the 3D viewport" />
                                     </div>
                                     <div class="mesh-object-report" id="meshObjectReport"></div>
-                                    <label class="mesh-object-flip" title="Invert every face normal. An open object is oriented +Z up by default (for a cage: floor facing up, walls facing inward); this is how to get the reverse. A closed object is oriented outward and needs no override.">
-                                        <input type="checkbox" id="meshObjectFlip" /> Flip normals
-                                    </label>
                                     <div class="plane-hint" style="margin-top:6px">Planes in this object</div>
                                     <div class="mesh-object-members" id="meshObjectMembers"></div>
                                     <div class="table-empty" id="meshObjectMembersEmpty">No planes in this object yet</div>
@@ -1132,8 +1132,6 @@
                                         <button class="panel-btn" id="btnExportMeshGlb" title="Binary glTF — welded vertices and this object's colour, converted to the Y-up glTF requires so Blender imports it upright">Export .glb</button>
                                     </div>
                                 </div>
-
-                                <div class="plane-hint">A 3D mesh object is a group of planes, and its shape comes from the nodes they SHARE — join two planes by adding the same node to both.</div>
                             </div>
                         </details>
                     </div>
@@ -1161,12 +1159,11 @@
                         <details class="plane-details plane-details-danger" id="originDangerDetails">
                             <summary>Danger Zone</summary>
                             <div class="plane-details-body">
-                                <div class="plane-hint">These actions apply the origin OUTSIDE the 3D view. Annotated points keep their calibration-world coordinates either way — it is the calibration that moves.</div>
                                 <div class="panel-button-row">
                                     <button class="panel-btn" id="btnExportCalibration" title="Download calibration-updated.toml: every camera's extrinsics re-expressed in the defined origin">Export New Calibration</button>
                                 </div>
                                 <div class="panel-button-row">
-                                    <button class="panel-btn panel-btn-danger" id="btnSetCalibration" title="Overwrite calibration.toml and re-base every 3D point in the project onto the defined origin">Set as New Calibration</button>
+                                    <button class="panel-btn panel-btn-danger" id="btnSetCalibration" title="Re-base every 3D point in the project onto the defined origin and export a new calibration file to match. Your calibration.toml is not overwritten.">Set as New Calibration</button>
                                 </div>
                                 <div class="panel-button-row">
                                     <button class="panel-btn panel-btn-danger" id="btnClearOrigin">Reset to Calibration Origin</button>

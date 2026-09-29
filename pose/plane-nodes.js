@@ -34,12 +34,15 @@
 //        'locked'       the 3D is frozen outright. `setPoint3d` refuses it, so
 //                       no solve, drag or fit can move it. This is the state
 //                       the whole constrained-fit subsystem calls an ANCHOR.
-//        'plane-locked' the node may move, but only within one plane. It is
+//        'plane-locked' the node may move, but only within EVERY plane it
+//                       belongs to — which is one plane's surface, or the line
+//                       two share, or the single point three meet at. It is
 //                       NOT an anchor: a constrained fit must not hold it
 //                       fixed, because its position is not fixed. The
 //                       restriction is geometric, so it cannot live here — a
-//                       node cannot resolve its own plane's fit. `PlaneModel`
-//                       enforces it (`constrainPoint3dForNode`).
+//                       node cannot resolve a plane's fit, and it does not know
+//                       which planes reference it. `PlaneModel` enforces it
+//                       (`planeLockForNode` / `constrainPoint3dForNode`).
 //
 //      `immutable` is kept as an accessor for `pin === 'locked'` so the ~30
 //      readers written before the split keep working unchanged.
@@ -87,9 +90,8 @@ export class PlaneNode {
      * @param {boolean|'none'|'plane-locked'|'locked'} [pin=false] - The pin
      *   state. A BOOLEAN is accepted (and means `locked`) so every caller and
      *   saved file written before the two-state split still works.
-     * @param {number|null} [pinPlaneId=null]
      */
-    constructor(id, name, color, pin, pinPlaneId) {
+    constructor(id, name, color, pin) {
         this.id = id;
         this.name = name;
         this.color = color;
@@ -101,13 +103,6 @@ export class PlaneNode {
          * promises; `immutable` below is the back-compatible view of it.
          */
         this.pin = normalizePin(pin);
-        /**
-         * @type {number|null} For `plane-locked`, the plane this node must stay
-         * in. Held as an ID and resolved LAZILY against the model, so deleting
-         * that plane needs no cascade — a stale ID simply stops constraining,
-         * the same way `MeshObject3D.planeIds` tolerates one.
-         */
-        this.pinPlaneId = (pinPlaneId === undefined) ? null : pinPlaneId;
         /**
          * @type {Float64Array} `[x,y,z]`; all-NaN means "not triangulated",
          * the same convention `InstanceGroup.points3d` uses.
@@ -275,7 +270,7 @@ export class PlaneNodePool {
      * Append a node.
      * @param {string} name
      * @param {{color?:string, immutable?:boolean,
-     *          pin?:'none'|'plane-locked'|'locked', pinPlaneId?:number}} [opts]
+     *          pin?:'none'|'plane-locked'|'locked'}} [opts]
      *   `pin` wins over `immutable` when both are given.
      * @returns {PlaneNode}
      */
@@ -285,8 +280,7 @@ export class PlaneNodePool {
             this._nextId++,
             name || ('n' + this._nextId),
             o.color || defaultNodeColor(this._colorSeq++),
-            o.pin !== undefined ? o.pin : !!o.immutable,
-            o.pinPlaneId
+            o.pin !== undefined ? o.pin : !!o.immutable
         );
         this.nodes.push(node);
         this._byId.set(node.id, node);
@@ -397,20 +391,19 @@ export class PlaneNodePool {
     /**
      * Set a node's pin state directly, which is the only way to reach
      * `plane-locked` — `setImmutable` is a boolean and can only express the
-     * two ends. `planeId` is meaningful for `plane-locked` alone and is
-     * cleared for the other two, so a released node cannot keep a dangling
-     * reference to the plane it used to be held in.
+     * two ends.
+     *
+     * It takes no plane: `plane-locked` holds a node in every plane it is a
+     * MEMBER of (`PlaneModel.planeLockForNode`), so there is nothing here to
+     * nominate and nothing to go stale when the membership changes.
      * @param {number} id
      * @param {'none'|'plane-locked'|'locked'} pin
-     * @param {number|null} [planeId]
      * @returns {boolean} Applied?
      */
-    setPin(id, pin, planeId) {
+    setPin(id, pin) {
         var node = this.getNode(id);
         if (!node) return false;
         node.pin = normalizePin(pin);
-        node.pinPlaneId = (node.pin === 'plane-locked' && planeId !== undefined)
-            ? planeId : null;
         return true;
     }
 

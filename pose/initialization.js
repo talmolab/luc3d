@@ -22,6 +22,7 @@ import { markDirty, setStatus, showLoading, hideLoading } from '../import-export
 import { resetPlaneState } from '../import-export/plane-metadata.js';
 import { createDemoSession } from '../demo-data.js';
 import { setupUI, setupMenus, updateSeekbar, onPlaybackStateChange, fitTimelineToData } from '../ui/ui-wiring.js';
+import { installInfoTips } from '../ui/info-tip.js';
 import { installTimelineShortcuts } from '../ui/timeline-controller.js';
 import { setupPanelTabs, setupSkeletonEditing, updateInfoPanel } from '../ui/info-panel.js';
 import {
@@ -58,6 +59,10 @@ window.logMessage = function (msg, level) {
 async function init() {
     try {
         // Setup UI components (no data needed)
+        // Before any panel renders: one delegated set of listeners serving every
+        // ⓘ in the app, so a panel that rebuilds its rows does not have to
+        // re-wire them (and cannot forget to).
+        installInfoTips();
         setupEmptyVideoController();
         setupUI();
         setupPanelTabs();

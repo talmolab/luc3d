@@ -3,10 +3,11 @@
 Multi-view pose annotation GUI. No build system — pure vanilla JS served as static files.
 
 ## Architecture
-ES modules, vanilla JS (no build step). `index.html` loads `app.js` as `<script type="module">`; `app.js` is a 2-line entry point that imports from `pose/`. The 64 modules are grouped into four directories:
-- `pose/` — data model, cross-view tracking, DLT triangulation, plane annotation model (planes + the global plane-node pool), 3D mesh objects (groups of planes) and their derived geometry, plane/origin serialization, origin transform, whole-project origin re-base, plane-to-plane angle, app initialization (14 files)
-- `ui/` — UI state, canvas rendering, mouse/keyboard interaction, info panel, modals, timeline, 3D viewport, panel visibility, video encoding, video display settings, keyboard-target arbitration, modal geometry, view legend, plane definition, 3D mesh objects, origin definition, origin re-base, plane angle, frame-range tracking, settings (33 files)
-- `loading/` — video decoding, session loading, SLP/package readers, per-camera SLP choice, web workers (7 files)
+ES modules, vanilla JS (no build step). `index.html` loads `app.js` as `<script type="module">`; `app.js` is a 2-line entry point that imports from `pose/`. The 70 modules are grouped into four directories:
+- `pose/` — data model, cross-view tracking, DLT triangulation, plane annotation model (planes + the global plane-node pool), 3D mesh objects (groups of planes) and their derived geometry, plane/origin serialization, origin transform, whole-project origin re-base, cross-session calibration comparison, plane-to-plane angle, the least-squares plane fit, app initialization
+  (16 files)
+- `ui/` — UI state, canvas rendering, mouse/keyboard interaction, info panel, modals, timeline, 3D viewport, panel visibility, video encoding, video display settings, keyboard-target arbitration, modal geometry, view legend, plane definition, 3D mesh objects, origin definition, origin re-base, cross-session calibration notice, plane angle, frame-range tracking, collapsible section state, info tooltips, settings (36 files)
+- `loading/` — video decoding, session loading, SLP/package readers, per-camera SLP choice, calibration-file selection, web workers (8 files)
 - `import-export/` — file I/O, save/load, SLP import/merge, visibility metadata, plane metadata, 3D mesh export (10 files)
 - `demo-data.js` — synthetic skeleton and camera data
 - `styles.css` — all styling
@@ -447,23 +448,56 @@ coordinates, deliberately: re-baking the point cloud would silently change every
 3D number the rest of the app reads, saves and reports, and the transform is the
 deliverable, not a rewritten cloud.
 
+**The origin is ANY node of a fitted plane, never only a corner.** A plane is a
+group of nodes and its fit is a surface through all of them, so a node in the
+middle of the floor is as good an origin as one at its edge — and on a real cage
+it is usually the better one, since that is where a physical mark tends to be.
+The picker never asked for an outline node (`_handleOriginPick` collects one
+mesh per `plane.nodeIds` entry, so "is this a corner?" is not a question the
+viewport can ask); only the wizard's own copy did, and a user reads copy like
+that as a rule. Say **node** in every string this flow prints — the instruction,
+the button tooltip, the status line and the refusal — and keep "corner" for the
+outline it actually means. What IS restricted is the plane: it must be one the
+user clicked Fit on, because an un-fit plane has no normal and so no +Z to
+offer. Covered by `tests/e2e/origin-picks-any-node.mjs`, which pins the wording
+and drives a real click onto a node strictly inside a five-node quad.
+
 That leaves exactly one artifact still speaking the old frame, and it is the
 reason the panel's **Danger Zone** exists:
 
-- **`Export New Calibration`** writes `calibration-updated.toml` — every
+- **`Export New Calibration`** writes `calibration-rebased.toml` — every
   camera's extrinsics through `rebaseExtrinsics` (`R_new = R_cam·Rᵀ`,
   `t_new = R_cam·origin + t_cam`). A downstream tool handed the user's 3D and
   the ORIGINAL calibration would reproject against the wrong world. Intrinsics,
   distortion, image size and camera ORDER are untouched, and the rotation keeps
   the notation it arrived in, so a diff against the input shows the origin
-  change and nothing else.
+  change and nothing else. **The name is shared with `Set as New Calibration`**
+  (`REBASED_CALIBRATION_NAME`, in `loading/calibration-pick.js`): for a given
+  origin the two actions produce byte-identical TOML — same cameras, same
+  `rebaseExtrinsics`, same writer — and what differs is whether the project
+  moved to match, which is a property of the project, not of the file.
+
+  **Two `*calib*` files in one folder is now possible, so the loaders must
+  CHOOSE.** They used to do `calibFile = file` as they scanned, making the
+  winner whichever the enumeration yielded LAST — an order neither the File
+  System Access API nor `webkitdirectory` promises. Harmless only while a
+  folder could hold one match, which stopped being true the moment this action
+  wrote a second name. `pickCalibrationFile`
+  (`loading/calibration-pick.js`) prefers `REBASED_CALIBRATION_NAME`
+  case-insensitively, else the lexicographically first, and returns the names
+  it ignored so both loaders can warn in the status bar. It lives in a module
+  with NO imports on purpose: `session-loader.js` reaches Three.js through a
+  CDN specifier and cannot be loaded by a Node test, and that module is also
+  outside the `origin-rebase` / `origin-definition` cycle. Covered by
+  `tests/test-calibration-file-pick.mjs`, including that the answer does not
+  depend on scan order.
   **`t_new` is built from `frame.origin`, not `frame.translation`** — the two
   differ by a rotation (`t = −R·origin`), and substituting one yields a
   calibration that still almost works, which is the worst kind of wrong.
-- **`Set as New Calibration`** COMMITS: it overwrites `calibration.toml` AND
-  re-bases every 3D number in the project, so the world becomes the defined
-  origin (`pose/origin-rebase.js` + `ui/origin-rebase.js`). Three things about
-  it are load-bearing:
+- **`Set as New Calibration`** COMMITS: it re-bases every 3D number in the
+  project, so the world becomes the defined origin, and writes the calibration
+  that matches (`pose/origin-rebase.js` + `ui/origin-rebase.js`). Several things
+  about it are load-bearing:
   - **Points and cameras move together, so no pixel moves.** 3D points take
     `p' = R·p + t`, plane NORMALS take `R·n` with no translation, cameras take
     `R_cam·Rᵀ` / `R_cam·origin + t_cam`. Every reprojection lands exactly where
@@ -477,13 +511,189 @@ reason the panel's **Danger Zone** exists:
     part, because `showSaveFilePicker` needs transient user activation and that
     expires within seconds. `Load Calibration` uses a plain `<input type=file>`
     and yields no write handle, so there is nothing to inherit.
+  - **The confirmation is TWO tables: origin-dependent and not.** Which table a
+    row is in IS the claim being made about it, and that split is the only
+    thing about this action a user has to trust. A camera is in BOTH —
+    extrinsics move, intrinsics and distortion do not — because "does this
+    rewrite my lens model?" is the most common fear about the button. Every row
+    is present for every project, **zeros included**: a per-camera session with
+    no `project.slp` has no instance groups and no pose 3D, and that has to
+    read as a stated zero rather than a missing row, or the modal's shape
+    depends on the load path. A third block, `#originRebaseBySession`, appears
+    only when `sessions > 1` — a multi-session project can carry a different
+    `calibration.toml` per session, the user picks which of them move (below),
+    and only the ACTIVE one's calibration is written. Plane nodes and plane fits
+    are NOT split per session: the `PlaneModel` is project-scoped. The modal
+    caps its height and sticks its action row, so Continue is never below the
+    fold and there is still only one scroller. The two headline tables
+    additionally **FOLD** — each is a real `<details open>` whose `<summary>`
+    is its title, so the keyboard and the accessibility tree come from the
+    browser rather than a click handler on a `div`, and the note folds with the
+    table instead of leaving an orphaned sentence. The first one reads
+    *Origin-dependent — **updated***, not *rewritten*: the numbers are
+    re-expressed in a new frame, and half this dialog's job is saying what is
+    NOT overwritten. **The fold is deliberately NOT persisted** — no
+    `persistSectionState`, nothing in `localStorage`. That helper is for
+    display taste in a long-lived panel; this split is the claim the user is
+    being asked to trust, so a fold made once must never be how the next
+    re-base is confirmed, and every open rebuilds both blocks expanded.
+    `#originRebaseBySession` stays un-foldable on purpose: it holds the
+    per-session checkboxes, and hiding the control the user came to use is
+    worse than an uneven stack. Pinned by
+    `tests/e2e/set-new-calibration.mjs` §1/§1b/§5/§6 and
+    `tests/test-origin-rebase.mjs` §1d.
+  - **On a MULTI-SESSION project the user CHOOSES which sessions move**, with a
+    checkbox per `#originRebaseBySession` row. Re-basing all of them
+    unconditionally was a decision the dialog was making on the user's behalf,
+    and there is one calibration file per session FOLDER while this writes
+    exactly one of them. The chosen sessions are passed to
+    `runSetCalibration` / `planOriginRebase` as a FILTERED array — no mode
+    flag, so there is no partial code path to drift, and a session that is not
+    in it keeps BOTH its 3D and its cameras, which is what leaves it internally
+    consistent. Three things about it:
+    - **The ACTIVE session cannot be deselected.** Its cameras are what
+      `calibration-rebased.toml` describes, and the project-scoped `PlaneModel`
+      — the node pool and every plane fit — moves exactly once, with it; leave
+      it behind and the file describes a frame the project's own plane geometry
+      is not in. Its box is checked and `disabled`, and the block note names it,
+      because a disabled input's own tooltip never fires. It is found by
+      `sessions.indexOf(state.session)` — **not** `state.activeSessionIdx` and
+      not index 0: `state.session` is what picks the cameras for the file, so
+      pinning the row by anything else could let the pinned row and the written
+      calibration name different sessions. Pinned with a negative control that
+      makes session TWO active.
+    - **Every headline count follows the selection**, through
+      `subsetRebaseTally` — a re-FOLD of the tally's `perSession` records, not a
+      re-count, so a click does not re-walk a lazy project's whole columnar
+      store. It shares one private fold with `countRebaseTargets`, so a re-fold
+      and a fresh count of the same sessions are the same tally by
+      construction. One `renderSelection()` owns all four selection-dependent
+      strings (both tables, the block note, the hazard warning and
+      `#originRebaseMultiNote`, whose first clause becomes
+      `1 of 2 loaded sessions are re-based`), and runs at build time too so no
+      initial string can drift from it. `plane nodes` and `Plane fits` do NOT
+      follow it: one `PlaneModel`, moving once.
+    - **Deselecting is a real hazard, said in two sentences.** The sessions left
+      behind keep their old 3D while the rest of the project moves, so the
+      project holds 3D in TWO coordinate frames — precisely what
+      `pose/calibration-compare.js` detects and `ui/calibration-notice.js`
+      reports on the next load. `#originRebaseSubsetWarning` appears only while
+      something is switched off, sits under the checkboxes rather than with the
+      two cautions, and is deliberately short: no numbered list, no third box of
+      prose. Covered by `tests/e2e/set-new-calibration.mjs` §8 (the pin, the
+      counts, the warning's presence AND absence, and a commit whose deselected
+      session comes out bit-identical) and `tests/test-origin-rebase.mjs`
+      §11/§11b/§11c.
+  - **A PLANE NODE IS A 3D POINT, and the confirmation dialog has to say so.**
+    `tally.points3d` — `keypoints3d` PLUS `planeNodes` — is what the
+    `3D points to update` headline quotes, and the three pose buckets and
+    `plane nodes` sit under it as sub-rows that ADD UP TO IT. Quoting
+    `keypoints3d` alone announced "0 3D points to update" on a project with
+    planes and no pose annotation, one row above the nine plane nodes it was
+    about to rewrite. Two corollaries: every sub-row counts POINTS (the group
+    counts live in the labels — `from 2 User instance groups` — because a
+    number of groups under a "3D points" heading is two units in one column),
+    and the success status line names the total and then the split rather than
+    printing "0 3D points, 9 plane nodes" for a reader to reconcile. A plane
+    FIT is deliberately NOT in the sum: it is a centroid and a normal, which
+    transform differently, so it keeps its own row. Covered by
+    `tests/test-origin-rebase.mjs` §1/§1b and
+    `tests/e2e/set-new-calibration.mjs` §1/§5.
+  - **The 2D inventory counts the WHOLE population, and never `frameGroups`
+    alone.** Most of an imported `.slp` is ungrouped predictions, which live in
+    `FrameGroup.unlinkedInstances`, not in any `InstanceGroup` — so tallying
+    group members reported `0 predicted 2D instances` on a project holding
+    hundreds of thousands. Use the same enumeration
+    `ui/custom-delete-ops.js`'s `collectSessionWide` uses, and for the same
+    reason: `lazyLoader.forEachInstanceRow` on a lazy project, because
+    `session.frameGroups` there is a small resident window (31 of 180,210
+    frames on the real project) and counting it yields a plausible, tiny
+    number; group members plus the unlinked pool on an eager one, which are
+    disjoint by construction. 2D is inventory, not work — it does not move
+    — but a wrong inventory line sends the user looking for data the dialog
+    says they do not have. Pinned by `tests/test-origin-rebase.mjs` §1/§1c.
+  - **THE CALIBRATION IS NOT OVERWRITTEN; THE PROJECT IS SAVED AUTOMATICALLY.**
+    The calibration goes to a NEW file, `calibration-rebased.toml`
+    (`REBASED_CALIBRATION_NAME`) — never over the `calibration.toml` the
+    project was annotated against, which is usually shared with tools outside
+    LUCID. `Export New Calibration` writes the same name, deliberately: the
+    two produce byte-identical TOML for a given origin. A folder can therefore
+    end up holding both names — see `pickCalibrationFile` above, which is
+    what decides between them on the next load.
+
+    The project `.slp` **is** written: `autoSaveAfterRebase` calls `quickSave`
+    as the last step of the commit. Leaving that to the user — which is what
+    the old completion modal's first obligation did — opened a window in which
+    the calibration just written to disk disagreed with the project sitting
+    beside it, for no benefit. Two things about the auto-save:
+    1. **It runs only when `state.slpFileHandle` exists.** Otherwise
+       `quickSave` would open `showSaveFilePicker`, which needs transient user
+       activation that the Continue click no longer has after a minute of
+       re-basing — so the picker throws `SecurityError`. That case sets a
+       status asking for Save As instead, which is honest: there is no file to
+       update.
+    2. **The dirty flag is what says whether it worked**, not the absence of an
+       exception: `quickSave` reports its own failures and does not re-raise,
+       so success is `!state.isDirty` after the await. The save runs BEFORE the
+       summary status line, because `quickSave` writes its own text into the
+       status bar and would otherwise overwrite the counts.
+
+    **There is no completion modal.** It stated two obligations; one is now
+    automatic and the other was already given up front. What survives is the
+    confirmation's own `#originRebaseStaleWarning`, and it makes only the claim
+    that always holds — `calibration-rebased.toml` takes PRECEDENCE over
+    `calibration.toml` when a folder holds both. It used to also say a folder
+    `.toml` is preferred over the calibration embedded in the `.slp`: true of
+    `handleLoadSessionFolderSingleSlp`, which falls back to the embedded copy
+    only when the folder has no `.toml`, but NOT of reopening the
+    `project.slp`, which never scans a folder. Stating it unconditionally
+    overstated the hazard for the ordinary reopen. (The 77 px negative control
+    in `tests/e2e/origin-rebase-slp-diff.mjs` still stands — it is about the
+    two frames disagreeing, not about which file wins.)
+
+    **On a MULTI-SESSION project the third obligation stays, in the
+    confirmation.** There is one calibration file per session FOLDER and this
+    writes exactly one of them, so the folders that were not written still hold
+    a calibration in the old frame. `#originRebaseMultiNote` says so when
+    `t.sessions > 1` — before the commit, which is also while the user can
+    still decline — and ends on the one ACTION left with the user: *Ensure
+    other re-based sessions have an updated calibration file in their folders.*
+    It deliberately does not spell out the old-frame/new-frame consequence or
+    promise a load-time note; the loader still reports the divergence if they
+    do nothing (see the multi-session section above), and an instruction beats
+    an explanation here. The folder count it quotes is `picked - 1`, NOT
+    `total - 1` — the sessions that MOVED but whose folder was not written. A
+    deselected session kept its old 3D and its old calibration, which still
+    agree, so it is not a folder to go and fix; and when the current session is
+    the only one moving (`picked === 1`) the trailing clauses are omitted
+    rather than printing a count of zero. Deselecting a session in that same
+    block puts the project into the two-frame state on purpose rather than by
+    accident, which is what `#originRebaseSubsetWarning` is for.
   A pin does NOT exempt a plane node: it says "do not re-solve this point", not
   "exempt this point from the world moving". Afterwards the defined origin is
   CLEARED — the project is that frame now, so there is no offset left to report.
+
+  **What a save after the re-base changes inside `project.slp`**, measured by
+  `tests/e2e/origin-rebase-slp-diff.mjs` (it saves the same project on each side
+  of the operation and diffs every HDF5 dataset):
+  - **Rewritten** — `session_data/points_3d` (every 3D keypoint, by exactly
+    `R·p + t`) and `sessions_json` (the EMBEDDED calibration, plus
+    `metadata.lucid`'s `planeNodes` and each plane's `planeFit`;
+    `planeOrigin` disappears, since the project IS that frame now).
+  - **Byte-identical** — `points`, `pred_points`, `frames`, `instances`
+    (all 2D), the whole `session_data` grouping (`frame_groups`,
+    `instance_groups`, `instance_group_members`, `instance_group_meta`),
+    `videos_json`, `tracks_json`, `suggestions_json`, and
+    `metadata.lucid.planePlacements`.
+  - **There is no `session_data/pred_points_3d` in a LUCID file.** Both writers
+    build `SIO.Instance3D` for every group whatever its members are, and the
+    vendored writer only routes to that table for a `PredictedInstance3D` with
+    point scores. The user/predicted split the confirmation dialog shows is a
+    provenance label on the LUCID side, not a division on disk.
 - **`Reset to Calibration Origin`** goes through a warning modal
   (`confirmClearOrigin`). `clearOrigin` itself stays unguarded because the load
   path and the tests must reach it without a dialog — the confirmation is about
-  an unrecoverable CLICK. The frame is derived from a corner and an arrow picked
+  an unrecoverable CLICK. The frame is derived from a node and an arrow picked
   in the 3D view and nothing records which, so there is no undo short of walking
   the wizard again.
 
@@ -501,12 +711,92 @@ and the Reset warning's Esc/Cancel/Confirm) and
 `tests/e2e/set-new-calibration.mjs` (the inventory dialog, both cancels, and the
 commit).
 
+## Multi-session projects: the sessions can disagree about where the world is
+
+A multi-session load reads **one calibration per session subfolder** and nothing
+makes them match. Almost always they are copies of one file, so this is a rare
+edge case — but it is a silent one, and that is what earns it a check.
+**Nothing looks wrong when it happens.** Each session still reprojects correctly
+against its own cameras, so every error stays small and every number stays
+plausible; what breaks is only the comparison BETWEEN sessions, which nothing on
+screen performs and so nothing on screen contradicts. The user finds out when a
+distance measured in one session does not match the same distance in another,
+long after annotating both.
+
+`compareSessionCalibrations` (`pose/calibration-compare.js`, DOM-free) runs at
+the END of a multi-session load and `ui/calibration-notice.js` shows a note when
+it disagrees. Five things about it are load-bearing:
+
+- **The modal says WHO differs and nothing else.** One title — *Sessions with
+  different calibrations detected* — then one section per distinct calibration:
+  a letter, `N sessions · M cameras`, and the session FOLDER NAMES one per line.
+  That is the whole modal, and everything else that used to be in it was
+  removed: a lead paragraph, a per-kind explanation of the difference, the
+  measured offset, a consequence paragraph and two numbered remedies — five
+  blocks of prose over a two-row table. Nobody reads that on the way into a
+  project, and the one string they need, the name of the odd folder, was buried
+  in it. The folder name is the only thing here the user can act on, so it is
+  the only thing the modal is made of. `tests/e2e/multi-session-calibration-notice.mjs`
+  asserts the old prose is ABSENT, because copy like that creeps back one
+  sentence at a time.
+- **The classification is still MEASURED — it just goes to the console.** For
+  one physical camera under two calibrations, `R_f = R_A^T*R_B` and
+  `t_f = R_A^T*(t_B - t_A)` give the change of world frame that camera implies.
+  If EVERY camera agrees on `(R_f, t_f)` the two differ only by where the origin
+  is (`kind: 'origin'`, and `t_f` is the position of the second origin in the
+  first's coordinates); if they disagree, no single frame change explains them
+  and the sessions were calibrated apart (`'lens'`, `'cameras'`,
+  `'extrinsics'`). The detector must compute this anyway — it is how it knows
+  the sessions disagree at all — and it distinguishes a recoverable misplaced
+  file from a genuine re-calibration, so it is worth keeping. It is logged, with
+  the offset, by `noteSessionCalibrationDivergence`. Do not put it back in the
+  modal: `report.frameOnly` exists for the detector's own use and for the tests,
+  not to branch the copy.
+- **The remedy belongs where the divergence is CREATED, not where it is
+  found.** The origin case is overwhelmingly a leftover
+  `calibration-rebased.toml`: `Set as New Calibration` re-bases every session in
+  memory but writes ONE file (the active session's), and `pickCalibrationFile`
+  then PREFERS that name on the next load — so one session comes back re-based
+  while the rest come back in the original frame. The commit confirmation's
+  `#originRebaseMultiNote` states that obligation BEFORE it writes the file
+  (when `t.sessions > 1`), which is both the right time to act on it — the user
+  can still decline — and what makes this note predictable rather than
+  alarming. Measured on the real
+  `small_multi_session` folder: its four `calibration.toml` files are
+  BYTE-IDENTICAL (md5 `5be0c54b…`), as are the four independent `slap_GT`
+  session calibrations — copies are what this lab actually ships, so the only
+  divergence there is the rebased file, with all eight cameras agreeing to 3e-14
+  in rotation and 5e-13 mm in translation, origin at
+  `(-10.591, 11.900, 1218.743)` mm — 1218.847 mm away, rotated 162.818°.
+- **It is SILENT in the ordinary case, and that matters more than any of the
+  rest.** The modal opens only on `ok === false`. A note on every multi-session
+  load would be worse than no note. A session with no calibration at all (a
+  per-camera folder load with no `.toml`) is excluded from the comparison and
+  listed as "not compared" rather than counted as a third calibration —
+  otherwise a perfectly consistent project raises the modal.
+- **It runs LAST, and behind the skeleton prompt.** Comparing while sessions are
+  still arriving one at a time reports a divergence the next session resolves; a
+  modal raised mid-load sits over the loading overlay; and two modals stacked
+  means the user answers whichever is on top. So it is passed as
+  `promptImportSkeletonForAllSessions`'s `onDone`.
+- **It is a NOTE, not a prompt.** One dismiss button, Esc-closable, and it
+  changes nothing. Fixing the divergence would mean writing to the user's
+  session folders during a load, which is not what a load is for.
+
+Coverage: `tests/test-calibration-compare.mjs` (the maths and all four `kind`s,
+with the re-based fixtures built from the app's own `buildOriginFrame` +
+`rebaseExtrinsics` so the detector and the re-base cannot drift apart silently)
+and `tests/e2e/multi-session-calibration-notice.mjs` (the modal, the absence of
+the old prose, both kinds of difference, the silent case, and the real loader
+tail — driven with the REAL calibrations from
+`tests/fixtures/multi-session-calib/`).
+
 ## Two pin states, and Set Angle Between Two Planes
 
 A plane node carries `pin`, not a boolean:
 
     'none'          unpinned
-    'plane-locked'  may move, but only WITHIN the plane named by `pinPlaneId`
+    'plane-locked'  may move, but only within EVERY plane it is a member of
     'locked'        the 3D is frozen outright
 
 **`locked` is the old `immutable`, and `immutable` is still there as an accessor
@@ -526,9 +816,76 @@ included, working unchanged. Rules, each with a test:
   `PlaneModel.constrainPoint3dForNode`, reached through
   `writePoints3dForPlane`'s optional `constrain` hook — the one sanctioned
   publish path, so every solve honours it without having to remember to.
-- **`pinPlaneId` resolves lazily.** A stale id stops constraining rather than
-  throwing, so `deletePlane` needs no cascade — the same rule
-  `MeshObject3D.planeIds` follows.
+  **Every path that writes a plane-locked node's 3D must go through it**, and
+  two did not: the 3D corner drag took the viewport's own constraint (the plane
+  under the cursor, which is only one of the planes holding the corner) as
+  final, and `applyPlaneFit` wrote unhooked — so dragging or fitting a
+  NEIGHBOURING plane that shares the corner pulled it off the others. Both now
+  call it. A shared corner is one node with one position, so "which plane am I
+  editing?" cannot be the thing that decides whether the pin holds.
+  `applyPlaneFit` additionally has to store `plane.planeFit` **before** the
+  constrained write, not after: a plane-locked corner of the plane being fitted
+  is held by that plane too, so a hook running against the fit being REPLACED
+  projects the corner onto a plane the fit then moves out from under it,
+  leaving it 13 mm off the very plane it was just fitted to.
+- **The constraint is MEMBERSHIP, and it is the INTERSECTION of the planes.**
+  There is no `pinPlaneId` and there must not be one again. A node held by one
+  plane may slide over its surface; by two, only along the line they meet in;
+  by three, not at all — it has one position and is locked in all but name.
+  `PlaneModel.planeLockForNode` answers with a `rank` (0 free, 1 plane, 2 line,
+  3 point) and the planes doing the holding, and `planeIntersectionBasis` /
+  `projectOntoPlaneIntersection` (`pose/plane-fit.js`) do the geometry by
+  Gram-Schmidt over the plane equations — which is where the rank comes from.
+  Nominating one plane instead was the old design and it was a second source of
+  truth about something the model already knew: adding a corner to a wall now
+  tightens its constraint by itself, deleting a plane loosens it with no
+  cascade, and a saved `pinPlaneId` is read and DISCARDED because the plane it
+  named is one of the planes the file already lists the node in.
+  On the real five-plane cage this is not an edge case — the held corner is in
+  Ground, the right wall AND the front wall, so it is pinned outright, and the
+  first edit snaps it 1.7 mm to the point they actually meet at.
+  A plane whose normal repeats a direction already accounted for is DROPPED
+  rather than averaged in, on a minimum-angle threshold of about 0.06°
+  (`PLANE_INDEPENDENCE_TOL`): two nearly-parallel planes do intersect, in a line
+  that runs off towards infinity as they line up, and snapping a held corner
+  onto it is a worse answer than admitting the second plane says nothing new.
+- **The plane it projects onto is a USABLE fit, never necessarily a stored
+  one.** `usablePlaneFit` (`pose/plane-data.js`) returns the stored `planeFit`,
+  else derives one with `fitPlaneToPoints3d` from the plane's own solved
+  corners, writing nothing. Requiring a stored fit is what made this pin state
+  do **nothing at all**, and the loop is the thing to remember: setting any pin
+  clears the `planeFit` of every plane holding that node — including the planes
+  it is being held in — so plane-locking a node's last act was to remove the
+  planes it was being locked to. On a real five-plane cage four planes had no
+  stored fit, and typing `z = 2000` into the held corner left it 683 mm off its
+  plane with nothing saying so.
+  **The node being constrained is EXCLUDED from a derived fit.** A derived fit
+  is least squares through the points it is handed, so including that node lets
+  the plane chase it: the projection lands between the typed point and the real
+  plane, and every repeat edit drifts further (647 mm out on that same project).
+  Excluding it makes the plane the OTHER corners define, which is what the pin
+  means, and makes re-projecting a committed position a no-op. A STORED fit is
+  used unexcluded — it does not move when a corner is nudged, which is the same
+  rule the 3D drag and the typed editor already follow. Fewer than three other
+  solved corners, or collinear ones, derive nothing and the pin stays inert:
+  two corners admit a pencil of planes and choosing one invents geometry.
+  The same helper backs `ui/plane-angle.js`'s `usableFit` and the 3D drag
+  surface, so the dialog, the viewport and the pin cannot disagree about where
+  a plane is. **`fitPlaneToPoints3d` lives in `pose/plane-fit.js`** for this —
+  `pose/plane-data.js` must stay off `pose/triangulation.js`, which pulls in the
+  whole UI.
+  **Set Origin is deliberately NOT widened by any of it.** Its node picker
+  asks whether the user has DECLARED a plane's frame, which `fittedPlanes()`
+  counts, so the 3D payload carries `fitted` (stored fit) beside `planeFit`
+  (usable fit) and the wizard reads `fitted`. A derived surface is enough to
+  slide a corner along; it is not a declaration about the project's origin.
+  Covered by `tests/e2e/plane-lock-holds.mjs` and
+  `tests/test-plane-nodes.mjs` §20b (the derived fit) and §20c (the
+  intersection). The e2e file checks nothing against the app's own fits: the
+  reference planes are rebuilt from each plane's OTHER corners, and NEAREST is
+  asserted as the optimality condition — what is left of the typed position,
+  measured along the only direction the corner can still move in, has to be
+  zero.
 - **The pin is a padlock, and the three states are named for it.**
   `PIN_LABELS` is Unlocked / Plane-locked / Locked (the model values are
   unchanged). The Nodes list shows one 15px icon per row and floats a
@@ -543,10 +900,14 @@ included, working unchanged. Rules, each with a test:
   path — **the 2D follows the 3D**, so every placed view is rewritten to the
   reprojection of what was typed — and the pin decides what is allowed:
   `locked` renders the fields `disabled`, `plane-locked` runs the value through
-  `constrainPoint3dForNode` and says in the status that it was projected onto
-  the plane (its holding plane is the chip marked with a padlock in that same
-  panel). The display is 4 decimals, but a field the user did not retype
-  keeps its full stored double, or editing one axis would round the other two.
+  `constrainPoint3dForNode` and says in the status what it was moved to — a
+  plane, the line two planes meet in, or the point three meet at, named. Every
+  plane currently holding the node wears a padlock on its chip in that same
+  panel, so "two marks" is how the user reads that the corner is down to a
+  line; a plane it belongs to that has no usable fit yet is left plain rather
+  than promising a restriction that is not in force. The display is 4 decimals,
+  but a field the user did not retype keeps its full stored double, or editing
+  one axis would round the other two.
 - **Both states are omitted at their defaults on save** and ride the existing
   `planeNodes` key, so `PLANE_METADATA_KEYS` does not change and
   `save-golden-digest.mjs` must not move. A `locked` node redundantly also
@@ -567,13 +928,18 @@ are easy to get wrong:
   on the side it already leans; and the moving plane's stored fit is ROTATED
   rather than re-fitted, because a re-fit re-derives the normal's sign from
   `jacobiEigen` and can flip it.
-- **Applying holds the nodes it moved PLANE-LOCKED to the plane that moved**,
-  so the next Triangulate cannot silently undo the angle. Plane-locked rather
-  than Locked because the assertion is about the plane's ORIENTATION, not about
-  where each corner sits on it: a held corner is still re-solved from 2D and
-  `constrainPoint3dForNode` projects the answer back onto the plane, so the
-  annotation goes on improving while the angle survives. A node the user had
-  already Locked is left Locked. (Separately, `Triangulate` raises a modal
+- **Applying holds the nodes it moved PLANE-LOCKED**, so the next Triangulate
+  cannot silently undo the angle. Plane-locked rather than Locked because the
+  assertion is about the plane's ORIENTATION, not about where each corner sits
+  on it: a held corner is still re-solved from 2D and
+  `constrainPoint3dForNode` projects the answer back onto the planes it belongs
+  to — the rotated one among them — so the annotation goes on improving while
+  the angle survives. A node the user had already Locked is left Locked.
+  It nominates no plane, because the pin no longer takes one; a corner this
+  rotation moved is in the rotated plane by definition. The corollary is the
+  `plane_locked_elsewhere` warning: a moved corner that is ALSO in some other
+  plane is pulled back into that plane too, so the result may miss the target,
+  and the warning names each node with the planes holding it elsewhere. (Separately, `Triangulate` raises a modal
   naming a plane's Locked nodes instead of mentioning them in a success line;
   `Fit` does not, because holding pinned nodes is what a constrained fit is
   for.)
@@ -598,9 +964,13 @@ are easy to get wrong:
   `planeFit` whenever a node it holds is pinned — including by this action's own
   auto-lock — so gating on `fittedPlanes()` hid three of a user's five annotated
   planes. `usableFit` (`ui/plane-angle.js`) returns the stored fit or derives
-  one with `fitPlaneToPoints3d`, writing nothing, and hands it to
-  `planAngleEdit` as its `fits` argument — the maths module may not import
-  `pose/triangulation.js` without losing its stub-free testability.
+  one, writing nothing, and hands it to `planAngleEdit` as its `fits` argument.
+  It now delegates to the model's `usablePlaneFit`, which the `plane-locked`
+  pin and the 3D drag surface also read — the same mistake had been made in both
+  of those, and one definition is what keeps them from disagreeing about where a
+  plane is. `planAngleEdit` keeps taking the fit as an argument as a TEST SEAM
+  (hand-written fits, including all four normal signs), not because it cannot
+  reach one: `fitPlaneToPoints3d` moved to the stub-free `pose/plane-fit.js`.
 
 Coverage: `tests/test-plane-angle.mjs` (the maths, over a floor-and-wall fixture
 whose angle is analytic — including that all four normal-sign combinations give
@@ -616,7 +986,7 @@ The third level of the plane model, added strictly beside the first two:
     object  a group of PLANES, whose shape comes from how they are CONNECTED
 
 `pose/mesh-object-3d.js` owns the authoring half (`MeshObject3D` — id, name,
-colour, `planeIds`, `flipNormals`; `MeshObjectSet`). `pose/mesh-object-geometry.js`
+colour, `planeIds`; `MeshObjectSet`). `pose/mesh-object-geometry.js`
 derives the shape and **never stores it**. `ui/mesh-objects.js` is the table.
 The class is `MeshObject3D` because a JS identifier cannot begin with a digit —
 every user-facing string says "3D Mesh Object".
@@ -651,10 +1021,14 @@ without, including after deleting a member plane.
   open default used to fall out of the PCA sign of whichever ring came first, so
   the same cage exported either way depending on the order its planes were
   created in. Only an all-vertical surface has no vertical component to read and
-  is left undecided. `flipNormals` remains the user's override, persisted; the
-  canonical correction and the toggle are **two independent reversals applied in
-  order**, and folding them into one `||` makes the toggle silently do nothing on
-  any mesh that needed the canonical flip.
+  is left undecided — kept exactly as the coherent pass produced it, which is
+  stable across rebuilds, since `areaVectorZ` is ~0 there and reading a sign off
+  it would flip the object on floating-point noise.
+  **There is no user override and no `Flip normals` control**, deliberately: the
+  derivation answers every case a toggle could, so a persisted flip would only
+  be a second source of truth fighting it. A `flipNormals` left in a file by an
+  older build is read and DISCARDED, not adopted — re-applying it would invert
+  exactly the objects the derivation already gets right.
 - **Concave faces.** The viewport's fan (`_buildPlaneFillMesh`) is right for a
   translucent overlay and self-overlaps on a concave ring, so the geometry module
   ear-clips instead. Its point-in-triangle test is **non-strict** on purpose: a
@@ -685,8 +1059,18 @@ and is therefore in **calibration world**. Putting the one in the other drew the
 object translated and rotated away from the very planes it was built from the
 moment an origin was defined. Reading positions back out of the plane payload
 makes that class of bug unrepresentable. The cost is that winding is no longer
-visible in 3D; it stays in the panel's connectivity report, which is where the
-`Flip normals` fix lives anyway.
+visible in 3D — and the panel does not report it either: since winding is
+derived there is nothing left for a user to act on, so a read-out would be prose
+nobody can use. The connectivity report keeps what IS actionable — the counts,
+a closed object's volume, disjoint shells, coincident-but-unshared nodes — and
+a single-shell open object, being the ordinary state of a cage with no lid, gets
+no line at all.
+
+**And there is no Shape column** on the 3D Mesh Objects table. It carried a
+per-row badge (`closed`, `2 shells`, `open — 6 naked`) whose terms nothing in
+the panel defined, which is a verdict the reader cannot cash. The report says
+what is actionable in sentences instead; a row is swatch / name / planes /
+delete.
 
 **Coordinates: LUCID's world is Z-up right-handed and so is Blender's.** No axis
 conversion belongs in this pipeline. The only transforms are the applied origin
@@ -756,6 +1140,189 @@ items are `div`s, so `disabled` on the button reaches neither).
 NOTE the keyboard shortcuts for these actions (`n`, `t`, `Shift+T`,
 `Mod+Shift+T`, `Shift+g`, `Delete`) and the Edit / Analysis menu items are
 **not** gated yet — they still reach the same handlers.
+
+The mode itself is entered from **View ▸ Define Planes** or **`Mod+Shift+P`**
+(`definePlanes` in `ACTION_CATALOG`, dispatched to `togglePlaneMode`). Both go
+through that one function, because leaving the mode has unwinding to do — Set
+Origin Mode, the angle dialog, the toolbar lock — and a second entry point would
+be a second place to forget it. `p` alone is Toggle Predicted; the two are kept
+apart only by `matchChord`'s rule that a bare letter requires shift to be UP, so
+that pairing is pinned by `tests/e2e/define-planes-shortcut.mjs` along with the
+binding being suppressed while a plane-name field has focus.
+
+**`showHotkeysHelp` lives at MODULE scope in `ui/ui-wiring.js`, and has to.** It
+has two callers in two different closures — the Hot Keys menu item, wired in
+`setupMenus`, and `setHandler('showHotkeys', ...)`, which runs in `setupUI` —
+and while it was declared inside `setupMenus`, pressing `?` threw
+`ReferenceError: showHotkeysHelp is not defined`. That broke the discoverability
+half of the shortcut rule above for EVERY shortcut, silently, since the menu
+item still worked. It also refuses to open on top of itself (`#hotkeysClose`
+already present), because `dispatchEvent` does not consume the keydown for the
+listeners after it. Pinned by `tests/e2e/define-planes-shortcut.mjs` §5.
+
+**A panel's section state is browser-local, and it is remembered.** Every
+collapsible `<details>` in the Define Planes panel and the Skeleton tab goes
+through `persistSectionState` (`ui/section-state.js`), which restores it from
+`localStorage` and writes back on `toggle`. Loading a project RELOADS the page,
+so without this the markup's `open` attributes won — every section expanded
+again and the user refolded the same ones after every load. Three rules:
+- **It is display taste, never project state**, the same class as the plane
+  panel's node-size sliders and the Visibility panel's global prefs. It must not
+  reach the `.slp`: `save-golden-digest.mjs` would move, and opening a
+  colleague's project would refold your panel.
+- **The restore runs ONCE, at setup** — not in `refreshPlanePanel`. Restoring on
+  every repaint reopens a section the instant the user collapses it.
+- **An id with no stored value keeps the markup default**, which is what lets
+  the origin panel's **Danger Zone** ship collapsed AND stay off the persisted
+  list: it holds the three actions that rewrite the calibration every downstream
+  tool reads, and reopening it because it was expanded once in another project
+  is the state being collapsed is for.
+Storage is best-effort everywhere (private windows and blocked site data throw
+on read AND write), so a section that cannot be remembered still opens and
+closes. Covered by `tests/e2e/plane-section-state.mjs`.
+
+**Major sections in the Define Planes panel are OUTLINED; sub-sections are
+not.** Both levels are the same bordered `.plane-details` box, so "Plane
+Appearance" inside Planes read as top-level as "3D Mesh Objects" beside it. The
+majors (`.plane-panel > .info-section > .plane-details`) have their existing 1px
+border RECOLOURED to the accent, all four sides — not a bar under the title,
+because a marked header says where a section starts and it is where a tall open
+one ENDS that is ambiguous in a single scrolling column. Recolouring the border
+already there rather than adding a second outline is what keeps it from costing
+content width in a ~300px panel full of boxes-within-boxes. The header keeps its
+own tint so a folded section still says what it is. Danger Zone is outlined the
+same way in the error colour — it must not pick up the accent, since the whole
+point of the red is that it does not look like its neighbours.
+
+**An ⓘ explains itself BESIDE THE POINTER, never in the status bar.** Every
+info icon in the app goes through `ui/info-tip.js`: `setInfoTip(el, text)` to
+declare one, `installInfoTips()` once at startup. It used to call `setStatus`,
+which paints the text at the bottom-left of the window — the furthest point on
+screen from the icon just clicked, in a bar that also carries save results and
+errors. Four things about it:
+- **It is delegated**, one listener set on `document` matching `[data-infotip]`,
+  not per-element wiring. The plane panel rebuilds its tables on almost every
+  interaction, so a button wired at creation time would need re-wiring by every
+  renderer — and the renderer that forgot would fail silently, since an icon
+  with no tip looks exactly like an icon whose text is empty.
+- **`setInfoTip` REMOVES `title`.** Left on, the native tooltip surfaces a
+  second later saying the same sentence somewhere else. The text stays reachable
+  as `aria-label`.
+- **The tip lives and dies with the HOVER, clicked or not.** Leaving the icon
+  dismisses it; a click only guarantees one is showing, which is what a tap
+  needs on a touch device, and buys no extra time. Nothing a click pins open is
+  worth the stale explanation left sitting over a panel the pointer has moved
+  on from. The one exception is a tip summoned by the KEYBOARD — no pointer to
+  leave, so it waits for blur or `Esc`.
+- **The keyboard path is gated on `:focus-visible`.** Clicking a `<button>`
+  focuses it, so without that gate a mouse click marked the tip keyboard-held
+  and it then outlived the pointer — exactly the behaviour the rule above
+  forbids.
+- **The tip is `pointer-events: none` and flips rather than clamps.** It follows
+  the cursor, so taking the hover would make it flicker itself away; and since
+  nearly every icon is in the right-hand panel, a tip placed blindly to the
+  right would hang off the viewport.
+- **KEEP IT SHORT — one or two sentences.** A tip is a label, not
+  documentation: it sits over the panel the user is working in, follows the
+  pointer, and disappears the moment they move off the icon, so anything long
+  enough to need reading is not read. State what the control IS; put the
+  caveats on the thing they qualify (a cell's own `title`) or in MODULES.md, and
+  let the behaviour be pinned by a test instead of explained in a tooltip. The
+  Views column's tip is the model: *"The fraction of number of hand-annotated
+  views out of all views."*
+- **A click on an ⓘ must not also do the thing underneath it.** These icons sit
+  inside a clickable table row, and inside the `<summary>` that folds the very
+  section being asked about, so the click listener is in the CAPTURE phase and
+  calls `stopPropagation`. Keep every ⓘ a `<button>`: that makes the button the
+  click's activation target, which is what stops a `<summary>` ancestor folding
+  without needing `preventDefault`. A plain `<span>` ⓘ would fold it.
+Covered by `tests/e2e/info-tip.mjs`, including that the status bar is left
+untouched and that an element created after startup is served with no wiring.
+
+**Text in a panel, a modal or the status bar can be SELECTED and COPIED.** Two
+separate things used to stop it, and fixing either alone leaves the user exactly
+as stuck:
+- **`Mod+C` never reached the browser.** It is bound to Copy selected instance,
+  and the catalog dispatcher `preventDefault()`s every binding it matches —
+  which cancels the keydown's `copy` default action too. Highlighted text could
+  not be copied; the keystroke wrote "No instance selected to copy" into the
+  status bar instead. `shouldIgnoreShortcut` (`ui/keyboard-target.js`) now hands
+  the copy/cut chord back **whenever a selection exists**, and only then, so
+  Copy selected instance is untouched in the normal annotating case. Paste is
+  deliberately NOT in that set — nothing about a selection says the user wants
+  to replace it.
+- **`user-select: none`.** Section headings in the info panel, the plane panel
+  and the Settings modal, and the whole status bar, could not be dragged over.
+`user-select: none` is now kept for one thing only: a surface whose job is to be
+dragged or repeatedly clicked, where a stray selection is debris — the menu bar,
+the toolbars, the view strip, the video overlays, the ✓/✗ toggle cells in the
+SLP chooser, and **every modal drag handle** (dragging a dialog by its title
+would otherwise smear a selection across it). Covered by
+`tests/e2e/copy-panel-text.mjs`, which drives the REAL clipboard — Playwright's
+`keyboard.press` dispatches the key without running Chromium's edit command, so
+the chord goes through CDP with `commands: ['Copy']`.
+
+**The Planes table shows `Views: annotated / total`, and ANNOTATED is not
+PLACED.** `annotatedViewStats` (`ui/plane-definition.js`) counts the views where
+at least one of the plane's corners is hand-placed — present, not switched off,
+not reprojected — over every view in the session. That distinction is the whole
+point: `Triangulate` reprojects a plane into the views it was never placed on,
+so afterwards it IS placed everywhere while the user may have drawn it twice,
+and those corners are the solve's own output, excluded from the next solve as
+evidence. Counting them would make the fraction read full after one Triangulate
+and never say anything again. It uses the SAME test `triangulatePlane` applies
+to choose contributing views (`usableViews`), so the number and the solver
+cannot disagree. No calibration → a dash, not `0/0`.
+
+Three unlabelled marks were removed from that row to make room, and none should
+come back: the `+n` shared-node badge (`+` reads as an addition — `4 +4` on a
+four-cornered plane looked like nine; the count lives in the cell's tooltip
+now), the `3D` solved badge (two letters in a box in a column with no header),
+and the placed-view count beside the caret (a THIRD view number on the row,
+measuring something different from the Views fraction with nothing saying so).
+Covered by `tests/e2e/plane-views-column.mjs`.
+
+**A major section explains itself in an ⓘ, not a paragraph.** The Define Planes
+panel's Nodes, Node Connections, Planes and 3D Mesh Objects each used to END in
+a `.plane-hint` block of prose. In a ~300px column that is a wall of text
+permanently wedged between one table and the next, read once and then scenery —
+and it sat at the FOOT of the section, answering "what is this?" after the user
+had scrolled past whatever they were unsure about. The sentence now lives in the
+`<summary>`'s ⓘ (`PLANE_SECTION_INFO` in `ui/plane-definition.js`), where it
+costs 16px, is where the question comes up, and survives the section being
+folded. Two places deliberately have NEITHER: the **Danger Zone**, whose warning
+belongs in the confirmation dialogs that actually fire, and Edit Plane's
+**"+ Add"**, where a working picker explains itself — only its two empty-state
+lines, which are real dead ends, remain. Covered by
+`tests/e2e/plane-section-info.mjs`.
+
+**Clicking a node in the Nodes table RINGS it in 3D, and the next click
+anywhere else clears it.** The table is the whole project's node pool and
+nothing in a row answered "which of the dots on my cage is this?".
+`planeState.selectedNodeId` is transient display state — never saved, never
+remembered — and three rules hold:
+- **One listener decides both halves**, a `click` on `document` in the CAPTURE
+  phase, wired once in `setupPlaneDefinition`. Anything carrying
+  `data-plane-node-id` selects that node; everything else — the rest of the
+  panel, the 3D view, any canvas — clears it. Capture, because a row's own
+  controls `stopPropagation` (the colour swatch, the padlock, the pin popover)
+  and a click on one of those still means "this node". One listener, because
+  wiring selection per row and clearing per surface leaves every surface nobody
+  remembered to wire holding a stale marker.
+- **Selecting must not rebuild the Nodes table.** The click that selects a row
+  is very often the click that is about to focus its name field, and a rebuild
+  throws that input away before the caret lands in it — so `setSelectedNode`
+  toggles a class on rows that already exist.
+- **An ID crosses into the viewport, never a position.**
+  `setSelectedPlaneNode({nodeId})` resolves it against the plane payload's
+  `nodeIds`, so the marker is built from the very numbers the corner was drawn
+  from — the same rule `setMeshMembership` follows, and for the same reason
+  (this group is in CALIBRATION world, while anything derived is in the user's
+  origin frame). One marker even for a shared corner, and a node in no plane is
+  marked nowhere: the 3D view draws planes, so a node no plane references is
+  not in it. The marker is three rings with an EMPTY middle, because a corner
+  is a dozen pixels across and anything solid over it hides the node's own
+  colour. Covered by `tests/e2e/plane-node-selection.mjs`.
 
 **Modals must close on `Esc`** unless explicitly stated otherwise. When building
 or editing any modal/overlay dialog, wire a `keydown` listener that closes it on
