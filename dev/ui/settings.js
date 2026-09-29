@@ -68,6 +68,11 @@ const ACTION_CATALOG = [
     { id: 'trackAll', label: 'Track all frames', category: 'Editing', binding: 'Mod+Shift+T', editable: true, dispatched: true },
     { id: 'openTrackingWizard', label: 'Open Tracking Wizard', category: 'Editing', binding: 'Mod+Shift+I', editable: true, dispatched: true },
     { id: 'findMatch', label: 'Find match for selection', category: 'Editing', binding: 'f', editable: true, dispatched: true },
+    // Mouse gestures, listed so they are discoverable. They have no key to
+    // rebind, so they are reference-only (`editable`/`dispatched` false) and
+    // their handlers live in `ui/interaction.js`.
+    { id: 'moveInstance', label: 'Move whole instance (drag a node)', category: 'Editing', binding: 'Alt+Drag', editable: false, dispatched: false },
+    { id: 'rotateInstance', label: 'Rotate instance about the node under the cursor', category: 'Editing', binding: 'Alt+Wheel', editable: false, dispatched: false },
 
     // --- Identity & Tracks (select a group first) ---
     // luc3d #172: an identity switch SWAPS the two identities from the current
