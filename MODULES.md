@@ -2518,6 +2518,18 @@ reasons: a `<label>` click forwards to its control and focus lands *after* the
 listener runs, and `input`/`change` fire as part of the activation behavior, so
 blurring mid-dispatch would be reaching into someone else's event.
 
+It is registered in the **capture** phase (issue #230). Delegated on `document`
+in the bubble phase, it never saw a click from any control whose own handler
+calls `e.stopPropagation()` — as the Triangulate / Triangulate All split
+buttons do (`wireTriDropdown`, `ui/ui-wiring.js`), so their click does not also
+close the toolbar menus. Those buttons therefore kept focus after a pointer
+click: they rendered as "selected", and `targetOwnsKey` handed `Space` and
+`Enter` to the focused button instead of to the app, killing play/pause until
+something else was clicked. Capture runs before any target handler can stop the
+event, so a control cannot opt itself out of focus release by accident. The
+blur is still deferred, so listening earlier changes nothing about *when* focus
+is released.
+
 **Imports from project modules.** None — every predicate reads only
 `tagName` / `type` / `role` / `isContentEditable` off its argument, so it
 bridges into both test runners and unit-tests against plain object stubs.
@@ -2525,9 +2537,12 @@ bridges into both test runners and unit-tests against plain object stubs.
 **Imported by.** `ui/ui-wiring.js`, `ui/settings.js`, `ui/interaction.js`,
 `loading/video.js`.
 
-**Tests.** `tests/test-keyboard-target.js` (the predicates, both runners) and
+**Tests.** `tests/test-keyboard-target.js` (the predicates, both runners),
 `tests/e2e/checkbox-focus-hotkeys.mjs` (the real app: click the checkbox, press
-Space, get playback; Tab to it and Space still toggles).
+Space, get playback; Tab to it and Space still toggles) and
+`tests/e2e/triangulate-button-focus.mjs` (the capture-phase half: the two
+Triangulate buttons, plus a synthesized button that stops propagation, so the
+rule is pinned rather than those two ids).
 
 ---
 
@@ -4961,12 +4976,16 @@ catalog and any user rebindings (grouped by category; Esc closes it).
 user's default method (`getDefaultTriangulationMethod()` from `ui/settings.js`),
 while hovering reveals a menu for picking DLT / BA explicitly. `wireTriDropdown`
 wires both the button click (default method) and the menu items (explicit
-picks). Implicit triangulation — the `t` shortcut, the Edit ▸ Triangulate menu
-item, and the auto-assign flow in `identity-assignment.js` — also uses the
-default method. The **environment-skeleton** solve (Load Environment) likewise
-takes it, via `resolveTriangulationMethod(group)` on a brand-new group; it used
-to hardcode DLT, so a BA user's environment 3D silently disagreed with the method
-they had selected.
+picks). Both handlers `stopPropagation()` so the click does not also reach the
+document listener that closes the toolbar menus — which is why the focus-release
+listener in `ui/keyboard-target.js` has to run in the **capture** phase (#230):
+in the bubble phase these two buttons kept focus after a click and swallowed
+`Space`/`Enter`. Implicit triangulation — the `t` shortcut, the Edit ▸
+Triangulate menu item, and the auto-assign flow in `identity-assignment.js` —
+also uses the default method. The **environment-skeleton** solve (Load
+Environment) likewise takes it, via `resolveTriangulationMethod(group)` on a
+brand-new group; it used to hardcode DLT, so a BA user's environment 3D
+silently disagreed with the method they had selected.
 
 **Track Frame is a split button too (#212).** It reuses the same `.tri-dropdown`
 markup and CSS-only hover reveal, but NOT `wireTriDropdown` — its button keeps

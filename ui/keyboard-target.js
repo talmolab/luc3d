@@ -219,6 +219,16 @@ let _focusReleaseDoc = null;
  * document after a pointer activates a checkbox, radio or button. Idempotent
  * per document.
  *
+ * Registered in the CAPTURE phase (issue #230). In the bubble phase any
+ * control whose own handler calls `e.stopPropagation()` — as the Triangulate /
+ * Triangulate All split buttons do, to keep their click from closing the
+ * toolbar menus — silently opts itself out of focus release, and then keeps
+ * focus after a pointer click: the button reads as "selected", and Space and
+ * Enter belong to it (`targetOwnsKey`) instead of to the app until something
+ * else is clicked. Capture runs before any target handler can stop the event,
+ * so no control can opt out by accident. The blur itself is still deferred, so
+ * running earlier changes nothing about when focus is actually released.
+ *
  * @param {Document} [doc]
  * @returns {boolean} whether a listener was installed by this call
  */
@@ -235,7 +245,7 @@ export function installFocusRelease(doc) {
         // `input`/`change` fire as part of the activation behavior — blurring
         // mid-dispatch would be reaching into someone else's event.
         setTimeout(function () { releaseTransientFocus(t, d); }, 0);
-    });
+    }, true);
     return true;
 }
 
