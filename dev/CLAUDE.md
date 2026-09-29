@@ -28,27 +28,47 @@ host — `talmolab.github.io/luc3d/` 301-redirects to it, and the `CNAME` file a
 `gh-pages` root is what makes Pages answer for that name. Cloudflare proxies it;
 the origin is Pages.
 
-**`deploy.yml` never writes the site root.** `https://luc3d.sleap.ai/` — the live
-page — is managed by hand and is deliberately outside the workflow's reach; every
-target is a named sub-folder, and an empty/`.`/`/` target path is refused rather
-than silently becoming a root wipe. Keep it that way: adding a root target also
-re-introduces a wipe that can take the live page, the other channels and the PR
-previews with it. Promotion to root is a manual step, after checking `/stable/`.
+`deploy.yml` maintains five channels on `gh-pages`. There is no build step, so a
+"build" is a copy of the repo at some ref, and the app is **sub-path safe**
+(relative importmap, `document.baseURI` in the test harness) — which is why one
+tree serves correctly from every path. Do not introduce origin-root-relative URLs
+(`/lib/...`); they 404 on every channel but root.
 
-It maintains four channels on `gh-pages`. There is no build step, so a "build" is
-a copy of the repo at some ref, and the app is **sub-path safe** (relative
-importmap, `document.baseURI` in the test harness) — which is why one tree serves
-correctly from every path. Do not introduce origin-root-relative URLs
-(`/lib/...`); they 404 on every channel.
-
-- `/stable/` — newest **full release**. Moves only on `release: published`.
-- `/latest/` — newest release **including pre-releases**.
-- `/dev/` — every push to `main`.
+- `/` — **the live page.** Newest **full release**; the only place it is served.
+- `/stable/` — an **alias** that redirects to root. A lone `index.html`, not a
+  copy, so a deep link under it (`…/stable/tests/…`) 404s.
+- `/latest/` — newest release **including pre-releases**. A real copy.
+- `/dev/` — every push to `main`. A real copy.
 - `/pr/<n>/` — PR previews, owned by `pr-preview.yml`. `deploy.yml` never touches them.
 
-Both release channels only ever move forward (a republished older version is a
-no-op). `CNAME` is created only if missing, never rewritten, and no `.nojekyll`
-is added — both rules exist so the workflow's root footprint stays exactly zero.
+**Only a full release moves root.** A push to `main` goes to `/dev/` alone; a
+pre-release goes to `/latest/` alone; republishing an older release moves nothing
+(release channels only ever move forward). The same run refreshes the `/stable/`
+alias, so the two can never point at different builds — there is only one build.
+`workflow_dispatch` with target `root` is the manual promote escape hatch; it
+writes root *and* the `/stable/` alias in one run, exactly as a release does.
+
+A target with a non-empty `redirect` is written as an alias (one `index.html`
+whose target is **relative**, so it stays correct under the custom domain,
+`talmolab.github.io/luc3d/` or a PR preview) instead of a copy of the app.
+GitHub Pages cannot issue a real HTTP redirect — no `.htaccess`, no
+`_redirects` — so a meta-refresh/JS stub is the only mechanism available.
+
+**Root is the only target that wipes — two rules keep that safe.** Every other
+channel owns its folder and can only damage itself, but root's previous output
+sits at the top of `gh-pages` beside every other channel and every PR preview:
+
+1. **Adding a channel means adding it to the keep-list** — the
+   `find . -maxdepth 1 ... ! -name` in `apply_targets`. A channel missing from
+   that list is deleted by the next full release. `stable` is listed for exactly
+   this reason, as are `.git` and `CNAME`.
+2. **Root is requested by an explicit `root: true` flag, never an empty path.**
+   The empty/`.`/`/` refusal is deliberately kept so an unset variable still
+   cannot turn `rm -rf "$path"` into `rm -rf` of everything.
+
+`CNAME` is excluded from the wipe and recreated if missing — losing it breaks the
+custom domain for everyone. No `.nojekyll` is added, since that would change how
+the live root is served and the app has no `_`-prefixed files.
 
 Releases are cut **by hand** (`gh release create v0.1.0 --generate-notes`).
 That is deliberate: a release created in Actions with `GITHUB_TOKEN` does not
