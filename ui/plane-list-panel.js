@@ -1,7 +1,8 @@
-// ui/plane-list-panel.js — Section 3 of the Define Planes panel: the Planes
-// table, its action row, the `Views: annotated / total` fraction and the
+// ui/plane-list-panel.js — the ROSTER half of the panel's Planes section: the
+// Planes table, its action row, the `Views: annotated / total` fraction and the
 // per-plane placements sub-row. The table is also the DRAG SOURCE that places a
-// plane onto a video view.
+// plane onto a video view, and the one control that SELECTS which plane the
+// editor below it edits (`ui/plane-editor-panel.js`, same <details>).
 //
 // Split out of `ui/plane-definition.js`. Cohesive by what it renders, not by
 // size: everything here draws or wires one Planes row, and nothing here solves

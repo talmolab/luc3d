@@ -20,11 +20,10 @@
  *     BESIDE it still does. The icon sits inside the <summary> that folds the
  *     very section being asked about, so the two have to be told apart.
  *  3. The sections that were told to LOSE their text have neither a paragraph
- *     nor an ⓘ: Danger Zone, and Edit Plane's "+ Add" line.
- *  4. Edit Plane's two labels say what their control DOES — "Select Plane" and
- *     "Edit Name", one above the other, picking vs renaming — and the label
- *     column is FIXED so the two controls do not stagger now that the labels
- *     are different lengths.
+ *     nor an ⓘ: Danger Zone, and the "+ Add" line under Nodes In This Plane.
+ *  4. The Planes section has exactly ONE labelled row and it says "Name", with
+ *     `+ New Plane` above it — no plane dropdown survives anywhere in the
+ *     section, because the roster is what selects.
  *  5. The member-node names are indented off the table's left edge, clear of
  *     the 2px accent bar `.plane-node-shared` paints inside the row.
  * The connectivity report's own de-prosing — it no longer discusses normals,
@@ -61,8 +60,8 @@ try {
     await page.waitForFunction(() => window.__lucid && window.__lucid.state, { timeout: 20000 });
 
     // Plane Mode, with a node and a plane so every section has real content —
-    // Node Connections lives inside Edit Plane and is not rendered at all until
-    // a plane is selected.
+    // Node Connections is part of the selected plane and is not rendered at all
+    // until there is one.
     await page.evaluate(async () => {
         const P = await import('/ui/plane-definition.js');
         if (!P.planeState.active) P.togglePlaneMode();
@@ -247,39 +246,53 @@ try {
         'but an EMPTY picker still says why: ' + JSON.stringify(emptyHint.slice(0, 50)));
 
     // =========================================================
-    console.log('\n--- 6. Edit Plane labels say what the control DOES ---');
+    console.log('\n--- 6. Planes has one labelled row, and it says Name ---');
     // =========================================================
-    // "Plane" and "Name" named the noun, not the action, and sat one above the
-    // other doing two different things — one picks, one renames.
+    // There used to be TWO stacked rows doing different things — a
+    // "Select Plane" dropdown above an "Edit Name" field — and the labels had
+    // to be verbose to tell them apart. Selection is a roster row click now (as
+    // with 3D Mesh Objects), so one row is left and it is plainly "Name".
     const labels = await page.evaluate(() => {
-        const rows = [...document.querySelectorAll('#planeEditorDetails .plane-name-row')];
-        return rows.map(r => {
-            const span = r.querySelector('span');
-            const ctrl = r.querySelector('select, input');
-            return {
-                text: span ? span.textContent.trim() : null,
-                labelWidth: span ? Math.round(span.getBoundingClientRect().width) : null,
-                clipped: span ? span.scrollWidth > span.clientWidth + 1 : null,
-                ctrlLeft: ctrl ? Math.round(ctrl.getBoundingClientRect().left) : null,
-                ctrlId: ctrl ? ctrl.id : null,
-            };
-        });
+        const rows = [...document.querySelectorAll('#planePlanesDetails .plane-name-row')];
+        const newBtn = document.getElementById('btnNewPlaneSkeleton');
+        const nameInput = document.getElementById('planeSkeletonName');
+        return {
+            rows: rows.map(r => {
+                const span = r.querySelector('span');
+                const ctrl = r.querySelector('select, input');
+                return {
+                    text: span ? span.textContent.trim() : null,
+                    clipped: span ? span.scrollWidth > span.clientWidth + 1 : null,
+                    ctrlId: ctrl ? ctrl.id : null,
+                };
+            }),
+            // No plane <select> ANYWHERE in the section. The three pickers
+            // inside the sub-sections (add-node, and the two edge ends) are
+            // not selectors for a plane and are excluded by name, not by
+            // nesting depth — a depth-limited walk would pass on a build that
+            // simply moved the dropdown one level in.
+            selects: [...document.querySelectorAll('#planePlanesDetails select')]
+                .map(s => s.id)
+                .filter(id => !/AddNode|EdgeSrc|EdgeDst/.test(id)),
+            newLabel: newBtn ? newBtn.textContent.trim() : null,
+            // The create button comes FIRST, above the name it will need.
+            newBeforeName: !!(newBtn.compareDocumentPosition(nameInput) &
+                Node.DOCUMENT_POSITION_FOLLOWING),
+        };
     });
-    const pick = labels.find(l => l.ctrlId === 'planeSelect');
-    const rename = labels.find(l => l.ctrlId === 'planeSkeletonName');
-    check(pick && pick.text === 'Select Plane',
-        'the selector is labelled "Select Plane" (got ' + JSON.stringify(pick && pick.text) + ')');
-    check(rename && rename.text === 'Edit Name',
-        'the name field is labelled "Edit Name" (got ' + JSON.stringify(rename && rename.text) + ')');
-
-    // The two labels are different lengths now, so the label column has to be
-    // FIXED or the two controls stagger. Content-sized labels aligned only by
-    // the accident of "Plane" and "Name" being the same width.
-    check(pick.ctrlLeft === rename.ctrlLeft,
-        'both controls start at the same x — the label column is fixed (got ' +
-        pick.ctrlLeft + ' vs ' + rename.ctrlLeft + ')');
-    check(pick.clipped === false && rename.clipped === false,
-        'and neither label is clipped by it');
+    const rename = labels.rows.find(l => l.ctrlId === 'planeSkeletonName');
+    check(labels.rows.length === 1,
+        'Planes has ONE labelled row, not a picker stacked on a renamer (got ' +
+        labels.rows.length + ': ' + JSON.stringify(labels.rows.map(r => r.text)) + ')');
+    check(rename && rename.text === 'Name',
+        'and it is labelled "Name" (got ' + JSON.stringify(rename && rename.text) + ')');
+    check(rename.clipped === false, 'the label is not clipped by the fixed label column');
+    check(labels.selects.length === 0,
+        'no plane dropdown survives anywhere in the section (got ' +
+        JSON.stringify(labels.selects) + ')');
+    check(labels.newLabel === '+ New Plane',
+        'the create button reads "+ New Plane" (got ' + JSON.stringify(labels.newLabel) + ')');
+    check(labels.newBeforeName, 'and sits above the Name field, as 3D Mesh Objects does');
 
     // =========================================================
     console.log('\n--- 7. Member node names are indented off the table edge ---');

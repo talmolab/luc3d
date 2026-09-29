@@ -5109,24 +5109,47 @@ binding is read inside a function body only.
 
 ### ui/plane-editor-panel.js
 
-**Purpose.** Section 2 of the panel: the Edit Plane editor — the plane selector,
-the member list, the "+ Add" existing-node picker and the edge pickers.
+**Purpose.** The EDITOR half of the panel's **Planes** section: the name
+field, the member list, the "+ Add" existing-node picker and the edge pickers,
+for whichever plane is selected. It renders directly under the roster
+(`ui/plane-list-panel.js`) inside the same `<details>`.
+
+**One section, two modules.** The roster and the editor are one
+`#planePlanesDetails` in the markup and two modules here, split by what they
+render: the roster draws EVERY plane, this draws the SELECTED one. They were two
+top-level sections as well — "Edit Plane" above "Planes" — until the reader
+having to hold a plane in their head while scrolling between the list that picks
+it and the controls that act on it made the case for merging them.
+
+**It does not CHOOSE the plane.** It used to: a plane dropdown was its
+top row, listing every plane by id with `+ New Plane` pinned last and a
+disabled "— select a plane —" placeholder holding the value when nothing was
+selected. That made it a **second writer of `planeState.selectedPlaneId`**,
+which the Planes table already owns — and the price of the
+duplication was all on the control: a placeholder that is not a plane, an
+ACTION sitting among the planes as if it were one, and a list whose labels are
+user-editable names keyed by id so a rename relabels rather than re-selects.
+The section now matches **3D Mesh Objects**, where the table selects and one
+`+ New` button creates: a plane is picked by clicking its row in the roster, and
+`+ New Plane` (`#btnNewPlaneSkeleton`, between the roster and this editor, and
+the only one in the panel) creates and selects. `renderEditor` reads
+`getSelectedPlane()` and renders; it writes no selection state at all.
 
 **Key exports.**
-- `renderEditor()` — the section's entry point, called by the hub's
-  `refreshPlanePanel`. It also calls into Section 1 (`renderNodesTable` /
-  `renderFrozenWarning`); that is one-directional, as Section 1 never calls
-  back.
-- `renderPlaneSelect(plane)`, `NEW_PLANE_OPTION` — both also read by the hub's
-  one-time wiring when the selection changes.
+- `renderEditor()` — the module's ONLY export and its entry point, called by
+  the hub's `refreshPlanePanel`. It also calls into the Nodes section
+  (`renderNodesTable` / `renderFrozenWarning`); that is one-directional, as
+  that module never calls back.
 
 **Imported by** `ui/plane-definition.js`.
 
 ### ui/plane-list-panel.js
 
-**Purpose.** Section 3 of the panel: the Planes table, its action row, the
-`Views: annotated / total` fraction and the per-plane placements sub-row. The
-table is also the DRAG SOURCE that places a plane onto a video view.
+**Purpose.** The ROSTER half of the panel's **Planes** section: the Planes
+table, its action row, the `Views: annotated / total` fraction and the per-plane
+placements sub-row. The table is also the DRAG SOURCE that places a plane onto a
+video view, and **the one control that SELECTS** which plane the editor below it
+(`ui/plane-editor-panel.js`, same `<details>`) edits.
 
 Cohesive by what it renders, not by size: everything here draws or wires one
 Planes row, and nothing here solves anything — Triangulate and Fit are reported
@@ -5148,10 +5171,11 @@ through the hub's `triangulatePlaneAndReport` / `fitPlaneAndReport`.
 
 ### ui/plane-definition.js
 
-> **This module was SPLIT.** It reached 4,474 lines, so the panel's three
-> sections and three cross-cutting helpers now live beside it:
-> `ui/plane-nodes-panel.js` (Section 1), `ui/plane-editor-panel.js`
-> (Section 2), `ui/plane-list-panel.js` (Section 3), plus
+> **This module was SPLIT.** It reached 4,474 lines, so the panel's parts and
+> three cross-cutting helpers now live beside it:
+> `ui/plane-nodes-panel.js` (Nodes), `ui/plane-list-panel.js` (the Planes
+> roster) and `ui/plane-editor-panel.js` (the selected plane's editor, under
+> that roster in the same section), plus
 > `ui/plane-dialog.js`, `ui/plane-toolbar-lock.js` and `ui/plane-overlays.js`.
 > The hub kept the model accessors, the placements, the two solver controllers
 > (triangulate and fit), the mode lifecycle, `refreshPlanePanel`, the
@@ -5202,10 +5226,12 @@ edges. That is what lets two planes MEET along a shared line — the corners on
 that line are one node with one 3D position and one 2D point per view, so
 re-solving either plane cannot split the line apart.
 
-**The panel's SHAPE is that model made visible: three SIBLING sections**, not a
+**The panel's SHAPE is that model made visible: two SIBLING sections**, not a
 nodes editor nested inside a plane editor. A node outlives the planes that
 reference it, so presenting node creation as a sub-step of editing one plane
-would misstate the model.
+would misstate the model. That is the one split the panel keeps — choosing a
+plane and editing it were two sections and are now one, because they are one
+job.
 
 1. **Nodes** (`#planeNodesDetails`) — the project-wide pool. A LIST, not a
    grid: each node is one row — chevron, colour, name, padlock, × — with **no
@@ -5219,52 +5245,73 @@ would misstate the model.
    is a valid resting state, rendered `.plane-node-unused`. The × here
    **destroys** the node project-wide and confirms first when it is shared or
    pinned, naming the planes it will change.
-2. **Edit Plane** (`#planeEditorDetails`) — WHICH plane, then what THAT plane is
-   made of. Its summary names the plane (`#planeEditorTitle`). Its TOP row is
-   the plane **selector** (`#planeSelect`), which lists every plane (option
-   value = plane id) with **`+ New Plane` pinned LAST**; it sits OUTSIDE
-   `#planeEditorContent` so it stays live with nothing selected, and is a
-   selector ONLY — choosing `+ New Plane` creates and selects one, and the
-   re-render puts the displayed value back on that new plane. Everything below
-   it (`#planeEditorContent`) is swapped for `#planeEditorEmpty` when nothing is
-   selected: the EDITABLE name `#planeSkeletonName` (the one place a plane is
-   renamed — the rename re-renders, so the selector and the Planes table follow
-   live); a members table (`#planeMembersTable`, `NAME | COLOR swatch | ×`)
-   whose × is `removeNodeFromPlane(…, {deleteIfOrphan:false})` — the REFERENCE
-   goes, the node stays in the pool with its 3D, pin and 2D; an
-   **add-an-existing-node** control (`#planeAddNodeSelect` +
-   `#btnAddExistingPlaneNode`) listing every pool node not already in the plane,
-   disabled with a spoken reason when there is none, and now the **only** way a
-   node enters a plane; and `#planeEdgesDetails` (edges are per-plane), whose
-   hint states that connections are OPTIONAL — triangulation and fitting are
-   edge-independent and edges exist for visual reference, and to state a fill
-   outline the convex hull cannot (a CONCAVE one). Without edges the fill hulls
-   the plane's points, so an unconnected plane still fills correctly.
-3. **Planes** (`#planePlanesDetails`) — `#planeSkeletonsTable` (the drag
+2. **Planes** (`#planePlanesDetails`) — the roster AND the selected plane, in
+   one section, in this order. Its summary is `Planes` plus the selected plane's
+   name (`#planeEditorTitle`), so a folded section still says which plane the
+   controls inside belong to.
+
+   First the **roster**: `#planeSkeletonsTable` (the drag
    source, with the per-plane expander and placement rows; each row's meta reads
    `N off, N reprojected`, since a view Triangulate reprojected onto is placed
    like any other and would otherwise give no clue that its corners are the
-   model's output rather than the user's annotation),
-   `#planeSkeletonsEmpty`, `+ New Plane`, the shared `.plane-action-row`
-   (Triangulate / Fill / Fit) and `Set Origin`. LAST, deliberately: the editor
-   is where the work happens, so it gets the space next to the pool it draws
-   nodes from, and this list reads as the roster you switch between. Selecting
-   here and selecting in `#planeSelect` are **the same one piece of state**
-   (`planeState.selectedPlaneId`), which both controls write and both re-read on
-   the next `refreshPlanePanel` — so they cannot drift apart. Note
-   `#planeEditorEmpty` points UP at the dropdown in section 2 ("pick one in the
-   Select Plane dropdown above") — that string tracks the selector and must move
-   with it, label included.
+   model's output rather than the user's annotation) and
+   `#planeSkeletonsEmpty`. **This table is the only selector**: a row click is
+   the one writer of `planeState.selectedPlaneId` besides `createPlane`, and
+   everything below it re-reads that on every `refreshPlanePanel`. It used to
+   share the job with a plane dropdown in a separate Edit Plane section; both
+   are gone, so there is nothing left for it to agree with.
 
-**Edit Plane's two labels name the ACTION: `Select Plane` and `Edit Name`.**
-They sit one above the other and do different things — the first picks which
-plane the section edits, the second renames it — and as `Plane` / `Name` they
-named the noun twice and left which was which to be discovered. The rename
-consequence is in the CSS: `.plane-name-row > span` is now a FIXED 72px column
-(`flex: 0 0 72px` + `nowrap`), because the old labels aligned their controls
-only by the accident of "Plane" and "Name" being the same width, and
-"Select Plane" / "Edit Name" are not. `tests/e2e/plane-section-info.mjs` §6
-asserts both controls start at the same x and that neither label is clipped.
+   Then **`+ New Plane`** (`#btnNewPlaneSkeleton`, in a
+   `.panel-button-row.plane-create-row`, ruled off below), which sits OUTSIDE
+   `#planeEditorContent` so it stays live with nothing selected — with no
+   planes at all it is the only thing in the section that can do anything, so
+   empty-stating it too would make this a dead end. It does NOT select either;
+   it creates and the creation selects.
+
+   Then the **selected plane**, which is `#planeEditorContent`, swapped for
+   `#planeEditorEmpty` when nothing is selected
+   ("click a plane in the table above, or + New Plane" — that string names both
+   controls above it and tracks both): the EDITABLE name `#planeSkeletonName`
+   (the one place a plane is
+   renamed — the rename re-renders, so the roster and the section header
+   follow live), then three foldables. `#planeMembersDetails`, a members table
+   (`#planeMembersTable`, `NAME | COLOR swatch | ×`)
+   whose × is `removeNodeFromPlane(…, {deleteIfOrphan:false})` — the REFERENCE
+   goes, the node stays in the pool with its 3D, pin and 2D — plus an
+   **add-an-existing-node** control (`#planeAddNodeSelect` +
+   `#btnAddExistingPlaneNode`) listing every pool node not already in the plane,
+   disabled with a spoken reason when there is none, and the **only** way a
+   node enters a plane. `#planeEdgesDetails` (edges are per-plane), whose
+   hint states that connections are OPTIONAL — triangulation and fitting are
+   edge-independent and edges exist for visual reference, and to state a fill
+   outline the convex hull cannot (a CONCAVE one). Without edges the fill hulls
+   the plane's points, so an unconnected plane still fills correctly. And
+   `#planeActionsDetails` (**Actions**): the shared `.plane-action-row`
+   (Triangulate / Fill / Fit), `Set Origin` and `Set Angle Between Planes` —
+   three loose button rows under the roster before, where they read as actions
+   on the TABLE rather than on one plane.
+
+   Last, and deliberately outside `#planeEditorContent`:
+   `#planeAppearanceDetails` (**Plane Appearance**). It styles every plane in
+   the roster rather than the selected one, so it must not empty-state with the
+   editor.
+
+**Planes has ONE labelled row, and it says `Name`.** There were two,
+stacked and doing different things — a `Select Plane` dropdown over an
+`Edit Name` field — and those labels had to name the ACTION because as
+`Plane` / `Name` they named the noun twice and left which was which to be
+discovered. With selection a roster row click the disambiguation is
+moot: one row, labelled `Name`, the same word 3D Mesh Objects uses for the same
+control. `.plane-name-row > span` stays a FIXED 72px column
+(`flex: 0 0 72px` + `nowrap`). It no longer has two different-width labels to
+hold apart, but it is what makes the input's left edge the same in the panel's
+TWO `.plane-name-row`s — this one and 3D Mesh Objects' — so the two sections'
+Name fields line up rather than each being sized by its own label.
+`tests/e2e/plane-section-info.mjs` §6 asserts there is exactly one such row,
+that it reads "Name", that no plane dropdown survives anywhere in the
+section, and that `+ New Plane` sits above the field.
+`tests/e2e/define-plane-mode.mjs` §2 asserts the section body's whole child
+list, so a part that appears, disappears or moves fails there.
 
 **Member node names are INDENTED off the table's left edge** (12px on
 `#planeMembersTable`'s first column, header included).
@@ -5771,34 +5818,37 @@ order:
    row. With it: `#planeNodesEmpty`, the
    `#planeFrozenWarning` line, and `#planeNodeNameInput` + `#btnAddPlaneNode`
    (pool-only: it creates no plane and joins none).
-2. `#planeEditorDetails` — **Edit Plane**. Summary =
-   `.plane-summary-label` ("Edit Plane") + `#planeEditorTitle` (the plane's
-   name). First in the body, in its own `.plane-name-row.plane-picker-row`:
-   `#planeSelect`, the plane SELECTOR (`+ New Plane` pinned last; a disabled
-   placeholder option holds the value when nothing is selected). It is outside
-   `#planeEditorContent`, which is swapped for `#planeEditorEmpty` when nothing
-   is selected. Inside: `#planeSkeletonName` (the editable name),
+2. `#planePlanesDetails` — **Planes**. Summary =
+   `.plane-summary-label` ("Planes") + `#planeEditorTitle` (the SELECTED
+   plane's name) + `#planePlanesInfo`. The body, in order:
+   `#planeSkeletonsTable` (the **Planes** table, drag
+   source and the only selector; `data-plane-skeleton-id`, `.plane-expander` /
+   `.plane-placed-count`,
+   `.plane-placements-row` ▸ `.plane-placements-body` ▸ `.plane-placement-item`
+   / `.plane-tri-summary` / `.plane-tri-node` ▸ `.plane-tri-node-name` /
+   `-xyz` / `-err` / `-pin`, each node line also carrying
+   `data-plane-node-id`), `#planeSkeletonsEmpty`, then
+   `.panel-button-row.plane-create-row` ▸ `#btnNewPlaneSkeleton`
+   (`+ New Plane`), then `#planeEditorEmpty` and `#planeEditorContent` — the
+   latter swapped for the former when nothing is selected. Inside
+   `#planeEditorContent`: `#planeSkeletonName` (the editable name),
    `#planeMembersDetails` (the members
    table `#planeMembersTable`, columns **Name / Color swatch / ×**, rows
    carrying `data-plane-member-id` and `.plane-member-name` /
    `.plane-member-swatch`; `#planeMembersEmpty`; `#planeAddNodeSelect` +
-   `#btnAddExistingPlaneNode` + `#planeAddNodeHint`) and `#planeEdgesDetails`
+   `#btnAddExistingPlaneNode` + `#planeAddNodeHint`), `#planeEdgesDetails`
    (`#planeEdgesTable`, `#planeEdgesEmpty`, `#planeEdgeSrcSelect` /
-   `#planeEdgeDstSelect` / `#btnAddPlaneEdge`).
-3. `#planePlanesDetails` — `#planeSkeletonsTable` (the **Planes** table, drag
-   source; `data-plane-skeleton-id`, `.plane-expander` / `.plane-placed-count`,
-   `.plane-placements-row` ▸ `.plane-placements-body` ▸ `.plane-placement-item`
-   / `.plane-tri-summary` / `.plane-tri-node` ▸ `.plane-tri-node-name` /
-   `-xyz` / `-err` / `-pin`, each node line also carrying
-   `data-plane-node-id`), `#planeSkeletonsEmpty`,
-   `#btnNewPlaneSkeleton`, the `.plane-action-row`
-   (`#btnPlaneTriangulate` / `#btnPlaneFill` / `#btnPlaneFit`),
-   `#btnSetOrigin`, `#btnSetPlaneAngle` and — nested inside it —
-   `#planeAppearanceDetails` (**Plane Appearance**: `#planeNodeSize` /
-   `#planeEdgeWeight` / `#planeNodeSize3d`). Appearance is a SUB-section of
-   Planes rather than a section of its own because it styles exactly what the
-   table above it lists and nothing else in the panel; it stays `open` so the
-   sliders are no less discoverable than when they sat at the top level.
+   `#planeEdgeDstSelect` / `#btnAddPlaneEdge`) and `#planeActionsDetails`
+   (**Actions**: the `.plane-action-row` ▸ `#btnPlaneTriangulate` /
+   `#btnPlaneFill` / `#btnPlaneFit`, then `#btnSetOrigin`, then
+   `#btnSetPlaneAngle`). Last in the body and OUTSIDE
+   `#planeEditorContent`: `#planeAppearanceDetails` (**Plane Appearance**:
+   `#planeNodeSize` / `#planeEdgeWeight` / `#planeNodeSize3d`). Appearance is a
+   SUB-section rather than a section of its own because it styles exactly what
+   the roster lists and nothing else in the panel, and it is outside the
+   swapped body because that is the part that needs a selected plane; it stays
+   `open` so the sliders are no less discoverable than when they sat at the top
+   level.
 
 It also creates
 the modal `#planeDialog` (`.plane-confirm-overlay` / `.plane-confirm-modal`,
@@ -5808,7 +5858,8 @@ it, and Esc CANCELS**, per the project's modal rule. Styles live under the
 "Defining Plane Mode" block at the end of `styles.css`.
 
 **Section titles are 14px** (`.plane-details > summary`). The sub-sections —
-those inside Edit Plane, and Plane Appearance inside Planes — stay at 12px via
+Nodes In This Plane, Node Connections, Actions and Plane Appearance, all four
+inside Planes — stay at 12px via
 `.plane-subdetails`, which is what makes the hierarchy legible without indenting
 them.
 `tests/e2e/define-plane-mode.mjs` §2 asserts both sizes, so a section added with
@@ -6753,8 +6804,8 @@ table no longer derives every object's full geometry on every repaint in order
 to print one word. `tests/e2e/mesh-object-roundtrip.mjs` §2 asserts the badge,
 the header cell and the fifth `<td>` are all gone.
 
-**Membership is edited by PICK-AND-ADD**, the same idiom Edit Plane uses to put
-an existing node in a plane: `renderMembers` lists the planes IN the object, one
+**Membership is edited by PICK-AND-ADD**, the same idiom the Planes section
+uses to put an existing node in a plane: `renderMembers` lists the planes IN the object, one
 row each with an × to take it back out, and `renderAddPlaneSelect` offers a
 `<select>` of the NON-members plus `+ Add` (`#meshObjectAddPlaneSelect` /
 `#btnAddMeshObjectPlane`). It replaced a checkbox against every plane in the
@@ -8690,11 +8741,11 @@ its neighbours' state as it was when that one section was wired.
 
 **Callers and their keys.**
 - `skeletonSectionsOpen` — `skeletonNodesSection`, `skeletonEdgesSection`.
-- `planeSectionsOpen` — `planeNodesDetails`, `planeEditorDetails`,
-  `planeMembersDetails`, `planeEdgesDetails`, `planePlanesDetails`,
+- `planeSectionsOpen` — `planeNodesDetails`, `planePlanesDetails`,
+  `planeMembersDetails`, `planeEdgesDetails`, `planeActionsDetails`,
   `planeAppearanceDetails`, `meshObjectsDetails`, `originResultDetails`.
-  The sub-sections are included deliberately: Edit Plane is the tallest thing in
-  the panel and most of that height is Members and Edges.
+  The sub-sections are included deliberately: Planes is the tallest thing in
+  the panel and most of that height is its four sub-sections.
   **`originDangerDetails` is deliberately ABSENT** — it ships collapsed because
   it holds the three actions that rewrite the calibration every downstream tool
   reads, and a Danger Zone left open because it was expanded once, weeks ago, in

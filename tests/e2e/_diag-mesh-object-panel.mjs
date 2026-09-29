@@ -45,7 +45,7 @@ await page.evaluate(async () => {
     document.getElementById('planePanel').style.display = '';
     document.getElementById('meshObjectsDetails').open = true;
     document.getElementById('planeNodesDetails').open = false;
-    document.getElementById('planeEditorDetails').open = false;
+    document.getElementById('planeMembersDetails').open = false;
     document.getElementById('planePlanesDetails').open = false;
     MO.meshObjectState.selectedObjectId = cage.id;
     P.refreshPlanePanel();

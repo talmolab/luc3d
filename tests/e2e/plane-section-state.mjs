@@ -5,7 +5,9 @@
  *
  *  1. MAJOR sections are marked and sub-sections are not. Both levels are the
  *     same bordered `.plane-details` box, so without this "Plane Appearance"
- *     (inside Planes) read as top-level as "3D Mesh Objects" beside it.
+ *     (inside Planes) read as top-level as "3D Mesh Objects" beside it. Planes
+ *     holds FOUR sub-sections now — the roster and the editor were two
+ *     sections and are one — so the two levels have to stay told apart.
  *  2. Which sections are open SURVIVES A RELOAD. Loading a project reloads the
  *     page, and the markup's `open` attributes come back — so every section was
  *     expanded again and the user refolded the same ones after every load.
@@ -82,14 +84,14 @@ try {
         };
         return {
             nodes: box('planeNodesDetails'),
-            editor: box('planeEditorDetails'),
             planes: box('planePlanesDetails'),
             mesh: box('meshObjectsDetails'),
             origin: box('originResultDetails'),
             danger: box('originDangerDetails'),
-            // Nested inside Edit Plane / Planes — peers in markup, not in rank.
+            // All four nested inside Planes — peers in markup, not in rank.
             members: box('planeMembersDetails'),
             edges: box('planeEdgesDetails'),
+            actions: box('planeActionsDetails'),
             appearance: box('planeAppearanceDetails'),
         };
     });
@@ -99,14 +101,14 @@ try {
     check(accent !== plain,
         'a major section is outlined in the accent, a sub-section is not (' +
         accent + ' vs ' + plain + ')');
-    for (const id of ['nodes', 'editor', 'planes', 'mesh', 'origin']) {
+    for (const id of ['nodes', 'planes', 'mesh', 'origin']) {
         const b = style[id];
         check(b && b.top === accent && b.right === accent &&
             b.bottom === accent && b.left === accent,
             id + ': the accent runs all FOUR sides, not just the top');
         check(b && b.width === '1px', id + ': and stays a thin line — ' + (b ? b.width : 'missing'));
     }
-    for (const id of ['members', 'edges', 'appearance']) {
+    for (const id of ['members', 'edges', 'actions', 'appearance']) {
         const b = style[id];
         check(b && b.top === plain && b.bottom === plain,
             id + ' (a SUB-section): keeps the plain border');
@@ -129,8 +131,8 @@ try {
     const saved = await stored();
     check(saved && saved.planeNodesDetails === false, 'collapsing Nodes is written to localStorage');
     check(saved && saved.planeAppearanceDetails === false,
-        'and so is a SUB-section — Edit Plane is the tallest thing in the panel and ' +
-        'most of that height is its sub-sections');
+        'and so is a SUB-section — Planes is the tallest thing in the panel and ' +
+        'most of that height is its four sub-sections');
 
     await page.reload();
     await boot();

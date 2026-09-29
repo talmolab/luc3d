@@ -1,4 +1,4 @@
-// ui/plane-nodes-panel.js — Section 1 of the Define Planes panel: the global
+// ui/plane-nodes-panel.js — Section 1 of the Define Planes panel (of two): the global
 // Nodes table, the padlock (pin) picker, the typed x/y/z editor and node
 // deletion.
 //
@@ -72,7 +72,7 @@ const PIN_TITLES = {
  * creation as a sub-step of editing one plane misstates the model. Everything
  * in this table acts on the NODE — renaming, recolouring, pinning and deleting
  * all apply to every plane using it — and there is no membership column: which
- * plane a node is IN is the Edit Plane section's business.
+ * plane a node is IN is the Planes section's business.
  */
 export function renderNodesTable() {
     var tbody = document.querySelector('#planeNodesTable tbody');
@@ -611,7 +611,7 @@ function renderNodeDetailRow(node, st, usedBy, model) {
     planesLine.className = 'plane-node-planes';
     if (usedBy.length === 0) {
         planesLine.classList.add('plane-node-planes-none');
-        planesLine.textContent = 'In no plane yet — use + Add in Edit Plane';
+        planesLine.textContent = 'In no plane yet — use + Add in Planes';
         planesLine.title = 'A node in no plane is a normal resting state: ' +
             'deleting a plane keeps its nodes. Nothing draws it on any view ' +
             'until some plane uses it.';
@@ -895,7 +895,7 @@ function nodeStateTitle(node, st, model) {
         // Not an error: planes are deleted without their nodes, so a node can
         // legitimately belong to nothing. It just is not drawn anywhere.
         : 'In no plane, so it is drawn on no view — put it in one with + Add ' +
-          'in the Edit Plane section';
+          'in the Planes section';
     if (st === 'frozen-unsolved') {
         return where + '. PINNED BUT NEVER TRIANGULATED — a dead end: pinning is ' +
             'exactly what forbids a solve from giving it a 3D position. Unpin it, ' +

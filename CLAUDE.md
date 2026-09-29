@@ -1264,6 +1264,24 @@ would otherwise smear a selection across it). Covered by
 `keyboard.press` dispatches the key without running Chromium's edit command, so
 the chord goes through CDP with `commands: ['Copy']`.
 
+**The Define Planes panel is TWO sections: Nodes, then Planes.** Planes holds
+the roster and the selected plane together, in one `<details>`: the table, then
+`+ New Plane`, then that plane's `Name` and three foldables — Nodes In This
+Plane, Node Connections and Actions (Triangulate / Fill / Fit, Set Origin, Set
+Angle Between Planes) — with Plane Appearance last and OUTSIDE the per-plane
+body, since it styles every plane in the table. Picking a plane and editing it
+used to be two sections, "Edit Plane" above "Planes", which made the reader hold
+a plane in their head while scrolling between the list that picks it and the
+controls that act on it. Two rules hold: the **roster is the only selector** (a
+row click, the one writer of `planeState.selectedPlaneId` besides
+`createPlane` — there is no plane dropdown, and `+ New Plane` creates rather
+than selects), and the **Nodes pool stays its own section**, because a node
+outlives the planes referencing it and may be in several at once, so presenting
+node creation as a sub-step of editing one plane would misstate the model.
+`tests/e2e/define-plane-mode.mjs` §2 asserts the section body's whole child
+list, so a part that appears, disappears or moves fails there rather than merely
+looking odd.
+
 **The Planes table shows `Views: annotated / total`, and ANNOTATED is not
 PLACED.** `annotatedViewStats` (`ui/plane-definition.js`) counts the views where
 at least one of the plane's corners is hand-placed — present, not switched off,
@@ -1293,8 +1311,8 @@ had scrolled past whatever they were unsure about. The sentence now lives in the
 `<summary>`'s ⓘ (`PLANE_SECTION_INFO` in `ui/plane-definition.js`), where it
 costs 16px, is where the question comes up, and survives the section being
 folded. Two places deliberately have NEITHER: the **Danger Zone**, whose warning
-belongs in the confirmation dialogs that actually fire, and Edit Plane's
-**"+ Add"**, where a working picker explains itself — only its two empty-state
+belongs in the confirmation dialogs that actually fire, and the Planes
+section's **"+ Add"**, where a working picker explains itself — only its two empty-state
 lines, which are real dead ends, remain. Covered by
 `tests/e2e/plane-section-info.mjs`.
 

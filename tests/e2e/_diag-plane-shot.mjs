@@ -36,7 +36,7 @@ await page.click('#btnNewPlaneSkeleton');
 await page.fill('#planeSkeletonName', 'floor');
 await page.dispatchEvent('#planeSkeletonName', 'change');
 // `+ Node` only mints a POOL node now — putting it in the plane is `+ Add` in
-// the Edit Plane section, so the shot has to drive both controls.
+// the Planes section, so the shot has to drive both controls.
 for (const n of ['fl', 'fr', 'br', 'bl']) {
   await page.fill('#planeNodeNameInput', n);
   await page.click('#btnAddPlaneNode');
@@ -88,7 +88,7 @@ await page.evaluate(async () => {
 // Collapse the editor so the shot frames the Plane Skeletons table, its
 // expanded placements, and the appearance sliders.
 await page.evaluate(() => {
-  document.getElementById('planeEditorDetails').open = false;
+  document.getElementById('planeMembersDetails').open = false;
   document.getElementById('planePanel').scrollTop = 0;
 });
 await new Promise(r => setTimeout(r, 400));

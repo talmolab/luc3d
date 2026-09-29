@@ -12,9 +12,10 @@
 //                      which plane the editor is editing.
 //   - Mode enter/exit — shows the "Defining Plane Mode" banner and swaps the
 //                      info panel's tab bar for the Define Plane panel.
-//   - The Define Plane panel — THREE sibling sections: the global Nodes pool,
-//                      the Edit Plane editor (which plane, its name, its member
-//                      nodes, its connections), and the Planes list.
+//   - The Define Plane panel — TWO sibling sections: the global Nodes pool,
+//                      and Planes (the roster, plus the editor for whichever
+//                      plane is selected: its name, its member nodes, its
+//                      connections and the actions that run on it).
 //   - Drag-and-drop  — dragging a plane row onto a video view PLACES that plane
 //                      there: its nodes get 2D points seeded in a ring around
 //                      the drop point.
@@ -31,33 +32,41 @@
 // two planes MEET along a shared line — the corners on that line are one node
 // with one 3D position, so re-solving either plane cannot split the line apart.
 //
-// The panel's SHAPE is that model made visible, which is why it is three
-// SIBLING sections rather than a nodes editor nested inside a plane editor:
+// The panel's SHAPE is that model made visible, which is why the pool is its
+// own section rather than a nodes editor nested inside a plane editor:
 //
 //   1. Nodes            — the project-wide pool. Name / colour / pin / delete
 //                         all act on the NODE, so they apply to every plane
 //                         using it. No membership column: a node is not owned
 //                         by a plane. `+ Node` mints a POOL node and touches no
 //                         plane at all — it neither creates one nor joins one.
-//   2. Edit Plane       — WHICH plane (the selector at the top, with a pinned
-//                         `+ New Plane` entry), then what THAT plane is made
-//                         of: its name, the nodes in it (× removes the
-//                         REFERENCE, never the node), an "add an existing node"
-//                         dropdown, and its connections.
-//   3. Planes           — the list, the drag source, and the actions that run
-//                         on the selected plane (Triangulate / Fill / Fit /
-//                         Set Origin).
+//   2. Planes           — the roster AND the editor, in that order: the list
+//                         (also the drag source, and the only thing that
+//                         SELECTS), `+ New Plane`, then the selected plane's
+//                         name and three foldable parts — Nodes In This Plane
+//                         (× removes the REFERENCE, never the node, and an
+//                         "add an existing node" dropdown puts one in), Node
+//                         Connections, and Actions (Triangulate / Fill / Fit /
+//                         Set Origin / Set Angle Between Planes). Plane
+//                         Appearance goes last, outside the per-plane part,
+//                         because it styles every plane in the list.
 //
-// Section 2's `+ Add` dropdown is the headline affordance: picking a node
-// another plane already uses is exactly how an intersection is built, and it
-// must stay at least as cheap as the checkbox it replaced. It is also the ONLY
-// way a node enters a plane — creating a node and putting one in a plane are
-// deliberately two separate acts, because a node is not owned by a plane.
+// Those two were three: picking a plane and editing it were separate sections,
+// so the reader had to hold a plane in their head while scrolling between the
+// list that picks it and the controls that act on it. One section, one plane.
 //
-// SELECTING vs RENAMING are two controls, not one. The top row's `<select>`
-// only chooses which plane is edited (and its last entry mints one); the Name
-// field in the body is where a plane is renamed. Merging them into one text
-// box made "type here" mean both "find" and "rename" depending on state.
+// `+ Add` is the headline affordance: picking a node another plane already uses
+// is exactly how an intersection is built, and it must stay at least as cheap
+// as the checkbox it replaced. It is also the ONLY way a node enters a plane —
+// creating a node and putting one in a plane are deliberately two separate
+// acts, because a node is not owned by a plane.
+//
+// SELECTING and RENAMING are still two controls, and they are now in two
+// different registers rather than two stacked rows: the ROSTER selects (a row
+// click, the one writer of `planeState.selectedPlaneId` besides `createPlane`)
+// and the Name field below renames. Merging them into one text box made "type
+// here" mean both "find" and "rename" depending on state; a `<select>` above
+// the Name field merely made the reader tell two labelled rows apart.
 //
 // ## PINNED (IMMUTABLE) NODES
 //
@@ -171,7 +180,8 @@ import { showPlaneDialog } from './plane-dialog.js';
 // importable FROM here but does not bind it in this module's own scope, and
 // `enterPlaneMode` / `exitPlaneMode` call this one directly.
 import { applyPlaneModeToolbarLock } from './plane-toolbar-lock.js';
-// Section 1 of the panel. Imported (not merely re-exported) because
+// Section 1 of the panel, the Nodes pool. Imported (not merely re-exported)
+// because
 // `refreshPlanePanel` and the setup wiring call these directly.
 import {
     renderNodesTable, renderPinInfoButton, renderFrozenWarning,
@@ -179,21 +189,17 @@ import {
     // plane-locked node was pulled back to.
     planeLockWhere,
 } from './plane-nodes-panel.js';
-// Section 3 of the panel. Imported, not merely re-exported: the panel
-// refresh below calls these directly.
+// The ROSTER half of section 2 — the Planes table and the actions that run on
+// the selected plane. Imported, not merely re-exported: the panel refresh below
+// calls these directly.
 import {
     renderActionRow, renderPlanesTable, renderOriginButton,
     // The three action-button glyphs: the one-time wiring below sets their
     // innerHTML, so the hub needs the strings as well as the renderers.
     ICON_TRIANGULATE, ICON_MESH, ICON_FIT,
 } from './plane-list-panel.js';
-// Section 2 of the panel.
-import {
-    renderEditor,
-    // The plane <select> and its "new plane" sentinel: the one-time wiring
-    // below reads both when the selection changes.
-    renderPlaneSelect, NEW_PLANE_OPTION,
-} from './plane-editor-panel.js';
+// The EDITOR half of section 2, below the roster in the same <details>.
+import { renderEditor } from './plane-editor-panel.js';
 import { setStatus, markDirty } from '../import-export/save-load.js';
 // The 3D Mesh Objects table lives in its own module and is purely additive —
 // this import and the two calls below are the whole of its coupling to the
@@ -1655,8 +1661,8 @@ export function enterPlaneMode() {
     // No plane is minted on entry. An empty Planes list is the honest starting
     // state; a phantom `plane_1` nobody asked for is something the user then
     // has to notice and delete, and it would be indistinguishable from one
-    // they created and forgot. The Edit Plane section carries its own
-    // empty state, so the panel is not a dead end without it.
+    // they created and forgot. The editor half of the Planes section carries
+    // its own empty state, so the panel is not a dead end without it.
     // An EXISTING plane is still re-selected, so re-entering the mode resumes
     // where it left off.
     var model = planeModel();
@@ -1791,12 +1797,6 @@ export function setEmptyState(tableId, emptyId, isEmpty) {
     if (empty) empty.style.display = isEmpty ? '' : 'none';
 }
 
-// --- Section 2: the Edit Plane editor -------------------------------------
-//
-// Moved to `ui/plane-editor-panel.js`: the selector, the member list, the
-// add-node picker and the edge pickers. `refreshPlanePanel` below still
-// drives `renderEditor`.
-
 // --- Section 1: the global Nodes table -------------------------------------
 //
 // Moved to `ui/plane-nodes-panel.js`: the Nodes table, the padlock picker,
@@ -1804,11 +1804,14 @@ export function setEmptyState(tableId, emptyId, isEmpty) {
 // drives them, and they are not re-exported because nothing outside this
 // module ever called them.
 
-// --- Section 3: the Planes table ------------------------------------------
+// --- Section 2: Planes, in two modules -------------------------------------
 //
-// Moved to `ui/plane-list-panel.js`: the action row, the per-plane rows,
-// the Views fraction and the placements sub-row. `refreshPlanePanel` below
-// still drives them.
+// One <details> in the markup, two modules here, split by what they render:
+// `ui/plane-list-panel.js` draws the ROSTER (the table, the drag source, the
+// Views fraction, the placements sub-row and the action row), and
+// `ui/plane-editor-panel.js` draws the SELECTED plane below it (the name, the
+// member list, the add-node picker, the edge pickers). `refreshPlanePanel`
+// below drives both.
 
 export function redraw() {
     drawAllOverlays(state.currentFrame);
@@ -2131,8 +2134,9 @@ export { drawPlaneOverlays } from './plane-overlays.js';
 var PLANE_SECTIONS_KEY = 'planeSectionsOpen';
 
 // Every collapsible section in the panel, majors and the sub-sections inside
-// them. Restoring only the majors would half-solve it: Edit Plane is the
-// tallest section in the panel and most of that height is Members and Edges.
+// them. Restoring only the majors would half-solve it: Planes is by far the
+// tallest section in the panel and most of that height is its four
+// sub-sections.
 //
 // `originDangerDetails` is deliberately ABSENT. It ships collapsed because it
 // holds the three actions that rewrite the calibration every downstream tool
@@ -2141,10 +2145,10 @@ var PLANE_SECTIONS_KEY = 'planeSectionsOpen';
 // It costs one click to reopen and that click is the point.
 var PLANE_SECTION_IDS = [
     'planeNodesDetails',
-    'planeEditorDetails',
+    'planePlanesDetails',
     'planeMembersDetails',
     'planeEdgesDetails',
-    'planePlanesDetails',
+    'planeActionsDetails',
     'planeAppearanceDetails',
     'meshObjectsDetails',
     'originResultDetails',
@@ -2222,50 +2226,15 @@ export function setupPlaneDefinition() {
 
     setupMeshObjects();
 
-    // --- The plane SELECTOR: which plane the editor edits ---
-    // Selection is one-way state (`planeState.selectedPlaneId`) that both this
-    // dropdown and the Planes table write and both re-read on the next
-    // `refreshPlanePanel`, so the two can never disagree without one of them
-    // failing to render at all.
-    var planeSelect = document.getElementById('planeSelect');
-    if (planeSelect) {
-        planeSelect.addEventListener('change', function () {
-            // Set Origin Mode locks every BUTTON, but this is a <select> that
-            // `lockUI` cannot reach — and it would both create state and run a
-            // full panel rebuild, which re-enables the very buttons the lock
-            // just turned off. Refused here, and only the dropdown is
-            // re-rendered so the displayed value goes back.
-            if (isOriginModeActive()) {
-                setStatus('Finish or leave Set Origin Mode before changing planes', 'warning');
-                renderPlaneSelect(getSelectedPlane());
-                return;
-            }
-            if (planeSelect.value === NEW_PLANE_OPTION) {
-                // `createPlane` selects the new plane, and the re-render puts
-                // the dropdown on it — "+ New Plane" must never be left showing
-                // as the current value, because it is an action, not a plane.
-                var made = createPlane();
-                setStatus('Created plane "' + made.name + '" — add nodes to it with + Add',
-                    'success');
-                refreshPlanePanel();
-                return;
-            }
-            var id = parseInt(planeSelect.value, 10);
-            if (isNaN(id) || !getPlane(id)) return;
-            planeState.selectedPlaneId = id;
-            refreshPlanePanel();
-        });
-    }
-
     var nameInput = document.getElementById('planeSkeletonName');
     if (nameInput) {
         // The one place a plane is RENAMED. `refreshPlanePanel` rebuilds the
-        // selector and the Planes table from the model, so both follow.
+        // Planes table and the section header from the model, so both follow.
         nameInput.addEventListener('change', function () {
             var plane = getSelectedPlane();
             if (!plane) return;
-            // Same reason as the selector above: an <input> outruns `lockUI`,
-            // and its refresh would re-enable the locked action row.
+            // An <input> outruns `lockUI`, which only reaches buttons, and
+            // this handler's refresh would re-enable the locked action row.
             if (isOriginModeActive()) {
                 nameInput.value = plane.name;
                 setStatus('Finish or leave Set Origin Mode before renaming a plane', 'warning');
@@ -2295,7 +2264,7 @@ export function setupPlaneDefinition() {
         // meant a stray click on an empty panel silently produced a plane the
         // user then had to notice and delete. A node in zero planes is a valid
         // resting state the Nodes table already renders (dimmed, "unused") —
-        // `+ Add` in the Edit Plane section is what places it.
+        // `+ Add` in the Planes section is what places it.
         addNodeBtn.addEventListener('click', function () {
             var model = planeModel();
             var name = nodeInput ? nodeInput.value.trim() : '';
@@ -2308,14 +2277,14 @@ export function setupPlaneDefinition() {
                 // meant. The existing node is not touched — a node joins a plane
                 // through + Add, deliberately, and only ever there.
                 setStatus('A node called "' + name + '" already exists — nodes are ' +
-                    'project-wide. Put it in a plane with + Add in Edit Plane.', 'warning');
+                    'project-wide. Put it in a plane with + Add in Planes.', 'warning');
                 return;
             }
             var node = model.addNode(name);
             markDirty();
             if (nodeInput) nodeInput.value = '';
             setStatus('Created node "' + node.name + '" in the project pool — it is in ' +
-                'no plane yet; add it to one with + Add in Edit Plane');
+                'no plane yet; add it to one with + Add in Planes');
             refreshPlanePanel();
             redraw();
         });
@@ -2388,11 +2357,21 @@ export function setupPlaneDefinition() {
         });
     }
 
+    // --- + New Plane: the section's one create affordance ---
+    // It sits directly under the roster, above the editor: a new plane is empty
+    // and the next thing to do with it is name it and add nodes, which is what
+    // everything below the button is for. `createPlane` SELECTS it, so the
+    // refresh below opens it in the editor.
+    //
+    // No Set Origin Mode refusal here, unlike the rename field beside it: this
+    // is a <button>, so `lockUI` disables it and the click never lands.
     var newPlaneBtn = document.getElementById('btnNewPlaneSkeleton');
     if (newPlaneBtn) {
         newPlaneBtn.addEventListener('click', function () {
-            createPlane();
+            var made = createPlane();
             refreshPlanePanel();
+            setStatus('Created plane "' + made.name +
+                '" — name it and add nodes with + Add', 'success');
         });
     }
 

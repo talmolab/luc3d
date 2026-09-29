@@ -10,15 +10,18 @@
  *
  *  1. The View menu item enters the mode: banner visible, info-panel tab bar
  *     swapped for the Define Plane panel. Exit restores the panel exactly.
- *  2. The panel is THREE SIBLING SECTIONS — Nodes (the project-wide pool), Edit
- *     Plane, and the Planes list — each a real <details> that collapses, with
- *     the global Nodes table NOT nested inside the plane editor. Node creation
- *     is not a sub-step of editing one plane.
+ *  2. The panel is TWO SIBLING SECTIONS — Nodes (the project-wide pool) and
+ *     Planes (the roster, `+ New Plane`, then the selected plane's Name and its
+ *     three foldable parts, with Plane Appearance last) — each a real <details>
+ *     that collapses, with the global Nodes table NOT nested inside the plane
+ *     editor. Node creation is not a sub-step of editing one plane. The roster
+ *     and the editor were two sections until the reader had to scroll between
+ *     the list that picks a plane and the controls that act on it.
  *  3. `+ Node` MINTS A POOL NODE AND TOUCHES NO PLANE: it creates none and
  *     joins none, `+ Add` is the only way into a plane, and a duplicate name is
- *     refused. Renaming is the Name field (not the selector) and reaches the
- *     dropdown and the Planes table live. The selector lists every plane with
- *     `+ New Plane` pinned last, and agrees with the Planes table both ways.
+ *     refused. Renaming is the Name field, and it reaches the roster and the
+ *     section header live. Selecting is a ROSTER ROW CLICK and nothing else —
+ *     there is no plane dropdown.
  *  4. Dropping a plane onto a view places it THERE, seeded around the drop
  *     point and clamped inside the frame. A SECOND drop of the same plane on
  *     the same view is refused rather than stacking or re-seeding, so carefully
@@ -243,55 +246,64 @@ try {
         listEmptyShown: getComputedStyle(document.getElementById('planeSkeletonsEmpty')).display !== 'none',
         nameDisabled: document.getElementById('planeSkeletonName').disabled,
         emptyText: document.getElementById('planeEditorEmpty').textContent,
-        // The SELECTOR is the one control that stays live with no plane: it is
-        // now a primary way to make the first one, so hiding it with the rest
-        // of the body would leave the section a dead end.
-        selectShown: getComputedStyle(document.getElementById('planeSelect')).display !== 'none',
-        selectOutsideContent:
-            !document.getElementById('planeSelect').closest('#planeEditorContent'),
-        selectOptions: Array.from(document.querySelectorAll('#planeSelect option'))
-            .map(o => o.textContent),
-        placeholderDisabled: document.querySelector('#planeSelect option').disabled,
+        // `+ New Plane` is the one control that stays live with no plane: with
+        // none anywhere it is the only thing in the section that can do
+        // anything, so empty-stating it too would leave a dead end. There is
+        // no plane <select> any more — the Planes table selects, exactly as a
+        // 3D Mesh Object is chosen by clicking its row.
+        noSelect: !document.getElementById('planeSelect'),
+        newShown: getComputedStyle(document.getElementById('btnNewPlaneSkeleton')).display !== 'none',
+        newEnabled: !document.getElementById('btnNewPlaneSkeleton').disabled,
+        newOutsideContent:
+            !document.getElementById('btnNewPlaneSkeleton').closest('#planeEditorContent'),
+        newInPlanes:
+            !!document.getElementById('btnNewPlaneSkeleton').closest('#planePlanesDetails'),
+        // Exactly ONE create button in the whole panel. It used to sit under
+        // the Planes table as well, and two identical "+ New Plane" buttons in
+        // one scrolling column is the thing the move was supposed to fix.
+        newButtons: document.querySelectorAll('#planePanel button').length &&
+            Array.from(document.querySelectorAll('#planePanel button'))
+                .filter(b => /\+ New Plane/.test(b.textContent)).length,
     }));
     check(m.planeCount === 0, `entering the mode creates no plane (got ${m.planeCount})`);
     check(m.listEmptyShown, 'the Planes list shows its empty state');
-    check(m.emptyShown && m.contentHidden, 'the Edit Plane section is empty-stated, not shown half-dead');
+    check(m.emptyShown && m.contentHidden, 'the per-plane part of Planes is empty-stated, not shown half-dead');
     check(m.nameDisabled, 'and its name field is disabled rather than editable-but-inert');
-    // The empty state points UP at the dropdown in this very section — the
-    // stale "pick one in Planes below" would send the user the wrong way.
-    check(/above/.test(m.emptyText) && /dropdown/i.test(m.emptyText) && !/below/.test(m.emptyText),
-        `the empty state points at the Plane dropdown above it (got ${JSON.stringify(m.emptyText)})`);
-    check(m.selectShown && m.selectOutsideContent,
-        'the plane selector stays live outside the empty-stated body');
-    check(eq(m.selectOptions, ['— no planes yet —', '+ New Plane']),
-        `with no planes it is a placeholder plus + New Plane (got ${JSON.stringify(m.selectOptions)})`);
-    check(m.placeholderDisabled,
-        'the placeholder is disabled, so "nothing selected" cannot be chosen back');
+    // The empty state names BOTH ways out of it — the roster above it that does
+    // the selecting, and the create button that makes the first one.
+    check(/table above/.test(m.emptyText) && /\+ New Plane/.test(m.emptyText),
+        `the empty state names the roster above it and + New Plane (got ${JSON.stringify(m.emptyText)})`);
+    check(m.noSelect, 'there is no plane <select> — the roster is the selector');
+    check(m.newShown && m.newEnabled && m.newOutsideContent && m.newInPlanes,
+        '+ New Plane is in Planes and stays live outside the empty-stated body');
+    check(m.newButtons === 1,
+        `exactly one + New Plane button in the panel (got ${m.newButtons})`);
 
-    // Everything from here needs a plane to act on. Make the FIRST one through
-    // the dropdown — with no plane anywhere that is the shortest path, and it
-    // must work from the placeholder state.
-    await page.selectOption('#planeSelect', { label: '+ New Plane' });
+    // Everything from here needs a plane to act on. Make the FIRST one with
+    // the button — with no plane anywhere it is the only path, and it must
+    // work from the empty state.
+    await page.click('#btnNewPlaneSkeleton');
     m = await page.evaluate(() => ({
         planeCount: window.__P.planeModel().planes.length,
         selectedIsNew: window.__P.planeState.selectedPlaneId ===
             window.__P.planeModel().planes[0].id,
-        selectValue: document.getElementById('planeSelect').value,
-        selectLabel: document.getElementById('planeSelect')
-            .selectedOptions[0].textContent,
         contentShown: getComputedStyle(document.getElementById('planeEditorContent')).display !== 'none',
-        noPlaceholder: !Array.from(document.querySelectorAll('#planeSelect option'))
-            .some(o => /no planes yet|select a plane/.test(o.textContent)),
+        emptyHidden: getComputedStyle(document.getElementById('planeEditorEmpty')).display === 'none',
+        title: document.getElementById('planeEditorTitle').textContent,
+        nameValue: document.getElementById('planeSkeletonName').value,
+        nameEnabled: !document.getElementById('planeSkeletonName').disabled,
+        status: document.getElementById('statusText').textContent,
     }));
-    check(m.planeCount === 1, `+ New Plane in the dropdown creates a plane (got ${m.planeCount})`);
-    check(m.selectedIsNew && m.contentShown, 'and selects it for editing');
-    check(m.selectValue === String(await page.evaluate(() => window.__plane(0).id)) &&
-        m.selectLabel !== '+ New Plane',
-        `the dropdown lands on the new plane, not on "+ New Plane" (got "${m.selectLabel}")`);
-    check(m.noPlaceholder, 'the placeholder is gone once something is selected');
+    check(m.planeCount === 1, `+ New Plane creates a plane (got ${m.planeCount})`);
+    check(m.selectedIsNew && m.contentShown && m.emptyHidden,
+        'and selects it, so the editor opens on it');
+    check(m.title === m.nameValue && m.nameEnabled && m.nameValue !== '',
+        `the header and the live Name field carry it (got "${m.title}" / "${m.nameValue}")`);
+    check(/Created plane/.test(m.status) && /add nodes/.test(m.status),
+        `and it says what to do next (got "${m.status}")`);
 
     // =================================================================
-    // 2 — three sibling sections, each collapsible
+    // 2 — two sibling sections, each collapsible
     // =================================================================
     //
     // The IA is the data model made visible: nodes are GLOBAL and outlive the
@@ -299,13 +311,20 @@ try {
     // NOT a sub-step of editing one plane. A regression that re-nests it would
     // put node creation back inside the plane editor, which is exactly the
     // thing the pool refactor made wrong.
-    console.log('\n2. Three sibling sections, each collapsible');
+    //
+    // That is the ONE split left. Choosing a plane and editing it used to be
+    // two sections — "Edit Plane" above "Planes" — and they are one now: the
+    // roster picks, and everything under it is the plane it picked. So the
+    // order INSIDE the section is the claim to pin, and it is asserted as the
+    // section body's own child list rather than by hunting ids one at a time.
+    console.log('\n2. Two sibling sections, each collapsible');
     m = await page.evaluate(() => {
         // Listed in DOM order, so `summaries` and `sectionOrder` cannot drift
         // apart — a hard-coded list in the old order would keep passing while
         // the panel said something else.
-        const ids = ['planeNodesDetails', 'planeEditorDetails', 'planePlanesDetails',
-                     'planeMembersDetails', 'planeEdgesDetails'];
+        const ids = ['planeNodesDetails', 'planePlanesDetails',
+                     'planeMembersDetails', 'planeEdgesDetails',
+                     'planeActionsDetails'];
         const els = ids.map(id => document.getElementById(id));
         const label = (e) => {
             const l = e.querySelector('.plane-summary-label');
@@ -315,35 +334,57 @@ try {
             allDetails: els.every(e => e && e.tagName === 'DETAILS'),
             summaries: els.map(e => e && label(e)),
             openByDefault: els.every(e => e.open),
-            // The three TOP-LEVEL sections are siblings under #planePanel, in
-            // work order, each in its own .info-section.
+            // The TOP-LEVEL sections are siblings under #planePanel, in work
+            // order, each in its own .info-section.
             sectionOrder: Array.from(document.querySelectorAll('#planePanel > .info-section'))
                 .map(s => {
                     const d = s.querySelector(':scope > details');
                     return d ? d.id : (s.querySelector('h3') ? 'h3:' + s.querySelector('h3').textContent : s.id);
-                }).slice(0, 3),
-            // The global Nodes table is NOT inside the plane editor…
-            nodesTableOutsideEditor:
-                !document.getElementById('planeNodesTable').closest('#planeEditorDetails'),
+                }).slice(0, 2),
+            // The global Nodes table is NOT inside the Planes section…
+            nodesTableOutsidePlanes:
+                !document.getElementById('planeNodesTable').closest('#planePlanesDetails'),
             // …while the selected plane's members table IS.
-            membersTableInsideEditor:
-                !!document.getElementById('planeMembersTable').closest('#planeEditorDetails'),
-            connectionsInsideEditor:
-                !!document.getElementById('planeEdgesTable').closest('#planeEditorDetails'),
+            membersTableInsidePlanes:
+                !!document.getElementById('planeMembersTable').closest('#planePlanesDetails'),
+            connectionsInsidePlanes:
+                !!document.getElementById('planeEdgesTable').closest('#planePlanesDetails'),
             // The pool's node-creation controls travel with the pool.
-            addNodeOutsideEditor:
-                !document.getElementById('btnAddPlaneNode').closest('#planeEditorDetails'),
+            addNodeOutsidePlanes:
+                !document.getElementById('btnAddPlaneNode').closest('#planePlanesDetails'),
             frozenWarningWithPool:
                 !!document.getElementById('planeFrozenWarning').closest('#planeNodesDetails'),
-            // The selector is the editor's TOP row and the editable name is
-            // below it, in the body — two controls, not one overloaded field.
-            selectInEditor: !!document.getElementById('planeSelect').closest('#planeEditorDetails'),
-            selectIsSelect: document.getElementById('planeSelect').tagName,
-            selectBeforeName: !!(document.getElementById('planeSelect')
+            // THE ORDER OF THE MERGED SECTION, read off the body's own
+            // children: roster, its empty state, `+ New Plane`, the per-plane
+            // empty state, the per-plane body, then Plane Appearance. Taken as
+            // a list rather than as a handful of pairwise
+            // `compareDocumentPosition` checks, so a child that appears,
+            // disappears or moves fails this instead of slipping between the
+            // pairs that happened to be asserted.
+            bodyOrder: Array.from(
+                document.querySelector('#planePlanesDetails > .plane-details-body').children)
+                .map(el => el.id || el.className),
+            // And the per-plane part: Name, then the three foldables.
+            perPlaneOrder: Array.from(document.getElementById('planeEditorContent').children)
+                .map(el => el.id || el.className),
+            // `+ New Plane` sits BETWEEN the roster and the name — below the
+            // list it adds to, above the field that names what it made. Same
+            // shape as 3D Mesh Objects, whose `+ New 3D Mesh Object` sits above
+            // its own Name field.
+            newInPlanes: !!document.getElementById('btnNewPlaneSkeleton').closest('#planePlanesDetails'),
+            newIsButton: document.getElementById('btnNewPlaneSkeleton').tagName,
+            newAfterRoster: !!(document.getElementById('planeSkeletonsTable')
+                .compareDocumentPosition(document.getElementById('btnNewPlaneSkeleton')) &
+                Node.DOCUMENT_POSITION_FOLLOWING),
+            newBeforeName: !!(document.getElementById('btnNewPlaneSkeleton')
                 .compareDocumentPosition(document.getElementById('planeSkeletonName')) &
                 Node.DOCUMENT_POSITION_FOLLOWING),
             nameInsideContent:
                 !!document.getElementById('planeSkeletonName').closest('#planeEditorContent'),
+            // Plane Appearance styles every plane in the roster, not the
+            // selected one, so it must stay OUT of the part that empty-states.
+            appearanceOutsideContent:
+                !document.getElementById('planeAppearanceDetails').closest('#planeEditorContent'),
         };
         // Collapse each and confirm the section actually shrinks to its
         // summary. Measure the <details> itself, not the body: Chromium keeps
@@ -364,20 +405,29 @@ try {
         return out;
     });
     check(m.allDetails, 'all five sections are <details>');
-    check(eq(m.summaries, ['Nodes', 'Edit Plane', 'Planes',
-                           'Nodes In This Plane', 'Node Connections']),
-        `section order is Nodes -> Edit Plane (members, connections) -> Planes (got ${JSON.stringify(m.summaries)})`);
-    check(m.selectInEditor && m.selectIsSelect === 'SELECT' && m.selectBeforeName &&
-        m.nameInsideContent,
-        'the editor leads with a <select> plane picker and keeps the editable name below it');
-    // Nodes -> Edit Plane -> Planes: the editor sits directly under the
-    // pool it draws nodes from, and the roster you switch between goes last.
-    check(eq(m.sectionOrder, ['planeNodesDetails', 'planeEditorDetails', 'planePlanesDetails']),
-        `the three top-level sections are siblings of #planePanel in that order (got ${JSON.stringify(m.sectionOrder)})`);
-    check(m.nodesTableOutsideEditor && m.addNodeOutsideEditor && m.frozenWarningWithPool,
+    check(eq(m.summaries, ['Nodes', 'Planes', 'Nodes In This Plane',
+                           'Node Connections', 'Actions']),
+        `Nodes, then Planes with its three foldables (got ${JSON.stringify(m.summaries)})`);
+    check(eq(m.bodyOrder, ['planeSkeletonsTable', 'planeSkeletonsEmpty',
+                           'panel-button-row plane-create-row', 'planeEditorEmpty',
+                           'planeEditorContent', 'planeAppearanceDetails']),
+        `Planes reads roster -> + New Plane -> the selected plane -> appearance (got ${JSON.stringify(m.bodyOrder)})`);
+    check(eq(m.perPlaneOrder, ['plane-name-row', 'planeMembersDetails',
+                               'planeEdgesDetails', 'planeActionsDetails']),
+        `and the selected plane is Name -> nodes -> connections -> actions (got ${JSON.stringify(m.perPlaneOrder)})`);
+    check(m.newInPlanes && m.newIsButton === 'BUTTON' && m.newAfterRoster &&
+        m.newBeforeName && m.nameInsideContent,
+        '+ New Plane is a button between the roster and the editable name');
+    check(m.appearanceOutsideContent,
+        'Plane Appearance is outside the empty-stated part, since it styles every plane');
+    // Nodes -> Planes: the pool first, because a plane is made of what is in
+    // it, and there is nothing after them that is about one plane.
+    check(eq(m.sectionOrder, ['planeNodesDetails', 'planePlanesDetails']),
+        `the two top-level sections are siblings of #planePanel in that order (got ${JSON.stringify(m.sectionOrder)})`);
+    check(m.nodesTableOutsidePlanes && m.addNodeOutsidePlanes && m.frozenWarningWithPool,
         'the global Nodes table, + Node and the pinned-node warning are their OWN section, not nested in the plane editor');
-    check(m.membersTableInsideEditor && m.connectionsInsideEditor,
-        'the selected plane\'s members and connections live in the plane section');
+    check(m.membersTableInsidePlanes && m.connectionsInsidePlanes,
+        'the selected plane\'s members and connections live in the Planes section');
     check(m.openByDefault, 'sections start expanded');
     check(m.collapsedHeights.every((h, i) => h <= m.summaryHeights[i] + 2),
         `collapsing shrinks each section to its summary (got ${JSON.stringify(m.collapsedHeights)} vs summaries ${JSON.stringify(m.summaryHeights)})`);
@@ -397,9 +447,9 @@ try {
             insidePlanes: !!app && planes.contains(app),
             summary: app ? app.querySelector('summary').textContent.trim() : null,
             open: !!app && app.open,
-            // Dressed as a SUB-section (12px), like the two inside Edit Plane —
-            // not as a top-level one (14px), which would claim a rank it no
-            // longer has.
+            // Dressed as a SUB-section (12px), like the three above it in the
+            // same section — not as a top-level one (14px), which would claim a
+            // rank it no longer has.
             titlePx: app ? parseFloat(getComputedStyle(app.querySelector('summary')).fontSize) : null,
             topTitlePx: parseFloat(getComputedStyle(planes.querySelector('summary')).fontSize),
             sliders: ['planeNodeSize', 'planeEdgeWeight', 'planeNodeSize3d']
@@ -476,23 +526,25 @@ try {
     check(/no plane yet/i.test(m.status),
         `and it says where the node went (got "${m.status}")`);
 
-    // 3b — renaming. The dropdown above SELECTS; this field is what renames,
-    // and both the dropdown and the Planes table must follow it live.
+    // 3b — renaming. This field is the ONE place a plane is renamed, and the
+    // two places that display the name — the Planes row and the section header
+    // — must follow it live, since neither is the source of truth.
     await page.fill('#planeSkeletonName', 'floor');
     await page.dispatchEvent('#planeSkeletonName', 'change');
     m = await page.evaluate(() => ({
         modelName: window.__plane(0).name,
-        selectLabel: document.getElementById('planeSelect').selectedOptions[0].textContent,
-        selectValue: document.getElementById('planeSelect').value,
         rowName: document.querySelector('#planeSkeletonsTable tbody tr').children[1].textContent,
         title: document.getElementById('planeEditorTitle').textContent,
+        selected: window.__P.planeState.selectedPlaneId,
+        planeId: window.__plane(0).id,
     }));
-    check(m.modelName === 'floor' && m.selectLabel === 'floor' && m.rowName === 'floor' &&
-        m.title === 'floor',
-        `renaming updates the model, the dropdown, the Planes row and the header ` +
-        `(got ${JSON.stringify([m.modelName, m.selectLabel, m.rowName, m.title])})`);
-    check(m.selectValue === String(await page.evaluate(() => window.__plane(0).id)),
-        'and the dropdown still selects by id, so a rename cannot move the selection');
+    check(m.modelName === 'floor' && m.rowName === 'floor' && m.title === 'floor',
+        `renaming updates the model, the Planes row and the header ` +
+        `(got ${JSON.stringify([m.modelName, m.rowName, m.title])})`);
+    // Selection is by ID, so a rename relabels rather than re-selects. With
+    // the name-keyed dropdown gone this is the assertion that keeps it so.
+    check(m.selected === m.planeId,
+        'and the selection is still the same plane, by id');
 
     // 3c — four nodes, minted into the POOL only …
     for (const n of ['fl', 'fr', 'br', 'bl']) {
@@ -579,10 +631,8 @@ try {
             pinInfoTitle: (document.getElementById('planePinInfo') || {})
                 .getAttribute?.('aria-label') || '',
             pinInfoNativeTitle: (document.getElementById('planePinInfo') || {}).title || '',
-            // The panel's SECTION titles, which have to read as one set: the
-            // four <details> summaries plus Plane Appearance, which is the one
-            // section with no <details> of its own and so has to be dressed to
-            // match. Sub-sections inside Edit Plane stay smaller on purpose.
+            // The panel's SECTION titles, which have to read as one set.
+            // Sub-sections inside Planes stay smaller on purpose.
             sectionTitles: Array.from(document.querySelectorAll(
                 '#planePanel > .info-section > .plane-details > summary, ' +
                 '#planePanel > .info-section > h3'))
@@ -627,7 +677,7 @@ try {
     check(m.sectionTitles.length >= 5 && m.sectionTitles.every(t => t[1] === '14px'),
         `every section title is 14px (got ${JSON.stringify(m.sectionTitles)})`);
     check(m.subTitles.length >= 2 && m.subTitles.every(t => t[1] === '12px'),
-        `and the sub-sections inside Edit Plane stay smaller (got ${JSON.stringify(m.subTitles)})`);
+        `and the sub-sections inside Planes stay smaller (got ${JSON.stringify(m.subTitles)})`);
     check(/unlocked \(mutable\)/.test(m.pinInfoTitle) &&
           /locked \(immutable\)/.test(m.pinInfoTitle) &&
           /plane-locked/.test(m.pinInfoTitle) &&
@@ -689,58 +739,78 @@ try {
         `the plane section header follows the selection (got "${m.editorTitle}")`);
 
     // =================================================================
-    // 3e — the plane selector: it lists every plane and agrees with the table
+    // 3e — plane selection: the Planes table is the only selector
     // =================================================================
     //
-    // Two controls write the same one piece of state (`selectedPlaneId`) and
-    // both re-read it on the next render, so they cannot drift; these
-    // assertions are what pins that, in both directions.
-    console.log('\n3e. Plane selector');
-    m = await page.evaluate(() => {
-        const opts = () => Array.from(document.querySelectorAll('#planeSelect option'));
-        return {
-            labels: opts().map(o => o.textContent),
-            values: opts().map(o => o.value),
-            planeNames: window.__P.planeModel().planes.map(p => p.name),
-            planeIds: window.__P.planeModel().planes.map(p => String(p.id)),
-        };
-    });
-    check(eq(m.labels.slice(0, -1), m.planeNames),
-        `the dropdown lists every plane, in creation order (got ${JSON.stringify(m.labels)})`);
-    check(m.labels[m.labels.length - 1] === '+ New Plane',
-        `+ New Plane is pinned LAST (got ${JSON.stringify(m.labels)})`);
-    check(eq(m.values.slice(0, -1), m.planeIds),
-        'options carry plane IDS, so a rename only relabels them');
+    // `selectedPlaneId` used to have two writers — this table and a `<select>`
+    // in a separate Edit Plane section — and the pair agreeing was a property
+    // that needed pinning. Both the dropdown and the second section are gone:
+    // the roster selects, and the editor is the rest of its own section. What
+    // is left to pin is that a row click moves the WHOLE editor below it rather
+    // than half of it.
+    console.log('\n3e. Plane selection');
+    // The Planes table is the ONLY selector now, so these assertions are what
+    // pin that one control against everything that reads `selectedPlaneId`.
+    // The old pair — a <select> and the table agreeing with each other — is
+    // gone with the dropdown; what is left is the claim that actually protects
+    // the user, which is that clicking a row moves the whole editor onto that
+    // plane rather than half of it.
+    m = await page.evaluate(() => ({
+        rows: Array.from(document.querySelectorAll('#planeSkeletonsTable tbody tr'))
+            .map(r => r.children[1].textContent),
+        planeNames: window.__P.planeModel().planes.map(p => p.name),
+        // The roster carries no create action among the planes. A pinned
+        // "+ New Plane" row would be an action posing as a plane, which is the
+        // shape the dropdown had.
+        noCreateRow: !Array.from(document.querySelectorAll('#planeSkeletonsTable tbody tr'))
+            .some(r => /\+ New/.test(r.textContent)),
+    }));
+    check(eq(m.rows, m.planeNames),
+        `the Planes table lists every plane, in creation order (got ${JSON.stringify(m.rows)})`);
+    check(m.noCreateRow, 'and no "+ New Plane" entry sits among them');
 
-    // Choosing a plane in the dropdown == clicking its row, and vice versa.
-    await page.selectOption('#planeSelect', { label: 'floor' });
-    const viaSelect = await page.evaluate(() => ({
+    // Clicking a row selects that plane, and EVERYTHING keyed off the
+    // selection follows in one render: the row's own highlight, the editor
+    // header, the Name field and the member list.
+    await page.click('#planeSkeletonsTable tbody tr:nth-child(1)');
+    const viaRow = await page.evaluate(() => ({
         selected: window.__P.planeState.selectedPlaneId,
+        firstId: window.__plane(0).id,
         title: document.getElementById('planeEditorTitle').textContent,
+        nameValue: document.getElementById('planeSkeletonName').value,
         members: window.__namesOf(window.__P.getSelectedPlane()),
         rowSelected: document.querySelectorAll('#planeSkeletonsTable tbody tr')[0]
             .classList.contains('plane-selected'),
+        otherRowSelected: document.querySelectorAll('#planeSkeletonsTable tbody tr')[1]
+            .classList.contains('plane-selected'),
     }));
-    check(viaSelect.title === 'floor' && eq(viaSelect.members, ['fl', 'fr', 'br', 'bl']),
-        `picking a plane in the dropdown edits it (got "${viaSelect.title}")`);
-    check(viaSelect.rowSelected, 'and the Planes table highlights the same row');
+    check(viaRow.selected === viaRow.firstId && viaRow.title === 'floor' &&
+        viaRow.nameValue === 'floor' && eq(viaRow.members, ['fl', 'fr', 'br', 'bl']),
+        `clicking a Planes row edits that plane (got "${viaRow.title}")`);
+    check(viaRow.rowSelected && !viaRow.otherRowSelected,
+        'and exactly that row is highlighted');
 
+    // The second row, to prove the selection MOVES rather than only being set
+    // once — and that the editor re-reads it rather than caching the plane.
     await page.click('#planeSkeletonsTable tbody tr:nth-child(2)');
     m = await page.evaluate(() => ({
         selected: window.__P.planeState.selectedPlaneId,
         secondId: window.__plane(1).id,
         secondName: window.__plane(1).name,
-        selectValue: document.getElementById('planeSelect').value,
-        selectLabel: document.getElementById('planeSelect').selectedOptions[0].textContent,
+        title: document.getElementById('planeEditorTitle').textContent,
+        nameValue: document.getElementById('planeSkeletonName').value,
+        firstRowSelected: document.querySelectorAll('#planeSkeletonsTable tbody tr')[0]
+            .classList.contains('plane-selected'),
     }));
-    check(m.selected === m.secondId && m.selectValue === String(m.secondId),
-        `clicking a Planes row moves the dropdown with it (got value "${m.selectValue}")`);
-    check(m.selectLabel === m.secondName,
-        `and the dropdown shows that plane's name (got "${m.selectLabel}" vs "${m.secondName}")`);
+    check(m.selected === m.secondId && m.title === m.secondName &&
+        m.nameValue === m.secondName,
+        `clicking the other row moves the editor with it (got "${m.title}")`);
+    check(!m.firstRowSelected, 'and the first row is no longer highlighted');
 
-    // + New Plane creates AND selects, and must not stay showing as the value —
-    // it is an action, not a plane.
-    await page.selectOption('#planeSelect', { label: '+ New Plane' });
+    // + New Plane creates AND selects, from a state where something else was
+    // already being edited — the case where "create" could plausibly leave the
+    // editor on the old plane.
+    await page.click('#btnNewPlaneSkeleton');
     m = await page.evaluate(() => {
         const P = window.__P;
         const model = P.planeModel();
@@ -748,15 +818,18 @@ try {
             count: model.planes.length,
             selectedIsLast: P.planeState.selectedPlaneId ===
                 model.planes[model.planes.length - 1].id,
-            selectValue: document.getElementById('planeSelect').value,
-            selectLabel: document.getElementById('planeSelect').selectedOptions[0].textContent,
-            lastLabel: Array.from(document.querySelectorAll('#planeSelect option'))
-                .pop().textContent,
             rows: document.querySelectorAll('#planeSkeletonsTable tbody tr').length,
+            lastRowSelected: Array.from(
+                document.querySelectorAll('#planeSkeletonsTable tbody tr')).pop()
+                .classList.contains('plane-selected'),
+            title: document.getElementById('planeEditorTitle').textContent,
             // The name field must be live on the new plane — that is where it
-            // gets a real name, since the dropdown cannot rename anything.
+            // gets a real name.
             nameValue: document.getElementById('planeSkeletonName').value,
             nameEnabled: !document.getElementById('planeSkeletonName').disabled,
+            // A fresh plane has no members, so the editor's body has to be
+            // showing its own empty state rather than the previous plane's.
+            memberRows: document.querySelectorAll('#planeMembersTable tbody tr').length,
         };
         // Back to two planes and the first selected, for the sections below.
         P.deletePlane(model.planes[model.planes.length - 1].id);
@@ -767,11 +840,10 @@ try {
     });
     check(m.count === 3 && m.rows === 3,
         `+ New Plane creates one and lists it (got ${m.count} planes, ${m.rows} rows)`);
-    check(m.selectedIsLast, 'and selects it for editing');
-    check(m.selectLabel !== '+ New Plane' && m.lastLabel === '+ New Plane',
-        `the dropdown falls back to the new plane and keeps + New Plane last (showing "${m.selectLabel}")`);
-    check(m.nameEnabled && m.nameValue === m.selectLabel,
-        `the Name field is live and carries the same name (got "${m.nameValue}")`);
+    check(m.selectedIsLast && m.lastRowSelected,
+        'and selects it, highlighting its row in the roster');
+    check(m.nameEnabled && m.nameValue === m.title && m.memberRows === 0,
+        `the editor moved onto the new, empty plane (got "${m.nameValue}", ${m.memberRows} members)`);
     check(m.afterCleanup === 2, 'cleanup left two planes for the sections below');
 
     // Re-select the first one for the drop tests.
@@ -1290,8 +1362,8 @@ try {
         P.refreshPlanePanel();
         out.disabledWhenNone = btns().every(b => b.disabled);
         out.titleWhenNone = document.getElementById('btnPlaneFit').title;
-        // …and the whole Edit Plane body empty-states, rather than
-        // offering a name field and an add-node dropdown with nothing to act on.
+        // …and the whole per-plane body empty-states, rather than offering a
+        // name field and an add-node dropdown with nothing to act on.
         out.editorEmptyShown =
             getComputedStyle(document.getElementById('planeEditorEmpty')).display !== 'none';
         out.editorContentHidden =
@@ -1317,7 +1389,7 @@ try {
         `the disabled state explains itself (got "${m.titleWhenNone}")`);
     check(m.editorEmptyShown && m.editorContentHidden && m.nameDisabled &&
         m.memberRowsWhenNone === 0 && m.addDisabledWhenNone,
-        'with no plane selected the Edit Plane body empty-states instead of showing dead controls');
+        'with no plane selected the per-plane body empty-states instead of showing dead controls');
     check(/none selected/i.test(m.editorTitleWhenNone),
         `and its header says so (got "${m.editorTitleWhenNone}")`);
     check(m.poolStillListed > 0,
@@ -2252,36 +2324,33 @@ try {
     check(m.draggingOff, 'corner dragging is turned off while picking');
     check(m.stillPickable, 'but those same corners stay pickable');
 
-    // The lock disables BUTTONS; the plane selector and the name field are not
-    // buttons, so they are refused in their own handlers. Both would otherwise
-    // run a full panel rebuild, which re-enables the very buttons the lock just
-    // turned off — a locked UI that silently unlocks itself.
+    // The lock disables BUTTONS; the name field is not one, so it is refused
+    // in its own handler. It would otherwise run a full panel rebuild, which
+    // re-enables the very buttons the lock just turned off — a locked UI that
+    // silently unlocks itself. (The plane <select> needed the same guard and
+    // is gone; `+ New Plane` is a button, so `lockUI` reaches it — asserted in
+    // `otherButtonsDisabled` above.)
     m = await page.evaluate(async () => {
         const P = await import('/ui/plane-definition.js');
         const before = P.planeModel().planes.length;
-        const sel = document.getElementById('planeSelect');
-        sel.value = 'new';
-        sel.dispatchEvent(new Event('change', { bubbles: true }));
-        const out = {
-            before, after: P.planeModel().planes.length,
-            selValue: sel.value,
-            selStatus: document.getElementById('statusText').textContent,
-        };
+        const out = { before };
         const name = document.getElementById('planeSkeletonName');
         const wasNamed = P.getSelectedPlane().name;
         name.value = 'renamed-under-the-lock';
         name.dispatchEvent(new Event('change', { bubbles: true }));
         out.nameKept = P.getSelectedPlane().name === wasNamed;
         out.fieldRestored = name.value === wasNamed;
+        out.nameStatus = document.getElementById('statusText').textContent;
+        out.after = P.planeModel().planes.length;
         out.stillLocked = ['btnSetOrigin', 'btnPlaneFit', 'btnPlaneTriangulate',
             'btnNewPlaneSkeleton'].every(id => document.getElementById(id).disabled);
         return out;
     });
-    check(m.after === m.before && m.selValue !== 'new',
-        `the plane selector cannot mint a plane under the lock (${m.before} -> ${m.after})`);
-    check(m.nameKept && m.fieldRestored, 'and the name field cannot rename one');
-    check(/Set Origin Mode/.test(m.selStatus), `both say why (got "${m.selStatus}")`);
-    check(m.stillLocked, 'and neither rebuild re-enables the locked buttons');
+    check(m.after === m.before,
+        `nothing under the lock minted a plane (${m.before} -> ${m.after})`);
+    check(m.nameKept && m.fieldRestored, 'the name field cannot rename one');
+    check(/Set Origin Mode/.test(m.nameStatus), `and says why (got "${m.nameStatus}")`);
+    check(m.stillLocked, 'and its refusal does not re-enable the locked buttons');
 
     // --- the instruction box gets out of the way ---
     // It floats over the very corner/arrow the wizard is asking for, so the

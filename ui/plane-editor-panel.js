@@ -1,16 +1,30 @@
-// ui/plane-editor-panel.js — Section 2 of the Define Planes panel: the Edit
-// Plane editor. The plane selector, the name field, the member list, the
-// "+ Add" existing-node picker and the edge pickers.
+// ui/plane-editor-panel.js — the EDITOR half of the panel's Planes section:
+// the name field, the member list, the "+ Add" existing-node picker and the
+// edge pickers, for whichever plane is selected.
 //
-// Split out of `ui/plane-definition.js` alongside Section 1
-// (`ui/plane-nodes-panel.js`) and Section 3 (`ui/plane-list-panel.js`), so the
-// panel's three sections are three modules and the hub keeps only the
-// orchestration that drives them.
+// It does NOT choose the plane. A plane is picked by clicking its row in the
+// roster directly above (`ui/plane-list-panel.js`), which is the only writer of
+// `planeState.selectedPlaneId` besides `createPlane`, and created with the
+// `+ New Plane` button between the two — the same shape as 3D Mesh Objects,
+// where the table selects and one `+ New` button creates. A `<select>` here
+// used to duplicate the table's job, which cost it a disabled
+// "— select a plane —" placeholder and a pinned "+ New Plane" action sitting
+// among the planes as if it were one.
+//
+// The roster and this editor are ONE section in the markup (`#planePlanesDetails`)
+// and two modules here, which is the split that matches how they change: the
+// roster renders every plane, this renders the selected one. They were two
+// sections as well, "Edit Plane" above "Planes", until the reader having to
+// scroll between the list and the controls made the case for merging them.
+//
+// Split out of `ui/plane-definition.js` alongside `ui/plane-nodes-panel.js`
+// (the Nodes pool) and `ui/plane-list-panel.js` (the roster), so the panel's
+// parts are modules and the hub keeps only the orchestration that drives them.
 //
 // `renderEditor` is the section's entry point and is what the hub's
-// `refreshPlanePanel` calls. It also calls into Section 1
+// `refreshPlanePanel` calls. It also calls into the Nodes section
 // (`renderNodesTable` / `renderFrozenWarning`), which is a one-directional
-// import: Section 1 never calls back into this module.
+// import: that module never calls back into this one.
 //
 // Everything imported from `./plane-definition.js` is circular and read inside
 // a function body only, never at this module's top level. Same rule as the
@@ -20,29 +34,29 @@ import { markDirty } from '../import-export/save-load.js';
 import { renderNodesTable, renderFrozenWarning } from './plane-nodes-panel.js';
 import {
     makeDeleteButton, setEmptyState, redraw, planeModel, planePool,
-    getPlanes, getSelectedPlane, refreshPlanePanel, syncPlanes3D,
+    getSelectedPlane, refreshPlanePanel, syncPlanes3D,
 } from './plane-definition.js';
 
 /**
- * Section 2 — Edit Plane: WHICH plane is being edited, and what it is made of
- * (its name, which nodes are in it, and its connections).
+ * The editor: what the SELECTED plane is made of (its name, which nodes are in
+ * it, and its connections), rendered under the roster that picked it.
  *
- * Everything BELOW the selector is empty-stated as a whole rather than shown
- * half-dead, because every control in it needs a plane to act on: a name field
- * with nothing to name and an "add node" dropdown with nowhere to add to are
- * worse than an explanation. The SELECTOR itself stays live either way — with
- * no plane it is the shortest path to making one.
+ * The body is empty-stated as a whole rather than shown half-dead, because
+ * every control in it needs a plane to act on: a name field with nothing to
+ * name and an "add node" dropdown with nowhere to add to are worse than an
+ * explanation. The roster, `+ New Plane` and Plane Appearance all sit OUTSIDE
+ * the swapped body and stay live either way — with no planes at all `+ New
+ * Plane` is the only thing in the section that can do anything, so
+ * empty-stating it too would make this a dead end.
  */
 export function renderEditor() {
     var plane = getSelectedPlane();
 
-    // Name the plane in the section header — with three sibling sections the
-    // reader needs to know WHICH plane the controls below belong to without
-    // cross-referencing the Planes table.
+    // Name the plane in the section header, so a reader who has scrolled the
+    // roster out of view still knows WHICH plane the controls below belong to —
+    // and so a folded section says it without being opened.
     var title = document.getElementById('planeEditorTitle');
     if (title) title.textContent = plane ? plane.name : '— none selected';
-
-    renderPlaneSelect(plane);
 
     var body = document.getElementById('planeEditorContent');
     var empty = document.getElementById('planeEditorEmpty');
@@ -64,63 +78,8 @@ export function renderEditor() {
 }
 
 /**
- * The `<option>` value of the pinned "+ New Plane" entry. A string that can
- * never be a plane id, so `parseInt` on a real selection cannot collide with
- * it. @private
- */
-export const NEW_PLANE_OPTION = 'new';
-
-/** The `<option>` value meaning "nothing selected". @private */
-const NO_PLANE_OPTION = '';
-
-/**
- * Fill the plane SELECTOR at the top of the Edit Plane section.
- *
- * Every plane, in creation order, plus "+ New Plane" pinned LAST. Last rather
- * than first because the list is what the control is for — a creation entry at
- * the top pushes the planes down and is hit by every mis-aimed click meant for
- * the first one.
- *
- * This control cannot rename anything: the option text is a plane's name but
- * the option VALUE is its id, so a rename (in the Name field below) simply
- * relabels an entry rather than moving the selection. With no plane selected a
- * placeholder holds the displayed value — a disabled one, so the user cannot
- * choose "nothing" back once they are editing a plane.
- *
- * @param {PlaneSkeleton|null} plane - The selected plane.
- */
-export function renderPlaneSelect(plane) {
-    var select = document.getElementById('planeSelect');
-    if (!select) return;
-    select.textContent = '';
-
-    var planes = getPlanes();
-    if (!plane) {
-        var ph = document.createElement('option');
-        ph.value = NO_PLANE_OPTION;
-        ph.disabled = true;
-        ph.textContent = planes.length ? '— select a plane —' : '— no planes yet —';
-        select.appendChild(ph);
-    }
-    planes.forEach(function (p) {
-        var opt = document.createElement('option');
-        opt.value = String(p.id);
-        opt.textContent = p.name;
-        select.appendChild(opt);
-    });
-
-    var mint = document.createElement('option');
-    mint.value = NEW_PLANE_OPTION;
-    mint.textContent = '+ New Plane';
-    select.appendChild(mint);
-
-    // Assigned AFTER the options exist, or the browser has nothing to match.
-    select.value = plane ? String(plane.id) : NO_PLANE_OPTION;
-}
-
-/**
- * The Edit Plane members table: the nodes IN the selected plane, in the plane's
- * own order.
+ * The members table: the nodes IN the selected plane, in the plane's own
+ * order.
  *
  * The × here is a REFERENCE removal — `removeNodeFromPlane` with
  * `deleteIfOrphan:false`, so the node stays in the pool with its 3D, its pin
