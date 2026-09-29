@@ -3681,9 +3681,9 @@ edit-group mode, keyboard shortcuts.
   `findNearestNode`, `findNearestUnlinkedNode`, `setAssignmentMode`,
   `setEditGroupMode`, `addToAssignmentSelection`,
   `getAssignmentSelectedIds`, `onMouseDown`/`onMouseMove`/`onMouseUp`/
-  `onMouseLeave`, `onKeyDown`, `_addNewInstance` (used by smart-add; lays out a
-  new skeleton via an inline BFS fan-out from the highest-degree root, with a
-  vertical-line fallback when there are no edges).
+  `onMouseLeave`/`onWheel`, `onKeyDown`, `_addNewInstance` (used by smart-add;
+  lays out a new skeleton via an inline BFS fan-out from the highest-degree
+  root, with a vertical-line fallback when there are no edges).
 - `isInteractiveClickTarget(target)` — used by other UI to skip
   click-through on form controls.
 
@@ -3767,6 +3767,74 @@ Delete-target selection within a multi-camera one.) Regression tests:
 — the state transition and a full click-click through real `MouseEvent`s, both
 confirmed to fail pre-fix.
 
+**Alt + wheel rotates a whole instance about the node under the cursor**
+(issue #198), the counterpart to Alt+drag's whole-instance translate. Ported
+from SLEAP's `QtNode.mousePressEvent`/`wheelEvent`
+(`sleap/gui/widgets/video.py`), including its rate: **6 degrees per wheel
+notch**, clockwise on a scroll up. One `_applyInstanceTransform` does the
+rigid rotate-then-translate for every path, always recomputed from a points
+snapshot taken when the gesture started, so a long burst cannot accumulate
+drift and a rotation composes with a simultaneous drag.
+
+Two entry points, because SLEAP's has a trackpad problem:
+- **Button held (SLEAP's own gesture).** Alt+press a node starts the existing
+  whole-instance drag; `_onDragWheel` then turns it about `dragInfo.pivot` (the
+  grabbed node — SLEAP's `setTransformOriginPoint`). Document-level and in the
+  capture phase, so the cursor may wander and the rotation still beats
+  wheel-to-zoom. A pure rotation never clears the drag deadzone, so `onMouseUp`
+  treats a non-zero `rotationDeg` as a change in its own right.
+- **No button (LUCID addition).** `onWheel` on the overlay canvas handles
+  Alt+wheel while merely hovering a node. SLEAP requires the button down, which
+  on a macOS trackpad means click-and-hold while two-finger scrolling; hold-free
+  Alt+wheel is what makes the feature usable there. The gesture latches in
+  `_rotateGesture` and commits on a ~200 ms idle
+  (`_scheduleRotateCommit`/`_commitRotateGesture`), on the next click, or on
+  `detach()` — so `onNodeMoved` (dirty flag, re-triangulation, 3D rebuild) runs
+  once per burst rather than per tick, exactly as a drag commits once on
+  release.
+
+**The lettering does not turn with the skeleton.** Only the points move. Every
+piece of label text — node names and the track/identity pill, in
+`drawInstanceLabels` and `drawUnlinkedInstances` — is drawn inside
+`ui/overlays.js`'s screen-aligned `beginUprightFrame`, which cancels the
+VIEW's rotation (issue #162) and never sees the instance's; what does follow
+the turned skeleton is the label's *placement*, since `computeLabelOffset`
+picks the widest gap between a node's edges. Pinned by the `Instance Rotate -
+node names stay horizontal` tests, which read the canvas transform in force at
+each `fillText` and assert transform-rotation + view-rotation is zero — they
+were confirmed to go red against a deliberately injected label rotation, so
+they pin the invariant rather than just current behavior.
+
+`wheelNotches` folds `deltaMode` in (Chrome ~100 px/notch, Firefox 3
+lines/notch) and **ignores `deltaX`** — SLEAP sums Qt's x and y deltas, but on a
+trackpad the incidental horizontal component then fights the vertical one.
+
+**Holding Alt suspends wheel-to-zoom outright.** A wheel with no Alt is left
+un-consumed so plain scroll still zooms, but an Alt+wheel is ALWAYS taken
+(`_consumeWheel`) — even over empty canvas, or over a reprojected instance,
+where there is nothing to turn. Zoom cannot be allowed to fire *while a
+rotation is in progress*: a scroll that strayed off the skeleton would yank the
+view out from under it. This takes TWO guards, because they cover different
+ground and each is pinned by its own assertion:
+- `onWheel`'s `_consumeWheel` handles the wheel landing ON an overlay canvas.
+- `loading/video.js`'s wheel handler returns early on `e.altKey`, which is the
+  only thing covering the **letterbox margin** of a `.video-cell` — a video
+  narrower or shorter than its pane leaves cell area with no overlay canvas
+  under the cursor at all, so `onWheel` never runs there. Removing this line
+  alone was confirmed to turn the e2e's margin check red while the
+  on-canvas one still passed.
+
+Releasing Alt brings zoom straight back; nothing is latched to a mode.
+Within a gesture the rotation IS latched, though, so a stray Alt+wheel
+off-skeleton keeps turning the same instance about the same pivot (SLEAP
+reaches the armed node wherever the pointer is) rather than doing nothing —
+once the gesture lapses, the same scroll does nothing at all.
+
+Coverage: `tests/test-instance-rotate.js` (31 assertions against the real
+manager) and `tests/e2e/alt-wheel-rotate-instance.mjs`, which drives real
+Chromium wheel input at the real app and asserts rotation and zoom never both
+fire, including the letterbox margin and the return of zoom on Alt release.
+
 **Zoom-aware thresholds.** `_displayToVideo(state, viewName)` returns how many
 video pixels span one CSS pixel on screen given the view's current `zoom.scale`.
 Hit-test padding (`findNearestNode`/`findNearestUnlinkedNode`) and the drag-start
@@ -3780,7 +3848,8 @@ drag at high zoom and blocked fine node adjustments.
 **Imported by.** `pose/initialization.js`, `ui/info-panel.js`.
 
 **User-facing features.** Click-to-select skeleton nodes, drag to move
-keypoints, double-click to convert predicted → user, shift-drag to add
+keypoints, Alt+drag to move a whole instance, Alt+wheel to rotate one about a
+node, double-click to convert predicted → user, shift-drag to add
 to manual-assignment selection, right-click to null/restore nodes,
 keyboard shortcuts (delete, alt-drag clone, etc.).
 
@@ -3875,6 +3944,18 @@ reasons: a `<label>` click forwards to its control and focus lands *after* the
 listener runs, and `input`/`change` fire as part of the activation behavior, so
 blurring mid-dispatch would be reaching into someone else's event.
 
+It is registered in the **capture** phase (issue #230). Delegated on `document`
+in the bubble phase, it never saw a click from any control whose own handler
+calls `e.stopPropagation()` — as the Triangulate / Triangulate All split
+buttons do (`wireTriDropdown`, `ui/ui-wiring.js`), so their click does not also
+close the toolbar menus. Those buttons therefore kept focus after a pointer
+click: they rendered as "selected", and `targetOwnsKey` handed `Space` and
+`Enter` to the focused button instead of to the app, killing play/pause until
+something else was clicked. Capture runs before any target handler can stop the
+event, so a control cannot opt itself out of focus release by accident. The
+blur is still deferred, so listening earlier changes nothing about *when* focus
+is released.
+
 **Imports from project modules.** None — every predicate reads only
 `tagName` / `type` / `role` / `isContentEditable` off its argument, so it
 bridges into both test runners and unit-tests against plain object stubs.
@@ -3886,7 +3967,10 @@ bridges into both test runners and unit-tests against plain object stubs.
 `tests/e2e/checkbox-focus-hotkeys.mjs` (the real app: click the checkbox, press
 Space, get playback; Tab to it and Space still toggles) and
 `tests/e2e/copy-panel-text.mjs` (the clipboard rule, against the REAL clipboard,
-with the no-selection negative control).
+with the no-selection negative control) and
+`tests/e2e/triangulate-button-focus.mjs` (the capture-phase half: the two
+Triangulate buttons, plus a synthesized button that stops propagation, so the
+rule is pinned rather than those two ids).
 
 ---
 
@@ -7193,7 +7277,11 @@ Keyboard Shortcuts panel — see the keyboard-shortcuts note in `CLAUDE.md`.
 dispatched entries, or a free-form display string (e.g. `← / →`, `1 – 9`) for
 fixed reference entries. `dispatched:true` → matched live and needs a runtime
 handler via `setHandler`; `dispatched:false` → handled by its own dedicated
-handler elsewhere and listed for reference only.
+handler elsewhere and listed for reference only. The two **mouse gestures** on
+an instance — `moveInstance` (`Alt+Drag`) and `rotateInstance` (`Alt+Wheel`,
+issue #198) — are in the catalog for the same reason: they have no key to
+rebind, so they are reference-only, but they belong in Settings ▸ Keyboard
+Shortcuts and the Hot Keys modal where people look for them.
 
 **Key exports.**
 - `getDefaultTriangulationMethod()` / `setDefaultTriangulationMethod(method)` —
@@ -8291,12 +8379,16 @@ catalog and any user rebindings (grouped by category; Esc closes it).
 user's default method (`getDefaultTriangulationMethod()` from `ui/settings.js`),
 while hovering reveals a menu for picking DLT / BA explicitly. `wireTriDropdown`
 wires both the button click (default method) and the menu items (explicit
-picks). Implicit triangulation — the `t` shortcut, the Edit ▸ Triangulate menu
-item, and the auto-assign flow in `identity-assignment.js` — also uses the
-default method. The **environment-skeleton** solve (Load Environment) likewise
-takes it, via `resolveTriangulationMethod(group)` on a brand-new group; it used
-to hardcode DLT, so a BA user's environment 3D silently disagreed with the method
-they had selected.
+picks). Both handlers `stopPropagation()` so the click does not also reach the
+document listener that closes the toolbar menus — which is why the focus-release
+listener in `ui/keyboard-target.js` has to run in the **capture** phase (#230):
+in the bubble phase these two buttons kept focus after a click and swallowed
+`Space`/`Enter`. Implicit triangulation — the `t` shortcut, the Edit ▸
+Triangulate menu item, and the auto-assign flow in `identity-assignment.js` —
+also uses the default method. The **environment-skeleton** solve (Load
+Environment) likewise takes it, via `resolveTriangulationMethod(group)` on a
+brand-new group; it used to hardcode DLT, so a BA user's environment 3D
+silently disagreed with the method they had selected.
 
 **Track Frame is a split button too (#212).** It reuses the same `.tri-dropdown`
 markup and CSS-only hover reveal, but NOT `wireTriDropdown` — its button keeps
@@ -9805,6 +9897,16 @@ a zoomed-in image keeps the same region centered instead of jumping.
   `setupSeekbar`, `setupKeyboardHandlers`, `initZoom`, `applyZoom`,
   `zoomVideo`, `resetZoom`, `zoomToRect`, `zoomAllVideos`,
   `resetAllZoom`, `setupZoomHandlers`.
+
+**`setupZoomHandlers`'s wheel-to-zoom stands down while Alt is held.** Alt
+turns the wheel into the instance-rotation control (`ui/interaction.js`
+`onWheel`, issue #198), whose listener is on the OVERLAY CANVAS — which does
+not fill the `.video-cell` this handler is bound to. A video narrower or
+shorter than its pane leaves letterbox margin with no canvas under the cursor,
+so `onWheel` never runs there and only this `e.altKey` early return keeps an
+Option+scroll that strayed into the margin from zooming the view out from under
+a rotation in progress. Removing the line alone turns the margin check in
+`tests/e2e/alt-wheel-rotate-instance.mjs` red.
 
 **Imports from project modules.** `ui/keyboard-target.js` only — the
 `shouldIgnoreShortcut` guard its `setupKeyboardHandlers` keydown listener
