@@ -1433,8 +1433,14 @@ export class InteractionManager {
      * feature usable from a trackpad. The button-held form still works and is
      * handled by `_onDragWheel`.
      *
-     * Anything else — no Alt, or Alt over empty space — is left alone so the
-     * video cell's wheel-to-zoom keeps working.
+     * A wheel with no Alt is left alone, so plain scroll still zooms. An
+     * Alt+wheel is ALWAYS consumed, even when there is nothing under the
+     * cursor to turn: while Option is held the wheel belongs to rotation, and
+     * a stray event that wandered off the skeleton must not zoom the view out
+     * from under a rotation in progress. `loading/video.js` stands its
+     * wheel-to-zoom down on `altKey` for the same reason, covering the
+     * letterbox margin of the cell where this canvas is not under the cursor
+     * at all. Releasing Option restores zoom immediately.
      *
      * @param {WheelEvent} e
      * @param {string} viewName
@@ -1446,10 +1452,10 @@ export class InteractionManager {
         if (this.isDragging) return;
 
         const notches = wheelNotches(e);
-        if (!notches) return;
+        if (!notches) { this._consumeWheel(e); return; }
 
         const state = this._getState();
-        if (!state) return;
+        if (!state) { this._consumeWheel(e); return; }
 
         let g = this._rotateGesture;
         if (g && (g.viewName !== viewName || g.frameIdx !== state.currentFrame)) {
@@ -1460,7 +1466,9 @@ export class InteractionManager {
         }
         if (!g) {
             g = this._beginRotateGesture(e, viewName, state);
-            if (!g) return; // nothing under the cursor — let the zoom handler run
+            // Nothing rotatable under the cursor. Swallow it anyway rather
+            // than falling through to zoom — see the note above.
+            if (!g) { this._consumeWheel(e); return; }
         }
 
         g.angleDeg -= notches * ROTATE_DEG_PER_NOTCH;
@@ -1468,7 +1476,17 @@ export class InteractionManager {
             g.angleDeg, 0, 0);
         this._scheduleRotateCommit();
         this._requestRedraw();
+        this._consumeWheel(e);
+    }
 
+    /**
+     * Take a wheel event out of circulation: no browser default, and no
+     * bubbling to the `.video-cell` wheel-to-zoom handler that encloses every
+     * overlay canvas.
+     * @param {WheelEvent} e
+     * @private
+     */
+    _consumeWheel(e) {
         e.preventDefault();
         e.stopPropagation();
     }

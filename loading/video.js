@@ -2172,6 +2172,16 @@ export class VideoController {
         // ---- Mouse wheel zoom (cursor-centered) ----
         container.addEventListener("wheel", function (e) {
             e.preventDefault();
+            // Alt/Option turns the wheel into the instance-rotation control
+            // (`ui/interaction.js` `onWheel`, issue #198), so zoom stands down
+            // for as long as the key is held. The rotation handler lives on the
+            // OVERLAY CANVAS, which does not fill this cell — a video narrower
+            // or shorter than its pane leaves letterbox margin where no canvas
+            // sits under the cursor. Without this guard, an Option+scroll that
+            // strayed into that margin mid-gesture zoomed instead, yanking the
+            // view out from under the skeleton being rotated. Releasing Option
+            // brings zoom straight back.
+            if (e.altKey) return;
             var factor = e.deltaY < 0 ? 1.10 : 1 / 1.10;
             var rect = container.getBoundingClientRect();
             var cssX = e.clientX - rect.left;

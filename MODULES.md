@@ -2466,13 +2466,32 @@ they pin the invariant rather than just current behavior.
 `wheelNotches` folds `deltaMode` in (Chrome ~100 px/notch, Firefox 3
 lines/notch) and **ignores `deltaX`** — SLEAP sums Qt's x and y deltas, but on a
 trackpad the incidental horizontal component then fights the vertical one.
-Anything else (no Alt, or Alt over empty space, or a reprojected instance) is
-left un-consumed so `loading/video.js`'s wheel-to-zoom on the enclosing
-`.video-cell` still works; that disambiguation is the whole point of the
-`stopPropagation`. Coverage: `tests/test-instance-rotate.js` (22 assertions
-against the real manager) and `tests/e2e/alt-wheel-rotate-instance.mjs`, which
-drives real Chromium wheel input at the real app and asserts rotation and zoom
-never both fire.
+
+**Holding Alt suspends wheel-to-zoom outright.** A wheel with no Alt is left
+un-consumed so plain scroll still zooms, but an Alt+wheel is ALWAYS taken
+(`_consumeWheel`) — even over empty canvas, or over a reprojected instance,
+where there is nothing to turn. Zoom cannot be allowed to fire *while a
+rotation is in progress*: a scroll that strayed off the skeleton would yank the
+view out from under it. This takes TWO guards, because they cover different
+ground and each is pinned by its own assertion:
+- `onWheel`'s `_consumeWheel` handles the wheel landing ON an overlay canvas.
+- `loading/video.js`'s wheel handler returns early on `e.altKey`, which is the
+  only thing covering the **letterbox margin** of a `.video-cell` — a video
+  narrower or shorter than its pane leaves cell area with no overlay canvas
+  under the cursor at all, so `onWheel` never runs there. Removing this line
+  alone was confirmed to turn the e2e's margin check red while the
+  on-canvas one still passed.
+
+Releasing Alt brings zoom straight back; nothing is latched to a mode.
+Within a gesture the rotation IS latched, though, so a stray Alt+wheel
+off-skeleton keeps turning the same instance about the same pivot (SLEAP
+reaches the armed node wherever the pointer is) rather than doing nothing —
+once the gesture lapses, the same scroll does nothing at all.
+
+Coverage: `tests/test-instance-rotate.js` (31 assertions against the real
+manager) and `tests/e2e/alt-wheel-rotate-instance.mjs`, which drives real
+Chromium wheel input at the real app and asserts rotation and zoom never both
+fire, including the letterbox margin and the return of zoom on Alt release.
 
 **Zoom-aware thresholds.** `_displayToVideo(state, viewName)` returns how many
 video pixels span one CSS pixel on screen given the view's current `zoom.scale`.
@@ -6050,6 +6069,16 @@ a zoomed-in image keeps the same region centered instead of jumping.
   `setupSeekbar`, `setupKeyboardHandlers`, `initZoom`, `applyZoom`,
   `zoomVideo`, `resetZoom`, `zoomToRect`, `zoomAllVideos`,
   `resetAllZoom`, `setupZoomHandlers`.
+
+**`setupZoomHandlers`'s wheel-to-zoom stands down while Alt is held.** Alt
+turns the wheel into the instance-rotation control (`ui/interaction.js`
+`onWheel`, issue #198), whose listener is on the OVERLAY CANVAS — which does
+not fill the `.video-cell` this handler is bound to. A video narrower or
+shorter than its pane leaves letterbox margin with no canvas under the cursor,
+so `onWheel` never runs there and only this `e.altKey` early return keeps an
+Option+scroll that strayed into the margin from zooming the view out from under
+a rotation in progress. Removing the line alone turns the margin check in
+`tests/e2e/alt-wheel-rotate-instance.mjs` red.
 
 **Imports from project modules.** `ui/keyboard-target.js` only — the
 `shouldIgnoreShortcut` guard its `setupKeyboardHandlers` keydown listener
