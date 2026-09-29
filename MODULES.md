@@ -5002,7 +5002,179 @@ re-triangulate, identity assignment, or visibility-toggle change.
 
 ---
 
+### ui/plane-dialog.js
+
+**Purpose.** The small blocking-error / confirmation modal the plane and origin
+flows share.
+
+Split out of `ui/plane-definition.js` when that file hit 4,474 lines. It was the
+easiest thing in it to lift: it touches no plane state, no model and no
+viewport. Four call sites reach it — the fit refusal, the Triangulate
+locked-nodes report, node deletion and `ui/origin-definition.js` — which is
+what makes a shared home the honest one rather than an accident of which
+feature needed it first.
+
+A **LEAF module**: it imports nothing.
+
+**Key exports.**
+- `showPlaneDialog({title, message, confirmLabel?, onConfirm?})` — OK-only when
+  there is no `onConfirm`, Cancel/confirm when there is. **Esc CANCELS**, per the
+  project modal rule, so an accidental dismissal can never apply the thing the
+  user was still deciding about.
+
+**Imported by** `ui/plane-definition.js` (which also re-exports it, so the name
+stays reachable at its original path), `ui/plane-nodes-panel.js`,
+`ui/plane-angle.js`, `ui/origin-definition.js`.
+
+### ui/plane-toolbar-lock.js
+
+**Purpose.** Disable the pose-annotation toolbar while Defining Plane Mode is
+on, and restore it exactly as it was on exit.
+
+Split out of `ui/plane-definition.js`. Self-contained: it reads one flag
+(`planeState.active`) and otherwise only touches toolbar DOM, with no fan-in
+from the rest of the panel.
+
+**Key exports.**
+- `applyPlaneModeToolbarLock()` — **idempotent, and must stay so**, because
+  `drawAllOverlays` re-derives `tbGroup.disabled` / `tbEditGroup.disabled` from
+  the pose selection on every overlay draw and the mode redraws constantly. Each
+  button's PRIOR `disabled` and `title` are snapshotted on the transition only —
+  re-snapshotting on the re-assert would record the LOCKED state and make the
+  restore a no-op.
+
+Adding a button to the lock means adding its id to `PLANE_LOCKED_TOOLBAR_IDS`;
+if it opens a menu, its wrapper also needs `PLANE_LOCKED_DROPDOWN_IDS`, since a
+`.tri-dropdown` menu opens on hover and its items are `div`s, so `disabled` on
+the button reaches neither.
+
+**Imports** `planeState` from `ui/plane-definition.js` — circular, and safe only
+because the binding is read INSIDE the function body. **Imported by**
+`ui/plane-definition.js` (re-exported) and, through that path,
+`ui/rendering.js`.
+
+### ui/plane-overlays.js
+
+**Purpose.** Draw the placed planes onto a view's 2D overlay canvas.
+
+Split out of `ui/plane-definition.js`. Pure rendering: it reads the model and
+the interaction state and writes pixels, and nothing in the panel calls back
+into it.
+
+**Key exports.**
+- `drawPlaneOverlays(view)` — called from `drawAllOverlays` AFTER
+  `drawFrameOverlays`, which begins with a `clearRect`, so drawing earlier would
+  be wiped. Planes are drawn in **every** mode, not just Defining Plane Mode —
+  they are geometry the user annotated, and hiding them outside the mode would
+  make them look lost. Only the SELECTION and HOVER decorations are mode-gated.
+  Fills and edges are per PLANE; NODES are drawn once each over the union, since
+  a corner two planes share is one node with one 2D point.
+
+**Imported by** `ui/plane-definition.js` (re-exported, which is how
+`ui/rendering.js` still reaches it unchanged).
+
+### ui/plane-nodes-panel.js
+
+**Purpose.** Section 1 of the Define Planes panel: the global Nodes table, the
+padlock (pin) picker, the typed x/y/z editor and node deletion.
+
+The largest cluster split out of `ui/plane-definition.js` (~880 lines) and the
+one with the most self-contained state — the pin popover singleton is read and
+written nowhere else in the app.
+
+**The model state stays in the hub.** `planeState`, and the one
+`new PlaneModel()` on it, is imported and never redeclared: a second copy would
+diverge silently, since the tests assert behavior rather than object identity.
+
+**Key exports.**
+- `renderNodesTable()` — one row per pool node; rebuilt on almost every
+  interaction, which is why selecting a row must NOT rebuild it (see
+  `setSelectedNode` in the hub).
+- `renderPinInfoButton()` — wired ONCE, guarded by `dataset.wired`; it is not a
+  per-repaint renderer despite the name.
+- `renderFrozenWarning()`, `planeLockWhere(lock)` — the latter is shared with
+  the hub's 3D corner drag, which reports where a plane-locked node was pulled
+  back to.
+
+The pin picker REPOSITIONS on scroll rather than dismissing: a `scroll` event
+arrives a frame late, so dismissing made it impossible to open on a row you had
+just scrolled to.
+
+**Imports** `state`, `setInfoTip`, `showPlaneDialog`, `setStatus`/`markDirty`,
+`PIN_STATES`, `nodeFreezeState`, `reprojectPointCamera`, `isOriginModeActive`,
+and from the hub `ICON_PIN`/`ICON_INFO`/`makeDeleteButton`/`setEmptyState`/
+`redraw`/`planeModel`/`planePool`/`planeState`/`refreshPlanePanel`/
+`refreshTriangulationErrors`/`syncPlanes3D`/`syncSelectedNode3D`. Every hub
+binding is read inside a function body only.
+
+### ui/plane-editor-panel.js
+
+**Purpose.** Section 2 of the panel: the Edit Plane editor — the plane selector,
+the member list, the "+ Add" existing-node picker and the edge pickers.
+
+**Key exports.**
+- `renderEditor()` — the section's entry point, called by the hub's
+  `refreshPlanePanel`. It also calls into Section 1 (`renderNodesTable` /
+  `renderFrozenWarning`); that is one-directional, as Section 1 never calls
+  back.
+- `renderPlaneSelect(plane)`, `NEW_PLANE_OPTION` — both also read by the hub's
+  one-time wiring when the selection changes.
+
+**Imported by** `ui/plane-definition.js`.
+
+### ui/plane-list-panel.js
+
+**Purpose.** Section 3 of the panel: the Planes table, its action row, the
+`Views: annotated / total` fraction and the per-plane placements sub-row. The
+table is also the DRAG SOURCE that places a plane onto a video view.
+
+Cohesive by what it renders, not by size: everything here draws or wires one
+Planes row, and nothing here solves anything — Triangulate and Fit are reported
+through the hub's `triangulatePlaneAndReport` / `fitPlaneAndReport`.
+
+**Key exports.**
+- `renderPlanesTable()`, `renderActionRow()`, `renderOriginButton()`.
+- `ICON_TRIANGULATE` / `ICON_MESH` / `ICON_FIT` — the action glyphs, also set by
+  the hub's one-time wiring.
+- `annotatedViewStats(plane)` stays private to the module but is the reason it
+  exists: it counts **hand-placed** views only, never reprojected ones, because
+  `Triangulate` reprojects a plane into views it was never placed on and
+  counting those would make the fraction read full after one Triangulate and
+  never say anything again. It uses the SAME test `triangulatePlane` applies to
+  choose contributing views, so the number and the solver cannot disagree.
+  Pinned by `tests/e2e/plane-views-column.mjs`.
+
+**Imported by** `ui/plane-definition.js`.
+
 ### ui/plane-definition.js
+
+> **This module was SPLIT.** It reached 4,474 lines, so the panel's three
+> sections and three cross-cutting helpers now live beside it:
+> `ui/plane-nodes-panel.js` (Section 1), `ui/plane-editor-panel.js`
+> (Section 2), `ui/plane-list-panel.js` (Section 3), plus
+> `ui/plane-dialog.js`, `ui/plane-toolbar-lock.js` and `ui/plane-overlays.js`.
+> The hub kept the model accessors, the placements, the two solver controllers
+> (triangulate and fit), the mode lifecycle, `refreshPlanePanel`, the
+> interaction callbacks and the one-time wiring — the orchestration that drives
+> the sections.
+>
+> **`planeState` did not move, and must not.** It is declared here and holds the
+> one `new PlaneModel()`; a second copy would diverge silently, since the tests
+> assert behavior rather than object identity.
+>
+> **The export surface is unchanged** — every name importable from this path
+> before the split still is, several by re-export. That is deliberate: ~25 of
+> them are reached by `await import('/ui/plane-definition.js')` from the e2e
+> tests, so the set of names this path resolves is part of the contract.
+> A few module-private helpers (`redraw`, `makeDeleteButton`, `setEmptyState`,
+> `ICON_PIN`, `ICON_INFO`, `syncSelectedNode3D`, `planeImmutableMask`) became
+> exports because the new modules need them.
+>
+> Each new module imports its hub bindings CIRCULARLY and reads them inside
+> function bodies only — never at module top level, where a circular import is
+> still `undefined`. That rule is what makes this feature's existing cycles
+> safe, and it is the one thing to preserve when adding to any of these files.
+
 
 **Purpose.** "Defining Plane Mode" (**View ▸ Define Planes**) — the annotation
 UI for re-defining the 3D viewer's origin. The end goal of that work is a
