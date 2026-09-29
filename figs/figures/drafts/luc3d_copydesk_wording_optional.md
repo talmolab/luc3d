@@ -1,0 +1,771 @@
+# Optional wording rewrites (LUC3D copydesk v4)
+
+Heavy, padded or run-on sentences. None is an error. Same format as the main checklist, manuscript order.
+
+**Progress:** 0 / 153
+
+- [ ] **L97** · Wording · #370a
+  - **Issue:** "in humans" contradicts the animal citations; "led to the development of" is padding.
+  - **Fix:** Short direct sentence about animal pose methods.
+  - **Current:** `Advances in deep learning for 2D pose estimation in humans have led to the development of accessible and popular methods for quantifying animal behavior \citep{Mathis2018,Pereira2020,Pereira2022,Biderman2024}.`
+  - **Replace with:** `Deep learning methods for 2D pose estimation have made animal behavior widely quantifiable \citep{Mathis2018,Pereira2020,Pereira2022,Biderman2024}.`
+- [ ] **L97** · Wording · #370b
+  - **Issue:** Heavy phrasing: "the solution to the problems caused by the limitations of 2D".
+  - **Fix:** Same claim at half the length.
+  - **Current:** `The human pose estimation literature has demonstrated that the solution to the problems caused by the limitations of 2D is to use multiple camera views to enable 3D pose estimation \citep{Iskakov2019}.`
+  - **Replace with:** `In human pose estimation, multiple camera views overcome the limits of 2D by enabling 3D reconstruction \citep{Iskakov2019}.`
+- [ ] **L97** · Wording · #370f
+  - **Issue:** Interrupting clause between "but" and its verb.
+  - **Fix:** Moves the clause so "but" leads straight to its verb.
+  - **Current:** `Anipose in particular \citep{Karashchuk2021} has become a widely used and reliable tool for camera calibration and triangulation but, as a Python package that must be installed and run from the command line, requires technical expertise.`
+  - **Replace with:** `Anipose \citep{Karashchuk2021} is widely used for camera calibration and triangulation, but as a Python package installed and run from the command line it requires technical expertise.`
+- [ ] **L97** · Wording · #370c
+  - **Issue:** "extended" used twice in one sentence.
+  - **Fix:** Says "extended" once, to people and then to animals.
+  - **Current:** `These single-subject 3D methods have since been extended to enable 3D pose estimation of multiple individuals simultaneously \citep{Huang2020,Chen2020}, a methodology that has similarly been extended to multi-animal applications \citep{Marshall2021,Marshall2022}.`
+  - **Replace with:** `These single-subject 3D methods have since been extended to multiple people \citep{Huang2020,Chen2020} and to multiple animals \citep{Marshall2021,Marshall2022}.`
+- [ ] **L97** · Wording · #370d
+  - **Issue:** "non-trivial installation process" is jargon.
+  - **Fix:** "require local installation".
+  - **Current:** `While other 3D annotation GUIs exist, they often involve a non-trivial installation process \citep{Hueser2023}.`
+  - **Replace with:** `Other 3D annotation GUIs exist, but they require local installation \citep{Hueser2023}.`
+- [ ] **L97** · Wording · #370e
+  - **Issue:** Filler topic sentence; the next three sentences state the gaps.
+  - **Fix:** Delete.
+  - **Current:** `Despite this progress there are still gaps in accessibility and integration.`
+  - **Replace with:** *(delete this sentence)*
+- [ ] **L99** · Wording · #367a
+  - **Issue:** Intensifier "considerably" adds nothing; the fold-change comes later.
+  - **Fix:** Drops "considerably".
+  - **Current:** `Reprojections let users label a subset of views and correct the rest, which speeds up multi-view labeling considerably.`
+  - **Replace with:** `Reprojections let users label a subset of views and correct the rest, which speeds up multi-view labeling.`
+- [ ] **L103** · Wording · #371a
+  - **Issue:** "they" has no clear referent; the cost is misattributed.
+  - **Fix:** Enrichment causes occlusion; omitting it costs naturalism.
+  - **Current:** `Many popular 2D datasets lack environmental enrichment because they introduce occlusions at the cost of limiting naturalism and experimental scope.`
+  - **Replace with:** `Many 2D datasets omit environmental enrichment because it causes occlusion, at the cost of naturalism and experimental scope.`
+- [ ] **L103** · Wording · #371b
+  - **Issue:** "As such" misused; the reason comes after the claim.
+  - **Fix:** Leads with the reason; pick "segmentation" or "clustering" (L247) consistently.
+  - **Current:** `As such, this dataset is well suited for benchmarking new models for behavioral segmentation and 3D pose estimation because its difficulty varies with the number of enrichment objects and the number of animals.`
+  - **Replace with:** `Because its difficulty varies with the number of animals and enrichment objects, SLAP-2M is suited to benchmarking new models for behavioral segmentation and 3D pose estimation.`
+- [ ] **L103** · Wording · #364c
+  - **Issue:** Participle "demonstrating"; hedge "need not be mutually exclusive".
+  - **Fix:** Finite verb "shows"; hedge removed.
+  - **Current:** `SLAP-2M contains different levels of enrichment, demonstrating that with 3D pose estimation, enrichment and good tracking need not be mutually exclusive.`
+  - **Replace with:** `SLAP-2M spans several levels of enrichment and shows that, with 3D pose estimation, enrichment and good tracking are compatible.`
+- [ ] **L110** · Wording · #372
+  - **Issue:** Word order, non-parallel "by ... or assuming", stray comma.
+  - **Fix:** "has traditionally been ... by ... or by", comma removed.
+  - **Current:** `Cross-view ID has been traditionally solved either by manual assignment, or assuming that the initial tracks have no dropped frames \citep{Klibaite2025, Waldmann2024}.`
+  - **Replace with:** `Cross-view identity has traditionally been assigned by hand or by assuming that the per-camera tracks have no dropped frames \citep{Klibaite2025, Waldmann2024}.`
+- [ ] **L112** · Wording · #373a · also 340a
+  - **Issue:** Tenth "no installation" (§4 #340); "no build step" is a developer detail.
+  - **Fix:** Plain statement with the figure ref.
+  - **Current:** `LUC3D addresses the problems presented by multi-camera 3D annotation and tracking in a web browser, with no installation and no build step required (Figure~\ref{fig1}B).`
+  - **Replace with:** `LUC3D performs multi-camera 3D annotation and tracking in a web browser (Figure~\ref{fig1}B).`
+- [ ] **L112** · Wording · #373c
+  - **Issue:** Comma splice before "for example".
+  - **Fix:** Colon fixes the splice; tighter camera naming.
+  - **Current:** `Those names are per camera and arbitrary, for example the same animal is track 89 in one view (Camera 0) and track 83 in another (Camera 7).`
+  - **Replace with:** `Those names are per camera and arbitrary, so the same animal is track 89 in Camera 0 and track 83 in Camera 7.`
+- [ ] **L112** · Wording · #373d
+  - **Issue:** "the aforementioned animal's" does not parse.
+  - **Fix:** Says both of that animal's tracks become identity 1.
+  - **Current:** `After re-identification the frame contains three identities, one per animal in every view, with 24 of the 25 detections assigned, such that all tracks associated with the aforementioned animal's are assigned to ID 1 (Figure~\ref{fig1}C, \textit{right}).`
+  - **Replace with:** `After re-identification the frame contains three identities, one per animal in every view, with 24 of the 25 detections assigned, and both of that animal's tracks become identity 1 (Figure~\ref{fig1}C, \textit{right}).`
+- [ ] **L112** · Wording · #373e
+  - **Issue:** "Importantly" is a tell; "which" has an unclear referent.
+  - **Fix:** Drops the opener; separate clause for the assignment.
+  - **Current:** `Importantly, LUC3D identifies that the remaining detection is a duplicate of an already-matched animal in a view the panel does not show, which one-to-one assignment correctly refuses.`
+  - **Replace with:** `The remaining detection is a duplicate of an already-matched animal in a view the panel does not show, and one-to-one assignment correctly leaves it unassigned.`
+- [ ] **L112** · Wording · #373f
+  - **Issue:** "we next show how" padding; trailing participle "overlaying".
+  - **Fix:** Direct statement with the figure ref; separate clause for the overlay.
+  - **Current:** `In Figure~\ref{fig1}D, we next show how LUC3D triangulates that frame and fills all 45 of its 3D keypoints, overlaying the reconstruction onto Camera 0's perspective (\textit{left}) so that it can be compared directly with that camera's video.`
+  - **Replace with:** `LUC3D then triangulates the frame and fills all 45 of its 3D keypoints (Figure~\ref{fig1}D), and the reconstruction is overlaid on Camera 0's video for direct comparison (\textit{left}).`
+- [ ] **L112** · Wording · #373g
+  - **Issue:** Tense ("compared"); "both provide it" has no antecedent; citations out of order.
+  - **Fix:** Present tense, names what the tools support, citation order matches.
+  - **Current:** `Figure~\ref{fig1}E compared LUC3D to existing packages designed to address similar issues, notably Label3D and JARVIS both provide it \citep{Hueser2023, Aldarondo2019}.`
+  - **Replace with:** `Figure~\ref{fig1}E compares LUC3D with seven related tools, including Label3D and JARVIS, which support multi-view 3D annotation \citep{Aldarondo2019, Hueser2023}.`
+- [ ] **L125** · Wording · #365a
+  - **Issue:** "such that" chain; "especially" doesn't fit a linear claim.
+  - **Fix:** Colon states what scaling linearly means.
+  - **Current:** `Traditional manual multi-camera annotation scales linearly with the number of cameras, such that using two cameras requires twice as much time spent labeling frames, especially when each camera view observes the animal and enclosure from a different perspective.`
+  - **Replace with:** `Manual multi-camera annotation scales linearly with the number of cameras, because every keypoint is placed by hand in every view.`
+- [ ] **L125** · Wording · #365b
+  - **Issue:** Restates sentence 1 with a tense shift.
+  - **Fix:** Delete.
+  - **Current:** `To generate a training set of 2D labeled frames, the user had to label frames from each camera view independently, manually placing all keypoints across all views, meaning that each additional camera added to a rig requires that the user generate another set of labeled frames for that view.`
+  - **Replace with:** *(delete this sentence)*
+- [ ] **L125** · Wording · #365c
+  - **Issue:** Past tense and wordy.
+  - **Fix:** Present tense, shorter.
+  - **Current:** `Additionally, keypoints that were not visible in the current view required the user to provide their best guess.`
+  - **Replace with:** `Keypoints a view cannot see still need a best guess.`
+- [ ] **L125** · Wording · #365d
+  - **Issue:** "as few as only", "is" for "are", "project" for "triangulate", figure-ref format.
+  - **Fix:** Fixes all four.
+  - **Current:** `However, since as few as only two views is sufficient to project a point into 3D space (Figure~\ref{fig2}A,1-2), using LUC3D the user can rotate from one view to the next, labeling only confident keypoints.`
+  - **Replace with:** `Because two views are enough to triangulate a point (Figure~\ref{fig2}A1--2), LUC3D lets the user label only the keypoints they can place confidently.`
+- [ ] **L125** · Wording · #365e
+  - **Issue:** "only labeling confident keypoints" said twice; "such that" chain.
+  - **Fix:** Single statement of what the user corrects.
+  - **Current:** `Remaining views inherit the placement of any unlabeled keypoints via reprojection of the 3D point back onto the unlabeled view (Figure~\ref{fig2}A3), such that the user can move from view to view, only labeling keypoints they are confident in placing, and correcting those reprojections that lack good correspondence to the animals in the video (Figure~\ref{fig2}A4).`
+  - **Replace with:** `The remaining views inherit each keypoint by reprojection (Figure~\ref{fig2}A3), and the user corrects only the reprojections that do not match the animal in the video (Figure~\ref{fig2}A4).`
+- [ ] **L125** · Wording · #365f
+  - **Issue:** "adding additional", "drastically"; precision claim untested here.
+  - **Fix:** Plain claim: each added camera costs few manual placements.
+  - **Current:** `Therefore, when using reprojection-aided labeling, adding additional cameras to an experimental preparation can drastically save the user time when labeling frames, while increasing the precision of each keypoint's placement.`
+  - **Replace with:** `With reprojection-aided labeling, each added camera costs few additional manual placements.`
+- [ ] **L127** · Wording · #374e
+  - **Issue:** "mouse clicks" here, "placements" everywhere else.
+  - **Fix:** Uses "placements" throughout.
+  - **Current:** `Figure~\ref{fig2}B compares the number of mouse clicks between manual labeling and reprojection-aided labeling.`
+  - **Replace with:** `Figure~\ref{fig2}B compares the number of manual placements for manual and reprojection-aided labeling.`
+- [ ] **L127** · Wording · #374a
+  - **Issue:** "at 10 pixels" is unclear.
+  - **Fix:** "within a 10-pixel tolerance".
+  - **Current:** `On the measured five-camera rig, accepting reprojections at 10 pixels reduces manual placements from 75 per animal to 32, a 2.3-fold reduction in manual labeling.`
+  - **Replace with:** `On the measured five-camera rig, accepting reprojections within a 10-pixel tolerance reduces manual placements from 75 per animal to 32, a 2.3-fold reduction.`
+- [ ] **L127** · Wording · #374b
+  - **Issue:** Reads as if modifying reprojections causes a 5-pixel error.
+  - **Fix:** States the 5-pixel tolerance and its placement count.
+  - **Current:** `Modifying those reprojections would result in 48 placements per animal, which is a 1.6-fold reduction in manual labeling and would reduce the error to $\sim$5 pixels.`
+  - **Replace with:** `At a 5-pixel tolerance, 48 placements remain, a 1.6-fold reduction.`
+- [ ] **L127** · Wording · #374c
+  - **Issue:** Says nothing new.
+  - **Fix:** Delete.
+  - **Current:** `This estimates the labeling effort saved by using reprojections in the labeling process.`
+  - **Replace with:** *(delete this sentence)*
+- [ ] **L127** · Wording · #374d
+  - **Issue:** "This assumes" is the second "This" opener; "node" for keypoint.
+  - **Fix:** "These counts assume ..."; says what the GUI can do.
+  - **Current:** ``` This assumes that each node would be manipulated separately, but the GUI provides methods for translating the points for one animal in a view (hereafter referred to as an ``instance'') which can also reduce labeling time. ```
+  - **Replace with:** ``` These counts assume each keypoint is placed separately, but the GUI can also move all of one animal's keypoints in a view (an ``instance'') together, which saves further time. ```
+- [ ] **L129** · Wording · #376a
+  - **Issue:** Heavy opener with "demonstrates".
+  - **Fix:** States the result directly.
+  - **Current:** `The relationship between the numbers of cameras used in triangulation and the 3D error demonstrates that multi-view geometry reduces the uncertainty of pose estimates.`
+  - **Replace with:** `3D error falls as cameras are added to the solve (Figure~\ref{fig2}C).`
+- [ ] **L131** · Wording · #376c
+  - **Issue:** "(See Figure ...)" formatting.
+  - **Fix:** Drops "See".
+  - **Current:** `The cost of solving from only two views depends on where those two cameras are placed relative to each other (See Figure~\ref{fig2}D).`
+  - **Replace with:** `The cost of solving from only two views depends on where those two cameras are placed relative to each other (Figure~\ref{fig2}D).`
+- [ ] **L131** · Wording · #376d
+  - **Issue:** "1.2 mm" here, "1.19 mm" in L129; plain space before unit.
+  - **Fix:** Matches L129 with a non-breaking space.
+  - **Current:** `The floor when all five views contribute is 1.2 mm.`
+  - **Replace with:** `The floor when all five views contribute is 1.19~mm.`
+- [ ] **L131** · Wording · #376e
+  - **Issue:** Link between camera placement and labor cost is implicit.
+  - **Fix:** Makes the link explicit: wide separation reduces corrections.
+  - **Current:** `Strategic camera placement when setting up the rig and careful choice of the two anchor views for reprojection can also reduce labor cost.`
+  - **Replace with:** `Choosing widely separated cameras, both when building the rig and when picking anchor views, reduces the corrections a labeler must make.`
+- [ ] **L131** · Wording · #376f
+  - **Issue:** Redundant with L129.
+  - **Fix:** Delete.
+  - **Current:** `Increasing the number of contributing views leads to more accurate 3D estimates compared with ground truth.`
+  - **Replace with:** *(delete this sentence)*
+- [ ] **L131** · Wording · #376h
+  - **Issue:** Buries the result behind "Figure 2E shows that".
+  - **Fix:** Leads with the result.
+  - **Current:** `Figure~\ref{fig2}E shows that dropping an unreliable view can reduce reprojection error (bottom).`
+  - **Replace with:** `Dropping the least reliable view lowers reprojection error in the remaining views (Figure~\ref{fig2}E, bottom).`
+- [ ] **L142** · Wording · #377b
+  - **Issue:** "therefore" and "meaning that" chain.
+  - **Fix:** Colon introduces the two counts.
+  - **Current:** `This requires $A!$ hypotheses per view and therefore $(A!)^C$ per frame, meaning that there are 32 hypotheses for two animals in five cameras and $\sim$190 million hypotheses for four animals in six cameras (Figure~\ref{fig3}B).`
+  - **Replace with:** `This requires $(A!)^C$ hypotheses per frame, which is 32 for two animals in five cameras but $\sim$190 million for four animals in six (Figure~\ref{fig3}B).`
+- [ ] **L144** · Wording · #378a
+  - **Issue:** Filler topic sentence.
+  - **Fix:** Delete; the next sentence starts the comparison.
+  - **Current:** `We investigated how the greedy Hungarian procedure performs relative to the exhaustive approach.`
+  - **Replace with:** *(delete this sentence)*
+- [ ] **L144** · Wording · #378b
+  - **Issue:** Session breakdown sits in a separate sentence.
+  - **Fix:** Absorbs the next sentence.
+  - **Current:** `Both methods were scored against proofread ground truth on 92 sessions (Figure~\ref{fig3}E).`
+  - **Replace with:** `Both methods were scored relative to proofread ground truth on 92 sessions, 50 from Mouse-Dyad-10M and 42 from SLAP-2M (Figure~\ref{fig3}E).`
+- [ ] **L144** · Wording · #378c
+  - **Issue:** Separate sentence for the session breakdown.
+  - **Fix:** Delete; merged into 378b.
+  - **Current:** `These comprised the 50 Mouse-Dyad-10M sessions and the 42 multi-animal SLAP-2M sessions.`
+  - **Replace with:** *(delete this sentence)*
+- [ ] **L148** · Wording · #379a
+  - **Issue:** "terms" plural (there is one 3D term); long parenthetical.
+  - **Fix:** Singular term; shorter parenthetical.
+  - **Current:** `Figures~\ref{fig3}G and H examine the contribution of the 3D correspondence terms in the association cost (Section~\ref{methods-association}; Supplementary Figure~\ref{fig6}E shows the 2D and 3D terms on one real frame).`
+  - **Replace with:** `Figures~\ref{fig3}G and H measure the contribution of the 3D correspondence term in the association cost (Section~\ref{methods-association}, Supplementary Figure~\ref{fig6}E).`
+- [ ] **L148** · Wording · #379d
+  - **Issue:** Wrong subject: the exhaustive method is the reference, not the term.
+  - **Fix:** Exhaustive enumeration has no 3D term and is the reference.
+  - **Current:** `The 3D correspondence term is not an available parameter in the exhaustive approach and serves as a reference.`
+  - **Replace with:** `Exhaustive enumeration has no 3D term and serves as a fixed reference.`
+- [ ] **L148** · Wording · #379e
+  - **Issue:** "ablated to 0" jargon; numbers are in a later sentence.
+  - **Fix:** Plain wording; absorbs the numbers from 379g.
+  - **Current:** `When the 3D term is ablated to 0, the greedy Hungarian association performs worse than the exhaustive approach.`
+  - **Replace with:** `With the 3D term set to zero, the greedy method is worse than exhaustive enumeration, with 632 switches per 100,000 camera frames and an IDF1 of 0.599.`
+- [ ] **L148** · Wording · #379f
+  - **Issue:** Definition placed mid-argument.
+  - **Fix:** Delete; moved into 379c.
+  - **Current:** `Identity switches occur when the ID for one instance is mistaken for another relative to ground truth labels.`
+  - **Replace with:** *(delete this sentence)*
+- [ ] **L148** · Wording · #379g
+  - **Issue:** Separate sentence for the r = 0 numbers.
+  - **Fix:** Delete; merged into 379e.
+  - **Current:** `Identity switches run at 632 per 100,000 camera frames and IDF1 falls to 0.599.`
+  - **Replace with:** *(delete this sentence)*
+- [ ] **L148** · Wording · #379h · also 345a
+  - **Issue:** "result in ... outperforming" is wordy.
+  - **Fix:** Plainer.
+  - **Current:** `All non-zero ratios result in the greedy approach outperforming exhaustive.`
+  - **Replace with:** `At every non-zero ratio the greedy method outperforms exhaustive enumeration.`
+- [ ] **L148** · Wording · #379l
+  - **Issue:** "therefore" and "sits".
+  - **Fix:** Plain "is".
+  - **Current:** `The default therefore sits near the plateau.`
+  - **Replace with:** `The default is near the plateau.`
+- [ ] **L148** · Wording · #379m
+  - **Issue:** Two separate denominator sentences.
+  - **Fix:** Merges them (or move both to the Fig 3 caption).
+  - **Current:** `Greedy rates are over the $\sim$45 million camera frames of the full sessions.`
+  - **Replace with:** `Greedy rates are over the $\sim$45 million camera frames of the full sessions, and exhaustive rates over the 21 million camera frames without missing instances.`
+- [ ] **L165** · Wording · #380a
+  - **Issue:** "leader and follower" used inconsistently across the paper.
+  - **Fix:** "leader--follower" throughout.
+  - **Current:** `The behavior shows a leader and follower structure.`
+  - **Replace with:** `The behavior has a leader--follower structure.`
+- [ ] **L167** · Wording · #381a
+  - **Issue:** Gerund with no subject; "likelihood" is the wrong word.
+  - **Fix:** Names the probability and what it is aligned to.
+  - **Current:** `Averaging the likelihood of rearing relative to the onset of the other animal's rearing demonstrates an asymmetric leader and follower relationship (Figure~\ref{fig4}G).`
+  - **Replace with:** `Aligned to one animal's rear onset, the probability that the other animal is rearing shows an asymmetric leader--follower relationship (Figure~\ref{fig4}G).`
+- [ ] **L167** · Wording · #381b
+  - **Issue:** "prior to and during" is wordy.
+  - **Fix:** "before and at".
+  - **Current:** `The male's rearing probability is below baseline prior to and during the female rear onset and reaches 1.7 times the baseline rate $\sim$0.8~s later.`
+  - **Replace with:** `The male's rearing probability is below baseline before and at the female's rear onset and reaches 1.7 times baseline $\sim$0.8~s later.`
+- [ ] **L167** · Wording · #381c
+  - **Issue:** "prior to"; mixed time formats.
+  - **Fix:** "before"; matching formats.
+  - **Current:** `The probability of the female's rearing rises prior to the male onset, reaches 4.7 times the baseline rate when he starts, and peaks at 5.3 times a third of a second later.`
+  - **Replace with:** `The female's rearing probability rises before the male's onset, reaches 4.7 times baseline when he starts, and peaks at 5.3 times baseline 0.33~s later.`
+- [ ] **L167** · Wording · #381d
+  - **Issue:** "further" for physical distance.
+  - **Fix:** "farther".
+  - **Current:** `This sequential relationship is not observed when the animals are further apart.`
+  - **Replace with:** `This sequential relationship is not observed when the animals are farther apart.`
+- [ ] **L167** · Wording · #360a
+  - **Issue:** Unneeded "therefore"; the sentence order already carries the inference.
+  - **Fix:** Drops "therefore".
+  - **Current:** `The male therefore usually joins a rear the female has already started.`
+  - **Replace with:** `The male usually joins a rear the female has already started.`
+- [ ] **L169** · Wording · #382a
+  - **Issue:** "With one value per session" repeats "session medians".
+  - **Fix:** Drops the redundant opener.
+  - **Current:** `With one value per session, the session medians are 0.36 body lengths per second for the male and 0.20 for the female, and the male is faster in 28 of 37 sessions (paired Wilcoxon $P = 4.6 \times 10^{-4}$).`
+  - **Replace with:** `Session medians are 0.36 body lengths per second for the male and 0.20 for the female, and the male is faster in 28 of 37 sessions (paired Wilcoxon $P = 4.6 \times 10^{-4}$).`
+- [ ] **L169** · Wording · #382b
+  - **Issue:** Hyphen in Mann-Whitney; wordy speed clause.
+  - **Fix:** En dash; clearer non-significance statement.
+  - **Current:** `Across individual animals, each of the four males scores more negative than each of the five females (Mann-Whitney $P = 0.016$), whereas the speed difference does not separate from individual identity at this number of animals ($P = 0.19$).`
+  - **Replace with:** `Across individual animals, each of the four males scores more negative than each of the five females (Mann--Whitney $P = 0.016$), whereas the speed difference is not significant across animals ($P = 0.19$).`
+- [ ] **L171** · Wording · #366a
+  - **Issue:** Filler topic sentence; L167 already established the asymmetry.
+  - **Fix:** States the point directly: the female leads most displays.
+  - **Current:** `The sequential ordering of the displays is asymmetric, and in this cohort the female is the leader.`
+  - **Replace with:** `In this cohort the female leads most displays.`
+- [ ] **L173** · Wording · #383a
+  - **Issue:** 60-word sentence with several clauses.
+  - **Fix:** Fewer clauses, active voice.
+  - **Current:** `The 56 Mouse-Dyad-10M sessions are repeated recordings of nine mice (four males and five females) in 18 pairings, and the displays are spread unevenly over them, from one to 305 per female, so the analysis was repeated with the pair as the unit of replication (Methods).`
+  - **Replace with:** `The 56 Mouse-Dyad-10M sessions are repeated recordings of nine mice (four males and five females) in 18 pairings, with displays spread unevenly over them (one to 305 per female), so we repeated the analysis with the pair as the unit of replication (Methods).`
+- [ ] **L173** · Wording · #383b
+  - **Issue:** "all 14 of 14" is redundant.
+  - **Fix:** "all 14"; parenthetical display count.
+  - **Current:** `Over the 14 pairs with at least five displays, covering 536 displays, the female starts a median 0.81 of that pair's displays and leads in all 14 of 14 (sign test $P = 1.2 \times 10^{-4}$).`
+  - **Replace with:** `Over the 14 pairs with at least five displays (536 displays), the female starts a median 0.81 of each pair's displays and leads in all 14 (sign test $P = 1.2 \times 10^{-4}$).`
+- [ ] **L173** · Wording · #383c
+  - **Issue:** Near-duplicate of 428 of 535 (L171) invites reconciliation.
+  - **Fix:** Delete.
+  - **Current:** `Pooling over pairs gives 425 of the 532 displays with an initiator, 79.9\%.`
+  - **Replace with:** *(delete this sentence)*
+- [ ] **L175** · Wording · #384a
+  - **Issue:** "could have been trivially explained" is wordy.
+  - **Fix:** Plainer.
+  - **Current:** `Finally, the finding could have been trivially explained by body size.`
+  - **Replace with:** `Finally, body size could explain the result.`
+- [ ] **L175** · Wording · #384b
+  - **Issue:** Long comma chain.
+  - **Fix:** Parenthetical for the numbers; shorter.
+  - **Current:** `The males are longer, with a median body length of 90.1~mm and the females 84.2~mm, and the male is longer in 29 of 37 sessions (paired Wilcoxon $P < 0.0001$), so the smaller-bodied sex is the one leading.`
+  - **Replace with:** `Males are longer (median body length 90.1~mm, and 84.2~mm for females, longer in 29 of 37 sessions, paired Wilcoxon $P < 0.0001$), so the smaller sex leads.`
+- [ ] **L175** · Wording · #380b
+  - **Issue:** Inconsistent "leader and follower" term.
+  - **Fix:** "leader--follower".
+  - **Current:** `These findings indicate that the leader and follower asymmetry during social rearing is not explained by rearing frequency, threshold definition, body size, or the track slot each animal occupies (Methods).`
+  - **Replace with:** `These findings indicate that the leader--follower asymmetry during social rearing is not explained by rearing frequency, threshold definition, body size, or the track slot each animal occupies (Methods).`
+- [ ] **L186** · Wording · #385a
+  - **Issue:** "purposely collected to provide multiple challenges" is padding.
+  - **Fix:** Shorter.
+  - **Current:** `The SLAP-2M dataset was purposely collected to provide multiple challenges for 2D and 3D pose estimation systems.`
+  - **Replace with:** `SLAP-2M was designed to be difficult for 2D and 3D pose estimation.`
+- [ ] **L186** · Wording · #385b
+  - **Issue:** Wordy; "(see Figure 5A for a visualization)".
+  - **Fix:** Shorter, plain figure ref.
+  - **Current:** `Each of the 74 SLAP-2M sessions varies by number of animals and number of environmental enrichment objects (see Figure~\ref{fig5}A for a visualization) which increase difficulty due to occlusions.`
+  - **Replace with:** `Its 74 sessions vary in the number of animals and of enrichment objects, both of which cause occlusion (Figure~\ref{fig5}A).`
+- [ ] **L186** · Wording · #385c · also 229a
+  - **Issue:** Result buried under "characterizes how"; missing leading zeros (#229).
+  - **Fix:** Leads with the result; leading zeros added.
+  - **Current:** `Figure~\ref{fig5}B characterizes how the LUC3D tracker's IDF1 score degrades with increased difficulty levels ranging from highly accurate ID tracking with two animals and no enrichment objects (median IDF1 = .989) to multiple animals and multiple enrichment objects (median IDF1 = .654).`
+  - **Replace with:** `Cross-view IDF1 of the LUC3D tracker falls from a median of 0.989 with two animals and no enrichment to 0.654 with several animals and several enrichment objects (Figure~\ref{fig5}B).`
+- [ ] **L186** · Wording · #385d
+  - **Issue:** The section's headline result (5C recovery) is only in the caption.
+  - **Fix:** States the recovery numbers in the body.
+  - **Current:** `Figure~\ref{fig5}C shows how increasing the number of camera views can recover missing keypoints.`
+  - **Replace with:** `Adding cameras recovers missing keypoints. At difficulty rating 7, the fraction missing per view falls from 57.1\% with two cameras to 37.7\% with six (Figure~\ref{fig5}C).`
+- [ ] **L186** · Wording · #385f
+  - **Issue:** "demonstrates how".
+  - **Fix:** Plain verb "shows".
+  - **Current:** `Figure~\ref{fig5}D demonstrates how the animal count affects missing keypoints across difficulty ratings.`
+  - **Replace with:** `Figure~\ref{fig5}D shows the miss rate within each animal count.`
+- [ ] **L199** · Wording · #386b
+  - **Issue:** "facilitating" and "significant".
+  - **Fix:** Direct statement of what the two features replace.
+  - **Current:** `This tool can speed up the labeling and proofreading process by facilitating reprojection-aided labeling and cross-view identity tracking which would otherwise require significant manual labor.`
+  - **Replace with:** `Reprojection-aided labeling and cross-view identity tracking replace much of the manual labor these steps would otherwise require.`
+- [ ] **L199** · Wording · #386c
+  - **Issue:** Datasets are "open", not "open source".
+  - **Fix:** "open"; tighter list.
+  - **Current:** `We also provide two large open source datasets of multi-animal multi-view 3D pose estimation for examining social behavior: SLAP-2M and Mouse-Dyad-10M.`
+  - **Replace with:** `We also release two large, open multi-animal, multi-view 3D datasets of mouse social behavior, SLAP-2M and Mouse-Dyad-10M.`
+- [ ] **L201** · Wording · #387 · also 340d, 443
+  - **Issue:** "performs competitively" undersells; lowercase start; missing comma.
+  - **Fix:** States that calibrat3 beat Anipose on all three rigs.
+  - **Current:** `calibrat3, the browser-based calibration tool performs competitively as well and completes the pipeline, so that every step from calibration through proofreading runs without any installation necessary.`
+  - **Replace with:** `The browser-based calibration tool, calibrat3, had lower reprojection error than Anipose on all three rigs tested and completes a pipeline that runs in the browser from calibration through proofreading.`
+- [ ] **L203** · Wording · #388a
+  - **Issue:** Wordy; missing comma before "but".
+  - **Fix:** Shorter, comma added.
+  - **Current:** `Previous work suggested that exhaustive hypothesis testing would be required to resolve the cross-view identity tracking problem but this becomes untenable when dealing with multiple animals and many camera views \citep{Maree2024}.`
+  - **Replace with:** `Previous work suggested that cross-view identity requires exhaustive hypothesis testing \citep{Maree2024}, but this becomes untenable with many animals and cameras.`
+- [ ] **L203** · Wording · #388b
+  - **Issue:** "30 times faster" holds only at two animals in five cameras.
+  - **Fix:** Qualifies the speedup (11.5 and 0.4 ms).
+  - **Current:** `On the frames where exhaustive enumeration can be run, which excludes frames with a missed or duplicated detection, greedy Hungarian matching with a 3D correspondence term misgroups fewer frames than the exhaustive strategy and runs about 30 times faster.`
+  - **Replace with:** `On the frames where exhaustive enumeration can be run, which excludes frames with a missed or duplicated detection, greedy Hungarian matching with a 3D correspondence term misgroups fewer frames than the exhaustive strategy and, for two animals in five cameras, runs about 30 times faster.`
+- [ ] **L203** · Wording · #388d
+  - **Issue:** "GUI environment" is padding.
+  - **Fix:** "fast enough for interactive use in the browser".
+  - **Current:** `This enables real-time interactive cross-view tracking that can be used in a browser-based GUI environment.`
+  - **Replace with:** `This makes cross-view tracking fast enough for interactive use in the browser.`
+- [ ] **L205** · Wording · #389a
+  - **Issue:** "reduce labor" and "minimize manual annotation" say the same thing.
+  - **Fix:** Colon explains the redundancy directly.
+  - **Current:** `LUC3D uses labeling redundancy to reduce labor and minimize manual annotation and provides a method for accepting or modifying reprojections from a small number of anchor camera views to the larger number of remaining views.`
+  - **Replace with:** `LUC3D exploits labeling redundancy. Labels in a few anchor views are reprojected into the remaining views, where they can be accepted or corrected.`
+- [ ] **L205** · Wording · #389c
+  - **Issue:** "far fewer" is vague; "set up" is the verb form.
+  - **Fix:** Uses the measured 2.3-fold; "setup".
+  - **Current:** `Reprojection-aided labeling allows the generation of training sets from scratch using far fewer manual labels than a traditional single-view set up.`
+  - **Replace with:** `Reprojection-aided labeling can build a training set from scratch with 2.3-fold fewer manual placements than labeling each view separately.`
+- [ ] **L207** · Wording · #391a
+  - **Issue:** "blocks of manual labor" is wordy.
+  - **Fix:** "manual tasks".
+  - **Current:** `For multi-animal datasets, correcting 2D identity switches during proofreading is one of the largest remaining blocks of manual labor.`
+  - **Replace with:** `For multi-animal datasets, correcting identity switches is one of the largest remaining manual tasks.`
+- [ ] **L207** · Wording · #391b
+  - **Issue:** Parenthetical restates "linearly".
+  - **Fix:** Drops the parenthetical.
+  - **Current:** `Without LUC3D it scales linearly with the number of cameras (a two-camera rig doubles the proofreading time and a four-camera rig quadruples it).`
+  - **Replace with:** `Done per camera, it scales linearly with the number of cameras.`
+- [ ] **L207** · Wording · #391c
+  - **Issue:** Long and wordy.
+  - **Fix:** Shorter.
+  - **Current:** `Identity must also be associated across views for the same animal to be recognized as the same ID in every camera which takes additional proofreading.`
+  - **Replace with:** `Identities must then be linked across views, which adds further proofreading.`
+- [ ] **L207** · Wording · #391d
+  - **Issue:** "automated proofread output" contradicts itself and overclaims.
+  - **Fix:** Says what the tracker does in one pass.
+  - **Current:** `The LUC3D cross-view tracker instead produces an automated proofread output for both cross-view identity assignment and temporal identity tracking.`
+  - **Replace with:** `The LUC3D cross-view tracker assigns identity across views and over time in one pass, so the user reviews each session once.`
+- [ ] **L207** · Wording · #391e
+  - **Issue:** "As a result" opener; content merged elsewhere.
+  - **Fix:** Delete; merged into 391d.
+  - **Current:** `As a result, the user needs only to review the session once, reducing proofreading labor.`
+  - **Replace with:** *(delete this sentence)*
+- [ ] **L207** · Wording · #391f · also 354b
+  - **Issue:** Claim not supported by any Results section.
+  - **Fix:** Delete; keep only if the camera-subset result is added (#396).
+  - **Current:** `Using more cameras gives the LUC3D cross-view tracker more redundant evidence so it makes fewer errors that require manual correction.`
+  - **Replace with:** *(delete this sentence)*
+- [ ] **L207** · Wording · #391g
+  - **Issue:** "visual aids and tools" is vague.
+  - **Fix:** Names the actual aid.
+  - **Current:** `The GUI also provides visual aids and tools which make the errors easy to catch and correct.`
+  - **Replace with:** `Color-coded reprojection errors in the GUI make the remaining mistakes easy to find.`
+- [ ] **L209** · Wording · #392a
+  - **Issue:** "We have also presented an example of how" is wordy.
+  - **Fix:** Shorter and concrete.
+  - **Current:** `We have also presented an example of how LUC3D can be used to recover 3D social behavior in a multi-animal context for downstream behavioral analysis.`
+  - **Replace with:** `As an example application, we used LUC3D to analyze social rearing in pairs of mice.`
+- [ ] **L209** · Wording · #392b
+  - **Issue:** Cites others for the authors' own finding.
+  - **Fix:** Frames the citations as prior work being extended.
+  - **Current:** `This analysis shows that rearing in this setting has a social structure \citep{Dias2025, Lever2006, Leonardis2022}.`
+  - **Replace with:** `Rearing in this setting has a social structure, extending earlier work on rearing and social interaction \citep{Dias2025, Lever2006, Leonardis2022}.`
+- [ ] **L209** · Wording · #392c
+  - **Issue:** Appositive splits the clause.
+  - **Fix:** Leads with the asymmetry.
+  - **Current:** `It also revealed an asymmetry between the two animals of each pair, the female leading and the male following, that would not be visible without cross-view identity and metric distance.`
+  - **Replace with:** `The female leads and the male follows, an asymmetry that would not be visible without cross-view identity and metric distance.`
+- [ ] **L209** · Wording · #392d
+  - **Issue:** Repeats 392c; number mismatch ("the display ... them").
+  - **Fix:** Delete.
+  - **Current:** `The female consistently leads the display, starting the large majority of them across nearly every session and every pairing.`
+  - **Replace with:** *(delete this sentence)*
+- [ ] **L217** · Wording · #393 · also 340e
+  - **Issue:** Heavy; repeats "no installation" and adds "no build step", a developer detail.
+  - **Fix:** Drops both phrases and tightens the sentence.
+  - **Current:** `It is written in plain JavaScript served as static files with no installation and no build step, either from the hosted deployment or from any local static file server, and it keeps no state on a server.`
+  - **Replace with:** `It is written in plain JavaScript and served as static files, from the hosted deployment or any local web server, and keeps no state on a server.`
+- [ ] **L217** · Wording · #368a · also 393
+  - **Issue:** "is composed of" is padding.
+  - **Fix:** Plain verb "is".
+  - **Current:** `A project is composed of a set of local files that the user opens and saves.`
+  - **Replace with:** `A project is a set of local files that the user opens and saves.`
+- [ ] **L221** · Wording · #398
+  - **Issue:** Skeleton-definition editing is also described in L229.
+  - **Fix:** Drop the second clause.
+  - **Current:** `Skeleton instances and their keypoints are created and edited directly on the video frames, and the node and edge definitions themselves can be edited inline.`
+  - **Replace with:** `Skeleton instances and their keypoints are created and edited directly on the video frames.`
+- [ ] **L223** · Wording · #394
+  - **Issue:** Restates the purpose of the dialog.
+  - **Fix:** Delete; folded into the previous sentence.
+  - **Current:** `This allows the tracker parameters to be chosen for each user's particular dataset.`
+  - **Replace with:** *(delete this sentence)*
+- [ ] **L223** · Wording · #394
+  - **Issue:** Unclear causal link between per-session creation and cross-view matching.
+  - **Fix:** Delete, or say what per-session creation enables.
+  - **Current:** `Tracks and identities are created per session so they can be matched across camera views.`
+  - **Replace with:** *(delete this sentence)*
+- [ ] **L227** · Wording · #397
+  - **Issue:** "which are read-only" is ungrammatical; the read-only rule is stated twice.
+  - **Fix:** Merge predicted and reprojected instances into one sentence.
+  - **Current:** `Predicted instances are produced by the cross-view tracker or imported from SLEAP which are read-only until converted into user instances.`
+  - **Replace with:** `Predicted instances, produced by the cross-view tracker or imported from SLEAP, and reprojected instances, computed by projecting the current 3D reconstruction into each view, are read-only until converted into user instances.`
+- [ ] **L227** · Wording · #397
+  - **Issue:** Repeats the read-only rule.
+  - **Fix:** Delete; merged into the previous sentence.
+  - **Current:** `Reprojected instances are computed by projecting the current 3D reconstruction back into each 2D view and are also read-only until converted into user instances.`
+  - **Replace with:** *(delete this sentence)*
+- [ ] **L227** · Wording · #397
+  - **Issue:** "cycled through" is awkward.
+  - **Fix:** Plainer verb, "toggles".
+  - **Current:** `Each node can also be cycled through visible or occluded with a right-click.`
+  - **Replace with:** `A right-click toggles a node between visible and occluded.`
+- [ ] **L243** · Wording · #368c
+  - **Issue:** "describes the details of" and "made available in" are wordy.
+  - **Fix:** "summarizes" and "released with".
+  - **Current:** `Table~\ref{tab:datasheets} describes the details of the two large multi-camera datasets that are made available in this paper: Mouse-Dyad-10M and SLAP-2M.`
+  - **Replace with:** `Table~\ref{tab:datasheets} summarizes the two multi-camera datasets released with this paper, Mouse-Dyad-10M and SLAP-2M.`
+- [ ] **L245** · Wording · #400
+  - **Issue:** "(denoted TTI)" doesn't say which node it labels; list order is scattered.
+  - **Fix:** Reordered list, head to tail. Attach TTI to the right node if needed.
+  - **Current:** `A 15-node mouse skeleton was used throughout, comprising the nose, left and right ears, the tail-tip and tail base (denoted TTI), three intermediate tail nodes, the head, trunk and neck, and the left and right shoulders and haunches.`
+  - **Replace with:** `A 15-node mouse skeleton was used throughout, comprising the nose, left and right ears, head, neck, trunk, left and right shoulders, left and right haunches, tail base, three intermediate tail nodes and tail tip.`
+- [ ] **L245** · Wording · #400
+  - **Issue:** "enter Figures" is the wrong verb.
+  - **Fix:** "are included in".
+  - **Current:** `The six sessions recorded on 8 September 2025 were added afterwards and enter Figures~\ref{fig2}B and D and~\ref{fig4}.`
+  - **Replace with:** `The six sessions recorded on 8 September 2025 were added afterwards and are included in Figures~\ref{fig2}B and D and~\ref{fig4}.`
+- [ ] **L258** · Wording · #401 · also 225f, 226b, 226c, 226d
+  - **Issue:** Four short sentences; "FPS"/"framerate" inconsistent; ASCII "x" (#225, #226).
+  - **Fix:** One sentence, "fps", $\times$.
+  - **Current:** `The video resolution for all datasets is 1280x1024 pixels. The SLAP-2M video data has a frame rate of 30 FPS. The Mouse-Dyad-10M data has a framerate of 150 FPS. The HardFight dataset has a framerate of 60 FPS.`
+  - **Replace with:** `Frame rates were 30 fps (SLAP-2M), 150 fps (Mouse-Dyad-10M) and 60 fps (HardFight), all at $1280 \times 1024$ pixels.`
+- [ ] **L260** · Wording · #402
+  - **Issue:** "output capture signals and output stimulation" doesn't parse; "Additionally" opener.
+  - **Fix:** Plain statement that stimulation is frame-locked to capture.
+  - **Current:** `Additionally, Panopticon contains an on-board interface for optogenetic stimulation paradigms, using the same trigger board as acquisition for exact correspondence between output capture signals and output stimulation.`
+  - **Replace with:** `Panopticon also drives optogenetic stimulation from the acquisition trigger board, so stimulation is frame-locked to capture.`
+- [ ] **L260** · Wording · #402
+  - **Issue:** Compound modifier missing its hyphen.
+  - **Fix:** "LUC3D-compatible".
+  - **Current:** `Each session is written to a LUC3D compatible structured folder with metadata describing the animals, rig and acquisition machine.`
+  - **Replace with:** `Each session is written to a LUC3D-compatible folder with metadata describing the animals, rig and acquisition machine.`
+- [ ] **L265** · Wording · #403 · also 340g
+  - **Issue:** Padding; the third "without any installation required" (#340).
+  - **Fix:** Shorter introduction of calibrat3.
+  - **Current:** `This paper presents a browser-based calibration tool called calibrat3 which takes an OpenCV/Anipose-inspired calibration suite and makes it more accessible without any installation required (\url{https://talmolab.github.io/calibrat3/}).`
+  - **Replace with:** `We also present calibrat3, a browser-based calibration tool modeled on the OpenCV and Anipose pipelines (\url{https://talmolab.github.io/calibrat3/}).`
+- [ ] **L265** · Wording · #403
+  - **Issue:** "allows for backwards compatibility with" is wordy.
+  - **Fix:** "reads both legacy and current".
+  - **Current:** `The tool also allows for backwards compatibility with deprecated versions of OpenCV's ChArUco boards and the newest formats.`
+  - **Replace with:** `It reads both legacy and current OpenCV ChArUco board formats.`
+- [ ] **L265** · Wording · #403
+  - **Issue:** Repeats capabilities now in the previous sentence.
+  - **Fix:** Delete; merged above.
+  - **Current:** `It is written in JavaScript with multiple options for camera distortions and performs per-camera intrinsics calculations.`
+  - **Replace with:** *(delete this sentence)*
+- [ ] **L265** · Wording · #403
+  - **Issue:** "benchmarked against"; methods pointer is a separate sentence.
+  - **Fix:** "compared with" plus the section pointer.
+  - **Current:** `Its accuracy was benchmarked against Anipose on three different camera rigs.`
+  - **Replace with:** `Its accuracy was compared with that of Anipose on three camera rigs (Supplementary Section~\ref{methods-calib-bench}).`
+- [ ] **L265** · Wording · #403
+  - **Issue:** Standalone pointer sentence.
+  - **Fix:** Delete; folded into the previous sentence.
+  - **Current:** `The benchmark methods can be found in Section~\ref{methods-calib-bench}.`
+  - **Replace with:** *(delete this sentence)*
+- [ ] **L265** · Wording · #403
+  - **Issue:** "can be found in" is padding; section not marked Supplementary.
+  - **Fix:** Shorter; says "Supplementary Section".
+  - **Current:** `The results can be found in Section~\ref{subsec-calib} and Supplementary Figure~\ref{fig8}.`
+  - **Replace with:** `Results are in Supplementary Section~\ref{subsec-calib} and Supplementary Figure~\ref{fig8}.`
+- [ ] **L267** · Wording · #404
+  - **Issue:** "realtime" spelling.
+  - **Fix:** "real time".
+  - **Current:** `Panopticon (Section~\ref{methods-acquisition}) also performs calibration directly from the acquisition window in realtime (Supplementary Figure~\ref{fig9}).`
+  - **Replace with:** `Panopticon (Section~\ref{methods-acquisition}) also performs calibration directly from the acquisition window in real time (Supplementary Figure~\ref{fig9}).`
+- [ ] **L267** · Wording · #404
+  - **Issue:** 55-word sentence; "it" has no clear referent.
+  - **Fix:** Split in two, naming the display.
+  - **Current:** `A ChArUco board is carried through the arena while a live coverage display shows which cameras and camera pairs have detected the board and which quadrants of each view remain uncovered, and it signals when every camera has sufficient shared detections and spatial coverage.`
+  - **Replace with:** `A ChArUco board is carried through the arena while a live coverage display shows which cameras and camera pairs have detected the board and which quadrants of each view remain uncovered. The display signals when every camera has sufficient shared detections and spatial coverage.`
+- [ ] **L272** · Wording · #405
+  - **Issue:** Overbroad: calibration benchmarks don't use the detection pool.
+  - **Fix:** Limit to tracking and triangulation benchmarks.
+  - **Current:** `Every benchmark reported here ran on a single shared detection pool with all track and identity information removed.`
+  - **Replace with:** `Every tracking and triangulation benchmark reported here ran on a single shared detection pool with all track and identity information removed.`
+- [ ] **L272** · Wording · #405
+  - **Issue:** Restates the paragraph's first two sentences.
+  - **Fix:** Delete.
+  - **Current:** `Because all identity labels were stripped before the methods ran, the comparison reflects each method's own association quality given the detector's spatial accuracy.`
+  - **Replace with:** *(delete this sentence)*
+- [ ] **L274** · Wording · #406
+  - **Issue:** Range written "E-G" here and "E--G" at L276.
+  - **Fix:** Use the en-dash range.
+  - **Current:** `The solver comparisons in Figure~\ref{fig2}E-G were computed on every 15th frame across the same 50 sessions as the tracking benchmarks.`
+  - **Replace with:** `The solver comparisons in Figure~\ref{fig2}E--G were computed on every 15th frame across the same 50 sessions as the tracking benchmarks.`
+- [ ] **L276** · Wording · #406
+  - **Issue:** "reduces redundant information and increases computational tractability" is padding.
+  - **Fix:** "loses little information".
+  - **Current:** `At 150 fps an animal moves less than a millimeter between consecutive frames, so sampling every 15th frame (0.1 s intervals) reduces redundant information and increases computational tractability.`
+  - **Replace with:** `At 150 fps an animal moves less than a millimeter between consecutive frames, so sampling every 15th frame (0.1~s intervals) loses little information.`
+- [ ] **L280** · Wording · #407
+  - **Issue:** "to allow for the solver to minimize it" is wordy.
+  - **Fix:** "so the solver can minimize it".
+  - **Current:** `The cost of pairing a target $t$ with a detection $d$ is summed over the skeleton nodes $k$ with per-node weights $w_k$, and then negated to allow for the solver to minimize it.`
+  - **Replace with:** `The cost of pairing a target $t$ with a detection $d$ is summed over the skeleton nodes $k$ with per-node weights $w_k$ and negated so the solver can minimize it.`
+- [ ] **L284** · Wording · #407
+  - **Issue:** "is on the ... distance" is missing a verb.
+  - **Fix:** "is based on".
+  - **Current:** `The three-dimensional term is on the perpendicular distance from the target's 3D point to the ray back-projected from the detection, with no age decay,`
+  - **Replace with:** `The three-dimensional term is based on the perpendicular distance from the target's 3D point to the ray back-projected from the detection, with no age decay,`
+- [ ] **L288** · Wording · #408 · also 346a, 346b
+  - **Issue:** Term used before it is defined.
+  - **Fix:** Define staleness first, then eviction, with a pointer.
+  - **Current:** `A retained per-view detection older than $N$ frames is evicted from a target's 3D anchor before that frame is matched. The age of a retained detection is called staleness and $N$ is the eviction window.`
+  - **Replace with:** `The age of a retained per-view detection is its staleness. Detections older than $N$ frames, the eviction window, are removed from a target's 3D anchor before each frame is matched (Section~\ref{methods-anchor}).`
+- [ ] **L290** · Wording · #91rc · also 409
+  - **Issue:** "Utilizes"; "sessions" said twice.
+  - **Fix:** Uses "used" and a parenthetical breakdown.
+  - **Current:** `The benchmark utilizes the 92 multi-animal sessions, 50 from Mouse-Dyad-10M and 42 from SLAP-2M sessions.`
+  - **Replace with:** `The benchmark used 92 multi-animal sessions (50 Mouse-Dyad-10M, 42 SLAP-2M).`
+- [ ] **L298** · Wording · #410 · also 107a
+  - **Issue:** Heavy; "with no random draw" is implied.
+  - **Fix:** Shorter, with binomial notation.
+  - **Current:** `$C$-choose-$k$ combinations of the five camera serials are sorted and taken at the first, middle and last index with no random draw and the same three subsets are used for every session.`
+  - **Replace with:** `For each $k$, the $\binom{5}{k}$ subsets were sorted by camera serial, and the first, middle and last were used for every session.`
+- [ ] **L298** · Wording · #410 · also 107b, 368d
+  - **Issue:** "This was performed so that" and "ruled infeasible" are padding.
+  - **Fix:** Plain statement of the design reason.
+  - **Current:** `This was performed so that between-session spread was not confounded with between-subset spread (the full 26-subset design at 50 sessions, 1,300 runs, was ruled infeasible).`
+  - **Replace with:** `Using the same subsets in every session keeps between-session and between-subset variation separate (all 26 subsets over 50 sessions, 1,300 runs, was too costly).`
+- [ ] **L302** · Wording · #411
+  - **Issue:** 50-word sentence; "vetoes any step which raises" is odd.
+  - **Fix:** Split in two with plain wording.
+  - **Current:** `The non-linear solver minimizes a geometric error in each camera's native, still-distorted pixels while holding the cameras fixed, using a soft-L1 loss followed by an L1 polish phase and initialized from the linear solution, with a backtracking guard that vetoes any step which raises the objective.`
+  - **Replace with:** `The non-linear solver, initialized from the linear solution, minimizes a geometric error in each camera's native, still-distorted pixels while holding the cameras fixed. It uses a soft-L1 loss followed by an L1 polish phase, with a backtracking check that rejects any step that increases the objective.`
+- [ ] **L306** · Wording · #412 · also 203ra
+  - **Issue:** "the ... release that" is awkward; "CPU based" lacks its hyphen.
+  - **Fix:** One clause, stating both solvers run on the CPU.
+  - **Current:** `The comparison triangulation method in Figures~\ref{fig2}F and~\ref{fig2}G is aniposelib 0.7.2, the OpenCV and NumPy release that undistorts with \texttt{cv2.undistortPoints} and then solves each point with a singular value decomposition, which is also CPU based.`
+  - **Replace with:** `The comparison solver in Figures~\ref{fig2}F and G is aniposelib 0.7.2, which undistorts with \texttt{cv2.undistortPoints} and solves each point by singular value decomposition on the CPU, as LUC3D does.`
+- [ ] **L306** · Wording · #412 · also 203rb
+  - **Issue:** Wordy; missing comma; "due to the browser-based constraint".
+  - **Fix:** One plain sentence.
+  - **Current:** `While there are also GPU-based alternatives those would not be suitable for comparison due to the browser-based constraint.`
+  - **Replace with:** `GPU triangulators were not compared because LUC3D runs in the browser.`
+- [ ] **L306** · Wording · #412
+  - **Issue:** "by algorithm class by linear and non-linear forms" is garbled.
+  - **Fix:** "in pairs by class (linear and non-linear)".
+  - **Current:** `The four solvers were compared in pairs matched by algorithm class by linear and non-linear forms.`
+  - **Replace with:** `The four solvers were compared in pairs by class (linear and non-linear).`
+- [ ] **L306** · Wording · #412
+  - **Issue:** Wordy; "impractical to include in the figure".
+  - **Fix:** Shorter; "is not plotted".
+  - **Current:** `Enabling the library's RANSAC path costs 2,467 microseconds per keypoint, which is 85 times the default path, so it was impractical to include in the figure.`
+  - **Replace with:** `aniposelib's RANSAC path costs 2,467 microseconds per keypoint, 85 times its default path, and is not plotted.`
+- [ ] **L308** · Wording · #413
+  - **Issue:** "The solvers reported here" includes aniposelib; ambiguous subject.
+  - **Fix:** Name LUC3D's and aniposelib's timers separately.
+  - **Current:** `The solvers reported here were timed in process under single-threaded Node 26 with \texttt{performance.now} around each call and aniposelib with \texttt{time.perf\_counter}, taking the best of three runs.`
+  - **Replace with:** `LUC3D's solvers were timed in process under single-threaded Node 26 with \texttt{performance.now} around each call, and aniposelib's with \texttt{time.perf\_counter}, taking the best of three runs.`
+- [ ] **L314** · Wording · #414 · also 328
+  - **Issue:** Disordered paragraph: "those other two views" lost its referent; "by reported" typo; predicted result in Methods.
+  - **Fix:** Reordered paragraph; typo, stray "that" and prediction removed.
+  - **Current:** `Figure~\ref{fig5}C measures how many of the detector's missing nodes that the other views could fill in by reprojection as a function of number of cameras. A keypoint is one node of an instance in a single frame. A keypoint counts as missing in a view when the proofread reference contains it and it is missing from the matched detection in each frame. A missing keypoint counts as recovered when at least two other cameras in the rig detect the keypoint. Each detected animal is paired with a reference animal by Hungarian matching on mean keypoint distance. Those other two views triangulate it and the result reprojects into the view that missed it. Triangulation cannot be performed with one view, so recovery with two cameras is zero by construction. The addition of more cameras into the reprojection calculation will increase the number of filled-in keypoints as they become visible from other angles. The misses are pooled over 74 sessions and $\sim$42 million keypoints in the SLAP-2M dataset. Missing keypoints are by reported by difficulty rating and recovery is examined by adding more cameras to the triangulation.`
+  - **Replace with:** `Figure~\ref{fig5}C measures how many of the detector's missing keypoints the other views can fill in by reprojection, as a function of camera count. A keypoint is one node of one instance in one frame. Each detected animal is paired with a reference animal by Hungarian matching on mean keypoint distance. A keypoint is missing in a view when the proofread reference has it and the matched detection does not, and recovered when at least two other cameras detect it, so that it can be triangulated and reprojected into the view that missed it. With two cameras, recovery is zero by construction. Misses are pooled over 74 SLAP-2M sessions ($\sim$42 million keypoints) and reported by difficulty rating.`
+- [ ] **L322** · Wording · #415
+  - **Issue:** 55-word sentence; hyphen instead of en dash in Mann–Whitney.
+  - **Fix:** Split in two; en dash.
+  - **Current:** `The comparison was repeated with the pair as the unit over the 14 pairs with at least five displays, and across animals, with each mouse's median over every display it took part in and the four males compared with the five females by a Mann-Whitney U test.`
+  - **Replace with:** `The comparison was repeated with the pair as the unit (14 pairs with at least five displays). It was also repeated across animals, using each mouse's median over every display it took part in, with the four males compared with the five females by a Mann--Whitney U test.`
+- [ ] **L328** · Wording · #416
+  - **Issue:** "detector" elsewhere means the pose detector.
+  - **Fix:** "display-detection code".
+  - **Current:** `To check that the detector has no slot preference, every session was re-run with the two slots exchanged in the input.`
+  - **Replace with:** `To check that the display-detection code has no slot preference, every session was re-run with the two slots exchanged in the input.`
+- [ ] **L334** · Wording · #360c
+  - **Issue:** Unneeded "therefore".
+  - **Fix:** Drops "therefore".
+  - **Current:** ``` A ``track 0'' in one camera therefore has no relation to a ``track 0'' in another. ```
+  - **Replace with:** ``` A ``track 0'' in one camera has no relation to a ``track 0'' in another. ```
+- [ ] **L336** · Wording · #417
+  - **Issue:** IDA is defined but no result or figure reports it.
+  - **Fix:** Delete, unless a panel uses it; then cite that panel.
+  - **Current:** `Identity accuracy (IDA) is the number of correctly identified detections divided by the number of detections matched to a ground-truth animal.`
+  - **Replace with:** *(delete this sentence)*
+- [ ] **L336** · Wording · #417
+  - **Issue:** Part of the unused IDA definition.
+  - **Fix:** Delete with the paragraph.
+  - **Current:** `It excludes detector misses, which enter the denominator of identity recall, and false-positive detections, which enter the denominator of identity precision.`
+  - **Replace with:** *(delete this sentence)*
+- [ ] **L336** · Wording · #417 · also 360d
+  - **Issue:** Part of the unused IDA definition.
+  - **Fix:** Delete with the paragraph.
+  - **Current:** `IDA therefore measures the association alone, and it is always at least as large as identity precision.`
+  - **Replace with:** *(delete this sentence)*
+- [ ] **L344** · Wording · #418
+  - **Issue:** Repeats L340's reason; "prematurely ... leading to poor performance".
+  - **Fix:** Keep only the setting.
+  - **Current:** `ByteTrack default setting often prematurely retires tracks leading to poor performance, so track retirement was disabled by setting \texttt{lost\_track\_buffer} to the session length.`
+  - **Replace with:** `Track retirement was disabled by setting \texttt{lost\_track\_buffer} to the session length.`
+- [ ] **L344** · Wording · #418
+  - **Issue:** "to make it competitive" editorializes.
+  - **Fix:** Drop the purpose clause.
+  - **Current:** `Its output was then reduced to two identities with a greedy stitch that operates on whole tracklets to make it competitive.`
+  - **Replace with:** `Its output was then reduced to two identities with a greedy stitch over whole tracklets.`
+- [ ] **L348** · Wording · #362a · also 419
+  - **Issue:** Convoluted description of the inverted-sign bug.
+  - **Fix:** States the bug plainly.
+  - **Current:** `\citet{Chen2020} weight each retained detection by an exponential decay in age (their Eq.~11), but the reference implementation computes the weights without applying them, and computes the sign of the exponent such that older detections would receive larger weights if the routine were completed.`
+  - **Replace with:** `\citet{Chen2020} weight each retained detection by an exponential decay in age (their Eq.~11), but the reference implementation computes the weights without applying them, and with the exponent's sign inverted, so older detections would receive larger weights if the weights were applied.`
+- [ ] **L348** · Wording · #360e
+  - **Issue:** "therefore" hides the real contrast between the paper and the code.
+  - **Fix:** "In practice" states that contrast.
+  - **Current:** `All retained detections therefore enter the triangulation at equal weight regardless of age.`
+  - **Replace with:** `In practice, all retained detections enter the triangulation at equal weight regardless of age.`
+- [ ] **L350** · Wording · #420
+  - **Issue:** First of three changes isn't signposted.
+  - **Fix:** Prefix "First,".
+  - **Current:** `Staleness eviction deletes every retained detection older than $N$ frames at the start of each frame, so the anchor is triangulated only from cameras that saw the animal recently.`
+  - **Replace with:** `First, staleness eviction deletes every retained detection older than $N$ frames at the start of each frame, so the anchor is triangulated only from cameras that saw the animal recently.`
+- [ ] **L350** · Wording · #420
+  - **Issue:** Second change isn't signposted.
+  - **Fix:** Prefix "Second,".
+  - **Current:** `Under synchronous scoring, every anchor is frozen at the start of a frame.`
+  - **Replace with:** `Second, under synchronous scoring, every anchor is frozen at the start of a frame.`
+- [ ] **L350** · Wording · #420 · also 334b
+  - **Issue:** "Also," opener; no unit.
+  - **Fix:** "Third," and mm (verified in `ui/settings.js`).
+  - **Current:** `Also, the distance threshold of the 3D affinity term was reduced from 50 to 25.`
+  - **Replace with:** `Third, the distance threshold of the 3D term was reduced from 50 to 25~mm.`
+- [ ] **L350** · Wording · #366b · also 420
+  - **Issue:** Vague passive opener that announces the next sentences.
+  - **Fix:** Says how many changes follow; signpost First/Second/Third (#420).
+  - **Current:** `Modifications were made to the anchor update to reduce identity switches.`
+  - **Replace with:** `We made three changes to the anchor update to reduce identity switches.`
+- [ ] **L356** · Wording · #421
+  - **Issue:** "a band labeled as running from" is heavy.
+  - **Fix:** Plain summary of medians, IQRs and bands.
+  - **Current:** `Medians and interquartile ranges are used for the error distributions and a band labeled as running from the 25th to the 75th percentile is an across-session spread of per-session medians.`
+  - **Replace with:** `Error distributions are summarized by medians and interquartile ranges, and bands spanning the 25th to 75th percentiles show the across-session spread of per-session medians.`
+- [ ] **L391** · Wording · #423
+  - **Issue:** "three and four animal" needs hyphens; "sessions" twice.
+  - **Fix:** Hyphenated compound; one "sessions".
+  - **Current:** `However, in the three and four animal sessions where cross-view association should help most, SLEAP is slightly ahead in all seven sessions (median differences $-0.039$ and $-0.028$).`
+  - **Replace with:** `However, in the seven three- and four-animal sessions, where cross-view association should help most, SLEAP is slightly ahead in every one (median differences $-0.039$ and $-0.028$).`
+- [ ] **L393** · Wording · #424
+  - **Issue:** Dangling modifier: LUC3D's IDF1 isn't doing the scoring.
+  - **Fix:** "When ... are pooled" clause.
+  - **Current:** `Scoring all five Mouse-Dyad-10M cameras into one accumulator with a single global identity per animal, LUC3D's IDF1 is unchanged, 0.861 within view and 0.861 across.`
+  - **Replace with:** `When all five Mouse-Dyad-10M cameras are pooled with one global identity per animal, LUC3D's IDF1 is unchanged (0.861 within view and across views).`
+- [ ] **L397** · Wording · #425
+  - **Issue:** "appearance cue": the tracker uses no appearance features.
+  - **Fix:** "no recent detection anchors the lost identity".
+  - **Current:** `If another animal then passes through that position while no recent appearance cue is available, the two identities swap.`
+  - **Replace with:** `If another animal then passes through that position while no recent detection anchors the lost identity, the two identities swap.`
+- [ ] **L397** · Wording · #425
+  - **Issue:** Percent units; main text L148 uses per 100,000 for the same numbers.
+  - **Fix:** Per 100,000 camera frames.
+  - **Current:** `At $N = 20$, within-view identity switches fell from 2,071 to 413 (0.0046\% to 0.0009\% of camera frames) and mean cross-view IDF1 rose from 0.749 to 0.861 across the 50 sessions.`
+  - **Replace with:** `At $N = 20$, within-view identity switches fell from 2,071 to 413 (4.6 to 0.92 per 100,000 camera frames) and mean cross-view IDF1 rose from 0.749 to 0.861 across the 50 sessions.`
+- [ ] **L399** · Wording · #426
+  - **Issue:** "and then rising back up" is ungrammatical.
+  - **Fix:** Clean list, absorbing the "opposite effect" sentence.
+  - **Current:** `The parameter sweep showed 2,071 switches with no eviction, 677 at $N = 1$, 511 at $N = 10$ and 413 at $N = 20$, and then rising back up to 487 at $N = 30$.`
+  - **Replace with:** `Switches numbered 2,071 with no eviction, 677 at $N = 1$, 511 at $N = 10$, 413 at $N = 20$ and 487 at $N = 30$, so retaining stale evidence beyond $N = 20$ reversed the gain.`
+- [ ] **L399** · Wording · #426
+  - **Issue:** Misplaced; "that" has no referent here.
+  - **Fix:** Delete; merged above.
+  - **Current:** `Retaining stale evidence for longer than that had the opposite effect.`
+  - **Replace with:** *(delete this sentence)*
+- [ ] **L399** · Wording · #426
+  - **Issue:** Repeats numbers from the same paragraph; missing "and"; "versus".
+  - **Fix:** Delete.
+  - **Current:** `Compared with $N = 10$, it produced fewer switches (413 versus 511), higher mean and median cross-view IDF1 (0.861 versus 0.850 and 0.915 versus 0.913).`
+  - **Replace with:** *(delete this sentence)*
+- [ ] **L406** · Wording · #427
+  - **Issue:** "on another" is missing its noun; two sentences for one point.
+  - **Fix:** One sentence with the reason.
+  - **Current:** `calibrat3 vendors OpenCV.js 4.13.0 and cannot be run on another, and OpenCV 5 moved the ChArUco corner origin by half a pixel in both axes. A calibration scored across the two OpenCV versions pays an undue penalty.`
+  - **Replace with:** `calibrat3 bundles OpenCV.js 4.13.0 and cannot use another version, and OpenCV 5 shifted the ChArUco corner origin by half a pixel in both axes, so scoring a calibration under a different version would penalize it unfairly.`
+- [ ] **L406** · Wording · #427
+  - **Issue:** 882 and 378 look contradictory with "867 to 1,003 per session".
+  - **Fix:** Marks them per camera. Consistent with the deposit: calibrat3 fits 6,750 camera-frames over 18 cameras on the 18-camera rig, about 375 per camera (`fig7s3_equal_frames.csv`).
+  - **Current:** `That is a median of 2,606 frames per camera on the 2022-10-07 SLAP-2M session and 623 on the 18-camera session, where calibrat3's sampled subset gives 882 and 378, so Anipose fits from more frames in both.`
+  - **Replace with:** `That is a median of 2,606 frames per camera on the 2022-10-07 SLAP-2M session and 623 on the 18-camera session, compared with 882 and 378 per camera in calibrat3's sampled subset, so Anipose fits from more frames on both.`
+- [ ] **L412** · Wording · #428
+  - **Issue:** Unparallel: "the median is 0.07 ... and Anipose 0.09".
+  - **Fix:** Parallel possessives.
+  - **Current:** `On the held-out Mouse-Dyad-10M rig, which had no part in choosing calibrat3's defaults, the median is 0.07 pixels and Anipose 0.09.`
+  - **Replace with:** `On the held-out Mouse-Dyad-10M rig, which had no part in choosing calibrat3's defaults, calibrat3's median is 0.07 pixels and Anipose's 0.09.`
+- [ ] **L412** · Wording · #428
+  - **Issue:** "margins" are actually medians.
+  - **Fix:** "gaps", with units and a colon.
+  - **Current:** `On the two rigs that were used to choose the defaults the margins are larger, 0.10 and 0.32 on the SLAP-2M rig and 0.21 and 1.28 on the 18-camera rig.`
+  - **Replace with:** `On the two rigs used to choose the defaults the gaps are larger, 0.10 and 0.32 pixels on the SLAP-2M rig and 0.21 and 1.28 on the 18-camera rig.`
+- [ ] **L412** · Wording · #428
+  - **Issue:** "furthest" for distance; misplaced unit.
+  - **Fix:** "farthest"; unit at the end.
+  - **Current:** `The tails separate furthest on the SLAP-2M rig, where the 95th percentiles are 0.55 pixels and 8.45.`
+  - **Replace with:** `The tails separate farthest on the SLAP-2M rig, where the 95th percentiles are 0.55 and 8.45 pixels.`
+- [ ] **L414** · Wording · #429
+  - **Issue:** "differences to"; rig not named in the text.
+  - **Fix:** "isolate the effect of"; names the 18-camera rig.
+  - **Current:** `The calibrat3 solver was tested on identical detections with one setting changed at a time to examine differences to the intrinsic model.`
+  - **Replace with:** `On the 18-camera rig, the calibrat3 solver was re-run on identical detections with one setting changed at a time to isolate the effect of the intrinsic model.`
+- [ ] **L420** · Wording · #430
+  - **Issue:** Padding; the consequence is obvious.
+  - **Fix:** Keep only "calibrat3 is deterministic."
+  - **Current:** `calibrat3 is deterministic so does not require multiple runs on the same data.`
+  - **Replace with:** `calibrat3 is deterministic.`

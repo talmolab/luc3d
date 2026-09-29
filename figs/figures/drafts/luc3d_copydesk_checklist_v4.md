@@ -1,0 +1,902 @@
+# Copydesk review v4: LUC3D manuscript (`luc3d_newest.tex`)
+
+Synced with the 2026-09-29 01:11 `luc3d_newest.tex`, plus the emergency edits applied on top of it (report: `EMERGENCY-FIX-SUPPFIG1-CHANGES.md`). Four tiers, manuscript order within each, one entry per sentence. Each entry gives **Issue** → **Fix** → **Current** (verbatim from the `.tex`, so Ctrl-F finds it) → **Replace with** (paste-ready, no colons, semicolons or em dashes joining clauses). Current and Replace text is in code format so the preview shows the exact LaTeX (backslashes, `$`, `~`) for copy and paste. "also #…" lists merged duplicate items.
+
+**Progress:** 25 / 150  (emergency 9/9 · must 15/17 · should 1/91 · AI tells 0/5 · repetition 0/28)
+
+---
+
+## 0. Emergency fix: new Supplementary Figure 1 (9 / 9)
+
+Supplementary Figure 1 (`\label{fig6}`, `figs/figures/fig6/fig6.pdf`) was rebuilt on 2026-09-28 from the fair SLAP-2M re-run. Panels B–D now show all three trackers on the keeptrack pool, with SLEAP capped at each session's animal count and ByteTrack never retiring tracks and stitched to that count. Panels A, E and F are unchanged. All nine are now applied (E1 and E6 by your own rewrites, the rest on 2026-09-29), so the text matches the figure. They replace the "pending fair re-run" entries in section 1 (those now point here), so apply them from this list only.
+
+Numbers used (all 74 sessions, source `figs/out/fig6_slap2m_fair.json`): within-view mean LUC3D 0.899, SLEAP 0.872, ByteTrack 0.838. LUC3D − SLEAP is 0.000 median for one animal (32 sessions), +0.026 overall (95% CI 0.009–0.044, 26 higher, 39 lower, 9 tied, sign test P = 0.14 excluding ties), +0.047 for two or more animals (26/42, P = 0.16), and 7/7 higher for three or four animals (medians +0.101 and +0.115, P = 0.016).
+
+- [x] **E1 · L150** · *resolved by your 15:27 rewrite* (the SLAP-2M claim is replaced by the Mouse-Dyad-10M numbers from Supp. Fig 1A, 0.861 / 0.642 / 0.676, which match the figure). See E9 for the one sentence it leaves inconsistent.
+  - **Why:** Results paragraph. The 56-of-74 claim and the occlusion explanation came from uncapped SLEAP on the truncated pool. With the fair run, LUC3D wins all 7 three- and four-animal sessions and ties SLEAP on single-animal sessions, so the claim reverses (wording changed, not just numbers).
+  - **Current:** `LUC3D's within-view IDF1 is higher than SLEAP's in 56 of the 74 SLAP-2M sessions (pooled difference 0.099, sign test $P = 1.1 \times 10^{-5}$), and SLEAP's is higher in every one of the seven sessions with three or four animals (median differences $-0.039$ and $-0.028$). Those are the sessions with the most occlusion, where the 3D targets that link identity across views are most often missing, so cross-view evidence does not translate into a within-view gain there.`
+  - **Replace with:** `In the seven SLAP-2M sessions with three or four animals, LUC3D's within-view IDF1 is higher than SLEAP's in every one (median differences 0.101 and 0.115, sign test $P = 0.016$), and in the 32 single-animal sessions the two are indistinguishable (median difference 0.000). Those are the sessions with the most occlusion, and the gain there is consistent with evidence from the other cameras recovering identities that a single camera loses.`
+- [x] **E2 · L338** · *applied 2026-09-29* · *half done at 15:27* (doubled period fixed, "6A" still needs to become "6A to D")
+  - **Why:** Methods. B–D now use the improved baseline settings too, so "6A" alone is wrong. Also fixes the doubled period.
+  - **Current:** `For Supplementary Figure~\ref{fig6}A, SLEAP and ByteTrack were run with settings that improve their performance over the defaults.`
+  - **Replace with:** `For Supplementary Figure~\ref{fig6}A to D, SLEAP and ByteTrack were run with settings that improve their performance over the defaults.`
+- [x] **E3 · L340** · *applied 2026-09-29, appended at the END of the paragraph (after “…47.5 tracks per camera-session.”), not after the first sentence, so the local_queues and original-run sentences stay with the Mouse-Dyad sentence they explain*
+  - **Why:** Methods. The SLEAP cap is described for Mouse-Dyad-10M only. Apply after the L342 Imprecise entry (section 2) if you take that one.
+  - **Current:** `sleap-nn (0.3.0) was run with the track count capped at the number of animals in the session, two for Mouse-Dyad-10M, using \texttt{--max\_tracks 2 --candidates\_method local\_queues}.`
+  - **Insert after:** `For SLAP-2M the cap was the session's number of animals, one to four, using sleap-nn (0.2.0), the version that produced the SLAP-2M detections.`
+- [x] **E4 · L342** · *applied 2026-09-29*
+  - **Why:** Methods. False now. B–D no longer use the original runs.
+  - **Current:** `These changes apply to Supplementary Figure~\ref{fig6}A only. Supplementary Figure~\ref{fig6}B to D use the original runs of both trackers, in which ByteTrack retires a track after 60 frames (2~s at SLAP-2M's 30 fps).`
+  - **Replace with:** `The same changes apply to Supplementary Figure~\ref{fig6}B to D, where the stitch reduces each session to its number of animals.`
+- [x] **E5 · L387** · *applied 2026-09-29*
+  - **Why:** Supplement 5.1. False now ("original settings… not directly comparable with A"). Your 15:27 edit deleted the duplicate sentence before it, so this is now the only B-to-D sentence.
+  - **Current:** `Supplementary Figure~\ref{fig6}B to D use the SLAP-2M sessions, which range from one to four animals, and the original settings of SLEAP and ByteTrack (Section~\ref{methods-baseline}), so their values are not directly comparable with Supplementary Figure~\ref{fig6}A.`
+  - **Replace with:** `Supplementary Figure~\ref{fig6}B to D use the SLAP-2M sessions, which range from one to four animals, and the same SLEAP and ByteTrack settings as Supplementary Figure~\ref{fig6}A (Section~\ref{methods-baseline}).`
+- [x] **E6 · L387** · *resolved by your 15:27 rewrite* (now "does not cost within-view accuracy (Supplementary Figure~\ref{fig6}A)", which drops the false "in most sessions improves it")
+  - **Why:** Supplement 5.1. "In most sessions improves it" is false (26 of 74 higher, 39 lower, 9 tied). The gain is in the three- and four-animal sessions.
+  - **Current:** `The within-view comparison is reported to show that adding cross-view association does not cost within-view accuracy, and in most sessions improves it.`
+  - **Replace with:** `The within-view comparison is reported to show that adding cross-view association does not cost within-view accuracy, and in the sessions with three or four animals improves it.`
+- [x] **E7 · L389** · *applied 2026-09-29*
+  - **Why:** Supplement 5.1. Every number changes, the single-animal sentence becomes false (capped, SLEAP and LUC3D tie there), and the last sentence reverses.
+  - **Current:** `Within a single camera of SLAP-2M, all three methods are broadly competitive. The within-view difference between LUC3D and SLEAP is largest in the single-animal sessions, where there is nothing to associate (Supplementary Figure~\ref{fig6}C). Pooled over all 74 sessions LUC3D's within-view IDF1 is higher by 0.099 (56 of 74 sessions, sign test $P = 1.1 \times 10^{-5}$). Restricted to sessions with two or more animals, the difference is 0.067 (31 of 42 sessions, $P = 0.003$). However, in the three and four animal sessions where cross-view association should help most, SLEAP is slightly ahead in all seven sessions (median differences $-0.039$ and $-0.028$).`
+  - **Replace with:** `The within-view difference between LUC3D and SLEAP is negligible in the single-animal sessions, where there is nothing to associate (Supplementary Figure~\ref{fig6}C). Pooled over all 74 sessions LUC3D's within-view IDF1 is higher by 0.026 (26 of 74 sessions, sign test $P = 0.14$). Restricted to sessions with two or more animals, the difference is 0.047 (26 of 42 sessions, $P = 0.16$). In the three and four animal sessions where cross-view association should help most, LUC3D is ahead in all seven sessions (median differences $0.101$ and $0.115$).`
+- [x] **E8 · L429** · *not needed, caption left unchanged (L387 states the settings)*
+  - **Why:** Supplementary Figure 1 caption. The caption never says how B–D's baselines were run, and that is now what makes B–D comparable with A.
+  - **Current:** `(A, 50 Mouse-Dyad-10M sessions; B to D, all 74 SLAP-2M sessions, $\sim$11.7 million camera frames;`
+  - **Replace with:** *(not applied, leave the caption as it is)*
+- [x] **E9 · L150** · *applied 2026-09-29* · new at 15:27
+  - **Why:** Your L150 rewrite puts "all three methods are broadly competitive" directly before 0.861 against 0.642 and 0.676, and a 0.22 gap is not broadly competitive. They are broadly competitive on SLAP-2M (0.899, 0.872, 0.838 in the re-run). The Mouse-Dyad-10M gap is mostly session length, not tracker quality. Its sessions are about ten times longer (about 180,000 against 18,000 frames per camera), and in 18,000-frame windows SLEAP and ByteTrack reach 0.798 and 0.823 (12-session subset, `figs/out/fig6_window_length_control_12.json`). The replacement states only the length fact and leaves the window numbers out until the full 50-session run.
+  - **Current:** `Within a single camera all three methods are broadly competitive. On Mouse-Dyad-10M, where SLEAP and ByteTrack were run with the number of animals enforced, LUC3D's within-view IDF1 is 0.861, compared with 0.642 for SLEAP and 0.676 for ByteTrack (Supplementary Figure~\ref{fig6}A).`
+  - **Replace with:** `Within a single camera all three methods are broadly competitive on SLAP-2M (Supplementary Figure~\ref{fig6}B).`
+
+**Optional, not yet in the text:** name the dataset in panel titles A ("Mouse-Dyad-10M") and B–D ("SLAP-2M"), and add the session-length sentence to Supplement 5.1. Both wait on the full 50-session window-length run (12-session subset: SLEAP 0.662 → 0.798, ByteTrack 0.703 → 0.823 in 18,000-frame windows).
+
+---
+
+## 1. Must fix (15 / 17)
+
+Only places where the text states something false: a number, method, dataset or figure description that the data or code contradicts. Typos, rounding, missing panel references and ambiguous wording are in Should fix.
+
+- [ ] **L148** · ⚠ Must fix · typo · **REVERTED in the 15:27 paste, re-apply**
+  - **Issue:** Stray backtick at the end of the paragraph prints as an opening quote.
+  - **Fix:** Removes it.
+  - **Current:** ``` The exhaustive rule is over the $\sim$22 million camera frames without missing instances.` ```
+  - **Replace with:** `The exhaustive rule is over the $\sim$22 million camera frames without missing instances.`
+- [ ] **L148** · ⚠ Must fix · wording · **REVERTED in the 15:27 paste, re-apply**
+  - **Issue:** "counts weighting" reads as if the counts are weighted.
+  - **Fix:** Adds ", which weights".
+  - **Current:** `It is computed as the number of detections matched to the right individual divided by the average of the ground-truth and predicted detection counts weighting false positives and false negatives equally.`
+  - **Replace with:** `It is computed as the number of detections matched to the right individual divided by the average of the ground-truth and predicted detection counts, which weights false positives and false negatives equally.`
+- [X] **L150** · ⚠ Must fix · typo
+  - **Issue:** Missing space in "switches.SLEAP".
+  - **Fix:** Adds the space.
+  - **Current:** `Supplementary Figure~\ref{fig6} and Supplementary Sections~\ref{subsec2-7} and~\ref{subsec2-9} compare the LUC3D cross-view tracker with SLEAP and ByteTrack and report additional parameter searches that reduce ID switches.SLEAP and ByteTrack track each camera on its own, so the cross-view comparison measures a capability they do not have, and thus their cross-view IDF1 cannot exceed about $1/C$.`
+  - **Replace with:** `Supplementary Figure~\ref{fig6} and Supplementary Sections~\ref{subsec2-7} and~\ref{subsec2-9} compare the LUC3D cross-view tracker with SLEAP and ByteTrack and report additional parameter searches that reduce ID switches. SLEAP and ByteTrack track each camera on its own, so the cross-view comparison measures a capability they do not have, and thus their cross-view IDF1 cannot exceed about $1/C$.`
+- [x] **L150** · ⚠ Must fix · see Emergency fix E1 (resolved)
+  - **Issue:** The 56-of-74 SLAP-2M comparison ran SLEAP without a track cap and on the truncated predictions_h5s pool (64% of detections kept, 27–30% in 3–4-animal sessions). The occlusion explanation may describe that artifact. The fair within-view comparison is Supplementary Figure 1A.
+  - **Fix:** Keep these sentences. After the fair re-run (SLEAP capped at the proofread animal count, ByteTrack never-retire plus stitch, all three on the keeptrack pool), replace the numbers with the re-run values, and change the wording only if the results change the claim.
+  - **Current:** `LUC3D's within-view IDF1 is higher than SLEAP's in 56 of the 74 SLAP-2M sessions (pooled difference 0.099, sign test $P = 1.1 \times 10^{-5}$), and SLEAP's is higher in every one of the seven sessions with three or four animals (median differences $-0.039$ and $-0.028$). Those are the sessions with the most occlusion, where the 3D targets that link identity across views are most often missing, so cross-view evidence does not translate into a within-view gain there.`
+  - **Result:** **Wording changed because the claim reversed.** Capped SLEAP on the keeptrack pool no longer beats LUC3D in the 3–4-animal sessions. LUC3D wins all seven there, so the old occlusion explanation ("cross-view evidence does not translate into a within-view gain") is deleted, not reworded. The 56-of-74 claim is also gone. Pooled, LUC3D is higher in only 26 of 74 sessions, so the sentence leads with the 3–4-animal result. Source: `figs/out/fig6_slap2m_fair.json` (`figs/fig6_slap2m_fair.py`, run 2026-09-28): 74 SLAP-2M sessions × 6 cameras on the keeptrack pool, SLEAP (sleap-nn 0.2.0) capped at the animal count and verified at ≤ N tracks on 444/444 camera-sessions, ByteTrack never-retire plus stitch to the animal count, all scored by `luc3d-bench/scripts/evaluate.py`. LUC3D reproduces `fig9_slap2m.json` exactly (max |diff| 0 over 444 camera-sessions). Sign tests exclude ties (9 single-animal sessions tie exactly).
+  - **Replace with:** *(moved to Emergency fix E1; apply from there)*
+- [X] **L159** · ⚠ Must fix · typo
+  - **Issue:** Missing space in "configurations.Boxes" (Fig 3E caption).
+  - **Fix:** Adds the space.
+  - **Current:** `pooled across animals-by-cameras configurations.Boxes, the per-session distribution on a symmetric-log axis (both medians are 0); every session a point.`
+  - **Replace with:** `pooled across animals-by-cameras configurations. Boxes, the per-session distribution on a symmetric-log axis (both medians are 0); every session a point.`
+- [X] **L245** · ⚠ Must fix · typo
+  - **Issue:** Doubled period.
+  - **Fix:** One period.
+  - **Current:** `The social rearing results are unchanged on the 50 alone (the female starts 80.0\% of displays with an initiator in both sets and leads in 32 of 32 sessions)..`
+  - **Replace with:** `The social rearing results are unchanged on the 50 alone (the female starts 80.0\% of displays with an initiator in both sets and leads in 32 of 32 sessions).`
+- [X] **L272** · ⚠ Must fix · false
+  - **Issue:** Not a single pool (SLAP-2M uses keeptrack_h5s for Figs 3 and 5 and predictions_h5s for Supp. Fig 1B–D), and not byte-identical input (SLEAP is scored on its own tracking, in 1A its re-tracked detections, in 1B–D its inference-time tracks).
+  - **Fix:** States what was shared within each benchmark and the SLEAP exception.
+  - **Current:** `Every benchmark reported here ran on a single shared detection pool with all track and identity information removed. This ensures the comparisons isolate cross-view association and triangulation from the quality of the underlying detector. Each method under comparison received byte-identical input.`
+  - **Replace with:** `Within each benchmark every method received the same per-frame detections, with all track and identity information removed, so the comparisons isolate cross-view association and triangulation from the quality of the underlying detector. SLEAP, whose tracker is part of its own pipeline, was scored on its own tracking of the same predictions.`
+- [X] **L340** · ⚠ Must fix · typo
+  - **Issue:** Doubled period.
+  - **Fix:** One period.
+  - **Current:** `For Supplementary Figure~\ref{fig6}A, SLEAP and ByteTrack were run with settings that improve their performance over the defaults..`
+  - **Replace with:** `For Supplementary Figure~\ref{fig6}A, SLEAP and ByteTrack were run with settings that improve their performance over the defaults.`
+- [X] **L368** · ⚠ Must fix · typo
+  - **Issue:** "the luc3d" and double spaces before \url.
+  - **Fix:** "LUC3D", single spaces.
+  - **Current:** `The code for the luc3d can be found at  \url{https://github.com/talmolab/luc3d} with documentation at  \url{https://talmolab.github.io/luc3d-docs/}.`
+  - **Replace with:** `The code for LUC3D can be found at \url{https://github.com/talmolab/luc3d} with documentation at \url{https://talmolab.github.io/luc3d-docs/}.`
+- [X] **L372** · ⚠ Must fix · typo
+  - **Issue:** "Pantopticon" and a double space.
+  - **Fix:** "Panopticon", single space.
+  - **Current:** `The Pantopticon acquisition and live calibration app can be accessed at  \url{https://github.com/talmolab/panopticon}.`
+  - **Replace with:** `The Panopticon acquisition and live calibration app can be accessed at \url{https://github.com/talmolab/panopticon}.`
+- [X] **L389** · ⚠ Must fix · duplicate
+  - **Issue:** Two consecutive sentences both say B–D use the SLAP-2M sessions.
+  - **Fix:** Deletes the first.
+  - **Current:** `Supplementary Figure~\ref{fig6}B to D use all 74 SLAP-2M sessions (one to four animals, six proofread cameras, the full difficulty range).`
+  - **Replace with:** *(delete this sentence)*
+- [x] **L387** · ⚠ Must fix · see Emergency fix E6 (resolved)
+  - **Issue:** "In most sessions improves it" is the 56-of-74 SLAP-2M claim (uncapped SLEAP, truncated pool).
+  - **Fix:** Keep these sentences. After the fair re-run (SLEAP capped at the proofread animal count, ByteTrack never-retire plus stitch, all three on the keeptrack pool), replace the numbers with the re-run values, and change the wording only if the results change the claim.
+  - **Current:** `The within-view comparison is reported to show that adding cross-view association does not cost within-view accuracy, and in most sessions improves it.`
+  - **Result:** **Wording changed.** "In most sessions" is false after the re-run (26 of 74 higher, 39 lower, 9 tied). The improvement is confined to the 3–4-animal sessions (7 of 7). Source: `figs/out/fig6_slap2m_fair.json` (`figs/fig6_slap2m_fair.py`, run 2026-09-28): 74 SLAP-2M sessions × 6 cameras on the keeptrack pool, SLEAP (sleap-nn 0.2.0) capped at the animal count and verified at ≤ N tracks on 444/444 camera-sessions, ByteTrack never-retire plus stitch to the animal count, all scored by `luc3d-bench/scripts/evaluate.py`. LUC3D reproduces `fig9_slap2m.json` exactly (max |diff| 0 over 444 camera-sessions). Sign tests exclude ties (9 single-animal sessions tie exactly).
+  - **Replace with:** *(moved to Emergency fix E6; apply from there)*
+- [x] **L389** · ⚠ Must fix · see Emergency fix E7 (applied)
+  - **Issue:** Every number after the first sentence rests on the uncapped SLEAP and the truncated pool (the single-animal gap is SLEAP splitting one animal across several tracks).
+  - **Fix:** Keep these sentences. After the fair re-run (SLEAP capped at the proofread animal count, ByteTrack never-retire plus stitch, all three on the keeptrack pool), replace the numbers with the re-run values, and change the wording only if the results change the claim.
+  - **Current:** `Within a single camera of SLAP-2M, all three methods are broadly competitive. The within-view difference between LUC3D and SLEAP is largest in the single-animal sessions, where there is nothing to associate (Supplementary Figure~\ref{fig6}C). Pooled over all 74 sessions LUC3D's within-view IDF1 is higher by 0.099 (56 of 74 sessions, sign test $P = 1.1 \times 10^{-5}$). Restricted to sessions with two or more animals, the difference is 0.067 (31 of 42 sessions, $P = 0.003$). However, in the three and four animal sessions where cross-view association should help most, SLEAP is slightly ahead in all seven sessions (median differences $-0.039$ and $-0.028$).`
+  - **Result:** **Numbers replaced. The last sentence reverses and the second sentence changes.** The single-animal gap was SLEAP splitting one animal across tracks. Capped, the two are identical (median 0.000), so "largest in the single-animal sessions" is false. Every number is from the re-run. Source: `figs/out/fig6_slap2m_fair.json` (`figs/fig6_slap2m_fair.py`, run 2026-09-28): 74 SLAP-2M sessions × 6 cameras on the keeptrack pool, SLEAP (sleap-nn 0.2.0) capped at the animal count and verified at ≤ N tracks on 444/444 camera-sessions, ByteTrack never-retire plus stitch to the animal count, all scored by `luc3d-bench/scripts/evaluate.py`. LUC3D reproduces `fig9_slap2m.json` exactly (max |diff| 0 over 444 camera-sessions). Sign tests exclude ties (9 single-animal sessions tie exactly).
+  - **Replace with:** *(moved to Emergency fix E7; apply from there)*
+- [X] **L406** · ⚠ Must fix · false
+  - **Issue:** calibrat3 did not run at its defaults. Its sampling target (800, default 100) and reference camera (Camera 6) were set for the benchmark. Anipose did run at its defaults.
+  - **Fix:** Drops "default"; the changed calibrat3 settings are already given later in the paragraph.
+  - **Current:** `Both calibration tools ran in their default configurations, on OpenCV 4.13.0.`
+  - **Replace with:** `Both calibration tools ran on OpenCV 4.13.0.`
+- [X] **L416** · ⚠ Must fix · superseded
+  - **Issue:** The control numbers (1.274 → 1.154, 1.157, 0.472) come from a control run on the older setup, before the OpenCV 4.13 re-run the figure uses, and the sentence caveats that in the middle of the result. The general conclusions hold on either setup (equal frames about −0.1 px, reference camera no effect, calibrat3 less than half of aniposelib's median).
+  - **Fix:** States the finding generally, with no setup caveat. L406 is the one place that says which OpenCV version was used and why.
+  - **Current:** `Giving aniposelib only the frames calibrat3 used moved its median from 1.274 to 1.154 pixels on the 18-camera dataset, in a control run before both tools were moved to OpenCV 4.13. Setting aniposelib to use the same reference camera left its median at 1.274 pixels, and combining it with the equal frame budget gave 1.157. On the same observations calibrat3 was at 0.472 pixels, so neither difference explains the gap between the two tools.`
+  - **Replace with:** `Neither difference explains the gap between the two tools. Restricting aniposelib to the frames calibrat3 used lowered its median by about 0.1 pixels on the 18-camera dataset, giving it the same reference camera had no effect, and calibrat3's median remained less than half of aniposelib's in both cases.`
+- [X] **L420** · ⚠ Must fix · mismatch
+  - **Issue:** The figure reports one converged draw, not all three. `fig7_calib_deposit_unified.py` substitutes `anipose_converged_rep0` for this session (`ANIPOSE_SUBST`). The three converged draws' reported errors (0.1012 to 0.1031, `fig7s5_anipose_divergence.csv`) do agree to within 0.002 pixels.
+  - **Fix:** Says the figure uses one of the three.
+  - **Current:** `On one Mouse-Dyad-10M session it failed to converge on three of six draws from byte-identical detections, and the three converged draws, which agree to within 0.002 pixels, are what the figure reports.`
+  - **Replace with:** `On one Mouse-Dyad-10M session it failed to converge on three of six draws from byte-identical detections. The three converged draws agree to within 0.002 pixels, and the figure reports one of them.`
+- [X] **L431** · ⚠ Must fix · mismatch
+  - **Issue:** The Supp 1F right panel plots switches × 100 / camera frames (`panels/fig6_07_pr_switches.py` L156, 45,021,960 camera frames), not a percentage of frames (about 9.0 million). The two differ fivefold.
+  - **Fix:** Names the denominator the panel uses.
+  - **Current:** `Right, ID switches as a percentage of total frames.`
+  - **Replace with:** `Right, ID switches as a percentage of camera frames.`
+
+## 2. Should fix (1 / 91)
+
+Quick consistency, caption and leftover v3 items, mostly a word or two each.
+
+- [ ] **L99** · v3 carry-over · #253
+  - **Issue:** Non-restrictive "which" clauses lack commas (v3 #253).
+  - **Fix:** Adds commas around both clauses.
+  - **Current:** `LUC3D relies on triangulation which recovers a 3D point from its 2D detections in multiple views and reprojection which projects that 3D point back into each camera's 2D view.`
+  - **Replace with:** `LUC3D relies on triangulation, which recovers a 3D point from its 2D detections in multiple views, and reprojection, which projects that point back into each camera's view.`
+- [ ] **L103** · Consistency · #86rb · also 367b
+  - **Issue:** Colon joins the list to the sentence.
+  - **Fix:** Keeps "comprehensive" and drops the colon.
+  - **Current:** `This paper presents two comprehensive datasets: Mouse-Dyad-10M, with two mice per session, and SLAP-2M, with up to four mice and multiple levels of environmental enrichment.`
+  - **Replace with:** `This paper presents two comprehensive datasets, Mouse-Dyad-10M with two mice per session and SLAP-2M with up to four mice and multiple levels of environmental enrichment.`
+- [ ] **L110** · v3 carry-over · #224a
+  - **Issue:** Numerals for small counts; the two setups run together.
+  - **Fix:** Spells out four and two; comma separates the setups.
+  - **Current:** `Figure~\ref{fig1}A shows two multi-view recording setups: the SLAP-2M cage with eight cameras and up to 4 animals and the Mouse-Dyad-10M arena with five cameras and 2 animals (rendered from a single session's own calibration and tracked 3D poses).`
+  - **Replace with:** `Figure~\ref{fig1}A shows two multi-view recording setups, the SLAP-2M cage with eight cameras and up to four animals, and the Mouse-Dyad-10M arena with five cameras and two animals (each rendered from one session's calibration and tracked 3D poses).`
+- [ ] **L118** · Caption · #450
+  - **Issue:** Trailing clause; no final period, unlike the other titles.
+  - **Fix:** Reordered title with a period.
+  - **Current:** `\textbf{LUC3D annotates and proofreads multi-camera 3D pose in a browser with no installation, and assigns cross-view identity}`
+  - **Replace with:** `\textbf{LUC3D assigns cross-view identity and annotates and proofreads multi-camera 3D pose in the browser.}`
+- [ ] **L118** · Caption · #450 · also 331
+  - **Issue:** Mixed nouns and clauses in the list; "labelling" (#331).
+  - **Fix:** Parallel list items; American spelling.
+  - **Current:** `\textbf{B}, Pipeline of a standard recording and labelling session. Video acquisition, 2D pose estimation (SLEAP or any other predictor as .slp), cameras are calibrated with a browser-based tool, cross-view re-identification, one per animal; triangulation collapses the tiles into a single 3D volume which is then proofread against per-view reprojections; and the project exports as .slp 2.8 or HDF5.`
+  - **Replace with:** `\textbf{B}, Pipeline of a recording and labeling session. Video is acquired, 2D poses are estimated (SLEAP or any predictor that writes .slp), cameras are calibrated in the browser, detections are re-identified across views with one identity per animal, and the triangulated 3D volume is proofread using per-view reprojections and exported as .slp 2.8 or HDF5.`
+- [ ] **L118** · Caption · #450
+  - **Issue:** Two fragments; confusing far-left/left/right labels.
+  - **Fix:** Two full sentences, left pair and right pair.
+  - **Current:** `The four tiles are the same two views, cam 0 mid (far left) and cam 7 sideR (left), before and after. The per-camera tracks supplied to the app, each labeled with the track name its own camera assigned. Then the same two views after re-identification, each labeled with the resolved identity (right and far right).`
+  - **Replace with:** `The four tiles are the same two views, cam 0 mid and cam 7 sideR, before (left pair) and after (right pair) re-identification. The left pair shows the per-camera tracks supplied to the app, each labeled with its own camera's track name, and the right pair the resolved identities.`
+- [ ] **L118** · Caption · #450
+  - **Issue:** "against"; numeral 7.
+  - **Fix:** "with seven".
+  - **Current:** `\textbf{E}, Capability comparison against 7 multi-animal or multi-camera pose tools, read from each tool's published documentation.`
+  - **Replace with:** `\textbf{E}, Capability comparison with seven multi-animal or multi-camera pose tools, read from each tool's published documentation.`
+- [ ] **L131** · Imprecise
+  - **Issue:** 4.32 → 3.34 pixels are the linear DLT solver's values (`fig2e_accuracy_vs_cameras.csv`, `dlt_p50`). Fig 2E top plots both solvers, and the refined solver goes 4.42 → 3.15 (`ba_p50`). The sentence doesn't say which.
+  - **Fix:** Names the solver and fixes the double parenthesis.
+  - **Current:** `Scored relative to a camera the solve never saw, error falls from 4.32 pixels with two cameras to 3.34 pixels with four cameras (Figure~\ref{fig2}E) (top).`
+  - **Replace with:** `Scored relative to a camera the solve never saw, the linear solver's error falls from 4.32 pixels with two cameras to 3.34 pixels with four cameras (Figure~\ref{fig2}E, top).`
+- [ ] **L136** · Caption · #451
+  - **Issue:** $\tau$ is a tolerance, not an error.
+  - **Fix:** "at tolerances".
+  - **Current:** `Every label by hand ($C \times N$, $N = 15$ nodes) and the placements still needed after reprojection with $\tau = 10$ pixel error (solid) and 5 pixel error (dashed).`
+  - **Replace with:** `Every label by hand ($C \times N$, $N = 15$ nodes) and the placements still needed after reprojection at tolerances $\tau = 10$ pixels (solid) and 5 pixels (dashed).`
+- [ ] **L136** · v3 carry-over · #225g · also 451
+  - **Issue:** "plus or minus" spelled out.
+  - **Fix:** Uses $\pm$.
+  - **Current:** `Dashed curve, $k/\sin\theta$ with $k = 1.52$~mm; band, plus or minus 25\%; dotted line, the all-five-view floor.`
+  - **Replace with:** `Dashed curve, $k/\sin\theta$ with $k = 1.52$~mm. Band, $\pm$25\%. Dotted line, the all-five-view floor.`
+- [ ] **L136** · Caption · #451
+  - **Issue:** "for the cameras used in" is garbled.
+  - **Fix:** "by number of cameras".
+  - **Current:** `\textbf{E}, Solver accuracy for the cameras used in the linear DLT and non-linear LUC3D triangulation solvers.`
+  - **Replace with:** `\textbf{E}, Solver accuracy by number of cameras, for the linear DLT and non-linear LUC3D solvers.`
+- [ ] **L136** · Caption · #451
+  - **Issue:** "lowest in 50 of 50 sessions" doesn't say which solver.
+  - **Fix:** Names LUC3D refined (verified: lowest of the four in all 50 sessions, `fig2f_per_session.csv`).
+  - **Current:** `Boxes, the session distribution (median, IQR, whiskers 1.5$\times$IQR): Anipose linear 2.26, LUC3D DLT 2.35, Anipose optim 2.26 and LUC3D refined 2.15~pixels, lowest in 50 of 50 sessions.`
+  - **Replace with:** `Boxes, the session distribution (median, IQR, whiskers 1.5$\times$IQR) with medians of Anipose linear 2.26, LUC3D DLT 2.35, Anipose optim 2.26 and LUC3D refined 2.15~pixels (LUC3D refined lowest of the four in all 50 sessions).`
+- [ ] **L142** · Consistency · #172ra
+  - **Issue:** "Maree et al. ... uses" (et al. is plural). The citation form "Maree et al. (2024) [18]" is fine in this numbered style.
+  - **Fix:** "uses" → "use".
+  - **Current:** `Maree et al. (2024) \citep{Maree2024} uses an exhaustive cross-view association algorithm that enumerates every possible grouping of detections into identities, triangulates and reprojects each, and keeps the grouping with the lowest reprojection error.`
+  - **Replace with:** `Maree et al. (2024) \citep{Maree2024} use an exhaustive cross-view association algorithm that enumerates every possible grouping of detections into identities, triangulates and reprojects each, and keeps the grouping with the lowest reprojection error.`
+- [ ] **L142** · Consistency · citation style
+  - **Issue:** My earlier item (#172rb) switched this to \citet, which prints "Chen et al. [5]" without the year, unlike "Maree et al. (2024) [18]". That advice was wrong for this numbered style.
+  - **Fix:** Restores the author-year form so both methods are cited the same way.
+  - **Current:** `Following \citet{Chen2020}, LUC3D instead solves one Hungarian assignment per camera and commits it before moving on to the next, at a cost of $C \cdot A^3$ (the greedy Hungarian approach, Figure~\ref{fig3}A).`
+  - **Replace with:** `Following Chen et al. (2020) \citep{Chen2020}, LUC3D instead solves one Hungarian assignment per camera and commits it before moving on to the next, at a cost of $C \cdot A^3$ (the greedy Hungarian approach, Figure~\ref{fig3}A).`
+- [ ] **L150** · Structural · #396
+  - **Issue:** The camera-subset result is only in Methods but supports L101 and L207.
+  - **Fix:** Add one Results sentence (or cut those claims).
+  - **Insert after:** `Those are the sessions with the most occlusion, where the 3D targets that link identity across views are most often missing, so cross-view evidence does not translate into a within-view gain there.`
+  - **Insert:** `When the tracker is re-run on camera subsets of the Mouse-Dyad-10M rig, within-view IDF1 rises from 0.644--0.688 with two cameras to 0.861 with all five, and identity switches fall from 2,383--3,540 to 413 (Section~\ref{methods-subset}).`
+- [ ] **L154** · v3 carry-over · #217a · also 352a
+  - **Issue:** Subsection opens by announcing its result.
+  - **Fix:** Delete; start with the measurement.
+  - **Current:** `We have demonstrated that there is little difference in the quality of the solvers when comparing Anipose with LUC3D.`
+  - **Replace with:** *(delete this sentence)*
+- [ ] **L154** · v3 carry-over · #217b · also 352b
+  - **Issue:** Missing comma; announces speed before showing it.
+  - **Fix:** Delete; folded into 217e.
+  - **Current:** `However LUC3D is able to perform triangulations faster which supports real-time usability in the browser-based GUI.`
+  - **Replace with:** *(delete this sentence)*
+- [ ] **L154** · v3 carry-over · #217d
+  - **Issue:** Doesn't say what refinement failed to improve on.
+  - **Fix:** Says "improves much on its linear solve".
+  - **Current:** `Neither library's non-linear refinement shows a large improvement for this dataset.`
+  - **Replace with:** `Neither library's non-linear refinement improves much on its linear solve for this dataset.`
+- [ ] **L159** · Caption · #452
+  - **Issue:** Dangling participle "forming".
+  - **Fix:** Correct groupings triangulate; incorrect ones are gray.
+  - **Current:** `Incorrect groupings are shown as gray lines and correct groupings in color, forming the 3D triangulation.`
+  - **Replace with:** `Correct groupings (colored) triangulate to a consistent 3D point, and incorrect groupings are gray.`
+- [ ] **L159** · Consistency · #445
+  - **Issue:** "HardFight recording" versus "dataset".
+  - **Fix:** "dataset".
+  - **Current:** `C is one frame of a 3-animal SLAP-2M session; D is one frame of the HardFight recording; G and H use Mouse-Dyad-10M.`
+  - **Replace with:** `C is one frame of a 3-animal SLAP-2M session, D is one frame of the HardFight dataset, and G and H use Mouse-Dyad-10M.`
+- [ ] **L159** · Typo
+  - **Issue:** No space between "configurations." and "Boxes" in the Fig 3E caption.
+  - **Fix:** Adds the space and drops the colon and semicolon.
+  - **Current:** `\textbf{E}, Grouping accuracy: frames misgrouped relative to proofread ground truth, per 100,000 clean frames, pooled across animals-by-cameras configurations. Boxes, the per-session distribution on a symmetric-log axis (both medians are 0); every session a point.`
+  - **Replace with:** `\textbf{E}, Grouping accuracy, shown as frames misgrouped relative to proofread ground truth per 100,000 clean frames, pooled across animals-by-cameras configurations. Boxes, the per-session distribution on a symmetric-log axis (both medians are 0), with every session a point.`
+- [ ] **L171** · Structural · #459
+  - **Issue:** "paired Wilcoxon" mismatches the corrected Methods.
+  - **Fix:** "Wilcoxon signed-rank test with a null of 0.5".
+  - **Current:** `Over the 23 sessions with at least six displays, the female's median share of initiations is 0.83 (paired Wilcoxon $P = 2.7 \times 10^{-5}$, Figure~\ref{fig4}F).`
+  - **Replace with:** `Over the 23 sessions with at least six displays, the female's median share of initiations is 0.83 (Wilcoxon signed-rank test with a null of 0.5, $P = 2.7 \times 10^{-5}$, Figure~\ref{fig4}F).`
+- [ ] **L180** · Caption · #453
+  - **Issue:** "between 58 to 76"; "exists" is the wrong verb.
+  - **Fix:** "between 58 and 76"; "is recoverable only by".
+  - **Current:** `Every camera is mounted between 58 to 76 degrees above the animals, so the height axis exists only after triangulation.`
+  - **Replace with:** `Every camera is mounted between 58 and 76 degrees above the animals, so height is recoverable only by triangulation.`
+- [ ] **L180** · Caption · #453
+  - **Issue:** "p25 to p75" is code shorthand.
+  - **Fix:** "25th to 75th percentile".
+  - **Current:** `\textbf{B}, Nose height by sex and the nose gap, around display onset: across-session median of per-session medians, band the across-session p25 to p75.`
+  - **Replace with:** `\textbf{B}, Nose height by sex and the nose gap, around display onset, shown as the across-session median of per-session medians. Band, 25th to 75th percentile across sessions.`
+- [ ] **L180** · Caption · #453 · also 324
+  - **Issue:** Fragment; "relative speed" disagrees with Methods (#324).
+  - **Fix:** Full definition with window and "own speed".
+  - **Current:** `\textbf{E}, Facing pursuit in the pre-event window. Each animal's facing axis dotted with the direction away from its partner, scaled by its own relative speed.`
+  - **Replace with:** `\textbf{E}, Pursuit score over the 1.5~s before onset, the dot product of each animal's facing axis with the direction away from its partner, scaled by its own speed.`
+- [ ] **L180** · Caption · #453
+  - **Issue:** "the males rear" number agreement; ASCII ×.
+  - **Fix:** "the male rears"; consistent $\times$.
+  - **Current:** `Around a female onset the males rear below their chance rate at lag 0 (0.6×; the male has not yet reared) and climb to $1.7\times$ about 0.8 s later (left).`
+  - **Replace with:** `Around a female onset the male rears below his chance rate at lag 0 ($0.6\times$, before he has reared) and climbs to $1.7\times$ about 0.8~s later (left).`
+- [ ] **L180** · Caption · #453
+  - **Issue:** "above chance rate" is ungrammatical; not parallel with the female sentence.
+  - **Fix:** Parallel phrasing; 0.33 s.
+  - **Current:** `Around the male onset, the female is already $4.7\times$ above chance rate at lag 0, peaking at $5.3\times$ a third of a second later (right).`
+  - **Replace with:** `Around a male onset, the female is already at $4.7\times$ chance at lag 0, peaking at $5.3\times$ 0.33~s later (right).`
+- [ ] **L180** · Caption · #453
+  - **Issue:** Telegraphic fragment.
+  - **Fix:** A full definition sentence.
+  - **Current:** `A display is both animals reared, neck above 0.75 body length, tail bases within 2 body lengths, held at least 0.25 s.`
+  - **Replace with:** `A display requires both animals to be reared (neck above 0.75 body lengths) with tail bases within two body lengths for at least 0.25~s.`
+- [ ] **L180** · Imprecise
+  - **Issue:** The caption title says "the female starts 80% of the displays". She starts 428 of all 539 displays, which is 79.4%. The 80.0% is 428 of the 535 displays with an initiator, which is what L171 and panel F say (`fig5_upright.json` initiator_track 428/107/4 NaN).
+  - **Fix:** Names the denominator and removes the semicolon.
+  - **Current:** `Two mice rear together face to face; the female starts 80\% of the displays and the male joins in.`
+  - **Replace with:** `Two mice rear together face to face. The female starts 80\% of the displays with an initiator, and the male joins in.`
+- [ ] **L186** · v3 carry-over · #218b · also 385e
+  - **Issue:** Nested parentheses and "See"; "Meanwhile" is filler.
+  - **Fix:** "(Figure 5E, middle)"; drops "Meanwhile".
+  - **Current:** `Meanwhile, the mean error of the detections that are present rises only 1.30-fold, from 3.65 to 4.74~pixels (See Figure~\ref{fig5}E) (middle).`
+  - **Replace with:** `The mean error of the detections that are present rises only 1.30-fold, from 3.65 to 4.74~pixels (Figure~\ref{fig5}E, middle).`
+- [ ] **L186** · Missing reference
+  - **Issue:** The miss-rate numbers (5.3 → 57.7%, 10.8-fold) come from Figure 5E (`fig5e_detection_quality.csv`), but the sentence has no panel reference and follows "Figure 5C shows…", so it reads as a Figure 5C result.
+  - **Fix:** Adds the Figure 5E reference.
+  - **Current:** `From the easiest stratum to the hardest, measured on every frame of all 74 sessions, the per-view miss rate rises 10.8-fold, from 5.3 to 57.7\%.`
+  - **Replace with:** `From the easiest stratum to the hardest, measured on every frame of all 74 sessions, the per-view miss rate rises 10.8-fold, from 5.3 to 57.7\% (Figure~\ref{fig5}E).`
+- [ ] **L191** · Caption · #454
+  - **Issue:** "leaders" collides with the behavioral leaders of Fig 4.
+  - **Fix:** "leader lines"; scale bars in parentheses.
+  - **Current:** `The inset, marked by the dashed box and leaders, shows the same instant of the 4-animal session as seen by its six proofread cameras, each view cropped to the app's bounding box, with scale bars of 50 mm.`
+  - **Replace with:** `The inset, marked by the dashed box and leader lines, shows the same instant of the four-animal session in its six proofread cameras, each view cropped to the app's bounding box (scale bars, 50~mm).`
+- [ ] **L191** · v3 carry-over · #225a
+  - **Issue:** ASCII "1.5x"; semicolon chain.
+  - **Fix:** $1.5\times$ and periods between clauses.
+  - **Current:** `\textbf{B}, Cross-view IDF1 by difficulty over the 42 multi-animal sessions; boxes, stratum median and IQR, whiskers 1.5x IQR, one point per session: medians 0.989, 0.917, 0.969, 0.675, 0.877 and 0.654 at ratings 2 to 7.`
+  - **Replace with:** `\textbf{B}, Cross-view IDF1 by difficulty over the 42 multi-animal sessions. Boxes, stratum median and IQR. Whiskers, $1.5\times$IQR. One point per session. Medians are 0.989, 0.917, 0.969, 0.675, 0.877 and 0.654 at ratings 2 to 7.`
+- [ ] **L191** · v3 carry-over · #225b
+  - **Issue:** ASCII "+-".
+  - **Fix:** Uses $\pm$.
+  - **Current:** `\textbf{D}, The same miss rate within each animal count (n = 32, 35, 4, 3 sessions for 1 to 4 animals); bars, +-1 s.d. between sessions; hollow markers, single-session cells.`
+  - **Replace with:** `\textbf{D}, The same miss rate within each animal count ($n = 32$, 35, 4 and 3 sessions for 1 to 4 animals). Bars, $\pm$1 s.d. between sessions. Hollow markers, single-session cells.`
+- [ ] **L191** · v3 carry-over · #225c
+  - **Issue:** ASCII "+-"; unhyphenated "20 pixel tolerance".
+  - **Fix:** Uses $\pm$ and "20-pixel".
+  - **Current:** `\textbf{E}, Raw per-camera detection quality by difficulty: keypoints missing (10.81-fold), error when present (mean +- s.d. between sessions, with p95; 1.30-fold), and the fraction beyond the app's 20 pixel tolerance (5.72-fold).`
+  - **Replace with:** `\textbf{E}, Raw per-camera detection quality by difficulty, shown as keypoints missing (10.8-fold), error when present (mean $\pm$ s.d. between sessions, with p95, 1.30-fold), and the fraction beyond the app's 20-pixel tolerance (5.72-fold).`
+- [ ] **L225** · Overstated
+  - **Issue:** The colors are green, orange and red (`styles.css:31-33`, #2ecc71, #f39c12, #e74c3c), set at 2 and 5 pixels (`ui/info-panel.js:1324-1326`). The sentence also has the "which are appear" typo.
+  - **Fix:** Orange, the thresholds, and the typo.
+  - **Current:** `The reprojection errors are also listed in an Instance info panel on the right side of the screen which are appear green, yellow and red depending on the size of the error (See Supplementary Figure~\ref{fig7} for GUI screenshot).`
+  - **Replace with:** `Reprojection errors are also listed in the instance information panel on the right of the screen, colored green below 2 pixels, orange below 5 pixels and red above (Supplementary Figure~\ref{fig7}).`
+- [ ] **L227** · v3 carry-over · #248
+  - **Issue:** 30-word sentence; "custom instance delete prompt" is wordy.
+  - **Fix:** 15 words: individually, or in bulk by label type, view, session, frame.
+  - **Current:** `Instances can be deleted individually or users can use the custom instance delete prompt to systematically delete instances by specifying the particular label type, view, session and/or frame.`
+  - **Replace with:** `Instances can be deleted individually, or in bulk by label type, view, session and frame.`
+- [ ] **L227** · Overstated
+  - **Issue:** A new instance is placed from the most recent user instance in that view (`pose/initialization.js`, `recordUserPoints` and `addNewInstanceSmart`), which need not be the previous frame.
+  - **Fix:** "previous frame" → "most recent labeled instance".
+  - **Current:** `After a new user instance is created, its keypoints are dragged into position individually from scratch or moved together as a rigid group to reposition an already roughly correct skeleton based on the previous frame for that view.`
+  - **Replace with:** `After a new user instance is created, its keypoints are dragged into position individually, or the instance is placed from the most recent labeled instance in that view and moved as a rigid group.`
+- [ ] **L235** · Overstated
+  - **Issue:** In SLP 2.8 the columnar `/session_data` tables hold the 3D points and the frame-group and instance-group grouping. The calibration is stored in the slim `sessions_json` (CLAUDE.md, sleap-io.js 0.5.5 notes).
+  - **Fix:** Says what the format stores without assigning the calibration to the columnar tables. Also fixes "contain" agreement.
+  - **Current:** `The files include the columnar session data introduced in format version 2.8, which contain the calibration, the cross-view identities and the 3D points.`
+  - **Replace with:** `The files use SLP format version 2.8, which stores the calibration, the cross-view identities and the 3D points alongside the 2D labels.`
+- [ ] **L235** · Overstated
+  - **Issue:** Only the LUC3D save and reopen cycle is test-pinned (`tests/e2e/save-golden-digest.mjs`). SLEAP reads the 2.8 `/session_data` only with a sleap-io release that includes format 2.8 (CLAUDE.md), so "round-trip through SLEAP without data loss" is broader than what has been verified.
+  - **Fix:** Separates the verified LUC3D round trip from SLEAP compatibility.
+  - **Current:** `This ensures that a project can save and load round-trip through SLEAP and through this application without data loss.`
+  - **Replace with:** `A project therefore saves and reopens in LUC3D without data loss, and SLEAP versions whose sleap-io supports format 2.8 can open the same file.`
+- [ ] **L243** · Consistency · #445
+  - **Issue:** "recordings" for datasets; "manually" redundant.
+  - **Fix:** "datasets were proofread".
+  - **Current:** `All three recordings have been manually proofread in 3D.`
+  - **Replace with:** `All three datasets were proofread in 3D.`
+- [ ] **L245** · v3 carry-over · #226e
+  - **Issue:** "frames per second" here, "fps" elsewhere.
+  - **Fix:** Uses "fps" and "about".
+  - **Current:** `The Mouse-Dyad-10M corpus consists of 56 sessions, each recording two mice with five synchronized cameras at 150 frames per second for approximately 20 minutes.`
+  - **Replace with:** `The Mouse-Dyad-10M corpus consists of 56 sessions, each recording two mice with five synchronized cameras at 150 fps for about 20 minutes.`
+- [ ] **L245** · v3 carry-over · #224b
+  - **Issue:** Numerals; "N = 9" reads as a per-session count.
+  - **Fix:** Spells out counts; says the nine mice form the pool.
+  - **Current:** `Each session contains a male and female mouse (N = 9, 4 male, 5 female) in 18 unique pairings.`
+  - **Replace with:** `Each session contains one male and one female, drawn from nine mice (four males, five females) in 18 unique pairings.`
+- [ ] **L247** · v3 carry-over · #224d
+  - **Issue:** Numerals and "with ... with between 1-4".
+  - **Fix:** "eight cameras and one to four animals"; also closes #249.
+  - **Current:** `The multi-animal dataset was collected during 74 recording sessions with 8 camera views with between 1-4 animals in each session.`
+  - **Replace with:** `The dataset comprises 74 recording sessions with eight cameras and one to four animals each.`
+- [ ] **L247** · v3 carry-over · #214
+  - **Issue:** Puffery: "unique in its level of diversity".
+  - **Fix:** Delete; nearby sentences list strains, sexes and enrichment levels.
+  - **Current:** `This dataset is unique in its level of diversity and emphasis on freely roaming behavior.`
+  - **Replace with:** *(delete this sentence)*
+- [ ] **L249** · Missing reference
+  - **Issue:** The sentence lists Figures 1 and 2A as the HardFight panels, but the Fig 3 caption says D is one frame of the HardFight recording.
+  - **Fix:** Adds Figure 3D.
+  - **Current:** `The third recording, HardFight, is a single eight-camera, three-mouse session at 60 frames per second, from which a 300-frame window was taken for Figure~\ref{fig1} and Figure~\ref{fig2}A.`
+  - **Replace with:** `The third recording, HardFight, is a single eight-camera, three-mouse session at 60 frames per second. A 300-frame window from it was used for Figures~\ref{fig1} and~\ref{fig2}A, and one frame for Figure~\ref{fig3}D.`
+- [X] **L251** · v3 carry-over · #237a
+  - **Issue:** TODO comment left in source.
+  - **Fix:** Delete before submission.
+  - **Current:** `%TODO: mouse strains/conditions/behaviors,`
+  - **Replace with:** *(delete this line)*
+- [ ] **L264** · v3 carry-over · #250 · also 403
+  - **Issue:** "dataset" should be plural.
+  - **Fix:** "datasets".
+  - **Current:** `Calibrations for the SLAP-2M and Mouse-Dyad-10M dataset were performed in Anipose.`
+  - **Replace with:** `Calibrations for the SLAP-2M and Mouse-Dyad-10M datasets were performed in Anipose.`
+- [ ] **L264** · Spelling · #231rb
+  - **Issue:** "Checkboard patterns"; run-on sentence.
+  - **Fix:** Says "board corners" and condenses.
+  - **Current:** `Reprojection errors are calculated between the 3D triangulated checkboard patterns and the 2D detections and the residual is measured for each iteration throughout optimization.`
+  - **Replace with:** `Reprojection errors between the triangulated board corners and their 2D detections are computed at each iteration of the optimization.`
+- [ ] **L282** · Typesetting · #333a
+  - **Issue:** Multi-letter names in math mode typeset as products of single letters.
+  - **Fix:** Wraps corr2d and velThresh in \mathit.
+  - **Current:** `w_k \cdot corr2d \cdot \left(1 - \frac{|d_k - \pi(t)_k|}{velThresh \cdot (1 + \Delta t)}\right) \cdot e^{-\lambda \Delta t}`
+  - **Replace with:** `w_k \cdot \mathit{corr2d} \cdot \left(1 - \frac{|d_k - \pi(t)_k|}{\mathit{velThresh} \cdot (1 + \Delta t)}\right) \cdot e^{-\lambda \Delta t}`
+- [ ] **L284** · Imprecise
+  - **Issue:** $\Delta t$ in the code is the frame index minus the MEAN frame index of the target's retained detections (`pose/cross-view-tracker.js` L139–143, L332–333), not the target's age.
+  - **Fix:** Defines $\Delta t$ as the code computes it.
+  - **Current:** `where $\Delta t$ is the target's age and $\lambda$ the time penalty, so age both widens the distance allowance and decays the whole term.`
+  - **Replace with:** `where $\Delta t$ is the number of frames since the mean frame of the target's retained detections and $\lambda$ the time penalty, so older evidence both widens the distance allowance and decays the whole term.`
+- [ ] **L286** · Typesetting · #333b
+  - **Issue:** Multi-letter names in math mode typeset as products of single letters.
+  - **Fix:** Uses \mathit for variables and \mathrm for dist and ray.
+  - **Current:** `w_k \cdot corr3d \cdot \left(1 - \frac{dist(t_k, ray(d_k))}{distThresh}\right)`
+  - **Replace with:** `w_k \cdot \mathit{corr3d} \cdot \left(1 - \frac{\mathrm{dist}(t_k, \mathrm{ray}(d_k))}{\mathit{distThresh}}\right)`
+- [ ] **L288** · Typesetting · #333c
+  - **Issue:** Multi-letter names in math mode typeset as products of single letters.
+  - **Fix:** Wraps corr3d and corr2d in \mathit.
+  - **Current:** `The ratio $r = corr3d/corr2d$ controls how strongly the association relies on 3D ray geometry relative to 2D reprojection distance.`
+  - **Replace with:** `The ratio $r = \mathit{corr3d}/\mathit{corr2d}$ controls how strongly the association relies on 3D ray geometry relative to 2D reprojection distance.`
+- [ ] **L290** · v3 carry-over · #219 · also 409
+  - **Issue:** 70-word sentence mixing the skipped run and the bound (same as #409).
+  - **Fix:** Splits at "so"; the bound gets its own sentence.
+  - **Current:** `Four animals in six cameras exceeds the harness cap of $10^6$ hypotheses per frame by a factor of 191 and was not run, so its cost in Figure~\ref{fig3}F is an arithmetic bound drawn with an open marker, from the $(A!)^{(C-1)} = 7{,}962{,}624$ hypotheses remaining once the global relabeling symmetry is removed up to the as-published $(A!)^C$.`
+  - **Replace with:** `Four animals in six cameras exceeds the harness cap of $10^6$ hypotheses per frame 191-fold and was not run. Its cost in Figure~\ref{fig3}F is an arithmetic bound (open marker) spanning $(A!)^{C-1} = 7{,}962{,}624$ hypotheses, after removing the global relabeling symmetry, to the as-published $(A!)^C$.`
+- [ ] **L294** · Typesetting · #333d
+  - **Issue:** Multi-letter names in math mode; "all 50" (#315).
+  - **Fix:** Uses \mathit and says "the 50 benchmark" sessions.
+  - **Current:** `The sweep in Figures~\ref{fig3}G and H fixes $corr2d = 1$ and varies $corr3d$ to sample twelve values of $r$ over all 50 Mouse-Dyad-10M sessions at full length.`
+  - **Replace with:** `The sweep in Figures~\ref{fig3}G and H fixes $\mathit{corr2d} = 1$ and varies $\mathit{corr3d}$ to sample twelve values of $r$ over the 50 benchmark Mouse-Dyad-10M sessions at full length.`
+- [ ] **L298** · v3 carry-over · #107c · also 368e, 410
+  - **Issue:** "cell", "deposited" and "attributable to" are jargon.
+  - **Fix:** Plain words: "run", "published", "reflect".
+  - **Current:** `The $k = 5$ cell reproduces the deposited 50-session result exactly, so any differences at lower $k$ are attributable to the reduced camera count.`
+  - **Replace with:** `The $k = 5$ run reproduces the published 50-session result exactly, so differences at lower $k$ reflect the reduced camera count.`
+- [ ] **L298** · v3 carry-over · #107d · also 410
+  - **Issue:** 90-word sentence; per-$k$ means repeat the ranges.
+  - **Fix:** Splits in two and drops the per-$k$ means.
+  - **Current:** `Within-view IDF1 rises monotonically with the cameras available, with subset means of 0.644 to 0.688 at $k = 2$, 0.750 to 0.779 at $k = 3$ and 0.803 to 0.843 at $k = 4$, and 0.861 for the full rig (per-$k$ means of 0.67, 0.77, 0.82 and 0.86), and identity switches fall the same way, from 2,383 to 3,540 over the 50 sessions at $k = 2$ to 413 at $k = 5$.`
+  - **Replace with:** `Within-view IDF1 rises with camera count, with subset means of 0.644 to 0.688 at $k = 2$, 0.750 to 0.779 at $k = 3$, 0.803 to 0.843 at $k = 4$ and 0.861 at $k = 5$. Identity switches over the 50 sessions fall from 2,383 to 3,540 at $k = 2$ to 413 at $k = 5$.`
+- [ ] **L298** · Imprecise
+  - **Issue:** Only raw switch totals are reported (`figs/data/fig2/fig2s1_cams_identity.csv` column `within_switches_total`, summed in `figs/fig2_cams_identity.py` L194). No rate over camera frames is computed, so the sentence describes a comparison that was not made.
+  - **Fix:** Says what the counts are and how exposure affects them.
+  - **Current:** `Because the exposure shrinks with $k$, switch counts from different $k$ are compared as rates over the camera frames of the cameras used.`
+  - **Replace with:** `These switch counts are totals over the cameras used, so fewer cameras also means fewer camera frames, and the counts understate the rise in switch rate at lower $k$.`
+- [ ] **L304** · Imprecise
+  - **Issue:** Fig 2E (bottom) drops, per keypoint, the single view with the largest residual (not the least reliable detections) and re-solves by linear DLT. Both before and after errors are measured in the kept views only (`figs/fig2_solvers_robust_sessions.mjs` L95–L111). This is a different rule from the app's threshold option.
+  - **Fix:** States the figure's actual procedure.
+  - **Current:** `Figure~\ref{fig2}E scores the same solve before and after dropping the camera with the least reliable detections and shows an overall decrease in reprojection error.`
+  - **Replace with:** `Figure~\ref{fig2}E (bottom) compares each keypoint's linear solve before and after dropping the single view with the largest reprojection residual, with both errors measured in the views that were kept.`
+- [ ] **L314** · Imprecise
+  - **Issue:** The match has a gate that the text omits. A detection farther than 60 pixels from every reference animal is unmatched (`figs/fig5_detections.py` L86, `MATCH_MAX_PX`).
+  - **Fix:** Adds the 60-pixel gate.
+  - **Current:** `Each detected animal is paired with a reference animal by Hungarian matching on mean keypoint distance.`
+  - **Replace with:** `Each detected animal is paired with a reference animal by Hungarian matching on mean keypoint distance, and a detection farther than 60 pixels from every reference animal is left unmatched.`
+- [ ] **L320** · Imprecise
+  - **Issue:** The code merges gaps of at most 0.15 s first and only then discards bouts shorter than 0.25 s (`figs/fig4_upright.py` L63–L75). The sentence gives the reverse order, which changes which bouts survive.
+  - **Fix:** Puts the two steps in the order the code runs them.
+  - **Current:** `Rearing bouts shorter than 0.25~s were discarded, and gaps of 0.15~s or less within a bout were merged.`
+  - **Replace with:** `Gaps of 0.15~s or less within a bout were merged, and bouts still shorter than 0.25~s were then discarded.`
+- [ ] **L322** · Imprecise
+  - **Issue:** Speed is the horizontal speed of the tail base, smoothed over 0.2 s, divided by the pair's MEAN body length, not each animal's own (`figs/fig4_upright.py` L59, L170–L174, L314–L315). With own body lengths the longer male would score slower.
+  - **Fix:** States the speed definition and the normalizer.
+  - **Current:** `Speed in Figure~\ref{fig4}D was calculated for each animal in body lengths per second, taken as the median over the 0.5~s before display onset.`
+  - **Replace with:** `Speed in Figure~\ref{fig4}D is the horizontal speed of each animal's tail base, smoothed over 0.2~s and expressed in the pair's mean body lengths per second, taken as the median over the 0.5~s before display onset.`
+- [ ] **L324** · Structural · #459
+  - **Issue:** A "paired" test on shares that sum to one is really a one-sample test.
+  - **Fix:** State it as a test against 0.5; the P value doesn't change.
+  - **Current:** `The female's and the male's shares were compared with a paired Wilcoxon signed-rank test across sessions.`
+  - **Replace with:** `Because the two shares sum to one, the female's share was compared with 0.5 by a Wilcoxon signed-rank test across sessions.`
+- [ ] **L326** · v3 carry-over · #224g
+  - **Issue:** "9 mice" here, "nine mice" elsewhere.
+  - **Fix:** "nine mice".
+  - **Current:** `Because the 56 Mouse-Dyad-10M sessions are repeated recordings of 9 mice in 18 pairings, the analysis was also run with the pair as the unit of replication.`
+  - **Replace with:** `Because the 56 Mouse-Dyad-10M sessions are repeated recordings of nine mice in 18 pairings, the analysis was also run with the pair as the unit of replication.`
+- [ ] **L334** · Consistency · #441
+  - **Issue:** "ids"; "asserts" is odd.
+  - **Fix:** "IDs", "assigns".
+  - **Current:** `LUC3D asserts one identity per animal across cameras and its ids are pooled directly.`
+  - **Replace with:** `LUC3D assigns one identity per animal across cameras, and its IDs are pooled directly.`
+- [ ] **L334** · Consistency · #441
+  - **Issue:** "ids"; first-person aside.
+  - **Fix:** "IDs", passive to match the paragraph.
+  - **Current:** `We keep their track ids separate per camera.`
+  - **Replace with:** `Their track IDs are kept separate per camera.`
+- [ ] **L334** · Consistency · #441
+  - **Issue:** "ids".
+  - **Fix:** "IDs".
+  - **Current:** `A tracker whose ids are kept separate per camera can match the truth in at most one camera, which puts it near $1/C$.`
+  - **Replace with:** `A tracker whose IDs are kept separate per camera can match the truth in at most one camera, which puts it near $1/C$.`
+- [ ] **L342** · Imprecise
+  - **Issue:** The re-run also used `--tracking_clean_instance_count 2`, and all other flags were copied from the original run (`figs/fig6_fair_baselines.py` L115–L116, `figs/fig6_sleap_max2_retrack.py` L43–L50).
+  - **Fix:** Gives the full flag set.
+  - **Current:** `sleap-nn (0.3.0) was run with the track count capped at the number of animals in the session, two for Mouse-Dyad-10M, using \texttt{--max\_tracks 2 --candidates\_method local\_queues}.`
+  - **Replace with:** `sleap-nn (0.3.0) was re-run with the track count capped at the number of animals in the session, two for Mouse-Dyad-10M, using \texttt{--max\_tracks 2 --candidates\_method local\_queues --tracking\_clean\_instance\_count 2}, with all other flags identical to the original run.`
+- [ ] **L350** · Semicolon · #6c · also 420
+  - **Issue:** Semicolon introduces a pointer clause.
+  - **Fix:** Parenthetical citation replaces the second clause.
+  - **Current:** `$N$ was swept over 1, 10, 20 and 30; that sweep is shown in Supplementary Figure~\ref{fig6}F and reported in Supplementary Section~\ref{subsec2-9}.`
+  - **Replace with:** `$N$ was swept over 1, 10, 20 and 30 (Supplementary Figure~\ref{fig6}F, Supplementary Section~\ref{subsec2-9}).`
+- [ ] **L356** · Imprecise
+  - **Issue:** Only Supplementary Figure 1A shows bootstrap CIs (`figs/fig6_fair_baselines.py` L72–L93, percentile bootstrap of the mean). Panel C shows per-session boxes with sign tests and no CI (`panels/fig6_02_by_animals.py` L88–L98).
+  - **Fix:** Limits the bootstrap statement to panel A.
+  - **Current:** `The paired comparisons in Supplementary Figure~\ref{fig6}A and C report 95\% bootstrap confidence intervals over sessions.`
+  - **Replace with:** `Supplementary Figure~\ref{fig6}A reports 95\% bootstrap confidence intervals of the mean over sessions.`
+- [ ] **L367** · v3 carry-over · #237b
+  - **Issue:** TODO comment; the statement is already written.
+  - **Fix:** Delete.
+  - **Current:** `% TODO: add code availability statement (LUC3D repository link).`
+  - **Replace with:** *(delete this line)*
+- [ ] **L370** · v3 carry-over · #252b
+  - **Issue:** Double space before \url.
+  - **Fix:** Single space.
+  - **Current:** `The calibrat3 browser-based calibration GUI can be accessed directly at  \url{https://talmolab.github.io/calibrat3/}.`
+  - **Replace with:** `The calibrat3 browser-based calibration GUI can be accessed directly at \url{https://talmolab.github.io/calibrat3/}.`
+- [ ] **L370** · v3 carry-over · #252c · also 449
+  - **Issue:** Double spaces before \url.
+  - **Fix:** Single spaces; points to the calibrat3 tutorial page, which lives in luc3d-docs (#449).
+  - **Current:** `The code for calibrat3 can be found at  \url{https://github.com/talmolab/calibrat3} with documentation at  \url{https://talmolab.github.io/luc3d-docs/}.`
+  - **Replace with:** `The code for calibrat3 is at \url{https://github.com/talmolab/calibrat3}, with documentation at \url{https://talmolab.github.io/luc3d-docs/tutorials/calibrating-cameras/}.`
+- [ ] **L406** · Overstated
+  - **Issue:** aniposelib 0.8.0's `detect_video` uses `skip=20` (`aniposelib/boards.py` lines 305–340). It checks every 20th frame and, after each detection, the following frames until the board is lost. A stretch where the board is visible can therefore be missed for up to 19 frames at its start.
+  - **Fix:** Describes the sampling and keeps the point that Anipose fits from nearly all board-visible frames.
+  - **Current:** `Its detector covers every frame in which a camera sees the board.`
+  - **Replace with:** `Its detector checks every 20th frame and, once it finds the board, every following frame until the board is lost, so it covers nearly every frame in which a camera sees the board.`
+- [ ] **L431** · Caption · #455
+  - **Issue:** Stray comma; "staleness horizon" appears nowhere else.
+  - **Fix:** "Cross-view identity and anchor staleness."
+  - **Current:** `\textbf{Cross-view identity, and the fresh-anchor staleness horizon.}`
+  - **Replace with:** `\textbf{Cross-view identity and anchor staleness.}`
+- [ ] **L431** · v3 carry-over · #225d
+  - **Issue:** ASCII "+-"; list missing "and".
+  - **Fix:** Uses $\pm$; adds "and".
+  - **Current:** `\textbf{A}, Within-view and cross-view IDF1 for LUC3D, SLEAP, ByteTrack (mean +- 95\% bootstrap CI).`
+  - **Replace with:** `\textbf{A}, Within-view and cross-view IDF1 for LUC3D, SLEAP and ByteTrack (mean $\pm$ 95\% bootstrap CI).`
+- [ ] **L431** · v3 carry-over · #225e
+  - **Issue:** ASCII "1.5x".
+  - **Fix:** Uses $1.5\times$.
+  - **Current:** `Boxes, the per-session differences (median, IQR, whiskers 1.5x IQR; every session also a dot).`
+  - **Replace with:** `Boxes, the per-session differences (median, IQR, whiskers $1.5\times$IQR, every session also a dot).`
+- [ ] **L431** · Caption · #455
+  - **Issue:** Double parentheses; heavy description.
+  - **Fix:** Lead with "Left," and one parenthetical per element.
+  - **Current:** `The 2D correspondence term is shown as the black dashed line on the image plane relative to the retained per-view 2D anchor (represented by the dashed translucent blue outline pose) (left).`
+  - **Replace with:** `Left, the 2D correspondence term, shown as the distance (black dashed line) on the image plane from the detection to the retained per-view 2D anchor (translucent blue pose).`
+- [ ] **L431** · Caption · #455
+  - **Issue:** Heavy; not parallel with the 2D sentence.
+  - **Fix:** Lead with "Right," in the same form.
+  - **Current:** `The 3D correspondence term is shown as distance between the 3D ray cast from the camera to the current node and the 3D anchor node denoted by a dotted black line between them (right).`
+  - **Replace with:** `Right, the 3D correspondence term, shown as the distance (dotted black line) between the ray cast from the camera through the current node and the 3D anchor node.`
+- [ ] **L431** · Caption · #455
+  - **Issue:** F's sessions are repeated from panel F.
+  - **Fix:** Drop the F clause.
+  - **Current:** `(A, 50 Mouse-Dyad-10M sessions; B to D, all 74 SLAP-2M sessions, $\sim$11.7 million camera frames; E is one frame of a two-animal SLAP-2M session; F, the 50 benchmark Mouse-Dyad-10M sessions.)`
+  - **Replace with:** `A uses 50 Mouse-Dyad-10M sessions, B to D all 74 SLAP-2M sessions ($\sim$11.7 million camera frames), and E one frame of a two-animal SLAP-2M session.`
+- [ ] **L445** · Caption · #456
+  - **Issue:** An error is lower, not shorter.
+  - **Fix:** "fifteen times lower".
+  - **Current:** `calibrat3 is lower throughout (median 0.10 pixels, Anipose 0.32) and its 95th percentile is fifteen times shorter (0.55 and 8.45).`
+  - **Replace with:** `calibrat3 is lower throughout (median 0.10 pixels, Anipose 0.32) and its 95th percentile is fifteen times lower (0.55 and 8.45).`
+- [ ] **L445** · Caption · #456
+  - **Issue:** "so the comparison that does not favor" is garbled.
+  - **Fix:** "so the comparison does not favor".
+  - **Current:** `(A to G are scored on Anipose's own detected corners so the comparison that does not favor calibrat3.)`
+  - **Replace with:** `(A to G are scored on Anipose's own detected corners, so the comparison does not favor calibrat3.)`
+- [ ] **L452** · Caption · #457
+  - **Issue:** Compound modifier missing its hyphen.
+  - **Fix:** "hardware-synchronized".
+  - **Current:** `\textbf{Panopticon acquires hardware synchronized multi-camera video.}`
+  - **Replace with:** `\textbf{Panopticon acquires hardware-synchronized multi-camera video.}`
+- [ ] **L454** · Caption · #457
+  - **Issue:** "real time" as a modifier needs a hyphen.
+  - **Fix:** "real-time".
+  - **Current:** `3, real time frame rate;`
+  - **Replace with:** `3, real-time frame rate;`
+- [ ] **L454** · Caption · #457
+  - **Issue:** "against" as an axis label; "over time" is redundant.
+  - **Fix:** "by trigger ordinal".
+  - **Current:** `\textbf{C}, LED intensity against trigger ordinal for all nine cameras over time.`
+  - **Replace with:** `\textbf{C}, LED intensity by trigger ordinal for all nine cameras.`
+- [ ] **L454** · Caption · #457
+  - **Issue:** "vs".
+  - **Fix:** "and by Anipose".
+  - **Current:** `\textbf{F}, Cumulative reprojection error for a calibration recorded through Panopticon, solved by Panopticon's solver vs Anipose on 32,532 ChArUco corner observations seen by two or more cameras.`
+  - **Replace with:** `\textbf{F}, Cumulative reprojection error for a calibration recorded through Panopticon, solved by Panopticon's solver and by Anipose on 32,532 ChArUco corner observations seen by two or more cameras.`
+- [ ] **L502** · Consistency · #448
+  - **Issue:** "O Keefe" is missing its apostrophe; double space.
+  - **Fix:** "O'Keefe"; single space.
+  - **Current:** `\bibitem{Lever2006} Lever, C., Burton, S., \& O Keefe, J. (2006).  Rearing on hind legs, environmental novelty, and the hippocampal formation.`
+  - **Replace with:** `\bibitem{Lever2006} Lever, C., Burton, S., \& O'Keefe, J. (2006). Rearing on hind legs, environmental novelty, and the hippocampal formation.`
+- [ ] **L504** · Consistency · #448
+  - **Issue:** Double space.
+  - **Fix:** Single space.
+  - **Current:** `Barton-Gluzman, L., Quinn,  L. K., Wiles, J.`
+  - **Replace with:** `Barton-Gluzman, L., Quinn, L. K., Wiles, J.`
+- [ ] **L506** · Consistency · #448
+  - **Issue:** Incomplete arXiv identifier.
+  - **Fix:** Fill in the real arXiv ID.
+  - **Current:** `Massively Parallel Imitation Learning of Mouse Forelimb Musculoskeletal Reaching Dynamics. \textit{arXiv:2511}.`
+  - **Replace with:** `Massively Parallel Imitation Learning of Mouse Forelimb Musculoskeletal Reaching Dynamics. \textit{arXiv:2511.XXXXX}.`
+- [ ] **L522** · Consistency · #448
+  - **Issue:** Title capitalization is wrong.
+  - **Fix:** Published capitalization, "3D-MuPPET".
+  - **Current:** `3d-muppet: 3d multi-pigeon pose estimation and tracking.`
+  - **Replace with:** `3D-MuPPET: 3D multi-pigeon pose estimation and tracking.`
+- [ ] **L524** · Consistency · #448
+  - **Issue:** Incomplete arXiv identifier.
+  - **Fix:** Fill in the real arXiv ID.
+  - **Current:** `MIMIC-MJX: Neuromechanical emulation of animal behavior. \textit{arXiv:2511}.`
+  - **Replace with:** `MIMIC-MJX: Neuromechanical emulation of animal behavior. \textit{arXiv:2511.XXXXX}.`
+
+## 3. AI tells (0 / 5)
+
+Patterns that repeat across the paper, not single ordinary words: trailing "-ing" clauses clustered in the Introduction, and cleft "which is why" constructions. Single "therefore"s and the like are in the optional wording file.
+
+- [ ] **L99** · AI tell · #364a
+  - **Issue:** Trailing participle ("making ... possible").
+  - **Fix:** Replaces the "-ing" closer with a plain clause.
+  - **Current:** `LUC3D also includes a cross-view tracker that uses 3D geometry to identify the same animal across cameras \citep{Maree2024}, and a browser-based camera calibration tool, making 3D pose estimation possible without leaving the browser.`
+  - **Replace with:** `LUC3D also includes a cross-view tracker that uses 3D geometry to identify the same animal across cameras \citep{Maree2024} and a browser-based camera calibration tool, so the whole pipeline runs in the browser.`
+- [ ] **L101** · AI tell · #364b
+  - **Issue:** Trailing participle ("sharply reducing"); "generate" used twice.
+  - **Fix:** Replaces the participle with a plain clause.
+  - **Current:** `Reprojection-aided labeling lets a frame labeled in a few anchor views generate accurate labels in all remaining views, sharply reducing the number of manual labels needed to generate a consistent training set.`
+  - **Replace with:** `Reprojection-aided labeling lets a frame labeled in a few anchor views generate accurate labels in all remaining views, so far fewer manual labels are needed for a consistent training set.`
+- [ ] **L110** · AI tell · #364d
+  - **Issue:** Trailing participle "limiting ..."; "currently" is redundant.
+  - **Fix:** Replaces the participle; drops "currently".
+  - **Current:** `The multi-camera problem of cross-view identification, deciding which detection in one view is the same animal in another, currently has no standard tool, limiting 3D reconstruction and proofreading.`
+  - **Replace with:** `The multi-camera problem of cross-view identification, deciding which detection in one view is the same animal in another, has no standard tool, and this limits 3D reconstruction and proofreading.`
+- [ ] **L292** · AI tell · #361a
+  - **Issue:** Cleft "which is why"; "holding" on data.
+  - **Fix:** Parenthetical for the condition, "so" for the consequence.
+  - **Current:** `Those frames are clean by construction, every camera holding exactly one detection per animal, which is why both methods group them almost perfectly.`
+  - **Replace with:** `These frames are clean by construction (exactly one detection per animal in every camera), so both methods group them almost perfectly.`
+- [ ] **L322** · AI tell · #361b · also 415
+  - **Issue:** Cleft "which is why".
+  - **Fix:** Parenthetical for the counts, "so" for the consequence.
+  - **Current:** `The displays are unevenly spread over animals, from one to 305 per female and 16 to 254 per male, which is why a test over displays would overstate the evidence.`
+  - **Replace with:** `The displays are unevenly spread over animals (one to 305 per female and 16 to 254 per male), so a test over displays would overstate the evidence.`
+
+## 4. Repetition cuts (0 / 28)
+
+The same claim made in two or three places. Mostly deletions.
+
+- [ ] **L91** · Repetition · #341 · also 215, 332, 82r
+  - **Issue:** Heavy, "refined", acronym wrong, GUI twice, ReID, promotional closer.
+  - **Fix:** Number-free rewrite (Cheese3D precedent); rearing clause optional.
+  - **Current:** `Animal behavior unfolds in three dimensions over time, yet accessible scientific tools for analyzing it in its natural form remain limited. Uncertainty from popular 2D pose methods can be refined with multi-camera approaches to produce more accurate 3D estimates. This paper presents LUC3D (Label Unification and Correspondence in 3D Annotation GUI), a browser-based 3D GUI for reducing the amount of manual labor required for labeling, proofreading, and multi-camera multi-animal tracking while requiring no installation to maximize accessibility. As proof-of-concept we present two datasets of proofread multi-camera 3D triangulated pose data of mouse social behavior, a protocol for generating 3D consistent labels, and a cross-view ReID tracking algorithm for multi-animal multi-camera pose data. This tool allows for the widespread adoption of 3D pose estimation techniques for studying social behavior while reducing the cost of entry for neuroscience labs across the world.`
+  - **Replace with:** `Animals behave in three dimensions, but tools for measuring 3D behavior remain difficult to install and use. Multiple camera views reduce the uncertainty of 2D pose estimates and allow 3D reconstruction. Here we present LUC3D (Label Unification and Correspondence in 3D), a browser-based interface that reduces the manual labor of labeling, proofreading and tracking multiple animals across multiple cameras, with no installation. LUC3D includes a reprojection-aided labeling protocol that produces 3D-consistent labels and a cross-view tracking algorithm fast enough for interactive use. We also release two proofread multi-camera 3D datasets of mouse social behavior and use them to describe a female-led social rearing display. LUC3D makes 3D multi-animal pose estimation accessible to laboratories without dedicated engineering support.`
+- [ ] **L101** · Repetition · #354a
+  - **Issue:** Claim supported only in Methods (L298, #396).
+  - **Fix:** Delete, or keep if the camera-subset result moves to Results.
+  - **Current:** `Adding more cameras also gives the tracker more redundant evidence for improving identity estimates.`
+  - **Replace with:** *(delete this sentence, or keep it if the L298 camera-subset result is moved into the Results)*
+- [ ] **L101** · Repetition · #355a
+  - **Issue:** Repeats L99's introduction of the tool.
+  - **Fix:** Delete.
+  - **Current:** `This paper provides a browser-based 3D annotation, proofreading, tracking, and calibration interface that makes 3D multi-animal pose estimation more usable and accessible.`
+  - **Replace with:** *(delete this sentence)*
+- [ ] **L101** · Repetition · #355b
+  - **Issue:** L103 introduces the datasets in the next sentence.
+  - **Fix:** Delete.
+  - **Current:** `We also provide two challenging benchmark datasets for future 3D cross-view tracking methods.`
+  - **Replace with:** *(delete this sentence)*
+- [ ] **L112** · Repetition · #342a · also 373b
+  - **Issue:** "specifically designed to easily" is padding.
+  - **Fix:** Plain statement: reads and writes SLEAP predictions.
+  - **Current:** `LUC3D does not include a detector, but is specifically designed to easily load and export SLEAP predictions.`
+  - **Replace with:** `LUC3D has no detector of its own and instead reads and writes SLEAP predictions.`
+- [ ] **L112** · Repetition · #340b · also 373h
+  - **Issue:** "without installation" again; list missing "and".
+  - **Fix:** Drops the repeat; adds "and".
+  - **Current:** `However, no other tool combines annotation-time cross-view identity, multi-animal support, a 3D proofreading viewport, all running in a browser without installation.`
+  - **Replace with:** `However, no other tool combines annotation-time cross-view identity, multi-animal support and a 3D proofreading viewport in the browser.`
+- [ ] **L148** · Repetition · #345b · also 379i
+  - **Issue:** Restates 345a and the r = 0 result; cleft "is what".
+  - **Fix:** Delete.
+  - **Current:** `The 3D correspondence term is therefore what lets the greedy search outperform exhaustive enumeration, since without it the greedy search alone falls behind.`
+  - **Replace with:** *(delete this sentence)*
+- [ ] **L175** · Repetition · #352
+  - **Issue:** Courtship interpretation repeated in Discussion (L209).
+  - **Fix:** Delete; move \citep{Dias2025} to L209.
+  - **Current:** `This pattern of female-paced engagement with male pursuit is consistent with courtship behavior, but confirming this interpretation would require ultrasonic vocalization recordings, estrous staging, and mating assays \citep{Dias2025}.`
+  - **Replace with:** *(delete this sentence, and move \citep{Dias2025} to the courtship sentence in L209)*
+- [ ] **L199** · Repetition · #340c · also 386a
+  - **Issue:** Wrong verb ("resolving annotation"); padding; installation repeated.
+  - **Fix:** One plain sentence stating what LUC3D is.
+  - **Current:** `The objective of LUC3D is to provide an easily accessible interactive GUI for resolving 3D multi-animal annotation and proofreading without any installation required.`
+  - **Replace with:** `LUC3D is an interactive browser interface for 3D multi-animal annotation and proofreading.`
+- [ ] **L203** · Repetition · #345c · also 388c
+  - **Issue:** Discussion reruns the ablation argument a third time.
+  - **Fix:** States only the conclusion.
+  - **Current:** `The ablation shows that the 3D term is what makes the greedy search competitive, since without it the greedy search falls behind exhaustive enumeration.`
+  - **Replace with:** `The ablation shows that this advantage comes from the 3D term.`
+- [ ] **L225** · Repetition · #351a · also 395
+  - **Issue:** MP4 export mentioned three times.
+  - **Fix:** Drops the export clause; covered at L233.
+  - **Current:** `The viewport can be placed at any camera's viewpoint for direct comparison with that camera's video, and can be exported as an MP4.`
+  - **Replace with:** `The viewport can be placed at any camera's viewpoint for direct comparison with that camera's video.`
+- [ ] **L225** · Repetition · #357a
+  - **Issue:** Proofreader's signal stated again at L231.
+  - **Fix:** Delete; kept at L231.
+  - **Current:** `The proofreader's working signal is the reprojection error.`
+  - **Replace with:** *(delete this sentence)*
+- [ ] **L231** · Repetition · #357b
+  - **Issue:** "principal diagnostic to identify" is heavy.
+  - **Fix:** Plainer: "main check that labels agree".
+  - **Current:** `The reprojection overlay is the proofreader's principal diagnostic to identify consistent labels across views.`
+  - **Replace with:** `The reprojection overlay is the proofreader's main check that labels agree across views.`
+- [ ] **L235** · Repetition · #351b · also 399
+  - **Issue:** MP4 export mentioned three times.
+  - **Fix:** Drops the MP4 item; covered at L233.
+  - **Current:** `Labels can also be exported as JSON, 3D points as HDF5, and the 3D viewport as MP4.`
+  - **Replace with:** `Labels can also be exported as JSON and 3D points as HDF5.`
+- [ ] **L247** · Repetition · #356a
+  - **Issue:** Intro argument repeated in Methods.
+  - **Fix:** Delete.
+  - **Current:** `While many popular 2D datasets lack environmental enrichment, adding levels of enrichment highlights the need for 3D pose estimation.`
+  - **Replace with:** *(delete this sentence)*
+- [ ] **L247** · Repetition · #356b
+  - **Issue:** Repeats Intro; dangling modifier ("By adding ..., 3D pose becomes").
+  - **Fix:** Delete.
+  - **Current:** `By adding more aspects of the environment which the animals can climb, 3D pose becomes more relevant.`
+  - **Replace with:** *(delete this sentence)*
+- [ ] **L249** · Repetition · #353b · also 444
+  - **Issue:** Duplicate with hard-coded figure numbers.
+  - **Fix:** Delete.
+  - **Current:** `It is used for the panels generated in the application (Figures 1 and 2A).`
+  - **Replace with:** *(delete this sentence)*
+- [ ] **L267** · Repetition · #347a · also 6a
+  - **Issue:** Verbatim duplicate of L426; semicolon.
+  - **Fix:** Delete; kept at L426.
+  - **Current:** `The at-rig solve confirms the recording and the camera geometry before animals are placed in the arena; the final calibration should be solved from the saved video by calibrat3.`
+  - **Replace with:** *(delete this sentence)*
+- [ ] **L267** · Repetition · #347b · also 6e
+  - **Issue:** Semicolon joining two sentences.
+  - **Fix:** Period instead.
+  - **Current:** `The at-rig solve confirms the recording and the camera geometry before animals are placed in the arena; the final calibration should be solved from the saved video by calibrat3 (Supplementary Figure~\ref{fig8}) or Anipose.`
+  - **Replace with:** `The at-rig solve confirms the recording and the camera geometry before animals are placed in the arena. The final calibration should be solved from the saved video with calibrat3 (Supplementary Figure~\ref{fig8}) or Anipose.`
+- [ ] **L272** · Repetition · #342b · also 406, 6b
+  - **Issue:** Repeats L112 (no detector); semicolon.
+  - **Fix:** Keep only "SLEAP produced the detections."
+  - **Current:** `SLEAP produced the detections; the application consumes SLEAP .slp files and neither trains nor runs a detector of its own.`
+  - **Replace with:** `SLEAP produced the detections.`
+- [ ] **L276** · Repetition · #348
+  - **Issue:** Smoothing explained again at L306.
+  - **Fix:** Delete.
+  - **Current:** `The stride does affect temporal smoothing, which is why that term is disabled in the triangulation comparison.`
+  - **Replace with:** *(delete this sentence)*
+- [ ] **L276** · Repetition · #91rb · also 349
+  - **Issue:** Repeats L274 (#349) and uses "utilized".
+  - **Fix:** Deletes the sentence.
+  - **Current:** `The held-out solver comparisons in Figure~\ref{fig2}E--G require combinatorial solves across camera subsets, so they utilized the subsampled data.`
+  - **Replace with:** *(delete this sentence)*
+- [ ] **L288** · Repetition · #346c · also 360b, 408
+  - **Issue:** Mechanism explained again at L350 and L397.
+  - **Fix:** Delete.
+  - **Current:** `An anchor is therefore only ever triangulated from cameras that saw the animal recently, and every camera is scored against a recent anchor, which is what prevents a long-lost identity from competing for assignments at full strength.`
+  - **Replace with:** *(delete this sentence)*
+- [ ] **L292** · Repetition · #350
+  - **Issue:** IoU matching already described at L272; "IOU" casing.
+  - **Fix:** Delete.
+  - **Current:** `Ground-truth identities were matched to each detection at an intersection-over-union (IOU) threshold of 0.5.`
+  - **Replace with:** *(delete this sentence)*
+- [ ] **L306** · Repetition · #203rc · also 412
+  - **Issue:** Redundant: the paragraph already says this.
+  - **Fix:** Deletes the sentence.
+  - **Current:** `Both linear and non-linear variants between Anipose and LUC3D were measured and compared.`
+  - **Replace with:** *(delete this sentence)*
+- [ ] **L389** · Repetition · #363a · also 343a, 422
+  - **Issue:** "demonstrates that capability" plus a second clause saying the same.
+  - **Fix:** Plain verb, one clause.
+  - **Current:** `SLEAP and ByteTrack were not designed to keep identity across cameras, so the cross-view comparison demonstrates that capability and is not a benchmark of the trackers.`
+  - **Replace with:** `SLEAP and ByteTrack were not designed to keep identity across cameras, so the cross-view comparison measures a capability they lack, not their tracking quality.`
+- [ ] **L393** · Repetition · #343b · also 424
+  - **Issue:** Repeats L389.
+  - **Fix:** Delete.
+  - **Current:** `The comparison therefore scores SLEAP and ByteTrack on a capability they never claimed.`
+  - **Replace with:** *(delete this sentence)*
+- [ ] **L393** · Repetition · #343c · also 424
+  - **Issue:** Repeats L389.
+  - **Fix:** Delete.
+  - **Current:** `It shows that the capability is present in LUC3D and absent in per-camera trackers.`
+  - **Replace with:** *(delete this sentence)*
+
+
+---
+
+## Your calls (no sentence to swap)
+
+- [ ] **App version** · The code checks read the `eric/figs` checkout, which is behind `main`. The "Refined" menu label (L302) is correct on `main` (#224, commit dcd7afb), so that entry was removed. The other app findings (dotted reprojections, 480p to 2160p export, per-keypoint outlier rule, green/orange/red error colours at 2 and 5 px) were re-checked on `main` and still hold.
+
+- [ ] **Cover letter, line 39** (`luc3d_cover_letter_natneuro.txt`) · ⚠ Must fix · data mismatch
+  - **Issue:** "the female initiates 80% of 539 displays". 80% is 428 of the 535 displays with an initiator; 428 of 539 is 79.4%.
+  - **Fix:** Drops the 539 and uses the paper's five-display threshold.
+  - **Current:** `Analyzing a 3D social behavior in which two mice rear face to face, we find a consistent leader-follower interaction: the female initiates 80% of 539 displays and leads in all 14 pairs with enough displays, while the male approaches her beforehand in a pattern resembling directed pursuit.`
+  - **Replace with:** `Analyzing a 3D social behavior in which two mice rear face to face, we find a consistent leader-follower interaction in which the female initiates 80% of displays and leads in all 14 pairs with at least five displays, while the male approaches her beforehand in a pattern resembling directed pursuit.`
+- [ ] **446.** **Section order** · Move `\subsection{Triangulation can be performed quickly without giving up quality}` (L152–L154) to directly after the Section 2-2 paragraphs (after L131, before the Fig 2 float), so Fig 2F/G are cited before Fig 3. No sentence changes needed beyond #352.
+- [ ] **447.** **Fig 4 panel order** · Panels are cited A, G, D, E, C, F. Either move the L167 paragraph ("We found that rearing is sequentially coupled...") after the L171 paragraph, or reletter panel G as C (shifting C–F to D–G) and update the caption.
+- [ ] **458.** **Supplement numbered as main-text sections** · No sentence to change. The Supplementary sections are `\subsection`s under `\section{Supplementary Material}`, so they print as "Section 5.x". Check whether the journal wants the Supplement as a separate PDF; if so, move everything from `\section{Supplementary Material}` onward into its own file.
+- [ ] **460 note** · Calibration benchmark · Commit a522115 says that on the old OpenCV setup Anipose was lower at the SLAP-2M median. The current text (calibrat3 lower on all three rigs) relies on the OpenCV 4.13 re-run, which does show that (0.10 and 0.32). Make sure no sentence mixes old-setup and new numbers (see the L416 entries).
+- [ ] **fig4_controls.py** · Optional housekeeping · The paper now reports the controls at ≥6 displays; the script still has `MIN_DISPLAYS = 5`. Change it to 6 and re-deposit so the script prints the paper's numbers. No figure changes.
+
+---
+
+## Done (95 sentences, checked against the 04:45 `.tex`)
+
+Merged duplicates count once.
+
+- [x] **L118** · #? · The Fig 1D rig tile shows 7 of the 8 cameras. `blender-images/fig1d_scene.py` excludes Camera3_sideC from the scene… *(applied)*
+- [x] **L136** · #451 · Data-source note sits between panels D and E; "286 thousand" is wrong: `fig2d_baseline_angle.csv` gives n = 286,200,174 keypoints. *(deleted)*
+- [x] **L136** · #? · Caption says ~286 thousand keypoints for Fig 2B and D. `fig2d_baseline_angle.csv` column `n` is 286,200,174 per camera pair, i.e. ~286… *(applied)*
+- [x] **L136** · #451 · Data-source note belongs at the end of the caption. *(applied)*
+- [x] **L142** · #172rb · Author-year printed twice; "onto"; "what is referred to as". *(applied)*
+- [x] **L142** · #? · Text says $\sim$4.5 million eligible frames, data says 4,591,864 (`fig3e_head_to_head.csv`, frames_computed), which rounds to 4.6. Every… *(applied)*
+- [x] **L144** · #305d · Stale pooled numbers; 4.59 million rounds to 4.6. The sentence reports only the pooled rate, which is not what Fig 3E shows (per-session… *(applied)*
+- [x] **L146** · #312 · No dataset is recorded at 50 fps; a referee will ask why 50. *(applied)*
+- [x] **L148** · #314a · "Contains" is the wrong verb for a switch rate. *(applied)*
+- [x] **L148** · #314b · "42" is a raw count while 0.92 is a rate. *(applied)*
+- [x] **L148** · #315 · "All" Mouse-Dyad-10M sessions is 56, but the sweep used 50 (L294). *(applied)*
+- [x] **L148** · #316 · IDF1 definition is wrong, and "explains" is the wrong verb. *(applied)*
+- [x] **L148** · #? · Text says 21 million camera frames, data says 21,622,345 (`fig3_frame_matched_bmimica.json`, camera_frames_scored), which rounds to 22… *(applied)*
+- [x] **L150** · #307a · "1/C is a ceiling" contradicts L334's "not a strict bound". *(applied)*
+- [x] **L150** · #344a · Six sentences; statistics repeated in Supplement; "ceiling" contradicts L334 (#307). *(applied)*
+- [x] **L154** · #310 · The linear DLT has no iterations, so the stated cause can't be right. *(applied)*
+- [x] **L154** · #? · 2.15–2.35 pixels are the four solvers' medians across sessions (`fig2f_per_session.csv`: 2.152, 2.256, 2.265, 2.348). The per-session… *(applied)*
+- [x] **L159** · #305a · Stale pooled numbers (current run: 4,591,725 frames; greedy 940 misgrouped, exhaustive 1,453). Panel E plots per-session boxes whose… *(applied)*
+- [x] **L159** · #305a2 · (same sentence pair as above, continued) Stale totals, and not labeled as pooled. *(applied)*
+- [x] **L159** · #305b · 4,591,864 frames were computed; 139 of them (all Mouse-Dyad-10M) had no GT match, so 4,591,725 were scored. Both round to the same value. *(applied)*
+- [x] **L159** · #333e · Multi-letter names in math mode (caption). *(applied)*
+- [x] **L175** · #? · The text gives three female-longer sessions and 74 of 96 displays (77%, P = 9e-8), which is the ≥5-display subset. The control script… *(applied)*
+- [x] **L180** · #313a · P value in e-notation; the body uses $\times 10^{n}$. *(applied)*
+- [x] **L180** · #313b · E-notation P value, hyphen as a minus sign, and a fragment. *(applied)*
+- [x] **L180** · #313c · P value in e-notation. *(applied)*
+- [x] **L180** · #? · Fig 4B caption says the noses converge to 0.12 body lengths at onset. The panel data (`figs/data/fig4/fig4d_upright_dynamics.csv`) gives… *(applied)*
+- [x] **L186** · #309 · "Transparent" contradicts L247's opaque top enrichment level, and the causal claim is too strong: `fig5d_animal_count.csv` shows… *(applied)*
+- [x] **L205** · #91ra · "Utilizing"; "nodes" used for data points. *(applied)*
+- [x] **L209** · #? · "Has already stopped moving" is stronger than the data. The female's session median speed is 0.20 body lengths per second… *(rewritten in your own words)*
+- [x] **L223** · #301a · `\ref{fig6}` prints "Figures 3 and 1"; "which is" is padding. *(applied)*
+- [x] **L223** · #311a · "Described above": the thresholds are described below. *(applied)*
+- [x] **L225** · #311b · "Described above": triangulation is described below; 45-word sentence. *(applied)*
+- [x] **L225** · #? · "Optional rejection of an outlying view" describes the automatic rule, which works per keypoint (worst observation above a threshold),… *(applied)*
+- [x] **L225** · #? · Reprojections are drawn dotted by default (`ui/overlays.js:1983`, `lineStyle ... 'dotted'`), and L231 already says dotted. *(applied)*
+- [x] **L229** · #247r · "Within a project" is redundant. *(applied)*
+- [x] **L231** · #325 · "Dotted" here but "dashed" in L225; garbled clause (v3 #150). *(applied)*
+- [x] **L233** · #151r · Missing "and" between the two verbs. *(applied)*
+- [x] **L233** · #? · The 3D video export offers 480p, 720p, 1080p and 2160p (`ui/overlay-export-layout.js:28-33`, `RES_PRESETS`, used by… *(applied)*
+- [x] **L239** · #196r · "Vanilla" is informal (v3 #196). Keep the sentence, since the Software section is where implementation details belong. The overlap with… *(rewritten in your own words)*
+- [x] **L239** · #320 · Two aniposelib versions (0.7.2 here, 0.8.0 in L406/Fig 8) with no explanation. *(applied)*
+- [x] **L243** · #? · The shortest SLAP-2M session is 4,125 frames, which is 2.3 min at 30 fps. The "1" came from the master sheet's `duration` column, which… *(applied)*
+- [x] **L245** · #301b · `\ref{fig6}` prints "Figures 3 and 1". *(applied)*
+- [x] **L245** · #301c · Prints "1A and 1F", which reads as main Figure 1. *(applied)*
+- [x] **L245** · #318 · "Top-down" contradicts the 58–76° camera elevation (L165, Fig 4A). *(applied)*
+- [x] **L245** · #? · 80.0% holds only for displays with an initiator (428 of 535, and 384 of 480 in the 50-session set). Of all displays it is 79.4% and… *(applied)*
+- [x] **L245** · #? · The text says ~100 million "2D predicted instances and reprojected instances". The datasheet's 100,847,340 is `poses_2d_reproj`, the 3D… *(applied)*
+- [x] **L247** · #224f · Numeral; long list without a final "and". *(applied)*
+- [x] **L247** · #301d · Prints "Figures 5 and 1B to E". *(applied)*
+- [x] **L247** · #317 · Says eight views but names only seven. *(applied)*
+- [x] **L247** · #86ra · "Ideal candidate" is puffery; "clustering" here but "segmentation" in L103. *(dismissed by you)*
+- [x] **L247** · #? · The text lists only Fig 5 and Supp Fig 6B–E as measured on SLAP-2M, but Fig 3E also scores the 42 multi-animal SLAP-2M sessions (the Fig… *(applied)*
+- [x] **L247** · #? · The ~22.5 million 2D poses are the ~2.8 million 3D poses reprojected into all eight views (`dataset_sheets.py`, 22.49 M = 2.81 M × 8,… *(applied)*
+- [x] **L258** · #303 · Stray `)` inside the URL, no space before "on", and "30-150fps". *(applied)*
+- [x] **L264** · #231ra · "Checkboard", "Aruco"; wordy definition. *(dismissed by you)*
+- [x] **L265** · #? · calibrat3's Levenberg–Marquardt step is a full bundle adjustment. It refines the intrinsics (fx, fy, cx, cy, k1, k2 by default) and the… *(applied)*
+- [x] **L267** · #319 · Cross-ref points to a section that doesn't describe the nine-camera rig; 60 words. *(applied)*
+- [x] **L274** · #301e · Prints "Figures 3, 4 and 1". *(applied)*
+- [x] **L274** · #406 · Two sentences for one fact; fig6 ref prints as Figure 1 (#301). *(rewritten in your own words)*
+- [x] **L288** · #334a · Three naming schemes for parameters in one sentence, and no units. *(applied)*
+- [x] **L290** · #305c · "$\sim$4.5" lacks "million" (#330); 9,678,503 rounds to 9.7M; run-on clause. *(applied)*
+- [x] **L290** · #306 · False. Fig 3E rates divide by the scored clean frames only (per session and pooled, $\sim$4.6 million in total;… *(deleted)*
+- [x] **L292** · #305e · 4.59 million rounds to 4.6, not 4.5. *(applied)*
+- [x] **L304** · #? · There are two routes, and the sentence merges them. A whole view can be excluded by hand in the Tracking Wizard's Camera Views panel… *(rewritten in your own words)*
+- [x] **L306** · #? · "Performs worse ... in all 50 sessions" holds only for held-out error (`fig2g_anipose_optim_accuracy.csv`: `optim_heldout_p50` >… *(applied)*
+- [x] **L314** · "The addition of more cameras..." kept as written *(dismissed by you)*
+- [x] **L314** · Recovery sentence describes how reprojection works; not a misstatement *(dismissed by you)*
+- [x] **L322** · #? · The panel plots `pursuit_rel`, the MEDIAN of the per-frame score over the 1.5 s window divided by the animal's median speed over the… *(applied)*
+- [x] **L324** · #321a · Says the controls used five displays; L175/L328 now say six. *(applied)*
+- [x] **L328** · #321b · "The controls" is too broad: the body-size control uses 37 and 36 sessions and the slot-swap control uses every session. *(applied)*
+- [x] **L328** · #323 · L175 reports a shared-threshold control that Methods never describes. *(applied)*
+- [x] **L334** · #301f · Prints "Figure 1D"; "camera-frames" is hyphenated (#440). *(applied)*
+- [x] **L334** · #307c · Contradicts 307a/307b, and "chance depends on the number of animals alone" doesn't parse. *(deleted)*
+- [x] **L340** · #? · This paragraph is about Supplementary Figure 1A (Mouse-Dyad-10M, 150 fps). The benchmark ran ByteTrack with a 60-frame buffer… *(applied)*
+- [x] **L340** · #? · `\ref{fig6}` prints "Figure 1A", which points at main Figure 1 (missed in the #301 sweep). *(applied)*
+- [x] **L342** · #? · The original run never passed `--max_tracks`. It used `--tracking_target_instance_count 2`, which caps instances per frame and not… *(applied)*
+- [x] **L344** · #? · Methods never says that Supplementary Figure 1B to D (SLAP-2M) use the original tracker runs. Their SLEAP and ByteTrack rows are copied… *(applied)*
+- [x] **L356** · #301g · Prints "Figures 1A and 1C". *(applied)*
+- [x] **L356** · #301h · Prints "Figure 1C". *(applied)*
+- [x] **L356** · #302 · A straight `"` prints as a curly closing quote. *(applied)*
+- [x] **L361** · #304 · Ivan C. Alcantara is listed twice; closing phrase is padding. *(applied)*
+- [x] **L389** · #301i · Prints "Figure 1A"; 70-word sentence with a semicolon and a garbled clause (#422). *(applied)*
+- [x] **L389** · #? · Your rewrite still says "every method". SLEAP's within-view IDF1 is higher on SLAP-2M (0.661, mean over 74 sessions,… *(applied)*
+- [x] **L389** · #? · Not a difficulty effect. On the clean keeptrack pool LUC3D scores higher on SLAP-2M (0.899 within view, `out/fig9_slap2m.json`) than on… *(applied)*
+- [x] **L391** · #301j · Prints "Figure 1C". *(applied)*
+- [x] **L393** · #301k · Prints "Figure 1A". *(applied)*
+- [x] **L393** · #301l · Prints "Figure 1B"; the sentence also repeats L391 (#344). *(deleted)*
+- [x] **L393** · #307b · "1/C is a ceiling" contradicts L334. *(applied)*
+- [x] **L397** · #308 · Contradicts L334, which says false negatives dominate every method's errors. *(applied)*
+- [x] **L397** · #? · Text gives $P = 1.7 \times 10^{-6}$ for $N = 20$ against the shipped tracker. The current per-session data (`out/fig8_methods_50.json`,… *(applied)*
+- [x] **L397** · #? · Text gives a median gain of 0.078 ($P = 2.7 \times 10^{-5}$) over the best re-tuning without eviction. Those are the old $N = 10$ values… *(applied)*
+- [x] **L406** · #? · 800 is not calibrat3's default sampling target. The app's default is 100 (`calibrat3/index.html` line 147, unchanged since commit… *(applied)*
+- [x] **L416** · #? · "calibrat3 is at 0.212 pixels on the same observations" pairs the OpenCV 4.13 calibrat3 value with the old-setup control. On the… *(applied)*
+- [x] **L416** · #? · The text says 1.280 → 1.183 pixels. No deposit contains 1.183. The only equal-frames control (`fig7s3_equal_frames.csv`, commit a522115)… *(applied)*
+- [x] **L416** · #? · The text says the reference camera moves the median by 0.004. The deposit gives 1.274 → 1.274 for the reference change alone (0.000),… *(applied)*
+- [x] **L420** · #? · The text says the three converged draws "agree to 0.001 pixels". `fig7s5_anipose_divergence.csv` gives their reported errors as… *(applied)*
