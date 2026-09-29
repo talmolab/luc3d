@@ -45,7 +45,8 @@ tree serves correctly from every path. Do not introduce origin-root-relative URL
 pre-release goes to `/latest/` alone; republishing an older release moves nothing
 (release channels only ever move forward). The same run refreshes the `/stable/`
 alias, so the two can never point at different builds — there is only one build.
-`workflow_dispatch` with target `root` is the manual promote escape hatch.
+`workflow_dispatch` with target `root` is the manual promote escape hatch; it
+writes root *and* the `/stable/` alias in one run, exactly as a release does.
 
 A target with a non-empty `redirect` is written as an alias (one `index.html`
 whose target is **relative**, so it stays correct under the custom domain,

@@ -200,7 +200,11 @@ jobs:
             fi
 
           elif [ "$EVENT_NAME" = "workflow_dispatch" ] && [ "$DISPATCH_TARGET" = "root" ]; then
+            # A manual promote lays down the alias in the SAME run, so it
+            # matches exactly what a full release does -- promoting by hand
+            # can never leave /stable/ pointing at a stale copy.
             add_target "" "manual-root $REF_NAME" true
+            add_target "stable" "manual-stable alias" false "../"
           elif [ "$EVENT_NAME" = "workflow_dispatch" ] && [ "$DISPATCH_TARGET" = "stable" ]; then
             add_target "stable" "manual-stable alias" false "../"
           elif [ "$EVENT_NAME" = "workflow_dispatch" ] && [ "$DISPATCH_TARGET" = "latest" ]; then
