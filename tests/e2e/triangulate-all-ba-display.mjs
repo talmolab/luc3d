@@ -183,8 +183,8 @@ try {
   check(out.shownA2 === out.shownA,
     `a second navigation-shaped repaint does not drift the value ` +
     `("${out.shownA2}" vs "${out.shownA}")`);
-  check(out.methodA === 'Bundle Adjustment',
-    `the method label reads "Bundle Adjustment" (got "${out.methodA}")`);
+  check(out.methodA === 'Refined',
+    `the method label reads "Refined" (got "${out.methodA}")`);
   check(out.worst3dDelta === 0,
     `the re-solve's 3D is bit-identical to the 3D the sweep stored on the group ` +
     `(worst |delta| ${out.worst3dDelta}) — the lazy fill deliberately does NOT write ` +

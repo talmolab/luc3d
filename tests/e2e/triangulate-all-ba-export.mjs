@@ -147,7 +147,7 @@ try {
     const status = () => (document.getElementById('statusText') || {}).textContent || '';
     // Provenance counters read straight out of the real status line.
     const provenance = () => {
-      const m = /([\d,]+) kept existing 3D, ([\d,]+) solved via Bundle Adjustment, ([\d,]+) via DLT/
+      const m = /([\d,]+) kept existing 3D, ([\d,]+) solved via Refined, ([\d,]+) via DLT/
         .exec(status());
       if (!m) return null;
       const n = (s) => parseInt(s.replace(/,/g, ''), 10);

@@ -151,6 +151,12 @@
     <!-- Label rendering tests -->
     <script src="test-labels.js"></script>
 
+    <!-- Which control owns a keystroke (issue #163) -->
+    <script src="test-keyboard-target.js"></script>
+
+    <!-- Remembered modal size/position -->
+    <script src="test-modal-geometry.js"></script>
+
     <!-- Assignment mode tests -->
     <script src="test-assignment.js"></script>
     <script src="test-occlusion-node-availability.js"></script>
@@ -368,6 +374,13 @@
         // store). Imports NO project modules — safe to bridge, and the only way
         // to unit-test the #149 contrast math (its DOM caller,
         // ui/sessions-panes.js, transitively pulls app.js).
+        // Which control owns a keystroke (issue #163). Imports no project
+        // modules — every predicate reads only `tagName`/`type`/`role` off its
+        // argument, so it unit-tests against plain object stubs in both runners.
+        import * as __KeyboardTarget from '../ui/keyboard-target.js';
+        // Remembered size/position for resizable modals. Imports no project
+        // modules; `clampGeometry` is a pure function of (rect, viewport).
+        import * as __ModalGeometry from '../ui/modal-geometry.js';
         import * as __VideoFilters from '../ui/video-filters.js';
         // Per-session timeline hidden sets + their `.slp` serialization. Also
         // imports no project modules. Namespaced rather than spread: names like
@@ -386,7 +399,8 @@
                               __LoadingProgressModal,
                               __TimelineCtrl, __TrackIdentityOps,
                               __ImportTrackResolve, __SioLazy,
-                              __VideoFilters);
+                              __VideoFilters, __KeyboardTarget,
+                              __ModalGeometry);
 
         // sleap-io.js bridge for the SLP export post-pass test — mirrors the
         // window.SleapIO bridge in index.html so test-slp-export-postpass.js can

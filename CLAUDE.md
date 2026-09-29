@@ -3,9 +3,9 @@
 Multi-view pose annotation GUI. No build system — pure vanilla JS served as static files.
 
 ## Architecture
-ES modules, vanilla JS (no build step). `index.html` loads `app.js` as `<script type="module">`; `app.js` is a 2-line entry point that imports from `pose/`. The 43 modules are grouped into four directories:
+ES modules, vanilla JS (no build step). `index.html` loads `app.js` as `<script type="module">`; `app.js` is a 2-line entry point that imports from `pose/`. The 48 modules are grouped into four directories:
 - `pose/` — data model, cross-view tracking, DLT triangulation, app initialization (6 files)
-- `ui/` — UI state, canvas rendering, mouse/keyboard interaction, info panel, modals, timeline, 3D viewport, video encoding, video display settings, settings (23 files)
+- `ui/` — UI state, canvas rendering, mouse/keyboard interaction, info panel, modals, timeline, 3D viewport, panel visibility, video encoding, video display settings, keyboard-target arbitration, modal geometry, settings (28 files)
 - `loading/` — video decoding, session loading, SLP/package readers, web workers (6 files)
 - `import-export/` — file I/O, save/load, SLP import/merge, visibility metadata (8 files)
 - `demo-data.js` — synthetic skeleton and camera data
@@ -20,6 +20,60 @@ python3 -m http.server 8080
 # App: http://localhost:8080/
 # Tests: http://localhost:8080/tests/test-runner.html
 ```
+
+## Deployment
+
+`luc3d.sleap.ai` is a GitHub Pages **custom domain** for this repo, not a separate
+host — `talmolab.github.io/luc3d/` 301-redirects to it, and the `CNAME` file at the
+`gh-pages` root is what makes Pages answer for that name. Cloudflare proxies it;
+the origin is Pages.
+
+`deploy.yml` maintains five channels on `gh-pages`. There is no build step, so a
+"build" is a copy of the repo at some ref, and the app is **sub-path safe**
+(relative importmap, `document.baseURI` in the test harness) — which is why one
+tree serves correctly from every path. Do not introduce origin-root-relative URLs
+(`/lib/...`); they 404 on every channel but root.
+
+- `/` — **the live page.** Newest **full release**; the only place it is served.
+- `/stable/` — an **alias** that redirects to root. A lone `index.html`, not a
+  copy, so a deep link under it (`…/stable/tests/…`) 404s.
+- `/latest/` — newest release **including pre-releases**. A real copy.
+- `/dev/` — every push to `main`. A real copy.
+- `/pr/<n>/` — PR previews, owned by `pr-preview.yml`. `deploy.yml` never touches them.
+
+**Only a full release moves root.** A push to `main` goes to `/dev/` alone; a
+pre-release goes to `/latest/` alone; republishing an older release moves nothing
+(release channels only ever move forward). The same run refreshes the `/stable/`
+alias, so the two can never point at different builds — there is only one build.
+`workflow_dispatch` with target `root` is the manual promote escape hatch; it
+writes root *and* the `/stable/` alias in one run, exactly as a release does.
+
+A target with a non-empty `redirect` is written as an alias (one `index.html`
+whose target is **relative**, so it stays correct under the custom domain,
+`talmolab.github.io/luc3d/` or a PR preview) instead of a copy of the app.
+GitHub Pages cannot issue a real HTTP redirect — no `.htaccess`, no
+`_redirects` — so a meta-refresh/JS stub is the only mechanism available.
+
+**Root is the only target that wipes — two rules keep that safe.** Every other
+channel owns its folder and can only damage itself, but root's previous output
+sits at the top of `gh-pages` beside every other channel and every PR preview:
+
+1. **Adding a channel means adding it to the keep-list** — the
+   `find . -maxdepth 1 ... ! -name` in `apply_targets`. A channel missing from
+   that list is deleted by the next full release. `stable` is listed for exactly
+   this reason, as are `.git` and `CNAME`.
+2. **Root is requested by an explicit `root: true` flag, never an empty path.**
+   The empty/`.`/`/` refusal is deliberately kept so an unset variable still
+   cannot turn `rm -rf "$path"` into `rm -rf` of everything.
+
+`CNAME` is excluded from the wipe and recreated if missing — losing it breaks the
+custom domain for everyone. No `.nojekyll` is added, since that would change how
+the live root is served and the app has no `_`-prefixed files.
+
+Releases are cut **by hand** (`gh release create v0.1.0 --generate-notes`).
+That is deliberate: a release created in Actions with `GITHUB_TOKEN` does not
+fire `release: published`, so a helper workflow could not trigger the deploy.
+Tags must be `vX.Y.Z` or `vX.Y.Z-N` (numeric pre-release), matching sleap-app.
 
 ## Dependencies (CDN only)
 - Three.js 0.147
@@ -360,6 +414,14 @@ the contrast half.
 - All loaded via script tags / import maps in index.html
 
 ## UI Conventions
+**No scroll-within-scroll.** A panel or modal gets ONE scroller. Do not give an
+inner widget its own `max-height` + `overflow-y: auto` inside something that
+already scrolls: the wheel then does different things a few pixels apart, and
+content past the inner cap is invisible with no hint that it exists. Let the
+widget grow to its full height and, when that makes the page unwieldy, make the
+section collapsible (a `<details>`, as the Tracking Wizard's node/camera tables
+do) or the container resizable — not scrollable twice.
+
 **Modals must close on `Esc`** unless explicitly stated otherwise. When building
 or editing any modal/overlay dialog, wire a `keydown` listener that closes it on
 `Escape` (and removes the listener on close). For a modal mid-operation (e.g. an
@@ -371,7 +433,7 @@ There are **three** test populations, each with its own runner. Run all three �
 they cover disjoint code, and a green run of one says nothing about the others.
 
 ```bash
-node tests/e2e/run-unit-tests.mjs     # tests/*.js  (browser suite, headless) — 1406 assertions
+node tests/e2e/run-unit-tests.mjs     # tests/*.js  (browser suite, headless) — 1504 assertions
 node tests/run-mjs-tests.mjs          # tests/test-*.mjs  (native-ESM Node tests)
 node tests/e2e/<name>.mjs             # tests/e2e/*.mjs  (Playwright, one file per behavior)
 ```
