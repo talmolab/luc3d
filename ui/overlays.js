@@ -2259,7 +2259,7 @@ export function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, ses
 
             // Draw reprojected instances — same color as group/3D viewer
             var trackBaseColor = getGroupColor(group, session, colorByIdentity, _frameIdx, viewName);
-            var reprojBrightness = reprojOpts.brightness != null ? reprojOpts.brightness : 1.0;
+            var reprojBrightness = reprojOpts.brightness != null ? reprojOpts.brightness : 0.5;
             var reprojTrackColor = reprojBrightness < 1.0
                 ? adjustColorBrightness(trackBaseColor, reprojBrightness)
                 : trackBaseColor;
