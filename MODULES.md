@@ -4836,6 +4836,16 @@ stopping at the last frame; the step transport buttons/keys stop it first.
   `data-value` + `drawAllOverlays` + `saveVisSettings`); they are added to
   `visStyleIds` for persistence/restore. The handler additionally rebuilds the
   3D skeleton for `vis3dNodeStyle` (`viewport3d.skeletonNodeShape = …; setFrame`).
+- Reprojection Brightness (`visReprojBrightness`) defaults to **50%** so
+  reprojections read as visibly distinct from the observed skeleton (the same
+  default is mirrored in `overlay-export-layout.js` `reproj.brightness` and the
+  `drawFrameOverlays` fallback in `overlays.js`). The slider is **always
+  enabled**: brightness tints the reprojection edges (and labels) whatever the
+  Node Color, so it is no longer gated on Node Color = Track. The visibility
+  `localStorage` blob carries a `_v` version (`VIS_CACHE_VERSION`, now 2); a
+  pre-v2 blob's `visReprojBrightness` of `'100'` — the old default, saved
+  along with every other slider on any panel edit — is dropped on restore so the
+  new default applies.
 - File ▸ "Export Video Overlays" (`menuExportOverlayVideo`) is wired to
   `showOverlayExportModal()` (overlay-export-modal.js); it sits directly above
   File ▸ "Export 3D Video" (`menuExportVideo3d`), which is wired to
