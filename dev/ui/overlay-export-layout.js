@@ -277,7 +277,7 @@ export function defaultOverlayExportSettings() {
         },
         reproj: {
             nodeStyle: 'circle', nodeSize: 4, lineWidth: 2, alpha: 0.9,
-            brightness: 1.0, nodeColor: 'white', lineStyle: 'dotted',
+            brightness: 0.5, nodeColor: 'white', lineStyle: 'dotted',
             labelSize: 0, labelAlpha: 0.9, showNodes: true, showEdges: true,
         },
         res: DEFAULT_RES,

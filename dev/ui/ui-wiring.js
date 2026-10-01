@@ -2170,10 +2170,6 @@ export function setupUI() {
             container.querySelectorAll('.line-style-btn').forEach(function(b) { b.classList.remove('active'); });
             btn.classList.add('active');
             container.setAttribute('data-value', btn.getAttribute('data-style'));
-            // Brightness slider only enabled when reprojections use track color
-            if (container.id === 'visReprojNodeColor') {
-                updateReprojBrightnessEnabled();
-            }
             // 3D node style: rebuild the 3D skeleton with the new node geometry.
             if (container.id === 'vis3dNodeStyle') {
                 if (viewport3d) {
@@ -2187,21 +2183,13 @@ export function setupUI() {
         });
     });
 
-    function updateReprojBrightnessEnabled() {
-        var nodeColor = document.getElementById('visReprojNodeColor').getAttribute('data-value') || 'white';
-        var slider = document.getElementById('visReprojBrightness');
-        var val = document.getElementById('visReprojBrightnessVal');
-        if (slider) {
-            var enabled = nodeColor === 'track';
-            slider.disabled = !enabled;
-            slider.style.opacity = enabled ? '1' : '0.35';
-            if (val) val.style.opacity = enabled ? '1' : '0.35';
-        }
-    }
-    updateReprojBrightnessEnabled();
-
     // --- Visibility settings cache (localStorage) ---
     var VIS_CACHE_KEY = 'visibilitySettings';
+    // Bumped when a default changes, so a value a browser cached under the OLD
+    // default is not mistaken for a deliberate choice. Every slider is saved on
+    // any panel edit, so without this the reprojection Brightness default
+    // (100% -> 50%, v2) would never reach a browser that had touched the panel.
+    var VIS_CACHE_VERSION = 2;
     var visSliderIds = [
         'visUserNodeSize', 'visUserEdgeWeight', 'visUserEdgeTrans',
         'visUserLabelSize', 'visUserLabelAlpha',
@@ -2236,6 +2224,7 @@ export function setupUI() {
             var el = document.getElementById(id);
             if (el) data[id] = el.getAttribute('data-value');
         });
+        data._v = VIS_CACHE_VERSION;
         localStorage.setItem(VIS_CACHE_KEY, JSON.stringify(data));
     }
 
@@ -2243,6 +2232,8 @@ export function setupUI() {
         var raw = localStorage.getItem(VIS_CACHE_KEY);
         if (!raw) return;
         try { var data = JSON.parse(raw); } catch(e) { return; }
+        // v1 caches stored reprojection Brightness at its old 100% default.
+        if (!(data._v >= 2) && String(data.visReprojBrightness) === '100') delete data.visReprojBrightness;
         visSliderIds.forEach(function(id) {
             if (data[id] == null) return;
             var el = document.getElementById(id);
@@ -2272,7 +2263,6 @@ export function setupUI() {
                 b.classList.toggle('active', b.getAttribute('data-style') === data[id]);
             });
         });
-        updateReprojBrightnessEnabled();
     }
 
     restoreVisSettings();
