@@ -40,6 +40,7 @@ import {
 // Pass 3i-3: update3DViewport moved to pose/initialization.js.
 import { update3DViewport } from '../pose/initialization.js';
 import { createMp4Writer, videoEncodingAvailable } from './video-encode.js';
+import { fileSystemAccessHint } from './browser-hints.js';
 // The two video-export modals share ONE set of quality tiers, one bitrate
 // formula, one H.264 level table and one streaming threshold. They used to keep
 // private copies of all four and had silently drifted apart (a 2x bitrate floor
@@ -2641,10 +2642,11 @@ export async function exportLabels() {
     if (!writer) {
         // No streaming target: the whole document has to be held in memory.
         var BIG = 20000;
+        var fsaHintJson = fileSystemAccessHint();
         if (totalFrames > BIG && !window.confirm(
             'This project has ' + totalFrames.toLocaleString() + ' frames. Without a ' +
             'save-file picker the whole JSON export must be built in memory, which ' +
-            'may crash the tab.\n\nExport anyway?')) {
+            'may crash the tab.' + (fsaHintJson ? '\n\n' + fsaHintJson : '') + '\n\nExport anyway?')) {
             setStatus('Export cancelled', 'warning');
             return;
         }
@@ -3231,9 +3233,10 @@ export function showExport3DVideoModal() {
                     fileHandle = null;
                 }
             }
+            var fsaHint3d = fileSystemAccessHint();
             if (!fileHandle && !window.confirm('This clip is about ' + _fmtBytes(estBytes) +
                 '. Without a save-file picker it must be built entirely in memory, which may ' +
-                'crash the tab.\n\nExport anyway?')) {
+                'crash the tab.' + (fsaHint3d ? '\n\n' + fsaHint3d : '') + '\n\nExport anyway?')) {
                 setStatus('3D video export cancelled', 'warning');
                 exporting = false;
                 cleanup();

@@ -33,7 +33,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
 const PORT = Number(process.env.PORT || 8140);
 const BROWSERS = (process.env.BROWSERS || 'chrome,safari,firefox').split(',').map(s => s.trim()).filter(Boolean);
-const APPS = { chrome: 'Google Chrome', safari: 'Safari', firefox: 'Firefox', edge: 'Microsoft Edge' };
+const APPS = { chrome: 'Google Chrome', safari: 'Safari', firefox: 'Firefox', edge: 'Microsoft Edge', brave: 'Brave Browser' };
 const HARDFIGHT = process.env.HARDFIGHT || '/Users/soline/Documents/luc3d/LabMeetingPrep/Oline/20260605_133431-HardFight_1kModels';
 const MIMICA = process.env.MIMICA || '/Users/soline/Documents/luc3d/LabMeetingPrep/Mimica/20260709171244_labMeetingPrep';
 const RUN = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
