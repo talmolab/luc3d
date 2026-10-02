@@ -1284,12 +1284,20 @@ function aggregateReprojectionError(frameIdx) {
  * `#infoPanel` and is always on screen, so this runs whether or not the panel
  * is collapsed.
  *
+ * The project-wide counters (`updateFrameCounters`) are skipped during
+ * playback: they walk EVERY frame group to recount labeled / triangulated
+ * frames — ~8–9 ms on a 36,000-frame project — yet don't depend on the frame
+ * being shown, so recomputing them on the ~10 Hz playback updates only blocked
+ * the video-frame callback long enough to drop frames (measured with
+ * tests/e2e/_bench-playback.mjs). `VideoController.stopPlayback` redraws with
+ * `isPlaying` false, so they are refreshed the moment playback stops.
+ *
  * @param {number|null} meanError
  */
 function updateStatusBarForFrame(meanError) {
     document.getElementById('statusError').textContent = 'Error: ' +
         (meanError != null ? meanError.toFixed(2) + ' px' : '-');
-    updateFrameCounters();
+    if (!state.isPlaying) updateFrameCounters();
 }
 
 export function updateFrameInfo(frameIdx, instanceGroups) {

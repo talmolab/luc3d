@@ -28,6 +28,7 @@ import {
 } from '../pose/pose-data.js';
 
 import { OnDemandVideoDecoder, VideoController } from './video.js';
+import { videoLoadFailureText } from './video-codec-diagnosis.js';
 
 import {
     pickFiles, pickFolder, pickVideoFiles,
@@ -282,14 +283,9 @@ export async function handleLoadVideos() {
             } catch (videoErr) {
                 console.error('Failed to load ' + file.name + ':', videoErr);
                 hlvModal.failTask(hlvTaskId, videoErr);
-                var errMsg = videoErr.message || String(videoErr);
-                // Detect unsupported codec errors
-                if (errMsg.indexOf('NO_SUPPORTED_STREAMS') >= 0 || errMsg.indexOf('DEMUXER_ERROR') >= 0 ||
-                    (errMsg.indexOf('Video error code 4') >= 0)) {
-                    failedVideos.push(stem + ' (unsupported codec - try transcoding to H.264 with: ffmpeg -i input.mp4 -c:v libx264 -crf 23 output.mp4)');
-                } else {
-                    failedVideos.push(stem + ': ' + errMsg);
-                }
+                // The decoder attaches a codec diagnosis (e.g. "HEVC tagged hev1 —
+                // re-tag with …") when the browser can't play the file.
+                failedVideos.push(videoLoadFailureText(stem, videoErr));
             }
         }
 
@@ -1933,12 +1929,7 @@ export async function handleLoadSessionFolderSingleSlp() {
                 }
             } catch (e) {
                 console.error('[single-slp] Failed to load video:', vFile.name, e);
-                var errMsg = e.message || String(e);
-                if (errMsg.indexOf('NO_SUPPORTED_STREAMS') >= 0 || errMsg.indexOf('DEMUXER_ERROR') >= 0 || errMsg.indexOf('Video error code 4') >= 0) {
-                    failedVideos.push(vFile.name + ' (unsupported codec — transcode to H.264: ffmpeg -i input.mp4 -c:v libx264 -crf 23 output.mp4)');
-                } else {
-                    failedVideos.push(vFile.name + ': ' + errMsg);
-                }
+                failedVideos.push(videoLoadFailureText(vFile.name, e));
             }
         }
 
@@ -2102,7 +2093,10 @@ export async function attachVideosForLazyReopen(session, loader, pickedFilesOver
     var failed = [];
     for (var li = 0; li < toLoad.length; li++) {
         var lEntry = toLoad[li];
-        if (!lEntry.decoder) { failed.push(lEntry.file.name); continue; }
+        if (!lEntry.decoder) {
+            failed.push(lEntry.error ? videoLoadFailureText(lEntry.file.name, lEntry.error) : lEntry.file.name);
+            continue;
+        }
         var vfEntry = {
             file: lEntry.file, name: lEntry.stem, decoder: lEntry.decoder,
             videoWidth: lEntry.decoder.videoTrack.video.width,
@@ -2615,6 +2609,7 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
         var parseJobs = [];
         var lazyJobs = [];
         var slpFailures = [];   // { camName, file, message } — surfaced, never swallowed
+        var videoFailures = []; // { text, kind } — codec diagnosis; surfaced, never swallowed
         var staleWarnings = []; // cameras whose chosen file is not the newest on disk
 
         // Pass 1 — choose exactly ONE `.slp` per camera.
@@ -2951,7 +2946,13 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
                                 : 30;
                         }
                     } catch (vidErr) {
+                        // Was console-only: a camera whose video the browser
+                        // can't play (Safari + hev1-tagged HEVC, AV1 without
+                        // hardware decode) loaded its poses with NO video and no
+                        // message. Reported in the final status below.
                         console.error('[session-folder] Failed to load video ' + videoFile.name + ':', vidErr);
+                        videoFailures.push({ text: videoLoadFailureText(videoFile.name, vidErr),
+                            kind: (vidErr && vidErr.codecDiagnosis && vidErr.codecDiagnosis.kind) || null });
                     }
                 }
             }
@@ -3110,7 +3111,20 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
             statusMsg += ' — ' + slpFailures.length + ' annotation file(s) could not be read: '
                 + slpFailures.map(function (f) { return f.camName + ' (' + f.file.name + ')'; }).join(', ');
             statusKind = 'error';
-        } else if (staleWarnings.length > 0) {
+        }
+        if (videoFailures.length > 0) {
+            // One message per distinct diagnosis (8 cameras with the same codec
+            // problem should read as one line, not eight).
+            var shown = [], sameAs = 0;
+            videoFailures.forEach(function (f) {
+                if (f.kind && shown.some(function (x) { return x.kind === f.kind; })) { sameAs++; return; }
+                shown.push(f);
+            });
+            statusMsg += ' — ' + videoFailures.length + ' video(s) could not be played: '
+                + shown.map(function (f) { return f.text; }).join(' | ')
+                + (sameAs > 0 ? ' (same for the other ' + sameAs + ')' : '');
+            statusKind = 'error';
+        } else if (slpFailures.length === 0 && staleWarnings.length > 0) {
             statusMsg += ' — newer .slp present but not loaded: ' + staleWarnings.join('; ');
             statusKind = 'warning';
         }
