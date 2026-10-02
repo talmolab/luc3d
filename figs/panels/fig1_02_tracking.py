@@ -170,6 +170,19 @@ LABEL_GAP_PT = 1.8
 #: PyMuPDF measures it) plus the chip's own 2 x 0.32 em of padding. Used to reserve
 #: the chip's real footprint while searching for a position clear of the animals.
 CHIP_H_EM = 1.80
+
+#: Chips pinned to one side of their own pose, overriding the search below, as
+#: {(camera, label): side}. The search scores chips against each detection's
+#: recorded bbox, which spans the KEYPOINTS -- but in cam 0 the bottom-left mouse's
+#: head and body sit above its detected keypoints, outside that bbox, so the
+#: search's "above" (its preferred side) put `T 94` and `ID 3` on the mouse's head
+#: (Eric, 2026-10-02: "move them to the left of the pose"). Only the left-side
+#: candidates are offered for these chips; the search still picks among the three
+#: vertical alignments and still clamps into the crop.
+FORCE_SIDE = {
+    ("Camera0_mid", "T 94"): "left",
+    ("Camera0_mid", "ID 3"): "left",
+}
 #: One typographic point in millimetres.
 MM_PER_PT = 25.4 / 72.0
 
@@ -437,11 +450,14 @@ def main():
                 acx, acy = (bx0 + bx1) / 2.0, (by0 + by1) / 2.0
                 cands = []
                 for hx in (acx, bx0 + cw / 2, bx1 - cw / 2):
-                    cands.append((hx, by0 - clear - chip_h / 2, 0.00))   # above
-                    cands.append((hx, by1 + clear + chip_h / 2, 0.60))   # below
+                    cands.append((hx, by0 - clear - chip_h / 2, 0.00, "above"))
+                    cands.append((hx, by1 + clear + chip_h / 2, 0.60, "below"))
                 for vy in (acy, by0 + chip_h / 2, by1 - chip_h / 2):
-                    cands.append((bx0 - clear - cw / 2, vy, 0.35))       # left
-                    cands.append((bx1 + clear + cw / 2, vy, 0.35))       # right
+                    cands.append((bx0 - clear - cw / 2, vy, 0.35, "left"))
+                    cands.append((bx1 + clear + cw / 2, vy, 0.35, "right"))
+                side = FORCE_SIDE.get((cam, s))
+                if side:
+                    cands = [c for c in cands if c[3] == side]
                 items.append(dict(s=s, col=col, cw=cw, cands=cands, acx=acx, acy=acy))
 
             # Widest first: a long chip has the fewest positions that clear the
@@ -449,7 +465,7 @@ def main():
             placed = []
             for it in sorted(items, key=lambda t: -t["cw"]):
                 best, best_cost = None, None
-                for (qx, qy, bias) in it["cands"]:
+                for (qx, qy, bias, _side) in it["cands"]:
                     # Clamp into the crop: a chip pushed past an edge would be
                     # clipped mid-glyph, and one above the top edge would land on
                     # the group heading.
