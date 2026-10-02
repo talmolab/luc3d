@@ -70,8 +70,17 @@ function linkCameras(root, tag) {
 // Safari only plays HEVC-in-MP4 tagged hvc1). Built under verify/ by:
 //   ffmpeg -t 60 -i in.mp4 -c copy -tag:v hvc1 out.mp4
 const HARDFIGHT_HVC1 = process.env.HARDFIGHT_HVC1 || path.join(repoRoot, 'verify', 'probe-remux', 'HardFight_hvc1');
-const media = { hardfight: linkCameras(HARDFIGHT, 'hardfight'), hardfightHvc1: linkCameras(HARDFIGHT_HVC1, 'hardfight-hvc1'),
-                mimica: linkCameras(MIMICA, 'mimica'), fps: { hardfight: 60, mimica: 150.1066 } };
+// ONLY_EXTRA=1 skips the original HEVC/H.264 sets (to test just the extras).
+const ONLY_EXTRA = process.env.ONLY_EXTRA === '1';
+const media = ONLY_EXTRA ? { hardfight: [], hardfightHvc1: [], mimica: [], fps: {} }
+    : { hardfight: linkCameras(HARDFIGHT, 'hardfight'), hardfightHvc1: linkCameras(HARDFIGHT_HVC1, 'hardfight-hvc1'),
+        mimica: linkCameras(MIMICA, 'mimica'), fps: { hardfight: 60, mimica: 150.1066 } };
+// Extra per-camera sets, e.g. the datasets transcoded to AV1 (15 s each):
+//   ffmpeg -t 15 -i in.mp4 -an -c:v libsvtav1 -preset 8 -crf 30 -g <fps> out.mp4
+media.extra = [
+    { name: 'hardfight-av1', fps: 60, dir: path.join(repoRoot, 'verify', 'probe-remux', 'HardFight_av1') },
+    { name: 'mimica-av1', fps: 150.1066, dir: path.join(repoRoot, 'verify', 'probe-remux', 'Mimica_av1') },
+].map(x => ({ name: x.name, fps: x.fps, urls: linkCameras(x.dir, x.name) })).filter(x => x.urls.length);
 
 // ---- static server with Range + POST /result -------------------------------
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.mjs': 'text/javascript',
@@ -146,8 +155,12 @@ function barcodeSet(name, file, fps, cams) {
     }
     return { name, fps, urls };
 }
+const SETS = process.env.SETS ? process.env.SETS.split(',') : ['hevc60x8', 'h264-60x5', 'h264-150x5'];
 const verifyMedia = { sets: [barcodeSet('hevc60x8', 'hevc-60.mp4', 60, 8), barcodeSet('h264-60x5', 'h264-60.mp4', 60, 5),
-                             barcodeSet('h264-150x5', 'h264-150.mp4', 150, 5)].filter(Boolean) };
+                             barcodeSet('h264-150x5', 'h264-150.mp4', 150, 5),
+                             barcodeSet('av1-60x5', 'av1-60.mp4', 60, 5), barcodeSet('av1-60x8', 'av1-60.mp4', 60, 8),
+                             barcodeSet('av1-150x5', 'av1-150.mp4', 150, 5)]
+                    .filter(Boolean).filter(x => SETS.includes(x.name)) };
 const pageUrl = (b) => `http://localhost:${PORT}/tests/e2e/${PAGE}?browser=${b}&run=${RUN}` +
     (process.env.READBACK === '0' ? '&readback=0' : '') + (process.env.LOOP ? '&loop=' + process.env.LOOP : '') +
     `&media=${encodeURIComponent(JSON.stringify(VERIFY ? verifyMedia : media))}`;
@@ -201,8 +214,16 @@ for (const k of ['importMaps', 'webAssembly', 'webgl2', 'videoFrame', 'videoDeco
 row('HEVC canPlayType', 'checks.codecs.hevc_hvc1.canPlayType');
 row('H.264 canPlayType', 'checks.codecs.h264_high.canPlayType');
 row('WebCodecs decode HEVC/H.264', r => { const d = get(r, 'checks.codecs.webcodecsDecode'); return d ? `${d.hevc}/${d.h264}` : null; });
+row('AV1 canPlayType L4.0 / L5.0', r => `${get(r, 'checks.codecs.av1_l40.canPlayType')} / ${get(r, 'checks.codecs.av1_l50.canPlayType')}`);
+row('AV1 WebCodecs decode L4.0 / L5.0', r => `${get(r, 'checks.codecs.webcodecsDecode.av1_l40')} / ${get(r, 'checks.codecs.webcodecsDecode.av1_l50')}`);
+for (const k of ['hevc60', 'h264_60', 'h264_150', 'av1_60', 'av1_150']) {
+    row(`mediaCapabilities ${k} (sup/smooth/HW)`, r => { const m = get(r, `checks.codecs.mediaCapabilities.${k}`);
+        return m ? (m.error ? 'ERR' : `${m.supported ? 'Y' : 'N'}/${m.smooth ? 'Y' : 'N'}/${m.powerEfficient ? 'Y' : 'N'}`) : null; });
+}
 row('WebCodecs encode H.264', 'checks.codecs.webcodecsEncode.h264');
-for (const set of ['hardfight-hevc-hev1', 'hardfight-hevc-hvc1', 'mimica-h264']) {
+const setNames = [...new Set([...received.values()].flatMap(r => Object.keys(r.checks || {}))
+    .filter(k => k.includes(':')).map(k => k.split(':')[0]))];
+for (const set of setNames) {
     for (const v of ['single-detached', 'all-detached', 'single-attached', 'all-attached']) {
         const key = `checks.${set}:${v}`;
         const P = v.startsWith('single') ? `${key}.play` : key;

@@ -101,6 +101,8 @@
       hevc_hvc1: 'video/mp4; codecs="hvc1.1.6.L120.90"',
       hevc_hev1: 'video/mp4; codecs="hev1.1.6.L120.90"',
       h264_high: 'video/mp4; codecs="avc1.640028"',
+      av1_l40: 'video/mp4; codecs="av01.0.08M.08"',   // level 4.0: 1280x1024 @ 60
+      av1_l50: 'video/mp4; codecs="av01.0.12M.08"',   // level 5.0: 1280x1024 @ 150
     };
     const out = {};
     for (const [k, t] of Object.entries(types)) {
@@ -117,7 +119,23 @@
       try { const s = await VideoEncoder.isConfigSupported({ codec, width: 1280, height: 1024, bitrate: 4e6, framerate: 30 }); return !!s.supported; }
       catch (e) { return 'error: ' + e.message; }
     }
-    out.webcodecsDecode = { hevc: await dec('hvc1.1.6.L120.90'), h264: await dec('avc1.640028') };
+    out.webcodecsDecode = { hevc: await dec('hvc1.1.6.L120.90'), h264: await dec('avc1.640028'),
+                            av1_l40: await dec('av01.0.08M.08'), av1_l50: await dec('av01.0.12M.08') };
+    // Media Capabilities: supported / smooth / powerEfficient (≈ hardware
+    // decode) for each codec at the cameras' size and rates.
+    out.mediaCapabilities = {};
+    if (navigator.mediaCapabilities && navigator.mediaCapabilities.decodingInfo) {
+      const cfgs = { hevc60: ['video/mp4; codecs="hvc1.1.6.L120.90"', 60], h264_60: ['video/mp4; codecs="avc1.640028"', 60],
+                     h264_150: ['video/mp4; codecs="avc1.640033"', 150], av1_60: ['video/mp4; codecs="av01.0.08M.08"', 60],
+                     av1_150: ['video/mp4; codecs="av01.0.12M.08"', 150] };
+      for (const [k, [ct, fr]] of Object.entries(cfgs)) {
+        try {
+          const r = await navigator.mediaCapabilities.decodingInfo({ type: 'file',
+            video: { contentType: ct, width: 1280, height: 1024, bitrate: 4000000, framerate: fr } });
+          out.mediaCapabilities[k] = { supported: r.supported, smooth: r.smooth, powerEfficient: r.powerEfficient };
+        } catch (e) { out.mediaCapabilities[k] = { error: e.message }; }
+      }
+    }
     out.webcodecsEncode = { h264: await enc('avc1.640028'), hevc: await enc('hvc1.1.6.L120.90') };
     return out;
   });
@@ -290,6 +308,7 @@
   await mediaSet('hardfight-hevc-hev1', media.hardfight, (media.fps || {}).hardfight || 60);
   await mediaSet('hardfight-hevc-hvc1', media.hardfightHvc1, (media.fps || {}).hardfight || 60);
   await mediaSet('mimica-h264', media.mimica, (media.fps || {}).mimica || 150.1066);
+  for (const x of (media.extra || [])) await mediaSet(x.name, x.urls, x.fps);
 
   // ---- does the app itself boot? ---------------------------------------------
   await step('appBoot', async () => {
