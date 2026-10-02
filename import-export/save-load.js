@@ -44,6 +44,7 @@ import {
 import { SioLazyLoader } from '../loading/sio-lazy-loader.js';
 import { getLoadingProgressModal } from '../ui/loading-progress-modal.js';
 import { writeVisibilityMetadata, readVisibilityMetadata } from './visibility-metadata.js';
+import { fileSystemAccessHint } from '../ui/browser-hints.js';
 
 /**
  * Confirmation modal shown when the user starts loading a real session while
@@ -981,8 +982,13 @@ export async function saveProjectSlp() {
         setStatus('No session to save', 'error');
         return;
     }
+    // In Brave the save-file picker is OFF by default, so Save lands here: the
+    // whole file is built in memory and downloaded (risky for a large
+    // project, and never updates the file in place). Say why, and how to fix.
+    var fsaHint = fileSystemAccessHint();
     try {
-        setStatus('Building SLP...', 'warning');
+        setStatus(fsaHint ? 'Building SLP in memory to download it (Brave cannot save straight to a file)...'
+            : 'Building SLP...', 'warning');
 
         var bytes = await buildSlpBytes();
         var blob = new Blob([bytes], { type: 'application/x-hdf5' });
@@ -1001,14 +1007,15 @@ export async function saveProjectSlp() {
         document.body.removeChild(a);
         setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
 
-        setStatus('Project saved as SLP (' + (blob.size / 1024 / 1024).toFixed(1) + ' MB)', 'success');
+        setStatus('Project saved as SLP (' + (blob.size / 1024 / 1024).toFixed(1) + ' MB)' +
+            (fsaHint ? ' — downloaded, not saved in place. ' + fsaHint : ''), 'success');
     } catch (err) {
         if (err && err.name === 'SaveCancelledError') {
             setStatus('Save cancelled', 'warning');
             return;
         }
         console.error('Save project SLP failed:', err);
-        setStatus('Save failed: ' + err.message, 'error');
+        setStatus('Save failed: ' + err.message + (fsaHint ? ' ' + fsaHint : ''), 'error');
     }
 }
 

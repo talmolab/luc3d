@@ -29,6 +29,7 @@ import {
 
 import { OnDemandVideoDecoder, VideoController } from './video.js';
 import { videoLoadFailureText } from './video-codec-diagnosis.js';
+import { fileSystemAccessHint } from '../ui/browser-hints.js';
 
 import {
     pickFiles, pickFolder, pickVideoFiles,
@@ -1132,8 +1133,12 @@ export async function handleLoadMultiSession() {
                 throw e;
             }
         } else {
-            // Fallback for browsers without File System Access API
-            setStatus('This browser does not support showDirectoryPicker. Use Chrome or Edge.', 'error');
+            // Fallback for browsers without File System Access API. Brave
+            // has it but OFF by default — say how to turn it on.
+            var fsaHint = fileSystemAccessHint();
+            setStatus(fsaHint
+                ? 'Loading several sessions needs a folder picker. ' + fsaHint
+                : 'This browser does not support showDirectoryPicker. Use Chrome or Edge.', 'error');
             return;
         }
 
