@@ -1,0 +1,324 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LUCID browser probe</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font: 14px/1.4 system-ui, sans-serif; margin: 16px; background: Canvas; color: CanvasText; }
+  pre { white-space: pre-wrap; font-size: 12px; }
+  iframe { width: 640px; height: 360px; border: 1px solid GrayText; }
+</style>
+</head>
+<body>
+<h1>LUCID browser capability probe</h1>
+<p id="status">running…</p>
+<pre id="log"></pre>
+<div id="stage"></div>
+<script>
+/*
+ * Opened by tests/e2e/_probe-capabilities.mjs in each installed browser
+ * (`open -a <Browser> <url>`). Runs the checks below and POSTs a JSON report
+ * to /result. Media are served by that runner (with HTTP Range support, which
+ * Safari needs for <video>), symlinked under verify/probe-media/.
+ *
+ * Videos are created DETACHED from the page, exactly as the app's decoders do
+ * (loading/video.js), because whether a browser decodes and hands out frames
+ * for an off-page <video> is the question that matters for LUCID.
+ */
+(async function () {
+  const q = new URLSearchParams(location.search);
+  const media = JSON.parse(q.get('media') || '{}');   // { hardfight: [urls], mimica: [urls], fps: {...} }
+  const R = { browser: q.get('browser'), run: q.get('run'), ua: navigator.userAgent,
+              dpr: devicePixelRatio, started: new Date().toISOString(), checks: {} };
+  const logEl = document.getElementById('log');
+  const log = (m) => { logEl.textContent += m + '\n'; };
+  const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+  const withTimeout = (p, ms, what) => Promise.race([p, sleep(ms).then(() => { throw new Error('timeout: ' + what); })]);
+  const nextFrame = () => new Promise(r => requestAnimationFrame(r));
+  const median = (a) => { const s = a.slice().sort((x, y) => x - y); return s.length ? s[s.length >> 1] : null; };
+
+  async function step(name, fn) {
+    log('▶ ' + name);
+    // heartbeat, so the runner can show where a browser stalls
+    fetch('/progress?browser=' + encodeURIComponent(R.browser) + '&step=' + encodeURIComponent(name) +
+          '&hidden=' + document.hidden).catch(() => {});
+    try { R.checks[name] = await fn(); }
+    catch (e) { R.checks[name] = { error: String(e && e.message || e) }; }
+    log('  ' + JSON.stringify(R.checks[name]).slice(0, 400));
+  }
+
+  // ---- display / scheduling ----------------------------------------------
+  await step('display', async () => {
+    const ts = [];
+    const t0 = performance.now();
+    while (performance.now() - t0 < 2000) ts.push(await nextFrame());
+    const d = []; for (let i = 1; i < ts.length; i++) d.push(ts[i] - ts[i - 1]);
+    const med = median(d);
+    return { rafMedianMs: +med.toFixed(2), rafHz: +(1000 / med).toFixed(1), samples: d.length,
+             screen: [screen.width, screen.height] };
+  });
+
+  // ---- platform APIs the app uses -----------------------------------------
+  await step('apis', async () => {
+    const cnv = document.createElement('canvas');
+    let moduleWorker = false;
+    try {
+      const src = URL.createObjectURL(new Blob(['export const x = 1; postMessage(1);'], { type: 'text/javascript' }));
+      moduleWorker = await withTimeout(new Promise((res) => {
+        const w = new Worker(src, { type: 'module' });
+        w.onmessage = () => { w.terminate(); res(true); };
+        w.onerror = () => res(false);
+      }), 3000, 'module worker');
+    } catch (e) { moduleWorker = false; }
+    return {
+      importMaps: !!(HTMLScriptElement.supports && HTMLScriptElement.supports('importmap')),
+      webAssembly: typeof WebAssembly === 'object',
+      webgl2: !!cnv.getContext('webgl2'),
+      offscreenCanvas: typeof OffscreenCanvas === 'function',
+      videoFrame: typeof VideoFrame === 'function',
+      videoDecoder: typeof VideoDecoder === 'function',
+      videoEncoder: typeof VideoEncoder === 'function',
+      rVFC: 'requestVideoFrameCallback' in HTMLVideoElement.prototype,
+      getVideoPlaybackQuality: 'getVideoPlaybackQuality' in HTMLVideoElement.prototype,
+      showSaveFilePicker: typeof window.showSaveFilePicker === 'function',
+      showDirectoryPicker: typeof window.showDirectoryPicker === 'function',
+      webkitdirectory: 'webkitdirectory' in document.createElement('input'),
+      moduleWorker,
+      compressionStream: typeof CompressionStream === 'function',
+      structuredClone: typeof structuredClone === 'function',
+      performanceMemory: !!performance.memory,
+      longTaskObserver: !!(PerformanceObserver.supportedEntryTypes || []).includes('longtask'),
+      loafObserver: !!(PerformanceObserver.supportedEntryTypes || []).includes('long-animation-frame'),
+    };
+  });
+
+  // ---- codecs ---------------------------------------------------------------
+  await step('codecs', async () => {
+    const v = document.createElement('video');
+    const types = {
+      hevc_hvc1: 'video/mp4; codecs="hvc1.1.6.L120.90"',
+      hevc_hev1: 'video/mp4; codecs="hev1.1.6.L120.90"',
+      h264_high: 'video/mp4; codecs="avc1.640028"',
+    };
+    const out = {};
+    for (const [k, t] of Object.entries(types)) {
+      out[k] = { canPlayType: v.canPlayType(t) || 'no',
+                 mse: (window.MediaSource && MediaSource.isTypeSupported) ? MediaSource.isTypeSupported(t) : null };
+    }
+    async function dec(codec) {
+      if (typeof VideoDecoder !== 'function') return null;
+      try { const s = await VideoDecoder.isConfigSupported({ codec, codedWidth: 1280, codedHeight: 1024 }); return !!s.supported; }
+      catch (e) { return 'error: ' + e.message; }
+    }
+    async function enc(codec) {
+      if (typeof VideoEncoder !== 'function') return null;
+      try { const s = await VideoEncoder.isConfigSupported({ codec, width: 1280, height: 1024, bitrate: 4e6, framerate: 30 }); return !!s.supported; }
+      catch (e) { return 'error: ' + e.message; }
+    }
+    out.webcodecsDecode = { hevc: await dec('hvc1.1.6.L120.90'), h264: await dec('avc1.640028') };
+    out.webcodecsEncode = { h264: await enc('avc1.640028'), hevc: await enc('hvc1.1.6.L120.90') };
+    return out;
+  });
+
+  // ---- media helpers ----------------------------------------------------------
+  function makeVideo(url, attach) {
+    const v = document.createElement('video');
+    v.crossOrigin = 'anonymous';   // media alternate between two loopback hosts (connection limit)
+    v.muted = true; v.playsInline = true; v.preload = 'auto'; v.src = url;
+    if (attach) { v.style.cssText = 'width:160px;height:128px'; document.getElementById('stage').appendChild(v); }
+    return v;
+  }
+  async function ready(v) {
+    if (v.readyState >= 3) return;
+    await withTimeout(new Promise((res, rej) => {
+      v.addEventListener('canplay', res, { once: true });
+      v.addEventListener('error', () => rej(new Error('video error ' + (v.error && v.error.code) + ' ' + (v.error && v.error.message || ''))), { once: true });
+    }), 15000, 'canplay');
+  }
+  async function seek(v, t) {
+    await withTimeout(new Promise(res => { v.addEventListener('seeked', res, { once: true }); v.currentTime = t; }), 10000, 'seek');
+  }
+  function quality(v) {
+    if (!v.getVideoPlaybackQuality) return null;
+    const q = v.getVideoPlaybackQuality();
+    return { total: q.totalVideoFrames, dropped: q.droppedVideoFrames };
+  }
+  const tiny = document.createElement('canvas'); tiny.width = 32; tiny.height = 26;
+  const tctx = tiny.getContext('2d', { willReadFrequently: true });
+  function nonBlank(src) {
+    try {
+      tctx.clearRect(0, 0, 32, 26);
+      tctx.drawImage(src, 0, 0, 32, 26);
+      const d = tctx.getImageData(0, 0, 32, 26).data;
+      let s = 0; for (let i = 0; i < d.length; i += 4) s += d[i] + d[i + 1] + d[i + 2];
+      return s / (d.length / 4) > 6;   // mean RGB sum per pixel
+    } catch (e) { return 'error: ' + e.message; }
+  }
+
+  // Play `videos` for `ms`; every refresh, read each video's frame FOUR ways
+  // and count how many distinct values each yields per second:
+  //   vfTs   — new VideoFrame(video).timestamp (what the app's loop uses)
+  //   clock  — floor(video.currentTime * fps)
+  //   rvfc   — the latest requestVideoFrameCallback mediaTime
+  //   pixels — a checksum of drawImage(video): did the PICTURE change?
+  // If the picture changes but vfTs doesn't, the timestamp is unusable; if
+  // the clock moves but the picture doesn't, the element isn't rendering.
+  function pixSum(src) {
+    try {
+      tctx.drawImage(src, 0, 0, 32, 26);
+      const d = tctx.getImageData(0, 0, 32, 26).data;
+      let h = 0; for (let i = 0; i < d.length; i += 4) h = (h * 31 + d[i] + d[i + 1] * 3 + d[i + 2] * 7) >>> 0;
+      return h;
+    } catch (e) { return 'err'; }
+  }
+  let measuring = false;
+  async function playAndCapture(videos, fps, ms) {
+    const n = videos.length;
+    const kinds = ['vfTs', 'clock', 'rvfc', 'pixels'];
+    const last = {}, distinct = {};
+    kinds.forEach(k => { last[k] = new Array(n).fill(undefined); distinct[k] = new Array(n).fill(0); });
+    const q0 = videos.map(quality);
+    let capOk = 0, capFail = 0, capMs = 0, refreshes = 0, firstErr = null, blankSeen = 0, blankChecks = 0;
+    const rvfcMT = new Array(n).fill(null), rvfcCount = new Array(n).fill(0);
+    // Per callback: how many pictures were presented since the last one
+    // (presentedFrames delta) and how far mediaTime moved (frames). ~1 picture
+    // per callback = callbacks mark every presented picture (mediaTime exact);
+    // >1 = callbacks are coalesced and lag the picture between them.
+    const pfDeltas = videos.map(() => []), mtSteps = videos.map(() => []);
+    const lastPF = new Array(n).fill(null), lastMT = new Array(n).fill(null);
+    const vfTsZero = new Array(n).fill(0);
+    if ('requestVideoFrameCallback' in HTMLVideoElement.prototype) {
+      videos.forEach((v, i) => {
+        const cb = (now, md) => {
+          rvfcCount[i]++; rvfcMT[i] = md && md.mediaTime;
+          if (md && measuring) {
+            if (lastPF[i] != null && typeof md.presentedFrames === 'number') pfDeltas[i].push(md.presentedFrames - lastPF[i]);
+            if (lastMT[i] != null) mtSteps[i].push(Math.round((md.mediaTime - lastMT[i]) * fps));
+            lastPF[i] = md.presentedFrames; lastMT[i] = md.mediaTime;
+          }
+          v.requestVideoFrameCallback(cb);
+        };
+        v.requestVideoFrameCallback(cb);
+      });
+    }
+    await Promise.all(videos.map(v => v.play().catch(e => { throw new Error('play() rejected: ' + e.message); })));
+    const ct0 = videos.map(v => v.currentTime);
+    const t0 = performance.now();
+    measuring = true;
+    while (performance.now() - t0 < ms) {
+      await nextFrame();
+      refreshes++;
+      for (let i = 0; i < n; i++) {
+        const v = videos[i], cur = {};
+        if (typeof VideoFrame === 'function') {
+          const tc = performance.now();
+          try {
+            const f = new VideoFrame(v);
+            cur.vfTs = Math.round(f.timestamp / 1e6 * fps);
+            if (f.timestamp === 0) vfTsZero[i]++;
+            if (refreshes % 30 === 0 && i === 0) { blankChecks++; if (nonBlank(f) !== true) blankSeen++; }
+            f.close(); capOk++;
+          } catch (e) { capFail++; if (!firstErr) firstErr = e.message; }
+          capMs += performance.now() - tc;
+        }
+        cur.clock = Math.floor(v.currentTime * fps + 1e-6);
+        cur.rvfc = rvfcMT[i] == null ? null : Math.round(rvfcMT[i] * fps);
+        cur.pixels = pixSum(v);
+        for (const k of kinds) {
+          if (cur[k] === undefined || cur[k] === null) continue;
+          if (cur[k] !== last[k][i]) { distinct[k][i]++; last[k][i] = cur[k]; }
+        }
+      }
+    }
+    measuring = false;
+    const secs = (performance.now() - t0) / 1000;
+    const q1 = videos.map(quality);
+    videos.forEach(v => v.pause());
+    const perSec = (arr) => arr.map(x => +(x / secs).toFixed(1));
+    return {
+      seconds: +secs.toFixed(2), refreshHz: +(refreshes / secs).toFixed(1),
+      clockRate: videos.map((v, i) => +((v.currentTime - ct0[i]) / secs).toFixed(3)),
+      distinctPerSec: { vfTs: perSec(distinct.vfTs), clock: perSec(distinct.clock), rvfc: perSec(distinct.rvfc), pixels: perSec(distinct.pixels) },
+      rvfcCallbacksPerSec: perSec(rvfcCount),
+      rvfcPresentedPerCallback: pfDeltas.map(a => median(a)),
+      rvfcMediaTimeStepFrames: mtSteps.map(a => median(a)),
+      vfTimestampZeroPct: vfTsZero.map(z => +(100 * z / Math.max(1, refreshes)).toFixed(0)),
+      videoFrameCapture: { ok: capOk, failed: capFail, firstError: firstErr, msPerRefresh: +(capMs / Math.max(1, refreshes)).toFixed(2) },
+      capturedFrameNonBlank: blankChecks ? (blankChecks - blankSeen) + '/' + blankChecks : null,
+      dropped: q1.map((q, i) => q && q0[i] ? q.dropped - q0[i].dropped : null),
+    };
+  }
+
+  async function mediaSet(name, urls, fps) {
+    if (!urls || !urls.length) return;
+    for (const attach of [false, true]) {
+      const tag = attach ? 'attached' : 'detached';
+      await step(name + ':single-' + tag, async () => {
+        const v = makeVideo(urls[0], attach);
+        await ready(v);
+        const meta = { duration: +v.duration.toFixed(2), size: [v.videoWidth, v.videoHeight] };
+        await seek(v, 10);
+        meta.drawImageNonBlank = nonBlank(v);
+        let vf = null;
+        if (typeof VideoFrame === 'function') {
+          try {
+            const f = new VideoFrame(v);
+            vf = { ok: true, timestampIdx: Math.round(f.timestamp / 1e6 * fps), currentTimeIdx: Math.floor(v.currentTime * fps + 1e-6),
+                   nonBlank: nonBlank(f), format: f.format, coded: [f.codedWidth, f.codedHeight] };
+            f.close();
+          } catch (e) { vf = { ok: false, error: e.message }; }
+        }
+        meta.videoFrameAfterSeek = vf;
+        meta.play = await playAndCapture([v], fps, 3000);
+        v.removeAttribute('src'); v.load(); v.remove();
+        return meta;
+      });
+      await step(name + ':all-' + tag, async () => {
+        const vs = urls.map(u => makeVideo(u, attach));
+        await Promise.all(vs.map(ready));
+        await Promise.all(vs.map(v => seek(v, 10)));
+        const r = await playAndCapture(vs, fps, 4000);
+        vs.forEach(v => { v.removeAttribute('src'); v.load(); v.remove(); });
+        r.cameras = urls.length;
+        return r;
+      });
+    }
+  }
+
+  await mediaSet('hardfight-hevc-hev1', media.hardfight, (media.fps || {}).hardfight || 60);
+  await mediaSet('hardfight-hevc-hvc1', media.hardfightHvc1, (media.fps || {}).hardfight || 60);
+  await mediaSet('mimica-h264', media.mimica, (media.fps || {}).mimica || 150.1066);
+
+  // ---- does the app itself boot? ---------------------------------------------
+  await step('appBoot', async () => {
+    const f = document.createElement('iframe');
+    f.src = '/index.html';
+    document.getElementById('stage').appendChild(f);
+    const t0 = performance.now();
+    while (performance.now() - t0 < 20000) {
+      await sleep(250);
+      let w = null; try { w = f.contentWindow; } catch (e) {}
+      if (w && w.__lucid && w.__lucid.state) {
+        return { booted: true, ms: Math.round(performance.now() - t0),
+                 hasVideoController: !!w.__lucid.videoController,
+                 dockview: !!(w.document.querySelector('.dv-dockview, .dockview-theme-dark, [class*="dv-"]')) };
+      }
+    }
+    return { booted: false, note: 'window.__lucid not present after 20 s' };
+  });
+
+  R.finished = new Date().toISOString();
+  document.getElementById('status').textContent = 'done — reporting';
+  try {
+    await fetch('/result?browser=' + encodeURIComponent(R.browser) + '&run=' + encodeURIComponent(R.run),
+                { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(R) });
+    document.getElementById('status').textContent = 'done — reported. You can close this tab.';
+  } catch (e) {
+    document.getElementById('status').textContent = 'done — FAILED to report: ' + e.message;
+  }
+})();
+</script>
+</body>
+</html>
