@@ -2263,7 +2263,13 @@ Three things deliberately stay outside the gate:
   `state.triangulationResults`, cheap) runs first and unconditionally, then
   `updateStatusBarForFrame` runs on both the hidden and the visible path.
   `updateInfoPanel`'s hidden branch calls `updateFrameInfo` for the same
-  reason. Only the panel's own DOM is skipped.
+  reason. Only the panel's own DOM is skipped. `updateStatusBarForFrame` does
+  **not** call `updateFrameCounters()` while `state.isPlaying`: those counters
+  walk every frame group (~8–9 ms at 36,000 frames), are independent of the
+  current frame, and recomputing them on the 10 Hz playback updates stalled the
+  video-frame callback enough to drop frames
+  (`tests/e2e/_bench-playback.mjs`). `VideoController.stopPlayback` redraws
+  with `isPlaying` false, which refreshes them on stop.
 - The reprojection **solve** in `ui/rendering.js`'s per-frame fill. The canvas
   overlays, the 3D viewport and the `.slp` export all read the same
   `_grp.reprojections` / `reprojectedInstances` it produces, and the fill only
@@ -3669,7 +3675,16 @@ data sources. Plus visibility-toggle helpers and frame counter updates.
   `'circle'` — reproj matches the 3D viewer marker (also `'circle'`) per
   issue #95. (`drawReprojectedSkeleton`'s own primitive fallback stays `'x'`
   for direct callers; the user-facing default comes from here.)
-- `drawAllOverlays(frameIdx)` — main per-frame redraw across every view. Threads
+- `drawAllOverlays(frameIdx, viewFrames?)` — main per-frame redraw across every
+  view. Optional `viewFrames` (`{ viewName: frameIdx }`, passed by the
+  per-refresh playback loop in `loading/video.js`) draws each view's overlay at
+  the frame ITS canvas shows (from that view's captured `VideoFrame`), so
+  overlay and video agree per camera even when cameras are a frame or two
+  apart; a view whose frame isn't hydrated (lazy) falls back to `frameIdx`, and
+  the selection highlight only shows where the selected group exists on that
+  view's frame. The lazy reprojection fill is the private
+  `fillLazyReprojections(fi, groups)`, run for `frameIdx` and once for each
+  other per-view frame. Threads
   `state.colorByIdentity` and `state.trailLength` (node-trail length, issue #102)
   into each `drawFrameOverlays` call. It also computes the per-view
   **`labelDisplayScale`** (backing-store px per on-screen CSS px) that
@@ -3699,7 +3714,9 @@ data sources. Plus visibility-toggle helpers and frame counter updates.
   playback speed and both were a per-frame cost capping buffered-playback fps.
   When paused (seek/step) they run every call; `VideoController.stopPlayback`
   fires one final unthrottled `drawAllOverlays` so the panel/playhead settle to
-  the exact stop frame.
+  the exact stop frame. While playing, the timeline call passes
+  `{ playback: true }` so the timeline only moves its playhead over a cached
+  snapshot instead of a full redraw (see `ui/timeline.js`).
 
   **Lazy reprojection fill — honors the group's triangulation method.** A group
   with `points3d` but no `reprojections`/`reprojectedInstances` is re-solved here
@@ -4140,6 +4157,21 @@ canvas "sad face" over just the timeline region. When that would happen the
 effective device-pixel ratio is scaled down (CSS size + scroll unchanged; only
 backing resolution drops) so the canvas always allocates.
 
+**Playback playhead fast path.** `setCurrentFrame(frameIdx, { playback: true })`
+(passed by `ui/rendering.js` only while `state.isPlaying`) does not repaint the
+timeline: the playhead is the only frame-dependent layer, so `redraw()` — while
+`_playbackMode` is set — snapshots the canvas just before drawing the playhead
+into `_staticCache`, and later playback calls blit that snapshot and draw only
+the playhead (`_drawFromStaticCache`). A full redraw on the 175-track HardFight
+project cost ~4.5 ms plus a forced style recalc (`ctx.font`) inside the
+video-frame callback, enough to drop video frames (`tests/e2e/_bench-playback.mjs`).
+Falls back to a full redraw when the visible window scrolls or the backing store
+changed size; any other `redraw()` (hover, resize, data change) re-snapshots, so
+the cache is always the last full redraw. A call WITHOUT the flag leaves playback
+mode, frees the snapshot and redraws in full even on the same frame (the
+`stopPlayback` settle call). Pixel-parity guarded by
+`tests/test-timeline-playback-playhead.js`.
+
 **Trackpad / wheel semantics.** `_handleWheel` maps wheel input as:
 horizontal-dominant scroll (`|deltaX| > |deltaY|`) pans `_scrollFrame`
 left/right (same axis as middle/right-drag pan and the scrollbar thumb),
@@ -4159,7 +4191,7 @@ when the bar appears/disappears.
 
 **Key exports.**
 - `Timeline` — class. Selected methods: `setData(session)`,
-  `setCurrentFrame(frameIdx)`, `setTotalFrames(n)`, `setZoom(level)`,
+  `setCurrentFrame(frameIdx, opts?)`, `setTotalFrames(n)`, `setZoom(level)`,
   `scrollTo(frameIdx)`, `resize`, `redraw`, `destroy`,
   `setDisplayMode(mode)`, `refreshTracks(session, opts?)`,
   `setFrameModified(frameIdx, modified)`, `getPreferredHeight`,
@@ -5224,6 +5256,24 @@ via the options bag.
   after compositing so the canvas can be captured frame-by-frame; used by the
   Export 3D Video modal). A second `Viewport3D` can be mounted in the export
   modal's container, reusing this class rather than duplicating 3D code.
+- **`updateSkeleton` updates IN PLACE** (it runs on every playback frame — the
+  3D view follows the video at full rate). Meshes and materials live in a pool
+  (`_skelPool`, built by `_ensureSkeletonPool`, one slot per instance group from
+  `_newSkeletonSlot`) and are only repositioned / recolored; every edge is the
+  ONE shared unit `CylinderGeometry` (radius 1, height 1) scaled to
+  `(radius, length, radius)`. The pool is rebuilt (`_disposeSkeletonPool`) only
+  when node shape, node size, edge weight, show-nodes/edges or the `skeleton`
+  object changes. The attached scene graph is identical to the old rebuild's:
+  one `instance_<g>` Group per group with 3D, children = that frame's valid
+  `node_*` markers then `edge_*` cylinders, same order; unused pooled objects
+  are DETACHED (not hidden), so traversals (`fitToScene`, tests) are unchanged.
+  Detaching goes through `_detachChildren` (`remove()`, like `_clearGroup`) rather
+  than `Object3D.clear()`, so it works with the test runners' THREE mocks.
+  Steady-state cost ~0.05 ms vs ~1 ms for the rebuild (which also re-uploaded a
+  cylinder buffer per edge per call). Guarded by
+  `tests/test-viewport3d-skeleton-pool.js` (pooled == fresh build after any
+  frame sequence; world-space edge endpoints/radius). `setEnvironment` still
+  builds per call via `_createCylinder` (not per-frame).
 
 **Imports from project modules.** `../pose/pose-data.js` —
 `points3dNodeCount`, `getPoint3d` (luc3d #189). This is the module's only
@@ -5588,6 +5638,14 @@ skeleton-only 3D-points import prompts before discarding it.
 
 ---
 
+**Video load failures are surfaced, with the reason.** Every loader reports a
+video the browser couldn't play via `videoLoadFailureText` (the decoder's codec
+diagnosis when there is one). The per-camera session-folder path used to log
+such failures to the console only — poses loaded with no video and no message
+(e.g. Safari + `hev1`-tagged HEVC); it now collects them in `videoFailures`
+and appends them to the final status (one line per distinct diagnosis), like
+`slpFailures`. Lazy reopen's attach step lists the reason per file too.
+
 ### loading/sio-lazy-loader.js
 
 **Purpose.** Main-thread lazy frame loader for large prediction `.slp` files,
@@ -5887,6 +5945,42 @@ loaded over the network or from disk.
 
 ---
 
+### loading/video-codec-diagnosis.js
+
+**Purpose.** Explain WHY the browser refused a video. A `<video>` load
+failure only yields "error code 4" (MEDIA_ERR_SRC_NOT_SUPPORTED); this reads
+the file's video codec from its MP4 sample description and returns a specific,
+actionable message. Measured cases (`tests/e2e/_probe-capabilities.mjs`, macOS
+26 / M2 Pro): Safari plays HEVC-in-MP4 only when tagged `hvc1` (`hev1` →
+canPlayType "") — a lossless `ffmpeg -c copy -tag:v hvc1` re-tag fixes it;
+Safari decodes AV1 only with hardware AV1 (Apple M3+), while Chrome/Firefox
+decode it in software; otherwise suggest another browser / converting to H.264.
+Reading is cheap on multi-GB recordings: it walks top-level box headers with
+random-access reads (`Blob.slice`, or HTTP Range for URLs) and reads only
+`moov` (recordings keep it at the END, after the `mdat`). No diagnosis (null)
+when the codec can't be read or the browser claims support — the original
+error then stands (e.g. a corrupt file).
+
+**Key exports.**
+- `sniffMp4VideoCodec(source)` → `{fourcc, codecName}|null` (File/Blob/URL).
+- `videoFourccFromMoov(moovBytes)` — first video sample-entry fourcc in a `moov`.
+- `explainUnplayableCodec(fourcc, fileName, env?)` → `{fourcc, codecName, kind,
+  message}|null`; pure (`env.canPlayType`, `env.isSafari` injectable). Kinds:
+  `hevc-hev1-tag`, `av1-unsupported`, `hevc-unsupported`, `unsupported`, `encrypted`.
+- `diagnoseUnplayableVideo(source, fileName?, env?)` — sniff + explain.
+- `videoLoadFailureText(name, err)` — one-line reason for loaders' status
+  messages: `err.codecDiagnosis.message` when present, else the error text.
+
+**Imports from project modules.** None.
+
+**Imported by.** `loading/video.js` (`OnDemandVideoDecoder._awaitPlayable`),
+`loading/session-loader.js` (`videoLoadFailureText`).
+
+**Tests.** `tests/test-video-codec-diagnosis.js` (synthetic MP4s: moov at the
+end read in < 4 KB, 64-bit box sizes, audio track first, every message kind,
+decoder integration); real browsers via the `decoderErrors` step of
+`tests/e2e/_probe-capabilities.html`.
+
 ### loading/video.js
 
 **Purpose.** Video decoding and multi-view playback. Hybrid HTML5
@@ -6045,13 +6139,71 @@ frame snapped it back). The root cost was that per playback frame the app
 ran three heavy updates in addition to the video+skeleton draw:
 `updateFrameInfo` + timeline `redraw()` (throttled in `rendering.js`) and
 `update3DViewport` — a full Three.js scene rebuild+render wired through
-`updateSeekbar` (throttled in `ui-wiring.js`), plus per-frame `[3D]`
-`console.log` spam (now gated behind `window.LUCID_3D_DEBUG`). With those
-coalesced to ~10 Hz during playback, the native `<video>` +
-`requestVideoFrameCallback` overlay keeps up frame-to-frame. **Native
-playback is the default** (smooth); `VideoController.stopPlayback` fires a
-final unthrottled overlay/seekbar update so info panel, timeline, and 3D
-settle to the exact stop frame.
+`updateSeekbar`, plus per-frame `[3D]` `console.log` spam (now gated behind
+`window.LUCID_3D_DEBUG`). With those coalesced to ~10 Hz during playback, the
+native `<video>` + `requestVideoFrameCallback` overlay keeps up
+frame-to-frame. **Native playback is the default** (smooth);
+`VideoController.stopPlayback` fires a final unthrottled overlay/seekbar
+update so the info panel and timeline settle to the exact stop frame.
+*Later (playback-choppiness work, measured with
+`tests/e2e/_bench-playback.mjs`):* the 10 Hz tail itself was still ~18 ms and
+dropped ~18% of video frames, so it was cut down — status-bar counters skipped
+while playing (`ui/info-panel.js`), timeline playhead-only redraw
+(`ui/timeline.js`). The 3D viewport is **no longer throttled**: its 10 Hz
+updates made it jump 6–7 frames at a time, and `updateSkeleton` is now an
+in-place pose update cheap enough to run on every frame (`ui/viewport3d.js`).
+**The native loop is now per-refresh** (`_playbackLoopMode() === 'refresh'`,
+default): on every `requestAnimationFrame` it captures each view's current
+frame (`decoder.captureCurrentFrame()` → `new VideoFrame(<video>)` + the index
+from that frame's own timestamp), `drawImage`s exactly that frame, and calls
+`drawOverlays(mainIdx, viewFrames)` so each view is overlaid at its own frame;
+a refresh where no view's frame changes draws nothing, captures are always
+`close()`d (held ones on `stopPlayback` via `_refreshCleanup`), and playback
+stops when the primary `<video>` ends. **Browsers whose `VideoFrame(<video>)`
+timestamps don't track the picture** (Safari 27: 0 in ~98% of captures;
+Firefox 157: a constant — measured with `tests/e2e/_probe-capabilities.mjs`)
+are detected per decoder by `judgeVideoFrameTimestamps` (the timestamp must
+move with the clock and agree within 3 frames; cached as
+`decoder._vfTimestamps = 'ok'|'bad'`). A `'bad'` view stops capturing (also
+avoiding Firefox's 5–11 ms/refresh capture cost), is painted with
+`drawCurrentFrame`, and takes its index from a per-view
+requestVideoFrameCallback `mediaTime` — exact in Safari (one callback per shown
+picture), projected forward ≤ 100 ms where callbacks are coalesced
+(`rvfcCallbacksCoalesced()`: Firefox, ~24 callbacks/s covering 2–6 pictures),
+else the clock. rVFC is registered only for fallback views (registering it on
+every view altered Chrome's presentation). Without this the loop froze in
+Safari/Firefox. Verified in the real browsers with
+`tests/e2e/_verify-playback-loop.html` (barcode frame numbers read back from
+each canvas): painted == overlay 100% in Chrome, 96–100% in Safari, ~30–95%
+(within ±1 frame) in Firefox, which exposes no exact per-picture timing.
+`self._refreshFallback` exposes the fallback state for that check. WHICH frame each view shows is chosen
+by an exported, pure **`PlaybackSchedule`**, with
+**`pickScheduledFrame(target, shown, pending, cap)`** choosing per view between
+the frame on screen, ONE capture held from an earlier refresh, and this
+refresh's capture (hold while the target hasn't passed the shown frame; else
+the newest frame not past the target, else the oldest one past it — never run
+ahead). The schedule only acts when a video frame spans MORE than one refresh
+(frames/refresh < 0.9, e.g. 60 fps on 120 Hz): it is a frame clock locked to
+the rAF timestamps — anchored on the primary's captures only after the refresh
+interval is measured, phased so frame boundaries sit half a lattice spacing
+from refresh instants, run one phase-preserving unit BEHIND the captures so
+the needed frame is normally already captured, drift-corrected only for
+genuine drift (> 0.8 frame, in phase-preserving units), re-anchored on
+stall/seek/rate change. When the video is as fast as the display or faster it
+returns the primary's capture unchanged (newest frame every refresh — a
+schedule there only adds holds). All views aim at the same frame, so cameras
+stay in step. Measured on 60 fps video at 120 Hz: ~30% of frames held for 3 or
+1 refreshes instead of 2 without it; the cadence is unit-tested
+(tests/test-playback-frame-sync.js) against captures modelled on the real ones
+(½-refresh stale, σ ≈ 0.1 frame jitter, measured from the benchmark's raw
+timelines), including exact rate ratios at every starting phase. The previous
+loop — everything redrawn from the PRIMARY view's `requestVideoFrameCallback`
+`mediaTime` — is opt-in via `window.LUCID_PLAYBACK_LOOP='rvfc'`. Why: with
+150 fps video (5-camera Mimica project) Chrome presented that one off-page
+primary `<video>` at a rate that varied at random per playback start (~60–120
+Hz on a 120 Hz display), capping every canvas, overlay and the 3D view at it,
+while the other cameras' overlays sat up to 3–4 frames off their video. Covered
+by the "default refresh loop" block in `tests/test-playback-frame-sync.js`.
 
 *Buffered mediabunny playback (`_startBufferedPlayback`) is OPT-IN* via
 `window.LUCID_PLAYBACK_BACKEND='buffered'`/`'mediabunny'`
@@ -6084,7 +6236,23 @@ a zoomed-in image keeps the same region centered instead of jumping.
   `getFrame(frameIndex)`, `_initMediabunny(source)` /
   `_mediabunnyEnabled()` (opt-in frame-accurate backend, issue #115),
   `decodeRange(start, end)`, `playNative`, `pauseNative`, `seekNative`,
-  `switchSource`, `close`, `drawCurrentFrame`.
+  `switchSource`, `close`, `drawCurrentFrame`, `_awaitPlayable` (init and
+  switchSource await the element's load through it: when the browser refuses
+  the file it throws `video-codec-diagnosis.js`'s explanation instead of a
+  bare "Video error code 4", with `err.codecDiagnosis` and `err.cause`),
+  `captureCurrentFrame` (returns
+  `{frame: VideoFrame, index}` for the per-refresh playback loop — index from
+  the captured frame's own timestamp; caller closes the frame; null when
+  WebCodecs/data is unavailable).
+  `_initMp4box` reads the container's sample table for the real frame count
+  and fps WITHOUT a WebCodecs support check (it never decodes with WebCodecs):
+  an early return when WebCodecs couldn't decode the codec (Firefox + HEVC)
+  left `_fps` at the 30 fps placeholder, halving every frame index.
+- `PlaybackSchedule` — class; `update(now, capturedIdx, framesPerMs)` → the
+  frame index that should be on screen this refresh; `reset()`.
+- `pickScheduledFrame(target, shownIdx, pendingIdx, capIdx)` →
+  `'shown'|'pending'|'cap'|null` (hold until the target passes the shown
+  frame; then the newest candidate not past it, else the oldest past it).
 - `EmbeddedVideoDecoder` — class for SLP-embedded frames. `getFrame`,
   `hasFrame`, `close`.
 - `VideoController` — class. Selected methods: `seekToFrame`,
