@@ -1677,6 +1677,36 @@ playback state, dirty tracking, multi-session UI.
 
 ---
 
+### ui/browser-hints.js
+
+**Purpose.** Browser-specific advice for features a browser has turned off.
+Brave ships the File System Access API (`showSaveFilePicker`,
+`showDirectoryPicker`, `showOpenFilePicker`) DISABLED by default while
+identifying as Chrome, so in Brave saves fall back to an in-memory download
+(risky for a large project, never saved in place), large exports must be
+buffered in memory, and multi-session loading refuses. Measured on Brave 1.96
+(Chromium 154): all three pickers are `undefined` by default and present with
+`--enable-features=FileSystemAccessAPI`, the feature behind
+`brave://flags/#file-system-access-api` ("File System Access API"). Safari and
+Firefox can't enable the API, so they get no hint (existing messages stand).
+
+**Key exports.**
+- `isBrave()` — `navigator.brave.isBrave` present.
+- `hasFileSystemAccess()` — save + directory pickers available.
+- `fileSystemAccessHint()` — how to enable the API (paste
+  `brave://flags/#file-system-access-api`, set Enabled, relaunch — or use
+  Chrome/Edge); `''` unless Brave with the API off, so callers can append it.
+
+**Imports from project modules.** None.
+
+**Imported by.** `loading/session-loader.js` (multi-session load message),
+`import-export/save-load.js` (`saveProjectSlp` download fallback status),
+`ui/export-modals.js` (3D video + JSON export in-memory confirms),
+`ui/overlay-export-modal.js` (overlay video in-memory confirm).
+
+**Tests.** `tests/test-browser-hints.js`; verified end to end in real Brave
+(default profile vs `--enable-features=FileSystemAccessAPI`).
+
 ### ui/custom-delete-ops.js
 
 **Purpose.** Pure, DOM-free logic behind "Custom Instance Delete…" — LUCID's
@@ -1996,6 +2026,8 @@ SLP all-sessions, JSON labels, points3d H5, reproj H5).
 
 **Imports from project modules.**
 - `./app-state.js` — `state`, `viewport3d`, `timeline`, `getActiveSession`.
+- `./browser-hints.js` — `fileSystemAccessHint` (appended to the 3D-video and
+  JSON-export "must be built in memory" confirms in Brave).
 - `../pose/pose-data.js` — `InstanceGroup`.
 - `../pose/triangulation.js` — `triangulateAndReproject`,
   `storeReprojectedInstances`, `frameHasGroupedUserInstances`,
@@ -3207,6 +3239,8 @@ exported but the amber `?` editing prompt is not.
 
 **Imports from project modules.**
 - `./app-state.js` — `state`, `videoController`, `getActiveSession`.
+- `./browser-hints.js` — `fileSystemAccessHint` (appended to the in-memory
+  export confirm in Brave).
 - `./viewport3d.js` — `Viewport3D`.
 - `./overlays.js` — `drawFrameOverlays`, `getTrackColor`, `getGroupColor`.
 - `./rendering.js` — `getVisibilitySettings` (the seed).
@@ -5612,7 +5646,8 @@ blank until the user manually re-ran Triangulate All. Covered by
 
 **Imports from project modules.**
 - `../ui/app-state.js` (incl. `buildRememberedSkeleton`), `../pose/pose-data.js`,
-  `./video.js`, `../import-export/file-io.js`, `../pose/triangulation.js`
+  `../ui/browser-hints.js` (`fileSystemAccessHint` — Brave hint in the
+  multi-session "needs a folder picker" message), `./video.js`, `../import-export/file-io.js`, `../pose/triangulation.js`
   (`shouldUseLazyH5`, `shouldUseLazySlp`, `LazyFrameLoader`),
   `./sio-lazy-loader.js` (`SioLazyLoader`),
   `../import-export/save-load.js`,
@@ -6891,7 +6926,9 @@ project save/reload — matching the SLP import path in `slp-import.js`.
 
 **Imports from project modules.**
 - `../pose/pose-data.js`, `../pose/triangulation.js`,
-  `../loading/video.js`, `../demo-data.js`, `./file-io.js`,
+  `../ui/browser-hints.js` (`fileSystemAccessHint` — `saveProjectSlp`, the
+  download fallback when there is no save-file picker, says why and how to
+  enable it in Brave), `../loading/video.js`, `../demo-data.js`, `./file-io.js`,
   `../ui/app-state.js`, `../loading/session-loader.js`,
   `../loading/sio-lazy-loader.js` (`SioLazyLoader`, for
   `reopenSessionLazyLoader`), `./slp-streaming-write.js`,

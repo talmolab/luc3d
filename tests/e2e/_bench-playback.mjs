@@ -71,6 +71,9 @@
  *     RVFC_ALL=1             also attach an rVFC observer to every secondary
  *                            <video> (off by default: it may itself change how
  *                            Chrome services an off-DOM element)
+ *     EXECUTABLE=<path>      Chromium-based browser binary to drive instead of
+ *                            Chrome (e.g. /Applications/Brave Browser.app/
+ *                            Contents/MacOS/Brave Browser)
  *     PORT=8123
  *     SPEED=1                playback speed multiplier
  *     EXCLUDE=<regex>        relative paths to leave out of the folder pick
@@ -151,7 +154,9 @@ const summary = {
 
 try {
     browser = await chromium.launch({
-        channel: 'chrome',          // real Chrome: HEVC + hardware decode
+        // real Chrome (HEVC + hardware decode); EXECUTABLE=<path> drives another
+        // Chromium-based browser instead (e.g. Brave) with a fresh profile.
+        ...(process.env.EXECUTABLE ? { executablePath: process.env.EXECUTABLE } : { channel: 'chrome' }),
         headless: false,
         args: ['--window-size=1800,1120', '--window-position=0,0',
                '--enable-precise-memory-info'],
