@@ -37,6 +37,11 @@ import { consumeInfoPanelStale } from './panel-visibility.js';
 // Block 2 (Prompt 4): rename migration for the per-session hidden-track
 // / hidden-identity Sets when the user renames an entity.
 import { renameHiddenTrack, renameHiddenIdentity } from './timeline-visibility.js';
+// View ▸ Define Planes — "Defining Plane Mode".
+import { togglePlaneMode, syncPlanes3D } from './plane-definition.js';
+// The Visibility panel's `Planes` section — the four ids, named from the one
+// module that reads them so this file cannot drift from it.
+import { PLANE_VIS_IDS } from './plane-visibility.js';
 import { newProject, markDirty, clearDirty, quickSave, saveAs, saveProjectSlp, saveProject,
          handleLoadProject, showLoading, hideLoading, setStatus } from '../import-export/save-load.js';
 import { handleLoadSlpFile, handleAddSlp, handleLoadPoints3dH5 } from '../import-export/slp-import.js';
@@ -667,6 +672,67 @@ function showCustomDeleteModal() {
     recompute();
 }
 
+// The Keyboard Shortcuts help, rendered from the same catalog (getActions())
+// that drives Settings ▸ Keyboard Shortcuts.
+//
+// At MODULE scope deliberately. It has two callers in two different closures —
+// the Hot Keys menu item (wired in `setupMenus`) and the `showHotkeys` catalog
+// action (wired in `setupUI`) — and declaring it inside `setupMenus` meant the
+// second one threw `ReferenceError: showHotkeysHelp is not defined`, so `?` had
+// never opened the help at all. Nothing in here reads a closure variable: it
+// needs `getActions` / `formatBinding` and the DOM, both module-level.
+function showHotkeysHelp() {
+    // One at a time. `?` arrives through the catalog dispatcher, which does not
+    // consume the keydown for the listeners after it, so a second press while
+    // the help is already up would otherwise stack a second overlay.
+    if (document.getElementById('hotkeysClose')) return;
+
+    // Generated from the same catalog (ACTION_CATALOG via getActions) that
+    // drives Settings ▸ Keyboard Shortcuts, so this list stays in sync with
+    // the Settings page and any user rebindings.
+    function esc(s) {
+        return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+
+    var overlay = document.createElement('div');
+    overlay.className = 'multi-frame-modal-overlay';
+    var modal = document.createElement('div');
+    modal.className = 'multi-frame-modal';
+    modal.style.maxWidth = '550px';
+
+    var rows = '';
+    var lastCategory = null;
+    getActions().forEach(function (a) {
+        if (a.category !== lastCategory) {
+            if (rows) rows += '<tr><td colspan="2" style="height:8px;"></td></tr>';
+            lastCategory = a.category;
+            rows += '<tr><td><b>' + esc(a.category) + '</b></td><td></td></tr>';
+        }
+        rows += '<tr><td><code>' + esc(formatBinding(a.binding)) + '</code></td><td>' + esc(a.label) + '</td></tr>';
+    });
+
+    modal.innerHTML =
+        '<h3>Keyboard Shortcuts</h3>' +
+        '<div style="max-height:60vh;overflow-y:auto;">' +
+        '<table class="data-table" style="font-size:12px;">' +
+        '<thead><tr><th>Key</th><th>Action</th></tr></thead>' +
+        '<tbody>' + rows + '</tbody></table></div>' +
+        '<div class="modal-actions"><button id="hotkeysClose" class="primary">Close</button></div>';
+    overlay.appendChild(modal);
+    document.body.appendChild(overlay);
+
+    function teardown() {
+        document.removeEventListener('keydown', onKey, true);
+        overlay.remove();
+    }
+    function onKey(ev) {
+        if (ev.key === 'Escape') { ev.preventDefault(); ev.stopPropagation(); teardown(); }
+    }
+    document.addEventListener('keydown', onKey, true);
+    document.getElementById('hotkeysClose').addEventListener('click', teardown);
+    overlay.addEventListener('click', function (ev) { if (ev.target === overlay) teardown(); });
+}
+
 // ============================================
 // Menu Setup
 // ============================================
@@ -1150,6 +1216,11 @@ export function setupMenus() {
         if (viewport3d) viewport3d.fitToScene();
     });
 
+    document.getElementById('menuDefinePlanes').addEventListener('click', function () {
+        closeMenus();
+        togglePlaneMode();
+    });
+
     document.getElementById('menuNewProject').addEventListener('click', function () {
         closeMenus();
         newProject();
@@ -1274,53 +1345,6 @@ export function setupMenus() {
         closeMenus();
         window.open('https://talmolab.github.io/calibrat3/', '_blank', 'noopener');
     });
-
-    function showHotkeysHelp() {
-        // Generated from the same catalog (ACTION_CATALOG via getActions) that
-        // drives Settings ▸ Keyboard Shortcuts, so this list stays in sync with
-        // the Settings page and any user rebindings.
-        function esc(s) {
-            return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-        }
-
-        var overlay = document.createElement('div');
-        overlay.className = 'multi-frame-modal-overlay';
-        var modal = document.createElement('div');
-        modal.className = 'multi-frame-modal';
-        modal.style.maxWidth = '550px';
-
-        var rows = '';
-        var lastCategory = null;
-        getActions().forEach(function (a) {
-            if (a.category !== lastCategory) {
-                if (rows) rows += '<tr><td colspan="2" style="height:8px;"></td></tr>';
-                lastCategory = a.category;
-                rows += '<tr><td><b>' + esc(a.category) + '</b></td><td></td></tr>';
-            }
-            rows += '<tr><td><code>' + esc(formatBinding(a.binding)) + '</code></td><td>' + esc(a.label) + '</td></tr>';
-        });
-
-        modal.innerHTML =
-            '<h3>Keyboard Shortcuts</h3>' +
-            '<div style="max-height:60vh;overflow-y:auto;">' +
-            '<table class="data-table" style="font-size:12px;">' +
-            '<thead><tr><th>Key</th><th>Action</th></tr></thead>' +
-            '<tbody>' + rows + '</tbody></table></div>' +
-            '<div class="modal-actions"><button id="hotkeysClose" class="primary">Close</button></div>';
-        overlay.appendChild(modal);
-        document.body.appendChild(overlay);
-
-        function teardown() {
-            document.removeEventListener('keydown', onKey, true);
-            overlay.remove();
-        }
-        function onKey(ev) {
-            if (ev.key === 'Escape') { ev.preventDefault(); ev.stopPropagation(); teardown(); }
-        }
-        document.addEventListener('keydown', onKey, true);
-        document.getElementById('hotkeysClose').addEventListener('click', teardown);
-        overlay.addEventListener('click', function (ev) { if (ev.target === overlay) teardown(); });
-    }
 
     document.getElementById('menuSaveSkeleton').addEventListener('click', function () {
         closeMenus();
@@ -1984,6 +2008,11 @@ export function setupUI() {
     });
     setHandler('toggleInfoPanel', function () { toggleInfoPanel(); });
     setHandler('toggle3D', function () { toggle3DViewport(); });
+    // Same call the View ▸ Define Planes menu item makes, so entering and
+    // leaving the mode is one code path however it is triggered — `exitPlaneMode`
+    // has unwinding to do (Set Origin Mode, the angle dialog, the toolbar lock)
+    // and a second entry point would be a second place to forget it.
+    setHandler('definePlanes', function () { togglePlaneMode(); });
 
     // Single dispatcher for catalog-driven shortcuts. Runs before the structural
     // handlers below; if a catalog action matches it consumes the event.
@@ -2038,10 +2067,13 @@ export function setupUI() {
                 }
                 break;
             }
-            case '?':
-                showHotkeysHelp();
-                e.preventDefault();
-                break;
+            // NO `case '?'` here. This switch is behind
+            // `if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;`, and
+            // `?` is Shift+/ on a US layout — so the case could never run, and on a
+            // layout where `?` is unshifted it would have opened a SECOND copy on
+            // top of the catalog dispatcher's. `showHotkeys` is dispatched from
+            // ACTION_CATALOG (see `setHandler('showHotkeys', ...)` above), which is
+            // also what makes it rebindable.
 
             case 'Escape': {
                 // Click the visible Cancel button in any active modal/toast
@@ -2163,6 +2195,25 @@ export function setupUI() {
         }
     });
 
+    // The `Planes` section: the annotated planes and their nodes, in 2D and in
+    // 3D. Wired apart from the block above because they need BOTH repaints —
+    // `drawAllOverlays` for the 2D overlays and `syncPlanes3D` for the 3D
+    // scene, which is rebuilt rather than redrawn — and because no selection
+    // can point at a plane, so the deselect sweep above has nothing to do here
+    // (`interactionManager.selectedPlane` is a Defining-Plane-Mode selection,
+    // and in that mode all four toggles are overridden on anyway).
+    var planeVisCheckIds = Object.keys(PLANE_VIS_IDS).map(function(k) {
+        return PLANE_VIS_IDS[k];
+    });
+    planeVisCheckIds.forEach(function(id) {
+        var el = document.getElementById(id);
+        if (!el) return;
+        el.addEventListener('change', function() {
+            drawAllOverlays(state.currentFrame);
+            syncPlanes3D();
+        });
+    });
+
     // Line style buttons
     document.querySelectorAll('.line-style-btn').forEach(function(btn) {
         btn.addEventListener('click', function() {
@@ -2202,7 +2253,7 @@ export function setupUI() {
     var visCheckIds = ['visLegend', 'visUser', 'visPredicted', 'visReprojections', 'visErrors',
         'visUnlinkedBadge',
         'vis3dLabelShow', 'vis3dSphereShow', 'vis3dPyramidShow',
-        'vis3dNodeShow', 'vis3dEdgeShow'];
+        'vis3dNodeShow', 'vis3dEdgeShow'].concat(planeVisCheckIds);
     var visStyleIds = [
         'visUserPreLineStyle', 'visUserPostLineStyle',
         'visPredPreLineStyle', 'visPredPostLineStyle',

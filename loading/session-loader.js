@@ -44,6 +44,7 @@ import { chooseCameraSlp } from './percam-slp-choice.js';
 // occlusion + 3D points). Circular ESM import (slp-import imports back
 // recomputeUploadedCameras); only invoked inside a function body.
 import { restoreGroupingAndUnlink, reconstructInstanceGroupsFromSessionLazy } from '../import-export/slp-import.js';
+import { REBASED_CALIBRATION_NAME, pickCalibrationFile } from './calibration-pick.js';
 
 import {
     LazyFrameLoader, shouldUseLazyH5, shouldUseLazySlp, getInstanceGroupsForFrame,
@@ -61,6 +62,7 @@ import {
 // module-init time, so live-binding lookup keeps them functional.
 import { drawAllOverlays, setReprojErrorVisible } from '../ui/rendering.js';
 import { updateInfoPanel, promptImportSkeletonForAllSessions } from '../ui/info-panel.js';
+import { noteSessionCalibrationDivergence } from '../ui/calibration-notice.js';
 import { parseSkeletonJSON } from '../import-export/skeleton-json.js';
 // Pass 3i-3: setupInteraction / setup3DViewport / setupTimeline / updateFpsDisplay /
 // hideWelcomeOverlay moved to pose/initialization.js.
@@ -75,6 +77,7 @@ import { populateViewStrip, populateSessionStrip, switchSession } from '../ui/se
 import { updateSeekbar, fitTimelineToData, onPlaybackStateChange } from '../ui/ui-wiring.js';
 import { getLoadingProgressModal } from '../ui/loading-progress-modal.js';
 import { readVisibilityMetadata } from '../import-export/visibility-metadata.js';
+import { readPlaneMetadata, resetPlaneState } from '../import-export/plane-metadata.js';
 
 // Module-private debounce timer for the zoom-redraw callback in
 // rebuildVideoController(). app.js's setupEmptyVideoController() has its own
@@ -1213,6 +1216,17 @@ export async function handleLoadMultiSession() {
         // .json, auto-load it for every session; otherwise prompt the user for a
         // unifying skeleton file. (Multi-session projects otherwise carry a
         // per-session skeleton each → duplicate-skeleton errors downstream.)
+        // Each session folder carried its OWN calibration and nothing made them
+        // agree — see `ui/calibration-notice.js`. The check runs LAST, once every
+        // session is in `state.sessions`: comparing while they are still arriving
+        // one at a time would report a divergence that the next session resolves,
+        // and a modal raised mid-load would sit over the loading overlay. It is
+        // queued behind the skeleton prompt for the same reason — two stacked
+        // modals, and the user answers whichever is on top.
+        var noteCalibrations = function () {
+            noteSessionCalibrationDivergence(state.sessions);
+        };
+
         if (state.sessions.length > 1) {
             var autoLoadedSkeleton = false;
             if (parentSkeletonHandle) {
@@ -1231,7 +1245,10 @@ export async function handleLoadMultiSession() {
                     console.warn('[multi-session] parent skeleton auto-load failed:', e);
                 }
             }
-            if (!autoLoadedSkeleton) promptImportSkeletonForAllSessions();
+            if (autoLoadedSkeleton) noteCalibrations();
+            else promptImportSkeletonForAllSessions(noteCalibrations);
+        } else {
+            noteCalibrations();
         }
 
     } catch (err) {
@@ -1649,6 +1666,8 @@ export async function handleLoadSessionFolderSingleSlp() {
 
         // Find root-level SLP, calibration, skeleton, and videos/ subdirectory
         var calibFile = null, skeletonFile = null, slpFile = null;
+        // COLLECTED, not overwritten — see `pickCalibrationFile`.
+        var calibMatches = [];
         var videoFiles = [];
         var videoExtensions = ['.mp4', '.avi', '.webm', '.mov', '.mkv'];
 
@@ -1661,7 +1680,7 @@ export async function handleLoadSessionFolderSingleSlp() {
             if (parts.length === 2) {
                 // Root-level files
                 if ((fnLower.endsWith('.toml') || fnLower.endsWith('.json')) && fnLower.indexOf('calib') >= 0) {
-                    calibFile = file;
+                    calibMatches.push(file);
                 } else if (fnLower.endsWith('.json') && fnLower.indexOf('skeleton') >= 0) {
                     skeletonFile = file;
                 } else if (fnLower.endsWith('.slp') || fnLower.endsWith('.h5')) {
@@ -1679,6 +1698,17 @@ export async function handleLoadSessionFolderSingleSlp() {
             hideLoading();
             setStatus('No SLP file found in root of folder', 'error');
             return;
+        }
+
+        // Resolve the ONE calibration to use, and say so when the folder held
+        // more than one: a silently-chosen stale calibration puts every camera
+        // in the wrong frame while every number still looks plausible.
+        var _calibPick = pickCalibrationFile(calibMatches);
+        calibFile = _calibPick.file;
+        if (_calibPick.ambiguous.length) {
+            console.warn('[single-slp] ' + calibMatches.length + ' calibration files in the folder — using ' + calibFile.name + ', ignoring ' + _calibPick.ambiguous.join(', '));
+            setStatus('Using ' + calibFile.name + ' — ' + _calibPick.ambiguous.length +
+                ' other calibration file(s) in the folder were ignored', 'warning');
         }
 
         console.log('[single-slp] Found:', {
@@ -2212,6 +2242,11 @@ export async function handleLoadProjectSlpLazy(slpFile) {
         state.views = [];
         state.videoFiles = [];
         state.triangulationResults = new Map();
+        // Plane state is project-scoped and lives on a module singleton, so
+        // it does NOT go away with `state.sessions`. `readPlaneMetadata`
+        // only restores into an EMPTY model, so without this the previous
+        // project's planes would survive and the new one's be dropped.
+        resetPlaneState();
         paneManager.clearAll();
 
         var loader = new SioLazyLoader();
@@ -2255,6 +2290,9 @@ export async function handleLoadProjectSlpLazy(slpFile) {
         // Session-scoped Visibility-panel state — the lazy-reopen mirror of the
         // eager read in import-export/slp-import.js.
         readVisibilityMetadata(session, lucid);
+        // Define Planes state — the lazy-reopen mirror of the eager read in
+        // `import-export/slp-import.js`.
+        readPlaneMetadata(session, lucid);
 
         session.lazyLoader = loader;
         session._lazyReopened = true;
@@ -2390,6 +2428,8 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
 
         // Categorize files into per-camera directories
         var calibFile = null;
+        // COLLECTED, not overwritten — see `pickCalibrationFile`.
+        var calibMatches = [];
         var skeletonFile = null;
         var videoExtensions = ['.mp4', '.avi', '.webm', '.mov', '.mkv'];
 
@@ -2411,7 +2451,7 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
                 var fileNameLower = parts[1].toLowerCase();
                 if ((fileNameLower.endsWith('.toml') || fileNameLower.endsWith('.json'))
                     && fileNameLower.indexOf('calib') >= 0) {
-                    calibFile = file;
+                    calibMatches.push(file);
                 } else if (fileNameLower.endsWith('.json') && fileNameLower.indexOf('skeleton') >= 0) {
                     skeletonFile = file;
                 }
@@ -2440,6 +2480,17 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
                     }
                 }
             }
+        }
+
+        // Resolve the ONE calibration to use, and say so when the folder held
+        // more than one: a silently-chosen stale calibration puts every camera
+        // in the wrong frame while every number still looks plausible.
+        var _calibPick = pickCalibrationFile(calibMatches);
+        calibFile = _calibPick.file;
+        if (_calibPick.ambiguous.length) {
+            console.warn('[session-folder] ' + calibMatches.length + ' calibration files in the folder — using ' + calibFile.name + ', ignoring ' + _calibPick.ambiguous.join(', '));
+            setStatus('Using ' + calibFile.name + ' — ' + _calibPick.ambiguous.length +
+                ' other calibration file(s) in the folder were ignored', 'warning');
         }
 
         console.log('[session-folder] Categorization result:', {

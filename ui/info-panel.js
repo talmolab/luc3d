@@ -10,6 +10,7 @@ import { getInstanceGroupsForFrame } from '../pose/triangulation.js';
 import { REPROJECTION_COLOR, getTrackColor, getGroupColor } from './overlays.js';
 import { drawAllOverlays, updateFrameCounters } from './rendering.js';
 import { isInteractiveClickTarget } from './interaction.js';
+import { persistSectionState } from './section-state.js';
 import { isInfoPanelVisible, markInfoPanelStale } from './panel-visibility.js';
 import { state, timeline, interactionManager, rememberSkeleton, buildRememberedSkeleton,
          setProjectSkeleton, getProjectSkeleton } from './app-state.js';
@@ -584,30 +585,9 @@ export function showCameraDetail(cam) {
 
 // Whether the Skeleton tab's Nodes / Edges sections are expanded. Browser-local
 // display taste, not project state, so it lives in localStorage alongside the
-// Visibility panel's global appearance prefs — never in the .slp.
+// Visibility panel's global appearance prefs — never in the .slp. The wiring
+// itself is `ui/section-state.js`, shared with the Define Planes panel.
 const SKELETON_SECTIONS_KEY = 'skeletonSectionsOpen';
-
-/**
- * Wire a collapsible <details> section so its open/closed state survives a
- * reload. Storage is best-effort: a browser that refuses it (private mode,
- * blocked site data) just gets the markup's default `open`.
- */
-function persistSectionState(id) {
-    const el = document.getElementById(id);
-    if (!el) return;
-    let saved = null;
-    try {
-        saved = JSON.parse(localStorage.getItem(SKELETON_SECTIONS_KEY) || '{}');
-    } catch (e) { saved = null; }
-    if (saved && typeof saved[id] === 'boolean') el.open = saved[id];
-    el.addEventListener('toggle', function () {
-        try {
-            const cur = JSON.parse(localStorage.getItem(SKELETON_SECTIONS_KEY) || '{}');
-            cur[id] = el.open;
-            localStorage.setItem(SKELETON_SECTIONS_KEY, JSON.stringify(cur));
-        } catch (e) { /* storage unavailable — the section still works */ }
-    });
-}
 
 function setSectionCount(id, n) {
     const el = document.getElementById(id);
@@ -860,8 +840,8 @@ export function promptImportSkeletonForAllSessions(onDone) {
 
 export function setupSkeletonEditing() {
     // Collapsible Nodes / Edges sections — restore last state, remember changes.
-    persistSectionState('skeletonNodesSection');
-    persistSectionState('skeletonEdgesSection');
+    persistSectionState('skeletonNodesSection', SKELETON_SECTIONS_KEY);
+    persistSectionState('skeletonEdgesSection', SKELETON_SECTIONS_KEY);
 
     // Add Node button
     document.getElementById('btnAddNode').addEventListener('click', function () {
