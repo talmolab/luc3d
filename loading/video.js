@@ -9,6 +9,7 @@
  */
 
 import { shouldIgnoreShortcut } from '../ui/keyboard-target.js';
+import { diagnoseUnplayableVideo } from './video-codec-diagnosis.js';
 
 // ---------------------------------------------------------------------------
 // Logging helper
@@ -65,6 +66,28 @@ export class OnDemandVideoDecoder {
         this._source = null;
     }
 
+    /**
+     * Await the <video> element's load; if the browser rejects the file, try to
+     * say WHY (video-codec-diagnosis.js reads the codec from the MP4 and checks
+     * it against this browser) and throw that instead of a bare "error code 4".
+     * The diagnosis is attached as `err.codecDiagnosis`; the original error is
+     * `err.cause`. Undiagnosable failures (corrupt file, …) rethrow unchanged.
+     */
+    async _awaitPlayable(metadataPromise, source) {
+        try {
+            await metadataPromise;
+        } catch (loadErr) {
+            var diag = null;
+            try { diag = await diagnoseUnplayableVideo(source); } catch (e) { /* keep the original error */ }
+            if (!diag) throw loadErr;
+            videoLog('Cannot play ' + diag.codecName + ' video: ' + diag.message, 'error');
+            var err = new Error(diag.message);
+            err.codecDiagnosis = diag;
+            err.cause = loadErr;
+            throw err;
+        }
+    }
+
     async init(source) {
         this._source = source;
 
@@ -119,7 +142,7 @@ export class OnDemandVideoDecoder {
 
         // Wait for video metadata (browser parses moov natively - very fast)
         this._emitProgress({ phase: 'canplay', ratio: 0 });
-        await metadataPromise;
+        await this._awaitPlayable(metadataPromise, source);
         this._emitProgress({ phase: 'canplay', ratio: 1 });
 
         var width = this._videoEl.videoWidth;
@@ -976,7 +999,7 @@ export class OnDemandVideoDecoder {
 
         this._videoEl.src = URL.createObjectURL(source);
         this._emitProgress({ phase: 'canplay', ratio: 0 });
-        await metadataPromise;
+        await this._awaitPlayable(metadataPromise, source);
         this._emitProgress({ phase: 'canplay', ratio: 1 });
 
         var width = this._videoEl.videoWidth;

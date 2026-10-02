@@ -310,6 +310,26 @@
   await mediaSet('mimica-h264', media.mimica, (media.fps || {}).mimica || 150.1066);
   for (const x of (media.extra || [])) await mediaSet(x.name, x.urls, x.fps);
 
+  // ---- what the app's decoder says about files this browser can't play ------
+  // OnDemandVideoDecoder.init → on a load failure, video-codec-diagnosis.js reads
+  // the codec from the MP4 and attaches an explanation (err.codecDiagnosis).
+  await step('decoderErrors', async () => {
+    const { OnDemandVideoDecoder } = await import('/loading/video.js');
+    const out = {};
+    for (const [k, url] of Object.entries(media.errorCases || {})) {
+      const dec = new OnDemandVideoDecoder({});
+      try {
+        await withTimeout(dec.init(url), 20000, 'init ' + k);
+        out[k] = { loaded: true, fps: dec._fps };
+        try { dec._videoEl.removeAttribute('src'); dec._videoEl.load(); } catch (e) {}
+      } catch (e) {
+        out[k] = { loaded: false, message: String(e && e.message || e).slice(0, 400),
+                   diagnosis: e && e.codecDiagnosis ? { kind: e.codecDiagnosis.kind, fourcc: e.codecDiagnosis.fourcc } : null };
+      }
+    }
+    return out;
+  });
+
   // ---- does the app itself boot? ---------------------------------------------
   await step('appBoot', async () => {
     const f = document.createElement('iframe');

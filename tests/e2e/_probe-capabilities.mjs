@@ -81,6 +81,16 @@ media.extra = [
     { name: 'hardfight-av1', fps: 60, dir: path.join(repoRoot, 'verify', 'probe-remux', 'HardFight_av1') },
     { name: 'mimica-av1', fps: 150.1066, dir: path.join(repoRoot, 'verify', 'probe-remux', 'Mimica_av1') },
 ].map(x => ({ name: x.name, fps: x.fps, urls: linkCameras(x.dir, x.name) })).filter(x => x.urls.length);
+// Files for the decoder's unplayable-codec messages: a real hev1-tagged camera
+// recording, an AV1 clip, and an H.264 control (same origin).
+media.errorCases = {};
+{
+    const hf = linkCameras(HARDFIGHT, 'errcase-hev1').slice(0, 1);
+    if (hf.length) media.errorCases.hev1_real = hf[0].replace(/^http:\/\/[^/]+/, '');
+    for (const [k, f] of [['av1_clip', 'av1-60.mp4'], ['h264_clip', 'h264-60.mp4']]) {
+        if (fs.existsSync(path.join(repoRoot, 'verify', 'barcode', f))) media.errorCases[k] = '/verify/barcode/' + f;
+    }
+}
 
 // ---- static server with Range + POST /result -------------------------------
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.mjs': 'text/javascript',
@@ -235,6 +245,10 @@ for (const set of setNames) {
         });
     }
     row(`${set} all-detached capture ms`, `checks.${set}:all-detached.videoFrameCapture.msPerRefresh`);
+}
+for (const k of ['hev1_real', 'av1_clip', 'h264_clip']) {
+    row(`decoder: ${k}`, r => { const d = get(r, `checks.decoderErrors.${k}`); if (!d) return null;
+        return d.loaded ? `loads (fps ${(+d.fps).toFixed(0)})` : (d.diagnosis ? `${d.diagnosis.kind}` : 'ERR ' + d.message.slice(0, 40)); });
 }
 row('app boots', r => { const a = get(r, 'checks.appBoot'); return a ? (a.booted ? `yes (${a.ms} ms)` : 'NO') : null; });
 const w0 = Math.max(...rows.map(r => r[0].length));

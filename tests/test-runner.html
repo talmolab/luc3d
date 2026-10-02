@@ -129,6 +129,7 @@
     <script src="test-video-controller.js"></script>
     <script src="test-playback-frame-sync.js"></script>
     <script src="test-playback-buffered.js"></script>
+    <script src="test-video-codec-diagnosis.js"></script>
     <script src="test-multi-video.js"></script>
 
     <!-- Prompt 4 / Block 1 (Timeline visual updates):
@@ -339,6 +340,7 @@
         import * as __SlpMerge from '../import-export/slp-merge.js';
         import * as __FileIO from '../import-export/file-io.js';
         import * as __Video from '../loading/video.js';
+        import * as __CodecDiag from '../loading/video-codec-diagnosis.js';
         import * as __LoadingProgressModal from '../ui/loading-progress-modal.js';
         // Block 1 (Prompt 4): the timeline toggle / fit-to-data / shortcut
         // helpers live in `ui/timeline-controller.js`. The module only
@@ -403,7 +405,7 @@
                               __TimelineCtrl, __TrackIdentityOps,
                               __ImportTrackResolve, __SioLazy,
                               __VideoFilters, __KeyboardTarget,
-                              __ModalGeometry);
+                              __ModalGeometry, __CodecDiag);
 
         // sleap-io.js bridge for the SLP export post-pass test — mirrors the
         // window.SleapIO bridge in index.html so test-slp-export-postpass.js can

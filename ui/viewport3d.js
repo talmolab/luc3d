@@ -985,7 +985,7 @@ export class Viewport3D {
         const pool = this._ensureSkeletonPool(nodeShape, nodeRadius, edgeRadius);
 
         // Detach last frame's groups (pooled — not disposed).
-        this._skeletonGroup.clear();
+        this._detachChildren(this._skeletonGroup);
 
         if (!instanceGroups || instanceGroups.length === 0) {
             if (_dbg3d) console.log('[3D] updateSkeleton: no instance groups');
@@ -1034,7 +1034,7 @@ export class Viewport3D {
 
             const instanceGroup3D = slot.group3D;
             instanceGroup3D.name = 'instance_' + g;
-            instanceGroup3D.clear();
+            this._detachChildren(instanceGroup3D);
 
             // --- Keypoint markers (shape per Node Style toggle) ---
             if (showNodes) {
@@ -1165,6 +1165,16 @@ export class Viewport3D {
     }
 
     /**
+     * Detach (not dispose) every child of `group` — pooled objects are reused.
+     * Uses `remove()` like `_clearGroup`, rather than Object3D.clear(), so it
+     * works with any Three build and with the test runners' THREE mocks.
+     * @private
+     */
+    _detachChildren(group) {
+        while (group.children.length > 0) group.remove(group.children[group.children.length - 1]);
+    }
+
+    /**
      * One pooled instance group: its THREE.Group, its two materials, and the
      * node / edge objects it has needed so far (grown on demand, reused after).
      * @private
@@ -1187,7 +1197,7 @@ export class Viewport3D {
      * @private
      */
     _disposeSkeletonPool() {
-        if (this._skeletonGroup) this._skeletonGroup.clear();
+        if (this._skeletonGroup) this._detachChildren(this._skeletonGroup);
         const pool = this._skelPool;
         if (!pool) return;
         if (pool.nodeGeo) pool.nodeGeo.dispose();

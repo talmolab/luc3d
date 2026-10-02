@@ -5267,6 +5267,8 @@ via the options bag.
   one `instance_<g>` Group per group with 3D, children = that frame's valid
   `node_*` markers then `edge_*` cylinders, same order; unused pooled objects
   are DETACHED (not hidden), so traversals (`fitToScene`, tests) are unchanged.
+  Detaching goes through `_detachChildren` (`remove()`, like `_clearGroup`) rather
+  than `Object3D.clear()`, so it works with the test runners' THREE mocks.
   Steady-state cost ~0.05 ms vs ~1 ms for the rebuild (which also re-uploaded a
   cylinder buffer per edge per call). Guarded by
   `tests/test-viewport3d-skeleton-pool.js` (pooled == fresh build after any
@@ -5636,6 +5638,14 @@ skeleton-only 3D-points import prompts before discarding it.
 
 ---
 
+**Video load failures are surfaced, with the reason.** Every loader reports a
+video the browser couldn't play via `videoLoadFailureText` (the decoder's codec
+diagnosis when there is one). The per-camera session-folder path used to log
+such failures to the console only — poses loaded with no video and no message
+(e.g. Safari + `hev1`-tagged HEVC); it now collects them in `videoFailures`
+and appends them to the final status (one line per distinct diagnosis), like
+`slpFailures`. Lazy reopen's attach step lists the reason per file too.
+
 ### loading/sio-lazy-loader.js
 
 **Purpose.** Main-thread lazy frame loader for large prediction `.slp` files,
@@ -5935,6 +5945,42 @@ loaded over the network or from disk.
 
 ---
 
+### loading/video-codec-diagnosis.js
+
+**Purpose.** Explain WHY the browser refused a video. A `<video>` load
+failure only yields "error code 4" (MEDIA_ERR_SRC_NOT_SUPPORTED); this reads
+the file's video codec from its MP4 sample description and returns a specific,
+actionable message. Measured cases (`tests/e2e/_probe-capabilities.mjs`, macOS
+26 / M2 Pro): Safari plays HEVC-in-MP4 only when tagged `hvc1` (`hev1` →
+canPlayType "") — a lossless `ffmpeg -c copy -tag:v hvc1` re-tag fixes it;
+Safari decodes AV1 only with hardware AV1 (Apple M3+), while Chrome/Firefox
+decode it in software; otherwise suggest another browser / converting to H.264.
+Reading is cheap on multi-GB recordings: it walks top-level box headers with
+random-access reads (`Blob.slice`, or HTTP Range for URLs) and reads only
+`moov` (recordings keep it at the END, after the `mdat`). No diagnosis (null)
+when the codec can't be read or the browser claims support — the original
+error then stands (e.g. a corrupt file).
+
+**Key exports.**
+- `sniffMp4VideoCodec(source)` → `{fourcc, codecName}|null` (File/Blob/URL).
+- `videoFourccFromMoov(moovBytes)` — first video sample-entry fourcc in a `moov`.
+- `explainUnplayableCodec(fourcc, fileName, env?)` → `{fourcc, codecName, kind,
+  message}|null`; pure (`env.canPlayType`, `env.isSafari` injectable). Kinds:
+  `hevc-hev1-tag`, `av1-unsupported`, `hevc-unsupported`, `unsupported`, `encrypted`.
+- `diagnoseUnplayableVideo(source, fileName?, env?)` — sniff + explain.
+- `videoLoadFailureText(name, err)` — one-line reason for loaders' status
+  messages: `err.codecDiagnosis.message` when present, else the error text.
+
+**Imports from project modules.** None.
+
+**Imported by.** `loading/video.js` (`OnDemandVideoDecoder._awaitPlayable`),
+`loading/session-loader.js` (`videoLoadFailureText`).
+
+**Tests.** `tests/test-video-codec-diagnosis.js` (synthetic MP4s: moov at the
+end read in < 4 KB, 64-bit box sizes, audio track first, every message kind,
+decoder integration); real browsers via the `decoderErrors` step of
+`tests/e2e/_probe-capabilities.html`.
+
 ### loading/video.js
 
 **Purpose.** Video decoding and multi-view playback. Hybrid HTML5
@@ -6190,7 +6236,11 @@ a zoomed-in image keeps the same region centered instead of jumping.
   `getFrame(frameIndex)`, `_initMediabunny(source)` /
   `_mediabunnyEnabled()` (opt-in frame-accurate backend, issue #115),
   `decodeRange(start, end)`, `playNative`, `pauseNative`, `seekNative`,
-  `switchSource`, `close`, `drawCurrentFrame`, `captureCurrentFrame` (returns
+  `switchSource`, `close`, `drawCurrentFrame`, `_awaitPlayable` (init and
+  switchSource await the element's load through it: when the browser refuses
+  the file it throws `video-codec-diagnosis.js`'s explanation instead of a
+  bare "Video error code 4", with `err.codecDiagnosis` and `err.cause`),
+  `captureCurrentFrame` (returns
   `{frame: VideoFrame, index}` for the per-refresh playback loop — index from
   the captured frame's own timestamp; caller closes the frame; null when
   WebCodecs/data is unavailable).
