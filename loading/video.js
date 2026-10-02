@@ -328,13 +328,13 @@ export class OnDemandVideoDecoder {
             this.config.description = description;
         }
 
-        // Check if WebCodecs supports this codec
-        var support = await VideoDecoder.isConfigSupported(this.config);
-        if (!support.supported) {
-            videoLog("WebCodecs does not support " + codec + ", using HTML5 fallback", "warn");
-            this.mp4boxFile = null;
-            return;
-        }
+        // No WebCodecs support check here: this pass never decodes with
+        // WebCodecs (see below — the <video> element decodes); it only reads the
+        // container's sample table for the real frame count and FPS, which is
+        // codec-independent. A check that returned early when WebCodecs can't
+        // decode the codec (Firefox 157 + HEVC) left `_fps` at the 30 fps
+        // placeholder, halving every frame index for 60 fps video — measured
+        // with tests/e2e/_verify-playback-loop.html (barcode frame numbers).
 
         // Get real sample table for accurate frame count and FPS
         var mp4Samples = this.mp4boxFile.getTrackSamplesInfo(videoTrackInfo.id);
@@ -1428,6 +1428,56 @@ export function pickScheduledFrame(target, shownIdx, pendingIdx, capIdx) {
     return shownIdx != null ? 'shown' : null;
 }
 
+/**
+ * Whether this browser's requestVideoFrameCallback is COALESCED — fires at a
+ * fixed low rate covering several presented pictures per callback — rather
+ * than once per presented picture.
+ *
+ * Measured with tests/e2e/_probe-capabilities.mjs on real browsers: Firefox
+ * fires ~24 callbacks/s whatever the video rate (2–6 pictures each, while the
+ * picture itself changes 49–120×/s); Safari fires once per picture it shows
+ * (callbacks/s == picture changes/s, even when it can only show ~24/s with 8
+ * cameras); Chrome once per presented frame. rVFC exposes nothing that tells
+ * the two cases apart (Safari also reports presentedFrames +2 per callback),
+ * so this is the one engine check: Gecko.
+ */
+function rvfcCallbacksCoalesced() {
+    try { return /\bFirefox\//.test(navigator.userAgent); } catch (e) { return false; }
+}
+
+/**
+ * Decide, per decoder, whether `new VideoFrame(<video>).timestamp` tracks the
+ * picture — the per-refresh loop's frame index depends on it. Chrome: yes.
+ * Safari 27: the timestamp is 0 for ~98% of captures during playback. Firefox
+ * 157: a constant. Judged once the video clock has advanced a few frames since
+ * the first capture: usable only if the timestamp moved AND agrees with the
+ * clock to within 3 frames. Cached on the decoder as `_vfTimestamps`
+ * ('ok' | 'bad'); undefined while undecided.
+ *
+ * @returns {'ok'|'bad'|undefined}
+ */
+function judgeVideoFrameTimestamps(dec, cap) {
+    var el = dec._videoEl;
+    if (!el || !cap || !cap.frame) return undefined;
+    var fps = dec._fps || 30;
+    var ctIdx = Math.floor(el.currentTime * fps + 1e-6);
+    var chk = dec._vfTsCheck;
+    if (!chk || ctIdx < chk.ct) {   // first look (or the clock went back: a seek) — start over
+        dec._vfTsCheck = { ts: cap.frame.timestamp, ct: ctIdx };
+        return undefined;
+    }
+    if (ctIdx - chk.ct < 4) return undefined;
+    var moved = cap.frame.timestamp !== chk.ts;
+    var agrees = Math.abs(cap.index - ctIdx) <= 3;
+    dec._vfTsCheck = null;
+    dec._vfTimestamps = (moved && agrees) ? 'ok' : 'bad';
+    videoLog('Playback: VideoFrame timestamps ' + (dec._vfTimestamps === 'ok'
+        ? 'track the video — painting captured frames'
+        : 'do NOT track the video in this browser — drawing the <video> directly, frame index from '
+          + (el.requestVideoFrameCallback ? 'requestVideoFrameCallback' : 'its clock')));
+    return dec._vfTimestamps;
+}
+
 // ---------------------------------------------------------------------------
 // VideoController - Synchronized multi-view playback with overlay support
 // ---------------------------------------------------------------------------
@@ -1847,11 +1897,52 @@ export class VideoController {
         function closeCap(c) {
             if (c && c.frame) { try { c.frame.close(); } catch (e) { /* ignore */ } }
         }
-        // Held VideoFrames must not outlive playback (stopPlayback calls this).
+        // Fallback for views whose VideoFrame timestamps are unusable (Safari,
+        // Firefox — see judgeVideoFrameTimestamps): draw the <video> directly
+        // and take the frame index from its requestVideoFrameCallback
+        // mediaTime (Safari: exact, once per shown picture), projected forward
+        // from the last callback where callbacks are coalesced (Firefox,
+        // ~24/s), else from its clock. rVFC is registered ONLY for those views:
+        // registering it on every view changed Chrome's presentation behaviour.
+        var coalesced = rvfcCallbacksCoalesced();
+        var fallback = [];   // per view: { el, id, mt, at }
+        self._refreshFallback = fallback;   // diagnostics only (tests/e2e/_verify-playback-loop.html)
+        function fallbackIndex(j, view, now) {
+            var dec = view.decoder, el = dec._videoEl, fps = dec._fps || self.state.fps || 30;
+            var f = fallback[j];
+            if (!f && el && typeof el.requestVideoFrameCallback === 'function') {
+                f = fallback[j] = { el: el, id: null, mt: null, at: null };
+                var onVF = function (cbNow, md) {
+                    if (fallback[j] !== f) return;
+                    f.mt = md && typeof md.mediaTime === 'number' ? md.mediaTime : el.currentTime;
+                    f.at = cbNow;
+                    f.id = el.requestVideoFrameCallback(onVF);
+                };
+                f.id = el.requestVideoFrameCallback(onVF);
+            }
+            if (f && f.mt != null) {
+                var t = f.mt;
+                if (coalesced && !el.paused) {
+                    t += Math.min(Math.max(0, now - f.at), 100) / 1000 * (el.playbackRate || 1);
+                }
+                return Math.round(t * fps);
+            }
+            return dec.getCurrentFrameIndex ? dec.getCurrentFrameIndex() : self.state.currentFrame;
+        }
+        // Held VideoFrames and fallback rVFCs must not outlive playback
+        // (stopPlayback calls this).
         self._refreshCleanup = function () {
             if (pending) for (var p = 0; p < pending.length; p++) closeCap(pending[p]);
             pending = null;
             shown = null;
+            for (var r = 0; r < fallback.length; r++) {
+                var fb = fallback[r];
+                if (fb && fb.id != null && fb.el.cancelVideoFrameCallback) {
+                    try { fb.el.cancelVideoFrameCallback(fb.id); } catch (e) { /* ignore */ }
+                }
+            }
+            fallback = [];
+            self._refreshFallback = fallback;
         };
         function drawRefreshFrame(now) {
             if (!self.state.isPlaying) return false;
@@ -1869,9 +1960,17 @@ export class VideoController {
             try {
                 for (var j = 0; j < n; j++) {
                     var dec = cur[j].decoder;
-                    caps[j] = dec.captureCurrentFrame ? dec.captureCurrentFrame() : null;
-                    idx[j] = caps[j] ? caps[j].index
-                        : (dec.getCurrentFrameIndex ? dec.getCurrentFrameIndex() : self.state.currentFrame);
+                    var tsMode = dec._vfTimestamps;
+                    caps[j] = (tsMode !== 'bad' && dec.captureCurrentFrame) ? dec.captureCurrentFrame() : null;
+                    if (caps[j] && tsMode === undefined) tsMode = judgeVideoFrameTimestamps(dec, caps[j]);
+                    if (caps[j] && tsMode === 'ok') {
+                        idx[j] = caps[j].index;
+                    } else {
+                        // Undecided (first few frames) or unusable timestamps:
+                        // paint the <video> itself, index from rVFC / clock.
+                        closeCap(caps[j]); caps[j] = null;
+                        idx[j] = fallbackIndex(j, cur[j], now);
+                    }
                 }
                 var dec0 = cur[0].decoder, primaryEl = dec0._videoEl;
                 if (idx[0] >= self.state.totalFrames || (primaryEl && primaryEl.ended)) {

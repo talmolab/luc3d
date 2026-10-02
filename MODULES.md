@@ -6113,7 +6113,24 @@ from that frame's own timestamp), `drawImage`s exactly that frame, and calls
 `drawOverlays(mainIdx, viewFrames)` so each view is overlaid at its own frame;
 a refresh where no view's frame changes draws nothing, captures are always
 `close()`d (held ones on `stopPlayback` via `_refreshCleanup`), and playback
-stops when the primary `<video>` ends. WHICH frame each view shows is chosen
+stops when the primary `<video>` ends. **Browsers whose `VideoFrame(<video>)`
+timestamps don't track the picture** (Safari 27: 0 in ~98% of captures;
+Firefox 157: a constant — measured with `tests/e2e/_probe-capabilities.mjs`)
+are detected per decoder by `judgeVideoFrameTimestamps` (the timestamp must
+move with the clock and agree within 3 frames; cached as
+`decoder._vfTimestamps = 'ok'|'bad'`). A `'bad'` view stops capturing (also
+avoiding Firefox's 5–11 ms/refresh capture cost), is painted with
+`drawCurrentFrame`, and takes its index from a per-view
+requestVideoFrameCallback `mediaTime` — exact in Safari (one callback per shown
+picture), projected forward ≤ 100 ms where callbacks are coalesced
+(`rvfcCallbacksCoalesced()`: Firefox, ~24 callbacks/s covering 2–6 pictures),
+else the clock. rVFC is registered only for fallback views (registering it on
+every view altered Chrome's presentation). Without this the loop froze in
+Safari/Firefox. Verified in the real browsers with
+`tests/e2e/_verify-playback-loop.html` (barcode frame numbers read back from
+each canvas): painted == overlay 100% in Chrome, 96–100% in Safari, ~30–95%
+(within ±1 frame) in Firefox, which exposes no exact per-picture timing.
+`self._refreshFallback` exposes the fallback state for that check. WHICH frame each view shows is chosen
 by an exported, pure **`PlaybackSchedule`**, with
 **`pickScheduledFrame(target, shown, pending, cap)`** choosing per view between
 the frame on screen, ONE capture held from an earlier refresh, and this
@@ -6177,6 +6194,10 @@ a zoomed-in image keeps the same region centered instead of jumping.
   `{frame: VideoFrame, index}` for the per-refresh playback loop — index from
   the captured frame's own timestamp; caller closes the frame; null when
   WebCodecs/data is unavailable).
+  `_initMp4box` reads the container's sample table for the real frame count
+  and fps WITHOUT a WebCodecs support check (it never decodes with WebCodecs):
+  an early return when WebCodecs couldn't decode the codec (Firefox + HEVC)
+  left `_fps` at the 30 fps placeholder, halving every frame index.
 - `PlaybackSchedule` — class; `update(now, capturedIdx, framesPerMs)` → the
   frame index that should be on screen this refresh; `reset()`.
 - `pickScheduledFrame(target, shownIdx, pendingIdx, capIdx)` →

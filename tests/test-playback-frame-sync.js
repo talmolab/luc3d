@@ -190,18 +190,26 @@
                 addEventListener: function () {}, removeEventListener: function () {} };
             var decoder = {
                 _videoEl: el, _fps: 60, samples: new Array(1000), videoTrack: null,
+                // Capture-path tests: timestamps already judged usable
+                // (judgeVideoFrameTimestamps); the fallback has its own tests.
+                _vfTimestamps: ('tsMode' in script) ? script.tsMode : 'ok',
                 seekNativeSettled: function () { return Promise.resolve(); },
                 seekNative: function () {}, playNative: function () {}, pauseNative: function () {},
                 drawCurrentFrame: function () { log.fallbackDraws.push(name); return true; },
                 getCurrentFrameIndex: function () { return script.clockIdx; },
                 captureCurrentFrame: function () {
                     if (script.cap === false) return null;
-                    var frame = { name: name, index: script.idx, closed: false,
+                    var ts = script.frozenTs != null ? script.frozenTs : script.idx / 60 * 1e6;
+                    var frame = { name: name, index: script.idx, timestamp: ts, closed: false,
                         close: function () { this.closed = true; } };
                     log.captured.push(frame);
-                    return { frame: frame, index: script.idx };
+                    return { frame: frame, index: Math.round(ts / 1e6 * 60) };
                 },
             };
+            if (script.rvfc) {
+                el.requestVideoFrameCallback = function (cb) { script.rvfcCb = cb; return 1; };
+                el.cancelVideoFrameCallback = function () { script.rvfcCancelled = true; };
+            }
             return {
                 name: name, decoder: decoder, videoWidth: 64, videoHeight: 48,
                 canvas: { width: 64, height: 48 },
@@ -261,6 +269,64 @@
             assertEqual(t.log.overlays[1].vf.cam0, 11, 'primary at 11');
             assertEqual(t.log.overlays[1].vf.cam1, 11, 'second view at the same frame');
             assertTrue(t.log.captured.every(function (c) { return c.closed; }), 'held and skipped captures are all closed');
+        });
+
+        // Safari 27 / Firefox 157: `new VideoFrame(video).timestamp` is 0 or a
+        // constant during playback (measured, tests/e2e/_probe-capabilities).
+        // The loop must notice and stop trusting it, or playback freezes.
+        it('unusable VideoFrame timestamps: stops capturing, draws the <video>, overlays at the clock', async function () {
+            if (!canRun()) return;
+            var a = { idx: 0, frozenTs: 0, clockIdx: 0, tsMode: undefined };
+            var t = setup([a]);
+            var el = t.views[0].decoder._videoEl;
+            t.ctrl.startPlayback();
+            for (var k = 0; k < 12; k++) {          // the clock advances, the timestamp doesn't
+                a.clockIdx = 100 + k * 2; el.currentTime = a.clockIdx / 60;
+                await nextFrames(1);
+            }
+            var capturedSoFar = t.log.captured.length;
+            a.clockIdx = 140; el.currentTime = 140 / 60;
+            await nextFrames(3);
+            var lastOv = t.log.overlays[t.log.overlays.length - 1];
+            t.ctrl.stopPlayback();
+            assertEqual(t.views[0].decoder._vfTimestamps, 'bad', 'timestamps judged unusable');
+            assertEqual(t.log.captured.length, capturedSoFar, 'no more VideoFrame captures once judged unusable');
+            assertTrue(t.log.fallbackDraws.length > 0, 'painted via drawCurrentFrame');
+            assertEqual(lastOv.vf.cam0, 140, 'overlay follows the clock');
+            assertTrue(t.log.captured.every(function (c) { return c.closed; }), 'judging captures were closed');
+        });
+
+        it('usable VideoFrame timestamps: judged ok and the captured frame keeps being painted', async function () {
+            if (!canRun()) return;
+            var a = { idx: 0, tsMode: undefined };
+            var t = setup([a]);
+            var el = t.views[0].decoder._videoEl;
+            t.ctrl.startPlayback();
+            for (var k = 0; k < 12; k++) { a.idx = 100 + k * 2; el.currentTime = a.idx / 60; await nextFrames(1); }
+            var drawnBefore = t.log.drawn.length;
+            a.idx = 140; el.currentTime = 140 / 60;
+            await nextFrames(3);
+            t.ctrl.stopPlayback();
+            assertEqual(t.views[0].decoder._vfTimestamps, 'ok', 'timestamps judged usable');
+            assertTrue(t.log.drawn.length > drawnBefore, 'captured VideoFrames are painted');
+        });
+
+        it('fallback takes the frame index from requestVideoFrameCallback mediaTime', async function () {
+            if (!canRun()) return;
+            var a = { idx: 0, tsMode: 'bad', clockIdx: 5, rvfc: true };
+            var t = setup([a]);
+            t.ctrl.startPlayback();
+            await nextFrames(2);
+            assertTrue(typeof a.rvfcCb === 'function', 'rVFC registered for the fallback view');
+            a.rvfcCb(performance.now(), { mediaTime: 300 / 60, presentedFrames: 1 });
+            await nextFrames(2);
+            var lastOv = t.log.overlays[t.log.overlays.length - 1];
+            t.ctrl.stopPlayback();
+            // Firefox projects a coalesced callback forward (≤ 100 ms → ≤ 6 frames at 60 fps).
+            var isGecko = /\bFirefox\//.test(navigator.userAgent);
+            assertTrue(isGecko ? (lastOv.vf.cam0 >= 300 && lastOv.vf.cam0 <= 306) : lastOv.vf.cam0 === 300,
+                'overlay at the rVFC frame (got ' + lastOv.vf.cam0 + '), not the clock (5)');
+            assertTrue(a.rvfcCancelled === true, 'fallback rVFC cancelled on stop');
         });
 
         it('falls back to drawCurrentFrame + the clock index when capture is unavailable', async function () {
