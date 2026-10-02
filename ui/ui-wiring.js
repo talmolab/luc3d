@@ -2589,27 +2589,18 @@ export function setupUI() {
 // UI Updates
 // ============================================
 
-// Throttle window (ms) for the 3D viewport update during playback.
-let _last3DUpdate = 0;
-const VIEWPORT3D_PLAYBACK_MS = 100;
-
 export function updateSeekbar(frameIdx) {
     if (frameIdx === undefined) frameIdx = state.currentFrame;
     updateSeekbarVisual(frameIdx);
     document.getElementById('currentFrame').textContent = frameIdx + 1;
 
-    // Update the 3D viewport on frame change. `update3DViewport` rebuilds the
-    // Three.js skeleton scene and renders it — a major per-frame cost that ran
-    // on EVERY playback frame. During playback it's throttled to ~10 Hz (same
-    // rationale as the info-panel/timeline throttle in rendering.js); the 2D
-    // video + skeleton overlays still update every frame, and the 3D view isn't
-    // legible per-frame at playback speed anyway. Paused (seek/step) it runs
-    // every call; VideoController.stopPlayback fires a final unthrottled update.
-    var now3d = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
-    if (!state.isPlaying || (now3d - _last3DUpdate) >= VIEWPORT3D_PLAYBACK_MS) {
-        _last3DUpdate = now3d;
-        update3DViewport(frameIdx);
-    }
+    // Update the 3D viewport on EVERY frame, playback included, so the 3D
+    // skeleton moves as smoothly as the video and its 2D overlays. This used to
+    // be throttled to ~10 Hz during playback because `updateSkeleton` rebuilt
+    // the whole Three.js scene (new materials + a new cylinder geometry per
+    // edge) each call; it now moves pooled meshes in place (p95 0.1 ms), so the
+    // throttle — which made the 3D view jump 6–7 frames at a time — is gone.
+    update3DViewport(frameIdx);
 }
 
 export function updateSeekbarVisual(frameIdx) {
