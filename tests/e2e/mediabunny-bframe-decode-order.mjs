@@ -39,12 +39,24 @@
 import { chromium } from 'playwright';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
+import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
 const PORT = Number(process.env.PORT || 8102);
 const NUM_FRAMES = 30;
+// BFRAME_DIR=<repo-relative dir>: run against another bframes-test.mp4 +
+// frame_NNN.png set. The checked-in default has only the PNGs — `*.mp4` is
+// gitignored, so the video never reached the repo; regenerate a matching pair
+// (any `-bf 3 -g 10` testsrc with a centred drawtext frame number, PNGs from
+// `ffmpeg -vsync 0`) into a gitignored folder such as verify/ and point here.
+const FIX = (process.env.BFRAME_DIR || 'tests/fixtures/bframes-test').replace(/\/+$/, '');
+if (!fs.existsSync(path.join(repoRoot, FIX, 'bframes-test.mp4'))) {
+    console.error(`  ✗ ${FIX}/bframes-test.mp4 is missing (*.mp4 is gitignored) — set BFRAME_DIR to a ` +
+        'regenerated video + PNG set; see the note at the top of this file.');
+    process.exit(1);
+}
 let fails = 0;
 const check = (c, m) => { console.log((c ? '  ✓ ' : '  ✗ ') + m); if (!c) fails++; };
 
@@ -59,7 +71,7 @@ try {
     await page.goto(`http://localhost:${PORT}/index.html`);
     await page.waitForFunction(() => window.__lucid && window.__lucid.state && window.SleapIO, { timeout: 20000 });
 
-    const r = await page.evaluate(async (numFrames) => {
+    const r = await page.evaluate(async ({ numFrames, FIX }) => {
         const videoMod = await import('/loading/video.js');
         const OnDemandVideoDecoder = videoMod.OnDemandVideoDecoder;
 
@@ -87,7 +99,7 @@ try {
             return sum / n;
         }
 
-        const resp = await fetch('/tests/fixtures/bframes-test/bframes-test.mp4');
+        const resp = await fetch('/' + FIX + '/bframes-test.mp4');
         const blob = await resp.blob();
         const file = new File([blob], 'bframes-test.mp4', { type: 'video/mp4' });
 
@@ -99,7 +111,7 @@ try {
             var decodedFrame = await decoder.getFrame(i);
             var decodedSig = decodedFrame ? canvasSignature(decodedFrame, 320, 240) : null;
 
-            var pngName = '/tests/fixtures/bframes-test/frame_' + String(i + 1).padStart(3, '0') + '.png';
+            var pngName = '/' + FIX + '/frame_' + String(i + 1).padStart(3, '0') + '.png';
             var img = await new Promise(function (resolve, reject) {
                 var im = new Image();
                 im.onload = function () { resolve(im); };
@@ -118,7 +130,7 @@ try {
             mbBackendActive: !!decoder._mbBackend,
             results: results,
         };
-    }, NUM_FRAMES);
+    }, { numFrames: NUM_FRAMES, FIX });
 
     check(r.mbBackendActive, 'mediabunny backend is active for this real B-frame video (not silently falling back)');
 

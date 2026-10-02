@@ -3,9 +3,9 @@
 Multi-view pose annotation GUI. No build system — pure vanilla JS served as static files.
 
 ## Architecture
-ES modules, vanilla JS (no build step). `index.html` loads `app.js` as `<script type="module">`; `app.js` is a 2-line entry point that imports from `pose/`. The 51 modules are grouped into four directories:
+ES modules, vanilla JS (no build step). `index.html` loads `app.js` as `<script type="module">`; `app.js` is a 2-line entry point that imports from `pose/`. The 52 modules are grouped into four directories:
 - `pose/` — data model, cross-view tracking, DLT triangulation, app initialization (6 files)
-- `ui/` — UI state, canvas rendering, mouse/keyboard interaction, info panel, modals, timeline, 3D viewport, panel visibility, video encoding, video display settings, keyboard-target arbitration, modal geometry, settings, browser-specific hints (29 files)
+- `ui/` — UI state, canvas rendering, mouse/keyboard interaction, info panel, modals, timeline, 3D viewport, panel visibility, video encoding, video display settings, keyboard-target arbitration, modal geometry, settings, browser-specific hints, the loading overlay + its progress bar (30 files)
 - `loading/` — video decoding, unplayable-codec diagnosis, session loading, SLP/package readers, web workers (8 files)
 - `import-export/` — file I/O, save/load, SLP import/merge, visibility metadata (8 files)
 - `demo-data.js` — synthetic skeleton and camera data
@@ -179,7 +179,24 @@ Tags must be `vX.Y.Z` or `vX.Y.Z-N` (numeric pre-release), matching sleap-app.
   after. Fixed by sorting `_frameTimes` ascending by timestamp at the end of
   `initialize()`, marked `// LUCID local patch (#115)`. **Re-apply after any
   re-vendor** (grep the marker) and report upstream to sleap-io/mediabunny.
-  Covered by `tests/e2e/mediabunny-bframe-decode-order.mjs`.
+  Covered by `tests/e2e/mediabunny-bframe-decode-order.mjs` — whose
+  `bframes-test.mp4` was never committed (`*.mp4` is gitignored; only the PNGs
+  are tracked), so run it with `BFRAME_DIR=` pointing at a regenerated
+  video + PNG set (recipe in the test's header).
+  **LOCAL PATCH (luc3d frame-index):** `lib/sleap-io/chunk-X76PRJK6.js`
+  `MediaBunnyVideoBackend.initialize()` walks `EncodedPacketSink.packets()` only
+  to collect each packet's timestamp, but without options that walk **reads
+  every packet's bytes — the whole file** (254–349 MB per HardFight_1kModels
+  camera, ~2.3 GB for one 8-camera "Load Single Session Folder"). Patched to
+  `packets(void 0, void 0, { metadataOnly: true })`: same packets, same order,
+  same timestamps, payload read skipped. Per video ~120 ms -> ~28 ms alone; in
+  the 8-camera load, where the decoders open in parallel and contend, all eight
+  finish in ~0.46 s instead of ~1.04 s (load ~2.35 s -> ~1.8 s). Guarded by
+  `tests/e2e/mediabunny-frame-index-metadata-only.mjs` (metadata-only == full
+  walk, `Object.is` per timestamp and in order, plus backend index == full walk
+  sorted; on a generated `-bf 3` B-frame video, and with `DATASET=` on real
+  files). Marked `// LUCID local patch (luc3d frame-index)`. **Re-apply after any
+  re-vendor** (grep the marker) and report upstream to sleap-io.js.
   **LOCAL PATCH (sleap-io.js#231):** `lib/sleap-io/chunk-X76PRJK6.js` writes the
   SLP `instances` table with dtype `"<d"` (h5wasm float64) instead of upstream's
   `"<f8"` — h5wasm does NOT speak numpy dtype strings and parses `"<f8"` as

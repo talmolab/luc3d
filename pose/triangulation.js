@@ -14,6 +14,7 @@ import { setReprojErrorVisible, drawAllOverlays } from '../ui/rendering.js';
 import { updateTriangulationBadge } from '../ui/info-panel.js';
 import { isCameraTracked, getTrackingThreshold, getDefaultTriangulationMethod } from '../ui/settings.js';
 import { markDirty, setStatus, showLoading, hideLoading } from '../import-export/save-load.js';
+import { showLoadingProgress, createProgressPacer, yieldToPaint } from '../ui/loading-overlay.js';
 // Pass 3i-3: update3DViewport moved to pose/initialization.js.
 import { update3DViewport } from './initialization.js';
 
@@ -2344,10 +2345,12 @@ export async function loadAllLazyFrames(onStatus) {
     var BATCH = 5000;
     var totalLoaded = 0;
     for (var start = 0; start < loader.nFrames; start += BATCH) {
-        if (onStatus) onStatus('Loading frames ' + start + '/' + loader.nFrames + '...');
+        // (msg, done, total): the counts let a caller drive a progress bar.
+        if (onStatus) onStatus('Loading frames ' + start + '/' + loader.nFrames + '...', start, loader.nFrames);
         var loaded = await batchLoadLazyFrames(start, BATCH);
         totalLoaded += loaded;
     }
+    if (onStatus) onStatus('Loading frames ' + loader.nFrames + '/' + loader.nFrames + '...', loader.nFrames, loader.nFrames);
     return totalLoaded;
 }
 
@@ -3155,10 +3158,22 @@ function _triangulateGroupStep(group, cameras, method) {
  * `opts.start`/`opts.end` (inclusive) restrict the sweep to a frame range — used
  * by the range operations (Triangulate Range). Omit both to sweep everything.
  *
+ * PROGRESS / YIELDING: the loop yields to the browser on a CLOCK, not every N
+ * frames — `createProgressPacer` (ui/loading-overlay.js) — and each yield waits
+ * for a paint, so `opts.onProgress(done, total)` (called just before each
+ * yield, and once at the end) is actually seen. It used to yield every 100
+ * frames, which on cheap per-frame work paid hundreds of yields for no visible
+ * benefit, and on expensive work (BA) left the overlay frozen between them.
+ * `done` is the POSITION in the sweep (frames passed, with or without data), so
+ * it rises monotonically to `total` and can drive a progress bar directly.
+ * `opts.onLoadProgress(done, total)` reports the up-front `loadAllLazyFrames`
+ * stage of a non-windowed lazy session (the only path that has one).
+ *
  * @param {Object} session                LUCID Session
  * @param {(frameIdx:number, fg:Object)=>void|Promise<void>} onFrame
- * @param {{window?:number, onProgress?:Function, yieldEvery?:number,
- *          gcEveryWindows?:number, gcMB?:number, start?:number, end?:number}} [opts]
+ * @param {{window?:number, onProgress?:Function, onLoadProgress?:Function,
+ *          onStatus?:Function, gcEveryWindows?:number, gcMB?:number,
+ *          start?:number, end?:number}} [opts]
  * @returns {Promise<number>} frames processed
  */
 function _hasFrameData(session, frameIdx) {
@@ -3171,7 +3186,7 @@ export async function sweepLazyFrameWindows(session, onFrame, opts) {
     opts = opts || {};
     var loader = session.lazyLoader;
     var windowed = loader && loader.isSync && typeof loader.releaseWindow === 'function';
-    var YIELD_EVERY = opts.yieldEvery || 100;
+    var pacer = createProgressPacer();
     var gcEvery = opts.gcEveryWindows || 5;
     var gcMB = opts.gcMB || 800;
     var processed = 0;
@@ -3189,14 +3204,16 @@ export async function sweepLazyFrameWindows(session, onFrame, opts) {
                 var fg = session.frameGroups.get(fi);
                 // A frame counts as HAVING DATA if it has 2D (a hydrated
                 // FrameGroup) *or* an `instanceGroups` entry — see `_hasFrameData`.
-                if (!fg && !_hasFrameData(session, fi)) continue;
-                await onFrame(fi, fg);
-                processed++;
-                if (processed % YIELD_EVERY === 0) {
-                    // Awaited: Track All's progress callback repaints a live
-                    // counter and must be allowed to finish before the next chunk.
-                    if (opts.onProgress) await opts.onProgress(processed, total);
-                    await new Promise(function (r) { setTimeout(r, 0); });
+                if (fg || _hasFrameData(session, fi)) {
+                    await onFrame(fi, fg);
+                    processed++;
+                }
+                // Checked for empty frames too, so a long run of frames with no
+                // data still advances the bar. `fi - from + 1` is a position in
+                // the (possibly offset) range, not the processed count.
+                if (pacer.due()) {
+                    if (opts.onProgress) await opts.onProgress(fi - from + 1, total);
+                    await pacer.yield();
                 }
             }
             // Release the window. Keep the on-screen current frame and any
@@ -3208,17 +3225,20 @@ export async function sweepLazyFrameWindows(session, onFrame, opts) {
             }
             loader.releaseWindow(start, end);
             windowCount++;
-            // `end` is an absolute frame index; progress is a COUNT within the
-            // (possibly offset) range, so subtract the range start.
-            if (opts.onProgress) await opts.onProgress(Math.min(end - from, total), total);
             if (windowCount % gcEvery === 0) await _encourageGC(gcMB);
         }
+        if (opts.onProgress) await opts.onProgress(total, total);
         return processed;
     }
 
     // Worker-backed lazy sessions (small analysis .h5, no windowing) still
     // materialize up front; non-lazy sessions already hold every frame.
-    if (loader) await loadAllLazyFrames(opts.onStatus);
+    if (loader) {
+        await loadAllLazyFrames(function (msg, done, total) {
+            if (opts.onLoadProgress) opts.onLoadProgress(done, total);
+            else if (opts.onStatus) opts.onStatus(msg);
+        });
+    }
     var lo = opts.start != null ? opts.start : -Infinity;
     var hi = opts.end != null ? opts.end : Infinity;
     // Union of both data maps, for the same reason the windowed branch checks
@@ -3233,11 +3253,12 @@ export async function sweepLazyFrameWindows(session, onFrame, opts) {
         var fg2 = session.frameGroups.get(idxs[j]);
         await onFrame(idxs[j], fg2);
         processed++;
-        if (processed % YIELD_EVERY === 0) {
-            if (opts.onProgress) opts.onProgress(processed, idxs.length);
-            await new Promise(function (r) { setTimeout(r, 0); });
+        if (pacer.due()) {
+            if (opts.onProgress) await opts.onProgress(processed, idxs.length);
+            await pacer.yield();
         }
     }
+    if (opts.onProgress) await opts.onProgress(processed, idxs.length);
     return processed;
 }
 
@@ -3318,8 +3339,10 @@ async function sweepTriangulateAllFrames(session, cameras, method) {
         if (anyInFrame) stats.frames++;
     }, {
         onProgress: function (done, tot) {
-            showLoading('Triangulating... ' + done + '/' + tot + ' frames (' +
-                stats.groups.toLocaleString() + ' groups)');
+            showLoadingProgress('Triangulating', done, tot, {
+                detail: triangulationMethodLabel(method) + ' · ' +
+                    stats.groups.toLocaleString() + ' groups',
+            });
         },
     });
     return stats;
@@ -3351,8 +3374,8 @@ export async function triangulateAllFrames(method) {
         typeof triLoader.releaseWindow === 'function' && triLoader.nFrames > 0;
     if (triWindowed) {
         markDirty();
-        showLoading('Triangulating ' + triLoader.nFrames.toLocaleString() + ' frames (' +
-            triangulationMethodLabel(method) + ')...');
+        showLoadingProgress('Triangulating', 0, triLoader.nFrames,
+            { detail: triangulationMethodLabel(method) });
         var swept = await sweepTriangulateAllFrames(state.session, cameras, method);
         setReprojErrorVisible(true);
         drawAllOverlays(state.currentFrame);
@@ -3383,12 +3406,15 @@ export async function triangulateAllFrames(method) {
     }
 
     markDirty();
-    showLoading('Triangulating ' + frameIndices.length + ' frames (' +
-        triangulationMethodLabel(method) + ')...');
+    var methodLabel = triangulationMethodLabel(method);
+    var stageOpts = function (detail) { return { detail: detail }; };
+    showLoadingProgress('Triangulating', 0, frameIndices.length, stageOpts(methodLabel));
+    // Paint the 0% overlay before the first chunk starts.
+    await yieldToPaint();
+    var pacer = createProgressPacer();
     var totalTriangulated = 0;
     var totalGroups = 0;
     var totalErrors = [];
-    var YIELD_EVERY = 100;
 
     for (var fi = 0; fi < frameIndices.length; fi++) {
         var frameIdx = frameIndices[fi];
@@ -3446,12 +3472,15 @@ export async function triangulateAllFrames(method) {
             totalTriangulated++;
         }
 
-        // Yield to UI periodically
-        if (fi > 0 && fi % YIELD_EVERY === 0) {
-            showLoading('Triangulating... ' + fi + '/' + frameIndices.length + ' frames');
-            await new Promise(function (r) { setTimeout(r, 0); });
+        // Report + yield on a clock (see createProgressPacer), not every N frames.
+        if (pacer.due()) {
+            showLoadingProgress('Triangulating', fi + 1, frameIndices.length,
+                stageOpts(methodLabel + ' · ' + totalGroups.toLocaleString() + ' groups'));
+            await pacer.yield();
         }
     }
+    showLoadingProgress('Triangulating', frameIndices.length, frameIndices.length,
+        stageOpts(methodLabel + ' · ' + totalGroups.toLocaleString() + ' groups'));
 
     // Show reproj/error UI elements
     setReprojErrorVisible(true);

@@ -57,6 +57,7 @@ import { SioLazyLoader } from './sio-lazy-loader.js';
 import {
     setStatus, showLoading, hideLoading, ensureNo3dImportBlockingLoad,
 } from '../import-export/save-load.js';
+import { showLoadingProgress, createProgressPacer, yieldToPaint } from '../ui/loading-overlay.js';
 
 // Circular import — these are still defined in app.js for now. See module
 // header note. They are only invoked inside function bodies, never at
@@ -2346,6 +2347,41 @@ export async function handleLoadProjectSlpLazy(slpFile) {
     }
 }
 
+/**
+ * Add one camera's parsed poses to `session` from the worker's COLUMNAR result
+ * (`parseSlpH5(file, null, { columnar: true })`; layout documented at
+ * `buildColumnarFrames` in loading/slp-import-worker.js).
+ *
+ * Exactly what the nested-`frames` loop in `handleLoadSessionFolderPerCamera`
+ * does per instance — same track remap + `resolveImportTrackIdx`, same
+ * `score || 1.0`, same occlusion — but each Instance's coordinates come from one
+ * flat buffer. Each instance gets its OWN `Float64Array` (a `slice`, not a
+ * `subarray` view): a view would pin the whole camera buffer, and structured-
+ * cloning a view (e.g. posting an instance to a worker) copies its entire
+ * underlying buffer.
+ */
+export function addColumnarFramesToSession(session, camName, col, trackRemap) {
+    var nn = col.numNodes;
+    var stride = nn * 2;
+    for (var f = 0; f < col.nFrames; f++) {
+        var frameIdx = col.frameIdx[f];
+        if (!session.frameGroups.has(frameIdx)) {
+            session.addFrameGroup(new FrameGroup(frameIdx));
+        }
+        var fg = session.getFrameGroup(frameIdx);
+        for (var i = col.instOffsets[f], end = col.instOffsets[f + 1]; i < end; i++) {
+            var rawTrackIdx = col.trackIdx[i];
+            var remappedTrackIdx = trackRemap[rawTrackIdx] !== undefined ? trackRemap[rawTrackIdx] : rawTrackIdx;
+            var instType = col.type[i] === 1 ? 'predicted' : 'user';
+            var trackIdx = resolveImportTrackIdx(session, remappedTrackIdx, instType);
+            var instance = new Instance(col.xy.slice(i * stride, (i + 1) * stride),
+                trackIdx, instType, col.score[i] || 1.0);
+            instance.setOccludedFrom(col.occluded.subarray(i * nn, (i + 1) * nn));
+            fg.addInstance(camName, instance);
+        }
+    }
+}
+
 export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVideos) {
     try {
         var allFiles;
@@ -2673,7 +2709,9 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
                 parseJobs.push({
                     camName: choice.camName,
                     file: choice.file,
-                    promise: parseSlpH5(choice.file).catch((function (job) {
+                    // Columnar: flat transferred typed arrays, consumed by the
+                    // build loop below — not ~1.6M structured-cloned [x, y] arrays.
+                    promise: parseSlpH5(choice.file, null, { columnar: true }).catch((function (job) {
                         return function (e) {
                             // Record instead of discarding: a `null` here used to
                             // `continue` past the camera, leaving that view empty
@@ -2695,6 +2733,37 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
                 + lazyJobs.length + ' camera(s) lazily so none are silently skipped.');
         }
 
+        // Progress: up to three labelled steps on the loading overlay —
+        // 1. parse (eager) / open (lazy) the annotation files, counted per camera
+        //    as each worker's result lands (separate tasks, so each one paints);
+        // 2. build the session from the parsed results, per camera;
+        // 3. open the videos, per video (absent when videos are deferred).
+        var nVideosToLoad = deferVideos ? 0 : matchedCameraDirs.filter(function (d) {
+            return d.videos.length > 0;
+        }).length;
+        var LOAD_STEPS = nVideosToLoad > 0 ? 3 : 2;
+        var loadStep = function (step, unit, detail) {
+            return { step: step, steps: LOAD_STEPS, unit: unit, detail: detail };
+        };
+        var nAnnotations = anyLazy ? lazyJobs.length : parseJobs.length;
+        var annotationsDone = 0;
+        var annotationsLabel = anyLazy ? 'Opening annotation files' : 'Parsing annotations';
+        var onAnnotationDone = function () {
+            annotationsDone++;
+            showLoadingProgress(annotationsLabel, annotationsDone, nAnnotations,
+                loadStep(1, 'cameras', anyLazy ? 'Lazy mode' : null));
+        };
+        if (nAnnotations > 0) {
+            showLoadingProgress(annotationsLabel, 0, nAnnotations,
+                loadStep(1, 'cameras', anyLazy ? 'Lazy mode' : null));
+            for (var pji = 0; pji < parseJobs.length; pji++) {
+                parseJobs[pji].promise = parseJobs[pji].promise.then(function (r) {
+                    onAnnotationDone();
+                    return r;
+                });
+            }
+        }
+
         // Open lazy files (metadata only — fast). Large `.slp` predictions use the
         // sleap-io.js streaming lazy reader (SioLazyLoader); SLEAP analysis `.h5`
         // use the worker-backed LazyFrameLoader. Pick the reader by the extension
@@ -2705,11 +2774,12 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
                 return /\.slp$/i.test(job.file.name);
             });
             lazyLoader = lazyAreSlp ? new SioLazyLoader() : new LazyFrameLoader();
-            showLoading('Opening ' + lazyJobs.length + ' '
-                + (lazyAreSlp ? 'SLP' : 'H5') + ' file(s) (lazy mode)...');
             try {
                 await Promise.all(lazyJobs.map(function (job) {
-                    return lazyLoader.open(job.camName, job.file);
+                    return lazyLoader.open(job.camName, job.file).then(function (r) {
+                        onAnnotationDone();
+                        return r;
+                    });
                 }));
             } catch (lazyErr) {
                 // Do NOT fall back to eager parseSlpH5 — a 100+ MB file would OOM
@@ -2722,9 +2792,21 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
         }
 
         var parseResults = await Promise.all(parseJobs.map(function (j) { return j.promise; }));
-        showLoading('Building session data...');
+        // Building runs on the main thread (~0.25 s per 36k-frame camera on the
+        // HardFight set), so report + yield between cameras on the pacer's clock.
+        var buildPacer = createProgressPacer();
+        if (parseJobs.length > 0) {
+            showLoadingProgress('Building session', 0, parseJobs.length, loadStep(2, 'cameras'));
+            await yieldToPaint();
+        } else {
+            showLoading('Building session data...');
+        }
 
         for (var pri = 0; pri < parseJobs.length; pri++) {
+            if (pri > 0 && buildPacer.due()) {
+                showLoadingProgress('Building session', pri, parseJobs.length, loadStep(2, 'cameras'));
+                await buildPacer.yield();
+            }
             var slpData = parseResults[pri];
             if (!slpData) continue;
             var camName = parseJobs[pri].camName;
@@ -2758,7 +2840,9 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
                 }
             }
 
-            if (slpData.frames) {
+            if (slpData.columnar) {
+                addColumnarFramesToSession(state.session, camName, slpData.columnar, trackRemap);
+            } else if (slpData.frames) {
                 for (var fri = 0; fri < slpData.frames.length; fri++) {
                     var frameData = slpData.frames[fri];
                     var frameIdx = frameData.frameIdx !== undefined ? frameData.frameIdx : (frameData.frame_idx !== undefined ? frameData.frame_idx : fri);
@@ -2844,7 +2928,37 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
             }
         }
 
-        // Load videos for each camera directory
+        // Load videos for each camera directory.
+        //
+        // The decoders are opened IN PARALLEL: every camera's `decoder.init` is
+        // started here, up front, and the loop below awaits its own camera's
+        // promise in place of calling `init` itself. Everything the loop does
+        // with the result (videoFiles / views / decoderPool / cameras /
+        // totalFrames / fps) still happens strictly in camera order, so the
+        // resulting state is identical to the old one-at-a-time loop. This is the
+        // pattern `switchSession` (ui/sessions-panes.js) already uses. Measured
+        // on HardFight_1kModels: 8 sequential inits ~1.7 s.
+        // Each promise resolves to `{ decoder }` or `{ error }` — never rejects,
+        // so a failed camera cannot become an unhandled rejection while an
+        // earlier camera is still being awaited.
+        var videosLoaded = 0;
+        var videoInits = matchedCameraDirs.map(function (cd) {
+            if (deferVideos || cd.videos.length === 0) return null;
+            var dec = new OnDemandVideoDecoder({ cacheSize: 60, lookahead: 10 });
+            return dec.init(cd.videos[0]).then(function () {
+                return { decoder: dec };
+            }, function (err) {
+                return { error: err };
+            }).then(function (r) {
+                videosLoaded++;
+                showLoadingProgress('Loading videos', videosLoaded, nVideosToLoad,
+                    loadStep(LOAD_STEPS, 'videos'));
+                return r;
+            });
+        });
+        if (nVideosToLoad > 0) {
+            showLoadingProgress('Loading videos', 0, nVideosToLoad, loadStep(LOAD_STEPS, 'videos'));
+        }
         for (var vdi = 0; vdi < matchedCameraDirs.length; vdi++) {
             var camDir = matchedCameraDirs[vdi];
             var camName = camDir.camName;
@@ -2902,10 +3016,10 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
                         state.session.videoFileIndices.push(loadedVfIdx);
                     }
                 } else {
-                    showLoading('Loading video: ' + videoFile.name + '...');
                     try {
-                        var decoder = new OnDemandVideoDecoder({ cacheSize: 60, lookahead: 10 });
-                        await decoder.init(videoFile);
+                        var initResult = await videoInits[vdi];
+                        if (initResult.error) throw initResult.error;
+                        var decoder = initResult.decoder;
                         state.decoderPool.push(decoder);
                         var vw = decoder.videoTrack.video.width;
                         var vh = decoder.videoTrack.video.height;
@@ -2961,6 +3075,15 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
                     }
                 }
             }
+        }
+
+        // Paint the finished video step, naming the tail: what follows (instance
+        // prep — ~0.45 s for 865k instances on HardFight — skeleton, views) is
+        // synchronous and would otherwise sit unexplained on a full bar.
+        if (nVideosToLoad > 0) {
+            showLoadingProgress('Loading videos', videosLoaded, nVideosToLoad,
+                loadStep(LOAD_STEPS, 'videos', 'Preparing instances…'));
+            await yieldToPaint();
         }
 
         // Check SLP version consistency across cameras

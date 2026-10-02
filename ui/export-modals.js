@@ -29,6 +29,7 @@ import { getTrackColor, getGroupColor } from './overlays.js';
 import { drawAllOverlays, setReprojErrorVisible } from './rendering.js';
 import { updateInfoPanel } from './info-panel.js';
 import { showLoading, hideLoading, setStatus } from '../import-export/save-load.js';
+import { showLoadingProgress, yieldToPaint } from './loading-overlay.js';
 import {
     exportSlpClientSide,
     exportSlpMultiSession,
@@ -321,8 +322,18 @@ export async function groupByIdentityAndTriangulateAll(explicitMethod) {
         ? (explicitMethod === 'ba' ? 'ba' : 'dlt')
         : resolveTriangulationMethod(null);
 
-    showLoading('Grouping by identity & triangulating 0/' + totalFrames + ' frames (' +
-        triangulationMethodLabel(prefMethod) + ')...');
+    // A lazy session the sweep cannot window materializes every frame first
+    // (`sweepLazyFrameWindows`' non-windowed branch) — a labelled stage of its own.
+    var gLoader = session.lazyLoader;
+    var gSteps = (gLoader && !(gLoader.isSync && typeof gLoader.releaseWindow === 'function')) ? 2 : 1;
+    var gMethodLabel = triangulationMethodLabel(prefMethod);
+    if (gSteps === 2) {
+        showLoadingProgress('Loading frames', 0, totalFrames, { step: 1, steps: gSteps });
+    } else {
+        showLoadingProgress('Grouping & triangulating', 0, totalFrames,
+            { step: 1, steps: 1, detail: gMethodLabel });
+    }
+    await yieldToPaint();
 
     var totalGrouped = 0;
     var totalTriangulated = 0;
@@ -501,12 +512,14 @@ export async function groupByIdentityAndTriangulateAll(explicitMethod) {
         }
 
     }, {
+        onLoadProgress: function (done, total) {
+            showLoadingProgress('Loading frames', done, total, { step: 1, steps: gSteps });
+        },
         onProgress: function (done, total) {
-            var el = document.getElementById('loadingStatus');
-            if (el) el.textContent =
-                'Grouping by identity & triangulating ' + done + '/' + total + ' frames (' +
-                triangulationMethodLabel(prefMethod) + '; ' +
-                reused3d.toLocaleString() + ' existing solutions kept)...';
+            showLoadingProgress('Grouping & triangulating', done, total, {
+                step: gSteps, steps: gSteps,
+                detail: gMethodLabel + ' · ' + reused3d.toLocaleString() + ' existing solutions kept',
+            });
         },
     });
 
@@ -568,8 +581,8 @@ async function groupByTrackAndTriangulateAll(selectedTrackIndices, selectedCamer
     // than a surprise.
     var prefMethodT = resolveTriangulationMethod(null);
 
-    showLoading('Grouping & triangulating 0/' + totalFrames + ' frames (' +
-        triangulationMethodLabel(prefMethodT) + ')...');
+    showLoadingProgress('Grouping & triangulating', 0, totalFrames,
+        { detail: triangulationMethodLabel(prefMethodT) });
 
     var totalGrouped = 0;
     var totalTriangulated = 0;
@@ -749,9 +762,10 @@ async function groupByTrackAndTriangulateAll(selectedTrackIndices, selectedCamer
 
     }, {
         onProgress: function (done, total) {
-            showLoading('Triangulating... ' + done + '/' + total + ' frames (' +
-                triangulationMethodLabel(prefMethodT) + '; ' +
-                reused3dT.toLocaleString() + ' existing solutions kept)');
+            showLoadingProgress('Grouping & triangulating', done, total, {
+                detail: triangulationMethodLabel(prefMethodT) + ' · ' +
+                    reused3dT.toLocaleString() + ' existing solutions kept',
+            });
         },
     });
 

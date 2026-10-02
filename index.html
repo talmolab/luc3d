@@ -40,6 +40,13 @@
         <div class="loading-overlay" id="loadingOverlay">
             <div class="spinner" id="loadingSpinner"></div>
             <div id="loadingStatus">Initializing...</div>
+            <div class="loading-eta hidden" id="loadingEta" aria-live="off"></div>
+            <!-- Determinate progress (ui/loading-overlay.js showLoadingProgress) -->
+            <div class="loading-progress hidden" id="loadingProgress" role="progressbar"
+                 aria-labelledby="loadingStatus" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+                <div class="loading-progress-fill" id="loadingProgressFill"></div>
+            </div>
+            <div class="loading-substatus hidden" id="loadingSubstatus"></div>
             <button class="btn" id="loadingDismiss" data-dismiss="true" style="display:none;margin-top:12px;">Dismiss</button>
         </div>
 
