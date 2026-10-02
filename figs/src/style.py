@@ -38,10 +38,14 @@ Usage:
     text_legend(ax, [("DLT", SET2[2]), ("refined", SET2[0])])
     save(fig, 4, "b", "accuracy_vs_cameras")
 
-FONTS. The reference repo's README tells you to `apt install msttcorefonts` to get
-real Arial. Where that is unavailable the list below falls through to Liberation
-Sans, which is metric-compatible with Arial (identical advance widths), so layout
-is unchanged and only the embedded font name differs.
+FONTS. Liberation Sans 2.1.5 is bundled in `src/fonts/` (SIL Open Font License
+1.1, see `src/fonts/LICENSE`) and registered with matplotlib at import, so the
+figures render the same on every machine with nothing installed. It is
+metric-compatible with Arial (identical advance widths), so layout matches the
+reference repo's Arial. It is FIRST in the family list on purpose: if a machine
+happened to have Arial, or had neither and fell through to DejaVu Sans (wider --
+fig1_01_pipeline's stage-pitch lint fails on it), the output would differ from the
+committed composites.
 """
 
 from __future__ import annotations
@@ -51,6 +55,12 @@ from pathlib import Path
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 import seaborn as sns
+from matplotlib import font_manager as _fm
+
+#: Bundled fonts, registered once at import. See FONTS in the module docstring.
+FONT_DIR = Path(__file__).resolve().parent / "fonts"
+for _ttf in sorted(FONT_DIR.glob("*.ttf")):
+    _fm.fontManager.addfont(str(_ttf))
 
 # --------------------------------------------------------------------------
 # palette
@@ -349,8 +359,8 @@ def use(font_size: float = 8.0) -> None:
             "font.size": font_size,
             "font.family": "sans-serif",
             "font.sans-serif": [
-                "Arial",
                 "Liberation Sans",
+                "Arial",
                 "Helvetica",
                 "DejaVu Sans",
             ],
