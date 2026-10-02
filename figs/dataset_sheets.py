@@ -39,8 +39,8 @@ NUMBERS.
     Mouse-Dyad-10M this is the same 9 individuals (4 male, 5 female) as the sex
     correction above. For SLAP-2M no persistent per-animal identity exists in
     `master_sheet.xlsx` (only per-session white/agouti/black mouse counts), so the
-    corpus-wide total cannot be derived here; left as "?" in the sheet -- per Eric,
-    the SLAP-2M total goes in the manuscript main text instead, not the datasheet.
+    corpus-wide total cannot be derived here; the SLAP-2M value, 16, was provided
+    by Eric (2026-10-01).
   * Held Out Views 0: all five calibrated views feed the proofread 3D; SLAP-2M's
     "2" is the two-of-eight views its proofreading never covered.
 
@@ -94,7 +94,7 @@ SLAP2M = {
         ("Camera Views", "8"),
         ("Held Out Views", "2"),
         ("No. Sessions", "74"),
-        ("Total Animals", "?"),
+        ("Total Animals", "16"),
         ("Animals / Session", "1-4"),
         ("Annotated Animals", "1-4"),
     ],
@@ -105,7 +105,7 @@ SLAP2M = {
         ("Data Types", "2D + 3D keypoints, Behavioral Labels"),
         ("3D Poses", "2.81 million"),
         ("2D Poses", "22.49 million"),
-        ("Proofreading", "Manual + Automated"),
+        ("Proofreading", "Manual"),
         ("No. Proofreaders", "2"),
         ("Mice Species", "White, Agouti, Black"),
         ("Mice Sex", "Male, Female"),
