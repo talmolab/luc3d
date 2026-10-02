@@ -179,10 +179,10 @@ Tags must be `vX.Y.Z` or `vX.Y.Z-N` (numeric pre-release), matching sleap-app.
   after. Fixed by sorting `_frameTimes` ascending by timestamp at the end of
   `initialize()`, marked `// LUCID local patch (#115)`. **Re-apply after any
   re-vendor** (grep the marker) and report upstream to sleap-io/mediabunny.
-  Covered by `tests/e2e/mediabunny-bframe-decode-order.mjs` — whose
-  `bframes-test.mp4` was never committed (`*.mp4` is gitignored; only the PNGs
-  are tracked), so run it with `BFRAME_DIR=` pointing at a regenerated
-  video + PNG set (recipe in the test's header).
+  Covered by `tests/e2e/mediabunny-bframe-decode-order.mjs`. Its fixture video
+  is committed through a `.gitignore` exception (`*.mp4` is otherwise ignored)
+  and regenerated — together with its ground-truth PNGs, never separately — by
+  `tests/fixtures/bframes-test/make_fixture.sh`.
   **LOCAL PATCH (luc3d frame-index):** `lib/sleap-io/chunk-X76PRJK6.js`
   `MediaBunnyVideoBackend.initialize()` walks `EncodedPacketSink.packets()` only
   to collect each packet's timestamp, but without options that walk **reads

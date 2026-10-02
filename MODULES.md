@@ -6235,8 +6235,8 @@ CLAUDE.md's sleap-io.js "LOCAL PATCH (issue #115, decode-order)" entry.
 Verified with a real ffmpeg-generated B-frame video (`-bf 3 -g 10`,
 `tests/fixtures/bframes-test/`): 18 of 30 frames (60%) decoded wrong before
 the patch, 0 after. Covered by `tests/e2e/mediabunny-bframe-decode-order.mjs`
-(its `.mp4` is gitignored and not in the repo — run with `BFRAME_DIR=`; see the
-test header).
+(fixture video + PNGs regenerated together by
+`tests/fixtures/bframes-test/make_fixture.sh`).
 
 **The frame index is built metadata-only (`luc3d frame-index` patch).** The
 same `initialize()` walk used `packets()` with no options, which reads every

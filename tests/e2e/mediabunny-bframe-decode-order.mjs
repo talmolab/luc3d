@@ -28,8 +28,8 @@
  * This test builds a REAL H.264 video with actual B-frames (ffmpeg, `-bf 3`)
  * where each frame has a burned-in, human-readable frame number, and
  * independently extracts ground-truth PNGs for each display-order frame via
- * `ffmpeg -vsync 0` (both fixtures are checked in — see
- * tests/fixtures/bframes-test/). It decodes every frame through the REAL
+ * `ffmpeg -vsync 0` (both are checked in and regenerated together by
+ * tests/fixtures/bframes-test/make_fixture.sh). It decodes every frame through the REAL
  * MediaBunnyVideoBackend (via OnDemandVideoDecoder) and asserts each
  * decoded frame's pixel content matches its ground-truth PNG — proving
  * decode ORDER correctness, not just that mediabunny is "active."
@@ -46,15 +46,15 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
 const PORT = Number(process.env.PORT || 8102);
 const NUM_FRAMES = 30;
-// BFRAME_DIR=<repo-relative dir>: run against another bframes-test.mp4 +
-// frame_NNN.png set. The checked-in default has only the PNGs — `*.mp4` is
-// gitignored, so the video never reached the repo; regenerate a matching pair
-// (any `-bf 3 -g 10` testsrc with a centred drawtext frame number, PNGs from
-// `ffmpeg -vsync 0`) into a gitignored folder such as verify/ and point here.
+// The fixture (video + ground-truth PNGs) is generated TOGETHER by
+// tests/fixtures/bframes-test/make_fixture.sh; `bframes-test.mp4` is committed
+// via a .gitignore exception (*.mp4 is otherwise ignored — for a while only the
+// PNGs were in the repo, so this test could not run on a fresh checkout).
+// BFRAME_DIR=<repo-relative dir> runs it against another video + PNG set.
 const FIX = (process.env.BFRAME_DIR || 'tests/fixtures/bframes-test').replace(/\/+$/, '');
 if (!fs.existsSync(path.join(repoRoot, FIX, 'bframes-test.mp4'))) {
-    console.error(`  ✗ ${FIX}/bframes-test.mp4 is missing (*.mp4 is gitignored) — set BFRAME_DIR to a ` +
-        'regenerated video + PNG set; see the note at the top of this file.');
+    console.error(`  ✗ ${FIX}/bframes-test.mp4 is missing — regenerate it with ` +
+        'tests/fixtures/bframes-test/make_fixture.sh (it rewrites the PNGs too).');
     process.exit(1);
 }
 let fails = 0;
