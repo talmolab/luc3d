@@ -1426,6 +1426,66 @@ body {
   min-height: 14px;
 }
 
+/* Align Views to References modal (#226). The table grows with the camera
+   count rather than scrolling inside the dialog (no scroll-within-scroll). */
+.align-views-modal {
+  max-width: 560px;
+}
+
+.align-views-modal kbd {
+  font-family: inherit;
+  font-size: 11px;
+  padding: 0 4px;
+  border: 1px solid var(--border-color);
+  border-radius: 3px;
+  background: var(--bg-tertiary);
+}
+
+.align-views-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.align-views-table th {
+  text-align: left;
+  font-weight: 500;
+  color: var(--text-muted);
+  padding: 0 8px 6px 0;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.align-views-table td {
+  padding: 4px 8px 4px 0;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.align-views-table .align-views-num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.align-views-result {
+  font-variant-numeric: tabular-nums;
+}
+
+.align-views-result.is-ref {
+  color: var(--accent, #7c8cf8);
+}
+
+.align-views-result.is-skipped {
+  color: var(--text-muted);
+}
+
+.align-views-all {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 12px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
 /* Endpoint labels under the dual slider, so the track's extent is readable
    without dragging a thumb to find out where it ends. */
 .track-range-bounds {
