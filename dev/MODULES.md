@@ -3939,6 +3939,22 @@ palettes, and per-frame draw routines. Receives `frameGroup` and
   `drawFrameOverlays` calls it right after the canvas clear (behind the live
   skeletons) when `options.trailLength > 0`. Length is chosen from the **Tracks ▸
   Node Trails** submenu (Off/10/50/100/250/500 → `state.trailLength`).
+  **Performance (it runs per view, per playback redraw):**
+  - `trailWindowFrames(frameGroups, frameIdx, trailLength)` (exported) finds the
+    window by **walking back** from `frameIdx` — ~`trailLength` lookups — instead
+    of scanning and sorting every loaded frame, which on a project held in memory
+    (HardFight: 36,000 frames) cost ~3 ms of every redraw as soon as trails were
+    on and grew further into the video. After `frameGroups.size` steps without
+    filling the window (a sparse project) it falls back to the scan, so it is
+    never worse than before.
+  - Segments are **batched per age step**: every node's newer→older segment at
+    window index k has the same style (alpha / width / historical color of k),
+    so they share one path and one `stroke()` — `numNodes` times fewer strokes.
+    Endpoints are transformed once each. Drawn segments and their styles are
+    identical to the per-segment version (checked on 400 random scenes); the
+    only difference is that overlapping same-age segments of one track no
+    longer double their alpha where they cross.
+  - Measured with `tests/e2e/_bench-playback.mjs` `SCENARIOS=...,trails<N>,...`.
 - Composite: `drawFrameOverlays(ctx, viewName, frameGroup,
   instanceGroups, session, options)` — the main per-view draw entrypoint.
   `options.trackingExcluded` (set by `rendering.js` from `isCameraTracked`)
