@@ -811,6 +811,9 @@ drifts upward (e.g., 4 → 11 on the test fixture).
   `yieldToPaint`.
 - `../ui/rendering.js` — `drawAllOverlays`.
 - `../ui/info-panel.js` — `updateInfoPanel`.
+- `../ui/color-by.js` — `setColorByIdentity`: a successful Track All / Track
+  Frame Range that assigned identities switches Color from Tracks to ID
+  (#242) and says so in the status line. Track Frame (one frame) does not.
 
 **Imported by.** `ui/ui-wiring.js`.
 
@@ -1821,6 +1824,31 @@ Calibration and `envSkeleton` remain per-session.
 
 **User-facing features.** Backs literally everything — session switching,
 playback state, dirty tracking, multi-session UI.
+
+---
+
+### ui/color-by.js
+
+**Purpose.** The toolbar's **Color: Tracks / ID** setting
+(`state.colorByIdentity`), settable from anywhere. The toggle's DOM and
+redraws live in `ui/ui-wiring.js`, but `pose/tracker.js` also flips it — after
+Track All the user wants to see IDs (#242) — and the tracker cannot import
+ui-wiring (import loop; its Node tests stub UI modules). Dependency-free.
+
+**Key exports.** `setColorByIdentity(state, on)` -> `true` if it changed
+anything (the handler runs only on a change); `onColorByChange(fn)` —
+registers the single change handler (ui-wiring: button highlight +
+`drawAllOverlays` + `update3DViewport`). With no handler (Node tests) it only
+sets the state.
+
+**Imports from project modules.** None.
+
+**Imported by.** `ui/ui-wiring.js` (registers the handler; the Tracks / ID
+buttons route through `setColorByIdentity`), `pose/tracker.js`.
+
+**Coverage.** `tests/test-tracker-gui.mjs` (Track All flips it once, a second
+run is a no-op, Track Frame leaves it) and `tests/e2e/track-all-switches-to-id.mjs`
+(real toolbar: button highlight, 3D recolor, switching back).
 
 ---
 
@@ -5181,11 +5209,13 @@ stopping at the last frame; the step transport buttons/keys stop it first.
 - Color-by toggle: the "Color by" Tracks/ID control lives in the top
   toolbar (buttons `colorByTracks` / `colorById`, next to the Errors
   checkbox), not the Tracks menu. `updateColorByToggle()` reflects
-  `state.colorByIdentity` on the buttons; each button's click sets the
-  state, re-renders the 2D overlays via `drawAllOverlays` AND the 3D viewer
-  via `update3DViewport` (whose `getGroupColor` closure reads
-  `state.colorByIdentity` live, so instances recolor instantly), and updates
-  the active class.
+  `state.colorByIdentity` on the buttons. Every change of the setting goes
+  through `setColorByIdentity` (`ui/color-by.js`) and lands in the one
+  handler registered here via `onColorByChange`: update the active class,
+  re-render the 2D overlays via `drawAllOverlays` AND the 3D viewer via
+  `update3DViewport` (whose `getGroupColor` closure reads
+  `state.colorByIdentity` live, so instances recolor instantly). The buttons
+  use it, and so does the tracker after Track All (#242).
 - Node Style: the four per-section Node Style button groups
   (`visUserNodeStyle` / `visPredNodeStyle` / `visReprojNodeStyle` /
   `vis3dNodeStyle`) reuse the `.line-style-btn` click handler (active toggle +
@@ -5396,6 +5426,8 @@ header for the full list. Notable ones: `app-state.js`,
 button's `#tbTrackFrameRange` dropdown item — #212),
 `seekbar-tooltip.js` (`installSeekbarTooltip`, the seekbar's hover tooltip —
 #142),
+`color-by.js` (`onColorByChange`, `setColorByIdentity` — the Color: Tracks /
+ID toggle, also flipped by the tracker after Track All — #242),
 `video-filters.js` (`setSessionRotation`; `clampRotation` still comes in via
 `sessions-panes.js`, which re-exports it).
 
