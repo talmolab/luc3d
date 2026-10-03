@@ -23,7 +23,14 @@ import { updateFrameInfo } from './info-panel.js';
 // Reproj/Error visibility
 // ============================================
 
-export function setReprojErrorVisible(visible) {
+/**
+ * Show / hide the reprojection-error UI (Info Panel section + error columns).
+ * Showing it also ticks the toolbar's Reproj and Errors boxes — unless
+ * `opts.checkBoxes === false`, which the Triangulate All paths pass because
+ * they set the boxes themselves via `showReprojectionsOnly` (#243). Ticking
+ * Errors here first would make every run look like a change (and flicker it).
+ */
+export function setReprojErrorVisible(visible, opts) {
     var display = visible ? '' : 'none';
     var el = document.getElementById('reprojErrorSection');
     if (el) el.style.display = display;
@@ -33,13 +40,42 @@ export function setReprojErrorVisible(visible) {
         cols[i].style.display = display;
     }
     // Check the checkboxes when triangulation data is available
-    if (visible) {
+    if (visible && !(opts && opts.checkBoxes === false)) {
         var reproj = document.getElementById('visReprojections');
         if (reproj) reproj.checked = true;
         var errors = document.getElementById('visErrors');
         if (errors) errors.checked = true;
     }
 }
+
+/**
+ * After Triangulate All (#243): the next job is proofreading the 3D, so show
+ * the reprojections and hide what competes with them — User, Predicted and
+ * Errors off, Reproj on (the toolbar checkboxes). Each change fires the
+ * checkbox's own `change` event, exactly as a click would, so the existing
+ * handler deselects an instance whose type just got hidden and redraws.
+ *
+ * Pair it with `setReprojErrorVisible(true, { checkBoxes: false })` so the
+ * boxes are compared with what the USER had, not with Errors just re-ticked.
+ *
+ * @returns {boolean} whether any checkbox changed (for the status line)
+ */
+export function showReprojectionsOnly() {
+    var want = [['visUser', false], ['visPredicted', false], ['visErrors', false], ['visReprojections', true]];
+    var changed = false;
+    for (var i = 0; i < want.length; i++) {
+        var el = document.getElementById(want[i][0]);
+        if (!el || el.checked === want[i][1]) continue;
+        el.checked = want[i][1];
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+        changed = true;
+    }
+    return changed;
+}
+
+// Suffix for a Triangulate All status line when `showReprojectionsOnly` hid
+// anything, so the user knows where User / Predicted went.
+export var REPROJ_ONLY_NOTE = ' · showing Reproj only (toolbar)';
 
 // ============================================
 // Overlay Drawing

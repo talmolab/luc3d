@@ -1633,7 +1633,8 @@ subtitle is populated for loaded projects, not just freshly triangulated ones.
 - `./pose-data.js` — `mat3x3Multiply`, `FrameGroup`, `Instance`,
   `UnlinkedInstance`, `InstanceGroup`.
 - `../ui/app-state.js` — `state`, `timeline`, `viewport3d`.
-- `../ui/rendering.js` — `setReprojErrorVisible`, `drawAllOverlays`.
+- `../ui/rendering.js` — `setReprojErrorVisible`, `showReprojectionsOnly`,
+  `REPROJ_ONLY_NOTE` (Triangulate All ends Reproj-only — #243), `drawAllOverlays`.
 - `../ui/info-panel.js` — `updateTriangulationBadge`.
 - `../ui/settings.js` — `isCameraTracked`, `getTrackingThreshold`,
   `getDefaultTriangulationMethod` (the fallback in `resolveTriangulationMethod`).
@@ -2271,7 +2272,9 @@ SLP all-sessions, JSON labels, points3d H5, reproj H5).
   `triangulationMethodLabel` (the last four for the adopt-don't-downgrade rule).
 - `./viewport3d.js` — `Viewport3D` (Export 3D Video modal).
 - `./overlays.js` — `getTrackColor`, `getGroupColor` (Export 3D Video modal).
-- `./rendering.js` — `drawAllOverlays`, `setReprojErrorVisible`.
+- `./rendering.js` — `drawAllOverlays`, `setReprojErrorVisible`,
+  `showReprojectionsOnly`, `REPROJ_ONLY_NOTE` (both group-and-triangulate-all
+  paths end Reproj-only — #243).
 - `./info-panel.js` — `updateInfoPanel`.
 - `../import-export/save-load.js` — `showLoading`, `hideLoading`,
   `setStatus`.
@@ -3993,8 +3996,18 @@ labels, occluded/null markers.
 data sources. Plus visibility-toggle helpers and frame counter updates.
 
 **Key exports.**
-- `setReprojErrorVisible(visible)` — show/hide the reproj-error info
-  column.
+- `setReprojErrorVisible(visible, opts?)` — show/hide the reproj-error info
+  column. Showing it ticks the Reproj and Errors boxes unless
+  `opts.checkBoxes === false`.
+- `showReprojectionsOnly()` -> `boolean` — after Triangulate All (#243): User,
+  Predicted, Errors off, Reproj on, each changed box firing its own `change`
+  event (so the deselect-hidden-instance handler and redraw run as for a
+  click); returns whether anything changed. `REPROJ_ONLY_NOTE` is the status
+  suffix the callers append when it did. The four Triangulate All endings
+  (`triangulateAllFrames` windowed + in-memory, `groupByIdentityAndTriangulateAll`,
+  `groupByTrackAndTriangulateAll`) call `setReprojErrorVisible(true, {checkBoxes:
+  false})` then this, so a run is compared with the USER's boxes, not with
+  Errors just re-ticked.
 - `getVisibilitySettings()` — reads per-view checkbox state from the DOM.
   Includes **`showUnlinkedBadge`** (the Visibility panel's *Unlinked Instances ▸
   Show "?" badge* toggle, `#visUnlinkedBadge`), passed straight through to

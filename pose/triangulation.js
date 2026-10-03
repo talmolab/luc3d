@@ -10,7 +10,7 @@ import { mat3x3Multiply, Camera, FrameGroup, Instance, UnlinkedInstance, Instanc
          setPoint3d, clearPoint3d, someValidPoint3d, countPoints3d } from './pose-data.js';
 import { state, timeline, viewport3d } from '../ui/app-state.js';
 // Pass 3i-2: triangulation orchestration moved out of app.js
-import { setReprojErrorVisible, drawAllOverlays } from '../ui/rendering.js';
+import { setReprojErrorVisible, showReprojectionsOnly, REPROJ_ONLY_NOTE, drawAllOverlays } from '../ui/rendering.js';
 import { updateTriangulationBadge } from '../ui/info-panel.js';
 import { isCameraTracked, getTrackingThreshold, getDefaultTriangulationMethod } from '../ui/settings.js';
 import { markDirty, setStatus, showLoading, hideLoading } from '../import-export/save-load.js';
@@ -2248,7 +2248,8 @@ export async function triangulateAllFrames(method) {
         showLoadingProgress('Triangulating', 0, triLoader.nFrames,
             { detail: triangulationMethodLabel(method) });
         var swept = await sweepTriangulateAllFrames(state.session, cameras, method);
-        setReprojErrorVisible(true);
+        setReprojErrorVisible(true, { checkBoxes: false });
+        var reprojOnly = showReprojectionsOnly();   // #243: proofreading comes next
         drawAllOverlays(state.currentFrame);
         update3DViewport(state.currentFrame);
         if (viewport3d) viewport3d.fitToScene();
@@ -2256,7 +2257,7 @@ export async function triangulateAllFrames(method) {
         var sweptAvg = swept.errN > 0 ? (swept.errSum / swept.errN).toFixed(2) : 'N/A';
         setStatus('Triangulated ' + swept.frames.toLocaleString() + ' frames via ' +
             triangulationMethodLabel(method) + ' (' + swept.groups.toLocaleString() +
-            ' groups, avg error: ' + sweptAvg + 'px)', 'success');
+            ' groups, avg error: ' + sweptAvg + 'px)' + (reprojOnly ? REPROJ_ONLY_NOTE : ''), 'success');
         console.log('[triangulate-all] windowed sweep done:', swept.frames, 'frames,',
             swept.groups, 'groups,', swept.skipped, 'groups skipped (<2 usable views), avg error:', sweptAvg);
         if (timeline) timeline.refreshTracks(state.session, { cap: true });
@@ -2380,8 +2381,9 @@ export async function triangulateAllFrames(method) {
     showLoadingProgress('Triangulating', frameIndices.length, frameIndices.length,
         stageOpts(methodLabel + ' · ' + totalGroups.toLocaleString() + ' groups'));
 
-    // Show reproj/error UI elements
-    setReprojErrorVisible(true);
+    // Show reproj/error UI elements, then only the reprojections (#243).
+    setReprojErrorVisible(true, { checkBoxes: false });
+    var reprojOnly = showReprojectionsOnly();
 
     // Update display for current frame
     drawAllOverlays(state.currentFrame);
@@ -2393,7 +2395,7 @@ export async function triangulateAllFrames(method) {
         ? (totalErrors.reduce(function (a, b) { return a + b; }, 0) / totalErrors.length).toFixed(2)
         : 'N/A';
     setStatus('Triangulated ' + totalTriangulated + ' frames via ' + triangulationMethodLabel(method) +
-        ' (' + totalGroups + ' groups, avg error: ' + avgError + 'px)', 'success');
+        ' (' + totalGroups + ' groups, avg error: ' + avgError + 'px)' + (reprojOnly ? REPROJ_ONLY_NOTE : ''), 'success');
     console.log('[triangulate-all] Done:', totalTriangulated, 'frames,', totalGroups, 'groups, avg error:', avgError);
 
     // Update timeline: mark frames with grouped UserInstances, refresh track bars
