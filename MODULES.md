@@ -806,7 +806,9 @@ drifts upward (e.g., 4 → 11 on the test fixture).
   `getTrackingThreshold`, `isCameraTracked` (both `trackAll`/`trackCurrentFrame`
   drop cameras where `isCameraTracked(name)` is false before tracking; abort with
   a warning if fewer than 2 views remain included).
-- `../import-export/save-load.js` — `setStatus`, `showLoading`, `hideLoading`.
+- `../import-export/save-load.js` — `setStatus`, `hideLoading`.
+- `../ui/loading-overlay.js` — `showLoadingProgress`, `createProgressPacer`,
+  `yieldToPaint`.
 - `../ui/rendering.js` — `drawAllOverlays`.
 - `../ui/info-panel.js` — `updateInfoPanel`.
 
@@ -823,11 +825,16 @@ synchronous loop over `frameIndices` (used by single-frame tracking + the
 bench/test harnesses, which read its return value). Its per-frame body is factored
 into `createTrackerRun`/`stepTrackerFrame`, reused by the async sibling
 `runCrossViewTrackerProgress(…, onProgress)`: identical association but it yields
-to the event loop ~every 5% of frames (≈20 updates total) and awaits
-`onProgress(done, total)`, so **Track All** repaints a "done/total (pct%)" counter
-in the loading overlay instead of freezing at 0/N. Updates are deliberately
-infrequent — each yield forces a browser repaint, expensive on a large run — so
-the counter steps rather than streams, keeping Track All fast. `buildTrackerDetections` wraps each linked/unlinked instance as a `Detection`;
+to the browser on a CLOCK (`createProgressPacer` from `ui/loading-overlay.js`,
+~every 250 ms, each yield waiting for one paint) and awaits `onProgress(done,
+total)` just before each yield and once at the end, so **Track All** shows a
+live "Assigning identities: done/total frames (pct%)…" line plus a determinate
+bar (`showLoadingProgress`). It used to step every 5% of frames, which on the
+36k-frame HardFight set froze the overlay ~1.7 s at a time. A non-windowed lazy
+session runs a labelled "Loading frames" stage first (Step 1 of 2) through
+`loadAllLazyFrames`' `(msg, done, total)` callback; the windowed path
+(`sweepTrackAllFrames`) hands `onProgress` to `sweepLazyFrameWindows`, which owns
+the pacing. `buildTrackerDetections` wraps each linked/unlinked instance as a `Detection`;
 `commitTrackedFrame` persists, per frame, one `InstanceGroup` per live target
 (with `identityId` + `points3d`), maps each target's stable trackId to a session
 `Identity`, writes `setFrameIdentity`, and promotes unlinked members into the
@@ -1070,6 +1077,28 @@ math, fundamental-matrix / epipolar utilities, Hungarian assignment. Also
 hosts the lazy-H5 frame loader and the user-facing triangulation orchestration
 (single-frame, all-frames, multi-frame range).
 
+**The pure math now lives in `pose/triangulation-core.js`** (DLT,
+refinement, reprojection, errors, `triangulateAndReproject`, `invert3x3`) so the
+Triangulate All worker pool can load it; this module imports it and
+**re-exports every public name**, so all existing imports keep working. It
+installs the core's two settings hooks (`setTriangulationSettingsHooks`) with
+`isCameraTracked` / `getTrackingThreshold`.
+
+**Performance (profiled on HardFight_1kModels, outputs bit-identical — see
+`tests/test-triangulation-kernels.mjs` and the `_bench-progress-overlay.mjs
+DIGEST_OPS=1` digests).** `cameraCenter` and `backProjectToRay(s)` derive a P's
+null vector and pseudo-inverse from P alone; Track All asked for them per
+detection per frame (~6.8 s of 17 s). They are now memoized per P array
+(`_pGeometry` / `_pseudoInverse`, a WeakMap) and VALIDATED on every hit against
+a snapshot of P's 12 entries, so an in-place-mutated P recomputes; returned
+centres are copies. Triangulate All's per-group step is split into
+`_prepareGroupStep` (camera fix-ups, >=2-usable-views gate, `usedCameras`) /
+solve / `_applyGroupStep`, so `triangulateAllFrames` (eager and the windowed
+`sweepTriangulateAllFrames`) submit solves to `pose/triangulation-pool.js` and
+apply results in submission order; `_triangulateGroupStep` (prepare + inline
+solve + apply) remains for Triangulate Range. Measured: Track All 16.9 s ->
+7.4 s, Refined Triangulate All 78.5 s -> 8.8 s, DLT 8.5 s -> 2.3 s.
+
 **3D points are flat (luc3d #189).** The array-level entry points speak the
 `Float64Array(3N)` `points3d` representation (see `pose/pose-data.js`):
 `triangulatePoints` and `triangulatePointsBA` **return** one, and
@@ -1091,7 +1120,15 @@ this module and used by EVERY operation that must touch every frame. Hydrate a
 2,000-frame window (`batchLoadLazyFrames`) → run the callback → drop the window's
 non-user `frameGroups` (pinning the on-screen frame and any user-edited frame) →
 `releaseWindow` → force a real collection every 5 windows. `opts.start`/`opts.end`
-restrict it to a range. It replaced three byte-identical copies
+restrict it to a range. **Progress/yielding is clock-paced**
+(`createProgressPacer`, `ui/loading-overlay.js`): `opts.onProgress(done, total)`
+is awaited just before each ~250 ms yield and once at the end, where `done` is the
+sweep POSITION (frames passed, data or not), so it rises monotonically to `total`
+and can drive the overlay bar directly; `opts.onLoadProgress(done, total)` reports
+the non-windowed branch's up-front `loadAllLazyFrames` stage (`opts.onStatus(msg)`
+is the text-only fallback). It used to yield every 100 processed frames (`opts.
+yieldEvery`, removed) and report a processed count that jumped at window ends.
+It replaced three byte-identical copies
 (`sweepTrackAllFrames` in `pose/tracker.js`, the private `sweepTriangulationFrames`
 in `ui/export-modals.js`, and the windowing inlined in `sweepTriangulateAllFrames`);
 those now delegate to it, and their local `frameGroupHasUserInstances`/
@@ -1599,6 +1636,11 @@ subtitle is populated for loaded projects, not just freshly triangulated ones.
   `getDefaultTriangulationMethod` (the fallback in `resolveTriangulationMethod`).
 - `../import-export/save-load.js` — `markDirty`, `setStatus`,
   `showLoading`, `hideLoading`.
+- `../ui/loading-overlay.js` — `showLoadingProgress`, `createProgressPacer`,
+  `yieldToPaint` (Triangulate All's eager loop and `sweepLazyFrameWindows`).
+- `./triangulation-core.js` — the pure math (re-exported) and
+  `setTriangulationSettingsHooks`.
+- `./triangulation-pool.js` — `createGroupSolver` (Triangulate All's parallel solve).
 - `./initialization.js` — `update3DViewport` (circular).
 
 **Imported by.** `pose/tracker.js`, `pose/initialization.js`,
@@ -1610,6 +1652,110 @@ subtitle is populated for loaded projects, not just freshly triangulated ones.
 **User-facing features.** "Triangulate" key (`T`), Edit menu Triangulate
 Frame / All / Multi-Frame, reprojection-error visualization, lazy SLP
 loading, "Triangulation needed" badge.
+
+---
+
+### pose/triangulation-core.js
+
+**Purpose.** The pure triangulation math, split out of `pose/triangulation.js`
+so a Web Worker can load it: matrix helpers (`matMul`, `matTranspose`,
+`jacobiEigen`, `solveSmallestEigenvector4x4`, `svd3x4`), DLT
+(`triangulatePointDLT`, `triangulatePoints`), the "Refined" point stage
+(`triangulatePointBA`, `triangulatePointsBA`, `BA_ROBUST_SCALE_PX`),
+reprojection (`reprojectPoint(s)`, `reprojectPointCamera(s)`), errors
+(`computeReprojectionError(s)`, `computeMeanReprojectionError`), `invert3x3`,
+and the full per-group pipeline `triangulateAndReproject`.
+
+**Key exports.** All of the above, plus `setTriangulationSettingsHooks({
+isCameraTracked, getTrackingThreshold })` — the only app state the pipeline
+reads (unset = every camera included, no threshold; the main thread installs
+them, a worker gets resolved values via `options.includedCameras` /
+`options.reprojErrorThreshold`) — and `__triangulationKernelsForTest`.
+
+**Allocation-free hot paths, bit-identical by construction.**
+- DLT: `dltHomogeneousFlat` + `smallestEigvec4Flat` perform the exact
+  operations of row arrays -> `matTranspose` -> `matMul` -> `jacobiEigen` ->
+  smallest-|λ| pick (same k-ordered sums from 0, same Givens sequence, angles,
+  row-then-column updates, skip/convergence tests) on preallocated typed arrays.
+  The generic path allocated four arrays per rotation.
+- Refinement: `triangulatePointBA` projects through
+  `_projectAndJacobian(Camera)Into`, which write into one scratch object with
+  the same expressions as `projectAndJacobian`, `distortJacobian` and
+  `Camera.distortPoint` (including their different r²·r² vs r⁴ association). It
+  was ~11.6 s of GC in an 80 s Refined run.
+Pinned by `tests/test-triangulation-kernels.mjs` (thousands of random systems,
+`Object.is` per value). **Any edit to these kernels must keep operation order,**
+or results drift in the last bits and tracker decisions can flip.
+
+**Imports from project modules.** `./pose-data.js` only (point3d helpers).
+
+**Imported by.** `pose/triangulation.js` (re-exports), `pose/triangulation-pool.js`,
+`pose/triangulation-worker.js`. Loaded before `pose/triangulation.js` by
+`tests/run-node.js`.
+
+---
+
+### pose/triangulation-pool.js
+
+**Purpose.** Run `triangulateAndReproject` for many instance groups on a pool
+of Web Workers — the Triangulate All paths' parallel solve. Every group is
+independent (cameras fixed), but the solve ran on one main thread (~1 of 12
+cores busy).
+
+**Key exports.** `createGroupSolver(cameras, { method, triangulateOnly,
+expectedGroups })` -> `{ submit(group, groupCameras, cb), mark(cb), throttle(),
+finish(), cancel(), parallel, workers }`; `MIN_GROUPS_FOR_WORKERS` (2000).
+
+**Contract.**
+- **Callbacks run in submission order** (jobs and `mark`s interleaved as
+  submitted), so every side effect on app state happens in the old inline
+  loop's order. `throttle()` bounds in-flight work (~2 batches per worker).
+- A job's inputs — each camera's `_xy` copy and nulled nodes, plus the two
+  settings resolved ONCE per run (the overlay blocks the UI) — are captured at
+  `submit`, so a lazy window may be released while its solves are in flight.
+- Cameras are shipped with the main thread's cached `R` / `Rt` / `P`, so the
+  worker never re-derives a matrix. Results are bit-identical to inline.
+- Inline fallback (synchronous at `submit`, same callbacks): no `Worker`, small
+  runs (`expectedGroups` < 2000, where start-up dominates), or
+  `window.LUCID_TRIANGULATION_WORKERS = 0`. Setting it to N > 0 forces an
+  N-worker pool regardless of size (tests). A batch a worker fails on — or a
+  worker that dies — is re-solved inline from the captured job.
+- Pool size `min(hardwareConcurrency - 1, 16)`; workers persist between runs
+  and are terminated after 30 s idle. One solver owns the pool at a time (a
+  concurrent second run solves inline). Every call site passes `method:
+  method` explicitly (`tests/test-triangulation-method-propagation.mjs`).
+
+**Imports from project modules.** `./triangulation-core.js`
+(`triangulateAndReproject`), `./pose-data.js` (`Instance`), `../ui/settings.js`
+(`isCameraTracked`, `getTrackingThreshold` — `typeof`-guarded for the flat test
+sandbox).
+
+**Imported by.** `pose/triangulation.js` (`triangulateAllFrames`,
+`sweepTriangulateAllFrames`), `ui/export-modals.js`
+(`groupByIdentityAndTriangulateAll`).
+
+**Coverage.** `tests/e2e/triangulate-all-worker-pool.mjs` — every Triangulate
+All route (eager, windowed with windows released mid-flight, group-by-identity
+DLT) run inline and on a forced 4-worker pool must hash identically, with a
+reprojection threshold and an excluded camera in effect (and a control proving
+those settings change the result).
+
+---
+
+### pose/triangulation-worker.js
+
+**Purpose.** Module worker for `pose/triangulation-pool.js`: rebuilds each job's
+group (real `Instance`s from flat `_xy` + nulled nodes) and cameras (with the
+main thread's cached matrices installed) and runs the same
+`triangulateAndReproject` from `./triangulation-core.js`. Messages: in
+`{type:'cameras'}`, `{type:'solve', id, jobs}`; out `{type:'solved', id,
+results}` (points3d buffers transferred) or `{type:'error', id, message}`.
+
+**Imports from project modules.** `./pose-data.js` (`Camera`, `Instance`),
+`./triangulation-core.js` (`triangulateAndReproject`).
+
+**Imported by.** Spawned by `pose/triangulation-pool.js` via
+`new Worker(new URL('pose/triangulation-worker.js', document.baseURI), {type:'module'})`.
 
 ---
 
@@ -2042,6 +2188,12 @@ SLP all-sessions, JSON labels, points3d H5, reproj H5).
 - `./info-panel.js` — `updateInfoPanel`.
 - `../import-export/save-load.js` — `showLoading`, `hideLoading`,
   `setStatus`.
+- `./loading-overlay.js` — `showLoadingProgress`, `yieldToPaint` (the
+  "Grouping & triangulating" bar in `groupByIdentityAndTriangulateAll` — which
+  Triangulate All ▸ DLT routes to — and `groupByTrackAndTriangulateAll`).
+- `../pose/triangulation-pool.js` — `createGroupSolver`
+  (`groupByIdentityAndTriangulateAll` solves its non-adopted groups on the
+  worker pool; adoption and regrouping stay on the main thread).
 - `../import-export/file-io.js` — `exportSlpClientSide`,
   `exportSlpMultiSession`, `findSkeletonMismatch`, `buildPoints3dH5`,
   `buildReprojH5`.
@@ -2704,6 +2856,69 @@ after all tasks complete; stays open on error.
   text-overflow: ellipsis;` with `.lpm-group-row { min-width: 0; overflow:
   hidden; }` to allow label shrinkage and `.lpm-icon { flex: 0 0 auto; }`
   to keep the status icon at fixed width.
+
+---
+
+### ui/loading-overlay.js
+
+**Purpose.** Owns the full-window loading overlay (`#loadingOverlay`) and its
+determinate progress bar — the ONE progress component shared by Track All,
+Triangulate All (all three routes), Group by Identity/Track, and anything else
+that runs a chunked main-thread loop behind the overlay.
+
+**Key exports.**
+- `showLoading(msg)` — indeterminate form (spinner + text); hides the bar.
+- `showLoadingProgress(label, done, total, { step, steps, detail, unit })` —
+  writes the standard `"<label>: done/total frames (pct%)…"` line and drives the
+  bar (`#loadingProgress` / `#loadingProgressFill`, `role="progressbar"`). The
+  line under the bar (`#loadingSubstatus`) carries `Step k of n` (only when
+  `steps > 1`) and `detail` (method, group counts), so the main line keeps one
+  format everywhere. A new stage (bar hidden, or the fraction moving backwards)
+  snaps instead of animating. `pct` is floored, so 100% means done.
+- **Time remaining** — every `showLoadingProgress` call also updates a second
+  text line under the main one (`#loadingEta`): "Estimating time remaining…"
+  until the stage has run 1.5 s and covered 1%, then "About 1 min 10 s
+  remaining" (rounded to 5 s under 10 min, to the minute above; "… in this step"
+  when `steps > 1`), cleared at 100%. The rate is measured over the last 10 s of
+  the CURRENT stage (a new label/step/total, or progress moving backwards,
+  starts a fresh estimate), so it follows work that speeds up or slows down
+  rather than lagging like a whole-run average. `estimateRemainingMs(samples,
+  done, total)` and `formatRemaining(ms)` are exported for tests, as is the
+  clock hook `__setLoadingOverlayClock(fn)`. The raw estimate is exposed as
+  `#loadingEta[data-ms]`, which the bench reads to score accuracy.
+- `hideLoading()` — hides the overlay and resets the bar.
+- `createProgressPacer(intervalMs = PROGRESS_INTERVAL_MS)` → `{ due(), yield() }`.
+  `due()` is true at most once per interval (a `performance.now()` check, cheap
+  enough to call every iteration); `yield()` = `yieldToPaint()`, after which the
+  interval restarts (so it measures WORK time between yields).
+- `yieldToPaint()` — resolves after the browser has painted: rAF then a task
+  queued after it (a bare `setTimeout(0)` can fire before the next display frame,
+  leaving the overlay unpainted for another whole chunk), with a 100 ms timer
+  fallback for throttled rAF. A hidden tab yields through a `MessageChannel`
+  instead — no paint needed, and unlike chained timers it is not throttled to
+  1/s in background tabs.
+- `PROGRESS_INTERVAL_MS` (250).
+
+**Imports from project modules.** None (safe under the Node test stubs: every
+DOM access is null-guarded, and with no `requestAnimationFrame` it yields via
+`MessageChannel`).
+
+**Imported by.** `import-export/save-load.js` (re-exports `showLoading`/
+`hideLoading`), `pose/tracker.js`, `pose/triangulation.js`, `ui/export-modals.js`,
+`loading/session-loader.js` (Load Single Session Folder's three-step progress).
+
+**Notes / caveats.**
+- **Why the bar is smooth with only ~4 updates/s:** the fill is scaled with
+  `transform: scaleX()` under a 250 ms linear CSS transition (`styles.css`
+  `.loading-progress-fill`, matched to `PROGRESS_INTERVAL_MS`). Transform
+  transitions run on the compositor thread, so the bar keeps gliding while the
+  main thread computes the next chunk — the same reason the spinner keeps
+  spinning. Animate `width` instead and it would freeze between updates.
+- Cost: each yield waits ~one display frame plus the overlay repaint, so the
+  overhead is ≈ frame-time / 250 ms. `tests/e2e/_bench-progress-overlay.mjs`
+  measures run time, update cadence and paints/s on a real project.
+- Not to be confused with `ui/loading-progress-modal.js`, the per-camera,
+  multi-row panel used for video loading.
 
 ---
 
@@ -5452,7 +5667,9 @@ filesystem enumeration, decoder rebuild.
   `handleLoadSessionFolder`, `handleEmptySession`,
   `handleLoadSessionFolderSingleSlp`,
   `handleLoadSessionFolderPerCamera`, `handleLoadProjectSlpLazy`,
-  `attachVideosForLazyReopen`.
+  `attachVideosForLazyReopen`. Also `addColumnarFramesToSession` (the
+  per-camera load's Instance builder from the SLP worker's columnar result;
+  exported for `tests/e2e/slp-import-fast-compound.mjs`).
   `handleLoadSessionFolderSingleSlp()` loads a folder holding a project `.slp`
   plus `videos/` + calibration. It reads the SLP with the **typed** reader
   (`parseSlpViaSleapIO`, raw `parseSlpH5` only as fallback) and restores the
@@ -5526,6 +5743,35 @@ entry for the loaded view (its dummy-camera loop skips already-assigned videos)
 and re-create other sessions' videos as views here. A session with a view but no
 matching `session.cameras` entry made the timeline draw no rows (it builds rows
 from `session.cameras`), so instances added there never appeared on the timeline.
+
+**Load progress.** `handleLoadSessionFolderPerCamera` drives the shared overlay
+bar (`ui/loading-overlay.js`) through up to three labelled steps: **1** "Parsing
+annotations: k/N cameras" (eager) or "Opening annotation files" (lazy), counted
+as each camera's worker result / lazy open resolves; **2** "Building session:
+k/N cameras", the main-thread build loop, which yields between cameras on the
+pacer's clock; **3** "Loading videos: k/N videos" (omitted when videos are
+deferred), painted at N/N with "Preparing instances…" before the synchronous
+tail. The video decoders are opened **in parallel**: every camera's
+`decoder.init` is started up front (each promise resolves `{decoder}` or
+`{error}`, never rejects), and the per-camera loop awaits its own camera's
+promise in place of calling `init`, so every side effect (videoFiles, views,
+decoderPool, cameras, totalFrames, fps) still happens in camera order — the same
+pattern as `switchSession`. With the metadata-only frame index (see
+`loading/video.js`), all 8 HardFight decoders finish opening in ~0.46 s; the
+rest of the step (~0.45 s) is the synchronous "Preparing instances" tail.
+Measure with `_bench-progress-overlay.mjs PROFILE_VIDEO=1`. Measured on
+HardFight_1kModels: ~0.35 s / ~0.5 s / ~0.9 s of a ~1.8 s load (it was 72 s
+before the worker's fast compound reads and columnar transfer — see
+`loading/slp-import-worker.js`). Step 2 builds each camera's Instances straight
+from the worker's columnar result via the exported
+**`addColumnarFramesToSession(session, camName, columnar, trackRemap)`** —
+the same track remap / `resolveImportTrackIdx` / `score || 1.0` / occlusion as
+the nested-`frames` loop it replaced (kept for results without `columnar`), with
+each Instance given its own `Float64Array` `slice` (not a `subarray` view, which
+would pin the whole camera buffer and make any structured clone of the instance
+copy all of it). A digest of the loaded session (every frame, camera,
+instance, coordinate, occlusion bit, track, type, score) is identical to the
+pre-change loader's on HardFight (`_bench-progress-overlay.mjs DIGEST=1`).
 
 **Per-camera `.slp` selection.** `handleLoadSessionFolderPerCamera` loads only
 **one** `.slp` per camera directory — the highest `_vN` version (first-wins on a
@@ -5655,6 +5901,8 @@ blank until the user manually re-ran Triangulate All. Covered by
   `../ui/info-panel.js` (`updateInfoPanel`),
   `../import-export/skeleton-json.js` (`parseSkeletonJSON`),
   `../import-export/slp-import.js`, `../ui/loading-progress-modal.js`,
+  `../ui/loading-overlay.js` (`showLoadingProgress`, `createProgressPacer`,
+  `yieldToPaint` — the per-camera folder load's step progress),
   `../import-export/import-track-resolve.js`,
   `../pose/initialization.js`, `../ui/sessions-panes.js`, `../ui/ui-wiring.js`,
   `../import-export/visibility-metadata.js` (`readVisibilityMetadata`, for the
@@ -5917,7 +6165,11 @@ zero-copy access. Two modes: full eager parse, or lazy
 open-and-stream-frames.
 
 **Message protocol.**
-- IN: `{type: 'parse', file}` — full eager parse.
+- IN: `{type: 'parse', file, slowCompound?, columnar?}` — full eager parse.
+  `slowCompound: true` forces h5wasm's `Dataset.value` for the compound tables
+  (the equivalence test's reference path; also a kill switch). `columnar: true`
+  returns the poses as flat TRANSFERRED typed arrays in `data.columnar` (and an
+  empty `data.frames`) — see below.
 - IN: `{type: 'open', file}` — lazy open, return metadata only.
 - IN: `{type: 'getFrame', frameIdx, requestId}` — read one frame lazily.
 - IN: `{type: 'getFrames', startIdx, endIdx, requestId}` — read range.
@@ -5940,6 +6192,40 @@ HDF5/SLP file (no root datasets)` when the root is empty or unreadable — an SL
 always has root keys (`metadata`, `videos_json`, `frames`, …) — so the failure
 reaches every caller as a rejection. Covered by
 `tests/e2e/percam-slp-choice-and-failure.mjs`.
+
+**Fast compound reads (`readCompoundColumnsFast`).** SLEAP-written `.slp` files
+store `frames` / `instances` / `points` / `pred_points` as HDF5 **compound**
+datasets, and h5wasm's `Dataset.value` turns each row into a JS array of small
+TypedArrays (~7 µs per cell). On the HardFight_1kModels set (8 cameras × 36,000
+frames, ~1.6M `pred_points` rows per camera) that made "Load Single Session
+Folder" take **72 s** — ~58 s in `pred_points` alone, with all 8 workers
+allocating millions of tiny arrays at once (one file parsed alone takes ~4.5 s;
+eight in parallel thrash). `readColumnar`/`readPoints` now first try
+`readCompoundColumnsFast`: one `get_dataset_data` into the WASM heap, then a
+DataView decode of each requested member into a `Float64Array` — a port of
+sleap-io.js's `readCompoundColumnsWorker` (keep the decode rules in step). Per
+file ~0.65 s; the whole load **72 s → ~5 s**. Columns are matched BY NAME (the
+`.value` path mapped by position); anything that is not a plain-numeric 1-D
+compound containing every requested field returns null and falls back to
+`.value`. LUCID's own files (2-D matrix + `field_names`) never take this path.
+`tests/e2e/slp-import-fast-compound.mjs` runs both paths on the same file and
+requires deep-equal results (`Object.is` per number) — on
+`tests/fixtures/slp-compound/sleap-compound-small.slp` (a genuine Python
+sleap-io file, regenerable with `make_fixture.py` there), and with `DATASET=`
+on every real `.slp` in a folder (all 8 HardFight cameras: identical).
+
+**Columnar result (`buildColumnarFrames`).** The default `data.frames` is ~1.6M
+boxed `[x, y]` arrays + ~200k objects per 36k-frame camera, and structured-
+cloning eight of them to the main thread was most of what remained of the
+session-folder load once the reads were fast (~2 s of ~5 s). With
+`columnar: true` the worker instead returns `data.columnar` = `{ numNodes,
+nFrames, nInstances, frameIdx, videoIdx, instOffsets (nFrames+1), trackIdx,
+score, type (1 = predicted), xy (NaN = missing), occluded }` — the same
+frames/instances kept and the same values, as typed arrays whose buffers are
+TRANSFERRED (zero-copy) in the `postMessage`. Only `parseSlpH5(file, null,
+{ columnar: true })` from `handleLoadSessionFolderPerCamera` asks for it; every
+other caller still gets `data.frames`. The equivalence test also requires the
+columnar result to expand back to exactly the nested `frames`.
 
 **Imports from project modules.** None.
 
@@ -6080,7 +6366,18 @@ of #141, not a regression from anything touched later. Fixed by sorting
 CLAUDE.md's sleap-io.js "LOCAL PATCH (issue #115, decode-order)" entry.
 Verified with a real ffmpeg-generated B-frame video (`-bf 3 -g 10`,
 `tests/fixtures/bframes-test/`): 18 of 30 frames (60%) decoded wrong before
-the patch, 0 after. Covered by `tests/e2e/mediabunny-bframe-decode-order.mjs`.
+the patch, 0 after. Covered by `tests/e2e/mediabunny-bframe-decode-order.mjs`
+(fixture video + PNGs regenerated together by
+`tests/fixtures/bframes-test/make_fixture.sh`).
+
+**The frame index is built metadata-only (`luc3d frame-index` patch).** The
+same `initialize()` walk used `packets()` with no options, which reads every
+packet's payload — the whole 250–350 MB video — only to collect timestamps.
+It now passes `{ metadataOnly: true }` (identical packets/order/timestamps,
+pinned by `tests/e2e/mediabunny-frame-index-metadata-only.mjs`), so
+`_initMediabunny` drops from ~120 ms to ~28 ms per HardFight camera, and the
+8-camera session-folder load's parallel decoder opens finish in ~0.46 s instead
+of ~1.04 s. See CLAUDE.md's "LOCAL PATCH (luc3d frame-index)".
 
 **`switchSource()` must refresh `_mbBackend` too (issue #115 regression,
 `eric/seeking-regression`).** `switchSource(source)` — used by the pooled-
@@ -6572,9 +6869,11 @@ exports via the eager path; partially-resident refuses and says so).
   all selected sessions share a skeleton (node count + names, in order),
   otherwise a human-readable mismatch message. Pure (no SleapIO); used both to
   guard `buildSlpLabelsMultiSession` and to pre-flight the per-camera download.
-- SLP parse (raw worker): `parseSlpH5(file, onProgress)` — spawns
-  `slp-import-worker.js`. Kept for SLEAP analysis `.h5` and as the
-  `parseSlpViaSleapIO` fallback.
+- SLP parse (raw worker): `parseSlpH5(file, onProgress, opts)` — spawns
+  `slp-import-worker.js`. Kept for SLEAP analysis `.h5`, as the
+  `parseSlpViaSleapIO` fallback, and for the per-camera session-folder load,
+  which passes `{ columnar: true }` to receive the poses as flat transferred
+  typed arrays (`data.columnar`) instead of nested `data.frames`.
 - SLP parse (sleap-io.js, PR 5.1/5.2): `parseSlpViaSleapIO(file, onProgress)` —
   drives `window.SleapIO.readSlpStreaming(file, {rawSessions:true})` (PR #196)
   and adapts the typed `Labels` into the `slpData` shape via the private
@@ -6909,8 +7208,9 @@ loading-overlay/status-text UI helpers.
   object was discarded by the dedup) serialized as `-1` (trackless), dropping the
   track. (On load, the global slot is re-localized to the session's own track
   index by name — see `slp-import.js` / `remapGlobalTrackToSession`.)
-- Status / overlay: `showLoading(msg)`, `hideLoading`,
-  `setStatus(text, type)`.
+- Status / overlay: `showLoading(msg)`, `hideLoading` (re-exported from
+  `ui/loading-overlay.js`, which owns the overlay; kept here because ~10 modules
+  import them from this one), `setStatus(text, type)`.
 
 **Trackless (null track) preservation.** `_restoreProjectV2` restores grouped
 and unlinked instances with `trackIdx = null` when the saved `trackIdx` is null

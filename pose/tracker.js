@@ -23,7 +23,8 @@ import { InstanceGroup, points3dNodeCount, hasPoint3d, readPoint3d } from './pos
 // Pass 3i-1: tracker UI/integration (was in app.js)
 import { state, interactionManager, timeline, getActiveSession } from '../ui/app-state.js';
 import { getNodeWeightArray, getTrackingThresholds, getTrackingThreshold, isCameraTracked } from '../ui/settings.js';
-import { setStatus, showLoading, hideLoading } from '../import-export/save-load.js';
+import { setStatus, hideLoading } from '../import-export/save-load.js';
+import { showLoadingProgress, createProgressPacer, yieldToPaint } from '../ui/loading-overlay.js';
 import { loadAllLazyFrames, sweepLazyFrameWindows } from './triangulation.js';
 import { drawAllOverlays } from '../ui/rendering.js';
 import { updateInfoPanel } from '../ui/info-panel.js';
@@ -1044,23 +1045,26 @@ export function runCrossViewTracker(session, cameras, frameIndices, propagate, m
 }
 
 // Async sibling of runCrossViewTracker used by Track All: identical association,
-// but yields to the event loop periodically so the loading overlay can repaint a
-// live "done/total" counter — a synchronous loop can never paint mid-run. The
-// awaited `onProgress(done, total)` callback returns a macrotask-yielding promise
-// (setTimeout 0), which is what actually lets the browser render each update.
+// but yields to the browser periodically so the loading overlay can repaint a
+// live "done/total" counter and progress bar — a synchronous loop can never
+// paint mid-run. Yields are paced by the CLOCK (`createProgressPacer`, ~4/s),
+// not by frame count: this used to report every 5% of frames, which on a 36k-
+// frame project froze the overlay for ~1.7 s at a time. Each yield waits for one
+// paint, so ~4/s costs about a frame-time per 250 ms of work.
+// `onProgress(done, total)` (awaited) just updates the overlay; it is called
+// before each yield and once at the end.
 export async function runCrossViewTrackerProgress(session, cameras, frameIndices, propagate, maxTargets, onProgress, identityPool) {
     var run = createTrackerRun(session, cameras, maxTargets, identityPool);
     var total = frameIndices.length;
-    // Repaint ~every 5% of frames (≈20 updates total). Each update yields to the
-    // event loop for a browser repaint, which is expensive on a large run — so we
-    // update the counter infrequently to keep Track All fast, rather than smoothly.
-    var stride = Math.max(1, Math.ceil(total / 20));
+    var pacer = createProgressPacer();
     for (var f = 0; f < total; f++) {
         stepTrackerFrame(session, run, frameIndices[f]);
-        if (onProgress && ((f + 1) % stride === 0 || f === total - 1)) {
+        if (onProgress && pacer.due()) {
             await onProgress(f + 1, total);
+            await pacer.yield();
         }
     }
+    if (onProgress) await onProgress(total, total);
     if (propagate) session.propagateIdentitiesToTracks();
     return { numIdentities: session.identities.length, numTargets: run.trk.targets.length };
 }
@@ -1073,22 +1077,17 @@ async function sweepTrackAllFrames(session, cameras, maxTargets, onProgress, opt
     var nFrames = session.lazyLoader.nFrames;
     var from = opts.start != null ? Math.max(0, opts.start) : 0;
     var to = opts.end != null ? Math.min(nFrames - 1, opts.end) : nFrames - 1;
-    var total = Math.max(0, to - from + 1);
-    var done = 0;
-    var stride = Math.max(1, Math.ceil(total / 20));
     // The hydrate-window/process/release/GC mechanics live in
     // `sweepLazyFrameWindows` (luc3d #195) — this was one of three identical
     // copies. Behaviour is preserved exactly: `stepTrackerFrame` already
     // early-returns on a frame with no `FrameGroup`, which is the same set the
     // sweep skips, and the release policy (pin the on-screen frame + any
-    // user-edited frame) and GC cadence are the ones lifted from here.
+    // user-edited frame) and GC cadence are the ones lifted from here. The
+    // sweep also owns progress pacing, reporting (position, total) to
+    // `onProgress` on its clock-based cadence.
     await sweepLazyFrameWindows(session, function (fi) {
         stepTrackerFrame(session, run, fi);
-        done++;
-        if (onProgress && (done % stride === 0 || done === total)) {
-            return onProgress(done, total);
-        }
-    }, { window: opts.window || 2000, start: from, end: to });
+    }, { window: opts.window || 2000, start: from, end: to, onProgress: onProgress });
     return { numIdentities: session.identities.length, numTargets: run.trk.targets.length };
 }
 
@@ -1311,11 +1310,16 @@ async function runTrackingPass(range) {
         if (!promptNumAnimals()) return bail;
     }
 
+    // A non-windowed lazy session materializes every frame first, so the run
+    // has two labelled stages; everything else is the identity pass alone.
+    var STEPS = (loader && !windowed) ? 2 : 1;
     if (loader && !windowed) {
-        showLoading('Loading all ' + session.numFrames + ' frames for tracking…');
-        await new Promise(function (r) { setTimeout(r, 0); });
+        showLoadingProgress('Loading frames', 0, session.numFrames, { step: 1, steps: STEPS });
+        await yieldToPaint();
         try {
-            await loadAllLazyFrames(function (msg) { showLoading(msg); });
+            await loadAllLazyFrames(function (msg, done, total) {
+                showLoadingProgress('Loading frames', done, total, { step: 1, steps: STEPS });
+            });
         } catch (e) {
             hideLoading();
             console.error('[' + label + '] failed to load all lazy frames:', e);
@@ -1378,7 +1382,8 @@ async function runTrackingPass(range) {
         session.instanceGroups = new Map();
     }
 
-    showLoading('Assigning identities: 0/' + totalFrameCount + ' frames…');
+    var stageOpts = { step: STEPS, steps: STEPS };
+    showLoadingProgress('Assigning identities', 0, totalFrameCount, stageOpts);
 
     // Drive the CrossViewTracker across the frames and populate IDENTITIES +
     // per-frame identity map + InstanceGroups only. Deliberately does NOT propagate
@@ -1387,15 +1392,13 @@ async function runTrackingPass(range) {
     // Tracks → IDs). Auto-rewriting Instance.trackIdx here would clobber the
     // imported track structure without consent.
     try {
-        // Yield once so the initial overlay paints before the run begins, then
-        // drive the async progress variant: it yields ~every 5% of frames and
-        // calls back with (done, total) so the counter advances without freezing
-        // at 0/N (infrequent so the repaints don't slow the run).
-        await new Promise(function (r) { setTimeout(r, 0); });
+        // Paint the 0% overlay before the run begins, then drive the async
+        // progress variant: it paces its own yields (~4/s, clock-based — see
+        // `createProgressPacer`) and calls back with (done, total) just before
+        // each, so this callback only has to update the overlay.
+        await yieldToPaint();
         var onProgress = function (done, total) {
-            showLoading('Assigning identities: ' + done + '/' + total +
-                ' frames (' + Math.round(done / total * 100) + '%)…');
-            return new Promise(function (r) { setTimeout(r, 0); });
+            showLoadingProgress('Assigning identities', done, total, stageOpts);
         };
         var lres = windowed
             ? await sweepTrackAllFrames(session, cameras, effectiveNumAnimals, onProgress,

@@ -3566,6 +3566,50 @@ input[type="range"]::-moz-range-track {
   }
 }
 
+/* Determinate progress bar under #loadingStatus (ui/loading-overlay.js).
+   The fill is scaled with `transform`, not `width`: a transform transition runs
+   on the compositor thread, so the bar keeps gliding between the pacer's
+   ~250 ms updates even while the main thread is busy with the next chunk. The
+   transition length matches PROGRESS_INTERVAL_MS. The overlay's `gap: 16px`
+   would push the bar too far from its label, hence the negative margins. */
+.loading-progress {
+  width: min(360px, 70vw);
+  height: 6px;
+  margin-top: -6px;
+  border-radius: 3px;
+  background: var(--border-color);
+  overflow: hidden;
+}
+
+.loading-progress-fill {
+  width: 100%;
+  height: 100%;
+  background: var(--accent);
+  transform-origin: left center;
+  transform: scaleX(0);
+  transition: transform 250ms linear;
+  will-change: transform;
+}
+
+.loading-progress-fill.no-anim {
+  transition: none;
+}
+
+/* Second text line: estimated time remaining (ui/loading-overlay.js). Tucked
+   up against #loadingStatus so the two read as one block of text. */
+.loading-eta {
+  margin-top: -12px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.loading-substatus {
+  margin-top: -8px;
+  font-size: 12px;
+  color: var(--text-muted, var(--text-secondary));
+}
+
 /* --------------------------------------------------------------------------
    Keyboard Key
    -------------------------------------------------------------------------- */
