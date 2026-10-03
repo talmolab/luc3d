@@ -1077,6 +1077,28 @@ math, fundamental-matrix / epipolar utilities, Hungarian assignment. Also
 hosts the lazy-H5 frame loader and the user-facing triangulation orchestration
 (single-frame, all-frames, multi-frame range).
 
+**The pure math now lives in `pose/triangulation-core.js`** (DLT,
+refinement, reprojection, errors, `triangulateAndReproject`, `invert3x3`) so the
+Triangulate All worker pool can load it; this module imports it and
+**re-exports every public name**, so all existing imports keep working. It
+installs the core's two settings hooks (`setTriangulationSettingsHooks`) with
+`isCameraTracked` / `getTrackingThreshold`.
+
+**Performance (profiled on HardFight_1kModels, outputs bit-identical — see
+`tests/test-triangulation-kernels.mjs` and the `_bench-progress-overlay.mjs
+DIGEST_OPS=1` digests).** `cameraCenter` and `backProjectToRay(s)` derive a P's
+null vector and pseudo-inverse from P alone; Track All asked for them per
+detection per frame (~6.8 s of 17 s). They are now memoized per P array
+(`_pGeometry` / `_pseudoInverse`, a WeakMap) and VALIDATED on every hit against
+a snapshot of P's 12 entries, so an in-place-mutated P recomputes; returned
+centres are copies. Triangulate All's per-group step is split into
+`_prepareGroupStep` (camera fix-ups, >=2-usable-views gate, `usedCameras`) /
+solve / `_applyGroupStep`, so `triangulateAllFrames` (eager and the windowed
+`sweepTriangulateAllFrames`) submit solves to `pose/triangulation-pool.js` and
+apply results in submission order; `_triangulateGroupStep` (prepare + inline
+solve + apply) remains for Triangulate Range. Measured: Track All 16.9 s ->
+7.4 s, Refined Triangulate All 78.5 s -> 8.8 s, DLT 8.5 s -> 2.3 s.
+
 **3D points are flat (luc3d #189).** The array-level entry points speak the
 `Float64Array(3N)` `points3d` representation (see `pose/pose-data.js`):
 `triangulatePoints` and `triangulatePointsBA` **return** one, and
@@ -1616,6 +1638,9 @@ subtitle is populated for loaded projects, not just freshly triangulated ones.
   `showLoading`, `hideLoading`.
 - `../ui/loading-overlay.js` — `showLoadingProgress`, `createProgressPacer`,
   `yieldToPaint` (Triangulate All's eager loop and `sweepLazyFrameWindows`).
+- `./triangulation-core.js` — the pure math (re-exported) and
+  `setTriangulationSettingsHooks`.
+- `./triangulation-pool.js` — `createGroupSolver` (Triangulate All's parallel solve).
 - `./initialization.js` — `update3DViewport` (circular).
 
 **Imported by.** `pose/tracker.js`, `pose/initialization.js`,
@@ -1627,6 +1652,110 @@ subtitle is populated for loaded projects, not just freshly triangulated ones.
 **User-facing features.** "Triangulate" key (`T`), Edit menu Triangulate
 Frame / All / Multi-Frame, reprojection-error visualization, lazy SLP
 loading, "Triangulation needed" badge.
+
+---
+
+### pose/triangulation-core.js
+
+**Purpose.** The pure triangulation math, split out of `pose/triangulation.js`
+so a Web Worker can load it: matrix helpers (`matMul`, `matTranspose`,
+`jacobiEigen`, `solveSmallestEigenvector4x4`, `svd3x4`), DLT
+(`triangulatePointDLT`, `triangulatePoints`), the "Refined" point stage
+(`triangulatePointBA`, `triangulatePointsBA`, `BA_ROBUST_SCALE_PX`),
+reprojection (`reprojectPoint(s)`, `reprojectPointCamera(s)`), errors
+(`computeReprojectionError(s)`, `computeMeanReprojectionError`), `invert3x3`,
+and the full per-group pipeline `triangulateAndReproject`.
+
+**Key exports.** All of the above, plus `setTriangulationSettingsHooks({
+isCameraTracked, getTrackingThreshold })` — the only app state the pipeline
+reads (unset = every camera included, no threshold; the main thread installs
+them, a worker gets resolved values via `options.includedCameras` /
+`options.reprojErrorThreshold`) — and `__triangulationKernelsForTest`.
+
+**Allocation-free hot paths, bit-identical by construction.**
+- DLT: `dltHomogeneousFlat` + `smallestEigvec4Flat` perform the exact
+  operations of row arrays -> `matTranspose` -> `matMul` -> `jacobiEigen` ->
+  smallest-|λ| pick (same k-ordered sums from 0, same Givens sequence, angles,
+  row-then-column updates, skip/convergence tests) on preallocated typed arrays.
+  The generic path allocated four arrays per rotation.
+- Refinement: `triangulatePointBA` projects through
+  `_projectAndJacobian(Camera)Into`, which write into one scratch object with
+  the same expressions as `projectAndJacobian`, `distortJacobian` and
+  `Camera.distortPoint` (including their different r²·r² vs r⁴ association). It
+  was ~11.6 s of GC in an 80 s Refined run.
+Pinned by `tests/test-triangulation-kernels.mjs` (thousands of random systems,
+`Object.is` per value). **Any edit to these kernels must keep operation order,**
+or results drift in the last bits and tracker decisions can flip.
+
+**Imports from project modules.** `./pose-data.js` only (point3d helpers).
+
+**Imported by.** `pose/triangulation.js` (re-exports), `pose/triangulation-pool.js`,
+`pose/triangulation-worker.js`. Loaded before `pose/triangulation.js` by
+`tests/run-node.js`.
+
+---
+
+### pose/triangulation-pool.js
+
+**Purpose.** Run `triangulateAndReproject` for many instance groups on a pool
+of Web Workers — the Triangulate All paths' parallel solve. Every group is
+independent (cameras fixed), but the solve ran on one main thread (~1 of 12
+cores busy).
+
+**Key exports.** `createGroupSolver(cameras, { method, triangulateOnly,
+expectedGroups })` -> `{ submit(group, groupCameras, cb), mark(cb), throttle(),
+finish(), cancel(), parallel, workers }`; `MIN_GROUPS_FOR_WORKERS` (2000).
+
+**Contract.**
+- **Callbacks run in submission order** (jobs and `mark`s interleaved as
+  submitted), so every side effect on app state happens in the old inline
+  loop's order. `throttle()` bounds in-flight work (~2 batches per worker).
+- A job's inputs — each camera's `_xy` copy and nulled nodes, plus the two
+  settings resolved ONCE per run (the overlay blocks the UI) — are captured at
+  `submit`, so a lazy window may be released while its solves are in flight.
+- Cameras are shipped with the main thread's cached `R` / `Rt` / `P`, so the
+  worker never re-derives a matrix. Results are bit-identical to inline.
+- Inline fallback (synchronous at `submit`, same callbacks): no `Worker`, small
+  runs (`expectedGroups` < 2000, where start-up dominates), or
+  `window.LUCID_TRIANGULATION_WORKERS = 0`. Setting it to N > 0 forces an
+  N-worker pool regardless of size (tests). A batch a worker fails on — or a
+  worker that dies — is re-solved inline from the captured job.
+- Pool size `min(hardwareConcurrency - 1, 16)`; workers persist between runs
+  and are terminated after 30 s idle. One solver owns the pool at a time (a
+  concurrent second run solves inline). Every call site passes `method:
+  method` explicitly (`tests/test-triangulation-method-propagation.mjs`).
+
+**Imports from project modules.** `./triangulation-core.js`
+(`triangulateAndReproject`), `./pose-data.js` (`Instance`), `../ui/settings.js`
+(`isCameraTracked`, `getTrackingThreshold` — `typeof`-guarded for the flat test
+sandbox).
+
+**Imported by.** `pose/triangulation.js` (`triangulateAllFrames`,
+`sweepTriangulateAllFrames`), `ui/export-modals.js`
+(`groupByIdentityAndTriangulateAll`).
+
+**Coverage.** `tests/e2e/triangulate-all-worker-pool.mjs` — every Triangulate
+All route (eager, windowed with windows released mid-flight, group-by-identity
+DLT) run inline and on a forced 4-worker pool must hash identically, with a
+reprojection threshold and an excluded camera in effect (and a control proving
+those settings change the result).
+
+---
+
+### pose/triangulation-worker.js
+
+**Purpose.** Module worker for `pose/triangulation-pool.js`: rebuilds each job's
+group (real `Instance`s from flat `_xy` + nulled nodes) and cameras (with the
+main thread's cached matrices installed) and runs the same
+`triangulateAndReproject` from `./triangulation-core.js`. Messages: in
+`{type:'cameras'}`, `{type:'solve', id, jobs}`; out `{type:'solved', id,
+results}` (points3d buffers transferred) or `{type:'error', id, message}`.
+
+**Imports from project modules.** `./pose-data.js` (`Camera`, `Instance`),
+`./triangulation-core.js` (`triangulateAndReproject`).
+
+**Imported by.** Spawned by `pose/triangulation-pool.js` via
+`new Worker(new URL('pose/triangulation-worker.js', document.baseURI), {type:'module'})`.
 
 ---
 
@@ -2062,6 +2191,9 @@ SLP all-sessions, JSON labels, points3d H5, reproj H5).
 - `./loading-overlay.js` — `showLoadingProgress`, `yieldToPaint` (the
   "Grouping & triangulating" bar in `groupByIdentityAndTriangulateAll` — which
   Triangulate All ▸ DLT routes to — and `groupByTrackAndTriangulateAll`).
+- `../pose/triangulation-pool.js` — `createGroupSolver`
+  (`groupByIdentityAndTriangulateAll` solves its non-adopted groups on the
+  worker pool; adoption and regrouping stay on the main thread).
 - `../import-export/file-io.js` — `exportSlpClientSide`,
   `exportSlpMultiSession`, `findSkeletonMismatch`, `buildPoints3dH5`,
   `buildReprojH5`.

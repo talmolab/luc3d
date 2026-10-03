@@ -30,6 +30,7 @@ import { drawAllOverlays, setReprojErrorVisible } from './rendering.js';
 import { updateInfoPanel } from './info-panel.js';
 import { showLoading, hideLoading, setStatus } from '../import-export/save-load.js';
 import { showLoadingProgress, yieldToPaint } from './loading-overlay.js';
+import { createGroupSolver } from '../pose/triangulation-pool.js';
 import {
     exportSlpClientSide,
     exportSlpMultiSession,
@@ -340,10 +341,21 @@ export async function groupByIdentityAndTriangulateAll(explicitMethod) {
     // 3D provenance, reported at the end: groups whose existing 3D was reused
     // as-is vs. groups that genuinely had to be solved, and with what.
     var reused3d = 0, solvedBa = 0, solvedDlt = 0;
+    // Solves run on the worker pool (pose/triangulation-pool.js); the regrouping
+    // itself stays on the main thread. Results land in submission order.
+    var gSolver = createGroupSolver(cameras,
+        { method: prefMethod, triangulateOnly: true, expectedGroups: totalFrames });
+    function applyIdentitySolve(group, triResult) {
+        group.points3d = triResult.points3d;
+        group.triangulationMethod = triResult.method;
+        if (triResult.method === 'ba') solvedBa++; else solvedDlt++;
+    }
 
     // Memory-bounded sweep over every frame (windows + release on lazy sessions),
     // replacing the old loadAllLazyFrames-then-iterate path that re-OOMed.
-    var processedFrames = await sweepTriangulationFrames(session, function (frameIdx, fg) {
+    var processedFrames;
+    try {
+    processedFrames = await sweepTriangulationFrames(session, function (frameIdx, fg) {
         // `fg` is undefined for a frame that has 3D grouping but no resident 2D
         // (the sweep's contract — see `sweepLazyFrameWindows`). Without this guard
         // the very next line throws a TypeError, which aborts the whole operation
@@ -498,18 +510,16 @@ export async function groupByIdentityAndTriangulateAll(explicitMethod) {
             } else {
                 // Still `triangulateOnly` (reprojections are recomputed on demand
                 // when drawing); that skips the reprojection/error passes, not the
-                // solve, so BA still runs when BA is what was asked for.
-                var triResult = triangulateAndReproject(group, cameras,
-                    { triangulateOnly: true, method: prefMethod });
-                group.points3d = triResult.points3d;
-                group.triangulationMethod = triResult.method;
-                if (triResult.method === 'ba') solvedBa++; else solvedDlt++;
+                // solve, so BA still runs when BA is what was asked for. Solved on
+                // the worker pool (bit-identical; applied in submission order).
+                gSolver.submit(group, cameras, applyIdentitySolve.bind(null, group));
             }
             group.markClean();
 
             totalGrouped++;
             totalTriangulated++;
         }
+        return gSolver.throttle();
 
     }, {
         onLoadProgress: function (done, total) {
@@ -518,10 +528,16 @@ export async function groupByIdentityAndTriangulateAll(explicitMethod) {
         onProgress: function (done, total) {
             showLoadingProgress('Grouping & triangulating', done, total, {
                 step: gSteps, steps: gSteps,
-                detail: gMethodLabel + ' · ' + reused3d.toLocaleString() + ' existing solutions kept',
+                detail: gMethodLabel + ' · ' + reused3d.toLocaleString() + ' existing solutions kept' +
+                    (gSolver.parallel ? ' · ' + gSolver.workers + ' workers' : ''),
             });
         },
     });
+    await gSolver.finish();
+    } catch (e) {
+        gSolver.cancel();
+        throw e;
+    }
 
     hideLoading();
     setReprojErrorVisible(true);
