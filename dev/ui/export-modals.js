@@ -2966,6 +2966,7 @@ export function showExport3DVideoModal() {
             pyramidLength: read3dNum('vis3dPyramidLength', 40),
             skeletonNodeSize: read3dNum('vis3dNodeSize', 2),
             skeletonEdgeWeight: read3dNum('vis3dEdgeWeight', 0.8),
+            skeletonBrightness: (function() { var e = document.getElementById('vis3dBrightness'); var v = e ? parseFloat(e.value) : NaN; return isNaN(v) ? 0.5 : Math.min(100, Math.max(0, v)) / 100; })(),
             showCameraLabels: read3dBool('vis3dLabelShow', true),
             showCameraSpheres: read3dBool('vis3dSphereShow', true),
             showCameraPyramids: read3dBool('vis3dPyramidShow', true),

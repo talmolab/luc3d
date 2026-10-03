@@ -809,7 +809,7 @@ export function drawSkeleton(ctx, instance, skeleton, options) {
 
 /**
  * Draw a reprojected skeleton with a visually distinct style:
- *   - Dashed edges
+ *   - Edges in `options.lineStyle` (solid/dotted/dashed; [4, 4] dash if unset)
  *   - X markers instead of filled circles
  *
  * @param {CanvasRenderingContext2D} ctx
@@ -870,7 +870,9 @@ export function drawReprojectedSkeleton(ctx, reprojectedPoints, skeleton, option
     // `showEdges`/`showNodes` default true (issue #190 SLEAP-parity toggles).
     if (skeleton.edges && options.showEdges !== false) {
         ctx.strokeStyle = edgeColor;
-        ctx.setLineDash([4, 4]);
+        // Honor the Visibility panel's reprojection Edge Style; callers that
+        // pass no lineStyle keep this primitive's historical [4, 4] dash.
+        ctx.setLineDash(options.lineStyle ? getLineDashPattern(options.lineStyle) : [4, 4]);
         ctx.beginPath();
         for (let i = 0; i < skeleton.edges.length; i++) {
             const edge = skeleton.edges[i];
@@ -2283,7 +2285,7 @@ export function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, ses
                     drawSkeleton(ctx, reprojInst, skeleton, Object.assign({}, reprojRender, {
                         color: reprojXColor,
                         edgeColor: isSelected ? '#ffffff' : reprojTrackColor,
-                        lineStyle: reprojOpts.lineStyle || 'dotted',
+                        lineStyle: reprojOpts.lineStyle || 'solid',
                         nodeShape: reprojOpts.nodeStyle || 'circle',
                     }));
 

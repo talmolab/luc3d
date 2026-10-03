@@ -149,6 +149,11 @@ export class Viewport3D {
         /** @type {number} 3D skeleton edge radius multiplier (default 0.8) */
         this.skeletonEdgeWeight = options.skeletonEdgeWeight !== undefined ? options.skeletonEdgeWeight : 0.8;
 
+        /** @type {number} 3D skeleton color brightness, 0..1 (default 0.5).
+         *  Scales the track/identity color's RGB like the 2D reprojection
+         *  Brightness; the selected instance keeps its full color. */
+        this.skeletonBrightness = options.skeletonBrightness !== undefined ? options.skeletonBrightness : 0.5;
+
         /** @type {string} 3D skeleton node marker shape:
          *  'circle' (sphere), 'square' (cube), 'triangle' (tetrahedron),
          *  'x' (crossed bars). */
@@ -1018,16 +1023,24 @@ export class Viewport3D {
             const isSelected = (this.selectedInstanceIdx === g);
             const scale = isSelected ? highlightScale : 1.0;
 
+            // Brightness dims the track/identity color; the selected instance
+            // keeps its full color so the selection still stands out.
+            const brightness = isSelected ? 1 : Math.min(1, Math.max(0, this.skeletonBrightness));
+
             // Recolor only on change. Uniform-only edits: no shader recompile.
             // Emissive boost for the selected instance.
-            if (slot.colorStr !== colorStr || slot.selected !== isSelected) {
+            if (slot.colorStr !== colorStr || slot.selected !== isSelected || slot.brightness !== brightness) {
                 slot.colorStr = colorStr;
                 slot.selected = isSelected;
+                slot.brightness = brightness;
                 const emissiveIntensity = isSelected ? 0.4 : 0.0;
                 slot.nodeMat.color.set(colorStr);
+                // Guarded: the Node test runner's THREE.Color mock has no multiplyScalar.
+                if (brightness < 1 && slot.nodeMat.color.multiplyScalar) slot.nodeMat.color.multiplyScalar(brightness);
                 slot.nodeMat.emissive.set(isSelected ? colorStr : 0x000000);
                 slot.nodeMat.emissiveIntensity = emissiveIntensity;
                 slot.edgeMat.color.set(colorStr);
+                if (brightness < 1 && slot.edgeMat.color.multiplyScalar) slot.edgeMat.color.multiplyScalar(brightness);
                 slot.edgeMat.emissive.set(isSelected ? colorStr : 0x000000);
                 slot.edgeMat.emissiveIntensity = emissiveIntensity * 0.5;
             }
@@ -1188,6 +1201,7 @@ export class Viewport3D {
             edgeMeshes: [],
             colorStr: null,
             selected: null,
+            brightness: null,
         };
     }
 

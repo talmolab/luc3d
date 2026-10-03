@@ -81,7 +81,7 @@ export function getVisibilitySettings() {
             nodeStyle: styleVal('visUserNodeStyle', 'circle'),
         },
         predictedOpts: {
-            nodeSize: parseInt(document.getElementById('visPredNodeSize').value) || 4,
+            nodeSize: parseInt(document.getElementById('visPredNodeSize').value) || 6,
             lineWidth: parseInt(document.getElementById('visPredEdgeWeight').value) || 2,
             alpha: parseInt(document.getElementById('visPredEdgeTrans').value) / 100,
             showLabels: false,
@@ -97,7 +97,7 @@ export function getVisibilitySettings() {
             labelSize: parseInt(document.getElementById('visReprojLabelSize').value) || 11,
             labelAlpha: parseFloat(document.getElementById('visReprojLabelAlpha').value),
             showLabels: parseInt(document.getElementById('visReprojLabelSize').value) > 0,
-            lineStyle: document.getElementById('visReprojLineStyle').getAttribute('data-value') || 'dotted',
+            lineStyle: document.getElementById('visReprojLineStyle').getAttribute('data-value') || 'solid',
             nodeStyle: styleVal('visReprojNodeStyle', 'circle'),
         },
     };

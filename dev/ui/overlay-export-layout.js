@@ -272,12 +272,12 @@ export function defaultOverlayExportSettings() {
             showNodes: true, showEdges: true,
         },
         pred: {
-            nodeStyle: 'x', nodeSize: 4, lineWidth: 2, alpha: 0.85,
+            nodeStyle: 'x', nodeSize: 6, lineWidth: 2, alpha: 0.85,
             lineStyle: 'solid', showNodes: true, showEdges: true,
         },
         reproj: {
             nodeStyle: 'circle', nodeSize: 4, lineWidth: 2, alpha: 0.9,
-            brightness: 0.5, nodeColor: 'white', lineStyle: 'dotted',
+            brightness: 0.5, nodeColor: 'white', lineStyle: 'solid',
             labelSize: 0, labelAlpha: 0.9, showNodes: true, showEdges: true,
         },
         res: DEFAULT_RES,
