@@ -131,7 +131,7 @@ export function settingsFromVisibilityPanel() {
     copy(s.pred, vis.predictedOpts, ['nodeStyle', 'nodeSize', 'lineWidth', 'alpha']);
     if (vis.predictedOpts) s.pred.lineStyle = vis.predictedOpts.postLineStyle || 'solid';
     copy(s.reproj, vis.reprojOpts, ['nodeStyle', 'nodeSize', 'lineWidth', 'alpha', 'brightness', 'labelSize', 'labelAlpha']);
-    if (vis.reprojOpts) s.reproj.lineStyle = vis.reprojOpts.lineStyle || 'dotted';
+    if (vis.reprojOpts) s.reproj.lineStyle = vis.reprojOpts.lineStyle || 'solid';
     s.reproj.nodeColor = vis.reprojNodeColor || 'white';
     s.fps = Math.round(state.fps || 30);
     return s;
@@ -714,6 +714,7 @@ export function showOverlayExportModal() {
                 pyramidLength: num('vis3dPyramidLength', 40),
                 skeletonNodeSize: num('vis3dNodeSize', 2),
                 skeletonEdgeWeight: num('vis3dEdgeWeight', 0.8),
+                skeletonBrightness: (function() { var e = document.getElementById('vis3dBrightness'); var v = e ? parseFloat(e.value) : NaN; return isNaN(v) ? 0.5 : Math.min(100, Math.max(0, v)) / 100; })(),
                 showCameraLabels: bool('vis3dLabelShow', true),
                 showCameraSpheres: bool('vis3dSphereShow', true),
                 showCameraPyramids: bool('vis3dPyramidShow', true),
