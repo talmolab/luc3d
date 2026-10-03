@@ -53,7 +53,7 @@ import { installSeekbarTooltip } from './seekbar-tooltip.js';
 // Pass 3i-2: triangulation orchestration moved out of app.js.
 import { triangulateCurrentFrame, triangulateAllFrames } from '../pose/triangulation.js';
 // User settings: default triangulation method + editable keyboard bindings.
-import { getDefaultTriangulationMethod, setHandler, dispatchEvent, getActions, formatBinding } from './settings.js';
+import { getDefaultTriangulationMethod, onDefaultTriangulationMethodChange, setHandler, dispatchEvent, getActions, formatBinding } from './settings.js';
 import { shouldIgnoreShortcut, installFocusRelease } from './keyboard-target.js';
 import { showSettingsModal } from './settings-modal.js';
 // Pass 3i-3: addNewInstanceSmart and update3DViewport moved to pose/initialization.js.
@@ -753,15 +753,20 @@ export function setupMenus() {
         triangulateCurrentFrame(getDefaultTriangulationMethod());
     });
 
-    // Help menu: Documentation (external docs) and Settings (preferences modal).
-    document.getElementById('menuDocumentation').addEventListener('click', function () {
+    // Help menu: Documentation (external docs) and Settings (preferences modal),
+    // each also a direct button at the right end of the menu bar (#138).
+    function openDocs() {
         closeMenus();
         window.open('https://talmolab.github.io/luc3d-docs/', '_blank', 'noopener');
-    });
-    document.getElementById('menuSettings').addEventListener('click', function () {
+    }
+    function openSettings() {
         closeMenus();
         showSettingsModal();
-    });
+    }
+    document.getElementById('menuDocumentation').addEventListener('click', openDocs);
+    document.getElementById('menuSettings').addEventListener('click', openSettings);
+    document.getElementById('menuBarDocs').addEventListener('click', openDocs);
+    document.getElementById('menuBarSettings').addEventListener('click', openSettings);
 
     // Tracks ▸ Tracking Wizard: opens the same Settings modal focused on the
     // Tracking Wizard panel (node weights, etc.).
@@ -2523,6 +2528,26 @@ export function setupUI() {
         });
     }
 
+    // The buttons say which method a plain click runs (#138): "Triangulate: DLT"
+    // / "Triangulate All: Ref", kept in step with Settings ▸ Default
+    // Triangulation. The method name matches the dropdown items below.
+    function updateTriangulateButtonLabels() {
+        var method = getDefaultTriangulationMethod();
+        var short = method === 'ba' ? 'Ref' : 'DLT';
+        var long = method === 'ba' ? 'Ref (slow & accurate)' : 'DLT (fast)';
+        [['tbTriangulate', 'Triangulate selected group (t)'],
+         ['tbTriangulateAll', 'Triangulate all frames with instance groups']].forEach(function (pair) {
+            var btn = document.getElementById(pair[0]);
+            if (!btn) return;
+            var span = btn.querySelector('.tri-method');
+            if (span) span.textContent = ': ' + short;
+            btn.title = pair[1] + ' with ' + long + ', the default set in Settings. ' +
+                'Hover for the other method.';
+        });
+    }
+    updateTriangulateButtonLabels();
+    onDefaultTriangulationMethodChange(updateTriangulateButtonLabels);
+
     // Triangulate current frame with the chosen (or default) method.
     wireTriDropdown('triangulateDropdown', 'tbTriangulate', function (method) {
         triangulateCurrentFrame(method);
@@ -3261,7 +3286,8 @@ state.speedMultiplier = 1.0;
 
         var presets = document.createElement('div');
         presets.className = 'speed-presets';
-        [1.0, 1.25, 1.5, 2.0, 3.0].forEach(function (val) {
+        // 0.25x / 0.5x for stepping through fast motion (#138).
+        [0.25, 0.5, 1.0, 1.25, 1.5, 2.0, 3.0].forEach(function (val) {
             var btn = document.createElement('button');
             btn.textContent = val.toFixed(val % 1 === 0 ? 1 : 2);
             if (Math.abs(state.speedMultiplier - val) < 0.01) btn.classList.add('active');

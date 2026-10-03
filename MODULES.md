@@ -4303,6 +4303,10 @@ Shortcuts and the Hot Keys modal where people look for them.
 **Key exports.**
 - `getDefaultTriangulationMethod()` / `setDefaultTriangulationMethod(method)` —
   read/write the default method used by implicit triangulation paths.
+- `onDefaultTriangulationMethodChange(fn)` — called with the new method when
+  `setDefaultTriangulationMethod` actually changes it (a throwing listener is
+  ignored). `ui/ui-wiring.js` uses it to keep the toolbar's "Triangulate: DLT"
+  / "Triangulate: Ref" labels in step with Settings (#138).
 - `getNodeWeight(name)` / `getNodeWeights()` / `getNodeWeightArray(nodeNames)` /
   `setNodeWeights(map)` — read/write per-node tracking weights (clamped to
   `[0,1]`; entries equal to the default `1` are dropped). `getNodeWeightArray`
@@ -5146,7 +5150,16 @@ drive a private timer-based stepper (`startNoVideoPlayback` /
 stopping at the last frame; the step transport buttons/keys stop it first.
 
 **Key exports.**
-- Menu / setup: `setupMenus`, `setupUI`. The Tracks menu hosts both
+- Menu / setup: `setupMenus`, `setupUI`. The menu bar ends with a **Help**
+  dropdown (Docs, Settings) after Hot Keys, and Docs / Settings are ALSO direct
+  buttons at its right end (`menuBarDocs` / `menuBarSettings`, sharing
+  `openDocs` / `openSettings` with the dropdown items) — #138. The Triangulate
+  / Triangulate All split buttons carry a `.tri-method` span that
+  `updateTriangulateButtonLabels` fills with the Settings default (": DLT" /
+  ": Ref", the dropdown's own names), refreshed via
+  `onDefaultTriangulationMethodChange`. The Speed popover's presets are 0.25x,
+  0.5x, 1x, 1.25x, 1.5x, 2x, 3x; the popover is right-aligned to the Speed
+  button so it stays on-screen. The Tracks menu hosts both
   identity↔track propagation actions (one-shot): `Propagate Tracks → IDs`
   (`menuPropagateTracksToIds` — creates an identity
   per track and assigns it to every group; sets `session.trustTracks`; was the
