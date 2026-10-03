@@ -169,6 +169,12 @@ body {
   color: var(--accent);
 }
 
+/* Docs / Settings as direct menu-bar buttons (#138): a menu-item with no
+   dropdown, so it acts on click. */
+.menu-bar-button {
+  cursor: pointer;
+}
+
 .menu-dropdown {
   display: none;
   position: absolute;
@@ -1158,6 +1164,11 @@ body {
 .tri-dropdown {
   position: relative;
   display: inline-flex;
+}
+
+/* "Triangulate: DLT" — the method a plain click runs (#138). */
+.tri-method {
+  opacity: 0.8;
 }
 
 .tri-caret {
@@ -3971,8 +3982,10 @@ kbd {
 .speed-popover {
     position: absolute;
     bottom: 100%;
-    left: 50%;
-    transform: translateX(-50%);
+    /* Right-aligned to the Speed button, opening leftward: the button sits
+       near the window's right edge, and centred on it the popover (wider since
+       the 0.25x / 0.5x presets, #138) ran off-screen. */
+    right: 0;
     margin-bottom: 6px;
     background: var(--bg-secondary, #1e1e1e);
     border: 1px solid var(--border-color, #444);
@@ -4016,7 +4029,7 @@ kbd {
     justify-content: center;
 }
 .speed-popover .speed-presets button {
-    padding: 4px 10px;
+    padding: 4px 8px;
     font-size: 11px;
     border: 1px solid var(--border-color, #444);
     background: var(--bg-tertiary, #2a2a2a);
