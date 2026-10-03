@@ -167,13 +167,19 @@
                 </div>
             </div>
             <div class="menu-item" id="menuHotkeys" style="cursor:pointer;">Hot Keys</div>
-            <div class="menu-item" data-menu="help" style="margin-left:auto;">
+            <div class="menu-item" data-menu="help">
                 Help
-                <div class="menu-dropdown" id="menuHelp" style="left:auto;right:0;">
+                <div class="menu-dropdown" id="menuHelp">
                     <div class="menu-dropdown-item" id="menuDocumentation">Docs</div>
                     <div class="menu-dropdown-item" id="menuSettings">Settings</div>
                 </div>
             </div>
+            <!-- #138: Docs and Settings also as direct buttons on the right, so
+                 they are one click away instead of hidden under a menu. -->
+            <div class="menu-item menu-bar-button" id="menuBarDocs" style="margin-left:auto;"
+                title="Open the LUCID documentation in a new tab">Docs</div>
+            <div class="menu-item menu-bar-button" id="menuBarSettings"
+                title="Settings: default triangulation, keyboard shortcuts, Tracking Wizard">Settings</div>
         </div>
 
         <!-- Toolbar -->
@@ -189,14 +195,14 @@
                 <button class="toolbar-btn" id="tbGroup" title="Group selected instances (⇧G or C)">Group</button>
                 <button class="toolbar-btn" id="tbEditGroup" title="Edit selected group membership">Edit Group</button>
                 <div class="tri-dropdown" id="triangulateDropdown">
-                    <button class="toolbar-btn" id="tbTriangulate" title="Triangulate selected group (t)">Triangulate <span class="tri-caret">▾</span></button>
+                    <button class="toolbar-btn" id="tbTriangulate" title="Triangulate selected group (t)">Triangulate<span class="tri-method"></span> <span class="tri-caret">▾</span></button>
                     <div class="tri-dropdown-menu">
                         <div class="tri-dropdown-item" data-method="dlt">DLT <span class="tri-dropdown-hint">Fast</span></div>
                         <div class="tri-dropdown-item" data-method="ba">Ref <span class="tri-dropdown-hint">Slow &amp; Accurate</span></div>
                     </div>
                 </div>
                 <div class="tri-dropdown" id="triangulateAllDropdown">
-                    <button class="toolbar-btn" id="tbTriangulateAll" title="Triangulate all frames with instance groups">Triangulate All <span class="tri-caret">▾</span></button>
+                    <button class="toolbar-btn" id="tbTriangulateAll" title="Triangulate all frames with instance groups">Triangulate All<span class="tri-method"></span> <span class="tri-caret">▾</span></button>
                     <div class="tri-dropdown-menu">
                         <div class="tri-dropdown-item" data-method="dlt">DLT <span class="tri-dropdown-hint">Fast</span></div>
                         <div class="tri-dropdown-item" data-method="ba">Ref <span class="tri-dropdown-hint">Slow &amp; Accurate</span></div>

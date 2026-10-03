@@ -28,6 +28,7 @@ import { showLoadingProgress, createProgressPacer, yieldToPaint } from '../ui/lo
 import { loadAllLazyFrames, sweepLazyFrameWindows } from './triangulation.js';
 import { drawAllOverlays } from '../ui/rendering.js';
 import { updateInfoPanel } from '../ui/info-panel.js';
+import { setColorByIdentity } from '../ui/color-by.js';
 
 /**
  * A frame index as the USER sees it: 1-based.
@@ -1406,6 +1407,11 @@ async function runTrackingPass(range) {
             : await runCrossViewTrackerProgress(session, cameras, frameIndices, false,
                 effectiveNumAnimals, onProgress, identityPool);
         hideLoading();
+        // The run's product is identities, so show them (#242): switch Color
+        // from Tracks to ID. Only when it assigned any — otherwise there is
+        // nothing new to look at. Recolors 2D + 3D through ui-wiring's handler;
+        // the overlay redraw below is then a cheap repeat.
+        var switchedToIds = lres.numIdentities > 0 && setColorByIdentity(state, true);
         drawAllOverlays(state.currentFrame);
         updateInfoPanel();
         if (timeline) timeline.refreshTracks(state.session, { cap: true });
@@ -1413,6 +1419,7 @@ async function runTrackingPass(range) {
         setStatus('Assigned ' + lres.numIdentities + ' identities across ' +
             totalFrameCount + ' frames' +
             (isRange ? ' (' + displayFrame(lo) + '–' + displayFrame(hi) + ')' : '') +
+            (switchedToIds ? ', now coloring by ID' : '') +
             ' — use Tracks ▸ Propagate IDs → Tracks to apply', 'success');
         // Report the span actually swept. For Track All that is whatever the
         // project turned out to hold; for a range it is the clamped, normalized
