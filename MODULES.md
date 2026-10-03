@@ -3578,7 +3578,11 @@ palettes, and per-frame draw routines. Receives `frameGroup` and
   SLEAP parity in the overlay-video export, issue #190). All 2D node draws route
   through it: `drawSkeleton`
   (normal + nulled nodes, via `options.nodeShape`), `drawReprojectedSkeleton`
-  (via `options.nodeShape`, default `'x'`), and `drawUnlinkedInstances`
+  (via `options.nodeShape`, default `'x'`; its edges honor `options.lineStyle`
+  via `getLineDashPattern`, falling back to the historical `[4, 4]` dash only
+  when no style is passed — it used to hard-code that dash, so the raw-
+  reprojection fallback ignored the Visibility panel's Edge Style), and
+  `drawUnlinkedInstances`
   (`instNodeShape`). `drawFrameOverlays` threads the per-type Node Style toggle
   through as `nodeShape: {user,predicted,reproj}Opts.nodeStyle`.
 - Independent node/edge visibility: `drawSkeleton` and
@@ -5117,16 +5121,24 @@ stopping at the last frame; the step transport buttons/keys stop it first.
   `data-value` + `drawAllOverlays` + `saveVisSettings`); they are added to
   `visStyleIds` for persistence/restore. The handler additionally rebuilds the
   3D skeleton for `vis3dNodeStyle` (`viewport3d.skeletonNodeShape = …; setFrame`).
-- Reprojection Brightness (`visReprojBrightness`) defaults to **50%** so
-  reprojections read as visibly distinct from the observed skeleton (the same
-  default is mirrored in `overlay-export-layout.js` `reproj.brightness` and the
-  `drawFrameOverlays` fallback in `overlays.js`). The slider is **always
-  enabled**: brightness tints the reprojection edges (and labels) whatever the
-  Node Color, so it is no longer gated on Node Color = Track. The visibility
-  `localStorage` blob carries a `_v` version (`VIS_CACHE_VERSION`, now 2); a
-  pre-v2 blob's `visReprojBrightness` of `'100'` — the old default, saved
-  along with every other slider on any panel edit — is dropped on restore so the
-  new default applies.
+- Visibility defaults: reprojection Brightness (`visReprojBrightness`) **50%**,
+  reprojection Node Size **4**, reprojection Edge Style **solid**, predicted
+  Node Size **6**, and 3D Viewer Brightness (`vis3dBrightness`) **50%**. The
+  same values are mirrored in `overlay-export-layout.js` (`reproj.brightness`,
+  `reproj.lineStyle`, `pred.nodeSize`), the `rendering.js`
+  `getVisibilitySettings` fallbacks, and `overlays.js` `drawFrameOverlays`. The
+  reprojection Brightness slider is **always enabled**: brightness tints the
+  reprojection edges (and labels) whatever the Node Color, so it is not gated on
+  Node Color = Track. `vis3dBrightness` is entered as a percentage and wired via
+  `skelSizeIds` with `scale: 0.01` into `viewport3d.skeletonBrightness`.
+- The visibility `localStorage` blob carries a `_v` version
+  (`VIS_CACHE_VERSION`, now 3). Every control is saved on any panel edit, so a
+  stored value equal to an OLD default is not a choice: on restore, for each
+  `VIS_CACHE_OLD_DEFAULTS` entry newer than the blob, keys still holding that
+  entry's old default are dropped so the new default applies (v2:
+  `visReprojBrightness` `'100'`; v3: `visReprojNodeSize` `'16'`,
+  `visPredNodeSize` `'20'`, `visReprojLineStyle` `'dashed'`). **Changing a
+  Visibility default means adding an entry there.**
 - File ▸ "Export Video Overlays" (`menuExportOverlayVideo`) is wired to
   `showOverlayExportModal()` (overlay-export-modal.js); it sits directly above
   File ▸ "Export 3D Video" (`menuExportVideo3d`), which is wired to
@@ -5523,6 +5535,16 @@ via the options bag.
   `tests/test-viewport3d-skeleton-pool.js` (pooled == fresh build after any
   frame sequence; world-space edge endpoints/radius). `setEnvironment` still
   builds per call via `_createCylinder` (not per-frame).
+- Constructor option / property `skeletonBrightness` (0..1, **default 0.5**):
+  `updateSkeleton` scales each group's track/identity color by it
+  (`THREE.Color.multiplyScalar`, the 3D counterpart of the 2D reprojection
+  Brightness). The factor is part of each pooled slot's recolor key
+  (`slot.brightness`, beside `colorStr` / `selected`), so changing it recolors
+  on the next `setFrame` without rebuilding the pool. The **selected** instance keeps its full color so the selection
+  still stands out. Driven by the Visibility panel's 3D Viewer ▸ Brightness (%)
+  input (`vis3dBrightness`); `pose/initialization.js`, the Export 3D Video modal
+  (`export-modals.js`) and the overlay-export 3D tile (`overlay-export-modal.js`)
+  all read that input when constructing their `Viewport3D`.
 
 **Imports from project modules.** `../pose/pose-data.js` —
 `points3dNodeCount`, `getPoint3d` (luc3d #189). This is the module's only

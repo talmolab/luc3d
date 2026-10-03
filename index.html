@@ -416,8 +416,8 @@
                     <h3>Predicted</h3>
                     <div class="vis-slider-row">
                         <span>Node Size</span>
-                        <input type="range" id="visPredNodeSize" min="1" max="50" value="20" step="1">
-                        <span class="vis-val" id="visPredNodeSizeVal">20</span>
+                        <input type="range" id="visPredNodeSize" min="1" max="50" value="6" step="1">
+                        <span class="vis-val" id="visPredNodeSizeVal">6</span>
                     </div>
                     <div class="vis-line-style-row">
                         <span>Node Style</span>
@@ -457,8 +457,8 @@
                     <h3>Reprojections</h3>
                     <div class="vis-slider-row">
                         <span>Node Size</span>
-                        <input type="range" id="visReprojNodeSize" min="1" max="50" value="16" step="1">
-                        <span class="vis-val" id="visReprojNodeSizeVal">16</span>
+                        <input type="range" id="visReprojNodeSize" min="1" max="50" value="4" step="1">
+                        <span class="vis-val" id="visReprojNodeSizeVal">4</span>
                     </div>
                     <div class="vis-line-style-row">
                         <span>Node Style</span>
@@ -496,10 +496,10 @@
                     </div>
                     <div class="vis-line-style-row">
                         <span>Edge Style</span>
-                        <div class="line-style-options" id="visReprojLineStyle" data-value="dashed">
-                            <button class="line-style-btn" data-style="solid" title="Solid"><svg width="40" height="12"><line x1="2" y1="6" x2="38" y2="6" stroke="currentColor" stroke-width="2"/></svg></button>
+                        <div class="line-style-options" id="visReprojLineStyle" data-value="solid">
+                            <button class="line-style-btn active" data-style="solid" title="Solid"><svg width="40" height="12"><line x1="2" y1="6" x2="38" y2="6" stroke="currentColor" stroke-width="2"/></svg></button>
                             <button class="line-style-btn" data-style="dotted" title="Dotted"><svg width="40" height="12"><line x1="2" y1="6" x2="38" y2="6" stroke="currentColor" stroke-width="2" stroke-dasharray="2,3"/></svg></button>
-                            <button class="line-style-btn active" data-style="dashed" title="Dashed"><svg width="40" height="12"><line x1="2" y1="6" x2="38" y2="6" stroke="currentColor" stroke-width="2" stroke-dasharray="6,4"/></svg></button>
+                            <button class="line-style-btn" data-style="dashed" title="Dashed"><svg width="40" height="12"><line x1="2" y1="6" x2="38" y2="6" stroke="currentColor" stroke-width="2" stroke-dasharray="6,4"/></svg></button>
                         </div>
                     </div>
                     <div class="vis-line-style-row">
@@ -587,6 +587,11 @@
                                         <button class="line-style-btn" data-style="square" title="Cube"><svg width="18" height="12"><rect x="4.5" y="1.5" width="9" height="9" fill="currentColor"/></svg></button>
                                     </div>
                                 </td>
+                            </tr>
+                            <tr>
+                                <td style="padding:3px 4px;" title="Dims the 3D skeleton's track/identity color. 100% is the full color.">Brightness (%)</td>
+                                <td style="text-align:center;padding:3px 4px;"><span style="display:inline-flex;align-items:center;"><input type="number" id="vis3dBrightness" value="50" min="0" max="100" step="5" class="no-spinner" style="width:48px;background:var(--bg-tertiary,#2a2a2a);color:var(--text-primary,#e0e0e0);border:1px solid var(--border-color,#444);border-radius:3px;font-size:11px;text-align:center;padding:2px 4px;-moz-appearance:textfield;"><span class="vis3d-stepper"><button data-dir="up">&#9650;</button><button data-dir="down">&#9660;</button></span></span></td>
+                                <td></td>
                             </tr>
                             <tr>
                                 <td style="padding:3px 4px;">Edge Weight</td>

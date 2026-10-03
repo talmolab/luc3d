@@ -2186,10 +2186,15 @@ export function setupUI() {
     // --- Visibility settings cache (localStorage) ---
     var VIS_CACHE_KEY = 'visibilitySettings';
     // Bumped when a default changes, so a value a browser cached under the OLD
-    // default is not mistaken for a deliberate choice. Every slider is saved on
-    // any panel edit, so without this the reprojection Brightness default
-    // (100% -> 50%, v2) would never reach a browser that had touched the panel.
-    var VIS_CACHE_VERSION = 2;
+    // default is not mistaken for a deliberate choice. Every control is saved on
+    // any panel edit, so without this a changed default would never reach a
+    // browser that had touched the panel. On restore, a blob older than a
+    // version drops each key still holding that version's OLD default.
+    var VIS_CACHE_VERSION = 3;
+    var VIS_CACHE_OLD_DEFAULTS = [
+        { v: 2, values: { visReprojBrightness: '100' } },
+        { v: 3, values: { visReprojNodeSize: '16', visPredNodeSize: '20', visReprojLineStyle: 'dashed' } },
+    ];
     var visSliderIds = [
         'visUserNodeSize', 'visUserEdgeWeight', 'visUserEdgeTrans',
         'visUserLabelSize', 'visUserLabelAlpha',
@@ -2197,7 +2202,7 @@ export function setupUI() {
         'visReprojNodeSize', 'visReprojEdgeWeight', 'visReprojEdgeTrans',
         'visReprojBrightness', 'visReprojLabelSize', 'visReprojLabelAlpha',
         'vis3dLabelSize', 'vis3dSphereSize', 'vis3dPyramidLength',
-        'vis3dNodeSize', 'vis3dEdgeWeight',
+        'vis3dNodeSize', 'vis3dEdgeWeight', 'vis3dBrightness',
     ];
     var visCheckIds = ['visLegend', 'visUser', 'visPredicted', 'visReprojections', 'visErrors',
         'visUnlinkedBadge',
@@ -2232,8 +2237,12 @@ export function setupUI() {
         var raw = localStorage.getItem(VIS_CACHE_KEY);
         if (!raw) return;
         try { var data = JSON.parse(raw); } catch(e) { return; }
-        // v1 caches stored reprojection Brightness at its old 100% default.
-        if (!(data._v >= 2) && String(data.visReprojBrightness) === '100') delete data.visReprojBrightness;
+        VIS_CACHE_OLD_DEFAULTS.forEach(function(m) {
+            if (data._v >= m.v) return;
+            Object.keys(m.values).forEach(function(id) {
+                if (String(data[id]) === m.values[id]) delete data[id];
+            });
+        });
         visSliderIds.forEach(function(id) {
             if (data[id] == null) return;
             var el = document.getElementById(id);
@@ -2277,6 +2286,8 @@ export function setupUI() {
         var skelSizeIds = {
             'vis3dNodeSize': { prop: 'skeletonNodeSize', parse: parseFloat },
             'vis3dEdgeWeight': { prop: 'skeletonEdgeWeight', parse: parseFloat },
+            // Entered as a percentage; the viewport takes a 0..1 factor.
+            'vis3dBrightness': { prop: 'skeletonBrightness', parse: parseFloat, scale: 0.01 },
         };
         var showIds = {
             'vis3dLabelShow': { prop: 'showCameraLabels' },
@@ -2345,6 +2356,7 @@ export function setupUI() {
             if (!el) return;
             el.addEventListener('input', function() {
                 var val = parseVal(el, skelSizeIds[id].parse);
+                if (skelSizeIds[id].scale) val = Math.min(1, val * skelSizeIds[id].scale);
                 if (viewport3d) viewport3d[skelSizeIds[id].prop] = val;
                 rebuildSkel();
                 saveVisSettings();
