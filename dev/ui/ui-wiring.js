@@ -49,6 +49,7 @@ import { OnDemandVideoDecoder, VideoController } from '../loading/video.js';
 import { trackCurrentFrame, trackAll, findMatchForSelected } from '../pose/tracker.js';
 // Track Frame Range (#212): the Track Frame split button's dropdown entry.
 import { showTrackRangeModal } from './track-range-modal.js';
+import { onColorByChange, setColorByIdentity } from './color-by.js';
 import { installSeekbarTooltip } from './seekbar-tooltip.js';
 // Pass 3i-2: triangulation orchestration moved out of app.js.
 import { triangulateCurrentFrame, triangulateAllFrames } from '../pose/triangulation.js';
@@ -857,19 +858,21 @@ export function setupMenus() {
     }
     updateColorByToggle();
 
-    colorByTracksBtn.addEventListener('click', function () {
-        state.colorByIdentity = false;
+    // Every change of the setting — these buttons, or the tracker switching to
+    // ID after Track All (#242) via ui/color-by.js — lands here.
+    onColorByChange(function () {
         updateColorByToggle();
         drawAllOverlays(state.currentFrame);
         update3DViewport(state.currentFrame);  // recolor 3D instances instantly
+    });
+
+    colorByTracksBtn.addEventListener('click', function () {
+        setColorByIdentity(state, false);
         setStatus('Coloring by Track', 'success');
     });
 
     colorByIdBtn.addEventListener('click', function () {
-        state.colorByIdentity = true;
-        updateColorByToggle();
-        drawAllOverlays(state.currentFrame);
-        update3DViewport(state.currentFrame);  // recolor 3D instances instantly
+        setColorByIdentity(state, true);
         setStatus('Coloring by Identity', 'success');
     });
 
