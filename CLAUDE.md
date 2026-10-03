@@ -40,6 +40,12 @@ tree serves correctly from every path. Do not introduce origin-root-relative URL
 - `/latest/` — newest release **including pre-releases**. A real copy.
 - `/dev/` — every push to `main`. A real copy.
 - `/pr/<n>/` — PR previews, owned by `pr-preview.yml`. `deploy.yml` never touches them.
+  Removed again when the PR closes — by a step that **re-syncs and retries** its
+  push, like `deploy.yml`'s. Both workflows push to `gh-pages` under different
+  concurrency groups, and a merge to `main` starts the `/dev/` deploy and the
+  preview cleanup in the same second; a single checkout-then-push lost that race
+  so often that 23 merged/closed PRs' previews were left on the live site. Any
+  new step that pushes to `gh-pages` needs the same loop.
 
 **Only a full release moves root.** A push to `main` goes to `/dev/` alone; a
 pre-release goes to `/latest/` alone; republishing an older release moves nothing
