@@ -50,6 +50,7 @@ import { trackCurrentFrame, trackAll, findMatchForSelected } from '../pose/track
 // Track Frame Range (#212): the Track Frame split button's dropdown entry.
 import { showTrackRangeModal } from './track-range-modal.js';
 import { showAlignViewsModal } from './view-align-modal.js';
+import { installSeekbarTooltip } from './seekbar-tooltip.js';
 // Pass 3i-2: triangulation orchestration moved out of app.js.
 import { triangulateCurrentFrame, triangulateAllFrames } from '../pose/triangulation.js';
 // User settings: default triangulation method + editable keyboard bindings.
@@ -1639,11 +1640,22 @@ export function setupUI() {
         var isDragging = false;
         var seekbar = document.getElementById('seekbar');
 
-        var getFrameFromEvent = function (e) {
-            var rect = seekbar.getBoundingClientRect();
-            var fraction = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+        // [0,1] along the bar -> 0-based frame. Shared with the hover tooltip
+        // so it names exactly the frame a click there would seek to.
+        var frameAtFraction = function (fraction) {
             return Math.round(fraction * (state.totalFrames - 1));
         };
+        var getFrameFromEvent = function (e) {
+            var rect = seekbar.getBoundingClientRect();
+            return frameAtFraction(Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width)));
+        };
+
+        // Hover tooltip with the frame (and timestamp) under the cursor (#142).
+        installSeekbarTooltip(seekbar, {
+            frameAtFraction: frameAtFraction,
+            getTotalFrames: function () { return state.totalFrames; },
+            getFps: function () { return state.fps; },
+        });
 
         var _seekThrottle = { lastRender: 0, timer: null, pendingFrame: null };
 
