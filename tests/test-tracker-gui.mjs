@@ -2,7 +2,8 @@
  * test-tracker-gui.mjs — Node test that the tracker drives the GUI "in all the
  * right ways", exactly like the current luc3d tracker: trackCurrentFrame()
  * assigns tracks + identities on the session AND refreshes the overlays, info
- * panel and timeline tracks. Uses tracker-gui-hooks.mjs (spy UI stubs).
+ * panel and timeline tracks; trackAll() also switches Color: Tracks -> ID
+ * (#242). Uses tracker-gui-hooks.mjs (spy UI stubs).
  *
  * Run:  node tests/test-tracker-gui.mjs
  */
@@ -32,8 +33,9 @@ register(pathToFileURL(path.join(HERE, 'tracker-gui-hooks.mjs')).href);
 const { Camera, Instance, FrameGroup, Session } =
     await import(pathToFileURL(path.join(POSE_DIR, 'pose-data.js')).href);
 const appState = await import(pathToFileURL(path.join(ROOT, 'ui', 'app-state.js')).href);
-const { trackCurrentFrame } =
+const { trackCurrentFrame, trackAll } =
     await import(pathToFileURL(path.join(POSE_DIR, 'tracker.js')).href);
+const colorBy = await import(pathToFileURL(path.join(ROOT, 'ui', 'color-by.js')).href);
 
 // --- synthetic 2-animal × 3-view frame -------------------------------------
 const NODES = ['n0', 'n1', 'n2', 'n3', 'n4', 'n5'];
@@ -69,6 +71,29 @@ ok(globalThis.__GUI.refreshTracks >= 1, 'timeline tracks refreshed (timeline.ref
 ok(globalThis.__GUI.lastStatus && /identit/i.test(globalThis.__GUI.lastStatus.msg || ''),
     'status reports identities to the user');
 eq(globalThis.__GUI.lastStatus && globalThis.__GUI.lastStatus.level, 'success', 'status level is success');
+// Track Frame (one frame) leaves the Color setting alone; only the whole-run
+// passes switch it (#242).
+ok(!appState.state.colorByIdentity, 'Track Frame does not switch Color to ID');
+
+// --- Track All switches Color: Tracks -> ID (#242) ---------------------------
+console.log('• trackAll() switches Color from Tracks to ID');
+let colorChanges = [];
+colorBy.onColorByChange(on => colorChanges.push(on));   // stands in for ui-wiring's handler
+appState.state.colorByIdentity = false;
+let res = await trackAll();
+ok(res && res.ok, 'Track All succeeded');
+eq(appState.state.colorByIdentity, true, 'Color is now ID');
+eq(JSON.stringify(colorChanges), '[true]', 'the change handler ran once (buttons + 2D/3D recolor in the app)');
+ok(/now coloring by ID/.test(globalThis.__GUI.lastStatus.msg), 'the status line says so: "' + globalThis.__GUI.lastStatus.msg + '"');
+
+console.log('• trackAll() with Color already ID changes nothing');
+colorChanges = [];
+res = await trackAll();
+ok(res && res.ok, 'second Track All succeeded');
+eq(appState.state.colorByIdentity, true, 'Color stays ID');
+eq(colorChanges.length, 0, 'no redundant recolor');
+ok(!/now coloring by ID/.test(globalThis.__GUI.lastStatus.msg), 'and the status line does not claim a switch');
+colorBy.onColorByChange(null);
 
 console.log(`\n${failed === 0 ? '✓ PASS' : '✗ FAIL'} — ${passed} passed, ${failed} failed`);
 if (failed > 0) { console.error('\nFailures:\n - ' + failures.join('\n - ')); process.exit(1); }
