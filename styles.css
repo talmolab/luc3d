@@ -2582,6 +2582,31 @@ body {
   height: 8px;
 }
 
+/* Seekbar hover tooltip (#142): frame + timestamp under the cursor. Sits
+   above the bar, over the timeline; `left` is set in px by
+   ui/seekbar-tooltip.js and the bubble is centred on it. */
+.seekbar-tooltip {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  transform: translateX(-50%);
+  z-index: 1000;
+  padding: 3px 8px;
+  border-radius: 4px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font-family: "SF Mono", "Fira Code", "Cascadia Code", monospace;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  pointer-events: none;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+}
+
+.seekbar-tooltip[hidden] {
+  display: none;
+}
+
 /* FPS pill */
 .fps-pill {
   display: inline-flex;
