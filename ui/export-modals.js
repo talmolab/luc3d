@@ -26,7 +26,7 @@ import {
 } from '../pose/triangulation.js';
 import { Viewport3D } from './viewport3d.js';
 import { getTrackColor, getGroupColor } from './overlays.js';
-import { drawAllOverlays, setReprojErrorVisible } from './rendering.js';
+import { drawAllOverlays, setReprojErrorVisible, showReprojectionsOnly, REPROJ_ONLY_NOTE } from './rendering.js';
 import { updateInfoPanel } from './info-panel.js';
 import { showLoading, hideLoading, setStatus } from '../import-export/save-load.js';
 import { showLoadingProgress, yieldToPaint } from './loading-overlay.js';
@@ -540,7 +540,8 @@ export async function groupByIdentityAndTriangulateAll(explicitMethod) {
     }
 
     hideLoading();
-    setReprojErrorVisible(true);
+    setReprojErrorVisible(true, { checkBoxes: false });
+    var reprojOnly = showReprojectionsOnly();   // #243: proofreading comes next
     drawAllOverlays(state.currentFrame);
     // Populate the 3D viewer for the current frame. Without this, "Triangulate
     // All" (which routes here when identities exist) triangulated every frame
@@ -555,7 +556,7 @@ export async function groupByIdentityAndTriangulateAll(explicitMethod) {
         triangulationMethodLabel(prefMethod) + ' (' +
         reused3d.toLocaleString() + ' kept existing 3D, ' +
         solvedBa.toLocaleString() + ' solved via Refined, ' +
-        solvedDlt.toLocaleString() + ' via DLT)', 'success');
+        solvedDlt.toLocaleString() + ' via DLT)' + (reprojOnly ? REPROJ_ONLY_NOTE : ''), 'success');
     console.log('[groupByIdentity] 3D provenance: reused', reused3d,
         '| solved BA', solvedBa, '| solved DLT', solvedDlt);
 }
@@ -787,7 +788,8 @@ async function groupByTrackAndTriangulateAll(selectedTrackIndices, selectedCamer
 
     // Post-triangulation updates — hide loading first so user sees results
     hideLoading();
-    setReprojErrorVisible(true);
+    setReprojErrorVisible(true, { checkBoxes: false });
+    var reprojOnly = showReprojectionsOnly();   // #243: proofreading comes next
     drawAllOverlays(state.currentFrame);
     update3DViewport(state.currentFrame);
     if (viewport3d) viewport3d.fitToScene();
@@ -801,7 +803,7 @@ async function groupByTrackAndTriangulateAll(selectedTrackIndices, selectedCamer
         ' frames via ' + triangulationMethodLabel(prefMethodT) +
         ' (avg error: ' + avgError + 'px; ' + reused3dT.toLocaleString() +
         ' kept existing 3D, ' + solvedBaT.toLocaleString() + ' solved via Refined, ' +
-        solvedDltT.toLocaleString() + ' via DLT)', 'success');
+        solvedDltT.toLocaleString() + ' via DLT)' + (reprojOnly ? REPROJ_ONLY_NOTE : ''), 'success');
     console.log('[group-by-track] Done:', totalGrouped, 'groups across', totalTriangulated,
         'frames, avg error:', avgError, '| 3D provenance: reused', reused3dT,
         '| solved BA', solvedBaT, '| solved DLT', solvedDltT);

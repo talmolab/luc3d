@@ -96,6 +96,8 @@ export function markDirty() {}
 const RENDERING_STUB = `
 export function drawAllOverlays() {}
 export function setReprojErrorVisible() {}
+export function showReprojectionsOnly() { return false; }
+export const REPROJ_ONLY_NOTE = '';
 `;
 
 const INFO_PANEL_STUB = `
