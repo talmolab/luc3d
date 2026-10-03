@@ -2070,12 +2070,7 @@ export function drawNodeTrails(ctx, viewName, session, frameIdx, options) {
     var trailLength = options.trailLength || 0;
     if (trailLength <= 0 || !session || frameIdx == null || !session.frameGroups) return;
 
-    // Window frames: present frames <= current, nearest first, capped so there are
-    // up to `trailLength` segments back from the current frame.
-    var windowIdx = [];
-    session.frameGroups.forEach(function (fg, idx) { if (idx <= frameIdx) windowIdx.push(idx); });
-    windowIdx.sort(function (a, b) { return b - a; });
-    windowIdx = windowIdx.slice(0, trailLength + 1);
+    var windowIdx = trailWindowFrames(session.frameGroups, frameIdx, trailLength);
     if (windowIdx.length < 2) return;                 // need at least one segment
     var W = windowIdx.length;
 
@@ -2127,29 +2122,79 @@ export function drawNodeTrails(ctx, viewName, session, frameIdx, options) {
                 : null);
         }
         if (!sample || sample.numNodes === 0) return;
+        var N = sample.numNodes;
 
-        for (var n = 0; n < sample.numNodes; n++) {
-            var prev = null;
-            for (var k2 = 0; k2 < W; k2++) {
-                var inst2 = byFrame[k2].get(tk);
-                if (!inst2 || !inst2.hasPoint(n)) { prev = null; continue; }   // gap — break the line
-                var cp = toCanvas(inst2.getX(n), inst2.getY(n));
-                // Segment prev(newer) → cp(older) is styled/colored by its older
-                // endpoint (index k2), so older segments fade and keep their color.
-                if (prev && colAtK[k2]) {
-                    ctx.globalAlpha = stepAlpha[k2];
-                    ctx.strokeStyle = colAtK[k2];
-                    ctx.lineWidth = stepWidth[k2];
-                    ctx.beginPath();
-                    ctx.moveTo(prev.x, prev.y);
-                    ctx.lineTo(cp.x, cp.y);
-                    ctx.stroke();
+        // Canvas position of every node at every window frame (NaN = absent), so
+        // each point is transformed once rather than once per segment end.
+        var pts = new Float64Array(W * N * 2);
+        for (var kp = 0; kp < W; kp++) {
+            var ik = byFrame[kp].get(tk);
+            for (var np = 0; np < N; np++) {
+                var o = (kp * N + np) * 2;
+                if (ik && ik.hasPoint(np)) {
+                    var c = toCanvas(ik.getX(np), ik.getY(np));
+                    pts[o] = c.x; pts[o + 1] = c.y;
+                } else {
+                    pts[o] = NaN; pts[o + 1] = NaN;
                 }
-                prev = cp;
             }
+        }
+
+        // ONE path per age step: every node's segment newer(k-1) → older(k) has
+        // the same style — the older endpoint's alpha / width / historical color —
+        // so they share a single stroke() instead of one each. That is N (the
+        // skeleton's node count) times fewer strokes; it was the per-trail-frame
+        // cost that made long trails stutter playback. A missing endpoint breaks
+        // the line exactly as before (no segment across a gap).
+        for (var k2 = 1; k2 < W; k2++) {
+            if (!colAtK[k2]) continue;
+            var started = false;
+            for (var n = 0; n < N; n++) {
+                var a = ((k2 - 1) * N + n) * 2, b = (k2 * N + n) * 2;
+                if (pts[a] !== pts[a] || pts[b] !== pts[b]) continue;   // NaN: absent
+                if (!started) { ctx.beginPath(); started = true; }
+                ctx.moveTo(pts[a], pts[a + 1]);
+                ctx.lineTo(pts[b], pts[b + 1]);
+            }
+            if (!started) continue;
+            ctx.globalAlpha = stepAlpha[k2];
+            ctx.strokeStyle = colAtK[k2];
+            ctx.lineWidth = stepWidth[k2];
+            ctx.stroke();
         }
     });
     ctx.restore();
+}
+
+/**
+ * The trail window: the last `trailLength`+1 PRESENT frames <= `frameIdx`,
+ * nearest first (index 0 = current) — sparse-aware, like SLEAP.
+ *
+ * Walks BACK from `frameIdx` instead of scanning and sorting every loaded
+ * frame: on a project held fully in memory (36,000 frames for HardFight) the
+ * scan + sort ran for every view on every redraw — a fixed ~3 ms of each
+ * playback frame as soon as trails were on, growing the further into the video
+ * you were. The walk touches ~`trailLength` frames. On a SPARSE project
+ * (labelled frames far apart) walking could take many more steps than there
+ * are frames, so after `frameGroups.size` steps it falls back to the scan,
+ * which then costs no more than the walk already did.
+ */
+export function trailWindowFrames(frameGroups, frameIdx, trailLength) {
+    var want = trailLength + 1;
+    var out = [];
+    var limit = frameGroups.size;
+    var idx = frameIdx, steps = 0;
+    for (; idx >= 0 && out.length < want && steps < limit; idx--, steps++) {
+        if (frameGroups.has(idx)) out.push(idx);
+    }
+    if (out.length < want && idx >= 0) {
+        // Ran out of step budget before reaching frame 0: sparse — scan instead.
+        out = [];
+        frameGroups.forEach(function (_fg, i) { if (i <= frameIdx) out.push(i); });
+        out.sort(function (x, y) { return y - x; });
+        out = out.slice(0, want);
+    }
+    return out;
 }
 
 export function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, session, options) {

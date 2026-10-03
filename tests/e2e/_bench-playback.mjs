@@ -57,6 +57,8 @@
  *         noInfo = info panel hidden; no3d = 3D viewer hidden; lean = both
  *         (user-reachable UI states, not code changes); domVideos = full with
  *         the <video> elements attached to the page (tiny, near-transparent);
+ *         trails<N> = full with Tracks ▸ Node Trails at N frames (e.g. trails100,
+ *         trails500); every other scenario runs with trails off;
  *         rvfcLoop = full on the previous primary-rVFC loop
  *         (window.LUCID_PLAYBACK_LOOP='rvfc'); rafFallback = rVFC hidden;
  *         rvfc = full + rVFC
@@ -652,6 +654,11 @@ try {
             if (c && c.checked !== want) { c.checked = want; c.dispatchEvent(new Event('change', { bubbles: true })); }
         }, name.replace(/-traced$|#.*$/, ''));
         const base = name.replace(/-traced$|#.*$/, '');
+        // trails<N> = full, with Tracks ▸ Node Trails set to N frames (issue #102
+        // presets 10/50/100/250/500). Every other scenario runs with trails OFF,
+        // so a trails run cannot leak into the next one.
+        const trailMatch = /^trails(\d+)$/.exec(base);
+        await page.evaluate((n) => { window.__lucid.state.trailLength = n; }, trailMatch ? Number(trailMatch[1]) : 0);
         const hideInfo = base === 'noInfo' || base === 'lean';
         const hide3d = base === 'no3d' || base === 'lean';
         await page.evaluate(async ({ hideInfo, hide3d }) => {
