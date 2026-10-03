@@ -352,6 +352,11 @@ const TRACKING_THRESHOLDS = [
         desc: 'The stale-anchor fix (pose/cross-view-tracker.js, 2026-08-14): evict a target\'s per-camera detection once it is older than this many frames, before that frame\'s matching runs, so a target cannot be re-triangulated from one fresh view fused with several ancient ones after an occlusion. 0 = off (reproduces the pre-fix, unbounded-staleness reference behavior). Validated default 20; measured to cut sustained ID switches roughly in half to 5x on both benchmark corpora when paired with a lower distance threshold.',
     },
     {
+        id: 'matchGate', label: 'Reject negative matches (gate)', default: 1,
+        min: 0, max: 1, step: 1,
+        desc: 'The match gate (pose/cross-view-tracker.js, 2026-10-03): 1 = a tracked target only takes a detection it scores positively on (roughly, within the distance threshold of where it is), instead of being forced onto whatever is left. Stops a spare target and an extra detection (e.g. a reflection) from trading a correct match away. Targets lost for longer than the stale window still re-acquire ungated. 0 = off (reproduces the pre-gate forced assignment).',
+    },
+    {
         id: 'reprojErrorThreshold', label: 'Reprojection error threshold (px)', default: 0,
         min: 0, max: 500, step: 1,
         desc: 'Robust triangulation: after an initial 3D solve, drop any 2D node whose reprojection error in a view exceeds this many pixels, then re-triangulate that node from the remaining reliable views. A node left with fewer than 2 reliable views is dropped from 3D. 0 = disabled (use all views). Views excluded in the Camera Views panel never contribute to triangulation regardless.',
@@ -369,7 +374,7 @@ TRACKING_THRESHOLDS.forEach(function (t) { _thrById.set(t.id, t); });
 const WIZARD_THRESHOLD_IDS = new Set([
     'filterMinVisibleNodes', 'filterMinInstanceScore',
     'corr2dWeight', 'corr3dWeight', 'velocityThreshold', 'distanceThreshold', 'timePenalty',
-    'stale',
+    'stale', 'matchGate',
     'reprojErrorThreshold',
 ]);
 
