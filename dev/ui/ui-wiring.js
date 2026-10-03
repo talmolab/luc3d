@@ -49,6 +49,7 @@ import { OnDemandVideoDecoder, VideoController } from '../loading/video.js';
 import { trackCurrentFrame, trackAll, findMatchForSelected } from '../pose/tracker.js';
 // Track Frame Range (#212): the Track Frame split button's dropdown entry.
 import { showTrackRangeModal } from './track-range-modal.js';
+import { showAlignViewsModal } from './view-align-modal.js';
 import { onColorByChange, setColorByIdentity } from './color-by.js';
 import { installSeekbarTooltip } from './seekbar-tooltip.js';
 // Pass 3i-2: triangulation orchestration moved out of app.js.
@@ -1157,6 +1158,11 @@ export function setupMenus() {
     document.getElementById('menuFitScene').addEventListener('click', function () {
         closeMenus();
         if (viewport3d) viewport3d.fitToScene();
+    });
+
+    document.getElementById('menuAlignViews').addEventListener('click', function () {
+        closeMenus();
+        showAlignViewsModal();
     });
 
     document.getElementById('menuNewProject').addEventListener('click', function () {

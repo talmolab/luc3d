@@ -1762,6 +1762,65 @@ results}` (points3d buffers transferred) or `{type:'error', id, message}`.
 
 ---
 
+### pose/view-align.js
+
+**Purpose.** The math behind View ▸ **Align Views to References…** (#226):
+given two or more reference views the user has rotated the way they like,
+compute the in-plane display rotation (`view.rotation` degrees) for every other
+calibrated camera so the scene looks the same way round in all of them. Pure,
+import-free (takes `Camera`-shaped objects), so it runs as-is in Node.
+
+**Key exports.** `alignViewRotations(cameras, rotations, referenceNames, {center?})`
+-> `{ok, center, rotations, skipped:[{name, reason}], disagreementDeg}` or
+`{ok:false, error}`; `estimateSceneCenter(cameras)` (least-squares point closest
+to every optical axis); geometry helpers `cameraCenterWorld`, `opticalAxisWorld`,
+`projectToImage` (pinhole + `distortPoint`, `null` behind the camera),
+`backProjectToWorldDir`, `screenUpImageDir`, `rotationForImageDir`, `wrapDeg`;
+constants `UP_PULL`, `MAX_LINE_OF_SIGHT_ALIGNMENT`, `UPSIDE_DOWN_DEG`.
+
+**The model.** Each reference contributes its screen-up PLANE (sight line +
+screen-up direction at the scene centre) and its own 3D up vector. Per camera,
+`U` minimizes `(1/N)Σ(U·n_j)² − 2λ U·(Σ w_jk up_j / Σ w_jk)` over unit vectors
+(a 3x3 trust-region problem solved exactly in the eigenbasis), with
+`w_jk = 1/φ³` by sight-line angle; the view is rotated so `U` projects
+screen-up at the scene centre (through lens distortion). Distinct planes ->
+their intersection (a ring of side cameras gets gravity up exactly);
+coincident planes -> the proximity-weighted SUM of the references' ups (a
+central top + central front pair: overhead views keep the arena layout, side
+views keep gravity up — the issue's mockups).
+
+**Notes / caveats.**
+- **Two earlier models failed on the real rigs** and are documented in the
+  header so they are not reintroduced: a single global plane intersection
+  refused HardFight's and Mimica's natural pairs (both references lie in the
+  rig's symmetry plane, so the planes coincide); carrying the reference's
+  orientation along the shortest orbit twisted ring cameras up to upside down.
+- **The tie-break must be the SUM of up vectors, not squared alignments** — a
+  top view's up is horizontal and a front view's vertical; only their sum
+  projects up in both. The squared form reported the two as "upside down".
+- **Planes are not distance-weighted** (only the tie-break is): down-weighting a
+  far reference's plane let the tie-break drag a clean intersection ~4° off.
+- **At least two references.** With one, `U` is that reference's own up, which
+  leaves ring cameras 10–20° off when it looks slightly down.
+- **The scene centre is calibration-only** (optical axes), so it behaves the
+  same on a lazily-loaded project whose frames are not resident; it refuses rigs
+  whose axes are all within ~2° of parallel.
+- A camera looking within 5° of `U` is skipped (its rotation would be noise), as
+  is one with the scene centre behind it.
+
+**Imports from project modules.** None.
+
+**Imported by.** `ui/view-align-modal.js`.
+
+**Coverage.** `tests/test-view-align.mjs` (synthetic rigs: ring, mixed heights,
+distortion with an off-centre scene point, top-down, top+front in one plane,
+blending, failure modes — every aligned view checked by projecting through the
+real `Camera` and rotating the way CSS does) and
+`tests/e2e/align-views-to-references.mjs` (the dialog in the real app). Real-data
+check: `tests/e2e/_diag-real-align-views.mjs`.
+
+---
+
 ## ui/
 
 ### ui/app-state.js
@@ -1819,7 +1878,7 @@ Calibration and `envSkeleton` remain per-session.
 `import-export/slp-import.js`, `loading/session-loader.js`,
 `ui/info-panel.js`, `ui/rendering.js`, `ui/identity-assignment.js`,
 `ui/export-modals.js`, `ui/sessions-panes.js`, `ui/layout-controls.js`,
-`ui/ui-wiring.js`.
+`ui/ui-wiring.js`, `ui/view-align-modal.js`.
 
 **User-facing features.** Backs literally everything — session switching,
 playback state, dirty tracking, multi-session UI.
@@ -4048,7 +4107,7 @@ data sources. Plus visibility-toggle helpers and frame counter updates.
 `pose/initialization.js`, `import-export/save-load.js`,
 `import-export/slp-import.js`, `loading/session-loader.js`,
 `ui/identity-assignment.js`, `ui/export-modals.js`,
-`ui/sessions-panes.js`, `ui/ui-wiring.js`.
+`ui/sessions-panes.js`, `ui/ui-wiring.js`, `ui/view-align-modal.js`.
 
 **User-facing features.** Every overlay redraw — after seek, drag,
 re-triangulate, identity assignment, or visibility-toggle change.
@@ -4164,8 +4223,8 @@ multi-video docking layout.
 - `../pose/initialization.js` — `setup3DViewport`.
 
 **Imported by.** `pose/initialization.js`, `ui/info-panel.js`,
-`ui/identity-assignment.js`, `ui/ui-wiring.js`,
-`loading/session-loader.js`, `import-export/save-load.js`,
+`ui/identity-assignment.js`, `ui/ui-wiring.js`, `ui/view-align-modal.js`
+(`syncRotationUI`), `loading/session-loader.js`, `import-export/save-load.js`,
 `import-export/slp-import.js`.
 
 **Decoder pool cold reserve.** `switchSession` maintains
@@ -5015,6 +5074,49 @@ the app-wide modal convention. On a successful run the viewer is parked on the
 
 ---
 
+### ui/view-align-modal.js
+
+**Purpose.** The **Align Views to References** dialog (#226), opened from View ▸
+"Align Views to References…" (`#menuAlignViews`). The user ticks two or more
+views they have already rotated (Visibility ▸ Video Rotation or the Shift+R+←/→
+chord); every other view is rotated to match, from the calibration
+(`pose/view-align.js`).
+
+**Key exports.** `showAlignViewsModal()`.
+
+**Behaviour.**
+- A table of the session's calibrated cameras: reference checkbox, current
+  angle, and a live preview of the angle each will get (or why it is left
+  unchanged). Inline errors (fewer than two references, an upside-down
+  reference) disable Apply. Pre-selects the last references used, else the
+  views already turned when there are at least two. `Esc`, Cancel and a backdrop
+  click close with no change; `Enter` applies.
+- **Writes both rotation copies**, as every rotation edit does: the session
+  store (`setSessionRotation`, persisted in `metadata.lucid.videoRotation`) and,
+  for the active session, `view.rotation` + `applyZoom` + `syncRotationUI`. Then
+  one `drawAllOverlays` and `markDirty`. Angles are stored as whole degrees.
+- **"Also apply to the other N sessions"** re-solves each other session from
+  its OWN calibration with this session's reference angles; sessions missing a
+  reference camera are listed in the status line, never half-applied. Edited
+  background sessions get `isDirty = true` directly — `markDirty()` only flags
+  the active one, and the switch-away prompt and lazy eviction read each
+  session's own flag.
+
+**Imports from project modules.** `ui/app-state.js` (`state`,
+`videoController`, `getActiveSession`), `import-export/save-load.js`
+(`setStatus`, `markDirty`), `ui/rendering.js` (`drawAllOverlays`),
+`ui/sessions-panes.js` (`syncRotationUI`), `ui/video-filters.js`
+(`getSessionRotation`, `setSessionRotation`, `clampRotationSetting`),
+`pose/view-align.js` (`alignViewRotations`).
+
+**Imported by.** `ui/ui-wiring.js` (the View-menu click handler).
+
+**Coverage.** `tests/e2e/align-views-to-references.mjs` — real dock panes and
+menu item; pre-selection, Esc, the upside-down refusal, Apply measured on screen
+through each wrapper's computed transform, dirty flags, apply-to-all.
+
+---
+
 ### ui/view-legend.js
 
 **Purpose.** The Visibility panel's **Display Legend** key, as DOM chrome in
@@ -5154,7 +5256,9 @@ Callers normally reach the serialize/ingest half through
 + `restoreViewRotation`, and the `clampRotation` re-export), `ui/ui-wiring.js`
 (`setSessionRotation`, to commit the hold-to-rotate gesture),
 `import-export/visibility-metadata.js` (the `metadata.lucid` mapping every
-reader and writer goes through). Bridged into `tests/test-runner.html` and
+reader and writer goes through), `ui/view-align-modal.js` (`getSessionRotation`
+/ `setSessionRotation` / `clampRotationSetting`, writing the aligned angles —
+#226). Bridged into `tests/test-runner.html` and
 covered by `tests/test-video-contrast.js` (contrast) and
 `tests/test-visibility-metadata.js` (brightness, rotation); the real-app halves
 are `tests/e2e/contrast-slider-roundtrip.mjs` and
@@ -5411,6 +5515,8 @@ header for the full list. Notable ones: `app-state.js`,
 `sessions-panes.js`, `settings.js`, `settings-modal.js`,
 `track-range-modal.js` (`showTrackRangeModal`, wired to the Track Frame split
 button's `#tbTrackFrameRange` dropdown item — #212),
+`view-align-modal.js` (`showAlignViewsModal`, wired to View ▸ "Align Views to
+References…" — #226),
 `seekbar-tooltip.js` (`installSeekbarTooltip`, the seekbar's hover tooltip —
 #142),
 `color-by.js` (`onColorByChange`, `setColorByIdentity` — the Color: Tracks /
@@ -7358,7 +7464,7 @@ project save/reload — matching the SLP import path in `slp-import.js`.
 `pose/initialization.js`, `import-export/slp-import.js`,
 `loading/session-loader.js`, `ui/info-panel.js`, `ui/rendering.js`,
 `ui/identity-assignment.js`, `ui/export-modals.js`,
-`ui/sessions-panes.js`, `ui/ui-wiring.js`.
+`ui/sessions-panes.js`, `ui/ui-wiring.js`, `ui/view-align-modal.js`.
 
 **User-facing features.** File menu New / Save / Save As / Quick Save /
 Open Project, dirty-state tracking, the loading spinner overlay, and
