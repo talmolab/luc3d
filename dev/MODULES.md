@@ -4027,6 +4027,51 @@ re-triangulate, identity assignment, or visibility-toggle change.
 
 ---
 
+### ui/seekbar-tooltip.js
+
+**Purpose.** Hover tooltip on the transport seekbar (#142): "Frame 1,234 ·
+00:41.100" for the point under the cursor, so you can see where a click or
+drag will land before making it.
+
+**Key exports.** `formatTimestamp(seconds)` (`mm:ss.mmm`, `h:mm:ss.mmm` from an
+hour up; rounds to the millisecond before splitting, so never `00:60.000`),
+`seekbarTooltipText(frameIdx, fps)`, `installSeekbarTooltip(seekbar,
+{frameAtFraction, getTotalFrames, getFps})` -> the tooltip element
+(`#seekbarTooltip`, `.seekbar-tooltip`).
+
+**Behaviour.**
+- The frame shown is EXACTLY the one a click there seeks to: the caller passes
+  the scrub handlers' own `frameAtFraction` mapping. It is shown **1-based**, like
+  `#currentFrame` and every other frame number on screen.
+- The timestamp is the frame's start time, `frameIdx / state.fps`, and is left
+  out when the frame rate is unknown (`state.fps` is 0 while a session has no
+  video yet).
+- Visible while hovering the bar and throughout a scrub drag (document-level
+  mousemove, so it keeps tracking after the pointer leaves the bar); hidden on
+  leave / release outside, and never shown when `totalFrames <= 1`. Centred on
+  the cursor and clamped to the bar's extent; `pointer-events: none` so it
+  cannot steal the hover.
+- **Layout-free while moving**, so hovering during playback adds no forced
+  synchronous layout to the frame: the bar's rect is read on mouseenter / drag
+  start and cached (a `ResizeObserver` and window `resize` drop it — the bar's
+  width moves when the frame counter beside it gains a digit), and the bubble
+  is measured only when its text LENGTH changes (monospace font). A move with
+  an unchanged length only writes.
+
+**Imports from project modules.** None (dependency-free, so the text half runs
+in Node).
+
+**Imported by.** `ui/ui-wiring.js` (installed inside the seekbar-scrubbing
+IIFE in `setupUI`).
+
+**Coverage.** `tests/test-seekbar-tooltip.mjs` (formatting) and
+`tests/e2e/seekbar-tooltip.mjs` (real mouse events: follows the pointer,
+tooltip frame == the frame a click lands on, drag off the bar, edges clamped,
+drawn on top of the timeline, no timestamp at fps 0, and zero layout reads
+across a run of hover moves).
+
+---
+
 ### ui/sessions-panes.js
 
 **Purpose.** Dockview pane manager (video panes), the view strip, the
@@ -5323,6 +5368,8 @@ header for the full list. Notable ones: `app-state.js`,
 `sessions-panes.js`, `settings.js`, `settings-modal.js`,
 `track-range-modal.js` (`showTrackRangeModal`, wired to the Track Frame split
 button's `#tbTrackFrameRange` dropdown item — #212),
+`seekbar-tooltip.js` (`installSeekbarTooltip`, the seekbar's hover tooltip —
+#142),
 `video-filters.js` (`setSessionRotation`; `clampRotation` still comes in via
 `sessions-panes.js`, which re-exports it).
 
