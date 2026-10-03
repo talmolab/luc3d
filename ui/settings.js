@@ -135,9 +135,22 @@ export function getDefaultTriangulationMethod() {
     return _settings.triangulationMethod === 'ba' ? 'ba' : 'dlt';
 }
 
+// Listeners told when the default changes — the toolbar's Triangulate buttons
+// show it (#138). A listener that throws must not stop the others or the save.
+var _methodListeners = [];
+
+export function onDefaultTriangulationMethodChange(fn) {
+    if (typeof fn === 'function') _methodListeners.push(fn);
+}
+
 export function setDefaultTriangulationMethod(method) {
+    var prev = getDefaultTriangulationMethod();
     _settings.triangulationMethod = method === 'ba' ? 'ba' : 'dlt';
     persist();
+    if (_settings.triangulationMethod === prev) return;
+    for (var i = 0; i < _methodListeners.length; i++) {
+        try { _methodListeners[i](_settings.triangulationMethod); } catch (e) { /* ignore */ }
+    }
 }
 
 // --- Node weights ----------------------------------------------------------
