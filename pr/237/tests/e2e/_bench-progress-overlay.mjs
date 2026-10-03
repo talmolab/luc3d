@@ -29,6 +29,16 @@
  *     CONSOLE=<regex>    echo matching page console lines, timestamped
  *     DIGEST=1           hash the loaded session's poses (compare two APP_ROOTs)
  *     PROFILE_VIDEO=1    time each video decoder's init phases + long tasks
+ *     DIGEST_OPS=1       after each Track All / Triangulate All, hash its full
+ *                        output (identities, frameIdentityMap, instanceGroups
+ *                        incl. members' coords, points3d, method,
+ *                        reprojections, triangulationResults) — compare two
+ *                        APP_ROOTs to prove a change is output-identical
+ *     TRI_WORKERS=N      Triangulate All worker-pool size (0 = inline)
+ *     CPU_PROFILE=1      record a V8 CPU profile per op (main thread) and print
+ *                        the top functions by self time + idle share; the raw
+ *                        .cpuprofile is saved next to summary.json (open in
+ *                        DevTools ▸ Performance)
  *     PORT=8124
  *
  * Output: verify/progress-bench/<LABEL>-<timestamp>/{summary.json,*.png}
@@ -88,6 +98,10 @@ try {
 
     await page.goto(`http://localhost:${PORT}/index.html`);
     await page.waitForFunction(() => window.__lucid && window.__lucid.state, { timeout: 30000 });
+    // TRI_WORKERS=N: Triangulate All worker-pool size (0 = solve inline).
+    if (process.env.TRI_WORKERS != null) {
+        await page.evaluate((n) => { window.LUCID_TRIANGULATION_WORKERS = n; }, Number(process.env.TRI_WORKERS));
+    }
 
     // In-page recorder: overlay updates + painted frames while the overlay is up.
     await page.evaluate(() => {
@@ -124,8 +138,33 @@ try {
         R.start = (name) => { R.rec = { name, t0: performance.now(), updates: [], paints: 0 }; };
     });
 
+    const cdp = process.env.CPU_PROFILE === '1' ? await page.context().newCDPSession(page) : null;
+    if (cdp) { await cdp.send('Profiler.enable'); await cdp.send('Profiler.setSamplingInterval', { interval: 500 }); }
+    function summarizeProfile(name, prof) {
+        fs.writeFileSync(path.join(OUT_DIR, name + '.cpuprofile'), JSON.stringify(prof));
+        const dt = new Map();          // node id -> self ms (from sample deltas)
+        for (let i = 0; i < prof.samples.length; i++) {
+            dt.set(prof.samples[i], (dt.get(prof.samples[i]) || 0) + (prof.timeDeltas[i + 1] || 0) / 1000);
+        }
+        const self = new Map(); let total = 0, idle = 0, gc = 0;
+        for (const n of prof.nodes) {
+            const ms = dt.get(n.id) || 0;
+            total += ms;
+            const fn = n.callFrame.functionName || '(anonymous)';
+            if (fn === '(idle)') { idle += ms; continue; }
+            if (fn === '(garbage collector)') gc += ms;
+            const file = (n.callFrame.url || '').split('/').slice(-2).join('/');
+            const key = `${fn}  ${file}:${n.callFrame.lineNumber + 1}`;
+            self.set(key, (self.get(key) || 0) + ms);
+        }
+        const top = [...self.entries()].sort((a, b) => b[1] - a[1]).slice(0, 22);
+        log(`   cpu: ${(total / 1000).toFixed(1)} s sampled, main thread idle ${(100 * idle / total).toFixed(0)}%, GC ${(gc / 1000).toFixed(1)} s`);
+        for (const [k, ms] of top) log(`     ${(ms / 1000).toFixed(2).padStart(6)} s  ${(100 * ms / total).toFixed(1).padStart(5)}%  ${k}`);
+    }
+
     async function runOp(name, startFn, doneRe) {
         log(`\n== ${name}`);
+        if (cdp) await cdp.send('Profiler.start');
         const prevStatus = await page.evaluate(() => document.getElementById('statusText').textContent);
         await page.evaluate((n) => window.__prog.start(n), name);
         await startFn();
@@ -151,6 +190,7 @@ try {
             }
             await sleep(SHOT_MS ? 100 : 250);
         }
+        if (cdp) summarizeProfile(name, (await cdp.send('Profiler.stop')).profile);
         const rec = await page.evaluate(() => {
             const r = window.__prog.rec;
             // The final hide. MutationObserver callbacks run at the end of the
@@ -210,6 +250,46 @@ try {
         (out.etaAccuracy || []).forEach(a => log('   eta @' + Math.round(a.at * 100) + '%: ' +
             (a.shown ? `"${a.shown}" (est ${a.estS}s, actual ${a.actualS}s, ${a.errPct > 0 ? '+' : ''}${a.errPct}%)` : 'none shown')));
         out.sampleTexts.forEach(t => log('   ' + t));
+        if (process.env.DIGEST_OPS === '1') {
+            out.outputDigest = await page.evaluate(() => {
+                // Generic deterministic hash: Maps/objects by sorted key, arrays and
+                // typed arrays in order, numbers by their exact f64 bits.
+                let h1 = 0x811c9dc5 >>> 0, h2 = 0x01000193 >>> 0;
+                const f64 = new Float64Array(1), u8 = new Uint8Array(f64.buffer);
+                const byte = (b) => { h1 = Math.imul(h1 ^ b, 16777619) >>> 0; h2 = Math.imul(h2 ^ b, 2246822519) >>> 0; };
+                const num = (v) => { f64[0] = v; for (let i = 0; i < 8; i++) byte(u8[i]); };
+                const str = (t) => { num(t.length); for (let i = 0; i < t.length; i++) num(t.charCodeAt(i)); };
+                const cmp = (a, b) => (typeof a === 'number' && typeof b === 'number') ? a - b : String(a) < String(b) ? -1 : String(a) > String(b) ? 1 : 0;
+                const seen = new WeakSet();
+                const walk = (v) => {
+                    if (v === null) { str('null'); return; }
+                    const t = typeof v;
+                    if (t === 'undefined') { str('undef'); return; }
+                    if (t === 'number') { str('n'); num(v); return; }
+                    if (t === 'string') { str('s'); str(v); return; }
+                    if (t === 'boolean') { str(v ? 'T' : 'F'); return; }
+                    if (t === 'function') return;
+                    if (seen.has(v)) { str('<cycle>'); return; }
+                    seen.add(v);
+                    if (ArrayBuffer.isView(v)) { str('ta'); num(v.length); for (let i = 0; i < v.length; i++) num(v[i]); }
+                    else if (Array.isArray(v)) { str('a'); num(v.length); for (const x of v) walk(x); }
+                    else if (v instanceof Map) { str('m'); const ks = [...v.keys()].sort(cmp); num(ks.length); for (const k of ks) { walk(k); walk(v.get(k)); } }
+                    else if (v instanceof Set) { str('set'); const ks = [...v].sort(cmp); num(ks.length); for (const k of ks) walk(k); }
+                    else { str('o'); const ks = Object.keys(v).sort(); for (const k of ks) { str(k); walk(v[k]); } }
+                    seen.delete(v);
+                };
+                const st = window.__lucid.state, s = st.session;
+                const part = (v) => { h1 = 0x811c9dc5 >>> 0; h2 = 0x01000193 >>> 0; walk(v); return h1.toString(16).padStart(8, '0') + h2.toString(16).padStart(8, '0'); };
+                let groups = 0, with3d = 0;
+                for (const [, gs] of s.instanceGroups) for (const g of gs) { groups++; if (g.points3d && g.points3d.length) with3d++; }
+                return {
+                    identities: part(s.identities), frameIdentityMap: part(s.frameIdentityMap),
+                    instanceGroups: part(s.instanceGroups), triangulationResults: part(st.triangulationResults),
+                    groups, with3d,
+                };
+            });
+            log('   output digest: ' + JSON.stringify(out.outputDigest));
+        }
         summary.ops.push({ ...out, updatesFull: vis });
         return out;
     }
