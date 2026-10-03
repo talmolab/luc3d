@@ -43,6 +43,7 @@ import {
 } from './slp-streaming-write.js';
 import { SioLazyLoader } from '../loading/sio-lazy-loader.js';
 import { getLoadingProgressModal } from '../ui/loading-progress-modal.js';
+import { showLoading, hideLoading } from '../ui/loading-overlay.js';
 import { writeVisibilityMetadata, readVisibilityMetadata } from './visibility-metadata.js';
 import { fileSystemAccessHint } from '../ui/browser-hints.js';
 
@@ -2035,14 +2036,9 @@ function _restoreLegacySession(data) {
 // Loading / Status
 // ============================================
 
-export function showLoading(msg) {
-    document.getElementById('loadingOverlay').classList.remove('hidden');
-    document.getElementById('loadingStatus').textContent = msg || 'Loading...';
-}
-
-export function hideLoading() {
-    document.getElementById('loadingOverlay').classList.add('hidden');
-}
+// The overlay itself (and its progress bar) lives in ui/loading-overlay.js;
+// re-exported here because ~10 modules import these two from this one.
+export { showLoading, hideLoading };
 
 export function setStatus(text, type) {
     document.getElementById('statusText').textContent = text;

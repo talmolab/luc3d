@@ -29,6 +29,8 @@ import { getTrackColor, getGroupColor } from './overlays.js';
 import { drawAllOverlays, setReprojErrorVisible } from './rendering.js';
 import { updateInfoPanel } from './info-panel.js';
 import { showLoading, hideLoading, setStatus } from '../import-export/save-load.js';
+import { showLoadingProgress, yieldToPaint } from './loading-overlay.js';
+import { createGroupSolver } from '../pose/triangulation-pool.js';
 import {
     exportSlpClientSide,
     exportSlpMultiSession,
@@ -321,18 +323,39 @@ export async function groupByIdentityAndTriangulateAll(explicitMethod) {
         ? (explicitMethod === 'ba' ? 'ba' : 'dlt')
         : resolveTriangulationMethod(null);
 
-    showLoading('Grouping by identity & triangulating 0/' + totalFrames + ' frames (' +
-        triangulationMethodLabel(prefMethod) + ')...');
+    // A lazy session the sweep cannot window materializes every frame first
+    // (`sweepLazyFrameWindows`' non-windowed branch) — a labelled stage of its own.
+    var gLoader = session.lazyLoader;
+    var gSteps = (gLoader && !(gLoader.isSync && typeof gLoader.releaseWindow === 'function')) ? 2 : 1;
+    var gMethodLabel = triangulationMethodLabel(prefMethod);
+    if (gSteps === 2) {
+        showLoadingProgress('Loading frames', 0, totalFrames, { step: 1, steps: gSteps });
+    } else {
+        showLoadingProgress('Grouping & triangulating', 0, totalFrames,
+            { step: 1, steps: 1, detail: gMethodLabel });
+    }
+    await yieldToPaint();
 
     var totalGrouped = 0;
     var totalTriangulated = 0;
     // 3D provenance, reported at the end: groups whose existing 3D was reused
     // as-is vs. groups that genuinely had to be solved, and with what.
     var reused3d = 0, solvedBa = 0, solvedDlt = 0;
+    // Solves run on the worker pool (pose/triangulation-pool.js); the regrouping
+    // itself stays on the main thread. Results land in submission order.
+    var gSolver = createGroupSolver(cameras,
+        { method: prefMethod, triangulateOnly: true, expectedGroups: totalFrames });
+    function applyIdentitySolve(group, triResult) {
+        group.points3d = triResult.points3d;
+        group.triangulationMethod = triResult.method;
+        if (triResult.method === 'ba') solvedBa++; else solvedDlt++;
+    }
 
     // Memory-bounded sweep over every frame (windows + release on lazy sessions),
     // replacing the old loadAllLazyFrames-then-iterate path that re-OOMed.
-    var processedFrames = await sweepTriangulationFrames(session, function (frameIdx, fg) {
+    var processedFrames;
+    try {
+    processedFrames = await sweepTriangulationFrames(session, function (frameIdx, fg) {
         // `fg` is undefined for a frame that has 3D grouping but no resident 2D
         // (the sweep's contract — see `sweepLazyFrameWindows`). Without this guard
         // the very next line throws a TypeError, which aborts the whole operation
@@ -487,28 +510,34 @@ export async function groupByIdentityAndTriangulateAll(explicitMethod) {
             } else {
                 // Still `triangulateOnly` (reprojections are recomputed on demand
                 // when drawing); that skips the reprojection/error passes, not the
-                // solve, so BA still runs when BA is what was asked for.
-                var triResult = triangulateAndReproject(group, cameras,
-                    { triangulateOnly: true, method: prefMethod });
-                group.points3d = triResult.points3d;
-                group.triangulationMethod = triResult.method;
-                if (triResult.method === 'ba') solvedBa++; else solvedDlt++;
+                // solve, so BA still runs when BA is what was asked for. Solved on
+                // the worker pool (bit-identical; applied in submission order).
+                gSolver.submit(group, cameras, applyIdentitySolve.bind(null, group));
             }
             group.markClean();
 
             totalGrouped++;
             totalTriangulated++;
         }
+        return gSolver.throttle();
 
     }, {
+        onLoadProgress: function (done, total) {
+            showLoadingProgress('Loading frames', done, total, { step: 1, steps: gSteps });
+        },
         onProgress: function (done, total) {
-            var el = document.getElementById('loadingStatus');
-            if (el) el.textContent =
-                'Grouping by identity & triangulating ' + done + '/' + total + ' frames (' +
-                triangulationMethodLabel(prefMethod) + '; ' +
-                reused3d.toLocaleString() + ' existing solutions kept)...';
+            showLoadingProgress('Grouping & triangulating', done, total, {
+                step: gSteps, steps: gSteps,
+                detail: gMethodLabel + ' · ' + reused3d.toLocaleString() + ' existing solutions kept' +
+                    (gSolver.parallel ? ' · ' + gSolver.workers + ' workers' : ''),
+            });
         },
     });
+    await gSolver.finish();
+    } catch (e) {
+        gSolver.cancel();
+        throw e;
+    }
 
     hideLoading();
     setReprojErrorVisible(true);
@@ -568,8 +597,8 @@ async function groupByTrackAndTriangulateAll(selectedTrackIndices, selectedCamer
     // than a surprise.
     var prefMethodT = resolveTriangulationMethod(null);
 
-    showLoading('Grouping & triangulating 0/' + totalFrames + ' frames (' +
-        triangulationMethodLabel(prefMethodT) + ')...');
+    showLoadingProgress('Grouping & triangulating', 0, totalFrames,
+        { detail: triangulationMethodLabel(prefMethodT) });
 
     var totalGrouped = 0;
     var totalTriangulated = 0;
@@ -749,9 +778,10 @@ async function groupByTrackAndTriangulateAll(selectedTrackIndices, selectedCamer
 
     }, {
         onProgress: function (done, total) {
-            showLoading('Triangulating... ' + done + '/' + total + ' frames (' +
-                triangulationMethodLabel(prefMethodT) + '; ' +
-                reused3dT.toLocaleString() + ' existing solutions kept)');
+            showLoadingProgress('Grouping & triangulating', done, total, {
+                detail: triangulationMethodLabel(prefMethodT) + ' · ' +
+                    reused3dT.toLocaleString() + ' existing solutions kept',
+            });
         },
     });
 
