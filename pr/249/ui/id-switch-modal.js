@@ -25,15 +25,15 @@
  * import-export/save-load.js (setStatus).
  */
 
-import { state, getActiveSession } from './app-state.js?v=858caeb3297a';
-import { setSeekbarSwitchMarkers } from './seekbar-markers.js?v=858caeb3297a';
-import { setStatus, markDirty } from '../import-export/save-load.js?v=858caeb3297a';
-import { showLoadingProgress, hideLoading, yieldToPaint } from './loading-overlay.js?v=858caeb3297a';
-import { getTrackingThreshold } from './settings.js?v=858caeb3297a';
-import { checkSizeSwitches, checkImageSwitches } from '../pose/id-switch-check.js?v=858caeb3297a';
-import { hasWebGPU, createImageEmbedder, IMAGE_MODEL_MB } from './image-embedder.js?v=858caeb3297a';
+import { state, getActiveSession } from './app-state.js?v=8f123c180386';
+import { setSeekbarSwitchMarkers } from './seekbar-markers.js?v=8f123c180386';
+import { setStatus, markDirty } from '../import-export/save-load.js?v=8f123c180386';
+import { showLoadingProgress, hideLoading, yieldToPaint } from './loading-overlay.js?v=8f123c180386';
+import { getTrackingThreshold } from './settings.js?v=8f123c180386';
+import { checkSizeSwitches, checkImageSwitches } from '../pose/id-switch-check.js?v=8f123c180386';
+import { hasWebGPU, createImageEmbedder, IMAGE_MODEL_MB } from './image-embedder.js?v=8f123c180386';
 import { idSwitchRowKey as rowKey, idSwitchPrimary as primaryOf, idSwitchMarkers as markersOf, idSwitchOnsets as countOnsets,
-         idSwitchEncounterCount as encounterCount, linkIdSwitchResults as tagAndLink } from './id-switch-review.js?v=858caeb3297a';
+         idSwitchEncounterCount as encounterCount, linkIdSwitchResults as tagAndLink } from './id-switch-review.js?v=8f123c180386';
 
 const CUE_LABEL = { size: 'body size', image: 'images' };
 
@@ -323,6 +323,39 @@ function aboutHtml(st, ran) {
               'different rate, set it in the fps box and run the check again: scores are evidence per second.') + '</p>';
 }
 
+// ---- The selected row's progress bar ------------------------------------------------
+// Driven by the viewer's frame (ui-wiring's updateSeekbarVisual -> updateIdSwitchProgress):
+// 0% at the row's landing frame (1 s before the animals come close), the close spell —
+// where a swap would happen — shaded in the middle, 100% at 1 s after they separate.
+var _prog = null, _progStale = true;        // {fill, p0, p1} of the selected row's bar
+
+/** The bar for a row (the selected one). */
+function progressHtml(f) {
+    var fps = state.fps > 0 ? state.fps : 30, lead = Math.round(ID_SWITCH_LEAD_IN_SECONDS * fps);
+    var s = f.startFrame != null && f.startFrame <= f.frame ? f.startFrame : f.frame;
+    var p0 = idSwitchLeadInFrame(f, fps), p1 = f.frame + lead, span = Math.max(1, p1 - p0);
+    var pct = function (x) { return (100 * Math.min(1, Math.max(0, (x - p0) / span))).toFixed(2) + '%'; };
+    var cur = state.currentFrame != null ? state.currentFrame : p0;
+    return '<div class="id-switch-pbar" data-p0="' + p0 + '" data-p1="' + p1 + '" title="' +
+        ID_SWITCH_LEAD_IN_SECONDS + ' s before → close ' + fmtTenths(s) + '–' + fmtTenths(f.frame) + ' (shaded) → ' + ID_SWITCH_LEAD_IN_SECONDS + ' s after">' +
+        // fill first, band over it: the shaded close spell stays visible as the fill passes it
+        '<div class="id-switch-pfill" style="width:' + pct(cur) + '"></div>' +
+        '<div class="id-switch-pband" style="left:' + pct(s) + ';width:calc(' + pct(f.frame) + ' - ' + pct(s) + ' + 2px)"></div></div>';
+}
+
+/** Move the selected row's bar to `frame` (called on every frame change; a no-op without a selected row). */
+export function updateIdSwitchProgress(frame) {
+    if (_progStale) {
+        _progStale = false;
+        var el = typeof document !== 'undefined' && document.querySelector('#idSwitchPanel .id-switch-row.is-current .id-switch-pbar');
+        _prog = el ? { fill: el.querySelector('.id-switch-pfill'), p0: +el.dataset.p0, p1: +el.dataset.p1 } : null;
+    }
+    if (!_prog) return;
+    if (!_prog.fill.isConnected) { _prog = null; return; }
+    var f = Math.min(1, Math.max(0, (frame - _prog.p0) / Math.max(1, _prog.p1 - _prog.p0)));
+    _prog.fill.style.width = (100 * f).toFixed(2) + '%';
+}
+
 /** An identity name in that identity's colour (the one the overlays and timeline use), when the session knows it. */
 function idName(session, name) {
     var ids = (session && session.identities) || [], hit = null;
@@ -346,7 +379,7 @@ function rowHtml(session, st, f, both) {
         '<span class="id-switch-score" title="Score' + (f.agree ? ' (size / images)' : '') + '">' + score + '</span></div>' +
         '<div class="id-switch-line2">' + spanHtml(f) +
         (both ? ' · ' + (cue === 'both' ? '<b>Both</b>' : cue === 'size' ? 'size' : 'images') : '') +
-        (note ? ' · ' + note : '') + '</div></div></div>';
+        (note ? ' · ' + note : '') + '</div>' + (st.current === key ? progressHtml(f) : '') + '</div></div>';
 }
 
 /** "close 2:00.3–2:01.2 (frames 7,218–7,317) [end ⇥]": the encounter, and a jump to its end. */
@@ -402,15 +435,22 @@ export function refreshIdSwitchPanel(session) {
         '<div class="id-switch-list" id="idSwitchList">' +
         (rows.length ? rows.map(function (f) { return rowHtml(session, st, f, both); }).join('')
             : '<p class="table-empty">No encounter scored below the threshold.</p>') + '</div>';
+    _progStale = true;                               // the list was rebuilt: re-find the selected row's bar
     var nav = st.navigate || _navigate;
     // A row lands ID_SWITCH_LEAD_IN_SECONDS before the animals come close (data-go), so pressing play
     // shows the whole interaction — the swap happens WHILE they are close, and the encounter's own
     // frame (its end, data-frame) is after it. "end ⇥" jumps to that end instead.
+    var byKey = new Map(rows.map(function (f) { return [rowKey(f), f]; }));
     var go = function (row, toEnd) {
         st.current = row.dataset.key;
         host.querySelectorAll('.id-switch-row.is-current').forEach(function (r) { r.classList.remove('is-current'); });
+        host.querySelectorAll('.id-switch-pbar').forEach(function (b) { b.remove(); });
         row.classList.add('is-current');
+        var f = byKey.get(row.dataset.key);
+        if (f) row.querySelector('.id-switch-main').insertAdjacentHTML('beforeend', progressHtml(f));   // pops up at the selected row
+        _progStale = true;
         if (nav) nav(parseInt(toEnd ? row.dataset.frame : row.dataset.go, 10));
+        updateIdSwitchProgress(state.currentFrame);
     };
     host.querySelector('#idSwitchList').addEventListener('click', function (e) {
         var row = e.target.closest('.id-switch-row');

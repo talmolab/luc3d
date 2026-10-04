@@ -18,7 +18,9 @@
  *     "Show repeats" lists the still-swapped encounters too.
  *  4. Each row shows its encounter's span ("close m:ss.s–m:ss.s"); clicking it
  *     lands 1 s before the animals come close (so play shows the whole
- *     interaction), "end ⇥" on the encounter's end; identity names are
+ *     interaction), "end ⇥" on the encounter's end; the selected row pops up a
+ *     progress bar driven by the frame (0% there, close spell shaded, 100% at
+ *     1 s after); identity names are
  *     drawn in their identity's colour.
  *  5. The checklist: ticking a row marks the project unsaved (the checklist is
  *     saved in the .slp — round trip in visibility-settings-roundtrip.mjs),
@@ -30,7 +32,7 @@
  *  7. The tab states the sampling it used and that, with no video loaded, the
  *     frame rate is the app's value rather than a measured one.
  *
- * Run: node tests/e2e/size-switch-check.mjs     (SHOT=/path.png saves a seekbar screenshot,
+ * Run: node tests/e2e/size-switch-check.mjs     (SHOT=/path.png saves a seekbar screenshot, BAR_SHOT= the selected row,
  *      PANEL_SHOT=/path.png the ID Switches tab)
  */
 import { chromium } from 'playwright';
@@ -177,10 +179,34 @@ try {
     await page.waitForFunction(f => window.__lucid.state.currentFrame === f, wantGo, { timeout: 10000 }).catch(() => {});
     const cur = await page.evaluate(() => window.__lucid.state.currentFrame);
     check(cur === wantGo, `clicking the row jumps to the lead-in, frame ${wantGo} (now ${cur})`);
+    // the selected row's progress bar: pops up at 0%, follows the frame, covers lead-in -> close -> 1 s after
+    const bar = () => page.evaluate(() => {
+        const bars = document.querySelectorAll('#idSwitchPanel .id-switch-pbar'), b = bars[0];
+        return { n: bars.length, inCurrent: !!(b && b.closest('.id-switch-row.is-current')), p0: b && +b.dataset.p0, p1: b && +b.dataset.p1,
+                 fill: b && parseFloat(b.querySelector('.id-switch-pfill').style.width), band: b && b.querySelector('.id-switch-pband').style.left };
+    });
+    let pb = await bar();
+    check(pb.n === 1 && pb.inCurrent && pb.p0 === wantGo && pb.p1 === row.frame + 60 && pb.fill === 0,
+        `selecting a row pops up one bar on it at 0% (range ${pb.p0}–${pb.p1}, close band from ${pb.band})`);
+    for (let i = 0; i < 30; i++) await page.keyboard.press('ArrowRight');
+    await page.waitForFunction(f => window.__lucid.state.currentFrame >= f, wantGo + 30, { timeout: 10000 }).catch(() => {});
+    pb = await bar();
+    const stepped = await page.evaluate(() => window.__lucid.state.currentFrame);
+    const want30 = 100 * (stepped - pb.p0) / (pb.p1 - pb.p0);
+    check(Math.abs(pb.fill - want30) < 0.1 && pb.fill > 0, `stepping forward moves it (frame ${stepped}: ${pb.fill.toFixed(1)}%, want ${want30.toFixed(1)}%)`);
+    if (process.env.BAR_SHOT) {
+        for (let i = 0; i < 60; i++) await page.keyboard.press('ArrowRight');   // into the close spell
+        await page.waitForTimeout(300);
+        const box = await page.locator('#idSwitchPanel .id-switch-row.is-current').boundingBox();
+        await page.screenshot({ path: process.env.BAR_SHOT, clip: { x: box.x - 4, y: box.y - 4, width: box.width + 8, height: box.height + 8 } });
+    }
     await page.click('#idSwitchPanel .id-switch-row .id-switch-end');
     await page.waitForFunction(f => window.__lucid.state.currentFrame === f, row.frame, { timeout: 10000 }).catch(() => {});
     const atEnd = await page.evaluate(() => window.__lucid.state.currentFrame);
     check(atEnd === row.frame, `"end ⇥" jumps to the encounter's end, frame ${row.frame} (now ${atEnd})`);
+    pb = await bar();
+    const wantEnd = 100 * (row.frame - pb.p0) / (pb.p1 - pb.p0);
+    check(Math.abs(pb.fill - wantEnd) < 0.1 && pb.fill > 50 && pb.fill < 100, `at the encounter's end the bar is past the close band (${pb.fill.toFixed(1)}%, 1 s still to go)`);
 
     // ---- 4b. identity names are drawn in their identity's colour
     const colours = await page.evaluate(() => {
