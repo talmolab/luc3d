@@ -43,7 +43,7 @@
  * Depends on: pose-data.js (readPoint3d). Pure — no DOM, no app state.
  */
 
-import { readPoint3d } from './pose-data.js?v=e9c0d7dfefc8';
+import { readPoint3d } from './pose-data.js?v=801af02ff3c4';
 
 /** Bone (node-pair) lengths used as the size signature. Pairs whose nodes the
  *  session skeleton lacks are skipped. */
@@ -87,7 +87,7 @@ export const IMAGE_CHECK_DEFAULTS = Object.assign({}, SIZE_CHECK_DEFAULTS, {
     iterations: 200,
     getEmbeddings: null,   // REQUIRED: async (frame, items[{k, group}]) -> per item [{camera, vector}];
                            // STARTED in increasing frame order, at most `inFlight` in flight
-    inFlight: 2,           // requests kept in flight (ui/image-embedder.js asks for 16, to batch frames)
+    inFlight: 2,           // requests kept in flight (ui/image-embedder.js asks for 8, to batch frames)
     prepareFrames: null,   // optional: async (frames[]) — every frame getEmbeddings will be asked for, in order
     releaseFrames: null,   // optional: () — called when done (or cancelled)
 });
