@@ -123,6 +123,8 @@ export class Viewport3D {
         this._cameraGroup = null;
         /** @type {THREE.Group} Group holding skeleton meshes for the current frame */
         this._skeletonGroup = null;
+        /** Reused skeleton meshes/materials — see `updateSkeleton`. */
+        this._skelPool = null;
 
         /** @type {number} Animation frame request ID */
         this._rafId = 0;
@@ -146,6 +148,11 @@ export class Viewport3D {
 
         /** @type {number} 3D skeleton edge radius multiplier (default 0.8) */
         this.skeletonEdgeWeight = options.skeletonEdgeWeight !== undefined ? options.skeletonEdgeWeight : 0.8;
+
+        /** @type {number} 3D skeleton color brightness, 0..1 (default 0.5).
+         *  Scales the track/identity color's RGB like the 2D reprojection
+         *  Brightness; the selected instance keeps its full color. */
+        this.skeletonBrightness = options.skeletonBrightness !== undefined ? options.skeletonBrightness : 0.5;
 
         /** @type {string} 3D skeleton node marker shape:
          *  'circle' (sphere), 'square' (cube), 'triangle' (tetrahedron),
@@ -958,28 +965,192 @@ export class Viewport3D {
      *        or null per node) and .trackIdx.
      */
     updateSkeleton(instanceGroups) {
-        this._clearGroup(this._skeletonGroup);
-
+        // IN-PLACE update. This runs on every frame of playback (the 3D view
+        // follows the video like the 2D overlays do), so it must not rebuild
+        // the scene: the old version created fresh materials per group, a fresh
+        // node geometry, and a fresh CylinderGeometry — a GPU buffer upload — for
+        // every edge on every call, then disposed them all on the next. Now the
+        // meshes and materials live in a pool (`_skelPool`) and are only moved /
+        // recolored; edges share ONE unit cylinder scaled to length. The pool is
+        // rebuilt only when something that changes geometry changes (node shape
+        // / size, edge weight, show-nodes/edges, the skeleton object).
+        //
+        // The resulting scene graph is the same as a rebuild's: `_skeletonGroup`
+        // holds one `instance_<g>` Group per group with 3D, whose children are
+        // exactly that frame's valid `node_*` markers then `edge_*` cylinders, in
+        // the same order. Pooled-but-unused objects are DETACHED, not hidden, so
+        // traversals (fitToScene, tests) see what they always saw.
         var _dbg3d = (typeof window !== 'undefined' && window.LUCID_3D_DEBUG);
-        if (!instanceGroups || instanceGroups.length === 0) {
-            if (_dbg3d) console.log('[3D] updateSkeleton: no instance groups');
-            return;
-        }
-
-        var groupsWithPts = instanceGroups.filter(function(g) { return points3dNodeCount(g.points3d) > 0; });
-        if (_dbg3d) console.log('[3D] updateSkeleton:', instanceGroups.length, 'groups,', groupsWithPts.length, 'with points3d, sceneScale:', this._sceneScale);
 
         const ss = this._sceneScale || 1;
         const nodeRadius = this.skeletonNodeSize * ss;
         const edgeRadius = this.skeletonEdgeWeight * ss;
         const highlightScale = 1.5;  // scale factor for selected instance
+        const nodeShape = this.skeletonNodeShape || 'circle';
+        const pool = this._ensureSkeletonPool(nodeShape, nodeRadius, edgeRadius);
+
+        // Detach last frame's groups (pooled — not disposed).
+        this._detachChildren(this._skeletonGroup);
+
+        if (!instanceGroups || instanceGroups.length === 0) {
+            if (_dbg3d) console.log('[3D] updateSkeleton: no instance groups');
+            return;
+        }
+        if (_dbg3d) {
+            var groupsWithPts = instanceGroups.filter(function(g) { return points3dNodeCount(g.points3d) > 0; });
+            console.log('[3D] updateSkeleton:', instanceGroups.length, 'groups,', groupsWithPts.length, 'with points3d, sceneScale:', this._sceneScale);
+        }
+
+        const edges = this.skeleton.edges || [];
+        const nodes = this.skeleton.nodes || [];
+        const showNodes = this.showSkeletonNodes && nodeRadius > 0;
+        const showEdges = this.showSkeletonEdges && edgeRadius > 0;
+        const dir = pool.tmpDir, yAxis = pool.yAxis;
+        let slotIdx = 0;
+
+        for (let g = 0; g < instanceGroups.length; g++) {
+            const group = instanceGroups[g];
+            const pts = group.points3d;
+            const nPts = points3dNodeCount(pts);
+            if (nPts === 0) continue;
+
+            const slot = pool.slots[slotIdx] || (pool.slots[slotIdx] = this._newSkeletonSlot());
+            slotIdx++;
+
+            const colorStr = this.getGroupColorFn
+                ? this.getGroupColorFn(group)
+                : this.getTrackColor(group.identityId >= 0 ? group.identityId : g);
+            const isSelected = (this.selectedInstanceIdx === g);
+            const scale = isSelected ? highlightScale : 1.0;
+
+            // Brightness dims the track/identity color; the selected instance
+            // keeps its full color so the selection still stands out.
+            const brightness = isSelected ? 1 : Math.min(1, Math.max(0, this.skeletonBrightness));
+
+            // Recolor only on change. Uniform-only edits: no shader recompile.
+            // Emissive boost for the selected instance.
+            if (slot.colorStr !== colorStr || slot.selected !== isSelected || slot.brightness !== brightness) {
+                slot.colorStr = colorStr;
+                slot.selected = isSelected;
+                slot.brightness = brightness;
+                const emissiveIntensity = isSelected ? 0.4 : 0.0;
+                slot.nodeMat.color.set(colorStr);
+                // Guarded: the Node test runner's THREE.Color mock has no multiplyScalar.
+                if (brightness < 1 && slot.nodeMat.color.multiplyScalar) slot.nodeMat.color.multiplyScalar(brightness);
+                slot.nodeMat.emissive.set(isSelected ? colorStr : 0x000000);
+                slot.nodeMat.emissiveIntensity = emissiveIntensity;
+                slot.edgeMat.color.set(colorStr);
+                if (brightness < 1 && slot.edgeMat.color.multiplyScalar) slot.edgeMat.color.multiplyScalar(brightness);
+                slot.edgeMat.emissive.set(isSelected ? colorStr : 0x000000);
+                slot.edgeMat.emissiveIntensity = emissiveIntensity * 0.5;
+            }
+
+            const instanceGroup3D = slot.group3D;
+            instanceGroup3D.name = 'instance_' + g;
+            this._detachChildren(instanceGroup3D);
+
+            // --- Keypoint markers (shape per Node Style toggle) ---
+            if (showNodes) {
+                let ni = 0;
+                for (let n = 0; n < nPts; n++) {
+                    const pt = getPoint3d(pts, n);
+                    if (pt == null) continue;
+                    // Guard against Inf coords (e.g. missing keypoints in an
+                    // imported points3d H5) — they would produce broken meshes and
+                    // poison bounding-sphere / fitToScene math. (NaN is already
+                    // filtered by getPoint3d, which treats it as "missing".)
+                    if (!isFinite(pt[0]) || !isFinite(pt[1]) || !isFinite(pt[2])) continue;
+
+                    let nodeObj = slot.nodeObjs[ni];
+                    if (!nodeObj) {
+                        if (nodeShape === 'x') {
+                            // 'x' has no single geometry — two crossed bars.
+                            nodeObj = new THREE.Group();
+                            const barA = new THREE.Mesh(pool.xBarGeo, slot.nodeMat);
+                            barA.rotation.z = Math.PI / 4;
+                            const barB = new THREE.Mesh(pool.xBarGeo, slot.nodeMat);
+                            barB.rotation.z = -Math.PI / 4;
+                            nodeObj.add(barA);
+                            nodeObj.add(barB);
+                        } else {
+                            nodeObj = new THREE.Mesh(pool.nodeGeo, slot.nodeMat);
+                        }
+                        slot.nodeObjs[ni] = nodeObj;
+                    }
+                    ni++;
+                    nodeObj.position.set(pt[0], pt[1], pt[2]);
+                    nodeObj.scale.setScalar(scale);
+                    nodeObj.name = 'node_' + (nodes[n] || n);
+                    instanceGroup3D.add(nodeObj);
+                }
+            }
+
+            // --- Skeleton edges: the shared unit cylinder (radius 1, height 1,
+            // along +Y) scaled to (radius, length, radius), centred on the edge
+            // midpoint and rotated from +Y onto the edge direction. ---
+            if (showEdges) {
+                const r = edgeRadius * scale;
+                let ei = 0;
+                for (let e = 0; e < edges.length; e++) {
+                    const srcIdx = edges[e][0];
+                    const dstIdx = edges[e][1];
+
+                    if (srcIdx >= nPts || dstIdx >= nPts) continue;
+                    const srcPt = getPoint3d(pts, srcIdx);
+                    const dstPt = getPoint3d(pts, dstIdx);
+                    if (srcPt == null || dstPt == null) continue;
+                    if (!isFinite(srcPt[0]) || !isFinite(srcPt[1]) || !isFinite(srcPt[2])) continue;
+                    if (!isFinite(dstPt[0]) || !isFinite(dstPt[1]) || !isFinite(dstPt[2])) continue;
+
+                    let cyl = slot.edgeMeshes[ei];
+                    if (!cyl) cyl = slot.edgeMeshes[ei] = new THREE.Mesh(pool.edgeGeo, slot.edgeMat);
+                    ei++;
+
+                    const dx = dstPt[0] - srcPt[0];
+                    const dy = dstPt[1] - srcPt[1];
+                    const dz = dstPt[2] - srcPt[2];
+                    const length = Math.sqrt(dx * dx + dy * dy + dz * dz);
+                    if (length < 1e-6) {
+                        // Degenerate edge: same as the old _createCylinder — a
+                        // 0.001-tall, un-rotated cylinder left at the origin.
+                        cyl.position.set(0, 0, 0);
+                        cyl.quaternion.identity();
+                        cyl.scale.set(r, 0.001, r);
+                    } else {
+                        cyl.position.set((srcPt[0] + dstPt[0]) / 2,
+                            (srcPt[1] + dstPt[1]) / 2, (srcPt[2] + dstPt[2]) / 2);
+                        dir.set(dx / length, dy / length, dz / length);
+                        cyl.quaternion.setFromUnitVectors(yAxis, dir);
+                        cyl.scale.set(r, length, r);
+                    }
+                    cyl.name = 'edge_' + srcIdx + '_' + dstIdx;
+                    instanceGroup3D.add(cyl);
+                }
+            }
+
+            this._skeletonGroup.add(instanceGroup3D);
+            if (_dbg3d) console.log('[3D] Added instance group with', instanceGroup3D.children.length, 'meshes');
+        }
+
+        if (_dbg3d) console.log('[3D] updateSkeleton complete:', this._skeletonGroup.children.length, 'instance groups in scene');
+    }
+
+    /**
+     * Return the skeleton mesh pool for the current geometry settings,
+     * (re)building it — and disposing the old one — when any of them changed.
+     * Holds the shared geometries (node marker, 'x' bar, unit edge cylinder)
+     * and the per-instance-group slots `_newSkeletonSlot` creates.
+     * @private
+     */
+    _ensureSkeletonPool(nodeShape, nodeRadius, edgeRadius) {
+        const key = nodeShape + '|' + nodeRadius + '|' + edgeRadius + '|' +
+            !!this.showSkeletonNodes + '|' + !!this.showSkeletonEdges;
+        let pool = this._skelPool;
+        if (pool && pool.key === key && pool.skeleton === this.skeleton) return pool;
+
+        this._disposeSkeletonPool();
         const sphereSegments = 12;
         const cylinderSegments = 6;
-
-        // Shared node geometry (one per shape, reused across all groups/nodes).
-        // 'x' has no single geometry — it's a group of two crossed bars built
-        // per node from the shared bar geometries below.
-        const nodeShape = this.skeletonNodeShape || 'circle';
         let nodeGeo = null, xBarGeo = null;
         if (nodeShape === 'square') {
             const sq = nodeRadius * 1.7;
@@ -993,103 +1164,64 @@ export class Viewport3D {
         } else {
             nodeGeo = new THREE.SphereGeometry(nodeRadius, sphereSegments, sphereSegments);
         }
-        const edges = this.skeleton.edges || [];
-        const nodes = this.skeleton.nodes || [];
+        pool = this._skelPool = {
+            key: key,
+            skeleton: this.skeleton,
+            nodeGeo: nodeGeo,
+            xBarGeo: xBarGeo,
+            edgeGeo: new THREE.CylinderGeometry(1, 1, 1, cylinderSegments),
+            slots: [],
+            tmpDir: new THREE.Vector3(),
+            yAxis: new THREE.Vector3(0, 1, 0),
+        };
+        return pool;
+    }
 
-        for (let g = 0; g < instanceGroups.length; g++) {
-            const group = instanceGroups[g];
-            const pts = group.points3d;
-            const nPts = points3dNodeCount(pts);
-            if (nPts === 0) continue;
+    /**
+     * Detach (not dispose) every child of `group` — pooled objects are reused.
+     * Uses `remove()` like `_clearGroup`, rather than Object3D.clear(), so it
+     * works with any Three build and with the test runners' THREE mocks.
+     * @private
+     */
+    _detachChildren(group) {
+        while (group.children.length > 0) group.remove(group.children[group.children.length - 1]);
+    }
 
-            const colorStr = this.getGroupColorFn
-                ? this.getGroupColorFn(group)
-                : this.getTrackColor(group.identityId >= 0 ? group.identityId : g);
-            const color = new THREE.Color(colorStr);
-            const isSelected = (this.selectedInstanceIdx === g);
+    /**
+     * One pooled instance group: its THREE.Group, its two materials, and the
+     * node / edge objects it has needed so far (grown on demand, reused after).
+     * @private
+     */
+    _newSkeletonSlot() {
+        return {
+            group3D: new THREE.Group(),
+            nodeMat: new THREE.MeshPhongMaterial({ color: 0xffffff, emissive: 0x000000, emissiveIntensity: 0, shininess: 60 }),
+            edgeMat: new THREE.MeshPhongMaterial({ color: 0xffffff, emissive: 0x000000, emissiveIntensity: 0, shininess: 30 }),
+            nodeObjs: [],
+            edgeMeshes: [],
+            colorStr: null,
+            selected: null,
+            brightness: null,
+        };
+    }
 
-            // Emissive boost for selected instance
-            const emissiveIntensity = isSelected ? 0.4 : 0.0;
-            const scale = isSelected ? highlightScale : 1.0;
-
-            const nodeMaterial = new THREE.MeshPhongMaterial({
-                color: color,
-                emissive: isSelected ? color : new THREE.Color(0x000000),
-                emissiveIntensity: emissiveIntensity,
-                shininess: 60,
-            });
-
-            const edgeMaterial = new THREE.MeshPhongMaterial({
-                color: color,
-                emissive: isSelected ? color : new THREE.Color(0x000000),
-                emissiveIntensity: emissiveIntensity * 0.5,
-                shininess: 30,
-            });
-
-            const instanceGroup3D = new THREE.Group();
-            instanceGroup3D.name = 'instance_' + g;
-
-            // --- Draw keypoint markers (shape per Node Style toggle) ---
-            if (this.showSkeletonNodes && nodeRadius > 0) {
-                for (let n = 0; n < nPts; n++) {
-                    const pt = getPoint3d(pts, n);
-                    if (pt == null) continue;
-                    // Guard against Inf coords (e.g. missing keypoints in an
-                    // imported points3d H5) — they would produce broken meshes and
-                    // poison bounding-sphere / fitToScene math. (NaN is already
-                    // filtered by getPoint3d, which treats it as "missing".)
-                    if (!isFinite(pt[0]) || !isFinite(pt[1]) || !isFinite(pt[2])) continue;
-
-                    let nodeObj;
-                    if (nodeShape === 'x') {
-                        nodeObj = new THREE.Group();
-                        const barA = new THREE.Mesh(xBarGeo, nodeMaterial);
-                        barA.rotation.z = Math.PI / 4;
-                        const barB = new THREE.Mesh(xBarGeo, nodeMaterial);
-                        barB.rotation.z = -Math.PI / 4;
-                        nodeObj.add(barA);
-                        nodeObj.add(barB);
-                    } else {
-                        nodeObj = new THREE.Mesh(nodeGeo, nodeMaterial);
-                    }
-                    nodeObj.position.set(pt[0], pt[1], pt[2]);
-                    if (scale !== 1.0) {
-                        nodeObj.scale.setScalar(scale);
-                    }
-                    nodeObj.name = 'node_' + (nodes[n] || n);
-                    instanceGroup3D.add(nodeObj);
-                }
-            }
-
-            // --- Draw skeleton edges as cylinders ---
-            if (this.showSkeletonEdges && edgeRadius > 0) {
-            for (let e = 0; e < edges.length; e++) {
-                const srcIdx = edges[e][0];
-                const dstIdx = edges[e][1];
-
-                if (srcIdx >= nPts || dstIdx >= nPts) continue;
-                const srcPt = getPoint3d(pts, srcIdx);
-                const dstPt = getPoint3d(pts, dstIdx);
-                if (srcPt == null || dstPt == null) continue;
-                if (!isFinite(srcPt[0]) || !isFinite(srcPt[1]) || !isFinite(srcPt[2])) continue;
-                if (!isFinite(dstPt[0]) || !isFinite(dstPt[1]) || !isFinite(dstPt[2])) continue;
-
-                const cylinder = this._createCylinder(
-                    srcPt, dstPt,
-                    edgeRadius * scale,
-                    edgeMaterial,
-                    cylinderSegments
-                );
-                cylinder.name = 'edge_' + srcIdx + '_' + dstIdx;
-                instanceGroup3D.add(cylinder);
-            }
-            }
-
-            this._skeletonGroup.add(instanceGroup3D);
-            console.log('[3D] Added instance group with', instanceGroup3D.children.length, 'meshes');
+    /**
+     * Detach every pooled skeleton object from the scene and free the pool's
+     * GPU resources (shared geometries + every slot's materials).
+     * @private
+     */
+    _disposeSkeletonPool() {
+        if (this._skeletonGroup) this._detachChildren(this._skeletonGroup);
+        const pool = this._skelPool;
+        if (!pool) return;
+        if (pool.nodeGeo) pool.nodeGeo.dispose();
+        if (pool.xBarGeo) pool.xBarGeo.dispose();
+        if (pool.edgeGeo) pool.edgeGeo.dispose();
+        for (const slot of pool.slots) {
+            slot.nodeMat.dispose();
+            slot.edgeMat.dispose();
         }
-
-        console.log('[3D] updateSkeleton complete:', this._skeletonGroup.children.length, 'instance groups in scene');
+        this._skelPool = null;
     }
 
     /**
@@ -1517,6 +1649,9 @@ export class Viewport3D {
             this.controls.dispose();
             this.controls = null;
         }
+
+        // Dispose the pooled skeleton objects (incl. ones not currently attached)
+        this._disposeSkeletonPool();
 
         // Dispose scene objects
         if (this.scene) {

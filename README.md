@@ -60,7 +60,9 @@ Or copy into the browser:
 https://luc3d.sleap.ai/
 ```
 
-Newest full release.
+The live site is the newest full release, updated whenever a release is
+published — pushes to `main` and pre-releases do not change it. `/stable/` is an
+alias that redirects here:
 ```
 https://luc3d.sleap.ai/stable/
 ```

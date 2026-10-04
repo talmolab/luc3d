@@ -4,28 +4,41 @@ name: Deploy to GitHub Pages
 # host: talmolab.github.io/luc3d/ 301-redirects to it. Cloudflare sits in front
 # of it (proxied DNS), but the origin is Pages.
 #
-# *** THIS WORKFLOW NEVER WRITES THE SITE ROOT. ***
+# gh-pages serves five channels:
 #
-# https://luc3d.sleap.ai/ -- the live page people actually use -- is managed BY
-# HAND and is deliberately outside this workflow's reach. There is no code path
-# here that writes, deletes or cleans a root-level file; every target is a named
-# sub-folder. That is the whole safety property, so keep it: if you ever add a
-# root target, you are also re-introducing a wipe that can take the live page,
-# the other channels and the PR previews with it.
-#
-# gh-pages serves four channels, all of them sub-folders:
-#
-#   /stable/   -- the newest FULL (non-pre-release) release.
-#                 Moves ONLY when a release is published.
-#   /latest/   -- the newest release INCLUDING pre-releases.
-#   /dev/      -- every push to main. Bleeding edge.
+#   /          -- THE LIVE PAGE. The newest FULL (non-pre-release) release.
+#                 The only place that build is actually served.
+#   /stable/   -- an ALIAS that redirects to root. One index.html, no copy of
+#                 the app, so a deep link under it (…/stable/tests/…) 404s.
+#   /latest/   -- the newest release INCLUDING pre-releases. A real copy.
+#   /dev/      -- every push to main. Bleeding edge. A real copy.
 #   /pr/<n>/   -- per-PR previews, owned by pr-preview.yml. Never touched here.
 #
-# Promoting a release to the live root is a manual step, taken once someone has
-# checked /stable/ and is happy with it.
+# Only a full release moves root. A push to main goes to /dev/ alone; a
+# pre-release goes to /latest/ alone; republishing an older release moves
+# nothing (see the HIGHEST_STABLE check). Root and /stable/ are gated on the
+# IDENTICAL condition and written from the same staged tree in the same run, so
+# they cannot disagree.
+#
+# *** ROOT IS THE ONLY TARGET THAT WIPES -- TREAT IT WITH CARE. ***
+#
+# Every other channel owns its own folder and can only damage itself. Root's
+# previous output sits at the TOP of gh-pages, next to every other channel and
+# every open PR preview, so it is removed by an explicit keep-list rather than a
+# blanket delete. Two rules follow, and breaking either is silent until someone
+# notices the site is gone:
+#
+#   1. ADD A CHANNEL => ADD IT TO THAT KEEP-LIST (the `find ... ! -name` in
+#      apply_targets). A channel missing from the list is deleted by the next
+#      full release. `stable` is in the list for exactly this reason.
+#   2. Root is requested by an explicit `root: true` flag, never by an empty
+#      path. The empty/`.`/`/` refusal is kept deliberately so an unset variable
+#      still cannot turn `rm -rf "$path"` into `rm -rf` of everything.
 #
 # LUCID has no build system, so a "build" is just a copy of the repo at that
-# ref. The app is already sub-path safe -- the importmap is relative (./lib/...)
+# ref -- plus ONE rewrite of the staged copy, scripts/stamp-version.mjs, which
+# adds ?v=<commit> to every same-site code URL so Cloudflare's 4-hour cache can
+# never mix two deploys (see "Stage the site"). The app is already sub-path safe -- the importmap is relative (./lib/...)
 # and the test harness resolves against document.baseURI -- which is what lets
 # the identical tree serve correctly from every one of these paths with no
 # rewriting. (This is the one big simplification over sleap-app's deploy.yml,
@@ -52,8 +65,10 @@ on:
   release:
     types: [published]
   # Manual re-deploy from the Actions tab. The ref picked in "Use workflow
-  # from" is what gets deployed -- so to rebuild /stable/ or /latest/ by hand,
-  # select the TAG there, not a branch.
+  # from" is what gets deployed -- so to rebuild root, /stable/ or /latest/ by
+  # hand, select the TAG there, not a branch. `root` is the promote escape
+  # hatch: it publishes the selected ref to the LIVE page, which is otherwise
+  # only reached by publishing a full release.
   workflow_dispatch:
     inputs:
       target:
@@ -64,6 +79,7 @@ on:
           - dev
           - latest
           - stable
+          - root
         required: true
 
 # Serialize deploys so two runs can't race on the gh-pages branch. pr-preview.yml
@@ -108,9 +124,15 @@ jobs:
           set -euo pipefail
 
           TARGETS='[]'
+          # path, label, is_root, redirect. `root` is a SEPARATE flag rather
+          # than an empty path on purpose: apply_targets still refuses an empty
+          # path outright, so only a caller that deliberately passes true can
+          # reach the live page. A non-empty `redirect` makes the target an
+          # ALIAS -- a lone index.html pointing elsewhere -- instead of a copy.
           add_target() {
-            TARGETS="$(jq -c --arg path "$1" --arg label "$2" \
-              '. + [{path: $path, label: $label}]' <<< "$TARGETS")"
+            TARGETS="$(jq -c --arg path "$1" --arg label "$2" --argjson root "${3:-false}" \
+              --arg redirect "${4:-}" \
+              '. + [{path: $path, label: $label, root: $root, redirect: $redirect}]' <<< "$TARGETS")"
           }
 
           if [ "$EVENT_NAME" = "release" ]; then
@@ -160,12 +182,16 @@ jobs:
             # downgrade the site. Compare against the highest known version
             # instead of assuming this one is it.
             if [ "$RELEASE_IS_PRERELEASE" = "true" ]; then
-              echo "Pre-release: leaving /stable/ untouched."
+              echo "Pre-release: leaving the live root and /stable/ untouched."
             elif [ "$RELEASE_TAG" = "$HIGHEST_STABLE" ]; then
-              add_target "stable" "$RELEASE_TAG (stable)"
+              # Root FIRST: its wipe then cannot race a sibling written earlier
+              # in the same apply loop. The keep-list makes order irrelevant,
+              # but relying on only one of the two would be careless.
+              add_target "" "$RELEASE_TAG (root)" true
+              add_target "stable" "$RELEASE_TAG (stable alias)" false "../"
             else
               echo "::notice::$RELEASE_TAG is not the highest stable release"\
-                   "($HIGHEST_STABLE) -- leaving /stable/ untouched."
+                   "($HIGHEST_STABLE) -- leaving the live root and /stable/ untouched."
             fi
 
             if [ "$RELEASE_TAG" = "$HIGHEST_ANY" ]; then
@@ -175,8 +201,14 @@ jobs:
                    "($HIGHEST_ANY) -- leaving /latest/ untouched."
             fi
 
+          elif [ "$EVENT_NAME" = "workflow_dispatch" ] && [ "$DISPATCH_TARGET" = "root" ]; then
+            # A manual promote lays down the alias in the SAME run, so it
+            # matches exactly what a full release does -- promoting by hand
+            # can never leave /stable/ pointing at a stale copy.
+            add_target "" "manual-root $REF_NAME" true
+            add_target "stable" "manual-stable alias" false "../"
           elif [ "$EVENT_NAME" = "workflow_dispatch" ] && [ "$DISPATCH_TARGET" = "stable" ]; then
-            add_target "stable" "manual-stable $REF_NAME"
+            add_target "stable" "manual-stable alias" false "../"
           elif [ "$EVENT_NAME" = "workflow_dispatch" ] && [ "$DISPATCH_TARGET" = "latest" ]; then
             add_target "latest" "manual-latest $REF_NAME"
           else
@@ -213,6 +245,17 @@ jobs:
             --exclude='.gitignore' \
             ./ "$RUNNER_TEMP/site/"
 
+          # Cache safety. Cloudflare serves .js/.css with a 4-hour lifetime --
+          # in browsers AND per Cloudflare data centre -- while index.html is
+          # revalidated within minutes, so without this a visitor could run the
+          # new index.html with old modules for hours (one data centre still did
+          # with an Incognito window, 2026-10-04). The stamp gives every same-site
+          # code URL `?v=<commit>`, so a new index.html names new URLs all the way
+          # down. It fails the deploy if any relative module reference is left
+          # unstamped: a module reached under two URLs would load twice.
+          # Covered by tests/test-stamp-version.mjs + tests/e2e/stamped-build.mjs.
+          node scripts/stamp-version.mjs "$RUNNER_TEMP/site" "${GITHUB_SHA::12}"
+
       - name: Deploy to gh-pages
         if: steps.targets.outputs.count != '0'
         env:
@@ -235,29 +278,85 @@ jobs:
             "https://x-access-token:$GH_TOKEN@github.com/$GITHUB_REPOSITORY.git"
 
           apply_targets() {
-            local count path
+            local count path is_root redirect
             count="$(jq 'length' "$RUNNER_TEMP/targets.json")"
             for i in $(seq 0 $((count - 1))); do
               path="$(jq -r ".[$i].path" "$RUNNER_TEMP/targets.json")"
-              # Every target is a named sub-folder and only ever touches its
-              # own. An empty path would mean the site ROOT -- the live page,
-              # which this workflow must never write -- so refuse it rather
-              # than letting a future edit silently turn `rm -rf "$path"` into
-              # `rm -rf` of everything.
+              is_root="$(jq -r ".[$i].root // false" "$RUNNER_TEMP/targets.json")"
+              redirect="$(jq -r ".[$i].redirect // empty" "$RUNNER_TEMP/targets.json")"
+
+              if [ "$is_root" = "true" ]; then
+                # THE LIVE PAGE. Remove root's OWN previous output while
+                # sparing every sibling channel and every PR preview -- they
+                # live at this same level, so a blanket delete would take them
+                # all. This keep-list is load-bearing: A NEW CHANNEL MUST BE
+                # ADDED HERE or the next full release deletes it.
+                #   .git   - the repository itself
+                #   CNAME  - loses the custom domain for everyone if dropped
+                #   dev latest stable pr - the other channels
+                find . -maxdepth 1 -mindepth 1 \
+                  ! -name '.git' \
+                  ! -name 'CNAME' \
+                  ! -name 'dev' \
+                  ! -name 'latest' \
+                  ! -name 'stable' \
+                  ! -name 'pr' \
+                  -exec rm -rf {} +
+                cp -R "$SITE/." .
+                continue
+              fi
+
+              # Every non-root target is a named sub-folder and only ever
+              # touches its own. An empty path here would mean the site root
+              # reached WITHOUT the explicit flag above -- i.e. a bug, such as
+              # an unset variable -- so refuse rather than letting
+              # `rm -rf "$path"` become `rm -rf` of everything.
               if [ -z "$path" ] || [ "$path" = "." ] || [ "$path" = "/" ]; then
-                echo "::error::refusing to deploy to the site root."
+                echo "::error::refusing to deploy to the site root without an explicit root flag."
                 return 1
               fi
+
               rm -rf "$path"
               mkdir -p "$path"
+
+              if [ -n "$redirect" ]; then
+                # An ALIAS, not a copy: this channel is just a name pointing at
+                # another path, so it holds one index.html and nothing else.
+                # The rm -rf above is what clears a previous full copy.
+                #
+                # GitHub Pages cannot issue a real HTTP redirect (no .htaccess,
+                # no _redirects), so this is the only mechanism available. The
+                # target is RELATIVE so it stays correct under any base -- the
+                # custom domain, talmolab.github.io/luc3d/, or a PR preview.
+                #
+                # location.replace() fires first and leaves no history entry,
+                # so Back does not bounce the visitor straight back here; the
+                # meta refresh is the no-JS fallback; the link is the last
+                # resort if both are blocked.
+                #
+                # Only index.html exists, so a DEEP link under this path
+                # (…/stable/tests/…) 404s. That is the accepted cost of making
+                # this an alias rather than a second copy.
+                printf '%s\n' \
+                  '<!DOCTYPE html>' \
+                  '<html lang="en">' \
+                  '<meta charset="utf-8">' \
+                  '<title>Redirecting to LUCID</title>' \
+                  "<link rel=\"canonical\" href=\"$redirect\">" \
+                  "<meta http-equiv=\"refresh\" content=\"0; url=$redirect\">" \
+                  "<script>location.replace('$redirect' + location.search + location.hash);</script>" \
+                  "<p>This is an alias. Continue to <a href=\"$redirect\">luc3d.sleap.ai</a>.</p>" \
+                  > "$path/index.html"
+                continue
+              fi
+
               cp -R "$SITE/." "$path/"
             done
 
             # CNAME is what makes Pages serve this repo at luc3d.sleap.ai;
-            # losing it breaks the domain for everyone. Nothing here deletes it
-            # any more, so it is only CREATED IF MISSING -- an existing root
-            # file is never rewritten, keeping this workflow's root footprint
-            # at exactly zero.
+            # losing it breaks the domain for everyone. It is excluded from the
+            # root wipe above, and this is the backstop for the case where it
+            # was never there to begin with.
             #
             # No .nojekyll: adding one would change how the LIVE root is served
             # (Jekyll currently drops `_`-prefixed paths). The deployed app has
@@ -281,11 +380,13 @@ jobs:
 
             apply_targets
 
-            # -f because gh-pages still carries a TRACKED root .gitignore left by
-            # the old pages.yml, and ignore rules cascade into subdirectories --
-            # without this it filters every channel's .md files and all of docs/,
-            # which is how /dev/ came to be missing them. This workflow never
-            # writes the root, so it cannot just delete that file.
+            # -f because gh-pages may still carry a TRACKED root .gitignore left
+            # by the old pages.yml, and ignore rules cascade into subdirectories
+            # -- without this it filters every channel's .md files and all of
+            # docs/, which is how /dev/ came to be missing them. The root wipe
+            # above clears that file the first time a full release deploys root
+            # (the staged tree excludes .gitignore), but -f stays: it covers
+            # every run before that, and costs nothing after.
             # Safe: `git clean -qfdx` ran above, so the only untracked paths here
             # are the ones apply_targets just wrote.
             git add -A -f

@@ -2584,9 +2584,14 @@ function _readColumnar(obj, fieldNames) {
  *
  * @param {File} file - The .slp file
  * @param {Function} [onProgress] - Optional progress callback
+ * @param {{columnar?: boolean}} [opts] - `columnar: true` asks the worker for
+ *   the pose data as flat TRANSFERRED typed arrays (`data.columnar`, see
+ *   `buildColumnarFrames` in loading/slp-import-worker.js) instead of the nested
+ *   `data.frames` objects, which are expensive to structured-clone. Only callers
+ *   that read `data.columnar` should ask for it; `data.frames` is then empty.
  * @returns {Promise<Object>} Raw parsed data from worker
  */
-export function parseSlpH5(file, onProgress) {
+export function parseSlpH5(file, onProgress, opts) {
     return new Promise(function (resolve, reject) {
         // Resolve worker URL relative to the document base so this works on
         // sub-path deployments (e.g. GitHub Pages /luc3d/, /luc3d/pr/N/) as well
@@ -2615,7 +2620,7 @@ export function parseSlpH5(file, onProgress) {
             reject(new Error('SLP worker error: ' + (err.message || 'unknown')));
         };
 
-        worker.postMessage({ type: 'parse', file: file });
+        worker.postMessage({ type: 'parse', file: file, columnar: !!(opts && opts.columnar) });
     });
 }
 

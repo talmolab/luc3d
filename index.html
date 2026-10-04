@@ -40,6 +40,13 @@
         <div class="loading-overlay" id="loadingOverlay">
             <div class="spinner" id="loadingSpinner"></div>
             <div id="loadingStatus">Initializing...</div>
+            <div class="loading-eta hidden" id="loadingEta" aria-live="off"></div>
+            <!-- Determinate progress (ui/loading-overlay.js showLoadingProgress) -->
+            <div class="loading-progress hidden" id="loadingProgress" role="progressbar"
+                 aria-labelledby="loadingStatus" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+                <div class="loading-progress-fill" id="loadingProgressFill"></div>
+            </div>
+            <div class="loading-substatus hidden" id="loadingSubstatus"></div>
             <button class="btn" id="loadingDismiss" data-dismiss="true" style="display:none;margin-top:12px;">Dismiss</button>
         </div>
 
@@ -127,6 +134,9 @@
                     <div class="menu-dropdown-item" id="menuPropagateTracksToIds">Propagate Tracks → IDs</div>
                     <div class="menu-dropdown-item" id="menuPropagateIdsToTracks">Propagate IDs → Tracks</div>
                     <div class="menu-separator"></div>
+                    <div class="menu-dropdown-item" id="menuCheckSizeSwitches">Check ID Switches (Body Size)…</div>
+                    <div class="menu-dropdown-item" id="menuCheckImageSwitches">Check ID Switches (Images)…</div>
+                    <div class="menu-separator"></div>
                     <div class="menu-dropdown-item has-submenu" id="menuTrailsParent">
                         <span>Node Trails</span>
                         <span class="submenu-arrow">▶</span>
@@ -155,16 +165,24 @@
                     <div class="menu-separator"></div>
                     <div class="menu-dropdown-item" id="menuResetView">Reset 3D View</div>
                     <div class="menu-dropdown-item" id="menuFitScene">Fit 3D to Scene</div>
+                    <div class="menu-separator"></div>
+                    <div class="menu-dropdown-item" id="menuAlignViews">Align Views to References...</div>
                 </div>
             </div>
             <div class="menu-item" id="menuHotkeys" style="cursor:pointer;">Hot Keys</div>
-            <div class="menu-item" data-menu="help" style="margin-left:auto;">
+            <div class="menu-item" data-menu="help">
                 Help
-                <div class="menu-dropdown" id="menuHelp" style="left:auto;right:0;">
+                <div class="menu-dropdown" id="menuHelp">
                     <div class="menu-dropdown-item" id="menuDocumentation">Docs</div>
                     <div class="menu-dropdown-item" id="menuSettings">Settings</div>
                 </div>
             </div>
+            <!-- #138: Docs and Settings also as direct buttons on the right, so
+                 they are one click away instead of hidden under a menu. -->
+            <div class="menu-item menu-bar-button" id="menuBarDocs" style="margin-left:auto;"
+                title="Open the LUCID documentation in a new tab">Docs</div>
+            <div class="menu-item menu-bar-button" id="menuBarSettings"
+                title="Settings: default triangulation, keyboard shortcuts, Tracking Wizard">Settings</div>
         </div>
 
         <!-- Toolbar -->
@@ -180,14 +198,14 @@
                 <button class="toolbar-btn" id="tbGroup" title="Group selected instances (⇧G or C)">Group</button>
                 <button class="toolbar-btn" id="tbEditGroup" title="Edit selected group membership">Edit Group</button>
                 <div class="tri-dropdown" id="triangulateDropdown">
-                    <button class="toolbar-btn" id="tbTriangulate" title="Triangulate selected group (t)">Triangulate <span class="tri-caret">▾</span></button>
+                    <button class="toolbar-btn" id="tbTriangulate" title="Triangulate selected group (t)">Triangulate<span class="tri-method"></span> <span class="tri-caret">▾</span></button>
                     <div class="tri-dropdown-menu">
                         <div class="tri-dropdown-item" data-method="dlt">DLT <span class="tri-dropdown-hint">Fast</span></div>
                         <div class="tri-dropdown-item" data-method="ba">Ref <span class="tri-dropdown-hint">Slow &amp; Accurate</span></div>
                     </div>
                 </div>
                 <div class="tri-dropdown" id="triangulateAllDropdown">
-                    <button class="toolbar-btn" id="tbTriangulateAll" title="Triangulate all frames with instance groups">Triangulate All <span class="tri-caret">▾</span></button>
+                    <button class="toolbar-btn" id="tbTriangulateAll" title="Triangulate all frames with instance groups">Triangulate All<span class="tri-method"></span> <span class="tri-caret">▾</span></button>
                     <div class="tri-dropdown-menu">
                         <div class="tri-dropdown-item" data-method="dlt">DLT <span class="tri-dropdown-hint">Fast</span></div>
                         <div class="tri-dropdown-item" data-method="ba">Ref <span class="tri-dropdown-hint">Slow &amp; Accurate</span></div>
@@ -278,6 +296,7 @@
                 <div class="panel-tabs">
                     <button class="panel-tab active" data-tab="tabInstances">Instances</button>
                     <button class="panel-tab" data-tab="tabVisibility">Visibility</button>
+                    <button class="panel-tab" data-tab="tabIdSwitches">ID Switches</button>
                     <button class="panel-tab" data-tab="tabVideos">Videos</button>
                     <button class="panel-tab" data-tab="tabCameras">Cameras</button>
                     <button class="panel-tab" data-tab="tabSkeleton">Skeleton</button>
@@ -409,8 +428,8 @@
                     <h3>Predicted</h3>
                     <div class="vis-slider-row">
                         <span>Node Size</span>
-                        <input type="range" id="visPredNodeSize" min="1" max="50" value="20" step="1">
-                        <span class="vis-val" id="visPredNodeSizeVal">20</span>
+                        <input type="range" id="visPredNodeSize" min="1" max="50" value="6" step="1">
+                        <span class="vis-val" id="visPredNodeSizeVal">6</span>
                     </div>
                     <div class="vis-line-style-row">
                         <span>Node Style</span>
@@ -450,8 +469,8 @@
                     <h3>Reprojections</h3>
                     <div class="vis-slider-row">
                         <span>Node Size</span>
-                        <input type="range" id="visReprojNodeSize" min="1" max="50" value="16" step="1">
-                        <span class="vis-val" id="visReprojNodeSizeVal">16</span>
+                        <input type="range" id="visReprojNodeSize" min="1" max="50" value="4" step="1">
+                        <span class="vis-val" id="visReprojNodeSizeVal">4</span>
                     </div>
                     <div class="vis-line-style-row">
                         <span>Node Style</span>
@@ -474,8 +493,8 @@
                     </div>
                     <div class="vis-slider-row">
                         <span>Brightness</span>
-                        <input type="range" id="visReprojBrightness" min="0" max="100" value="100" step="1">
-                        <span class="vis-val" id="visReprojBrightnessVal">100%</span>
+                        <input type="range" id="visReprojBrightness" min="0" max="100" value="50" step="1">
+                        <span class="vis-val" id="visReprojBrightnessVal">50%</span>
                     </div>
                     <div class="vis-slider-row">
                         <span>Label Size</span>
@@ -489,10 +508,10 @@
                     </div>
                     <div class="vis-line-style-row">
                         <span>Edge Style</span>
-                        <div class="line-style-options" id="visReprojLineStyle" data-value="dashed">
-                            <button class="line-style-btn" data-style="solid" title="Solid"><svg width="40" height="12"><line x1="2" y1="6" x2="38" y2="6" stroke="currentColor" stroke-width="2"/></svg></button>
+                        <div class="line-style-options" id="visReprojLineStyle" data-value="solid">
+                            <button class="line-style-btn active" data-style="solid" title="Solid"><svg width="40" height="12"><line x1="2" y1="6" x2="38" y2="6" stroke="currentColor" stroke-width="2"/></svg></button>
                             <button class="line-style-btn" data-style="dotted" title="Dotted"><svg width="40" height="12"><line x1="2" y1="6" x2="38" y2="6" stroke="currentColor" stroke-width="2" stroke-dasharray="2,3"/></svg></button>
-                            <button class="line-style-btn active" data-style="dashed" title="Dashed"><svg width="40" height="12"><line x1="2" y1="6" x2="38" y2="6" stroke="currentColor" stroke-width="2" stroke-dasharray="6,4"/></svg></button>
+                            <button class="line-style-btn" data-style="dashed" title="Dashed"><svg width="40" height="12"><line x1="2" y1="6" x2="38" y2="6" stroke="currentColor" stroke-width="2" stroke-dasharray="6,4"/></svg></button>
                         </div>
                     </div>
                     <div class="vis-line-style-row">
@@ -582,12 +601,24 @@
                                 </td>
                             </tr>
                             <tr>
+                                <td style="padding:3px 4px;" title="Dims the 3D skeleton's track/identity color. 100% is the full color.">Brightness (%)</td>
+                                <td style="text-align:center;padding:3px 4px;"><span style="display:inline-flex;align-items:center;"><input type="number" id="vis3dBrightness" value="50" min="0" max="100" step="5" class="no-spinner" style="width:48px;background:var(--bg-tertiary,#2a2a2a);color:var(--text-primary,#e0e0e0);border:1px solid var(--border-color,#444);border-radius:3px;font-size:11px;text-align:center;padding:2px 4px;-moz-appearance:textfield;"><span class="vis3d-stepper"><button data-dir="up">&#9650;</button><button data-dir="down">&#9660;</button></span></span></td>
+                                <td></td>
+                            </tr>
+                            <tr>
                                 <td style="padding:3px 4px;">Edge Weight</td>
                                 <td style="text-align:center;padding:3px 4px;"><span style="display:inline-flex;align-items:center;"><input type="number" id="vis3dEdgeWeight" value="0.8" min="0" max="20" step="0.1" class="no-spinner" style="width:48px;background:var(--bg-tertiary,#2a2a2a);color:var(--text-primary,#e0e0e0);border:1px solid var(--border-color,#444);border-radius:3px;font-size:11px;text-align:center;padding:2px 4px;-moz-appearance:textfield;"><span class="vis3d-stepper"><button data-dir="up">&#9650;</button><button data-dir="down">&#9660;</button></span></span></td>
                                 <td style="text-align:center;padding:3px 4px;"><label class="toggle-switch"><input type="checkbox" id="vis3dEdgeShow" checked><span class="slider"></span></label></td>
                             </tr>
                         </tbody>
                     </table>
+                </div>
+
+                <!-- ==================== ID Switches Tab ==================== -->
+                <!-- Rendered by ui/id-switch-modal.js refreshIdSwitchPanel: the review checklist of
+                     Tracks ▸ Check ID Switches results for the active session. -->
+                <div class="panel-tab-content" id="tabIdSwitches">
+                    <div id="idSwitchPanel"></div>
                 </div>
 
                 <!-- ==================== Videos Tab ==================== -->
@@ -793,6 +824,7 @@
                             <div><kbd>A</kbd> Toggle assignment mode</div>
                             <div><kbd>Enter</kbd> Create group (assign)</div>
                             <div><kbd>Alt+Drag</kbd> Move whole instance</div>
+                            <div><kbd>Alt+Wheel</kbd> Rotate instance about node</div>
                             <div><kbd>Space</kbd> Play/Pause</div>
                             <div><kbd>Left/Right</kbd> Prev/Next frame</div>
                             <div>Drag empty: Box zoom / Pan</div>
@@ -851,6 +883,8 @@
                 <div class="seekbar-track">
                     <div class="seekbar-progress" id="seekbarProgress"></div>
                 </div>
+                <!-- Possible-ID-switch ticks (ui/seekbar-markers.js) -->
+                <div class="seekbar-marks" id="seekbarMarks"></div>
                 <div class="seekbar-thumb" id="seekbarThumb"></div>
             </div>
 

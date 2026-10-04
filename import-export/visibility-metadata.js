@@ -1,5 +1,7 @@
 // import-export/visibility-metadata.js — the `metadata.lucid` <-> Session
-// mapping for the Visibility panel's SESSION-SCOPED settings.
+// mapping for the Visibility panel's SESSION-SCOPED settings, and for the other
+// per-session panel state that belongs in the project file: the ID Switches
+// tab's review checklist (`idSwitchReview`, ui/id-switch-review.js).
 //
 // ## What this covers, and what it deliberately does not
 //
@@ -49,6 +51,7 @@ import {
     serializeVideoRotation, ingestVideoRotation,
 } from '../ui/video-filters.js';
 import { serializeHiddenSets, ingestHiddenSets } from '../ui/timeline-visibility.js';
+import { serializeIdSwitchReview, ingestIdSwitchReview } from '../ui/id-switch-review.js';
 
 /**
  * Every `metadata.lucid` key this module may write. Exported so tests (and the
@@ -64,6 +67,7 @@ export const VISIBILITY_METADATA_KEYS = [
     'hiddenCameras',
     'hiddenTracks',
     'hiddenIdentities',
+    'idSwitchReview',
 ];
 
 /**
@@ -97,6 +101,10 @@ export function writeVisibilityMetadata(lucid, session) {
         }
     }
 
+    // The ID Switches checklist: absent unless a check left results on this session.
+    var review = serializeIdSwitchReview(session);
+    if (review) lucid.idSwitchReview = review;
+
     return lucid;
 }
 
@@ -116,5 +124,6 @@ export function readVisibilityMetadata(session, lucid) {
     ingestVideoContrast(session, src.videoContrast);
     ingestVideoRotation(session, src.videoRotation);
     ingestHiddenSets(session, src);
+    ingestIdSwitchReview(session, src.idSwitchReview);
     return session;
 }

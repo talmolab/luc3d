@@ -9,6 +9,9 @@ __pycache__/
 
 # Video files (too large for git)
 *.mp4
+# Tiny (29 KB) B-frame fixture for tests/e2e/mediabunny-bframe-decode-order.mjs —
+# regenerate with tests/fixtures/bframes-test/make_fixture.sh.
+!tests/fixtures/bframes-test/bframes-test.mp4
 *.avi
 *.mov
 
