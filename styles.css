@@ -4592,3 +4592,22 @@ kbd {
   background: var(--accent-hover);
   border-color: var(--accent-hover);
 }
+
+/* Tracks ▸ Check ID Switches (Body Size) — ui/size-switch-modal.js */
+.size-switch-modal { max-width: 640px; }
+.size-switch-repeats { display: block; margin: 6px 0; font-size: 12px; }
+.size-switch-rate { margin: 4px 0 8px; font-size: 12px; opacity: 0.8; }
+.size-switch-row { cursor: pointer; }
+.size-switch-row:hover td { background: rgba(255, 107, 53, 0.12); }
+.size-switch-row.is-current td { background: rgba(255, 107, 53, 0.25); }
+.size-switch-row.is-repeat td { opacity: 0.6; }
+.size-switch-empty { opacity: 0.7; }
+
+/* Image ID-switch check — progress dialog + per-check row tint (ui/id-switch-modal.js) */
+.id-switch-progress { max-width: 520px; }
+.id-switch-progress-text { margin: 8px 0; font-size: 13px; min-height: 2.6em; }
+.id-switch-progress-bar { height: 6px; border-radius: 3px; background: rgba(255,255,255,0.12); overflow: hidden; }
+.id-switch-progress-fill { height: 100%; width: 0; background: #4cc9f0; transition: width 0.2s; }
+.size-switch-row.cue-image td:first-child { box-shadow: inset 3px 0 0 #4cc9f0; }
+.size-switch-row.cue-size td:first-child { box-shadow: inset 3px 0 0 #ffb020; }
+.size-switch-row.cue-both td:first-child { box-shadow: inset 3px 0 0 #ffb020, inset 6px 0 0 #4cc9f0; }

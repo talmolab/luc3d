@@ -97,6 +97,13 @@ export class Timeline {
         /** Cached per-frame marker info: Map<frameIdx, { hasUser, hasPredicted, modified }> */
         this._frameMarkers = new Map();
 
+        /**
+         * Possible ID-switch markers from Tracks ▸ Check ID Switches (Body Size)
+         * (`pose/size-switch-check.js`): [{ frame, nameA, nameB, score, continues }],
+         * sorted by frame. Empty = none drawn. See `setSwitchMarkers`.
+         */
+        this._switchMarkers = [];
+
         /** Track names (string[]) */
         this._trackNames = [];
 
@@ -188,6 +195,8 @@ export class Timeline {
         this.PLAYHEAD_COLOR = '#ffffff';
         this.MARKER_USER_COLOR = '#3b82f6';          // blue
         this.MARKER_PREDICTED_COLOR = '#93c5fd';      // light blue
+        this.SWITCH_MARKER_COLOR = '#ffb020';         // possible ID switch (size check)
+        this.SWITCH_MARKER_IMAGE_COLOR = '#4cc9f0';   // possible ID switch (image check)
         this.MARKER_MODIFIED_COLOR = '#ffffff';        // white
         this.RANGE_COLOR = 'rgba(99,102,241,0.25)';   // indigo translucent
         this.SEPARATOR_COLOR = 'rgba(255,255,255,0.12)';
@@ -724,6 +733,9 @@ export class Timeline {
             ctx.fillRect(x0, 0, x1 - x0, H);
         }
 
+        // --- Possible ID-switch markers (drawn over tracks, under the playhead) ---
+        if (this._switchMarkers.length) this._drawSwitchMarkers(ctx, W, H);
+
         // During playback, keep a copy of everything drawn so far so
         // `setCurrentFrame` can move the playhead without a full redraw.
         if (this._playbackMode) this._snapshotStatic();
@@ -733,6 +745,67 @@ export class Timeline {
 
         // --- Scrollbar ---
         this._updateScrollbar();
+    }
+
+    /**
+     * Show possible identity-switch markers (or clear them with an empty array).
+     * Each marker is drawn as a vertical line at `frame`: bold with a downward
+     * tick for an independent change point, dimmer with a small tick for a
+     * follow-on (`followOf`), a faint hairline for a `continues` repeat (a
+     * persistent switch makes every later encounter of that pair look swapped
+     * too). Hovering near one adds its description to the tooltip.
+     *
+     * @param {Array<{frame:number, nameA:string, nameB:string, score:number, continues?:boolean, kind?:string, followOf?:number}>} markers
+     */
+    setSwitchMarkers(markers) {
+        this._switchMarkers = (markers || []).slice().sort(function (a, b) { return a.frame - b.frame; });
+        this.redraw();
+    }
+
+    /** @returns {Array} the markers currently shown (a copy). */
+    getSwitchMarkers() {
+        return this._switchMarkers.slice();
+    }
+
+    /** @private */
+    _drawSwitchMarkers(ctx, W, H) {
+        var startFrame = Math.floor(this._scrollFrame) - 1;
+        var endFrame = Math.ceil(this._scrollFrame + this._visibleFrames()) + 1;
+        ctx.save();
+        for (var i = 0; i < this._switchMarkers.length; i++) {
+            var m = this._switchMarkers[i];
+            if (m.frame < startFrame || m.frame > endFrame) continue;
+            var x = Math.round(this._frameToX(m.frame + 0.5)) + 0.5;
+            if (x < this.LEFT_MARGIN || x > W - this.RIGHT_PADDING) continue;
+            // independent change point: bold line + big tick; follow-on: dimmer, small tick;
+            // still-swapped repeat: faint hairline, no tick.
+            var follow = m.followOf != null;
+            ctx.globalAlpha = m.continues ? 0.35 : follow ? 0.7 : 1;
+            var col = m.cue === 'image' ? this.SWITCH_MARKER_IMAGE_COLOR : this.SWITCH_MARKER_COLOR;
+            ctx.strokeStyle = col;
+            ctx.lineWidth = m.continues ? 1 : follow ? 1.5 : 2;
+            ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
+            if (!m.continues) {
+                var tw = follow ? 3.5 : 6, th = follow ? 5 : 9;
+                ctx.fillStyle = col;
+                ctx.strokeStyle = 'rgba(0,0,0,0.6)'; ctx.lineWidth = 1;
+                ctx.beginPath(); ctx.moveTo(x - tw, 0); ctx.lineTo(x + tw, 0); ctx.lineTo(x, th); ctx.closePath(); ctx.fill(); ctx.stroke();
+            }
+        }
+        ctx.restore();
+    }
+
+    /**
+     * The switch marker nearest pixel `x` (within 4 px), or null.
+     * @private
+     */
+    _switchMarkerAtX(x) {
+        var best = null, bestD = 4;
+        for (var i = 0; i < this._switchMarkers.length; i++) {
+            var d = Math.abs(this._frameToX(this._switchMarkers[i].frame + 0.5) - x);
+            if (d <= bestD) { bestD = d; best = this._switchMarkers[i]; }
+        }
+        return best;
     }
 
     /**
@@ -2646,6 +2719,13 @@ export class Timeline {
                 if (marker.hasPredicted) parts.push('predicted');
                 if (marker.modified) parts.push('modified');
                 if (parts.length > 0) text += ' (' + parts.join(', ') + ')';
+            }
+            const sw = this._switchMarkers.length ? this._switchMarkerAtX(x) : null;
+            if (sw) {
+                text += ' — possible ID switch: ' + sw.nameA + ' ↔ ' + sw.nameB +
+                    ' (' + (sw.agree ? 'size and images agree; ' : '') + (sw.cue === 'image' ? 'image' : 'size') + ' score ' + Math.round(sw.score) +
+                    (sw.continues ? ', still swapped' : sw.followOf != null ? ', follows an earlier switch'
+                        : sw.kind === 'end' ? ', labelling changes here' : '') + ')';
             }
             this._showTooltip(x, y, text);
         } else {

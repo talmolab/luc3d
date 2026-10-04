@@ -3,9 +3,9 @@
 Multi-view pose annotation GUI. No build system — pure vanilla JS served as static files.
 
 ## Architecture
-ES modules, vanilla JS (no build step). `index.html` loads `app.js` as `<script type="module">`; `app.js` is a 2-line entry point that imports from `pose/`. The 59 modules are grouped into four directories:
-- `pose/` — data model, cross-view tracking, DLT triangulation (the pure math in `triangulation-core.js`, solved in parallel by `triangulation-pool.js` + `triangulation-worker.js`), app initialization, multi-view display alignment (`view-align.js`) (10 files)
-- `ui/` — UI state, canvas rendering, mouse/keyboard interaction, info panel, modals, timeline, 3D viewport, panel visibility, video encoding, video display settings, keyboard-target arbitration, modal geometry, settings, browser-specific hints, the loading overlay + its progress bar, the Align Views to References dialog, the seekbar hover tooltip, the Color: Tracks/ID setting (33 files)
+ES modules, vanilla JS (no build step). `index.html` loads `app.js` as `<script type="module">`; `app.js` is a 2-line entry point that imports from `pose/`. The 63 modules are grouped into four directories:
+- `pose/` — data model, cross-view tracking, DLT triangulation (the pure math in `triangulation-core.js`, solved in parallel by `triangulation-pool.js` + `triangulation-worker.js`), app initialization, multi-view display alignment (`view-align.js`), the ID-switch checks by body size and images (`id-switch-check.js`) (11 files)
+- `ui/` — UI state, canvas rendering, mouse/keyboard interaction, info panel, modals, timeline, 3D viewport, panel visibility, video encoding, video display settings, keyboard-target arbitration, modal geometry, settings, browser-specific hints, the loading overlay + its progress bar, the Align Views to References dialog, the seekbar hover tooltip, the Color: Tracks/ID setting, the Check ID Switches dialog, its image embedder and crop worker (36 files)
 - `loading/` — video decoding, unplayable-codec diagnosis, session loading, SLP/package readers, web workers (8 files)
 - `import-export/` — file I/O, save/load, SLP import/merge, visibility metadata (8 files)
 - `demo-data.js` — synthetic skeleton and camera data
@@ -105,6 +105,15 @@ Tags must be `vX.Y.Z` or `vX.Y.Z-N` (numeric pre-release), matching sleap-app.
   DOM (`.dv-groupview` > `[.dv-tabs-and-actions-container][.dv-content-container]`)
   and on `--dv-tabs-and-actions-container-height`.
 - mp4box.js
+- **transformers.js pinned to 4.3.0** (`ui/image-embedder.js`, `/+esm` from
+  jsdelivr) + the `onnx-community/dinov2-small` model from the Hugging Face CDN —
+  fetched only when the IMAGE ID-switch check first runs (opt-in, default off),
+  then cached by the browser. Pinned for the dockview reason. The image check was
+  calibrated against this model's embeddings of `cutCrop`'s crops: a bump of
+  either, or any change to the crop, needs a recalibration (see MODULES.md
+  `pose/id-switch-check.js`). An opt-in (`imageCheckWebNN`) also tries the
+  same model on WebNN and keeps it only if a trial shows it faster AND
+  consistent with WebGPU (see MODULES.md `ui/image-embedder.js`).
 - **Video export = mediabunny, via `ui/video-encode.js` — the app's one encoding
   seam.** sleap-io.js has NO browser encoder (its `renderVideo()` shells out to a
   native `ffmpeg` and is Node-entry-only; its docs say "there is no encoder in the

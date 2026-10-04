@@ -33,6 +33,12 @@ const THRESHOLD_DEFAULTS = {
     distanceThreshold: 25,
     timePenalty: 0.1,
     stale: 20,
+    autoSwitchCheck: 1,
+    autoImageSwitchCheck: 0,
+    imageCheckThreshold: -25,
+    imageCheckHz: 2,
+    imageCheckMaxViews: 3,
+    imageCheckWebNN: 0,
 };
 
 const SETTINGS_STUB = `

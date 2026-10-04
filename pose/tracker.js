@@ -29,6 +29,7 @@ import { loadAllLazyFrames, sweepLazyFrameWindows } from './triangulation.js';
 import { drawAllOverlays } from '../ui/rendering.js';
 import { updateInfoPanel } from '../ui/info-panel.js';
 import { setColorByIdentity } from '../ui/color-by.js';
+import { runIdSwitchChecks } from '../ui/id-switch-modal.js';
 
 /**
  * A frame index as the USER sees it: 1-based.
@@ -1370,6 +1371,10 @@ async function runTrackingPass(range) {
         isRange ? '(range ' + lo + '–' + hi + ', 0-based)' : '');
     console.time('[' + label + '] total');
 
+    // Possible-ID-switch markers (Tracks ▸ Check ID Switches) describe the identities this
+    // pass is about to replace — drop them, for a range too.
+    if (timeline && timeline.getSwitchMarkers && timeline.getSwitchMarkers().length) timeline.setSwitchMarkers([]);
+
     // Clear old identities/groups for a fresh run. A range clears only its own
     // frames and RECYCLES the existing identities (see runTrackingPass's doc);
     // Track All wipes everything and lets commitTrackedFrame mint id_0…id_N.
@@ -1416,11 +1421,22 @@ async function runTrackingPass(range) {
         updateInfoPanel();
         if (timeline) timeline.refreshTracks(state.session, { cap: true });
         console.timeEnd('[' + label + '] total');
-        setStatus('Assigned ' + lres.numIdentities + ' identities across ' +
+        var doneMsg = 'Assigned ' + lres.numIdentities + ' identities across ' +
             totalFrameCount + ' frames' +
             (isRange ? ' (' + displayFrame(lo) + '–' + displayFrame(hi) + ')' : '') +
             (switchedToIds ? ', now coloring by ID' : '') +
-            ' — use Tracks ▸ Propagate IDs → Tracks to apply', 'success');
+            ' — use Tracks ▸ Propagate IDs → Tracks to apply';
+        setStatus(doneMsg, 'success');
+        // Then check the result for identity switches (ui/id-switch-modal.js): by body
+        // size (Tracking Wizard `autoSwitchCheck`, default on) and/or by images
+        // (`autoImageSwitchCheck`, default off — minutes, needs the videos + WebGPU).
+        // After a range this covers the WHOLE session's identities, so a re-tracked
+        // window is checked against the frames around it; with too little tracked
+        // data a check reports itself skipped. It never fails the tracking pass.
+        var autoSize = getTrackingThreshold('autoSwitchCheck') > 0, autoImage = getTrackingThreshold('autoImageSwitchCheck') > 0;
+        if (lres.numIdentities > 1 && (autoSize || autoImage)) {
+            await runIdSwitchChecks({ auto: true, statusPrefix: doneMsg, size: autoSize, image: autoImage });
+        }
         // Report the span actually swept. For Track All that is whatever the
         // project turned out to hold; for a range it is the clamped, normalized
         // window, which is what the caller needs to park the viewer on.

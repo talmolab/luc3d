@@ -60,6 +60,7 @@ import { shouldIgnoreShortcut, installFocusRelease } from './keyboard-target.js'
 import { showSettingsModal } from './settings-modal.js';
 // Pass 3i-3: addNewInstanceSmart and update3DViewport moved to pose/initialization.js.
 import { addNewInstanceSmart, update3DViewport, navigateToFrame } from '../pose/initialization.js';
+import { runIdSwitchChecks, setIdSwitchNavigator } from './id-switch-modal.js';
 // Pass 3f / 3i-4: identity-assignment workflow symbols moved out of app.js.
 // (`swapTracks` joined this module in 3i-4; `seekToLabeledFrame` is now in-module.)
 import {
@@ -789,6 +790,19 @@ export function setupMenus() {
     document.getElementById('menuGroupByIdentity').addEventListener('click', function () {
         closeMenus();
         groupByIdentityAndTriangulateAll();
+    });
+
+    // Tracks ▸ Check ID Switches (Body Size): flag close encounters whose
+    // post-encounter body sizes favour swapped identities (ui/id-switch-modal.js).
+    setIdSwitchNavigator(navigateToFrame);   // also used when a tracking pass runs the checks itself
+    document.getElementById('menuCheckSizeSwitches').addEventListener('click', function () {
+        closeMenus();
+        runIdSwitchChecks({ size: true, navigateToFrame: navigateToFrame });
+    });
+    // Tracks ▸ Check ID Switches (Images): the same, by appearance — minutes, needs the videos + WebGPU.
+    document.getElementById('menuCheckImageSwitches').addEventListener('click', function () {
+        closeMenus();
+        runIdSwitchChecks({ image: true, navigateToFrame: navigateToFrame });
     });
 
     // Propagate Tracks → IDs (one-shot): each track label becomes an identity,
