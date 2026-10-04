@@ -60,6 +60,21 @@ whose target is **relative**, so it stays correct under the custom domain,
 GitHub Pages cannot issue a real HTTP redirect — no `.htaccess`, no
 `_redirects` — so a meta-refresh/JS stub is the only mechanism available.
 
+**Every deployed copy is version-stamped.** Both workflows run
+`scripts/stamp-version.mjs <dir> <commit>` on the staged copy (never on the
+repo): every same-site code reference — relative imports, `new URL('…js', …)`
+worker URLs, `<script src>`, stylesheet `<link>`s, importmap entries — gets
+`?v=<commit>`. Cloudflare serves `.js`/`.css` with a 4-hour lifetime in browsers
+AND per data centre, while `index.html` is revalidated within minutes; without the
+stamp a visitor could run a new `index.html` with old modules for hours (seen on
+PR #249's preview, even in Incognito). An ES module's identity is its URL, so the
+stamp must be all-or-nothing: the script fails the deploy if any relative module
+reference is left unstamped (that module would load twice). Keep code references
+literal and relative — a computed `import(someVar)` or a root-absolute `/x.js`
+would defeat it. Covered by `tests/test-stamp-version.mjs` and
+`tests/e2e/stamped-build.mjs` (stamps the working tree, loads the app — every
+module once — and runs the browser suite on it).
+
 **Root is the only target that wipes — two rules keep that safe.** Every other
 channel owns its folder and can only damage itself, but root's previous output
 sits at the top of `gh-pages` beside every other channel and every PR preview:

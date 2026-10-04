@@ -19,6 +19,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Same cache safety as deploy.yml's "Stage the site": every same-site code
+      # URL gets ?v=<commit>, so Cloudflare's 4-hour .js cache can never serve
+      # an earlier push's modules under this push's index.html. Rewrites only
+      # this throwaway checkout; fails if any module reference is left unstamped.
+      - name: Stamp code URLs with this commit
+        run: node scripts/stamp-version.mjs . "${GITHUB_SHA::12}"
+
       - name: Deploy PR Preview
         uses: JamesIves/github-pages-deploy-action@v4
         with:
