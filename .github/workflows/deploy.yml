@@ -36,7 +36,9 @@ name: Deploy to GitHub Pages
 #      still cannot turn `rm -rf "$path"` into `rm -rf` of everything.
 #
 # LUCID has no build system, so a "build" is just a copy of the repo at that
-# ref. The app is already sub-path safe -- the importmap is relative (./lib/...)
+# ref -- plus ONE rewrite of the staged copy, scripts/stamp-version.mjs, which
+# adds ?v=<commit> to every same-site code URL so Cloudflare's 4-hour cache can
+# never mix two deploys (see "Stage the site"). The app is already sub-path safe -- the importmap is relative (./lib/...)
 # and the test harness resolves against document.baseURI -- which is what lets
 # the identical tree serve correctly from every one of these paths with no
 # rewriting. (This is the one big simplification over sleap-app's deploy.yml,
@@ -242,6 +244,17 @@ jobs:
             --exclude='.claude/' \
             --exclude='.gitignore' \
             ./ "$RUNNER_TEMP/site/"
+
+          # Cache safety. Cloudflare serves .js/.css with a 4-hour lifetime --
+          # in browsers AND per Cloudflare data centre -- while index.html is
+          # revalidated within minutes, so without this a visitor could run the
+          # new index.html with old modules for hours (one data centre still did
+          # with an Incognito window, 2026-10-04). The stamp gives every same-site
+          # code URL `?v=<commit>`, so a new index.html names new URLs all the way
+          # down. It fails the deploy if any relative module reference is left
+          # unstamped: a module reached under two URLs would load twice.
+          # Covered by tests/test-stamp-version.mjs + tests/e2e/stamped-build.mjs.
+          node scripts/stamp-version.mjs "$RUNNER_TEMP/site" "${GITHUB_SHA::12}"
 
       - name: Deploy to gh-pages
         if: steps.targets.outputs.count != '0'
