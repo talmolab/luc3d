@@ -8324,3 +8324,50 @@ empty so the user can practice triangulating).
 
 **User-facing features.** File menu Load Demo Session — the synthetic
 test dataset shipped with the app.
+
+---
+
+### server.py
+
+**Purpose.** Development server (`SimpleHTTPRequestHandler`). Serves the static
+tree, keeps a legacy `POST /convert-slp` endpoint alive when `h5py` is present,
+and implements **offline mode**.
+
+**CLI.** `python3 server.py [port] [--offline]`; `LUCID_OFFLINE=1` also enables
+offline. Prints which mode it started in.
+
+**Offline mode.** Reads `offline-deps.json` via `scripts/offline_deps.py` and
+rewrites the mapped CDN URLs in served `.html` / `.js` / `.mjs` bodies to
+depth-relative `lib/` paths (`./lib/…` at root, `../lib/…` from `tests/`). Files
+on disk are never modified, so the working tree keeps its CDN URLs. Refuses to
+start when a declared package is missing rather than serving a page that half
+works. `.js` coverage is required, not optional: two of the six CDN references
+are ESM imports inside `ui/sessions-panes.js` and `ui/overlay-export-modal.js`.
+
+**Imports from project modules.** `scripts/offline_deps.py` —
+`load_manifest`, `package_status`, `replacement_map`, `rewrite_text`.
+
+**User-facing features.** Local development; offline development.
+
+---
+
+### scripts/offline_deps.py
+
+**Purpose.** Fetch, verify and vendor the four CDN dependencies declared in
+`offline-deps.json` into gitignored `lib/` directories, and build a
+pre-rewritten offline bundle. Standard library only — no Node, curl, tar or
+Git Bash, so it behaves identically on Linux, macOS and Windows.
+
+**CLI.** `install` (idempotent; `--force` re-fetches) · `check`
+(`--strict` also fails on unmapped CDN URLs) · `bundle` · `clean`.
+Honors `LUCID_NPM_REGISTRY`.
+
+**Key functions.** `load_manifest()`, `replacement_map()`, `rewrite_text()`
+(shared with `server.py`), `package_status()`, `run_asserts()` (behavioral
+checks pinning the API each package must still expose), `check_pins()`
+(re-derives the dockview version pin from source rather than trusting prose),
+`find_unmapped_cdn_urls()`.
+
+**Imported by.** `server.py`; `tests/e2e/offline-server.mjs` shells out to it.
+
+**User-facing features.** Offline install and the distributable bundle.
