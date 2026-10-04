@@ -33,6 +33,7 @@ const THRESHOLD_DEFAULTS = {
     distanceThreshold: 25,
     timePenalty: 0.1,
     stale: 20,
+    matchGate: 1,
 };
 
 const SETTINGS_STUB = `
