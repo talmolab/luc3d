@@ -25,15 +25,15 @@
  * import-export/save-load.js (setStatus).
  */
 
-import { state, getActiveSession } from './app-state.js';
-import { setSeekbarSwitchMarkers } from './seekbar-markers.js';
-import { setStatus, markDirty } from '../import-export/save-load.js';
-import { showLoadingProgress, hideLoading, yieldToPaint } from './loading-overlay.js';
-import { getTrackingThreshold } from './settings.js';
-import { checkSizeSwitches, checkImageSwitches } from '../pose/id-switch-check.js';
-import { hasWebGPU, createImageEmbedder, IMAGE_MODEL_MB } from './image-embedder.js';
+import { state, getActiveSession } from './app-state.js?v=d2b34797ef4b';
+import { setSeekbarSwitchMarkers } from './seekbar-markers.js?v=d2b34797ef4b';
+import { setStatus, markDirty } from '../import-export/save-load.js?v=d2b34797ef4b';
+import { showLoadingProgress, hideLoading, yieldToPaint } from './loading-overlay.js?v=d2b34797ef4b';
+import { getTrackingThreshold } from './settings.js?v=d2b34797ef4b';
+import { checkSizeSwitches, checkImageSwitches } from '../pose/id-switch-check.js?v=d2b34797ef4b';
+import { hasWebGPU, createImageEmbedder, IMAGE_MODEL_MB } from './image-embedder.js?v=d2b34797ef4b';
 import { idSwitchRowKey as rowKey, idSwitchPrimary as primaryOf, idSwitchMarkers as markersOf, idSwitchOnsets as countOnsets,
-         idSwitchEncounterCount as encounterCount, linkIdSwitchResults as tagAndLink } from './id-switch-review.js';
+         idSwitchEncounterCount as encounterCount, linkIdSwitchResults as tagAndLink } from './id-switch-review.js?v=d2b34797ef4b';
 
 const CUE_LABEL = { size: 'body size', image: 'images' };
 

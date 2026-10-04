@@ -16,20 +16,20 @@ import {
     reprojectPoints,
     computeInstanceDistanceTo,
     hungarianAlgorithm
-} from './triangulation.js';
-import { CrossViewTracker, Detection } from './cross-view-tracker.js';
-import { InstanceGroup, points3dNodeCount, hasPoint3d, readPoint3d } from './pose-data.js';
+} from './triangulation.js?v=d2b34797ef4b';
+import { CrossViewTracker, Detection } from './cross-view-tracker.js?v=d2b34797ef4b';
+import { InstanceGroup, points3dNodeCount, hasPoint3d, readPoint3d } from './pose-data.js?v=d2b34797ef4b';
 
 // Pass 3i-1: tracker UI/integration (was in app.js)
-import { state, interactionManager, timeline, getActiveSession } from '../ui/app-state.js';
-import { getNodeWeightArray, getTrackingThresholds, getTrackingThreshold, isCameraTracked } from '../ui/settings.js';
-import { setStatus, hideLoading } from '../import-export/save-load.js';
-import { showLoadingProgress, createProgressPacer, yieldToPaint } from '../ui/loading-overlay.js';
-import { loadAllLazyFrames, sweepLazyFrameWindows } from './triangulation.js';
-import { drawAllOverlays, showPredictedOnly, PREDICTED_ONLY_NOTE } from '../ui/rendering.js';
-import { updateInfoPanel } from '../ui/info-panel.js';
-import { setColorByIdentity } from '../ui/color-by.js';
-import { runIdSwitchChecks, clearIdSwitchResults } from '../ui/id-switch-modal.js';
+import { state, interactionManager, timeline, getActiveSession } from '../ui/app-state.js?v=d2b34797ef4b';
+import { getNodeWeightArray, getTrackingThresholds, getTrackingThreshold, isCameraTracked } from '../ui/settings.js?v=d2b34797ef4b';
+import { setStatus, hideLoading } from '../import-export/save-load.js?v=d2b34797ef4b';
+import { showLoadingProgress, createProgressPacer, yieldToPaint } from '../ui/loading-overlay.js?v=d2b34797ef4b';
+import { loadAllLazyFrames, sweepLazyFrameWindows } from './triangulation.js?v=d2b34797ef4b';
+import { drawAllOverlays, showPredictedOnly, PREDICTED_ONLY_NOTE } from '../ui/rendering.js?v=d2b34797ef4b';
+import { updateInfoPanel } from '../ui/info-panel.js?v=d2b34797ef4b';
+import { setColorByIdentity } from '../ui/color-by.js?v=d2b34797ef4b';
+import { runIdSwitchChecks, clearIdSwitchResults } from '../ui/id-switch-modal.js?v=d2b34797ef4b';
 
 /**
  * A frame index as the USER sees it: 1-based.
