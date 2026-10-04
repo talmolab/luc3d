@@ -370,69 +370,7 @@ export function formatEmbedTiming(t) {
     return Math.round(t.cropsPerS) + ' crops/s over ' + t.seconds.toFixed(0) + ' s · GPU busy ' + Math.round(t.gpuBusyPct) + '% (' +
         t.batches + ' batches of ~' + Math.round(t.avgBatch) + ', ' + t.modelMsPerCrop.toFixed(1) + ' ms/crop) · per frame: decode ' +
         Math.round(t.decodeMsPerFrame) + ' ms, crop ' + Math.round(t.cropMsPerFrame) + ' ms, queue ' + Math.round(t.queueMsPerFrame) + ' ms' +
-        ' · ' + (t.backend === 'webnn' ? 'WebNN' : 'WebGPU') + (t.dtype ? ' ' + t.dtype : '') + (t.decodeIn ? ' · decoding in ' + t.decodeIn : '');
-}
-
-/**
- * One decode worker per camera (ui/image-decode-worker.js): each opens that
- * camera's video file itself, stream-decodes the check's frames and cuts the
- * crops, so no video frame touches the main thread. Resolves to null — and the
- * caller keeps the main-thread streaming readers + crop pool — when any camera
- * lacks a local file (`decoder.file`) or the mediabunny frame index, when Worker
- * is unavailable, `window.LUCID_DECODE_WORKERS === 0`, or any worker fails to
- * open its file.
- * @returns {Promise<?{run(vi, frame, crops): Promise<{tensors, decodeMs, cropMs}>, terminate()}>}
- */
-export async function createDecodeWorkers(views, frames) {
-    if (typeof Worker !== 'function' || (typeof window !== 'undefined' && window.LUCID_DECODE_WORKERS === 0)) return null;
-    const plans = views.map(function (v) {
-        const d = v.decoder, be = d && d._mbBackend;
-        if (!d || !(typeof Blob !== 'undefined' && d.file instanceof Blob) || !be || !be._frameTimes) return null;
-        const times = frames.map(function (f) { return be._frameTimes[f]; });
-        return times.some(function (t) { return t == null; }) ? null : { file: d.file, times: times };
-    });
-    if (!plans.length || plans.some(function (p) { return !p; })) return null;
-    const workers = [], pending = new Map();
-    let nextId = 1;
-    const terminate = function () {
-        workers.forEach(function (w) { try { w.postMessage({ type: 'close' }); } catch (e) { /* ignore */ } w.terminate(); });
-        pending.forEach(function (p) { p.reject(new Error('decode workers closed')); });
-        pending.clear();
-    };
-    try {
-        const opened = plans.map(function (plan) {
-            const w = new Worker(new URL('./image-decode-worker.js', import.meta.url), { type: 'module' });
-            workers.push(w);
-            return new Promise(function (resolve, reject) {
-                w.onmessage = function (e) {
-                    const m = e.data;
-                    if (m.type === 'opened') { resolve(); return; }
-                    if (m.type === 'error') { reject(new Error(m.error)); return; }
-                    const p = pending.get(m.id); if (!p) return;
-                    pending.delete(m.id);
-                    if (m.error) p.reject(new Error(m.error)); else p.resolve(m);
-                };
-                w.onerror = function (e) { e.preventDefault(); reject(new Error(e.message || 'decode worker failed')); };
-                w.postMessage({ type: 'open', file: plan.file, times: plan.times, frames: frames });
-            });
-        });
-        await Promise.all(opened);
-    } catch (e) {
-        console.warn('[image-embedder] decode workers unavailable, decoding on the main thread:', e.message);
-        terminate();
-        return null;
-    }
-    workers.forEach(function (w) { w.onerror = function (e) { e.preventDefault(); pending.forEach(function (p) { p.reject(new Error('decode worker failed')); }); pending.clear(); }; });
-    return {
-        run: function (vi, frame, crops) {
-            const id = nextId++;
-            return new Promise(function (resolve, reject) {
-                pending.set(id, { resolve: resolve, reject: reject });
-                workers[vi].postMessage({ type: 'crop', id: id, frame: frame, crops: crops });
-            });
-        },
-        terminate: terminate,
-    };
+        ' · ' + (t.backend === 'webnn' ? 'WebNN' : 'WebGPU') + (t.dtype ? ' ' + t.dtype : '');
 }
 
 /**
@@ -567,7 +505,7 @@ export async function createImageEmbedder(session, opts) {
         return backend === 'webnn' ? runWebNN(data, n) : runWebGPU(data, n);
     };
     const canvas = new OffscreenCanvas(CROP, CROP);
-    let readers = null, pool, dec = null;   // pool: undefined = not made yet, null = inline; dec: per-camera decode workers
+    let readers = null, pool;   // pool: undefined = not made yet, null = inline
     const frameOf = function (vi, frame) {
         const r = readers && readers[vi];
         if (r) return r.get(frame);
@@ -623,7 +561,6 @@ export async function createImageEmbedder(session, opts) {
             });
             return { vi: vi, crops: crops, who: who };
         };
-        if (dec) return finishFrame(items, await decodeInWorkers(frame, want, cropsFor), tStart);
         // fetch only the cameras some item needs (a streamed reader steps past a frame nobody asks for);
         // a streamed frame is ours to hand over and close, a getFrame one belongs to the decoder's cache
         const images = await Promise.all(views.map(async function (v, vi) {
@@ -667,28 +604,10 @@ export async function createImageEmbedder(session, opts) {
             images.forEach(function (im) { if (im && im.owned && im.img && im.img.close) im.img.close(); });
         }
         tm.cropMs += performance.now() - tFrames;
-        return finishFrame(items, { jobs: jobs, tensors: tensors }, null);
+        return finishFrame(items, { jobs: jobs, tensors: tensors });
     };
-    // Worker path: each needed view's crops are cut by that camera's decode worker. Timing: the
-    // frame's decode / crop are the slowest camera's (they run in parallel).
-    const decodeInWorkers = async function (frame, want, cropsFor) {
-        const jobs = [];
-        views.forEach(function (v, vi) { if (want.some(function (w) { return w.has(vi); })) jobs.push(cropsFor(vi)); });
-        let dMax = 0, cMax = 0;
-        const tensors = await Promise.all(jobs.map(function (job) {
-            return dec.run(job.vi, frame, job.crops).then(function (m) {
-                dMax = Math.max(dMax, m.decodeMs); cMax = Math.max(cMax, m.cropMs);
-                return m.tensors;
-            }, function (e) {
-                console.warn('[image-embedder] decode worker failed, skipping one view of frame ' + frame + ':', e.message);
-                return [];
-            });
-        }));
-        tm.decodeMs += dMax; tm.cropMs += cMax;
-        return { jobs: jobs, tensors: tensors };
-    };
-    // Shared tail: queue the frame's crops for the model and hand back {camera, vector} per item.
-    const finishFrame = async function (items, cut, tStart) {
+    // Queue the frame's crops for the model and hand back {camera, vector} per item.
+    const finishFrame = async function (items, cut) {
         const out = items.map(function () { return []; });
         const owner = [];   // owner[i] = [item index, camera]
         cut.jobs.forEach(function (job, j) { if (cut.tensors[j].length) job.who.forEach(function (w) { owner.push(w); }); });
@@ -708,17 +627,11 @@ export async function createImageEmbedder(session, opts) {
         /** Where the time went in this run — see `summarizeEmbedTiming`. */
         // the precision that actually ran: WebGPU runs fp16 only where the GPU offers 'shader-f16'
         // (fp32 measured ~1.5x slower on an M2 Pro); the WebNN path always loads fp16
-        stats: function () { const t = summarizeEmbedTiming(tm, backend, backend === 'webnn' ? 'fp16' : dtype); t.decodeIn = tm.usedWorkers ? 'workers' : 'main thread'; return t; },
+        stats: function () { return summarizeEmbedTiming(tm, backend, backend === 'webnn' ? 'fp16' : dtype); },
         prepareFrames: async function (frames) {
-            dec = opts.decodeWorkers === false ? null : await createDecodeWorkers(views, frames);
-            tm.usedWorkers = !!dec;
-            if (!dec) readers = views.map(function (v) { return streamingReader(v.decoder, frames); });
+            readers = views.map(function (v) { return streamingReader(v.decoder, frames); });
         },
-        /** 'workers' when each camera decodes in its own worker, else 'main thread'. */
-        decodeMode: function () { return dec ? 'workers' : 'main thread'; },
         releaseFrames: function () {
-            if (dec) dec.terminate();
-            dec = null;
             if (readers) readers.forEach(function (r) { if (r) r.close(); });
             readers = null;
             if (pool) pool.terminate();

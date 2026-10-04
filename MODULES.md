@@ -4812,27 +4812,18 @@ frames, 8 cameras, 8 in flight): RTX 2000 Ada PC 131 crops/s, GPU busy 92% at
 supply-bound. 16 in flight was tried and reverted: no change (PC 124, VM 160
 crops/s; decode is throughput-bound, so each frame just waited twice as long)
 while the PC's dedicated GPU memory climbed to 10.6 GB.
-**Decode workers** (`imageCheckDecodeWorkers`, EXPERIMENTAL, default 0; `opts.decodeWorkers`;
-`window.LUCID_DECODE_WORKERS = 0` forces off). The recordings are HEVC, P-frames
-only, a keyframe every 250 frames, so the check decodes essentially every frame
-of every camera (~2,000–2,700 decoded frames/s on the field machines). With
-workers, `prepareFrames` starts one `ui/image-decode-worker.js` per camera that
-opens the camera's own `decoder.file` with mediabunny, stream-decodes the frame
-list (the backend's PTS-sorted `_frameTimes`) and cuts that view's crops — no
-VideoFrame reaches the main thread, which then only computes crop geometry and
-batches tensors. Falls back to the main-thread streaming readers + crop pool when
-any camera lacks a local file or the frame index, or a worker fails to open.
-Crops are bit-identical to the main-thread path (tests/e2e/image-decode-worker.mjs;
-2,248 real crops, embeddings max |difference| 0). On an M2 Pro decode throughput
-is the same either way (~4,800 decoded frames/s — the hardware decoder's limit),
-so it pays only where the main thread, not the decoder, limits (the RTX 4000 Ada
-VM's decoder sat at 44%); the timing line ends "decoding in workers" / "main
-thread" so the two can be compared on the machine. **Field result (RTX 4000 Ada VM,
-Windows): worse** — about half the throughput (~4–5 frames/s vs ~10.7 on the
-main thread), the hardware video decoder only 19–26% busy (vs 44%), and
-dedicated GPU memory climbing in a GC sawtooth to 19.3 of 20 GB. Not
-reproducible on macOS (no unclosed-VideoFrame warnings, same throughput), so it
-stays opt-in for diagnosis only.
+**Decode workers were tried and removed** (2026-10-04). The recordings are HEVC,
+P-frames only, a keyframe every 250 frames, so the check decodes essentially
+every frame of every camera (~2,000–2,700 decoded frames/s on the field
+machines). A per-camera module worker that opened the camera's file with
+mediabunny, stream-decoded and cropped there gave bit-identical crops, and the
+same throughput as the main thread on an M2 Pro (~4,800 decoded frames/s, the
+hardware decoder's limit) — but on an RTX 4000 Ada VM (Windows) it ran at about
+half the speed (~4–5 vs ~10.7 frames/s), with the hardware video decoder less
+busy (19–26% vs 44%) and dedicated GPU memory climbing in a GC sawtooth to 19.3
+of 20 GB. Not reproducible on macOS (no unclosed-VideoFrame warnings), so it was
+removed rather than kept as an option. Cheaper decoding has to come from the
+recordings (keyframes every 0.5 s).
 Embeddings are bit-identical across all of this (cosine 1.00000 vs seeking,
 top-k vs the same views at all-k, and max |difference| 0 for worker vs inline
 crops over 5,687 real crops).
@@ -4864,7 +4855,7 @@ Numbers in `ui/id-switch-modal.js`.
 `checkImageSwitches` needs; `releaseFrames` also terminates the crop pool and
 disposes a WebNN model);
 `loadImageModel(onStatus)` (once, cached promise); `hasWebGPU()`;
-`selectViews(geos, maxViews)`; `createDecodeWorkers(views, frames)`; `EMBED_MAX_BATCH`, `EMBED_IN_FLIGHT`,
+`selectViews(geos, maxViews)`; `EMBED_MAX_BATCH`, `EMBED_IN_FLIGHT`,
 `summarizeEmbedTiming(tm, backend, dtype)`, `formatEmbedTiming(t)`; WebNN: `hasWebNN()`, `loadWebNNModel(onStatus)`,
 `chooseBackend(trial)`, `WEBNN_BATCH`, `WEBNN_TRIAL_FRAMES`; `createCropPool()` -> `{run(image, crops) ->
 Promise<Float32Array[]>, broken, terminate()}` or null; crop helpers
@@ -4897,29 +4888,6 @@ the CLS extraction (`last_hidden_state` token 0) on any version bump.
 `tests/test-id-switch-check.mjs`; the crop pool in `tests/e2e/image-crop-worker.mjs`;
 the full path on real data by a scratch harness (not in the suite: it needs the
 proofread videos and GPU) — see the image-check notes above.
-
----
-
-### ui/image-decode-worker.js
-
-**Purpose.** Module worker (one per camera) that decodes that camera's video
-for the image ID-switch check and cuts its crops, so no video frame touches the
-main thread (`createDecodeWorkers` in `ui/image-embedder.js`).
-
-**Messages.** IN `{type: 'open', file, times, frames}` -> `{type: 'opened'}` |
-`{type: 'error'}`; IN `{type: 'crop', id, frame, crops: [{g, others}]}` -> `{id,
-tensors (transferred), decodeMs, cropMs}` | `{id, error}` (frames strictly
-increasing — a frame behind the stream is an error, never a wrong frame); IN
-`{type: 'close'}`. Jobs run one at a time in order; frames no job asks for are
-decoded and dropped (P-frames need them).
-
-**Imports.** mediabunny by RELATIVE path (`../lib/mediabunny/mediabunny.min.mjs` —
-module workers do not see the page's importmap) and `ui/image-embedder.js`
-(`cutCrop`, `writeInputTensor`, `CROP`, `INPUT`).
-
-**Spawned by.** `ui/image-embedder.js` (`createDecodeWorkers`).
-
-**Coverage.** `tests/e2e/image-decode-worker.mjs`.
 
 ---
 
@@ -5002,8 +4970,7 @@ Shortcuts and the Hot Keys modal where people look for them.
   check after Track All / Track Frame Range, default 1; `autoImageSwitchCheck` —
   0/1, the image check likewise, default 0; `imageCheckThreshold` -25;
   `imageCheckHz` 2; `imageCheckMaxViews` 3; `imageCheckWebNN` — 0/1, try WebNN,
-  default 0; `imageCheckDecodeWorkers` — 0/1, decode in per-camera workers
-  (experimental), default 0). The remaining catalog entries (`epipolarDecay`, `reprojSigma`, `epipolarWeight`,
+  default 0). The remaining catalog entries (`epipolarDecay`, `reprojSigma`, `epipolarWeight`,
   `reprojWeight`, `minMatchScore`, `prevIdentityBonus`, `reprojGate2/3/4`,
   `track3dWeight`) drive the bench-only luc3d matcher and are hidden from the UI
   but still resolve via `getTrackingThreshold`. `getTrackingThresholds` returns
