@@ -811,13 +811,13 @@ drifts upward (e.g., 4 → 11 on the test fixture).
   `yieldToPaint`.
 - `../ui/rendering.js` — `drawAllOverlays`.
 - `../ui/info-panel.js` — `updateInfoPanel`.
-- `../ui/id-switch-modal.js` — `runIdSwitchChecks`: after a successful Track
+- `../ui/id-switch-modal.js` — `runIdSwitchChecks`, `clearIdSwitchResults`: after a successful Track
   All or Track Frame Range that assigned 2+ identities, `runTrackingPass` runs the
   ID-switch checks over the whole session (`{auto: true, statusPrefix, size,
   image}`: size per the Tracking Wizard's `autoSwitchCheck` (default on), images
   per `autoImageSwitchCheck` (default off)) and awaits them, so the pass resolves
-  after the checks. It also clears stale switch markers
-  (`timeline.setSwitchMarkers([])`) before clearing identities, for both paths.
+  after the checks. It also drops the session's earlier results and their
+  markers (`clearIdSwitchResults(session)`) before clearing identities, for both paths.
   No cycle: that module imports app-state, save-load, loading-overlay, settings,
   `pose/id-switch-check.js` and `ui/image-embedder.js`, none of which import the
   tracker.
@@ -2714,6 +2714,8 @@ on reload); see `ui/app-state.js`.
 - `./rendering.js` — `drawAllOverlays`, `updateFrameCounters`.
 - `./interaction.js` — `isInteractiveClickTarget`.
 - `./panel-visibility.js` — `isInfoPanelVisible`, `markInfoPanelStale`.
+- `./id-switch-modal.js` — `refreshIdSwitchPanel`: `updateInfoPanel` re-renders
+  the ID Switches tab (and its timeline markers) for the active session.
 - `./app-state.js` — `state`, `timeline`, `interactionManager`,
   `rememberSkeleton`, `buildRememberedSkeleton`.
 - `../import-export/save-load.js` — `setStatus`, `markDirty`.
@@ -4346,6 +4348,8 @@ multi-video docking layout.
 - `removeSession`, `switchSession` (async).
 
 **Imports from project modules.**
+- `./id-switch-modal.js` — `refreshIdSwitchPanel`: `switchSession` shows the new
+  session's ID-switch results and markers (try/catch, like `populateTimelineVisibility`).
 - `./app-state.js` — `state`, controllers + setters.
 - `../pose/pose-data.js` — `FrameGroup`, `UnlinkedInstance`, `Camera`.
 - `../pose/triangulation.js` — `triangulateAndReproject`,
@@ -4521,13 +4525,17 @@ the headless test runner doesn't crash on a missing `document`.
 same checks run automatically after Track All / Track Frame Range. Runs
 `checkSizeSwitches` / `checkImageSwitches` (`pose/id-switch-check.js`), puts every
 change point and repeat on the timeline (`timeline.setSwitchMarkers`, tagged
-`cue: 'size' | 'image'`), and shows a results dialog.
+`cue: 'size' | 'image'`), and lists the change points in the right panel's
+**ID Switches** tab as a per-session review checklist.
 
 **Key exports.** `runIdSwitchChecks({size?, image?, auto?, statusPrefix?,
 navigateToFrame?, inject?})`; `setIdSwitchNavigator(fn)` (ui-wiring registers
 `navigateToFrame` once, so rows stay clickable when the tracker started the
-check); `showIdSwitchModal(results, deps)`; back-compat `runSizeSwitchCheck`,
-`showSizeSwitchModal`. `inject: {createEmbedder, hasWebGPU}` replaces the image
+check); `refreshIdSwitchPanel(session?)` (render the tab and put that session's
+markers on the timeline — called after a check, from `updateInfoPanel` and from
+`switchSession`); `openIdSwitchPanel()` (show the panel, if hidden, on the tab);
+`clearIdSwitchResults(session?)` (called by `runTrackingPass` before it relabels);
+back-compat `runSizeSwitchCheck`. `inject: {createEmbedder, hasWebGPU}` replaces the image
 model and the WebGPU probe — test-only (`tests/e2e/id-switch-image-check.mjs`).
 
 **Runs automatically after tracking.** `pose/tracker.js`'s `runTrackingPass` calls
@@ -4536,7 +4544,7 @@ and Track Frame Range: size when the Tracking Wizard's `autoSwitchCheck` is on
 (default), images when `autoImageSwitchCheck` is on (default OFF — minutes, needs
 the videos + WebGPU). Auto mode appends each check's result to the pass's status
 line ("Assigned N identities … · ID-switch check (body size): …; ID-switch check
-(images): …"), opens the dialog only when a possible switch is found, and reports
+(images): …"), opens the ID Switches tab only when a possible switch is found, and reports
 a check that cannot run as "skipped — reason", never as a failure of the pass. It
 always analyses the WHOLE session's identities.
 
@@ -4556,23 +4564,34 @@ time scales with views per animal x `imageCheckHz`; decoding + cropping alone
 would allow ~270 crops/s.
 Reads `imageCheckMaxViews` (default 3) and passes it as `maxViewsPerAnimal`, and
 `imageCheckWebNN` (default 0) as `webnn`; the embedder's `backend()` outcome is
-attached to the result as `model` and its note shown in the dialog's footer.
+attached to the result as `model` and its note shown under "About these flags".
 
-**User-facing features.** The dialog is capped at the window height (`styles.css`
-`.size-switch-modal`): heading, summary and buttons stay put and the list is its
-one scroller, with sticky column heads. One row per change point (time, 1-based frame,
-`id_a ↔ id_b`, check, score); when both checks ran, a change point both found
-(same pair within 1 s) is ONE "Both" row (scores "size / image"), and the dialog
-says to review those first. Follow-ons are dimmed ("follows the switch at m:ss");
-`end` points say the earlier encounters look swapped; "Show repeats" adds the
-still-swapped encounters. Clicking a row navigates there. `Esc` / Close / backdrop
-close the dialog and KEEP the markers; **Clear markers** removes them. A check
-that re-runs replaces only its own cue's markers. The rate line states the
-sampling and warns when the frame rate was not measured from video.
+**User-facing features.** The **ID Switches** tab (`#tabIdSwitches` /
+`#idSwitchPanel` in `index.html`, third tab; at the default panel width it sits in
+"More ▾"). Results are stored per session on `session._idSwitch` (`{results:
+{size?, image?}, reviewed: Set, showRepeats, current}`; in memory only — not
+saved to the `.slp`), so they survive closing/reopening the tab and switching
+sessions, until the check re-runs (a cue replaces only its own results; ticks on
+change points it finds again are kept, matched by cue + frame + pair), "Clear",
+or a new tracking pass. The tab shows a heading, per-check counts, "About these
+flags" (the method, calibration figures, sampling rate, frame-rate warning and
+the image backend note), a sticky toolbar ("N of M reviewed", **Next
+unreviewed ▸** — the next unticked row after the current one, wrapping —
+**Clear**, and "Show N later encounters that still look swapped"), then one row
+per change point: a **reviewed** checkbox, time, `id_a ↔ id_b`, score, and
+"frame N · check · note" (Both / size / images; "follows the switch at m:ss";
+"labelling changes here; earlier encounters look swapped"; "still swapped"). A
+change point both checks found (same pair within 1 s) is ONE "Both" row (scores
+"size / image"). Clicking a row navigates there; ticking it dims the row and its
+timeline marker (`reviewed`). A check run from the menu always opens the tab; an
+automatic one only when it found something. The tab content is the panel's one
+scroller (the list has none of its own). With no results it says so and offers
+"Check by body size" / "Check by images…" (they click the menu items).
 
 **Notes / caveats.** Kept a leaf like `ui/track-range-modal.js` (no import of
-`pose/initialization.js`). Single scroller (no inner `max-height`). The dialog
-keeps the `size-switch-*` class / element names of its size-only predecessor.
+`pose/initialization.js`); it opens the panel through the DOM (the toggle button
+and the tab button), not by importing ui-wiring. The module keeps its `-modal`
+name for the image check's progress dialog, which is still modal.
 
 **Imports from project modules.** `ui/app-state.js` (`state`, `timeline`,
 `getActiveSession`), `import-export/save-load.js` (`setStatus`),
@@ -4582,9 +4601,12 @@ keeps the `size-switch-*` class / element names of its size-only predecessor.
 
 **Imported by.** `ui/ui-wiring.js` (`#menuCheckSizeSwitches`,
 `#menuCheckImageSwitches`, `setIdSwitchNavigator`), `pose/tracker.js` (the
-automatic run).
+automatic run, `clearIdSwitchResults`), `ui/info-panel.js` and
+`ui/sessions-panes.js` (`refreshIdSwitchPanel`).
 
-**Coverage.** `tests/e2e/size-switch-check.mjs` (size, menu path),
+**Coverage.** `tests/e2e/size-switch-check.mjs` (size, menu path, the checklist:
+ticks, Next unreviewed, persistence across the tab / a re-run / a session switch,
+Clear, one scroller),
 `tests/e2e/track-auto-size-switch-check.mjs` (after Track All / Track Frame Range),
 `tests/e2e/id-switch-image-check.mjs` (images with an injected embedder: "Both"
 merge, identical-size animals found by images only, Esc cancel, no WebGPU, menu,
@@ -4936,13 +4958,14 @@ when the bar appears/disappears.
   `getTrackAreaElement`, `setSwitchMarkers(markers)` / `getSwitchMarkers()`.
 
 **Possible-ID-switch markers.** `setSwitchMarkers([{frame, nameA, nameB, score,
-continues?, kind?, followOf?, cue?, agree?}])` (from `ui/id-switch-modal.js`; `[]` clears)
+continues?, kind?, followOf?, cue?, agree?, reviewed?}])` (from `ui/id-switch-modal.js`; `[]` clears)
 draws a layer over the tracks, under the playhead (so it is in the playback
 static snapshot), amber for the size check and cyan for images (`cue`): an
 independent change point is a bold line with a
 downward tick, a follow-on (`followOf`) dimmer with a small tick, a
-still-swapped repeat (`continues`) a faint hairline. Hovering within 4 px adds
-"possible ID switch: a ↔ b (size score N…)" to the frame tooltip.
+still-swapped repeat (`continues`) a faint hairline; one ticked in the ID Switches
+tab (`reviewed`) is drawn at a third of its strength. Hovering within 4 px adds
+"possible ID switch: a ↔ b (size score N…, reviewed)" to the frame tooltip.
 
 **Initial-load 40% cap.** `setData(session)` sizes the container via
 `_fitContainerToData()`, which clamps the container height to

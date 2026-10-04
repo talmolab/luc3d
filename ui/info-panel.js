@@ -10,6 +10,7 @@ import { getInstanceGroupsForFrame } from '../pose/triangulation.js';
 import { REPROJECTION_COLOR, getTrackColor, getGroupColor } from './overlays.js';
 import { drawAllOverlays, updateFrameCounters } from './rendering.js';
 import { isInteractiveClickTarget } from './interaction.js';
+import { refreshIdSwitchPanel } from './id-switch-modal.js';
 import { isInfoPanelVisible, markInfoPanelStale } from './panel-visibility.js';
 import { state, timeline, interactionManager, rememberSkeleton, buildRememberedSkeleton,
          setProjectSkeleton, getProjectSkeleton } from './app-state.js';
@@ -1025,6 +1026,8 @@ export function updateInfoPanel() {
     // Block 2 (Prompt 4): refresh the per-session Timeline visibility
     // toggle lists in the Visibility tab.
     populateTimelineVisibility(state.session);
+    // The ID Switches tab (and its timeline markers) for this session.
+    refreshIdSwitchPanel(state.session);
 
     // Wire Videos tab buttons
     document.getElementById('btnAddVideos').onclick = function () { handleLoadVideos(); };

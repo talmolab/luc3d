@@ -61,6 +61,7 @@ import { drawAllOverlays, setReprojErrorVisible } from './rendering.js';
 // run during module evaluation.
 import { setSoloView } from './ui-wiring.js';
 import { updateInfoPanel, populateTimelineVisibility } from './info-panel.js';
+import { refreshIdSwitchPanel } from './id-switch-modal.js';
 // `autoAssignState` is a mutable binding tracked via ESM live binding.
 // The cycle (identity-assignment imports panelRenderers from here) is
 // hoist-safe because both reads are inside function bodies.
@@ -2109,6 +2110,8 @@ export async function switchSession(newIdx) {
     // Block 2 (Prompt 4): re-render the Visibility tab's Timeline
     // toggle lists from the new session's per-session hidden Sets.
     try { populateTimelineVisibility(newSession); } catch (e) { /* non-fatal in tests */ }
+    // ID-switch results are per session: show this one's list and timeline markers.
+    try { refreshIdSwitchPanel(newSession); } catch (e) { /* non-fatal in tests */ }
 
     // Restore per-session timeline height + collapsed state. First visit
     // (no `_timelineHeight` stored) → fit to the new session's data,

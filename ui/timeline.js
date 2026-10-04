@@ -99,7 +99,7 @@ export class Timeline {
 
         /**
          * Possible ID-switch markers from Tracks ▸ Check ID Switches (Body Size)
-         * (`pose/size-switch-check.js`): [{ frame, nameA, nameB, score, continues }],
+         * (`pose/id-switch-check.js`): [{ frame, nameA, nameB, score, continues, cue?, reviewed? }],
          * sorted by frame. Empty = none drawn. See `setSwitchMarkers`.
          */
         this._switchMarkers = [];
@@ -780,7 +780,7 @@ export class Timeline {
             // independent change point: bold line + big tick; follow-on: dimmer, small tick;
             // still-swapped repeat: faint hairline, no tick.
             var follow = m.followOf != null;
-            ctx.globalAlpha = m.continues ? 0.35 : follow ? 0.7 : 1;
+            ctx.globalAlpha = (m.continues ? 0.35 : follow ? 0.7 : 1) * (m.reviewed ? 0.35 : 1);   // ticked in the ID Switches tab: dimmed
             var col = m.cue === 'image' ? this.SWITCH_MARKER_IMAGE_COLOR : this.SWITCH_MARKER_COLOR;
             ctx.strokeStyle = col;
             ctx.lineWidth = m.continues ? 1 : follow ? 1.5 : 2;
@@ -2725,7 +2725,7 @@ export class Timeline {
                 text += ' — possible ID switch: ' + sw.nameA + ' ↔ ' + sw.nameB +
                     ' (' + (sw.agree ? 'size and images agree; ' : '') + (sw.cue === 'image' ? 'image' : 'size') + ' score ' + Math.round(sw.score) +
                     (sw.continues ? ', still swapped' : sw.followOf != null ? ', follows an earlier switch'
-                        : sw.kind === 'end' ? ', labelling changes here' : '') + ')';
+                        : sw.kind === 'end' ? ', labelling changes here' : '') + (sw.reviewed ? ', reviewed' : '') + ')';
             }
             this._showTooltip(x, y, text);
         } else {

@@ -4593,32 +4593,46 @@ kbd {
   border-color: var(--accent-hover);
 }
 
-/* Tracks ▸ Check ID Switches — ui/id-switch-modal.js. Never taller than the window:
-   heading, summary and buttons stay put and the list is the ONE scroller. */
-.size-switch-modal {
-  max-width: 640px;
-  max-height: calc(100vh - 48px);
-  display: flex;
-  flex-direction: column;
+/* Tracks ▸ Check ID Switches — the ID Switches tab of the right panel (ui/id-switch-modal.js
+   refreshIdSwitchPanel). The tab content is the panel's one scroller; the toolbar sticks. */
+.id-switch-summary { font-size: 12px; margin: 2px 0; }
+.id-switch-about { margin-top: 8px; font-size: 12px; }
+.id-switch-about summary { cursor: pointer; color: var(--text-secondary); }
+.id-switch-about p { font-size: 12px; margin: 6px 0; color: var(--text-secondary); line-height: 1.45; }
+.id-switch-rate { opacity: 0.85; }
+.id-switch-toolbar {
+  position: sticky; top: 0; z-index: 1;
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+  padding: 8px 16px; background: var(--bg-secondary); border-bottom: 1px solid var(--border-color);
 }
-.size-switch-modal > * { flex: none; }
-.size-switch-modal > .size-switch-list { flex: 1 1 auto; min-height: 96px; overflow-y: auto; }
-.size-switch-list thead th { position: sticky; top: 0; z-index: 1; background: var(--bg-secondary); }
-/* room for the cue bar (inset shadow) left of the time */
-.size-switch-list th:first-child, .size-switch-list td:first-child { padding-left: 10px; }
-.size-switch-repeats { display: block; margin: 6px 0; font-size: 12px; }
-.size-switch-rate { margin: 4px 0 8px; font-size: 12px; opacity: 0.8; }
-.size-switch-row { cursor: pointer; }
-.size-switch-row:hover td { background: rgba(255, 107, 53, 0.12); }
-.size-switch-row.is-current td { background: rgba(255, 107, 53, 0.25); }
-.size-switch-row.is-repeat td { opacity: 0.6; }
-.size-switch-empty { opacity: 0.7; }
+.id-switch-done { font-size: 12px; margin-right: auto; }
+.id-switch-toolbar .panel-btn { flex: none; }
+.id-switch-next:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.id-switch-repeats { flex-basis: 100%; font-size: 11px; color: var(--text-secondary); }
+.id-switch-run { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+.id-switch-row {
+  display: flex; gap: 8px; align-items: flex-start; cursor: pointer;
+  padding: 6px 16px 6px 13px; border-bottom: 1px solid var(--border-color);
+  border-left: 3px solid transparent;
+}
+.id-switch-row:hover { background: rgba(255, 107, 53, 0.10); }
+.id-switch-row.is-current { background: rgba(255, 107, 53, 0.22); }
+.id-switch-row.cue-size { border-left-color: #ffb020; }
+.id-switch-row.cue-image { border-left-color: #4cc9f0; }
+.id-switch-row.cue-both { border-image: linear-gradient(to right, #ffb020 50%, #4cc9f0 50%) 1; }
+.id-switch-row.is-repeat .id-switch-main { opacity: 0.65; }
+.id-switch-row.is-reviewed .id-switch-main { opacity: 0.45; }
+.id-switch-row.is-reviewed .id-switch-pair { text-decoration: line-through; }
+.id-switch-tick { margin: 2px 0 0; flex: none; cursor: pointer; }
+.id-switch-main { flex: 1; min-width: 0; }
+.id-switch-line1 { display: flex; gap: 8px; font-size: 12px; }
+.id-switch-time { font-variant-numeric: tabular-nums; color: var(--text-secondary); }
+.id-switch-pair { flex: 1; min-width: 0; }
+.id-switch-score { font-variant-numeric: tabular-nums; color: var(--text-secondary); }
+.id-switch-line2 { font-size: 11px; color: var(--text-muted); margin-top: 1px; }
 
-/* Image ID-switch check — progress dialog + per-check row tint (ui/id-switch-modal.js) */
+/* Image ID-switch check — progress dialog (ui/id-switch-modal.js) */
 .id-switch-progress { max-width: 520px; }
 .id-switch-progress-text { margin: 8px 0; font-size: 13px; min-height: 2.6em; }
 .id-switch-progress-bar { height: 6px; border-radius: 3px; background: rgba(255,255,255,0.12); overflow: hidden; }
 .id-switch-progress-fill { height: 100%; width: 0; background: #4cc9f0; transition: width 0.2s; }
-.size-switch-row.cue-image td:first-child { box-shadow: inset 3px 0 0 #4cc9f0; }
-.size-switch-row.cue-size td:first-child { box-shadow: inset 3px 0 0 #ffb020; }
-.size-switch-row.cue-both td:first-child { box-shadow: inset 3px 0 0 #ffb020, inset 6px 0 0 #4cc9f0; }

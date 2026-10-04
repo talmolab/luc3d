@@ -1,20 +1,22 @@
 /**
  * track-auto-size-switch-check.mjs — the body-size ID-switch check runs on its
  * own after Track All and after Track Frame Range (pose/tracker.js ->
- * ui/size-switch-modal.js `runSizeSwitchCheck({auto:true})`), in the real app.
+ * ui/id-switch-modal.js `runIdSwitchChecks({auto:true})`), in the real app.
  *
  * Fixture A (tracked by the REAL tracker): two mouse-shaped animals of different
  * size seen by three calibrated cameras for 65 s at 30 fps, kept apart, so the
  * tracker makes no switch. Asserted:
  *  1. Track All clears stale switch markers, runs the check, and appends its
- *     result to Track All's own status line — with no dialog when nothing is found.
+ *     result to Track All's own status line — without opening the ID Switches tab
+ *     when nothing is found.
  *  2. Track Frame Range runs it too, over the WHOLE session's identities: after
  *     Track All a 10 s window is checked against the full 65 s; on a fresh
  *     session the window alone is too little tracking, so the status says it was
  *     skipped and why — the range itself still succeeds.
  *  3. With the Tracking Wizard's `autoSwitchCheck` off, neither runs it.
  * Fixture B (labels swapped after one encounter, as in tests/e2e/size-switch-check.mjs):
- *  4. The automatic path opens the dialog when a switch IS found, its status
+ *  4. The automatic path opens the right panel (even when hidden) on the ID
+ *     Switches tab when a switch IS found, its status
  *     carries the tracking pass's message, and rows navigate through the
  *     navigator ui-wiring registered (no navigateToFrame passed in).
  *
@@ -75,7 +77,8 @@ try {
         };
     });
     const statusText = () => page.evaluate(() => document.getElementById('statusText').textContent);
-    const modalOpen = () => page.evaluate(() => !!document.querySelector('.size-switch-modal'));
+    const tabOpen = () => page.evaluate(() => !!document.querySelector('#tabIdSwitches.active') &&
+        !document.getElementById('infoPanelWrapper').classList.contains('collapsed'));
 
     // ---- 1. Track All
     await page.evaluate(async () => {
@@ -90,7 +93,7 @@ try {
     check(/^Assigned 2 identities/.test(st) && /ID-switch check \(body size\): no possible switches/.test(st),
         `Track All: check ran, result appended to its status ("${st}")`);
     check(markersA === 0, 'Track All: the stale marker from before was cleared');
-    check(!(await modalOpen()), 'Track All: no dialog when nothing is found');
+    check(!(await tabOpen()), 'Track All: the ID Switches tab is not opened when nothing is found');
 
     // ---- 2a. Track Frame Range on the session Track All just tracked: the check covers the WHOLE
     //          session (65 s), so it runs even though the window itself is only 10 s
@@ -125,7 +128,7 @@ try {
     const off = await page.evaluate(() => [window.__stAll, window.__stRange]);
     check(off.every(t => /^Assigned/.test(t) && !/ID-switch check/.test(t)), `setting off: neither Track All nor the range ran it (${JSON.stringify(off)})`);
 
-    // ---- 4. automatic path with a switch: dialog opens, rows navigate via the registered navigator
+    // ---- 4. automatic path with a switch: the ID Switches tab opens, rows navigate via the registered navigator
     const fx = await page.evaluate(async () => {
         const pd = await import('/pose/pose-data.js'); const AS = await import('/ui/app-state.js');
         const NODES = ['Nose', 'Ear_R', 'Ear_L', 'TTI', 'TailTip', 'Head', 'Trunk', 'Tail_0', 'Tail_1', 'Tail_2',
@@ -159,15 +162,16 @@ try {
         AS.state.sessions = [session]; AS.state.activeSessionIdx = 0; AS.state.session = session;
         AS.state.totalFrames = T * STEP; AS.state.currentFrame = 0; AS.state.fps = 60;
         if (AS.timeline) { AS.timeline.setTotalFrames(T * STEP); AS.timeline.setData(session); }
+        document.getElementById('infoPanelToggleBtn').click();      // hide the panel: the check must bring it back
         const M = await import('/ui/id-switch-modal.js');
         await M.runSizeSwitchCheck({ auto: true, statusPrefix: 'Assigned 3 identities across 27360 frames' });
         return { swapFrame };
     });
     st = await statusText();
-    check(await modalOpen(), 'automatic path: the dialog opens when a switch is found');
+    check(await tabOpen(), 'automatic path: the hidden panel opens on the ID Switches tab when a switch is found');
     check(/^Assigned 3 identities across 27360 frames · ID-switch check \(body size\): 1 possible switch/.test(st), `automatic path: status keeps the pass's message ("${st}")`);
-    const rowFrame = await page.evaluate(() => +document.querySelector('.size-switch-row').dataset.frame);
-    await page.click('.size-switch-row');
+    const rowFrame = await page.evaluate(() => +document.querySelector('#idSwitchPanel .id-switch-row').dataset.frame);
+    await page.click('#idSwitchPanel .id-switch-row .id-switch-main');
     await page.waitForFunction(f => window.__lucid.state.currentFrame === f, rowFrame, { timeout: 10000 }).catch(() => {});
     const cur = await page.evaluate(() => window.__lucid.state.currentFrame);
     check(Math.abs(rowFrame - fx.swapFrame) <= 40 && cur === rowFrame, `row at the switch (${rowFrame} vs ${fx.swapFrame}) navigates via the registered navigator (now ${cur})`);
