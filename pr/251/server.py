@@ -25,7 +25,7 @@ import io
 import json
 import os
 import sys
-from http.server import SimpleHTTPRequestHandler, HTTPServer
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "scripts"))
@@ -57,6 +57,13 @@ except Exception as exc:                                        # noqa: BLE001
 
 
 class LucidHandler(SimpleHTTPRequestHandler):
+    # Keep-alive, so a cold load reuses ~6 connections instead of opening one per
+    # file. Safe only because the server is threaded (above): single-threaded
+    # keep-alive deadlocks, since the server sits waiting for the next request on
+    # one connection while the browser waits for responses on the others. Every
+    # response here carries an accurate Content-Length, which HTTP/1.1 requires.
+    protocol_version = "HTTP/1.1"
+
     def do_GET(self):
         rewritten = self._rewritten_body()
         if rewritten is None:
@@ -111,6 +118,18 @@ class LucidHandler(SimpleHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
+        # These were the only responses with no validator at all -- every other
+        # file gets Last-Modified from send_head() -- which left them uncacheable
+        # rather than merely revalidated.
+        #
+        # Deliberately NOT answering If-Modified-Since with a 304: mtime does not
+        # change when --offline is toggled, but the body does, so an mtime-only
+        # 304 would hand the browser a cached CDN body while serving offline (or
+        # the reverse) and half the app would point at the wrong place. Keep
+        # no-cache + a full 200 on revalidation; a 304 here needs a validator that
+        # includes the mode.
+        self.send_header("Last-Modified", self.date_time_string(os.stat(fs_path).st_mtime))
+        self.send_header("Cache-Control", "no-cache")
         self.end_headers()
         if include_body:
             self.wfile.write(body)
@@ -204,7 +223,16 @@ def main(argv=None):
         if REWRITES is None:
             return 1
 
-    server = HTTPServer(("0.0.0.0", args.port), LucidHandler)
+    # Threaded + keep-alive, which is what `python -m http.server` itself does.
+    # A cold load pulls ~70 ES modules plus lib/, and offline mode adds the four
+    # that normally come from a CDN on a separate host -- so ALL of it funnels
+    # through here. Single-threaded HTTP/1.0 gave that one TCP connection per
+    # file, handled strictly one at a time, behind a listen backlog of 5 that
+    # Chrome's 6 parallel connections already overflow. A plain reload mostly
+    # revalidates (304s) and survives it; a hard refresh or a fresh tab re-fetches
+    # everything and does not.
+    server = ThreadingHTTPServer(("0.0.0.0", args.port), LucidHandler)
+    server.daemon_threads = True
     mode = "OFFLINE (dependencies from lib/)" if args.offline else "online (dependencies from CDN)"
     print(f"LUCID server on http://0.0.0.0:{args.port}/")
     print(f"  Mode: {mode}")
