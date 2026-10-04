@@ -910,7 +910,7 @@ computing `loader`/`windowed` first and checking `loader.nFrames > 0` instead of
 `tests/e2e/track-all-fresh-lazy-session.mjs` (reopens a real saved lazy project
 with 0 resident frameGroups and asserts Track All finds identities instead of
 bailing). Hyperparameters come from the
-`corr2dWeight`/`corr3dWeight`/`velocityThreshold`/`distanceThreshold`/`timePenalty`/`stale`
+`corr2dWeight`/`corr3dWeight`/`velocityThreshold`/`distanceThreshold`/`timePenalty`/`stale`/`matchGate`
 tracking thresholds (`ui/settings.js`; defaults are the `G_keeptrack_3d6`
 champion values, except `distanceThreshold`/`stale` which carry the 2026-08-14
 stale-anchor-fix values — see `pose/cross-view-tracker.js`). Track Frame/Track All pass the user's animal count as
@@ -1035,6 +1035,34 @@ tracker exactly):
 `distanceThreshold`'s Tracking Wizard default moved 50 → 25 alongside this
 fix (`ui/settings.js`); `scripts/bench/hooks.mjs`'s `THRESHOLD_DEFAULTS` was
 updated to match (its own comment requires staying in sync).
+
+**Match gate (2026-10-03, `matchGate` hp, default 1; 0 = off).** The reference
+Hungarian is forced: whenever a view has at least as many detections as
+targets, every target takes one, however negative its adjacency. One spare
+target (left by an earlier false birth — common when the animal count is
+auto-detected from views that also see reflections) plus one extra detection (a
+reflection) is then enough to trade a correct match away. On the real
+`194366_05mice_flippers` recording (5 mice, 8 cameras) at frame 3,620,
+Camera4_topR, the spare scored -26.7 on the real mouse while that mouse's own
+target scored +55.9, both scored about -600 on the reflection, and the summed
+optimum gave the mouse to the spare and the reflection to its target — a
+persistent switch. `_trackView` now runs two `_assign` stages: **tracked**
+targets (still holding a detection after stale eviction) get one "no match"
+column each at adjacency 0, so they only take a detection they score
+positively on; then **lost** targets (`_lost`, set in `_beginFrame` when
+eviction emptied `detsByCam`) take the leftovers, forced, as before — the
+re-acquisition path for an animal unseen for `stale` frames. Measured on the
+whole recording (108,000 frames, tail nodes weight 0): with 5 animals,
+one-frame 3D jumps > 50 mm (a group bundled with a wrong detection) 195 → 1,
+group members reprojecting > 30 px 1.64% → 0.66%, frames with all 5 groups
+committed 99.88% → 99.63%; with 7 (auto-detect), jumps 341 → 29 and id_0–id_4
+stay committed far more of the time. `matchGate: 0` reproduces the pre-gate
+tracker exactly (same events on all 108,000 frames). Wired from the Tracking
+Wizard's `matchGate` threshold (`ui/settings.js`) via `crossViewHyperparams()`
+(`pose/tracker.js`); `scripts/bench/hooks.mjs` mirrors the default. Covered by
+`tests/test-cross-view-tracker.mjs` (the swap in miniature — fails with the
+gate off — and lost-target re-acquisition, which fails under a naive gate that
+also gates lost targets).
 
 **Coordinate conventions (verified vs `sleap_3d/geometry.py`).** Works entirely
 in NORMALIZED camera coordinates: detections are undistorted + K⁻¹-applied on
@@ -4725,11 +4753,12 @@ Shortcuts and the Hot Keys modal where people look for them.
   **filtered to `WIZARD_THRESHOLD_IDS`** — the CrossViewTracker's free parameters
   only (`filterMinVisibleNodes`, `filterMinInstanceScore`, `corr2dWeight`,
   `corr3dWeight`, `velocityThreshold`, `distanceThreshold`, `timePenalty`,
-  `autoSwitchCheck` — 0/1, run the body-size ID-switch check after Track All /
-  Track Frame Range, default 1; `autoImageSwitchCheck` — 0/1, the image check
-  likewise, default 0; `imageCheckThreshold` -25; `imageCheckHz` 2;
-  `imageCheckMaxViews` 3; `imageCheckWebNN` — 0/1, try WebNN, default 0). The
-  remaining catalog entries (`epipolarDecay`, `reprojSigma`, `epipolarWeight`,
+  `stale`, `matchGate` (0/1 toggle for the CrossViewTracker match gate),
+  `reprojErrorThreshold`, `autoSwitchCheck` — 0/1, run the body-size ID-switch
+  check after Track All / Track Frame Range, default 1; `autoImageSwitchCheck` —
+  0/1, the image check likewise, default 0; `imageCheckThreshold` -25;
+  `imageCheckHz` 2; `imageCheckMaxViews` 3; `imageCheckWebNN` — 0/1, try WebNN,
+  default 0). The remaining catalog entries (`epipolarDecay`, `reprojSigma`, `epipolarWeight`,
   `reprojWeight`, `minMatchScore`, `prevIdentityBonus`, `reprojGate2/3/4`,
   `track3dWeight`) drive the bench-only luc3d matcher and are hidden from the UI
   but still resolve via `getTrackingThreshold`. `getTrackingThresholds` returns

@@ -352,6 +352,11 @@ const TRACKING_THRESHOLDS = [
         desc: 'The stale-anchor fix (pose/cross-view-tracker.js, 2026-08-14): evict a target\'s per-camera detection once it is older than this many frames, before that frame\'s matching runs, so a target cannot be re-triangulated from one fresh view fused with several ancient ones after an occlusion. 0 = off (reproduces the pre-fix, unbounded-staleness reference behavior). Validated default 20; measured to cut sustained ID switches roughly in half to 5x on both benchmark corpora when paired with a lower distance threshold.',
     },
     {
+        id: 'matchGate', label: 'Reject negative matches (gate)', default: 1,
+        min: 0, max: 1, step: 1,
+        desc: 'The match gate (pose/cross-view-tracker.js, 2026-10-03): 1 = a tracked target only takes a detection it scores positively on (roughly, within the distance threshold of where it is), instead of being forced onto whatever is left. Stops a spare target and an extra detection (e.g. a reflection) from trading a correct match away. Targets lost for longer than the stale window still re-acquire ungated. 0 = off (reproduces the pre-gate forced assignment).',
+    },
+    {
         id: 'autoSwitchCheck', label: 'Check ID switches after tracking (body size)', default: 1,
         min: 0, max: 1, step: 1,
         desc: 'After Track All or Track Frame Range, flag close encounters where the animals leaving it match each other\'s body size better than their own (Tracks ▸ Check ID Switches; pose/size-switch-check.js). Checks every tracked frame in the session (needs at least 60 s of tracking). Results go on the timeline; the dialog opens only when a possible switch is found. 1 = on, 0 = off.',
@@ -399,7 +404,7 @@ TRACKING_THRESHOLDS.forEach(function (t) { _thrById.set(t.id, t); });
 const WIZARD_THRESHOLD_IDS = new Set([
     'filterMinVisibleNodes', 'filterMinInstanceScore',
     'corr2dWeight', 'corr3dWeight', 'velocityThreshold', 'distanceThreshold', 'timePenalty',
-    'stale',
+    'stale', 'matchGate',
     'autoSwitchCheck', 'autoImageSwitchCheck', 'imageCheckThreshold', 'imageCheckHz', 'imageCheckMaxViews', 'imageCheckWebNN',
     'reprojErrorThreshold',
 ]);
