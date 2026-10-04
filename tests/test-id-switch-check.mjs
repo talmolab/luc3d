@@ -218,6 +218,35 @@ group('Image check — catches a swap between animals of IDENTICAL size (the siz
     eq(clean.flags.length, 0, 'image check: clean labels → no flags');
 }
 
+group('Image check — several frames in flight (so a provider can batch them)');
+{
+    const SWAP = 16, { session } = buildSession(SWAP, 60, [1, 1, 1]);
+    // the synthetic embedder draws its noise in CALL order, so identical scores also mean calls started in frame order
+    const tracked = (inner, delay) => {
+        const st = { live: 0, max: 0, frames: [] };
+        return { st, fn: async (frame, items) => { st.frames.push(frame); st.live++; st.max = Math.max(st.max, st.live);
+            try { const r = await inner(frame, items); await new Promise(res => setTimeout(res, delay(frame))); return r; } finally { st.live--; } } };
+    };
+    const one = tracked(syntheticEmbedder(), () => 0), many = tracked(syntheticEmbedder(), f => (f * 7919) % 5);
+    const a = await SC.checkImageSwitches(session, { fps: 60, getEmbeddings: one.fn, inFlight: 1 });
+    const b = await SC.checkImageSwitches(session, { fps: 60, getEmbeddings: many.fn, inFlight: 8 });
+    ok(one.st.max === 1 && many.st.max > 1 && many.st.max <= 8, `inFlight bounds the requests in flight (1 → ${one.st.max}, 8 → ${many.st.max})`);
+    ok(many.st.frames.every((f, i, A) => i === 0 || f > A[i - 1]), 'requests are started in increasing frame order (a streaming reader relies on it)');
+    ok(a.ok && b.ok && a.encounters.length === b.encounters.length && a.encounters.every((e, i) => e.score === b.encounters[i].score),
+        'results are identical whether 1 or 8 requests are in flight (completing out of order)');
+}
+
+group('Image check — timing summary (ui/image-embedder.js)');
+{
+    globalThis.window = globalThis;
+    const E = await import(pathToFileURL(path.join(ROOT, 'ui', 'image-embedder.js')).href);
+    const t = E.summarizeEmbedTiming({ frames: 100, crops: 1500, batches: 30, t0: 1000, t1: 11000, decodeMs: 3000, cropMs: 5000, queueMs: 20000, runMs: 900, readMs: 8100, maxBatch: 64 }, 'webgpu');
+    ok(Math.abs(t.cropsPerS - 150) < 1e-9 && Math.abs(t.gpuBusyPct - 90) < 1e-9 && t.avgBatch === 50 && t.decodeMsPerFrame === 30,
+        `summary: 150 crops/s, GPU busy 90%, batches of 50, decode 30 ms/frame (${JSON.stringify(t).slice(0, 120)}…)`);
+    eq(E.formatEmbedTiming(t), '150 crops/s over 10 s · GPU busy 90% (30 batches of ~50, 6.0 ms/crop) · per frame: decode 30 ms, crop 50 ms, queue 200 ms', 'one-line format');
+    eq(E.formatEmbedTiming({ crops: 0 }), '', 'nothing embedded → no line');
+}
+
 group('Image check — cancellation and failure reasons');
 {
     const ctl = new AbortController();

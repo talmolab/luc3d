@@ -64,13 +64,18 @@ export function loadImageModel(onStatus) {
         const T = await import(TRANSFORMERS_URL);
         const model = await T.AutoModel.from_pretrained(IMAGE_MODEL_ID, {
             device: 'webgpu', dtype: dtype,
+            // Keep the output ON THE GPU: the model's only output is last_hidden_state [n, 257, 384]
+            // (5.9 MB for 15 crops) and the check uses 1 of those 257 tokens — clsFromGpu copies just it.
+            session_options: { preferredOutputLocation: 'gpu-buffer' },
             progress_callback: function (p) {
                 if (onStatus && p && p.status === 'progress' && p.total) {
                     onStatus('Downloading the image model: ' + Math.round(100 * p.loaded / p.total) + '% (first use only)');
                 }
             },
         });
-        return { T: T, model: model, dtype: dtype };
+        let device = null;
+        try { device = await T.env.backends.onnx.webgpu.device; } catch (e) { /* clsFromGpu falls back to a full read */ }
+        return { T: T, model: model, dtype: dtype, device: device };
     })();
     _modelPromise.catch(function () { _modelPromise = null; });   // allow a retry after a failure
     return _modelPromise;
@@ -131,6 +136,40 @@ function clsVectors(res, n) {
         out.push(v);
     }
     return out;
+}
+
+/**
+ * The CLS token of each of the first `n` items of a model output that stayed on
+ * the GPU (`preferredOutputLocation: 'gpu-buffer'`): one small copy per crop of
+ * row 0 into a staging buffer, mapped once — 1/257 of the full readback. Falls
+ * back to reading the whole tensor when the output or the device isn't a GPU
+ * buffer. Disposes the output either way. Bit-identical to `clsVectors`.
+ */
+async function clsFromGpu(res, n, device) {
+    const t = res.last_hidden_state, ort = (t && t.ort_tensor) || t;
+    try {
+        if (!device || !ort || ort.location !== 'gpu-buffer' || !ort.gpuBuffer) {
+            if (ort && ort.location === 'gpu-buffer' && ort.getData) {   // no device handle: download it all
+                const data = await ort.getData();
+                return clsVectors({ last_hidden_state: { dims: ort.dims, data: data } }, n);
+            }
+            return clsVectors(res, n);
+        }
+        const tokens = ort.dims[1], dim = ort.dims[2], bpe = ort.type === 'float16' ? 2 : 4, row = dim * bpe;
+        const staging = device.createBuffer({ size: n * row, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+        const enc = device.createCommandEncoder();
+        for (let i = 0; i < n; i++) enc.copyBufferToBuffer(ort.gpuBuffer, i * tokens * row, staging, i * row, row);
+        device.queue.submit([enc.finish()]);
+        await staging.mapAsync(GPUMapMode.READ);
+        const raw = staging.getMappedRange().slice(0);
+        staging.unmap(); staging.destroy();
+        const out = [];
+        if (bpe === 4) { const a = new Float32Array(raw); for (let i = 0; i < n; i++) out.push(a.slice(i * dim, (i + 1) * dim)); }
+        else { const h = new Float16Array(raw); for (let i = 0; i < n; i++) out.push(Float32Array.from(h.subarray(i * dim, (i + 1) * dim))); }
+        return out;
+    } finally {
+        if (ort && ort.dispose && ort.location === 'gpu-buffer') { try { ort.dispose(); } catch (e) { /* ignore */ } }
+    }
 }
 
 function cosine(a, b) {
@@ -295,6 +334,39 @@ export function selectViews(geos, maxViews) {
     return new Set(vis);
 }
 
+/** Most crops one model run takes (memory: ~38 MB of input at 64). */
+export const EMBED_MAX_BATCH = 64;
+/** Frames the image check keeps in flight, so the next batch fills while the GPU runs this one. */
+export const EMBED_IN_FLIGHT = 8;
+
+/**
+ * A run's timing as numbers a person can act on. `gpuBusyPct` is the share of the
+ * run's wall time spent inside model runs + readback: near 100% means the GPU is
+ * the limit; well below means it waits on decode / crop / the main thread (then
+ * see `decodeMsPerFrame` and `cropMsPerFrame`, which overlap across in-flight
+ * frames, and `queueMsPerFrame`, the wait for a model slot — high when GPU-bound).
+ */
+export function summarizeEmbedTiming(tm, backend) {
+    const wall = Math.max(1, tm.t1 - tm.t0), busy = tm.runMs + tm.readMs, per = function (x, d) { return d ? x / d : 0; };
+    return {
+        backend: backend || 'webgpu', frames: tm.frames, crops: tm.crops, seconds: wall / 1000,
+        cropsPerS: per(tm.crops, wall / 1000), batches: tm.batches, avgBatch: per(tm.crops, tm.batches), maxBatch: tm.maxBatch,
+        // submitMs: the model call (upload + queueing — it returns before the GPU finishes); gpuWaitMs: waiting
+        // for the results + the CLS copy, which is where the GPU's compute time shows up
+        gpuBusyPct: 100 * Math.min(1, busy / wall), modelMsPerCrop: per(busy, tm.crops), submitMs: tm.runMs, gpuWaitMs: tm.readMs,
+        decodeMsPerFrame: per(tm.decodeMs, tm.frames), cropMsPerFrame: per(tm.cropMs, tm.frames), queueMsPerFrame: per(tm.queueMs, tm.frames),
+    };
+}
+
+/** One line for the dialog / console: "155 crops/s over 15 s · GPU busy 98% (41 batches of ~55, 6.3 ms/crop) · per frame: decode 37 ms, crop 146 ms, queue 199 ms". */
+export function formatEmbedTiming(t) {
+    if (!t || !t.crops) return '';
+    return Math.round(t.cropsPerS) + ' crops/s over ' + t.seconds.toFixed(0) + ' s · GPU busy ' + Math.round(t.gpuBusyPct) + '% (' +
+        t.batches + ' batches of ~' + Math.round(t.avgBatch) + ', ' + t.modelMsPerCrop.toFixed(1) + ' ms/crop) · per frame: decode ' +
+        Math.round(t.decodeMsPerFrame) + ' ms, crop ' + Math.round(t.cropMsPerFrame) + ' ms, queue ' + Math.round(t.queueMsPerFrame) + ' ms' +
+        (t.backend && t.backend !== 'webgpu' ? ' · ' + t.backend : '');
+}
+
 /**
  * A pool of crop workers (ui/image-crop-worker.js), or null to crop inline:
  * no Worker support, or `window.LUCID_CROP_WORKERS` = 0. Size: one per core but
@@ -372,7 +444,7 @@ export async function createImageEmbedder(session, opts) {
     if (!views.length) throw new Error('needs the session\'s videos to be loaded');
     const sk = skeletonIndex((session.skeleton && session.skeleton.nodes) || []);
     if (sk.nose < 0 || sk.tti < 0) throw new Error('needs Nose and TTI nodes in the skeleton to align crops');
-    const { T, model } = await loadImageModel(opts.onStatus);
+    const { T, model, device } = await loadImageModel(opts.onStatus);
     // WebNN (opt-in, experimental): embed the first frames on both backends, then keep the faster consistent one
     let nnModel = null, trial = null, backend = 'webgpu', note = '';
     if (opts.webnn) {
@@ -387,8 +459,15 @@ export async function createImageEmbedder(session, opts) {
     }
     const dropWebNN = function () { if (nnModel) { try { nnModel.dispose(); } catch (e) { /* ignore */ } } nnModel = null; };
     const SZ = 3 * INPUT * INPUT;
+    // timing breakdown for this run (stats()): where the time goes, measured on the user's machine
+    const tm = { frames: 0, crops: 0, batches: 0, t0: 0, t1: 0, decodeMs: 0, cropMs: 0, queueMs: 0, runMs: 0, readMs: 0, maxBatch: 0 };
     const runWebGPU = async function (data, n) {
-        return clsVectors(await model({ pixel_values: new T.Tensor('float32', data, [n, 3, INPUT, INPUT]) }), n);
+        const a = performance.now();
+        const res = await model({ pixel_values: new T.Tensor('float32', data, [n, 3, INPUT, INPUT]) });
+        const b = performance.now();
+        const out = await clsFromGpu(res, n, device);
+        tm.runMs += b - a; tm.readMs += performance.now() - b;
+        return out;
     };
     const runWebNN = async function (data, n) {
         const out = [], B = WEBNN_BATCH;
@@ -420,14 +499,44 @@ export async function createImageEmbedder(session, opts) {
         return backend === 'webnn' ? runWebNN(data, n) : runWebGPU(data, n);
     };
     const canvas = new OffscreenCanvas(CROP, CROP);
-    let readers = null, modelChain = Promise.resolve(), pool;   // pool: undefined = not made yet, null = inline
+    let readers = null, pool;   // pool: undefined = not made yet, null = inline
     const frameOf = function (vi, frame) {
         const r = readers && readers[vi];
         if (r) return r.get(frame);
         return views[vi].decoder.getFrame(frame);
     };
     const maxViews = opts.maxViewsPerAnimal > 0 ? Math.floor(opts.maxViewsPerAnimal) : 0;
+    // ---- Batching. Model runs are serialised, but each takes EVERY crop that has queued up meanwhile
+    // (up to EMBED_MAX_BATCH): the first frame runs alone, and while it runs the next frames' crops
+    // accumulate into a bigger batch. With the check keeping EMBED_IN_FLIGHT frames in flight, the GPU
+    // gets the next batch as soon as it finishes one instead of waiting on one frame's decode + crop.
+    const queue = [];
+    let running = false;
+    const pump = function () {
+        if (running || !queue.length) return;
+        const take = [];
+        let n = 0;
+        while (queue.length && (n === 0 || n + queue[0].tensors.length <= EMBED_MAX_BATCH)) { const q = queue.shift(); take.push(q); n += q.tensors.length; }
+        running = true;
+        const now = performance.now();
+        take.forEach(function (q) { tm.queueMs += now - q.at; });
+        const data = new Float32Array(n * SZ);
+        let at = 0;
+        take.forEach(function (q) { q.tensors.forEach(function (t) { data.set(t, at); at += SZ; }); });
+        tm.batches++; tm.maxBatch = Math.max(tm.maxBatch, n);
+        embed(data, n).then(function (vecs) {
+            let k = 0;
+            take.forEach(function (q) { q.resolve(vecs.slice(k, k + q.tensors.length)); k += q.tensors.length; });
+        }, function (err) {
+            take.forEach(function (q) { q.reject(err); });
+        }).then(function () { running = false; pump(); });
+    };
+    const enqueue = function (tensors) {
+        return new Promise(function (resolve, reject) { queue.push({ tensors: tensors, resolve: resolve, reject: reject, at: performance.now() }); pump(); });
+    };
     const getEmbeddings = async function (frame, items) {
+        const tStart = performance.now();
+        if (!tm.t0) tm.t0 = tStart;
         // crop geometry comes from the 2D keypoints alone, so the views to embed are known before decoding
         const geo = views.map(function (v) {
             const cam = v.cameraName || v.name;
@@ -447,6 +556,8 @@ export async function createImageEmbedder(session, opts) {
                 return img ? { img: img, owned: !!r } : null;
             } catch (e) { return null; }
         }));
+        const tFrames = performance.now();
+        tm.decodeMs += tFrames - tStart;
         // per view: the crops to cut there (every other animal is masked out, picked for it or not)
         const jobs = [];
         views.forEach(function (v, vi) {
@@ -489,19 +600,22 @@ export async function createImageEmbedder(session, opts) {
         const out = items.map(function () { return []; });
         const owner = [];   // owner[i] = [item index, camera]
         jobs.forEach(function (job, j) { if (tensors[j].length) job.who.forEach(function (w) { owner.push(w); }); });
+        tm.cropMs += performance.now() - tFrames;
+        tm.frames++;
         if (!owner.length) return out;
-        const data = new Float32Array(owner.length * SZ);
-        let at = 0;
-        tensors.forEach(function (ts) { ts.forEach(function (t) { data.set(t, at); at += SZ; }); });
-        // one model run at a time: with the check's one-ahead request, the next frame decodes meanwhile
-        const run = modelChain.then(function () { return embed(data, owner.length); });
-        modelChain = run.catch(function () {});
-        const vecs = await run;
+        const flat = [];
+        tensors.forEach(function (ts) { ts.forEach(function (t) { flat.push(t); }); });
+        const vecs = await enqueue(flat);
+        tm.crops += vecs.length; tm.t1 = performance.now();
         vecs.forEach(function (v, i) { out[owner[i][0]].push({ camera: owner[i][1], vector: v }); });
         return out;
     };
     return {
         getEmbeddings: getEmbeddings,
+        /** How many frames the check should keep in flight (so batches can fill while the GPU works). */
+        inFlight: EMBED_IN_FLIGHT,
+        /** Where the time went in this run — see `summarizeEmbedTiming`. */
+        stats: function () { return summarizeEmbedTiming(tm, backend); },
         prepareFrames: async function (frames) { readers = views.map(function (v) { return streamingReader(v.decoder, frames); }); },
         releaseFrames: function () {
             if (readers) readers.forEach(function (r) { if (r) r.close(); });

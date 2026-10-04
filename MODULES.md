@@ -1831,8 +1831,8 @@ exported so calibration can re-apply thresholds to the same scores);
 `followSeconds` 60, `minTrackedSeconds` 60, `sepFactor` 0.65, `signal`, ...);
 `IMAGE_CHECK_DEFAULTS` (+ `imageHz` 2, `threshold` -25, `pcaDims` 32,
 `getEmbeddings` REQUIRED: `async (frame, items[{k, group}]) -> per item
-[{camera, vector}]`, called in increasing frame order with one request kept ahead,
-so at most two in flight; optional `prepareFrames(frames)` (awaited once with the
+[{camera, vector}]`, STARTED in increasing frame order with up to `inFlight`
+(default 2; the image embedder asks for 8) in flight; optional `prepareFrames(frames)` (awaited once with the
 sorted frames it will ask for) and `releaseFrames()` (always called at the end) let
 the provider stream its video).
 
@@ -4609,7 +4609,9 @@ time scales with views per animal x `imageCheckHz`; decoding + cropping alone
 would allow ~270 crops/s.
 Reads `imageCheckMaxViews` (default 3) and passes it as `maxViewsPerAnimal`, and
 `imageCheckWebNN` (default 0) as `webnn`; the embedder's `backend()` outcome is
-attached to the result as `model` and its note shown under "About these flags".
+attached to the result as `model` and its note shown under "About these flags";
+`embedder.stats()` is attached as `timing`, logged to the console and shown there
+as "Image check speed on this machine: …". Passes `inFlight: embedder.inFlight`.
 
 **User-facing features.** The **ID Switches** tab (`#tabIdSwitches` /
 `#idSwitchPanel` in `index.html`, third tab; at the default panel width it sits in
@@ -4777,6 +4779,22 @@ frame is sent as a `clone()`, anything else as an ImageBitmap copy). A failed
 worker drops that one view of that frame and the rest of the run crops inline;
 `window.LUCID_CROP_WORKERS = 0` forces inline. `writeInputTensor`'s 160 -> 224
 sample positions are a precomputed table (same arithmetic, bit-identical).
+**GPU feeding (2026-10-04).** On RTX 2000 Ada / RTX 4000 Ada PCs the GPU ran ~50%
+busy at ~83 crops/s — below the M2 Pro — because each frame was one small model
+call (~15 crops) with the GPU idle between calls. Now: (1) the model's output
+stays on the GPU (`preferredOutputLocation: 'gpu-buffer'`; its ONLY output is
+`last_hidden_state` [n, 257, 384], 5.9 MB per 15 crops) and `clsFromGpu` copies
+just token 0 of each crop into a staging buffer — 1/257 of the readback,
+bit-identical (max |difference| 0); (2) model runs are a greedy BATCH QUEUE: one
+run at a time, each taking every crop queued meanwhile (up to `EMBED_MAX_BATCH`
+= 64), with the check keeping `EMBED_IN_FLIGHT` = 8 frames in flight
+(`inFlight` on the provider) so batches fill while the GPU works. M2 Pro, 150
+real frames: 104 -> **155 crops/s**, GPU busy 66% -> 98%, batches ~15 -> ~55,
+embeddings identical. (3) `stats()` / `summarizeEmbedTiming` /
+`formatEmbedTiming`: crops/s, GPU busy % (model call + result wait over wall
+time), batches, ms/crop, and per-frame decode / crop / queue latency — logged
+to the console and shown under "About these flags", so a slow run says where it
+waited (e.g. Drive-streamed video: decode 734 ms/frame, GPU busy 43%).
 Embeddings are bit-identical across all of this (cosine 1.00000 vs seeking,
 top-k vs the same views at all-k, and max |difference| 0 for worker vs inline
 crops over 5,687 real crops).
@@ -4804,11 +4822,12 @@ decode + crop ceiling rose from 145 to ~270 crops/s at 3 views (decoding alone:
 Numbers in `ui/id-switch-modal.js`.
 
 **Key exports.** `createImageEmbedder(session, {onStatus, maxViewsPerAnimal, webnn})` ->
-`{getEmbeddings, prepareFrames, releaseFrames, backend, views}` (the provider
+`{getEmbeddings, prepareFrames, releaseFrames, backend, stats, inFlight, views}` (the provider
 `checkImageSwitches` needs; `releaseFrames` also terminates the crop pool and
 disposes a WebNN model);
 `loadImageModel(onStatus)` (once, cached promise); `hasWebGPU()`;
-`selectViews(geos, maxViews)`; WebNN: `hasWebNN()`, `loadWebNNModel(onStatus)`,
+`selectViews(geos, maxViews)`; `EMBED_MAX_BATCH`, `EMBED_IN_FLIGHT`,
+`summarizeEmbedTiming(tm, backend)`, `formatEmbedTiming(t)`; WebNN: `hasWebNN()`, `loadWebNNModel(onStatus)`,
 `chooseBackend(trial)`, `WEBNN_BATCH`, `WEBNN_TRIAL_FRAMES`; `createCropPool()` -> `{run(image, crops) ->
 Promise<Float32Array[]>, broken, terminate()}` or null; crop helpers
 `cropGeometry`, `cutCrop`, `convexHull`, `writeInputTensor`; constants

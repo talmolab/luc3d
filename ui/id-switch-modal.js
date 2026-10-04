@@ -32,7 +32,7 @@ import { setStatus, markDirty } from '../import-export/save-load.js';
 import { showLoadingProgress, hideLoading, yieldToPaint } from './loading-overlay.js';
 import { getTrackingThreshold } from './settings.js';
 import { checkSizeSwitches, checkImageSwitches } from '../pose/id-switch-check.js';
-import { hasWebGPU, createImageEmbedder, IMAGE_MODEL_MB } from './image-embedder.js';
+import { hasWebGPU, createImageEmbedder, IMAGE_MODEL_MB, formatEmbedTiming } from './image-embedder.js';
 import { idSwitchRowKey as rowKey, idSwitchPrimary as primaryOf, idSwitchMarkers as markersOf, idSwitchOnsets as countOnsets,
          idSwitchEncounterCount as encounterCount, linkIdSwitchResults as tagAndLink } from './id-switch-review.js';
 
@@ -172,6 +172,7 @@ async function runImage(session, rate, inject) {
             threshold: getTrackingThreshold('imageCheckThreshold'),
             getEmbeddings: embedder.getEmbeddings,
             prepareFrames: embedder.prepareFrames,
+            inFlight: embedder.inFlight || 2,
             releaseFrames: embedder.releaseFrames,
             signal: prog.signal,
             onProgress: async function (stage, done, total) {
@@ -186,6 +187,10 @@ async function runImage(session, rate, inject) {
             },
         });
         if (res && embedder.backend) res.model = embedder.backend();   // after releaseFrames: the final word
+        if (res && embedder.stats) {
+            res.timing = embedder.stats();                 // where the time went, on THIS machine
+            console.log('[ID switches, images] ' + formatEmbedTiming(res.timing), res.timing);
+        }
         return res;
     } catch (e) {
         if (e && e.name === 'AbortError') return { ok: false, reason: 'cancelled', cancelled: true };
@@ -321,7 +326,10 @@ function aboutHtml(st, ran) {
             (im.model && im.model.note ? ' (' + escapeHtml(im.model.note) + ')' : '') : '') +
         (r0.fpsFromVideo ? ', measured from the video)'
             : ') — <b>no video is loaded, so this frame rate was not measured</b>. If the recording ran at a ' +
-              'different rate, set it in the fps box and run the check again: scores are evidence per second.') + '</p>';
+              'different rate, set it in the fps box and run the check again: scores are evidence per second.') + '</p>' +
+        (im && im.ok && im.timing && im.timing.crops ? '<p class="id-switch-rate">Image check speed on this machine: ' +
+            escapeHtml(formatEmbedTiming(im.timing)) + '. GPU busy well under 100% means it waited on video decoding, ' +
+            'cropping or the browser\'s main thread rather than computing.</p>' : '');
 }
 
 // ---- The selected row's progress bar ------------------------------------------------
