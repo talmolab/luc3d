@@ -24,16 +24,16 @@
  * an M-series Mac) and its int8 model drifts from the calibrated embeddings.
  *
  * Decoding: the frames are STREAMED per camera (`prepareFrames`), and on
- * recordings whose keyframes are at least as dense as the samples (e.g. one every
+ * recordings whose keyframes are about as dense as the samples (e.g. one every
  * 0.5 s) each sample is moved to its nearest keyframe and decoded as that ONE
  * frame — see `planKeyframeSamples` (pose/id-switch-check.js) and keyframeIndices.
  *
  * Depends on: ui/app-state.js (state.views), pose/id-switch-check.js
- * (planKeyframeSamples), mediabunny (EncodedPacketSink, imported lazily, for the keyframe index).
+ * (planKeyframeSamples, KEYFRAME_GAP_TOLERANCE), mediabunny (EncodedPacketSink, imported lazily, for the keyframe index).
  */
 
-import { state } from './app-state.js?v=c5e02e4355db';
-import { planKeyframeSamples } from '../pose/id-switch-check.js?v=c5e02e4355db';
+import { state } from './app-state.js?v=97654ac0e810';
+import { planKeyframeSamples, KEYFRAME_GAP_TOLERANCE } from '../pose/id-switch-check.js?v=97654ac0e810';
 
 export const TRANSFORMERS_URL = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.0/+esm';
 export const IMAGE_MODEL_ID = 'onnx-community/dinov2-small';
@@ -438,8 +438,8 @@ export function formatEmbedTiming(t) {
 function formatKeyframes(k) {
     if (!k || !k.of) return '';
     if (k.cameras) return ' · decoded at keyframes in ' + k.cameras + '/' + k.of + ' cameras (' + Math.round(k.snappedPct) + '% of samples)';
-    return ' · every frame decoded' + (k.keyframeGap != null ? ' (keyframe every ' + Math.round(k.keyframeGap) + ' frames; ' +
-        Math.round(k.spacing) + ' or denser would decode only the samples)' : '');
+    return ' · every frame decoded' + (k.keyframeGap != null ? ' (keyframe every ' + Math.round(k.keyframeGap) + ' frames; a keyframe every 0.5 s — ' +
+        Math.floor(KEYFRAME_GAP_TOLERANCE * k.spacing) + ' frames or fewer — would decode only the samples)' : '');
 }
 
 /**
@@ -480,7 +480,7 @@ export function createCropPool() {
     };
     try {
         for (let i = 0; i < n; i++) {
-            const w = { worker: new Worker(new URL('./image-crop-worker.js?v=c5e02e4355db', import.meta.url), { type: 'module' }), load: 0 };
+            const w = { worker: new Worker(new URL('./image-crop-worker.js?v=97654ac0e810', import.meta.url), { type: 'module' }), load: 0 };
             w.worker.onmessage = function (e) {
                 const p = pending.get(e.data.id); if (!p) return;
                 pending.delete(e.data.id); w.load--;

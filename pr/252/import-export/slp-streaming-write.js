@@ -53,9 +53,9 @@
  * streams from the columnar store untouched.
  */
 
-import { _buildSioPoints } from './file-io.js?v=c5e02e4355db';
-import { points3dNodeCount } from '../pose/pose-data.js?v=c5e02e4355db';
-import { writeVisibilityMetadata } from './visibility-metadata.js?v=c5e02e4355db';
+import { _buildSioPoints } from './file-io.js?v=97654ac0e810';
+import { points3dNodeCount } from '../pose/pose-data.js?v=97654ac0e810';
+import { writeVisibilityMetadata } from './visibility-metadata.js?v=97654ac0e810';
 
 function numAt(arr, i, dflt) {
     if (!arr || i < 0 || i >= arr.length) return dflt === undefined ? 0 : dflt;
