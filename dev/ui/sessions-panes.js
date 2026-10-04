@@ -28,21 +28,21 @@ import {
     state,
     videoController, interactionManager, viewport3d, timeline, paneManager,
     setVideoController, setPaneManager,
-} from './app-state.js?v=cf58587c4f84';
-import { FrameGroup, UnlinkedInstance, Camera, someValidPoint3d } from '../pose/pose-data.js?v=cf58587c4f84';
+} from './app-state.js?v=e565bad463e6';
+import { FrameGroup, UnlinkedInstance, Camera, someValidPoint3d } from '../pose/pose-data.js?v=e565bad463e6';
 import {
     triangulateAndReproject, storeReprojectedInstances, getInstanceGroupsForFrame,
     sessionHasCalibration, resolveTriangulationMethod,
-} from '../pose/triangulation.js?v=cf58587c4f84';
+} from '../pose/triangulation.js?v=e565bad463e6';
 import {
     cellResizeObserver,
     createViewForVideoFile,
     rebuildVideoController,
     fitCanvasesToCells,
     updateTotalFrames,
-} from '../loading/session-loader.js?v=cf58587c4f84';
-import { OnDemandVideoDecoder } from '../loading/video.js?v=cf58587c4f84';
-import { setStatus, showLoading, hideLoading, quickSave, markDirty } from '../import-export/save-load.js?v=cf58587c4f84';
+} from '../loading/session-loader.js?v=e565bad463e6';
+import { OnDemandVideoDecoder } from '../loading/video.js?v=e565bad463e6';
+import { setStatus, showLoading, hideLoading, quickSave, markDirty } from '../import-export/save-load.js?v=e565bad463e6';
 import {
     CONTRAST_MIN, CONTRAST_MAX, clampContrast,
     BRIGHTNESS_MIN, BRIGHTNESS_MAX, clampBrightness,
@@ -50,25 +50,26 @@ import {
     buildVideoFilter, getSessionContrast, setSessionContrast,
     getSessionBrightness, setSessionBrightness,
     getSessionRotation, setSessionRotation,
-} from './video-filters.js?v=cf58587c4f84';
+} from './video-filters.js?v=e565bad463e6';
 // `clampRotation` moved to the dependency-free `video-filters.js` so the test
 // runners can bridge it; re-exported here because `ui/ui-wiring.js` (and the
 // module map) have always imported it from this module.
 export { clampRotation };
-import { drawAllOverlays, setReprojErrorVisible } from './rendering.js?v=cf58587c4f84';
+import { drawAllOverlays, setReprojErrorVisible } from './rendering.js?v=e565bad463e6';
 // `ui/ui-wiring.js` imports this module, so this is a cycle — hoist-safe
 // because the only read is inside the view strip's click handler, which cannot
 // run during module evaluation.
-import { setSoloView } from './ui-wiring.js?v=cf58587c4f84';
-import { updateInfoPanel, populateTimelineVisibility } from './info-panel.js?v=cf58587c4f84';
+import { setSoloView } from './ui-wiring.js?v=e565bad463e6';
+import { updateInfoPanel, populateTimelineVisibility } from './info-panel.js?v=e565bad463e6';
+import { refreshIdSwitchPanel } from './id-switch-modal.js?v=e565bad463e6';
 // `autoAssignState` is a mutable binding tracked via ESM live binding.
 // The cycle (identity-assignment imports panelRenderers from here) is
 // hoist-safe because both reads are inside function bodies.
-import { autoAssignState } from './identity-assignment.js?v=cf58587c4f84';
+import { autoAssignState } from './identity-assignment.js?v=e565bad463e6';
 
 // Pass 3i-3: setup3DViewport moved to pose/initialization.js.
-import { setup3DViewport } from '../pose/initialization.js?v=cf58587c4f84';
-import { getLoadingProgressModal } from './loading-progress-modal.js?v=cf58587c4f84';
+import { setup3DViewport } from '../pose/initialization.js?v=e565bad463e6';
+import { getLoadingProgressModal } from './loading-progress-modal.js?v=e565bad463e6';
 
 // ============================================
 // Dockview Pane Manager
@@ -2109,6 +2110,8 @@ export async function switchSession(newIdx) {
     // Block 2 (Prompt 4): re-render the Visibility tab's Timeline
     // toggle lists from the new session's per-session hidden Sets.
     try { populateTimelineVisibility(newSession); } catch (e) { /* non-fatal in tests */ }
+    // ID-switch results are per session: show this one's list and timeline markers.
+    try { refreshIdSwitchPanel(newSession); } catch (e) { /* non-fatal in tests */ }
 
     // Restore per-session timeline height + collapsed state. First visit
     // (no `_timelineHeight` stored) → fit to the new session's data,

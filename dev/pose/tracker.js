@@ -16,19 +16,20 @@ import {
     reprojectPoints,
     computeInstanceDistanceTo,
     hungarianAlgorithm
-} from './triangulation.js?v=cf58587c4f84';
-import { CrossViewTracker, Detection } from './cross-view-tracker.js?v=cf58587c4f84';
-import { InstanceGroup, points3dNodeCount, hasPoint3d, readPoint3d } from './pose-data.js?v=cf58587c4f84';
+} from './triangulation.js?v=e565bad463e6';
+import { CrossViewTracker, Detection } from './cross-view-tracker.js?v=e565bad463e6';
+import { InstanceGroup, points3dNodeCount, hasPoint3d, readPoint3d } from './pose-data.js?v=e565bad463e6';
 
 // Pass 3i-1: tracker UI/integration (was in app.js)
-import { state, interactionManager, timeline, getActiveSession } from '../ui/app-state.js?v=cf58587c4f84';
-import { getNodeWeightArray, getTrackingThresholds, getTrackingThreshold, isCameraTracked } from '../ui/settings.js?v=cf58587c4f84';
-import { setStatus, hideLoading } from '../import-export/save-load.js?v=cf58587c4f84';
-import { showLoadingProgress, createProgressPacer, yieldToPaint } from '../ui/loading-overlay.js?v=cf58587c4f84';
-import { loadAllLazyFrames, sweepLazyFrameWindows } from './triangulation.js?v=cf58587c4f84';
-import { drawAllOverlays } from '../ui/rendering.js?v=cf58587c4f84';
-import { updateInfoPanel } from '../ui/info-panel.js?v=cf58587c4f84';
-import { setColorByIdentity } from '../ui/color-by.js?v=cf58587c4f84';
+import { state, interactionManager, timeline, getActiveSession } from '../ui/app-state.js?v=e565bad463e6';
+import { getNodeWeightArray, getTrackingThresholds, getTrackingThreshold, isCameraTracked } from '../ui/settings.js?v=e565bad463e6';
+import { setStatus, hideLoading } from '../import-export/save-load.js?v=e565bad463e6';
+import { showLoadingProgress, createProgressPacer, yieldToPaint } from '../ui/loading-overlay.js?v=e565bad463e6';
+import { loadAllLazyFrames, sweepLazyFrameWindows } from './triangulation.js?v=e565bad463e6';
+import { drawAllOverlays, showPredictedOnly, PREDICTED_ONLY_NOTE } from '../ui/rendering.js?v=e565bad463e6';
+import { updateInfoPanel } from '../ui/info-panel.js?v=e565bad463e6';
+import { setColorByIdentity } from '../ui/color-by.js?v=e565bad463e6';
+import { runIdSwitchChecks, clearIdSwitchResults } from '../ui/id-switch-modal.js?v=e565bad463e6';
 
 /**
  * A frame index as the USER sees it: 1-based.
@@ -1128,12 +1129,14 @@ export function trackCurrentFrame() {
         // frame's prior tracker groups so repeated runs don't stack.
         session.instanceGroups.set(state.currentFrame, []);
         var lr = runCrossViewTracker(session, trackedCameras, [state.currentFrame], false, effectiveNumAnimals);
+        // Show what tracking produced: the predictions only (User, Reproj, Errors off).
+        var predOnly = lr.numTargets > 0 && showPredictedOnly();
         drawAllOverlays(state.currentFrame);
         updateInfoPanel();
         if (timeline) timeline.refreshTracks(state.session, { cap: true });
         if (lr.numTargets > 0) {
             setStatus('Frame ' + displayFrame(state.currentFrame) + ': ' + lr.numIdentities +
-                ' identities / ' + lr.numTargets + ' cross-view targets', 'success');
+                ' identities / ' + lr.numTargets + ' cross-view targets' + (predOnly ? PREDICTED_ONLY_NOTE : ''), 'success');
         } else {
             setStatus('No cross-view matches found (need instances in 2+ views)', 'warning');
         }
@@ -1372,6 +1375,10 @@ async function runTrackingPass(range) {
         isRange ? '(range ' + lo + '–' + hi + ', 0-based)' : '');
     console.time('[' + label + '] total');
 
+    // ID-switch results (Tracks ▸ Check ID Switches; the ID Switches tab + timeline markers)
+    // describe the identities this pass is about to replace — drop them, for a range too.
+    clearIdSwitchResults(session);
+
     // Clear old identities/groups for a fresh run. A range clears only its own
     // frames and RECYCLES the existing identities (see runTrackingPass's doc);
     // Track All wipes everything and lets commitTrackedFrame mint id_0…id_N.
@@ -1414,15 +1421,28 @@ async function runTrackingPass(range) {
         // nothing new to look at. Recolors 2D + 3D through ui-wiring's handler;
         // the overlay redraw below is then a cheap repeat.
         var switchedToIds = lres.numIdentities > 0 && setColorByIdentity(state, true);
+        // ...and only the predictions (User, Reproj, Errors off), the layer tracking produced.
+        var predOnly = lres.numIdentities > 0 && showPredictedOnly();
         drawAllOverlays(state.currentFrame);
         updateInfoPanel();
         if (timeline) timeline.refreshTracks(state.session, { cap: true });
         console.timeEnd('[' + label + '] total');
-        setStatus('Assigned ' + lres.numIdentities + ' identities across ' +
+        var doneMsg = 'Assigned ' + lres.numIdentities + ' identities across ' +
             totalFrameCount + ' frames' +
             (isRange ? ' (' + displayFrame(lo) + '–' + displayFrame(hi) + ')' : '') +
             (switchedToIds ? ', now coloring by ID' : '') +
-            ' — use Tracks ▸ Propagate IDs → Tracks to apply', 'success');
+            ' — use Tracks ▸ Propagate IDs → Tracks to apply' + (predOnly ? PREDICTED_ONLY_NOTE : '');
+        setStatus(doneMsg, 'success');
+        // Then check the result for identity switches (ui/id-switch-modal.js): by body
+        // size (Tracking Wizard `autoSwitchCheck`, default on) and/or by images
+        // (`autoImageSwitchCheck`, default off — minutes, needs the videos + WebGPU).
+        // After a range this covers the WHOLE session's identities, so a re-tracked
+        // window is checked against the frames around it; with too little tracked
+        // data a check reports itself skipped. It never fails the tracking pass.
+        var autoSize = getTrackingThreshold('autoSwitchCheck') > 0, autoImage = getTrackingThreshold('autoImageSwitchCheck') > 0;
+        if (lres.numIdentities > 1 && (autoSize || autoImage)) {
+            await runIdSwitchChecks({ auto: true, statusPrefix: doneMsg, size: autoSize, image: autoImage });
+        }
         // Report the span actually swept. For Track All that is whatever the
         // project turned out to hold; for a range it is the clamped, normalized
         // window, which is what the caller needs to park the viewer on.

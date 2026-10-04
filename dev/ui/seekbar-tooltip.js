@@ -63,6 +63,10 @@ export function seekbarTooltipText(frameIdx, fps) {
  *                                            // the SAME mapping the scrub handlers use
  *   getTotalFrames: () => number,
  *   getFps: () => number,
+ *   markerAt?: (frac: number, widthPx: number) => ({frame: number, text: string} | null),
+ *                                            // a marker under the cursor (ui/seekbar-markers.js):
+ *                                            // its frame replaces frameAtFraction's (the scrub
+ *                                            // handlers snap to it too) and its text is appended
  * }} opts
  * @returns {HTMLElement} the tooltip element
  */
@@ -93,7 +97,8 @@ export function installSeekbarTooltip(seekbar, opts) {
         if (!rect) cacheRect();
         var x = Math.max(0, Math.min(rect.width, e.clientX - rect.left));
         var frac = rect.width > 0 ? x / rect.width : 0;
-        var text = seekbarTooltipText(opts.frameAtFraction(frac), opts.getFps());
+        var hit = opts.markerAt ? opts.markerAt(frac, rect.width) : null;
+        var text = seekbarTooltipText(hit ? hit.frame : opts.frameAtFraction(frac), opts.getFps()) + (hit ? ' — ' + hit.text : '');
         tip.textContent = text;
         tip.hidden = false;
         if (text.length !== measuredLen) {

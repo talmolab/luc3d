@@ -5,19 +5,19 @@
 // - setReprojErrorVisible: toggles reprojection-error column visibility in info panels.
 // - updateFrameCounters: status-bar frame counters (labeled / triangulated / instances).
 
-import { state, interactionManager, timeline } from './app-state.js?v=cf58587c4f84';
-import { points3dNodeCount } from '../pose/pose-data.js?v=cf58587c4f84';
+import { state, interactionManager, timeline } from './app-state.js?v=e565bad463e6';
+import { points3dNodeCount } from '../pose/pose-data.js?v=e565bad463e6';
 import {
     ensureLazyFrameData, getInstanceGroupsForFrame,
     triangulateAndReproject, storeReprojectedInstances,
-} from '../pose/triangulation.js?v=cf58587c4f84';
-import { drawFrameOverlays } from './overlays.js?v=cf58587c4f84';
-import { syncViewLegends } from './view-legend.js?v=cf58587c4f84';
-import { isCameraTracked } from './settings.js?v=cf58587c4f84';
+} from '../pose/triangulation.js?v=e565bad463e6';
+import { drawFrameOverlays } from './overlays.js?v=e565bad463e6';
+import { syncViewLegends } from './view-legend.js?v=e565bad463e6';
+import { isCameraTracked } from './settings.js?v=e565bad463e6';
 
 // Pass 3f: editGroupState + finishEditGroup moved to ui/identity-assignment.js.
-import { editGroupState, finishEditGroup } from './identity-assignment.js?v=cf58587c4f84';
-import { updateFrameInfo } from './info-panel.js?v=cf58587c4f84';
+import { editGroupState, finishEditGroup } from './identity-assignment.js?v=e565bad463e6';
+import { updateFrameInfo } from './info-panel.js?v=e565bad463e6';
 
 // ============================================
 // Reproj/Error visibility
@@ -61,7 +61,28 @@ export function setReprojErrorVisible(visible, opts) {
  * @returns {boolean} whether any checkbox changed (for the status line)
  */
 export function showReprojectionsOnly() {
-    var want = [['visUser', false], ['visPredicted', false], ['visErrors', false], ['visReprojections', true]];
+    return setToolbarLayers([['visUser', false], ['visPredicted', false], ['visErrors', false], ['visReprojections', true]]);
+}
+
+// Suffix for a Triangulate All status line when `showReprojectionsOnly` hid
+// anything, so the user knows where User / Predicted went.
+export var REPROJ_ONLY_NOTE = ' · showing Reproj only (toolbar)';
+
+/**
+ * After Track Frame / Track Frame Range / Track All: the run's product is the
+ * tracked PREDICTIONS (now colored by identity), so show only those — Predicted
+ * on; User, Reproj and Errors off. Same mechanics as `showReprojectionsOnly`
+ * (each box fires its own `change` event). Returns whether anything changed.
+ */
+export function showPredictedOnly() {
+    return setToolbarLayers([['visUser', false], ['visPredicted', true], ['visReprojections', false], ['visErrors', false]]);
+}
+
+// Suffix for a tracking status line when `showPredictedOnly` changed anything.
+export var PREDICTED_ONLY_NOTE = ' · showing Predicted only (toolbar)';
+
+/** Set toolbar layer checkboxes `[[id, checked], …]` as clicks would; true if any changed. */
+function setToolbarLayers(want) {
     var changed = false;
     for (var i = 0; i < want.length; i++) {
         var el = document.getElementById(want[i][0]);
@@ -72,10 +93,6 @@ export function showReprojectionsOnly() {
     }
     return changed;
 }
-
-// Suffix for a Triangulate All status line when `showReprojectionsOnly` hid
-// anything, so the user knows where User / Predicted went.
-export var REPROJ_ONLY_NOTE = ' · showing Reproj only (toolbar)';
 
 // ============================================
 // Overlay Drawing
