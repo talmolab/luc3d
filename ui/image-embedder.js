@@ -23,10 +23,17 @@
  * required: the CPU (WASM) runtime is ~50x slower (3 vs 155 crops/s measured on
  * an M-series Mac) and its int8 model drifts from the calibrated embeddings.
  *
- * Depends on: ui/app-state.js (state.views).
+ * Decoding: the frames are STREAMED per camera (`prepareFrames`), and on
+ * recordings whose keyframes are at least as dense as the samples (e.g. one every
+ * 0.5 s) each sample is moved to its nearest keyframe and decoded as that ONE
+ * frame — see `planKeyframeSamples` (pose/id-switch-check.js) and keyframeIndices.
+ *
+ * Depends on: ui/app-state.js (state.views), pose/id-switch-check.js
+ * (planKeyframeSamples), mediabunny (EncodedPacketSink, imported lazily, for the keyframe index).
  */
 
 import { state } from './app-state.js';
+import { planKeyframeSamples } from '../pose/id-switch-check.js';
 
 export const TRANSFORMERS_URL = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.0/+esm';
 export const IMAGE_MODEL_ID = 'onnx-community/dinov2-small';
@@ -280,23 +287,64 @@ export function writeInputTensor(crop, data, offset) {
     }
 }
 
+/** Index of `t` in the sorted timestamps `times` (nearest, within half a frame), or -1. */
+function frameAtTime(times, t) {
+    let lo = 0, hi = times.length - 1;
+    while (lo < hi) { const m = (lo + hi) >> 1; if (times[m] < t) lo = m + 1; else hi = m; }
+    let i = lo;
+    if (i > 0 && Math.abs(times[i - 1] - t) < Math.abs(times[i] - t)) i--;
+    const half = times.length > 1 ? (times[times.length - 1] - times[0]) / (times.length - 1) / 2 : Infinity;
+    return Math.abs(times[i] - t) <= half ? i : -1;
+}
+
+const _keyframes = new WeakMap();   // mediabunny backend -> Promise<?Int32Array>
+/**
+ * A decoder's keyframe indices (increasing), read from the container's packet
+ * index — metadata only, no frame data — once per video. null when the decoder
+ * has no mediabunny backend (the HTML5 fallback) or the index can't be read.
+ * @returns {Promise<?Int32Array>}
+ */
+export function keyframeIndices(decoder) {
+    const be = decoder && decoder._mbBackend;
+    if (!be || !be.input || !be._frameTimes || !be._frameTimes.length) return Promise.resolve(null);
+    if (!_keyframes.has(be)) {
+        _keyframes.set(be, (async function () {
+            const { EncodedPacketSink } = await import('mediabunny');   // lazily: keeps this module loadable in Node tests
+            const track = await be.input.getPrimaryVideoTrack();
+            const out = [];
+            for await (const pk of new EncodedPacketSink(track).packets(undefined, undefined, { metadataOnly: true })) {
+                if (pk.type === 'key') { const i = frameAtTime(be._frameTimes, pk.timestamp); if (i >= 0) out.push(i); }
+            }
+            return Int32Array.from(out.sort(function (a, b) { return a - b; }));
+        })().catch(function () { return null; }));
+    }
+    return _keyframes.get(be);
+}
+
 /**
  * A per-camera reader that STREAMS a known, increasing list of frames instead of
  * seeking to each one. `decoder.getFrame(i)` asks mediabunny for one sample at a
  * time, which decodes from the previous keyframe every call (up to a whole GOP —
  * 250 frames in the recordings measured); `samplesAtTimestamps` over the whole
- * list decodes forward once. Returns null when the decoder has no mediabunny
- * backend (the HTML5 fallback), so the caller uses `getFrame`.
+ * list decodes forward once, and jumps straight to a later keyframe when a target
+ * sits in a later GOP. `decode[i]` is the frame actually decoded for `frames[i]`
+ * (planKeyframeSamples: a keyframe up to half a sample spacing away, so each
+ * sample is ONE decoded frame; or the frame itself). Returns null when the
+ * decoder has no mediabunny backend (the HTML5 fallback), so the caller uses
+ * `getFrame`.
  */
-function streamingReader(decoder, frames) {
+function streamingReader(decoder, frames, decode) {
     const be = decoder && decoder._mbBackend;
     if (!be || !be.sink || typeof be.sink.samplesAtTimestamps !== 'function' || !be._frameTimes) return null;
-    const ts = frames.map(function (f) { return be._frameTimes[f]; });
+    decode = decode || frames;
+    const ts = decode.map(function (f) { return be._frameTimes[f]; });
     if (ts.some(function (t) { return t == null; })) return null;
     const pos = new Map(frames.map(function (f, i) { return [f, i]; }));
     const it = be.sink.samplesAtTimestamps(ts)[Symbol.asyncIterator]();
     let ptr = 0, chain = Promise.resolve();
     return {
+        /** The frame decoded (and to crop keypoints from) for requested `frame`. */
+        decodedFrame: function (frame) { const i = pos.get(frame); return i == null ? frame : decode[i]; },
         // resolves to a VideoFrame (caller closes it) or null; frames must be requested in order
         get: function (frame) {
             const want = pos.get(frame);
@@ -364,13 +412,34 @@ export function summarizeEmbedTiming(tm, backend, dtype) {
     };
 }
 
+/**
+ * How the samples were decoded, per camera: `cameras` decoded at keyframes (of
+ * `of` streamed), `snappedPct` of their samples moved, and the median keyframe
+ * gap in frames (the slowest camera's) — what to fix when it is 0 of N.
+ */
+export function summarizeKeyframePlans(plans) {
+    const used = plans.filter(function (p) { return p && p.streamed; });
+    const on = used.filter(function (p) { return p.snapped > 0; });
+    const tot = on.reduce(function (a, p) { return a + p.decode.length; }, 0), moved = on.reduce(function (a, p) { return a + p.snapped; }, 0);
+    const gaps = used.map(function (p) { return p.keyframeGap; }).filter(isFinite);
+    return { cameras: on.length, of: used.length, snappedPct: tot ? 100 * moved / tot : 0,
+             keyframeGap: gaps.length ? Math.max.apply(null, gaps) : null, spacing: used.length ? used[0].spacing : null };
+}
+
 /** One line for the dialog / console: "155 crops/s over 15 s · GPU busy 98% (41 batches of ~55, 6.3 ms/crop) · per frame: decode 37 ms, crop 146 ms, queue 199 ms · WebGPU fp16". */
 export function formatEmbedTiming(t) {
     if (!t || !t.crops) return '';
     return Math.round(t.cropsPerS) + ' crops/s over ' + t.seconds.toFixed(0) + ' s · GPU busy ' + Math.round(t.gpuBusyPct) + '% (' +
         t.batches + ' batches of ~' + Math.round(t.avgBatch) + ', ' + t.modelMsPerCrop.toFixed(1) + ' ms/crop) · per frame: decode ' +
         Math.round(t.decodeMsPerFrame) + ' ms, crop ' + Math.round(t.cropMsPerFrame) + ' ms, queue ' + Math.round(t.queueMsPerFrame) + ' ms' +
-        ' · ' + (t.backend === 'webnn' ? 'WebNN' : 'WebGPU') + (t.dtype ? ' ' + t.dtype : '');
+        ' · ' + (t.backend === 'webnn' ? 'WebNN' : 'WebGPU') + (t.dtype ? ' ' + t.dtype : '') + formatKeyframes(t.keyframes);
+}
+
+function formatKeyframes(k) {
+    if (!k || !k.of) return '';
+    if (k.cameras) return ' · decoded at keyframes in ' + k.cameras + '/' + k.of + ' cameras (' + Math.round(k.snappedPct) + '% of samples)';
+    return ' · every frame decoded' + (k.keyframeGap != null ? ' (keyframe every ' + Math.round(k.keyframeGap) + ' frames; ' +
+        Math.round(k.spacing) + ' or denser would decode only the samples)' : '');
 }
 
 /**
@@ -508,6 +577,20 @@ export async function createImageEmbedder(session, opts) {
     };
     const canvas = new OffscreenCanvas(CROP, CROP);
     let readers = null, pool;   // pool: undefined = not made yet, null = inline
+    // identity -> its InstanceGroup at `frame` (an identity seen twice there is ambiguous: left out)
+    const identityGroups = function (frame) {
+        const out = new Map(), dup = new Set();
+        for (const g of (session.instanceGroups && session.instanceGroups.get(frame)) || []) {
+            if (g.identityId == null) continue;
+            if (out.has(g.identityId)) dup.add(g.identityId); else out.set(g.identityId, g);
+        }
+        dup.forEach(function (id) { out.delete(id); });
+        return out;
+    };
+    // per view: how its samples were decoded (keyframe sampling or streamed), for stats()
+    let plans = [];
+    const useKeyframes = opts.keyframes !== false &&
+        !(typeof window !== 'undefined' && window.LUCID_IMAGE_KEYFRAMES === 0);
     const frameOf = function (vi, frame) {
         const r = readers && readers[vi];
         if (r) return r.get(frame);
@@ -545,11 +628,15 @@ export async function createImageEmbedder(session, opts) {
     const getEmbeddings = async function (frame, items) {
         const tStart = performance.now();
         if (!tm.t0) tm.t0 = tStart;
-        // crop geometry comes from the 2D keypoints alone, so the views to embed are known before decoding
-        const geo = views.map(function (v) {
-            const cam = v.cameraName || v.name;
+        // crop geometry comes from the 2D keypoints alone, so the views to embed are known before decoding;
+        // a view whose sample moved to a keyframe crops each animal (same identity) from THAT frame's keypoints
+        const geo = views.map(function (v, vi) {
+            const cam = v.cameraName || v.name, r = readers && readers[vi];
+            const at = r ? r.decodedFrame(frame) : frame;
+            const groups = at === frame ? null : identityGroups(at);
             return items.map(function (it) {
-                const inst = it.group.instances && it.group.instances.get(cam);
+                const g = groups ? groups.get(it.group.identityId) : it.group;
+                const inst = g && g.instances && g.instances.get(cam);
                 return inst ? cropGeometry(inst, sk) : null;
             });
         });
@@ -629,9 +716,21 @@ export async function createImageEmbedder(session, opts) {
         /** Where the time went in this run — see `summarizeEmbedTiming`. */
         // the precision that actually ran: WebGPU runs fp16 only where the GPU offers 'shader-f16'
         // (fp32 measured ~1.5x slower on an M2 Pro); the WebNN path always loads fp16
-        stats: function () { return summarizeEmbedTiming(tm, backend, backend === 'webnn' ? 'fp16' : dtype); },
+        stats: function () {
+            const t = summarizeEmbedTiming(tm, backend, backend === 'webnn' ? 'fp16' : dtype);
+            t.keyframes = summarizeKeyframePlans(plans);
+            return t;
+        },
         prepareFrames: async function (frames) {
-            readers = views.map(function (v) { return streamingReader(v.decoder, frames); });
+            const tracked = function (f) { return !!(session.instanceGroups && session.instanceGroups.has(f)); };
+            plans = await Promise.all(views.map(async function (v) {
+                // opts.keyframes may be a function (decoder -> keyframe indices): a test / benchmark hook
+                const kf = !useKeyframes ? null
+                    : typeof opts.keyframes === 'function' ? await opts.keyframes(v.decoder) : await keyframeIndices(v.decoder);
+                return planKeyframeSamples(frames, kf, tracked);
+            }));
+            readers = views.map(function (v, vi) { return streamingReader(v.decoder, frames, plans[vi].decode); });
+            plans.forEach(function (p, vi) { p.streamed = !!readers[vi]; });   // (stats() runs after releaseFrames)
         },
         releaseFrames: function () {
             if (readers) readers.forEach(function (r) { if (r) r.close(); });

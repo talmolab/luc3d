@@ -1825,7 +1825,10 @@ identities, sampledFrames, closeDistance, threshold, fps, step, sampleHz, cue}`
 `{ok:false, reason}`; `markChangePoints(scored, o)` (the change-point step,
 exported so calibration can re-apply thresholds to the same scores);
 `fitSoftmax(X, y, n, D, K, opts)` (L2 multinomial logistic regression, Adam);
-`fitPCA(X, n, D, k)` (randomized subspace iteration); `SIZE_BONES`;
+`fitPCA(X, n, D, k)` (randomized subspace iteration);
+`planKeyframeSamples(frames, keyframes, hasFrame)` -> `{decode, snapped, spacing,
+keyframeGap, maxShift}` (which frame each image sample decodes in one camera — see
+"Keyframe sampling" under `ui/image-embedder.js`); `SIZE_BONES`;
 `REFERENCE_HZ` (15); `SIZE_CHECK_DEFAULTS` (`fps` REQUIRED, `sampleHz` 15,
 `folds` 5, `gapSeconds` 10, `syncSeconds` 1, `threshold` -50, `continueBelow` 0,
 `followSeconds` 60, `minTrackedSeconds` 60, `sepFactor` 0.65, `signal`, ...);
@@ -1887,18 +1890,37 @@ at keyframes — every 250 frames, ~0.23/s on these files — would cut decoding
 white-dark 75% -> 55% -> 41%, image-only flags real 77% -> 57% -> 51%; 5-mouse
 false change points 21 -> 29 -> 40 / 30 min and the real switch missed at -25
 below 2/s. The tracklets after an encounter are short, so they need dense samples.
-The rate stays 2/s; cheaper decoding has to come from the recordings (keyframes
-every 0.5 s, so samples could land on keyframes) or from decode parallelism.
+The rate stays 2/s; cheaper decoding has to come from the recordings — which is
+what keyframe sampling does: on recordings with a keyframe every 0.5 s each sample
+moves to its nearest keyframe, <= 0.25 s away (`planKeyframeSamples`; see
+"Keyframe sampling" under `ui/image-embedder.js`). **Moving samples by up to
+±0.25 s does not change the result** (2026-10-04, 5-mouse recording, the real
+model and check, 3 views; snapped = moved to frames 0, 30, 60, …; control =
+every sample moved by a constant 16 frames, i.e. different frames with no
+keyframe logic). Gate-on tracking (no real switch): planted-swap AUC 0.880
+today / 0.880 snapped / 0.873 control, 43.5 / 43.8 / 44.4% caught at -25, change
+points 10 / 7 / 9; encounter scores vs today correlate 0.982 (snapped) and 0.977
+(control). Gate-off tracking: the real switch (74,544, id_2/id_3) is an onset in
+all three (-94 / -99 / -112), AUC 0.812 / 0.805 / 0.807, change points 11 / 14 /
+16, correlation 0.981 / 0.973. Snapping moves the scores less than the control
+does, so its differences are which-frames-were-sampled noise. Harness:
+`tests/e2e/_diag-image-keyframe-snap.mjs` (planted swaps cost no re-run: with
+blocked CV an encounter's tracklet rows are never in their own fold's training
+set, so swapping the two animals' labels after it turns its score S into exactly
+-S).
 
 **Imports from project modules.** `pose/pose-data.js` (`readPoint3d`).
 
-**Imported by.** `ui/id-switch-modal.js`.
+**Imported by.** `ui/id-switch-modal.js`, `ui/image-embedder.js` (`planKeyframeSamples`).
 
 **Coverage.** `tests/test-id-switch-check.mjs` (synthetic 3-animal sessions defined
 in time: clean -> no flags; minority / majority switch -> onset / end change point;
 25-120 fps invariance; images with synthetic embeddings catching a swap between
 animals of IDENTICAL size that size misses; cancellation; PCA; failure reasons;
-crop geometry of `ui/image-embedder.js`), `tests/e2e/size-switch-check.mjs`,
+crop geometry of `ui/image-embedder.js`; `planKeyframeSamples`: sparse/unknown
+keyframes move nothing, a keyframe every 30 frames moves every 32-frame sample
+<= 15 frames, strictly increasing, untracked keyframes skipped),
+`tests/e2e/image-keyframe-sampling.mjs`, `tests/e2e/size-switch-check.mjs`,
 `tests/e2e/track-auto-size-switch-check.mjs`, `tests/e2e/id-switch-image-check.mjs`.
 
 ---
@@ -4769,7 +4791,8 @@ interval and redrawn on return, Clear stops it).
 
 **Purpose.** Appearance embeddings for the image ID-switch check: for a sampled
 frame and the identities present, decode that frame in every camera
-(streamed: see below), cut a masked, pose-aligned crop of each identity from
+(streamed, and moved to the nearest keyframe when keyframes are dense: see
+below), cut a masked, pose-aligned crop of each identity from
 its own 2D keypoints, and embed the crops with DINOv2-small on the GPU.
 
 **Speed.** `prepareFrames(frames)` opens one `streamingReader` per camera over the
@@ -4824,6 +4847,38 @@ busy (19–26% vs 44%) and dedicated GPU memory climbing in a GC sawtooth to 19.
 of 20 GB. Not reproducible on macOS (no unclosed-VideoFrame warnings), so it was
 removed rather than kept as an option. Cheaper decoding has to come from the
 recordings (keyframes every 0.5 s).
+**Keyframe sampling (2026-10-04).** `prepareFrames` reads each camera's keyframes
+from the container's packet index (`keyframeIndices`: mediabunny
+`EncodedPacketSink.packets(…, {metadataOnly: true})`, `type === 'key'`, mapped to
+frame indices through the backend's `_frameTimes`; no frame data read, cached per
+video) and plans the samples with `planKeyframeSamples` (pose/id-switch-check.js):
+when the median keyframe gap is <= the sample spacing (32 frames at 60 fps and
+2/s), each sample moves to its nearest keyframe within half the spacing that has
+tracking (`session.instanceGroups.has`), so `samplesAtTimestamps` decodes ONE
+frame per sample (mediabunny resets to the target's keyframe when it is past the
+last decoded packet). Each view crops its animals from the keypoints of the frame
+it actually decoded (`decodedFrame`; the same identity's group there — an
+identity seen twice in that frame is left out), while the evidence still counts
+at the grid frame, so encounters and tracklets are unchanged. Sparser keyframes
+move nothing: the timestamps are exactly the old ones. Per camera, so cameras
+encoded differently mix. `opts.keyframes`: `false` (or `window.
+LUCID_IMAGE_KEYFRAMES = 0`) turns it off; a function `(decoder) -> keyframe
+indices` replaces the index (diagnostics). `stats().keyframes` /
+`summarizeKeyframePlans` -> `{cameras, of, snappedPct, keyframeGap, spacing}`, and
+the speed line ends "· decoded at keyframes in 8/8 cameras (100% of samples)" or
+"· every frame decoded (keyframe every 250 frames; 32 or denser would decode only
+the samples)". Measured on the M2 Pro, 2-minute clips of the 8 cameras of the
+5-mouse recording decoded concurrently (`tests/e2e/_bench-image-keyframe-decode.mjs`,
+1,800 camera-samples): original files and x265 with a keyframe every 250 frames
+151 samples/s (53,768 frames decoded, ~4,500/s — the hardware decoder's limit);
+x265 with a keyframe every 30 frames 297 samples/s in place (27,000 frames:
+mediabunny already skips to each sample's GOP) and **2,800 samples/s snapped
+(1,800 frames) — 18.6x today**. On that HEVC (hardware decoder) a keyframe decoded
+alone is bit-identical to it decoded mid-stream (96/96 raw planes; embeddings of
+the same crops max |difference| 0). Cost of the keyframes (x265, same QP 24, P-only):
++42% file size over the 8 cameras (+30% to +65% per camera; the static views pay
+most), at slightly HIGHER quality vs the original (PSNR +0.6 to +0.75 dB on every
+camera, SSIM up ~0.0015); on camera 0, QP 26 restores the size at -0.35 dB.
 Embeddings are bit-identical across all of this (cosine 1.00000 vs seeking,
 top-k vs the same views at all-k, and max |difference| 0 for worker vs inline
 crops over 5,687 real crops).
@@ -4856,13 +4911,15 @@ decode + crop ceiling rose from 145 to ~270 crops/s at 3 views (decoding alone:
 7.9 s vs 8.3 s with cropping) — headroom for a GPU faster than ~145 crops/s.
 Numbers in `ui/id-switch-modal.js`.
 
-**Key exports.** `createImageEmbedder(session, {onStatus, maxViewsPerAnimal, webnn})` ->
+**Key exports.** `createImageEmbedder(session, {onStatus, maxViewsPerAnimal, webnn, keyframes})` ->
 `{getEmbeddings, prepareFrames, releaseFrames, backend, stats, inFlight, views}` (the provider
 `checkImageSwitches` needs; `releaseFrames` also terminates the crop pool and
 disposes a WebNN model);
 `loadImageModel(onStatus)` (once, cached promise); `hasWebGPU()`;
 `selectViews(geos, maxViews)`; `EMBED_MAX_BATCH`, `EMBED_IN_FLIGHT`,
-`summarizeEmbedTiming(tm, backend, dtype)`, `formatEmbedTiming(t)`; WebNN: `hasWebNN()`, `loadWebNNModel(onStatus)`,
+`summarizeEmbedTiming(tm, backend, dtype)`, `formatEmbedTiming(t)`;
+`keyframeIndices(decoder)` -> `Promise<Int32Array|null>` (cached per video);
+`summarizeKeyframePlans(plans)`; WebNN: `hasWebNN()`, `loadWebNNModel(onStatus)`,
 `chooseBackend(trial)`, `WEBNN_BATCH`, `WEBNN_TRIAL_FRAMES`; `createCropPool()` -> `{run(image, crops) ->
 Promise<Float32Array[]>, broken, terminate()}` or null; crop helpers
 `cropGeometry`, `cutCrop`, `convexHull`, `writeInputTensor`; constants
@@ -4885,13 +4942,21 @@ fp32 (~88 MB). WebGPU only: the CPU (WASM) runtime measured ~50x slower (3 vs 15
 crops/s) and its int8 model drifts (cosine 0.953 vs the calibrated model). Re-check
 the CLS extraction (`last_hidden_state` token 0) on any version bump.
 
-**Imports from project modules.** `ui/app-state.js` (`state.views`). Spawns
-`ui/image-crop-worker.js`.
+**Imports from project modules.** `ui/app-state.js` (`state.views`),
+`pose/id-switch-check.js` (`planKeyframeSamples`); `mediabunny`
+(`EncodedPacketSink`, imported LAZILY inside `keyframeIndices` — a static bare
+import would break this module in Node tests and in the crop worker, which has no
+importmap). Spawns `ui/image-crop-worker.js`.
 
 **Imported by.** `ui/id-switch-modal.js`, `ui/image-crop-worker.js`.
 
-**Coverage.** Crop geometry, `selectViews`, `chooseBackend` and the resize table in
+**Coverage.** Crop geometry, `selectViews`, `chooseBackend`, the resize table and
+the keyframe line of `formatEmbedTiming` in
 `tests/test-id-switch-check.mjs`; the crop pool in `tests/e2e/image-crop-worker.mjs`;
+keyframe sampling on generated 60 fps H.264 (keyframes every 30 frames vs one) in
+`tests/e2e/image-keyframe-sampling.mjs` (keyframe index, one decoded packet per
+sample, bit-identical planes, sparse video unchanged); accuracy on real data by
+`tests/e2e/_diag-image-keyframe-snap.mjs` (diagnostic, not in the suite);
 the full path on real data by a scratch harness (not in the suite: it needs the
 proofread videos and GPU) — see the image-check notes above.
 
