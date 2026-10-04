@@ -16,20 +16,20 @@ import {
     reprojectPoints,
     computeInstanceDistanceTo,
     hungarianAlgorithm
-} from './triangulation.js?v=e565bad463e6';
-import { CrossViewTracker, Detection } from './cross-view-tracker.js?v=e565bad463e6';
-import { InstanceGroup, points3dNodeCount, hasPoint3d, readPoint3d } from './pose-data.js?v=e565bad463e6';
+} from './triangulation.js?v=1915b267906d';
+import { CrossViewTracker, Detection } from './cross-view-tracker.js?v=1915b267906d';
+import { InstanceGroup, points3dNodeCount, hasPoint3d, readPoint3d } from './pose-data.js?v=1915b267906d';
 
 // Pass 3i-1: tracker UI/integration (was in app.js)
-import { state, interactionManager, timeline, getActiveSession } from '../ui/app-state.js?v=e565bad463e6';
-import { getNodeWeightArray, getTrackingThresholds, getTrackingThreshold, isCameraTracked } from '../ui/settings.js?v=e565bad463e6';
-import { setStatus, hideLoading } from '../import-export/save-load.js?v=e565bad463e6';
-import { showLoadingProgress, createProgressPacer, yieldToPaint } from '../ui/loading-overlay.js?v=e565bad463e6';
-import { loadAllLazyFrames, sweepLazyFrameWindows } from './triangulation.js?v=e565bad463e6';
-import { drawAllOverlays, showPredictedOnly, PREDICTED_ONLY_NOTE } from '../ui/rendering.js?v=e565bad463e6';
-import { updateInfoPanel } from '../ui/info-panel.js?v=e565bad463e6';
-import { setColorByIdentity } from '../ui/color-by.js?v=e565bad463e6';
-import { runIdSwitchChecks, clearIdSwitchResults } from '../ui/id-switch-modal.js?v=e565bad463e6';
+import { state, interactionManager, timeline, getActiveSession } from '../ui/app-state.js?v=1915b267906d';
+import { getNodeWeightArray, getTrackingThresholds, getTrackingThreshold, isCameraTracked } from '../ui/settings.js?v=1915b267906d';
+import { setStatus, hideLoading } from '../import-export/save-load.js?v=1915b267906d';
+import { showLoadingProgress, createProgressPacer, yieldToPaint } from '../ui/loading-overlay.js?v=1915b267906d';
+import { loadAllLazyFrames, sweepLazyFrameWindows } from './triangulation.js?v=1915b267906d';
+import { drawAllOverlays, showPredictedOnly, PREDICTED_ONLY_NOTE } from '../ui/rendering.js?v=1915b267906d';
+import { updateInfoPanel } from '../ui/info-panel.js?v=1915b267906d';
+import { setColorByIdentity } from '../ui/color-by.js?v=1915b267906d';
+import { runIdSwitchChecks, clearIdSwitchResults } from '../ui/id-switch-modal.js?v=1915b267906d';
 
 /**
  * A frame index as the USER sees it: 1-based.

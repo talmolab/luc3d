@@ -15,10 +15,12 @@ See `MODULES.md` at the repo root for per-module details (purpose, exports, impo
 
 ## Local Development
 ```bash
-python3 -m http.server 8080
-# Or simply: python3 server.py
+python3 server.py 8080            # Windows: py server.py 8080
+# Or: python3 -m http.server 8080  (no --offline support)
 # App: http://localhost:8080/
 # Tests: http://localhost:8080/tests/test-runner.html
+
+python3 scripts/offline_deps.py install && python3 server.py --offline
 ```
 
 ## Deployment
@@ -96,7 +98,83 @@ That is deliberate: a release created in Actions with `GITHUB_TOKEN` does not
 fire `release: published`, so a helper workflow could not trigger the deploy.
 Tags must be `vX.Y.Z` or `vX.Y.Z-N` (numeric pre-release), matching sleap-app.
 
-## Dependencies (CDN only)
+## Offline mode
+
+Four dependencies still load from jsdelivr (three.js, mp4box, dockview-core,
+yaml); everything else under `lib/` is committed. **`offline-deps.json` is the
+single source of truth** for their versions, npm tarball URLs, registry integrity
+hashes, extracted file lists, and which CDN URL each local path replaces. Three
+consumers read it, so the table exists exactly once:
+
+- `scripts/offline_deps.py` (`install` / `check` / `bundle` / `clean`) — stdlib
+  only, so offline setup needs no Node, curl, tar or Git Bash. Packages land in
+  **gitignored** `lib/<pkg>/`, each keeping a tracked `.gitignore` +
+  `PROVENANCE.txt` so `lib/` still documents what belongs there. Downloads honor
+  `LUCID_NPM_REGISTRY` for institutional mirrors.
+- `server.py --offline` (or `LUCID_OFFLINE=1`) — rewrites the mapped URLs in
+  served `.html`/`.js`/`.mjs`, so the working tree keeps its CDN URLs and nothing
+  is committed by accident. Refuses to start if a package is missing. **It must
+  cover `.js`:** two of the six references are ESM imports inside
+  `ui/sessions-panes.js` and `ui/overlay-export-modal.js`, not HTML tags.
+- `offline_deps.py bundle` — stages a copy with the URLs **already rewritten**,
+  so the zip runs under any static server. That is what keeps Python off the end
+  user's machine; the bundle ships `start-windows.ps1` (PowerShell, preinstalled)
+  plus `start-macos.command` / `start-linux.sh` (python3, else Ruby WEBrick).
+
+Rewritten paths are **depth-relative** (`./lib/…` at root, `../lib/…` from
+`tests/`), never origin-root-relative — the gh-pages sub-path rule applies here too.
+
+Two guards, because this rots silently otherwise:
+
+- **`check`** re-derives the dockview pin rather than trusting prose: any
+  `cdn.jsdelivr.net/npm/<pkg>@<ver>` in source that disagrees with the manifest
+  fails. The "pinned in THREE places" rule below is now enforced, not just documented.
+- **`check --strict`** fails on any CDN URL outside `lib/` the manifest does not
+  map, so a newly added CDN import cannot quietly break offline mode. A URL that
+  is deliberately not mapped goes in the manifest's **`unmapped`** block with a
+  reason — an allowlist, so the guard keeps failing on URLs nobody has considered.
+- **`tests/e2e/offline-server.mjs`** boots the app with every non-localhost
+  request *aborted* (not throttled — that would still hit the HTTP cache) and
+  asserts THREE/OrbitControls/MP4Box/h5wasm/dockview-css/`yaml` all resolved. It
+  skips cleanly when the packages are absent. Confirmed to fail without
+  `--offline`, so it pins behavior rather than the current state.
+
+`lib/sleap-io/chunk-X76PRJK6.js`'s `MP4BOX_CDN` (unpkg mp4box@0.5.4) is
+deliberately **not** mapped. Its `loadMp4box()` returns `globalThis.MP4Box`
+before reaching the fetch, and `index.html`'s mp4box script tag always sets that
+global (from `lib/mp4box/` in offline mode) — so the unpkg fallback is
+unreachable, which `tests/e2e/offline-server.mjs` confirms by asserting `MP4Box`
+exists with all off-origin requests blocked. Mapping it would also silently
+substitute the vendored 0.5.2 for the 0.5.4 it names. `--strict` skips `lib/`, so
+it does not flag this. If the mp4box script tag is ever removed from
+`index.html`, this becomes live: `await import("mp4box")` would throw (no
+importmap entry) and fall through to unpkg.
+
+**One feature does not work offline:** the image ID-switch check
+(`ui/image-embedder.js`, Tracks ▸ Check ID Switches (Images)). Its
+`TRANSFORMERS_URL` is in `unmapped`, because vendoring that URL would not be
+enough — transformers.js then fetches the `onnx-community/dinov2-small` **weights
+(44–88 MB) from huggingface.co** at runtime, so offline support means vendoring
+the model as well and setting `env.localModelPath`. It is lazily imported by that
+one opt-in command and nothing else touches it, so this degrades rather than
+breaking the app. Offline, the dynamic `import()` currently throws a raw
+"Failed to fetch dynamically imported module" instead of a reason string like
+`runImage`'s other preflight gates in `ui/id-switch-modal.js`.
+
+**Node-only `.mjs` is never rewritten** (`is_rewritable` in
+`scripts/offline_deps.py`, shared by `bundle` and `server.py --offline` so the zip
+and the served tree cannot drift). Every non-`lib/` `.mjs` in the repo is a test or
+a tool — the browser-served ones all live under `lib/` — and
+`tests/test-stamp-version.mjs` holds CDN URLs as **fixtures** asserting
+`scripts/stamp-version.mjs` leaves absolute URLs alone, so rewriting it would
+quietly invert what it checks. Same carve-out `stamp-version.mjs` itself makes.
+
+Licenses for everything under `lib/` are in **`lib/LICENSES.txt`**, and each
+package now carries its upstream `LICENSE` (previously none did — h5wasm's NIST
+terms require the notice be kept intact and mediabunny is MPL-2.0). dockview-core
+6.6.1 ships no LICENSE file upstream, so its MIT text is reproduced there.
+
+## Dependencies (CDN by default, vendorable — see Offline mode)
 - Three.js 0.147
 - dockview-core **pinned to 6.6.1** in THREE places (`index.html` CSS +
   `ui/sessions-panes.js` ESM import + `ui/overlay-export-modal.js` ESM import —
