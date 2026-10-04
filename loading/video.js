@@ -29,6 +29,9 @@ export function videoLog(msg, level) {
     }
 }
 
+/** A paused-stepping decode stream with no request for this long is closed (OnDemandVideoDecoder._mbGetFrame). */
+export const STEP_CURSOR_IDLE_MS = 3000;
+
 // ---------------------------------------------------------------------------
 // OnDemandVideoDecoder
 // ---------------------------------------------------------------------------
@@ -61,6 +64,8 @@ export class OnDemandVideoDecoder {
         this._mp4InitPromise = null;
         this._html5SeekLock = null; // Prevent concurrent HTML5 seeks
         this._mbBackend = null; // Optional mediabunny frame-accurate backend (issue #115)
+        this._stepCursor = null; // open decode stream for paused forward steps (see _mbGetFrame)
+        this._keySink = null;    // mediabunny EncodedPacketSink: which keyframe a frame needs
 
         // Source reference for mp4box lazy init
         this._source = null;
@@ -481,6 +486,82 @@ export class OnDemandVideoDecoder {
         return best;
     }
 
+    /**
+     * One paused frame from the mediabunny backend, keeping a decode stream OPEN
+     * between calls so stepping forward costs one decoded frame instead of every
+     * frame since the keyframe. `MediaBunnyVideoBackend.getFrame` opens a fresh
+     * decoder per frame and decodes from the frame's keyframe — on P-frame
+     * recordings with a keyframe every 250 frames, ~125 frames per camera for
+     * every arrow-key step. Here the stream (mediabunny `samples(t)`, which
+     * decodes from the keyframe once and then keeps a few frames ahead) serves
+     * every request at or after its position that needs no newer keyframe;
+     * anything else (a step back, a jump past the next keyframe) reopens it at
+     * the target — exactly the fresh decode it replaces. Results go into the
+     * backend's frame cache like `getFrame`'s, so a step back over frames just
+     * shown is still a cache hit. Idle streams close after STEP_CURSOR_IDLE_MS;
+     * playback, a source switch and `close()` close them at once. Any failure
+     * falls back to the backend's own `getFrame`. `window.LUCID_STEP_CURSOR = 0`
+     * turns it off. Callers serialize (getFrame's `_mbSeekLock`).
+     */
+    async _mbGetFrame(frameIndex) {
+        var be = this._mbBackend;
+        var off = typeof window !== 'undefined' && window.LUCID_STEP_CURSOR === 0;
+        if (off || !be.sink || typeof be.sink.samples !== 'function' || !be._frameTimes || !be.cache) return be.getFrame(frameIndex);
+        var hit = be.cache.get(frameIndex);
+        if (hit) { be.cache.delete(frameIndex); be.cache.set(frameIndex, hit); return hit; }
+        if (be.decodingPromise) { await be.decodingPromise; if (be.cache.has(frameIndex)) return be.cache.get(frameIndex); }
+        var ts = be._frameTimes[frameIndex];
+        if (ts == null) return null;
+        try {
+            var c = this._stepCursor;
+            if (!(c && c.backend === be && frameIndex >= c.next && await this._sameKeyframeRun(c, ts))) {
+                this.releaseStepCursor();
+                c = this._stepCursor = { backend: be, it: be.sink.samples(ts)[Symbol.asyncIterator](), next: frameIndex, nextTs: ts, timer: null };
+            }
+            if (c.timer) { clearTimeout(c.timer); c.timer = null; }
+            var times = be._frameTimes, half = times.length > 1 ? (times[times.length - 1] - times[0]) / (times.length - 1) / 2 : Infinity;
+            for (;;) {
+                var r = await c.it.next();
+                if (r.done || !r.value) throw new Error('stream ended before frame ' + frameIndex);
+                var sample = r.value;
+                if (sample.timestamp < ts - half) { sample.close(); continue; }   // passed over on the way
+                if (sample.timestamp > ts + half) { sample.close(); throw new Error('stream skipped frame ' + frameIndex); }
+                var vf = sample.toVideoFrame();
+                var bitmap = await createImageBitmap(vf);
+                vf.close(); sample.close();
+                c.next = frameIndex + 1;
+                c.nextTs = times[frameIndex + 1] != null ? times[frameIndex + 1] : Infinity;
+                be.cacheFrame(frameIndex, bitmap);
+                var self = this;
+                c.timer = setTimeout(function () { if (self._stepCursor === c) self.releaseStepCursor(); }, STEP_CURSOR_IDLE_MS);
+                return bitmap;
+            }
+        } catch (e) {
+            this.releaseStepCursor();
+            videoLog("Step cursor failed for frame " + frameIndex + " (" + e.message + "), decoding it alone", "warn");
+            return be.getFrame(frameIndex);
+        }
+    }
+
+    /** Can the open stream reach `ts` without passing a newer keyframe (i.e. is advancing it no costlier than reopening)? */
+    async _sameKeyframeRun(c, ts) {
+        if (!this._keySink) {
+            var mb = await import('mediabunny');
+            this._keySink = new mb.EncodedPacketSink(await c.backend.input.getPrimaryVideoTrack());
+        }
+        var key = await this._keySink.getKeyPacket(ts);
+        return !!key && key.timestamp <= c.nextTs;
+    }
+
+    /** Close the paused-stepping decode stream (frees its decoder and buffered frames). */
+    releaseStepCursor() {
+        var c = this._stepCursor;
+        this._stepCursor = null;
+        if (!c) return;
+        if (c.timer) clearTimeout(c.timer);
+        try { if (c.it && c.it.return) c.it.return(); } catch (_) { /* ignore */ }
+    }
+
     async getFrame(frameIndex) {
         if (frameIndex < 0 || frameIndex >= this.samples.length) {
             videoLog("Frame index out of range: " + frameIndex, "warn");
@@ -518,7 +599,7 @@ export class OnDemandVideoDecoder {
             var resolveMbLock;
             this._mbSeekLock = new Promise(function (r) { resolveMbLock = r; });
             try {
-                var mbFrame = await this._mbBackend.getFrame(frameIndex);
+                var mbFrame = await this._mbGetFrame(frameIndex);
                 if (mbFrame) return mbFrame;
                 videoLog("Mediabunny returned no frame for " + frameIndex + ", falling back to HTML5", "warn");
             } catch (e) {
@@ -969,6 +1050,8 @@ export class OnDemandVideoDecoder {
         // WRONG video — frame-accurate for a video nobody is looking at
         // anymore, which reads as the pose overlay drifting off the video.
         // Re-initialized below, after the new element's metadata loads.
+        this.releaseStepCursor();
+        this._keySink = null;
         if (this._mbBackend) {
             try { this._mbBackend.close(); } catch (_) {}
             this._mbBackend = null;
@@ -1086,6 +1169,8 @@ export class OnDemandVideoDecoder {
         }
 
         // Release the mediabunny backend (frees its Input/decoder + cached frames)
+        this.releaseStepCursor();
+        this._keySink = null;
         if (this._mbBackend) {
             try { this._mbBackend.close(); } catch (_) {}
             this._mbBackend = null;
@@ -1820,6 +1905,8 @@ export class VideoController {
 
         this.state.isPlaying = true;
         var self = this;
+        // playback decodes on its own; free the paused-stepping streams' decoders
+        this.state.views.forEach(function (v) { if (v.decoder && v.decoder.releaseStepCursor) v.decoder.releaseStepCursor(); });
 
         // ------------------------------------------------------------------
         // Buffered mediabunny playback (issue #115 follow-up) — OPT-IN.

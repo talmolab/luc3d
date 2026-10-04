@@ -7241,6 +7241,35 @@ around calls into `_mbBackend.getFrame`. Covered by two unit tests in
 serialization contract; the real WebCodecs race itself isn't reproducible
 headlessly).
 
+**Paused stepping keeps a decode stream open (`_mbGetFrame`, 2026-10-04).**
+`MediaBunnyVideoBackend.getFrame` opens a fresh decoder per frame and decodes
+from the frame's keyframe, so on P-frame recordings with a keyframe every 250
+frames EVERY paused frame — an arrow-key step forward included — decoded ~125
+frames per camera. `getFrame` now goes through `_mbGetFrame`, which keeps one
+mediabunny `sink.samples(t)` stream per decoder (`_stepCursor`: decodes from the
+keyframe once, then stays a few frames ahead) and serves any request at or after
+its position that needs no newer keyframe (`_sameKeyframeRun`: the target's key
+packet, via a lazily created `EncodedPacketSink.getKeyPacket` — `import('mediabunny')`
+on first use — is at or before the stream's next frame) by advancing it; a step
+back or a jump past the next keyframe reopens it at the target, i.e. the same
+decode as before. Results go into the backend's frame cache as `getFrame`'s did,
+so stepping back over frames just shown stays a cache hit. Released after
+`STEP_CURSOR_IDLE_MS` (3 s) idle, by `releaseStepCursor()` (called for every view
+by `VideoController.startPlayback`), `switchSource` and `close`. Any failure
+falls back to the backend's own `getFrame`; `window.LUCID_STEP_CURSOR = 0` turns it
+off. Measured (M2 Pro, real Chrome, 2-min clips of the 8 cameras of the 5-mouse
+recording, all 8 views per frame; `tests/e2e/_bench-step-cursor.mjs`): on the
+original recordings (keyframe every 250) a step forward 148 -> **1 ms**, a held
+arrow key 2.6 -> **245 frames/s**; re-encoded with a keyframe every 30, 64 -> 1 ms
+and 15.6 -> 366 frames/s. Steps back and jumps are unchanged apart from the
+stream's read-ahead (~40 extra packets decoded in the background on opening:
+jump 206 -> 214 ms, step back 405 -> 421 ms on the originals). Stepped frames are
+pixel-identical to the frame-accurate decode. Cost while paused: each open stream
+holds its few read-ahead frames (and a decoder) until it idles out. Guarded by
+`tests/e2e/step-cursor.mjs` (one packet per step vs every frame since the
+keyframe, pixel-identical stepped / stepped-back / jumped frames, reopening at the
+right keyframe, release on idle / request / close).
+
 **Callers must coalesce rapid single-frame steps via `scrubToFrame`, never
 call `seekToFrame` directly for repeatable user input (issue #115
 followup-followup, `eric/seeking-regression`).** Adding `_mbSeekLock` above
@@ -7365,8 +7394,10 @@ a zoomed-in image keeps the same region centered instead of jumping.
 
 **Key exports.**
 - `videoLog(msg, level)` — namespaced logger.
+- `STEP_CURSOR_IDLE_MS` (3000) — idle time before a paused-stepping stream closes.
 - `OnDemandVideoDecoder` — class. Selected methods: `init(source)`,
-  `getFrame(frameIndex)`, `_initMediabunny(source)` /
+  `getFrame(frameIndex)` (mediabunny: via `_mbGetFrame`, the open stepping
+  stream), `releaseStepCursor()`, `_initMediabunny(source)` /
   `_mediabunnyEnabled()` (opt-in frame-accurate backend, issue #115),
   `decodeRange(start, end)`, `playNative`, `pauseNative`, `seekNative`,
   `switchSource`, `close`, `drawCurrentFrame`, `_awaitPlayable` (init and
@@ -7412,8 +7443,9 @@ a rotation in progress. Removing the line alone turns the margin check in
 
 **Imports from project modules.** `ui/keyboard-target.js` only — the
 `shouldIgnoreShortcut` guard its `setupKeyboardHandlers` keydown listener
-applies (issue #163); that module imports nothing itself. Otherwise none (uses
-the global `MP4Box` from script tag).
+applies (issue #163); that module imports nothing itself. `mediabunny`
+(`EncodedPacketSink`) is imported lazily by `_sameKeyframeRun`. Otherwise none
+(uses the global `MP4Box` from script tag).
 
 **Imported by.** `pose/initialization.js`, `import-export/save-load.js`,
 `import-export/slp-import.js`, `loading/session-loader.js`,
