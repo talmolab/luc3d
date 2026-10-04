@@ -300,7 +300,7 @@ group('Checklist save / reopen (ui/id-switch-review.js)');
     const pt = (frame, a, b, score, extra) => Object.assign({ frame, nameA: a, nameB: b, score }, extra || {});
     const results = {
         size: { ok: true, encounters: [1, 2, 3], sampleHz: 15, step: 4, fps: 60, fpsFromVideo: false,
-                flags: [pt(100, 'id_0', 'id_1', -88.06), pt(400, 'id_0', 'id_2', -5, { followOf: 100 }), pt(700, 'id_0', 'id_1', -9, { continues: true })],
+                flags: [pt(100, 'id_0', 'id_1', -88.06, { startFrame: 64 }), pt(400, 'id_0', 'id_2', -5, { followOf: 100 }), pt(700, 'id_0', 'id_1', -9, { continues: true })],
                 changes: [pt(900, 'id_1', 'id_2', 2.2, { kind: 'end' })] },
         image: { ok: true, encounters: [1, 2], sampleHz: 15, step: 4, fps: 60, fpsFromVideo: false, imageHz: 2, crops: 50, cameras: ['c0'],
                  flags: [pt(130, 'id_1', 'id_0', -30)], changes: [] },
@@ -318,6 +318,15 @@ group('Checklist save / reopen (ui/id-switch-review.js)');
         "'end' point, follow-on and repeat survive");
     ok(st && st.results.size.flags[0].agree && st.results.size.flags[0].agree.cue === 'image' && st.reviewed.has('size:100:id_0:id_1'),
         'the "Both" link is rebuilt and the ticks come back');
+    ok(st && st.results.size.flags[0].startFrame === 64 && st.results.size.flags[1].startFrame === undefined,
+        "an encounter's start frame survives (and stays absent where it was unknown)");
+    const old = JSON.parse(JSON.stringify(payload)); old.checks.size.points.forEach(p => p.length = 7);   // saved before startFrame existed
+    const st0 = R.ingestIdSwitchReview({}, old)._idSwitch;
+    ok(st0 && st0.results.size.flags.length === 4 && st0.results.size.flags.every(m => m.startFrame === undefined), 'a file saved before start frames existed still opens');
+    const M = await import(pathToFileURL(path.join(ROOT, 'ui', 'id-switch-modal.js')).href).catch(e => ({ __err: e }));
+    if (M.__err) ok(true, 'id-switch-modal needs the browser to import (lead-in checked in the e2e test)');
+    else ok(M.idSwitchLeadInFrame({ frame: 100, startFrame: 64 }, 30) === 34 && M.idSwitchLeadInFrame({ frame: 100 }, 60) === 40 &&
+            M.idSwitchLeadInFrame({ frame: 10, startFrame: 5 }, 60) === 0, 'lead-in: 1 s before the start (or the end), never below 0');
     let threw = false, n = 0;
     for (const junk of [null, 7, 'x', {}, { v: 2, checks: {} }, { v: 1, checks: null }, { v: 1, checks: { size: { points: 'no' } } },
                         { v: 1, checks: { size: { points: [[1, 2, 3], null, ['a', 'b', 'c', 'd']] } } }]) {

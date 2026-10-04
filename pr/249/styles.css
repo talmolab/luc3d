@@ -4645,6 +4645,11 @@ kbd {
 .id-switch-id { font-weight: 600; }
 .id-switch-score { font-variant-numeric: tabular-nums; color: var(--text-secondary); }
 .id-switch-line2 { font-size: 11px; color: var(--text-muted); margin-top: 1px; }
+.id-switch-end {
+  margin-left: 2px; padding: 0 5px; font-size: 10px; line-height: 15px; cursor: pointer;
+  background: transparent; color: var(--text-secondary); border: 1px solid var(--border-color); border-radius: 3px;
+}
+.id-switch-end:hover { color: var(--text-primary); background: var(--surface-hover); }
 
 /* Image ID-switch check — progress dialog (ui/id-switch-modal.js) */
 .id-switch-progress { max-width: 520px; }

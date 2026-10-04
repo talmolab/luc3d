@@ -47,7 +47,7 @@
     describe('estimateSaveCagePressureBytes — merged-save warning model', function () {
 
         it('an empty project costs nothing', async function () {
-            const { estimateSaveCagePressureBytes } = await import('../import-export/save-load.js?v=d2b34797ef4b');
+            const { estimateSaveCagePressureBytes } = await import('../import-export/save-load.js?v=858caeb3297a');
             assertEqual(estimateSaveCagePressureBytes([fakeSession(0, 0, 0)]), 0);
             assertEqual(estimateSaveCagePressureBytes([{}]), 0, 'a session with no instanceGroups');
             assertEqual(estimateSaveCagePressureBytes([]), 0, 'nothing to export');
@@ -57,14 +57,14 @@
             // 180,210 frames x 5 cameras with nothing triangulated. The old
             // heuristic reported 10.3 GB here purely from frames x cameras; the
             // streaming writer's actual cost is bounded by its frame cache.
-            const { estimateSaveCagePressureBytes } = await import('../import-export/save-load.js?v=d2b34797ef4b');
+            const { estimateSaveCagePressureBytes } = await import('../import-export/save-load.js?v=858caeb3297a');
             const sess = fakeSession(0, 0, 5, { lazyLoader: { nFrames: 180210 } });
             assertEqual(estimateSaveCagePressureBytes([sess]), 0,
                 'no grouping resident -> no cage pressure, regardless of frame count');
         });
 
         it('scales with GROUPED members, not with frame count', async function () {
-            const { estimateSaveCagePressureBytes } = await import('../import-export/save-load.js?v=d2b34797ef4b');
+            const { estimateSaveCagePressureBytes } = await import('../import-export/save-load.js?v=858caeb3297a');
             // Same frame count, 4x the members.
             const lean = estimateSaveCagePressureBytes([fakeSession(100, 1, 2)]);
             const fat = estimateSaveCagePressureBytes([fakeSession(100, 2, 4)]);
@@ -73,7 +73,7 @@
         });
 
         it('is dominated by live Instance members', async function () {
-            const { estimateSaveCagePressureBytes } = await import('../import-export/save-load.js?v=d2b34797ef4b');
+            const { estimateSaveCagePressureBytes } = await import('../import-export/save-load.js?v=858caeb3297a');
             const withMembers = estimateSaveCagePressureBytes([fakeSession(50, 1, 5)]);
             const noMembers = estimateSaveCagePressureBytes([fakeSession(50, 1, 0)]);
             assertTrue(withMembers > noMembers * 5,
@@ -81,14 +81,14 @@
         });
 
         it('counts frameIdentityMap entries', async function () {
-            const { estimateSaveCagePressureBytes } = await import('../import-export/save-load.js?v=d2b34797ef4b');
+            const { estimateSaveCagePressureBytes } = await import('../import-export/save-load.js?v=858caeb3297a');
             const without = estimateSaveCagePressureBytes([fakeSession(10, 1, 2, { fimEntries: 0 })]);
             const with100k = estimateSaveCagePressureBytes([fakeSession(10, 1, 2, { fimEntries: 100000 })]);
             assertTrue(with100k > without, 'per-detection identity entries add pressure');
         });
 
         it('sums across multiple sessions exported together', async function () {
-            const { estimateSaveCagePressureBytes } = await import('../import-export/save-load.js?v=d2b34797ef4b');
+            const { estimateSaveCagePressureBytes } = await import('../import-export/save-load.js?v=858caeb3297a');
             const one = fakeSession(20, 1, 3);
             const two = fakeSession(20, 1, 3);
             assertEqual(estimateSaveCagePressureBytes([one, two]),
@@ -100,7 +100,7 @@
             // — the actual numbers from the 180,210-frame x 5-camera project.
             // Measured live baseline there: 2,891 MB. The estimate must be the
             // same ORDER as that, not 4x it like the old 10.3 GB figure.
-            const { estimateSaveCagePressureBytes } = await import('../import-export/save-load.js?v=d2b34797ef4b');
+            const { estimateSaveCagePressureBytes } = await import('../import-export/save-load.js?v=858caeb3297a');
             const N_GROUPS = 531799, N_MEMBERS = 2627453, N_FIM = 2627453;
             const sess = {
                 instanceGroups: new Map([[0, [{
@@ -123,7 +123,7 @@
         it('responds to memory optimisation — the property the old model lacked', async function () {
             // Halving the grouped members (or their per-object cost) must move
             // the number. The old formula was constant w.r.t. every such change.
-            const { estimateSaveCagePressureBytes } = await import('../import-export/save-load.js?v=d2b34797ef4b');
+            const { estimateSaveCagePressureBytes } = await import('../import-export/save-load.js?v=858caeb3297a');
             const before = estimateSaveCagePressureBytes([fakeSession(100, 2, 4)]);
             const after = estimateSaveCagePressureBytes([fakeSession(100, 1, 4)]);
             assertTrue(after < before * 0.6, 'halving grouped members roughly halves the estimate');
@@ -132,13 +132,13 @@
 
     describe('getCageLimitBytes — the tab\'s hard JS-heap ceiling', function () {
         it('reports a plausible ceiling', async function () {
-            const { getCageLimitBytes } = await import('../import-export/save-load.js?v=d2b34797ef4b');
+            const { getCageLimitBytes } = await import('../import-export/save-load.js?v=858caeb3297a');
             const cap = getCageLimitBytes();
             assertTrue(cap >= 1e9 && cap <= 8e9, 'ceiling in a sane range, got ' + (cap / 1e9).toFixed(2) + ' GB');
         });
 
         it('matches performance.memory when Chrome exposes it', async function () {
-            const { getCageLimitBytes } = await import('../import-export/save-load.js?v=d2b34797ef4b');
+            const { getCageLimitBytes } = await import('../import-export/save-load.js?v=858caeb3297a');
             if (typeof performance === 'undefined' || !performance.memory) return;
             assertEqual(getCageLimitBytes(), performance.memory.jsHeapSizeLimit);
         });

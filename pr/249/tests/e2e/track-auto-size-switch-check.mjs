@@ -201,11 +201,12 @@ try {
     st = await statusText();
     check(await tabOpen(), 'automatic path: the hidden panel opens on the ID Switches tab when a switch is found');
     check(/^Assigned 3 identities across 27360 frames · ID-switch check \(body size\): 1 possible switch/.test(st), `automatic path: status keeps the pass's message ("${st}")`);
-    const rowFrame = await page.evaluate(() => +document.querySelector('#idSwitchPanel .id-switch-row').dataset.frame);
+    const [rowFrame, rowGo] = await page.evaluate(() => { const r = document.querySelector('#idSwitchPanel .id-switch-row'); return [+r.dataset.frame, +r.dataset.go]; });
     await page.click('#idSwitchPanel .id-switch-row .id-switch-main');
-    await page.waitForFunction(f => window.__lucid.state.currentFrame === f, rowFrame, { timeout: 10000 }).catch(() => {});
+    await page.waitForFunction(f => window.__lucid.state.currentFrame === f, rowGo, { timeout: 10000 }).catch(() => {});
     const cur = await page.evaluate(() => window.__lucid.state.currentFrame);
-    check(Math.abs(rowFrame - fx.swapFrame) <= 40 && cur === rowFrame, `row at the switch (${rowFrame} vs ${fx.swapFrame}) navigates via the registered navigator (now ${cur})`);
+    check(Math.abs(rowFrame - fx.swapFrame) <= 40 && rowGo < rowFrame && cur === rowGo,
+        `row at the switch (${rowFrame} vs ${fx.swapFrame}) navigates via the registered navigator to its lead-in (now ${cur}, want ${rowGo})`);
     check(errs.length === 0, 'no page errors' + (errs.length ? ': ' + errs.join(' | ') : ''));
 } finally {
     if (browser) await browser.close();

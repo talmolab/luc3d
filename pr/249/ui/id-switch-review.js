@@ -17,11 +17,13 @@
  *   { v: 1,
  *     checks: { size?|image?: { encounters, sampleHz, step, fps, fpsFromVideo,
  *                                [imageHz, crops, cameras, model: {name, note}],
- *                                points: [[frame, nameA, nameB, score, kind, followOf, continues], …] } },
+ *                                points: [[frame, nameA, nameB, score, kind, followOf, continues, startFrame], …] } },
  *     reviewed: [rowKey, …] }
  *
  * `points` are every change point and repeat (`flags` + `changes`); `kind` is ''
- * or 'end', `followOf` a frame or -1, `continues` 0/1. Rows are keyed by check,
+ * or 'end', `followOf` a frame or -1, `continues` 0/1, `startFrame` the first close
+ * frame of the encounter (`frame` is its last) or -1 — absent in files saved before
+ * it was added, which then land on `frame`. Rows are keyed by check,
  * frame and identity NAMES (`rowKey`) — names, not ids, are what a reopened
  * project still agrees on. Nothing is written for a session no check has run on,
  * so such a project's bytes are unchanged. Reads tolerate absence and garbage.
@@ -89,7 +91,7 @@ export function serializeIdSwitchReview(session) {
             encounters: idSwitchEncounterCount(r), sampleHz: r.sampleHz, step: r.step, fps: r.fps, fpsFromVideo: !!r.fpsFromVideo,
             points: idSwitchMarkers(r).map(function (m) {
                 return [m.frame, String(m.nameA), String(m.nameB), Math.round(m.score * 10) / 10, m.kind === 'end' ? 'end' : '',
-                        m.followOf == null ? -1 : m.followOf, m.continues ? 1 : 0];
+                        m.followOf == null ? -1 : m.followOf, m.continues ? 1 : 0, m.startFrame == null ? -1 : m.startFrame];
             }),
         };
         if (cue === 'image') {
@@ -120,6 +122,7 @@ export function ingestIdSwitchReview(session, payload) {
                 if (p[4] === 'end') m.kind = 'end';
                 if (isNum(p[5]) && p[5] >= 0) m.followOf = p[5];
                 if (p[6]) m.continues = true;
+                if (isNum(p[7]) && p[7] >= 0 && p[7] <= p[0]) m.startFrame = p[7];
                 flags.push(m);
             });
             var r = { ok: true, restored: true, flags: flags, changes: [], encounterCount: isNum(c.encounters) ? c.encounters : 0,

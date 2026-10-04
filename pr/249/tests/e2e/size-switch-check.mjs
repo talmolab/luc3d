@@ -16,7 +16,9 @@
  *     seekbar tooltip, and clicking near it lands on exactly its frame.
  *  3. The tab is the panel's one scroller (the list has no scroller of its own);
  *     "Show repeats" lists the still-swapped encounters too.
- *  4. Clicking a row navigates the viewer to that frame; identity names are
+ *  4. Each row shows its encounter's span ("close m:ss.s–m:ss.s"); clicking it
+ *     lands 1 s before the animals come close (so play shows the whole
+ *     interaction), "end ⇥" on the encounter's end; identity names are
  *     drawn in their identity's colour.
  *  5. The checklist: ticking a row marks the project unsaved (the checklist is
  *     saved in the .slp — round trip in visibility-settings-roundtrip.mjs),
@@ -104,7 +106,7 @@ try {
     await page.evaluate(() => document.getElementById('menuCheckSizeSwitches').click());
     await page.waitForSelector('#tabIdSwitches.active .id-switch-row', { timeout: 60000 });
     const rowsNow = () => page.evaluate(() => Array.from(document.querySelectorAll('#idSwitchPanel .id-switch-row'))
-        .map(r => ({ frame: +r.dataset.frame, key: r.dataset.key, text: r.textContent, reviewed: r.classList.contains('is-reviewed') })));
+        .map(r => ({ frame: +r.dataset.frame, go: +r.dataset.go, key: r.dataset.key, text: r.textContent, reviewed: r.classList.contains('is-reviewed') })));
     const ui = await page.evaluate(() => ({ status: document.getElementById('statusText').textContent,
         rate: (document.querySelector('#idSwitchPanel .id-switch-rate') || {}).textContent || '',
         done: (document.querySelector('.id-switch-done') || {}).textContent || '' }));
@@ -163,11 +165,22 @@ try {
     if (process.env.PANEL_SHOT) await page.screenshot({ path: process.env.PANEL_SHOT });
     await page.evaluate(() => document.getElementById('idSwitchRepeats').click());
 
-    // ---- 4. click a row -> navigate there
+    // ---- 4. click a row -> 1 s before the animals come close; "end ⇥" -> the encounter's end
+    const span = await page.evaluate(async (f) => {
+        const m = (await import('/ui/seekbar-markers.js')).getSeekbarSwitchMarkers().find(x => x.frame === f && !x.continues);
+        return { start: m && m.startFrame, text: document.querySelector('#idSwitchPanel .id-switch-line2').textContent };
+    }, row.frame);
+    const wantGo = Math.max(0, span.start - 60);          // 1 s lead-in at 60 fps
+    check(span.start != null && span.start < row.frame && row.go === wantGo && /^close \d+:\d\d\.\d–\d+:\d\d\.\d \(frames [\d,]+–[\d,]+\)/.test(span.text),
+        `the row shows the encounter's span ("${span.text.slice(0, 60)}…") and lands 1 s before it starts (frame ${row.go}; close from ${span.start} to ${row.frame})`);
     await page.click('#idSwitchPanel .id-switch-row .id-switch-main');
-    await page.waitForFunction(f => window.__lucid.state.currentFrame === f, row.frame, { timeout: 10000 }).catch(() => {});
+    await page.waitForFunction(f => window.__lucid.state.currentFrame === f, wantGo, { timeout: 10000 }).catch(() => {});
     const cur = await page.evaluate(() => window.__lucid.state.currentFrame);
-    check(cur === row.frame, `clicking the row jumps to frame ${row.frame} (now ${cur})`);
+    check(cur === wantGo, `clicking the row jumps to the lead-in, frame ${wantGo} (now ${cur})`);
+    await page.click('#idSwitchPanel .id-switch-row .id-switch-end');
+    await page.waitForFunction(f => window.__lucid.state.currentFrame === f, row.frame, { timeout: 10000 }).catch(() => {});
+    const atEnd = await page.evaluate(() => window.__lucid.state.currentFrame);
+    check(atEnd === row.frame, `"end ⇥" jumps to the encounter's end, frame ${row.frame} (now ${atEnd})`);
 
     // ---- 4b. identity names are drawn in their identity's colour
     const colours = await page.evaluate(() => {
@@ -193,9 +206,9 @@ try {
         `ticking a row: "${afterTick.done}", row dimmed, its seekbar marker dimmed (${afterTick.reviewedMarkers})`);
     if (ui.rows.length > 1) {
         await page.click('#idSwitchNext');
-        await page.waitForFunction(f => window.__lucid.state.currentFrame === f, ui.rows[1].frame, { timeout: 10000 }).catch(() => {});
+        await page.waitForFunction(f => window.__lucid.state.currentFrame === f, ui.rows[1].go, { timeout: 10000 }).catch(() => {});
         const nf = await page.evaluate(() => window.__lucid.state.currentFrame);
-        check(nf === ui.rows[1].frame, `"Next unreviewed" jumps to the next unticked row (frame ${nf}, expected ${ui.rows[1].frame})`);
+        check(nf === ui.rows[1].go, `"Next unreviewed" jumps to the next unticked row's lead-in (frame ${nf}, expected ${ui.rows[1].go})`);
     } else {
         check(await page.evaluate(() => document.getElementById('idSwitchNext').disabled), '"Next unreviewed" is disabled once all are ticked');
     }
