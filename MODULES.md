@@ -1826,6 +1826,7 @@ identities, sampledFrames, closeDistance, threshold, fps, step, sampleHz, cue}`
 exported so calibration can re-apply thresholds to the same scores);
 `fitSoftmax(X, y, n, D, K, opts)` (L2 multinomial logistic regression, Adam);
 `fitPCA(X, n, D, k)` (randomized subspace iteration);
+`KEYFRAME_GAP_TOLERANCE` (1.1);
 `planKeyframeSamples(frames, keyframes, hasFrame)` -> `{decode, snapped, spacing,
 keyframeGap, maxShift}` (which frame each image sample decodes in one camera — see
 "Keyframe sampling" under `ui/image-embedder.js`); `SIZE_BONES`;
@@ -1911,7 +1912,7 @@ set, so swapping the two animals' labels after it turns its score S into exactly
 
 **Imports from project modules.** `pose/pose-data.js` (`readPoint3d`).
 
-**Imported by.** `ui/id-switch-modal.js`, `ui/image-embedder.js` (`planKeyframeSamples`).
+**Imported by.** `ui/id-switch-modal.js`, `ui/image-embedder.js` (`planKeyframeSamples`, `KEYFRAME_GAP_TOLERANCE`).
 
 **Coverage.** `tests/test-id-switch-check.mjs` (synthetic 3-animal sessions defined
 in time: clean -> no flags; minority / majority switch -> onset / end change point;
@@ -1919,7 +1920,8 @@ in time: clean -> no flags; minority / majority switch -> onset / end change poi
 animals of IDENTICAL size that size misses; cancellation; PCA; failure reasons;
 crop geometry of `ui/image-embedder.js`; `planKeyframeSamples`: sparse/unknown
 keyframes move nothing, a keyframe every 30 frames moves every 32-frame sample
-<= 15 frames, strictly increasing, untracked keyframes skipped),
+<= 15 frames, strictly increasing, untracked keyframes skipped, gaps up to 1.1x
+the spacing qualify and beyond do not, a keyframe every 0.5 s at 100 and 50 fps),
 `tests/e2e/image-keyframe-sampling.mjs`, `tests/e2e/size-switch-check.mjs`,
 `tests/e2e/track-auto-size-switch-check.mjs`, `tests/e2e/id-switch-image-check.mjs`.
 
@@ -4852,8 +4854,11 @@ from the container's packet index (`keyframeIndices`: mediabunny
 `EncodedPacketSink.packets(…, {metadataOnly: true})`, `type === 'key'`, mapped to
 frame indices through the backend's `_frameTimes`; no frame data read, cached per
 video) and plans the samples with `planKeyframeSamples` (pose/id-switch-check.js):
-when the median keyframe gap is <= the sample spacing (32 frames at 60 fps and
-2/s), each sample moves to its nearest keyframe within half the spacing that has
+when the median keyframe gap is <= `KEYFRAME_GAP_TOLERANCE` (1.1) x the sample
+spacing (32 frames at 60 fps and 2/s; the 10% lets a recorder's "keyframe every
+0.5 s" qualify at frame rates where rounding makes the spacing a little shorter —
+49 frames at 100 fps, 24 at 50 — at every rate up to 240 fps), each sample moves
+to its nearest keyframe within half of max(spacing, keyframe gap) that has
 tracking (`session.instanceGroups.has`), so `samplesAtTimestamps` decodes ONE
 frame per sample (mediabunny resets to the target's keyframe when it is past the
 last decoded packet). Each view crops its animals from the keypoints of the frame
@@ -4866,8 +4871,8 @@ LUCID_IMAGE_KEYFRAMES = 0`) turns it off; a function `(decoder) -> keyframe
 indices` replaces the index (diagnostics). `stats().keyframes` /
 `summarizeKeyframePlans` -> `{cameras, of, snappedPct, keyframeGap, spacing}`, and
 the speed line ends "· decoded at keyframes in 8/8 cameras (100% of samples)" or
-"· every frame decoded (keyframe every 250 frames; 32 or denser would decode only
-the samples)". Measured on the M2 Pro, 2-minute clips of the 8 cameras of the
+"· every frame decoded (keyframe every 250 frames; a keyframe every 0.5 s — 35
+frames or fewer — would decode only the samples)". Measured on the M2 Pro, 2-minute clips of the 8 cameras of the
 5-mouse recording decoded concurrently (`tests/e2e/_bench-image-keyframe-decode.mjs`,
 1,800 camera-samples): original files and x265 with a keyframe every 250 frames
 151 samples/s (53,768 frames decoded, ~4,500/s — the hardware decoder's limit);
@@ -4879,6 +4884,17 @@ the same crops max |difference| 0). Cost of the keyframes (x265, same QP 24, P-o
 +42% file size over the 8 cameras (+30% to +65% per camera; the static views pay
 most), at slightly HIGHER quality vs the original (PSNR +0.6 to +0.75 dB on every
 camera, SSIM up ~0.0015); on camera 0, QP 26 restores the size at -0.35 dB.
+The field recordings come from campy's NVENC writer (`-preset fast -qp 24 -bf:v
+0`, no `-g`, so NVENC's default keyframe every 250 frames); from those files'
+own keyframe / P-frame sizes, a keyframe every 30 frames at QP 24 projects to
++53% (+43% to +70% per camera; 6.3 -> ~9.7 GB per 30-min 8-camera session).
+**AV1** (campy's `av1_nvenc` setups) works the same way: keyframes from the
+packet index, one decoded packet per sample, bit-identical keyframes (96/96,
+embeddings max |difference| 0). It costs more: SVT-AV1 (low-delay, CRF 32) +95%
+size for a keyframe every 30 frames; and on the M2 Pro, which has no AV1
+hardware (Chrome decodes it in software), it is only 2x faster: 140 samples/s
+today -> 272 snapped (134 in place; software AV1 keyframes are expensive). GPUs
+with AV1 decode (RTX 30/40, Ada) should look like the HEVC case; not measured.
 Embeddings are bit-identical across all of this (cosine 1.00000 vs seeking,
 top-k vs the same views at all-k, and max |difference| 0 for worker vs inline
 crops over 5,687 real crops).
@@ -4943,7 +4959,7 @@ crops/s) and its int8 model drifts (cosine 0.953 vs the calibrated model). Re-ch
 the CLS extraction (`last_hidden_state` token 0) on any version bump.
 
 **Imports from project modules.** `ui/app-state.js` (`state.views`),
-`pose/id-switch-check.js` (`planKeyframeSamples`); `mediabunny`
+`pose/id-switch-check.js` (`planKeyframeSamples`, `KEYFRAME_GAP_TOLERANCE`); `mediabunny`
 (`EncodedPacketSink`, imported LAZILY inside `keyframeIndices` — a static bare
 import would break this module in Node tests and in the crop worker, which has no
 importmap). Spawns `ui/image-crop-worker.js`.
@@ -4953,7 +4969,7 @@ importmap). Spawns `ui/image-crop-worker.js`.
 **Coverage.** Crop geometry, `selectViews`, `chooseBackend`, the resize table and
 the keyframe line of `formatEmbedTiming` in
 `tests/test-id-switch-check.mjs`; the crop pool in `tests/e2e/image-crop-worker.mjs`;
-keyframe sampling on generated 60 fps H.264 (keyframes every 30 frames vs one) in
+keyframe sampling on generated 60 fps H.264 and AV1 (keyframes every 30 frames vs one) in
 `tests/e2e/image-keyframe-sampling.mjs` (keyframe index, one decoded packet per
 sample, bit-identical planes, sparse video unchanged); accuracy on real data by
 `tests/e2e/_diag-image-keyframe-snap.mjs` (diagnostic, not in the suite);

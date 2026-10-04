@@ -4,9 +4,11 @@
  * `keyframeIndices` + pose/id-switch-check.js `planKeyframeSamples`), and the
  * pictures it gets that way are the same pictures.
  *
- * Two generated H.264 videos, 60 fps, P-frames only (no B-frames, like the
- * HEVC recordings this is for): keyframe every 30 frames (0.5 s) and one
- * keyframe only (as sparse as the field recordings' 250). The image samples are
+ * Generated 60 fps videos with no frame reordering, like the NVENC recordings
+ * this is for (campy: hevc_nvenc / av1_nvenc, `-bf 0`): H.264 with a keyframe every
+ * 30 frames (0.5 s) and with one keyframe only (as sparse as the field
+ * recordings' 250), plus AV1 (SVT-AV1, low-delay) with a keyframe every 30
+ * frames when ffmpeg has libsvtav1 (skipped with a note otherwise). The image samples are
  * the check's real ones at 60 fps: every 32nd frame. Asserted:
  *  1. keyframeIndices reads the keyframes from the packet index (0, 30, 60, …;
  *     just 0 for the sparse video).
@@ -15,7 +17,8 @@
  *     sample — vs every frame since each sample's keyframe in place.
  *  3. A keyframe decoded alone is BIT-IDENTICAL (raw decoded planes) to the same
  *     frame decoded inside the full stream, so embeddings of it are too.
- *  4. Sparse: no sample moves — the decode list is exactly today's, which
+ *  4. AV1: 1-3 hold the same.
+ *  5. Sparse: no sample moves — the decode list is exactly today's, which
  *     decodes every frame up to the last sample (the cost this removes).
  *
  * Needs ffmpeg (libx264); skipped with a note if absent.
@@ -36,14 +39,16 @@ const check = (c, m) => { console.log((c ? '  ✓ ' : '  ✗ ') + m); if (!c) fa
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'lucid-keyframes-'));
 const N = 600;   // 10 s at 60 fps
-const make = (name, gop) => {
+const make = (name, gop, codec = 'h264') => {
     const out = path.join(tmp, name);
+    const enc = codec === 'av1'
+        ? ['-c:v', 'libsvtav1', '-preset', '10', '-g', String(gop), '-svtav1-params', 'irefresh-type=2:scd=0:pred-struct=1']
+        : ['-c:v', 'libx264', '-bf', '0', '-g', String(gop), '-keyint_min', String(gop), '-sc_threshold', '0'];
     const r = spawnSync('ffmpeg', ['-loglevel', 'error', '-y', '-f', 'lavfi', '-i', 'testsrc2=size=320x256:rate=60',
-        '-frames:v', String(N), '-c:v', 'libx264', '-bf', '0', '-g', String(gop), '-keyint_min', String(gop),
-        '-sc_threshold', '0', '-pix_fmt', 'yuv420p', out]);
+        '-frames:v', String(N), ...enc, '-pix_fmt', 'yuv420p', out]);
     return r.status === 0 && fs.existsSync(out) ? out : null;
 };
-const dense = make('dense.mp4', 30), sparse = make('sparse.mp4', 1000);
+const dense = make('dense.mp4', 30), sparse = make('sparse.mp4', 1000), av1 = make('av1.mp4', 30, 'av1');
 if (!dense || !sparse) {
     console.log('  (ffmpeg with libx264 unavailable — skipped)');
     fs.rmSync(tmp, { recursive: true, force: true });
@@ -109,15 +114,21 @@ try {
         }, N);
     };
 
-    console.log('\n• keyframe every 30 frames (0.5 s at 60 fps)');
-    const d = await run(dense);
-    check(d.kf.length === N / 30 && d.kf.every((f, i) => f === 30 * i), `keyframes read from the packet index: ${d.kf.slice(0, 4).join(', ')}, … (${d.kf.length})`);
-    check(d.snapped === d.frames.length, `every sample moved to a keyframe (${d.snapped}/${d.frames.length})`);
-    check(d.maxMove <= 15, `largest move ${d.maxMove} frames (≤ 15 = 0.25 s)`);
-    check(d.plannedDecoded === d.frames.length, `planned list: one decoded packet per sample (${d.plannedDecoded} for ${d.frames.length} samples)`);
-    const sinceKey = d.frames.reduce((a, f) => a + (f % 30) + 1, 0);
-    check(d.inPlaceDecoded === sinceKey, `in place each sample costs every frame since its keyframe (${d.inPlaceDecoded} packets, expected ${sinceKey})`);
-    check(d.identical === d.compared, `a keyframe decoded alone is bit-identical to it decoded mid-stream (${d.identical}/${d.compared})`);
+    const denseChecks = (d) => {
+        check(d.kf.length === N / 30 && d.kf.every((f, i) => f === 30 * i), `keyframes read from the packet index: ${d.kf.slice(0, 4).join(', ')}, … (${d.kf.length})`);
+        check(d.snapped === d.frames.length, `every sample moved to a keyframe (${d.snapped}/${d.frames.length})`);
+        check(d.maxMove <= 15, `largest move ${d.maxMove} frames (≤ 15 = 0.25 s)`);
+        check(d.plannedDecoded === d.frames.length, `planned list: one decoded packet per sample (${d.plannedDecoded} for ${d.frames.length} samples)`);
+        const sinceKey = d.frames.reduce((a, f) => a + (f % 30) + 1, 0);
+        check(d.inPlaceDecoded === sinceKey, `in place each sample costs every frame since its keyframe (${d.inPlaceDecoded} packets, expected ${sinceKey})`);
+        check(d.identical === d.compared, `a keyframe decoded alone is bit-identical to it decoded mid-stream (${d.identical}/${d.compared})`);
+    };
+    console.log('\n• H.264, keyframe every 30 frames (0.5 s at 60 fps)');
+    denseChecks(await run(dense));
+
+    console.log('\n• AV1 (low-delay), keyframe every 30 frames');
+    if (av1) denseChecks(await run(av1));
+    else console.log('  (ffmpeg without libsvtav1 — skipped)');
 
     console.log('\n• one keyframe (sparse, like the recordings\' every 250 frames)');
     const s = await run(sparse);
