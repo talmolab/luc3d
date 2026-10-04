@@ -25,17 +25,11 @@ So the page imports PNGs from `src/assets/`, and the vector PDF is ALSO copied i
 `public/pdf/` so each caption can offer a full-resolution link. Nothing is rasterised
 at build time.
 
-FIGURE NUMBERING NOW MATCHES THE REPO'S (2026-08-26 renumbering, Eric): the
-figure directories were renamed to the manuscript's own 1-6 (the old fig13 is
-fig3, fig5 is fig4, fig6 is fig5, fig11 is fig6; the old fig3/fig4/fig7-fig13
-compositions were removed from the branch). Fig 7 (calibrat3 against Anipose on
-three rigs) was added 2026-09 and is numbered natively. FIGURES is the identity
-map, kept as a table so a future renumber has one place to change.
-
-NOTE the manuscript draft (figures/drafts/luc3d_newest.tex) carries a GUI
-screenshot as its own Figure 7, so the calibration figure is \ref{fig8} THERE
-while it is figures/fig7 here and Figure 7 on the page. The page does not show
-the screenshot. Match by content, not by number, when reading captions.
+FIGURE NUMBERING FOLLOWS THE MANUSCRIPT (2026-10-04, Eric: the page's figures carry
+the names they have in `figures/drafts/luc3d_newest.tex`). Main Figures 1-5, then
+Supplementary Figures 1-4 and Supplementary Table 1; see FIGURES for which artwork
+each one is. The repo directories keep their own numbers (repo fig6 is Supplementary
+Figure 1, repo fig7 is Supplementary Figure 3), so match by FIGURES, not by number.
 
     python3 figs/make_web_assets.py                       # default page repo path
     python3 figs/make_web_assets.py --page-repo /path/to/luc3d-page
@@ -55,17 +49,32 @@ from pathlib import Path
 FIGS = Path(__file__).resolve().parent
 DEFAULT_PAGE_REPO = Path("/root/vast/eric/luc3d-page")
 
-#: (page figure number, artwork directory). The page's Figure N is FIGURES[N-1].
-#: See the docstring for the 2026-08-25 renumbering this encodes.
+#: (page slug, artwork PNG, artwork PDF), in the manuscript's own numbering
+#: (`figures/drafts/luc3d_newest.tex`). Main Figures 1-5 are the repo's fig1-fig5
+#: (fig4 = datasets, fig5 = social rearing since the 2026-10-03 swap). The
+#: Supplementary items map onto the tex as: Supplementary Figure 1 = \ref{fig6} =
+#: repo fig6; Supplementary Figure 2 = \ref{fig7}, the GUI screenshot, which lives
+#: only in Overleaf as `figs/fig7.png` -- exported from `figures/supp_fig2_gui/` if
+#: that file exists, skipped otherwise; Supplementary Figure 3 = \ref{fig8} = repo
+#: fig7 (calibration); Supplementary Figure 4 = \ref{fig9} = `figs/fig9.pdf`
+#: (Panopticon, no repo dir); Supplementary Table 1 = \ref{tab:datasheets}.
+#: The page imports `src/assets/figures/<slug>.png` and links `public/pdf/luc3d-<slug>.pdf`.
 FIGURES = [
-    (1, "fig1"),
-    (2, "fig2"),
-    (3, "fig3"),
-    (4, "fig4"),
-    (5, "fig5"),
-    (6, "fig6"),
-    (7, "fig7"),
+    ("figure1", "figures/fig1/fig1.png", "figures/fig1/fig1.pdf"),
+    ("figure2", "figures/fig2/fig2.png", "figures/fig2/fig2.pdf"),
+    ("figure3", "figures/fig3/fig3.png", "figures/fig3/fig3.pdf"),
+    ("figure4", "figures/fig4/fig4.png", "figures/fig4/fig4.pdf"),
+    ("figure5", "figures/fig5/fig5.png", "figures/fig5/fig5.pdf"),
+    ("supp-figure1", "figures/fig6/fig6.png", "figures/fig6/fig6.pdf"),
+    ("supp-figure2", "figures/supp_fig2_gui/fig7.png", None),
+    ("supp-figure3", "figures/fig7/fig7.png", "figures/fig7/fig7.pdf"),
+    ("supp-figure4", "fig9.png", "fig9.pdf"),
+    ("supp-table1", "figures/datasheets/datasheet_combined.png",
+     "figures/datasheets/datasheet_combined.pdf"),
 ]
+
+#: Entries that may be absent without failing the export (see Supplementary Figure 2).
+OPTIONAL = {"supp-figure2"}
 
 #: The dpi the composites are rendered at by `assemble.py` (its PNG proof). Recorded
 #: rather than assumed: if the assembler's dpi changes, the manifest says so.
@@ -126,36 +135,42 @@ def main() -> int:
     }
 
     stale, missing = [], []
-    for n, d in FIGURES:
-        src_png = FIGS / "figures" / d / f"{d}.png"
-        src_pdf = FIGS / "figures" / d / f"{d}.pdf"
-        if not src_png.exists() or not src_pdf.exists():
-            missing.append(f"figure {n} ({d}): no {src_png.name} / {src_pdf.name}")
+    for slug, rel_png, rel_pdf in FIGURES:
+        src_png = FIGS / rel_png
+        src_pdf = FIGS / rel_pdf if rel_pdf else None
+        if not src_png.exists() or (src_pdf and not src_pdf.exists()):
+            if slug in OPTIONAL:
+                print(f"  {slug}: no {rel_png} -- skipped (optional)")
+                continue
+            missing.append(f"{slug}: no {rel_png} / {rel_pdf}")
             continue
-        dst_png = assets / f"figure{n}.png"
-        dst_pdf = pdfs / f"luc3d-figure{n}.pdf"
+        dst_png = assets / f"{slug}.png"
+        dst_pdf = pdfs / f"luc3d-{slug}.pdf" if src_pdf else None
         entry = {
-            "figure": n, "artwork_dir": d,
+            "slug": slug,
             "source_png": str(src_png.relative_to(FIGS.parent)),
-            "source_pdf": str(src_pdf.relative_to(FIGS.parent)),
             "png_sha256_16": digest(src_png), "png_bytes": src_png.stat().st_size,
-            "pdf_sha256_16": digest(src_pdf), "pdf_bytes": src_pdf.stat().st_size,
-            "asset": f"src/assets/figures/figure{n}.png",
-            "pdf_asset": f"public/pdf/luc3d-figure{n}.pdf",
+            "asset": f"src/assets/figures/{slug}.png",
         }
+        if src_pdf:
+            entry.update({
+                "source_pdf": str(src_pdf.relative_to(FIGS.parent)),
+                "pdf_sha256_16": digest(src_pdf), "pdf_bytes": src_pdf.stat().st_size,
+                "pdf_asset": f"public/pdf/luc3d-{slug}.pdf",
+            })
         manifest["figures"].append(entry)
 
         if a.check:
             if not dst_png.exists() or digest(dst_png) != entry["png_sha256_16"]:
-                stale.append(f"figure {n} ({d}) PNG")
-            if not dst_pdf.exists() or digest(dst_pdf) != entry["pdf_sha256_16"]:
-                stale.append(f"figure {n} ({d}) PDF")
+                stale.append(f"{slug} PNG")
+            if src_pdf and (not dst_pdf.exists() or digest(dst_pdf) != entry["pdf_sha256_16"]):
+                stale.append(f"{slug} PDF")
         else:
             shutil.copy2(src_png, dst_png)
-            shutil.copy2(src_pdf, dst_pdf)
-            print(f"  figure {n}  <- {d}  "
-                  f"({entry['png_bytes'] / 1e6:.1f} MB png, "
-                  f"{entry['pdf_bytes'] / 1e6:.1f} MB pdf)")
+            if src_pdf:
+                shutil.copy2(src_pdf, dst_pdf)
+            print(f"  {slug:13s} <- {rel_png}  ({entry['png_bytes'] / 1e6:.1f} MB png"
+                  + (f", {entry['pdf_bytes'] / 1e6:.1f} MB pdf)" if src_pdf else ")"))
 
     if missing:
         print("MISSING artwork:", *missing, sep="\n  ")
