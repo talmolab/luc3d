@@ -12,13 +12,16 @@
  *     (its encounters with the third animal look off too); the status line
  *     reports the count.
  *  2. The timeline carries the markers (the change point plus faint repeats).
+ *  2b. In a short (600 px) window the dialog stays inside it with its buttons
+ *     visible, and only the list scrolls (one scroller, sticky column heads).
  *  3. Clicking the row navigates the viewer to that frame.
  *  4. Esc closes the dialog and leaves the markers; "Clear markers" removes them.
  *  5. On an untracked session the action warns instead of running.
  *  6. The dialog states the sampling it used and that, with no video loaded,
  *     the frame rate is the app's value rather than a measured one.
  *
- * Run: node tests/e2e/size-switch-check.mjs     (SHOT=/path.png saves a timeline screenshot)
+ * Run: node tests/e2e/size-switch-check.mjs     (SHOT=/path.png saves a timeline screenshot,
+ *      DIALOG_SHOT=/path.png the short-window dialog)
  */
 import { chromium } from 'playwright';
 import { spawn } from 'node:child_process';
@@ -121,6 +124,25 @@ try {
         const box = await page.locator('#timelineContainer, .timeline-container').first().boundingBox().catch(() => null);
         await page.screenshot({ path: process.env.SHOT, clip: box || undefined });
     }
+
+    // ---- 2b. a short window: the dialog stays inside it, buttons visible, only the list scrolls
+    await page.setViewportSize({ width: 1600, height: 600 });
+    await page.evaluate(() => { const cb = document.getElementById('sizeSwitchRepeats'); if (cb && !cb.checked) cb.click(); });
+    const fit = await page.evaluate(() => {
+        const m = document.querySelector('.size-switch-modal'), l = document.getElementById('sizeSwitchList'),
+            b = document.getElementById('sizeSwitchClose').getBoundingClientRect(), r = m.getBoundingClientRect();
+        return { top: r.top, bottom: r.bottom, vh: innerHeight, btnBottom: b.bottom, listScrolls: l.scrollHeight > l.clientHeight + 1,
+                 modalScrolls: m.scrollHeight > m.clientHeight + 1, listOverflow: getComputedStyle(l).overflowY, rows: l.querySelectorAll('tr').length, listH: l.clientHeight };
+    });
+    check(fit.top >= 0 && fit.bottom <= fit.vh && fit.btnBottom <= fit.vh,
+        `short window: dialog (${Math.round(fit.top)}-${Math.round(fit.bottom)} px) and Close button fit in ${fit.vh} px`);
+    check(fit.listScrolls && fit.listOverflow === 'auto' && !fit.modalScrolls, `the list is the one scroller (${fit.rows} rows in ${fit.listH} px; the dialog itself does not scroll)`);
+    if (process.env.DIALOG_SHOT) {
+        await page.evaluate(() => { document.getElementById('sizeSwitchList').scrollTop = 60; });
+        await page.screenshot({ path: process.env.DIALOG_SHOT });
+    }
+    await page.evaluate(() => { const cb = document.getElementById('sizeSwitchRepeats'); if (cb && cb.checked) cb.click(); });
+    await page.setViewportSize({ width: 1600, height: 900 });
 
     // ---- 3. click the row -> navigate there
     await page.click('.size-switch-row');

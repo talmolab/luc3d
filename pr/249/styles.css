@@ -4593,8 +4593,19 @@ kbd {
   border-color: var(--accent-hover);
 }
 
-/* Tracks ▸ Check ID Switches (Body Size) — ui/size-switch-modal.js */
-.size-switch-modal { max-width: 640px; }
+/* Tracks ▸ Check ID Switches — ui/id-switch-modal.js. Never taller than the window:
+   heading, summary and buttons stay put and the list is the ONE scroller. */
+.size-switch-modal {
+  max-width: 640px;
+  max-height: calc(100vh - 48px);
+  display: flex;
+  flex-direction: column;
+}
+.size-switch-modal > * { flex: none; }
+.size-switch-modal > .size-switch-list { flex: 1 1 auto; min-height: 96px; overflow-y: auto; }
+.size-switch-list thead th { position: sticky; top: 0; z-index: 1; background: var(--bg-secondary); }
+/* room for the cue bar (inset shadow) left of the time */
+.size-switch-list th:first-child, .size-switch-list td:first-child { padding-left: 10px; }
 .size-switch-repeats { display: block; margin: 6px 0; font-size: 12px; }
 .size-switch-rate { margin: 4px 0 8px; font-size: 12px; opacity: 0.8; }
 .size-switch-row { cursor: pointer; }
