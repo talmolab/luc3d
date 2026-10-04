@@ -164,7 +164,8 @@ async function runImage(session, rate, inject) {
     try {
         var embedder = await (inject.createEmbedder || createImageEmbedder)(session, { onStatus: function (t) { prog.update(t, 0); },
             maxViewsPerAnimal: getTrackingThreshold('imageCheckMaxViews'),
-            webnn: getTrackingThreshold('imageCheckWebNN') > 0 });
+            webnn: getTrackingThreshold('imageCheckWebNN') > 0,
+            decodeWorkers: getTrackingThreshold('imageCheckDecodeWorkers') > 0 });
         t0 = performance.now();
         var res = await checkImageSwitches(session, {
             fps: rate.fps,

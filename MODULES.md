@@ -1832,7 +1832,7 @@ exported so calibration can re-apply thresholds to the same scores);
 `IMAGE_CHECK_DEFAULTS` (+ `imageHz` 2, `threshold` -25, `pcaDims` 32,
 `getEmbeddings` REQUIRED: `async (frame, items[{k, group}]) -> per item
 [{camera, vector}]`, STARTED in increasing frame order with up to `inFlight`
-(default 2; the image embedder asks for 16) in flight; optional `prepareFrames(frames)` (awaited once with the
+(default 2; the image embedder asks for 8) in flight; optional `prepareFrames(frames)` (awaited once with the
 sorted frames it will ask for) and `releaseFrames()` (always called at the end) let
 the provider stream its video).
 
@@ -1880,6 +1880,15 @@ embedding only each animal's 3 largest views matches all 8 — brown-black AUC
 -66 (all views -46), similar-size pairs 1v3 44% (28%), 21 false change points /
 30 min (18), 0 false "Both". 4 views is indistinguishable from all; 2 views starts
 to cost (colour "Both" 92% real, false flags 1.1%).
+**Sampling below 2/s does not work** (2026-10-04, checked because sampling only
+at keyframes — every 250 frames, ~0.23/s on these files — would cut decoding
+~250x). At 3 views per animal, 2/s -> 0.47/s -> 0.23/s: brown-black image AUC
+0.925 -> 0.80 -> 0.75 (size alone 0.73), caught at -25 48% -> 32% -> 25%,
+white-dark 75% -> 55% -> 41%, image-only flags real 77% -> 57% -> 51%; 5-mouse
+false change points 21 -> 29 -> 40 / 30 min and the real switch missed at -25
+below 2/s. The tracklets after an encounter are short, so they need dense samples.
+The rate stays 2/s; cheaper decoding has to come from the recordings (keyframes
+every 0.5 s, so samples could land on keyframes) or from decode parallelism.
 
 **Imports from project modules.** `pose/pose-data.js` (`readPoint3d`).
 
@@ -4787,7 +4796,7 @@ stays on the GPU (`preferredOutputLocation: 'gpu-buffer'`; its ONLY output is
 just token 0 of each crop into a staging buffer — 1/257 of the readback,
 bit-identical (max |difference| 0); (2) model runs are a greedy BATCH QUEUE: one
 run at a time, each taking every crop queued meanwhile (up to `EMBED_MAX_BATCH`
-= 64), with the check keeping `EMBED_IN_FLIGHT` = 16 frames in flight
+= 64), with the check keeping `EMBED_IN_FLIGHT` = 8 frames in flight
 (`inFlight` on the provider) so batches fill while the GPU works. M2 Pro, 150
 real frames: 104 -> **155 crops/s**, GPU busy 66% -> 98%, batches ~15 -> ~55,
 embeddings identical. (3) `stats()` / `summarizeEmbedTiming` /
@@ -4800,8 +4809,25 @@ lacks `shader-f16`, ~1.5x slower on an M2 Pro). Field results (5-mouse, 3,375
 frames, 8 cameras, 8 in flight): RTX 2000 Ada PC 131 crops/s, GPU busy 92% at
 7.1 ms/crop — compute-bound; RTX 4000 Ada VM 161 crops/s, GPU busy 76% at
 4.8 ms/crop, decode ~530 ms/frame with its video decoder 44% busy — frame
-supply-bound, hence 16 in flight (no change on the GPU-bound M2 Pro: 155 crops/s
-at 8 and 16).
+supply-bound. 16 in flight was tried and reverted: no change (PC 124, VM 160
+crops/s; decode is throughput-bound, so each frame just waited twice as long)
+while the PC's dedicated GPU memory climbed to 10.6 GB.
+**Decode workers** (`imageCheckDecodeWorkers`, default 1; `opts.decodeWorkers`;
+`window.LUCID_DECODE_WORKERS = 0` forces off). The recordings are HEVC, P-frames
+only, a keyframe every 250 frames, so the check decodes essentially every frame
+of every camera (~2,000–2,700 decoded frames/s on the field machines). With
+workers, `prepareFrames` starts one `ui/image-decode-worker.js` per camera that
+opens the camera's own `decoder.file` with mediabunny, stream-decodes the frame
+list (the backend's PTS-sorted `_frameTimes`) and cuts that view's crops — no
+VideoFrame reaches the main thread, which then only computes crop geometry and
+batches tensors. Falls back to the main-thread streaming readers + crop pool when
+any camera lacks a local file or the frame index, or a worker fails to open.
+Crops are bit-identical to the main-thread path (tests/e2e/image-decode-worker.mjs;
+2,248 real crops, embeddings max |difference| 0). On an M2 Pro decode throughput
+is the same either way (~4,800 decoded frames/s — the hardware decoder's limit),
+so it pays only where the main thread, not the decoder, limits (the RTX 4000 Ada
+VM's decoder sat at 44%); the timing line ends "decoding in workers" / "main
+thread" so the two can be compared on the machine.
 Embeddings are bit-identical across all of this (cosine 1.00000 vs seeking,
 top-k vs the same views at all-k, and max |difference| 0 for worker vs inline
 crops over 5,687 real crops).
@@ -4833,7 +4859,7 @@ Numbers in `ui/id-switch-modal.js`.
 `checkImageSwitches` needs; `releaseFrames` also terminates the crop pool and
 disposes a WebNN model);
 `loadImageModel(onStatus)` (once, cached promise); `hasWebGPU()`;
-`selectViews(geos, maxViews)`; `EMBED_MAX_BATCH`, `EMBED_IN_FLIGHT`,
+`selectViews(geos, maxViews)`; `createDecodeWorkers(views, frames)`; `EMBED_MAX_BATCH`, `EMBED_IN_FLIGHT`,
 `summarizeEmbedTiming(tm, backend, dtype)`, `formatEmbedTiming(t)`; WebNN: `hasWebNN()`, `loadWebNNModel(onStatus)`,
 `chooseBackend(trial)`, `WEBNN_BATCH`, `WEBNN_TRIAL_FRAMES`; `createCropPool()` -> `{run(image, crops) ->
 Promise<Float32Array[]>, broken, terminate()}` or null; crop helpers
@@ -4866,6 +4892,29 @@ the CLS extraction (`last_hidden_state` token 0) on any version bump.
 `tests/test-id-switch-check.mjs`; the crop pool in `tests/e2e/image-crop-worker.mjs`;
 the full path on real data by a scratch harness (not in the suite: it needs the
 proofread videos and GPU) — see the image-check notes above.
+
+---
+
+### ui/image-decode-worker.js
+
+**Purpose.** Module worker (one per camera) that decodes that camera's video
+for the image ID-switch check and cuts its crops, so no video frame touches the
+main thread (`createDecodeWorkers` in `ui/image-embedder.js`).
+
+**Messages.** IN `{type: 'open', file, times, frames}` -> `{type: 'opened'}` |
+`{type: 'error'}`; IN `{type: 'crop', id, frame, crops: [{g, others}]}` -> `{id,
+tensors (transferred), decodeMs, cropMs}` | `{id, error}` (frames strictly
+increasing — a frame behind the stream is an error, never a wrong frame); IN
+`{type: 'close'}`. Jobs run one at a time in order; frames no job asks for are
+decoded and dropped (P-frames need them).
+
+**Imports.** mediabunny by RELATIVE path (`../lib/mediabunny/mediabunny.min.mjs` —
+module workers do not see the page's importmap) and `ui/image-embedder.js`
+(`cutCrop`, `writeInputTensor`, `CROP`, `INPUT`).
+
+**Spawned by.** `ui/image-embedder.js` (`createDecodeWorkers`).
+
+**Coverage.** `tests/e2e/image-decode-worker.mjs`.
 
 ---
 
@@ -4948,7 +4997,8 @@ Shortcuts and the Hot Keys modal where people look for them.
   check after Track All / Track Frame Range, default 1; `autoImageSwitchCheck` —
   0/1, the image check likewise, default 0; `imageCheckThreshold` -25;
   `imageCheckHz` 2; `imageCheckMaxViews` 3; `imageCheckWebNN` — 0/1, try WebNN,
-  default 0). The remaining catalog entries (`epipolarDecay`, `reprojSigma`, `epipolarWeight`,
+  default 0; `imageCheckDecodeWorkers` — 0/1, decode in per-camera workers,
+  default 1). The remaining catalog entries (`epipolarDecay`, `reprojSigma`, `epipolarWeight`,
   `reprojWeight`, `minMatchScore`, `prevIdentityBonus`, `reprojGate2/3/4`,
   `track3dWeight`) drive the bench-only luc3d matcher and are hidden from the UI
   but still resolve via `getTrackingThreshold`. `getTrackingThresholds` returns
