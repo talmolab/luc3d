@@ -16,13 +16,21 @@
     "are behavioral checks: they pin the API/global LUCID actually depends on, so",
     "an upstream that silently drops it fails the install instead of the app.",
     "",
-    "NOT mapped on purpose: lib/sleap-io/chunk-X76PRJK6.js:8697's MP4BOX_CDN",
+    "NOT mapped on purpose: lib/sleap-io/chunk-X76PRJK6.js's MP4BOX_CDN",
     "(unpkg mp4box@0.5.4). Its loadMp4box() returns globalThis.MP4Box before ever",
     "reaching that fetch, and index.html's mp4box script tag always sets the",
     "global -- so it is unreachable. Mapping it would also substitute 0.5.2 for",
-    "the 0.5.4 it names. See the Offline mode section in CLAUDE.md."
+    "the 0.5.4 it names. See the Offline mode section in CLAUDE.md.",
+    "",
+    "`unmapped` is the rest of that list: CDN URLs `check --strict` must not",
+    "flag. Every entry needs a reason, so the guard still fails on a NEW CDN URL",
+    "nobody has thought about -- which is the whole point of --strict."
   ],
   "registry": "https://registry.npmjs.org",
+  "unmapped": {
+    "https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.0/+esm": "ui/image-embedder.js. Out of offline scope, and not fixable by vendoring this URL alone: transformers.js then fetches the dinov2-small WEIGHTS (44-88 MB) from huggingface.co at runtime, so offline support means vendoring the model and setting env.localModelPath too. It is lazily imported by one opt-in command (Tracks > Check ID Switches (Images)) and nothing else in the app touches it, so offline it is the single feature that does not work -- every other path is covered.",
+    "https://cdn.jsdelivr.net/npm/x@1/+esm": "tests/test-stamp-version.mjs fixture. Not a real dependency: it is the input to an assertion that scripts/stamp-version.mjs leaves absolute CDN URLs alone."
+  },
   "packages": {
     "three": {
       "version": "0.147.0",

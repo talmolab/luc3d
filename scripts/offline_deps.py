@@ -63,6 +63,15 @@ DOWNLOAD_TIMEOUT = 30
 # Files that get URL-rewritten. Anything else is copied byte for byte.
 REWRITABLE_SUFFIXES = (".html", ".js", ".mjs")
 
+# ...except Node-only code, which the browser never loads. Every non-lib/ .mjs in
+# the repo is a test or a tool (the browser-served .mjs all live under lib/, which
+# is vendored and never rewritten), and rewriting those is all downside: the
+# CDN URLs in tests/test-stamp-version.mjs are FIXTURES asserting that
+# scripts/stamp-version.mjs leaves absolute URLs alone, so a rewrite would quietly
+# invert what that test checks. Same carve-out stamp-version.mjs makes, for the
+# same reason.
+NODE_ONLY_DIRS = ("tests/", "scripts/")
+
 # Directories never worth shipping, used only when git is unavailable.
 WALK_EXCLUDES = {
     ".git", ".github", ".claude", "node_modules", "scratch", "prompts",
@@ -101,6 +110,20 @@ def replacement_map(manifest):
     for pkg in manifest["packages"].values():
         out.update(pkg.get("replaces", {}))
     return out
+
+
+def is_rewritable(rel_posix):
+    """Should this repo-relative path have its CDN URLs rewritten?
+
+    Shared by `bundle` and `server.py --offline` so the zip and the served tree
+    cannot drift. See NODE_ONLY_DIRS for why .mjs under tests/ and scripts/ is
+    excluded.
+    """
+    if not rel_posix.endswith(REWRITABLE_SUFFIXES):
+        return False
+    if rel_posix.endswith(".mjs") and rel_posix.startswith(NODE_ONLY_DIRS):
+        return False
+    return True
 
 
 def rewrite_text(text, mapping, depth):
@@ -329,7 +352,7 @@ def check_pins(manifest):
 
 def find_unmapped_cdn_urls(manifest):
     """CDN URLs in source that offline mode would not rewrite."""
-    mapped = set(replacement_map(manifest))
+    mapped = set(replacement_map(manifest)) | set(manifest.get("unmapped", {}))
     pattern = re.compile(r"https://(?:cdn\.jsdelivr\.net|unpkg\.com)/[^\"'\s)]+")
     problems = []
     for path in source_files():
@@ -490,7 +513,7 @@ def cmd_bundle(manifest, args):
             if not src.is_file() or rel.as_posix() in seen:
                 continue
             seen.add(rel.as_posix())
-            if src.suffix in REWRITABLE_SUFFIXES:
+            if is_rewritable(rel.as_posix()):
                 text = src.read_text(encoding="utf-8", errors="surrogateescape")
                 new = rewrite_text(text, mapping, depth=len(rel.parts) - 1)
                 if new != text:

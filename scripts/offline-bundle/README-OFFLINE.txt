@@ -4,6 +4,10 @@ LUCID — offline copy
 Everything LUCID needs is already in this folder. Nothing is downloaded when you
 run it, so this works with the network switched off.
 
+One exception: Tracks > Check ID Switches (Images) downloads an image model
+(about 44 MB) the first time you use it, so that one command needs internet.
+Every other part of LUCID works offline.
+
 
 Start it
 --------

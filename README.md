@@ -41,6 +41,9 @@ is missing rather than serving a half-offline page. `scripts/offline_deps.py
 check` reports what is installed; `--strict` also fails on a CDN URL the manifest
 does not map, which is what stops a new one from silently breaking offline mode.
 
+One feature still needs internet: **Tracks ▸ Check ID Switches (Images)** downloads
+an image model (~44 MB) on first use. Everything else works with the network off.
+
 To give someone a copy that runs offline without any of this, build a zip whose
 URLs are already rewritten — it works under any static server, and includes
 start scripts for Windows, macOS and Linux:
