@@ -1832,7 +1832,7 @@ exported so calibration can re-apply thresholds to the same scores);
 `IMAGE_CHECK_DEFAULTS` (+ `imageHz` 2, `threshold` -25, `pcaDims` 32,
 `getEmbeddings` REQUIRED: `async (frame, items[{k, group}]) -> per item
 [{camera, vector}]`, STARTED in increasing frame order with up to `inFlight`
-(default 2; the image embedder asks for 8) in flight; optional `prepareFrames(frames)` (awaited once with the
+(default 2; the image embedder asks for 16) in flight; optional `prepareFrames(frames)` (awaited once with the
 sorted frames it will ask for) and `releaseFrames()` (always called at the end) let
 the provider stream its video).
 
@@ -4787,14 +4787,21 @@ stays on the GPU (`preferredOutputLocation: 'gpu-buffer'`; its ONLY output is
 just token 0 of each crop into a staging buffer — 1/257 of the readback,
 bit-identical (max |difference| 0); (2) model runs are a greedy BATCH QUEUE: one
 run at a time, each taking every crop queued meanwhile (up to `EMBED_MAX_BATCH`
-= 64), with the check keeping `EMBED_IN_FLIGHT` = 8 frames in flight
+= 64), with the check keeping `EMBED_IN_FLIGHT` = 16 frames in flight
 (`inFlight` on the provider) so batches fill while the GPU works. M2 Pro, 150
 real frames: 104 -> **155 crops/s**, GPU busy 66% -> 98%, batches ~15 -> ~55,
 embeddings identical. (3) `stats()` / `summarizeEmbedTiming` /
 `formatEmbedTiming`: crops/s, GPU busy % (model call + result wait over wall
 time), batches, ms/crop, and per-frame decode / crop / queue latency — logged
 to the console and shown under "About these flags", so a slow run says where it
-waited (e.g. Drive-streamed video: decode 734 ms/frame, GPU busy 43%).
+waited (e.g. Drive-streamed video: decode 734 ms/frame, GPU busy 43%), ending
+with the backend and precision that ran ("· WebGPU fp16" — fp32 where the GPU
+lacks `shader-f16`, ~1.5x slower on an M2 Pro). Field results (5-mouse, 3,375
+frames, 8 cameras, 8 in flight): RTX 2000 Ada PC 131 crops/s, GPU busy 92% at
+7.1 ms/crop — compute-bound; RTX 4000 Ada VM 161 crops/s, GPU busy 76% at
+4.8 ms/crop, decode ~530 ms/frame with its video decoder 44% busy — frame
+supply-bound, hence 16 in flight (no change on the GPU-bound M2 Pro: 155 crops/s
+at 8 and 16).
 Embeddings are bit-identical across all of this (cosine 1.00000 vs seeking,
 top-k vs the same views at all-k, and max |difference| 0 for worker vs inline
 crops over 5,687 real crops).
@@ -4827,7 +4834,7 @@ Numbers in `ui/id-switch-modal.js`.
 disposes a WebNN model);
 `loadImageModel(onStatus)` (once, cached promise); `hasWebGPU()`;
 `selectViews(geos, maxViews)`; `EMBED_MAX_BATCH`, `EMBED_IN_FLIGHT`,
-`summarizeEmbedTiming(tm, backend)`, `formatEmbedTiming(t)`; WebNN: `hasWebNN()`, `loadWebNNModel(onStatus)`,
+`summarizeEmbedTiming(tm, backend, dtype)`, `formatEmbedTiming(t)`; WebNN: `hasWebNN()`, `loadWebNNModel(onStatus)`,
 `chooseBackend(trial)`, `WEBNN_BATCH`, `WEBNN_TRIAL_FRAMES`; `createCropPool()` -> `{run(image, crops) ->
 Promise<Float32Array[]>, broken, terminate()}` or null; crop helpers
 `cropGeometry`, `cutCrop`, `convexHull`, `writeInputTensor`; constants

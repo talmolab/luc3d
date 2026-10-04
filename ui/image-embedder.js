@@ -336,8 +336,12 @@ export function selectViews(geos, maxViews) {
 
 /** Most crops one model run takes (memory: ~38 MB of input at 64). */
 export const EMBED_MAX_BATCH = 64;
-/** Frames the image check keeps in flight, so the next batch fills while the GPU runs this one. */
-export const EMBED_IN_FLIGHT = 8;
+/**
+ * Frames the image check keeps in flight, so the next batch fills while the GPU runs this one.
+ * 16, not 8: on an RTX 4000 Ada VM each frame took ~650 ms to decode + crop, so 8 in flight capped
+ * frame supply near 12/s and the GPU waited 24% of the time with its video decoder only 44% busy.
+ */
+export const EMBED_IN_FLIGHT = 16;
 
 /**
  * A run's timing as numbers a person can act on. `gpuBusyPct` is the share of the
@@ -346,10 +350,10 @@ export const EMBED_IN_FLIGHT = 8;
  * see `decodeMsPerFrame` and `cropMsPerFrame`, which overlap across in-flight
  * frames, and `queueMsPerFrame`, the wait for a model slot — high when GPU-bound).
  */
-export function summarizeEmbedTiming(tm, backend) {
+export function summarizeEmbedTiming(tm, backend, dtype) {
     const wall = Math.max(1, tm.t1 - tm.t0), busy = tm.runMs + tm.readMs, per = function (x, d) { return d ? x / d : 0; };
     return {
-        backend: backend || 'webgpu', frames: tm.frames, crops: tm.crops, seconds: wall / 1000,
+        backend: backend || 'webgpu', dtype: dtype || null, frames: tm.frames, crops: tm.crops, seconds: wall / 1000,
         cropsPerS: per(tm.crops, wall / 1000), batches: tm.batches, avgBatch: per(tm.crops, tm.batches), maxBatch: tm.maxBatch,
         // submitMs: the model call (upload + queueing — it returns before the GPU finishes); gpuWaitMs: waiting
         // for the results + the CLS copy, which is where the GPU's compute time shows up
@@ -358,13 +362,13 @@ export function summarizeEmbedTiming(tm, backend) {
     };
 }
 
-/** One line for the dialog / console: "155 crops/s over 15 s · GPU busy 98% (41 batches of ~55, 6.3 ms/crop) · per frame: decode 37 ms, crop 146 ms, queue 199 ms". */
+/** One line for the dialog / console: "155 crops/s over 15 s · GPU busy 98% (41 batches of ~55, 6.3 ms/crop) · per frame: decode 37 ms, crop 146 ms, queue 199 ms · WebGPU fp16". */
 export function formatEmbedTiming(t) {
     if (!t || !t.crops) return '';
     return Math.round(t.cropsPerS) + ' crops/s over ' + t.seconds.toFixed(0) + ' s · GPU busy ' + Math.round(t.gpuBusyPct) + '% (' +
         t.batches + ' batches of ~' + Math.round(t.avgBatch) + ', ' + t.modelMsPerCrop.toFixed(1) + ' ms/crop) · per frame: decode ' +
         Math.round(t.decodeMsPerFrame) + ' ms, crop ' + Math.round(t.cropMsPerFrame) + ' ms, queue ' + Math.round(t.queueMsPerFrame) + ' ms' +
-        (t.backend && t.backend !== 'webgpu' ? ' · ' + t.backend : '');
+        ' · ' + (t.backend === 'webnn' ? 'WebNN' : 'WebGPU') + (t.dtype ? ' ' + t.dtype : '');
 }
 
 /**
@@ -444,7 +448,7 @@ export async function createImageEmbedder(session, opts) {
     if (!views.length) throw new Error('needs the session\'s videos to be loaded');
     const sk = skeletonIndex((session.skeleton && session.skeleton.nodes) || []);
     if (sk.nose < 0 || sk.tti < 0) throw new Error('needs Nose and TTI nodes in the skeleton to align crops');
-    const { T, model, device } = await loadImageModel(opts.onStatus);
+    const { T, model, device, dtype } = await loadImageModel(opts.onStatus);
     // WebNN (opt-in, experimental): embed the first frames on both backends, then keep the faster consistent one
     let nnModel = null, trial = null, backend = 'webgpu', note = '';
     if (opts.webnn) {
@@ -615,7 +619,9 @@ export async function createImageEmbedder(session, opts) {
         /** How many frames the check should keep in flight (so batches can fill while the GPU works). */
         inFlight: EMBED_IN_FLIGHT,
         /** Where the time went in this run — see `summarizeEmbedTiming`. */
-        stats: function () { return summarizeEmbedTiming(tm, backend); },
+        // the precision that actually ran: WebGPU runs fp16 only where the GPU offers 'shader-f16'
+        // (fp32 measured ~1.5x slower on an M2 Pro); the WebNN path always loads fp16
+        stats: function () { return summarizeEmbedTiming(tm, backend, backend === 'webnn' ? 'fp16' : dtype); },
         prepareFrames: async function (frames) { readers = views.map(function (v) { return streamingReader(v.decoder, frames); }); },
         releaseFrames: function () {
             if (readers) readers.forEach(function (r) { if (r) r.close(); });

@@ -240,10 +240,10 @@ group('Image check — timing summary (ui/image-embedder.js)');
 {
     globalThis.window = globalThis;
     const E = await import(pathToFileURL(path.join(ROOT, 'ui', 'image-embedder.js')).href);
-    const t = E.summarizeEmbedTiming({ frames: 100, crops: 1500, batches: 30, t0: 1000, t1: 11000, decodeMs: 3000, cropMs: 5000, queueMs: 20000, runMs: 900, readMs: 8100, maxBatch: 64 }, 'webgpu');
+    const t = E.summarizeEmbedTiming({ frames: 100, crops: 1500, batches: 30, t0: 1000, t1: 11000, decodeMs: 3000, cropMs: 5000, queueMs: 20000, runMs: 900, readMs: 8100, maxBatch: 64 }, 'webgpu', 'fp16');
     ok(Math.abs(t.cropsPerS - 150) < 1e-9 && Math.abs(t.gpuBusyPct - 90) < 1e-9 && t.avgBatch === 50 && t.decodeMsPerFrame === 30,
         `summary: 150 crops/s, GPU busy 90%, batches of 50, decode 30 ms/frame (${JSON.stringify(t).slice(0, 120)}…)`);
-    eq(E.formatEmbedTiming(t), '150 crops/s over 10 s · GPU busy 90% (30 batches of ~50, 6.0 ms/crop) · per frame: decode 30 ms, crop 50 ms, queue 200 ms', 'one-line format');
+    eq(E.formatEmbedTiming(t), '150 crops/s over 10 s · GPU busy 90% (30 batches of ~50, 6.0 ms/crop) · per frame: decode 30 ms, crop 50 ms, queue 200 ms · WebGPU fp16', 'one-line format, with the backend and precision that ran');
     eq(E.formatEmbedTiming({ crops: 0 }), '', 'nothing embedded → no line');
 }
 
