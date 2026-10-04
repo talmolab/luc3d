@@ -134,6 +134,9 @@
                     <div class="menu-dropdown-item" id="menuPropagateTracksToIds">Propagate Tracks → IDs</div>
                     <div class="menu-dropdown-item" id="menuPropagateIdsToTracks">Propagate IDs → Tracks</div>
                     <div class="menu-separator"></div>
+                    <div class="menu-dropdown-item" id="menuCheckSizeSwitches">Check ID Switches (Body Size)…</div>
+                    <div class="menu-dropdown-item" id="menuCheckImageSwitches">Check ID Switches (Images)…</div>
+                    <div class="menu-separator"></div>
                     <div class="menu-dropdown-item has-submenu" id="menuTrailsParent">
                         <span>Node Trails</span>
                         <span class="submenu-arrow">▶</span>
@@ -293,6 +296,7 @@
                 <div class="panel-tabs">
                     <button class="panel-tab active" data-tab="tabInstances">Instances</button>
                     <button class="panel-tab" data-tab="tabVisibility">Visibility</button>
+                    <button class="panel-tab" data-tab="tabIdSwitches">ID Switches</button>
                     <button class="panel-tab" data-tab="tabVideos">Videos</button>
                     <button class="panel-tab" data-tab="tabCameras">Cameras</button>
                     <button class="panel-tab" data-tab="tabSkeleton">Skeleton</button>
@@ -610,6 +614,13 @@
                     </table>
                 </div>
 
+                <!-- ==================== ID Switches Tab ==================== -->
+                <!-- Rendered by ui/id-switch-modal.js refreshIdSwitchPanel: the review checklist of
+                     Tracks ▸ Check ID Switches results for the active session. -->
+                <div class="panel-tab-content" id="tabIdSwitches">
+                    <div id="idSwitchPanel"></div>
+                </div>
+
                 <!-- ==================== Videos Tab ==================== -->
                 <div class="panel-tab-content" id="tabVideos">
                     <div class="info-section">
@@ -872,6 +883,8 @@
                 <div class="seekbar-track">
                     <div class="seekbar-progress" id="seekbarProgress"></div>
                 </div>
+                <!-- Possible-ID-switch ticks (ui/seekbar-markers.js) -->
+                <div class="seekbar-marks" id="seekbarMarks"></div>
                 <div class="seekbar-thumb" id="seekbarThumb"></div>
             </div>
 

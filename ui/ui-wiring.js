@@ -52,6 +52,7 @@ import { showTrackRangeModal } from './track-range-modal.js';
 import { showAlignViewsModal } from './view-align-modal.js';
 import { onColorByChange, setColorByIdentity } from './color-by.js';
 import { installSeekbarTooltip } from './seekbar-tooltip.js';
+import { installSeekbarMarkers, seekbarMarkerAt, describeSwitchMarker, setSeekbarMarkerFrames } from './seekbar-markers.js';
 // Pass 3i-2: triangulation orchestration moved out of app.js.
 import { triangulateCurrentFrame, triangulateAllFrames } from '../pose/triangulation.js';
 // User settings: default triangulation method + editable keyboard bindings.
@@ -60,6 +61,7 @@ import { shouldIgnoreShortcut, installFocusRelease } from './keyboard-target.js'
 import { showSettingsModal } from './settings-modal.js';
 // Pass 3i-3: addNewInstanceSmart and update3DViewport moved to pose/initialization.js.
 import { addNewInstanceSmart, update3DViewport, navigateToFrame } from '../pose/initialization.js';
+import { runIdSwitchChecks, setIdSwitchNavigator, updateIdSwitchProgress } from './id-switch-modal.js';
 // Pass 3f / 3i-4: identity-assignment workflow symbols moved out of app.js.
 // (`swapTracks` joined this module in 3i-4; `seekToLabeledFrame` is now in-module.)
 import {
@@ -789,6 +791,19 @@ export function setupMenus() {
     document.getElementById('menuGroupByIdentity').addEventListener('click', function () {
         closeMenus();
         groupByIdentityAndTriangulateAll();
+    });
+
+    // Tracks ▸ Check ID Switches (Body Size): flag close encounters whose
+    // post-encounter body sizes favour swapped identities (ui/id-switch-modal.js).
+    setIdSwitchNavigator(navigateToFrame);   // also used when a tracking pass runs the checks itself
+    document.getElementById('menuCheckSizeSwitches').addEventListener('click', function () {
+        closeMenus();
+        runIdSwitchChecks({ size: true, navigateToFrame: navigateToFrame });
+    });
+    // Tracks ▸ Check ID Switches (Images): the same, by appearance — minutes, needs the videos + WebGPU.
+    document.getElementById('menuCheckImageSwitches').addEventListener('click', function () {
+        closeMenus();
+        runIdSwitchChecks({ image: true, navigateToFrame: navigateToFrame });
     });
 
     // Propagate Tracks → IDs (one-shot): each track label becomes an identity,
@@ -1653,16 +1668,25 @@ export function setupUI() {
         var frameAtFraction = function (fraction) {
             return Math.round(fraction * (state.totalFrames - 1));
         };
+        // A possible-ID-switch tick under the cursor (ui/seekbar-markers.js) wins: a click or
+        // drag there lands on that exact frame, and the tooltip names it.
         var getFrameFromEvent = function (e) {
             var rect = seekbar.getBoundingClientRect();
-            return frameAtFraction(Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width)));
+            var frac = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+            var m = seekbarMarkerAt(frac, rect.width);
+            return m ? m.frame : frameAtFraction(frac);
         };
+        installSeekbarMarkers(document.getElementById('seekbarMarks'), state.totalFrames);
 
         // Hover tooltip with the frame (and timestamp) under the cursor (#142).
         installSeekbarTooltip(seekbar, {
             frameAtFraction: frameAtFraction,
             getTotalFrames: function () { return state.totalFrames; },
             getFps: function () { return state.fps; },
+            markerAt: function (frac, widthPx) {
+                var m = seekbarMarkerAt(frac, widthPx);
+                return m ? { frame: m.frame, text: describeSwitchMarker(m) } : null;
+            },
         });
 
         var _seekThrottle = { lastRender: 0, timer: null, pendingFrame: null };
@@ -2666,6 +2690,8 @@ export function updateSeekbarVisual(frameIdx) {
     document.getElementById('seekbarProgress').style.width = pct + '%';
     document.getElementById('seekbarThumb').style.left = pct + '%';
     document.getElementById('currentFrame').textContent = frameIdx + 1;
+    setSeekbarMarkerFrames(state.totalFrames);       // no-op unless the frame count changed
+    updateIdSwitchProgress(frameIdx);                // the ID Switches tab's selected-row bar (no-op without one)
 }
 
 export function onPlaybackStateChange(isPlaying) {

@@ -2653,6 +2653,20 @@ body {
   height: 8px;
 }
 
+/* Possible-ID-switch ticks on the seekbar (ui/seekbar-markers.js): over the
+   track, under the thumb; they never take the pointer (the seekbar's handlers
+   snap to them instead). */
+.seekbar-marks { position: absolute; inset: 0; pointer-events: none; z-index: 1; }
+.seekbar-mark {
+  position: absolute; top: 50%; width: 3px; height: 16px; border-radius: 1px;
+  transform: translate(-50%, -50%); background: #ffb020; box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.45);
+}
+.seekbar-mark.cue-image { background: #4cc9f0; }
+.seekbar-mark.cue-both { background: linear-gradient(to bottom, #ffb020 50%, #4cc9f0 50%); }
+.seekbar-mark.is-follow { opacity: 0.7; height: 12px; }
+.seekbar-mark.is-repeat { opacity: 0.4; width: 2px; height: 10px; box-shadow: none; }
+.seekbar-mark.is-reviewed { opacity: 0.3; }
+
 /* Seekbar hover tooltip (#142): frame + timestamp under the cursor. Sits
    above the bar, over the timeline; `left` is set in px by
    ui/seekbar-tooltip.js and the bubble is centred on it. */
@@ -3212,6 +3226,9 @@ body {
  * resized with the box: `.slider::before` is a fixed 16px with a 18px travel, so
  * inheriting it into a 17px-tall box would overflow the track and never line up.
  */
+/* Tracking Wizard on/off settings (ui/settings-modal.js makeToggle): sit where the number box was. */
+.settings-toggle { align-self: center; margin-left: 12px; }
+
 .toggle-switch.toggle-switch-sm {
   width: 30px;
   height: 17px;
@@ -4592,3 +4609,67 @@ kbd {
   background: var(--accent-hover);
   border-color: var(--accent-hover);
 }
+
+/* Tracks ▸ Check ID Switches — the ID Switches tab of the right panel (ui/id-switch-modal.js
+   refreshIdSwitchPanel). The tab content is the panel's one scroller; the toolbar sticks. */
+.id-switch-summary { font-size: 12px; margin: 2px 0; }
+.id-switch-about { margin-top: 8px; font-size: 12px; }
+.id-switch-about summary { cursor: pointer; color: var(--text-secondary); }
+.id-switch-about p { font-size: 12px; margin: 6px 0; color: var(--text-secondary); line-height: 1.45; }
+.id-switch-rate { opacity: 0.85; }
+.id-switch-toolbar {
+  position: sticky; top: 0; z-index: 1;
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+  padding: 8px 16px; background: var(--bg-secondary); border-bottom: 1px solid var(--border-color);
+}
+.id-switch-done { font-size: 12px; margin-right: auto; }
+.id-switch-toolbar .panel-btn { flex: none; }
+.id-switch-next:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.id-switch-repeats { flex-basis: 100%; font-size: 11px; color: var(--text-secondary); }
+.id-switch-run { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+.id-switch-row {
+  display: flex; gap: 8px; align-items: flex-start; cursor: pointer;
+  padding: 6px 16px 6px 13px; border-bottom: 1px solid var(--border-color);
+  border-left: 3px solid transparent;
+}
+.id-switch-row:hover { background: rgba(255, 107, 53, 0.10); }
+.id-switch-row.is-current { background: rgba(255, 107, 53, 0.22); }
+.id-switch-row.cue-size { border-left-color: #ffb020; }
+.id-switch-row.cue-image { border-left-color: #4cc9f0; }
+.id-switch-row.cue-both { border-image: linear-gradient(to right, #ffb020 50%, #4cc9f0 50%) 1; }
+.id-switch-row.is-repeat .id-switch-main { opacity: 0.65; }
+.id-switch-row.is-reviewed .id-switch-main { opacity: 0.45; }
+.id-switch-row.is-reviewed .id-switch-pair { text-decoration: line-through; }
+.id-switch-tick { margin: 2px 0 0; flex: none; cursor: pointer; }
+.id-switch-main { flex: 1; min-width: 0; }
+.id-switch-line1 { display: flex; gap: 8px; font-size: 12px; }
+.id-switch-time { font-variant-numeric: tabular-nums; color: var(--text-secondary); }
+.id-switch-pair { flex: 1; min-width: 0; }
+.id-switch-id { font-weight: 600; }
+.id-switch-score { font-variant-numeric: tabular-nums; color: var(--text-secondary); }
+.id-switch-line2 { font-size: 11px; color: var(--text-muted); margin-top: 1px; }
+.id-switch-end {
+  margin-left: 2px; padding: 0 5px; font-size: 10px; line-height: 15px; cursor: pointer;
+  background: transparent; color: var(--text-secondary); border: 1px solid var(--border-color); border-radius: 3px;
+}
+.id-switch-end:hover { color: var(--text-primary); background: var(--surface-hover); }
+/* Animated box around the selected row's two animals, on its own canvas per view
+   (ui/id-switch-highlight.js) — inside the wrapper, so zoom/pan/rotation apply. */
+.id-switch-canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; }
+
+/* The selected row's progress bar, driven by the viewer's frame: 1 s before the
+   animals come close -> the close spell (shaded, where a swap would happen) -> 1 s after. */
+.id-switch-pbar {
+  position: relative; height: 6px; margin-top: 5px; border-radius: 3px;
+  background: var(--bg-button); overflow: hidden;
+  animation: id-switch-pbar-in 160ms ease-out;
+}
+@keyframes id-switch-pbar-in { from { opacity: 0; transform: scaleY(0.2); } to { opacity: 1; transform: none; } }
+.id-switch-pband { position: absolute; top: 0; bottom: 0; background: rgba(255, 176, 32, 0.45); }
+.id-switch-pfill { position: absolute; left: 0; top: 0; bottom: 0; width: 0; background: var(--accent); opacity: 0.85; transition: width 60ms linear; }
+
+/* Image ID-switch check — progress dialog (ui/id-switch-modal.js) */
+.id-switch-progress { max-width: 520px; }
+.id-switch-progress-text { margin: 8px 0; font-size: 13px; min-height: 2.6em; }
+.id-switch-progress-bar { height: 6px; border-radius: 3px; background: rgba(255,255,255,0.12); overflow: hidden; }
+.id-switch-progress-fill { height: 100%; width: 0; background: #4cc9f0; transition: width 0.2s; }

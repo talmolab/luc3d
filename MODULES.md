@@ -809,8 +809,23 @@ drifts upward (e.g., 4 → 11 on the test fixture).
 - `../import-export/save-load.js` — `setStatus`, `hideLoading`.
 - `../ui/loading-overlay.js` — `showLoadingProgress`, `createProgressPacer`,
   `yieldToPaint`.
-- `../ui/rendering.js` — `drawAllOverlays`.
+- `../ui/rendering.js` — `drawAllOverlays`, `showPredictedOnly`,
+  `PREDICTED_ONLY_NOTE`: Track Frame (when it found targets), Track Frame Range
+  and Track All (when they assigned identities) end showing ONLY the Predicted
+  layer — User, Reproj, Errors unticked — and append the note to the status line
+  when that changed anything (the tracking counterpart of Triangulate All's
+  Reproj-only switch, #243).
 - `../ui/info-panel.js` — `updateInfoPanel`.
+- `../ui/id-switch-modal.js` — `runIdSwitchChecks`, `clearIdSwitchResults`: after a successful Track
+  All or Track Frame Range that assigned 2+ identities, `runTrackingPass` runs the
+  ID-switch checks over the whole session (`{auto: true, statusPrefix, size,
+  image}`: size per the Tracking Wizard's `autoSwitchCheck` (default on), images
+  per `autoImageSwitchCheck` (default off)) and awaits them, so the pass resolves
+  after the checks. It also drops the session's earlier results and their
+  markers (`clearIdSwitchResults(session)`) before clearing identities, for both paths.
+  No cycle: that module imports app-state, save-load, loading-overlay, settings,
+  `pose/id-switch-check.js` and `ui/image-embedder.js`, none of which import the
+  tracker.
 - `../ui/color-by.js` — `setColorByIdentity`: a successful Track All / Track
   Frame Range that assigned identities switches Color from Tracks to ID
   (#242) and says so in the status line. Track Frame (one frame) does not.
@@ -1791,6 +1806,103 @@ results}` (points3d buffers transferred) or `{type:'error', id, message}`.
 
 ---
 
+### pose/id-switch-check.js
+
+**Purpose.** The analysis behind Tracks ▸ **Check ID Switches (Body Size)…** and
+**(Images)…**, which also run automatically after Track All / Track Frame Range
+(`ui/id-switch-modal.js`). Flags close encounters between two tracked identities
+where the animals leaving the encounter look more like each other's identity than
+their own — a possible identity switch. Two cues through ONE machinery: body size
+(3D bone lengths, cheap, no video) and appearance (embeddings of masked,
+pose-aligned crops, supplied by the caller — `ui/image-embedder.js` in the app).
+Pure — no DOM, no app state — so both run headlessly (the image check with any
+embedding provider).
+
+**Key exports.** `checkSizeSwitches(session, opts)` and
+`checkImageSwitches(session, opts)` (async) -> `{ok, flags, changes, encounters,
+identities, sampledFrames, closeDistance, threshold, fps, step, sampleHz, cue}`
+(+ `bones` for size; + `imageHz`, `crops`, `cameras` for images) or
+`{ok:false, reason}`; `markChangePoints(scored, o)` (the change-point step,
+exported so calibration can re-apply thresholds to the same scores);
+`fitSoftmax(X, y, n, D, K, opts)` (L2 multinomial logistic regression, Adam);
+`fitPCA(X, n, D, k)` (randomized subspace iteration); `SIZE_BONES`;
+`REFERENCE_HZ` (15); `SIZE_CHECK_DEFAULTS` (`fps` REQUIRED, `sampleHz` 15,
+`folds` 5, `gapSeconds` 10, `syncSeconds` 1, `threshold` -50, `continueBelow` 0,
+`followSeconds` 60, `minTrackedSeconds` 60, `sepFactor` 0.65, `signal`, ...);
+`IMAGE_CHECK_DEFAULTS` (+ `imageHz` 2, `threshold` -25, `pcaDims` 32,
+`getEmbeddings` REQUIRED: `async (frame, items[{k, group}]) -> per item
+[{camera, vector}]`, STARTED in increasing frame order with up to `inFlight`
+(default 2; the image embedder asks for 8) in flight; optional `prepareFrames(frames)` (awaited once with the
+sorted frames it will ask for) and `releaseFrames()` (always called at the end) let
+the provider stream its video).
+
+**The shared method.** Every round(fps / `sampleHz`)-th frame is a grid sample.
+"Close" = body centroids within `sepFactor` x the median body extent (unit-free).
+Tracklet = a run where an identity is apart from every other; encounter = the last
+close sample of a close spell, scored when both identities' next tracklets start
+within `syncSeconds`. A softmax is trained on the tracker's OWN labels with blocked
+CV (each fold excludes `gapSeconds` either side) — on bone lengths (size), or per
+camera on PCA-reduced embeddings, averaged over cameras (images, sampled every
+round(sampleHz / imageHz)-th grid sample). Log-probabilities are normalised within
+each frame across the identities present; an encounter's score = summed evidence
+for the claimed labelling minus the exchanged one over the two following
+tracklets. Each sample is weighted by `REFERENCE_HZ` / that cue's sample rate, so
+scores are evidence per unit TIME and thresholds hold at any frame rate (25-120
+fps tested within 0.4%). `opts.signal` cancels (AbortError).
+
+**Change points, not raw flags.** The model can tell that the labelling on the
+two sides of an encounter disagrees, not which side is right (it learns whichever
+side covers more of the session). Per pair, a run of flagged encounters (starting
+below `threshold`, continuing FORWARD while below `continueBelow`) yields one
+change point: its start (`kind: 'onset'`) when it reaches the session end, else
+the first unflagged encounter after it (`kind: 'end'`, in `changes`) when it
+starts the session; both for a middle run of 2+. Other members are repeats
+(`continues`). A change point within `followSeconds` after another of a different
+pair sharing an identity is its follow-on (`followOf`).
+
+**Calibration (2026-10-03).** Size: on the 5-mouse tail-mark recording
+(194366_05mice_flippers, 108k frames, 8 cameras) planted swaps AUC 0.95; the real
+gate-off switch (frame 74,544) is an onset; the verified run gets 7 false change
+points / 30 min. Images, calibrated with this code on DINOv2 embeddings of the
+crops `ui/image-embedder.js` cuts: on the 5-mouse recording -25 gives 18 false
+change points / 30 min and catches the real switch (image score -46; -50 misses
+it, 0 gives 42); for the pairs size cannot separate (tail marks 1/2/3: size alone
+5-19%) images catch 28-55%. On 6 proofread SLAP sessions with white, brown and
+black mice (the 2022-10-07 sessions, which are 30 fps — scored at `fps: 30`), for
+the similar-size, different-coat pairs (brown-black: size AUC 0.73, 5% caught at
+-50) images reach AUC 0.92 and catch 46% at -25 (white vs dark 76%), at a 0.8%
+false-flag rate per clean encounter. When both checks flag an encounter it was a
+real swap 98% of the time (images alone 79%; none on the 5-mouse run with no
+switches). Images remain weak for animals that look alike (same coat).
+**Views per animal** (`imageCheckMaxViews`, default 3; recalibrated 2026-10-04):
+embedding only each animal's 3 largest views matches all 8 — brown-black AUC
+0.925, 48% at -25, 0.8% false flags, "Both" 98% real; 5-mouse: real switch scored
+-66 (all views -46), similar-size pairs 1v3 44% (28%), 21 false change points /
+30 min (18), 0 false "Both". 4 views is indistinguishable from all; 2 views starts
+to cost (colour "Both" 92% real, false flags 1.1%).
+**Sampling below 2/s does not work** (2026-10-04, checked because sampling only
+at keyframes — every 250 frames, ~0.23/s on these files — would cut decoding
+~250x). At 3 views per animal, 2/s -> 0.47/s -> 0.23/s: brown-black image AUC
+0.925 -> 0.80 -> 0.75 (size alone 0.73), caught at -25 48% -> 32% -> 25%,
+white-dark 75% -> 55% -> 41%, image-only flags real 77% -> 57% -> 51%; 5-mouse
+false change points 21 -> 29 -> 40 / 30 min and the real switch missed at -25
+below 2/s. The tracklets after an encounter are short, so they need dense samples.
+The rate stays 2/s; cheaper decoding has to come from the recordings (keyframes
+every 0.5 s, so samples could land on keyframes) or from decode parallelism.
+
+**Imports from project modules.** `pose/pose-data.js` (`readPoint3d`).
+
+**Imported by.** `ui/id-switch-modal.js`.
+
+**Coverage.** `tests/test-id-switch-check.mjs` (synthetic 3-animal sessions defined
+in time: clean -> no flags; minority / majority switch -> onset / end change point;
+25-120 fps invariance; images with synthetic embeddings catching a swap between
+animals of IDENTICAL size that size misses; cancellation; PCA; failure reasons;
+crop geometry of `ui/image-embedder.js`), `tests/e2e/size-switch-check.mjs`,
+`tests/e2e/track-auto-size-switch-check.mjs`, `tests/e2e/id-switch-image-check.mjs`.
+
+---
+
 ### pose/view-align.js
 
 **Purpose.** The math behind View ▸ **Align Views to References…** (#226):
@@ -2616,6 +2728,8 @@ on reload); see `ui/app-state.js`.
 - `./rendering.js` — `drawAllOverlays`, `updateFrameCounters`.
 - `./interaction.js` — `isInteractiveClickTarget`.
 - `./panel-visibility.js` — `isInfoPanelVisible`, `markInfoPanelStale`.
+- `./id-switch-modal.js` — `refreshIdSwitchPanel`: `updateInfoPanel` re-renders
+  the ID Switches tab (and its seekbar markers) for the active session.
 - `./app-state.js` — `state`, `timeline`, `interactionManager`,
   `rememberSkeleton`, `buildRememberedSkeleton`.
 - `../import-export/save-load.js` — `setStatus`, `markDirty`.
@@ -4052,6 +4166,10 @@ data sources. Plus visibility-toggle helpers and frame counter updates.
   `groupByTrackAndTriangulateAll`) call `setReprojErrorVisible(true, {checkBoxes:
   false})` then this, so a run is compared with the USER's boxes, not with
   Errors just re-ticked.
+- `showPredictedOnly()` -> `boolean` — the tracking counterpart: after Track
+  Frame / Track Frame Range / Track All (`pose/tracker.js`) Predicted on; User,
+  Reproj, Errors off, by the same change-event mechanics (shared private
+  `setToolbarLayers`). `PREDICTED_ONLY_NOTE` is its status suffix.
 - `getVisibilitySettings()` — reads per-view checkbox state from the DOM.
   Includes **`showUnlinkedBadge`** (the Visibility panel's *Unlinked Instances ▸
   Show "?" badge* toggle, `#visUnlinkedBadge`), passed straight through to
@@ -4171,6 +4289,37 @@ re-triangulate, identity assignment, or visibility-toggle change.
 
 ---
 
+### ui/seekbar-markers.js
+
+**Purpose.** Possible-ID-switch ticks on the transport seekbar (`#seekbarMarks`
+inside `#seekbar`), for the active session's ID Switches results — where the
+timeline used to draw them.
+
+**Key exports.** `installSeekbarMarkers(layerEl, totalFrames)`;
+`setSeekbarSwitchMarkers(markers, totalFrames)` (`[]` clears) /
+`getSeekbarSwitchMarkers()`; `setSeekbarMarkerFrames(totalFrames)` (re-lays the
+ticks out only when the frame count changed — called from `updateSeekbarVisual`);
+`seekbarMarkerAt(frac, widthPx, tolPx = 5)` (the tick nearest the cursor; a change
+point beats a repeat); `describeSwitchMarker(m)` (the tooltip text).
+
+**Drawing.** One tick per marker at `frame / (totalFrames - 1)` — the thumb's own
+mapping: amber = size, cyan = images, amber-over-cyan = "Both" (drawn once, on the
+size marker; its image twin is skipped), follow-on fainter and shorter,
+still-swapped repeat a short faint tick, `reviewed` (ticked in the tab) dimmed.
+Over the track, under the thumb, `pointer-events: none`: the seekbar's
+mousedown/drag handlers (`ui/ui-wiring.js`) snap to a tick within 5 px, and the
+seekbar tooltip names it ("Frame 18,105 · 05:01.733 — possible ID switch: id_1 ↔
+id_2 (size score -1415)").
+
+**Imports from project modules.** None.
+
+**Imported by.** `ui/ui-wiring.js`, `ui/id-switch-modal.js`.
+
+**Coverage.** `tests/e2e/size-switch-check.mjs` (ticks drawn, none on the
+timeline, hover text, click snaps to the tick's frame, reviewed dimming).
+
+---
+
 ### ui/seekbar-tooltip.js
 
 **Purpose.** Hover tooltip on the transport seekbar (#142): "Frame 1,234 ·
@@ -4180,7 +4329,10 @@ drag will land before making it.
 **Key exports.** `formatTimestamp(seconds)` (`mm:ss.mmm`, `h:mm:ss.mmm` from an
 hour up; rounds to the millisecond before splitting, so never `00:60.000`),
 `seekbarTooltipText(frameIdx, fps)`, `installSeekbarTooltip(seekbar,
-{frameAtFraction, getTotalFrames, getFps})` -> the tooltip element
+{frameAtFraction, getTotalFrames, getFps, markerAt?})` -> the tooltip element
+(`markerAt(frac, widthPx)` -> `{frame, text}` | null: a possible-ID-switch tick
+under the cursor — its frame replaces `frameAtFraction`'s, as the scrub handlers
+snap to it, and its text is appended)
 (`#seekbarTooltip`, `.seekbar-tooltip`).
 
 **Behaviour.**
@@ -4248,6 +4400,8 @@ multi-video docking layout.
 - `removeSession`, `switchSession` (async).
 
 **Imports from project modules.**
+- `./id-switch-modal.js` — `refreshIdSwitchPanel`: `switchSession` shows the new
+  session's ID-switch results and markers (try/catch, like `populateTimelineVisibility`).
 - `./app-state.js` — `state`, controllers + setters.
 - `../pose/pose-data.js` — `FrameGroup`, `UnlinkedInstance`, `Camera`.
 - `../pose/triangulation.js` — `triangulateAndReproject`,
@@ -4417,6 +4571,354 @@ the headless test runner doesn't crash on a missing `document`.
 
 ---
 
+### ui/id-switch-modal.js
+
+**Purpose.** Tracks ▸ **Check ID Switches (Body Size)…** / **(Images)…**, and the
+same checks run automatically after Track All / Track Frame Range. Runs
+`checkSizeSwitches` / `checkImageSwitches` (`pose/id-switch-check.js`), puts every
+change point and repeat on the transport seekbar (`setSeekbarSwitchMarkers`, `ui/seekbar-markers.js`; tagged
+`cue: 'size' | 'image'`), and lists the change points in the right panel's
+**ID Switches** tab as a per-session review checklist.
+
+**Key exports.** `runIdSwitchChecks({size?, image?, auto?, statusPrefix?,
+navigateToFrame?, inject?})`; `setIdSwitchNavigator(fn)` (ui-wiring registers
+`navigateToFrame` once, so rows stay clickable when the tracker started the
+check); `refreshIdSwitchPanel(session?)` (render the tab and put that session's
+markers on the seekbar — called after a check, from `updateInfoPanel` and from
+`switchSession`); `openIdSwitchPanel()` (show the panel, if hidden, on the tab);
+`clearIdSwitchResults(session?)` (called by `runTrackingPass` before it relabels);
+`ID_SWITCH_LEAD_IN_SECONDS`, `idSwitchLeadInFrame(marker, fps)`,
+`updateIdSwitchProgress(frame)`; back-compat
+`runSizeSwitchCheck`. `inject: {createEmbedder, hasWebGPU}` replaces the image
+model and the WebGPU probe — test-only (`tests/e2e/id-switch-image-check.mjs`).
+
+**Runs automatically after tracking.** `pose/tracker.js`'s `runTrackingPass` calls
+`runIdSwitchChecks({auto: true, statusPrefix, size, image})` after BOTH Track All
+and Track Frame Range: size when the Tracking Wizard's `autoSwitchCheck` is on
+(default), images when `autoImageSwitchCheck` is on (default OFF — minutes, needs
+the videos + WebGPU). Auto mode appends each check's result to the pass's status
+line ("Assigned N identities … · ID-switch check (body size): …; ID-switch check
+(images): …"), opens the ID Switches tab only when a possible switch is found, and reports
+a check that cannot run as "skipped — reason", never as a failure of the pass. It
+always analyses the WHOLE session's identities.
+
+**The image check.** Needs the session's videos and WebGPU (else it says why).
+Runs under its own cancellable progress dialog (Cancel / Esc -> "cancelled", no
+markers added): model download (first use), "Cropping and embedding N views:
+frame i of n — about X min left", then fitting. Reads `imageCheckHz` (default 2)
+and `imageCheckThreshold` (default -25). Measured on a real 5-min, 3-animal,
+8-camera session in Chrome (HEVC from Google Drive), before streaming decode and
+view selection: 370 s, ~20 crops/s end to end. Its encounter scores matched the
+offline-calibrated ones (correlation 0.999). Speed now (5-mouse, 8 cameras, local
+HEVC, 150 frames 32 apart ≈ the 2 Hz default, Chrome fp16 on an M-series Mac):
+85 s seeking per frame -> 59 s streamed -> 24 s streamed at 3 views per animal
+(32 s at 4, 16 s at 2) -> **21 s with crops cut in workers** (all views: 50 s) —
+~9 min for a 30-min, 5-animal session. The model (~105 crops/s) is the floor, so
+time scales with views per animal x `imageCheckHz`; decoding + cropping alone
+would allow ~270 crops/s.
+Reads `imageCheckMaxViews` (default 3) and passes it as `maxViewsPerAnimal`, and
+`imageCheckWebNN` (default 0) as `webnn`; the embedder's `backend()` outcome is
+attached to the result as `model` and its note shown under "About these flags";
+`embedder.stats()` is attached as `timing`, logged to the console and shown there
+as "Image check speed on this machine: …". Passes `inFlight: embedder.inFlight`.
+
+**User-facing features.** The **ID Switches** tab (`#tabIdSwitches` /
+`#idSwitchPanel` in `index.html`, third tab; at the default panel width it sits in
+"More ▾"). Results are stored per session on `session._idSwitch` (`{results:
+{size?, image?}, reviewed: Set, showRepeats, current}`), so they survive
+closing/reopening the tab and switching sessions — and are SAVED in the `.slp`
+(`metadata.lucid.idSwitchReview`, see `ui/id-switch-review.js`; ticking a row,
+a new run and Clear mark the project unsaved) — until the check re-runs (a cue replaces only its own results; ticks on
+change points it finds again are kept, matched by cue + frame + pair), "Clear",
+or a new tracking pass. The tab shows a heading, per-check counts, "About these
+flags" (the method, calibration figures, sampling rate, frame-rate warning and
+the image backend note), a sticky toolbar ("N of M reviewed", **Next
+unreviewed ▸** — the next unticked row after the current one, wrapping —
+**Clear**, and "Show N later encounters that still look swapped"), then one row
+per change point: a **reviewed** checkbox, time, `id_a ↔ id_b` (each name in its
+identity's colour, as in the overlays), score, the encounter's span ("close
+4:59.6–5:01.7 (frames 17,977–18,105)") with an **end ⇥** button, and
+"frame N · check · note" (Both / size / images; "follows the switch at m:ss";
+"labelling changes here; earlier encounters look swapped"; "still swapped"). A
+change point both checks found (same pair within 1 s) is ONE "Both" row (scores
+"size / image"). Clicking a row navigates there; ticking it dims the row and its
+seekbar tick (`reviewed`). **Where a row lands:** an encounter's frame is the
+LAST close sample (the labels are read from the tracklets AFTER it), so a swap
+happens before it, while the animals are close; clicking a row therefore lands
+`ID_SWITCH_LEAD_IN_SECONDS` (1 s) before the close spell STARTS
+(`idSwitchLeadInFrame`, from the flag's `startFrame`; its end frame when the start
+is unknown, e.g. a file saved before start frames were kept), so pressing play
+shows the whole interaction; **end ⇥** jumps to the end frame, and Next
+unreviewed uses the lead-in too. **The selected row's progress bar** pops up on
+selection and follows the viewer's frame (stepping, scrubbing, playback):
+0% at the landing frame (1 s before the close spell), the close spell — where a
+swap would happen — shaded amber in the middle, 100% at 1 s after the
+encounter's end; clamped outside that range. `updateIdSwitchProgress(frame)` is
+called from `ui/ui-wiring.js` `updateSeekbarVisual` on every frame change: one
+style write, and a no-op without a selected row (the bar element is looked up
+once per render/selection, not per frame). The same interval drives an
+**animated box around the pair in every camera view** (`ui/id-switch-highlight.js`,
+set by row selection and panel renders, advanced by `updateIdSwitchProgress`). A check run from the menu always opens the tab; an
+automatic one only when it found something. The tab content is the panel's one
+scroller (the list has none of its own). With no results it says so and offers
+"Check by body size" / "Check by images…" (they click the menu items).
+
+**Notes / caveats.** Kept a leaf like `ui/track-range-modal.js` (no import of
+`pose/initialization.js`); it opens the panel through the DOM (the toggle button
+and the tab button), not by importing ui-wiring. The module keeps its `-modal`
+name for the image check's progress dialog, which is still modal.
+
+**Imports from project modules.** `ui/app-state.js` (`state`, `timeline`,
+`getActiveSession`), `import-export/save-load.js` (`setStatus`),
+`ui/loading-overlay.js` (`showLoadingProgress`, `hideLoading`, `yieldToPaint`),
+`ui/settings.js` (`getTrackingThreshold`), `pose/id-switch-check.js`,
+`ui/image-embedder.js` (`hasWebGPU`, `createImageEmbedder`),
+`ui/id-switch-review.js` (row keys, change-point helpers, `linkIdSwitchResults`),
+`ui/id-switch-highlight.js` (`setIdSwitchHighlight`, `updateIdSwitchHighlight`).
+
+**Imported by.** `ui/ui-wiring.js` (`#menuCheckSizeSwitches`,
+`#menuCheckImageSwitches`, `setIdSwitchNavigator`, `updateIdSwitchProgress`), `pose/tracker.js` (the
+automatic run, `clearIdSwitchResults`), `ui/info-panel.js` and
+`ui/sessions-panes.js` (`refreshIdSwitchPanel`).
+
+**Coverage.** `tests/e2e/size-switch-check.mjs` (size, menu path, the checklist:
+ticks, Next unreviewed, persistence across the tab / a re-run / a session switch,
+Clear, one scroller),
+`tests/e2e/track-auto-size-switch-check.mjs` (after Track All / Track Frame Range),
+`tests/e2e/id-switch-image-check.mjs` (images with an injected embedder: "Both"
+merge, identical-size animals found by images only, Esc cancel, no WebGPU, menu,
+default off).
+
+---
+
+### ui/id-switch-review.js
+
+**Purpose.** The ID Switches tab's review checklist as data: the helpers that read
+a session's check results (`session._idSwitch`) and their `.slp` serialization,
+`metadata.lucid.idSwitchReview`, written and read through
+`import-export/visibility-metadata.js` (the one `metadata.lucid` seam).
+
+**Key exports.** `idSwitchRowKey(m)` (check + frame + identity NAMES — names, not
+ids, are what a reopened project still agrees on); `idSwitchPrimary(res)` (change
+points), `idSwitchMarkers(res)` (+ repeats), `idSwitchOnsets(res)` (the
+"possible switches" count), `idSwitchEncounterCount(res)`;
+`linkIdSwitchResults(results)` (tag each marker's `cue`, link a size and an image
+change point of the same pair within 1 s as `agree` — "Both");
+`serializeIdSwitchReview(session)` -> payload or `null` (no check results -> no
+key, so untouched projects keep their bytes); `ingestIdSwitchReview(session,
+payload)` (rebuilds `session._idSwitch`, re-links "Both"; ignores anything
+malformed, never throws).
+
+**Format.** `{v: 1, checks: {size?|image?: {encounters, sampleHz, step, fps,
+fpsFromVideo, [imageHz, crops, cameras, model: {name, note}], points: [[frame,
+nameA, nameB, score (0.1), kind ('' | 'end'), followOf (frame | -1), continues
+(0 | 1), startFrame (the encounter's first close frame | -1; absent in files saved
+before it existed — they still open, rows then land on the end frame)], …]}},
+reviewed: [rowKey, …]}` — only what the tab and the timeline
+draw; not the encounters or the fitted models. A restored check result has
+`restored: true` and `encounterCount` instead of `encounters`.
+
+**Imports from project modules.** None (loads in the node test sandbox; listed in
+`tests/run-node.js`).
+
+**Imported by.** `ui/id-switch-modal.js`, `import-export/visibility-metadata.js`.
+
+**Coverage.** `tests/test-id-switch-check.mjs` (lossless reopen -> re-save,
+"Both" re-link, ticks, garbage tolerance, nothing written without results);
+`tests/e2e/visibility-settings-roundtrip.mjs` (both writers, real reader).
+
+---
+
+### ui/id-switch-highlight.js
+
+**Purpose.** An animated box around the selected ID-switch row's two animals in
+every camera view, while the viewer's frame is inside that row's interval (1 s
+before they come close -> 1 s after they separate — the row's progress-bar span).
+
+**Key exports.** `setIdSwitchHighlight({nameA, nameB, p0, p1} | null)`;
+`updateIdSwitchHighlight(frame)` (every frame change, via
+`ui/id-switch-modal.js` `updateIdSwitchProgress`); `getIdSwitchHighlight()`.
+
+**How.** Draws on its OWN canvas per view (`.id-switch-canvas`, appended to the
+view's `.canvas-wrapper`, `pointer-events: none`), backing size video × zoom like
+the overlay canvas: the wrapper's CSS transform carries zoom/pan/rotation, the
+overlay redraw paths (which clear the overlay canvas every frame) never touch it,
+and the overlay-video export does not include it. A `requestAnimationFrame` loop
+runs ONLY while the frame is in the interval — the outline marches (dash offset)
+and pulses even when paused — and stops after clearing the canvases once outside
+it. Boxes are recomputed only when the frame changes: per camera, the instances
+whose identity NAME is one of the pair at that frame (per-frame track identity
+first, then the group's `identityId`; unlinked instances via
+`getIdentityIdForUnlinkedInstance`), one box around both (or the one visible),
+labelled "id_a ↔ id_b" in the identities' colours. Lines, padding and text are
+sized in SCREEN pixels (canvas width / (layout width × zoom)), so a small tile
+of a large video stays readable. Lazy projects: nothing for a non-resident frame.
+
+**Imports from project modules.** `ui/app-state.js` (`state`), `ui/overlays.js`
+(`makeVideoToCanvasTransform`).
+
+**Imported by.** `ui/id-switch-modal.js`.
+
+**Coverage.** `tests/e2e/id-switch-highlight.mjs` (two real views: box around
+the pair and not the third animal, animates while paused, cleared past the
+interval and redrawn on return, Clear stops it).
+
+---
+
+### ui/image-embedder.js
+
+**Purpose.** Appearance embeddings for the image ID-switch check: for a sampled
+frame and the identities present, decode that frame in every camera
+(streamed: see below), cut a masked, pose-aligned crop of each identity from
+its own 2D keypoints, and embed the crops with DINOv2-small on the GPU.
+
+**Speed.** `prepareFrames(frames)` opens one `streamingReader` per camera over the
+whole sorted frame list (mediabunny `samplesAtTimestamps`: decode forward once,
+instead of `getFrame` re-decoding from the keyframe — up to a 250-frame GOP — for
+every sample; falls back to `getFrame` without a mediabunny backend);
+`releaseFrames()` closes them. Model runs are serialised on a queue, so the
+check's one-ahead request decodes and crops the next frame while the GPU embeds
+the current one. `maxViewsPerAnimal` (from `imageCheckMaxViews`) embeds only each
+animal's N largest views (`selectViews`, by Nose–TTI pixel length, decided from
+the keypoints before decoding); cameras no animal needs are not fetched.
+Cropping runs in a pool of module workers (`createCropPool`,
+`ui/image-crop-worker.js`; one per core but one, at most 8; one job = one view of
+one frame, its VideoFrame transferred and closed by the worker — a decoder-cached
+frame is sent as a `clone()`, anything else as an ImageBitmap copy). A failed
+worker drops that one view of that frame and the rest of the run crops inline;
+`window.LUCID_CROP_WORKERS = 0` forces inline. `writeInputTensor`'s 160 -> 224
+sample positions are a precomputed table (same arithmetic, bit-identical).
+**GPU feeding (2026-10-04).** On RTX 2000 Ada / RTX 4000 Ada PCs the GPU ran ~50%
+busy at ~83 crops/s — below the M2 Pro — because each frame was one small model
+call (~15 crops) with the GPU idle between calls. Now: (1) the model's output
+stays on the GPU (`preferredOutputLocation: 'gpu-buffer'`; its ONLY output is
+`last_hidden_state` [n, 257, 384], 5.9 MB per 15 crops) and `clsFromGpu` copies
+just token 0 of each crop into a staging buffer — 1/257 of the readback,
+bit-identical (max |difference| 0); (2) model runs are a greedy BATCH QUEUE: one
+run at a time, each taking every crop queued meanwhile (up to `EMBED_MAX_BATCH`
+= 64), with the check keeping `EMBED_IN_FLIGHT` = 8 frames in flight
+(`inFlight` on the provider) so batches fill while the GPU works. M2 Pro, 150
+real frames: 104 -> **155 crops/s**, GPU busy 66% -> 98%, batches ~15 -> ~55,
+embeddings identical. (3) `stats()` / `summarizeEmbedTiming` /
+`formatEmbedTiming`: crops/s, GPU busy % (model call + result wait over wall
+time), batches, ms/crop, and per-frame decode / crop / queue latency — logged
+to the console and shown under "About these flags", so a slow run says where it
+waited (e.g. Drive-streamed video: decode 734 ms/frame, GPU busy 43%), ending
+with the backend and precision that ran ("· WebGPU fp16" — fp32 where the GPU
+lacks `shader-f16`, ~1.5x slower on an M2 Pro). Field results (5-mouse, 3,375
+frames, 8 cameras, 8 in flight): RTX 2000 Ada PC 131 crops/s, GPU busy 92% at
+7.1 ms/crop — compute-bound; RTX 4000 Ada VM 161 crops/s, GPU busy 76% at
+4.8 ms/crop, decode ~530 ms/frame with its video decoder 44% busy — frame
+supply-bound. 16 in flight was tried and reverted: no change (PC 124, VM 160
+crops/s; decode is throughput-bound, so each frame just waited twice as long)
+while the PC's dedicated GPU memory climbed to 10.6 GB.
+**Decode workers were tried and removed** (2026-10-04). The recordings are HEVC,
+P-frames only, a keyframe every 250 frames, so the check decodes essentially
+every frame of every camera (~2,000–2,700 decoded frames/s on the field
+machines). A per-camera module worker that opened the camera's file with
+mediabunny, stream-decoded and cropped there gave bit-identical crops, and the
+same throughput as the main thread on an M2 Pro (~4,800 decoded frames/s, the
+hardware decoder's limit) — but on an RTX 4000 Ada VM (Windows) it ran at about
+half the speed (~4–5 vs ~10.7 frames/s), with the hardware video decoder less
+busy (19–26% vs 44%) and dedicated GPU memory climbing in a GC sawtooth to 19.3
+of 20 GB. Not reproducible on macOS (no unclosed-VideoFrame warnings), so it was
+removed rather than kept as an option. Cheaper decoding has to come from the
+recordings (keyframes every 0.5 s).
+Embeddings are bit-identical across all of this (cosine 1.00000 vs seeking,
+top-k vs the same views at all-k, and max |difference| 0 for worker vs inline
+crops over 5,687 real crops).
+
+**WebNN (opt-in, experimental: `webnn: true`, from `imageCheckWebNN`).** WebNN can
+reach hardware WebGPU cannot — on Windows, Chrome runs it through Windows ML /
+DirectML, which use NVIDIA tensor cores. It is behind
+`chrome://flags/#web-machine-learning-neural-network` (Chrome 154), compiles a
+static graph (input fixed to `WEBNN_BATCH` = 8 crops via `freeDimensionOverrides`,
+the last batch zero-padded), and its numerics are not the calibrated model's. So
+the first `WEBNN_TRIAL_FRAMES` (6) frames are embedded on BOTH backends — WebGPU's
+output is what the check uses — and `chooseBackend` keeps WebNN only if it is
+>= 10% faster and agrees (median cosine >= 0.998, worst >= 0.98); it stops early
+once WebNN runs at under half WebGPU's speed. Any WebNN failure falls back to
+WebGPU. `backend()` -> `{name, note}` says what happened. Measured on the M2 Pro
+(the only hardware tested): WebNN runs the whole graph (652/652 nodes on the WebNN
+EP) but on the CPU whatever the device hint, `powerPreference` or the
+`WebNNCoreML*` features — raw matmuls 0.29 TFLOPS, the model 14 vs 140 crops/s —
+so the trial keeps WebGPU (results identical, +3.4 s). Forced WebNN (`webnn:
+'force'`, benchmarking only) agrees with WebGPU: cosine median 0.9994, worst 0.997.
+**Windows / NVIDIA RTX 2000 Ada (2026-10-04, Chrome with the WebNN flag): the
+trial picked WebNN — 435 vs 180 crops/s (2.4x, the tensor cores via Windows ML),
+embeddings agree (cosine 0.9992); the same 8 image switches as the WebGPU run.**
+The whole check went 124–131 -> 151 crops/s (386 -> 335 s): with the model
+that fast the run is decode-bound (decode 608 ms/frame, queue 4 ms, the video
+decoder 83% busy). WebNN model runs are timed into the speed line (they return
+results on the CPU, so run + readback are one figure). Workers: 9-16% faster on an M2 Pro (model-bound
+there), main thread blocked 0.1 s instead of 10-24 s per 150 frames, and the
+decode + crop ceiling rose from 145 to ~270 crops/s at 3 views (decoding alone:
+7.9 s vs 8.3 s with cropping) — headroom for a GPU faster than ~145 crops/s.
+Numbers in `ui/id-switch-modal.js`.
+
+**Key exports.** `createImageEmbedder(session, {onStatus, maxViewsPerAnimal, webnn})` ->
+`{getEmbeddings, prepareFrames, releaseFrames, backend, stats, inFlight, views}` (the provider
+`checkImageSwitches` needs; `releaseFrames` also terminates the crop pool and
+disposes a WebNN model);
+`loadImageModel(onStatus)` (once, cached promise); `hasWebGPU()`;
+`selectViews(geos, maxViews)`; `EMBED_MAX_BATCH`, `EMBED_IN_FLIGHT`,
+`summarizeEmbedTiming(tm, backend, dtype)`, `formatEmbedTiming(t)`; WebNN: `hasWebNN()`, `loadWebNNModel(onStatus)`,
+`chooseBackend(trial)`, `WEBNN_BATCH`, `WEBNN_TRIAL_FRAMES`; `createCropPool()` -> `{run(image, crops) ->
+Promise<Float32Array[]>, broken, terminate()}` or null; crop helpers
+`cropGeometry`, `cutCrop`, `convexHull`, `writeInputTensor`; constants
+`TRANSFORMERS_URL`, `IMAGE_MODEL_ID`, `IMAGE_MODEL_MB`, `CROP` (160), `INPUT` (224).
+
+**The crop** (must match the calibration): rotate so the nose points right
+(Nose − TTI), centre on the mean of the body keypoints, side 1.3 x body length,
+160 x 160, greyscale; outside the animal's convex hull dilated by a quarter body
+length is black, and so are the other animals' hulls in that view; resized to
+224 (bilinear) and ImageNet-normalised; embedding = CLS token of
+`last_hidden_state` (post-layernorm). Checked against the offline pipeline on 24
+real crops: pixel correlation 0.994 (median), 99% mask agreement; embeddings
+cosine 0.971 (vs 0.644 between different crops).
+
+**Dependencies.** transformers.js **pinned to 4.3.0** (`/+esm` from jsdelivr —
+pinned for the reason dockview is) and `onnx-community/dinov2-small` from the
+Hugging Face CDN, both fetched on FIRST USE and cached by the browser; nothing
+about the user's data is sent. fp16 (~44 MB) when the GPU has `shader-f16`, else
+fp32 (~88 MB). WebGPU only: the CPU (WASM) runtime measured ~50x slower (3 vs 155
+crops/s) and its int8 model drifts (cosine 0.953 vs the calibrated model). Re-check
+the CLS extraction (`last_hidden_state` token 0) on any version bump.
+
+**Imports from project modules.** `ui/app-state.js` (`state.views`). Spawns
+`ui/image-crop-worker.js`.
+
+**Imported by.** `ui/id-switch-modal.js`, `ui/image-crop-worker.js`.
+
+**Coverage.** Crop geometry, `selectViews`, `chooseBackend` and the resize table in
+`tests/test-id-switch-check.mjs`; the crop pool in `tests/e2e/image-crop-worker.mjs`;
+the full path on real data by a scratch harness (not in the suite: it needs the
+proofread videos and GPU) — see the image-check notes above.
+
+---
+
+### ui/image-crop-worker.js
+
+**Purpose.** Module worker that cuts the image ID-switch check's crops off the
+main thread, for `createCropPool` in `ui/image-embedder.js`. It runs the same
+`cutCrop` + `writeInputTensor` the main thread would, so its output is
+bit-identical (asserted).
+
+**Messages.** IN `{id, image: VideoFrame|ImageBitmap (transferred), crops:
+[{g: cropGeometry, others: [hull]}]}` — one camera view of one frame; OUT `{id,
+tensors: [Float32Array(3 x 224 x 224)]}` (transferred, one per crop, in order) or
+`{id, error}`. The worker owns the image and closes it.
+
+**Imports from project modules.** `ui/image-embedder.js` (`cutCrop`,
+`writeInputTensor`, `CROP`, `INPUT`; that module's only import, `ui/app-state.js`,
+is worker-safe).
+
+**Spawned by.** `ui/image-embedder.js` (`createCropPool`).
+
+**Coverage.** `tests/e2e/image-crop-worker.mjs`.
+
+---
+
 ### ui/settings.js
 
 **Purpose.** Central user-settings store: the default triangulation method
@@ -4465,12 +4967,17 @@ Shortcuts and the Hot Keys modal where people look for them.
 - `getTrackingThresholdDefs()` / `getTrackingThreshold(id)` /
   `getTrackingThresholds()` / `setTrackingThresholds(map)` — read/write the
   tracker's user-editable thresholds. `getTrackingThresholdDefs` returns the
-  wizard's render catalog `[{ id, label, default, value, min, max, step, desc }]`,
+  wizard's render catalog `[{ id, label, default, value, min, max, step, desc, kind }]`
+  (`kind`: `'toggle'` for on/off settings, drawn as a switch; else `'number'`),
   **filtered to `WIZARD_THRESHOLD_IDS`** — the CrossViewTracker's free parameters
   only (`filterMinVisibleNodes`, `filterMinInstanceScore`, `corr2dWeight`,
   `corr3dWeight`, `velocityThreshold`, `distanceThreshold`, `timePenalty`,
   `stale`, `matchGate` (0/1 toggle for the CrossViewTracker match gate),
-  `reprojErrorThreshold`). The remaining catalog entries (`epipolarDecay`, `reprojSigma`, `epipolarWeight`,
+  `reprojErrorThreshold`, `autoSwitchCheck` — 0/1, run the body-size ID-switch
+  check after Track All / Track Frame Range, default 1; `autoImageSwitchCheck` —
+  0/1, the image check likewise, default 0; `imageCheckThreshold` -25;
+  `imageCheckHz` 2; `imageCheckMaxViews` 3; `imageCheckWebNN` — 0/1, try WebNN,
+  default 0). The remaining catalog entries (`epipolarDecay`, `reprojSigma`, `epipolarWeight`,
   `reprojWeight`, `minMatchScore`, `prevIdentityBonus`, `reprojGate2/3/4`,
   `track3dWeight`) drive the bench-only luc3d matcher and are hidden from the UI
   but still resolve via `getTrackingThreshold`. `getTrackingThresholds` returns
@@ -4554,12 +5061,16 @@ render a greyed, dashed reference chip), and **Tracking Wizard** (three sections
 number field, range `0–1`, step `0.01`, seeded from `getNodeWeight(name)`; a `0`
 drops the node from the CrossViewTracker's association cost and greys the row
 (`.settings-view-excluded`), with a hint when no skeleton is loaded; **Camera
-Views** — one row per camera of the active session with a binary `0/1` number
-field seeded from `getCameraWeight(name)`; a `0` excludes that view from tracking
-and greys the row, with a hint when no cameras are loaded; and **Tracking
-Thresholds** — one labelled+described number field per `getTrackingThresholdDefs()`
-entry (the CrossViewTracker's free parameters only; legacy luc3d thresholds are
-filtered out), range/step from the catalog). All edits mutate a local `working`
+Views** — one row per camera of the active session with an on/off switch
+(the app's `.toggle-switch`, `role="switch"`; stored as a `0/1` weight) seeded
+from `getCameraWeight(name)`; off excludes that view from tracking and greys the
+row, with a hint when no cameras are loaded; and **Tracking Thresholds** — one
+labelled+described number field per `getTrackingThresholdDefs()` entry (the
+CrossViewTracker's free parameters only; legacy luc3d thresholds are filtered
+out), range/step from the catalog — or, for a `kind: 'toggle'` entry (the match
+gate, the two after-tracking ID-switch checks, the WebNN opt-in), an on/off
+switch stored as `1`/`0` (`makeToggle`). Covered by
+`tests/e2e/settings-wizard-toggles.mjs`. All edits mutate a local `working`
 state only (only editable bindings are tracked); nothing commits until **Apply**
 (`setDefaultTriangulationMethod` + `applyBindings` + `setNodeWeights` +
 `setCameraWeights` + `setTrackingThresholds`), which then repaints overlays +
@@ -4644,6 +5155,10 @@ when the bar appears/disappears.
   `setFrameModified(frameIdx, modified)`, `getPreferredHeight`,
   `getCameraGroups`, `getLabelLines`, `getRowCount`,
   `getTrackAreaElement`.
+
+**Possible-ID-switch markers** are no longer drawn here — they moved to the
+transport seekbar (`ui/seekbar-markers.js`); the timeline's marker layer, its
+`setSwitchMarkers` / `getSwitchMarkers` API and tooltip text are gone.
 
 **Initial-load 40% cap.** `setData(session)` sizes the container via
 `_fitContainerToData()`, which clamps the container height to
@@ -5355,6 +5870,11 @@ stopping at the last frame; the step transport buttons/keys stop it first.
   per track and assigns it to every group; sets `session.trustTracks`; was the
   old Edit-menu "Trust Track Labels" toggle) and `Propagate IDs → Tracks`
   (`menuPropagateIdsToTracks` — calls `Session.propagateIdentitiesToTracks`).
+  Tracks ▸ **Check ID Switches (Body Size)…** (`menuCheckSizeSwitches`) calls
+  `runIdSwitchChecks({size: true, navigateToFrame})`, and Tracks ▸ **Check ID
+  Switches (Images)…** (`menuCheckImageSwitches`) `runIdSwitchChecks({image: true,
+  navigateToFrame})`, from `ui/id-switch-modal.js`; `setIdSwitchNavigator` is
+  called once at setup.
 - Color-by toggle: the "Color by" Tracks/ID control lives in the top
   toolbar (buttons `colorByTracks` / `colorById`, next to the Errors
   checkbox), not the Tracks menu. `updateColorByToggle()` reflects
@@ -5577,6 +6097,9 @@ button's `#tbTrackFrameRange` dropdown item — #212),
 References…" — #226),
 `seekbar-tooltip.js` (`installSeekbarTooltip`, the seekbar's hover tooltip —
 #142),
+`seekbar-markers.js` (`installSeekbarMarkers`, `seekbarMarkerAt`,
+`describeSwitchMarker`, `setSeekbarMarkerFrames` — the possible-ID-switch ticks:
+the scrub handlers and the tooltip snap to a tick within 5 px),
 `color-by.js` (`onColorByChange`, `setColorByIdentity` — the Color: Tracks /
 ID toggle, also flipped by the tracker after Track All — #242),
 `video-filters.js` (`setSessionRotation`; `clampRotation` still comes in via
@@ -6907,7 +7430,9 @@ keyboard transport.
 ### import-export/visibility-metadata.js
 
 **Purpose.** The `metadata.lucid` ↔ `Session` mapping for the Visibility panel's
-SESSION-SCOPED settings. One module owns the key list so a writer and a reader
+SESSION-SCOPED settings — and for the other per-session panel state that belongs
+in the project file: the ID Switches tab's review checklist (`idSwitchReview`,
+`ui/id-switch-review.js`). One module owns the key list so a writer and a reader
 cannot drift: adding a setting means touching this file and nothing else.
 
 **What it covers, and what it deliberately does not.** The Visibility panel
@@ -6926,7 +7451,7 @@ holds two kinds of state:
 **Key exports.**
 - `VISIBILITY_METADATA_KEYS` — every key this module may write
   (`videoBrightness`, `videoContrast`, `videoRotation`, `hiddenCameras`,
-  `hiddenTracks`, `hiddenIdentities`). Exported so tests can assert a default
+  `hiddenTracks`, `hiddenIdentities`, `idSwitchReview`). Exported so tests can assert a default
   project carries none of them without duplicating the list.
 - `writeVisibilityMetadata(lucid, session)` — mutate a `metadata.lucid` dict in
   place, adding only non-default settings; returns the same dict.
@@ -6949,7 +7474,7 @@ Purely additive to the file format: these are optional keys inside LUCID's own
 so files stay readable by the SLEAP GUI.
 
 **Imports from project modules.** `../ui/video-filters.js`,
-`../ui/timeline-visibility.js` — both dependency-free leaves, so this module
+`../ui/timeline-visibility.js`, `../ui/id-switch-review.js` — all dependency-free leaves, so this module
 bridges into the test runners without pulling `app.js` in.
 
 **Imported by.** The four writers — `import-export/file-io.js`
@@ -6962,7 +7487,8 @@ the v2 and v3 project-JSON shapes) — and the three readers —
 
 **Tests.** `tests/test-visibility-metadata.js` (unit; bridged as
 `window.__VisibilityMetadata`) and
-`tests/e2e/visibility-settings-roundtrip.mjs` (real app, both writers).
+`tests/e2e/visibility-settings-roundtrip.mjs` (real app, both writers; includes
+the ID Switches checklist).
 
 ---
 
