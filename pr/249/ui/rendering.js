@@ -61,7 +61,28 @@ export function setReprojErrorVisible(visible, opts) {
  * @returns {boolean} whether any checkbox changed (for the status line)
  */
 export function showReprojectionsOnly() {
-    var want = [['visUser', false], ['visPredicted', false], ['visErrors', false], ['visReprojections', true]];
+    return setToolbarLayers([['visUser', false], ['visPredicted', false], ['visErrors', false], ['visReprojections', true]]);
+}
+
+// Suffix for a Triangulate All status line when `showReprojectionsOnly` hid
+// anything, so the user knows where User / Predicted went.
+export var REPROJ_ONLY_NOTE = ' · showing Reproj only (toolbar)';
+
+/**
+ * After Track Frame / Track Frame Range / Track All: the run's product is the
+ * tracked PREDICTIONS (now colored by identity), so show only those — Predicted
+ * on; User, Reproj and Errors off. Same mechanics as `showReprojectionsOnly`
+ * (each box fires its own `change` event). Returns whether anything changed.
+ */
+export function showPredictedOnly() {
+    return setToolbarLayers([['visUser', false], ['visPredicted', true], ['visReprojections', false], ['visErrors', false]]);
+}
+
+// Suffix for a tracking status line when `showPredictedOnly` changed anything.
+export var PREDICTED_ONLY_NOTE = ' · showing Predicted only (toolbar)';
+
+/** Set toolbar layer checkboxes `[[id, checked], …]` as clicks would; true if any changed. */
+function setToolbarLayers(want) {
     var changed = false;
     for (var i = 0; i < want.length; i++) {
         var el = document.getElementById(want[i][0]);
@@ -72,10 +93,6 @@ export function showReprojectionsOnly() {
     }
     return changed;
 }
-
-// Suffix for a Triangulate All status line when `showReprojectionsOnly` hid
-// anything, so the user knows where User / Predicted went.
-export var REPROJ_ONLY_NOTE = ' · showing Reproj only (toolbar)';
 
 // ============================================
 // Overlay Drawing

@@ -4628,6 +4628,7 @@ kbd {
 .id-switch-line1 { display: flex; gap: 8px; font-size: 12px; }
 .id-switch-time { font-variant-numeric: tabular-nums; color: var(--text-secondary); }
 .id-switch-pair { flex: 1; min-width: 0; }
+.id-switch-id { font-weight: 600; }
 .id-switch-score { font-variant-numeric: tabular-nums; color: var(--text-secondary); }
 .id-switch-line2 { font-size: 11px; color: var(--text-muted); margin-top: 1px; }
 

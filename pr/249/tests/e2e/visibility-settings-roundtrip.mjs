@@ -26,6 +26,11 @@
  *     keep producing identical bytes (`tests/e2e/save-golden-digest.mjs`).
  *  6. The writer adds ONLY its own keys — every other `metadata.lucid` field
  *     survives untouched.
+ *  7. The ID Switches tab's review checklist (`idSwitchReview`,
+ *     ui/id-switch-review.js) rides the same seam: flagged change points, their
+ *     scores / follow-on / repeat / 'end' kinds, the image run's details, and the
+ *     ticked rows come back exactly, with a "Both" pair re-linked — and a session
+ *     no check ran on writes no such key.
  *
  * Run: node visibility-settings-roundtrip.mjs   (spawns its own http.server)
  */
@@ -267,6 +272,7 @@ try {
         const lazyMod = await import('/loading/sio-lazy-loader.js');
         const vfmod = await import('/ui/video-filters.js');
         const vmeta = await import('/import-export/visibility-metadata.js');
+        const review = await import('/ui/id-switch-review.js');
         const { Skeleton, Camera, Instance, InstanceGroup, FrameGroup, Session } = pd;
         const SioLazyLoader = lazyMod.SioLazyLoader || lazyMod.default;
         const NODES = 4;
@@ -283,7 +289,8 @@ try {
               rotation: { a_cam0: 90, a_cam2: -179 },      // a_cam1 stays 0
               hiddenCameras: ['a_cam1'],
               hiddenTracks: ['t0'],
-              hiddenIdentities: ['id0'] },
+              hiddenIdentities: ['id0'],
+              idSwitch: true },
             { name: 'sessB', cams: ['b_cam0', 'b_cam1'], fx: 2000, nFrames: 3,
               brightness: { b_cam1: 45 },
               rotation: { b_cam0: 180 },
@@ -318,6 +325,24 @@ try {
             session._hiddenCameras = new Set(spec.hiddenCameras);
             session._hiddenTracks = new Set(spec.hiddenTracks);
             session._hiddenIdentities = new Set(spec.hiddenIdentities);
+            if (spec.idSwitch) {
+                // What a size + image check run leaves (pose/id-switch-check.js shapes): a change point
+                // both checks found (frames 100 / 110, same pair -> "Both"), a follow-on, a still-swapped
+                // repeat, an 'end' point; the image run's sampling + backend note; two rows ticked.
+                const pt = (frame, a, b, score, extra) => Object.assign({ frame, nameA: a, nameB: b, identityA: a, identityB: b, score }, extra || {});
+                const results = {
+                    size: { ok: true, encounters: new Array(40).fill(0), sampleHz: 15, step: 4, fps: 60, fpsFromVideo: true,
+                            flags: [pt(100, 'id0', 'idX', -73.46), pt(900, 'id0', 'idY', -12.5, { followOf: 100 }), pt(1500, 'id0', 'idX', -40, { continues: true })],
+                            changes: [pt(2400, 'idX', 'idY', 3.04, { kind: 'end' })] },
+                    image: { ok: true, encounters: new Array(31).fill(0), sampleHz: 15, step: 4, fps: 60, fpsFromVideo: true,
+                             imageHz: 2, crops: 4321, cameras: ['a_cam0', 'a_cam2'], model: { name: 'webgpu', note: 'WebNN 14 vs WebGPU 140 crops/s — WebNN not faster here, used WebGPU' },
+                             flags: [pt(110, 'idX', 'id0', -57.21)], changes: [] },
+                };
+                review.linkIdSwitchResults(results);
+                session._idSwitch = { results, reviewed: new Set([review.idSwitchRowKey(results.size.flags[0]), review.idSwitchRowKey(results.size.changes[0])]),
+                                      showRepeats: false, current: null };
+                spec.idSwitchExpected = review.serializeIdSwitchReview(session);
+            }
             return session;
         }
 
@@ -362,7 +387,11 @@ try {
                         hiddenCameras: Array.from(fresh._hiddenCameras).sort(),
                         hiddenTracks: Array.from(fresh._hiddenTracks).sort(),
                         hiddenIdentities: Array.from(fresh._hiddenIdentities).sort(),
+                        idSwitch: review.serializeIdSwitchReview(fresh),
                     },
+                    idSwitchBothLinked: !!(fresh._idSwitch && fresh._idSwitch.results.size &&
+                        fresh._idSwitch.results.size.flags.some(m => m.agree && m.agree.cue === 'image' && m.agree.agree === m)),
+                    idSwitchReviewed: fresh._idSwitch ? Array.from(fresh._idSwitch.reviewed).sort() : [],
                 });
             }
             return { nSessions: (slpData.sessions || []).length, perSession };
@@ -388,7 +417,7 @@ try {
             const plain = buildSession({
                 ...SPECS[0], name: 'plain',
                 brightness: {}, rotation: {},
-                hiddenCameras: [], hiddenTracks: [], hiddenIdentities: [],
+                hiddenCameras: [], hiddenTracks: [], hiddenIdentities: [], idSwitch: false,
             });
             const labels = fileio.buildSlpLabelsAllViews(plain, viewsFor(SPECS[0]), videoFilesFor(SPECS[0]));
             const bytes = await window.SleapIO.saveSlpToBytes(labels);
@@ -445,6 +474,7 @@ try {
             hiddenCameras: spec.hiddenCameras.slice().sort(),
             hiddenTracks: spec.hiddenTracks.slice().sort(),
             hiddenIdentities: spec.hiddenIdentities.slice().sort(),
+            idSwitch: spec.idSwitchExpected || null,
         };
     }
 
@@ -463,7 +493,11 @@ try {
             `hidden tracks on disk (got ${JSON.stringify(e.present.hiddenTracks)})`);
         check(eq(e.present.hiddenIdentities, want.hiddenIdentities),
             `hidden identities on disk (got ${JSON.stringify(e.present.hiddenIdentities)})`);
+        check(!!e.present.idSwitchReview && e.present.idSwitchReview.checks.size.points.length === 4 && e.present.idSwitchReview.reviewed.length === 2,
+            `the ID Switches checklist is on disk (${e.present.idSwitchReview ? e.present.idSwitchReview.checks.size.points.length + ' size points, ' + e.present.idSwitchReview.reviewed.length + ' ticked' : 'absent'})`);
         check(eq(e.restored, want), `everything restores into a fresh Session (got ${JSON.stringify(e.restored)})`);
+        check(e.idSwitchBothLinked && eq(e.idSwitchReviewed, ['size:100:id0:idX', 'size:2400:idX:idY']),
+            `the checklist reopens with its "Both" pair re-linked and its ticks (${JSON.stringify(e.idSwitchReviewed)})`);
         check(Object.values(e.foreignKeysIntact).every(Boolean),
             `every other metadata.lucid key survived (got ${JSON.stringify(e.foreignKeysIntact)})`);
     }

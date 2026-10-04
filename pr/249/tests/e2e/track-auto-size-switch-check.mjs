@@ -14,6 +14,10 @@
  *     session the window alone is too little tracking, so the status says it was
  *     skipped and why — the range itself still succeeds.
  *  3. With the Tracking Wizard's `autoSwitchCheck` off, neither runs it.
+ *  1b/2b/5. Track All, Track Frame Range and single-frame Track Frame each end
+ *     with ONLY Predicted ticked in the toolbar (User, Reproj, Errors off — as
+ *     Triangulate All shows only Reproj), the status saying so; when the boxes
+ *     already show only Predicted nothing changes and no note is added.
  * Fixture B (labels swapped after one encounter, as in tests/e2e/size-switch-check.mjs):
  *  4. The automatic path opens the right panel (even when hidden) on the ID
  *     Switches tab when a switch IS found, its status
@@ -80,7 +84,14 @@ try {
     const tabOpen = () => page.evaluate(() => !!document.querySelector('#tabIdSwitches.active') &&
         !document.getElementById('infoPanelWrapper').classList.contains('collapsed'));
 
+    const LAYERS = ['visUser', 'visPredicted', 'visReprojections', 'visErrors'];
+    const boxes = () => page.evaluate(ids => ids.map(id => document.getElementById(id).checked), LAYERS);
+    const tickAll = () => page.evaluate(ids => ids.forEach(id => { const el = document.getElementById(id);
+        if (!el.checked) { el.checked = true; el.dispatchEvent(new Event('change', { bubbles: true })); } }), LAYERS);
+    const PRED_ONLY = [false, true, false, false];
+
     // ---- 1. Track All
+    await tickAll();
     await page.evaluate(async () => {
         await window.__buildTrackable('A');
         const AS = await import('/ui/app-state.js');
@@ -94,6 +105,9 @@ try {
         `Track All: check ran, result appended to its status ("${st}")`);
     check(markersA === 0, 'Track All: the stale marker from before was cleared');
     check(!(await tabOpen()), 'Track All: the ID Switches tab is not opened when nothing is found');
+    let bx = await boxes();
+    check(JSON.stringify(bx) === JSON.stringify(PRED_ONLY) && /showing Predicted only \(toolbar\)/.test(st),
+        `Track All: only Predicted is shown afterwards (User/Pred/Reproj/Errors = ${bx}), and the status says so`);
 
     // ---- 2a. Track Frame Range on the session Track All just tracked: the check covers the WHOLE
     //          session (65 s), so it runs even though the window itself is only 10 s
@@ -101,8 +115,11 @@ try {
     st = await statusText();
     check(/\(601–900\)/.test(st) && /ID-switch check \(body size\): no possible switches/.test(st),
         `Track Frame Range after Track All: check ran over the whole session ("${st}")`);
+    check(!/showing Predicted only/.test(st) && JSON.stringify(await boxes()) === JSON.stringify(PRED_ONLY),
+        'boxes already Predicted-only: nothing changes, no note');
 
     // ---- 2b. Track Frame Range on a fresh session: 10 s of tracking -> skipped, range still succeeds
+    await tickAll();
     const rr = await page.evaluate(async () => {
         await window.__buildTrackable('B');
         const tr = await import('/pose/tracker.js'); tr.setTrackerNumAnimals(2);
@@ -112,6 +129,20 @@ try {
     check(rr && rr.ok, 'Track Frame Range: the range run succeeded');
     check(/^Assigned 2 identities .*\(1–300\)/.test(st) && /ID-switch check \(body size\): skipped — needs at least 60 s of tracking/.test(st),
         `Track Frame Range: check ran and reports why it was skipped ("${st}")`);
+    bx = await boxes();
+    check(JSON.stringify(bx) === JSON.stringify(PRED_ONLY) && /showing Predicted only/.test(st), `Track Frame Range: only Predicted shown afterwards (${bx})`);
+
+    // ---- 5. single-frame Track Frame
+    await tickAll();
+    const tf = await page.evaluate(async () => {
+        await window.__buildTrackable('D');
+        const AS = await import('/ui/app-state.js'); AS.state.currentFrame = 120;
+        const tr = await import('/pose/tracker.js'); tr.setTrackerNumAnimals(2); tr.trackCurrentFrame();
+        return document.getElementById('statusText').textContent;
+    });
+    bx = await boxes();
+    check(/^Frame 121: 2 identities/.test(tf) && /showing Predicted only/.test(tf) && JSON.stringify(bx) === JSON.stringify(PRED_ONLY),
+        `Track Frame: only Predicted shown afterwards (${bx}; "${tf}")`);
 
     // ---- 3. setting off: neither pass runs it
     await page.evaluate(async () => {

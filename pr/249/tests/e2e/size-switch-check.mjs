@@ -14,8 +14,11 @@
  *  2. The timeline carries the markers (the change point plus faint repeats).
  *  3. The tab is the panel's one scroller (the list has no scroller of its own);
  *     "Show repeats" lists the still-swapped encounters too.
- *  4. Clicking a row navigates the viewer to that frame.
- *  5. The checklist: ticking a row counts it reviewed and dims its timeline
+ *  4. Clicking a row navigates the viewer to that frame; identity names are
+ *     drawn in their identity's colour.
+ *  5. The checklist: ticking a row marks the project unsaved (the checklist is
+ *     saved in the .slp — round trip in visibility-settings-roundtrip.mjs),
+ *     counts it reviewed and dims its timeline
  *     marker; "Next unreviewed" jumps to the next unticked row; the results and
  *     ticks survive leaving the tab, a re-run, and switching sessions away and
  *     back (results are per session); "Clear" removes results and markers.
@@ -146,13 +149,26 @@ try {
     const cur = await page.evaluate(() => window.__lucid.state.currentFrame);
     check(cur === row.frame, `clicking the row jumps to frame ${row.frame} (now ${cur})`);
 
+    // ---- 4b. identity names are drawn in their identity's colour
+    const colours = await page.evaluate(() => {
+        const s = window.__lucid.state.session, hex = c => { const d = document.createElement('i'); d.style.color = c; return d.style.color; };
+        return Array.from(document.querySelectorAll('#idSwitchPanel .id-switch-id')).map(el => {
+            const id = s.identities.find(i => i.name === el.textContent);
+            return { name: el.textContent, got: el.style.color, want: id && id.color ? hex(id.color) : null };
+        });
+    });
+    check(colours.length >= 2 && colours.every(c => c.want && c.got === c.want),
+        `identity names take their identity's colour (${colours.slice(0, 2).map(c => c.name + ' ' + c.got).join(', ')})`);
+
     // ---- 5. the checklist
+    await page.evaluate(() => { window.__lucid.state.isDirty = false; window.__lucid.state.session.isDirty = false; });
     await page.click('#idSwitchPanel .id-switch-row .id-switch-tick');
     const afterTick = await page.evaluate(async () => {
         const m = (await import('/ui/app-state.js')).timeline.getSwitchMarkers();
         return { done: document.querySelector('.id-switch-done').textContent.trim(), first: document.querySelector('.id-switch-row').classList.contains('is-reviewed'),
-                 reviewedMarkers: m.filter(x => x.reviewed).length };
+                 reviewedMarkers: m.filter(x => x.reviewed).length, dirty: window.__lucid.state.isDirty && window.__lucid.state.session.isDirty };
     });
+    check(afterTick.dirty, 'ticking a row marks the project unsaved (the checklist is saved in the .slp)');
     check(/^1 of /.test(afterTick.done) && afterTick.first && afterTick.reviewedMarkers >= 1,
         `ticking a row: "${afterTick.done}", row dimmed, its timeline marker dimmed (${afterTick.reviewedMarkers})`);
     if (ui.rows.length > 1) {
