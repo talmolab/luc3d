@@ -8,8 +8,8 @@
  * noise, from 4 cameras. The scoring underneath is the real pose/id-switch-check.js.
  * Fixtures are tracked sessions (InstanceGroups only) where two identities swap
  * after one encounter, as in tests/e2e/size-switch-check.mjs. Asserted:
- *  1. Animals of different size: both checks find the swap; the dialog shows it
- *     ONCE, as "Both", and the timeline carries size (amber) and image (cyan) markers.
+ *  1. Animals of different size: both checks find the swap; the ID Switches tab
+ *     lists it ONCE, as "Both", and the timeline carries size (amber) and image (cyan) markers.
  *  2. Animals of IDENTICAL size: only the image check finds it ("Images" row).
  *  3. A cancellable progress dialog: Esc mid-run stops it, reports "cancelled"
  *     and adds no image markers.
@@ -90,8 +90,7 @@ try {
             } };
         };
     });
-    const rows = () => page.evaluate(() => Array.from(document.querySelectorAll('.size-switch-row')).map(r => ({ frame: +r.dataset.frame, text: r.textContent, cls: r.className })));
-    const closeDialog = () => page.evaluate(() => { const b = document.getElementById('sizeSwitchClose'); if (b) b.click(); });
+    const rows = () => page.evaluate(() => Array.from(document.querySelectorAll('#idSwitchPanel .id-switch-row')).map(r => ({ frame: +r.dataset.frame, text: r.textContent, cls: r.className })));
 
     // ---- 1. different sizes: both checks agree -> one "Both" row
     let fx = await page.evaluate(async () => {
@@ -103,11 +102,10 @@ try {
     let R = await rows();
     const both = R.find(r => Math.abs(r.frame - fx.swapFrame) <= 60 && /Both/.test(r.text));
     check(!!both && fx.pair.every(n => both.text.includes(n)), `different sizes: the switch is ONE "Both" row at ${both && both.frame} (switch ${fx.swapFrame}): "${both && both.text}"`);
-    check(!R.some(r => r !== both && Math.abs(r.frame - fx.swapFrame) <= 60 && /Images/.test(r.text)), '…and not a second "Images" row for the same change point');
+    check(!R.some(r => r !== both && Math.abs(r.frame - fx.swapFrame) <= 60 && /· images/.test(r.text)), '…and not a second "Images" row for the same change point');
     const cues = await page.evaluate(async () => { const tl = (await import('/ui/app-state.js')).timeline; return [...new Set(tl.getSwitchMarkers().map(m => m.cue))].sort(); });
     check(cues.join() === 'image,size', `timeline carries both checks' markers (${cues})`);
     check(!(await page.$('.id-switch-progress')), 'the progress dialog is gone when done');
-    await closeDialog();
 
     // ---- 2. identical sizes: only the image check finds it
     fx = await page.evaluate(async () => {
@@ -118,10 +116,9 @@ try {
     });
     R = await rows();
     const imgRow = R.find(r => Math.abs(r.frame - fx.swapFrame) <= 60);
-    check(!!imgRow && /Images/.test(imgRow.text) && !/Both/.test(imgRow.text), `identical sizes: found by images only ("${imgRow && imgRow.text}")`);
+    check(!!imgRow && /· images/.test(imgRow.text) && !/Both/.test(imgRow.text), `identical sizes: found by images only ("${imgRow && imgRow.text}")`);
     const st2 = await page.evaluate(() => document.getElementById('statusText').textContent);
     check(/Check ID Switches: no possible switches.*; Check ID Switches \(images\): 1 possible switch/.test(st2), `status reports each check ("${st2}")`);
-    await closeDialog();
 
     // ---- 3. cancel mid-run with Esc
     await page.evaluate(async () => {
@@ -134,18 +131,18 @@ try {
     await page.keyboard.press('Escape');
     const cancelled = await page.evaluate(async () => { const r = await window.__done;
         return { reason: r && r.image && r.image.reason, status: document.getElementById('statusText').textContent,
-                 progress: !!document.querySelector('.id-switch-progress'), dialog: !!document.querySelector('.size-switch-modal'),
+                 progress: !!document.querySelector('.id-switch-progress'), rows: document.querySelectorAll('#idSwitchPanel .id-switch-row').length,
                  markers: (await import('/ui/app-state.js')).timeline.getSwitchMarkers().filter(m => m.cue === 'image').length }; });
     check(cancelled.reason === 'cancelled' && /cancelled/.test(cancelled.status), `Esc cancels the image check ("${cancelled.status}")`);
-    check(!cancelled.progress && !cancelled.dialog && cancelled.markers === 0, 'nothing left behind: no progress dialog, no results dialog, no image markers');
+    check(!cancelled.progress && !cancelled.rows && cancelled.markers === 0, 'nothing left behind: no progress dialog, no listed results, no image markers');
 
     // ---- 4. no WebGPU
     const noGpu = await page.evaluate(async () => {
         const M = await import('/ui/id-switch-modal.js');
         await M.runIdSwitchChecks({ image: true, inject: { createEmbedder: window.__fakeEmbedder(0), hasWebGPU: async () => false } });
-        return { status: document.getElementById('statusText').textContent, dialog: !!document.querySelector('.size-switch-modal') };
+        return { status: document.getElementById('statusText').textContent, rows: document.querySelectorAll('#idSwitchPanel .id-switch-row').length };
     });
-    check(/needs WebGPU/.test(noGpu.status) && !noGpu.dialog, `without WebGPU it explains why ("${noGpu.status}")`);
+    check(/needs WebGPU/.test(noGpu.status) && !noGpu.rows, `without WebGPU it explains why ("${noGpu.status}")`);
 
     // ---- 5. menu + default
     const ui = await page.evaluate(async () => ({ menu: !!document.getElementById('menuCheckImageSwitches'),

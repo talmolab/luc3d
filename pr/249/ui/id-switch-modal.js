@@ -5,9 +5,12 @@
  * Runs the size and/or image check (pose/id-switch-check.js) over the active
  * session's tracked identities, puts every flagged close encounter on the
  * timeline as a possible-switch marker (amber = size, cyan = images), and lists
- * the CHANGE POINTS in a dialog — click a row to jump there. A change point both
- * checks found (same pair, within 1 s) is shown once as "Both". Repeats (other
- * encounters of a pair that is still swapped) are counted and can be shown.
+ * the CHANGE POINTS in the right panel's "ID Switches" tab as a checklist —
+ * click a row to jump there, tick it once reviewed, "Next unreviewed" walks the
+ * list. Results (and what was reviewed) are kept per session until the check
+ * runs again or "Clear". A change point both checks found (same pair, within
+ * 1 s) is shown once as "Both". Repeats (other encounters of a pair that is
+ * still swapped) are counted and can be shown.
  *
  * The size check only reads the tracker's 3D skeletons (seconds, no video). The
  * image check decodes video and embeds crops on the GPU (ui/image-embedder.js):
@@ -101,7 +104,7 @@ function recordingFps(session) {
 function tagAndLink(results) {
     ['size', 'image'].forEach(function (cue) {
         var r = results[cue];
-        if (r && r.ok) markersOf(r).forEach(function (m) { m.cue = cue; });
+        if (r && r.ok) markersOf(r).forEach(function (m) { m.cue = cue; delete m.agree; });
     });
     var s = results.size, im = results.image;
     if (!(s && s.ok && im && im.ok)) return;
@@ -206,11 +209,11 @@ async function runImage(session, rate, inject) {
 /**
  * Run the selected checks, mark the results on the timeline and report them.
  *
- * From the menu (`auto` false) the dialog always opens. After Track All or Track
- * Frame Range (`auto: true`, pose/tracker.js) the results are appended to the
- * pass's own status line (`statusPrefix`), the dialog opens only when a possible
- * switch was found, and a check that cannot run is reported as skipped — never as
- * an error of the tracking pass.
+ * From the menu (`auto` false) the ID Switches tab always opens. After Track All
+ * or Track Frame Range (`auto: true`, pose/tracker.js) the results are appended
+ * to the pass's own status line (`statusPrefix`), the tab opens only when a
+ * possible switch was found, and a check that cannot run is reported as skipped —
+ * never as an error of the tracking pass.
  *
  * @param {{size?: boolean, image?: boolean, auto?: boolean, statusPrefix?: string,
  *          navigateToFrame?: function(number), inject?: {createEmbedder?, hasWebGPU?}}} opts
@@ -222,7 +225,7 @@ export async function runIdSwitchChecks(opts) {
     opts = opts || {};
     var auto = !!opts.auto, cues = ['size', 'image'].filter(function (c) { return opts[c]; });
     if (!cues.length) return null;
-    var deps = { navigateToFrame: opts.navigateToFrame || _navigate };
+    var deps = { navigateToFrame: opts.navigateToFrame || null };
     var session = getActiveSession();
     var head = function (cue) { return auto ? 'ID-switch check (' + CUE_LABEL[cue] + ')' : (cue === 'size' ? 'Check ID Switches' : 'Check ID Switches (images)'); };
     if (!hasTrackedIdentities(session)) {
@@ -247,20 +250,25 @@ export async function runIdSwitchChecks(opts) {
         res.fpsFromVideo = rate.fromVideo;
         var n = countOnsets(res);
         parts.push(head(cue) + ': ' + (n
-            ? n + ' possible switch' + (n === 1 ? '' : 'es') + ' in ' + res.encounters.length + ' close encounters — marked on the timeline'
+            ? n + ' possible switch' + (n === 1 ? '' : 'es') + ' in ' + res.encounters.length + ' close encounters'
             : 'no possible switches in ' + res.encounters.length + ' close encounters'));
         if (n) level = 'warning';
     }
-    tagAndLink(results);
     var ran = cues.filter(function (c) { return results[c] && results[c].ok; });
-    if (timeline && ran.length) {
-        // A cue that ran replaces its own old markers; a cue that didn't keeps them.
-        var keep = timeline.getSwitchMarkers().filter(function (m) { return ran.indexOf(m.cue || 'size') < 0; });
-        timeline.setSwitchMarkers(keep.concat.apply(keep, ran.map(function (c) { return markersOf(results[c]); })));
+    if (ran.length) {
+        // A cue that ran replaces its own earlier results; a cue that didn't run (or failed) keeps them.
+        var st = session._idSwitch || (session._idSwitch = { results: {}, reviewed: new Set(), showRepeats: false, current: null });
+        ran.forEach(function (c) { st.results[c] = results[c]; });
+        if (deps.navigateToFrame) st.navigate = deps.navigateToFrame;
+        tagAndLink(st.results);
+        var live = new Set(listRows(st, true).map(rowKey));
+        st.reviewed.forEach(function (k) { if (!live.has(k)) st.reviewed.delete(k); });   // keep ticks that still apply
     }
-    setStatus((auto && opts.statusPrefix ? opts.statusPrefix + ' · ' : '') + parts.join('; '), level);
+    refreshIdSwitchPanel(session);      // also when nothing ran: the tab and markers always show this session's results
     var anyFound = ran.some(function (c) { return countOnsets(results[c]) > 0; });
-    if ((!auto && ran.length) || anyFound) showIdSwitchModal(results, deps);
+    setStatus((auto && opts.statusPrefix ? opts.statusPrefix + ' · ' : '') + parts.join('; ') +
+        (anyFound ? ' — listed in the ID Switches tab' : ''), level);
+    if ((!auto && ran.length) || anyFound) openIdSwitchPanel();
     return results;
 }
 
@@ -270,115 +278,160 @@ export function runSizeSwitchCheck(opts) {
 }
 
 // ---------------------------------------------------------------------------
-// The results dialog
+// The ID Switches tab (right panel): a per-session review checklist
 // ---------------------------------------------------------------------------
 
-/**
- * The results dialog. Esc / Close / backdrop close it; markers stay on the
- * timeline until "Clear markers".
- */
-export function showIdSwitchModal(results, deps) {
-    var showRepeats = false;
-    var ran = ['size', 'image'].filter(function (c) { return results[c] && results[c].ok; });
-    var overlay = document.createElement('div');
-    overlay.className = 'multi-frame-modal-overlay';
-    var modal = document.createElement('div');
-    modal.className = 'multi-frame-modal size-switch-modal';
-    var repeats = 0;
-    ran.forEach(function (c) { repeats += results[c].flags.filter(function (f) { return f.continues; }).length; });
-    var title = ran.length === 2 ? 'Possible ID Switches' : ran[0] === 'image' ? 'Possible ID Switches (Images)' : 'Possible ID Switches (Body Size)';
-    var summary = ran.map(function (c) {
-        var r = results[c], n = countOnsets(r);
-        return '<div class="track-range-summary">' + (ran.length === 2 ? '<b>' + (c === 'size' ? 'Body size' : 'Images') + ':</b> ' : '') +
-            r.encounters.length + ' close encounters checked · <b>' + n + '</b> possible switch' + (n === 1 ? '' : 'es') + '</div>';
-    }).join('');
-    var r0 = results[ran[0]];
-    modal.innerHTML =
-        '<h3>' + title + '</h3>' +
-        '<p>Each close encounter between two identities is scored by whether the animals leaving it look like the ' +
-        'identities they now carry — by 3D body size' + (results.image && results.image.ok ? ' and/or by appearance in the videos' : '') +
+/** A row's identity across re-runs: its check, frame and pair. */
+function rowKey(m) { return (m.cue || 'size') + ':' + m.frame + ':' + m.identityA + ':' + m.identityB; }
+
+function isReviewed(st, m) { return st.reviewed.has(rowKey(m)) || (m.agree ? st.reviewed.has(rowKey(m.agree)) : false); }
+
+/** The rows to list: change points (plus repeats when shown); a "Both" pair appears once, on its size row. */
+function listRows(st, withRepeats) {
+    var rows = [];
+    ['size', 'image'].forEach(function (c) {
+        var r = st.results[c];
+        if (!(r && r.ok)) return;
+        (withRepeats ? markersOf(r) : primaryOf(r)).forEach(function (m) { if (!(c === 'image' && m.agree)) rows.push(m); });
+    });
+    return rows.sort(function (a, b) { return a.frame - b.frame; });
+}
+
+/** Put the session's markers on the timeline, reviewed ones dimmed (`reviewed`). */
+function syncMarkers(session) {
+    if (!timeline || !timeline.setSwitchMarkers) return;
+    var st = session && session._idSwitch, all = [];
+    if (st) ['size', 'image'].forEach(function (c) {
+        var r = st.results[c];
+        if (r && r.ok) markersOf(r).forEach(function (m) { m.reviewed = isReviewed(st, m); all.push(m); });
+    });
+    timeline.setSwitchMarkers(all);
+}
+
+/** Show the right panel (if hidden) on the ID Switches tab. */
+export function openIdSwitchPanel() {
+    var wrap = document.getElementById('infoPanelWrapper');
+    if (wrap && wrap.classList.contains('collapsed')) { var t = document.getElementById('infoPanelToggleBtn'); if (t) t.click(); }
+    var tab = document.querySelector('.panel-tab[data-tab="tabIdSwitches"]');
+    if (tab) tab.click();
+}
+
+/** Forget a session's results (a new tracking pass relabels everything) and clear its markers. */
+export function clearIdSwitchResults(session) {
+    session = session || getActiveSession();
+    if (session) delete session._idSwitch;
+    refreshIdSwitchPanel(session);
+}
+
+function aboutHtml(st, ran) {
+    var r0 = st.results[ran[0]], im = st.results.image;
+    return '<p>Each close encounter between two identities is scored by whether the animals leaving it look like the ' +
+        'identities they now carry — by 3D body size' + (im && im.ok ? ' and/or by appearance in the videos' : '') +
         ', learned from the tracker\'s own labels. Flags are leads to review, not certainties: size cannot tell apart ' +
         'animals of near-equal size, and images struggle with animals that look alike.' +
         (ran.length === 2 ? ' <b>Review "Both" rows first</b> — when both checks flag the same encounter it was a real swap ' +
             'far more often (in calibration: 98% vs 79% for images alone, and none on a 30-min recording with no switches).' : '') + '</p>' +
-        summary +
-        (repeats ? '<div class="track-range-summary">' + repeats + ' later encounter' + (repeats === 1 ? '' : 's') + ' still look swapped</div>' : '') +
-        '<div class="size-switch-rate">Analysed ' + r0.sampleHz.toFixed(1) + ' samples/s (every ' +
+        '<p class="id-switch-rate">Analysed ' + r0.sampleHz.toFixed(1) + ' samples/s (every ' +
         (r0.step === 1 ? 'frame' : ordinal(r0.step) + ' frame') + ' at ' + r0.fps.toFixed(2).replace(/\.?0+$/, '') + ' fps' +
-        (results.image && results.image.ok ? '; images at ' + results.image.imageHz.toFixed(1) + '/s, ' +
-            results.image.crops.toLocaleString() + ' crops from ' + results.image.cameras.length + ' views' +
-            (results.image.model && results.image.model.note ? ' (' + escapeHtml(results.image.model.note) + ')' : '') : '') +
+        (im && im.ok ? '; images at ' + im.imageHz.toFixed(1) + '/s, ' + im.crops.toLocaleString() + ' crops from ' + im.cameras.length + ' views' +
+            (im.model && im.model.note ? ' (' + escapeHtml(im.model.note) + ')' : '') : '') +
         (r0.fpsFromVideo ? ', measured from the video)'
             : ') — <b>no video is loaded, so this frame rate was not measured</b>. If the recording ran at a ' +
-              'different rate, set it in the fps box and run the check again: scores are evidence per second.') +
-        '</div>' +
-        (repeats ? '<label class="size-switch-repeats"><input type="checkbox" id="sizeSwitchRepeats"> Show repeats</label>' : '') +
-        '<div class="size-switch-list" id="sizeSwitchList"></div>' +
-        '<div class="modal-actions">' +
-        '<button id="sizeSwitchClear">Clear markers</button>' +
-        '<button class="primary" id="sizeSwitchClose">Close</button>' +
-        '</div>';
-    overlay.appendChild(modal);
-    document.body.appendChild(overlay);
-    var listEl = modal.querySelector('#sizeSwitchList');
-
-    function rowsToShow() {
-        var rows = [];
-        ran.forEach(function (c) {
-            var list = showRepeats ? markersOf(results[c]) : primaryOf(results[c]);
-            list.forEach(function (m) {
-                if (c === 'image' && m.agree) return;      // shown once, on the size row, as "Both"
-                rows.push(m);
-            });
-        });
-        return rows.sort(function (a, b) { return a.frame - b.frame; });
-    }
-    function render() {
-        var rows = rowsToShow();
-        if (!rows.length) { listEl.innerHTML = '<p class="size-switch-empty">No encounter scored below the threshold.</p>'; return; }
-        var both = ran.length === 2;
-        listEl.innerHTML = '<table class="align-views-table"><thead><tr><th>Time</th><th>Frame</th><th>Identities</th>' +
-            (both ? '<th>Check</th>' : '') + '<th class="align-views-num">Score</th></tr></thead><tbody>' +
-            rows.map(function (f) {
-                var cue = f.agree ? 'both' : f.cue;
-                var score = f.agree ? Math.round(f.score) + ' / ' + Math.round(f.agree.score) : Math.round(f.score);
-                return '<tr class="size-switch-row' + (f.continues || f.followOf != null ? ' is-repeat' : '') + ' cue-' + cue + '" data-frame="' + f.frame + '">' +
-                    '<td>' + fmtTime(f.frame) + '</td><td>' + (f.frame + 1).toLocaleString() + '</td>' +
-                    '<td>' + escapeHtml(f.nameA) + ' ↔ ' + escapeHtml(f.nameB) +
-                    (f.continues ? ' (still swapped)'
-                        : f.followOf != null ? ' (follows the switch at ' + fmtTime(f.followOf) + ')'
-                        : f.kind === 'end' ? ' (labelling changes here; earlier encounters look swapped)' : '') + '</td>' +
-                    (both ? '<td>' + (cue === 'both' ? '<b>Both</b>' : cue === 'size' ? 'Size' : 'Images') + '</td>' : '') +
-                    '<td class="align-views-num">' + score + '</td></tr>';
-            }).join('') + '</tbody></table>';
-    }
-
-    function close() {
-        document.removeEventListener('keydown', onKey);
-        overlay.remove();
-    }
-    function onKey(e) {
-        if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(); }
-    }
-    listEl.addEventListener('click', function (e) {
-        var row = e.target.closest('.size-switch-row');
-        if (!row) return;
-        listEl.querySelectorAll('.size-switch-row.is-current').forEach(function (r) { r.classList.remove('is-current'); });
-        row.classList.add('is-current');
-        if (deps && deps.navigateToFrame) deps.navigateToFrame(parseInt(row.dataset.frame, 10));
-    });
-    var rep = modal.querySelector('#sizeSwitchRepeats');
-    if (rep) rep.addEventListener('change', function () { showRepeats = rep.checked; render(); });
-    modal.querySelector('#sizeSwitchClear').addEventListener('click', function () {
-        if (timeline) timeline.setSwitchMarkers([]);
-        setStatus('Cleared ID-switch markers', 'success');
-        close();
-    });
-    modal.querySelector('#sizeSwitchClose').addEventListener('click', close);
-    overlay.addEventListener('mousedown', function (e) { if (e.target === overlay) close(); });
-    document.addEventListener('keydown', onKey);
-    render();
+              'different rate, set it in the fps box and run the check again: scores are evidence per second.') + '</p>';
 }
 
-/** Back-compat name. */
-export var showSizeSwitchModal = showIdSwitchModal;
+function rowHtml(st, f, both) {
+    var cue = f.agree ? 'both' : f.cue, key = rowKey(f), rev = isReviewed(st, f);
+    var score = f.agree ? Math.round(f.score) + ' / ' + Math.round(f.agree.score) : Math.round(f.score);
+    var note = f.continues ? 'still swapped'
+        : f.followOf != null ? 'follows the switch at ' + fmtTime(f.followOf)
+        : f.kind === 'end' ? 'labelling changes here; earlier encounters look swapped' : '';
+    return '<div class="id-switch-row cue-' + cue + (f.continues || f.followOf != null ? ' is-repeat' : '') + (rev ? ' is-reviewed' : '') +
+        (st.current === key ? ' is-current' : '') + '" data-frame="' + f.frame + '" data-key="' + escapeHtml(key) + '">' +
+        '<input type="checkbox" class="id-switch-tick" title="Reviewed"' + (rev ? ' checked' : '') + '>' +
+        '<div class="id-switch-main"><div class="id-switch-line1"><span class="id-switch-time">' + fmtTime(f.frame) + '</span>' +
+        '<span class="id-switch-pair">' + escapeHtml(f.nameA) + ' ↔ ' + escapeHtml(f.nameB) + '</span>' +
+        '<span class="id-switch-score" title="Score' + (f.agree ? ' (size / images)' : '') + '">' + score + '</span></div>' +
+        '<div class="id-switch-line2">frame ' + (f.frame + 1).toLocaleString() +
+        (both ? ' · ' + (cue === 'both' ? '<b>Both</b>' : cue === 'size' ? 'size' : 'images') : '') +
+        (note ? ' · ' + note : '') + '</div></div></div>';
+}
+
+/**
+ * (Re)render the ID Switches tab for `session` (default: the active one) and put
+ * its markers on the timeline. Cheap; called after a check, on every info-panel
+ * refresh and on session switch.
+ */
+export function refreshIdSwitchPanel(session) {
+    session = session || getActiveSession();
+    syncMarkers(session);
+    var host = typeof document !== 'undefined' && document.getElementById('idSwitchPanel');
+    if (!host) return;
+    var st = session && session._idSwitch;
+    var ran = st ? ['size', 'image'].filter(function (c) { return st.results[c] && st.results[c].ok; }) : [];
+    if (!ran.length) {
+        host.innerHTML = '<div class="info-section"><h3>Possible ID switches</h3><p class="table-empty id-switch-empty">' +
+            (hasTrackedIdentities(session) ? 'No ID-switch check has run on this session yet.' : 'Run Track All first: the checks need tracked identities with 3D.') +
+            '</p><div class="id-switch-run"><button class="panel-btn" data-run="menuCheckSizeSwitches">Check by body size</button>' +
+            '<button class="panel-btn" data-run="menuCheckImageSwitches">Check by images…</button></div></div>';
+        host.querySelectorAll('[data-run]').forEach(function (b) {
+            b.addEventListener('click', function () { var m = document.getElementById(b.dataset.run); if (m) m.click(); });
+        });
+        return;
+    }
+    var both = ran.length === 2, primary = listRows(st, false), all = listRows(st, true);
+    var repeats = all.length - primary.length, done = primary.filter(function (m) { return isReviewed(st, m); }).length;
+    var rows = st.showRepeats ? all : primary;
+    host.innerHTML =
+        '<div class="info-section id-switch-head"><h3>Possible ID switches</h3>' +
+        ran.map(function (c) {
+            var r = st.results[c], n = countOnsets(r);
+            return '<div class="id-switch-summary">' + (both ? '<b>' + (c === 'size' ? 'Body size' : 'Images') + ':</b> ' : '') +
+                r.encounters.length.toLocaleString() + ' close encounters · <b>' + n + '</b> possible switch' + (n === 1 ? '' : 'es') + '</div>';
+        }).join('') +
+        '<details class="id-switch-about"><summary>About these flags</summary>' + aboutHtml(st, ran) + '</details>' +
+        '</div>' +
+        '<div class="id-switch-toolbar">' +
+        '<span class="id-switch-done"><b>' + done + '</b> of ' + primary.length + ' reviewed</span>' +
+        '<button class="panel-btn id-switch-next" id="idSwitchNext"' + (done < primary.length ? '' : ' disabled') + '>Next unreviewed ▸</button>' +
+        '<button class="panel-btn" id="idSwitchClear" title="Forget these results and remove their timeline markers">Clear</button>' +
+        (repeats ? '<label class="id-switch-repeats"><input type="checkbox" id="idSwitchRepeats"' + (st.showRepeats ? ' checked' : '') +
+            '> Show ' + repeats + ' later encounter' + (repeats === 1 ? '' : 's') + ' that still look swapped</label>' : '') +
+        '</div>' +
+        '<div class="id-switch-list" id="idSwitchList">' +
+        (rows.length ? rows.map(function (f) { return rowHtml(st, f, both); }).join('')
+            : '<p class="table-empty">No encounter scored below the threshold.</p>') + '</div>';
+    var nav = st.navigate || _navigate;
+    var go = function (row) {
+        st.current = row.dataset.key;
+        host.querySelectorAll('.id-switch-row.is-current').forEach(function (r) { r.classList.remove('is-current'); });
+        row.classList.add('is-current');
+        if (nav) nav(parseInt(row.dataset.frame, 10));
+    };
+    host.querySelector('#idSwitchList').addEventListener('click', function (e) {
+        var row = e.target.closest('.id-switch-row');
+        if (!row) return;
+        if (e.target.classList.contains('id-switch-tick')) {
+            if (e.target.checked) st.reviewed.add(row.dataset.key); else st.reviewed.delete(row.dataset.key);
+            st.current = row.dataset.key;
+            refreshIdSwitchPanel(session);
+            return;
+        }
+        go(row);
+    });
+    host.querySelector('#idSwitchNext').addEventListener('click', function () {
+        var list = Array.from(host.querySelectorAll('.id-switch-row')), at = list.findIndex(function (r) { return r.dataset.key === st.current; });
+        for (var i = 1; i <= list.length; i++) {
+            var r = list[(at + i + list.length) % list.length];
+            if (!r.classList.contains('is-reviewed')) {        // the next listed row not yet ticked, wrapping
+                go(r); r.scrollIntoView({ block: 'nearest' }); return;
+            }
+        }
+    });
+    host.querySelector('#idSwitchClear').addEventListener('click', function () {
+        clearIdSwitchResults(session);
+        setStatus('Cleared the ID-switch results and markers', 'success');
+    });
+    var rep = host.querySelector('#idSwitchRepeats');
+    if (rep) rep.addEventListener('change', function () { st.showRepeats = rep.checked; refreshIdSwitchPanel(session); });
+}

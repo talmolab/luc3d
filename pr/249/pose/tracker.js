@@ -29,7 +29,7 @@ import { loadAllLazyFrames, sweepLazyFrameWindows } from './triangulation.js';
 import { drawAllOverlays } from '../ui/rendering.js';
 import { updateInfoPanel } from '../ui/info-panel.js';
 import { setColorByIdentity } from '../ui/color-by.js';
-import { runIdSwitchChecks } from '../ui/id-switch-modal.js';
+import { runIdSwitchChecks, clearIdSwitchResults } from '../ui/id-switch-modal.js';
 
 /**
  * A frame index as the USER sees it: 1-based.
@@ -1373,9 +1373,9 @@ async function runTrackingPass(range) {
         isRange ? '(range ' + lo + '–' + hi + ', 0-based)' : '');
     console.time('[' + label + '] total');
 
-    // Possible-ID-switch markers (Tracks ▸ Check ID Switches) describe the identities this
-    // pass is about to replace — drop them, for a range too.
-    if (timeline && timeline.getSwitchMarkers && timeline.getSwitchMarkers().length) timeline.setSwitchMarkers([]);
+    // ID-switch results (Tracks ▸ Check ID Switches; the ID Switches tab + timeline markers)
+    // describe the identities this pass is about to replace — drop them, for a range too.
+    clearIdSwitchResults(session);
 
     // Clear old identities/groups for a fresh run. A range clears only its own
     // frames and RECYCLES the existing identities (see runTrackingPass's doc);

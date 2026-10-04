@@ -7,21 +7,24 @@
  * after encounter 16 for the rest of the session — a switch that persists, the
  * shape the size check was validated on (pose/size-switch-check.js; unit-level
  * coverage in tests/test-size-switch-check.mjs). Asserted through the real menu:
- *  1. The dialog's first change point is the switch encounter, naming the
- *     swapped pair; any others come after it and involve a swapped identity
- *     (its encounters with the third animal look off too); the status line
- *     reports the count.
+ *  1. The ID Switches tab of the right panel opens; its first change point is
+ *     the switch encounter, naming the swapped pair; any others come after it
+ *     and involve a swapped identity (its encounters with the third animal look
+ *     off too); the status line reports the count.
  *  2. The timeline carries the markers (the change point plus faint repeats).
- *  2b. In a short (600 px) window the dialog stays inside it with its buttons
- *     visible, and only the list scrolls (one scroller, sticky column heads).
- *  3. Clicking the row navigates the viewer to that frame.
- *  4. Esc closes the dialog and leaves the markers; "Clear markers" removes them.
- *  5. On an untracked session the action warns instead of running.
- *  6. The dialog states the sampling it used and that, with no video loaded,
- *     the frame rate is the app's value rather than a measured one.
+ *  3. The tab is the panel's one scroller (the list has no scroller of its own);
+ *     "Show repeats" lists the still-swapped encounters too.
+ *  4. Clicking a row navigates the viewer to that frame.
+ *  5. The checklist: ticking a row counts it reviewed and dims its timeline
+ *     marker; "Next unreviewed" jumps to the next unticked row; the results and
+ *     ticks survive leaving the tab, a re-run, and switching sessions away and
+ *     back (results are per session); "Clear" removes results and markers.
+ *  6. On an untracked session the action warns instead of running.
+ *  7. The tab states the sampling it used and that, with no video loaded, the
+ *     frame rate is the app's value rather than a measured one.
  *
  * Run: node tests/e2e/size-switch-check.mjs     (SHOT=/path.png saves a timeline screenshot,
- *      DIALOG_SHOT=/path.png the short-window dialog)
+ *      PANEL_SHOT=/path.png the ID Switches tab)
  */
 import { chromium } from 'playwright';
 import { spawn } from 'node:child_process';
@@ -92,16 +95,16 @@ try {
         return { swapFrame, pair: events[SWAP].pair.map(k => 'id_' + k), totalFrames: T * STEP };
     });
 
-    // ---- 1. run it from the real menu item
+    // ---- 1. run it from the real menu item: the ID Switches tab opens
     await page.evaluate(() => document.getElementById('menuCheckSizeSwitches').click());
-    await page.waitForSelector('.size-switch-modal', { timeout: 60000 });
-    const ui = await page.evaluate(() => {
-        const rows = Array.from(document.querySelectorAll('.size-switch-row')).map(r => ({ frame: +r.dataset.frame, text: r.textContent }));
-        const AS = window.__lucid;
-        return { rows, status: document.getElementById("statusText").textContent,
-                 rate: (document.querySelector('.size-switch-rate') || {}).textContent || '' };
-    });
-    console.log('    rows:', JSON.stringify(ui.rows));
+    await page.waitForSelector('#tabIdSwitches.active .id-switch-row', { timeout: 60000 });
+    const rowsNow = () => page.evaluate(() => Array.from(document.querySelectorAll('#idSwitchPanel .id-switch-row'))
+        .map(r => ({ frame: +r.dataset.frame, key: r.dataset.key, text: r.textContent, reviewed: r.classList.contains('is-reviewed') })));
+    const ui = await page.evaluate(() => ({ status: document.getElementById('statusText').textContent,
+        rate: (document.querySelector('#idSwitchPanel .id-switch-rate') || {}).textContent || '',
+        done: (document.querySelector('.id-switch-done') || {}).textContent || '' }));
+    ui.rows = await rowsNow();
+    console.log('    rows:', JSON.stringify(ui.rows.map(r => [r.frame, r.text])));
     // The swapped identities also carry the "wrong" label in their encounters with the THIRD animal
     // after the switch, so those can surface as change points too — but only after the switch, and
     // only involving a swapped identity. The first change point is the switch itself.
@@ -111,9 +114,10 @@ try {
     check(Math.abs(row.frame - fx.swapFrame) <= 40, `…at the switch encounter (frame ${row.frame}, switch at ${fx.swapFrame})`);
     check(fx.pair.every(n => (row.text || '').includes(n)), `…naming the swapped pair (${fx.pair.join(' ↔ ')}): "${row.text}"`);
     check(/15\.0 samples\/s \(every 4th frame at 60 fps/.test(ui.rate) && /not measured/.test(ui.rate),
-        `dialog states the sampling and that the frame rate is not from a video ("${ui.rate.slice(0, 110)}…")`);
-    check(/ 1 possible switch /.test(ui.status), `status counts one switch, not its follow-ons ("${ui.status}")`);
+        `the tab states the sampling and that the frame rate is not from a video ("${ui.rate.slice(0, 110)}…")`);
+    check(/ 1 possible switch /.test(ui.status) && /ID Switches tab/.test(ui.status), `status counts one switch, not its follow-ons, and points at the tab ("${ui.status}")`);
     check(ui.rows.slice(1).every(r => /follows the switch at/.test(r.text)), 'the other change points are labelled as its follow-ons');
+    check(/^0 of \d+ reviewed/.test(ui.done.trim()), `checklist starts at "${ui.done.trim()}"`);
 
     // ---- 2. timeline markers
     const markers = await page.evaluate(async () => (await import('/ui/app-state.js')).timeline.getSwitchMarkers());
@@ -125,41 +129,68 @@ try {
         await page.screenshot({ path: process.env.SHOT, clip: box || undefined });
     }
 
-    // ---- 2b. a short window: the dialog stays inside it, buttons visible, only the list scrolls
-    await page.setViewportSize({ width: 1600, height: 600 });
-    await page.evaluate(() => { const cb = document.getElementById('sizeSwitchRepeats'); if (cb && !cb.checked) cb.click(); });
-    const fit = await page.evaluate(() => {
-        const m = document.querySelector('.size-switch-modal'), l = document.getElementById('sizeSwitchList'),
-            b = document.getElementById('sizeSwitchClose').getBoundingClientRect(), r = m.getBoundingClientRect();
-        return { top: r.top, bottom: r.bottom, vh: innerHeight, btnBottom: b.bottom, listScrolls: l.scrollHeight > l.clientHeight + 1,
-                 modalScrolls: m.scrollHeight > m.clientHeight + 1, listOverflow: getComputedStyle(l).overflowY, rows: l.querySelectorAll('tr').length, listH: l.clientHeight };
-    });
-    check(fit.top >= 0 && fit.bottom <= fit.vh && fit.btnBottom <= fit.vh,
-        `short window: dialog (${Math.round(fit.top)}-${Math.round(fit.bottom)} px) and Close button fit in ${fit.vh} px`);
-    check(fit.listScrolls && fit.listOverflow === 'auto' && !fit.modalScrolls, `the list is the one scroller (${fit.rows} rows in ${fit.listH} px; the dialog itself does not scroll)`);
-    if (process.env.DIALOG_SHOT) {
-        await page.evaluate(() => { document.getElementById('sizeSwitchList').scrollTop = 60; });
-        await page.screenshot({ path: process.env.DIALOG_SHOT });
-    }
-    await page.evaluate(() => { const cb = document.getElementById('sizeSwitchRepeats'); if (cb && cb.checked) cb.click(); });
-    await page.setViewportSize({ width: 1600, height: 900 });
+    // ---- 3. one scroller; Show repeats
+    await page.evaluate(() => document.getElementById('idSwitchRepeats').click());
+    const withRep = await rowsNow();
+    const scroll = await page.evaluate(() => ({ tab: getComputedStyle(document.getElementById('tabIdSwitches')).overflowY,
+        list: getComputedStyle(document.getElementById('idSwitchList')).overflowY }));
+    check(withRep.length > ui.rows.length && withRep.some(r => /still swapped/.test(r.text)),
+        `"Show repeats" lists the still-swapped encounters too (${ui.rows.length} -> ${withRep.length} rows)`);
+    check(scroll.tab === 'auto' && scroll.list === 'visible', `the tab is the one scroller (tab ${scroll.tab}, list ${scroll.list})`);
+    if (process.env.PANEL_SHOT) await page.screenshot({ path: process.env.PANEL_SHOT });
+    await page.evaluate(() => document.getElementById('idSwitchRepeats').click());
 
-    // ---- 3. click the row -> navigate there
-    await page.click('.size-switch-row');
+    // ---- 4. click a row -> navigate there
+    await page.click('#idSwitchPanel .id-switch-row .id-switch-main');
     await page.waitForFunction(f => window.__lucid.state.currentFrame === f, row.frame, { timeout: 10000 }).catch(() => {});
     const cur = await page.evaluate(() => window.__lucid.state.currentFrame);
     check(cur === row.frame, `clicking the row jumps to frame ${row.frame} (now ${cur})`);
 
-    // ---- 4. Esc closes, markers stay; Clear removes them
-    await page.keyboard.press('Escape');
-    const afterEsc = await page.evaluate(async () => ({ open: !!document.querySelector('.size-switch-modal'),
-        n: (await import('/ui/app-state.js')).timeline.getSwitchMarkers().length }));
-    check(!afterEsc.open && afterEsc.n === markers.length, `Esc closes the dialog and keeps the ${afterEsc.n} markers`);
+    // ---- 5. the checklist
+    await page.click('#idSwitchPanel .id-switch-row .id-switch-tick');
+    const afterTick = await page.evaluate(async () => {
+        const m = (await import('/ui/app-state.js')).timeline.getSwitchMarkers();
+        return { done: document.querySelector('.id-switch-done').textContent.trim(), first: document.querySelector('.id-switch-row').classList.contains('is-reviewed'),
+                 reviewedMarkers: m.filter(x => x.reviewed).length };
+    });
+    check(/^1 of /.test(afterTick.done) && afterTick.first && afterTick.reviewedMarkers >= 1,
+        `ticking a row: "${afterTick.done}", row dimmed, its timeline marker dimmed (${afterTick.reviewedMarkers})`);
+    if (ui.rows.length > 1) {
+        await page.click('#idSwitchNext');
+        await page.waitForFunction(f => window.__lucid.state.currentFrame === f, ui.rows[1].frame, { timeout: 10000 }).catch(() => {});
+        const nf = await page.evaluate(() => window.__lucid.state.currentFrame);
+        check(nf === ui.rows[1].frame, `"Next unreviewed" jumps to the next unticked row (frame ${nf}, expected ${ui.rows[1].frame})`);
+    } else {
+        check(await page.evaluate(() => document.getElementById('idSwitchNext').disabled), '"Next unreviewed" is disabled once all are ticked');
+    }
+    // leave the tab and come back; re-run; switch sessions away and back — results and ticks persist
+    await page.click('.panel-tab[data-tab="tabInstances"]');
+    // at the default panel width the tab sits in "More ▾" — reach it the way a user would
+    if (await page.isVisible('.panel-tab[data-tab="tabIdSwitches"]')) await page.click('.panel-tab[data-tab="tabIdSwitches"]');
+    else { await page.click('.panel-tab-more-btn'); await page.click('.panel-tab-more-item:has-text("ID Switches")'); }
+    let back = await rowsNow();
+    check(back.length === ui.rows.length && back[0].reviewed, `reopening the tab shows the same ${back.length} rows, first still ticked`);
     await page.evaluate(() => document.getElementById('menuCheckSizeSwitches').click());
-    await page.waitForSelector('.size-switch-modal', { timeout: 60000 });
-    await page.click('#sizeSwitchClear');
-    const cleared = await page.evaluate(async () => (await import('/ui/app-state.js')).timeline.getSwitchMarkers().length);
-    check(cleared === 0 && !(await page.$('.size-switch-modal')), 'Clear markers removes them and closes the dialog');
+    await page.waitForFunction(() => /Check ID Switches:/.test(document.getElementById('statusText').textContent), null, { timeout: 60000 });
+    await page.waitForTimeout(200);
+    back = await rowsNow();
+    check(back.length === ui.rows.length && back[0].reviewed, 're-running the check keeps the tick on the change point it found again');
+    const perSession = await page.evaluate(async () => {
+        const pd = await import('/pose/pose-data.js'); const AS = await import('/ui/app-state.js'); const IP = await import('/ui/info-panel.js');
+        const a = AS.state.session, b = new pd.Session([], new pd.Skeleton('m', ['Nose', 'TTI'], []), [], 'Other');
+        AS.state.sessions = [a, b]; AS.state.session = b; AS.state.activeSessionIdx = 1; IP.updateInfoPanel();
+        const onB = { rows: document.querySelectorAll('#idSwitchPanel .id-switch-row').length, empty: !!document.querySelector('#idSwitchPanel .id-switch-empty'),
+                      markers: AS.timeline.getSwitchMarkers().length };
+        AS.state.session = a; AS.state.activeSessionIdx = 0; IP.updateInfoPanel();
+        return { onB, onA: { rows: document.querySelectorAll('#idSwitchPanel .id-switch-row').length, markers: AS.timeline.getSwitchMarkers().length } };
+    });
+    check(perSession.onB.rows === 0 && perSession.onB.empty && perSession.onB.markers === 0 &&
+          perSession.onA.rows === ui.rows.length && perSession.onA.markers === markers.length,
+        `results are per session (other session: ${perSession.onB.rows} rows, ${perSession.onB.markers} markers; back: ${perSession.onA.rows} rows, ${perSession.onA.markers} markers)`);
+    await page.click('#idSwitchClear');
+    const cleared = await page.evaluate(async () => ({ n: (await import('/ui/app-state.js')).timeline.getSwitchMarkers().length,
+        rows: document.querySelectorAll('#idSwitchPanel .id-switch-row').length, empty: !!document.querySelector('#idSwitchPanel .id-switch-empty') }));
+    check(cleared.n === 0 && cleared.rows === 0 && cleared.empty, '"Clear" removes the results and the markers, leaving the empty state');
 
     // ---- 5. untracked session warns
     await page.evaluate(async () => {
@@ -169,8 +200,8 @@ try {
         document.getElementById('menuCheckSizeSwitches').click();
     });
     await page.waitForTimeout(300);
-    const warn = await page.evaluate(() => ({ status: document.getElementById('statusText').textContent, open: !!document.querySelector('.size-switch-modal') }));
-    check(!warn.open && /Track All/.test(warn.status), `untracked session: no dialog, a warning ("${warn.status}")`);
+    const warn = await page.evaluate(() => ({ status: document.getElementById('statusText').textContent, rows: document.querySelectorAll('#idSwitchPanel .id-switch-row').length }));
+    check(!warn.rows && /Track All/.test(warn.status), `untracked session: no results, a warning ("${warn.status}")`);
 
     check(errs.length === 0, 'no page errors' + (errs.length ? ': ' + errs.join(' | ') : ''));
 } finally {
