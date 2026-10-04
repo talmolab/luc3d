@@ -4578,7 +4578,8 @@ check); `refreshIdSwitchPanel(session?)` (render the tab and put that session's
 markers on the seekbar — called after a check, from `updateInfoPanel` and from
 `switchSession`); `openIdSwitchPanel()` (show the panel, if hidden, on the tab);
 `clearIdSwitchResults(session?)` (called by `runTrackingPass` before it relabels);
-back-compat `runSizeSwitchCheck`. `inject: {createEmbedder, hasWebGPU}` replaces the image
+`ID_SWITCH_LEAD_IN_SECONDS`, `idSwitchLeadInFrame(marker, fps)`; back-compat
+`runSizeSwitchCheck`. `inject: {createEmbedder, hasWebGPU}` replaces the image
 model and the WebGPU probe — test-only (`tests/e2e/id-switch-image-check.mjs`).
 
 **Runs automatically after tracking.** `pose/tracker.js`'s `runTrackingPass` calls
@@ -4623,12 +4624,20 @@ the image backend note), a sticky toolbar ("N of M reviewed", **Next
 unreviewed ▸** — the next unticked row after the current one, wrapping —
 **Clear**, and "Show N later encounters that still look swapped"), then one row
 per change point: a **reviewed** checkbox, time, `id_a ↔ id_b` (each name in its
-identity's colour, as in the overlays), score, and
+identity's colour, as in the overlays), score, the encounter's span ("close
+4:59.6–5:01.7 (frames 17,977–18,105)") with an **end ⇥** button, and
 "frame N · check · note" (Both / size / images; "follows the switch at m:ss";
 "labelling changes here; earlier encounters look swapped"; "still swapped"). A
 change point both checks found (same pair within 1 s) is ONE "Both" row (scores
 "size / image"). Clicking a row navigates there; ticking it dims the row and its
-seekbar tick (`reviewed`). A check run from the menu always opens the tab; an
+seekbar tick (`reviewed`). **Where a row lands:** an encounter's frame is the
+LAST close sample (the labels are read from the tracklets AFTER it), so a swap
+happens before it, while the animals are close; clicking a row therefore lands
+`ID_SWITCH_LEAD_IN_SECONDS` (1 s) before the close spell STARTS
+(`idSwitchLeadInFrame`, from the flag's `startFrame`; its end frame when the start
+is unknown, e.g. a file saved before start frames were kept), so pressing play
+shows the whole interaction; **end ⇥** jumps to the end frame, and Next
+unreviewed uses the lead-in too. A check run from the menu always opens the tab; an
 automatic one only when it found something. The tab content is the panel's one
 scroller (the list has none of its own). With no results it says so and offers
 "Check by body size" / "Check by images…" (they click the menu items).
@@ -4681,7 +4690,9 @@ malformed, never throws).
 **Format.** `{v: 1, checks: {size?|image?: {encounters, sampleHz, step, fps,
 fpsFromVideo, [imageHz, crops, cameras, model: {name, note}], points: [[frame,
 nameA, nameB, score (0.1), kind ('' | 'end'), followOf (frame | -1), continues
-(0 | 1)], …]}}, reviewed: [rowKey, …]}` — only what the tab and the timeline
+(0 | 1), startFrame (the encounter's first close frame | -1; absent in files saved
+before it existed — they still open, rows then land on the end frame)], …]}},
+reviewed: [rowKey, …]}` — only what the tab and the timeline
 draw; not the encounters or the fitted models. A restored check result has
 `restored: true` and `encounterCount` instead of `encounters`.
 

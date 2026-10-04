@@ -48,6 +48,22 @@ function ordinal(n) {
     return n + (s[(v - 20) % 10] || s[v] || s[0]);
 }
 
+/** Seconds of lead-in before an encounter starts: a row lands here so pressing play shows the whole interaction. */
+export const ID_SWITCH_LEAD_IN_SECONDS = 1;
+
+/** Where a row lands: `ID_SWITCH_LEAD_IN_SECONDS` before its close spell starts (its end frame if the start is unknown). */
+export function idSwitchLeadInFrame(m, fps) {
+    var start = m.startFrame != null && m.startFrame <= m.frame ? m.startFrame : m.frame;
+    return Math.max(0, start - Math.round(ID_SWITCH_LEAD_IN_SECONDS * (fps > 0 ? fps : 30)));
+}
+
+/** "2:00.3" from a 0-based frame index at the app's frame rate (tenths of a second). */
+function fmtTenths(frame) {
+    var t = Math.floor(10 * frame / (state.fps || 30)) / 10;
+    var m = Math.floor(t / 60), s = t - 60 * m;
+    return m + ':' + (s < 10 ? '0' : '') + s.toFixed(1);
+}
+
 /** "12:34" from a 0-based frame index at the app's frame rate. */
 function fmtTime(frame) {
     var sec = frame / (state.fps || 30);
@@ -322,14 +338,24 @@ function rowHtml(session, st, f, both) {
         : f.followOf != null ? 'follows the switch at ' + fmtTime(f.followOf)
         : f.kind === 'end' ? 'labelling changes here; earlier encounters look swapped' : '';
     return '<div class="id-switch-row cue-' + cue + (f.continues || f.followOf != null ? ' is-repeat' : '') + (rev ? ' is-reviewed' : '') +
-        (st.current === key ? ' is-current' : '') + '" data-frame="' + f.frame + '" data-key="' + escapeHtml(key) + '">' +
+        (st.current === key ? ' is-current' : '') + '" data-frame="' + f.frame + '" data-go="' + idSwitchLeadInFrame(f, state.fps) +
+        '" data-key="' + escapeHtml(key) + '">' +
         '<input type="checkbox" class="id-switch-tick" title="Reviewed"' + (rev ? ' checked' : '') + '>' +
         '<div class="id-switch-main"><div class="id-switch-line1"><span class="id-switch-time">' + fmtTime(f.frame) + '</span>' +
         '<span class="id-switch-pair">' + idName(session, f.nameA) + ' ↔ ' + idName(session, f.nameB) + '</span>' +
         '<span class="id-switch-score" title="Score' + (f.agree ? ' (size / images)' : '') + '">' + score + '</span></div>' +
-        '<div class="id-switch-line2">frame ' + (f.frame + 1).toLocaleString() +
+        '<div class="id-switch-line2">' + spanHtml(f) +
         (both ? ' · ' + (cue === 'both' ? '<b>Both</b>' : cue === 'size' ? 'size' : 'images') : '') +
         (note ? ' · ' + note : '') + '</div></div></div>';
+}
+
+/** "close 2:00.3–2:01.2 (frames 7,218–7,317) [end ⇥]": the encounter, and a jump to its end. */
+function spanHtml(f) {
+    var s = f.startFrame != null && f.startFrame <= f.frame ? f.startFrame : null;
+    var end = '<button class="id-switch-end" title="Jump to frame ' + (f.frame + 1).toLocaleString() +
+        ', the end of the encounter — where the animals separate and their labels are read">end ⇥</button>';
+    if (s == null || s === f.frame) return 'close at ' + fmtTenths(f.frame) + ' (frame ' + (f.frame + 1).toLocaleString() + ') ' + end;
+    return 'close ' + fmtTenths(s) + '–' + fmtTenths(f.frame) + ' (frames ' + (s + 1).toLocaleString() + '–' + (f.frame + 1).toLocaleString() + ') ' + end;
 }
 
 /**
@@ -377,11 +403,14 @@ export function refreshIdSwitchPanel(session) {
         (rows.length ? rows.map(function (f) { return rowHtml(session, st, f, both); }).join('')
             : '<p class="table-empty">No encounter scored below the threshold.</p>') + '</div>';
     var nav = st.navigate || _navigate;
-    var go = function (row) {
+    // A row lands ID_SWITCH_LEAD_IN_SECONDS before the animals come close (data-go), so pressing play
+    // shows the whole interaction — the swap happens WHILE they are close, and the encounter's own
+    // frame (its end, data-frame) is after it. "end ⇥" jumps to that end instead.
+    var go = function (row, toEnd) {
         st.current = row.dataset.key;
         host.querySelectorAll('.id-switch-row.is-current').forEach(function (r) { r.classList.remove('is-current'); });
         row.classList.add('is-current');
-        if (nav) nav(parseInt(row.dataset.frame, 10));
+        if (nav) nav(parseInt(toEnd ? row.dataset.frame : row.dataset.go, 10));
     };
     host.querySelector('#idSwitchList').addEventListener('click', function (e) {
         var row = e.target.closest('.id-switch-row');
@@ -393,7 +422,7 @@ export function refreshIdSwitchPanel(session) {
             refreshIdSwitchPanel(session);
             return;
         }
-        go(row);
+        go(row, e.target.classList.contains('id-switch-end'));
     });
     host.querySelector('#idSwitchNext').addEventListener('click', function () {
         var list = Array.from(host.querySelectorAll('.id-switch-row')), at = list.findIndex(function (r) { return r.dataset.key === st.current; });
