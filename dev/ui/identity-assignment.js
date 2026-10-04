@@ -6,24 +6,24 @@
 // Plus purgeTriangulationDataForGroup, the detach-reprojection helper
 // every grouping workflow needs after unlinking/removing a group.
 
-import { state, videoController, interactionManager, viewport3d, timeline, paneManager } from './app-state.js';
-import { InstanceGroup, UnlinkedInstance, someValidPoint3d } from '../pose/pose-data.js';
+import { state, videoController, interactionManager, viewport3d, timeline, paneManager } from './app-state.js?v=cf58587c4f84';
+import { InstanceGroup, UnlinkedInstance, someValidPoint3d } from '../pose/pose-data.js?v=cf58587c4f84';
 import {
     frameHasGroupedUserInstances, getInstanceGroupsForFrame,
     triangulateAndReproject, storeReprojectedInstances, resolveTriangulationMethod,
     reprojectPointsCamera, computeInstanceDistanceTo, hungarianAlgorithm,
     updateTimelineForFrame,
     triangulateCurrentFrame,
-} from '../pose/triangulation.js';
-import { getDefaultTriangulationMethod } from './settings.js';
-import { drawAllOverlays, setReprojErrorVisible } from './rendering.js';
-import { updateInfoPanel } from './info-panel.js';
-import { markDirty, setStatus } from '../import-export/save-load.js';
+} from '../pose/triangulation.js?v=cf58587c4f84';
+import { getDefaultTriangulationMethod } from './settings.js?v=cf58587c4f84';
+import { drawAllOverlays, setReprojErrorVisible } from './rendering.js?v=cf58587c4f84';
+import { updateInfoPanel } from './info-panel.js?v=cf58587c4f84';
+import { markDirty, setStatus } from '../import-export/save-load.js?v=cf58587c4f84';
 
 // Pass 3i-3: update3DViewport moved to pose/initialization.js.
-import { update3DViewport } from '../pose/initialization.js';
+import { update3DViewport } from '../pose/initialization.js?v=cf58587c4f84';
 // Pass 3h: dockview panel registry now lives in sessions-panes.js.
-import { panelRenderers } from './sessions-panes.js';
+import { panelRenderers } from './sessions-panes.js?v=cf58587c4f84';
 
 // ============================================
 // Track/Identity helpers (top-level so all code can access)

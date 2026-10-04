@@ -32,9 +32,9 @@
  * to N > 0 to force an N-worker pool regardless of size. A batch a worker fails
  * on is re-solved inline, from the same captured inputs.
  */
-import { triangulateAndReproject } from './triangulation-core.js';
-import { Instance } from './pose-data.js';
-import { isCameraTracked, getTrackingThreshold } from '../ui/settings.js';
+import { triangulateAndReproject } from './triangulation-core.js?v=cf58587c4f84';
+import { Instance } from './pose-data.js?v=cf58587c4f84';
+import { isCameraTracked, getTrackingThreshold } from '../ui/settings.js?v=cf58587c4f84';
 
 /** Groups per worker message: big enough to amortize messaging, small enough
  *  to load-balance (~0.25 s of Refined solves, ~20 ms of DLT). */
@@ -65,7 +65,7 @@ function getPool() {
     }
     if (pool) terminatePool();
     try {
-        const url = new URL('pose/triangulation-worker.js', document.baseURI);
+        const url = new URL('pose/triangulation-worker.js?v=cf58587c4f84', document.baseURI);
         const workers = [];
         for (let i = 0; i < n; i++) workers.push({ w: new Worker(url, { type: 'module' }), busy: false });
         pool = { workers, idleTimer: null };

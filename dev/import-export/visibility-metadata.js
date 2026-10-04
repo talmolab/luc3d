@@ -47,8 +47,8 @@ import {
     serializeVideoContrast, ingestVideoContrast,
     serializeVideoBrightness, ingestVideoBrightness,
     serializeVideoRotation, ingestVideoRotation,
-} from '../ui/video-filters.js';
-import { serializeHiddenSets, ingestHiddenSets } from '../ui/timeline-visibility.js';
+} from '../ui/video-filters.js?v=cf58587c4f84';
+import { serializeHiddenSets, ingestHiddenSets } from '../ui/timeline-visibility.js?v=cf58587c4f84';
 
 /**
  * Every `metadata.lucid` key this module may write. Exported so tests (and the
