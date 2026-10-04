@@ -4558,7 +4558,9 @@ Reads `imageCheckMaxViews` (default 3) and passes it as `maxViewsPerAnimal`, and
 `imageCheckWebNN` (default 0) as `webnn`; the embedder's `backend()` outcome is
 attached to the result as `model` and its note shown in the dialog's footer.
 
-**User-facing features.** One row per change point (time, 1-based frame,
+**User-facing features.** The dialog is capped at the window height (`styles.css`
+`.size-switch-modal`): heading, summary and buttons stay put and the list is its
+one scroller, with sticky column heads. One row per change point (time, 1-based frame,
 `id_a ↔ id_b`, check, score); when both checks ran, a change point both found
 (same pair within 1 s) is ONE "Both" row (scores "size / image"), and the dialog
 says to review those first. Follow-ons are dimmed ("follows the switch at m:ss");
