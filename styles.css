@@ -4650,6 +4650,10 @@ kbd {
   background: transparent; color: var(--text-secondary); border: 1px solid var(--border-color); border-radius: 3px;
 }
 .id-switch-end:hover { color: var(--text-primary); background: var(--surface-hover); }
+/* Animated box around the selected row's two animals, on its own canvas per view
+   (ui/id-switch-highlight.js) — inside the wrapper, so zoom/pan/rotation apply. */
+.id-switch-canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; }
+
 /* The selected row's progress bar, driven by the viewer's frame: 1 s before the
    animals come close -> the close spell (shaded, where a swap would happen) -> 1 s after. */
 .id-switch-pbar {

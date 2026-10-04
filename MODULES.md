@@ -4645,7 +4645,9 @@ swap would happen — shaded amber in the middle, 100% at 1 s after the
 encounter's end; clamped outside that range. `updateIdSwitchProgress(frame)` is
 called from `ui/ui-wiring.js` `updateSeekbarVisual` on every frame change: one
 style write, and a no-op without a selected row (the bar element is looked up
-once per render/selection, not per frame). A check run from the menu always opens the tab; an
+once per render/selection, not per frame). The same interval drives an
+**animated box around the pair in every camera view** (`ui/id-switch-highlight.js`,
+set by row selection and panel renders, advanced by `updateIdSwitchProgress`). A check run from the menu always opens the tab; an
 automatic one only when it found something. The tab content is the panel's one
 scroller (the list has none of its own). With no results it says so and offers
 "Check by body size" / "Check by images…" (they click the menu items).
@@ -4660,7 +4662,8 @@ name for the image check's progress dialog, which is still modal.
 `ui/loading-overlay.js` (`showLoadingProgress`, `hideLoading`, `yieldToPaint`),
 `ui/settings.js` (`getTrackingThreshold`), `pose/id-switch-check.js`,
 `ui/image-embedder.js` (`hasWebGPU`, `createImageEmbedder`),
-`ui/id-switch-review.js` (row keys, change-point helpers, `linkIdSwitchResults`).
+`ui/id-switch-review.js` (row keys, change-point helpers, `linkIdSwitchResults`),
+`ui/id-switch-highlight.js` (`setIdSwitchHighlight`, `updateIdSwitchHighlight`).
 
 **Imported by.** `ui/ui-wiring.js` (`#menuCheckSizeSwitches`,
 `#menuCheckImageSwitches`, `setIdSwitchNavigator`, `updateIdSwitchProgress`), `pose/tracker.js` (the
@@ -4712,6 +4715,42 @@ draw; not the encounters or the fitted models. A restored check result has
 **Coverage.** `tests/test-id-switch-check.mjs` (lossless reopen -> re-save,
 "Both" re-link, ticks, garbage tolerance, nothing written without results);
 `tests/e2e/visibility-settings-roundtrip.mjs` (both writers, real reader).
+
+---
+
+### ui/id-switch-highlight.js
+
+**Purpose.** An animated box around the selected ID-switch row's two animals in
+every camera view, while the viewer's frame is inside that row's interval (1 s
+before they come close -> 1 s after they separate — the row's progress-bar span).
+
+**Key exports.** `setIdSwitchHighlight({nameA, nameB, p0, p1} | null)`;
+`updateIdSwitchHighlight(frame)` (every frame change, via
+`ui/id-switch-modal.js` `updateIdSwitchProgress`); `getIdSwitchHighlight()`.
+
+**How.** Draws on its OWN canvas per view (`.id-switch-canvas`, appended to the
+view's `.canvas-wrapper`, `pointer-events: none`), backing size video × zoom like
+the overlay canvas: the wrapper's CSS transform carries zoom/pan/rotation, the
+overlay redraw paths (which clear the overlay canvas every frame) never touch it,
+and the overlay-video export does not include it. A `requestAnimationFrame` loop
+runs ONLY while the frame is in the interval — the outline marches (dash offset)
+and pulses even when paused — and stops after clearing the canvases once outside
+it. Boxes are recomputed only when the frame changes: per camera, the instances
+whose identity NAME is one of the pair at that frame (per-frame track identity
+first, then the group's `identityId`; unlinked instances via
+`getIdentityIdForUnlinkedInstance`), one box around both (or the one visible),
+labelled "id_a ↔ id_b" in the identities' colours. Lines, padding and text are
+sized in SCREEN pixels (canvas width / (layout width × zoom)), so a small tile
+of a large video stays readable. Lazy projects: nothing for a non-resident frame.
+
+**Imports from project modules.** `ui/app-state.js` (`state`), `ui/overlays.js`
+(`makeVideoToCanvasTransform`).
+
+**Imported by.** `ui/id-switch-modal.js`.
+
+**Coverage.** `tests/e2e/id-switch-highlight.mjs` (two real views: box around
+the pair and not the third animal, animates while paused, cleared past the
+interval and redrawn on return, Clear stops it).
 
 ---
 
