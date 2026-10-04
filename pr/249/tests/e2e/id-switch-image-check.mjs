@@ -75,7 +75,7 @@ try {
             }
             AS.state.sessions = [session]; AS.state.activeSessionIdx = 0; AS.state.session = session;
             AS.state.totalFrames = T * STEP; AS.state.currentFrame = 0; AS.state.fps = 60; AS.state.views = [];
-            if (AS.timeline) { AS.timeline.setTotalFrames(T * STEP); AS.timeline.setData(session); AS.timeline.setSwitchMarkers([]); }
+            if (AS.timeline) { AS.timeline.setTotalFrames(T * STEP); AS.timeline.setData(session); } (await import('/ui/seekbar-markers.js')).setSeekbarSwitchMarkers([]);
             return { swapFrame, pair: events[SWAP].pair.map(k => 'id_' + k) };
         };
         // Synthetic embedder: per-animal appearance vector + noise, 4 cameras; optional per-frame delay.
@@ -103,8 +103,8 @@ try {
     const both = R.find(r => Math.abs(r.frame - fx.swapFrame) <= 60 && /Both/.test(r.text));
     check(!!both && fx.pair.every(n => both.text.includes(n)), `different sizes: the switch is ONE "Both" row at ${both && both.frame} (switch ${fx.swapFrame}): "${both && both.text}"`);
     check(!R.some(r => r !== both && Math.abs(r.frame - fx.swapFrame) <= 60 && /· images/.test(r.text)), '…and not a second "Images" row for the same change point');
-    const cues = await page.evaluate(async () => { const tl = (await import('/ui/app-state.js')).timeline; return [...new Set(tl.getSwitchMarkers().map(m => m.cue))].sort(); });
-    check(cues.join() === 'image,size', `timeline carries both checks' markers (${cues})`);
+    const cues = await page.evaluate(async () => { return [...new Set((await import('/ui/seekbar-markers.js')).getSeekbarSwitchMarkers().map(m => m.cue))].sort(); });
+    check(cues.join() === 'image,size', `the seekbar carries both checks' markers (${cues})`);
     check(!(await page.$('.id-switch-progress')), 'the progress dialog is gone when done');
 
     // ---- 2. identical sizes: only the image check finds it
@@ -132,7 +132,7 @@ try {
     const cancelled = await page.evaluate(async () => { const r = await window.__done;
         return { reason: r && r.image && r.image.reason, status: document.getElementById('statusText').textContent,
                  progress: !!document.querySelector('.id-switch-progress'), rows: document.querySelectorAll('#idSwitchPanel .id-switch-row').length,
-                 markers: (await import('/ui/app-state.js')).timeline.getSwitchMarkers().filter(m => m.cue === 'image').length }; });
+                 markers: (await import('/ui/seekbar-markers.js')).getSeekbarSwitchMarkers().filter(m => m.cue === 'image').length }; });
     check(cancelled.reason === 'cancelled' && /cancelled/.test(cancelled.status), `Esc cancels the image check ("${cancelled.status}")`);
     check(!cancelled.progress && !cancelled.rows && cancelled.markers === 0, 'nothing left behind: no progress dialog, no listed results, no image markers');
 

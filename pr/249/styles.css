@@ -2653,6 +2653,20 @@ body {
   height: 8px;
 }
 
+/* Possible-ID-switch ticks on the seekbar (ui/seekbar-markers.js): over the
+   track, under the thumb; they never take the pointer (the seekbar's handlers
+   snap to them instead). */
+.seekbar-marks { position: absolute; inset: 0; pointer-events: none; z-index: 1; }
+.seekbar-mark {
+  position: absolute; top: 50%; width: 3px; height: 16px; border-radius: 1px;
+  transform: translate(-50%, -50%); background: #ffb020; box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.45);
+}
+.seekbar-mark.cue-image { background: #4cc9f0; }
+.seekbar-mark.cue-both { background: linear-gradient(to bottom, #ffb020 50%, #4cc9f0 50%); }
+.seekbar-mark.is-follow { opacity: 0.7; height: 12px; }
+.seekbar-mark.is-repeat { opacity: 0.4; width: 2px; height: 10px; box-shadow: none; }
+.seekbar-mark.is-reviewed { opacity: 0.3; }
+
 /* Seekbar hover tooltip (#142): frame + timestamp under the cursor. Sits
    above the bar, over the timeline; `left` is set in px by
    ui/seekbar-tooltip.js and the bubble is centred on it. */
