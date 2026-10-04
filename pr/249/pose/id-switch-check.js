@@ -43,7 +43,7 @@
  * Depends on: pose-data.js (readPoint3d). Pure — no DOM, no app state.
  */
 
-import { readPoint3d } from './pose-data.js?v=bd8da31804e9';
+import { readPoint3d } from './pose-data.js?v=f6313df4b99f';
 
 /** Bone (node-pair) lengths used as the size signature. Pairs whose nodes the
  *  session skeleton lacks are skipped. */
@@ -86,7 +86,8 @@ export const IMAGE_CHECK_DEFAULTS = Object.assign({}, SIZE_CHECK_DEFAULTS, {
     maxTrainRows: 6000,
     iterations: 200,
     getEmbeddings: null,   // REQUIRED: async (frame, items[{k, group}]) -> per item [{camera, vector}];
-                           // called in increasing frame order, at most 2 calls in flight
+                           // STARTED in increasing frame order, at most `inFlight` in flight
+    inFlight: 2,           // requests kept in flight (ui/image-embedder.js asks for 8, to batch frames)
     prepareFrames: null,   // optional: async (frames[]) — every frame getEmbeddings will be asked for, in order
     releaseFrames: null,   // optional: () — called when done (or cancelled)
 });
@@ -553,17 +554,21 @@ export async function checkImageSwitches(session, opts) {
         if (items.length >= 2) jobs.push({ i: i, frame: grid.frames[i], items: items });
     }
     // The provider may stream the frames in order instead of seeking to each one
-    // (`prepareFrames`), and one request is kept in flight ahead of the one being
-    // consumed, so decoding/cropping the next frame overlaps embedding this one.
+    // (`prepareFrames`), and up to `inFlight` requests (default 2) run ahead of the
+    // one being consumed — requests are STARTED in frame order, so a streaming
+    // provider still sees increasing frames — letting decode/crop of later frames
+    // overlap embedding (a provider can then batch several frames per model run).
     if (typeof o.prepareFrames === 'function') await o.prepareFrames(jobs.map(function (j) { return j.frame; }));
     try {
-        var start = function (j) { return o.getEmbeddings(jobs[j].frame, jobs[j].items); };
-        var next = jobs.length ? start(0) : null;
+        var ahead = Math.max(1, Math.floor(o.inFlight || 2));
+        var start = function (j) { var p = o.getEmbeddings(jobs[j].frame, jobs[j].items); p.catch(function () {}); return p; };   // surfaced when awaited
+        var pending = [], launched = 0;
+        var fill = function () { while (launched < jobs.length && pending.length < ahead) pending.push(start(launched++)); };
+        fill();
         for (var ji = 0; ji < jobs.length; ji++) {
             throwIfAborted(o.signal);
-            var embs = await next;
-            next = ji + 1 < jobs.length ? start(ji + 1) : null;
-            if (next) next.catch(function () {});     // surfaced when awaited; avoid an unhandled rejection meanwhile
+            var embs = await pending.shift();
+            fill();
             var job = jobs[ji];
             for (var it = 0; it < job.items.length; it++) {
                 var list = (embs && embs[it]) || [];
