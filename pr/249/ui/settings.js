@@ -17,7 +17,7 @@
 // add/update its entry here so the Settings panel stays complete and truthful.
 // (See CLAUDE.md.)
 
-import { shouldIgnoreShortcut } from './keyboard-target.js?v=a958230ba1fe';
+import { shouldIgnoreShortcut } from './keyboard-target.js?v=047b52d3c7b5';
 
 const STORAGE_KEY = 'lucid.settings.v1';
 
@@ -353,18 +353,18 @@ const TRACKING_THRESHOLDS = [
     },
     {
         id: 'matchGate', label: 'Reject negative matches (gate)', default: 1,
-        min: 0, max: 1, step: 1,
-        desc: 'The match gate (pose/cross-view-tracker.js, 2026-10-03): 1 = a tracked target only takes a detection it scores positively on (roughly, within the distance threshold of where it is), instead of being forced onto whatever is left. Stops a spare target and an extra detection (e.g. a reflection) from trading a correct match away. Targets lost for longer than the stale window still re-acquire ungated. 0 = off (reproduces the pre-gate forced assignment).',
+        min: 0, max: 1, step: 1, kind: 'toggle',     // an on/off switch in the wizard (stored as 1 / 0)
+        desc: 'The match gate (pose/cross-view-tracker.js, 2026-10-03). On: a tracked target only takes a detection it scores positively on (roughly, within the distance threshold of where it is), instead of being forced onto whatever is left. Stops a spare target and an extra detection (e.g. a reflection) from trading a correct match away. Targets lost for longer than the stale window still re-acquire ungated. Off: the pre-gate forced assignment.',
     },
     {
         id: 'autoSwitchCheck', label: 'Check ID switches after tracking (body size)', default: 1,
-        min: 0, max: 1, step: 1,
-        desc: 'After Track All or Track Frame Range, flag close encounters where the animals leaving it match each other\'s body size better than their own (Tracks ▸ Check ID Switches; pose/size-switch-check.js). Checks every tracked frame in the session (needs at least 60 s of tracking). Results go on the timeline; the dialog opens only when a possible switch is found. 1 = on, 0 = off.',
+        min: 0, max: 1, step: 1, kind: 'toggle',     // an on/off switch in the wizard (stored as 1 / 0)
+        desc: 'After Track All or Track Frame Range, flag close encounters where the animals leaving it match each other\'s body size better than their own (Tracks ▸ Check ID Switches; pose/id-switch-check.js). Checks every tracked frame in the session (needs at least 60 s of tracking). Results are marked on the seekbar and listed in the ID Switches tab, which opens only when a possible switch is found.',
     },
     {
         id: 'autoImageSwitchCheck', label: 'Check ID switches after tracking (image detection)', default: 0,
-        min: 0, max: 1, step: 1,
-        desc: 'After Track All or Track Frame Range, also check close encounters by APPEARANCE: crops of each animal in every camera are embedded with an image model on the GPU (Tracks ▸ Check ID Switches (Images)). Catches animals of similar size that look different (e.g. coat colour), which the size check cannot. Slow — minutes for a long recording — and needs the videos loaded and WebGPU (current Chrome/Edge); the model (~44 MB) downloads on first use. 1 = on, 0 = off.',
+        min: 0, max: 1, step: 1, kind: 'toggle',     // an on/off switch in the wizard (stored as 1 / 0)
+        desc: 'After Track All or Track Frame Range, also check close encounters by APPEARANCE: crops of each animal in every camera are embedded with an image model on the GPU (Tracks ▸ Check ID Switches (Images)). Catches animals of similar size that look different (e.g. coat colour), which the size check cannot. Slow — minutes for a long recording — and needs the videos loaded and WebGPU (current Chrome/Edge); the model (~44 MB) downloads on first use.',
     },
     {
         id: 'imageCheckThreshold', label: 'Image check: flag threshold', default: -25,
@@ -383,8 +383,8 @@ const TRACKING_THRESHOLDS = [
     },
     {
         id: 'imageCheckWebNN', label: 'Image check: try WebNN (experimental)', default: 0,
-        min: 0, max: 1, step: 1,
-        desc: 'Also try the browser\'s WebNN API, which on Windows can use NVIDIA tensor cores (Chrome: enable chrome://flags/#web-machine-learning-neural-network). The first frames are embedded both ways; WebNN is kept only if it is faster and its embeddings match the calibrated WebGPU model. The result dialog says which was used. On macOS (Chrome 154) it measured ~10x slower, CPU only, so the trial keeps WebGPU there.',
+        min: 0, max: 1, step: 1, kind: 'toggle',     // an on/off switch in the wizard (stored as 1 / 0)
+        desc: 'Also try the browser\'s WebNN API, which on Windows can use NVIDIA tensor cores (Chrome: enable chrome://flags/#web-machine-learning-neural-network). The first frames are embedded both ways; WebNN is kept only if it is faster and its embeddings match the calibrated WebGPU model. "About these flags" in the ID Switches tab says which was used. On macOS (Chrome 154) it measured ~10x slower, CPU only, so the trial keeps WebGPU there.',
     },
     {
         id: 'reprojErrorThreshold', label: 'Reprojection error threshold (px)', default: 0,
@@ -427,7 +427,7 @@ export function getTrackingThresholdDefs() {
         return {
             id: t.id, label: t.label, default: t.default,
             value: getTrackingThreshold(t.id),
-            min: t.min, max: t.max, step: t.step, desc: t.desc,
+            min: t.min, max: t.max, step: t.step, desc: t.desc, kind: t.kind || 'number',
         };
     });
 }

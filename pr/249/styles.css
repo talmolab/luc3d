@@ -3226,6 +3226,9 @@ body {
  * resized with the box: `.slider::before` is a fixed 16px with a 18px travel, so
  * inheriting it into a 17px-tall box would overflow the track and never line up.
  */
+/* Tracking Wizard on/off settings (ui/settings-modal.js makeToggle): sit where the number box was. */
+.settings-toggle { align-self: center; margin-left: 12px; }
+
 .toggle-switch.toggle-switch-sm {
   width: 30px;
   height: 17px;
