@@ -878,6 +878,8 @@ function crossViewHyperparams() {
         timePenalty: thr('timePenalty'),
         // Stale-anchor fix (pose/cross-view-tracker.js, 2026-08-14).
         stale: thr('stale'),
+        // Match gate (pose/cross-view-tracker.js, 2026-10-03).
+        matchGate: thr('matchGate'),
     };
 }
 
