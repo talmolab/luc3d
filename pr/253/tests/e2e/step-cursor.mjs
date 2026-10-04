@@ -1,0 +1,124 @@
+/**
+ * step-cursor.mjs — paused frame stepping keeps a decode stream open
+ * (loading/video.js `OnDemandVideoDecoder._mbGetFrame`), so an arrow-key step
+ * forward decodes ONE frame instead of every frame since the keyframe, and the
+ * frames it shows are the same frames.
+ *
+ * A generated 60 fps H.264 video, P-frames only, a keyframe every 300 frames (as
+ * sparse as the field recordings' 250), opened as the app's OnDemandVideoDecoder
+ * (mediabunny backend). Packets handed to WebCodecs are counted. Asserted:
+ *  1. 30 steps forward from a mid-GOP frame decode ONE packet each (after the
+ *     stream's first run from the keyframe plus its read-ahead) — vs
+ *     `LUCID_STEP_CURSOR = 0`, where every step decodes from the keyframe.
+ *  2. Every stepped, stepped-back and jumped-to frame is pixel-identical to the
+ *     same frame decoded with the stream off (the frame-accurate path, #115).
+ *  3. Stepping back reopens the stream (no wrong frame from the old one); a jump
+ *     past the next keyframe reopens it AT that keyframe, not by decoding through.
+ *  4. The stream is released after STEP_CURSOR_IDLE_MS idle, by
+ *     `releaseStepCursor()`, and by `close()`.
+ *
+ * Needs ffmpeg (libx264); skipped with a note if absent.
+ * Run: node tests/e2e/step-cursor.mjs
+ */
+import { chromium } from 'playwright';
+import { spawn, spawnSync } from 'node:child_process';
+import path from 'node:path';
+import fs from 'node:fs';
+import os from 'node:os';
+import { fileURLToPath } from 'node:url';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const repoRoot = path.resolve(__dirname, '..', '..');
+const PORT = Number(process.env.PORT || 8277);
+let fails = 0;
+const check = (c, m) => { console.log((c ? '  ✓ ' : '  ✗ ') + m); if (!c) fails++; };
+
+const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'lucid-stepcursor-'));
+const vid = path.join(tmp, 'gop300.mp4');
+const ff = spawnSync('ffmpeg', ['-loglevel', 'error', '-y', '-f', 'lavfi', '-i', 'testsrc2=size=320x256:rate=60',
+    '-frames:v', '900', '-c:v', 'libx264', '-bf', '0', '-g', '300', '-keyint_min', '300', '-sc_threshold', '0',
+    '-pix_fmt', 'yuv420p', vid]);
+if (ff.status !== 0 || !fs.existsSync(vid)) {
+    console.log('  (ffmpeg with libx264 unavailable — skipped)');
+    fs.rmSync(tmp, { recursive: true, force: true });
+    process.exit(0);
+}
+
+const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
+await new Promise(r => setTimeout(r, 1200));
+
+let browser;
+try {
+    browser = await chromium.launch();
+    const page = await browser.newPage();
+    // (close() itself throws a pre-existing TypeError from the <video> load listener — not this test's subject)
+    page.on('pageerror', e => { if (!/reading 'error'/.test(String(e))) { console.log('  [pageerror]', String(e).slice(0, 300)); fails++; } });
+    await page.goto(`http://localhost:${PORT}/index.html`);
+    await page.waitForFunction(() => window.__lucid && window.SleapIO && window.SleapIO.MediaBunnyVideoBackend, { timeout: 20000 });
+    await page.evaluate(() => {
+        const inp = document.createElement('input'); inp.type = 'file'; inp.id = '__vid'; document.body.appendChild(inp);
+        window.__decoded = 0;
+        const orig = VideoDecoder.prototype.decode;
+        VideoDecoder.prototype.decode = function (c) { window.__decoded++; return orig.call(this, c); };
+    });
+    await page.setInputFiles('#__vid', vid);
+    const r = await page.evaluate(async () => {
+        const V = await import('./loading/video.js');
+        const file = document.getElementById('__vid').files[0];
+        const dec = new V.OnDemandVideoDecoder({ cacheSize: 200 });
+        await dec.init(file);
+        const be = dec._mbBackend;
+        const px = (bm) => { const c = new OffscreenCanvas(bm.width, bm.height), x = c.getContext('2d'); x.drawImage(bm, 0, 0); return x.getImageData(0, 0, bm.width, bm.height).data; };
+        const clear = () => { dec.releaseStepCursor(); be.cache.forEach(b => b.close()); be.cache.clear(); };
+        const run = async (on, frames) => {   // decode `frames` in order; pixels + packets per frame
+            window.LUCID_STEP_CURSOR = on ? undefined : 0;
+            clear();
+            const out = [];
+            for (const f of frames) { window.__decoded = 0; const bm = await dec.getFrame(f); out.push({ f, px: px(bm), packets: window.__decoded }); }
+            return out;
+        };
+        const steps = []; for (let f = 400; f <= 430; f++) steps.push(f);          // land mid-GOP, then 30 steps
+        const off = await run(false, steps), on = await run(true, steps);
+        const same = (a, b) => a.every((x, i) => x.px.length === b[i].px.length && x.px.every((v, j) => v === b[i].px[j]));
+        const res = {
+            offStepPackets: off.slice(1).map(x => x.packets), onFirst: on[0].packets, onStepPackets: on.slice(1).map(x => x.packets),
+            stepsIdentical: same(on, off),
+        };
+        // back steps beyond anything shown (reopen), then a jump past the next keyframe (600) — vs off
+        const seq = [430, 420, 410, 700, 701];
+        const off2 = await run(false, seq), on2 = await run(true, seq);
+        res.mixedIdentical = same(on2, off2);
+        res.jumpPackets = on2[3].packets;               // 700 needs only keyframe 600 onward (+ read-ahead)
+        res.cursorAfterJump = dec._stepCursor ? dec._stepCursor.next : null;
+        // release: idle, explicit, close()
+        window.LUCID_STEP_CURSOR = undefined;
+        await dec.getFrame(702);
+        res.openBeforeIdle = !!dec._stepCursor;
+        await new Promise(r => setTimeout(r, V.STEP_CURSOR_IDLE_MS + 300));
+        res.closedAfterIdle = dec._stepCursor === null;
+        await dec.getFrame(703); res.reopened = !!dec._stepCursor;
+        dec.releaseStepCursor(); res.closedExplicit = dec._stepCursor === null;
+        await dec.getFrame(704); dec.close(); res.closedOnClose = dec._stepCursor === null;
+        return res;
+    });
+    const sumOff = r.offStepPackets.reduce((a, b) => a + b, 0), sumOn = r.onStepPackets.reduce((a, b) => a + b, 0);
+    console.log('\n• 30 steps forward from frame 400 (keyframe 300)');
+    check(r.offStepPackets.every((p, i) => p === 401 + i - 300 + 1), `stream off: each step decodes from the keyframe (${r.offStepPackets[0]}…${r.offStepPackets[29]} packets, ${sumOff} in all)`);
+    check(r.onStepPackets.every(p => p === 1), `stream on: every step decodes ONE packet (${sumOn} for 30 steps; the frame shown was already read ahead, the packet tops the read-ahead up)`);
+    check(r.onFirst >= 101 && r.onFirst <= 101 + 50, `the first frame decodes keyframe 300 → 400 plus a short read-ahead (${r.onFirst} packets)`);
+    check(r.stepsIdentical, 'every stepped frame pixel-identical to the frame-accurate decode');
+    console.log('\n• back steps and a jump past the next keyframe');
+    check(r.mixedIdentical, 'frames 430 → 420 → 410 → 700 → 701 pixel-identical to the frame-accurate decode');
+    check(r.jumpPackets <= (700 - 600 + 1) + 50, `jump to 700 reopens at keyframe 600 (${r.jumpPackets} packets, not ~${700 - 410} decoded through)`);
+    check(r.cursorAfterJump === 702, `stream positioned after 701 (next ${r.cursorAfterJump})`);
+    console.log('\n• release');
+    check(r.openBeforeIdle && r.closedAfterIdle, 'stream closed after STEP_CURSOR_IDLE_MS idle');
+    check(r.reopened && r.closedExplicit, 'reopens on the next frame; releaseStepCursor() closes it');
+    check(r.closedOnClose, 'close() closes it');
+} finally {
+    if (browser) await browser.close().catch(() => {});
+    server.kill();
+    fs.rmSync(tmp, { recursive: true, force: true });
+}
+console.log(fails ? `\nFAIL (${fails})` : '\nPASS');
+process.exit(fails ? 1 : 0);
