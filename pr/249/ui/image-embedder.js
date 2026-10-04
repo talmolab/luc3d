@@ -26,7 +26,7 @@
  * Depends on: ui/app-state.js (state.views).
  */
 
-import { state } from './app-state.js?v=44512f1b8738';
+import { state } from './app-state.js?v=a958230ba1fe';
 
 export const TRANSFORMERS_URL = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.0/+esm';
 export const IMAGE_MODEL_ID = 'onnx-community/dinov2-small';
@@ -411,7 +411,7 @@ export function createCropPool() {
     };
     try {
         for (let i = 0; i < n; i++) {
-            const w = { worker: new Worker(new URL('./image-crop-worker.js?v=44512f1b8738', import.meta.url), { type: 'module' }), load: 0 };
+            const w = { worker: new Worker(new URL('./image-crop-worker.js?v=a958230ba1fe', import.meta.url), { type: 'module' }), load: 0 };
             w.worker.onmessage = function (e) {
                 const p = pending.get(e.data.id); if (!p) return;
                 pending.delete(e.data.id); w.load--;
@@ -475,13 +475,15 @@ export async function createImageEmbedder(session, opts) {
         tm.runMs += b - a; tm.readMs += performance.now() - b;
         return out;
     };
-    const runWebNN = async function (data, n) {
-        const out = [], B = WEBNN_BATCH;
+    // `timed`: count it in the run's timing (not during the WebNN trial, where the WebGPU run is the timed one)
+    const runWebNN = async function (data, n, timed) {
+        const out = [], B = WEBNN_BATCH, t0 = performance.now();
         for (let i = 0; i < n; i += B) {
             const m = Math.min(B, n - i), buf = new Float32Array(B * SZ);   // the last batch zero-padded
             buf.set(data.subarray(i * SZ, (i + m) * SZ));
             clsVectors(await nnModel({ pixel_values: new T.Tensor('float32', buf, [B, 3, INPUT, INPUT]) }), m).forEach(function (v) { out.push(v); });
         }
+        if (timed) tm.runMs += performance.now() - t0;   // WebNN returns results on the CPU: run + readback in one
         return out;
     };
     const embed = async function (data, n) {
@@ -502,7 +504,7 @@ export async function createImageEmbedder(session, opts) {
                 return runWebGPU(data, n);
             }
         }
-        return backend === 'webnn' ? runWebNN(data, n) : runWebGPU(data, n);
+        return backend === 'webnn' ? runWebNN(data, n, true) : runWebGPU(data, n);
     };
     const canvas = new OffscreenCanvas(CROP, CROP);
     let readers = null, pool;   // pool: undefined = not made yet, null = inline
