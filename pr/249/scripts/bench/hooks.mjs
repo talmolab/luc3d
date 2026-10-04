@@ -40,7 +40,7 @@ const THRESHOLD_DEFAULTS = {
     imageCheckHz: 2,
     imageCheckMaxViews: 3,
     imageCheckWebNN: 0,
-    imageCheckDecodeWorkers: 1,
+    imageCheckDecodeWorkers: 0,
 };
 
 const SETTINGS_STUB = `

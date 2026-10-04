@@ -17,7 +17,7 @@
 // add/update its entry here so the Settings panel stays complete and truthful.
 // (See CLAUDE.md.)
 
-import { shouldIgnoreShortcut } from './keyboard-target.js?v=801af02ff3c4';
+import { shouldIgnoreShortcut } from './keyboard-target.js?v=a6c571581b7d';
 
 const STORAGE_KEY = 'lucid.settings.v1';
 
@@ -387,9 +387,9 @@ const TRACKING_THRESHOLDS = [
         desc: 'Also try the browser\'s WebNN API, which on Windows can use NVIDIA tensor cores (Chrome: enable chrome://flags/#web-machine-learning-neural-network). The first frames are embedded both ways; WebNN is kept only if it is faster and its embeddings match the calibrated WebGPU model. The result dialog says which was used. On macOS (Chrome 154) it measured ~10x slower, CPU only, so the trial keeps WebGPU there.',
     },
     {
-        id: 'imageCheckDecodeWorkers', label: 'Image check: decode video in workers', default: 1,
+        id: 'imageCheckDecodeWorkers', label: 'Image check: decode video in workers (experimental)', default: 0,
         min: 0, max: 1, step: 1,
-        desc: 'Decode and crop each camera\'s video in its own background thread (1) instead of on the browser\'s main thread (0). The recordings must be decoded frame by frame, so the image check decodes nearly every frame of every camera; on machines whose video decoder has headroom this can feed the GPU faster. The result\'s speed line says which ran — compare both on your machine. Embeddings are identical either way.',
+        desc: 'Decode and crop each camera\'s video in its own background thread (1) instead of on the browser\'s main thread (0). The recordings must be decoded frame by frame, so the image check decodes nearly every frame of every camera; on machines whose video decoder has headroom this can feed the GPU faster. The result\'s speed line says which ran — compare both on your machine. Embeddings are identical either way. Off by default: on an RTX 4000 Ada VM it ran at about half the speed and its GPU memory climbed to the 20 GB limit.',
     },
     {
         id: 'reprojErrorThreshold', label: 'Reprojection error threshold (px)', default: 0,

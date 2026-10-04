@@ -28,8 +28,8 @@
  * importmap.
  */
 
-import { Input, BlobSource, ALL_FORMATS, VideoSampleSink } from '../lib/mediabunny/mediabunny.min.mjs?v=801af02ff3c4';
-import { cutCrop, writeInputTensor, CROP, INPUT } from './image-embedder.js?v=801af02ff3c4';
+import { Input, BlobSource, ALL_FORMATS, VideoSampleSink } from '../lib/mediabunny/mediabunny.min.mjs?v=a6c571581b7d';
+import { cutCrop, writeInputTensor, CROP, INPUT } from './image-embedder.js?v=a6c571581b7d';
 
 let input = null, it = null, ptr = 0, pos = null, canvas = null;
 let chain = Promise.resolve();

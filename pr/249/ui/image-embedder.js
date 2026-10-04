@@ -26,7 +26,7 @@
  * Depends on: ui/app-state.js (state.views).
  */
 
-import { state } from './app-state.js?v=801af02ff3c4';
+import { state } from './app-state.js?v=a6c571581b7d';
 
 export const TRANSFORMERS_URL = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.0/+esm';
 export const IMAGE_MODEL_ID = 'onnx-community/dinov2-small';
@@ -401,7 +401,7 @@ export async function createDecodeWorkers(views, frames) {
     };
     try {
         const opened = plans.map(function (plan) {
-            const w = new Worker(new URL('./image-decode-worker.js?v=801af02ff3c4', import.meta.url), { type: 'module' });
+            const w = new Worker(new URL('./image-decode-worker.js?v=a6c571581b7d', import.meta.url), { type: 'module' });
             workers.push(w);
             return new Promise(function (resolve, reject) {
                 w.onmessage = function (e) {
@@ -473,7 +473,7 @@ export function createCropPool() {
     };
     try {
         for (let i = 0; i < n; i++) {
-            const w = { worker: new Worker(new URL('./image-crop-worker.js?v=801af02ff3c4', import.meta.url), { type: 'module' }), load: 0 };
+            const w = { worker: new Worker(new URL('./image-crop-worker.js?v=a6c571581b7d', import.meta.url), { type: 'module' }), load: 0 };
             w.worker.onmessage = function (e) {
                 const p = pending.get(e.data.id); if (!p) return;
                 pending.delete(e.data.id); w.load--;

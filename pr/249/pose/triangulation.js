@@ -7,17 +7,17 @@
 
 import { mat3x3Multiply, Camera, FrameGroup, Instance, UnlinkedInstance, InstanceGroup,
          makePoints3d, points3dNodeCount, hasPoint3d, getPoint3d, readPoint3d,
-         setPoint3d, clearPoint3d, someValidPoint3d, countPoints3d } from './pose-data.js?v=801af02ff3c4';
-import { state, timeline, viewport3d } from '../ui/app-state.js?v=801af02ff3c4';
+         setPoint3d, clearPoint3d, someValidPoint3d, countPoints3d } from './pose-data.js?v=a6c571581b7d';
+import { state, timeline, viewport3d } from '../ui/app-state.js?v=a6c571581b7d';
 // Pass 3i-2: triangulation orchestration moved out of app.js
-import { setReprojErrorVisible, showReprojectionsOnly, REPROJ_ONLY_NOTE, drawAllOverlays } from '../ui/rendering.js?v=801af02ff3c4';
-import { updateTriangulationBadge } from '../ui/info-panel.js?v=801af02ff3c4';
-import { isCameraTracked, getTrackingThreshold, getDefaultTriangulationMethod } from '../ui/settings.js?v=801af02ff3c4';
-import { markDirty, setStatus, showLoading, hideLoading } from '../import-export/save-load.js?v=801af02ff3c4';
-import { showLoadingProgress, createProgressPacer, yieldToPaint } from '../ui/loading-overlay.js?v=801af02ff3c4';
-import { createGroupSolver } from './triangulation-pool.js?v=801af02ff3c4';
+import { setReprojErrorVisible, showReprojectionsOnly, REPROJ_ONLY_NOTE, drawAllOverlays } from '../ui/rendering.js?v=a6c571581b7d';
+import { updateTriangulationBadge } from '../ui/info-panel.js?v=a6c571581b7d';
+import { isCameraTracked, getTrackingThreshold, getDefaultTriangulationMethod } from '../ui/settings.js?v=a6c571581b7d';
+import { markDirty, setStatus, showLoading, hideLoading } from '../import-export/save-load.js?v=a6c571581b7d';
+import { showLoadingProgress, createProgressPacer, yieldToPaint } from '../ui/loading-overlay.js?v=a6c571581b7d';
+import { createGroupSolver } from './triangulation-pool.js?v=a6c571581b7d';
 // Pass 3i-3: update3DViewport moved to pose/initialization.js.
-import { update3DViewport } from './initialization.js?v=801af02ff3c4';
+import { update3DViewport } from './initialization.js?v=a6c571581b7d';
 // The pure math (DLT, refinement, reprojection, triangulateAndReproject) lives
 // in ./triangulation-core.js so a worker can load it; re-exported below so every
 // existing import of these names from this module keeps working.
@@ -29,7 +29,7 @@ import {
     computeReprojectionError, computeReprojectionErrors, computeMeanReprojectionError,
     invert3x3, triangulateAndReproject, __triangulationKernelsForTest,
     setTriangulationSettingsHooks,
-} from './triangulation-core.js?v=801af02ff3c4';
+} from './triangulation-core.js?v=a6c571581b7d';
 export {
     triangulatePointDLT, triangulatePoints, BA_ROBUST_SCALE_PX,
     triangulatePointBA, triangulatePointsBA,
