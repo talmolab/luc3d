@@ -34,7 +34,15 @@ import offline_deps  # noqa: E402  (needs the path above)
 # Set from the CLI in main(); {} means "serve the CDN URLs unchanged".
 REWRITES = {}
 
-# Try to import h5py for legacy /convert-slp endpoint
+# Try to import h5py for the legacy /convert-slp endpoint. Nothing else needs it:
+# serving the app -- online or offline -- never touches h5py, so a broken install
+# must not take the server down with it.
+#
+# Deliberately `Exception`, not `ImportError`: a mismatched h5py/numpy pair raises
+# ValueError("numpy.dtype size changed, may indicate binary incompatibility") from
+# inside h5py's Cython init, which an ImportError-only guard lets through. That is
+# routine in a conda environment, and it used to kill the server at startup for a
+# feature the user was not asking for.
 try:
     import h5py
 
@@ -42,8 +50,10 @@ try:
     from json_to_slp import write_slp_data
 
     HAS_H5PY = True
-except ImportError:
+except Exception as exc:                                        # noqa: BLE001
     HAS_H5PY = False
+    print("note: /convert-slp disabled (h5py unavailable: %s: %s)"
+          % (type(exc).__name__, exc))
 
 
 class LucidHandler(SimpleHTTPRequestHandler):
