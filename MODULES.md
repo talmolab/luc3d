@@ -4967,7 +4967,8 @@ Shortcuts and the Hot Keys modal where people look for them.
 - `getTrackingThresholdDefs()` / `getTrackingThreshold(id)` /
   `getTrackingThresholds()` / `setTrackingThresholds(map)` — read/write the
   tracker's user-editable thresholds. `getTrackingThresholdDefs` returns the
-  wizard's render catalog `[{ id, label, default, value, min, max, step, desc }]`,
+  wizard's render catalog `[{ id, label, default, value, min, max, step, desc, kind }]`
+  (`kind`: `'toggle'` for on/off settings, drawn as a switch; else `'number'`),
   **filtered to `WIZARD_THRESHOLD_IDS`** — the CrossViewTracker's free parameters
   only (`filterMinVisibleNodes`, `filterMinInstanceScore`, `corr2dWeight`,
   `corr3dWeight`, `velocityThreshold`, `distanceThreshold`, `timePenalty`,
@@ -5060,12 +5061,16 @@ render a greyed, dashed reference chip), and **Tracking Wizard** (three sections
 number field, range `0–1`, step `0.01`, seeded from `getNodeWeight(name)`; a `0`
 drops the node from the CrossViewTracker's association cost and greys the row
 (`.settings-view-excluded`), with a hint when no skeleton is loaded; **Camera
-Views** — one row per camera of the active session with a binary `0/1` number
-field seeded from `getCameraWeight(name)`; a `0` excludes that view from tracking
-and greys the row, with a hint when no cameras are loaded; and **Tracking
-Thresholds** — one labelled+described number field per `getTrackingThresholdDefs()`
-entry (the CrossViewTracker's free parameters only; legacy luc3d thresholds are
-filtered out), range/step from the catalog). All edits mutate a local `working`
+Views** — one row per camera of the active session with an on/off switch
+(the app's `.toggle-switch`, `role="switch"`; stored as a `0/1` weight) seeded
+from `getCameraWeight(name)`; off excludes that view from tracking and greys the
+row, with a hint when no cameras are loaded; and **Tracking Thresholds** — one
+labelled+described number field per `getTrackingThresholdDefs()` entry (the
+CrossViewTracker's free parameters only; legacy luc3d thresholds are filtered
+out), range/step from the catalog — or, for a `kind: 'toggle'` entry (the match
+gate, the two after-tracking ID-switch checks, the WebNN opt-in), an on/off
+switch stored as `1`/`0` (`makeToggle`). Covered by
+`tests/e2e/settings-wizard-toggles.mjs`. All edits mutate a local `working`
 state only (only editable bindings are tracked); nothing commits until **Apply**
 (`setDefaultTriangulationMethod` + `applyBindings` + `setNodeWeights` +
 `setCameraWeights` + `setTrackingThresholds`), which then repaints overlays +
