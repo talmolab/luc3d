@@ -4844,7 +4844,13 @@ EP) but on the CPU whatever the device hint, `powerPreference` or the
 `WebNNCoreML*` features — raw matmuls 0.29 TFLOPS, the model 14 vs 140 crops/s —
 so the trial keeps WebGPU (results identical, +3.4 s). Forced WebNN (`webnn:
 'force'`, benchmarking only) agrees with WebGPU: cosine median 0.9994, worst 0.997.
-Untested on Windows/NVIDIA. Workers: 9-16% faster on an M2 Pro (model-bound
+**Windows / NVIDIA RTX 2000 Ada (2026-10-04, Chrome with the WebNN flag): the
+trial picked WebNN — 435 vs 180 crops/s (2.4x, the tensor cores via Windows ML),
+embeddings agree (cosine 0.9992); the same 8 image switches as the WebGPU run.**
+The whole check went 124–131 -> 151 crops/s (386 -> 335 s): with the model
+that fast the run is decode-bound (decode 608 ms/frame, queue 4 ms, the video
+decoder 83% busy). WebNN model runs are timed into the speed line (they return
+results on the CPU, so run + readback are one figure). Workers: 9-16% faster on an M2 Pro (model-bound
 there), main thread blocked 0.1 s instead of 10-24 s per 150 frames, and the
 decode + crop ceiling rose from 145 to ~270 crops/s at 3 views (decoding alone:
 7.9 s vs 8.3 s with cropping) — headroom for a GPU faster than ~145 crops/s.
