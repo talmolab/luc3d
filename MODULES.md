@@ -4812,7 +4812,7 @@ frames, 8 cameras, 8 in flight): RTX 2000 Ada PC 131 crops/s, GPU busy 92% at
 supply-bound. 16 in flight was tried and reverted: no change (PC 124, VM 160
 crops/s; decode is throughput-bound, so each frame just waited twice as long)
 while the PC's dedicated GPU memory climbed to 10.6 GB.
-**Decode workers** (`imageCheckDecodeWorkers`, default 1; `opts.decodeWorkers`;
+**Decode workers** (`imageCheckDecodeWorkers`, EXPERIMENTAL, default 0; `opts.decodeWorkers`;
 `window.LUCID_DECODE_WORKERS = 0` forces off). The recordings are HEVC, P-frames
 only, a keyframe every 250 frames, so the check decodes essentially every frame
 of every camera (~2,000–2,700 decoded frames/s on the field machines). With
@@ -4827,7 +4827,12 @@ Crops are bit-identical to the main-thread path (tests/e2e/image-decode-worker.m
 is the same either way (~4,800 decoded frames/s — the hardware decoder's limit),
 so it pays only where the main thread, not the decoder, limits (the RTX 4000 Ada
 VM's decoder sat at 44%); the timing line ends "decoding in workers" / "main
-thread" so the two can be compared on the machine.
+thread" so the two can be compared on the machine. **Field result (RTX 4000 Ada VM,
+Windows): worse** — about half the throughput (~4–5 frames/s vs ~10.7 on the
+main thread), the hardware video decoder only 19–26% busy (vs 44%), and
+dedicated GPU memory climbing in a GC sawtooth to 19.3 of 20 GB. Not
+reproducible on macOS (no unclosed-VideoFrame warnings, same throughput), so it
+stays opt-in for diagnosis only.
 Embeddings are bit-identical across all of this (cosine 1.00000 vs seeking,
 top-k vs the same views at all-k, and max |difference| 0 for worker vs inline
 crops over 5,687 real crops).
@@ -4997,8 +5002,8 @@ Shortcuts and the Hot Keys modal where people look for them.
   check after Track All / Track Frame Range, default 1; `autoImageSwitchCheck` —
   0/1, the image check likewise, default 0; `imageCheckThreshold` -25;
   `imageCheckHz` 2; `imageCheckMaxViews` 3; `imageCheckWebNN` — 0/1, try WebNN,
-  default 0; `imageCheckDecodeWorkers` — 0/1, decode in per-camera workers,
-  default 1). The remaining catalog entries (`epipolarDecay`, `reprojSigma`, `epipolarWeight`,
+  default 0; `imageCheckDecodeWorkers` — 0/1, decode in per-camera workers
+  (experimental), default 0). The remaining catalog entries (`epipolarDecay`, `reprojSigma`, `epipolarWeight`,
   `reprojWeight`, `minMatchScore`, `prevIdentityBonus`, `reprojGate2/3/4`,
   `track3dWeight`) drive the bench-only luc3d matcher and are hidden from the UI
   but still resolve via `getTrackingThreshold`. `getTrackingThresholds` returns
