@@ -20,8 +20,9 @@ Full documentation, tutorials, and user guides: (https://talmolab.github.io/luc3
 - `styles.css` — All styling
 
 ## Local Development
+The same commands work on macOS, Linux and Windows.
 ```bash
-python3 server.py 8080          # Windows: py server.py 8080
+python3 server.py 8080
 # App: http://localhost:8080/
 # Tests: http://localhost:8080/tests/test-runner.html
 ```
@@ -32,25 +33,10 @@ python3 server.py 8080          # Windows: py server.py 8080
 Four dependencies (three.js, mp4box, dockview-core, yaml) normally load from a
 CDN. Fetch them once, while connected, and the app runs with no network:
 ```bash
-python3 scripts/offline_deps.py install     # Windows: py scripts\offline_deps.py install
+python3 scripts/offline_deps.py install
 python3 server.py --offline
 ```
-`--offline` rewrites those URLs to `lib/` as it serves, so nothing on disk
-changes and nothing gets committed by accident. It refuses to start if a package
-is missing rather than serving a half-offline page. `scripts/offline_deps.py
-check` reports what is installed; `--strict` also fails on a CDN URL the manifest
-does not map, which is what stops a new one from silently breaking offline mode.
 
-One feature still needs internet: **Tracks ▸ Check ID Switches (Images)** downloads
-an image model (~44 MB) on first use. Everything else works with the network off.
-
-To give someone a copy that runs offline without any of this, build a zip whose
-URLs are already rewritten — it works under any static server, and includes
-start scripts for Windows, macOS and Linux:
-```bash
-python3 scripts/offline_deps.py bundle
-```
-Versions and checksums live in `offline-deps.json`; licenses in `lib/LICENSES.txt`.
 ## Web Deployment
 
 <a href="https://luc3d.sleap.ai/" target="_blank" rel="noopener noreferrer">Access the live site here</a>
