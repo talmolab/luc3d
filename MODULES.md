@@ -4578,7 +4578,8 @@ check); `refreshIdSwitchPanel(session?)` (render the tab and put that session's
 markers on the seekbar — called after a check, from `updateInfoPanel` and from
 `switchSession`); `openIdSwitchPanel()` (show the panel, if hidden, on the tab);
 `clearIdSwitchResults(session?)` (called by `runTrackingPass` before it relabels);
-`ID_SWITCH_LEAD_IN_SECONDS`, `idSwitchLeadInFrame(marker, fps)`; back-compat
+`ID_SWITCH_LEAD_IN_SECONDS`, `idSwitchLeadInFrame(marker, fps)`,
+`updateIdSwitchProgress(frame)`; back-compat
 `runSizeSwitchCheck`. `inject: {createEmbedder, hasWebGPU}` replaces the image
 model and the WebGPU probe — test-only (`tests/e2e/id-switch-image-check.mjs`).
 
@@ -4637,7 +4638,14 @@ happens before it, while the animals are close; clicking a row therefore lands
 (`idSwitchLeadInFrame`, from the flag's `startFrame`; its end frame when the start
 is unknown, e.g. a file saved before start frames were kept), so pressing play
 shows the whole interaction; **end ⇥** jumps to the end frame, and Next
-unreviewed uses the lead-in too. A check run from the menu always opens the tab; an
+unreviewed uses the lead-in too. **The selected row's progress bar** pops up on
+selection and follows the viewer's frame (stepping, scrubbing, playback):
+0% at the landing frame (1 s before the close spell), the close spell — where a
+swap would happen — shaded amber in the middle, 100% at 1 s after the
+encounter's end; clamped outside that range. `updateIdSwitchProgress(frame)` is
+called from `ui/ui-wiring.js` `updateSeekbarVisual` on every frame change: one
+style write, and a no-op without a selected row (the bar element is looked up
+once per render/selection, not per frame). A check run from the menu always opens the tab; an
 automatic one only when it found something. The tab content is the panel's one
 scroller (the list has none of its own). With no results it says so and offers
 "Check by body size" / "Check by images…" (they click the menu items).
@@ -4655,7 +4663,7 @@ name for the image check's progress dialog, which is still modal.
 `ui/id-switch-review.js` (row keys, change-point helpers, `linkIdSwitchResults`).
 
 **Imported by.** `ui/ui-wiring.js` (`#menuCheckSizeSwitches`,
-`#menuCheckImageSwitches`, `setIdSwitchNavigator`), `pose/tracker.js` (the
+`#menuCheckImageSwitches`, `setIdSwitchNavigator`, `updateIdSwitchProgress`), `pose/tracker.js` (the
 automatic run, `clearIdSwitchResults`), `ui/info-panel.js` and
 `ui/sessions-panes.js` (`refreshIdSwitchPanel`).
 
