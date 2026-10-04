@@ -6,14 +6,38 @@ Serves static files. SLP export is now handled client-side via sleap-io.js.
 A legacy /convert-slp endpoint is still available if h5py is installed.
 
 Usage:
-    python server.py [port]
-    # or simply: python3 -m http.server 8080
+    python3 server.py [port]             # normal: dependencies load from a CDN
+    python3 server.py --offline          # serve the vendored copies in lib/
+    # or simply: python3 -m http.server 8080   (online only)
+
+On Windows use `py` in place of `python3`.
+
+--offline rewrites the CDN URLs in .html/.js/.mjs responses to point at lib/, so
+the working tree keeps its CDN URLs and nothing is committed by accident. It is
+for developing against the offline path; to hand someone a copy that runs offline
+under any static server, build a pre-rewritten zip instead:
+
+    python3 scripts/offline_deps.py bundle
 """
 
+import argparse
 import io
 import json
+import os
 import sys
 from http.server import SimpleHTTPRequestHandler, HTTPServer
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent / "scripts"))
+import offline_deps  # noqa: E402  (needs the path above)
+
+# Set from the CLI in main(); {} means "serve the CDN URLs unchanged".
+REWRITES = {}
+
+# Suffixes whose bodies get URL-rewritten in offline mode. .js matters as much as
+# .html: two of the CDN references are ESM imports inside ui/sessions-panes.js and
+# ui/overlay-export-modal.js, not script tags.
+REWRITABLE = (".html", ".js", ".mjs")
 
 # Try to import h5py for legacy /convert-slp endpoint
 try:
@@ -28,6 +52,58 @@ except ImportError:
 
 
 class LucidHandler(SimpleHTTPRequestHandler):
+    def do_GET(self):
+        rewritten = self._rewritten_body()
+        if rewritten is None:
+            super().do_GET()
+            return
+        self._send_rewritten(*rewritten, include_body=True)
+
+    def do_HEAD(self):
+        rewritten = self._rewritten_body()
+        if rewritten is None:
+            super().do_HEAD()
+            return
+        self._send_rewritten(*rewritten, include_body=False)
+
+    def _rewritten_body(self):
+        """(bytes, fs_path) for this request, or None to serve the file as-is."""
+        if not REWRITES:
+            return None
+
+        url_path = self.path.split("?", 1)[0].split("#", 1)[0]
+        fs_path = self.translate_path(self.path)
+        if os.path.isdir(fs_path):
+            fs_path = os.path.join(fs_path, "index.html")
+            url_path = url_path.rstrip("/") + "/index.html"
+        if not fs_path.endswith(REWRITABLE) or not os.path.isfile(fs_path):
+            return None
+
+        try:
+            text = Path(fs_path).read_text(encoding="utf-8", errors="surrogateescape")
+        except OSError:
+            return None
+
+        # Depth of the requested file below the site root decides how many ../
+        # the local path needs: /index.html -> ./lib/..., /ui/x.js -> ../lib/...
+        depth = max(0, len([p for p in url_path.split("/") if p]) - 1)
+        new = offline_deps.rewrite_text(text, REWRITES, depth)
+        if new == text:
+            return None
+        # fs_path, not self.path: for "/" the latter names the DIRECTORY, whose
+        # guessed type is application/octet-stream -- which makes the browser
+        # download the page instead of rendering it.
+        return new.encode("utf-8", "surrogateescape"), fs_path
+
+    def _send_rewritten(self, body, fs_path, include_body):
+        ctype = self.guess_type(fs_path)
+        self.send_response(200)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        if include_body:
+            self.wfile.write(body)
+
     def do_POST(self):
         if self.path == "/convert-slp":
             self._handle_convert_slp()
@@ -77,13 +153,50 @@ class LucidHandler(SimpleHTTPRequestHandler):
             self.send_header("Access-Control-Allow-Headers", "Content-Type")
             self.end_headers()
         else:
-            super().do_OPTIONS()
+            # SimpleHTTPRequestHandler has no do_OPTIONS, so deferring to super()
+            # here raised AttributeError -> 500 on any other OPTIONS request.
+            self.send_error(501, "Unsupported method (OPTIONS)")
 
 
-def main():
-    port = int(sys.argv[1]) if len(sys.argv) > 1 else 8080
-    server = HTTPServer(("0.0.0.0", port), LucidHandler)
-    print(f"LUCID server on http://0.0.0.0:{port}/")
+def enable_offline():
+    """Load the rewrite table, refusing to start if the packages are missing.
+
+    Failing loudly matters more than usual here: a half-offline page looks like it
+    worked, then dies on the first missing import with a console error nobody sees.
+    """
+    manifest = offline_deps.load_manifest()
+    missing = [
+        name for name, spec in manifest["packages"].items()
+        if not offline_deps.package_status(name, spec)[0]
+    ]
+    if missing:
+        print("!! Cannot serve offline: %s not installed." % ", ".join(missing),
+              file=sys.stderr)
+        print("   Run this once, while connected:", file=sys.stderr)
+        print("       python3 scripts/offline_deps.py install", file=sys.stderr)
+        return None
+    return offline_deps.replacement_map(manifest)
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description="LUCID development server.")
+    parser.add_argument("port", nargs="?", type=int, default=8080,
+                        help="port to listen on (default: 8080)")
+    parser.add_argument("--offline", action="store_true",
+                        default=os.environ.get("LUCID_OFFLINE") == "1",
+                        help="serve lib/ instead of the CDN (also: LUCID_OFFLINE=1)")
+    args = parser.parse_args(argv)
+
+    global REWRITES
+    if args.offline:
+        REWRITES = enable_offline()
+        if REWRITES is None:
+            return 1
+
+    server = HTTPServer(("0.0.0.0", args.port), LucidHandler)
+    mode = "OFFLINE (dependencies from lib/)" if args.offline else "online (dependencies from CDN)"
+    print(f"LUCID server on http://0.0.0.0:{args.port}/")
+    print(f"  Mode: {mode}")
     print("  SLP export: client-side via sleap-io.js (no server dependency)")
     if HAS_H5PY:
         print("  Legacy /convert-slp endpoint: available (h5py found)")
@@ -92,7 +205,8 @@ def main():
     except KeyboardInterrupt:
         print("\nShutting down.")
         server.server_close()
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
