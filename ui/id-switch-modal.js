@@ -26,11 +26,13 @@
  */
 
 import { state, timeline, getActiveSession } from './app-state.js';
-import { setStatus } from '../import-export/save-load.js';
+import { setStatus, markDirty } from '../import-export/save-load.js';
 import { showLoadingProgress, hideLoading, yieldToPaint } from './loading-overlay.js';
 import { getTrackingThreshold } from './settings.js';
 import { checkSizeSwitches, checkImageSwitches } from '../pose/id-switch-check.js';
 import { hasWebGPU, createImageEmbedder, IMAGE_MODEL_MB } from './image-embedder.js';
+import { idSwitchRowKey as rowKey, idSwitchPrimary as primaryOf, idSwitchMarkers as markersOf, idSwitchOnsets as countOnsets,
+         idSwitchEncounterCount as encounterCount, linkIdSwitchResults as tagAndLink } from './id-switch-review.js';
 
 const CUE_LABEL = { size: 'body size', image: 'images' };
 
@@ -75,17 +77,6 @@ var _navigate = null;
 /** Register `navigateToFrame` for result rows (called once from ui/ui-wiring.js). */
 export function setIdSwitchNavigator(fn) { _navigate = fn; }
 
-/** Change points to review: switch onsets plus 'end' points (where an early swapped stretch stops). */
-function primaryOf(res) {
-    return res.flags.filter(function (f) { return !f.continues; }).concat(res.changes || [])
-        .sort(function (a, b) { return a.frame - b.frame; });
-}
-
-/** Everything drawn on the timeline: change points at full strength, repeats faint. */
-function markersOf(res) {
-    return res.flags.concat(res.changes || []);
-}
-
 /**
  * The recording's frame rate, and whether it was measured from the video. The
  * checks convert their time settings (and weight their scores) with it, so a
@@ -98,28 +89,6 @@ function recordingFps(session) {
     });
     var fps = state.fps > 0 ? state.fps : (session && session.fps > 0 ? session.fps : 0);
     return { fps: fps, fromVideo: fromVideo };
-}
-
-/** Tag a result's markers with their cue, and link change points both checks found. */
-function tagAndLink(results) {
-    ['size', 'image'].forEach(function (cue) {
-        var r = results[cue];
-        if (r && r.ok) markersOf(r).forEach(function (m) { m.cue = cue; delete m.agree; });
-    });
-    var s = results.size, im = results.image;
-    if (!(s && s.ok && im && im.ok)) return;
-    var tol = Math.max(1, Math.round(s.fps || 30));
-    var samePair = function (a, b) {
-        return (a.identityA === b.identityA && a.identityB === b.identityB) || (a.identityA === b.identityB && a.identityB === b.identityA);
-    };
-    primaryOf(im).forEach(function (m) {
-        var hit = primaryOf(s).find(function (x) { return samePair(x, m) && Math.abs(x.frame - m.frame) <= tol; });
-        if (hit) { m.agree = hit; hit.agree = m; }
-    });
-}
-
-function countOnsets(res) {
-    return primaryOf(res).filter(function (f) { return f.followOf == null; }).length;
 }
 
 // ---------------------------------------------------------------------------
@@ -263,6 +232,7 @@ export async function runIdSwitchChecks(opts) {
         tagAndLink(st.results);
         var live = new Set(listRows(st, true).map(rowKey));
         st.reviewed.forEach(function (k) { if (!live.has(k)) st.reviewed.delete(k); });   // keep ticks that still apply
+        markDirty();                                       // new results: the .slp's checklist is out of date
     }
     refreshIdSwitchPanel(session);      // also when nothing ran: the tab and markers always show this session's results
     var anyFound = ran.some(function (c) { return countOnsets(results[c]) > 0; });
@@ -280,9 +250,6 @@ export function runSizeSwitchCheck(opts) {
 // ---------------------------------------------------------------------------
 // The ID Switches tab (right panel): a per-session review checklist
 // ---------------------------------------------------------------------------
-
-/** A row's identity across re-runs: its check, frame and pair. */
-function rowKey(m) { return (m.cue || 'size') + ':' + m.frame + ':' + m.identityA + ':' + m.identityB; }
 
 function isReviewed(st, m) { return st.reviewed.has(rowKey(m)) || (m.agree ? st.reviewed.has(rowKey(m.agree)) : false); }
 
@@ -319,7 +286,7 @@ export function openIdSwitchPanel() {
 /** Forget a session's results (a new tracking pass relabels everything) and clear its markers. */
 export function clearIdSwitchResults(session) {
     session = session || getActiveSession();
-    if (session) delete session._idSwitch;
+    if (session && session._idSwitch) { delete session._idSwitch; markDirty(); }
     refreshIdSwitchPanel(session);
 }
 
@@ -340,7 +307,15 @@ function aboutHtml(st, ran) {
               'different rate, set it in the fps box and run the check again: scores are evidence per second.') + '</p>';
 }
 
-function rowHtml(st, f, both) {
+/** An identity name in that identity's colour (the one the overlays and timeline use), when the session knows it. */
+function idName(session, name) {
+    var ids = (session && session.identities) || [], hit = null;
+    for (var i = 0; i < ids.length; i++) if (ids[i] && ids[i].name === name) { hit = ids[i]; break; }
+    var col = hit && typeof hit.color === 'string' && /^#[0-9a-f]{3,8}$|^rgb/i.test(hit.color) ? hit.color : null;
+    return '<span class="id-switch-id"' + (col ? ' style="color:' + col + '"' : '') + '>' + escapeHtml(name) + '</span>';
+}
+
+function rowHtml(session, st, f, both) {
     var cue = f.agree ? 'both' : f.cue, key = rowKey(f), rev = isReviewed(st, f);
     var score = f.agree ? Math.round(f.score) + ' / ' + Math.round(f.agree.score) : Math.round(f.score);
     var note = f.continues ? 'still swapped'
@@ -350,7 +325,7 @@ function rowHtml(st, f, both) {
         (st.current === key ? ' is-current' : '') + '" data-frame="' + f.frame + '" data-key="' + escapeHtml(key) + '">' +
         '<input type="checkbox" class="id-switch-tick" title="Reviewed"' + (rev ? ' checked' : '') + '>' +
         '<div class="id-switch-main"><div class="id-switch-line1"><span class="id-switch-time">' + fmtTime(f.frame) + '</span>' +
-        '<span class="id-switch-pair">' + escapeHtml(f.nameA) + ' ↔ ' + escapeHtml(f.nameB) + '</span>' +
+        '<span class="id-switch-pair">' + idName(session, f.nameA) + ' ↔ ' + idName(session, f.nameB) + '</span>' +
         '<span class="id-switch-score" title="Score' + (f.agree ? ' (size / images)' : '') + '">' + score + '</span></div>' +
         '<div class="id-switch-line2">frame ' + (f.frame + 1).toLocaleString() +
         (both ? ' · ' + (cue === 'both' ? '<b>Both</b>' : cue === 'size' ? 'size' : 'images') : '') +
@@ -387,7 +362,7 @@ export function refreshIdSwitchPanel(session) {
         ran.map(function (c) {
             var r = st.results[c], n = countOnsets(r);
             return '<div class="id-switch-summary">' + (both ? '<b>' + (c === 'size' ? 'Body size' : 'Images') + ':</b> ' : '') +
-                r.encounters.length.toLocaleString() + ' close encounters · <b>' + n + '</b> possible switch' + (n === 1 ? '' : 'es') + '</div>';
+                encounterCount(r).toLocaleString() + ' close encounters · <b>' + n + '</b> possible switch' + (n === 1 ? '' : 'es') + '</div>';
         }).join('') +
         '<details class="id-switch-about"><summary>About these flags</summary>' + aboutHtml(st, ran) + '</details>' +
         '</div>' +
@@ -399,7 +374,7 @@ export function refreshIdSwitchPanel(session) {
             '> Show ' + repeats + ' later encounter' + (repeats === 1 ? '' : 's') + ' that still look swapped</label>' : '') +
         '</div>' +
         '<div class="id-switch-list" id="idSwitchList">' +
-        (rows.length ? rows.map(function (f) { return rowHtml(st, f, both); }).join('')
+        (rows.length ? rows.map(function (f) { return rowHtml(session, st, f, both); }).join('')
             : '<p class="table-empty">No encounter scored below the threshold.</p>') + '</div>';
     var nav = st.navigate || _navigate;
     var go = function (row) {
@@ -414,6 +389,7 @@ export function refreshIdSwitchPanel(session) {
         if (e.target.classList.contains('id-switch-tick')) {
             if (e.target.checked) st.reviewed.add(row.dataset.key); else st.reviewed.delete(row.dataset.key);
             st.current = row.dataset.key;
+            markDirty();                                   // the checklist is saved in the .slp
             refreshIdSwitchPanel(session);
             return;
         }

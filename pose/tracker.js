@@ -26,7 +26,7 @@ import { getNodeWeightArray, getTrackingThresholds, getTrackingThreshold, isCame
 import { setStatus, hideLoading } from '../import-export/save-load.js';
 import { showLoadingProgress, createProgressPacer, yieldToPaint } from '../ui/loading-overlay.js';
 import { loadAllLazyFrames, sweepLazyFrameWindows } from './triangulation.js';
-import { drawAllOverlays } from '../ui/rendering.js';
+import { drawAllOverlays, showPredictedOnly, PREDICTED_ONLY_NOTE } from '../ui/rendering.js';
 import { updateInfoPanel } from '../ui/info-panel.js';
 import { setColorByIdentity } from '../ui/color-by.js';
 import { runIdSwitchChecks, clearIdSwitchResults } from '../ui/id-switch-modal.js';
@@ -1129,12 +1129,14 @@ export function trackCurrentFrame() {
         // frame's prior tracker groups so repeated runs don't stack.
         session.instanceGroups.set(state.currentFrame, []);
         var lr = runCrossViewTracker(session, trackedCameras, [state.currentFrame], false, effectiveNumAnimals);
+        // Show what tracking produced: the predictions only (User, Reproj, Errors off).
+        var predOnly = lr.numTargets > 0 && showPredictedOnly();
         drawAllOverlays(state.currentFrame);
         updateInfoPanel();
         if (timeline) timeline.refreshTracks(state.session, { cap: true });
         if (lr.numTargets > 0) {
             setStatus('Frame ' + displayFrame(state.currentFrame) + ': ' + lr.numIdentities +
-                ' identities / ' + lr.numTargets + ' cross-view targets', 'success');
+                ' identities / ' + lr.numTargets + ' cross-view targets' + (predOnly ? PREDICTED_ONLY_NOTE : ''), 'success');
         } else {
             setStatus('No cross-view matches found (need instances in 2+ views)', 'warning');
         }
@@ -1419,6 +1421,8 @@ async function runTrackingPass(range) {
         // nothing new to look at. Recolors 2D + 3D through ui-wiring's handler;
         // the overlay redraw below is then a cheap repeat.
         var switchedToIds = lres.numIdentities > 0 && setColorByIdentity(state, true);
+        // ...and only the predictions (User, Reproj, Errors off), the layer tracking produced.
+        var predOnly = lres.numIdentities > 0 && showPredictedOnly();
         drawAllOverlays(state.currentFrame);
         updateInfoPanel();
         if (timeline) timeline.refreshTracks(state.session, { cap: true });
@@ -1427,7 +1431,7 @@ async function runTrackingPass(range) {
             totalFrameCount + ' frames' +
             (isRange ? ' (' + displayFrame(lo) + '–' + displayFrame(hi) + ')' : '') +
             (switchedToIds ? ', now coloring by ID' : '') +
-            ' — use Tracks ▸ Propagate IDs → Tracks to apply';
+            ' — use Tracks ▸ Propagate IDs → Tracks to apply' + (predOnly ? PREDICTED_ONLY_NOTE : '');
         setStatus(doneMsg, 'success');
         // Then check the result for identity switches (ui/id-switch-modal.js): by body
         // size (Tracking Wizard `autoSwitchCheck`, default on) and/or by images

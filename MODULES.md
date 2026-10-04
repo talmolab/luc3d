@@ -809,7 +809,12 @@ drifts upward (e.g., 4 → 11 on the test fixture).
 - `../import-export/save-load.js` — `setStatus`, `hideLoading`.
 - `../ui/loading-overlay.js` — `showLoadingProgress`, `createProgressPacer`,
   `yieldToPaint`.
-- `../ui/rendering.js` — `drawAllOverlays`.
+- `../ui/rendering.js` — `drawAllOverlays`, `showPredictedOnly`,
+  `PREDICTED_ONLY_NOTE`: Track Frame (when it found targets), Track Frame Range
+  and Track All (when they assigned identities) end showing ONLY the Predicted
+  layer — User, Reproj, Errors unticked — and append the note to the status line
+  when that changed anything (the tracking counterpart of Triangulate All's
+  Reproj-only switch, #243).
 - `../ui/info-panel.js` — `updateInfoPanel`.
 - `../ui/id-switch-modal.js` — `runIdSwitchChecks`, `clearIdSwitchResults`: after a successful Track
   All or Track Frame Range that assigned 2+ identities, `runTrackingPass` runs the
@@ -4152,6 +4157,10 @@ data sources. Plus visibility-toggle helpers and frame counter updates.
   `groupByTrackAndTriangulateAll`) call `setReprojErrorVisible(true, {checkBoxes:
   false})` then this, so a run is compared with the USER's boxes, not with
   Errors just re-ticked.
+- `showPredictedOnly()` -> `boolean` — the tracking counterpart: after Track
+  Frame / Track Frame Range / Track All (`pose/tracker.js`) Predicted on; User,
+  Reproj, Errors off, by the same change-event mechanics (shared private
+  `setToolbarLayers`). `PREDICTED_ONLY_NOTE` is its status suffix.
 - `getVisibilitySettings()` — reads per-view checkbox state from the DOM.
   Includes **`showUnlinkedBadge`** (the Visibility panel's *Unlinked Instances ▸
   Show "?" badge* toggle, `#visUnlinkedBadge`), passed straight through to
@@ -4569,16 +4578,18 @@ attached to the result as `model` and its note shown under "About these flags".
 **User-facing features.** The **ID Switches** tab (`#tabIdSwitches` /
 `#idSwitchPanel` in `index.html`, third tab; at the default panel width it sits in
 "More ▾"). Results are stored per session on `session._idSwitch` (`{results:
-{size?, image?}, reviewed: Set, showRepeats, current}`; in memory only — not
-saved to the `.slp`), so they survive closing/reopening the tab and switching
-sessions, until the check re-runs (a cue replaces only its own results; ticks on
+{size?, image?}, reviewed: Set, showRepeats, current}`), so they survive
+closing/reopening the tab and switching sessions — and are SAVED in the `.slp`
+(`metadata.lucid.idSwitchReview`, see `ui/id-switch-review.js`; ticking a row,
+a new run and Clear mark the project unsaved) — until the check re-runs (a cue replaces only its own results; ticks on
 change points it finds again are kept, matched by cue + frame + pair), "Clear",
 or a new tracking pass. The tab shows a heading, per-check counts, "About these
 flags" (the method, calibration figures, sampling rate, frame-rate warning and
 the image backend note), a sticky toolbar ("N of M reviewed", **Next
 unreviewed ▸** — the next unticked row after the current one, wrapping —
 **Clear**, and "Show N later encounters that still look swapped"), then one row
-per change point: a **reviewed** checkbox, time, `id_a ↔ id_b`, score, and
+per change point: a **reviewed** checkbox, time, `id_a ↔ id_b` (each name in its
+identity's colour, as in the overlays), score, and
 "frame N · check · note" (Both / size / images; "follows the switch at m:ss";
 "labelling changes here; earlier encounters look swapped"; "still swapped"). A
 change point both checks found (same pair within 1 s) is ONE "Both" row (scores
@@ -4597,7 +4608,8 @@ name for the image check's progress dialog, which is still modal.
 `getActiveSession`), `import-export/save-load.js` (`setStatus`),
 `ui/loading-overlay.js` (`showLoadingProgress`, `hideLoading`, `yieldToPaint`),
 `ui/settings.js` (`getTrackingThreshold`), `pose/id-switch-check.js`,
-`ui/image-embedder.js` (`hasWebGPU`, `createImageEmbedder`).
+`ui/image-embedder.js` (`hasWebGPU`, `createImageEmbedder`),
+`ui/id-switch-review.js` (row keys, change-point helpers, `linkIdSwitchResults`).
 
 **Imported by.** `ui/ui-wiring.js` (`#menuCheckSizeSwitches`,
 `#menuCheckImageSwitches`, `setIdSwitchNavigator`), `pose/tracker.js` (the
@@ -4611,6 +4623,42 @@ Clear, one scroller),
 `tests/e2e/id-switch-image-check.mjs` (images with an injected embedder: "Both"
 merge, identical-size animals found by images only, Esc cancel, no WebGPU, menu,
 default off).
+
+---
+
+### ui/id-switch-review.js
+
+**Purpose.** The ID Switches tab's review checklist as data: the helpers that read
+a session's check results (`session._idSwitch`) and their `.slp` serialization,
+`metadata.lucid.idSwitchReview`, written and read through
+`import-export/visibility-metadata.js` (the one `metadata.lucid` seam).
+
+**Key exports.** `idSwitchRowKey(m)` (check + frame + identity NAMES — names, not
+ids, are what a reopened project still agrees on); `idSwitchPrimary(res)` (change
+points), `idSwitchMarkers(res)` (+ repeats), `idSwitchOnsets(res)` (the
+"possible switches" count), `idSwitchEncounterCount(res)`;
+`linkIdSwitchResults(results)` (tag each marker's `cue`, link a size and an image
+change point of the same pair within 1 s as `agree` — "Both");
+`serializeIdSwitchReview(session)` -> payload or `null` (no check results -> no
+key, so untouched projects keep their bytes); `ingestIdSwitchReview(session,
+payload)` (rebuilds `session._idSwitch`, re-links "Both"; ignores anything
+malformed, never throws).
+
+**Format.** `{v: 1, checks: {size?|image?: {encounters, sampleHz, step, fps,
+fpsFromVideo, [imageHz, crops, cameras, model: {name, note}], points: [[frame,
+nameA, nameB, score (0.1), kind ('' | 'end'), followOf (frame | -1), continues
+(0 | 1)], …]}}, reviewed: [rowKey, …]}` — only what the tab and the timeline
+draw; not the encounters or the fitted models. A restored check result has
+`restored: true` and `encounterCount` instead of `encounters`.
+
+**Imports from project modules.** None (loads in the node test sandbox; listed in
+`tests/run-node.js`).
+
+**Imported by.** `ui/id-switch-modal.js`, `import-export/visibility-metadata.js`.
+
+**Coverage.** `tests/test-id-switch-check.mjs` (lossless reopen -> re-save,
+"Both" re-link, ticks, garbage tolerance, nothing written without results);
+`tests/e2e/visibility-settings-roundtrip.mjs` (both writers, real reader).
 
 ---
 
@@ -7234,7 +7282,9 @@ keyboard transport.
 ### import-export/visibility-metadata.js
 
 **Purpose.** The `metadata.lucid` ↔ `Session` mapping for the Visibility panel's
-SESSION-SCOPED settings. One module owns the key list so a writer and a reader
+SESSION-SCOPED settings — and for the other per-session panel state that belongs
+in the project file: the ID Switches tab's review checklist (`idSwitchReview`,
+`ui/id-switch-review.js`). One module owns the key list so a writer and a reader
 cannot drift: adding a setting means touching this file and nothing else.
 
 **What it covers, and what it deliberately does not.** The Visibility panel
@@ -7253,7 +7303,7 @@ holds two kinds of state:
 **Key exports.**
 - `VISIBILITY_METADATA_KEYS` — every key this module may write
   (`videoBrightness`, `videoContrast`, `videoRotation`, `hiddenCameras`,
-  `hiddenTracks`, `hiddenIdentities`). Exported so tests can assert a default
+  `hiddenTracks`, `hiddenIdentities`, `idSwitchReview`). Exported so tests can assert a default
   project carries none of them without duplicating the list.
 - `writeVisibilityMetadata(lucid, session)` — mutate a `metadata.lucid` dict in
   place, adding only non-default settings; returns the same dict.
@@ -7276,7 +7326,7 @@ Purely additive to the file format: these are optional keys inside LUCID's own
 so files stay readable by the SLEAP GUI.
 
 **Imports from project modules.** `../ui/video-filters.js`,
-`../ui/timeline-visibility.js` — both dependency-free leaves, so this module
+`../ui/timeline-visibility.js`, `../ui/id-switch-review.js` — all dependency-free leaves, so this module
 bridges into the test runners without pulling `app.js` in.
 
 **Imported by.** The four writers — `import-export/file-io.js`
@@ -7289,7 +7339,8 @@ the v2 and v3 project-JSON shapes) — and the three readers —
 
 **Tests.** `tests/test-visibility-metadata.js` (unit; bridged as
 `window.__VisibilityMetadata`) and
-`tests/e2e/visibility-settings-roundtrip.mjs` (real app, both writers).
+`tests/e2e/visibility-settings-roundtrip.mjs` (real app, both writers; includes
+the ID Switches checklist).
 
 ---
 

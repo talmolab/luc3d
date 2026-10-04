@@ -292,6 +292,41 @@ group('Crop geometry (ui/image-embedder.js)');
     }
 }
 
+group('Checklist save / reopen (ui/id-switch-review.js)');
+{
+    const R = await import(pathToFileURL(path.join(ROOT, 'ui', 'id-switch-review.js')).href);
+    ok(R.serializeIdSwitchReview({}) === null && R.serializeIdSwitchReview({ _idSwitch: { results: { size: { ok: false } } } }) === null,
+        'no check results → nothing to write (an untouched project keeps its bytes)');
+    const pt = (frame, a, b, score, extra) => Object.assign({ frame, nameA: a, nameB: b, score }, extra || {});
+    const results = {
+        size: { ok: true, encounters: [1, 2, 3], sampleHz: 15, step: 4, fps: 60, fpsFromVideo: false,
+                flags: [pt(100, 'id_0', 'id_1', -88.06), pt(400, 'id_0', 'id_2', -5, { followOf: 100 }), pt(700, 'id_0', 'id_1', -9, { continues: true })],
+                changes: [pt(900, 'id_1', 'id_2', 2.2, { kind: 'end' })] },
+        image: { ok: true, encounters: [1, 2], sampleHz: 15, step: 4, fps: 60, fpsFromVideo: false, imageHz: 2, crops: 50, cameras: ['c0'],
+                 flags: [pt(130, 'id_1', 'id_0', -30)], changes: [] },
+    };
+    R.linkIdSwitchResults(results);
+    ok(results.size.flags[0].agree === results.image.flags[0], 'same pair (either order) within 1 s → linked as "Both"');
+    const sess = { _idSwitch: { results, reviewed: new Set(['size:100:id_0:id_1', 'image:130:id_1:id_0']) } };
+    const payload = JSON.parse(JSON.stringify(R.serializeIdSwitchReview(sess)));   // as it comes back from the file
+    const back = R.ingestIdSwitchReview({}, payload);
+    const st = back._idSwitch;
+    ok(st && JSON.stringify(R.serializeIdSwitchReview(back)) === JSON.stringify(payload), 'reopen → re-save is lossless');
+    ok(st && R.idSwitchOnsets(st.results.size) === R.idSwitchOnsets(results.size) && R.idSwitchEncounterCount(st.results.size) === 3,
+        'restored counts match (possible switches, encounters checked)');
+    ok(st && st.results.size.flags.some(m => m.kind === 'end') && st.results.size.flags.some(m => m.followOf === 100) && st.results.size.flags.some(m => m.continues),
+        "'end' point, follow-on and repeat survive");
+    ok(st && st.results.size.flags[0].agree && st.results.size.flags[0].agree.cue === 'image' && st.reviewed.has('size:100:id_0:id_1'),
+        'the "Both" link is rebuilt and the ticks come back');
+    let threw = false, n = 0;
+    for (const junk of [null, 7, 'x', {}, { v: 2, checks: {} }, { v: 1, checks: null }, { v: 1, checks: { size: { points: 'no' } } },
+                        { v: 1, checks: { size: { points: [[1, 2, 3], null, ['a', 'b', 'c', 'd']] } } }]) {
+        try { const s2 = R.ingestIdSwitchReview({}, junk); if (!s2._idSwitch || !R.idSwitchMarkers(s2._idSwitch.results.size || { flags: [] }).length) n++; }
+        catch (e) { threw = true; }
+    }
+    ok(!threw && n === 8, `malformed payloads are ignored without throwing (${n}/8)`);
+}
+
 group('Failure reasons');
 {
     const empty = new PD.Session([], new PD.Skeleton('m', NODES, []), [], 'e');
