@@ -5,19 +5,19 @@
 // - setReprojErrorVisible: toggles reprojection-error column visibility in info panels.
 // - updateFrameCounters: status-bar frame counters (labeled / triangulated / instances).
 
-import { state, interactionManager, timeline } from './app-state.js?v=c6d8dda9f01b';
-import { points3dNodeCount } from '../pose/pose-data.js?v=c6d8dda9f01b';
+import { state, interactionManager, timeline } from './app-state.js?v=fb0406f5189e';
+import { points3dNodeCount } from '../pose/pose-data.js?v=fb0406f5189e';
 import {
     ensureLazyFrameData, getInstanceGroupsForFrame,
     triangulateAndReproject, storeReprojectedInstances,
-} from '../pose/triangulation.js?v=c6d8dda9f01b';
-import { drawFrameOverlays } from './overlays.js?v=c6d8dda9f01b';
-import { syncViewLegends } from './view-legend.js?v=c6d8dda9f01b';
-import { isCameraTracked } from './settings.js?v=c6d8dda9f01b';
+} from '../pose/triangulation.js?v=fb0406f5189e';
+import { drawFrameOverlays } from './overlays.js?v=fb0406f5189e';
+import { syncViewLegends } from './view-legend.js?v=fb0406f5189e';
+import { isCameraTracked } from './settings.js?v=fb0406f5189e';
 
 // Pass 3f: editGroupState + finishEditGroup moved to ui/identity-assignment.js.
-import { editGroupState, finishEditGroup } from './identity-assignment.js?v=c6d8dda9f01b';
-import { updateFrameInfo } from './info-panel.js?v=c6d8dda9f01b';
+import { editGroupState, finishEditGroup } from './identity-assignment.js?v=fb0406f5189e';
+import { updateFrameInfo } from './info-panel.js?v=fb0406f5189e';
 
 // ============================================
 // Reproj/Error visibility
