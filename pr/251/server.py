@@ -34,11 +34,6 @@ import offline_deps  # noqa: E402  (needs the path above)
 # Set from the CLI in main(); {} means "serve the CDN URLs unchanged".
 REWRITES = {}
 
-# Suffixes whose bodies get URL-rewritten in offline mode. .js matters as much as
-# .html: two of the CDN references are ESM imports inside ui/sessions-panes.js and
-# ui/overlay-export-modal.js, not script tags.
-REWRITABLE = (".html", ".js", ".mjs")
-
 # Try to import h5py for legacy /convert-slp endpoint
 try:
     import h5py
@@ -76,7 +71,13 @@ class LucidHandler(SimpleHTTPRequestHandler):
         if os.path.isdir(fs_path):
             fs_path = os.path.join(fs_path, "index.html")
             url_path = url_path.rstrip("/") + "/index.html"
-        if not fs_path.endswith(REWRITABLE) or not os.path.isfile(fs_path):
+        # Which files get rewritten is offline_deps' call, so the served tree and
+        # `bundle`'s zip cannot drift. .js matters as much as .html: two of the CDN
+        # references are ESM imports inside ui/sessions-panes.js and
+        # ui/overlay-export-modal.js, not script tags.
+        if not offline_deps.is_rewritable(url_path.lstrip("/")):
+            return None
+        if not os.path.isfile(fs_path):
             return None
 
         try:

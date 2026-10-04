@@ -16,7 +16,7 @@
  * `options.reprojErrorThreshold` instead.
  */
 
-import { makePoints3d, points3dNodeCount, hasPoint3d, getPoint3d, readPoint3d, setPoint3d, clearPoint3d } from './pose-data.js?v=8ee4659b0ee6';
+import { makePoints3d, points3dNodeCount, hasPoint3d, getPoint3d, readPoint3d, setPoint3d, clearPoint3d } from './pose-data.js?v=c6d8dda9f01b';
 
 // Settings readers for `triangulateAndReproject` (see the header). Unset means
 // "every camera included, no threshold" — the same defaults as before the split.

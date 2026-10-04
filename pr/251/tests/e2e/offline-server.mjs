@@ -41,6 +41,10 @@ let up = false;
 for (let i = 0; i < 100 && !up; i++) {
   try {
     const r = await fetch(`http://localhost:${PORT}/index.html`);
+    // Drain the body. An unconsumed one leaves undici's parser paused, and it
+    // then trips `assert(!this.paused)` inside Node when the socket closes --
+    // an internal crash that looks nothing like the probe that caused it.
+    await r.arrayBuffer();
     up = r.ok;
   } catch { await new Promise(r => setTimeout(r, 100)); }
 }
