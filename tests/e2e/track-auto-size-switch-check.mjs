@@ -95,12 +95,12 @@ try {
     await page.evaluate(async () => {
         await window.__buildTrackable('A');
         const AS = await import('/ui/app-state.js');
-        AS.timeline.setSwitchMarkers([{ frame: 100, nameA: 'x', nameB: 'y', score: -99 }]);   // stale, from "an earlier run"
+        (await import('/ui/seekbar-markers.js')).setSeekbarSwitchMarkers([{ frame: 100, nameA: 'x', nameB: 'y', score: -99 }], 1950);   // stale, from "an earlier run"
         const tr = await import('/pose/tracker.js'); tr.setTrackerNumAnimals(2);
         await tr.trackAll();
     });
     let st = await statusText();
-    const markersA = await page.evaluate(async () => (await import('/ui/app-state.js')).timeline.getSwitchMarkers().length);
+    const markersA = await page.evaluate(async () => (await import('/ui/seekbar-markers.js')).getSeekbarSwitchMarkers().length);
     check(/^Assigned 2 identities/.test(st) && /ID-switch check \(body size\): no possible switches/.test(st),
         `Track All: check ran, result appended to its status ("${st}")`);
     check(markersA === 0, 'Track All: the stale marker from before was cleared');

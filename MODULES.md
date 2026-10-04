@@ -2720,7 +2720,7 @@ on reload); see `ui/app-state.js`.
 - `./interaction.js` — `isInteractiveClickTarget`.
 - `./panel-visibility.js` — `isInfoPanelVisible`, `markInfoPanelStale`.
 - `./id-switch-modal.js` — `refreshIdSwitchPanel`: `updateInfoPanel` re-renders
-  the ID Switches tab (and its timeline markers) for the active session.
+  the ID Switches tab (and its seekbar markers) for the active session.
 - `./app-state.js` — `state`, `timeline`, `interactionManager`,
   `rememberSkeleton`, `buildRememberedSkeleton`.
 - `../import-export/save-load.js` — `setStatus`, `markDirty`.
@@ -4280,6 +4280,37 @@ re-triangulate, identity assignment, or visibility-toggle change.
 
 ---
 
+### ui/seekbar-markers.js
+
+**Purpose.** Possible-ID-switch ticks on the transport seekbar (`#seekbarMarks`
+inside `#seekbar`), for the active session's ID Switches results — where the
+timeline used to draw them.
+
+**Key exports.** `installSeekbarMarkers(layerEl, totalFrames)`;
+`setSeekbarSwitchMarkers(markers, totalFrames)` (`[]` clears) /
+`getSeekbarSwitchMarkers()`; `setSeekbarMarkerFrames(totalFrames)` (re-lays the
+ticks out only when the frame count changed — called from `updateSeekbarVisual`);
+`seekbarMarkerAt(frac, widthPx, tolPx = 5)` (the tick nearest the cursor; a change
+point beats a repeat); `describeSwitchMarker(m)` (the tooltip text).
+
+**Drawing.** One tick per marker at `frame / (totalFrames - 1)` — the thumb's own
+mapping: amber = size, cyan = images, amber-over-cyan = "Both" (drawn once, on the
+size marker; its image twin is skipped), follow-on fainter and shorter,
+still-swapped repeat a short faint tick, `reviewed` (ticked in the tab) dimmed.
+Over the track, under the thumb, `pointer-events: none`: the seekbar's
+mousedown/drag handlers (`ui/ui-wiring.js`) snap to a tick within 5 px, and the
+seekbar tooltip names it ("Frame 18,105 · 05:01.733 — possible ID switch: id_1 ↔
+id_2 (size score -1415)").
+
+**Imports from project modules.** None.
+
+**Imported by.** `ui/ui-wiring.js`, `ui/id-switch-modal.js`.
+
+**Coverage.** `tests/e2e/size-switch-check.mjs` (ticks drawn, none on the
+timeline, hover text, click snaps to the tick's frame, reviewed dimming).
+
+---
+
 ### ui/seekbar-tooltip.js
 
 **Purpose.** Hover tooltip on the transport seekbar (#142): "Frame 1,234 ·
@@ -4289,7 +4320,10 @@ drag will land before making it.
 **Key exports.** `formatTimestamp(seconds)` (`mm:ss.mmm`, `h:mm:ss.mmm` from an
 hour up; rounds to the millisecond before splitting, so never `00:60.000`),
 `seekbarTooltipText(frameIdx, fps)`, `installSeekbarTooltip(seekbar,
-{frameAtFraction, getTotalFrames, getFps})` -> the tooltip element
+{frameAtFraction, getTotalFrames, getFps, markerAt?})` -> the tooltip element
+(`markerAt(frac, widthPx)` -> `{frame, text}` | null: a possible-ID-switch tick
+under the cursor — its frame replaces `frameAtFraction`'s, as the scrub handlers
+snap to it, and its text is appended)
 (`#seekbarTooltip`, `.seekbar-tooltip`).
 
 **Behaviour.**
@@ -4533,7 +4567,7 @@ the headless test runner doesn't crash on a missing `document`.
 **Purpose.** Tracks ▸ **Check ID Switches (Body Size)…** / **(Images)…**, and the
 same checks run automatically after Track All / Track Frame Range. Runs
 `checkSizeSwitches` / `checkImageSwitches` (`pose/id-switch-check.js`), puts every
-change point and repeat on the timeline (`timeline.setSwitchMarkers`, tagged
+change point and repeat on the transport seekbar (`setSeekbarSwitchMarkers`, `ui/seekbar-markers.js`; tagged
 `cue: 'size' | 'image'`), and lists the change points in the right panel's
 **ID Switches** tab as a per-session review checklist.
 
@@ -4541,7 +4575,7 @@ change point and repeat on the timeline (`timeline.setSwitchMarkers`, tagged
 navigateToFrame?, inject?})`; `setIdSwitchNavigator(fn)` (ui-wiring registers
 `navigateToFrame` once, so rows stay clickable when the tracker started the
 check); `refreshIdSwitchPanel(session?)` (render the tab and put that session's
-markers on the timeline — called after a check, from `updateInfoPanel` and from
+markers on the seekbar — called after a check, from `updateInfoPanel` and from
 `switchSession`); `openIdSwitchPanel()` (show the panel, if hidden, on the tab);
 `clearIdSwitchResults(session?)` (called by `runTrackingPass` before it relabels);
 back-compat `runSizeSwitchCheck`. `inject: {createEmbedder, hasWebGPU}` replaces the image
@@ -4594,7 +4628,7 @@ identity's colour, as in the overlays), score, and
 "labelling changes here; earlier encounters look swapped"; "still swapped"). A
 change point both checks found (same pair within 1 s) is ONE "Both" row (scores
 "size / image"). Clicking a row navigates there; ticking it dims the row and its
-timeline marker (`reviewed`). A check run from the menu always opens the tab; an
+seekbar tick (`reviewed`). A check run from the menu always opens the tab; an
 automatic one only when it found something. The tab content is the panel's one
 scroller (the list has none of its own). With no results it says so and offers
 "Check by body size" / "Check by images…" (they click the menu items).
@@ -5003,17 +5037,11 @@ when the bar appears/disappears.
   `setDisplayMode(mode)`, `refreshTracks(session, opts?)`,
   `setFrameModified(frameIdx, modified)`, `getPreferredHeight`,
   `getCameraGroups`, `getLabelLines`, `getRowCount`,
-  `getTrackAreaElement`, `setSwitchMarkers(markers)` / `getSwitchMarkers()`.
+  `getTrackAreaElement`.
 
-**Possible-ID-switch markers.** `setSwitchMarkers([{frame, nameA, nameB, score,
-continues?, kind?, followOf?, cue?, agree?, reviewed?}])` (from `ui/id-switch-modal.js`; `[]` clears)
-draws a layer over the tracks, under the playhead (so it is in the playback
-static snapshot), amber for the size check and cyan for images (`cue`): an
-independent change point is a bold line with a
-downward tick, a follow-on (`followOf`) dimmer with a small tick, a
-still-swapped repeat (`continues`) a faint hairline; one ticked in the ID Switches
-tab (`reviewed`) is drawn at a third of its strength. Hovering within 4 px adds
-"possible ID switch: a ↔ b (size score N…, reviewed)" to the frame tooltip.
+**Possible-ID-switch markers** are no longer drawn here — they moved to the
+transport seekbar (`ui/seekbar-markers.js`); the timeline's marker layer, its
+`setSwitchMarkers` / `getSwitchMarkers` API and tooltip text are gone.
 
 **Initial-load 40% cap.** `setData(session)` sizes the container via
 `_fitContainerToData()`, which clamps the container height to
@@ -5952,6 +5980,9 @@ button's `#tbTrackFrameRange` dropdown item — #212),
 References…" — #226),
 `seekbar-tooltip.js` (`installSeekbarTooltip`, the seekbar's hover tooltip —
 #142),
+`seekbar-markers.js` (`installSeekbarMarkers`, `seekbarMarkerAt`,
+`describeSwitchMarker`, `setSeekbarMarkerFrames` — the possible-ID-switch ticks:
+the scrub handlers and the tooltip snap to a tick within 5 px),
 `color-by.js` (`onColorByChange`, `setColorByIdentity` — the Color: Tracks /
 ID toggle, also flipped by the tracker after Track All — #242),
 `video-filters.js` (`setSessionRotation`; `clampRotation` still comes in via

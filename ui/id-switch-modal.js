@@ -4,7 +4,7 @@
  *
  * Runs the size and/or image check (pose/id-switch-check.js) over the active
  * session's tracked identities, puts every flagged close encounter on the
- * timeline as a possible-switch marker (amber = size, cyan = images), and lists
+ * seekbar as a possible-switch tick (amber = size, cyan = images), and lists
  * the CHANGE POINTS in the right panel's "ID Switches" tab as a checklist —
  * click a row to jump there, tick it once reviewed, "Next unreviewed" walks the
  * list. Results (and what was reviewed) are kept per session until the check
@@ -25,7 +25,8 @@
  * import-export/save-load.js (setStatus).
  */
 
-import { state, timeline, getActiveSession } from './app-state.js';
+import { state, getActiveSession } from './app-state.js';
+import { setSeekbarSwitchMarkers } from './seekbar-markers.js';
 import { setStatus, markDirty } from '../import-export/save-load.js';
 import { showLoadingProgress, hideLoading, yieldToPaint } from './loading-overlay.js';
 import { getTrackingThreshold } from './settings.js';
@@ -176,7 +177,7 @@ async function runImage(session, rate, inject) {
 }
 
 /**
- * Run the selected checks, mark the results on the timeline and report them.
+ * Run the selected checks, mark the results on the seekbar and report them.
  *
  * From the menu (`auto` false) the ID Switches tab always opens. After Track All
  * or Track Frame Range (`auto: true`, pose/tracker.js) the results are appended
@@ -264,15 +265,14 @@ function listRows(st, withRepeats) {
     return rows.sort(function (a, b) { return a.frame - b.frame; });
 }
 
-/** Put the session's markers on the timeline, reviewed ones dimmed (`reviewed`). */
+/** Put the session's markers on the seekbar (ui/seekbar-markers.js), reviewed ones dimmed (`reviewed`). */
 function syncMarkers(session) {
-    if (!timeline || !timeline.setSwitchMarkers) return;
     var st = session && session._idSwitch, all = [];
     if (st) ['size', 'image'].forEach(function (c) {
         var r = st.results[c];
         if (r && r.ok) markersOf(r).forEach(function (m) { m.reviewed = isReviewed(st, m); all.push(m); });
     });
-    timeline.setSwitchMarkers(all);
+    setSeekbarSwitchMarkers(all, state.totalFrames);
 }
 
 /** Show the right panel (if hidden) on the ID Switches tab. */
@@ -334,7 +334,7 @@ function rowHtml(session, st, f, both) {
 
 /**
  * (Re)render the ID Switches tab for `session` (default: the active one) and put
- * its markers on the timeline. Cheap; called after a check, on every info-panel
+ * its markers on the seekbar. Cheap; called after a check, on every info-panel
  * refresh and on session switch.
  */
 export function refreshIdSwitchPanel(session) {
@@ -369,7 +369,7 @@ export function refreshIdSwitchPanel(session) {
         '<div class="id-switch-toolbar">' +
         '<span class="id-switch-done"><b>' + done + '</b> of ' + primary.length + ' reviewed</span>' +
         '<button class="panel-btn id-switch-next" id="idSwitchNext"' + (done < primary.length ? '' : ' disabled') + '>Next unreviewed ▸</button>' +
-        '<button class="panel-btn" id="idSwitchClear" title="Forget these results and remove their timeline markers">Clear</button>' +
+        '<button class="panel-btn" id="idSwitchClear" title="Forget these results and remove their seekbar markers">Clear</button>' +
         (repeats ? '<label class="id-switch-repeats"><input type="checkbox" id="idSwitchRepeats"' + (st.showRepeats ? ' checked' : '') +
             '> Show ' + repeats + ' later encounter' + (repeats === 1 ? '' : 's') + ' that still look swapped</label>' : '') +
         '</div>' +

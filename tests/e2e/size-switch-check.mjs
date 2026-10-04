@@ -11,14 +11,16 @@
  *     the switch encounter, naming the swapped pair; any others come after it
  *     and involve a swapped identity (its encounters with the third animal look
  *     off too); the status line reports the count.
- *  2. The timeline carries the markers (the change point plus faint repeats).
+ *  2. The SEEKBAR carries the markers as ticks (the change point plus faint
+ *     repeats) and the timeline none; hovering a tick names the switch in the
+ *     seekbar tooltip, and clicking near it lands on exactly its frame.
  *  3. The tab is the panel's one scroller (the list has no scroller of its own);
  *     "Show repeats" lists the still-swapped encounters too.
  *  4. Clicking a row navigates the viewer to that frame; identity names are
  *     drawn in their identity's colour.
  *  5. The checklist: ticking a row marks the project unsaved (the checklist is
  *     saved in the .slp — round trip in visibility-settings-roundtrip.mjs),
- *     counts it reviewed and dims its timeline
+ *     counts it reviewed and dims its seekbar tick
  *     marker; "Next unreviewed" jumps to the next unticked row; the results and
  *     ticks survive leaving the tab, a re-run, and switching sessions away and
  *     back (results are per session); "Clear" removes results and markers.
@@ -26,7 +28,7 @@
  *  7. The tab states the sampling it used and that, with no video loaded, the
  *     frame rate is the app's value rather than a measured one.
  *
- * Run: node tests/e2e/size-switch-check.mjs     (SHOT=/path.png saves a timeline screenshot,
+ * Run: node tests/e2e/size-switch-check.mjs     (SHOT=/path.png saves a seekbar screenshot,
  *      PANEL_SHOT=/path.png the ID Switches tab)
  */
 import { chromium } from 'playwright';
@@ -122,14 +124,32 @@ try {
     check(ui.rows.slice(1).every(r => /follows the switch at/.test(r.text)), 'the other change points are labelled as its follow-ons');
     check(/^0 of \d+ reviewed/.test(ui.done.trim()), `checklist starts at "${ui.done.trim()}"`);
 
-    // ---- 2. timeline markers
-    const markers = await page.evaluate(async () => (await import('/ui/app-state.js')).timeline.getSwitchMarkers());
-    check(markers.some(m => !m.continues && Math.abs(m.frame - fx.swapFrame) <= 40), `timeline has the change-point marker (${markers.length} markers)`);
-    check(markers.some(m => m.continues), 'timeline also shows the still-swapped repeats');
+    // ---- 2. seekbar ticks (not the timeline)
+    const markers = await page.evaluate(async () => (await import('/ui/seekbar-markers.js')).getSeekbarSwitchMarkers());
+    check(markers.some(m => !m.continues && Math.abs(m.frame - fx.swapFrame) <= 40), `the seekbar has the change-point marker (${markers.length} markers)`);
+    check(markers.some(m => m.continues), 'the seekbar also shows the still-swapped repeats');
+    const ticks = await page.evaluate(async () => {
+        const AS = await import('/ui/app-state.js');
+        return { n: document.querySelectorAll('#seekbarMarks .seekbar-mark').length, repeats: document.querySelectorAll('#seekbarMarks .seekbar-mark.is-repeat').length,
+                 timelineApi: typeof AS.timeline.setSwitchMarkers };
+    });
+    check(ticks.n === markers.length && ticks.repeats >= 1 && ticks.timelineApi === 'undefined',
+        `${ticks.n} ticks drawn on the seekbar (${ticks.repeats} faint repeats); the timeline no longer draws switch markers`);
+    // hover a tick, then click 2 px beside it: the tooltip names the switch and the click lands on its frame
+    const tick = await page.evaluate(f => { const el = document.querySelector('#seekbarMarks .seekbar-mark[data-frame="' + f + '"]'); const r = el.getBoundingClientRect();
+        return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; }, row.frame);
+    await page.mouse.move(tick.x + 2, tick.y);
+    const tipText = await page.evaluate(() => document.getElementById('seekbarTooltip').textContent);
+    check(/possible ID switch: id_\d ↔ id_\d \(size score/.test(tipText) && tipText.startsWith('Frame ' + (row.frame + 1).toLocaleString('en-US')),
+        `hovering a tick: "${tipText}"`);
+    await page.mouse.down(); await page.mouse.up();
+    await page.waitForFunction(f => window.__lucid.state.currentFrame === f, row.frame, { timeout: 10000 }).catch(() => {});
+    const snapped = await page.evaluate(() => window.__lucid.state.currentFrame);
+    check(snapped === row.frame, `clicking beside a tick lands on exactly its frame (${snapped}, tick ${row.frame})`);
+    await page.mouse.move(5, 5);
     if (process.env.SHOT) {
-        await page.evaluate(async () => { const tl = (await import('/ui/app-state.js')).timeline; tl.setZoom(1); tl.redraw(); });
-        const box = await page.locator('#timelineContainer, .timeline-container').first().boundingBox().catch(() => null);
-        await page.screenshot({ path: process.env.SHOT, clip: box || undefined });
+        const box = await page.locator('#seekbar').boundingBox().catch(() => null);
+        await page.screenshot({ path: process.env.SHOT, clip: box ? { x: box.x - 10, y: box.y - 40, width: box.width + 20, height: box.height + 50 } : undefined });
     }
 
     // ---- 3. one scroller; Show repeats
@@ -164,13 +184,13 @@ try {
     await page.evaluate(() => { window.__lucid.state.isDirty = false; window.__lucid.state.session.isDirty = false; });
     await page.click('#idSwitchPanel .id-switch-row .id-switch-tick');
     const afterTick = await page.evaluate(async () => {
-        const m = (await import('/ui/app-state.js')).timeline.getSwitchMarkers();
+        const m = (await import('/ui/seekbar-markers.js')).getSeekbarSwitchMarkers();
         return { done: document.querySelector('.id-switch-done').textContent.trim(), first: document.querySelector('.id-switch-row').classList.contains('is-reviewed'),
                  reviewedMarkers: m.filter(x => x.reviewed).length, dirty: window.__lucid.state.isDirty && window.__lucid.state.session.isDirty };
     });
     check(afterTick.dirty, 'ticking a row marks the project unsaved (the checklist is saved in the .slp)');
     check(/^1 of /.test(afterTick.done) && afterTick.first && afterTick.reviewedMarkers >= 1,
-        `ticking a row: "${afterTick.done}", row dimmed, its timeline marker dimmed (${afterTick.reviewedMarkers})`);
+        `ticking a row: "${afterTick.done}", row dimmed, its seekbar marker dimmed (${afterTick.reviewedMarkers})`);
     if (ui.rows.length > 1) {
         await page.click('#idSwitchNext');
         await page.waitForFunction(f => window.__lucid.state.currentFrame === f, ui.rows[1].frame, { timeout: 10000 }).catch(() => {});
@@ -196,15 +216,15 @@ try {
         const a = AS.state.session, b = new pd.Session([], new pd.Skeleton('m', ['Nose', 'TTI'], []), [], 'Other');
         AS.state.sessions = [a, b]; AS.state.session = b; AS.state.activeSessionIdx = 1; IP.updateInfoPanel();
         const onB = { rows: document.querySelectorAll('#idSwitchPanel .id-switch-row').length, empty: !!document.querySelector('#idSwitchPanel .id-switch-empty'),
-                      markers: AS.timeline.getSwitchMarkers().length };
+                      markers: (await import('/ui/seekbar-markers.js')).getSeekbarSwitchMarkers().length };
         AS.state.session = a; AS.state.activeSessionIdx = 0; IP.updateInfoPanel();
-        return { onB, onA: { rows: document.querySelectorAll('#idSwitchPanel .id-switch-row').length, markers: AS.timeline.getSwitchMarkers().length } };
+        return { onB, onA: { rows: document.querySelectorAll('#idSwitchPanel .id-switch-row').length, markers: (await import('/ui/seekbar-markers.js')).getSeekbarSwitchMarkers().length } };
     });
     check(perSession.onB.rows === 0 && perSession.onB.empty && perSession.onB.markers === 0 &&
           perSession.onA.rows === ui.rows.length && perSession.onA.markers === markers.length,
         `results are per session (other session: ${perSession.onB.rows} rows, ${perSession.onB.markers} markers; back: ${perSession.onA.rows} rows, ${perSession.onA.markers} markers)`);
     await page.click('#idSwitchClear');
-    const cleared = await page.evaluate(async () => ({ n: (await import('/ui/app-state.js')).timeline.getSwitchMarkers().length,
+    const cleared = await page.evaluate(async () => ({ n: (await import('/ui/seekbar-markers.js')).getSeekbarSwitchMarkers().length,
         rows: document.querySelectorAll('#idSwitchPanel .id-switch-row').length, empty: !!document.querySelector('#idSwitchPanel .id-switch-empty') }));
     check(cleared.n === 0 && cleared.rows === 0 && cleared.empty, '"Clear" removes the results and the markers, leaving the empty state');
 

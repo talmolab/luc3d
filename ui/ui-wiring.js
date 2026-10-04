@@ -52,6 +52,7 @@ import { showTrackRangeModal } from './track-range-modal.js';
 import { showAlignViewsModal } from './view-align-modal.js';
 import { onColorByChange, setColorByIdentity } from './color-by.js';
 import { installSeekbarTooltip } from './seekbar-tooltip.js';
+import { installSeekbarMarkers, seekbarMarkerAt, describeSwitchMarker, setSeekbarMarkerFrames } from './seekbar-markers.js';
 // Pass 3i-2: triangulation orchestration moved out of app.js.
 import { triangulateCurrentFrame, triangulateAllFrames } from '../pose/triangulation.js';
 // User settings: default triangulation method + editable keyboard bindings.
@@ -1667,16 +1668,25 @@ export function setupUI() {
         var frameAtFraction = function (fraction) {
             return Math.round(fraction * (state.totalFrames - 1));
         };
+        // A possible-ID-switch tick under the cursor (ui/seekbar-markers.js) wins: a click or
+        // drag there lands on that exact frame, and the tooltip names it.
         var getFrameFromEvent = function (e) {
             var rect = seekbar.getBoundingClientRect();
-            return frameAtFraction(Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width)));
+            var frac = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+            var m = seekbarMarkerAt(frac, rect.width);
+            return m ? m.frame : frameAtFraction(frac);
         };
+        installSeekbarMarkers(document.getElementById('seekbarMarks'), state.totalFrames);
 
         // Hover tooltip with the frame (and timestamp) under the cursor (#142).
         installSeekbarTooltip(seekbar, {
             frameAtFraction: frameAtFraction,
             getTotalFrames: function () { return state.totalFrames; },
             getFps: function () { return state.fps; },
+            markerAt: function (frac, widthPx) {
+                var m = seekbarMarkerAt(frac, widthPx);
+                return m ? { frame: m.frame, text: describeSwitchMarker(m) } : null;
+            },
         });
 
         var _seekThrottle = { lastRender: 0, timer: null, pendingFrame: null };
@@ -2680,6 +2690,7 @@ export function updateSeekbarVisual(frameIdx) {
     document.getElementById('seekbarProgress').style.width = pct + '%';
     document.getElementById('seekbarThumb').style.left = pct + '%';
     document.getElementById('currentFrame').textContent = frameIdx + 1;
+    setSeekbarMarkerFrames(state.totalFrames);       // no-op unless the frame count changed
 }
 
 export function onPlaybackStateChange(isPlaying) {
