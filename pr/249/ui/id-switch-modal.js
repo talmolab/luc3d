@@ -25,16 +25,16 @@
  * import-export/save-load.js (setStatus).
  */
 
-import { state, getActiveSession } from './app-state.js?v=a6c571581b7d';
-import { setSeekbarSwitchMarkers } from './seekbar-markers.js?v=a6c571581b7d';
-import { setIdSwitchHighlight, updateIdSwitchHighlight } from './id-switch-highlight.js?v=a6c571581b7d';
-import { setStatus, markDirty } from '../import-export/save-load.js?v=a6c571581b7d';
-import { showLoadingProgress, hideLoading, yieldToPaint } from './loading-overlay.js?v=a6c571581b7d';
-import { getTrackingThreshold } from './settings.js?v=a6c571581b7d';
-import { checkSizeSwitches, checkImageSwitches } from '../pose/id-switch-check.js?v=a6c571581b7d';
-import { hasWebGPU, createImageEmbedder, IMAGE_MODEL_MB, formatEmbedTiming } from './image-embedder.js?v=a6c571581b7d';
+import { state, getActiveSession } from './app-state.js?v=44512f1b8738';
+import { setSeekbarSwitchMarkers } from './seekbar-markers.js?v=44512f1b8738';
+import { setIdSwitchHighlight, updateIdSwitchHighlight } from './id-switch-highlight.js?v=44512f1b8738';
+import { setStatus, markDirty } from '../import-export/save-load.js?v=44512f1b8738';
+import { showLoadingProgress, hideLoading, yieldToPaint } from './loading-overlay.js?v=44512f1b8738';
+import { getTrackingThreshold } from './settings.js?v=44512f1b8738';
+import { checkSizeSwitches, checkImageSwitches } from '../pose/id-switch-check.js?v=44512f1b8738';
+import { hasWebGPU, createImageEmbedder, IMAGE_MODEL_MB, formatEmbedTiming } from './image-embedder.js?v=44512f1b8738';
 import { idSwitchRowKey as rowKey, idSwitchPrimary as primaryOf, idSwitchMarkers as markersOf, idSwitchOnsets as countOnsets,
-         idSwitchEncounterCount as encounterCount, linkIdSwitchResults as tagAndLink } from './id-switch-review.js?v=a6c571581b7d';
+         idSwitchEncounterCount as encounterCount, linkIdSwitchResults as tagAndLink } from './id-switch-review.js?v=44512f1b8738';
 
 const CUE_LABEL = { size: 'body size', image: 'images' };
 
@@ -164,8 +164,7 @@ async function runImage(session, rate, inject) {
     try {
         var embedder = await (inject.createEmbedder || createImageEmbedder)(session, { onStatus: function (t) { prog.update(t, 0); },
             maxViewsPerAnimal: getTrackingThreshold('imageCheckMaxViews'),
-            webnn: getTrackingThreshold('imageCheckWebNN') > 0,
-            decodeWorkers: getTrackingThreshold('imageCheckDecodeWorkers') > 0 });
+            webnn: getTrackingThreshold('imageCheckWebNN') > 0 });
         t0 = performance.now();
         var res = await checkImageSwitches(session, {
             fps: rate.fps,
