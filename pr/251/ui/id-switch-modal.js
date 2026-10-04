@@ -25,16 +25,16 @@
  * import-export/save-load.js (setStatus).
  */
 
-import { state, getActiveSession } from './app-state.js?v=11b4b893941e';
-import { setSeekbarSwitchMarkers } from './seekbar-markers.js?v=11b4b893941e';
-import { setIdSwitchHighlight, updateIdSwitchHighlight } from './id-switch-highlight.js?v=11b4b893941e';
-import { setStatus, markDirty } from '../import-export/save-load.js?v=11b4b893941e';
-import { showLoadingProgress, hideLoading, yieldToPaint } from './loading-overlay.js?v=11b4b893941e';
-import { getTrackingThreshold } from './settings.js?v=11b4b893941e';
-import { checkSizeSwitches, checkImageSwitches } from '../pose/id-switch-check.js?v=11b4b893941e';
-import { hasWebGPU, createImageEmbedder, IMAGE_MODEL_MB, formatEmbedTiming } from './image-embedder.js?v=11b4b893941e';
+import { state, getActiveSession } from './app-state.js?v=ce7f810a1a55';
+import { setSeekbarSwitchMarkers } from './seekbar-markers.js?v=ce7f810a1a55';
+import { setIdSwitchHighlight, updateIdSwitchHighlight } from './id-switch-highlight.js?v=ce7f810a1a55';
+import { setStatus, markDirty } from '../import-export/save-load.js?v=ce7f810a1a55';
+import { showLoadingProgress, hideLoading, yieldToPaint } from './loading-overlay.js?v=ce7f810a1a55';
+import { getTrackingThreshold } from './settings.js?v=ce7f810a1a55';
+import { checkSizeSwitches, checkImageSwitches } from '../pose/id-switch-check.js?v=ce7f810a1a55';
+import { hasWebGPU, createImageEmbedder, IMAGE_MODEL_MB, formatEmbedTiming } from './image-embedder.js?v=ce7f810a1a55';
 import { idSwitchRowKey as rowKey, idSwitchPrimary as primaryOf, idSwitchMarkers as markersOf, idSwitchOnsets as countOnsets,
-         idSwitchEncounterCount as encounterCount, linkIdSwitchResults as tagAndLink } from './id-switch-review.js?v=11b4b893941e';
+         idSwitchEncounterCount as encounterCount, linkIdSwitchResults as tagAndLink } from './id-switch-review.js?v=ce7f810a1a55';
 
 const CUE_LABEL = { size: 'body size', image: 'images' };
 
