@@ -58,6 +58,12 @@ export function setIdSwitchHighlight(target) {
     updateIdSwitchHighlight(state.currentFrame);
 }
 
+/** Recompute the boxes at the current frame — after the identities themselves changed (a fixed switch). */
+export function refreshIdSwitchHighlight() {
+    _frame = -1;
+    updateIdSwitchHighlight(state.currentFrame);
+}
+
 /** @returns {?{nameA, nameB, p0, s, e, p1}} the current target (tests). */
 export function getIdSwitchHighlight() { return _target ? Object.assign({}, _target) : null; }
 

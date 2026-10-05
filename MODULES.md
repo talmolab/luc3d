@@ -1490,7 +1490,13 @@ session graph that holds them.
   correction history. No frame materialization, so nothing hydrates or evicts.
   Returns `{entries, groups, frames}`. Guarded by the `swapIdentitiesForward
   (#172)` block in `tests/test-identity.js` and end to end by
-  `tests/e2e/identity-switch-propagates-to-end.mjs`;
+  `tests/e2e/identity-switch-propagates-to-end.mjs`. It is
+  `swapIdentitiesInRange(startFrame, Infinity, …)`;
+  `swapIdentitiesInRange(startFrame, endFrame, identityA, identityB)` — the same
+  swap bounded on BOTH sides (inclusive), what fixing a flagged ID switch does
+  (`ui/id-switch-modal.js`): the frames after the pair's switch-back are already
+  right. Its own inverse, which is how a fix is undone. Covered by
+  `tests/test-id-switch-fix.mjs` §3;
   `swapIdentitiesForwardInCamera(startFrame, cameraName, identityA, identityB)` —
   the **single-view** counterpart (luc3d #201). Same dense value swap, forward to
   the end of the project, but restricted to ONE camera: this is how an ID is
@@ -3154,7 +3160,12 @@ below `threshold`, continuing FORWARD while below `continueBelow`) yields one
 change point: its start (`kind: 'onset'`) when it reaches the session end, else
 the first unflagged encounter after it (`kind: 'end'`, in `changes`) when it
 starts the session; both for a middle run of 2+. Other members are repeats
-(`continues`). A change point within `followSeconds` after another of a different
+(`continues`). Each change point also names the other edge of its swapped
+stretch, which is what fixing it swaps: an onset's `switchBackAt` (the pair's
+encounter after the run — for a lone middle flag that encounter is no change
+point of its own — or null when the run reaches the end) and an 'end''s
+`switchedAt` (the run's first encounter, or null when the run starts the
+session). A change point within `followSeconds` after another of a different
 pair sharing an identity is its follow-on (`followOf`).
 
 **Calibration (2026-10-03).** Size: on the 5-mouse tail-mark recording
@@ -7901,7 +7912,8 @@ change point and repeat on the transport seekbar (`setSeekbarSwitchMarkers`, `ui
 **Key exports.** `runIdSwitchChecks({size?, image?, auto?, statusPrefix?,
 navigateToFrame?, inject?})`; `setIdSwitchNavigator(fn)` (ui-wiring registers
 `navigateToFrame` once, so rows stay clickable when the tracker started the
-check); `refreshIdSwitchPanel(session?)` (render the tab and put that session's
+check); `setIdSwitchRefresher(fn)` (ui-wiring registers the repaint run after a
+fix / undo — overlays, 3D, info panel, timeline — keeping this module a leaf); `refreshIdSwitchPanel(session?)` (render the tab and put that session's
 markers on the seekbar — called after a check, from `updateInfoPanel` and from
 `switchSession`); `openIdSwitchPanel()` (show the panel, if hidden, on the tab);
 `clearIdSwitchResults(session?)` (called by `runTrackingPass` before it relabels);
@@ -7988,17 +8000,33 @@ scroller (the list has none of its own). With no results it says so and offers
 and the tab button), not by importing ui-wiring. The module keeps its `-modal`
 name for the image check's progress dialog, which is still modal.
 
+**Fixing a switch.** The selected row shows **Fix switch…** under its bar. It
+opens a confirmation naming the frames (`idSwitchFixPlan`, `ui/id-switch-review.js`)
+and why each edge is where it is; Esc / Cancel / a click outside change nothing,
+and every keystroke stops at the dialog (capture phase) so no app shortcut acts
+under it. Confirming calls `Session.swapIdentitiesInRange` (every view), records
+the fix in `st.fixes`, renames the other rows the swap re-labels, ticks the row,
+marks the project dirty, repaints through the registered refresher and returns the
+view to the row's lead-in, so pressing play shows the corrected labels. The row
+then reads **Fixed** (not struck through) with the swapped frames and, on the
+LATEST fix only, **Undo fix** — later fixes may build on an earlier one, so only
+the last is exactly reversible; undo swaps the same frames back. A follow-on row's
+dialog says to fix the switch it follows first. Re-running a check forgets the
+fixes (the swaps stay): its rows were scored on the fixed labels, so an undo would
+rename them wrongly.
+
 **Imports from project modules.** `ui/app-state.js` (`state`, `timeline`,
 `getActiveSession`), `import-export/save-load.js` (`setStatus`),
 `ui/loading-overlay.js` (`showLoadingProgress`, `hideLoading`, `yieldToPaint`),
 `ui/settings.js` (`getTrackingThreshold`), `pose/id-switch-check.js`,
 `ui/image-embedder.js` (`hasWebGPU`, `createImageEmbedder`),
-`ui/id-switch-review.js` (row keys, change-point helpers, `linkIdSwitchResults`),
+`ui/id-switch-review.js` (row keys, change-point helpers, `linkIdSwitchResults`,
+`idSwitchFixPlan`, `idSwitchFixFor`, `idSwitchRenameForFix`),
 `ui/id-switch-highlight.js` (`setIdSwitchHighlight`, `updateIdSwitchHighlight`,
-`ID_SWITCH_SECTION_RGB`).
+`refreshIdSwitchHighlight`, `ID_SWITCH_SECTION_RGB`).
 
 **Imported by.** `ui/ui-wiring.js` (`#menuCheckSizeSwitches`,
-`#menuCheckImageSwitches`, `setIdSwitchNavigator`, `updateIdSwitchProgress`), `pose/tracker.js` (the
+`#menuCheckImageSwitches`, `setIdSwitchNavigator`, `setIdSwitchRefresher`, `updateIdSwitchProgress`), `pose/tracker.js` (the
 automatic run, `clearIdSwitchResults`), `ui/info-panel.js` and
 `ui/sessions-panes.js` (`refreshIdSwitchPanel`).
 
@@ -8008,7 +8036,9 @@ Clear, one scroller),
 `tests/e2e/track-auto-size-switch-check.mjs` (after Track All / Track Frame Range),
 `tests/e2e/id-switch-image-check.mjs` (images with an injected embedder: "Both"
 merge, identical-size animals found by images only, Esc cancel, no WebGPU, menu,
-default off).
+default off), `tests/e2e/id-switch-fix.mjs` (Fix switch…: both start rules in the
+dialog, Esc / Cancel / shortcuts, the swap fixes exactly the crossed stretch, the
+row afterwards, the renamed follow-on, saved, Undo exact).
 
 ---
 
@@ -8028,14 +8058,32 @@ change point of the same pair within 1 s as `agree` — "Both");
 `serializeIdSwitchReview(session)` -> payload or `null` (no check results -> no
 key, so untouched projects keep their bytes); `ingestIdSwitchReview(session,
 payload)` (rebuilds `session._idSwitch`, re-links "Both"; ignores anything
-malformed, never throws).
+malformed, never throws); `idSwitchFixPlan(m, res, {currentFrame,
+totalFrames})` -> `{key, partnerKey, nameA, nameB, from, to, start, edge}` or null
+— what fixing row `m` swaps (see below); `idSwitchFixFor(st, m)` (the fix covering
+a row, its own or its partner's); `idSwitchRenameForFix(st, fix)` (renames the
+other pairs' rows inside a fixed stretch — an involution, keys follow).
+
+**What a fix swaps.** The boundary is chosen inside the close spell [s, e]: the
+frame the viewer is paused on when it is in [s, e + 1], else e + 1 (where the
+animals separate). An onset swaps from there to its `switchBackAt` encounter's last
+close frame, or the last frame; an 'end' swaps the stretch BEFORE it, from just
+after `switchedAt` (or frame 0) to the frame before its boundary. The change point
+at the other edge is the fix's `partnerKey` (the same stretch). Results restored
+from a file saved before the links existed pair by the nearest change point of
+the same pair on the right side. After a fix, every OTHER row in the stretch that
+names exactly one of the pair is about the animal that now carries the other
+name, so it is renamed (selecting it must still box the same animals); the fixed
+pair's own rows are not.
 
 **Format.** `{v: 1, checks: {size?|image?: {encounters, sampleHz, step, fps,
 fpsFromVideo, [imageHz, crops, cameras, model: {name, note}], points: [[frame,
 nameA, nameB, score (0.1), kind ('' | 'end'), followOf (frame | -1), continues
 (0 | 1), startFrame (the encounter's first close frame | -1; absent in files saved
-before it existed — they still open, rows then land on the end frame)], …]}},
-reviewed: [rowKey, …]}` — only what the tab and the timeline
+before it existed — they still open, rows then land on the end frame), link
+(`switchBackAt` / `switchedAt` | -1 for none; absent in older files)], …]}},
+reviewed: [rowKey, …], fixes?: [[key, partnerKey, nameA, nameB, from, to], …]}`
+(`fixes` oldest first, only when something was fixed) — only what the tab and the timeline
 draw; not the encounters or the fitted models. A restored check result has
 `restored: true` and `encounterCount` instead of `encounters`.
 
@@ -8046,6 +8094,7 @@ draw; not the encounters or the fitted models. A restored check result has
 
 **Coverage.** `tests/test-id-switch-check.mjs` (lossless reopen -> re-save,
 "Both" re-link, ticks, garbage tolerance, nothing written without results);
+`tests/test-id-switch-fix.mjs` (the links, the plans, renaming, fixes round trip);
 `tests/e2e/visibility-settings-roundtrip.mjs` (both writers, real reader).
 
 ---
@@ -8059,7 +8108,8 @@ before they come close -> 1 s after they separate — the row's progress-bar spa
 **Key exports.** `setIdSwitchHighlight({nameA, nameB, p0, s, e, p1} | null)`
 (`s..e` is the close spell); `updateIdSwitchHighlight(frame)` (every frame
 change, via `ui/id-switch-modal.js` `updateIdSwitchProgress`);
-`getIdSwitchHighlight()`; `ID_SWITCH_SECTION_RGB` (`{lead, close}` as `r, g, b`
+`refreshIdSwitchHighlight()` (recompute the boxes at the current frame after the
+identities changed — a fix); `getIdSwitchHighlight()`; `ID_SWITCH_SECTION_RGB` (`{lead, close}` as `r, g, b`
 strings — orange / red) and `idSwitchSection(target, frame)` (`'close'` over
 `[s, e]`, else `'lead'`).
 
@@ -9203,8 +9253,9 @@ stopping at the last frame; the step transport buttons/keys stop it first.
   Tracks ▸ **Check ID Switches (Body Size)…** (`menuCheckSizeSwitches`) calls
   `runIdSwitchChecks({size: true, navigateToFrame})`, and Tracks ▸ **Check ID
   Switches (Images)…** (`menuCheckImageSwitches`) `runIdSwitchChecks({image: true,
-  navigateToFrame})`, from `ui/id-switch-modal.js`; `setIdSwitchNavigator` is
-  called once at setup.
+  navigateToFrame})`, from `ui/id-switch-modal.js`; `setIdSwitchNavigator` and
+  `setIdSwitchRefresher` (the repaint after the tab fixes a switch) are called
+  once at setup.
 - Color-by toggle: the "Color by" Tracks/ID control lives in the top
   toolbar (buttons `colorByTracks` / `colorById`, next to the Errors
   checkbox), not the Tracks menu. `updateColorByToggle()` reflects

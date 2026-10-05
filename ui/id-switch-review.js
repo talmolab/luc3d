@@ -6,6 +6,7 @@
  * The ID Switches tab (ui/id-switch-modal.js) renders `session._idSwitch`:
  *   { results: { size?, image? },   // checkSizeSwitches / checkImageSwitches results (ok ones)
  *     reviewed: Set<rowKey>,        // rows ticked "reviewed"
+ *     fixes: [fix, …],              // switches the user fixed, oldest first (see idSwitchFixPlan)
  *     showRepeats, current, navigate }
  *
  * It is saved per session as `metadata.lucid.idSwitchReview` (through
@@ -17,13 +18,17 @@
  *   { v: 1,
  *     checks: { size?|image?: { encounters, sampleHz, step, fps, fpsFromVideo,
  *                                [imageHz, crops, cameras, model: {name, note}],
- *                                points: [[frame, nameA, nameB, score, kind, followOf, continues, startFrame], …] } },
- *     reviewed: [rowKey, …] }
+ *                                points: [[frame, nameA, nameB, score, kind, followOf, continues, startFrame, link], …] } },
+ *     reviewed: [rowKey, …],
+ *     fixes: [[key, partnerKey, nameA, nameB, from, to], …] }      // only when something was fixed
  *
  * `points` are every change point and repeat (`flags` + `changes`); `kind` is ''
  * or 'end', `followOf` a frame or -1, `continues` 0/1, `startFrame` the first close
  * frame of the encounter (`frame` is its last) or -1 — absent in files saved before
- * it was added, which then land on `frame`. Rows are keyed by check,
+ * it was added, which then land on `frame`. `link` is the other edge of a change
+ * point's swapped stretch — an onset's `switchBackAt`, an 'end''s `switchedAt` —
+ * or -1 for none (the session's end / start); files saved before it was added
+ * have no `link`, and a fix then pairs rows by what the list shows. Rows are keyed by check,
  * frame and identity NAMES (`rowKey`) — names, not ids, are what a reopened
  * project still agrees on. Nothing is written for a session no check has run on,
  * so such a project's bytes are unchanged. Reads tolerate absence and garbage.
@@ -76,6 +81,103 @@ export function linkIdSwitchResults(results) {
     });
 }
 
+function samePair(a, b) {
+    return (a.nameA === b.nameA && a.nameB === b.nameB) || (a.nameA === b.nameB && a.nameB === b.nameA);
+}
+
+/**
+ * The other edge of a change point's swapped stretch, as a frame (the last close
+ * frame of that encounter) or null for the session's end (onset) / start ('end').
+ * Read from the check (`switchBackAt` / `switchedAt`); for results restored from
+ * a file saved before those were kept, the nearest change point of the same pair
+ * on the right side stands in.
+ */
+function linkedFrame(m, res) {
+    var isEnd = m.kind === 'end', own = isEnd ? m.switchedAt : m.switchBackAt;
+    if (own !== undefined) return own;
+    var best = null;
+    idSwitchMarkers(res).forEach(function (x) {
+        if (x === m || x.continues || !samePair(x, m) || (x.kind === 'end') === isEnd) return;
+        if (isEnd ? (x.frame < m.frame && (best == null || x.frame > best)) : (x.frame > m.frame && (best == null || x.frame < best))) best = x.frame;
+    });
+    return best;
+}
+
+/**
+ * What fixing change point `m` swaps: identities `nameA` ↔ `nameB` on frames
+ * `from..to` (inclusive), in every view.
+ *
+ * The swap happens while the animals are close, so the boundary is a choice made
+ * inside the close spell [s, e]: the frame the viewer is paused on when it is in
+ * [s, e + 1] (the user stopped where the labels flip), else e + 1, where they
+ * separate. How far it reaches is the detector's: an onset swaps from there to
+ * the pair's next encounter that reads right again (`switchBackAt`, its last
+ * close frame) or the end of the video; an 'end' swaps the stretch BEFORE it —
+ * from just after the encounter where it began (`switchedAt`), or frame 0 — up
+ * to the frame before its boundary. The change point at the other edge, when the
+ * list shows one, is the fix's `partnerKey`: the same stretch, fixed by the same swap.
+ *
+ * @param {object} m          a change point (a row of the ID Switches tab)
+ * @param {object} res        the check result it came from
+ * @param {{currentFrame:number, totalFrames:number}} o
+ * @returns {?{key, partnerKey, nameA, nameB, from, to, start:'paused'|'separate', edge:?number}}
+ *   null when the stretch is empty. `edge` is the linked frame (null = session end / start).
+ */
+export function idSwitchFixPlan(m, res, o) {
+    var s = m.startFrame != null && m.startFrame <= m.frame ? m.startFrame : m.frame, e = m.frame;
+    var cur = o.currentFrame, paused = cur != null && cur >= s && cur <= e + 1;
+    var split = paused ? cur : e + 1, edge = linkedFrame(m, res), from, to;
+    if (m.kind === 'end') { from = edge == null ? 0 : edge + 1; to = split - 1; }
+    else { from = split; to = edge == null ? Math.max(0, (o.totalFrames || 0) - 1) : edge; }
+    if (!(to >= from)) return null;
+    var partner = edge == null ? null : idSwitchMarkers(res).find(function (x) {
+        return x !== m && !x.continues && x.frame === edge && samePair(x, m) && (x.kind === 'end') !== (m.kind === 'end');
+    });
+    return { key: idSwitchRowKey(m), partnerKey: partner ? idSwitchRowKey(partner) : '', nameA: m.nameA, nameB: m.nameB,
+             from: from, to: to, start: paused ? 'paused' : 'separate', edge: edge };
+}
+
+/** The fix that covers row `m` (its own, or its partner's), or null. */
+export function idSwitchFixFor(st, m) {
+    var keys = [idSwitchRowKey(m)].concat(m.agree ? [idSwitchRowKey(m.agree)] : []);
+    var fx = (st && st.fixes) || [];
+    for (var i = fx.length - 1; i >= 0; i--) if (keys.indexOf(fx[i].key) >= 0 || keys.indexOf(fx[i].partnerKey) >= 0) return fx[i];
+    return null;
+}
+
+/**
+ * After `fix` swapped two identities on its frames, every OTHER row in that
+ * stretch that names exactly one of them is about the animal that now carries
+ * the other name — rename it, so selecting the row still boxes the same animals.
+ * Rows of the fixed pair itself are left alone (the pair is the same either way
+ * round). An involution, like the swap: applying it again (on undo) restores the
+ * names. Keys follow (reviewed ticks, the selection, other fixes) and "Both" is
+ * re-linked.
+ */
+export function idSwitchRenameForFix(st, fix) {
+    var remap = new Map();
+    ['size', 'image'].forEach(function (cue) {
+        var r = st.results[cue];
+        if (!(r && r.ok)) return;
+        idSwitchMarkers(r).forEach(function (m) {
+            if (m.frame < fix.from || m.frame > fix.to) return;
+            var a = m.nameA === fix.nameA || m.nameA === fix.nameB, b = m.nameB === fix.nameA || m.nameB === fix.nameB;
+            if (a === b) return;                                   // the fixed pair itself, or neither
+            var swapName = function (n) { return n === fix.nameA ? fix.nameB : fix.nameA; };
+            var before = idSwitchRowKey(m);
+            if (a) { m.nameA = swapName(m.nameA); if (m.identityA != null && fix.idA != null) m.identityA = m.identityA === fix.idA ? fix.idB : fix.idA; }
+            else { m.nameB = swapName(m.nameB); if (m.identityB != null && fix.idA != null) m.identityB = m.identityB === fix.idA ? fix.idB : fix.idA; }
+            remap.set(before, idSwitchRowKey(m));
+        });
+    });
+    if (!remap.size) return;
+    var mapKey = function (k) { return remap.has(k) ? remap.get(k) : k; };
+    st.reviewed = new Set(Array.from(st.reviewed || []).map(mapKey));
+    if (st.current) st.current = mapKey(st.current);
+    (st.fixes || []).forEach(function (f) { if (f !== fix) { f.key = mapKey(f.key); if (f.partnerKey) f.partnerKey = mapKey(f.partnerKey); } });
+    linkIdSwitchResults(st.results);
+}
+
 /**
  * The `metadata.lucid.idSwitchReview` payload for a session, or null when no
  * check has results there (so nothing is written).
@@ -91,7 +193,8 @@ export function serializeIdSwitchReview(session) {
             encounters: idSwitchEncounterCount(r), sampleHz: r.sampleHz, step: r.step, fps: r.fps, fpsFromVideo: !!r.fpsFromVideo,
             points: idSwitchMarkers(r).map(function (m) {
                 return [m.frame, String(m.nameA), String(m.nameB), Math.round(m.score * 10) / 10, m.kind === 'end' ? 'end' : '',
-                        m.followOf == null ? -1 : m.followOf, m.continues ? 1 : 0, m.startFrame == null ? -1 : m.startFrame];
+                        m.followOf == null ? -1 : m.followOf, m.continues ? 1 : 0, m.startFrame == null ? -1 : m.startFrame,
+                        linkOf(m)];
             }),
         };
         if (cue === 'image') {
@@ -101,7 +204,17 @@ export function serializeIdSwitchReview(session) {
         checks[cue] = c;
     });
     if (!Object.keys(checks).length) return null;
-    return { v: 1, checks: checks, reviewed: Array.from(st.reviewed || []).sort() };
+    var out = { v: 1, checks: checks, reviewed: Array.from(st.reviewed || []).sort() };
+    if (st.fixes && st.fixes.length) {
+        out.fixes = st.fixes.map(function (f) { return [f.key, f.partnerKey || '', String(f.nameA), String(f.nameB), f.from, f.to]; });
+    }
+    return out;
+}
+
+/** A point's `link` column: its stretch's other edge, -1 for none or not known. */
+function linkOf(m) {
+    var v = m.kind === 'end' ? m.switchedAt : m.switchBackAt;
+    return typeof v === 'number' && isFinite(v) ? v : -1;
 }
 
 var isNum = function (x) { return typeof x === 'number' && isFinite(x); };
@@ -123,6 +236,10 @@ export function ingestIdSwitchReview(session, payload) {
                 if (isNum(p[5]) && p[5] >= 0) m.followOf = p[5];
                 if (p[6]) m.continues = true;
                 if (isNum(p[7]) && p[7] >= 0 && p[7] <= p[0]) m.startFrame = p[7];
+                if (isNum(p[8]) && !m.continues) {                // absent in older files: pairing falls back (linkedFrame)
+                    var link = p[8] >= 0 ? p[8] : null;
+                    if (m.kind === 'end') m.switchedAt = link; else m.switchBackAt = link;
+                }
                 flags.push(m);
             });
             var r = { ok: true, restored: true, flags: flags, changes: [], encounterCount: isNum(c.encounters) ? c.encounters : 0,
@@ -137,10 +254,16 @@ export function ingestIdSwitchReview(session, payload) {
         });
         if (!Object.keys(results).length) return session;
         linkIdSwitchResults(results);
+        var fixes = [];
+        (Array.isArray(payload.fixes) ? payload.fixes : []).forEach(function (f) {
+            if (!Array.isArray(f) || typeof f[0] !== 'string' || typeof f[2] !== 'string' || typeof f[3] !== 'string' ||
+                !isNum(f[4]) || !isNum(f[5]) || f[5] < f[4]) return;
+            fixes.push({ key: f[0], partnerKey: typeof f[1] === 'string' ? f[1] : '', nameA: f[2], nameB: f[3], from: f[4], to: f[5] });
+        });
         session._idSwitch = {
             results: results,
             reviewed: new Set(Array.isArray(payload.reviewed) ? payload.reviewed.filter(function (k) { return typeof k === 'string'; }) : []),
-            showRepeats: false, current: null,
+            fixes: fixes, showRepeats: false, current: null,
         };
     } catch (e) { /* a malformed payload is ignored, like every other optional metadata.lucid key */ }
     return session;
