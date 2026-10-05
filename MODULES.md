@@ -11154,7 +11154,14 @@ genuine drift (> 0.8 frame, in phase-preserving units), re-anchored on
 stall/seek/rate change. When the video is as fast as the display or faster it
 returns the primary's capture unchanged (newest frame every refresh — a
 schedule there only adds holds). All views aim at the same frame, so cameras
-stay in step. Measured on 60 fps video at 120 Hz: ~30% of frames held for 3 or
+stay in step — and a SECONDARY view's target is additionally clamped to the
+frame the primary actually reached this refresh (`min(target, shown[0])`).
+Without that clamp the schedule, being a free-running clock, reaches a frame
+only some views have captured: those paint it while the primary holds, so two
+cameras sit one frame apart and the overlay — drawn at the primary's index —
+disagrees with the secondary's canvas. That only happens when the schedule is
+ACTIVE (frames/refresh < 0.9), i.e. on a >60 Hz display, which is why a
+headless run (software rAF ≈ 60 Hz, scheduling off) cannot see it. Measured on 60 fps video at 120 Hz: ~30% of frames held for 3 or
 1 refreshes instead of 2 without it; the cadence is unit-tested
 (tests/test-playback-frame-sync.js) against captures modelled on the real ones
 (½-refresh stale, σ ≈ 0.1 frame jitter, measured from the benchmark's raw
