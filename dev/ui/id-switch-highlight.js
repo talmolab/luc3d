@@ -37,8 +37,8 @@
  * `updateIdSwitchProgress`).
  */
 
-import { state } from './app-state.js?v=bedcfb285113';
-import { makeVideoToCanvasTransform } from './overlays.js?v=bedcfb285113';
+import { state } from './app-state.js?v=0a12c3c47adf';
+import { makeVideoToCanvasTransform } from './overlays.js?v=0a12c3c47adf';
 
 var _target = null;          // {nameA, nameB, p0, s, e, p1}
 var _frame = -1;             // frame the boxes were computed for
