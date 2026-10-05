@@ -20,6 +20,11 @@
  * `session.getIdentityIdForUnlinkedInstance`. One box encloses both (or the one
  * visible in that view), labelled "id_a ↔ id_b" in the identities' colours.
  *
+ * The box takes the colour of the progress-bar SECTION the frame is in —
+ * `ID_SWITCH_SECTION_RGB`, which the bar (ui/id-switch-modal.js `progressHtml`)
+ * reads too, so the two cannot drift: orange over the lead-in and lead-out,
+ * red over the close spell [s, e] where a swap would happen.
+ *
  * Driven by ui/id-switch-modal.js: `setIdSwitchHighlight` on row selection /
  * panel render, `updateIdSwitchHighlight(frame)` on every frame change (from
  * `updateIdSwitchProgress`).
@@ -28,24 +33,32 @@
 import { state } from './app-state.js';
 import { makeVideoToCanvasTransform } from './overlays.js';
 
-var _target = null;          // {nameA, nameB, p0, p1}
+var _target = null;          // {nameA, nameB, p0, s, e, p1}
 var _frame = -1;             // frame the boxes were computed for
 var _boxes = new Map();      // view name -> {x0, y0, x1, y1} in video px, or absent
 var _raf = 0;
 var _canvases = new WeakMap();
 var _cleared = true;
 
-/** Select the pair + interval to highlight, or `null` to stop. */
+/** The colour of each section of the row's interval, as `r, g, b` (the bar and the box share it). */
+export var ID_SWITCH_SECTION_RGB = Object.freeze({ lead: '255, 176, 32', close: '240, 60, 50' });
+
+/** The section `frame` is in: 'close' over [s, e], else 'lead' (lead-in or lead-out). */
+export function idSwitchSection(target, frame) {
+    return target && target.s != null && target.e != null && frame >= target.s && frame <= target.e ? 'close' : 'lead';
+}
+
+/** Select the pair + interval (p0 .. close spell s..e .. p1) to highlight, or `null` to stop. */
 export function setIdSwitchHighlight(target) {
     var same = _target && target && _target.nameA === target.nameA && _target.nameB === target.nameB &&
-        _target.p0 === target.p0 && _target.p1 === target.p1;
+        _target.p0 === target.p0 && _target.s === target.s && _target.e === target.e && _target.p1 === target.p1;
     if (same) return;
-    _target = target ? { nameA: target.nameA, nameB: target.nameB, p0: target.p0, p1: target.p1 } : null;
+    _target = target ? { nameA: target.nameA, nameB: target.nameB, p0: target.p0, s: target.s, e: target.e, p1: target.p1 } : null;
     _frame = -1;
     updateIdSwitchHighlight(state.currentFrame);
 }
 
-/** @returns {?{nameA, nameB, p0, p1}} the current target (tests). */
+/** @returns {?{nameA, nameB, p0, s, e, p1}} the current target (tests). */
 export function getIdSwitchHighlight() { return _target ? Object.assign({}, _target) : null; }
 
 /** Called on every frame change: start / stop the animation and refresh the boxes. */
@@ -140,6 +153,7 @@ function tick(t) {
     _raf = 0;
     if (!_target || _frame < 0) return;
     _cleared = false;
+    var rgb = ID_SWITCH_SECTION_RGB[idSwitchSection(_target, _frame)];
     (state.views || []).forEach(function (v) {
         var c = canvasFor(v);
         if (!c) return;
@@ -158,7 +172,7 @@ function tick(t) {
         ctx.save();
         ctx.lineWidth = 4 * s; ctx.strokeStyle = 'rgba(0, 0, 0, ' + (0.55 * pulse).toFixed(3) + ')';
         ctx.setLineDash([]); ctx.strokeRect(x, y, w, h);                          // dark halo: readable on any video
-        ctx.lineWidth = 2.5 * s; ctx.strokeStyle = 'rgba(255, 176, 32, ' + pulse.toFixed(3) + ')';
+        ctx.lineWidth = 2.5 * s; ctx.strokeStyle = 'rgba(' + rgb + ', ' + pulse.toFixed(3) + ')';
         ctx.setLineDash([10 * s, 7 * s]); ctx.lineDashOffset = -((t / 28) % (17 * s));   // marching ants
         ctx.strokeRect(x, y, w, h);
         // "id_a ↔ id_b" above the box, each name in its identity's colour

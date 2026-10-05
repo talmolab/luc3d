@@ -6744,14 +6744,16 @@ details[open] > summary.origin-rebase-block-title::before {
 .id-switch-canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; }
 
 /* The selected row's progress bar, driven by the viewer's frame: 1 s before the
-   animals come close -> the close spell (shaded, where a swap would happen) -> 1 s after. */
+   animals come close (orange) -> the close spell (red, where a swap would happen) ->
+   1 s after (orange). The section colours are set inline from ID_SWITCH_SECTION_RGB
+   (ui/id-switch-highlight.js), which the box in the views also wears. */
 .id-switch-pbar {
   position: relative; height: 6px; margin-top: 5px; border-radius: 3px;
   background: var(--bg-button); overflow: hidden;
   animation: id-switch-pbar-in 160ms ease-out;
 }
 @keyframes id-switch-pbar-in { from { opacity: 0; transform: scaleY(0.2); } to { opacity: 1; transform: none; } }
-.id-switch-pband { position: absolute; top: 0; bottom: 0; background: rgba(255, 176, 32, 0.45); }
+.id-switch-pband { position: absolute; top: 0; bottom: 0; }
 .id-switch-pfill { position: absolute; left: 0; top: 0; bottom: 0; width: 0; background: var(--accent); opacity: 0.85; transition: width 60ms linear; }
 
 /* Image ID-switch check — progress dialog (ui/id-switch-modal.js) */

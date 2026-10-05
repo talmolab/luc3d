@@ -7970,13 +7970,15 @@ shows the whole interaction; **end ⇥** jumps to the end frame, and Next
 unreviewed uses the lead-in too. **The selected row's progress bar** pops up on
 selection and follows the viewer's frame (stepping, scrubbing, playback):
 0% at the landing frame (1 s before the close spell), the close spell — where a
-swap would happen — shaded amber in the middle, 100% at 1 s after the
-encounter's end; clamped outside that range. `updateIdSwitchProgress(frame)` is
+swap would happen — red in the middle, the lead-in and lead-out orange, 100% at
+1 s after the encounter's end; clamped outside that range. The section colours
+come from `ID_SWITCH_SECTION_RGB` (`ui/id-switch-highlight.js`), set inline. `updateIdSwitchProgress(frame)` is
 called from `ui/ui-wiring.js` `updateSeekbarVisual` on every frame change: one
 style write, and a no-op without a selected row (the bar element is looked up
 once per render/selection, not per frame). The same interval drives an
 **animated box around the pair in every camera view** (`ui/id-switch-highlight.js`,
-set by row selection and panel renders, advanced by `updateIdSwitchProgress`). A check run from the menu always opens the tab; an
+set by row selection and panel renders, advanced by `updateIdSwitchProgress`),
+which wears the colour of the bar section the frame is in. A check run from the menu always opens the tab; an
 automatic one only when it found something. The tab content is the panel's one
 scroller (the list has none of its own). With no results it says so and offers
 "Check by body size" / "Check by images…" (they click the menu items).
@@ -7992,7 +7994,8 @@ name for the image check's progress dialog, which is still modal.
 `ui/settings.js` (`getTrackingThreshold`), `pose/id-switch-check.js`,
 `ui/image-embedder.js` (`hasWebGPU`, `createImageEmbedder`),
 `ui/id-switch-review.js` (row keys, change-point helpers, `linkIdSwitchResults`),
-`ui/id-switch-highlight.js` (`setIdSwitchHighlight`, `updateIdSwitchHighlight`).
+`ui/id-switch-highlight.js` (`setIdSwitchHighlight`, `updateIdSwitchHighlight`,
+`ID_SWITCH_SECTION_RGB`).
 
 **Imported by.** `ui/ui-wiring.js` (`#menuCheckSizeSwitches`,
 `#menuCheckImageSwitches`, `setIdSwitchNavigator`, `updateIdSwitchProgress`), `pose/tracker.js` (the
@@ -8053,9 +8056,12 @@ draw; not the encounters or the fitted models. A restored check result has
 every camera view, while the viewer's frame is inside that row's interval (1 s
 before they come close -> 1 s after they separate — the row's progress-bar span).
 
-**Key exports.** `setIdSwitchHighlight({nameA, nameB, p0, p1} | null)`;
-`updateIdSwitchHighlight(frame)` (every frame change, via
-`ui/id-switch-modal.js` `updateIdSwitchProgress`); `getIdSwitchHighlight()`.
+**Key exports.** `setIdSwitchHighlight({nameA, nameB, p0, s, e, p1} | null)`
+(`s..e` is the close spell); `updateIdSwitchHighlight(frame)` (every frame
+change, via `ui/id-switch-modal.js` `updateIdSwitchProgress`);
+`getIdSwitchHighlight()`; `ID_SWITCH_SECTION_RGB` (`{lead, close}` as `r, g, b`
+strings — orange / red) and `idSwitchSection(target, frame)` (`'close'` over
+`[s, e]`, else `'lead'`).
 
 **How.** Draws on its OWN canvas per view (`.id-switch-canvas`, appended to the
 view's `.canvas-wrapper`, `pointer-events: none`), backing size video × zoom like
@@ -8068,7 +8074,11 @@ it. Boxes are recomputed only when the frame changes: per camera, the instances
 whose identity NAME is one of the pair at that frame (per-frame track identity
 first, then the group's `identityId`; unlinked instances via
 `getIdentityIdForUnlinkedInstance`), one box around both (or the one visible),
-labelled "id_a ↔ id_b" in the identities' colours. Lines, padding and text are
+labelled "id_a ↔ id_b" in the identities' colours. The outline wears the
+colour of the row's progress-bar SECTION the frame is in — orange over the
+lead-in and lead-out, red over the close spell — from `ID_SWITCH_SECTION_RGB`,
+which the bar (`ui/id-switch-modal.js` `progressHtml`) also reads, so the two
+cannot drift. Lines, padding and text are
 sized in SCREEN pixels (canvas width / (layout width × zoom)), so a small tile
 of a large video stays readable. Lazy projects: nothing for a non-resident frame.
 
@@ -8078,8 +8088,10 @@ of a large video stays readable. Lazy projects: nothing for a non-resident frame
 **Imported by.** `ui/id-switch-modal.js`.
 
 **Coverage.** `tests/e2e/id-switch-highlight.mjs` (two real views: box around
-the pair and not the third animal, animates while paused, cleared past the
-interval and redrawn on return, Clear stops it).
+the pair and not the third animal, animates while paused, orange in the
+lead-in / red in the close spell / orange in the lead-out with the bar's
+sections matching, cleared past the interval and redrawn on return, Clear stops
+it).
 
 ---
 

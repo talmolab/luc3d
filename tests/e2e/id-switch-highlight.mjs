@@ -11,7 +11,10 @@
  *     `.id-switch-canvas` around id_0 + id_1 — and nothing near id_2.
  *  2. It animates while paused (the outline changes between two moments).
  *  3. Stepping past the interval clears every canvas; coming back redraws.
- *  4. "Clear" in the tab stops it.
+ *  4. The box wears the colour of the progress-bar section the frame is in:
+ *     orange over the lead-in (10) and lead-out (51), red over the close spell
+ *     (40..50) — and the bar itself is orange | red | orange.
+ *  5. "Clear" in the tab stops it.
  *
  * Run: node tests/e2e/id-switch-highlight.mjs     (HL_SHOT=/path.png saves a screenshot)
  */
@@ -86,14 +89,17 @@ try {
             const c = v.wrapper && v.wrapper.querySelector('.id-switch-canvas');
             if (!c) return { canvas: false };
             const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data, sx = c.width / 640, sy = c.height / 480;
-            let pair = 0, far = 0, total = 0, hash = 0;
+            let pair = 0, far = 0, total = 0, hash = 0, orange = 0, red = 0;
             for (let y = 0; y < c.height; y++) for (let x = 0; x < c.width; x++) {
                 const i = (y * c.width + x) * 4; if (!d[i + 3]) continue;
                 total++; hash = (hash * 31 + x * 7 + y + d[i]) >>> 0;
+                const r = d[i], g = d[i + 1], b = d[i + 2];
+                // classify by HUE, not level: the pulse and the dark halo under the stroke darken it
+                if (d[i + 3] > 64 && r > 100 && b < 0.4 * r) { if (g > 0.55 * r && g < 0.85 * r) orange++; else if (g < 0.4 * r) red++; }
                 const vx = x / sx, vy = y / sy;
                 if (vx < 300 && vy < 320) pair++; else if (vx > 450 && vy > 300) far++;
             }
-            return { canvas: true, inWrapper: c.parentNode === v.wrapper, pair, far, total, hash };
+            return { canvas: true, inWrapper: c.parentNode === v.wrapper, pair, far, total, hash, orange, red };
         });
     });
 
@@ -110,11 +116,28 @@ try {
     await page.waitForTimeout(250);
     const c2 = await census();
     check(c2.every((v, i) => v.hash !== c1[i].hash), 'the outline moves while paused (marching ants)');
+    check(c1.every(v => v.orange > 100 && v.orange > 5 * v.red),
+        `lead-in (frame 10): the box is orange (${JSON.stringify(c1.map(v => [v.orange, v.red]))})`);
+    const bar = await page.evaluate(() => {
+        const b = document.querySelector('#idSwitchPanel .id-switch-row.is-current .id-switch-pbar');
+        return b && { track: b.style.backgroundImage, band: b.querySelector('.id-switch-pband').style.background };
+    });
+    check(!!bar && /rgba\(255, 176, 32/.test(bar.track) && /rgba\(240, 60, 50/.test(bar.band),
+        `the bar is orange lead-in/out around a red close spell (${JSON.stringify(bar)})`);
 
     // ---- 3. step past the interval (frame 80 is its last) -> cleared; back in -> redrawn
     await page.click('#idSwitchPanel .id-switch-row .id-switch-end');               // frame 50, in range
     await page.waitForFunction(() => window.__lucid.state.currentFrame === 50, null, { timeout: 10000 }).catch(() => {});
-    for (let i = 0; i < 31; i++) await page.keyboard.press('ArrowRight');
+    await page.waitForTimeout(150);
+    const close = await census();
+    check(close.every(v => v.red > 100 && v.red > 5 * v.orange),
+        `close spell (frame 50): the box is red (${JSON.stringify(close.map(v => [v.orange, v.red]))})`);
+    await page.keyboard.press('ArrowRight');
+    await page.waitForTimeout(150);
+    const after = await census();
+    check(after.every(v => v.orange > 100 && v.orange > 5 * v.red),
+        `lead-out (frame 51): the box is orange again (${JSON.stringify(after.map(v => [v.orange, v.red]))})`);
+    for (let i = 0; i < 30; i++) await page.keyboard.press('ArrowRight');
     await page.waitForFunction(() => window.__lucid.state.currentFrame === 81, null, { timeout: 10000 }).catch(() => {});
     await page.waitForTimeout(150);
     const out = await census();
@@ -124,7 +147,7 @@ try {
     const back = await census();
     check(back.every(v => v.pair > 200), 'stepping back into the interval (frame 80) draws it again');
 
-    // ---- 4. Clear stops it
+    // ---- 5. Clear stops it
     await page.click('#idSwitchClear');
     await page.waitForTimeout(150);
     const cleared = await census();

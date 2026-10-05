@@ -27,7 +27,7 @@
 
 import { state, getActiveSession } from './app-state.js';
 import { setSeekbarSwitchMarkers } from './seekbar-markers.js';
-import { setIdSwitchHighlight, updateIdSwitchHighlight } from './id-switch-highlight.js';
+import { setIdSwitchHighlight, updateIdSwitchHighlight, ID_SWITCH_SECTION_RGB } from './id-switch-highlight.js';
 import { setStatus, markDirty } from '../import-export/save-load.js';
 import { showLoadingProgress, hideLoading, yieldToPaint } from './loading-overlay.js';
 import { getTrackingThreshold } from './settings.js';
@@ -335,7 +335,9 @@ function aboutHtml(st, ran) {
 // ---- The selected row's progress bar ------------------------------------------------
 // Driven by the viewer's frame (ui-wiring's updateSeekbarVisual -> updateIdSwitchProgress):
 // 0% at the row's landing frame (1 s before the animals come close), the close spell —
-// where a swap would happen — shaded in the middle, 100% at 1 s after they separate.
+// where a swap would happen — red in the middle, 100% at 1 s after they separate; the
+// lead-in and lead-out are orange. The box in the views wears the colour of the section
+// the frame is in (ID_SWITCH_SECTION_RGB, shared with ui/id-switch-highlight.js).
 var _prog = null, _progStale = true;        // {fill, p0, p1} of the selected row's bar
 
 /** A row's interval: p0 (landing, 1 s before the close spell) .. s (close starts) .. f.frame (close ends) .. p1 (1 s after). */
@@ -349,7 +351,7 @@ function rowRange(f) {
 function highlightRow(f) {
     if (!f) { setIdSwitchHighlight(null); return; }
     var r = rowRange(f);
-    setIdSwitchHighlight({ nameA: f.nameA, nameB: f.nameB, p0: r.p0, p1: r.p1 });
+    setIdSwitchHighlight({ nameA: f.nameA, nameB: f.nameB, p0: r.p0, s: r.s, e: f.frame, p1: r.p1 });
 }
 
 /** The bar for a row (the selected one). */
@@ -357,11 +359,16 @@ function progressHtml(f) {
     var r = rowRange(f), s = r.s, p0 = r.p0, p1 = r.p1, span = Math.max(1, p1 - p0);
     var pct = function (x) { return (100 * Math.min(1, Math.max(0, (x - p0) / span))).toFixed(2) + '%'; };
     var cur = state.currentFrame != null ? state.currentFrame : p0;
-    return '<div class="id-switch-pbar" data-p0="' + p0 + '" data-p1="' + p1 + '" title="' +
-        ID_SWITCH_LEAD_IN_SECONDS + ' s before → close ' + fmtTenths(s) + '–' + fmtTenths(f.frame) + ' (shaded) → ' + ID_SWITCH_LEAD_IN_SECONDS + ' s after">' +
-        // fill first, band over it: the shaded close spell stays visible as the fill passes it
+    var lead = 'rgba(' + ID_SWITCH_SECTION_RGB.lead + ', 0.5)';
+    // the track: orange lead-in | (band) | orange lead-out, hard stops at the close spell's edges
+    var track = 'linear-gradient(to right, ' + lead + ' 0 ' + pct(s) + ', transparent ' + pct(s) + ' ' + pct(f.frame) +
+        ', ' + lead + ' ' + pct(f.frame) + ' 100%)';
+    return '<div class="id-switch-pbar" data-p0="' + p0 + '" data-p1="' + p1 + '" style="background-image:' + track + '" title="' +
+        ID_SWITCH_LEAD_IN_SECONDS + ' s before (orange) → close ' + fmtTenths(s) + '–' + fmtTenths(f.frame) + ' (red) → ' + ID_SWITCH_LEAD_IN_SECONDS + ' s after (orange)">' +
+        // fill first, band over it: the red close spell stays visible as the fill passes it
         '<div class="id-switch-pfill" style="width:' + pct(cur) + '"></div>' +
-        '<div class="id-switch-pband" style="left:' + pct(s) + ';width:calc(' + pct(f.frame) + ' - ' + pct(s) + ' + 2px)"></div></div>';
+        '<div class="id-switch-pband" style="left:' + pct(s) + ';width:calc(' + pct(f.frame) + ' - ' + pct(s) + ' + 2px);background:rgba(' +
+        ID_SWITCH_SECTION_RGB.close + ', 0.75)"></div></div>';
 }
 
 /** Move the selected row's bar to `frame` (called on every frame change; a no-op without a selected row). */
