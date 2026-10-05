@@ -16,7 +16,11 @@
  *     (40..50) — and the bar itself is orange | red | orange.
  *     The bar's playhead line sits on the fill's leading edge at every frame and
  *     stands proud of the bar.
- *  5. "Clear" in the tab stops it.
+ *  5. Clicking the bar goes to that frame (also a few px above its 6 px), dragging
+ *     along it scrubs, and neither sends the row back to its lead-in.
+ *  6. When the animals move between frames, the old box is cleared completely (a
+ *     repaint clears only the rectangle the last one drew, not the whole canvas).
+ *  7. "Clear" in the tab stops it.
  *
  * Run: node tests/e2e/id-switch-highlight.mjs     (HL_SHOT=/path.png saves a screenshot)
  */
@@ -127,6 +131,27 @@ try {
     check(!!bar && /rgba\(255, 176, 32/.test(bar.track) && /rgba\(240, 60, 50/.test(bar.band),
         `the bar is orange lead-in/out around a red close spell (${JSON.stringify(bar)})`);
 
+    // ---- 5. click / drag on the bar (interval 10..80): x of t across it -> frame round(10 + 70 t)
+    const barBox = await page.locator('#idSwitchPanel .id-switch-row.is-current .id-switch-pbar').boundingBox();
+    const atT = t => barBox.x + t * barBox.width, midY = barBox.y + barBox.height / 2;
+    const cur = () => page.evaluate(() => window.__lucid.state.currentFrame);
+    await page.mouse.click(atT(0.25), midY);
+    await page.waitForTimeout(100);
+    check(await cur() === 28, `clicking a quarter of the way along goes to frame 28 (${await cur()})`);
+    const stillSel = await page.evaluate(() => !!document.querySelector('#idSwitchPanel .id-switch-row.is-current .id-switch-pbar'));
+    check(stillSel, 'the row stays selected with its bar (the click is not a row click)');
+    await page.mouse.click(atT(0.5), barBox.y - 4);
+    await page.waitForTimeout(100);
+    check(await cur() === 45, `a click 4 px above the bar still lands, halfway: frame 45 (${await cur()})`);
+    await page.mouse.move(atT(0.25), midY); await page.mouse.down();
+    await page.mouse.move(atT(0.6), midY + 20, { steps: 5 });                   // drifting off the bar keeps scrubbing
+    const mid = await cur();
+    await page.mouse.move(atT(0.75), midY, { steps: 5 }); await page.mouse.up();
+    await page.waitForTimeout(100);
+    const headAt = await page.evaluate(() => document.querySelector('#idSwitchPanel .id-switch-row.is-current .id-switch-phead').style.left);
+    check(mid === 52 && await cur() === 63 && headAt === '75.71%',
+        `dragging scrubs: 52 mid-drag, 63 on release, playhead at 75.71% (${mid}, ${await cur()}, ${headAt})`);
+
     // ---- 3. step past the interval (frame 80 is its last) -> cleared; back in -> redrawn
     await page.click('#idSwitchPanel .id-switch-row .id-switch-end');               // frame 50, in range
     await page.waitForFunction(() => window.__lucid.state.currentFrame === 50, null, { timeout: 10000 }).catch(() => {});
@@ -159,7 +184,33 @@ try {
     const back = await census();
     check(back.every(v => v.pair > 200), 'stepping back into the interval (frame 80) draws it again');
 
-    // ---- 5. Clear stops it
+    // ---- 6. the box moves: frame 79 has id_0 + id_1 250 px to the right -> nothing left where they were
+    await page.evaluate(async () => {
+        const pd = await import('/pose/pose-data.js'); const S = window.__lucid.state.session;
+        const groups = S.instanceGroups.get(79);
+        for (const g of groups.slice(0, 2)) for (const cam of ['camA', 'camB']) {
+            const old = g.getInstance(cam), pts = [];
+            for (let k = 0; k < old.numNodes; k++) pts.push([old.getX(k) + 250, old.getY(k)]);
+            g.addInstance(cam, new pd.Instance(pts, null, 'predicted', 0.9));
+        }
+    });
+    await page.keyboard.press('ArrowLeft');                                           // 80 -> 79
+    await page.waitForFunction(() => window.__lucid.state.currentFrame === 79, null, { timeout: 10000 }).catch(() => {});
+    await page.waitForTimeout(200);
+    const moved = await page.evaluate(() => window.__lucid.state.views.map(v => {
+        const c = v.wrapper.querySelector('.id-switch-canvas');
+        const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data, sx = c.width / 640;
+        let oldPlace = 0, newPlace = 0;
+        for (let y = 0; y < c.height; y++) for (let x = 0; x < c.width; x++) {
+            if (!d[(y * c.width + x) * 4 + 3]) continue;
+            if (x / sx < 300) oldPlace++; else newPlace++;
+        }
+        return { oldPlace, newPlace };
+    }));
+    check(moved.every(v => v.oldPlace === 0 && v.newPlace > 200),
+        `the box moved with them and nothing is left where it was (${JSON.stringify(moved)})`);
+
+    // ---- 7. Clear stops it
     await page.click('#idSwitchClear');
     await page.waitForTimeout(150);
     const cleared = await census();

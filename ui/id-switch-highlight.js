@@ -13,6 +13,13 @@
  * canvases are cleared once and the loop stops. Boxes are recomputed only when
  * the frame changes.
  *
+ * Kept cheap, because it runs during playback on every view: a view is repainted
+ * when the frame changes and otherwise at most every `ANIM_MS` (the animation is
+ * timed from the clock, so its speed does not depend on the rate), and a repaint
+ * clears only the rectangle the last one drew, not the whole video-sized canvas.
+ * Repainting all eight full canvases at the display rate (120 Hz) was 2x the
+ * video's own rate for an outline that moves a few pixels.
+ *
  * The animals are found per camera by their identity NAME at the current frame,
  * the way the overlays resolve identity: the per-frame identity of the instance's
  * track first (`session.getIdentityForTrack(trackIdx, camera, frame)`), else its
@@ -39,6 +46,9 @@ var _boxes = new Map();      // view name -> {x0, y0, x1, y1} in video px, or ab
 var _raf = 0;
 var _canvases = new WeakMap();
 var _cleared = true;
+var ANIM_MS = 33;            // repaint for the animation alone at most ~30 Hz; a new frame repaints at once
+var _paintT = -Infinity, _paintFrame = -1;
+var _dirty = new WeakMap();  // canvas -> [x, y, w, h] the last repaint drew (canvas px), cleared by the next
 
 /** The colour of each section of the row's interval, as `r, g, b` (the bar and the box share it). */
 export var ID_SWITCH_SECTION_RGB = Object.freeze({ lead: '255, 176, 32', close: '240, 60, 50' });
@@ -71,7 +81,7 @@ export function getIdSwitchHighlight() { return _target ? Object.assign({}, _tar
 export function updateIdSwitchHighlight(frame) {
     var inRange = !!_target && frame >= _target.p0 && frame <= _target.p1;
     if (!inRange) { stop(); return; }
-    if (frame !== _frame) { _frame = frame; computeBoxes(frame); }
+    if (frame !== _frame) { _frame = frame; computeBoxes(frame); _paintFrame = -1; }
     if (!_raf && typeof requestAnimationFrame === 'function') _raf = requestAnimationFrame(tick);
 }
 
@@ -81,7 +91,7 @@ function stop() {
     if (!_cleared) {
         (state.views || []).forEach(function (v) {
             var c = _canvases.get(v);
-            if (c) c.getContext('2d').clearRect(0, 0, c.width, c.height);
+            if (c) { c.getContext('2d').clearRect(0, 0, c.width, c.height); _dirty.delete(c); }
         });
         _cleared = true;
     }
@@ -158,13 +168,18 @@ function colorOf(name) {
 function tick(t) {
     _raf = 0;
     if (!_target || _frame < 0) return;
+    if (_frame === _paintFrame && t - _paintT < ANIM_MS) {      // same frame, animation step not due yet
+        if (typeof requestAnimationFrame === 'function') _raf = requestAnimationFrame(tick);
+        return;
+    }
+    _paintT = t; _paintFrame = _frame;
     _cleared = false;
     var rgb = ID_SWITCH_SECTION_RGB[idSwitchSection(_target, _frame)];
     (state.views || []).forEach(function (v) {
         var c = canvasFor(v);
         if (!c) return;
-        var ctx = c.getContext('2d');
-        ctx.clearRect(0, 0, c.width, c.height);
+        var ctx = c.getContext('2d'), d = _dirty.get(c);
+        if (d) { ctx.clearRect(d[0], d[1], d[2], d[3]); _dirty.delete(c); }
         var b = _boxes.get(v.name);
         if (!b) return;
         var toC = makeVideoToCanvasTransform(v.videoWidth, v.videoHeight, c.width, c.height);
@@ -190,6 +205,9 @@ function tick(t) {
         var lx = x + 4 * s;
         parts.forEach(function (p) { ctx.fillStyle = p[1]; ctx.fillText(p[0], lx, ly); lx += ctx.measureText(p[0]).width; });
         ctx.restore();
+        // what this repaint touched — the box with its halo, and the label — with a margin for antialiasing
+        var m = 4 * s, dx0 = Math.floor(x - m), dy0 = Math.floor(Math.min(y, ly - fs) - m);
+        _dirty.set(c, [dx0, dy0, Math.ceil(Math.max(x + w, x + tw + 8 * s) + m) - dx0, Math.ceil(Math.max(y + h, ly + 5 * s) + m) - dy0]);
     });
     if (typeof requestAnimationFrame === 'function') _raf = requestAnimationFrame(tick);
 }

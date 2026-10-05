@@ -6760,6 +6760,9 @@ details[open] > summary.origin-rebase-block-title::before {
   position: relative; height: 6px; margin: 8px 0 3px;
   animation: id-switch-pbar-in 160ms ease-out;
 }
+/* Click or drag on it to go to a frame: a hit area taller than the 6 px bar. */
+.id-switch-pbar { cursor: pointer; touch-action: none; }
+.id-switch-pbar::before { content: ''; position: absolute; inset: -7px 0; }
 /* The coloured track clips the fill and band to its rounded ends; the bar does not,
    so the playhead can stand proud of it. */
 .id-switch-ptrack { position: absolute; inset: 0; border-radius: 3px; background-color: var(--bg-button); overflow: hidden; }

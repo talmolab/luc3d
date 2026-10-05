@@ -7988,7 +7988,13 @@ come from `ID_SWITCH_SECTION_RGB` (`ui/id-switch-highlight.js`), set inline.
 A **playhead** line (`.id-switch-phead`) marks the current frame at the fill's
 leading edge and stands 4 px proud of the bar, so the coloured track is an inner
 element (`.id-switch-ptrack`) that clips the fill and band to its rounded ends
-while the bar itself does not clip; both move in the same style write. `updateIdSwitchProgress(frame)` is
+while the bar itself does not clip; both move in the same style write.
+**Clicking or dragging the bar goes to that frame** (`round(p0 + x·(p1 − p0))`),
+like the transport seekbar; a `::before` gives it a hit area 7 px taller on each
+side. It is a `pointerdown` on the list (window-level move/up listeners, the bar
+re-found on every move so a panel rebuilt mid-drag cannot strand it, repeats of
+the same frame skipped), and the click that ends the press is swallowed so it
+never re-lands the row on its lead-in. `updateIdSwitchProgress(frame)` is
 called from `ui/ui-wiring.js` `updateSeekbarVisual` on every frame change: one
 style write, and a no-op without a selected row (the bar element is looked up
 once per render/selection, not per frame). The same interval drives an
@@ -8124,7 +8130,12 @@ overlay redraw paths (which clear the overlay canvas every frame) never touch it
 and the overlay-video export does not include it. A `requestAnimationFrame` loop
 runs ONLY while the frame is in the interval — the outline marches (dash offset)
 and pulses even when paused — and stops after clearing the canvases once outside
-it. Boxes are recomputed only when the frame changes: per camera, the instances
+it. It is kept cheap because it runs during playback on every view: a view is
+repainted when the frame changes and otherwise at most every `ANIM_MS` (33 ms; the
+animation is timed from the clock, so its speed does not depend on the rate), and
+a repaint clears only the rectangle the previous one drew (`_dirty`) instead of
+the whole video-sized canvas — repainting all eight full canvases at the display
+rate (120 Hz) was twice the video's own rate. Boxes are recomputed only when the frame changes: per camera, the instances
 whose identity NAME is one of the pair at that frame (per-frame track identity
 first, then the group's `identityId`; unlinked instances via
 `getIdentityIdForUnlinkedInstance`), one box around both (or the one visible),
@@ -8144,8 +8155,10 @@ of a large video stays readable. Lazy projects: nothing for a non-resident frame
 **Coverage.** `tests/e2e/id-switch-highlight.mjs` (two real views: box around
 the pair and not the third animal, animates while paused, orange in the
 lead-in / red in the close spell / orange in the lead-out with the bar's
-sections matching, cleared past the interval and redrawn on return, Clear stops
-it).
+sections matching, the bar's playhead and click / drag seeking, cleared past the
+interval and redrawn on return, a moved box leaves nothing behind, Clear stops
+it); `tests/e2e/_bench-playback.mjs` scenario `idswitch` (playback cost on a real
+project with a row selected over the whole run).
 
 ---
 
