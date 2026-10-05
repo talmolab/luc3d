@@ -501,7 +501,8 @@ The Visibility panel's **session-scoped** state persists per session in the
 `videoContrast` and `videoRotation` (each `{ cameraName: int }`) plus
 `hiddenCameras` / `hiddenTracks` / `hiddenIdentities` (sorted name arrays), plus
 the ID Switches tab's review checklist, `idSwitchReview` (`ui/id-switch-review.js`;
-absent unless a check left results on that session).
+absent unless a check left results on that session; it also records the switches
+fixed from the tab, whose identity swaps are in the session data itself).
 Everything goes through **one** module, `import-export/visibility-metadata.js`
 (`writeVisibilityMetadata` / `readVisibilityMetadata`, `VISIBILITY_METADATA_KEYS`),
 which the four writers and three readers all call — adding a setting means

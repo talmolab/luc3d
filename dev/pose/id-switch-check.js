@@ -43,7 +43,7 @@
  * Depends on: pose-data.js (readPoint3d). Pure — no DOM, no app state.
  */
 
-import { readPoint3d } from './pose-data.js?v=3d7774e200ef';
+import { readPoint3d } from './pose-data.js?v=bedcfb285113';
 
 /** Bone (node-pair) lengths used as the size signature. Pairs whose nodes the
  *  session skeleton lacks are skipped. */
@@ -417,7 +417,7 @@ function finish(grid, LP, present, weight, o, extra) {
  * @param {Array} scored  encounters sorted by frame
  */
 export function markChangePoints(scored, o) {
-    scored.forEach(function (sc) { delete sc.kind; delete sc.followOf; });
+    scored.forEach(function (sc) { delete sc.kind; delete sc.followOf; delete sc.switchBackAt; });
     // The model learns from the tracker's labels, so it can tell that the labelling on the two sides
     // of an encounter disagrees, not which side is right: whichever side covers MORE of the session
     // reads as "correct". Mark the CHANGE POINT of each run of flagged encounters per pair:
@@ -447,8 +447,13 @@ export function markChangePoints(scored, o) {
             var m2 = n; while (m2 + 1 < L.length && L[m2 + 1].flagged) m2++;
             var atStart = n === 0, atEnd = m2 === L.length - 1;
             for (var r6 = n; r6 <= m2; r6++) L[r6].continues = r6 > n || (atStart && !atEnd);
-            if (!atEnd && (atStart || m2 > n)) changes.push(Object.assign({}, L[m2 + 1], { kind: 'end', continues: false }));
-            if (!(atStart && !atEnd)) L[n].kind = 'onset';
+            // Each change point also names the OTHER edge of its swapped stretch, which is what fixing it
+            // swaps (ui/id-switch-modal.js): an onset, the encounter after the run where the labels look
+            // right again (`switchBackAt`, null when the run reaches the session end); an 'end', the run's
+            // first encounter (`switchedAt`, null when the run starts the session — swapped from frame 0).
+            if (!atEnd && (atStart || m2 > n)) changes.push(Object.assign({}, L[m2 + 1], { kind: 'end', continues: false,
+                switchedAt: atStart ? null : L[n].frame }));
+            if (!(atStart && !atEnd)) { L[n].kind = 'onset'; L[n].switchBackAt = atEnd ? null : L[m2 + 1].frame; }
             n = m2;
         }
     });
@@ -499,7 +504,10 @@ function failure(reason) { return { ok: false, reason: reason, flags: [], change
  *   point is the first UNflagged encounter after it, returned in `changes`
  *   (`kind: 'end'`, not itself flagged). Markers to show = `flags` + `changes`.
  *   A change point with `followOf: <frame>` is a follow-on of the switch at that
- *   frame (a swapped identity's next encounter with a third animal).
+ *   frame (a swapped identity's next encounter with a third animal). An onset
+ *   carries `switchBackAt` (the frame of the encounter after its run, or null
+ *   when the run reaches the session end); an 'end' carries `switchedAt` (the run's first
+ *   encounter, or null when the run starts the session).
  */
 export async function checkSizeSwitches(session, opts) {
     var o = Object.assign({}, SIZE_CHECK_DEFAULTS, opts || {});
