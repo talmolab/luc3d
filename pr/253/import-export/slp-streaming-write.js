@@ -53,9 +53,10 @@
  * streams from the columnar store untouched.
  */
 
-import { _buildSioPoints } from './file-io.js?v=814a143763d4';
-import { points3dNodeCount } from '../pose/pose-data.js?v=814a143763d4';
-import { writeVisibilityMetadata } from './visibility-metadata.js?v=814a143763d4';
+import { _buildSioPoints } from './file-io.js?v=d39ae7dcd87f';
+import { points3dNodeCount } from '../pose/pose-data.js?v=d39ae7dcd87f';
+import { writeVisibilityMetadata } from './visibility-metadata.js?v=d39ae7dcd87f';
+import { writePlaneMetadata } from './plane-metadata.js?v=d39ae7dcd87f';
 
 function numAt(arr, i, dflt) {
     if (!arr || i < 0 || i >= arr.length) return dflt === undefined ? 0 : dflt;
@@ -398,6 +399,9 @@ export async function buildSessionRefGraph(session, views, videoFiles, ctx) {
     // default, so untouched projects serialize byte-identically. Must stay in
     // lockstep with the eager writer in `file-io.js` (both call the one helper).
     writeVisibilityMetadata(sioSession.metadata.lucid, session);
+    // Define Planes state — the streaming mirror of the eager writer in
+    // `file-io.js` (both call the one helper, so they cannot drift).
+    writePlaneMetadata(sioSession.metadata.lucid, session);
     for (var av = 0; av < sioCameras.length; av++) sioSession.addVideo(ctx.allVideos[sessionVideoIndices[av]], sioCameras[av]);
 
     var camByName = new Map();

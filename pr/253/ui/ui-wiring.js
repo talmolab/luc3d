@@ -9,7 +9,7 @@
 
 import { state, videoController, interactionManager, viewport3d, timeline, paneManager,
          setVideoController, setInteractionManager, setViewport3D, setTimeline, VIEW_NAMES,
-         getActiveSession, hasRealVideo, setInstanceClipboard, getInstanceClipboard } from './app-state.js?v=814a143763d4';
+         getActiveSession, hasRealVideo, setInstanceClipboard, getInstanceClipboard } from './app-state.js?v=d39ae7dcd87f';
 // Block 1 (Prompt 4): the timeline collapse/fit/sync helpers and the
 // Ctrl/Cmd+J keyboard shortcut installer live in `timeline-controller.js`.
 // Import them explicitly so the local call sites in this file (menu
@@ -21,47 +21,52 @@ import {
     installTimelineShortcuts,
     getCachedTimelineHeight,
     setCachedTimelineHeight,
-} from './timeline-controller.js?v=814a143763d4';
+} from './timeline-controller.js?v=d39ae7dcd87f';
 import { Skeleton, Camera, Instance, InstanceGroup, FrameGroup, UnlinkedInstance, Identity, Session,
-         someValidPoint3d } from '../pose/pose-data.js?v=814a143763d4';
+         someValidPoint3d } from '../pose/pose-data.js?v=d39ae7dcd87f';
 import { ensureLazyFrameData, batchLoadLazyFrames, getInstanceGroupsForFrame, evictLazyFrames,
          loadAllLazyFrames, updateTimelineForFrame, triangulateAndReproject,
-         resolveTriangulationMethod } from '../pose/triangulation.js?v=814a143763d4';
-import { drawAllOverlays, getVisibilitySettings, updateFrameCounters, setReprojErrorVisible } from './rendering.js?v=814a143763d4';
+         resolveTriangulationMethod } from '../pose/triangulation.js?v=d39ae7dcd87f';
+import { drawAllOverlays, getVisibilitySettings, updateFrameCounters, setReprojErrorVisible } from './rendering.js?v=d39ae7dcd87f';
 import { updateInfoPanel, updateFrameInfo, updateTriangulationBadge,
          populateVideosTable, populateCamerasTable, populateSkeletonTable,
          setupPanelTabs, setupSkeletonEditing, exportSkeletonJSON,
          ensureSession, populateSessionAssignTable, populateUnassignedVideos,
-         populateTimelineVisibility } from './info-panel.js?v=814a143763d4';
-import { consumeInfoPanelStale } from './panel-visibility.js?v=814a143763d4';
+         populateTimelineVisibility } from './info-panel.js?v=d39ae7dcd87f';
+import { consumeInfoPanelStale, collapseViewport3D } from './panel-visibility.js?v=d39ae7dcd87f';
 // Block 2 (Prompt 4): rename migration for the per-session hidden-track
 // / hidden-identity Sets when the user renames an entity.
-import { renameHiddenTrack, renameHiddenIdentity } from './timeline-visibility.js?v=814a143763d4';
+import { renameHiddenTrack, renameHiddenIdentity } from './timeline-visibility.js?v=d39ae7dcd87f';
+// View ▸ Define Planes — "Defining Plane Mode".
+import { togglePlaneMode, syncPlanes3D } from './plane-definition.js?v=d39ae7dcd87f';
+// The Visibility panel's `Planes` section — the four ids, named from the one
+// module that reads them so this file cannot drift from it.
+import { PLANE_VIS_IDS } from './plane-visibility.js?v=d39ae7dcd87f';
 import { newProject, markDirty, clearDirty, quickSave, saveAs, saveProjectSlp, saveProject,
-         handleLoadProject, showLoading, hideLoading, setStatus } from '../import-export/save-load.js?v=814a143763d4';
-import { handleLoadSlpFile, handleAddSlp, handleLoadPoints3dH5 } from '../import-export/slp-import.js?v=814a143763d4';
-import { pickFiles, parseCalibrationJSON, exportCalibrationTOML, downloadTOML, parseSlpH5 } from '../import-export/file-io.js?v=814a143763d4';
+         handleLoadProject, showLoading, hideLoading, setStatus } from '../import-export/save-load.js?v=d39ae7dcd87f';
+import { handleLoadSlpFile, handleAddSlp, handleLoadPoints3dH5 } from '../import-export/slp-import.js?v=d39ae7dcd87f';
+import { pickFiles, parseCalibrationJSON, exportCalibrationTOML, downloadTOML, parseSlpH5 } from '../import-export/file-io.js?v=d39ae7dcd87f';
 import { handleLoadCalibration, handleLoadVideos, handleLoadMultiSession,
-         loadSingleSessionFromCache, handleEmptySession, showSessionModeModal, autoAssignVideosToCameras } from '../loading/session-loader.js?v=814a143763d4';
-import { OnDemandVideoDecoder, VideoController } from '../loading/video.js?v=814a143763d4';
+         loadSingleSessionFromCache, handleEmptySession, showSessionModeModal, autoAssignVideosToCameras } from '../loading/session-loader.js?v=d39ae7dcd87f';
+import { OnDemandVideoDecoder, VideoController } from '../loading/video.js?v=d39ae7dcd87f';
 
 // Pass 3i-1: tracker functions moved out of app.js.
-import { trackCurrentFrame, trackAll, findMatchForSelected } from '../pose/tracker.js?v=814a143763d4';
+import { trackCurrentFrame, trackAll, findMatchForSelected } from '../pose/tracker.js?v=d39ae7dcd87f';
 // Track Frame Range (#212): the Track Frame split button's dropdown entry.
-import { showTrackRangeModal } from './track-range-modal.js?v=814a143763d4';
-import { showAlignViewsModal } from './view-align-modal.js?v=814a143763d4';
-import { onColorByChange, setColorByIdentity } from './color-by.js?v=814a143763d4';
-import { installSeekbarTooltip } from './seekbar-tooltip.js?v=814a143763d4';
-import { installSeekbarMarkers, seekbarMarkerAt, describeSwitchMarker, setSeekbarMarkerFrames } from './seekbar-markers.js?v=814a143763d4';
+import { showTrackRangeModal } from './track-range-modal.js?v=d39ae7dcd87f';
+import { showAlignViewsModal } from './view-align-modal.js?v=d39ae7dcd87f';
+import { onColorByChange, setColorByIdentity } from './color-by.js?v=d39ae7dcd87f';
+import { installSeekbarTooltip } from './seekbar-tooltip.js?v=d39ae7dcd87f';
+import { installSeekbarMarkers, seekbarMarkerAt, describeSwitchMarker, setSeekbarMarkerFrames } from './seekbar-markers.js?v=d39ae7dcd87f';
 // Pass 3i-2: triangulation orchestration moved out of app.js.
-import { triangulateCurrentFrame, triangulateAllFrames } from '../pose/triangulation.js?v=814a143763d4';
+import { triangulateCurrentFrame, triangulateAllFrames } from '../pose/triangulation.js?v=d39ae7dcd87f';
 // User settings: default triangulation method + editable keyboard bindings.
-import { getDefaultTriangulationMethod, onDefaultTriangulationMethodChange, setHandler, dispatchEvent, getActions, formatBinding } from './settings.js?v=814a143763d4';
-import { shouldIgnoreShortcut, installFocusRelease } from './keyboard-target.js?v=814a143763d4';
-import { showSettingsModal } from './settings-modal.js?v=814a143763d4';
+import { getDefaultTriangulationMethod, onDefaultTriangulationMethodChange, setHandler, dispatchEvent, getActions, formatBinding } from './settings.js?v=d39ae7dcd87f';
+import { shouldIgnoreShortcut, installFocusRelease } from './keyboard-target.js?v=d39ae7dcd87f';
+import { showSettingsModal } from './settings-modal.js?v=d39ae7dcd87f';
 // Pass 3i-3: addNewInstanceSmart and update3DViewport moved to pose/initialization.js.
-import { addNewInstanceSmart, update3DViewport, navigateToFrame } from '../pose/initialization.js?v=814a143763d4';
-import { runIdSwitchChecks, setIdSwitchNavigator, updateIdSwitchProgress } from './id-switch-modal.js?v=814a143763d4';
+import { addNewInstanceSmart, update3DViewport, navigateToFrame } from '../pose/initialization.js?v=d39ae7dcd87f';
+import { runIdSwitchChecks, setIdSwitchNavigator, updateIdSwitchProgress } from './id-switch-modal.js?v=d39ae7dcd87f';
 // Pass 3f / 3i-4: identity-assignment workflow symbols moved out of app.js.
 // (`swapTracks` joined this module in 3i-4; `seekToLabeledFrame` is now in-module.)
 import {
@@ -70,10 +75,10 @@ import {
     startManualAssignment, runSingleFrameTriangulation, showMultiFrameModal,
     purgeTriangulationDataForGroup,
     swapTracks,
-} from './identity-assignment.js?v=814a143763d4';
+} from './identity-assignment.js?v=d39ae7dcd87f';
 // Custom Instance Delete: DOM-free matching/cascade/durability logic. Imports no
 // project modules itself, which is why it can also be unit tested in isolation.
-import { collectDeletionTargets, executeDeletion } from './custom-delete-ops.js?v=814a143763d4';
+import { collectDeletionTargets, executeDeletion } from './custom-delete-ops.js?v=d39ae7dcd87f';
 // Pass 3g: export-modals workflow symbols moved out of app.js.
 import {
     exportLabels, exportPoints3dH5, exportReprojH5,
@@ -81,19 +86,19 @@ import {
     showSlpExportPerSessionModal,
     showTriangulateMultiFrameModal,
     showGroupByTrackModal, groupByIdentityAndTriangulateAll, showExport3DVideoModal,
-} from './export-modals.js?v=814a143763d4';
-import { showOverlayExportModal } from './overlay-export-modal.js?v=814a143763d4';
+} from './export-modals.js?v=d39ae7dcd87f';
+import { showOverlayExportModal } from './overlay-export-modal.js?v=d39ae7dcd87f';
 // Pass 3h: sessions-panes workflow symbols moved out of app.js.
 import {
     panelRenderers, multiSelectViews, activatePanelForView, scrollViewStripTo,
     refreshPaneInteractions, clearMultiSelect, clampRotation, syncRotationUI,
     populateViewStrip, populateSessionsPanel, populateSessionStrip,
     showMoveVideoModal, removeSession, switchSession,
-} from './sessions-panes.js?v=814a143763d4';
+} from './sessions-panes.js?v=d39ae7dcd87f';
 import {
     nameExists, countNulledByCamera, deleteTrackAt, deleteIdentityAt,
-} from './track-identity-ops.js?v=814a143763d4';
-import { setSessionRotation } from './video-filters.js?v=814a143763d4';
+} from './track-identity-ops.js?v=d39ae7dcd87f';
+import { setSessionRotation } from './video-filters.js?v=d39ae7dcd87f';
 
 // ============================================
 // Rename Track / Identity modal
@@ -672,6 +677,67 @@ function showCustomDeleteModal() {
     recompute();
 }
 
+// The Keyboard Shortcuts help, rendered from the same catalog (getActions())
+// that drives Settings ▸ Keyboard Shortcuts.
+//
+// At MODULE scope deliberately. It has two callers in two different closures —
+// the Hot Keys menu item (wired in `setupMenus`) and the `showHotkeys` catalog
+// action (wired in `setupUI`) — and declaring it inside `setupMenus` meant the
+// second one threw `ReferenceError: showHotkeysHelp is not defined`, so `?` had
+// never opened the help at all. Nothing in here reads a closure variable: it
+// needs `getActions` / `formatBinding` and the DOM, both module-level.
+function showHotkeysHelp() {
+    // One at a time. `?` arrives through the catalog dispatcher, which does not
+    // consume the keydown for the listeners after it, so a second press while
+    // the help is already up would otherwise stack a second overlay.
+    if (document.getElementById('hotkeysClose')) return;
+
+    // Generated from the same catalog (ACTION_CATALOG via getActions) that
+    // drives Settings ▸ Keyboard Shortcuts, so this list stays in sync with
+    // the Settings page and any user rebindings.
+    function esc(s) {
+        return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+
+    var overlay = document.createElement('div');
+    overlay.className = 'multi-frame-modal-overlay';
+    var modal = document.createElement('div');
+    modal.className = 'multi-frame-modal';
+    modal.style.maxWidth = '550px';
+
+    var rows = '';
+    var lastCategory = null;
+    getActions().forEach(function (a) {
+        if (a.category !== lastCategory) {
+            if (rows) rows += '<tr><td colspan="2" style="height:8px;"></td></tr>';
+            lastCategory = a.category;
+            rows += '<tr><td><b>' + esc(a.category) + '</b></td><td></td></tr>';
+        }
+        rows += '<tr><td><code>' + esc(formatBinding(a.binding)) + '</code></td><td>' + esc(a.label) + '</td></tr>';
+    });
+
+    modal.innerHTML =
+        '<h3>Keyboard Shortcuts</h3>' +
+        '<div style="max-height:60vh;overflow-y:auto;">' +
+        '<table class="data-table" style="font-size:12px;">' +
+        '<thead><tr><th>Key</th><th>Action</th></tr></thead>' +
+        '<tbody>' + rows + '</tbody></table></div>' +
+        '<div class="modal-actions"><button id="hotkeysClose" class="primary">Close</button></div>';
+    overlay.appendChild(modal);
+    document.body.appendChild(overlay);
+
+    function teardown() {
+        document.removeEventListener('keydown', onKey, true);
+        overlay.remove();
+    }
+    function onKey(ev) {
+        if (ev.key === 'Escape') { ev.preventDefault(); ev.stopPropagation(); teardown(); }
+    }
+    document.addEventListener('keydown', onKey, true);
+    document.getElementById('hotkeysClose').addEventListener('click', teardown);
+    overlay.addEventListener('click', function (ev) { if (ev.target === overlay) teardown(); });
+}
+
 // ============================================
 // Menu Setup
 // ============================================
@@ -1175,6 +1241,11 @@ export function setupMenus() {
         if (viewport3d) viewport3d.fitToScene();
     });
 
+    document.getElementById('menuDefinePlanes').addEventListener('click', function () {
+        closeMenus();
+        togglePlaneMode();
+    });
+
     document.getElementById('menuAlignViews').addEventListener('click', function () {
         closeMenus();
         showAlignViewsModal();
@@ -1304,53 +1375,6 @@ export function setupMenus() {
         closeMenus();
         window.open('https://talmolab.github.io/calibrat3/', '_blank', 'noopener');
     });
-
-    function showHotkeysHelp() {
-        // Generated from the same catalog (ACTION_CATALOG via getActions) that
-        // drives Settings ▸ Keyboard Shortcuts, so this list stays in sync with
-        // the Settings page and any user rebindings.
-        function esc(s) {
-            return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-        }
-
-        var overlay = document.createElement('div');
-        overlay.className = 'multi-frame-modal-overlay';
-        var modal = document.createElement('div');
-        modal.className = 'multi-frame-modal';
-        modal.style.maxWidth = '550px';
-
-        var rows = '';
-        var lastCategory = null;
-        getActions().forEach(function (a) {
-            if (a.category !== lastCategory) {
-                if (rows) rows += '<tr><td colspan="2" style="height:8px;"></td></tr>';
-                lastCategory = a.category;
-                rows += '<tr><td><b>' + esc(a.category) + '</b></td><td></td></tr>';
-            }
-            rows += '<tr><td><code>' + esc(formatBinding(a.binding)) + '</code></td><td>' + esc(a.label) + '</td></tr>';
-        });
-
-        modal.innerHTML =
-            '<h3>Keyboard Shortcuts</h3>' +
-            '<div style="max-height:60vh;overflow-y:auto;">' +
-            '<table class="data-table" style="font-size:12px;">' +
-            '<thead><tr><th>Key</th><th>Action</th></tr></thead>' +
-            '<tbody>' + rows + '</tbody></table></div>' +
-            '<div class="modal-actions"><button id="hotkeysClose" class="primary">Close</button></div>';
-        overlay.appendChild(modal);
-        document.body.appendChild(overlay);
-
-        function teardown() {
-            document.removeEventListener('keydown', onKey, true);
-            overlay.remove();
-        }
-        function onKey(ev) {
-            if (ev.key === 'Escape') { ev.preventDefault(); ev.stopPropagation(); teardown(); }
-        }
-        document.addEventListener('keydown', onKey, true);
-        document.getElementById('hotkeysClose').addEventListener('click', teardown);
-        overlay.addEventListener('click', function (ev) { if (ev.target === overlay) teardown(); });
-    }
 
     document.getElementById('menuSaveSkeleton').addEventListener('click', function () {
         closeMenus();
@@ -2034,6 +2058,11 @@ export function setupUI() {
     });
     setHandler('toggleInfoPanel', function () { toggleInfoPanel(); });
     setHandler('toggle3D', function () { toggle3DViewport(); });
+    // Same call the View ▸ Define Planes menu item makes, so entering and
+    // leaving the mode is one code path however it is triggered — `exitPlaneMode`
+    // has unwinding to do (Set Origin Mode, the angle dialog, the toolbar lock)
+    // and a second entry point would be a second place to forget it.
+    setHandler('definePlanes', function () { togglePlaneMode(); });
 
     // Single dispatcher for catalog-driven shortcuts. Runs before the structural
     // handlers below; if a catalog action matches it consumes the event.
@@ -2088,10 +2117,13 @@ export function setupUI() {
                 }
                 break;
             }
-            case '?':
-                showHotkeysHelp();
-                e.preventDefault();
-                break;
+            // NO `case '?'` here. This switch is behind
+            // `if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;`, and
+            // `?` is Shift+/ on a US layout — so the case could never run, and on a
+            // layout where `?` is unshifted it would have opened a SECOND copy on
+            // top of the catalog dispatcher's. `showHotkeys` is dispatched from
+            // ACTION_CATALOG (see `setHandler('showHotkeys', ...)` above), which is
+            // also what makes it rebindable.
 
             case 'Escape': {
                 // Click the visible Cancel button in any active modal/toast
@@ -2213,6 +2245,25 @@ export function setupUI() {
         }
     });
 
+    // The `Planes` section: the annotated planes and their nodes, in 2D and in
+    // 3D. Wired apart from the block above because they need BOTH repaints —
+    // `drawAllOverlays` for the 2D overlays and `syncPlanes3D` for the 3D
+    // scene, which is rebuilt rather than redrawn — and because no selection
+    // can point at a plane, so the deselect sweep above has nothing to do here
+    // (`interactionManager.selectedPlane` is a Defining-Plane-Mode selection,
+    // and in that mode all four toggles are overridden on anyway).
+    var planeVisCheckIds = Object.keys(PLANE_VIS_IDS).map(function(k) {
+        return PLANE_VIS_IDS[k];
+    });
+    planeVisCheckIds.forEach(function(id) {
+        var el = document.getElementById(id);
+        if (!el) return;
+        el.addEventListener('change', function() {
+            drawAllOverlays(state.currentFrame);
+            syncPlanes3D();
+        });
+    });
+
     // Line style buttons
     document.querySelectorAll('.line-style-btn').forEach(function(btn) {
         btn.addEventListener('click', function() {
@@ -2257,7 +2308,7 @@ export function setupUI() {
     var visCheckIds = ['visLegend', 'visUser', 'visPredicted', 'visReprojections', 'visErrors',
         'visUnlinkedBadge',
         'vis3dLabelShow', 'vis3dSphereShow', 'vis3dPyramidShow',
-        'vis3dNodeShow', 'vis3dEdgeShow'];
+        'vis3dNodeShow', 'vis3dEdgeShow'].concat(planeVisCheckIds);
     var visStyleIds = [
         'visUserPreLineStyle', 'visUserPostLineStyle',
         'visPredPreLineStyle', 'visPredPostLineStyle',
@@ -2882,12 +2933,7 @@ export function toggle3DViewport() {
     const container = document.getElementById('viewport3dContainer');
     var isCollapsing = !container.classList.contains('collapsed');
     if (isCollapsing) {
-        // Save current width so we can restore it when expanding
-        container._savedWidth = container.style.width || '';
-        // Clear inline width so the CSS .collapsed { width: 0 } rule takes effect
-        container.style.width = '';
-        container.classList.add('collapsed');
-        if (viewport3d) viewport3d.setVisible(false);
+        collapseViewport3D(viewport3d);
     } else {
         // Class off + width back FIRST: everything below reads the container's
         // collapse state (via ui/panel-visibility.js) or its size.

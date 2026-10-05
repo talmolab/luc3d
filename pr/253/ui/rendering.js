@@ -5,19 +5,23 @@
 // - setReprojErrorVisible: toggles reprojection-error column visibility in info panels.
 // - updateFrameCounters: status-bar frame counters (labeled / triangulated / instances).
 
-import { state, interactionManager, timeline } from './app-state.js?v=814a143763d4';
-import { points3dNodeCount } from '../pose/pose-data.js?v=814a143763d4';
+import { state, interactionManager, timeline } from './app-state.js?v=d39ae7dcd87f';
+import { points3dNodeCount } from '../pose/pose-data.js?v=d39ae7dcd87f';
 import {
     ensureLazyFrameData, getInstanceGroupsForFrame,
     triangulateAndReproject, storeReprojectedInstances,
-} from '../pose/triangulation.js?v=814a143763d4';
-import { drawFrameOverlays } from './overlays.js?v=814a143763d4';
-import { syncViewLegends } from './view-legend.js?v=814a143763d4';
-import { isCameraTracked } from './settings.js?v=814a143763d4';
+} from '../pose/triangulation.js?v=d39ae7dcd87f';
+import { drawFrameOverlays } from './overlays.js?v=d39ae7dcd87f';
+import { syncViewLegends } from './view-legend.js?v=d39ae7dcd87f';
+import { isCameraTracked } from './settings.js?v=d39ae7dcd87f';
+// Plane placements draw on the same overlay canvas, so they must run AFTER
+// drawFrameOverlays (which opens with a clearRect). Circular import — safe
+// because the call site is inside drawAllOverlays' body.
+import { drawPlaneOverlays, applyPlaneModeToolbarLock } from './plane-definition.js?v=d39ae7dcd87f';
 
 // Pass 3f: editGroupState + finishEditGroup moved to ui/identity-assignment.js.
-import { editGroupState, finishEditGroup } from './identity-assignment.js?v=814a143763d4';
-import { updateFrameInfo } from './info-panel.js?v=814a143763d4';
+import { editGroupState, finishEditGroup } from './identity-assignment.js?v=d39ae7dcd87f';
+import { updateFrameInfo } from './info-panel.js?v=d39ae7dcd87f';
 
 // ============================================
 // Reproj/Error visibility
@@ -292,6 +296,11 @@ export function drawAllOverlays(frameIdx, viewFrames) {
         var isReprojSelected = interactionManager ? interactionManager.selectedReprojected : false;
         tbEditGroup.disabled = isReprojSelected;
     }
+    // Defining Plane Mode blocks the pose-annotation buttons, and the two
+    // above are recomputed on EVERY overlay draw — so the lock is re-asserted
+    // here rather than only at `enterPlaneMode`, where it would survive until
+    // the first mouse move. A no-op when the mode is off.
+    applyPlaneModeToolbarLock();
 
     var editGroupTarget = interactionManager ? interactionManager.editGroupTarget : null;
 
@@ -413,6 +422,10 @@ export function drawAllOverlays(frameIdx, viewFrames) {
             editGroupTarget: editGroupTarget,
             trackingExcluded: !isCameraTracked(view.name),
         });
+
+        // Annotated planes (View ▸ Define Planes). Frame-independent, so they
+        // are drawn on every frame regardless of the current FrameGroup.
+        drawPlaneOverlays(view);
     }
 
     // The legend lives in the pane, outside the rotating `.canvas-wrapper`, so

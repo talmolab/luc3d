@@ -4,7 +4,7 @@
 // owns the download / file-picker wrappers) so the round-trip logic is unit
 // testable without a browser.
 
-import { Skeleton } from '../pose/pose-data.js?v=814a143763d4';
+import { Skeleton } from '../pose/pose-data.js?v=d39ae7dcd87f';
 
 /**
  * Build the SLEAP-compatible jsonpickle skeleton object for `skeleton`.
