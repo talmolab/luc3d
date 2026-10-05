@@ -21,7 +21,7 @@ import { CrossViewTracker, Detection } from './cross-view-tracker.js';
 import { InstanceGroup, points3dNodeCount, hasPoint3d, readPoint3d } from './pose-data.js';
 
 // Pass 3i-1: tracker UI/integration (was in app.js)
-import { state, interactionManager, timeline, getActiveSession } from '../ui/app-state.js';
+import { state, interactionManager, timeline, viewport3d, getActiveSession } from '../ui/app-state.js';
 import { getNodeWeightArray, getTrackingThresholds, getTrackingThreshold, isCameraTracked } from '../ui/settings.js';
 import { setStatus, hideLoading } from '../import-export/save-load.js';
 import { showLoadingProgress, createProgressPacer, yieldToPaint } from '../ui/loading-overlay.js';
@@ -30,6 +30,8 @@ import { drawAllOverlays, showPredictedOnly, PREDICTED_ONLY_NOTE } from '../ui/r
 import { updateInfoPanel } from '../ui/info-panel.js';
 import { setColorByIdentity } from '../ui/color-by.js';
 import { runIdSwitchChecks, clearIdSwitchResults } from '../ui/id-switch-modal.js';
+import { collapseTimeline } from '../ui/timeline-controller.js';
+import { collapseViewport3D } from '../ui/panel-visibility.js';
 
 /**
  * A frame index as the USER sees it: 1-based.
@@ -1426,6 +1428,15 @@ async function runTrackingPass(range) {
         drawAllOverlays(state.currentFrame);
         updateInfoPanel();
         if (timeline) timeline.refreshTracks(state.session, { cap: true });
+        // Track All closes the Timeline and the 3D viewer if they are open, handing
+        // the space back to the views where the new IDs are shown. There is no 3D
+        // pose to look at yet: tracking assigns IDs, and Triangulate All comes next.
+        // A range does not: it is a targeted re-run whose result the user is usually
+        // inspecting on the timeline.
+        if (!isRange) {
+            collapseTimeline();
+            collapseViewport3D(viewport3d);
+        }
         console.timeEnd('[' + label + '] total');
         var doneMsg = 'Assigned ' + lres.numIdentities + ' identities across ' +
             totalFrameCount + ' frames' +

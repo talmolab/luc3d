@@ -33,7 +33,7 @@ import { updateInfoPanel, updateFrameInfo, updateTriangulationBadge,
          setupPanelTabs, setupSkeletonEditing, exportSkeletonJSON,
          ensureSession, populateSessionAssignTable, populateUnassignedVideos,
          populateTimelineVisibility } from './info-panel.js';
-import { consumeInfoPanelStale } from './panel-visibility.js';
+import { consumeInfoPanelStale, collapseViewport3D } from './panel-visibility.js';
 // Block 2 (Prompt 4): rename migration for the per-session hidden-track
 // / hidden-identity Sets when the user renames an entity.
 import { renameHiddenTrack, renameHiddenIdentity } from './timeline-visibility.js';
@@ -2933,12 +2933,7 @@ export function toggle3DViewport() {
     const container = document.getElementById('viewport3dContainer');
     var isCollapsing = !container.classList.contains('collapsed');
     if (isCollapsing) {
-        // Save current width so we can restore it when expanding
-        container._savedWidth = container.style.width || '';
-        // Clear inline width so the CSS .collapsed { width: 0 } rule takes effect
-        container.style.width = '';
-        container.classList.add('collapsed');
-        if (viewport3d) viewport3d.setVisible(false);
+        collapseViewport3D(viewport3d);
     } else {
         // Class off + width back FIRST: everything below reads the container's
         // collapse state (via ui/panel-visibility.js) or its size.

@@ -1789,6 +1789,13 @@ which was removed during the ESM migration).
 epipolar/reprojection scoring, Hungarian assignment, multi-frame
 identity propagation.
 
+**Track All closes the Timeline and the 3D viewer.** On success, a full Track
+All calls `collapseTimeline()` (`ui/timeline-controller.js`) and
+`collapseViewport3D(viewport3d)` (`ui/panel-visibility.js`) so the views showing
+the new IDs get the space back — there is no 3D pose to look at until Triangulate
+All runs. A closed panel stays closed. Track Frame Range and Track Frame leave
+both as they were. Covered by `tests/e2e/track-all-closes-timeline-and-3d.mjs`.
+
 **Animal-count auto-detect is a resident SAMPLE, deliberately.**
 `computeMaxInstancesPerView` (used when the user has not set a count) reads
 `session.frameGroups`, so on a lazy project it samples the resident window rather
@@ -1946,7 +1953,7 @@ drifts upward (e.g., 4 → 11 on the test fixture).
   `triangulatePoints`, `reprojectPoint`, `reprojectPoints`,
   `computeInstanceDistance`, `hungarianAlgorithm`.
 - `../ui/app-state.js` — `state`, `interactionManager`, `timeline`,
-  `getActiveSession`.
+  `viewport3d`, `getActiveSession`.
 - `../ui/settings.js` — `getNodeWeightArray`, `getTrackingThresholds`,
   `getTrackingThreshold`, `isCameraTracked` (both `trackAll`/`trackCurrentFrame`
   drop cameras where `isCameraTracked(name)` is false before tracking; abort with
@@ -1968,6 +1975,10 @@ drifts upward (e.g., 4 → 11 on the test fixture).
   per `autoImageSwitchCheck` (default off)) and awaits them, so the pass resolves
   after the checks. It also drops the session's earlier results and their
   markers (`clearIdSwitchResults(session)`) before clearing identities, for both paths.
+- `../ui/timeline-controller.js` — `collapseTimeline`: a successful Track All
+  (not a range) closes the Timeline if it is open.
+- `../ui/panel-visibility.js` — `collapseViewport3D`: the same, for the 3D viewer
+  (passed `viewport3d` from `../ui/app-state.js`, which is also imported).
   No cycle: that module imports app-state, save-load, loading-overlay, settings,
   `pose/id-switch-check.js` and `ui/image-embedder.js`, none of which import the
   tracker.
@@ -8729,14 +8740,18 @@ Frame Number") keyboard-shortcut installer. Has zero transitive
 `app.js` imports so it can be bridged into the test runner.
 
 **Key exports.**
-- `toggleTimeline`, `fitTimelineToData`, `syncTimelineToggleButton`,
-  `installTimelineShortcuts`, `getCachedTimelineHeight`,
-  `setCachedTimelineHeight`.
+- `toggleTimeline`, `collapseTimeline`, `fitTimelineToData`,
+  `syncTimelineToggleButton`, `installTimelineShortcuts`,
+  `getCachedTimelineHeight`, `setCachedTimelineHeight`.
+- `collapseTimeline()` closes the timeline only if it is open (never opens
+  it), via `toggleTimeline()` so the height cache and toolbar button match a
+  manual collapse. Returns whether it collapsed anything.
 
 **Imports from project modules.**
 - `./app-state.js` — `state` (for `state.timeline`).
 
-**Imported by.** `pose/initialization.js`, `ui/ui-wiring.js`
+**Imported by.** `pose/initialization.js`, `pose/tracker.js`
+(`collapseTimeline`, after Track All), `ui/ui-wiring.js`
 (re-exports the same surface so legacy `import { toggleTimeline, … } from
 './ui-wiring.js'` keeps working).
 
@@ -9306,7 +9321,8 @@ split handles write inline widths there, which would defeat the collapse the
 same way).
 
 Each toggle also drives the work, not just the pixels — see
-`ui/panel-visibility.js`. Hiding the 3D viewport calls
+`ui/panel-visibility.js`. Hiding the 3D viewport goes through that module's
+`collapseViewport3D` (shared with Track All, which closes the panel) and calls
 `Viewport3D.setVisible(false)` (render loop stopped, scene rebuilds deferred)
 and lets `update3DViewport` skip out; showing it calls `setVisible(true)` then
 `update3DViewport(state.currentFrame)`, which also auto-inits the viewport if a
@@ -10152,6 +10168,12 @@ be readable by the code doing it.
   also on `window.__lucidPanelVis`) — diagnostics. A visibility gate that
   looks right and still does the work has no visual signature at all, so the
   counters are what `tests/e2e/panel-toggle-independence.mjs` reads.
+- `collapseViewport3D(viewport3d)` — collapse the 3D panel if expanded (no-op
+  otherwise; returns whether it did): park the inline width, add `collapsed`,
+  `viewport3d.setVisible(false)`. The collapse half of `toggle3DViewport`, which
+  calls it; it lives here so `pose/tracker.js` can close the panel after Track
+  All without importing `ui/ui-wiring.js` (an import loop). The viewport is a
+  PARAMETER, not an import, to keep this module a leaf.
 
 **Imports from project modules.** **None — this is a leaf module by design.**
 `ui/info-panel.js`, `ui/ui-wiring.js` and `pose/initialization.js` all need to
@@ -10159,8 +10181,9 @@ ask it, and several of those already import each other, so any import here
 would close a cycle.
 
 **Imported by.** `ui/info-panel.js` (gates `updateInfoPanel` /
-`updateFrameInfo`), `ui/ui-wiring.js` (`refreshInfoPanelAfterShow`),
-`pose/initialization.js` (gates `update3DViewport` and `setup3DViewport`).
+`updateFrameInfo`), `ui/ui-wiring.js` (`refreshInfoPanelAfterShow`,
+`toggle3DViewport`), `pose/initialization.js` (gates `update3DViewport` and
+`setup3DViewport`), `pose/tracker.js` (`collapseViewport3D` after Track All).
 
 **Note.** `ui/viewport3d.js` deliberately does NOT import this — it takes a
 per-instance `visible` flag instead, because the export modals mount their own
