@@ -42,6 +42,7 @@ import {
 // lookup keeps them functional.
 import { drawAllOverlays, setReprojErrorVisible } from '../ui/rendering.js';
 import { updateInfoPanel, promptImportSkeletonForAllSessions } from '../ui/info-panel.js';
+import { noteSessionCalibrationDivergence } from '../ui/calibration-notice.js';
 // Pass 3i-3: setup3DViewport moved to pose/initialization.js.
 import { setup3DViewport } from '../pose/initialization.js';
 // Pass 3e-1: fitTimelineToData moved to ui-wiring.js.
@@ -54,6 +55,7 @@ import { recomputeUploadedCameras } from '../loading/session-loader.js';
 import { populateViewStrip, populateSessionStrip } from '../ui/sessions-panes.js';
 import { getLoadingProgressModal } from '../ui/loading-progress-modal.js';
 import { readVisibilityMetadata } from './visibility-metadata.js';
+import { readPlaneMetadata, resetPlaneState } from './plane-metadata.js';
 
 /**
  * SLP import parse dispatcher (PR 5.1). Routes real `.slp` files through
@@ -857,6 +859,11 @@ export async function handleLoadSlpFile(slpFile) {
         state.views = [];
         state.videoFiles = [];
         state.sessions = [];
+        // Plane state is project-scoped and lives on a module singleton, so
+        // it does NOT go away with `state.sessions`. `readPlaneMetadata`
+        // only restores into an EMPTY model, so without this the previous
+        // project's planes would survive and the new one's be dropped.
+        resetPlaneState();
         // Reset decoder pool + cold reserve on new project load. Old decoders
         // point at the previous project's files and must be released to avoid
         // dangling mp4box references / leaked file handles.
@@ -1034,6 +1041,9 @@ export async function handleLoadSlpFile(slpFile) {
         var session = new Session(cameras, sessSkeleton, sessTracks);
         session.name = sessName;
         readVisibilityMetadata(session, earlyVisibility);
+        // Define Planes state — pool/planes/origin from the first session that
+        // carries them, this session's per-view 2D onto this session.
+        readPlaneMetadata(session, earlyVisibility);
 
         // Populate FrameGroups from worker's frames array (yield every 20K for UI)
         var BATCH = 20000;
@@ -1618,9 +1628,15 @@ export async function handleLoadSlpFile(slpFile) {
         setStatus('SLP loaded (' + statusParts.join(', ') + ')', 'success');
 
         // One skeleton per project: a multi-session .slp otherwise carries a
-        // per-session skeleton each. Prompt for a single unifying skeleton file.
+        // per-session skeleton each. Prompt for a single unifying skeleton file,
+        // and only once that is answered check whether the sessions' embedded
+        // calibrations agree — a `.slp` carries one per session, so merging two
+        // separately-calibrated recordings lands here too. See
+        // `ui/calibration-notice.js`.
         if (state.sessions.length > 1) {
-            promptImportSkeletonForAllSessions();
+            promptImportSkeletonForAllSessions(function () {
+                noteSessionCalibrationDivergence(state.sessions);
+            });
         }
     } catch (err) {
         console.error('[load-slp] FATAL:', err);
