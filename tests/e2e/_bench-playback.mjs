@@ -62,7 +62,10 @@
  *         rvfcLoop = full on the previous primary-rVFC loop
  *         (window.LUCID_PLAYBACK_LOOP='rvfc'); rafFallback = rVFC hidden;
  *         rvfc = full + rVFC
- *         observers on every video
+ *         observers on every video;
+ *         idswitch = full with an ID Switches row selected whose interval
+ *         covers the whole run, so the animated box in every view, the
+ *         row's progress bar and its playhead all update every frame
  *     (append #N to repeat a scenario, e.g. full#2)
  *     TRI=0                  skip the explicit Triangulate All (measures the
  *                            lazy per-frame re-solve path after Track All)
@@ -701,6 +704,28 @@ try {
             });
             await sleep(500);
         }
+        // idswitch: a synthetic ID-switch result on the first two identities whose
+        // row interval (lead-in .. 1 s after) covers warm-up + measurement, selected,
+        // with the tab showing — the per-frame work the ID Switches review adds.
+        if (base === 'idswitch') {
+            const sel = await page.evaluate(async ({ START, W }) => {
+                const S = window.__lucid.state, s = S.session, fps = S.fps || 30;
+                const ids = (s.identities || []).slice(0, 2);
+                if (ids.length < 2) return 'needs two identities';
+                const flag = { frame: START + Math.round((W + 2) * fps), startFrame: START + Math.round(fps),
+                               nameA: ids[0].name, nameB: ids[1].name, identityA: ids[0].id, identityB: ids[1].id,
+                               score: -80, cue: 'size', kind: 'onset', switchBackAt: null, flagged: true, continues: false };
+                const key = 'size:' + flag.frame + ':' + flag.nameA + ':' + flag.nameB;
+                s._idSwitch = { results: { size: { ok: true, flags: [flag], changes: [], encounters: [{}], sampleHz: 15, step: 2, fps, fpsFromVideo: true } },
+                                reviewed: new Set(), fixes: [], showRepeats: false, current: key };
+                const M = await import('/ui/id-switch-modal.js');
+                M.refreshIdSwitchPanel(s); M.openIdSwitchPanel(); M.updateIdSwitchProgress(S.currentFrame);
+                const H = await import('/ui/id-switch-highlight.js');
+                return { target: H.getIdSwitchHighlight(), bar: !!document.querySelector('#idSwitchPanel .id-switch-row.is-current .id-switch-phead') };
+            }, { START, W: WARMUP + secs });
+            log(`  idswitch: ${JSON.stringify(sel)}`);
+            await sleep(500);
+        }
         const info = await page.evaluate((n) => window.__bench.install(n), base);
         await page.evaluate((SPEED) => {
             window.__lucid.state.speedMultiplier = SPEED;
@@ -754,6 +779,8 @@ try {
             }
             window.__benchRestore = [];
             window.LUCID_PLAYBACK_LOOP = undefined;          // undo rvfcLoop
+            const s = window.__lucid.state.session;
+            if (s && s._idSwitch) { delete s._idSwitch; (await import('/ui/id-switch-modal.js')).refreshIdSwitchPanel(s); }   // undo idswitch
             for (const v of window.__lucid.state.views) {   // undo rafFallback's shadowing
                 const el = v.decoder && v.decoder._videoEl;
                 if (el && Object.prototype.hasOwnProperty.call(el, 'requestVideoFrameCallback')) delete el.requestVideoFrameCallback;

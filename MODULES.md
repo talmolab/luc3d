@@ -1490,7 +1490,13 @@ session graph that holds them.
   correction history. No frame materialization, so nothing hydrates or evicts.
   Returns `{entries, groups, frames}`. Guarded by the `swapIdentitiesForward
   (#172)` block in `tests/test-identity.js` and end to end by
-  `tests/e2e/identity-switch-propagates-to-end.mjs`;
+  `tests/e2e/identity-switch-propagates-to-end.mjs`. It is
+  `swapIdentitiesInRange(startFrame, Infinity, …)`;
+  `swapIdentitiesInRange(startFrame, endFrame, identityA, identityB)` — the same
+  swap bounded on BOTH sides (inclusive), what fixing a flagged ID switch does
+  (`ui/id-switch-modal.js`): the frames after the pair's switch-back are already
+  right. Its own inverse, which is how a fix is undone. Covered by
+  `tests/test-id-switch-fix.mjs` §3;
   `swapIdentitiesForwardInCamera(startFrame, cameraName, identityA, identityB)` —
   the **single-view** counterpart (luc3d #201). Same dense value swap, forward to
   the end of the project, but restricted to ONE camera: this is how an ID is
@@ -3169,7 +3175,12 @@ below `threshold`, continuing FORWARD while below `continueBelow`) yields one
 change point: its start (`kind: 'onset'`) when it reaches the session end, else
 the first unflagged encounter after it (`kind: 'end'`, in `changes`) when it
 starts the session; both for a middle run of 2+. Other members are repeats
-(`continues`). A change point within `followSeconds` after another of a different
+(`continues`). Each change point also names the other edge of its swapped
+stretch, which is what fixing it swaps: an onset's `switchBackAt` (the pair's
+encounter after the run — for a lone middle flag that encounter is no change
+point of its own — or null when the run reaches the end) and an 'end''s
+`switchedAt` (the run's first encounter, or null when the run starts the
+session). A change point within `followSeconds` after another of a different
 pair sharing an identity is its follow-on (`followOf`).
 
 **Calibration (2026-10-03).** Size: on the 5-mouse tail-mark recording
@@ -7936,7 +7947,8 @@ change point and repeat on the transport seekbar (`setSeekbarSwitchMarkers`, `ui
 **Key exports.** `runIdSwitchChecks({size?, image?, auto?, statusPrefix?,
 navigateToFrame?, inject?})`; `setIdSwitchNavigator(fn)` (ui-wiring registers
 `navigateToFrame` once, so rows stay clickable when the tracker started the
-check); `refreshIdSwitchPanel(session?)` (render the tab and put that session's
+check); `setIdSwitchRefresher(fn)` (ui-wiring registers the repaint run after a
+fix / undo — overlays, 3D, info panel, timeline — keeping this module a leaf); `refreshIdSwitchPanel(session?)` (render the tab and put that session's
 markers on the seekbar — called after a check, from `updateInfoPanel` and from
 `switchSession`); `openIdSwitchPanel()` (show the panel, if hidden, on the tab);
 `clearIdSwitchResults(session?)` (called by `runTrackingPass` before it relabels);
@@ -8005,13 +8017,25 @@ shows the whole interaction; **end ⇥** jumps to the end frame, and Next
 unreviewed uses the lead-in too. **The selected row's progress bar** pops up on
 selection and follows the viewer's frame (stepping, scrubbing, playback):
 0% at the landing frame (1 s before the close spell), the close spell — where a
-swap would happen — shaded amber in the middle, 100% at 1 s after the
-encounter's end; clamped outside that range. `updateIdSwitchProgress(frame)` is
+swap would happen — red in the middle, the lead-in and lead-out orange, 100% at
+1 s after the encounter's end; clamped outside that range. The section colours
+come from `ID_SWITCH_SECTION_RGB` (`ui/id-switch-highlight.js`), set inline.
+A **playhead** line (`.id-switch-phead`) marks the current frame at the fill's
+leading edge and stands 4 px proud of the bar, so the coloured track is an inner
+element (`.id-switch-ptrack`) that clips the fill and band to its rounded ends
+while the bar itself does not clip; both move in the same style write.
+**Clicking or dragging the bar goes to that frame** (`round(p0 + x·(p1 − p0))`),
+like the transport seekbar; a `::before` gives it a hit area 7 px taller on each
+side. It is a `pointerdown` on the list (window-level move/up listeners, the bar
+re-found on every move so a panel rebuilt mid-drag cannot strand it, repeats of
+the same frame skipped), and the click that ends the press is swallowed so it
+never re-lands the row on its lead-in. `updateIdSwitchProgress(frame)` is
 called from `ui/ui-wiring.js` `updateSeekbarVisual` on every frame change: one
 style write, and a no-op without a selected row (the bar element is looked up
 once per render/selection, not per frame). The same interval drives an
 **animated box around the pair in every camera view** (`ui/id-switch-highlight.js`,
-set by row selection and panel renders, advanced by `updateIdSwitchProgress`). A check run from the menu always opens the tab; an
+set by row selection and panel renders, advanced by `updateIdSwitchProgress`),
+which wears the colour of the bar section the frame is in. A check run from the menu always opens the tab; an
 automatic one only when it found something. The tab content is the panel's one
 scroller (the list has none of its own). With no results it says so and offers
 "Check by body size" / "Check by images…" (they click the menu items).
@@ -8021,16 +8045,33 @@ scroller (the list has none of its own). With no results it says so and offers
 and the tab button), not by importing ui-wiring. The module keeps its `-modal`
 name for the image check's progress dialog, which is still modal.
 
+**Fixing a switch.** The selected row shows **Fix switch…** under its bar. It
+opens a confirmation naming the frames (`idSwitchFixPlan`, `ui/id-switch-review.js`)
+and why each edge is where it is; Esc / Cancel / a click outside change nothing,
+and every keystroke stops at the dialog (capture phase) so no app shortcut acts
+under it. Confirming calls `Session.swapIdentitiesInRange` (every view), records
+the fix in `st.fixes`, renames the other rows the swap re-labels, ticks the row,
+marks the project dirty, repaints through the registered refresher and returns the
+view to the row's lead-in, so pressing play shows the corrected labels. The row
+then reads **Fixed** (not struck through) with the swapped frames and, on the
+LATEST fix only, **Undo fix** — later fixes may build on an earlier one, so only
+the last is exactly reversible; undo swaps the same frames back. A follow-on row's
+dialog says to fix the switch it follows first. Re-running a check forgets the
+fixes (the swaps stay): its rows were scored on the fixed labels, so an undo would
+rename them wrongly.
+
 **Imports from project modules.** `ui/app-state.js` (`state`, `timeline`,
 `getActiveSession`), `import-export/save-load.js` (`setStatus`),
 `ui/loading-overlay.js` (`showLoadingProgress`, `hideLoading`, `yieldToPaint`),
 `ui/settings.js` (`getTrackingThreshold`), `pose/id-switch-check.js`,
 `ui/image-embedder.js` (`hasWebGPU`, `createImageEmbedder`),
-`ui/id-switch-review.js` (row keys, change-point helpers, `linkIdSwitchResults`),
-`ui/id-switch-highlight.js` (`setIdSwitchHighlight`, `updateIdSwitchHighlight`).
+`ui/id-switch-review.js` (row keys, change-point helpers, `linkIdSwitchResults`,
+`idSwitchFixPlan`, `idSwitchFixFor`, `idSwitchRenameForFix`),
+`ui/id-switch-highlight.js` (`setIdSwitchHighlight`, `updateIdSwitchHighlight`,
+`refreshIdSwitchHighlight`, `ID_SWITCH_SECTION_RGB`).
 
 **Imported by.** `ui/ui-wiring.js` (`#menuCheckSizeSwitches`,
-`#menuCheckImageSwitches`, `setIdSwitchNavigator`, `updateIdSwitchProgress`), `pose/tracker.js` (the
+`#menuCheckImageSwitches`, `setIdSwitchNavigator`, `setIdSwitchRefresher`, `updateIdSwitchProgress`), `pose/tracker.js` (the
 automatic run, `clearIdSwitchResults`), `ui/info-panel.js` and
 `ui/sessions-panes.js` (`refreshIdSwitchPanel`).
 
@@ -8040,7 +8081,9 @@ Clear, one scroller),
 `tests/e2e/track-auto-size-switch-check.mjs` (after Track All / Track Frame Range),
 `tests/e2e/id-switch-image-check.mjs` (images with an injected embedder: "Both"
 merge, identical-size animals found by images only, Esc cancel, no WebGPU, menu,
-default off).
+default off), `tests/e2e/id-switch-fix.mjs` (Fix switch…: both start rules in the
+dialog, Esc / Cancel / shortcuts, the swap fixes exactly the crossed stretch, the
+row afterwards, the renamed follow-on, saved, Undo exact).
 
 ---
 
@@ -8060,14 +8103,36 @@ change point of the same pair within 1 s as `agree` — "Both");
 `serializeIdSwitchReview(session)` -> payload or `null` (no check results -> no
 key, so untouched projects keep their bytes); `ingestIdSwitchReview(session,
 payload)` (rebuilds `session._idSwitch`, re-links "Both"; ignores anything
-malformed, never throws).
+malformed, never throws); `idSwitchFixPlan(m, res, {currentFrame,
+totalFrames, window?})` -> `{key, partnerKey, nameA, nameB, from, to, start
+('current' | 'separate'), edge}` or null
+— what fixing row `m` swaps (see below); `idSwitchFixFor(st, m)` (the fix covering
+a row, its own or its partner's); `idSwitchRenameForFix(st, fix)` (renames the
+other pairs' rows inside a fixed stretch — an involution, keys follow).
+
+**What a fix swaps.** The boundary is the CURRENT frame whenever it is inside the
+row's window (`o.window` — in the app the whole progress bar, 1 s before the
+animals come close to 1 s after they separate), so the user puts it where they saw
+the labels flip by playing, stepping or clicking the bar; outside the window it
+falls back to e + 1 (where the animals separate). Without `o.window` the window is
+the close spell [s, e + 1]. An onset swaps from there to its `switchBackAt` encounter's last
+close frame, or the last frame; an 'end' swaps the stretch BEFORE it, from just
+after `switchedAt` (or frame 0) to the frame before its boundary. The change point
+at the other edge is the fix's `partnerKey` (the same stretch). Results restored
+from a file saved before the links existed pair by the nearest change point of
+the same pair on the right side. After a fix, every OTHER row in the stretch that
+names exactly one of the pair is about the animal that now carries the other
+name, so it is renamed (selecting it must still box the same animals); the fixed
+pair's own rows are not.
 
 **Format.** `{v: 1, checks: {size?|image?: {encounters, sampleHz, step, fps,
 fpsFromVideo, [imageHz, crops, cameras, model: {name, note}], points: [[frame,
 nameA, nameB, score (0.1), kind ('' | 'end'), followOf (frame | -1), continues
 (0 | 1), startFrame (the encounter's first close frame | -1; absent in files saved
-before it existed — they still open, rows then land on the end frame)], …]}},
-reviewed: [rowKey, …]}` — only what the tab and the timeline
+before it existed — they still open, rows then land on the end frame), link
+(`switchBackAt` / `switchedAt` | -1 for none; absent in older files)], …]}},
+reviewed: [rowKey, …], fixes?: [[key, partnerKey, nameA, nameB, from, to], …]}`
+(`fixes` oldest first, only when something was fixed) — only what the tab and the timeline
 draw; not the encounters or the fitted models. A restored check result has
 `restored: true` and `encounterCount` instead of `encounters`.
 
@@ -8078,6 +8143,7 @@ draw; not the encounters or the fitted models. A restored check result has
 
 **Coverage.** `tests/test-id-switch-check.mjs` (lossless reopen -> re-save,
 "Both" re-link, ticks, garbage tolerance, nothing written without results);
+`tests/test-id-switch-fix.mjs` (the links, the plans, renaming, fixes round trip);
 `tests/e2e/visibility-settings-roundtrip.mjs` (both writers, real reader).
 
 ---
@@ -8088,9 +8154,13 @@ draw; not the encounters or the fitted models. A restored check result has
 every camera view, while the viewer's frame is inside that row's interval (1 s
 before they come close -> 1 s after they separate — the row's progress-bar span).
 
-**Key exports.** `setIdSwitchHighlight({nameA, nameB, p0, p1} | null)`;
-`updateIdSwitchHighlight(frame)` (every frame change, via
-`ui/id-switch-modal.js` `updateIdSwitchProgress`); `getIdSwitchHighlight()`.
+**Key exports.** `setIdSwitchHighlight({nameA, nameB, p0, s, e, p1} | null)`
+(`s..e` is the close spell); `updateIdSwitchHighlight(frame)` (every frame
+change, via `ui/id-switch-modal.js` `updateIdSwitchProgress`);
+`refreshIdSwitchHighlight()` (recompute the boxes at the current frame after the
+identities changed — a fix); `getIdSwitchHighlight()`; `ID_SWITCH_SECTION_RGB` (`{lead, close}` as `r, g, b`
+strings — orange / red) and `idSwitchSection(target, frame)` (`'close'` over
+`[s, e]`, else `'lead'`).
 
 **How.** Draws on its OWN canvas per view (`.id-switch-canvas`, appended to the
 view's `.canvas-wrapper`, `pointer-events: none`), backing size video × zoom like
@@ -8099,11 +8169,20 @@ overlay redraw paths (which clear the overlay canvas every frame) never touch it
 and the overlay-video export does not include it. A `requestAnimationFrame` loop
 runs ONLY while the frame is in the interval — the outline marches (dash offset)
 and pulses even when paused — and stops after clearing the canvases once outside
-it. Boxes are recomputed only when the frame changes: per camera, the instances
+it. It is kept cheap because it runs during playback on every view: a view is
+repainted when the frame changes and otherwise at most every `ANIM_MS` (33 ms; the
+animation is timed from the clock, so its speed does not depend on the rate), and
+a repaint clears only the rectangle the previous one drew (`_dirty`) instead of
+the whole video-sized canvas — repainting all eight full canvases at the display
+rate (120 Hz) was twice the video's own rate. Boxes are recomputed only when the frame changes: per camera, the instances
 whose identity NAME is one of the pair at that frame (per-frame track identity
 first, then the group's `identityId`; unlinked instances via
 `getIdentityIdForUnlinkedInstance`), one box around both (or the one visible),
-labelled "id_a ↔ id_b" in the identities' colours. Lines, padding and text are
+labelled "id_a ↔ id_b" in the identities' colours. The outline wears the
+colour of the row's progress-bar SECTION the frame is in — orange over the
+lead-in and lead-out, red over the close spell — from `ID_SWITCH_SECTION_RGB`,
+which the bar (`ui/id-switch-modal.js` `progressHtml`) also reads, so the two
+cannot drift. Lines, padding and text are
 sized in SCREEN pixels (canvas width / (layout width × zoom)), so a small tile
 of a large video stays readable. Lazy projects: nothing for a non-resident frame.
 
@@ -8113,8 +8192,12 @@ of a large video stays readable. Lazy projects: nothing for a non-resident frame
 **Imported by.** `ui/id-switch-modal.js`.
 
 **Coverage.** `tests/e2e/id-switch-highlight.mjs` (two real views: box around
-the pair and not the third animal, animates while paused, cleared past the
-interval and redrawn on return, Clear stops it).
+the pair and not the third animal, animates while paused, orange in the
+lead-in / red in the close spell / orange in the lead-out with the bar's
+sections matching, the bar's playhead and click / drag seeking, cleared past the
+interval and redrawn on return, a moved box leaves nothing behind, Clear stops
+it); `tests/e2e/_bench-playback.mjs` scenario `idswitch` (playback cost on a real
+project with a row selected over the whole run).
 
 ---
 
@@ -9287,8 +9370,9 @@ stopping at the last frame; the step transport buttons/keys stop it first.
   Tracks ▸ **Check ID Switches (Body Size)…** (`menuCheckSizeSwitches`) calls
   `runIdSwitchChecks({size: true, navigateToFrame})`, and Tracks ▸ **Check ID
   Switches (Images)…** (`menuCheckImageSwitches`) `runIdSwitchChecks({image: true,
-  navigateToFrame})`, from `ui/id-switch-modal.js`; `setIdSwitchNavigator` is
-  called once at setup.
+  navigateToFrame})`, from `ui/id-switch-modal.js`; `setIdSwitchNavigator` and
+  `setIdSwitchRefresher` (the repaint after the tab fixes a switch) are called
+  once at setup.
 - Color-by toggle: the "Color by" Tracks/ID control lives in the top
   toolbar (buttons `colorByTracks` / `colorById`, next to the Errors
   checkbox), not the Tracks menu. `updateColorByToggle()` reflects

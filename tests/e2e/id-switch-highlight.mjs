@@ -11,7 +11,16 @@
  *     `.id-switch-canvas` around id_0 + id_1 — and nothing near id_2.
  *  2. It animates while paused (the outline changes between two moments).
  *  3. Stepping past the interval clears every canvas; coming back redraws.
- *  4. "Clear" in the tab stops it.
+ *  4. The box wears the colour of the progress-bar section the frame is in:
+ *     orange over the lead-in (10) and lead-out (51), red over the close spell
+ *     (40..50) — and the bar itself is orange | red | orange.
+ *     The bar's playhead line sits on the fill's leading edge at every frame and
+ *     stands proud of the bar.
+ *  5. Clicking the bar goes to that frame (also a few px above its 6 px), dragging
+ *     along it scrubs, and neither sends the row back to its lead-in.
+ *  6. When the animals move between frames, the old box is cleared completely (a
+ *     repaint clears only the rectangle the last one drew, not the whole canvas).
+ *  7. "Clear" in the tab stops it.
  *
  * Run: node tests/e2e/id-switch-highlight.mjs     (HL_SHOT=/path.png saves a screenshot)
  */
@@ -86,14 +95,17 @@ try {
             const c = v.wrapper && v.wrapper.querySelector('.id-switch-canvas');
             if (!c) return { canvas: false };
             const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data, sx = c.width / 640, sy = c.height / 480;
-            let pair = 0, far = 0, total = 0, hash = 0;
+            let pair = 0, far = 0, total = 0, hash = 0, orange = 0, red = 0;
             for (let y = 0; y < c.height; y++) for (let x = 0; x < c.width; x++) {
                 const i = (y * c.width + x) * 4; if (!d[i + 3]) continue;
                 total++; hash = (hash * 31 + x * 7 + y + d[i]) >>> 0;
+                const r = d[i], g = d[i + 1], b = d[i + 2];
+                // classify by HUE, not level: the pulse and the dark halo under the stroke darken it
+                if (d[i + 3] > 64 && r > 100 && b < 0.4 * r) { if (g > 0.55 * r && g < 0.85 * r) orange++; else if (g < 0.4 * r) red++; }
                 const vx = x / sx, vy = y / sy;
                 if (vx < 300 && vy < 320) pair++; else if (vx > 450 && vy > 300) far++;
             }
-            return { canvas: true, inWrapper: c.parentNode === v.wrapper, pair, far, total, hash };
+            return { canvas: true, inWrapper: c.parentNode === v.wrapper, pair, far, total, hash, orange, red };
         });
     });
 
@@ -110,11 +122,59 @@ try {
     await page.waitForTimeout(250);
     const c2 = await census();
     check(c2.every((v, i) => v.hash !== c1[i].hash), 'the outline moves while paused (marching ants)');
+    check(c1.every(v => v.orange > 100 && v.orange > 5 * v.red),
+        `lead-in (frame 10): the box is orange (${JSON.stringify(c1.map(v => [v.orange, v.red]))})`);
+    const bar = await page.evaluate(() => {
+        const b = document.querySelector('#idSwitchPanel .id-switch-row.is-current .id-switch-pbar');
+        return b && { track: b.querySelector('.id-switch-ptrack').style.backgroundImage, band: b.querySelector('.id-switch-pband').style.background };
+    });
+    check(!!bar && /rgba\(255, 176, 32/.test(bar.track) && /rgba\(240, 60, 50/.test(bar.band),
+        `the bar is orange lead-in/out around a red close spell (${JSON.stringify(bar)})`);
+
+    // ---- 5. click / drag on the bar (interval 10..80): x of t across it -> frame round(10 + 70 t)
+    const barBox = await page.locator('#idSwitchPanel .id-switch-row.is-current .id-switch-pbar').boundingBox();
+    const atT = t => barBox.x + t * barBox.width, midY = barBox.y + barBox.height / 2;
+    const cur = () => page.evaluate(() => window.__lucid.state.currentFrame);
+    await page.mouse.click(atT(0.25), midY);
+    await page.waitForTimeout(100);
+    check(await cur() === 28, `clicking a quarter of the way along goes to frame 28 (${await cur()})`);
+    const stillSel = await page.evaluate(() => !!document.querySelector('#idSwitchPanel .id-switch-row.is-current .id-switch-pbar'));
+    check(stillSel, 'the row stays selected with its bar (the click is not a row click)');
+    await page.mouse.click(atT(0.5), barBox.y - 4);
+    await page.waitForTimeout(100);
+    check(await cur() === 45, `a click 4 px above the bar still lands, halfway: frame 45 (${await cur()})`);
+    await page.mouse.move(atT(0.25), midY); await page.mouse.down();
+    await page.mouse.move(atT(0.6), midY + 20, { steps: 5 });                   // drifting off the bar keeps scrubbing
+    const mid = await cur();
+    await page.mouse.move(atT(0.75), midY, { steps: 5 }); await page.mouse.up();
+    await page.waitForTimeout(100);
+    const headAt = await page.evaluate(() => document.querySelector('#idSwitchPanel .id-switch-row.is-current .id-switch-phead').style.left);
+    check(mid === 52 && await cur() === 63 && headAt === '75.71%',
+        `dragging scrubs: 52 mid-drag, 63 on release, playhead at 75.71% (${mid}, ${await cur()}, ${headAt})`);
 
     // ---- 3. step past the interval (frame 80 is its last) -> cleared; back in -> redrawn
     await page.click('#idSwitchPanel .id-switch-row .id-switch-end');               // frame 50, in range
     await page.waitForFunction(() => window.__lucid.state.currentFrame === 50, null, { timeout: 10000 }).catch(() => {});
-    for (let i = 0; i < 31; i++) await page.keyboard.press('ArrowRight');
+    await page.waitForTimeout(150);
+    const close = await census();
+    const head = await page.evaluate(() => {
+        const b = document.querySelector('#idSwitchPanel .id-switch-row.is-current .id-switch-pbar');
+        const fill = b.querySelector('.id-switch-pfill').getBoundingClientRect(), h = b.querySelector('.id-switch-phead');
+        const bar = b.getBoundingClientRect(), r = h.getBoundingClientRect();
+        return { left: h.style.left, width: b.querySelector('.id-switch-pfill').style.width,
+                 centre: r.left + r.width / 2, edge: fill.right, above: bar.top - r.top, below: r.bottom - bar.bottom };
+    });
+    check(head.left === head.width && head.left === '57.14%',
+        `frame 50: the playhead is at the fill's edge, 40/70 of the way (${head.left} vs fill ${head.width})`);
+    check(head.above >= 3 && head.below >= 3, `the playhead stands proud of the bar (${head.above}px above, ${head.below}px below)`);
+    check(close.every(v => v.red > 100 && v.red > 5 * v.orange),
+        `close spell (frame 50): the box is red (${JSON.stringify(close.map(v => [v.orange, v.red]))})`);
+    await page.keyboard.press('ArrowRight');
+    await page.waitForTimeout(150);
+    const after = await census();
+    check(after.every(v => v.orange > 100 && v.orange > 5 * v.red),
+        `lead-out (frame 51): the box is orange again (${JSON.stringify(after.map(v => [v.orange, v.red]))})`);
+    for (let i = 0; i < 30; i++) await page.keyboard.press('ArrowRight');
     await page.waitForFunction(() => window.__lucid.state.currentFrame === 81, null, { timeout: 10000 }).catch(() => {});
     await page.waitForTimeout(150);
     const out = await census();
@@ -124,7 +184,33 @@ try {
     const back = await census();
     check(back.every(v => v.pair > 200), 'stepping back into the interval (frame 80) draws it again');
 
-    // ---- 4. Clear stops it
+    // ---- 6. the box moves: frame 79 has id_0 + id_1 250 px to the right -> nothing left where they were
+    await page.evaluate(async () => {
+        const pd = await import('/pose/pose-data.js'); const S = window.__lucid.state.session;
+        const groups = S.instanceGroups.get(79);
+        for (const g of groups.slice(0, 2)) for (const cam of ['camA', 'camB']) {
+            const old = g.getInstance(cam), pts = [];
+            for (let k = 0; k < old.numNodes; k++) pts.push([old.getX(k) + 250, old.getY(k)]);
+            g.addInstance(cam, new pd.Instance(pts, null, 'predicted', 0.9));
+        }
+    });
+    await page.keyboard.press('ArrowLeft');                                           // 80 -> 79
+    await page.waitForFunction(() => window.__lucid.state.currentFrame === 79, null, { timeout: 10000 }).catch(() => {});
+    await page.waitForTimeout(200);
+    const moved = await page.evaluate(() => window.__lucid.state.views.map(v => {
+        const c = v.wrapper.querySelector('.id-switch-canvas');
+        const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data, sx = c.width / 640;
+        let oldPlace = 0, newPlace = 0;
+        for (let y = 0; y < c.height; y++) for (let x = 0; x < c.width; x++) {
+            if (!d[(y * c.width + x) * 4 + 3]) continue;
+            if (x / sx < 300) oldPlace++; else newPlace++;
+        }
+        return { oldPlace, newPlace };
+    }));
+    check(moved.every(v => v.oldPlace === 0 && v.newPlace > 200),
+        `the box moved with them and nothing is left where it was (${JSON.stringify(moved)})`);
+
+    // ---- 7. Clear stops it
     await page.click('#idSwitchClear');
     await page.waitForTimeout(150);
     const cleared = await census();
