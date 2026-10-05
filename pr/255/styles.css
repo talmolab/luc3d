@@ -1,0 +1,6763 @@
+/* ==========================================================================
+   Multi-View Pose Proofreading GUI - Dark Theme Stylesheet
+   ========================================================================== */
+
+/* --------------------------------------------------------------------------
+   Reset & Base
+   -------------------------------------------------------------------------- */
+
+*,
+*::before,
+*::after {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+/* No native up/down spinner on ANY number field, app-wide.
+   Chromium paints the spinner inside the field, on top of the text, so on the
+   narrow numeric inputs this app uses it crowds or clips the value the moment
+   the pointer is over it. Every field here is typed into, not clicked up one
+   step at a time, and the arrow keys still step the value natively.
+   This was already being done twice, per-class (`.no-spinner` for the 3D
+   viewer fields, `.settings-num-input` for Settings); both scoped copies are
+   gone now that the base rule covers every field. Deliberately does NOT touch
+   `.vis3d-stepper`, the 3D viewer's hand-built replacement arrows — those are
+   a real widget, not browser chrome. */
+input[type="number"] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
+input[type="number"]::-webkit-outer-spin-button,
+input[type="number"]::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  appearance: none;
+  margin: 0;
+}
+
+:root {
+  --bg-primary: #1a1a1a;
+  --bg-secondary: #222222;
+  --bg-tertiary: #2a2a2a;
+  --bg-button: #333333;
+  --bg-button-hover: #555555;
+  --text-primary: #e0e0e0;
+  --text-secondary: #aaaaaa;
+  --text-muted: #777777;
+  --accent: #667eea;
+  --accent-hover: #7b91f5;
+  --accent-dim: rgba(102, 126, 234, 0.25);
+  /* Alias, because six declarations already reference `--accent-color` and it
+     was never defined anywhere. An undefined custom property is "invalid at
+     computed-value time", which does NOT fall back to an earlier declaration —
+     the property resolves to its INITIAL value. So `.multi-frame-modal
+     button.primary` and `.range-slider-fill` were painting `transparent`
+     backgrounds (measured), i.e. every modal's primary button and the Export
+     Video Overlays range slider's fill bar were invisible. Aliased rather than
+     hard-coded so the two can never drift apart. */
+  --accent-color: var(--accent);
+  --border-color: #3a3a3a;
+  --border-light: #444444;
+  --error-color: #e74c3c;
+  --warning-color: #f39c12;
+  --success-color: #2ecc71;
+  --info-panel-width: 300px;
+  --controls-bar-height: 56px;
+  --status-bar-height: 28px;
+  --menu-bar-height: 32px;
+  --toolbar-height: 36px;
+  --timeline-height: 200px;
+  --transition-fast: 150ms ease;
+  --transition-normal: 250ms ease;
+}
+
+html,
+body {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+  font-size: 14px;
+  line-height: 1.4;
+  color: var(--text-primary);
+  background: var(--bg-primary);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* --------------------------------------------------------------------------
+   Scrollbar Styling
+   -------------------------------------------------------------------------- */
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--bg-secondary);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--bg-button-hover);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
+}
+
+/* Firefox */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--bg-button-hover) var(--bg-secondary);
+}
+
+/* --------------------------------------------------------------------------
+   App Container
+   Layout: menu-bar -> main-content -> toolbar -> timeline -> controls-bar -> status-bar
+   -------------------------------------------------------------------------- */
+
+.app-container {
+  display: flex;
+  flex-direction: column;
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+  background: var(--bg-primary);
+}
+
+/* --------------------------------------------------------------------------
+   Menu Bar
+   -------------------------------------------------------------------------- */
+
+.menu-bar {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 0;
+  height: var(--menu-bar-height);
+  background: var(--bg-tertiary);
+  border-bottom: 1px solid var(--border-color);
+  flex-shrink: 0;
+  user-select: none;
+}
+
+.menu-item {
+  position: relative;
+  padding: 4px 12px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+
+.menu-item:hover {
+  background: var(--bg-button);
+  color: var(--text-primary);
+}
+
+.menu-item.active,
+.menu-item.open {
+  background: var(--accent-dim);
+  color: var(--accent);
+}
+
+/* Docs / Settings as direct menu-bar buttons (#138): a menu-item with no
+   dropdown, so it acts on click. */
+.menu-bar-button {
+  cursor: pointer;
+}
+
+.menu-dropdown {
+  display: none;
+  position: absolute;
+  top: 100%;
+  left: 0;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+  min-width: 200px;
+  z-index: 100;
+  padding: 4px 0;
+}
+
+.menu-dropdown-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 16px;
+  font-size: 13px;
+  color: var(--text-primary);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background var(--transition-fast);
+}
+
+.menu-dropdown-item:hover {
+  background: var(--accent-dim);
+}
+
+.menu-dropdown-item .trail-check {
+  display: inline-block;
+  width: 14px;
+  color: var(--accent, #4ea1ff);
+  font-weight: bold;
+}
+
+/* Nested submenu (e.g. Tracks ▸ Node Trails ▸ Off/10/50/100). The submenu is a
+   .menu-dropdown, so the global menu-close handler stamps it with an inline
+   display:none — the :hover rule needs !important to win over that. */
+.menu-dropdown-item.has-submenu {
+  position: relative;
+}
+
+.menu-dropdown-item.has-submenu .submenu-arrow {
+  margin-left: 24px;
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.menu-dropdown .submenu {
+  top: -5px;                /* align first submenu item with the parent row */
+  left: 100%;
+  min-width: 140px;
+}
+
+.menu-dropdown-item.has-submenu:hover > .submenu {
+  display: block !important;
+}
+
+.menu-dropdown-item .shortcut {
+  margin-left: 24px;
+  font-size: 11px;
+  color: var(--text-muted);
+  font-family: "SF Mono", "Fira Code", "Cascadia Code", monospace;
+}
+
+.menu-dropdown-item.disabled {
+  color: var(--text-muted);
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.menu-dropdown-item.disabled:hover {
+  background: transparent;
+}
+
+.menu-has-submenu {
+  position: relative;
+}
+
+.menu-submenu {
+  display: none;
+  position: absolute;
+  left: 100%;
+  top: 0;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+  min-width: 160px;
+  z-index: 101;
+  padding: 4px 0;
+}
+
+.menu-has-submenu:hover > .menu-submenu {
+  display: block;
+}
+
+.menu-submenu-item {
+  padding: 5px 14px;
+  font-size: 12px;
+  color: var(--text-primary);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.menu-submenu-item:hover {
+  background: var(--accent-dim);
+}
+
+.menu-submenu-item.menu-submenu-new {
+  color: var(--accent-color);
+  border-top: 1px solid var(--border-color);
+  margin-top: 2px;
+  padding-top: 6px;
+}
+
+.menu-separator {
+  height: 1px;
+  background: var(--border-color);
+  margin: 4px 0;
+}
+
+/* --------------------------------------------------------------------------
+   Main Content (video grid + 3D viewport + info panel)
+   -------------------------------------------------------------------------- */
+
+.main-content {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.video-grid-section {
+  flex: 1;
+  display: flex;
+  flex-direction: row;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* --------------------------------------------------------------------------
+   Session Strip sidebar (far left)
+   -------------------------------------------------------------------------- */
+
+/* Session strip sidebar (far left) */
+.session-strip {
+    width: 64px;
+    min-width: 40px;
+    display: flex;
+    flex-direction: column;
+    background: var(--bg-secondary);
+    border-right: 1px solid var(--border-color);
+    flex-shrink: 0;
+    overflow: hidden;
+    transition: width 0.15s ease, opacity 0.15s ease;
+    position: relative;
+}
+
+.session-strip-resize {
+    position: absolute;
+    top: 0;
+    right: 0;
+    width: 4px;
+    height: 100%;
+    cursor: col-resize;
+    background: var(--border-color);
+    opacity: 0;
+    transition: opacity 0.15s;
+    z-index: 5;
+}
+
+.session-strip-resize:hover,
+.session-strip-resize.dragging {
+    opacity: 1;
+}
+
+.session-strip.session-strip-hidden {
+    width: 0;
+    min-width: 0;
+    border-right: none;
+    opacity: 0;
+    pointer-events: none;
+}
+
+#sessionHoverZone {
+    position: fixed;
+    left: 0;
+    top: 0;
+    width: 6px;
+    height: 100%;
+    z-index: 9999;
+}
+
+.session-strip-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 4px 0;
+}
+
+.session-strip-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 4px;
+    margin: 4px 4px;
+    cursor: pointer;
+    border-radius: 4px;
+    border: 2px solid var(--border-color);
+    transition: background var(--transition-fast), border-color var(--transition-fast);
+    position: relative;
+}
+
+.session-strip-item:hover {
+    background: var(--bg-button);
+}
+
+.session-strip-item.active {
+    background: var(--accent-dim);
+    border-color: var(--accent);
+}
+
+.session-strip-icon {
+    width: 32px;
+    height: 24px;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+}
+
+.session-strip-icon .cam-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--text-muted);
+}
+
+.session-strip-item.active .cam-dot {
+    background: var(--accent);
+}
+
+.session-strip-label {
+    font-size: 8px;
+    color: var(--text-muted);
+    margin-top: 2px;
+    max-width: 40px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    text-align: center;
+}
+
+.session-strip-add {
+    width: 32px;
+    height: 24px;
+    margin: 4px auto 8px;
+    background: var(--bg-button);
+    border: 1px dashed var(--border-color);
+    border-radius: 4px;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 14px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.session-strip-add:hover {
+    background: var(--bg-button-hover);
+    border-color: var(--border-light);
+    color: var(--text-primary);
+}
+
+/* --------------------------------------------------------------------------
+   View Strip (left sidebar with video thumbnails)
+   -------------------------------------------------------------------------- */
+
+.view-strip {
+  width: 64px;
+  min-width: 64px;
+  background: var(--bg-secondary);
+  border-right: 1px solid var(--border-color);
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  user-select: none;
+}
+
+.view-strip-header {
+  padding: 6px 0;
+  text-align: center;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  color: var(--text-muted);
+  border-bottom: 1px solid var(--border-color);
+  flex-shrink: 0;
+}
+
+.view-strip-list {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 4px 0;
+}
+
+.view-strip-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 6px 4px;
+  margin: 2px 4px;
+  border-radius: 4px;
+  cursor: grab;
+  transition: background var(--transition-fast);
+  position: relative;
+}
+
+.view-strip-item:hover {
+  background: var(--bg-button);
+}
+
+.view-strip-item.active {
+  background: var(--accent-dim);
+  outline: 1px solid var(--accent);
+}
+
+.view-strip-item.strip-selected {
+  outline: 2px solid rgba(255, 221, 68, 0.5);
+  background: rgba(255, 221, 68, 0.1);
+}
+
+.view-strip-item.strip-multi-selected {
+  outline: 2px solid rgba(100, 180, 255, 0.7);
+  background: rgba(100, 180, 255, 0.15);
+}
+
+.view-strip-item.dragging {
+  opacity: 0.5;
+}
+
+.view-strip-item .strip-thumb {
+  width: 48px;
+  height: 36px;
+  background: #111;
+  border-radius: 3px;
+  border: 1px solid var(--border-color);
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.view-strip-item .strip-thumb canvas {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.view-strip-item .strip-label {
+  font-size: 9px;
+  color: var(--text-secondary);
+  margin-top: 3px;
+  text-align: center;
+  max-width: 56px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.view-strip-item .strip-status {
+  position: absolute;
+  top: 4px;
+  right: 6px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--success-color);
+}
+
+.view-strip-item .strip-status.in-dock {
+  background: var(--accent);
+}
+
+/* --------------------------------------------------------------------------
+   Video Dock (main viewing area)
+   -------------------------------------------------------------------------- */
+
+.video-dock {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  position: relative;
+}
+
+.video-dock-empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  font-size: 13px;
+  pointer-events: none;
+  z-index: 1;
+}
+
+.video-dock-empty.hidden {
+  display: none;
+}
+
+.dock-empty-icon {
+  font-size: 36px;
+  margin-bottom: 8px;
+  opacity: 0.4;
+}
+
+/* --------------------------------------------------------------------------
+   3D Viewport
+   -------------------------------------------------------------------------- */
+
+.viewport3d-container {
+  width: 400px;
+  background: #1a1a1a;
+  border-left: 1px solid var(--border-color);
+  flex-shrink: 0;
+  position: relative;
+  overflow: hidden;
+  transition: width var(--transition-normal);
+}
+
+.viewport3d-message {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  font-size: 13px;
+  text-align: center;
+  padding: 20px;
+  z-index: 2;
+  pointer-events: none;
+}
+
+.viewport3d-message.hidden {
+  display: none;
+}
+
+.viewport3d-container.collapsed {
+  width: 0;
+  overflow: hidden;
+  border-left: none;
+}
+
+.viewport3d-container canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.viewport3d-show-cam-btn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 10;
+  padding: 4px 10px;
+  font-size: 11px;
+  background: rgba(30, 30, 30, 0.85);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+
+.viewport3d-show-cam-btn:hover {
+  background: rgba(50, 50, 50, 0.95);
+  color: var(--text-primary);
+}
+
+/* --------------------------------------------------------------------------
+   Dockview Integration
+   -------------------------------------------------------------------------- */
+
+.video-dock .dv-dockview {
+  width: 100%;
+  height: 100%;
+}
+
+.dockview-theme-abyss {
+  --dv-background-color: #1a1a1a;
+  --dv-activegroup-visiblepanel-tab-background-color: #2a2a2a;
+  --dv-activegroup-hiddenpanel-tab-background-color: #222222;
+  --dv-inactivegroup-visiblepanel-tab-background-color: #252525;
+  --dv-inactivegroup-hiddenpanel-tab-background-color: #1e1e1e;
+  --dv-tab-font-size: 11px;
+  --dv-paneview-header-border-color: #3a3a3a;
+  --dv-separator-border: #3a3a3a;
+}
+
+.dv-dockview .video-cell {
+  position: absolute;
+  inset: 0;
+}
+
+/* Bypass dockview panel activation — allow direct interaction in any panel */
+.dv-dockview .dv-content-container {
+  pointer-events: none;
+}
+.dv-dockview .dv-content-container > * {
+  pointer-events: auto;
+}
+
+/* --------------------------------------------------------------------------
+   "Export Video Overlays" composition dock (#ovDock)
+   --------------------------------------------------------------------------
+   The tab band is OVERLAID on the tile instead of occupying its own row above
+   it. dockview lays a group out as `[tabs][content]` in a column flexbox
+   (`.dv-groupview`), so a 35px band cost 35px of VIDEO per grid ROW — on a
+   two-row composition that is ~8% of the dock spent on chrome, and the tiles
+   were letterboxed to pay for it. Shortening the band and pulling the content
+   container back up over it by exactly the band's height gives the content the
+   group's FULL height, so the tile — and its canvas backing store, resized by
+   `tileResizeObserver` — gets every pixel; the name + close X then float over
+   the top-left corner of the video.
+
+   Why this and NOT `group.model.header.hidden = true`: `.dv-tab` IS dockview's
+   drag source (`Tab` sets `draggable` on that element), so hiding the band
+   removes the only way to rearrange tiles by dragging, and takes the close X
+   with it. Rearranging is the whole point of this dock — `captureLayout()`
+   reads the arrangement off the DOM and it IS the exported frame. The band
+   stays real, just repositioned.
+
+   `position: relative` + `z-index` is load-bearing, not decoration: the tile's
+   video/overlay canvases are `position: absolute`, so without it they paint
+   OVER the band and swallow every click on the tab.
+
+   Scoped to `#ovDock`. The `.dockview-theme-abyss` block above is shared with
+   the MAIN WINDOW's video dock (ui/sessions-panes.js), which wants its normal
+   35px tabs. The id also supplies the specificity: styles.css is loaded BEFORE
+   the pinned dockview stylesheet (index.html), so a class-only override loses.
+
+   The custom properties are declared on `.dv-groupview`, NOT on `#ovDock`:
+   dockview puts the theme class on its own `.dv-shell` INSIDE the container, so
+   a value set on `#ovDock` is overridden by the theme's declaration on that
+   descendant. Declaring at or below the shell wins.
+   -------------------------------------------------------------------------- */
+
+#ovDock .dv-groupview {
+  --dv-tabs-and-actions-container-height: 20px;
+  --dv-tabs-and-actions-container-font-size: 10px;
+  /* Nothing behind the tabs — the video shows through the band. */
+  --dv-tabs-and-actions-container-background-color: transparent;
+  /* The tab itself becomes a translucent chip so the name stays readable over
+     both bright and dark video. Set through the theme's own variables so no
+     `!important` is needed to beat the dockview stylesheet. */
+  --dv-activegroup-visiblepanel-tab-background-color: rgba(0, 0, 0, 0.55);
+  --dv-inactivegroup-visiblepanel-tab-background-color: rgba(0, 0, 0, 0.45);
+  --dv-activegroup-visiblepanel-tab-color: #ffffff;
+  --dv-inactivegroup-visiblepanel-tab-color: #e0e0e0;
+}
+
+#ovDock .dv-tabs-and-actions-container {
+  position: relative;
+  z-index: 2;
+}
+
+#ovDock .dv-groupview > .dv-content-container {
+  margin-top: calc(-1 * var(--dv-tabs-and-actions-container-height));
+}
+
+/* Legibility for the case where the chip sits over a bright frame. */
+#ovDock .dv-tab {
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.9);
+  /* Floor for the drag hit area. With the name hidden the tab's natural width is
+     49px, so this never binds today — it is a guard: `.dv-tab` IS dockview's drag
+     source, and a future bump that dropped the tab's own padding must not leave a
+     chip too small to grab. 44px is the conventional minimum pointer target. */
+  min-width: 44px;
+}
+
+/* ---- The tab shows the X, never the name --------------------------------
+   `Layers ▸ Render Video Names` burns the camera name onto the TILE
+   (`drawViewNameLabel`, ui/overlays.js) at the TOP-LEFT — the same corner and the
+   same 20px band this chip occupies. Two texts in one place is a ghost, not a
+   label: measured on a 259px tile the caption inks x 5..45 while the tab text
+   starts at x 7, so a short name printed twice a few pixels apart and a long one
+   was unreadable. So the tab never renders its title, in either state:
+     layer ON  -> the name comes from the burned-in caption, which is the copy
+                  that actually reaches the .mp4;
+     layer OFF -> the name comes from HOVER (below), so the composition never
+                  shows a name the export will not carry.
+
+   `order: 2` puts the zero-width title AFTER the close X instead of before it, so
+   the hover reveal grows the chip to the RIGHT and the X does not move. A control
+   that jumps out from under the cursor is a bug; the X sits 19px from the tile's
+   left edge in all four (layer on/off x hover/not) states.
+
+   The `padding-left` is the "little space to the left of the X": 19px of bare
+   `.dv-tab` surface, which is the drag source, so a tile can still be picked up and
+   rearranged. (dockview's `.dv-void-container` fills the rest of the band and is
+   `draggable` too, so this is the guarantee rather than the only handle.) */
+#ovDock .dv-default-tab {
+  padding-left: 12px;
+}
+
+#ovDock .dv-default-tab-content {
+  order: 2;
+  flex: 0 0 auto;
+  width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+/* Layer OFF: the hovered tile — and only that tile — names itself, so the user can
+   still tell which video is which. The class is set by `applyTabNameMode()`
+   (ui/overlay-export-modal.js).
+
+   Keyed off `.dv-groupview:hover`, NOT the tile element: the tab band is a SIBLING
+   of `.dv-content-container`, so `[data-view-name]:hover` goes FALSE the moment the
+   pointer moves onto the band — the label would flicker off exactly as the user
+   reaches for the X (both measured in a browser probe). Unaffected by
+   `.dv-dockview .dv-content-container { pointer-events: none }` above: that stops
+   the container being a hit TARGET; `:hover` still applies to the ancestors of
+   whichever descendant is hit. */
+#ovDock.ov-hover-tab-names .dv-groupview:hover .dv-default-tab-content {
+  width: auto;
+  padding-left: 5px;
+}
+
+/* The 3D tile keeps its name in every state: it has no overlay canvas, so it never
+   gets a burned-in caption, and with the layer ON nothing else would name it. The
+   selector mirrors `TILE_3D` in ui/overlay-export-layout.js. Its OWN rule, not a
+   comma-arm of the hover rule above: a browser without `:has()` drops the entire
+   rule a failing selector appears in, and that must not take the hover reveal with
+   it. */
+#ovDock .dv-groupview:has(> .dv-content-container [data-view-name="__3d__"]) .dv-default-tab-content {
+  width: auto;
+  padding-left: 5px;
+}
+
+/* Layer ON: drop the X one band-height so it does not sit ON the caption.
+   The burned-in caption starts ~4px from the tile's left edge and its width follows
+   the NAME, while the X is pinned at 19px — so anything longer than about three
+   characters collided ("topL" had its L behind the glyph). A fixed left padding
+   cannot clear a variable-width caption, so the X moves down instead of across, and
+   the two stack: caption on the first line, X just under it.
+
+   `transform` deliberately, not margin/top: it does not affect layout, so the
+   content container still starts at the group's top edge and the tile keeps the full
+   height that the whole overlaid-band change bought.
+
+   Scoped to `:not(.ov-hover-tab-names)` — i.e. only when the layer is ON and a
+   caption actually exists. With the layer OFF there is nothing to collide with, and
+   the band stays where the pointer expects it. */
+#ovDock:not(.ov-hover-tab-names) .dv-tabs-and-actions-container {
+  transform: translateY(var(--dv-tabs-and-actions-container-height));
+}
+
+/* --------------------------------------------------------------------------
+   Video Cell
+   -------------------------------------------------------------------------- */
+
+.video-cell {
+  position: relative;
+  overflow: hidden;
+  background: #111111;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.video-cell .canvas-wrapper {
+  position: relative;
+  display: inline-block;
+  max-width: 100%;
+  max-height: 100%;
+  line-height: 0;
+}
+
+.video-cell .canvas-wrapper canvas {
+  display: block;
+  max-width: 100%;
+  max-height: 100%;
+}
+
+.video-cell .canvas-wrapper .overlay-canvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: auto;
+  cursor: default;
+}
+
+/* View label (top-left corner) */
+.video-cell .view-label {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  padding: 3px 10px;
+  background: rgba(0, 0, 0, 0.7);
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  border-radius: 4px;
+  pointer-events: none;
+  z-index: 5;
+  user-select: none;
+}
+
+/* Box zoom overlay */
+.box-zoom-overlay {
+  position: absolute;
+  border: 2px dashed var(--accent);
+  background: rgba(102, 126, 234, 0.1);
+  pointer-events: none;
+  z-index: 15;
+}
+
+/* Zoomed state */
+.video-cell.zoomed {
+  z-index: 10;
+}
+
+/* Camera click highlight from 3D viewport */
+.video-cell.camera-highlighted {
+  outline: 3px solid #ffdd44;
+  outline-offset: -3px;
+  z-index: 11;
+}
+
+/* When not zoomed: highlight around the video frame (canvas-wrapper) */
+.video-cell.video-selected:not(.zoomed) .canvas-wrapper {
+  outline: 2px solid rgba(255, 221, 68, 0.5);
+  outline-offset: -2px;
+  border-radius: 2px;
+}
+
+/* When zoomed: highlight via pseudo-element overlay (always visible, above transformed content) */
+.video-cell.video-selected.zoomed::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border: 2px solid rgba(255, 221, 68, 0.5);
+  pointer-events: none;
+  z-index: 18;
+}
+
+.unzoom-btn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  padding: 3px 8px;
+  background: var(--accent-dim);
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.8px;
+  border: 1px solid var(--accent);
+  border-radius: 3px;
+  cursor: pointer;
+  z-index: 6;
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+
+.unzoom-btn:hover {
+  background: var(--accent);
+  color: #ffffff;
+}
+
+/* Visibility ▸ Display Legend, as pane chrome (ui/view-legend.js).
+   A SIBLING of .canvas-wrapper, deliberately: the wrapper is what applyZoom
+   rotates, so anything inside it tips over with the video. Out here the legend
+   stays upright, is anchored to the pane's top-right rather than the video's
+   (it may overhang a letterbox bar), and is sized in CSS px so every view's
+   legend matches regardless of camera resolution. */
+.video-cell .view-legend {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 7;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 9px;
+  background: rgba(0, 0, 0, 0.6);
+  border-radius: 4px;
+  font-size: 11px;
+  line-height: 1;
+  color: #ffffff;
+  /* The overlay canvas under this is the click target for annotation — the
+     legend must never eat a click meant for a keypoint. */
+  pointer-events: none;
+  user-select: none;
+}
+
+/* Three things want the pane's top-right, and only one of them is always
+   there. Each of the other two pushes the legend down one slot, and both
+   together push it down two. */
+.video-cell.zoomed .view-legend,
+#videoDock.has-view-indicator .view-legend {
+  top: 38px;
+}
+
+#videoDock.has-view-indicator .video-cell.zoomed .view-legend {
+  top: 68px;
+}
+
+.video-cell .view-legend-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  white-space: nowrap;
+}
+
+.video-cell .view-legend-icon {
+  width: 18px;
+  height: 12px;
+  flex-shrink: 0;
+}
+
+/* --------------------------------------------------------------------------
+   Toolbar (between video grid and controls)
+   -------------------------------------------------------------------------- */
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: var(--toolbar-height);
+  padding: 0 8px;
+  background: var(--bg-secondary);
+  border-top: 1px solid var(--border-color);
+  border-bottom: 1px solid var(--border-color);
+  flex-shrink: 0;
+  user-select: none;
+  overflow: visible;
+}
+
+.toolbar-group {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 8px;
+  border-right: 1px solid var(--border-color);
+}
+
+.toolbar-group:last-child {
+  border-right: none;
+}
+
+.toolbar-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 28px;
+  height: 28px;
+  padding: 0 8px;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+
+.toolbar-btn:hover:not(:disabled) {
+  background: var(--bg-button-hover);
+  color: var(--text-primary);
+}
+
+/* A disabled toolbar button had NO styling of its own, so it looked exactly
+   like a live one and only failed on click. Give it the same read as every
+   other disabled control in the app. */
+.toolbar-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.toolbar-btn:active {
+  color: var(--accent);
+}
+
+.toolbar-btn.active {
+  background: var(--accent-dim);
+  color: var(--accent);
+}
+
+/* The two panel-visibility toggles (3D viewer + info panel) sit together at
+   the far right of the toolbar. They get a light outline — unlike the rest of
+   the toolbar's borderless buttons — so they read as a distinct pair of
+   layout controls rather than as more of the annotation actions to their
+   left (issue #151). `box-sizing: border-box` is global, so the border does
+   not change the shared 28px button height. */
+.toolbar-group.panel-toggles {
+  margin-left: auto;
+  gap: 6px;
+  /* Flush to the window edge, mirroring `#tbSessions` at the left edge:
+     drop the shared `.toolbar-group` right padding (8px) and cancel
+     `.toolbar`'s own 8px. (`#tbSessions` uses a single -16px to cancel both
+     at once; here the padding is already gone, so -8px is the whole of it.)
+     The pull equals the toolbar's padding, so the group lands on the border
+     box and nothing overflows. */
+  padding-right: 0;
+  margin-right: -8px;
+}
+
+.toolbar-btn.panel-toggle-btn {
+  border: 1px solid var(--border-light);
+}
+
+.toolbar-btn.panel-toggle-btn:hover {
+  border-color: var(--text-muted);
+}
+
+#tbSessions {
+  width: 64px;
+  padding: 0;
+  margin-left: -16px;
+}
+
+/* Toolbar dropdown menu (for Assign button) */
+.toolbar-dropdown-menu {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  min-width: 120px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  padding: 4px 0;
+}
+
+.toolbar-dropdown-item {
+  padding: 6px 12px;
+  font-size: 13px;
+  cursor: pointer;
+  white-space: nowrap;
+  color: var(--text-primary);
+  transition: background var(--transition-fast);
+}
+
+.toolbar-dropdown-item:hover {
+  background: var(--accent-dim);
+}
+
+.toolbar-dropdown-label {
+  padding: 6px 12px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  cursor: default;
+  user-select: none;
+}
+
+.toolbar-dropdown-sub {
+  padding-left: 24px;
+}
+
+/* Flyout submenu for nested dropdown items */
+.toolbar-dropdown-item.has-flyout {
+  position: relative;
+}
+
+.toolbar-flyout-menu {
+  display: none;
+  position: absolute;
+  left: 100%;
+  top: -4px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  padding: 4px 0;
+  min-width: 140px;
+  z-index: 10001;
+}
+
+.toolbar-dropdown-item.has-flyout:hover > .toolbar-flyout-menu {
+  display: block;
+}
+
+/* Triangulate / Triangulate All split dropdowns (DLT vs Refined) */
+.tri-dropdown {
+  position: relative;
+  display: inline-flex;
+}
+
+/* Defining Plane Mode blocks the pose-annotation buttons (ui/plane-definition.js,
+   `applyPlaneModeToolbarLock`). These wrappers need their own rule: the menu
+   below opens on :hover and its DLT / BA entries are <div>s with their own
+   click handlers, so `disabled` on the button inside reaches neither —
+   `pointer-events: none` on the wrapper kills the hover-open AND the items. */
+.tri-dropdown.plane-mode-locked {
+  pointer-events: none;
+}
+
+/* "Triangulate: DLT" — the method a plain click runs (#138). */
+.tri-method {
+  opacity: 0.8;
+}
+
+.tri-caret {
+  margin-left: 4px;
+  font-size: 9px;
+  opacity: 0.7;
+}
+
+.tri-dropdown-menu {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  margin-top: 0;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  min-width: 180px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  padding: 4px 0;
+  z-index: 200;
+  /* Pure-CSS "hover intent": no display:none (keeps it out of layout via
+     position:absolute), flush under the button (margin-top:0) so the cursor
+     never crosses a gap, and a delayed visibility transition keeps the menu
+     up for a short grace period after the cursor leaves. */
+  visibility: hidden;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-4px);
+  transition: opacity 0.12s ease, transform 0.12s ease,
+    visibility 0s linear 0.35s;
+}
+
+.tri-dropdown:hover .tri-dropdown-menu,
+.tri-dropdown.open .tri-dropdown-menu {
+  visibility: visible;
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0);
+  transition-delay: 0s;
+}
+
+.tri-dropdown-item {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 12px;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+  color: var(--text-primary);
+  transition: background var(--transition-fast);
+}
+
+.tri-dropdown-item:hover {
+  background: var(--accent-dim);
+}
+
+.tri-dropdown-hint {
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+/* Multi-frame assignment modal */
+.multi-frame-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  z-index: 20000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.multi-frame-modal {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 24px;
+  min-width: 420px;
+  max-width: 500px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  color: var(--text-primary);
+}
+
+.multi-frame-modal h3 {
+  margin: 0 0 16px 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.multi-frame-modal p {
+  margin: 0 0 16px 0;
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.multi-frame-modal .modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 20px;
+}
+
+/* Rename Track / Identity modal */
+.rename-list {
+  max-height: 240px;
+  overflow-y: auto;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  margin-bottom: 12px;
+}
+
+.rename-list-item {
+  padding: 6px 10px;
+  font-size: 13px;
+  cursor: pointer;
+  border-bottom: 1px solid var(--border-color);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.rename-list-item:last-child {
+  border-bottom: none;
+}
+
+.rename-list-item:hover {
+  background: var(--bg-tertiary);
+}
+
+.rename-list-item.selected {
+  background: #ffd54a;
+  color: #1a1a1a;
+}
+
+.rename-name-label {
+  display: block;
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+}
+
+.rename-name-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 6px 8px;
+  font-size: 13px;
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+}
+
+/* Read-only (reference) list, e.g. current tracks in the New modal */
+.rename-list.readonly .rename-list-item {
+  cursor: default;
+}
+
+.rename-list.readonly .rename-list-item:hover {
+  background: transparent;
+}
+
+/* Delete modal: red warning line + per-camera count total */
+.delete-warning {
+  color: #e5484d;
+  font-size: 12px;
+  margin: 0 0 12px;
+  min-height: 14px;
+}
+
+.delete-total-row td {
+  font-weight: 700;
+  border-top: 1px solid var(--border-color);
+}
+
+.multi-frame-modal button.danger {
+  background: #e5484d;
+  border-color: #e5484d;
+  color: #fff;
+}
+
+.multi-frame-modal button.danger:hover {
+  background: #d13b40;
+  border-color: #d13b40;
+}
+
+.multi-frame-modal button {
+  padding: 6px 16px;
+  border-radius: 4px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.multi-frame-modal button.primary {
+  background: var(--accent-color);
+  border-color: var(--accent-color);
+  color: #fff;
+}
+
+.multi-frame-modal button:hover {
+  filter: brightness(1.15);
+}
+
+.multi-frame-modal button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  filter: none;
+}
+
+/* Shared inline validation line for modals (red, reserves its own height so
+   showing/hiding a message never shifts the buttons underneath). */
+.modal-error {
+  color: #e5484d;
+  font-size: 12px;
+  margin: 8px 0 0;
+  min-height: 14px;
+}
+
+/* Track Frame Range modal (#212) */
+.track-range-fields {
+  display: flex;
+  gap: 12px;
+}
+
+.track-range-field {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.track-range-field input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 6px 8px;
+  font-size: 13px;
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+}
+
+.track-range-summary {
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  min-height: 14px;
+}
+
+/* Align Views to References modal (#226). The table grows with the camera
+   count rather than scrolling inside the dialog (no scroll-within-scroll). */
+.align-views-modal {
+  max-width: 560px;
+}
+
+.align-views-modal kbd {
+  font-family: inherit;
+  font-size: 11px;
+  padding: 0 4px;
+  border: 1px solid var(--border-color);
+  border-radius: 3px;
+  background: var(--bg-tertiary);
+}
+
+.align-views-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.align-views-table th {
+  text-align: left;
+  font-weight: 500;
+  color: var(--text-muted);
+  padding: 0 8px 6px 0;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.align-views-table td {
+  padding: 4px 8px 4px 0;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.align-views-table .align-views-num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.align-views-result {
+  font-variant-numeric: tabular-nums;
+}
+
+.align-views-result.is-ref {
+  color: var(--accent, #7c8cf8);
+}
+
+.align-views-result.is-skipped {
+  color: var(--text-muted);
+}
+
+.align-views-all {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 12px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+/* Endpoint labels under the dual slider, so the track's extent is readable
+   without dragging a thumb to find out where it ends. */
+.track-range-bounds {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: -10px;
+  margin-bottom: 12px;
+}
+
+/* Dual range slider */
+.range-slider-container {
+  position: relative;
+  height: 36px;
+  margin: 16px 0;
+}
+
+.range-slider-track {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  right: 0;
+  height: 4px;
+  background: var(--bg-tertiary);
+  border-radius: 2px;
+  transform: translateY(-50%);
+}
+
+.range-slider-fill {
+  position: absolute;
+  top: 50%;
+  height: 4px;
+  background: var(--accent-color);
+  border-radius: 2px;
+  transform: translateY(-50%);
+}
+
+.range-slider-container input[type="range"] {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+  pointer-events: none;
+  margin: 0;
+}
+
+.range-slider-container input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--accent-color);
+  border: 2px solid #fff;
+  cursor: pointer;
+  pointer-events: all;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
+}
+
+.range-slider-container input[type="range"]::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--accent-color);
+  border: 2px solid #fff;
+  cursor: pointer;
+  pointer-events: all;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
+}
+
+/* Frame input fields row */
+.frame-inputs-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 12px 0;
+}
+
+.frame-inputs-row label {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.frame-inputs-row input[type="number"] {
+  width: 72px;
+  padding: 4px 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font-size: 13px;
+  text-align: center;
+}
+
+.frame-inputs-row .separator {
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+/* Progress bar */
+.multi-frame-progress {
+  margin-top: 16px;
+}
+
+.multi-frame-progress .progress-label {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+}
+
+.multi-frame-progress .progress-bar-track {
+  height: 8px;
+  background: var(--bg-tertiary);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.multi-frame-progress .progress-bar-fill {
+  height: 100%;
+  background: #4a9eff;
+  border-radius: 4px;
+  transition: width 0.15s ease;
+}
+
+/* SLP Export Modal */
+.slp-export-modal {
+  min-width: 680px;
+}
+
+/* Multi-session (two-panel) SLP export layout */
+.slp-export-multi {
+  min-width: 820px;
+}
+
+.slp-export-multi-body {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+}
+
+.slp-export-multi-left {
+  flex: 0 0 260px;
+  min-width: 0;
+}
+
+.slp-export-multi-right {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.slp-export-panel-label {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+}
+
+.slp-session-row {
+  cursor: pointer;
+}
+
+.slp-session-row:hover {
+  background: var(--accent-dim);
+}
+
+.slp-session-row.slp-session-active {
+  background: rgba(100, 150, 255, 0.18);
+  outline: 2px solid rgba(100, 150, 255, 0.55);
+}
+
+.slp-session-selcam {
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Restore right-align override for cam-view stats columns */
+.slp-cam-table th:nth-child(n+2),
+.slp-cam-table td:nth-child(n+2) {
+  text-align: right;
+  width: 80px;
+  font-variant-numeric: tabular-nums;
+}
+
+.slp-export-table-container {
+  max-height: 250px;
+  overflow-y: auto;
+  margin-bottom: 10px;
+}
+
+.slp-export-table {
+  width: 100%;
+}
+
+.slp-export-table th:nth-child(n+3),
+.slp-export-table td:nth-child(n+3) {
+  text-align: right;
+  width: 80px;
+  font-variant-numeric: tabular-nums;
+}
+
+.slp-export-row {
+  cursor: pointer;
+}
+
+.slp-export-row:hover {
+  background: var(--accent-dim);
+}
+
+.slp-export-row.slp-export-selected {
+  background: rgba(250, 204, 21, 0.25);
+  outline: 2px solid rgba(250, 204, 21, 0.7);
+}
+
+.slp-export-row.slp-has-edits {
+  background: rgba(76, 175, 80, 0.12);
+}
+
+.slp-export-row.slp-has-edits.slp-export-selected {
+  background: rgba(250, 204, 21, 0.25);
+  outline: 2px solid rgba(250, 204, 21, 0.7);
+}
+
+.slp-export-options {
+  margin: 8px 0;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.slp-reproj-toggle {
+  display: inline-flex;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  overflow: hidden;
+  font-size: 12px;
+}
+
+.slp-toggle-option {
+  padding: 3px 10px;
+  cursor: pointer;
+  color: var(--text-secondary);
+  user-select: none;
+  transition: background 0.15s, color 0.15s;
+}
+
+.slp-toggle-option:hover {
+  background: var(--accent-dim);
+}
+
+.slp-toggle-option.slp-toggle-active {
+  background: rgba(234, 179, 8, 0.3);
+  color: #eab308;
+  font-weight: 600;
+}
+
+.slp-reproj-toggle.slp-toggle-disabled .slp-toggle-option {
+  opacity: 0.35;
+  cursor: default;
+  pointer-events: none;
+}
+
+/* --------------------------------------------------------------------------
+   "Include" group for the SLP export modals (Per Session / By Cam)
+   --------------------------------------------------------------------------
+   Uses the app's standard .toggle-switch instead of raw checkboxes, and opens
+   with a plain NOTE: "UserLabels are automatically saved". Users kept asking
+   whether their own labels were exported when the only visible controls were
+   "Predicted Instances" / "Reprojections" (luc3d #194); the answer is a
+   statement, not a switch, because nothing about it is the user's to change. */
+.slp-inc-group {
+  margin: 10px 0 8px;
+}
+
+.slp-inc-legend {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+}
+
+.slp-inc-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.slp-inc-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 13px;
+}
+
+.slp-inc-name {
+  color: var(--text-primary);
+  cursor: pointer;
+  user-select: none;
+}
+
+/* The always-saved note. Reads as an assurance, not a disabled option: no
+   control affordances, and the check mark carries the "this is already on"
+   meaning a switch would have. */
+.slp-inc-note {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  margin-bottom: 9px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-primary);
+}
+
+.slp-inc-note-mark {
+  flex-shrink: 0;
+  font-weight: 700;
+  color: var(--accent);
+}
+
+/* Unavailable option (e.g. nothing triangulated yet, so no reprojections). */
+.slp-inc-row.slp-inc-row-disabled {
+  opacity: 0.5;
+}
+
+.slp-inc-row.slp-inc-row-disabled .slp-inc-name,
+.slp-inc-row.slp-inc-row-disabled .toggle-switch .slider {
+  cursor: not-allowed;
+}
+
+.slp-export-filename-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0;
+  font-size: 13px;
+}
+
+.slp-export-filename-row input {
+  flex: 1;
+  padding: 4px 8px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+.slp-export-note {
+  margin: 8px 0;
+  padding: 6px 10px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  background: var(--bg-tertiary);
+  border-radius: 4px;
+}
+
+.slp-export-error {
+  min-height: 18px;
+  margin: 4px 0 6px;
+  font-size: 12px;
+  color: #ef4444;
+}
+
+.slp-export-error:empty {
+  display: none;
+}
+
+.slp-export-note code {
+  font-size: 11px;
+  color: var(--text-primary);
+}
+
+/* Export All Views modal */
+.slp-export-all-modal {
+  min-width: 700px;
+}
+
+/* Quick post-export result popup (Download Successful / Failed). Sits above the
+   export modals (z 20000) so it shows on top / after they close. */
+.export-result-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 30000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.35);
+}
+
+.export-result-card {
+  min-width: 240px;
+  max-width: 70vw;
+  padding: 20px 28px;
+  border-radius: 10px;
+  background: var(--bg-secondary, #1e1e1e);
+  border: 1px solid var(--border-color);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.export-result-icon {
+  width: 44px;
+  height: 44px;
+  line-height: 44px;
+  border-radius: 50%;
+  font-size: 24px;
+  font-weight: 700;
+  color: #fff;
+}
+
+.export-result-card.success .export-result-icon { background: #22c55e; }
+.export-result-card.failure .export-result-icon { background: #ef4444; }
+
+.export-result-msg {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  word-break: break-word;
+}
+
+/* Export SLEAP File Per Session: active session → one file per camera dir. */
+/* Wide enough for a real prediction filename
+   (`cam-<14-digit-stamp>-0000_h265_CRF30_denoised.mp4.predictions_v1.slp` is
+   ~67 characters) to sit in the field without eliding. `width` rather than the
+   old `min-width: 720px`, because a min-width beats max-width in CSS and so
+   pushed the modal off-screen on a narrow window instead of shrinking. */
+.slp-export-persession-modal {
+  width: min(920px, 94vw);
+  max-width: 94vw;
+}
+
+/* Eight cameras is routine, so show more of them before scrolling. */
+.slp-export-persession-modal .slp-export-table-container {
+  max-height: 320px;
+}
+
+.slp-export-persession-modal .slp-export-table {
+  table-layout: auto;
+  width: 100%;
+}
+
+/* Download + Camera + Directory columns shrink to fit so the Output Filename
+   column (last) absorbs the remaining width and the input reads its full name. */
+.slp-export-persession-modal .slp-export-table th:nth-child(1),
+.slp-export-persession-modal .slp-export-table td:nth-child(1),
+.slp-export-persession-modal .slp-export-table th:nth-child(2),
+.slp-export-persession-modal .slp-export-table td:nth-child(2),
+.slp-export-persession-modal .slp-export-table th:nth-child(3),
+.slp-export-persession-modal .slp-export-table td:nth-child(3) {
+  width: 1%;
+  white-space: nowrap;
+  padding-right: 16px;
+}
+
+.slp-export-persession-modal .slp-export-table th:last-child,
+.slp-export-persession-modal .slp-export-table td:last-child {
+  width: auto;
+}
+
+/* The Output Filename header sits over a left-aligned field, so it opts out of
+   the `th:nth-child(n+3)` right-align the stats-style tables want. */
+.slp-export-persession-modal .slp-export-table th:last-child {
+  text-align: left;
+  padding-left: 10px;
+}
+
+/* Download checkbox column — compact and centered. */
+.slp-export-persession-modal .slp-ps-dl-cell {
+  text-align: center;
+  padding-right: 12px;
+}
+
+/* The stock checkbox renders as a white box on this dark table — the same
+   mismatch the Include switches fixed. Drawn here instead, in the app's palette. */
+.slp-export-persession-modal .slp-ps-dl {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  border: 1px solid var(--border-color);
+  border-radius: 3px;
+  background: var(--bg-tertiary);
+  cursor: pointer;
+  position: relative;
+  vertical-align: middle;
+  transition: background var(--transition-fast), border-color var(--transition-fast);
+}
+
+.slp-export-persession-modal .slp-ps-dl:hover {
+  border-color: var(--text-muted);
+}
+
+.slp-export-persession-modal .slp-ps-dl:checked {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.slp-export-persession-modal .slp-ps-dl:checked::after {
+  content: "";
+  position: absolute;
+  left: 4px;
+  top: 1px;
+  width: 4px;
+  height: 8px;
+  border: solid #ffffff;
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+
+.slp-export-persession-modal .slp-ps-dl:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.slp-export-persession-modal .slp-ps-dir {
+  color: var(--text-muted);
+  font-family: "SF Mono", "Fira Code", "Cascadia Code", monospace;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+/* Output filename field. The browser default (white box, system font) was the
+   one thing in this modal that did not look like the rest of the app — and the
+   names here are long and structured (`cam-<timestamp>-0000_h265_CRF30_
+   denoised.mp4.predictions.slp`), so the monospace stack shared with
+   `.data-table .mono` and the Directory cell is what makes them scannable at
+   all: the `_v2` / `_CRF30` segments line up down the column. Elides when
+   unfocused and shows the full name on hover (`title`, kept in sync by the
+   change handler); focus switches to `clip` so editing the tail is not fighting
+   an ellipsis. */
+.slp-export-persession-modal .slp-ps-filename {
+  width: 100%;
+  min-width: 340px;
+  box-sizing: border-box;
+  padding: 5px 9px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  color: var(--text-primary);
+  font-family: "SF Mono", "Fira Code", "Cascadia Code", monospace;
+  font-size: 11px;
+  line-height: 1.55;
+  text-overflow: ellipsis;
+  transition: border-color var(--transition-fast), background var(--transition-fast);
+}
+
+.slp-export-persession-modal .slp-ps-filename:hover {
+  border-color: var(--text-muted);
+}
+
+.slp-export-persession-modal .slp-ps-filename:focus {
+  outline: none;
+  border-color: var(--accent);
+  background: var(--bg-secondary);
+  text-overflow: clip;
+}
+
+/* A row the user unchecked is not being written — dim it so the Download column
+   is readable at a glance instead of one checkbox at a time. Still editable. */
+.slp-export-persession-modal tr.slp-ps-off td:not(.slp-ps-dl-cell) {
+  opacity: 0.45;
+}
+
+.slp-export-all-modal .slp-export-table {
+  table-layout: auto;
+}
+
+/* Camera column: shrink to fit content, with right padding */
+.slp-export-all-modal .slp-export-table th:first-child,
+.slp-export-all-modal .slp-export-table td:first-child {
+  width: 1%;
+  white-space: nowrap;
+  padding-right: 20px;
+}
+
+/* Reprojections column: explicit min-width so toggle is never clipped */
+.slp-export-all-modal .slp-export-table th:last-child,
+.slp-export-all-modal .slp-export-table td:last-child {
+  min-width: 180px;
+  white-space: nowrap;
+  text-align: center;
+}
+
+.slp-all-row {
+  opacity: 0.45;
+}
+
+.slp-all-row.slp-all-selected {
+  opacity: 1;
+  background: rgba(250, 204, 21, 0.15);
+}
+
+.slp-all-row.slp-all-selected:hover {
+  background: rgba(250, 204, 21, 0.22);
+}
+
+.slp-all-filename {
+  width: 100%;
+  padding: 2px 6px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 3px;
+  color: var(--text-primary);
+  font-size: 12px;
+  box-sizing: border-box;
+}
+
+.slp-all-reproj .slp-toggle-option {
+  padding: 2px 6px;
+  font-size: 11px;
+}
+
+/* Export SLEAP by Camera modal — fixed width so many cameras scroll the camera
+   table horizontally rather than stretching the modal across the screen. */
+.slp-bycam-modal {
+  width: min(1040px, 92vw);
+  min-width: 520px;
+  max-width: 92vw;
+}
+
+/* Two separate, independently-scrollable tables (session names | camera grid)
+   with a small gap. Row heights are pinned so the two stay row-aligned. */
+.slp-bycam-body {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 8px 0;
+}
+
+/* Each table gets its own scroll container. overflow-x:scroll keeps a bottom
+   scrollbar always present (mouse users) and scrolls on a trackpad; the
+   horizontal extent of each is driven by its own content width. */
+.slp-bycam-scroll {
+  max-height: 360px;
+  overflow-x: scroll;
+  overflow-y: auto;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  scrollbar-width: thin; /* Firefox */
+}
+
+/* Definite width (not auto) so the session table can exceed it and scroll
+   horizontally for long names — auto + overflow:scroll collapses to min-content
+   and clips instead. */
+.slp-bycam-sess-scroll {
+  flex: 0 0 200px;
+  width: 200px;
+  max-width: 200px;
+}
+
+.slp-bycam-cam-scroll {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* Always-visible, themed scrollbars (esp. the horizontal one). */
+.slp-bycam-scroll::-webkit-scrollbar {
+  height: 12px;
+  width: 10px;
+}
+.slp-bycam-scroll::-webkit-scrollbar-track {
+  background: var(--bg-tertiary);
+  border-radius: 6px;
+}
+.slp-bycam-scroll::-webkit-scrollbar-thumb {
+  background: var(--border-color);
+  border-radius: 6px;
+}
+.slp-bycam-scroll::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
+}
+
+/* Scoped under .slp-bycam-scroll to outrank the generic `.data-table`
+   (width:100%; border-collapse:collapse) defined later in this file.
+   width:max-content lets each table grow to its content and scroll; a
+   percentage min-width here would clamp max-content, so the camera table's
+   "fill when narrow" is handled separately below. */
+.slp-bycam-scroll > .slp-bycam-table {
+  border-collapse: separate;
+  border-spacing: 0;
+  width: auto;
+  font-size: 12px;
+}
+.slp-bycam-cam-scroll > .slp-bycam-cam-table {
+  min-width: 100%; /* fill the container when there are few cameras */
+}
+
+.slp-bycam-table th,
+.slp-bycam-table td {
+  border-bottom: 1px solid var(--border-color);
+  border-right: 1px solid var(--border-color);
+  padding: 2px 6px;
+  box-sizing: border-box;
+}
+
+/* Pinned row heights so the two tables line up row-for-row across the gap. */
+.slp-bycam-table thead th { height: 28px; }
+.slp-bycam-table tbody td { height: 26px; }
+.slp-bycam-table tfoot td { height: 34px; }
+
+/* Compact, fixed-width camera columns (header / cells / ✗ / Download). */
+.slp-bycam-cam-head,
+.slp-bycam-cell,
+.slp-bycam-missing,
+.slp-bycam-incl-cell {
+  width: 92px;
+  min-width: 92px;
+  max-width: 92px;
+}
+
+/* Sticky header row (camera names / "Session" label). */
+.slp-bycam-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--bg-secondary);
+  text-align: center;
+  white-space: nowrap;
+}
+
+/* Sticky footer row (Download buttons / spacer). */
+.slp-bycam-table tfoot td {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  background: var(--bg-secondary);
+  text-align: center;
+}
+
+/* Session panel: a div-list (not a table). width:max-content on the inner
+   wrapper grows it to the longest name so the container scrolls horizontally;
+   min-width:100% fills the container for short names. */
+.slp-bycam-sess-inner {
+  width: max-content;
+  min-width: 100%;
+}
+.slp-bycam-sess-cell-d {
+  display: flex;
+  align-items: center;
+  white-space: nowrap;
+  padding: 0 8px;
+  border-bottom: 1px solid var(--border-color);
+  box-sizing: border-box;
+  background: var(--bg-secondary);
+}
+.slp-bycam-sess-h-row {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  height: 28px;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+}
+.slp-bycam-sess-row {
+  height: 26px;
+  font-variant-numeric: tabular-nums;
+}
+.slp-bycam-sess-foot-row {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  height: 34px;
+  border-bottom: none;
+}
+
+/* Long camera names scroll horizontally inside the header cell. */
+.slp-bycam-cam-name {
+  max-width: 80px;
+  overflow-x: auto;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+/* Toggle-able presence cell. */
+.slp-bycam-cell {
+  text-align: center;
+  cursor: pointer;
+  user-select: none;
+  font-weight: 700;
+}
+
+.slp-bycam-cell.on {
+  background: rgba(250, 204, 21, 0.25);
+  color: #eab308;
+}
+
+.slp-bycam-cell.off {
+  background: var(--bg-tertiary);
+  color: var(--text-muted);
+  opacity: 0.55;
+}
+
+.slp-bycam-cell:hover {
+  outline: 1px solid rgba(250, 204, 21, 0.6);
+  outline-offset: -1px;
+}
+
+/* Session lacks this camera view — red ✗, not selectable. */
+.slp-bycam-missing {
+  text-align: center;
+  color: #ef4444;
+  font-weight: 700;
+  cursor: not-allowed;
+  user-select: none;
+}
+
+.slp-bycam-incl-cell {
+  text-align: center;
+  padding: 2px 3px;
+}
+
+/* Per-column include toggle for "Download All". Mirrors the presence-cell
+   ✓/✗ look so the footer reads as one more selectable row. */
+.slp-bycam-incl {
+  display: inline-block;
+  min-width: 22px;
+  text-align: center;
+  cursor: pointer;
+  user-select: none;
+  font-weight: 700;
+  border-radius: 4px;
+  padding: 1px 4px;
+}
+
+.slp-bycam-incl.on {
+  background: rgba(250, 204, 21, 0.25);
+  color: #eab308;
+}
+
+.slp-bycam-incl.off {
+  background: var(--bg-tertiary);
+  color: var(--text-muted);
+  opacity: 0.7;
+}
+
+.slp-bycam-incl:not(.disabled):hover {
+  outline: 1px solid rgba(250, 204, 21, 0.6);
+  outline-offset: -1px;
+}
+
+/* Blocked (skeleton mismatch) or permanently-empty column — red ✗, not selectable. */
+.slp-bycam-incl.disabled {
+  background: none;
+  color: #ef4444;
+  opacity: 0.85;
+  cursor: not-allowed;
+}
+
+/* Full-width Download All row beneath the table. */
+.slp-bycam-all-row {
+  display: flex;
+  justify-content: flex-end;
+  margin: 10px 0 0;
+}
+
+.slp-bycam-modal .slp-bycam-all-btn {
+  padding: 7px 20px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.slp-bycam-modal .slp-bycam-all-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* Red warning shown under the tables when a column's download is blocked
+   because the selected sessions have mismatched skeletons. */
+.slp-bycam-skel-warning {
+  margin: 6px 0 0;
+  padding: 6px 8px;
+  font-size: 12px;
+  color: #ef4444;
+  background: rgba(239, 68, 68, 0.08);
+  border: 1px solid rgba(239, 68, 68, 0.35);
+  border-radius: 4px;
+  white-space: pre-line;
+}
+
+
+/* Modal layout: range row with views list */
+.modal-range-row {
+  display: flex;
+  gap: 20px;
+  align-items: flex-start;
+}
+
+.modal-range-row .frame-inputs-row {
+  margin: 0;
+}
+
+.modal-views-section {
+  min-width: 100px;
+}
+
+.modal-views-section label {
+  font-size: 12px;
+  color: var(--text-secondary);
+  display: block;
+  margin-bottom: 4px;
+}
+
+.modal-view-list {
+  margin: 0;
+  padding-left: 16px;
+  font-size: 12px;
+  color: var(--text-primary);
+  line-height: 1.6;
+}
+
+/* Error message in modal */
+.multi-frame-error {
+  margin-top: 12px;
+  padding: 8px 12px;
+  background: rgba(220, 53, 69, 0.12);
+  border: 1px solid rgba(220, 53, 69, 0.3);
+  border-radius: 4px;
+  color: #f87171;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.toolbar-separator {
+  width: 1px;
+  height: 20px;
+  background: var(--border-color);
+  margin: 0 4px;
+  flex-shrink: 0;
+}
+
+/* --------------------------------------------------------------------------
+   Timeline
+   -------------------------------------------------------------------------- */
+
+.timeline-container {
+  height: var(--timeline-height);
+  min-height: 40px;
+  background: var(--bg-tertiary);
+  border-top: 1px solid var(--border-color);
+  position: relative;
+  /* Block 1 (Prompt 4): vertical overflow now lives on the inner
+     `.timeline-track-area` wrapper — the container itself is a flex
+     column so the wrapper can absorb the remaining vertical space. */
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+}
+
+.timeline-track-area {
+  flex: 1 1 auto;
+  min-height: 0;
+  /* Scrollbar appears only when the timeline is shortened enough that the
+     track rows overflow vertically. `scrollbar-gutter: stable` keeps the
+     canvas width steady when the bar appears/disappears so the playhead
+     doesn't jitter on resize. Combined with the explicit `::-webkit-scrollbar`
+     rules below (and `-webkit-appearance: none`), this defeats macOS's
+     overlay-scrollbar behavior so the bar is always *visible* while it
+     exists rather than fading on idle. */
+  overflow-y: auto;
+  overflow-x: hidden;
+  position: relative;
+  scrollbar-gutter: stable;
+  /* Firefox: classic visible scrollbar at the platform's normal width. */
+  scrollbar-width: auto;
+  scrollbar-color: var(--text-muted) var(--bg-tertiary);
+}
+
+/* Wider, always-visible vertical scrollbar on the timeline's track area.
+   Overrides the body-level 6px `::-webkit-scrollbar` rule so this scrollbar
+   reads as a deliberate UI element, and uses `-webkit-appearance: none` to
+   defeat macOS's overlay-scrollbar behavior. */
+.timeline-track-area::-webkit-scrollbar {
+  width: 12px;
+  -webkit-appearance: none;
+}
+
+.timeline-track-area::-webkit-scrollbar-track {
+  background: var(--bg-tertiary);
+  border-left: 1px solid var(--border-color);
+}
+
+.timeline-track-area::-webkit-scrollbar-thumb {
+  background: var(--text-muted);
+  border-radius: 6px;
+  border: 2px solid var(--bg-tertiary);
+  min-height: 24px;
+}
+
+.timeline-track-area::-webkit-scrollbar-thumb:hover {
+  background: var(--text-secondary);
+}
+
+.timeline-canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.timeline-container.collapsed {
+  /* Fully hide the timeline — `height: 0` alone is not enough because
+     `.timeline-container` declares `min-height: 40px`, which would leave a
+     ~two-row strip visible. Override `min-height` and force `height: 0`
+     with !important so any inline-style height set by toggleTimeline /
+     fitTimelineToData is also defeated. The 8px `.split-handle.horizontal`
+     above the container remains visible and provides the click-and-drag
+     affordance the user can use to expand the timeline back up. */
+  height: 0 !important;
+  min-height: 0 !important;
+  border-top: none;
+  overflow: hidden;
+}
+
+/* --------------------------------------------------------------------------
+   Controls Bar (Playback)
+   -------------------------------------------------------------------------- */
+
+.controls-bar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  height: var(--controls-bar-height);
+  padding: 0 16px;
+  background: var(--bg-secondary);
+  border-top: 1px solid var(--border-color);
+  flex-shrink: 0;
+  user-select: none;
+}
+
+/* Frame counter display */
+.frame-display {
+  font-family: "SF Mono", "Fira Code", "Cascadia Code", monospace;
+  font-size: 13px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  min-width: 90px;
+}
+
+.frame-display .current-frame {
+  color: var(--text-primary);
+  font-weight: 600;
+  cursor: default;
+  padding: 0 2px;
+  border-radius: 3px;
+  transition: background var(--transition-fast);
+}
+
+.frame-display .current-frame:hover {
+  background: var(--bg-tertiary);
+}
+
+/* Transport controls */
+.transport-controls {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.transport-controls button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  background: var(--bg-button);
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 14px;
+  transition: background var(--transition-fast), border-color var(--transition-fast);
+}
+
+.transport-controls button:hover {
+  background: var(--bg-button-hover);
+  border-color: var(--border-light);
+}
+
+.transport-controls button:active {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.transport-controls button.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #ffffff;
+}
+
+.transport-controls button:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+/* Seekbar */
+.seekbar-container {
+  flex: 1;
+  position: relative;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  min-width: 120px;
+}
+
+.seekbar-track {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 6px;
+  background: var(--bg-button);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.seekbar-progress {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 3px;
+  width: 0%;
+  transition: width 50ms linear;
+}
+
+.seekbar-thumb {
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  background: #ffffff;
+  border: 2px solid var(--accent);
+  border-radius: 50%;
+  top: 50%;
+  left: 0%;
+  transform: translate(-50%, -50%);
+  z-index: 2;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
+  transition: transform var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.seekbar-container:hover .seekbar-thumb {
+  transform: translate(-50%, -50%) scale(1.2);
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.6);
+}
+
+.seekbar-container:hover .seekbar-track {
+  height: 8px;
+}
+
+/* Possible-ID-switch ticks on the seekbar (ui/seekbar-markers.js): over the
+   track, under the thumb; they never take the pointer (the seekbar's handlers
+   snap to them instead). */
+.seekbar-marks { position: absolute; inset: 0; pointer-events: none; z-index: 1; }
+.seekbar-mark {
+  position: absolute; top: 50%; width: 3px; height: 16px; border-radius: 1px;
+  transform: translate(-50%, -50%); background: #ffb020; box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.45);
+}
+.seekbar-mark.cue-image { background: #4cc9f0; }
+.seekbar-mark.cue-both { background: linear-gradient(to bottom, #ffb020 50%, #4cc9f0 50%); }
+.seekbar-mark.is-follow { opacity: 0.7; height: 12px; }
+.seekbar-mark.is-repeat { opacity: 0.4; width: 2px; height: 10px; box-shadow: none; }
+.seekbar-mark.is-reviewed { opacity: 0.3; }
+
+/* Seekbar hover tooltip (#142): frame + timestamp under the cursor. Sits
+   above the bar, over the timeline; `left` is set in px by
+   ui/seekbar-tooltip.js and the bubble is centred on it. */
+.seekbar-tooltip {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  transform: translateX(-50%);
+  z-index: 1000;
+  padding: 3px 8px;
+  border-radius: 4px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font-family: "SF Mono", "Fira Code", "Cascadia Code", monospace;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  pointer-events: none;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+}
+
+.seekbar-tooltip[hidden] {
+  display: none;
+}
+
+/* FPS pill */
+.fps-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px 10px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  cursor: default;
+  user-select: none;
+  transition: border-color var(--transition-fast), background var(--transition-fast);
+}
+
+.fps-pill:hover {
+  border-color: var(--border-light);
+  background: var(--bg-button);
+}
+
+/* FPS display */
+.fps-display {
+  font-family: "SF Mono", "Fira Code", "Cascadia Code", monospace;
+  font-size: 12px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  min-width: 40px;
+  text-align: center;
+}
+
+/* --------------------------------------------------------------------------
+   Info Panel (Right Sidebar)
+   -------------------------------------------------------------------------- */
+
+.info-panel {
+  width: var(--info-panel-width);
+  min-width: var(--info-panel-width);
+  background: var(--bg-secondary);
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  overflow-x: hidden;
+  flex-shrink: 0;
+  flex: 1;
+  transition: width var(--transition-normal), min-width var(--transition-normal),
+    opacity var(--transition-normal);
+}
+
+/* Info sections */
+.info-section {
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.info-section h3 {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  color: var(--text-muted);
+  margin-bottom: 10px;
+}
+
+/* A collapsible info-panel section: <details class="info-section
+   info-collapsible">, heading in the <summary>, content after it. Native
+   <details>/<summary> rather than a hand-rolled div + click handler, matching
+   the Settings wizard's sections (ui/settings-modal.js buildSection): the
+   disclosure is then keyboard-operable and screen-reader-labelled for free,
+   and ui/keyboard-target.js already knows a SUMMARY owns Space/Enter. */
+.info-collapsible > summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  list-style: none;
+  /* SELECTABLE. A section heading is content the user may want to quote, and a
+     heading nobody can drag over is an invisible dead patch in the middle of an
+     otherwise selectable panel. The cost is that a double-click both selects
+     the word and toggles the section twice — a no-op, and cheaper than the
+     text being unreachable. See the Selectable text note above .status-bar. */
+  user-select: text;
+}
+
+/* Replace the UA disclosure triangle with one that matches the app. */
+.info-collapsible > summary::-webkit-details-marker {
+  display: none;
+}
+
+.info-collapsible > summary::before {
+  content: '';
+  width: 0;
+  height: 0;
+  flex-shrink: 0;
+  border-left: 5px solid var(--text-muted);
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  transition: transform var(--transition-fast);
+}
+
+.info-collapsible[open] > summary::before {
+  transform: rotate(90deg);
+}
+
+/* The h3 keeps its type styling but not its block margin — the summary is a
+   flex row and owns the spacing, which only exists when the body is showing. */
+.info-collapsible > summary h3 {
+  margin: 0;
+}
+
+.info-collapsible[open] > summary {
+  margin-bottom: 10px;
+}
+
+.info-collapsible > summary:hover h3 {
+  color: var(--text-primary);
+}
+
+.info-collapsible > summary:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Row count, so a collapsed section still says how much it is hiding. */
+.info-collapsible-count {
+  font-size: 11px;
+  color: var(--text-muted);
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 0 6px;
+  line-height: 15px;
+}
+
+/* Session info */
+.session-info-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 3px 0;
+  font-size: 13px;
+}
+
+.session-info-row .label {
+  color: var(--text-secondary);
+}
+
+.session-info-row .value {
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+/* Instance / Track list */
+.instance-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  list-style: none;
+}
+
+.instance-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  background: var(--bg-tertiary);
+  border-radius: 5px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background var(--transition-fast);
+}
+
+.instance-item:hover {
+  background: var(--bg-button);
+}
+
+.instance-item.selected {
+  background: var(--accent-dim);
+  outline: 1px solid var(--accent);
+}
+
+/* ---- Panel Tabs ---- */
+.panel-tabs {
+  display: flex;
+  border-bottom: 1px solid var(--border-color);
+  background: var(--bg-secondary);
+  flex-shrink: 0;
+}
+
+.panel-tab {
+  /* Size to the tab's full name — never squished/truncated. Overflow tabs
+     are demoted into the "More" dropdown by layoutPanelTabs() instead. */
+  flex: 0 0 auto;
+  padding: 8px 12px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  transition: color var(--transition-fast), border-color var(--transition-fast);
+  white-space: nowrap;
+}
+
+.panel-tab:hover {
+  color: var(--text-secondary);
+}
+
+.panel-tab.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+
+/* ---- "More ▾" overflow dropdown for panel tabs ---- */
+.panel-tab-more {
+  position: relative;
+  margin-left: auto; /* anchor to the right edge of the tab bar */
+  flex: 0 0 auto;
+}
+
+.panel-tab-more-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.panel-tab-more-btn .more-caret {
+  font-size: 9px;
+  line-height: 1;
+}
+
+.panel-tab-more-menu {
+  display: none;
+  position: absolute;
+  top: 100%;
+  right: 0;
+  z-index: 100;
+  min-width: 130px;
+  padding: 4px 0;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.45);
+}
+
+.panel-tab-more.open .panel-tab-more-menu {
+  display: block;
+}
+
+.panel-tab-more-item {
+  display: block;
+  width: 100%;
+  padding: 7px 14px;
+  text-align: left;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+  background: none;
+  border: none;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: color var(--transition-fast), background var(--transition-fast);
+}
+
+.panel-tab-more-item:hover {
+  color: var(--text-secondary);
+  background: var(--bg-tertiary);
+}
+
+.panel-tab-more-item.active {
+  color: var(--accent);
+}
+
+.panel-tab-content {
+  display: none;
+  flex: 1;
+  overflow-y: auto;
+}
+
+.panel-tab-content.active {
+  display: block;
+}
+
+/* ---- Data Tables ---- */
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.data-table thead th {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+  padding: 4px 6px;
+  text-align: left;
+  border-bottom: 1px solid var(--border-color);
+  position: sticky;
+  top: 0;
+  background: var(--bg-secondary);
+}
+
+.data-table tbody tr {
+  cursor: pointer;
+  transition: background var(--transition-fast);
+}
+
+.data-table tbody tr:hover {
+  background: var(--bg-button);
+}
+
+.data-table tbody tr.selected {
+  background: var(--accent-dim);
+}
+
+.data-table tbody td {
+  padding: 5px 6px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 120px;
+}
+
+.data-table .mono {
+  font-family: "SF Mono", "Fira Code", "Cascadia Code", monospace;
+  font-size: 11px;
+}
+
+.data-table .badge {
+  display: inline-block;
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-weight: 600;
+}
+
+.data-table .badge-predicted {
+  background: rgba(168, 85, 247, 0.4);
+  color: #d8b4fe;
+}
+
+.data-table .badge-user {
+  background: rgba(6, 182, 212, 0.4);
+  color: #67e8f9;
+}
+
+.data-table .badge-reproj {
+  background: rgba(251, 146, 60, 0.4);
+  color: #fdba74;
+}
+
+.table-empty {
+  padding: 10px 6px;
+  font-size: 12px;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.panel-button-row {
+  display: flex;
+  gap: 6px;
+}
+
+.panel-btn {
+  flex: 1;
+  padding: 4px 8px;
+  font-size: 12px;
+  background: var(--surface-lighter);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.panel-btn:hover:not(:disabled) {
+  background: var(--surface-hover);
+}
+
+.panel-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.track-indicator {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.instance-item .instance-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.instance-item .instance-score {
+  font-family: "SF Mono", "Fira Code", "Cascadia Code", monospace;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+/* Triangulation method label (under "Reprojection Error") */
+.error-method {
+  text-align: center;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+/* Reprojection error display */
+.error-display-undist {
+  text-align: center;
+  font-family: "SF Mono", "Fira Code", "Cascadia Code", monospace;
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-top: -8px;
+  padding-bottom: 10px;
+}
+
+.error-display-undist:empty {
+  display: none;
+}
+
+.error-display {
+  font-family: "SF Mono", "Fira Code", "Cascadia Code", monospace;
+  font-size: 22px;
+  font-weight: 700;
+  text-align: center;
+  padding: 12px 0;
+  color: var(--text-primary);
+}
+
+.error-display.low {
+  color: var(--success-color);
+}
+
+.error-display.medium {
+  color: var(--warning-color);
+}
+
+.error-display.high {
+  color: var(--error-color);
+}
+
+.error-display .error-unit {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--text-muted);
+  margin-left: 4px;
+}
+
+/* Control group (labels + inputs in the panel) */
+.control-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.control-group label {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 13px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.control-group label span {
+  color: var(--text-primary);
+}
+
+/* --------------------------------------------------------------------------
+   Toggle Switch
+   -------------------------------------------------------------------------- */
+
+.toggle-switch {
+  position: relative;
+  display: inline-block;
+  width: 40px;
+  height: 22px;
+  flex-shrink: 0;
+}
+
+.toggle-switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+  position: absolute;
+}
+
+.toggle-switch .slider {
+  position: absolute;
+  inset: 0;
+  background: var(--bg-button);
+  border-radius: 22px;
+  cursor: pointer;
+  transition: background var(--transition-normal);
+}
+
+.toggle-switch .slider::before {
+  content: "";
+  position: absolute;
+  width: 16px;
+  height: 16px;
+  left: 3px;
+  bottom: 3px;
+  background: var(--text-secondary);
+  border-radius: 50%;
+  transition: transform var(--transition-normal), background var(--transition-normal);
+}
+
+.toggle-switch input:checked + .slider {
+  background: var(--accent);
+}
+
+.toggle-switch input:checked + .slider::before {
+  transform: translateX(18px);
+  background: #ffffff;
+}
+
+/*
+ * Compact variant, for the "Export Video Overlays" settings panel — its rows are
+ * 11px and dense, and the stock 40x22 switch dominates them. The knob has to be
+ * resized with the box: `.slider::before` is a fixed 16px with a 18px travel, so
+ * inheriting it into a 17px-tall box would overflow the track and never line up.
+ */
+/* Tracking Wizard on/off settings (ui/settings-modal.js makeToggle): sit where the number box was. */
+.settings-toggle { align-self: center; margin-left: 12px; }
+
+.toggle-switch.toggle-switch-sm {
+  width: 30px;
+  height: 17px;
+}
+
+.toggle-switch.toggle-switch-sm .slider {
+  border-radius: 17px;
+}
+
+.toggle-switch.toggle-switch-sm .slider::before {
+  width: 12px;
+  height: 12px;
+  left: 2px;
+  bottom: 2px;
+}
+
+.toggle-switch.toggle-switch-sm input:checked + .slider::before {
+  transform: translateX(14px);
+}
+
+.toggle-switch input:focus-visible + .slider {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* --------------------------------------------------------------------------
+   Range Slider (node size, etc.)
+   -------------------------------------------------------------------------- */
+
+input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 6px;
+  background: var(--bg-button);
+  border-radius: 3px;
+  outline: none;
+  cursor: pointer;
+}
+
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  background: var(--accent);
+  border: 2px solid #ffffff;
+  border-radius: 50%;
+  cursor: pointer;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+  transition: transform var(--transition-fast);
+}
+
+input[type="range"]::-webkit-slider-thumb:hover {
+  transform: scale(1.15);
+}
+
+input[type="range"]::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  background: var(--accent);
+  border: 2px solid #ffffff;
+  border-radius: 50%;
+  cursor: pointer;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+}
+
+input[type="range"]::-moz-range-track {
+  height: 6px;
+  background: var(--bg-button);
+  border-radius: 3px;
+}
+
+/* --------------------------------------------------------------------------
+   Buttons
+   -------------------------------------------------------------------------- */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 16px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+  background: var(--bg-button);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background var(--transition-fast), border-color var(--transition-fast);
+}
+
+.btn:hover {
+  background: var(--bg-button-hover);
+  border-color: var(--border-light);
+}
+
+.btn:active {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.btn-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #ffffff;
+}
+
+.btn-primary:hover {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+}
+
+.btn-primary:active {
+  background: #5568d4;
+  border-color: #5568d4;
+}
+
+.btn-sm {
+  padding: 4px 10px;
+  font-size: 12px;
+  border-radius: 4px;
+}
+
+/* A selection has to be VISIBLE to be worth making. The UA default is a
+   translucent system blue tuned for light pages; over this theme's near-black
+   panels it reads as a faint smudge, which is a poor answer to "did I select
+   the right line?". The accent at full strength, with an explicit foreground so
+   the contrast does not depend on whatever colour the text already had. */
+::selection {
+  background: var(--accent);
+  color: #fff;
+}
+
+/* --------------------------------------------------------------------------
+   Status Bar
+   --------------------------------------------------------------------------
+
+   SELECTABLE TEXT, and the note the other `user-select: text` overrides point
+   at.
+
+   Anything in a panel, a modal or this bar is something the user may need to
+   put somewhere else — a reprojection error to paste into a message, a file
+   name from the SLP chooser, the text of a save failure. Those are exactly the
+   strings that are hardest to retype and most valuable verbatim, and this bar
+   is where every error lands. So the default across panels and dialogs is that
+   text can be dragged over and copied.
+
+   `user-select: none` is kept for one thing only: a surface whose whole job is
+   to be dragged or repeatedly clicked, where a stray selection is debris rather
+   than a feature — the menu bar, the toolbars, the view strip, the video
+   overlays, the ✓/✗ toggle cells in the SLP chooser, and every modal drag
+   handle (dragging a dialog by its title would otherwise smear a selection
+   across it).
+
+   The other half of "copy-able" is the keyboard: `Mod+C` is bound to Copy
+   selected instance and the dispatcher `preventDefault()`s it, which cancelled
+   the browser's own copy. `shouldIgnoreShortcut` in `ui/keyboard-target.js`
+   hands the chord back whenever a selection exists.
+   -------------------------------------------------------------------------- */
+
+.status-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: var(--status-bar-height);
+  padding: 0 12px;
+  background: var(--bg-tertiary);
+  border-top: 1px solid var(--border-color);
+  font-size: 11px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+  user-select: text;
+}
+
+.status-bar .status-left,
+.status-bar .status-right {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.status-bar .status-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.status-bar .status-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--success-color);
+}
+
+.status-bar .status-dot.warning {
+  background: var(--warning-color);
+}
+
+.status-bar .status-dot.error {
+  background: var(--error-color);
+}
+
+/* --------------------------------------------------------------------------
+   Instance Actions
+   -------------------------------------------------------------------------- */
+
+.instance-actions {
+  display: flex;
+  gap: 4px;
+  padding: 8px 0 0;
+}
+
+.instance-actions .btn {
+  flex: 1;
+  font-size: 12px;
+  padding: 4px 8px;
+}
+
+/* --------------------------------------------------------------------------
+   Overlay Canvas Cursor States
+   -------------------------------------------------------------------------- */
+
+.overlay-canvas {
+  cursor: default;
+}
+
+.overlay-canvas.cursor-pointer {
+  cursor: pointer;
+}
+
+.overlay-canvas.cursor-grab {
+  cursor: grab;
+}
+
+.overlay-canvas.cursor-grabbing {
+  cursor: grabbing;
+}
+
+.overlay-canvas.cursor-crosshair {
+  cursor: crosshair;
+}
+
+/* --------------------------------------------------------------------------
+   Context Menu
+   -------------------------------------------------------------------------- */
+
+.context-menu {
+  position: fixed;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+  min-width: 180px;
+  z-index: 200;
+  padding: 4px 0;
+}
+
+.context-menu-item {
+  padding: 6px 16px;
+  font-size: 13px;
+  cursor: pointer;
+  color: var(--text-primary);
+  transition: background var(--transition-fast);
+}
+
+.context-menu-item:hover {
+  background: var(--accent-dim);
+}
+
+.context-menu-item.danger {
+  color: var(--error-color);
+}
+
+.context-menu-item.danger:hover {
+  background: rgba(231, 76, 60, 0.1);
+}
+
+/* --------------------------------------------------------------------------
+   Triangulation Status Badge
+   -------------------------------------------------------------------------- */
+
+.triangulation-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.triangulation-badge.needs-triangulation {
+  background: rgba(255, 204, 0, 0.15);
+  color: var(--warning-color);
+  border: 1px solid rgba(255, 204, 0, 0.3);
+}
+
+.triangulation-badge.triangulated {
+  background: rgba(76, 175, 80, 0.15);
+  color: var(--success-color);
+  border: 1px solid rgba(76, 175, 80, 0.3);
+}
+
+.triangulation-badge.error {
+  background: rgba(244, 67, 54, 0.15);
+  color: var(--error-color);
+  border: 1px solid rgba(244, 67, 54, 0.3);
+}
+
+/* --------------------------------------------------------------------------
+   Keyboard Shortcut Hints
+   -------------------------------------------------------------------------- */
+
+.shortcut-hint {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-family: "SF Mono", "Fira Code", "Cascadia Code", monospace;
+  background: var(--bg-tertiary);
+  padding: 1px 4px;
+  border-radius: 3px;
+  border: 1px solid var(--border-color);
+}
+
+/* --------------------------------------------------------------------------
+   Split Pane Handle
+   -------------------------------------------------------------------------- */
+
+.split-handle {
+  background: var(--border-color);
+  flex-shrink: 0;
+  transition: background 0.15s;
+  position: relative;
+  z-index: 5;
+}
+
+.split-handle:hover,
+.split-handle.dragging {
+  background: var(--accent);
+}
+
+.split-handle.vertical {
+  width: 5px;
+  cursor: col-resize;
+}
+
+.split-handle.horizontal {
+  height: 8px;
+  cursor: row-resize;
+}
+
+/* Hide split handles when adjacent panel is collapsed */
+.split-handle.hidden {
+  display: none;
+}
+
+/* Auto-assignment toast — centered in menu bar with highlight */
+.auto-assign-toast {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 4px 16px;
+  font-size: 12px;
+  color: var(--text-primary);
+  white-space: nowrap;
+  background: rgba(102, 126, 234, 0.12);
+  border: 1px solid rgba(102, 126, 234, 0.3);
+  border-radius: 6px;
+}
+
+.auto-assign-toast button {
+  padding: 4px 14px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background: var(--bg-button);
+  color: var(--text-primary);
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.auto-assign-toast button:hover {
+  background: var(--bg-button-hover);
+}
+
+.auto-assign-toast button.primary {
+  background: var(--accent-dim);
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+/* Red highlight for auto-assignment view selection */
+.video-cell.auto-assign-selected:not(.zoomed) .canvas-wrapper {
+  outline: 3px solid #ef4444;
+  outline-offset: -3px;
+}
+
+/* When zoomed: red highlight via pseudo-element overlay */
+.video-cell.auto-assign-selected.zoomed::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border: 3px solid #ef4444;
+  pointer-events: none;
+  z-index: 18;
+}
+
+/* Ghost line shown during split handle drag */
+.split-ghost-line {
+  position: fixed;
+  width: 3px;
+  background: var(--accent);
+  z-index: 9999;
+  pointer-events: none;
+  box-shadow: 0 0 8px rgba(102, 126, 234, 0.6);
+}
+
+/* --------------------------------------------------------------------------
+   Info Panel Wrapper & Toggle Button
+   -------------------------------------------------------------------------- */
+
+.info-panel-wrapper {
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  border-left: 1px solid var(--border-color);
+}
+
+.info-panel-wrapper.collapsed {
+  border-left: none;
+}
+
+.info-panel-wrapper.collapsed .info-panel {
+  width: 0;
+  min-width: 0;
+  opacity: 0;
+  overflow: hidden;
+  border-left: none;
+}
+
+/* --------------------------------------------------------------------------
+   Loading Overlay
+   -------------------------------------------------------------------------- */
+
+.loading-overlay {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  background: rgba(26, 26, 26, 0.88);
+  z-index: 1000;
+  color: var(--text-secondary);
+  font-size: 14px;
+}
+
+.spinner {
+  width: 40px;
+  height: 40px;
+  border: 3px solid var(--border-color);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Determinate progress bar under #loadingStatus (ui/loading-overlay.js).
+   The fill is scaled with `transform`, not `width`: a transform transition runs
+   on the compositor thread, so the bar keeps gliding between the pacer's
+   ~250 ms updates even while the main thread is busy with the next chunk. The
+   transition length matches PROGRESS_INTERVAL_MS. The overlay's `gap: 16px`
+   would push the bar too far from its label, hence the negative margins. */
+.loading-progress {
+  width: min(360px, 70vw);
+  height: 6px;
+  margin-top: -6px;
+  border-radius: 3px;
+  background: var(--border-color);
+  overflow: hidden;
+}
+
+.loading-progress-fill {
+  width: 100%;
+  height: 100%;
+  background: var(--accent);
+  transform-origin: left center;
+  transform: scaleX(0);
+  transition: transform 250ms linear;
+  will-change: transform;
+}
+
+.loading-progress-fill.no-anim {
+  transition: none;
+}
+
+/* Second text line: estimated time remaining (ui/loading-overlay.js). Tucked
+   up against #loadingStatus so the two read as one block of text. */
+.loading-eta {
+  margin-top: -12px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.loading-substatus {
+  margin-top: -8px;
+  font-size: 12px;
+  color: var(--text-muted, var(--text-secondary));
+}
+
+/* --------------------------------------------------------------------------
+   Keyboard Key
+   -------------------------------------------------------------------------- */
+
+kbd {
+  display: inline-block;
+  padding: 1px 5px;
+  font-family: "SF Mono", "Fira Code", "Cascadia Code", monospace;
+  font-size: 10px;
+  background: var(--bg-button);
+  border: 1px solid var(--border-color);
+  border-radius: 3px;
+  min-width: 20px;
+  text-align: center;
+}
+
+/* --------------------------------------------------------------------------
+   Utility: Hidden
+   -------------------------------------------------------------------------- */
+
+.hidden {
+  display: none !important;
+}
+
+/* --------------------------------------------------------------------------
+   Responsive: Collapse Info Panel on Narrow Screens
+   -------------------------------------------------------------------------- */
+
+@media (max-width: 900px) {
+  .info-panel-wrapper {
+    position: absolute;
+    right: 0;
+    top: 0;
+    bottom: calc(var(--controls-bar-height) + var(--status-bar-height));
+    z-index: 50;
+    box-shadow: -4px 0 16px rgba(0, 0, 0, 0.5);
+  }
+
+  .info-panel-wrapper.collapsed {
+    box-shadow: none;
+  }
+}
+
+@media (max-width: 640px) {
+  .info-panel {
+    width: 100%;
+    min-width: 100%;
+  }
+
+  .view-strip {
+    width: 48px;
+    min-width: 48px;
+  }
+
+  .view-strip-item .strip-thumb {
+    width: 36px;
+    height: 27px;
+  }
+
+  .controls-bar {
+    gap: 8px;
+    padding: 0 8px;
+  }
+
+  .frame-display {
+    font-size: 11px;
+    min-width: 70px;
+  }
+
+  .transport-controls button {
+    width: 30px;
+    height: 30px;
+    font-size: 12px;
+  }
+}
+
+/* Visibility tab */
+#tabVisibility {
+    padding: 8px 10px;
+}
+.vis-section-header {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-primary);
+    padding: 6px 0 4px;
+    margin-top: 10px;
+    margin-bottom: 6px;
+    border-top: 1px solid var(--border-color);
+}
+.vis-section-header:first-of-type {
+    border-top: none;
+    margin-top: 0;
+}
+
+/* Toolbar checkboxes */
+.toolbar-checkboxes {
+    font-size: 11px;
+    gap: 8px;
+    color: var(--text-secondary);
+    align-items: center;
+}
+.toolbar-checkboxes label {
+    display: flex;
+    align-items: center;
+    gap: 3px;
+    cursor: pointer;
+}
+.vis-slider-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+    font-size: 11px;
+    color: var(--text-secondary);
+}
+/* Block 2 (Prompt 4): per-session timeline visibility toggle lists. */
+.vis-timeline-toggles {
+    font-size: 11px;
+}
+.vis-toggle-list {
+    max-height: 160px;
+    overflow-y: auto;
+    border: 1px solid var(--border-subtle, #2a2a2a);
+    border-radius: 3px;
+    padding: 2px;
+    margin-bottom: 4px;
+}
+.vis-toggle-row:hover {
+    background: rgba(255,255,255,0.04);
+}
+/* Views list specifically: cameras are a small, finite count — drop the
+   scroll-clamped container and render as clean tabular rows with subtle
+   separators. Tracks and Identities keep .vis-toggle-list (scrollable). */
+#visTimelineCameras {
+    max-height: none;
+    overflow: visible;
+    border: none;
+    padding: 0;
+}
+#visTimelineCameras .vis-toggle-row {
+    padding: 4px 6px;
+    border-bottom: 1px solid var(--border-subtle, #2a2a2a);
+}
+#visTimelineCameras .vis-toggle-row:last-child {
+    border-bottom: none;
+}
+/* Compact toggle-switch for the timeline visibility rows — the standard
+   40×22 size dominates the narrow Info Panel rows when many cameras /
+   tracks / identities are listed. */
+.vis-toggle-row .toggle-switch {
+    width: 28px;
+    height: 16px;
+}
+.vis-toggle-row .toggle-switch .slider::before {
+    width: 12px;
+    height: 12px;
+    left: 2px;
+    bottom: 2px;
+}
+.vis-toggle-row .toggle-switch input:checked + .slider::before {
+    transform: translateX(12px);
+}
+.vis-slider-row span:first-child {
+    flex: 0 0 100px;
+}
+.vis-slider-row input[type="range"] {
+    flex: 1;
+}
+.vis-val {
+    flex: 0 0 28px;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+}
+.vis-line-style-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+    font-size: 11px;
+    color: var(--text-secondary);
+}
+.vis-line-style-row span:first-child {
+    flex: 0 0 100px;
+}
+.line-style-options {
+    display: flex;
+    gap: 4px;
+}
+.line-style-btn {
+    background: none;
+    border: 1px solid var(--border-color);
+    border-radius: 3px;
+    padding: 2px 4px;
+    cursor: pointer;
+    color: var(--text-secondary);
+    display: flex;
+    align-items: center;
+}
+.line-style-btn:hover {
+    border-color: var(--text-secondary);
+}
+.line-style-btn.active {
+    border-color: var(--accent);
+    background: var(--accent-dim);
+    color: var(--text-primary);
+}
+
+/* --- Tracker UI --- */
+.tracker-progress {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 32px;
+    background: #1a1a2e;
+    display: flex;
+    align-items: center;
+    padding: 0 12px;
+    z-index: 9999;
+    border-bottom: 1px solid #333;
+    gap: 8px;
+}
+.tracker-progress-inner {
+    flex: 1;
+    height: 4px;
+    background: #333;
+    border-radius: 2px;
+    overflow: hidden;
+}
+.tracker-progress-bar {
+    height: 100%;
+    background: #667eea;
+    border-radius: 2px;
+    transition: width 0.2s;
+}
+#trackerProgressText {
+    font-size: 12px;
+    color: #ccc;
+    white-space: nowrap;
+}
+.tracker-settings {
+    background: #16213e;
+    border: 1px solid #2a2d5e;
+    border-radius: 4px;
+    margin: 4px 8px;
+    padding: 4px 8px;
+    font-size: 12px;
+}
+.tracker-settings summary {
+    cursor: pointer;
+    color: #667eea;
+    font-weight: 600;
+}
+.tracker-settings-body label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin: 4px 0;
+    color: #ccc;
+}
+.tracker-settings-body input[type="range"] {
+    flex: 1;
+    max-width: 120px;
+}
+.tracker-settings-body span {
+    min-width: 28px;
+    text-align: right;
+    color: #888;
+    font-size: 11px;
+}
+
+/* --- Timeline mode toggle --- */
+.timeline-mode-toggle {
+    position: absolute;
+    top: 2px;
+    right: 6px;
+    z-index: 10;
+    display: flex;
+    gap: 2px;
+}
+.timeline-mode-btn {
+    font-size: 10px;
+    padding: 1px 6px;
+    border: 1px solid #444;
+    background: #1a1a2e;
+    color: #888;
+    border-radius: 3px;
+    cursor: pointer;
+    line-height: 1.4;
+}
+.timeline-mode-btn:hover {
+    background: #2a2d5e;
+    color: #ccc;
+}
+.timeline-mode-btn.active {
+    background: #667eea;
+    color: #fff;
+    border-color: #667eea;
+}
+
+/* Custom stepper arrows for 3D viewer inputs */
+.vis3d-stepper {
+    display: inline-flex;
+    flex-direction: column;
+    vertical-align: middle;
+    margin-left: 2px;
+}
+.vis3d-stepper button {
+    display: block;
+    width: 14px;
+    height: 10px;
+    padding: 0;
+    border: 1px solid var(--border-color, #444);
+    background: var(--bg-tertiary, #2a2a2a);
+    color: var(--text-secondary, #aaa);
+    font-size: 7px;
+    line-height: 8px;
+    text-align: center;
+    cursor: pointer;
+}
+.vis3d-stepper button:first-child {
+    border-radius: 2px 2px 0 0;
+    border-bottom: none;
+}
+.vis3d-stepper button:last-child {
+    border-radius: 0 0 2px 2px;
+}
+.vis3d-stepper button:hover {
+    background: var(--bg-button-hover, #3a3a3a);
+    color: var(--text-primary, #e0e0e0);
+}
+
+/* Speed popover */
+.speed-popover {
+    position: absolute;
+    bottom: 100%;
+    /* Right-aligned to the Speed button, opening leftward: the button sits
+       near the window's right edge, and centred on it the popover (wider since
+       the 0.25x / 0.5x presets, #138) ran off-screen. */
+    right: 0;
+    margin-bottom: 6px;
+    background: var(--bg-secondary, #1e1e1e);
+    border: 1px solid var(--border-color, #444);
+    border-radius: 8px;
+    padding: 12px 14px;
+    min-width: 240px;
+    z-index: 9000;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+}
+.speed-popover .speed-label {
+    text-align: center;
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--text-primary, #e0e0e0);
+    margin-bottom: 8px;
+}
+.speed-popover .speed-slider-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 10px;
+}
+.speed-popover .speed-slider-row input[type=range] {
+    flex: 1;
+}
+.speed-popover .speed-slider-row button {
+    width: 24px;
+    height: 24px;
+    border: 1px solid var(--border-color, #444);
+    background: var(--bg-tertiary, #2a2a2a);
+    color: var(--text-primary, #e0e0e0);
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 14px;
+    line-height: 1;
+    padding: 0;
+}
+.speed-popover .speed-presets {
+    display: flex;
+    gap: 4px;
+    justify-content: center;
+}
+.speed-popover .speed-presets button {
+    padding: 4px 8px;
+    font-size: 11px;
+    border: 1px solid var(--border-color, #444);
+    background: var(--bg-tertiary, #2a2a2a);
+    color: var(--text-primary, #e0e0e0);
+    border-radius: 4px;
+    cursor: pointer;
+}
+.speed-popover .speed-presets button.active {
+    border-color: var(--accent, #4a9eff);
+    background: rgba(74,158,255,0.15);
+}
+
+/* ===== Settings modal ===== */
+.settings-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  z-index: 20000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.settings-modal {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  /* Opening size only. `ui/modal-geometry.js` measures this on first open,
+     centres the card, and thereafter restores whatever size the user left it
+     at as inline width/height. It also owns the viewport fit (clamping to a
+     24px gutter), so there is deliberately NO max-width/max-height here — a
+     second cap would silently shrink a rect the clamp thought it had granted
+     and leave the card flush against one edge. */
+  width: 880px;
+  height: 620px;
+  display: flex;
+  flex-direction: column;
+  /* `resize` needs a non-visible overflow, which this already had. The grip is
+     the browser's own, bottom-right. */
+  overflow: hidden;
+  resize: both;
+  min-width: 520px;
+  min-height: 320px;
+}
+
+/* Dragging by the header. No transition on position — the card must track the
+   pointer exactly, not lag behind it. */
+.settings-modal-header {
+  cursor: move;
+  user-select: none;
+}
+
+.settings-modal.modal-dragging {
+  /* Kill hover/selection noise mid-drag. */
+  user-select: none;
+}
+
+/* The × is a click target inside the drag handle, so it opts out of the grab
+   cursor as well as out of the drag itself (see `noDragSelector`). */
+.settings-modal-close {
+  cursor: pointer;
+}
+
+.settings-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.settings-modal-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.settings-modal-close {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+  transition: color var(--transition-fast);
+}
+
+.settings-modal-close:hover {
+  color: var(--text-primary);
+}
+
+.settings-modal-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.settings-nav {
+  width: 180px;
+  flex-shrink: 0;
+  border-right: 1px solid var(--border-color);
+  padding: 8px 0;
+  overflow-y: auto;
+  background: var(--bg-tertiary);
+}
+
+.settings-nav-item {
+  padding: 9px 18px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+
+.settings-nav-item:hover {
+  background: var(--bg-button);
+  color: var(--text-primary);
+}
+
+.settings-nav-item.active {
+  background: var(--accent-dim);
+  color: var(--accent);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.settings-panel-container {
+  flex: 1;
+  padding: 20px 24px;
+  overflow-y: auto;
+}
+
+.settings-panel {
+  display: none;
+}
+
+.settings-panel.active {
+  display: block;
+}
+
+.settings-panel-title {
+  font-size: 13px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+  margin-bottom: 14px;
+}
+
+.settings-radio-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  margin-bottom: 10px;
+  cursor: pointer;
+  transition: background var(--transition-fast),
+    border-color var(--transition-fast);
+}
+
+.settings-radio-row:hover {
+  background: var(--bg-button);
+}
+
+.settings-radio {
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--text-muted);
+  border-radius: 4px;
+  flex-shrink: 0;
+  position: relative;
+  transition: border-color var(--transition-fast),
+    background var(--transition-fast);
+}
+
+.settings-radio-row.checked .settings-radio {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.settings-radio-row.checked .settings-radio::after {
+  content: '\2713';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  color: #fff;
+  font-size: 11px;
+  line-height: 1;
+}
+
+.settings-radio-row.checked {
+  border-color: var(--accent);
+  background: var(--accent-dim);
+}
+
+.settings-radio-label {
+  display: flex;
+  flex-direction: column;
+}
+
+.settings-radio-title {
+  font-size: 13px;
+  color: var(--text-primary);
+}
+
+.settings-radio-desc {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.settings-kbd-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 4px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.settings-kbd-label {
+  font-size: 13px;
+  color: var(--text-primary);
+}
+
+.settings-kbd-key {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  min-width: 44px;
+  text-align: center;
+  padding: 4px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background: var(--bg-button);
+  color: var(--text-primary);
+  font-size: 12px;
+  cursor: pointer;
+  transition: border-color var(--transition-fast);
+}
+
+.settings-kbd-key:hover {
+  border-color: var(--accent);
+}
+
+.settings-kbd-key.capturing {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-dim);
+}
+
+/* Fixed (non-rebindable) reference shortcuts: shown but not interactive. */
+.settings-kbd-key.fixed {
+  cursor: default;
+  color: var(--text-muted);
+  background: transparent;
+  border-style: dashed;
+}
+
+.settings-kbd-key.fixed:hover {
+  border-color: var(--border-color);
+}
+
+/* Category subheader within the Keyboard Shortcuts list. */
+.settings-kbd-category {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--accent);
+  margin: 16px 0 4px;
+  padding-bottom: 2px;
+}
+
+.settings-kbd-category:first-child {
+  margin-top: 0;
+}
+
+.settings-kbd-hint {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 12px;
+}
+
+/* Tracking Wizard ▸ Node Weights / Camera Views: a multi-column table that
+   grows to its full height.
+
+   It used to be capped at 240px with its own `overflow-y: auto`, which put a
+   scrollbar inside `.settings-panel-container`'s scrollbar — the wheel did
+   different things a few pixels apart, and rows past the cap were invisible
+   with no hint that the window could simply be made bigger. Now the panel is
+   the one scroller in the card: the table reflows into MORE COLUMNS as the
+   (resizable) modal widens, and its `<details>` section folds away when it is
+   in the way. */
+.settings-node-weight-list {
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  padding: 2px 10px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  column-gap: 24px;
+}
+
+/* --- Collapsible wizard sections --------------------------------------- */
+.settings-section {
+  margin-bottom: 4px;
+}
+
+.settings-section-summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  list-style: none;
+  user-select: text;   /* selectable — see .status-bar */
+  /* The spacing that .settings-kbd-category used to carry itself; it is a flex
+     item inside the summary now, so the summary owns it. */
+  margin: 16px 0 4px;
+}
+
+.settings-section:first-of-type > .settings-section-summary {
+  margin-top: 0;
+}
+
+/* Replace the UA disclosure triangle with one that matches the app. */
+.settings-section-summary::-webkit-details-marker {
+  display: none;
+}
+
+.settings-section-summary::before {
+  content: '';
+  width: 0;
+  height: 0;
+  flex-shrink: 0;
+  border-left: 5px solid var(--text-muted, #888);
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  transition: transform var(--transition-fast);
+}
+
+.settings-section[open] > .settings-section-summary::before {
+  transform: rotate(90deg);
+}
+
+.settings-section-summary:hover .settings-section-title {
+  color: var(--text-primary);
+}
+
+/* The heading already carries .settings-kbd-category; inside a summary it must
+   not also claim the block-level margins that spaced standalone headings. */
+.settings-section-title {
+  margin: 0;
+}
+
+.settings-section-count {
+  font-size: 11px;
+  color: var(--text-muted, #888);
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 0 6px;
+  line-height: 15px;
+}
+
+.settings-section-body {
+  padding-bottom: 6px;
+}
+
+.settings-node-weight-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 4px;
+  border-bottom: 1px solid var(--border-color);
+  min-width: 0;
+}
+
+.settings-node-weight-row .settings-kbd-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Tracking Wizard ▸ Camera Views: a view excluded from tracking (weight 0)
+   greys out to signal it won't take part in the association math. */
+.settings-node-weight-row.settings-view-excluded .settings-kbd-label {
+  color: var(--text-muted, #888);
+  opacity: 0.55;
+}
+.settings-node-weight-row.settings-view-excluded .settings-num-input {
+  opacity: 0.55;
+}
+
+/* Tracking Wizard ▸ Tracking Thresholds: label + description, value on the right. */
+.settings-threshold-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 8px 4px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.settings-threshold-label-wrap {
+  flex: 1;
+  min-width: 0;
+}
+
+.settings-threshold-title {
+  font-size: 13px;
+  color: var(--text-primary);
+}
+
+.settings-threshold-desc {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+/* Shared number field for node weights and tracking thresholds. */
+.settings-num-input {
+  width: 72px;
+  flex: 0 0 auto;
+  text-align: center;
+  padding: 4px 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background: var(--bg-button);
+  color: var(--text-primary);
+  font-size: 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.settings-num-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.settings-docs-note {
+  margin-top: 14px;
+}
+
+.settings-docs-note a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.settings-docs-note a:hover {
+  text-decoration: underline;
+}
+
+.settings-coming-soon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  min-height: 200px;
+  color: var(--text-muted);
+  font-size: 14px;
+  letter-spacing: 0.5px;
+}
+
+.settings-modal-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 12px 18px;
+  border-top: 1px solid var(--border-color);
+}
+
+.settings-btn {
+  padding: 7px 18px;
+  border-radius: 5px;
+  font-size: 13px;
+  cursor: pointer;
+  border: 1px solid var(--border-color);
+  transition: background var(--transition-fast), color var(--transition-fast),
+    opacity var(--transition-fast);
+}
+
+.settings-btn-cancel {
+  background: var(--bg-button);
+  color: var(--text-secondary);
+}
+
+.settings-btn-cancel:hover {
+  color: var(--text-primary);
+}
+
+.settings-btn-apply {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+
+.settings-btn-apply:hover {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+}
+
+/* --------------------------------------------------------------------------
+   Defining Plane Mode (View ▸ Define Planes)
+
+   A MODE, not a modal: the banner sits under the toolbar for as long as the
+   mode is active, and the info panel swaps its tab bar for the Define Plane
+   panel. Both are driven by ui/plane-definition.js.
+   -------------------------------------------------------------------------- */
+
+.plane-mode-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+  height: var(--toolbar-height);
+  padding: 0 10px;
+  background: linear-gradient(
+    to bottom,
+    rgba(102, 126, 234, 0.22),
+    rgba(102, 126, 234, 0.12)
+  );
+  border-bottom: 1px solid var(--accent);
+  font-size: 12px;
+  user-select: none;
+}
+
+.plane-mode-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 6px var(--accent);
+  flex: 0 0 auto;
+}
+
+.plane-mode-label {
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  color: var(--text-primary);
+}
+
+.plane-mode-hint {
+  color: var(--text-secondary);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plane-mode-exit {
+  margin-left: auto;
+  flex: 0 0 auto;
+}
+
+/* A video view accepting a plane-skeleton drop. */
+.video-cell.plane-drop-target::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border: 2px dashed var(--accent);
+  background: var(--accent-dim);
+  z-index: 5;
+}
+
+/* --- Define Plane info panel --------------------------------------------- */
+
+/* Mirrors .panel-tab-content's box so swapping the tabs for this panel does
+   not change the info panel's scroll behaviour. */
+/* THE PANEL'S WIDTH BELONGS TO THE TABLES. The info panel is a fixed 300px and
+   the Nodes table now has to show three coordinates, so every nested box that
+   used to take a bite out of the width gives it back: the panel's own padding,
+   the `.info-section` wrapper (which was inheriting the 14/16 meant for the
+   tabbed info panel), the `<details>` body, and the cell padding. The sections
+   stay collapsible — folding one away is how you make room VERTICALLY, which is
+   the axis that is actually cheap here. */
+.plane-panel {
+  flex: 1;
+  overflow-y: auto;
+  padding: 6px 3px;
+}
+
+.plane-panel .info-section {
+  padding: 6px 0;
+}
+
+/* Every section of this panel is a <details> now — Plane Appearance was the last
+   bare <h3> and moved inside Planes — so an <h3> here would be an oversight
+   rather than a style. The rule stays as the safety net for one added by
+   mistake: it dresses it as a section title instead of letting the tabbed info
+   panel's small uppercase caption leak in. */
+.plane-panel .info-section > h3 {
+  padding: 7px 8px;
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--text-primary);
+}
+
+/* The width trim above zeroed the section's horizontal padding, which the
+   tables want (they set their own) but these rows do not — the label sat on
+   the panel's left edge and the value on its right. Inset them to the same 8px
+   as the <h3> above them rather than padding `.info-section`, which also wraps
+   the Defined Origin readout that is sized to the panel's full inner width. */
+.plane-panel .vis-slider-row {
+  padding: 0 8px;
+}
+
+.plane-panel .data-table thead th,
+.plane-panel .data-table tbody td {
+  padding: 4px 3px;
+  /* The generic rule caps a cell at 120px with an ellipsis, which is right for
+     the read-only info tables and wrong for a row of input fields — it would
+     clip the full-width coordinate line. */
+  max-width: none;
+}
+
+/* These rows are forms, not a selectable list: nothing happens when you click
+   one, and a node is TWO rows now, so a hover that lit up half a node was
+   advertising an interaction that does not exist. */
+.plane-panel .data-table tbody tr {
+  cursor: default;
+}
+
+.plane-panel .data-table tbody tr:hover {
+  background: none;
+}
+
+.plane-details {
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background: var(--bg-secondary);
+}
+
+/* Section titles. Bigger than the 12px the rest of the panel uses: these are
+   the four things the panel IS, and at body size they read as another row of
+   controls. The sub-sections inside Planes stay at 12px, so the hierarchy
+   is legible without indentation. */
+.plane-details > summary {
+  cursor: pointer;
+  user-select: text;   /* selectable — see .status-bar */
+  padding: 7px 8px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  list-style: none;
+}
+
+.plane-details > summary::-webkit-details-marker {
+  display: none;
+}
+
+.plane-details > summary::before {
+  content: "\25B6";
+  display: inline-block;
+  width: 12px;
+  font-size: 9px;
+  color: var(--text-muted);
+  transition: transform var(--transition-fast);
+}
+
+.plane-details[open] > summary::before {
+  transform: rotate(90deg);
+}
+
+.plane-details > summary:hover {
+  background: var(--bg-tertiary);
+}
+
+.plane-details-body {
+  padding: 6px 4px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* MAJOR sections — the handful of things this panel IS (Nodes, Planes,
+   Planes, 3D Mesh Objects, Defined Origin, Danger Zone), as opposed to the
+   sub-sections nested inside them.
+
+   Both levels are a bordered `.plane-details` box, and at a glance that made
+   them peers: "Plane Appearance" inside Planes looked exactly as top-level as
+   "3D Mesh Objects" beside it. In a panel this tall, with everything scrolling
+   past in one column, the nesting is the only thing telling you where one
+   section ends and the next begins.
+
+   So the majors get their 1px border RECOLOURED to the accent — the whole way
+   around, not just a bar under the title. A marked header alone tells you where
+   a section STARTS; it is where one ends that is ambiguous when a tall open
+   section is followed by another, which is most of this panel. Recolouring the
+   existing border rather than adding a second outline is what keeps that from
+   costing content width: the panel is ~300px wide and already full of
+   boxes-within-boxes. The sub-sections keep the plain grey border, so the
+   hierarchy is one glance rather than a reading. */
+.plane-panel > .info-section > .plane-details {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border-color));
+}
+
+/* The header still gets its own tint, so a section says what it is whether it
+   is open or folded away — the outline says where it reaches, the strip says
+   which part of it you click. */
+.plane-panel > .info-section > .plane-details > summary {
+  background: var(--bg-tertiary);
+  border-radius: 3px 3px 0 0;
+}
+
+/* Folded, the summary IS the whole box, so it keeps all four rounded corners
+   rather than leaving two square ones against nothing. */
+.plane-panel > .info-section > .plane-details:not([open]) > summary {
+  border-radius: 3px;
+}
+
+/* Hover already tints the row (`.plane-details > summary:hover`), which against
+   the strip above would be a no-op; lift it one step instead so the target
+   still responds. */
+.plane-panel > .info-section > .plane-details > summary:hover {
+  background: var(--bg-button);
+}
+
+/* Danger Zone is a major section too, and is outlined the same way in its own
+   colour — the whole point of the red is that this block does not look like its
+   neighbours, so it must not pick up the accent here. It already sets exactly
+   this border via `.origin-danger-section .plane-details-danger`; repeated
+   because THIS selector is more specific and would otherwise win. */
+.plane-panel > .info-section > .plane-details-danger {
+  border-color: color-mix(in srgb, var(--error-color) 45%, var(--border-color));
+}
+
+.plane-panel > .info-section > .plane-details-danger > summary:hover {
+  background: color-mix(in srgb, var(--error-color) 12%, var(--bg-tertiary));
+}
+
+.plane-subdetails {
+  background: var(--bg-primary);
+}
+
+.plane-subdetails > summary {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.plane-name-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+/* A FIXED label column, so every row's control starts at the same x. The
+   panel has two of these rows — this plane's Name and a 3D Mesh Object's —
+   and a content-sized label would let each be positioned by its own text, so
+   the two sections' fields would start at different x. 72px fits both labels at
+   this 11px size with room to spare; `nowrap` plus `flex-basis` rather than
+   `width` so a longer label grows the column instead of wrapping inside it. */
+.plane-name-row > span {
+  flex: 0 0 72px;
+  white-space: nowrap;
+}
+
+.plane-name-row input,
+.plane-text-input,
+.plane-select {
+  flex: 1;
+  min-width: 0;
+  padding: 3px 4px;
+  font-size: 12px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  color: var(--text-primary);
+  border-radius: 3px;
+}
+
+.plane-hint {
+  margin-top: 6px;
+  font-size: 10px;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+/* The per-plane part of the Planes section is swapped out wholesale for its
+   empty state, so it needs its own flex column — otherwise the wrapper
+   collapses the `.plane-details-body` gap between the name row, the members
+   table, the connections and the actions. */
+#planeEditorContent {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* The `+ New Plane` row, between the roster and the editor. Ruled off from
+   the editor below it because that is where the section changes subject: above
+   the rule is every plane, below it is the one being edited — and this button,
+   which makes one, is the last thing that works with none selected. */
+.plane-create-row {
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+/* "Planes — floor". The label is fixed; the name is the selected plane's, so
+   a reader who has scrolled the roster out of view — or folded the section —
+   can still tell which plane the editor below acts on. */
+.plane-summary-name {
+  margin-left: 6px;
+  font-weight: 400;
+  color: var(--accent);
+}
+
+/* The selected plane's member list. The colour here is a READ-ONLY swatch: a
+   node's colour is a property of the node and is edited once, in the Nodes
+   table, so a second picker would imply two places to change it. */
+.plane-member-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The node names sit IN from the table's left edge rather than against it.
+   `.plane-node-shared` paints a 2px accent bar INSIDE the row, so at the
+   inherited 6px of cell padding a shared node's name cleared it by four pixels
+   and the column read as flush with the edge. The header comes along, or the
+   column label and its values stop lining up. */
+#planeMembersTable thead th:first-child,
+#planeMembersTable tbody td:first-child {
+  padding-left: 12px;
+}
+
+.plane-member-swatch {
+  width: 12px;
+  height: 12px;
+  margin-right: 0;
+}
+
+/* The panel is ~300px wide and these tables hold names, counts, badges and
+   buttons. An auto-layout table is sized by its widest cell and simply grows
+   past `width: 100%`, which is what gave the whole Define Plane panel a
+   horizontal scrollbar; fixed layout makes the `<th>` widths binding, so the
+   cells' inherited ellipsis is what gives instead.
+   `#planeNodesTable` is deliberately NOT here: its rows are input fields that
+   size themselves, and its detail row is a full-width form. */
+#planeSkeletonsTable,
+#planeMembersTable,
+#planeEdgesTable {
+  table-layout: fixed;
+}
+
+/* A header cell has no ellipsis of its own, and "NODES" is wider than the
+   numbers under it. */
+#planeSkeletonsTable thead th,
+#planeMembersTable thead th,
+#planeEdgesTable thead th {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Draggable plane-skeleton rows. */
+#planeSkeletonsTable tbody tr {
+  cursor: grab;
+}
+
+#planeSkeletonsTable tbody tr:active {
+  cursor: grabbing;
+}
+
+#planeSkeletonsTable tbody tr.plane-selected {
+  background: var(--accent-dim);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.plane-swatch {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  margin-right: 5px;
+  vertical-align: middle;
+}
+
+/* Per-node colour picker in the Nodes table. Native <input type=color> is a
+   chunky control by default; strip it back to a swatch that fits the row. */
+.plane-node-color {
+  width: 26px;
+  height: 18px;
+  padding: 0;
+  border: 1px solid var(--border-color);
+  border-radius: 3px;
+  background: transparent;
+  cursor: pointer;
+  vertical-align: middle;
+}
+
+.plane-node-color::-webkit-color-swatch-wrapper {
+  padding: 2px;
+}
+
+.plane-node-color::-webkit-color-swatch {
+  border: none;
+  border-radius: 2px;
+}
+
+.plane-node-color::-moz-color-swatch {
+  border: none;
+  border-radius: 2px;
+}
+
+/* --- Plane skeleton row: expander + action buttons ----------------------- */
+
+.plane-expander {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 3px;
+  min-width: 0;
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 10px;
+  cursor: pointer;
+  border-radius: 3px;
+}
+
+.plane-expander:hover:not(:disabled) {
+  background: var(--bg-button);
+  color: var(--text-primary);
+}
+
+.plane-expander:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.plane-expander .plane-caret {
+  display: inline-block;
+  font-size: 8px;
+  transition: transform var(--transition-fast);
+}
+
+.plane-expander.open .plane-caret {
+  transform: rotate(90deg);
+}
+
+
+.plane-actions {
+  white-space: nowrap;
+  text-align: right;
+}
+
+.plane-icon-btn {
+  padding: 1px 3px;
+  min-width: 0;
+  line-height: 1;
+  vertical-align: middle;
+  color: var(--text-secondary);
+}
+
+.plane-icon-btn:hover:not(:disabled) {
+  color: var(--text-primary);
+}
+
+.plane-icon-btn:disabled {
+  opacity: 0.3;
+}
+
+.plane-icon-btn.active {
+  background: var(--accent-dim);
+  border-color: var(--accent);
+}
+
+.plane-tri-btn.active {
+  color: var(--success-color);
+}
+
+/* Shared Triangulate / Fill / Fit row — acts on the selected plane skeleton. */
+.plane-action-row .panel-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 4px 4px;
+  font-size: 11px;
+}
+
+.plane-action-row .panel-btn svg {
+  flex: 0 0 auto;
+}
+
+.plane-action-row .panel-btn.active {
+  border-color: var(--accent);
+  background: var(--accent-dim);
+}
+
+/* "this plane has 3D" marker in the table row. */
+
+.plane-fit-summary {
+  border-top: none;
+  padding-top: 0;
+  margin-top: 2px;
+  color: var(--success-color);
+}
+
+/* --- Expanded placements sub-row ---------------------------------------- */
+
+.plane-placements-row > td {
+  background: var(--bg-primary);
+  padding: 2px 3px 4px !important;
+}
+
+/* Indented under its plane and ruled off on the left, the same shape
+   `.plane-node-detail-body` gives an expanded node — the two sections are the
+   same widget and should read that way.
+   `white-space: normal` is the load-bearing line: the cell inherits `nowrap`
+   from `.data-table tbody td`, and that is what used to push the summary
+   sentences past the panel's right edge. */
+.plane-placements-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  margin-left: 22px;
+  padding: 2px 0 2px 8px;
+  border-left: 1px solid var(--border-color);
+  white-space: normal;
+}
+
+.plane-placement-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 4px;
+  font-size: 11px;
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+.plane-placement-item:hover {
+  background: var(--bg-tertiary);
+}
+
+.plane-placement-item.plane-selected {
+  background: var(--accent-dim);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.plane-placement-view {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plane-placement-meta {
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+/* `.panel-btn` is `flex: 1`, which stretches the × across the row's free
+   space inside this flex container. Keep it button-sized. */
+.plane-placement-item .panel-btn {
+  flex: 0 0 auto;
+}
+
+.plane-tri-summary {
+  margin-top: 5px;
+  padding-top: 5px;
+  border-top: 1px solid var(--border-color);
+  font-size: 10px;
+  color: var(--text-secondary);
+  /* Whole sentences, so they wrap rather than truncate: there is no width to
+     spare here and no word of them is expendable. `anywhere` because a view
+     list or a normal triple is one long unbreakable-looking token. */
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+/* A node's readout is a flex row of separate parts — swatch, name,
+   coordinates, residual, padlock — so it WRAPS onto a second line at narrow
+   widths instead of running off the edge, and only the name ever ellipses. */
+.plane-tri-node {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 1px 5px;
+  min-width: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10px;
+  color: var(--text-muted);
+  padding-left: 2px;
+}
+
+/* The shared swatch carries a right margin for inline use; in a gapped flex
+   row that would double the spacing. */
+.plane-tri-node .plane-swatch {
+  flex: 0 0 auto;
+  margin-right: 0;
+}
+
+.plane-tri-node-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-secondary);
+}
+
+/* Shrinkable as a last resort — a coordinate triple normally fits on its own
+   line, and the full text is in the row's tooltip when it does not. */
+.plane-tri-node-xyz,
+.plane-tri-node-err {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plane-tri-node-pin {
+  display: inline-flex;
+  flex: 0 0 auto;
+  color: var(--accent);
+}
+
+.plane-tri-node-pin svg {
+  width: 11px;
+  height: 11px;
+}
+
+/* A pinned node's reprojection residual is OUT of sample, so it is reported
+   apart from the solve's own error rather than blended into it. */
+.plane-anchor-summary {
+  border-top: none;
+  padding-top: 0;
+  margin-top: 2px;
+  color: var(--warning-color);
+}
+
+/* --- The Nodes table: the global pool ------------------------------------ */
+
+/* A node in no plane is a normal resting state (planes are deleted without
+   their nodes), so it is dimmed rather than flagged — it simply is not drawn
+   on any view until some plane takes it up. */
+.plane-node-row.plane-node-unused td {
+  opacity: 0.6;
+}
+
+/* Shared by 2+ planes: the whole point of the pool, so it is legible at a
+   glance rather than only in a tooltip. */
+.plane-node-row.plane-node-shared {
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+/* SELECTED: the node the 3D view is ringing. A background rather than another
+   left bar, because both bars are spoken for — `plane-node-shared` and
+   `plane-node-frozen-unsolved` each claim the same 2px inset — and selection
+   has to be legible ON TOP of either of them rather than replacing it. Set on
+   the cells, not the row, so it reaches past the row background the table's
+   own striping paints. Both of a node's rows carry the class, so an expanded
+   node highlights as one block. */
+.plane-node-row.plane-node-selected > td {
+  background: var(--accent-dim);
+}
+
+/* Pinned but never triangulated: a dead end, because pinning is exactly what
+   stops a solve from filling the node in. The Pin control can say "Locked" but
+   not "and there is no 3D to hold", so the row says it — this is the only
+   per-row cue left now that the 3D column is gone. After the shared rule on
+   purpose: a node in this state is worth flagging over a node merely shared. */
+.plane-node-row.plane-node-frozen-unsolved {
+  box-shadow: inset 2px 0 0 var(--error-color);
+}
+
+/* --- The coordinate line ------------------------------------------------- */
+
+/* A node's second row. Joined to the identity row above it: that row drops its
+   bottom rule, this one keeps it, so the separator falls between NODES rather
+   than through the middle of one. */
+/* An OPEN node's identity row drops its rule, so the node and its panel read
+   as one block; a closed one keeps it, because then it is the whole node. */
+.plane-panel #planeNodesTable tbody tr.plane-node-main.plane-node-open > td {
+  border-bottom: none;
+}
+
+.plane-node-detail > td {
+  padding-top: 0 !important;
+  padding-bottom: 6px !important;
+}
+
+.plane-node-xyz-line {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+
+/* --- The node row ------------------------------------------------------- */
+
+/* Taller and quieter than a data row: this is a list of nodes you scan, not a
+   grid of values you compare. */
+.plane-nodes-table tbody td {
+  padding-top: 6px !important;
+  padding-bottom: 6px !important;
+}
+
+.plane-nodes-table thead th {
+  border-bottom: 1px solid var(--border-color);
+  white-space: nowrap;
+}
+
+/* The three icon columns are content-sized, so their labels are what set their
+   width — centre the label and the control under it together, or a 40px
+   "PINNED" over a 20px padlock reads as two different columns. */
+.plane-nodes-table .th-center,
+.plane-nodes-table tbody td:nth-child(2),
+.plane-nodes-table tbody td:nth-child(4),
+.plane-nodes-table tbody td:nth-child(5) {
+  text-align: center;
+}
+
+/* The info button rides beside the word rather than under it. */
+.plane-nodes-table .th-pin {
+  display: table-cell;
+}
+
+/* A column header's ⓘ, wherever the header is — the Nodes table's Pinned
+   column and the Planes table's Views column. */
+.data-table th .plane-pin-info {
+  margin-left: 3px;
+  vertical-align: middle;
+}
+
+.plane-node-expander {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  border-radius: 3px;
+}
+
+.plane-node-expander:hover {
+  background: var(--bg-button);
+  color: var(--text-primary);
+}
+
+.plane-node-expander .plane-caret {
+  display: inline-block;
+  font-size: 7px;
+  transition: transform var(--transition-fast);
+}
+
+.plane-node-expander.open .plane-caret {
+  transform: rotate(90deg);
+}
+
+/* The name. Plain text at rest — a row of boxed fields is what made this list
+   read as a form — and an input the moment you go near it. */
+.plane-node-name {
+  width: 100%;
+  min-width: 0;
+  padding: 2px 4px;
+  font-size: 12px;
+  font-weight: 500;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  color: var(--text-primary);
+}
+
+.plane-node-row:hover .plane-node-name {
+  border-color: var(--border-color);
+}
+
+.plane-node-name:focus {
+  background: var(--bg-tertiary);
+  border-color: var(--accent);
+  outline: none;
+}
+
+/* Rounded square, like the mock: it is the node's identity, so it leads the
+   row and is the same colour everywhere the node is drawn. */
+.plane-node-color {
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+}
+
+/* Bare glyph, not a button: quiet until you reach for it. The shared delete
+   button is a red `.panel-btn`, which is right in a table you visit to remove
+   something and wrong in a list of six nodes you are reading — six boxed red ×
+   down the edge was most of what made this list shout. */
+.plane-node-del {
+  color: var(--text-muted) !important;
+  background: transparent !important;
+  border-color: transparent !important;
+}
+
+.plane-node-del:hover {
+  color: var(--error-color) !important;
+  background: var(--bg-button) !important;
+}
+
+/* --- The expanded panel -------------------------------------------------- */
+
+/* Indented under its node and ruled off on the left, so a long list of open
+   nodes still reads as nodes with detail rather than as twice as many rows. */
+.plane-node-detail-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-left: 22px;
+  padding: 2px 0 2px 8px;
+  border-left: 1px solid var(--border-color);
+}
+
+.plane-node-planes {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.plane-node-planes-label {
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  font-size: 9px;
+}
+
+.plane-node-plane-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 5px;
+  background: var(--bg-tertiary);
+  border-radius: 8px;
+  color: var(--text-secondary);
+}
+
+.plane-node-plane-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+}
+
+.plane-node-plane-holder {
+  color: var(--text-primary);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+.plane-node-plane-mark {
+  display: inline-flex;
+  color: var(--accent);
+}
+
+.plane-node-plane-mark svg {
+  width: 11px;
+  height: 11px;
+}
+
+.plane-node-planes-none {
+  font-style: italic;
+}
+
+.plane-node-planes-stale {
+  color: var(--error-color);
+}
+
+.plane-node-xyz-cell {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+
+.plane-node-xyz-label {
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  flex: 0 0 auto;
+}
+
+/* Monospaced and right-aligned: these are read down the column as much as they
+   are read across a row, and proportional digits make that harder. */
+.plane-node-xyz-input {
+  flex: 1;
+  min-width: 0;
+  width: 100%;
+  padding: 2px 3px;
+  font-family: "SF Mono", "Fira Code", "Cascadia Code", monospace;
+  font-size: 10px;
+  text-align: right;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  color: var(--text-primary);
+  border-radius: 3px;
+}
+
+.plane-node-xyz-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+/* A Locked node's position is not typed over — see the Pin column. Shown, not
+   hidden: the coordinate is the most interesting thing about a locked node. */
+.plane-node-xyz-input:disabled {
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  cursor: not-allowed;
+}
+
+/* --- The pin control: one padlock, three states -------------------------- */
+
+/* Icon-only, and it has to stay legible at 15px while carrying the row's most
+   important fact. Colour does the work: a locked node is warm, a held one is
+   the accent, an unlocked one is quiet. */
+.plane-node-pin-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: 3px;
+  cursor: pointer;
+  color: var(--text-muted);
+}
+
+.plane-node-pin-btn:hover,
+.plane-node-pin-btn:focus-visible {
+  background: var(--bg-button);
+  color: var(--text-primary);
+  outline: none;
+}
+
+.plane-node-pin-btn.plane-node-pin-locked {
+  color: var(--warning-color);
+}
+
+.plane-node-pin-btn.plane-node-pin-plane-locked {
+  color: var(--accent);
+}
+
+/* The picker. Floats over the panel (see `openPinPopover` for why it is not in
+   the row), and reads left-to-right in increasing strictness — the same order
+   as `PIN_STATES`, so the control and the model agree. */
+.plane-pin-popover {
+  position: fixed;
+  z-index: 1200;
+  display: flex;
+  gap: 2px;
+  padding: 3px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 5px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.5);
+}
+
+.plane-pin-option {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: 3px;
+  cursor: pointer;
+  color: var(--text-secondary);
+}
+
+.plane-pin-option:hover:not(:disabled) {
+  background: var(--bg-button);
+  color: var(--text-primary);
+}
+
+/* The state already in force: shown so you can see what you have, dimmed and
+   not clickable because picking it again would do nothing. */
+.plane-pin-option.is-current {
+  opacity: 0.35;
+  cursor: default;
+  background: var(--bg-secondary);
+}
+
+.plane-pin-option.plane-node-pin-locked:not(.is-current):hover {
+  color: var(--warning-color);
+}
+
+.plane-pin-option.plane-node-pin-plane-locked:not(.is-current):hover {
+  color: var(--accent);
+}
+
+/* The ⓘ popover — one element, reused, moved to the pointer by
+   `ui/info-tip.js`. `position: fixed` because every info icon in the app is
+   inside something that scrolls or clips (the plane panel, a table, a modal),
+   and an absolutely positioned child would be cut off by the first
+   `overflow: auto` above it. The z-index clears the modals for the same
+   reason: an explanation is useless underneath the thing it explains.
+
+   `max-width` is what makes it readable — these are sentences, and without a
+   cap a long one becomes a single line spanning the window. `pointer-events:
+   none` keeps it from stealing the `mouseout` that dismisses it: the tip
+   follows the cursor, so without this it would slide under the pointer, take
+   the hover, fire `mouseout` on the icon and flicker itself away. */
+.info-tip {
+  position: fixed;
+  z-index: 10000;
+  max-width: 260px;
+  padding: 6px 9px;
+  border: 1px solid var(--border-light);
+  border-radius: 4px;
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font-size: 11px;
+  line-height: 1.45;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.5);
+  pointer-events: none;
+}
+
+.info-tip[hidden] {
+  display: none;
+}
+
+/* The two ⓘ buttons: the Pinned column's, in the header where the word "Pin"
+   used to be, and a major section's, beside its heading.
+
+   The section one replaced a `.plane-hint` paragraph at the FOOT of each
+   section — a wall of prose in a ~300px column, permanently between one table
+   and the next, read once and then scenery. Sixteen pixels beside the heading
+   asks the question where it comes up and, unlike the paragraph, is still there
+   when the section is folded. */
+.plane-pin-info,
+.plane-section-info {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: 50%;
+  color: var(--text-muted);
+  cursor: help;
+}
+
+.plane-pin-info:hover,
+.plane-section-info:hover {
+  color: var(--text-primary);
+}
+
+/* `middle`, not the flex baseline: the heading is 14px and the icon 13, so
+   baseline-aligning them sits the circle low enough to read as a footnote
+   marker. The margin keeps it off the last letter of the heading without
+   letting a click on the gap count as a click on the icon. */
+.plane-details > summary .plane-section-info {
+  margin-left: 5px;
+  vertical-align: middle;
+}
+
+/* A sub-section's heading is 12px, so its ⓘ comes down to match. */
+.plane-subdetails > summary .plane-section-info {
+  width: 14px;
+  height: 14px;
+  margin-left: 4px;
+}
+
+
+/* Pinned but never triangulated is a dead end — pinning is exactly what stops
+   a solve from filling the node in. The row carries the state as a class; this
+   is the panel-level explanation of it, so it is read without hovering. */
+.plane-warning {
+  margin-top: 6px;
+  padding: 5px 6px;
+  border: 1px solid var(--error-color);
+  border-radius: 4px;
+  background: rgba(229, 72, 77, 0.08);
+  color: var(--text-secondary);
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+/* "+2 shared" marker next to a plane's node count. */
+
+/* --- 3D Mesh Objects table (ui/mesh-objects.js) --------------------------- */
+
+/* `.plane-name-row input` is `flex: 1`, which stretches the colour swatch to
+   match the name field. The swatch is a fixed-size chip, so opt it out. */
+.plane-name-row input.plane-node-color {
+  flex: 0 0 auto;
+}
+
+/* "-1" marker next to an object's plane count: member planes that were deleted.
+   Warning-coloured rather than accent, because unlike `.plane-shared-count` it
+   reports something the user probably did not intend. */
+.mesh-object-dangling {
+  margin-left: 4px;
+  padding: 0 3px;
+  border-radius: 3px;
+  font-size: 9px;
+  line-height: 14px;
+  color: var(--warning-color);
+  border: 1px solid var(--warning-color);
+  vertical-align: middle;
+}
+
+/* The connectivity read-out under the name row. */
+.mesh-object-report {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.mesh-object-line {
+  padding: 4px 6px;
+  border-radius: 4px;
+  font-size: 10px;
+  line-height: 1.45;
+  border: 1px solid transparent;
+  color: var(--text-secondary);
+}
+
+.mesh-object-line-info {
+  background: rgba(127, 127, 127, 0.08);
+  border-color: var(--border-color);
+}
+
+.mesh-object-line-ok {
+  background: rgba(70, 167, 88, 0.08);
+  border-color: var(--success-color);
+}
+
+.mesh-object-line-warn {
+  background: rgba(245, 166, 35, 0.08);
+  border-color: var(--warning-color);
+}
+
+.mesh-object-line-error {
+  background: rgba(229, 72, 77, 0.08);
+  border-color: var(--error-color);
+}
+
+/* Membership: every plane in the project, checked when it is a member. A list
+   rather than a dropdown because the question "which planes are in this object"
+   is answered by seeing them all at once. */
+/* No inner scroller, deliberately: this list is the object's OWN members, so
+   it is a handful of rows, and the panel it sits in already scrolls. */
+.mesh-object-members {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.mesh-object-member {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 4px;
+  border-radius: 3px;
+  font-size: 11px;
+  color: var(--text-primary);
+}
+
+.mesh-object-member:hover {
+  background: rgba(127, 127, 127, 0.12);
+}
+
+/* A member whose plane was deleted. Still listed, because its × is the only
+   way to clear the stale id out of the object. */
+.mesh-object-member-dangling .mesh-object-member-name {
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.mesh-object-member-count {
+  margin-left: auto;
+  font-size: 9px;
+  color: var(--text-muted);
+}
+
+/* `.panel-btn` is `flex: 1`, which is right in a button row and wrong for a
+   single x at the end of a flex row — it would stretch across the gap the
+   count just pushed open. */
+.mesh-object-member .panel-btn {
+  flex: 0 0 auto;
+}
+
+/* The selected object's row, matching the Planes table's selection exactly —
+   the editor below acts on this row, so it has to be obvious which one. */
+#meshObjectsTable tbody tr {
+  cursor: pointer;
+}
+
+#meshObjectsTable tbody tr.plane-selected {
+  background: var(--accent-dim);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+/* --- Blocking / confirming dialog (ui/plane-definition.js) ---------------- */
+
+.plane-confirm-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  z-index: 20000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.plane-confirm-modal {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 20px 22px;
+  min-width: 380px;
+  max-width: 520px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  color: var(--text-primary);
+}
+
+.plane-confirm-modal h3 {
+  margin: 0 0 12px 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.plane-confirm-message {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.plane-confirm-modal .modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 18px;
+}
+
+.plane-confirm-modal button {
+  padding: 6px 16px;
+  border-radius: 4px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.plane-confirm-modal button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.plane-confirm-modal button:hover {
+  filter: brightness(1.15);
+}
+
+/* ============================================
+   Set Angle Between Two Planes (ui/plane-angle.js)
+   ============================================ */
+
+/* Reuses .plane-confirm-overlay / .plane-confirm-modal wholesale, so the
+   dialog looks like the rest of the plane panel's dialogs and inherits their
+   button styling; only the form rows below are new. */
+.plane-angle-modal {
+  min-width: 440px;
+}
+
+/* NO scrim, and the backdrop does not take the pointer. Alone among the plane
+   dialogs, this one is NOT modal: its inputs are two planes the user needs to
+   orbit the 3D view to tell apart, so the view stays live underneath and a
+   0.6-black dim over it would be a lie as well as an obstruction. The modal
+   itself takes the pointer back. Esc still cancels — that listener is on the
+   document and owes nothing to this. */
+#planeAngleOverlay {
+  background: none;
+  pointer-events: none;
+}
+
+#planeAngleOverlay .plane-confirm-modal {
+  pointer-events: auto;
+}
+
+/* The edit lock. "Live view, frozen data": the dialog reads plane geometry to
+   draw its ghost, so the panel that edits that geometry is out of service while
+   it is open. Every control in there is `disabled` by `applyAngleModalLock` —
+   this is the part `disabled` cannot do: dim the section so the lock is visible
+   rather than a dead click, and stop the <summary> elements folding sections
+   away under a dialog positioned against them. The panel still SCROLLS, so a
+   long node table can be read while the dialog is up. */
+body.plane-angle-lock .plane-panel {
+  opacity: 0.55;
+}
+
+body.plane-angle-lock .plane-panel summary {
+  pointer-events: none;
+}
+
+/* The dot that ties a dropdown to the outline that plane wears in 3D. */
+.plane-angle-swatch {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 6px;
+  vertical-align: middle;
+}
+
+/* The title doubles as a drag handle, so the dialog can be moved off the 3D
+   view — the same affordance the Set Origin instruction box has. */
+.plane-angle-drag {
+  cursor: move;
+  user-select: none;
+}
+
+.plane-angle-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  font-size: 12px;
+}
+
+.plane-angle-row label {
+  flex: 0 0 96px;
+  color: var(--text-secondary);
+}
+
+.plane-angle-row .plane-select {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.plane-angle-input {
+  width: 74px;
+  padding: 3px 6px;
+  border-radius: 4px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font-size: 12px;
+  text-align: right;
+}
+
+.plane-angle-suffix {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.plane-angle-swap {
+  flex: 0 0 auto;
+  padding: 2px 8px !important;
+  font-size: 13px !important;
+  line-height: 1.2;
+}
+
+/* The current angle and the hinge. Monospaced so a changing number does not
+   shift the line's width as the user types. */
+.plane-angle-readout {
+  margin: 10px 0;
+  padding: 8px 10px;
+  border-radius: 4px;
+  background: var(--bg-tertiary);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--text-primary);
+}
+
+.plane-angle-hint {
+  font-size: 11px;
+  color: var(--text-muted);
+  line-height: 1.5;
+  margin-top: 4px;
+}
+
+.plane-angle-warn:not(:empty) {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.plane-angle-error,
+.plane-angle-warning {
+  font-size: 11px;
+  line-height: 1.5;
+  padding: 6px 8px;
+  border-radius: 4px;
+  white-space: pre-wrap;
+}
+
+.plane-angle-error {
+  background: rgba(239, 68, 68, 0.15);
+  border: 1px solid rgba(239, 68, 68, 0.45);
+  color: #fca5a5;
+}
+
+.plane-angle-warning {
+  background: rgba(251, 191, 36, 0.12);
+  border: 1px solid rgba(251, 191, 36, 0.35);
+  color: #fcd34d;
+}
+
+.plane-confirm-modal button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Pin-state badges in the Nodes table, in the existing .badge family. */
+.data-table .badge-locked {
+  background: rgba(239, 68, 68, 0.35);
+  color: #fca5a5;
+}
+
+.data-table .badge-plane-locked {
+  background: rgba(251, 191, 36, 0.3);
+  color: #fcd34d;
+}
+
+/* ============================================
+   Set Origin Mode (ui/origin-definition.js)
+   ============================================ */
+
+/* Distinguished from the plane bar by colour alone — same shape, so it reads as
+   a mode banner immediately, but never mistaken for the one it replaces. */
+.origin-mode-bar {
+  background: rgba(255, 145, 60, 0.13);
+  border-bottom-color: rgba(255, 145, 60, 0.4);
+}
+
+.origin-mode-bar .plane-mode-dot {
+  background: #ff913c;
+}
+
+/* The menu bar's dropdowns are divs, so `disabled` cannot reach them. */
+body.origin-mode-lock .menu-bar,
+body.origin-mode-lock .view-strip,
+body.origin-mode-lock .timeline-container {
+  pointer-events: none;
+  opacity: 0.5;
+}
+
+/* Instructions sit over the 3D viewport because that is where the clicking
+   happens — a panel-side hint would be read after the click, not before. */
+.origin-instruction {
+  position: absolute;
+  /* Below the viewport's own top-right button row, which it would otherwise
+     sit on top of. */
+  top: 36px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 20;
+  max-width: min(420px, 90%);
+  padding: 8px 12px;
+  border-radius: 6px;
+  background: rgba(20, 20, 24, 0.92);
+  border: 1px solid rgba(255, 145, 60, 0.5);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.5);
+  text-align: center;
+  pointer-events: none;   /* never steal a pick from the canvas below */
+}
+
+/* The grip is the one part of the box that takes the pointer, so the box can be
+   dragged aside when it covers the geometry being picked without ever becoming
+   a click target itself. Full-width so it is easy to grab, but only a few
+   pixels tall so it costs almost none of the click-through area. */
+.origin-drag-handle {
+  pointer-events: auto;
+  cursor: move;
+  margin: -6px -10px 2px;
+  padding: 2px 4px 3px;
+  border-radius: 5px 5px 0 0;
+  font-size: 10px;
+  line-height: 9px;
+  letter-spacing: 3px;
+  color: var(--text-muted, #888);
+  user-select: none;
+  touch-action: none;   /* pointermove must not turn into a scroll/pan */
+}
+
+.origin-drag-handle:hover {
+  color: var(--text-primary, #e0e0e0);
+  background: rgba(255, 145, 60, 0.15);
+}
+
+.origin-step {
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text-primary);
+}
+
+.origin-legend {
+  margin-top: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  font-size: 10px;
+  color: var(--text-secondary);
+}
+
+.origin-legend > span:not(.origin-swatch) {
+  margin-right: 8px;
+}
+
+.origin-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  display: inline-block;
+}
+
+.origin-swatch-pos { background: #ff4d4d; }
+.origin-swatch-neg { background: #4d8bff; }
+
+/* The buttons are the one part of the overlay that must take clicks. */
+.origin-confirm-row {
+  margin-top: 8px;
+  display: flex;
+  gap: 6px;
+  justify-content: center;
+  pointer-events: auto;
+}
+
+.origin-confirm-row .panel-btn {
+  flex: 0 0 auto;
+  min-width: 84px;
+}
+
+.origin-continue {
+  border-color: rgba(255, 145, 60, 0.7);
+  color: #ffb877;
+}
+
+/* --- the result readout --- */
+
+/* The panel is ~300px wide. This used to be a 5-column table
+   (name | x | y | z | unit) that was wider than the panel, so the unit column
+   was clipped off the right edge. Each row is now its NAME with the values
+   indented underneath — the same shape, and deliberately the same
+   `.plane-node-xyz-*` layout classes, as the Nodes list further up the panel.
+   Unlike a node, nothing here collapses: these are seven short computed
+   vectors, not a list that grows with the project. */
+
+.origin-source {
+  font-size: 11px;
+  color: var(--text-secondary);
+  margin-bottom: 3px;
+}
+
+.origin-convention {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-bottom: 7px;
+}
+
+/* Blocks are separated by more than a name is from its own values (4px below),
+   so the gap does the grouping: each name reads as the heading of the line
+   beneath it rather than as one more item in a flat list. */
+.origin-block + .origin-block,
+.origin-angle + .origin-block {
+  margin-top: 9px;
+}
+
+/* Full width and on its own line, so a long label wraps rather than setting a
+   width the values then have to squeeze in beside. */
+.origin-row-name {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-primary);
+  margin-bottom: 2px;
+}
+
+/* Not a column any more: the unit describes the whole vector, and as a fifth
+   column it was the part that fell off the edge. */
+.origin-unit {
+  margin-left: 4px;
+  font-size: 10px;
+  font-weight: 400;
+  color: var(--text-muted);
+}
+
+/* Indented under its name and ruled off on the left, matching
+   `.plane-node-detail-body`; a shallower indent because there is no expander
+   gutter to clear here. The right padding is not symmetry — without it the z
+   value sits on the panel's edge, which is what makes the line look like it is
+   falling out of the panel rather than hanging off its name. */
+.origin-block-body {
+  margin-left: 4px;
+  padding: 2px 8px 2px 8px;
+  border-left: 2px solid var(--border-color);
+}
+
+/* The Nodes list gives each axis an input box, which is what keeps its "x" tied
+   to the number beside it. With no box the pair has to be held together by
+   position instead: the label is glued to the right-packed value, and the three
+   pairs are spread across the line. Spread rather than equal thirds because a
+   `flex: 1` third leaves dead space in FRONT of the x pair, which detaches the
+   whole line from the name above it — the pairs should start at the rule. */
+.origin-block-body .plane-node-xyz-line {
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.origin-block-body .plane-node-xyz-cell {
+  flex: 0 1 auto;
+  justify-content: flex-end;
+}
+
+/* The min-width is what lets the pairs stay glued AND the columns stay square:
+   with all three cells the same width, `space-between` spaces them evenly, so
+   the x/y/z values line up down the list as well as across. Letting the value
+   FILL its third instead would align the columns too, but it parks each axis
+   letter next to the PREVIOUS value, which is the one thing this readout
+   cannot afford to be ambiguous about. */
+.origin-block-body .origin-xyz-value {
+  min-width: 58px;
+}
+
+.origin-block-body .plane-node-xyz-label {
+  font-size: 10px;
+}
+
+/* The read-only twin of `.plane-node-xyz-input`: same monospaced column of
+   digits, but no box — nothing here is typeable. It may shrink (and ellipsise)
+   rather than push the line wider than the panel. */
+.origin-xyz-value {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  text-align: right;
+  color: var(--text-primary);
+}
+
+.origin-matrix-label {
+  margin-top: 8px;
+}
+
+.origin-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+}
+
+.origin-table td {
+  text-align: right;
+  padding: 3px 4px;
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+
+.origin-matrix td {
+  border: 1px solid var(--border-color);
+  text-align: center;
+}
+
+.origin-angle {
+  margin-top: 9px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+/* The readout sits inside a <details> now, so its first child no longer needs
+   the top margin the <h3> used to supply. */
+.plane-details-body > .origin-result {
+  padding: 0 4px;
+}
+
+/* ============================================
+   Danger Zone
+   ============================================
+
+   The three actions that reach outside the 3D view: two that rewrite the
+   calibration every downstream tool reads, and one that throws the defined
+   origin away. Tinted rather than merely labelled — this block sits at the
+   bottom of a panel the user scrolls past constantly, and "Reset" next to
+   "Export" is exactly the pair a misclick lands between.
+
+   The tint is on the BORDER and the summary only. A red body would make the
+   two harmless-looking buttons (a download, a disabled placeholder) read as
+   destructive too, which spends the warning on the wrong click. */
+.origin-danger-section .plane-details-danger {
+  border-color: color-mix(in srgb, var(--error-color) 45%, var(--border-color));
+}
+
+.plane-details-danger > summary {
+  color: var(--error-color);
+}
+
+.plane-details-danger > summary::before {
+  color: var(--error-color);
+}
+
+.plane-details-danger > summary:hover {
+  background: color-mix(in srgb, var(--error-color) 12%, transparent);
+}
+
+/* Each action gets its own full-width row: `.panel-button-row` is a flex row
+   that would otherwise put all three side by side, and at ~300px the labels
+   would truncate into "Export New Cal…" / "Set as New C…", which is precisely
+   the pair you do not want a user guessing between. */
+.plane-details-danger .panel-button-row + .panel-button-row {
+  margin-top: 6px;
+}
+
+.panel-btn-danger {
+  border-color: color-mix(in srgb, var(--error-color) 55%, var(--border-color));
+  color: var(--error-color);
+}
+
+.panel-btn-danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--error-color) 18%, var(--surface-lighter));
+}
+
+/* ============================================
+   Set as New Calibration — the confirm + progress dialogs
+   ============================================
+
+   Both reuse `.plane-confirm-overlay` / `.plane-confirm-modal`, so the scrim,
+   the z-index and the Esc behaviour are the panel's existing ones. Only the
+   inventory table and the caution line are new. See ui/origin-rebase.js. */
+/* `.calib-notice-modal` (ui/calibration-notice.js) shares this geometry rather
+   than repeating it: it is the same kind of dialog — a stack of titled blocks
+   whose height depends on the project — and it reuses the block classes below
+   for the same reason. It carries no caution and no todo list: it is a note
+   saying which sessions loaded which calibration, and nothing else. */
+.origin-rebase-modal,
+.calib-notice-modal {
+  min-width: 440px;
+  max-width: 560px;
+  /* Three tables plus two cautions is tall — ~975px on a multi-session
+     project — so on a laptop the Continue button would sit below the fold
+     with no way to reach it. ONE scroller, on the modal: the tables inside
+     never get their own, per the no-scroll-within-scroll rule. */
+  max-height: calc(100vh - 64px);
+  overflow-y: auto;
+}
+
+/* ...and Cancel / Continue STICK to the bottom of that scrollport, so the
+   two buttons are visible the moment the modal opens instead of waiting
+   below the fold. Still one scroller — sticky does not add another, it just
+   keeps this row out of the scrolled flow. */
+.origin-rebase-modal .modal-actions,
+.calib-notice-modal .modal-actions {
+  position: sticky;
+  bottom: -20px;
+  margin: 0 -22px -20px;
+  padding: 12px 22px 20px;
+  background: var(--bg-secondary);
+}
+
+.origin-rebase-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 12px 0;
+  font-size: 12px;
+}
+
+.origin-rebase-table td {
+  padding: 3px 0;
+  color: var(--text-primary);
+}
+
+.origin-rebase-num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  /* The counts are the point of the table and get compared against each other,
+     so they line up on a monospace column rather than on the label. */
+  font-family: var(--font-mono, ui-monospace, monospace);
+}
+
+/* The provenance breakdown is subordinate to the total above it. */
+.origin-rebase-sub td {
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+/* One level further in: the group buckets under `pose keypoints`. Dimmer
+   again, so three indent levels are told apart by weight and not only by the
+   em-spaces in the label, which a proportional font renders inconsistently. */
+.origin-rebase-sub2 td {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+/* Rows that are context, not work: 2D counts, and the reprojections that do
+   not move at all. Dimmed so they cannot be misread as things being rewritten. */
+.origin-rebase-quiet td {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+/* One titled table. The dialog has two of these — what the re-base rewrites
+   and what it leaves alone — plus a third for the per-session split, because
+   a single table answering both questions in one column left the reader
+   working out which row was which. */
+.origin-rebase-block {
+  margin: 14px 0 0;
+}
+
+.origin-rebase-block-title {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border-color, #444);
+}
+
+/* The two headline blocks FOLD: `ui/origin-rebase.js` builds them as
+   `<details open>` with the title as the `<summary>`, so a user who has read
+   the inventory once can collapse it and get at Continue without scrolling.
+   Expanded every time the dialog opens — the state is deliberately not
+   persisted, because the two-table split is the claim the user is being asked
+   to trust and must never be hidden by a fold they made in another project.
+
+   Scoped to `summary` so the plain `<div>` title that
+   `ui/calibration-notice.js` reuses this class on, and the dialog's own
+   non-folding `By session` block, are untouched.
+
+   No `max-height` / `overflow-y` anywhere in here: the modal above is the ONE
+   scroller, per the no-scroll-within-scroll rule. */
+summary.origin-rebase-block-title {
+  cursor: pointer;
+  /* The browser's own marker is suppressed rather than merely left in place,
+     because the triangle below is drawn in BOTH states and two disclosure
+     indicators on one row read as a glitch. `list-style` covers Firefox and
+     modern Chrome; the `::-webkit-details-marker` rule below covers Safari and
+     older WebKit, which ignore it. `display: flex` also blockifies the
+     `::before` so it can be rotated. */
+  list-style: none;
+  display: flex;
+  /* CENTER, not baseline: a rotated glyph's baseline is not where its ink is,
+     so baseline alignment left the caret sitting low and reading as a stray
+     mark beside the title rather than as part of it. */
+  align-items: center;
+  gap: 6px;
+}
+
+summary.origin-rebase-block-title::-webkit-details-marker {
+  display: none;
+}
+
+summary.origin-rebase-block-title::before {
+  /* One glyph rotated, not two different ones, so the indicator keeps its
+     metrics and the title does not shift a pixel as the section folds. */
+  /* Sized and coloured to match the title text it belongs to. At 9px in
+     `--text-muted` this glyph was ~4px of dim ink: it read as a bullet, looked
+     the same open as closed, and the only thing telling a foldable block from
+     the non-foldable `By session` one was that dot. A disclosure control has to
+     be visible or it is not a control. */
+  content: '\25B8';
+  font-size: 11px;
+  line-height: 1;
+  color: var(--text-secondary);
+  /* Rotate about the glyph's own centre, or the caret drifts sideways as it
+     turns and the title shifts with it. */
+  transform-origin: 50% 50%;
+  transition: transform 0.12s ease;
+}
+
+details[open] > summary.origin-rebase-block-title::before {
+  transform: rotate(90deg);
+}
+
+.origin-rebase-block-note {
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text-muted);
+  margin: 5px 0 2px;
+}
+
+/* One distinct calibration and the sessions that loaded it
+   (ui/calibration-notice.js). The counts sit on the TITLE row, so everything
+   below the title is nothing but folder names — the only strings in that modal
+   the user acts on. */
+.calib-notice-group-title {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.calib-notice-group-count {
+  /* The group counts get compared against each other down the stack, so they
+     line up on a monospace column, like `.origin-rebase-num`. */
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-variant-numeric: tabular-nums;
+  /* Overriding the uppercase title treatment: this half is a measurement, not
+     a heading. */
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 400;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.calib-notice-sessions {
+  margin: 6px 0 2px;
+}
+
+/* One folder name per line, monospace: these are paths the user is about to go
+   and find on disk, and a proportional font makes two long timestamped names
+   differing in one digit hard to tell apart. */
+.calib-notice-session {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-primary);
+  word-break: break-all;
+}
+
+.calib-notice-more {
+  font-family: inherit;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+/* The second table is the reassurance, not the warning, so its numbers do not
+   compete with the first table's for attention. */
+#originRebaseKeeps td,
+#originRebaseBySession td {
+  color: var(--text-secondary);
+}
+
+/* One session's row in the "By session" block: the checkbox that says whether
+   it moves, and the session name. A `<label>`, so the NAME is part of the hit
+   target — these are long timestamped folder names and a 13px box is not. */
+.origin-rebase-session {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  cursor: pointer;
+  /* The names are folders the user goes and finds on disk, and two timestamped
+     ones can differ in a single digit — same reason
+     `.calib-notice-session` is monospace. */
+  font-family: var(--font-mono, ui-monospace, monospace);
+  word-break: break-all;
+}
+
+.origin-rebase-session input {
+  flex: 0 0 auto;
+  margin: 0;
+  cursor: pointer;
+}
+
+/* The ACTIVE session: checked and disabled, because its cameras are what the
+   new calibration file describes. Not a choice, so not a pointer — the reason
+   is in the block note, which is where a disabled control's explanation has to
+   live since a disabled input's own tooltip never fires. */
+.origin-rebase-session-pinned,
+.origin-rebase-session-pinned input {
+  cursor: default;
+}
+
+.origin-rebase-caution {
+  margin: 12px 0 4px;
+  padding: 8px 10px;
+  border-radius: 4px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--error-color);
+  background: color-mix(in srgb, var(--error-color) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--error-color) 35%, transparent);
+}
+
+/* The LASTING warning, as opposed to the red one above it, which is about the
+   next 90 seconds. Amber rather than a second red box: two identical alarms
+   stacked read as one wall of red and the eye takes neither, and these two say
+   genuinely different things — "do not close the tab" expires when the
+   operation does, "your old calibration.toml now disagrees with this project"
+   does not. */
+.origin-rebase-caution.origin-rebase-caution-warn {
+  color: var(--warning-color);
+  background: color-mix(in srgb, var(--warning-color) 10%, transparent);
+  border-color: color-mix(in srgb, var(--warning-color) 35%, transparent);
+}
+
+/* The two obligations the completion modal leaves the user with. Numbered,
+   because they are steps to take and not a description of what happened. */
+.origin-rebase-todo {
+  margin: 12px 0 4px;
+  padding-left: 20px;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text-primary);
+}
+
+.origin-rebase-todo li + li {
+  margin-top: 8px;
+}
+
+/* The progress modal's bar borrows the multi-frame one's geometry; this is the
+   only rule it needs of its own, since it has no `.multi-frame-progress`
+   ancestor to inherit the label spacing from. */
+.origin-rebase-modal .multi-frame-progress {
+  margin: 14px 0 4px;
+}
+
+.origin-rebase-modal .progress-label {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+  font-variant-numeric: tabular-nums;
+}
+/* Tracks ▸ Check ID Switches — the ID Switches tab of the right panel (ui/id-switch-modal.js
+   refreshIdSwitchPanel). The tab content is the panel's one scroller; the toolbar sticks. */
+.id-switch-summary { font-size: 12px; margin: 2px 0; }
+.id-switch-about { margin-top: 8px; font-size: 12px; }
+.id-switch-about summary { cursor: pointer; color: var(--text-secondary); }
+.id-switch-about p { font-size: 12px; margin: 6px 0; color: var(--text-secondary); line-height: 1.45; }
+.id-switch-rate { opacity: 0.85; }
+.id-switch-toolbar {
+  position: sticky; top: 0; z-index: 1;
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+  padding: 8px 16px; background: var(--bg-secondary); border-bottom: 1px solid var(--border-color);
+}
+.id-switch-done { font-size: 12px; margin-right: auto; }
+.id-switch-toolbar .panel-btn { flex: none; }
+.id-switch-next:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.id-switch-repeats { flex-basis: 100%; font-size: 11px; color: var(--text-secondary); }
+.id-switch-run { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+.id-switch-row {
+  display: flex; gap: 8px; align-items: flex-start; cursor: pointer;
+  padding: 6px 16px 6px 13px; border-bottom: 1px solid var(--border-color);
+  border-left: 3px solid transparent;
+}
+.id-switch-row:hover { background: rgba(255, 107, 53, 0.10); }
+.id-switch-row.is-current { background: rgba(255, 107, 53, 0.22); }
+.id-switch-row.cue-size { border-left-color: #ffb020; }
+.id-switch-row.cue-image { border-left-color: #4cc9f0; }
+.id-switch-row.cue-both { border-image: linear-gradient(to right, #ffb020 50%, #4cc9f0 50%) 1; }
+.id-switch-row.is-repeat .id-switch-main { opacity: 0.65; }
+.id-switch-row.is-reviewed .id-switch-main { opacity: 0.45; }
+.id-switch-row.is-reviewed .id-switch-pair { text-decoration: line-through; }
+.id-switch-tick { margin: 2px 0 0; flex: none; cursor: pointer; }
+.id-switch-main { flex: 1; min-width: 0; }
+.id-switch-line1 { display: flex; gap: 8px; font-size: 12px; }
+.id-switch-time { font-variant-numeric: tabular-nums; color: var(--text-secondary); }
+.id-switch-pair { flex: 1; min-width: 0; }
+.id-switch-id { font-weight: 600; }
+.id-switch-score { font-variant-numeric: tabular-nums; color: var(--text-secondary); }
+.id-switch-line2 { font-size: 11px; color: var(--text-muted); margin-top: 1px; }
+.id-switch-end {
+  margin-left: 2px; padding: 0 5px; font-size: 10px; line-height: 15px; cursor: pointer;
+  background: transparent; color: var(--text-secondary); border: 1px solid var(--border-color); border-radius: 3px;
+}
+.id-switch-end:hover { color: var(--text-primary); background: var(--surface-hover); }
+/* Animated box around the selected row's two animals, on its own canvas per view
+   (ui/id-switch-highlight.js) — inside the wrapper, so zoom/pan/rotation apply. */
+.id-switch-canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; }
+
+/* The selected row's progress bar, driven by the viewer's frame: 1 s before the
+   animals come close (orange) -> the close spell (red, where a swap would happen) ->
+   1 s after (orange). The section colours are set inline from ID_SWITCH_SECTION_RGB
+   (ui/id-switch-highlight.js), which the box in the views also wears. */
+.id-switch-pbar {
+  position: relative; height: 6px; margin-top: 5px; border-radius: 3px;
+  background: var(--bg-button); overflow: hidden;
+  animation: id-switch-pbar-in 160ms ease-out;
+}
+@keyframes id-switch-pbar-in { from { opacity: 0; transform: scaleY(0.2); } to { opacity: 1; transform: none; } }
+.id-switch-pband { position: absolute; top: 0; bottom: 0; }
+.id-switch-pfill { position: absolute; left: 0; top: 0; bottom: 0; width: 0; background: var(--accent); opacity: 0.85; transition: width 60ms linear; }
+
+/* Image ID-switch check — progress dialog (ui/id-switch-modal.js) */
+.id-switch-progress { max-width: 520px; }
+.id-switch-progress-text { margin: 8px 0; font-size: 13px; min-height: 2.6em; }
+.id-switch-progress-bar { height: 6px; border-radius: 3px; background: rgba(255,255,255,0.12); overflow: hidden; }
+.id-switch-progress-fill { height: 100%; width: 0; background: #4cc9f0; transition: width 0.2s; }
