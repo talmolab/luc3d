@@ -16,7 +16,9 @@
  * `options.reprojErrorThreshold` instead.
  */
 
-import { makePoints3d, points3dNodeCount, hasPoint3d, getPoint3d, readPoint3d, setPoint3d, clearPoint3d } from './pose-data.js?v=97654ac0e810';
+import { makePoints3d, points3dNodeCount, hasPoint3d, getPoint3d, readPoint3d, setPoint3d, clearPoint3d } from './pose-data.js?v=62a2ec3e1ea9';
+import { jacobiEigen } from './plane-fit.js?v=62a2ec3e1ea9';
+export { jacobiEigen };
 
 // Settings readers for `triangulateAndReproject` (see the header). Unset means
 // "every camera included, no threshold" — the same defaults as before the split.
@@ -75,127 +77,10 @@ export function matTranspose(A) {
     return T;
 }
 
-/**
- * Jacobi eigenvalue algorithm for an NxN symmetric matrix.
- *
- * Iteratively applies Givens (Jacobi) rotations to drive off-diagonal elements
- * to zero. Converges for any real symmetric matrix. Particularly efficient and
- * robust for small matrices (4x4 in our case).
- *
- * @param {number[][]} M - NxN symmetric matrix (will not be modified)
- * @param {number} [maxIter=100] - Maximum number of sweeps
- * @param {number} [tol=1e-12] - Convergence tolerance for off-diagonal norm
- * @returns {{ eigenvalues: number[], eigenvectors: number[][] }}
- *   eigenvalues[i] is the i-th eigenvalue.
- *   eigenvectors[i] is the i-th eigenvector (column i of the rotation matrix).
- */
-export function jacobiEigen(M, maxIter, tol) {
-    if (maxIter === undefined) maxIter = 100;
-    if (tol === undefined) tol = 1e-12;
-
-    const n = M.length;
-
-    // Deep copy M into A (we will modify A in-place)
-    const A = [];
-    for (let i = 0; i < n; i++) {
-        A[i] = M[i].slice();
-    }
-
-    // V accumulates the product of all rotation matrices -> eigenvectors
-    // Start with identity
-    const V = [];
-    for (let i = 0; i < n; i++) {
-        V[i] = new Array(n).fill(0);
-        V[i][i] = 1;
-    }
-
-    for (let iter = 0; iter < maxIter; iter++) {
-        // Compute off-diagonal Frobenius norm
-        let offDiagNorm = 0;
-        for (let i = 0; i < n; i++) {
-            for (let j = i + 1; j < n; j++) {
-                offDiagNorm += A[i][j] * A[i][j];
-            }
-        }
-        offDiagNorm = Math.sqrt(2 * offDiagNorm); // factor of 2 because symmetric
-
-        if (offDiagNorm < tol) {
-            break; // Converged
-        }
-
-        // Sweep: zero out each off-diagonal element (i < j)
-        for (let p = 0; p < n; p++) {
-            for (let q = p + 1; q < n; q++) {
-                if (Math.abs(A[p][q]) < tol * 1e-2) {
-                    continue; // Skip tiny elements
-                }
-
-                // Compute rotation angle
-                const app = A[p][p];
-                const aqq = A[q][q];
-                const apq = A[p][q];
-
-                let theta;
-                if (Math.abs(app - aqq) < 1e-15) {
-                    theta = Math.PI / 4;
-                } else {
-                    theta = 0.5 * Math.atan2(2 * apq, app - aqq);
-                }
-
-                const c = Math.cos(theta);
-                const s = Math.sin(theta);
-
-                // Apply rotation to A: A' = G^T A G
-                // Only rows/cols p and q change
-
-                // First, compute new values for rows p and q
-                const newRowP = new Array(n);
-                const newRowQ = new Array(n);
-                for (let j = 0; j < n; j++) {
-                    newRowP[j] = c * A[p][j] + s * A[q][j];
-                    newRowQ[j] = -s * A[p][j] + c * A[q][j];
-                }
-                for (let j = 0; j < n; j++) {
-                    A[p][j] = newRowP[j];
-                    A[q][j] = newRowQ[j];
-                }
-
-                // Now columns p and q
-                const newColP = new Array(n);
-                const newColQ = new Array(n);
-                for (let i = 0; i < n; i++) {
-                    newColP[i] = c * A[i][p] + s * A[i][q];
-                    newColQ[i] = -s * A[i][p] + c * A[i][q];
-                }
-                for (let i = 0; i < n; i++) {
-                    A[i][p] = newColP[i];
-                    A[i][q] = newColQ[i];
-                }
-
-                // Accumulate rotation into V
-                for (let i = 0; i < n; i++) {
-                    const vip = V[i][p];
-                    const viq = V[i][q];
-                    V[i][p] = c * vip + s * viq;
-                    V[i][q] = -s * vip + c * viq;
-                }
-            }
-        }
-    }
-
-    // Extract eigenvalues from diagonal of A, eigenvectors from columns of V
-    const eigenvalues = new Array(n);
-    const eigenvectors = [];
-    for (let i = 0; i < n; i++) {
-        eigenvalues[i] = A[i][i];
-        eigenvectors[i] = new Array(n);
-        for (let j = 0; j < n; j++) {
-            eigenvectors[i][j] = V[j][i]; // column i of V
-        }
-    }
-
-    return { eigenvalues: eigenvalues, eigenvectors: eigenvectors };
-}
+// `jacobiEigen` lives in ./plane-fit.js, not here: `pose/plane-data.js` needs
+// the least-squares plane fit built on it and must not import this module.
+// That file depends only on ./pose-data.js, so a worker can still load it.
+// Re-exported because every existing caller reads it from this module.
 
 /**
  * For a 4x4 symmetric matrix M, find the eigenvector corresponding to the
@@ -336,22 +221,35 @@ function smallestEigvec4Flat(M, out) {
  * DLT null vector for observations already gathered as rows: `xs[r], ys[r]`
  * with projection matrix `Ps[r]`, r < nObs. Writes the homogeneous 4-vector
  * into `out`. Same A entries and M = AᵀA sums as building A + `svd3x4`.
+ *
+ * The unknown is a point in the NORMALIZED world frame `X = s·X' + c` (see the
+ * note on `triangulatePointDLT`), so the rows are formed from `P·T` rather than
+ * `P`. Omitting `s`/`cx`/`cy`/`cz` is the identity frame, which reproduces the
+ * raw rows exactly — multiplying by 1 and adding 0 are exact in IEEE 754 — so
+ * `__triangulationKernelsForTest`'s bit-identity against `svd3x4(A)` is
+ * unaffected.
  */
-function dltHomogeneousFlat(xs, ys, Ps, nObs, out) {
+function dltHomogeneousFlat(xs, ys, Ps, nObs, out, s, cx, cy, cz) {
+    if (s === undefined) { s = 1; cx = 0; cy = 0; cz = 0; }
     const rows = nObs * 2;
     if (_dltA.length < rows * 4) _dltA = new Float64Array(rows * 4 * 2);
     const A = _dltA;
     for (let idx = 0; idx < nObs; idx++) {
         const x = xs[idx], y = ys[idx], P = Ps[idx];
         const o1 = (2 * idx) * 4, o2 = (2 * idx + 1) * 4;
-        A[o1] = x * P[2][0] - P[0][0];
-        A[o1 + 1] = x * P[2][1] - P[0][1];
-        A[o1 + 2] = x * P[2][2] - P[0][2];
-        A[o1 + 3] = x * P[2][3] - P[0][3];
-        A[o2] = y * P[2][0] - P[1][0];
-        A[o2 + 1] = y * P[2][1] - P[1][1];
-        A[o2 + 2] = y * P[2][2] - P[1][2];
-        A[o2 + 3] = y * P[2][3] - P[1][3];
+        // Column 4 is row r of P·T's last entry:
+        //   P[r][0]*cx + P[r][1]*cy + P[r][2]*cz + P[r][3]
+        const p0w = P[0][0] * cx + P[0][1] * cy + P[0][2] * cz + P[0][3];
+        const p1w = P[1][0] * cx + P[1][1] * cy + P[1][2] * cz + P[1][3];
+        const p2w = P[2][0] * cx + P[2][1] * cy + P[2][2] * cz + P[2][3];
+        A[o1] = s * (x * P[2][0] - P[0][0]);
+        A[o1 + 1] = s * (x * P[2][1] - P[0][1]);
+        A[o1 + 2] = s * (x * P[2][2] - P[0][2]);
+        A[o1 + 3] = x * p2w - p0w;
+        A[o2] = s * (y * P[2][0] - P[1][0]);
+        A[o2 + 1] = s * (y * P[2][1] - P[1][1]);
+        A[o2 + 2] = s * (y * P[2][2] - P[1][2]);
+        A[o2 + 3] = y * p2w - p1w;
     }
     const M = _dltM;
     for (let i = 0; i < 4; i++) {
@@ -374,6 +272,76 @@ const _dltOut = new Float64Array(4);
 // ============================================
 
 /**
+ * The camera centre of a 3x4 projection matrix, or null if it is degenerate.
+ *
+ * `P = [M | p4]` and the centre is the null vector, `C = -M^-1 p4`. Used only
+ * to build the normalizing frame below — nothing else reads it.
+ * @private
+ */
+function cameraCentreFromP(P) {
+    const a = P[0][0], b = P[0][1], c = P[0][2];
+    const d = P[1][0], e = P[1][1], f = P[1][2];
+    const g = P[2][0], h = P[2][1], i = P[2][2];
+    const det = a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g);
+    if (!isFinite(det) || Math.abs(det) < 1e-12) return null;
+    const x = P[0][3], y = P[1][3], z = P[2][3];
+    const C = [
+        -(((e * i - f * h) * x) + (-(b * i - c * h) * y) + ((b * f - c * e) * z)) / det,
+        -((-(d * i - f * g) * x) + ((a * i - c * g) * y) + (-(a * f - c * d) * z)) / det,
+        -(((d * h - e * g) * x) + (-(a * h - b * g) * y) + ((a * e - b * d) * z)) / det,
+    ];
+    return (isFinite(C[0]) && isFinite(C[1]) && isFinite(C[2])) ? C : null;
+}
+
+/**
+ * Cache of normalizing frames, keyed on the caller's `projectionMatrices`
+ * ARRAY. `triangulatePoints` passes the same array for every keypoint of a
+ * group, so this computes one 3x3 inverse per camera per group rather than per
+ * point. Weak, so a released camera set is collectable.
+ * @private
+ */
+const _dltFrameCache = new WeakMap();
+
+/**
+ * The similarity that `triangulatePointDLT` solves in: centre on the camera
+ * centroid, scale by their mean distance from it.
+ *
+ * Derived from the CAMERAS ONLY — never from the observations or the answer —
+ * which is precisely what makes it transform covariantly with the world frame
+ * and so makes the solve frame-invariant (see the note on the DLT itself).
+ * @private
+ */
+function dltNormalizingFrame(projectionMatrices) {
+    if (_dltFrameCache.has(projectionMatrices)) {
+        return _dltFrameCache.get(projectionMatrices);
+    }
+    const centres = [];
+    for (let i = 0; i < projectionMatrices.length; i++) {
+        const P = projectionMatrices[i];
+        if (!P) continue;
+        const C = cameraCentreFromP(P);
+        if (C) centres.push(C);
+    }
+    let frame = null;
+    if (centres.length > 0) {
+        let cx = 0, cy = 0, cz = 0;
+        for (let i = 0; i < centres.length; i++) {
+            cx += centres[i][0]; cy += centres[i][1]; cz += centres[i][2];
+        }
+        cx /= centres.length; cy /= centres.length; cz /= centres.length;
+        let s = 0;
+        for (let i = 0; i < centres.length; i++) {
+            s += Math.hypot(centres[i][0] - cx, centres[i][1] - cy, centres[i][2] - cz);
+        }
+        s /= centres.length;
+        if (!isFinite(s) || s < 1e-9) s = 1;          // coincident centres
+        if (isFinite(cx) && isFinite(cy) && isFinite(cz)) frame = { cx, cy, cz, s };
+    }
+    _dltFrameCache.set(projectionMatrices, frame);
+    return frame;
+}
+
+/**
  * Triangulate a single 3D point from 2+ 2D observations using DLT.
  *
  * DLT formulation: for each observation (x_i, y_i) and projection matrix P_i,
@@ -384,6 +352,38 @@ const _dltOut = new Float64Array(4);
  * The system Ax = 0 is solved via SVD (smallest right singular vector).
  * The solution x is a homogeneous 4-vector; we convert to 3D by dividing
  * by the last component.
+ *
+ * ## IT IS SOLVED IN A NORMALIZED WORLD FRAME, AND THAT IS LOAD-BEARING
+ *
+ * DLT minimizes an ALGEBRAIC error, and `‖x‖ = 1` on a HOMOGENEOUS 4-vector is
+ * not a geometric constraint: it weights the direction part `(X,Y,Z)` against
+ * the scale part `W`, so moving the world origin re-weights the cost and moves
+ * the minimizer. Solving in the raw calibration frame therefore made this
+ * function depend on WHERE THE ORIGIN HAPPENS TO BE — and
+ * `Set as New Calibration`, whose whole contract is that it re-expresses the
+ * world and changes no geometry, moved it by ~1.2 m. Measured on a real
+ * 6-camera session: identical 2D triangulated 0.26 mm apart at the median but
+ * 17 mm at p99 and metres in the tail, and because `CrossViewTracker` scores
+ * its cross-view association against exactly these points (`_retriangulate`),
+ * 21% of frames came out grouped DIFFERENTLY — three times worse by
+ * reprojection — purely from swapping the calibration file.
+ *
+ * So the system is built in a frame derived from the CAMERAS: origin at their
+ * centroid, unit = their mean distance from it (`dltNormalizingFrame`). Under
+ * a rigid change of world frame `X' = R(X - o)` the camera centres move with
+ * everything else, so that frame moves with them, and the normalized `A`
+ * differs only by `diag(Rᵀ, 1)` on its columns — an ORTHOGONAL factor, which
+ * leaves `‖x‖ = 1` alone. The null vector therefore maps exactly, and the
+ * answer is exactly the rigidly-transformed answer. Scaling is the same
+ * argument plus ordinary conditioning (Hartley).
+ *
+ * The frame must depend on the cameras ALONE. Deriving it from the
+ * observations, or from a first-pass answer, would make it depend on the very
+ * thing being solved for and the invariance argument collapses.
+ *
+ * If no camera centre can be recovered (degenerate projection matrices) this
+ * falls back to solving in the raw frame, which is the old behaviour — a worse
+ * answer is better than no answer.
  *
  * @param {(number[]|null)[]} observations - 2D points [[x1,y1], [x2,y2], ...]
  *   null entries mean the point is not visible in that camera.
@@ -404,16 +404,25 @@ export function triangulatePointDLT(observations, projectionMatrices) {
         return null;
     }
 
-    // Rows of A (2 per observation: x·P[2] − P[0], y·P[2] − P[1]) and its null
-    // vector, via the allocation-free kernel — bit-identical to building A as
-    // row arrays and calling `svd3x4(A)` (see `dltHomogeneousFlat`).
+    // The camera-derived similarity this is solved in (see the note above).
+    // Null only when no projection matrix yields a centre, in which case the
+    // frame is the identity and this is the original raw-frame solve.
+    const nf = dltNormalizingFrame(projectionMatrices);
+    const s = nf ? nf.s : 1;
+    const cx = nf ? nf.cx : 0, cy = nf ? nf.cy : 0, cz = nf ? nf.cz : 0;
+
+    // Rows of A (2 per observation: x·P[2] − P[0], y·P[2] − P[1], taken through
+    // the normalizing frame) and its null vector, via the allocation-free
+    // kernel — bit-identical to building A as row arrays and calling
+    // `svd3x4(A)` (see `dltHomogeneousFlat`).
     for (let idx = 0; idx < validIndices.length; idx++) {
         const i = validIndices[idx];
         _dltXs[idx] = observations[i][0];
         _dltYs[idx] = observations[i][1];
         _dltPs[idx] = projectionMatrices[i];
     }
-    const xHomog = dltHomogeneousFlat(_dltXs, _dltYs, _dltPs, validIndices.length, _dltOut);
+    const xHomog = dltHomogeneousFlat(
+        _dltXs, _dltYs, _dltPs, validIndices.length, _dltOut, s, cx, cy, cz);
     _dltPs.length = 0;   // don't pin projection matrices between calls
 
     // Convert from homogeneous coordinates
@@ -423,7 +432,12 @@ export function triangulatePointDLT(observations, projectionMatrices) {
         return null;
     }
 
-    return [xHomog[0] / w, xHomog[1] / w, xHomog[2] / w];
+    // Back out of the normalized frame: X = s·X' + c
+    return [
+        s * (xHomog[0] / w) + cx,
+        s * (xHomog[1] / w) + cy,
+        s * (xHomog[2] / w) + cz,
+    ];
 }
 
 /**
@@ -1058,6 +1072,29 @@ export function reprojectPoints(points3d, projectionMatrix) {
 export function reprojectPointCamera(point3d, camera) {
     const ideal = reprojectPoint(point3d, camera.projectionMatrix);
     return camera.distortPoint ? camera.distortPoint(ideal) : ideal;
+}
+
+/**
+ * The homogeneous depth `w` of a 3D point in a camera's projective frame:
+ * POSITIVE in front of the camera, negative behind it, ~0 on the plane through
+ * the centre of projection.
+ *
+ * `reprojectPoint` divides by `w` without checking its sign, so a point BEHIND
+ * the camera comes back as a mirrored pixel coordinate that is finite,
+ * plausible, and geometrically meaningless. Any caller reprojecting into a
+ * camera it did not choose — one the user never annotated in, e.g. filling in
+ * the views a plane was not placed on — has to gate on this. Callers
+ * reprojecting into the camera an observation CAME from do not: the point is
+ * in front by construction there.
+ *
+ * @param {number[]} point3d - [X, Y, Z]
+ * @param {Camera} camera - Needs `.projectionMatrix`.
+ * @returns {number} `w`, or NaN if the camera has no projection matrix.
+ */
+export function cameraDepth(point3d, camera) {
+    const P = camera && camera.projectionMatrix;
+    if (!P || !P[2]) return NaN;
+    return P[2][0] * point3d[0] + P[2][1] * point3d[1] + P[2][2] * point3d[2] + P[2][3];
 }
 
 /**

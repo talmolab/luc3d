@@ -6,7 +6,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Multi-View Pose Proofreader</title>
-    <link rel="stylesheet" href="styles.css?v=97654ac0e810">
+    <link rel="stylesheet" href="styles.css?v=62a2ec3e1ea9">
     <!-- Pinned: dockview-core 7.x renamed api.onUnhandledDragOverEvent →
          onUnhandledDragOver, so the unpinned /+esm import broke pane docking
          whenever the CDN cache refreshed. Keep this pin in sync with the
@@ -18,17 +18,17 @@
     <script src="https://cdn.jsdelivr.net/npm/three@0.147.0/build/three.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/three@0.147.0/examples/js/controls/OrbitControls.js"></script>
     <!-- h5wasm for in-browser HDF5 read/write — local vendored 0.10.3 IIFE (global `h5wasm`); see lib/h5wasm/PROVENANCE.txt -->
-    <script src="./lib/h5wasm/h5wasm.iife.js?v=97654ac0e810"></script>
+    <script src="./lib/h5wasm/h5wasm.iife.js?v=62a2ec3e1ea9"></script>
     <!-- Video encode AND decode both go through mediabunny (importmap below):
          export via ui/video-encode.js, decode via sleap-io.js's backend. -->
     <!-- Import map for sleap-io.js ESM dependencies -->
     <script type="importmap">
     {
         "imports": {
-            "h5wasm": "./lib/h5wasm/hdf5_hl.js?v=97654ac0e810",
+            "h5wasm": "./lib/h5wasm/hdf5_hl.js?v=62a2ec3e1ea9",
             "yaml": "https://cdn.jsdelivr.net/npm/yaml@2.8.0/browser/index.js",
-            "mediabunny": "./lib/mediabunny/mediabunny.min.mjs?v=97654ac0e810",
-            "pako": "./lib/pako/pako.esm.mjs?v=97654ac0e810"
+            "mediabunny": "./lib/mediabunny/mediabunny.min.mjs?v=62a2ec3e1ea9",
+            "pako": "./lib/pako/pako.esm.mjs?v=62a2ec3e1ea9"
         }
     }
     </script>
@@ -166,6 +166,8 @@
                     <div class="menu-dropdown-item" id="menuResetView">Reset 3D View</div>
                     <div class="menu-dropdown-item" id="menuFitScene">Fit 3D to Scene</div>
                     <div class="menu-separator"></div>
+                    <div class="menu-dropdown-item" id="menuDefinePlanes">Define Planes <span
+                            class="shortcut-hint">Ctrl/Cmd+Shift+P</span></div>
                     <div class="menu-dropdown-item" id="menuAlignViews">Align Views to References...</div>
                 </div>
             </div>
@@ -242,6 +244,24 @@
             </div>
         </div>
 
+        <!-- Defining Plane Mode banner (View ▸ Define Planes). Hidden unless the
+             mode is active; see ui/plane-definition.js. -->
+        <div class="plane-mode-bar" id="planeModeBar" style="display:none;">
+            <span class="plane-mode-dot"></span>
+            <span class="plane-mode-label">Defining Plane Mode</span>
+            <span class="plane-mode-hint" id="planeModeHint">Drag a plane from the panel onto a video view</span>
+            <button class="toolbar-btn plane-mode-exit" id="planeModeExit" title="Leave Defining Plane Mode">Exit</button>
+        </div>
+
+        <!-- Set Origin Mode. Replaces the plane bar while active (both at once
+             would advertise two modes). Exit and Esc are the only ways out. -->
+        <div class="plane-mode-bar origin-mode-bar" id="originModeBar" style="display:none;">
+            <span class="plane-mode-dot"></span>
+            <span class="plane-mode-label">Set Origin Mode</span>
+            <span class="plane-mode-hint" id="originModeHint"></span>
+            <button class="toolbar-btn plane-mode-exit" id="originModeExit" title="Leave Set Origin Mode (Esc)">Exit</button>
+        </div>
+
         <!-- Main content: video grid + 3D viewport + info panel -->
         <div class="main-content">
             <!-- Video Grid Section (left/center) -->
@@ -284,6 +304,23 @@
                 <button class="viewport3d-show-cam-btn" id="btnShowInitialView" title="Reset to initial view" style="display:none; top:36px;">Show Initial View</button>
                 <button class="viewport3d-show-cam-btn" id="btnSetEnv" title="Freeze current frame's 3D groups as persistent environment reference" style="bottom:6px; top:auto;">Set Env</button>
                 <button class="viewport3d-show-cam-btn" id="btnClearEnv" title="Remove environment overlay" style="bottom:6px; top:auto; left:70px; display:none;">Clear Env</button>
+                <!-- Set Origin Mode wizard: instructions live over the 3D view
+                     because that is where the clicking happens. -->
+                <div class="origin-instruction" id="originInstruction" style="display:none;">
+                    <!-- The box floats over the very geometry the user has to
+                         click, so it can be dragged out of the way. Only the
+                         grip takes pointer events (see styles.css). -->
+                    <div class="origin-drag-handle" id="originDragHandle" title="Drag to move">&#8942;&#8942;&#8942;</div>
+                    <div class="origin-step" id="originStepText"></div>
+                    <div class="origin-legend" id="originLegend" style="display:none;">
+                        <span class="origin-swatch origin-swatch-pos"></span><span>Red arrow = +Z</span>
+                        <span class="origin-swatch origin-swatch-neg"></span><span>Blue arrow = +Z</span>
+                    </div>
+                    <div class="origin-confirm-row" id="originConfirmRow" style="display:none;">
+                        <button class="panel-btn" id="btnOriginCancel">Cancel</button>
+                        <button class="panel-btn origin-continue" id="btnOriginContinue">Continue</button>
+                    </div>
+                </div>
             </div>
 
             <!-- Split handle: 3D viewport | info panel -->
@@ -527,6 +564,45 @@
                         <span title="The amber &quot;?&quot; badge on an instance that is not yet assigned to a cross-view group. Untick to keep the dashed edges and reduced opacity without the badge.">Show "?" badge</span>
                         <label class="toggle-switch" style="margin-left:auto;">
                             <input type="checkbox" id="visUnlinkedBadge" checked>
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                    <!-- Planes. The planes the user annotated are scene geometry
+                         and are drawn in EVERY mode, so these four say which of
+                         their parts survive OUTSIDE Defining Plane Mode. Inside
+                         the mode all four are forced on (ui/plane-visibility.js):
+                         the panel edits parts the user has to be able to see.
+                         Planes and nodes are separate because a node outlives
+                         the planes referencing it, and 2D/3D are separate
+                         because they are two different kinds of clutter —
+                         filled walls over the frame being labelled, versus a
+                         cage in the 3D view that is the whole point of it. -->
+                    <h3>Planes</h3>
+                    <div class="vis-slider-row">
+                        <span title="Draw the annotated planes (View > Define Planes) over the 2D views, filled. Always on inside Defining Plane Mode.">Planes in 2D Views</span>
+                        <label class="toggle-switch" style="margin-left:auto;">
+                            <input type="checkbox" id="visPlanes2D" checked>
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                    <div class="vis-slider-row">
+                        <span title="Draw the annotated planes in the 3D viewer, filled. Always on inside Defining Plane Mode.">Planes in 3D Views</span>
+                        <label class="toggle-switch" style="margin-left:auto;">
+                            <input type="checkbox" id="visPlanes3D" checked>
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                    <div class="vis-slider-row">
+                        <span title="Draw the plane NODES — the corner dots and their names — over the 2D views. Independent of the planes themselves. Always on inside Defining Plane Mode.">Nodes in 2D Views</span>
+                        <label class="toggle-switch" style="margin-left:auto;">
+                            <input type="checkbox" id="visPlaneNodes2D" checked>
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                    <div class="vis-slider-row">
+                        <span title="Draw the plane nodes as corners in the 3D viewer. Independent of the planes themselves. Always on inside Defining Plane Mode.">Nodes in 3D Views</span>
+                        <label class="toggle-switch" style="margin-left:auto;">
+                            <input type="checkbox" id="visPlaneNodes3D" checked>
                             <span class="slider"></span>
                         </label>
                     </div>
@@ -834,6 +910,362 @@
                     </div>
                 </div>
 
+                <!-- ==================== Define Plane Panel ====================
+                     Shown INSTEAD of the tab bar + tab contents while Defining
+                     Plane Mode is active (View ▸ Define Planes). Populated by
+                     ui/plane-definition.js.
+
+                     TWO SIBLING SECTIONS, in the order the work happens:
+                     Nodes (the project-wide pool) -> Planes (the roster, and
+                     the editor for whichever plane is selected). Node creation
+                     is deliberately NOT nested inside the plane editor: a node
+                     outlives the planes that use it and may belong to several
+                     at once, so presenting it as a sub-step of editing one
+                     plane would misstate the model. That is the one split this
+                     panel keeps; picking a plane and editing it were two
+                     sections and are now one, because they are one job. -->
+                <div class="plane-panel" id="planePanel" style="display:none;">
+
+                    <!-- 1 — NODES: the PROJECT-WIDE pool. Everything in this
+                         table acts on the NODE, so it applies to every plane
+                         using it. + Node ONLY mints a pool node — putting one
+                         into a plane is + Add in the Planes section. -->
+                    <div class="info-section">
+                        <details class="plane-details" id="planeNodesDetails" open>
+                            <summary>Nodes<button type="button" class="plane-section-info" id="planeNodesInfo"></button></summary>
+                            <div class="plane-details-body">
+                                <!-- Every column is named except the chevron,
+                                     which names itself. The icon columns are
+                                     content-sized, so the Name field takes
+                                     whatever is left. Pinned carries an info
+                                     button because what the THREE states MEAN
+                                     is the one thing a padlock cannot say. -->
+                                <table class="data-table plane-nodes-table" id="planeNodesTable">
+                                    <thead>
+                                        <tr>
+                                            <th style="width:14px"></th>
+                                            <th class="th-center">Color</th>
+                                            <th>Name</th>
+                                            <th class="th-center th-pin">Pinned<button type="button" class="plane-pin-info" id="planePinInfo"></button></th>
+                                            <th class="th-center">Delete</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody></tbody>
+                                </table>
+                                <div class="table-empty" id="planeNodesEmpty">No nodes yet</div>
+                                <!-- Pinned-but-never-triangulated nodes, named in the
+                                     open: that state cannot resolve itself, so a
+                                     tooltip would not reach the user who caused it. -->
+                                <div class="plane-warning" id="planeFrozenWarning" style="display:none;"></div>
+                                <div class="panel-button-row" style="margin-top:6px">
+                                    <input type="text" id="planeNodeNameInput" class="plane-text-input" placeholder="Node name" />
+                                    <button class="panel-btn" id="btnAddPlaneNode" title="Mint a node in the project-wide pool. It joins NO plane and creates none — put it in a plane with + Add in the Planes section.">+ Node</button>
+                                </div>
+                            </div>
+                        </details>
+                    </div>
+
+                    <!-- 2 — PLANES: the roster AND the editor for whichever
+                         plane is selected, in ONE section. They used to be two
+                         — "Edit Plane" above "Planes" — and the split made the
+                         reader hold a plane in their head while scrolling
+                         between the list that picks it and the controls that
+                         act on it.
+
+                         Top to bottom: the roster, `+ New Plane`, then the
+                         selected plane's name and its three foldable parts
+                         (Nodes In This Plane / Node Connections / Actions), and
+                         Plane Appearance last because it styles every plane in
+                         the table rather than the selected one.
+
+                         A plane is an ordered set of nodes from the Nodes pool
+                         above, plus optional connections. Deleting a plane
+                         KEEPS its nodes — the Nodes table is the only place a
+                         node is destroyed. Its members are references into that
+                         pool, so the × in Nodes In This Plane takes the node out
+                         of THIS plane only and the node itself survives. -->
+                    <div class="info-section">
+                        <details class="plane-details" id="planePlanesDetails" open>
+                            <summary><span class="plane-summary-label">Planes</span><span class="plane-summary-name" id="planeEditorTitle"></span><button type="button" class="plane-section-info" id="planePlanesInfo"></button></summary>
+                            <div class="plane-details-body">
+                                <!-- THE roster, and the only selector: a row
+                                     click picks the plane everything below
+                                     edits. Also the drag source — a row dropped
+                                     onto a video view places that plane there.
+                                     Fixed column widths (see
+                                     `table-layout: fixed` in styles.css): the
+                                     panel is ~300px and an auto-layout table
+                                     grows to fit its widest cell, which is what
+                                     gave the section a horizontal scrollbar.
+                                     Name takes whatever is left and ellipses. -->
+                                <table class="data-table" id="planeSkeletonsTable">
+                                    <thead>
+                                        <tr>
+                                            <th style="width:20px"></th>
+                                            <th>Name</th>
+                                            <th style="width:46px">Nodes</th>
+                                            <!-- 62px: "VIEWS" measures 37px at the
+                                                 header's 10px/0.5px uppercase, plus
+                                                 the 16px ⓘ and its 3px margin, plus
+                                                 6px of cell padding. Under 62 the
+                                                 header ellipses to "VIEWS…". -->
+                                            <th style="width:62px">Views<button type="button" class="plane-pin-info" id="planeViewsInfo"></button></th>
+                                            <th style="width:28px"></th>
+                                        </tr>
+                                    </thead>
+                                    <tbody></tbody>
+                                </table>
+                                <div class="table-empty" id="planeSkeletonsEmpty">No planes yet</div>
+
+                                <!-- CREATE, ruled off from the editor below it:
+                                     everything under the rule acts on the
+                                     SELECTED plane, and this is the one control
+                                     that makes one. It sits OUTSIDE
+                                     #planeEditorContent so it stays live with
+                                     nothing selected — with no planes at all it
+                                     is the only thing here that does anything,
+                                     so it cannot be empty-stated away. It does
+                                     not select, either: the roster above does
+                                     that, the same way a 3D Mesh Object is
+                                     chosen by clicking its row. -->
+                                <div class="panel-button-row plane-create-row">
+                                    <button class="panel-btn" id="btnNewPlaneSkeleton" title="Create a new plane and edit it below">+ New Plane</button>
+                                </div>
+
+                                <!-- Everything below needs a plane to act on, so
+                                     it is empty-stated as a whole rather than
+                                     shown half-dead. -->
+                                <div class="table-empty" id="planeEditorEmpty" style="display:none;">No plane selected — click a plane in the table above, or + New Plane.</div>
+                                <div id="planeEditorContent">
+                                    <!-- The plane's name, the only place it is
+                                         renamed — the same label 3D Mesh Objects
+                                         uses for the same control. -->
+                                    <div class="plane-name-row">
+                                        <span>Name</span>
+                                        <input type="text" id="planeSkeletonName" placeholder="plane_1" />
+                                    </div>
+
+                                    <details class="plane-details plane-subdetails" id="planeMembersDetails" open>
+                                        <summary>Nodes In This Plane</summary>
+                                        <div class="plane-details-body">
+                                            <table class="data-table" id="planeMembersTable">
+                                                <thead>
+                                                    <tr>
+                                                        <th>Name</th>
+                                                        <!-- Wide enough for the
+                                                             header word: the table
+                                                             is fixed-layout now, so
+                                                             a too-narrow column
+                                                             ellipses "COLOR". -->
+                                                        <th style="width:46px">Color</th>
+                                                        <th style="width:30px"></th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody></tbody>
+                                            </table>
+                                            <div class="table-empty" id="planeMembersEmpty">No nodes in this plane yet</div>
+                                            <!-- THE way a node comes to be shared: pick a
+                                                 node that is already in the pool and add it
+                                                 here as well. -->
+                                            <div class="panel-button-row" style="margin-top:6px">
+                                                <select id="planeAddNodeSelect" class="plane-select"></select>
+                                                <button class="panel-btn" id="btnAddExistingPlaneNode" title="Add the selected existing node to this plane. A node may belong to several planes — that is how two planes share an intersection line.">+ Add</button>
+                                            </div>
+                                            <div class="plane-hint" id="planeAddNodeHint"></div>
+                                        </div>
+                                    </details>
+
+                                    <details class="plane-details plane-subdetails" id="planeEdgesDetails" open>
+                                        <summary>Node Connections<button type="button" class="plane-section-info" id="planeEdgesInfo"></button></summary>
+                                        <div class="plane-details-body">
+                                            <table class="data-table" id="planeEdgesTable">
+                                                <thead>
+                                                    <tr>
+                                                        <th>Source</th>
+                                                        <th>Destination</th>
+                                                        <th style="width:30px"></th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody></tbody>
+                                            </table>
+                                            <div class="table-empty" id="planeEdgesEmpty">No connections</div>
+                                            <div class="panel-button-row" style="margin-top:6px">
+                                                <select id="planeEdgeSrcSelect" class="plane-select"></select>
+                                                <select id="planeEdgeDstSelect" class="plane-select"></select>
+                                                <button class="panel-btn" id="btnAddPlaneEdge" title="Connect two nodes of this plane">+ Link</button>
+                                            </div>
+                                        </div>
+                                    </details>
+
+                                    <!-- Everything that RUNS on the selected
+                                         plane, in one place — it used to be
+                                         three loose button rows under the Planes
+                                         table, where they read as actions on the
+                                         table rather than on one plane. Foldable
+                                         like its two siblings, so a user editing
+                                         membership can put the solve controls
+                                         away. Each button is still gated on its
+                                         own precondition (Set Origin needs a
+                                         fit, Set Angle two of them), so the
+                                         section is never a list of live buttons
+                                         that do nothing. -->
+                                    <details class="plane-details plane-subdetails" id="planeActionsDetails" open>
+                                        <summary>Actions</summary>
+                                        <div class="plane-details-body">
+                                            <!-- Populated with icons by ui/plane-definition.js. -->
+                                            <div class="panel-button-row plane-action-row">
+                                                <button class="panel-btn" id="btnPlaneTriangulate" disabled>Triangulate</button>
+                                                <button class="panel-btn" id="btnPlaneFill" disabled>Fill</button>
+                                                <button class="panel-btn" id="btnPlaneFit" disabled>Fit</button>
+                                            </div>
+                                            <div class="panel-button-row" style="margin-top:6px">
+                                                <button class="panel-btn" id="btnSetOrigin" disabled>Set Origin</button>
+                                            </div>
+                                            <!-- Assert a real-world relationship between two
+                                                 planes (0 deg = parallel, 90 = perpendicular).
+                                                 Needs TWO fitted planes, so it is gated
+                                                 separately from Set Origin. -->
+                                            <div class="panel-button-row" style="margin-top:6px">
+                                                <button class="panel-btn" id="btnSetPlaneAngle" disabled>Set Angle Between Planes</button>
+                                            </div>
+                                        </div>
+                                    </details>
+                                </div>
+
+                                <!-- Shared across every plane, by design: one node
+                                     size and one edge weight for all of them (see
+                                     ui/plane-definition.js). Last in the section
+                                     and OUTSIDE #planeEditorContent, because it
+                                     styles what the roster lists rather than the
+                                     one plane being edited — so it stays usable
+                                     with nothing selected. -->
+                                <details class="plane-details plane-subdetails" id="planeAppearanceDetails" open>
+                                    <summary>Plane Appearance</summary>
+                                    <div class="plane-details-body">
+                                        <div class="vis-slider-row">
+                                            <span>2D Node Size</span>
+                                            <input type="range" id="planeNodeSize" min="1" max="20" value="13" step="1">
+                                            <span class="vis-val" id="planeNodeSizeVal">13</span>
+                                        </div>
+                                        <div class="vis-slider-row">
+                                            <span>Edge Weight</span>
+                                            <input type="range" id="planeEdgeWeight" min="1" max="12" value="3" step="1">
+                                            <span class="vis-val" id="planeEdgeWeightVal">3</span>
+                                        </div>
+                                        <!-- Sizes plane corners in the 3D scene ONLY.
+                                             Pose skeleton nodes keep their own size
+                                             (`skeletonNodeSize`). -->
+                                        <div class="vis-slider-row">
+                                            <span>3D Node Size</span>
+                                            <input type="range" id="planeNodeSize3d" min="1" max="20" value="4" step="1">
+                                            <span class="vis-val" id="planeNodeSize3dVal">4</span>
+                                        </div>
+                                    </div>
+                                </details>
+                            </div>
+                        </details>
+                    </div>
+
+                    <!-- 3D Mesh Objects: a group of PLANES, the way a plane is a group
+                         of NODES. The shape is derived from how the member planes are
+                         connected (which nodes they share) and is never stored — see
+                         pose/mesh-object-geometry.js. Sits below Planes because you
+                         cannot group planes that do not exist yet. -->
+                    <div class="info-section">
+                        <details class="plane-details" id="meshObjectsDetails" open>
+                            <summary>3D Mesh Objects<button type="button" class="plane-section-info" id="meshObjectsInfo"></button></summary>
+                            <div class="plane-details-body">
+                                <table class="data-table" id="meshObjectsTable">
+                                    <thead>
+                                        <tr>
+                                            <th style="width:30px"></th>
+                                            <th>Name</th>
+                                            <th style="width:52px">Planes</th>
+                                            <th style="width:28px"></th>
+                                        </tr>
+                                    </thead>
+                                    <tbody></tbody>
+                                </table>
+                                <div class="table-empty" id="meshObjectsEmpty">No 3D mesh objects yet</div>
+                                <div class="panel-button-row" style="margin-top:6px">
+                                    <button class="panel-btn" id="btnNewMeshObject" title="Group planes into one 3D mesh object">+ New 3D Mesh Object</button>
+                                </div>
+
+                                <!-- Membership editor for the SELECTED object. Hidden
+                                     entirely when nothing is selected: every control in
+                                     it needs an object to act on. -->
+                                <div id="meshObjectEditor" style="display:none;">
+                                    <div class="plane-name-row" style="margin-top:8px">
+                                        <span>Name</span>
+                                        <input type="text" id="meshObjectName" placeholder="cage" />
+                                        <input type="color" id="meshObjectColor" class="plane-node-color" title="Colour for this object in the 3D viewport" />
+                                    </div>
+                                    <div class="mesh-object-report" id="meshObjectReport"></div>
+                                    <div class="plane-hint" style="margin-top:6px">Planes in this object</div>
+                                    <div class="mesh-object-members" id="meshObjectMembers"></div>
+                                    <div class="table-empty" id="meshObjectMembersEmpty">No planes in this object yet</div>
+                                    <!-- Pick-and-add, the same shape as the Planes section's
+                                         "+ Add" for an existing node: the list offers
+                                         only what is NOT already a member, so it empties
+                                         as the object is filled in. -->
+                                    <div class="panel-button-row" style="margin-top:6px">
+                                        <select id="meshObjectAddPlaneSelect" class="plane-select"></select>
+                                        <button class="panel-btn" id="btnAddMeshObjectPlane" title="Add the selected plane to this object. Its nodes join the object's shape, and any it shares with a plane already here becomes a seam.">+ Add</button>
+                                    </div>
+                                    <div class="plane-hint" id="meshObjectAddPlaneHint"></div>
+
+                                    <!-- Export acts on the SELECTED object, so it lives
+                                         in the editor with everything else that does.
+                                         Two formats for two audiences: STL is written in
+                                         LUCID's own Z-up millimetres for CAD, GLB is
+                                         converted to the Y-up the glTF spec mandates so
+                                         Blender's importer lands it back upright. -->
+                                    <div class="panel-button-row" style="margin-top:8px">
+                                        <button class="panel-btn" id="btnExportMeshStl" title="Binary STL — triangles only, no colour or units, in the calibration's millimetres (Z-up, as CAD expects)">Export .stl</button>
+                                        <button class="panel-btn" id="btnExportMeshGlb" title="Binary glTF — welded vertices and this object's colour, converted to the Y-up glTF requires so Blender imports it upright">Export .glb</button>
+                                    </div>
+                                </div>
+                            </div>
+                        </details>
+                    </div>
+
+                    <!-- The output of the whole feature: the transform from the
+                         calibration's world frame to the user's. Populated by
+                         ui/origin-definition.js; hidden until an origin is set.
+                         Collapsible because it is a dozen labelled vectors plus a
+                         3x3 — read once, then in the way of everything below it. -->
+                    <div class="info-section" id="originResultSection" style="display:none;">
+                        <details class="plane-details" id="originResultDetails" open>
+                            <summary>Defined Origin</summary>
+                            <div class="plane-details-body">
+                                <div class="origin-result" id="originResult"></div>
+                            </div>
+                        </details>
+                    </div>
+
+                    <!-- Danger Zone: the actions that leave this app — they rewrite
+                         the calibration every downstream tool reads, or throw the
+                         defined origin away. Collapsed by default and visible only
+                         once an origin exists, since all three are meaningless
+                         without one. See ui/origin-definition.js. -->
+                    <div class="info-section origin-danger-section" id="originDangerSection" style="display:none;">
+                        <details class="plane-details plane-details-danger" id="originDangerDetails">
+                            <summary>Danger Zone</summary>
+                            <div class="plane-details-body">
+                                <div class="panel-button-row">
+                                    <button class="panel-btn" id="btnExportCalibration" title="Download calibration-updated.toml: every camera's extrinsics re-expressed in the defined origin">Export New Calibration</button>
+                                </div>
+                                <div class="panel-button-row">
+                                    <button class="panel-btn panel-btn-danger" id="btnSetCalibration" title="Re-base every 3D point in the project onto the defined origin and export a new calibration file to match. Your calibration.toml is not overwritten.">Set as New Calibration</button>
+                                </div>
+                                <div class="panel-button-row">
+                                    <button class="panel-btn panel-btn-danger" id="btnClearOrigin">Reset to Calibration Origin</button>
+                                </div>
+                            </div>
+                        </details>
+                    </div>
+                </div>
+
                 <details class="tracker-settings" id="trackerSettingsPanel" style="display:none;">
                     <summary>Tracker Settings</summary>
                     <div class="tracker-settings-body">
@@ -938,7 +1370,7 @@
             InstanceGroup as SioInstanceGroup, FrameGroup as SioFrameGroup,
             Identity as SioIdentity, Instance3D, PredictedInstance3D,
             MediaBunnyVideoBackend
-        } from './lib/sleap-io/index.browser.js?v=97654ac0e810';
+        } from './lib/sleap-io/index.browser.js?v=62a2ec3e1ea9';
         window.SleapIO = {
             Labels, LabeledFrame, Instance, PredictedInstance,
             Skeleton, Node, Edge, Video, Track, saveSlpToBytes,
@@ -952,7 +1384,7 @@
         window.dispatchEvent(new Event('sleapio-ready'));
     </script>
 
-    <script type="module" src="app.js?v=97654ac0e810"></script>
+    <script type="module" src="app.js?v=62a2ec3e1ea9"></script>
 </body>
 
 </html>

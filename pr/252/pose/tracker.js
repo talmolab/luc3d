@@ -16,20 +16,22 @@ import {
     reprojectPoints,
     computeInstanceDistanceTo,
     hungarianAlgorithm
-} from './triangulation.js?v=97654ac0e810';
-import { CrossViewTracker, Detection } from './cross-view-tracker.js?v=97654ac0e810';
-import { InstanceGroup, points3dNodeCount, hasPoint3d, readPoint3d } from './pose-data.js?v=97654ac0e810';
+} from './triangulation.js?v=62a2ec3e1ea9';
+import { CrossViewTracker, Detection } from './cross-view-tracker.js?v=62a2ec3e1ea9';
+import { InstanceGroup, points3dNodeCount, hasPoint3d, readPoint3d } from './pose-data.js?v=62a2ec3e1ea9';
 
 // Pass 3i-1: tracker UI/integration (was in app.js)
-import { state, interactionManager, timeline, getActiveSession } from '../ui/app-state.js?v=97654ac0e810';
-import { getNodeWeightArray, getTrackingThresholds, getTrackingThreshold, isCameraTracked } from '../ui/settings.js?v=97654ac0e810';
-import { setStatus, hideLoading } from '../import-export/save-load.js?v=97654ac0e810';
-import { showLoadingProgress, createProgressPacer, yieldToPaint } from '../ui/loading-overlay.js?v=97654ac0e810';
-import { loadAllLazyFrames, sweepLazyFrameWindows } from './triangulation.js?v=97654ac0e810';
-import { drawAllOverlays, showPredictedOnly, PREDICTED_ONLY_NOTE } from '../ui/rendering.js?v=97654ac0e810';
-import { updateInfoPanel } from '../ui/info-panel.js?v=97654ac0e810';
-import { setColorByIdentity } from '../ui/color-by.js?v=97654ac0e810';
-import { runIdSwitchChecks, clearIdSwitchResults } from '../ui/id-switch-modal.js?v=97654ac0e810';
+import { state, interactionManager, timeline, viewport3d, getActiveSession } from '../ui/app-state.js?v=62a2ec3e1ea9';
+import { getNodeWeightArray, getTrackingThresholds, getTrackingThreshold, isCameraTracked } from '../ui/settings.js?v=62a2ec3e1ea9';
+import { setStatus, hideLoading } from '../import-export/save-load.js?v=62a2ec3e1ea9';
+import { showLoadingProgress, createProgressPacer, yieldToPaint } from '../ui/loading-overlay.js?v=62a2ec3e1ea9';
+import { loadAllLazyFrames, sweepLazyFrameWindows } from './triangulation.js?v=62a2ec3e1ea9';
+import { drawAllOverlays, showPredictedOnly, PREDICTED_ONLY_NOTE } from '../ui/rendering.js?v=62a2ec3e1ea9';
+import { updateInfoPanel } from '../ui/info-panel.js?v=62a2ec3e1ea9';
+import { setColorByIdentity } from '../ui/color-by.js?v=62a2ec3e1ea9';
+import { runIdSwitchChecks, clearIdSwitchResults } from '../ui/id-switch-modal.js?v=62a2ec3e1ea9';
+import { collapseTimeline } from '../ui/timeline-controller.js?v=62a2ec3e1ea9';
+import { collapseViewport3D } from '../ui/panel-visibility.js?v=62a2ec3e1ea9';
 
 /**
  * A frame index as the USER sees it: 1-based.
@@ -1426,6 +1428,15 @@ async function runTrackingPass(range) {
         drawAllOverlays(state.currentFrame);
         updateInfoPanel();
         if (timeline) timeline.refreshTracks(state.session, { cap: true });
+        // Track All closes the Timeline and the 3D viewer if they are open, handing
+        // the space back to the views where the new IDs are shown. There is no 3D
+        // pose to look at yet: tracking assigns IDs, and Triangulate All comes next.
+        // A range does not: it is a targeted re-run whose result the user is usually
+        // inspecting on the timeline.
+        if (!isRange) {
+            collapseTimeline();
+            collapseViewport3D(viewport3d);
+        }
         console.timeEnd('[' + label + '] total');
         var doneMsg = 'Assigned ' + lres.numIdentities + ' identities across ' +
             totalFrameCount + ' frames' +

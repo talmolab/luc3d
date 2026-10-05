@@ -328,7 +328,12 @@ try {
     const downloads = [];
     page.on('download', d => downloads.push(d));
     await page.evaluate(() => {
-        Array.from(document.querySelectorAll('button'))
+        // Scoped to the modal ON PURPOSE. A document-wide /^Export/i match takes
+        // the FIRST such button in DOM order, and the plane panel's static
+        // "Export New Calibration" sits well above this dynamically-appended
+        // modal — so the unscoped query clicked a hidden, unrelated button and
+        // then waited for downloads that could never arrive.
+        Array.from(document.querySelectorAll('#ovExportOverlay button'))
             .find(b => /^Export/i.test(b.textContent.trim())).click();
     });
     // Wait for the downloads to SETTLE rather than for a guessed count: this

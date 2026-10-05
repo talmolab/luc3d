@@ -102,8 +102,32 @@
  *   - 3D velocity is zero (no motion prediction); re-triangulation is plain DLT
  *     over all of a target's (now freshness-filtered) per-view detections.
  *
- * Depends on: pose/triangulation.js (all geometry is coordinate-agnostic and
- * reused directly by passing the bare extrinsic + normalized points).
+ * Depends on: pose/triangulation.js, reused directly by passing the bare
+ * extrinsic + normalized points.
+ *
+ * ## THE GEOMETRY MUST BE COORDINATE-AGNOSTIC, AND ONE PIECE OF IT WAS NOT
+ *
+ * Both cost terms are geometric GIVEN `target.points3d`: `_adjacency2d`
+ * projects that 3D into the view and measures normalized-pixel distance,
+ * `_adjacency3d` measures point-to-ray distance in mm. `reprojectPoint`,
+ * `backProjectToRays`, `pointsToRayDistances` and `epipolarErrorMatrix` are all
+ * invariant to a rigid change of world frame (the fundamental matrix is the
+ * relative pose, invariant to 1e-19 under a re-base). So `points3d` is the ONLY
+ * frame-dependent input — and `_retriangulate` builds it with plain DLT, which
+ * until the fix in `triangulatePointDLT` was NOT invariant: minimizing an
+ * algebraic error under `‖x‖ = 1` on a homogeneous 4-vector weights direction
+ * against scale, so moving the origin moved the answer.
+ *
+ * `Set as New Calibration` moves it ~1.2 m. Measured on the real cage session
+ * that shifted `points3d` by up to 15 mm, and since `_adjacency3d` divides
+ * millimetre distances by `distanceThreshold` (default 1.0) that is a cost
+ * swing of ~15 PER NODE — so 21% of frames came out grouped differently, three
+ * times worse by reprojection, purely from swapping the calibration file.
+ *
+ * Keep it that way: anything added to the cost must be a function of the rays
+ * and the pixels, or of `points3d`, and never of absolute world coordinates.
+ * Note this path calls `triangulatePoints` (DLT) unconditionally — the
+ * Settings "Refined" / `ba` method does NOT reach the tracker.
  */
 
 import {
@@ -114,8 +138,8 @@ import {
     hungarianAlgorithm,
     computeFundamentalMatrix,
     epipolarErrorMatrix,
-} from './triangulation.js?v=97654ac0e810';
-import { points3dNodeCount, readPoint3d } from './pose-data.js?v=97654ac0e810';
+} from './triangulation.js?v=62a2ec3e1ea9';
+import { points3dNodeCount, readPoint3d } from './pose-data.js?v=62a2ec3e1ea9';
 
 // ---------------------------------------------------------------------------
 // Normalized-coordinate helpers

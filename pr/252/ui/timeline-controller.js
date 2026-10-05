@@ -4,6 +4,7 @@
  * Encapsulates:
  *   - toggleTimeline()        — collapse/expand the timeline, caching the
  *                                prior height so the next expand restores it.
+ *   - collapseTimeline()      — collapse it if open (never opens it).
  *   - fitTimelineToData()     — size the timeline container to fit all tracks,
  *                                capped at 30% of window.innerHeight.
  *   - syncTimelineToggleButton() — keep the toolbar button's `.active` class
@@ -24,7 +25,7 @@
  * the test runner.
  */
 
-import { state } from './app-state.js?v=97654ac0e810';
+import { state } from './app-state.js?v=62a2ec3e1ea9';
 
 // ----------------------------------------------------------------------------
 // Module-level state
@@ -102,6 +103,22 @@ export function toggleTimeline() {
     }
 
     syncTimelineToggleButton();
+}
+
+/**
+ * Collapse the timeline if it is open; a no-op when it is already collapsed.
+ * Unlike `toggleTimeline()` this never OPENS it, so a caller can close it
+ * without knowing its state. Goes through `toggleTimeline()` so the height
+ * cache and the toolbar button stay exactly as a manual collapse leaves them.
+ * Used by Track All (`pose/tracker.js`).
+ *
+ * @returns {boolean} true if it was open and is now collapsed
+ */
+export function collapseTimeline() {
+    var container = _getContainer();
+    if (!container || container.classList.contains('collapsed')) return false;
+    toggleTimeline();
+    return true;
 }
 
 /**

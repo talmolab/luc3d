@@ -17,7 +17,7 @@
  * requires the shared accessors rather than array indexing.
  */
 
-import { points3dNodeCount, getPoint3d } from '../pose/pose-data.js?v=97654ac0e810';
+import { points3dNodeCount, getPoint3d } from '../pose/pose-data.js?v=62a2ec3e1ea9';
 
 // ============================================
 // Deferred work (hidden viewport)
@@ -37,6 +37,32 @@ import { points3dNodeCount, getPoint3d } from '../pose/pose-data.js?v=97654ac0e8
  * a new deferred key can't silently drop it — only leave it unordered.
  */
 const DEFER_REPLAY_ORDER = ['cameras', 'environment', 'frame', 'highlight', 'fit'];
+
+/**
+ * The colour a SELECTED 3D Mesh Object's member planes are lit up in.
+ *
+ * One fixed yellow, deliberately NOT the object's own colour. The highlight
+ * has to be legible against whatever colours the user gave their planes, and
+ * an object drawn in a colour of its own would be competing with five plane
+ * colours at once — so it gets a colour no plane palette entry uses, at an
+ * opacity above the plane fills' own 0.28. Only one object can be selected at
+ * a time, so a shared highlight colour is never ambiguous.
+ *
+ * The object's colour is still its identity everywhere it is not competing for
+ * attention: the table swatch, the editor and the `.glb` `baseColorFactor`.
+ */
+const MESH_MEMBER_COLOR = '#ffe600';
+
+/**
+ * The colour the SELECTED plane node is ringed in.
+ *
+ * White, and deliberately not any plane-node palette entry: a node wears its
+ * own colour in 2D, in 3D and in the panel's swatch, so a selection drawn in
+ * that colour would be invisible on the one node it is about. Fixed rather
+ * than derived for the same reason `MESH_MEMBER_COLOR` is — only one node is
+ * selected at a time, so one colour is never ambiguous.
+ */
+const NODE_SELECT_COLOR = '#ffffff';
 
 // ============================================
 // Viewport3D class
@@ -87,6 +113,24 @@ export class Viewport3D {
         /** @type {function(boolean): void|null} Callback when camera view mode changes */
         this.onCameraViewChanged = null;
 
+        /**
+         * @type {function(number, number, number[]): void|null}
+         * Called on every pointer move while a plane corner is being dragged in
+         * 3D: `(planeId, nodeIdx, [x, y, z])`. The new position is ALWAYS on
+         * that plane's fitted plane — see `_onPlanePointerDown`. The owner is
+         * expected to write the model and call `setPlanes` again; this class
+         * does not mutate `points3d` itself.
+         */
+        this.onPlaneNodeDragged = options.onPlaneNodeDragged || null;
+
+        /**
+         * @type {function(number, number): void|null}
+         * Called once when a 3D plane-corner drag ends and actually moved
+         * something: `(planeId, nodeIdx)`. For work too expensive to do per
+         * move (panel rebuilds, error recomputation).
+         */
+        this.onPlaneNodeDragEnd = options.onPlaneNodeDragEnd || null;
+
         /** @type {number|null} Index of the currently selected/highlighted instance */
         this.selectedInstanceIdx = null;
 
@@ -123,6 +167,104 @@ export class Viewport3D {
         this._cameraGroup = null;
         /** @type {THREE.Group} Group holding skeleton meshes for the current frame */
         this._skeletonGroup = null;
+        /**
+         * @type {THREE.Group} Group holding user-annotated PLANES
+         * (View ▸ Define Planes). A sibling of `_skeletonGroup`, NOT a child —
+         * `updateSkeleton` clears `_skeletonGroup` on every frame, and planes
+         * are frame-independent scene geometry that must survive that.
+         */
+        this._planeGroup = null;
+        /** @type {THREE.Group|null} MEMBERSHIP highlighting for the selected 3D
+         * Mesh Object: the member planes' own outlines, redrawn in the object's
+         * colour. A sibling of `_planeGroup`, never a part of it, so the plane
+         * drawing stays byte-for-byte what it was.
+         *
+         * This deliberately does NOT draw the derived surface as a separate
+         * body. An object IS its member planes — the same cage already on
+         * screen — so a second surface beside them is at best a duplicate and
+         * at worst a lie: the derived geometry is built in the user's ORIGIN
+         * frame (the panel quotes volumes in it, and the exporters write it),
+         * while this group, like every data group, hangs off `scene` rather
+         * than `_framePivot` and so is drawn in CALIBRATION world. Putting
+         * framed vertices in an unframed group drew the object displaced and
+         * rotated away from the cage it was built from. Highlighting the real
+         * planes cannot drift, because it re-reads the very points the plane
+         * drawing used. */
+        this._meshMembershipGroup = null;
+        /** @type {THREE.Group|null} A ring marker around the ONE plane node selected in
+         * the Define Planes panel's Nodes table. A sibling of `_planeGroup` for
+         * the same reason `_meshMembershipGroup` is one: it is an additive view
+         * of a corner already drawn, and keeping it out of `_planeGroup` leaves
+         * the plane drawing exactly what it was. Pure display — nothing here
+         * writes a node. */
+        this._nodeSelectGroup = null;
+        /** @type {THREE.Group|null} A GHOST of where "Set Angle Between Two
+         * Planes" would put the plane being rotated, shown while its dialog is
+         * open. A sibling of `_planeGroup` for the same reason
+         * `_meshMembershipGroup` is one: it is a second, additive view of the same
+         * nodes, and keeping it out of `_planeGroup` is what lets the real
+         * plane drawing stay exactly what it was. Empty unless the dialog is
+         * open, and it is pure display — nothing here writes a node. */
+        this._angleGroup = null;
+
+        /** @type {THREE.Group|null} Role outlines for the Set Angle dialog: which
+         * plane is being held and which one is about to move. A THIRD group, not
+         * the ghost's, because the two answer different questions and are cleared
+         * at different times — a refused plan drops the ghost while the roles are
+         * still what the user is choosing between. Pure display. */
+        this._planeRoleGroup = null;
+
+        /** @type {Array<Object>} The last `setPlanes` payload, kept so a drag can
+         * look up the plane's fit (its drag constraint) by id. */
+        this._planes = [];
+        /** @type {number} Corner-sphere size for annotated PLANES only, driven by
+         * the panel's "3D Node Size" slider. Deliberately not `skeletonNodeSize`:
+         * sizing plane corners must not resize pose nodes. */
+        this.planeNodeSize = options.planeNodeSize !== undefined ? options.planeNodeSize : 4;
+        /**
+         * @type {boolean} Draw each plane's BODY — its fill and its edges. The
+         * Visibility panel's "Planes in 3D Views" toggle, pushed in by
+         * `syncPlanes3D`; forced on inside Defining Plane Mode.
+         */
+        this.showPlaneSurfaces = options.showPlaneSurfaces !== undefined
+            ? options.showPlaneSurfaces : true;
+        /**
+         * @type {boolean} Draw each plane's CORNERS. The Visibility panel's
+         * "Nodes in 3D Views" toggle, independent of `showPlaneSurfaces` — a
+         * node outlives the planes referencing it, so the two are not one
+         * switch. With the corners off nothing is pickable, which is correct:
+         * the payload is only `editable` inside the mode, where both are forced
+         * on.
+         */
+        this.showPlaneNodes = options.showPlaneNodes !== undefined
+            ? options.showPlaneNodes : true;
+        /** @type {{planeId:number, nodeIdx:number, moved:boolean, pointerId:number}|null}
+         * Non-null only while a plane corner is being dragged in 3D. */
+        this._planeDrag = null;
+        /** @type {boolean} Set when a plane drag ends, so the camera-picking
+         * `click` that follows the same pointer-up is not read as a camera click. */
+        this._suppressCameraClick = false;
+
+        // --- Set Origin Mode ---
+        /** @type {'node'|'axis'|null} What a click is currently picking, if anything. */
+        this._originPickMode = null;
+        /** @type {THREE.Group} Candidate +Z arrows + the picked-corner marker. */
+        this._originGroup = null;
+        /** @type {THREE.Group} Parent of the grid floor + axis helper, moved by
+         * `setOriginFrame` so the DISPLAYED frame can be re-based without
+         * touching a single data point. */
+        this._framePivot = null;
+        /** @type {THREE.GridHelper|null} */
+        this._gridFloor = null;
+        /** @type {Object|null} The frame currently displayed, or null for the
+         * calibration's own. Also what the camera pivots on and spins about —
+         * see `originPivot` / `originUp` / `_rebaseControls`. */
+        this._originFrame = null;
+        /** @type {function(number, number, number[]): void|null} */
+        this.onOriginNodePicked = options.onOriginNodePicked || null;
+        /** @type {function(string): void|null} `'positive'` or `'negative'`. */
+        this.onOriginAxisPicked = options.onOriginAxisPicked || null;
+
         /** Reused skeleton meshes/materials — see `updateSkeleton`. */
         this._skelPool = null;
 
@@ -206,6 +348,34 @@ export class Viewport3D {
      * Initialize Three.js scene, renderer, camera, lights, grid, and controls.
      * @private
      */
+    /**
+     * Build the OrbitControls, orbiting about the camera's CURRENT `up`.
+     *
+     * Split out of `_init` because the orbit axis is baked in at construction:
+     * r147's `update` captures a quaternion from `camera.up` once, when the
+     * closure is defined, so a later `camera.up = …` re-aims the camera without
+     * re-aiming the orbit. Re-basing the frame therefore has to rebuild the
+     * controls (`_rebaseControls`), and the two paths must not drift apart in
+     * their tuning — hence one function owning it.
+     * @private
+     */
+    _createControls() {
+        const controls = new THREE.OrbitControls(this.threeCamera, this.renderer.domElement);
+        controls.enableDamping = true;
+        controls.dampingFactor = 0.1;
+        controls.screenSpacePanning = true;
+        controls.minDistance = 10;
+        controls.maxDistance = 100000;
+        // Declutter: check distance to the viewed camera on orbit changes. Lives
+        // here, not in `_setupCameraPicking`, so a rebuild keeps it.
+        controls.addEventListener('change', () => { this._checkDeclutter(); });
+        // What the orbit axis actually is, as opposed to what `camera.up` says
+        // — `_rebaseControls` compares against this to know when a rebuild is
+        // the only way to move the axis.
+        this._controlsUp = this.threeCamera.up.clone().normalize();
+        return controls;
+    }
+
     _init() {
         const width = this.container.clientWidth || 400;
         const height = this.container.clientHeight || 300;
@@ -227,13 +397,8 @@ export class Viewport3D {
         this.threeCamera.up.set(0, 0, 1); // Z-up world convention
 
         // --- Orbit Controls ---
-        this.controls = new THREE.OrbitControls(this.threeCamera, this.renderer.domElement);
+        this.controls = this._createControls();
         this.controls.target.set(0, 0, 0);
-        this.controls.enableDamping = true;
-        this.controls.dampingFactor = 0.1;
-        this.controls.screenSpacePanning = true;
-        this.controls.minDistance = 10;
-        this.controls.maxDistance = 100000;
         this.controls.update();
 
         // --- Lights ---
@@ -249,12 +414,26 @@ export class Viewport3D {
         fillLight.position.set(-200, 200, 100);
         this.scene.add(fillLight);
 
+        // --- Origin frame: grid floor + axis helper ---
+        // Both live under one pivot so "Set Origin" can move the WHOLE frame
+        // with a single matrix, without touching any data group. Re-basing the
+        // display must never re-bake the data: 3D points stay in calibration
+        // world coordinates, and the transform is reported instead.
+        this._framePivot = new THREE.Group();
+        this._framePivot.name = 'originFrame';
+        this.scene.add(this._framePivot);
+
         // --- Grid floor (XY plane at Z=0, matching Z-up convention) ---
         this._addGridFloor();
 
         // --- Axis helper (will be rescaled in fitToScene) ---
         this._axisHelper = new THREE.AxesHelper(50);
-        this.scene.add(this._axisHelper);
+        this._framePivot.add(this._axisHelper);
+
+        // --- Origin-picking overlay (Set Origin Mode arrows) ---
+        this._originGroup = new THREE.Group();
+        this._originGroup.name = 'originPicker';
+        this.scene.add(this._originGroup);
 
         // --- Scene groups ---
         this._cameraGroup = new THREE.Group();
@@ -269,11 +448,34 @@ export class Viewport3D {
         this._envGroup.name = 'environment';
         this.scene.add(this._envGroup);
 
+        this._planeGroup = new THREE.Group();
+        this._planeGroup.name = 'planes';
+        this.scene.add(this._planeGroup);
+
+        this._meshMembershipGroup = new THREE.Group();
+        this._meshMembershipGroup.name = 'meshMembership';
+        this.scene.add(this._meshMembershipGroup);
+
+        this._nodeSelectGroup = new THREE.Group();
+        this._nodeSelectGroup.name = 'nodeSelection';
+        this.scene.add(this._nodeSelectGroup);
+
+        this._angleGroup = new THREE.Group();
+        this._angleGroup.name = 'anglePreview';
+        this.scene.add(this._angleGroup);
+
+        this._planeRoleGroup = new THREE.Group();
+        this._planeRoleGroup.name = 'planeRoles';
+        this.scene.add(this._planeRoleGroup);
+
         // --- Draw camera pyramids ---
         this.addCameraPyramids();
 
         // --- Camera picking (click to match perspective) ---
         this._setupCameraPicking();
+
+        // --- Plane-corner dragging (View ▸ Define Planes) ---
+        this._setupPlaneEditing();
 
         // --- Resize handling ---
         this._resizeObserver = new ResizeObserver(() => {
@@ -388,7 +590,8 @@ export class Viewport3D {
         // GridHelper creates grid on XZ plane; rotate -90deg around X to put it on XY
         grid.rotation.x = -Math.PI / 2;
 
-        this.scene.add(grid);
+        this._gridFloor = grid;
+        this._framePivot.add(grid);
     }
 
     // ============================================
@@ -632,6 +835,20 @@ export class Viewport3D {
         const mouse = new THREE.Vector2();
 
         this.renderer.domElement.addEventListener('click', (e) => {
+            // A plane-corner drag that happens to end over a camera pyramid
+            // still produces a `click`. Swallow exactly that one, or letting go
+            // of a corner would jump the view into a camera's perspective.
+            if (this._suppressCameraClick) {
+                this._suppressCameraClick = false;
+                return;
+            }
+            // Set Origin Mode owns the click while it is armed, and consumes it
+            // even on a miss — a stray click must not select a camera and swing
+            // the view away from the corner the user is aiming at.
+            if (this._originPickMode) {
+                this._handleOriginPick(e);
+                return;
+            }
             const rect = this.renderer.domElement.getBoundingClientRect();
             mouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
             mouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
@@ -653,11 +870,192 @@ export class Viewport3D {
                 }
             }
         });
+        // The controls' own 'change' listener is attached in `_createControls`,
+        // so it survives a rebuild.
+    }
 
-        // Declutter: check distance to viewed camera on orbit changes
-        this.controls.addEventListener('change', () => {
-            this._checkDeclutter();
+    // ============================================
+    // Plane-corner dragging (View ▸ Define Planes)
+    // ============================================
+
+    /**
+     * Let the user drag a plane's corners directly in the 3D scene.
+     *
+     * Two rules, both enforced here rather than by the caller:
+     *   1. Only a plane that has been FIT is draggable. `setPlanes` marks node
+     *      meshes with `userData.planeEditable`, and only those are ever picked,
+     *      so an un-fit (merely triangulated) plane's corners are inert.
+     *   2. A corner can only move WITHIN the plane it was fitted to. The drag
+     *      resolves the pointer ray against that plane, so the result is on it
+     *      by construction — there is no "move then re-project" step that could
+     *      drift, and no way to pull a corner off the plane at all.
+     *
+     * The fit itself (centroid + normal) is held FIXED for the whole drag and
+     * is not re-derived after it. That is the point: those two are what a later
+     * step turns into the origin's translation + rotation, and nudging a corner
+     * must not move the frame it defines. Re-fitting mid-drag would also let
+     * the plane chase the corner being dragged.
+     * @private
+     */
+    _setupPlaneEditing() {
+        const dom = this.renderer.domElement;
+
+        // Scratch objects, reused per event — these run on every pointer move.
+        this._planeNdc = new THREE.Vector2();
+        this._planeMathPlane = new THREE.Plane();
+        this._planeHitPoint = new THREE.Vector3();
+        this._planeHoverCursor = '';
+
+        // CAPTURE, and on the CONTAINER rather than the canvas. OrbitControls
+        // registered its own `pointerdown` on the canvas back in `_init`, and
+        // at the target element capture and bubble listeners fire in
+        // REGISTRATION order — so a capture listener on the canvas would still
+        // run second and the orbit would already have started. From an ancestor
+        // the capture phase genuinely precedes the target, which lets us
+        // stopPropagation() and keep OrbitControls from ever seeing the press.
+        this._onPlaneDownCapture = (e) => this._onPlanePointerDown(e);
+        this.container.addEventListener('pointerdown', this._onPlaneDownCapture, true);
+
+        this._onPlaneMoveBound = (e) => this._onPlanePointerMove(e);
+        this._onPlaneUpBound = (e) => this._onPlanePointerUp(e);
+        dom.addEventListener('pointermove', this._onPlaneMoveBound);
+        dom.addEventListener('pointerup', this._onPlaneUpBound);
+        dom.addEventListener('pointercancel', this._onPlaneUpBound);
+    }
+
+    /**
+     * The `setPlanes` payload entry for a plane id, or null.
+     * @private
+     */
+    _planePayloadById(id) {
+        for (let i = 0; i < this._planes.length; i++) {
+            if (this._planes[i].id === id) return this._planes[i];
+        }
+        return null;
+    }
+
+    /**
+     * Raycast the pointer against DRAGGABLE plane-corner meshes only.
+     * @returns {THREE.Mesh|null}
+     * @private
+     */
+    _pickPlaneNode(e) {
+        if (this._disposed || !this.renderer || !this._planeGroup) return null;
+        const dom = this.renderer.domElement;
+        const rect = dom.getBoundingClientRect();
+        if (!rect.width || !rect.height) return null;
+
+        const meshes = [];
+        this._planeGroup.traverse(function (child) {
+            if (child.isMesh && child.userData && child.userData.planeEditable) meshes.push(child);
         });
+        if (meshes.length === 0) return null;
+        // See `_handleOriginPick`: a plane rebuilt this frame would otherwise be
+        // raycast against transforms `render()` has not written yet.
+        if (this.scene) this.scene.updateMatrixWorld();
+
+        this._planeNdc.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+        this._planeNdc.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+        this._raycaster.setFromCamera(this._planeNdc, this.threeCamera);
+        const hits = this._raycaster.intersectObjects(meshes, false);
+        return hits.length > 0 ? hits[0].object : null;
+    }
+
+    /** @private */
+    _onPlanePointerDown(e) {
+        if (this._disposed || !this.renderer) return;
+        // Self-heal: if a previous drag ended off-canvas no `click` followed, so
+        // the suppression flag is still set. Clear it before it eats a real one.
+        this._suppressCameraClick = false;
+        // The container also holds the overlay buttons ("Show Camera View", …).
+        if (e.target !== this.renderer.domElement) return;
+        if (e.button !== 0) return;
+
+        const mesh = this._pickPlaneNode(e);
+        if (!mesh) return;
+        const payload = this._planePayloadById(mesh.userData.planeId);
+        if (!payload || !payload.planeFit) return;
+
+        const n = payload.planeFit.normal;
+        const c = payload.planeFit.centroid;
+        if (!n || !c) return;
+        this._planeMathPlane.setFromNormalAndCoplanarPoint(
+            new THREE.Vector3(n[0], n[1], n[2]).normalize(),
+            new THREE.Vector3(c[0], c[1], c[2]));
+
+        this._planeDrag = {
+            planeId: mesh.userData.planeId,
+            nodeIdx: mesh.userData.nodeIdx,
+            moved: false,
+            pointerId: e.pointerId,
+        };
+        if (this.controls) this.controls.enabled = false;
+        // Keep OrbitControls from starting an orbit under the drag.
+        e.stopPropagation();
+        e.preventDefault();
+        try { this.renderer.domElement.setPointerCapture(e.pointerId); } catch (_) { /* synthetic pointer */ }
+    }
+
+    /** @private */
+    _onPlanePointerMove(e) {
+        if (this._disposed || !this.renderer) return;
+        if (!this._planeDrag) {
+            this._updatePlaneHoverCursor(e);
+            return;
+        }
+
+        const dom = this.renderer.domElement;
+        const rect = dom.getBoundingClientRect();
+        if (!rect.width || !rect.height) return;
+        this._planeNdc.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+        this._planeNdc.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+        this._raycaster.setFromCamera(this._planeNdc, this.threeCamera);
+
+        // Edge-on views make the ray nearly parallel to the plane, where the
+        // intersection is numerically meaningless and would fling the corner to
+        // a huge coordinate. Refuse rather than move it somewhere absurd.
+        const cosine = this._raycaster.ray.direction.dot(this._planeMathPlane.normal);
+        if (Math.abs(cosine) < 1e-3) return;
+        const hit = this._raycaster.ray.intersectPlane(this._planeMathPlane, this._planeHitPoint);
+        if (!hit) return;
+        if (!isFinite(hit.x) || !isFinite(hit.y) || !isFinite(hit.z)) return;
+
+        this._planeDrag.moved = true;
+        e.preventDefault();
+        if (this.onPlaneNodeDragged) {
+            this.onPlaneNodeDragged(this._planeDrag.planeId, this._planeDrag.nodeIdx,
+                [hit.x, hit.y, hit.z]);
+        }
+    }
+
+    /** @private */
+    _onPlanePointerUp(e) {
+        if (!this._planeDrag) return;
+        const drag = this._planeDrag;
+        this._planeDrag = null;
+        if (this.controls) this.controls.enabled = true;
+        if (this.renderer) {
+            try { this.renderer.domElement.releasePointerCapture(drag.pointerId); } catch (_) { /* never captured */ }
+        }
+        this._suppressCameraClick = true;
+        if (drag.moved && this.onPlaneNodeDragEnd) {
+            this.onPlaneNodeDragEnd(drag.planeId, drag.nodeIdx);
+        }
+    }
+
+    /**
+     * Cursor affordance: draggable corners are the only thing in the 3D scene
+     * that responds to a press, so they have to look different.
+     * @private
+     */
+    _updatePlaneHoverCursor(e) {
+        if (!this.renderer) return;
+        // Set Origin Mode owns the cursor while it is armed.
+        if (this._originPickMode) return;
+        const want = this._pickPlaneNode(e) ? 'move' : '';
+        if (this._planeHoverCursor === want) return;
+        this._planeHoverCursor = want;
+        this.renderer.domElement.style.cursor = want;
     }
 
     /**
@@ -712,9 +1110,10 @@ export class Viewport3D {
             this._viewingCamera = null;
         }
         this._viewingCamData = null;
-        // Reset FOV and up vector to defaults before fitting
+        // Reset FOV and up vector to defaults before fitting — "up" being the
+        // displayed frame's +Z, which is world +Z until an origin is applied.
         this.threeCamera.fov = 50;
-        this.threeCamera.up.set(0, 0, 1);
+        this.threeCamera.up.copy(this.originUp());
         this.threeCamera.updateProjectionMatrix();
         this.fitToScene();
         if (this.onCameraViewChanged) {
@@ -1330,6 +1729,936 @@ export class Viewport3D {
     }
 
     /**
+     * Show user-annotated planes (View ▸ Define Planes) in the 3D scene.
+     *
+     * Full rebuild per call, like `setEnvironment` — a handful of planes with
+     * a handful of corners each, so diffing would be more code than it saves.
+     * Everything lands in `_planeGroup`, a sibling of `_skeletonGroup`, so the
+     * per-frame `updateSkeleton` clear leaves it alone: a plane is static scene
+     * geometry, not per-frame content.
+     *
+     * `points3d` needs no transform on the way in. The Three camera is Z-up
+     * (`threeCamera.up.set(0,0,1)`) and the scene is already in the
+     * calibration's world frame, so triangulated coordinates go straight into
+     * `position.set` — the same as skeleton nodes and camera centres.
+     *
+     * A plane whose payload carries BOTH `editable` and `planeFit` has
+     * draggable corners (see `_setupPlaneEditing`); everything else is inert
+     * scenery. The payload is kept in `_planes` so a drag in progress can look
+     * up its constraint plane by id across the rebuilds it triggers.
+     *
+     * `showPlaneSurfaces` / `showPlaneNodes` (the Visibility panel's `Planes`
+     * toggles) decide which meshes this builds. They never filter `_planes`:
+     * the ids in it are what the selected-node marker, the mesh-object
+     * highlight, the angle dialog's role outlines and a live drag all resolve
+     * against, so hiding a plane must cost meshes and nothing else.
+     *
+     * @param {Array<{id:number, name:string, color:string,
+     *                nodeIds?:number[],
+     *                nodeColors?:string[], nodeImmutable?:boolean[],
+     *                edges?:Array<number[]>,
+     *                polygonOrder?:number[], filled?:boolean,
+     *                editable?:boolean,
+     *                planeFit?:{centroid:number[], normal:number[]},
+     *                fitted?:boolean,
+     *                points3d:Float64Array}>} planes
+     */
+    setPlanes(planes) {
+        this._clearGroup(this._planeGroup);
+        this._planes = planes || [];
+        if (!planes || planes.length === 0) return;
+
+        const ss = this._sceneScale || 1;
+        // Planes size their corners independently of pose nodes — the Plane
+        // Appearance "3D Node Size" slider, pushed in by `syncPlanes3D`.
+        const nodeRadius = this.planeNodeSize * 0.9 * ss;
+        const edgeRadius = this.skeletonEdgeWeight * 0.9 * ss;
+
+        for (let i = 0; i < planes.length; i++) {
+            const plane = planes[i];
+            const pts = plane.points3d;
+            if (!pts) continue;
+
+            const nNodes = points3dNodeCount(pts);
+            if (nNodes === 0) continue;
+
+            const planeGroup3D = new THREE.Group();
+            planeGroup3D.name = 'plane_' + plane.id;
+
+            // The corners, unless the Visibility panel has them switched off.
+            // The payload is still kept whole in `_planes`, so the marker, the
+            // mesh highlight and a drag's plane lookup are unaffected — this
+            // hides meshes, it does not forget planes.
+            if (this.showPlaneNodes) {
+                // One shared sphere geometry per plane; materials differ per node
+                // because plane nodes carry their own colour (the cross-view
+                // correspondence cue).
+                const sphereGeo = new THREE.SphereGeometry(nodeRadius, 12, 12);
+
+                // Only a plane WITH A FIT can have its corners dragged — a corner
+                // with no plane to slide along has no constrained direction to
+                // move in. `planeFit` may be a derived one (see the caller); this
+                // asks whether there is a surface, not who supplied it.
+                const draggable = !!(plane.editable && plane.planeFit);
+
+                for (let k = 0; k < nNodes; k++) {
+                    const pt = getPoint3d(pts, k);
+                    if (pt == null) continue;
+                    if (!isFinite(pt[0]) || !isFinite(pt[1]) || !isFinite(pt[2])) continue;
+                    const color = (plane.nodeColors && plane.nodeColors[k]) || plane.color;
+                    const mesh = new THREE.Mesh(sphereGeo, new THREE.MeshPhongMaterial({
+                        color: new THREE.Color(color),
+                        shininess: 60,
+                    }));
+                    mesh.position.set(pt[0], pt[1], pt[2]);
+                    mesh.name = 'planeNode_' + k;
+                    mesh.userData.planeId = plane.id;
+                    mesh.userData.nodeIdx = k;
+                    // A PINNED node is never draggable, however fitted its plane
+                    // is. `planeEditable` gates the hover cursor as well as the
+                    // drag (`_pickPlaneNode`), so leaving it true here would offer
+                    // a `move` cursor over a corner the edit path then refuses —
+                    // an affordance advertising an action that cannot happen.
+                    const pinned = !!(plane.nodeImmutable && plane.nodeImmutable[k]);
+                    mesh.userData.planeEditable = draggable && !pinned;
+                    mesh.userData.planeImmutable = pinned;
+                    // Independent of `draggable`: Set Origin Mode turns dragging OFF
+                    // but still needs these exact corners to be pickable. A pinned
+                    // corner is a PREFERRED origin anchor, so this must not follow
+                    // `planeEditable` down.
+                    //
+                    // `fitted`, NOT `planeFit`: the wizard's question is whether
+                    // the user has declared this plane's frame, which is what
+                    // `fittedPlanes()` counts. `planeFit` above may be derived, and
+                    // a plane nobody has Fit must not silently become eligible to
+                    // define the project's origin. A payload that omits `fitted`
+                    // falls back to the old meaning so an older caller is unchanged.
+                    mesh.userData.planeFitted = plane.fitted !== undefined
+                        ? !!plane.fitted : !!plane.planeFit;
+                    planeGroup3D.add(mesh);
+                }
+            }
+
+            // The plane's BODY — its edges and its fill. One flag for both: they
+            // are the plane's own shape, while the corners above are the shared
+            // pool's nodes, which is the split the two toggles make.
+            if (this.showPlaneSurfaces) {
+                const edgeMaterial = new THREE.MeshPhongMaterial({
+                    color: new THREE.Color(plane.color),
+                    shininess: 30,
+                    transparent: true,
+                    opacity: 0.9,
+                });
+                const edges = plane.edges || [];
+                for (let e = 0; e < edges.length; e++) {
+                    const a = getPoint3d(pts, edges[e][0]);
+                    const b = getPoint3d(pts, edges[e][1]);
+                    if (a == null || b == null) continue;
+                    if (!isFinite(a[0]) || !isFinite(a[1]) || !isFinite(a[2])) continue;
+                    if (!isFinite(b[0]) || !isFinite(b[1]) || !isFinite(b[2])) continue;
+                    const cyl = this._createCylinder(a, b, edgeRadius, edgeMaterial, 6);
+                    cyl.name = 'planeEdge_' + edges[e][0] + '_' + edges[e][1];
+                    planeGroup3D.add(cyl);
+                }
+
+                if (plane.filled) {
+                    const fill = this._buildPlaneFillMesh(plane, pts);
+                    if (fill) planeGroup3D.add(fill);
+                }
+            }
+
+            this._planeGroup.add(planeGroup3D);
+        }
+    }
+
+    /**
+     * Triangle-soup mesh filling a plane's polygon, or null if it has fewer
+     * than 3 usable corners.
+     *
+     * Fan triangulation from the first vertex, walking `polygonOrder` — the
+     * user's connection cycle when there is one, else the convex hull of the
+     * plane's corners, so the fan is over the real outline rather than an
+     * index-order bowtie, and an interior corner is COVERED by the fill rather
+     * than being a vertex of it. A fan is only valid over a convex ring, which
+     * the hull always is; a user-drawn concave ring can still fan wrong, and
+     * that is the price of honouring their edges. `DoubleSide` because
+     * a plane is viewable from either face; `depthWrite: false` so the
+     * translucent fill never occludes skeleton nodes behind it.
+     * @private
+     */
+    _buildPlaneFillMesh(plane, pts) {
+        const geo = this._buildPlaneFillGeometry(plane, pts);
+        if (!geo) return null;
+        const mesh = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({
+            color: new THREE.Color(plane.color),
+            transparent: true,
+            opacity: 0.28,
+            side: THREE.DoubleSide,
+            depthWrite: false,
+        }));
+        mesh.name = 'planeFill';
+        return mesh;
+    }
+
+    /**
+     * The fan geometry behind `_buildPlaneFillMesh`, without a material.
+     *
+     * Split out so the 3D Mesh Object membership highlight covers exactly the
+     * same triangles as the plane's own fill — one ring-walking rule, so a
+     * highlight can never disagree in shape with the surface it highlights.
+     * Returns null for fewer than 3 usable corners.
+     * @private
+     */
+    _buildPlaneFillGeometry(plane, pts) {
+        const order = (plane.polygonOrder && plane.polygonOrder.length)
+            ? plane.polygonOrder
+            : null;
+        const verts = [];
+        const n = points3dNodeCount(pts);
+        const walk = order || Array.from({ length: n }, function (_, i) { return i; });
+        for (let i = 0; i < walk.length; i++) {
+            const pt = getPoint3d(pts, walk[i]);
+            if (pt == null) continue;
+            if (!isFinite(pt[0]) || !isFinite(pt[1]) || !isFinite(pt[2])) continue;
+            verts.push(pt);
+        }
+        if (verts.length < 3) return null;
+
+        const positions = [];
+        for (let t = 1; t < verts.length - 1; t++) {
+            positions.push(verts[0][0], verts[0][1], verts[0][2]);
+            positions.push(verts[t][0], verts[t][1], verts[t][2]);
+            positions.push(verts[t + 1][0], verts[t + 1][1], verts[t + 1][2]);
+        }
+        const geo = new THREE.BufferGeometry();
+        geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+        return geo;
+    }
+
+    // ============================================
+    // Set Origin Mode (pick a node, pick a +Z, re-base the frame)
+    // ============================================
+
+    /**
+     * Resolve a click while Set Origin Mode is armed.
+     *
+     * In `'node'` mode EVERY node of a FITTED plane is a candidate — every one
+     * of them, not just those on the outline: the raycast collects each corner
+     * mesh `setPlanes` built, which is one per `plane.nodeIds` entry. A node of
+     * an un-fit plane has no +Z to offer, so letting it be picked would dead-end
+     * the wizard. The flag comes from `setPlanes`' `planeFitted` userData, which
+     * is deliberately independent of `planeEditable`: dragging is off during the
+     * wizard, but those same nodes stay pickable.
+     * @private
+     */
+    _handleOriginPick(e) {
+        const dom = this.renderer.domElement;
+        const rect = dom.getBoundingClientRect();
+        if (!rect.width || !rect.height) return;
+        // Raycasting reads `matrixWorld`, which is only refreshed by `render()`.
+        // The arrows are built in response to the PREVIOUS click, so a click
+        // arriving before the next frame would raycast against stale (identity)
+        // transforms and silently miss.
+        if (this.scene) this.scene.updateMatrixWorld();
+        this._planeNdc.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+        this._planeNdc.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+        this._raycaster.setFromCamera(this._planeNdc, this.threeCamera);
+
+        if (this._originPickMode === 'node') {
+            const meshes = [];
+            this._planeGroup.traverse(function (child) {
+                if (child.isMesh && child.userData && child.userData.planeFitted) meshes.push(child);
+            });
+            if (meshes.length === 0) return;
+            const hits = this._raycaster.intersectObjects(meshes, false);
+            if (hits.length === 0) return;
+            const hit = hits[0].object;
+            if (this.onOriginNodePicked) {
+                this.onOriginNodePicked(hit.userData.planeId, hit.userData.nodeIdx,
+                    [hit.position.x, hit.position.y, hit.position.z]);
+            }
+            return;
+        }
+
+        if (this._originPickMode === 'axis') {
+            const meshes = [];
+            this._originGroup.traverse(function (child) {
+                if (child.isMesh && child.userData && child.userData.originAxis) meshes.push(child);
+            });
+            if (meshes.length === 0) return;
+            const hits = this._raycaster.intersectObjects(meshes, false);
+            if (hits.length === 0) return;
+            const key = hits[0].object.userData.originAxis;
+            if (key && this.onOriginAxisPicked) this.onOriginAxisPicked(key);
+        }
+    }
+
+    /**
+     * Arm 3D picking for Set Origin Mode.
+     *
+     * @param {'node'|'axis'|null} mode - `'node'` picks a corner of a FITTED
+     *   plane (`onOriginNodePicked`), `'axis'` picks one of the two candidate
+     *   +Z arrows (`onOriginAxisPicked`), null disarms. While armed, clicks are
+     *   consumed here and never reach camera picking — selecting a camera
+     *   mid-wizard would yank the view away from what the user is aiming at.
+     */
+    setOriginPickMode(mode) {
+        this._originPickMode = mode || null;
+        if (this.renderer) {
+            this.renderer.domElement.style.cursor = mode ? 'crosshair' : '';
+            this._planeHoverCursor = mode ? 'crosshair' : '';
+        }
+    }
+
+    /**
+     * Draw the two candidate +Z directions as arrows from the chosen origin.
+     *
+     * Both are always drawn — the choice is between a normal and its negation,
+     * and showing only one would hide that there IS a choice. `chosen` dims the
+     * loser instead of removing it, so the picked direction reads as a decision
+     * rather than as the only option.
+     *
+     * @param {{origin:number[], normal:number[], length?:number,
+     *          chosen?:'positive'|'negative'|null}|null} spec
+     *   `length` should be derived from the PLANE's extent by the caller — a
+     *   fixed size scaled only by the camera baseline is either invisible on a
+     *   room-sized plane or off-screen on a small one.
+     */
+    setOriginCandidates(spec) {
+        this._clearGroup(this._originGroup);
+        if (!spec || !spec.origin || !spec.normal) return;
+
+        const n = new THREE.Vector3(spec.normal[0], spec.normal[1], spec.normal[2]);
+        if (n.lengthSq() < 1e-18) return;
+        n.normalize();
+
+        const ss = this._sceneScale || 1;
+        const length = (spec.length > 0) ? spec.length : 110 * ss;
+        const radius = Math.max(0.6 * ss, length * 0.02);
+        const chosen = spec.chosen || null;
+
+        const build = (dir, key, colorHex) => {
+            const dim = chosen != null && chosen !== key;
+            const material = new THREE.MeshPhongMaterial({
+                color: new THREE.Color(colorHex),
+                shininess: 70,
+                transparent: true,
+                opacity: dim ? 0.22 : 1.0,
+                // The chosen arrow must read through the plane fill it starts on.
+                depthTest: !dim,
+            });
+            const arrow = this._createArrowMesh(spec.origin, dir, length, radius, material);
+            arrow.name = 'originAxis_' + key;
+            arrow.traverse(function (c) {
+                c.userData.originAxis = key;
+                c.name = c.name || ('originAxisPart_' + key);
+            });
+            this._originGroup.add(arrow);
+        };
+
+        build([n.x, n.y, n.z], 'positive', 0xff4d4d);
+        build([-n.x, -n.y, -n.z], 'negative', 0x4d8bff);
+
+        // A marker at the picked corner, so it stays visible under the arrows.
+        const dot = new THREE.Mesh(
+            new THREE.SphereGeometry(radius * 1.8, 14, 14),
+            new THREE.MeshPhongMaterial({ color: new THREE.Color(0xffffff), shininess: 90 }));
+        dot.position.set(spec.origin[0], spec.origin[1], spec.origin[2]);
+        dot.name = 'originMarker';
+        this._originGroup.add(dot);
+    }
+
+    /** Remove the Set Origin arrows and marker. */
+    clearOriginCandidates() {
+        this._clearGroup(this._originGroup);
+    }
+
+    /**
+     * A shaft + head arrow as pickable MESHES (not `ArrowHelper`, whose Line
+     * shaft raycasts against a distance threshold rather than real geometry —
+     * unreliable to click).
+     * @private
+     */
+    _createArrowMesh(origin, dir, length, radius, material) {
+        const group = new THREE.Group();
+        const headLen = length * 0.26;
+        const shaftLen = Math.max(1e-6, length - headLen);
+
+        const shaft = new THREE.Mesh(
+            new THREE.CylinderGeometry(radius, radius, shaftLen, 12), material);
+        shaft.position.y = shaftLen / 2;
+        group.add(shaft);
+
+        const head = new THREE.Mesh(
+            new THREE.ConeGeometry(radius * 2.4, headLen, 14), material);
+        head.position.y = shaftLen + headLen / 2;
+        group.add(head);
+
+        // Built along +Y (the geometry default), then rotated onto `dir`.
+        const d = new THREE.Vector3(dir[0], dir[1], dir[2]).normalize();
+        group.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), d);
+        group.position.set(origin[0], origin[1], origin[2]);
+        return group;
+    }
+
+    /**
+     * Re-base the DISPLAYED frame: move the grid floor and axis helper onto the
+     * user's origin and orientation.
+     *
+     * Only the frame and the ORBIT move. Cameras, skeletons and planes stay
+     * exactly where the calibration puts them, because re-baking them would
+     * silently change every 3D coordinate the rest of the app reads and reports
+     * — and the transform, not a rewritten point cloud, is the deliverable here.
+     * The visual result is the same either way: the grid now lies on the
+     * annotated plane with +Z pointing the chosen way.
+     *
+     * The orbit follows because interaction is part of the display: dragging
+     * and zooming re-center on the new origin (`_rebaseControls`), or the scene
+     * would swing about a calibration origin that is no longer drawn anywhere.
+     * That moves the camera, never the data.
+     *
+     * @param {{origin:number[], xAxis:number[], yAxis:number[], zAxis:number[]}|null}
+     *   frame - from `buildOriginFrame`; null restores the calibration frame.
+     */
+    setOriginFrame(frame) {
+        if (!this._framePivot) return;
+        if (!frame) {
+            this._framePivot.position.set(0, 0, 0);
+            this._framePivot.quaternion.identity();
+            this._originFrame = null;
+            // Symmetric with applying one: the orbit goes back to the
+            // calibration origin and world +Z, or Reset would leave the user
+            // pivoting on an origin the display no longer shows.
+            this._rebaseControls();
+            return;
+        }
+        const x = frame.xAxis, y = frame.yAxis, z = frame.zAxis, o = frame.origin;
+        // Basis COLUMNS are the new axes: this maps frame-local coordinates out
+        // into world, which is exactly what a parent transform has to do.
+        const m = new THREE.Matrix4().makeBasis(
+            new THREE.Vector3(x[0], x[1], x[2]),
+            new THREE.Vector3(y[0], y[1], y[2]),
+            new THREE.Vector3(z[0], z[1], z[2]));
+        this._framePivot.quaternion.setFromRotationMatrix(m);
+        this._framePivot.position.set(o[0], o[1], o[2]);
+        this._originFrame = frame;
+        this._rebaseControls();
+    }
+
+    /** Restore the calibration's own frame. */
+    clearOriginFrame() {
+        this.setOriginFrame(null);
+    }
+
+    /**
+     * The point every camera interaction pivots on: the user's origin once one
+     * is applied, the calibration's until then.
+     */
+    originPivot() {
+        const f = this._originFrame;
+        return f ? new THREE.Vector3(f.origin[0], f.origin[1], f.origin[2])
+                 : new THREE.Vector3(0, 0, 0);
+    }
+
+    /** The axis orbiting spins about: the frame's +Z, else the world's. */
+    originUp() {
+        const f = this._originFrame;
+        return f ? new THREE.Vector3(f.zAxis[0], f.zAxis[1], f.zAxis[2]).normalize()
+                 : new THREE.Vector3(0, 0, 1);
+    }
+
+    /**
+     * A direction stated in FRAME coordinates, rotated out into world ones —
+     * so a canned viewing angle ("above and to the side") means the same thing
+     * relative to the user's grid as it did relative to the calibration's.
+     * @private
+     */
+    _frameDirection(x, y, z) {
+        const v = new THREE.Vector3(x, y, z);
+        if (this._framePivot) v.applyQuaternion(this._framePivot.quaternion);
+        return v;
+    }
+
+    /**
+     * Move the ORBIT onto the applied frame: pivot on the user's origin, spin
+     * about the user's +Z.
+     *
+     * Re-basing only the grid leaves the user dragging and zooming around a
+     * point that is no longer marked by anything on screen — the whole scene
+     * swings about the old calibration origin while the axes sit somewhere
+     * else. This is what makes the interaction agree with the display.
+     *
+     * The camera is translated by the same delta as the target, so the view
+     * direction and the distance survive: what is on screen does not jump, only
+     * what the next drag or wheel tick keys on. Rebuilding the controls is not
+     * optional for the axis — see `_createControls` — but it is skipped when the
+     * axis has not actually moved, which is the common case (a re-applied frame,
+     * a Reset View) and keeps a rebuild off the hot paths.
+     * @private
+     */
+    _rebaseControls() {
+        if (!this.controls || !this.threeCamera) return;
+        const target = this.originPivot();
+        const up = this.originUp();
+
+        this.threeCamera.position.add(target.clone().sub(this.controls.target));
+        this.threeCamera.up.copy(up);
+        this.controls.target.copy(target);
+
+        if (this._controlsUp && this._controlsUp.dot(up) > 0.999999) {
+            this.controls.update();
+            return;
+        }
+        const old = this.controls;
+        const enabled = old.enabled;
+        const minDistance = old.minDistance;
+        const maxDistance = old.maxDistance;   // re-derived by the next fit
+        old.dispose();
+        this.controls = this._createControls();
+        this.controls.minDistance = minDistance;
+        this.controls.maxDistance = maxDistance;
+        this.controls.enabled = enabled;
+        this.controls.target.copy(target);
+        this.controls.update();
+    }
+
+    /**
+     * Draw the selected 3D Mesh Object's surface, or clear it with `null`.
+     *
+     * ADDITIVE: a separate group, a separate call, and nothing here touches
+     * `_planeGroup`. The per-plane translucent fills stay exactly as they were,
+     * so turning an object on shows the welded surface ON TOP of the planes it
+     * was built from rather than replacing them.
+     *
+     * Front and back faces are drawn in DIFFERENT colours on purpose. Winding is
+     * the one property of the exported mesh a user cannot otherwise see, and it
+     * is the property most likely to be wrong — so "I am looking at the inside"
+     * has to be visible in the viewport, not discovered in Blender.
+     *
+     * @param {{color:string, vertices:Float64Array, triangles:Uint32Array,
+     *          faces:number[][]}|null} payload
+     */
+    /**
+     * Show a ghost of where a plane would land.
+     *
+     * ADDITIVE: its own group, its own pair of calls, and nothing here touches
+     * `_planeGroup`. Geometry comes from the caller (the PLANNED points, which
+     * have not been written to any node), while the plane's edge list, polygon
+     * order and colour are read back out of the last `setPlanes` payload — so
+     * the ghost is drawn exactly like the real plane and there is no second
+     * copy of that payload shape to keep in step.
+     *
+     * `depthTest: false` on purpose. The ghost overlaps the solid plane it is
+     * proposing to replace, and the useful thing to see is the DIFFERENCE
+     * between the two; a depth-tested ghost is hidden by the very plane it is
+     * about to move. That is the same reasoning as the dimmed, non-depth-tested
+     * unchosen arrow in the origin picker.
+     *
+     * @param {{planeId:*, points3d:Float64Array, color?:string}} spec
+     */
+    setAnglePreview(spec) {
+        this._clearGroup(this._angleGroup);
+        if (!spec || !spec.points3d) return;
+        const nNodes = points3dNodeCount(spec.points3d);
+        if (nNodes === 0) return;
+
+        // The real plane's payload, for its edges / ring / colour.
+        let src = null;
+        for (let i = 0; i < this._planes.length; i++) {
+            if (this._planes[i] && this._planes[i].id === spec.planeId) { src = this._planes[i]; break; }
+        }
+
+        const ss = this._sceneScale || 1;
+        const color = new THREE.Color(spec.color || (src && src.color) || '#ffffff');
+        const pts = spec.points3d;
+
+        const ghostMat = new THREE.MeshBasicMaterial({
+            color: color,
+            transparent: true,
+            opacity: 0.5,
+            depthWrite: false,
+            depthTest: false,
+        });
+
+        // Corners, as small markers so a plane with no edges still reads.
+        const dotGeo = new THREE.SphereGeometry(this.planeNodeSize * 0.7 * ss, 8, 8);
+        for (let k = 0; k < nNodes; k++) {
+            const pt = getPoint3d(pts, k);
+            if (pt == null || !isFinite(pt[0]) || !isFinite(pt[1]) || !isFinite(pt[2])) continue;
+            const dot = new THREE.Mesh(dotGeo, ghostMat);
+            dot.position.set(pt[0], pt[1], pt[2]);
+            dot.name = 'anglePreviewNode_' + k;
+            dot.renderOrder = 10;
+            this._angleGroup.add(dot);
+        }
+
+        // Edges, in the plane's own edge list where it has one.
+        const edges = (src && src.edges) || [];
+        const edgeRadius = this.skeletonEdgeWeight * 0.9 * ss;
+        for (let e = 0; e < edges.length; e++) {
+            const a = getPoint3d(pts, edges[e][0]);
+            const b = getPoint3d(pts, edges[e][1]);
+            if (a == null || b == null) continue;
+            if (!isFinite(a[0]) || !isFinite(b[0])) continue;
+            const cyl = this._createCylinder(a, b, edgeRadius, ghostMat, 6);
+            cyl.name = 'anglePreviewEdge_' + edges[e][0] + '_' + edges[e][1];
+            cyl.renderOrder = 10;
+            this._angleGroup.add(cyl);
+        }
+
+        // Fill, reusing the real builder so a concave ring is ordered the same
+        // way it is for the solid plane; only the material differs.
+        if (src) {
+            const fill = this._buildPlaneFillMesh(
+                { polygonOrder: src.polygonOrder, color: spec.color || src.color }, pts);
+            if (fill) {
+                fill.material.opacity = 0.22;
+                fill.material.depthTest = false;
+                fill.name = 'anglePreviewFill';
+                fill.renderOrder = 9;
+                this._angleGroup.add(fill);
+            }
+        }
+    }
+
+    /** Remove the ghost. Safe to call when there is none. */
+    clearAnglePreview() {
+        this._clearGroup(this._angleGroup);
+    }
+
+    /**
+     * Outline planes to show the ROLE each is playing, or clear with `null`.
+     *
+     * The Set Angle dialog names two planes in dropdowns; this is what says
+     * WHICH TWO in the scene, and which of them is being held. A user with five
+     * annotated planes cannot otherwise tell "back wall" from "front wall" in
+     * the viewport, and picking the wrong one is silent until the box bends.
+     *
+     * ADDITIVE, like the ghost: its own group, and nothing here touches
+     * `_planeGroup`, so the real planes keep their own colours and the outline
+     * reads as annotation rather than as a recolour. Geometry comes from the
+     * last `setPlanes` payload, so a role outline is always drawn on the plane
+     * as it currently is — the ghost is the one that shows the proposal.
+     *
+     * `depthTest: false` for the same reason the ghost uses it: an outline
+     * hidden behind the plane it outlines conveys nothing. It renders BELOW the
+     * ghost (renderOrder 8 against 9/10), so a proposal is never obscured by
+     * the highlight of the plane it proposes to move.
+     *
+     * @param {{planeId:*, color:string}[]|null} roles
+     */
+    setPlaneRoles(roles) {
+        this._clearGroup(this._planeRoleGroup);
+        if (!roles || !roles.length) return;
+
+        const ss = this._sceneScale || 1;
+        for (let r = 0; r < roles.length; r++) {
+            const role = roles[r];
+            if (!role) continue;
+            let src = null;
+            for (let i = 0; i < this._planes.length; i++) {
+                if (this._planes[i] && this._planes[i].id === role.planeId) {
+                    src = this._planes[i];
+                    break;
+                }
+            }
+            if (!src || !src.points3d) continue;
+            const pts = src.points3d;
+            const nNodes = points3dNodeCount(pts);
+            if (nNodes === 0) continue;
+
+            const mat = new THREE.MeshBasicMaterial({
+                color: new THREE.Color(role.color || '#ffffff'),
+                transparent: true,
+                opacity: 0.85,
+                depthWrite: false,
+                depthTest: false,
+            });
+
+            // Corners first: a plane with no edge list still has to read.
+            const dotGeo = new THREE.SphereGeometry(this.planeNodeSize * 1.35 * ss, 10, 10);
+            for (let k = 0; k < nNodes; k++) {
+                const pt = getPoint3d(pts, k);
+                if (pt == null || !isFinite(pt[0]) || !isFinite(pt[1]) || !isFinite(pt[2])) continue;
+                const dot = new THREE.Mesh(dotGeo, mat);
+                dot.position.set(pt[0], pt[1], pt[2]);
+                dot.name = 'planeRoleNode_' + role.planeId + '_' + k;
+                dot.renderOrder = 8;
+                this._planeRoleGroup.add(dot);
+            }
+
+            // A deliberately FAT outline — this is the plane's border seen
+            // through everything, not another edge drawn next to the real one.
+            const edges = src.edges || [];
+            const edgeRadius = this.skeletonEdgeWeight * 2.2 * ss;
+            for (let e = 0; e < edges.length; e++) {
+                const a = getPoint3d(pts, edges[e][0]);
+                const b = getPoint3d(pts, edges[e][1]);
+                if (a == null || b == null) continue;
+                if (!isFinite(a[0]) || !isFinite(b[0])) continue;
+                const cyl = this._createCylinder(a, b, edgeRadius, mat, 6);
+                cyl.name = 'planeRoleEdge_' + role.planeId + '_' + e;
+                cyl.renderOrder = 8;
+                this._planeRoleGroup.add(cyl);
+            }
+        }
+    }
+
+    /** Remove the role outlines. Safe to call when there are none. */
+    clearPlaneRoles() {
+        this._clearGroup(this._planeRoleGroup);
+    }
+
+    /**
+     * Light up the planes that belong to the selected 3D Mesh Object.
+     *
+     * The answer to "which planes did I put in this object?", drawn on the
+     * planes themselves: each member's FACE is filled, and its corners and
+     * edges redrawn fatter, in one fixed yellow (`MESH_MEMBER_COLOR`). Adding
+     * a plane in the panel lights it up here, which is the whole feedback loop
+     * the membership editor needs.
+     *
+     * The face is the load-bearing part. An outline alone left each plane
+     * wearing its own colour, so on a five-walled cage the answer to "is this
+     * wall a member?" came down to a few corner dots.
+     *
+     * Why a highlight and not the derived surface: see `_meshMembershipGroup`.
+     * The short version is that an object is not a separate body, it IS these
+     * planes, and the derived geometry lives in a different coordinate frame
+     * than this group is drawn in.
+     *
+     * Positions come from `this._planes` — the payload the plane drawing
+     * itself was built from — so a highlight can never sit anywhere but
+     * exactly on top of its plane, whatever happens to the origin frame.
+     *
+     * Drawn UNDER the Set Angle role outlines (renderOrder 7 against 8) and
+     * slightly thinner, so an open angle dialog still reads over a membership
+     * highlight covering the same plane.
+     *
+     * The payload carries NO colour, on purpose: the highlight colour is fixed
+     * here (see `MESH_MEMBER_COLOR`) and an unused `color` field would be an
+     * invitation to wire the object's own colour back in, which is the thing
+     * that made membership hard to see.
+     *
+     * @param {{planeIds?:Array}|null} payload - null clears.
+     */
+    setMeshMembership(payload) {
+        this._clearGroup(this._meshMembershipGroup);
+        if (!payload || !payload.planeIds || !payload.planeIds.length) return;
+
+        const ss = this._sceneScale || 1;
+        const color = new THREE.Color(MESH_MEMBER_COLOR);
+
+        // The SURFACE. This is what makes a member read as a member: an
+        // outline alone left the plane wearing its own colour, so on a cage of
+        // five coloured walls the answer to "is this one in the object?" was a
+        // few corner dots. `depthTest` stays ON here, unlike the outline below
+        // — a filled face that ignored depth would paint the cage's back walls
+        // over its front ones and the shape would stop reading as a shape.
+        const faceMat = new THREE.MeshBasicMaterial({
+            color: color,
+            transparent: true,
+            opacity: 0.45,
+            side: THREE.DoubleSide,
+            depthWrite: false,
+        });
+
+        // Corners and outline. `depthTest: false` so an occluded member still
+        // announces itself — confirming that the FAR wall is in the object is
+        // exactly what this is for, and an outline is thin enough to do that
+        // without destroying the sense of depth a filled face would.
+        const lineMat = new THREE.MeshBasicMaterial({
+            color: color,
+            transparent: true,
+            opacity: 0.9,
+            depthWrite: false,
+            depthTest: false,
+        });
+
+        const dotGeo = new THREE.SphereGeometry(this.planeNodeSize * 1.15 * ss, 10, 10);
+        const edgeRadius = this.skeletonEdgeWeight * 1.6 * ss;
+
+        for (let r = 0; r < payload.planeIds.length; r++) {
+            const planeId = payload.planeIds[r];
+            let src = null;
+            for (let i = 0; i < this._planes.length; i++) {
+                if (this._planes[i] && this._planes[i].id === planeId) {
+                    src = this._planes[i];
+                    break;
+                }
+            }
+            // A member plane that was deleted simply has nothing to light up.
+            // Same lazy resolution the model itself uses — no cascade, no throw.
+            if (!src || !src.points3d) continue;
+            const pts = src.points3d;
+            const nNodes = points3dNodeCount(pts);
+            if (nNodes === 0) continue;
+
+            // Regardless of the plane's own `filled` flag: what is being shown
+            // is membership, not the plane's display setting, and a member the
+            // user had left unfilled still has to look like a member.
+            const faceGeo = this._buildPlaneFillGeometry(src, pts);
+            if (faceGeo) {
+                const face = new THREE.Mesh(faceGeo, faceMat);
+                face.name = 'meshMemberFace_' + planeId;
+                // Above the plane's own fill (renderOrder 0), which is drawn in
+                // the plane's colour on the very same triangles.
+                face.renderOrder = 7;
+                this._meshMembershipGroup.add(face);
+            }
+
+            for (let k = 0; k < nNodes; k++) {
+                const pt = getPoint3d(pts, k);
+                if (pt == null || !isFinite(pt[0]) || !isFinite(pt[1]) || !isFinite(pt[2])) continue;
+                const dot = new THREE.Mesh(dotGeo, lineMat);
+                dot.position.set(pt[0], pt[1], pt[2]);
+                dot.name = 'meshMemberNode_' + planeId + '_' + k;
+                dot.renderOrder = 7;
+                this._meshMembershipGroup.add(dot);
+            }
+
+            const edges = src.edges || [];
+            for (let e = 0; e < edges.length; e++) {
+                const a = getPoint3d(pts, edges[e][0]);
+                const b = getPoint3d(pts, edges[e][1]);
+                if (a == null || b == null) continue;
+                if (!isFinite(a[0]) || !isFinite(b[0])) continue;
+                const cyl = this._createCylinder(a, b, edgeRadius, lineMat, 6);
+                cyl.name = 'meshMemberEdge_' + planeId + '_' + e;
+                cyl.renderOrder = 7;
+                this._meshMembershipGroup.add(cyl);
+            }
+        }
+    }
+
+    /** Remove the membership highlighting. Safe to call when there is none. */
+    clearMeshMembership() {
+        this._clearGroup(this._meshMembershipGroup);
+    }
+
+    /**
+     * Mark the plane node selected in the Nodes table, or clear the mark.
+     *
+     * The answer to "which corner is the row I am looking at?", drawn on the
+     * corner itself: three white rings around it, in the three coordinate
+     * planes. ONE marker, even for a node several planes share — a pool node
+     * has one position, which is what a shared corner IS, and a second marker
+     * on top of the first would only z-fight with it.
+     *
+     * RINGS, and their middle is EMPTY. A corner is about a dozen pixels
+     * across at a normal zoom, so anything solid drawn over it — a ball, or a
+     * wireframe sphere, whose lines close up into one at that size — hides the
+     * node's own colour, which is how the user knows they landed on the right
+     * one. A ring is read from its outline and leaves the middle alone.
+     *
+     * Three of them, at right angles, rather than one facing the camera. One
+     * ring would have to be re-aimed on every orbit — per-frame work, in a
+     * class this viewport otherwise keeps free of it — and a ring seen edge-on
+     * is a line. Three cannot all be edge-on at once, so the marker reads as a
+     * ring from every direction the user can orbit to.
+     *
+     * A POOL NODE ID crosses this boundary, not a position. The viewport
+     * resolves it against the plane payload it was just handed (`nodeIds`,
+     * parallel to `nodeColors`), so the cage is built from the very numbers the
+     * corner was drawn from and cannot land anywhere else — the same rule
+     * `setMeshMembership` follows, and for the same reason: a position computed
+     * anywhere else may be in the user's ORIGIN frame, while this group hangs
+     * off `scene` and is drawn in CALIBRATION world.
+     *
+     * A node in no plane, or one with no 3D yet, simply has nothing on screen
+     * to mark and is left alone. That is not a failure: the 3D view draws
+     * planes, so a node no plane references is not in it.
+     *
+     * `depthTest: false`, like the membership outline: a corner behind a filled
+     * wall is exactly the one worth finding, and a wireframe is open enough to
+     * say so without flattening the scene. Drawn UNDER the Set Angle role
+     * outlines (renderOrder 7 against 8).
+     *
+     * @param {{nodeId:number}|null} payload - null clears.
+     */
+    setSelectedPlaneNode(payload) {
+        this._clearGroup(this._nodeSelectGroup);
+        if (!payload || payload.nodeId == null) return;
+
+        const found = this._findPlaneNodePoint(payload.nodeId);
+        if (!found) return;
+
+        const ss = this._sceneScale || 1;
+        const r = this.planeNodeSize * 2.6 * ss;
+        const geo = new THREE.TorusGeometry(r, r * 0.09, 6, 40);
+        const mat = new THREE.MeshBasicMaterial({
+            color: new THREE.Color(NODE_SELECT_COLOR),
+            transparent: true,
+            opacity: 0.95,
+            depthWrite: false,
+            depthTest: false,
+        });
+        // A torus is built in the XY plane, so two of the three are rotated a
+        // quarter turn onto the other two axes.
+        const spins = [[0, 0, 0], [Math.PI / 2, 0, 0], [0, Math.PI / 2, 0]];
+        const marker = new THREE.Group();
+        for (let i = 0; i < spins.length; i++) {
+            const ring = new THREE.Mesh(geo, mat);
+            ring.rotation.set(spins[i][0], spins[i][1], spins[i][2]);
+            ring.renderOrder = 7;
+            marker.add(ring);
+        }
+        marker.position.set(found.pt[0], found.pt[1], found.pt[2]);
+        // The plane it was found through is in the name for debugging only —
+        // the position is the node's, whichever plane draws it.
+        marker.name = 'planeNodeSelected_' + found.planeId + '_' + found.k;
+        this._nodeSelectGroup.add(marker);
+    }
+
+    /**
+     * Where the plane payload draws a given POOL node, or null if nothing does.
+     *
+     * The first plane that carries the id wins, and there is nothing to choose
+     * between them: every plane referencing a node draws it at that node's one
+     * position, which is what a shared corner IS.
+     *
+     * @param {number} nodeId
+     * @returns {{planeId:number, k:number, pt:number[]}|null}
+     * @private
+     */
+    _findPlaneNodePoint(nodeId) {
+        for (let i = 0; i < this._planes.length; i++) {
+            const src = this._planes[i];
+            if (!src || !src.nodeIds || !src.points3d) continue;
+            for (let k = 0; k < src.nodeIds.length; k++) {
+                if (src.nodeIds[k] !== nodeId) continue;
+                const pt = getPoint3d(src.points3d, k);
+                if (pt == null) continue;
+                if (!isFinite(pt[0]) || !isFinite(pt[1]) || !isFinite(pt[2])) continue;
+                return { planeId: src.id, k: k, pt: pt };
+            }
+        }
+        return null;
+    }
+
+    /** Remove the node marker. Safe to call when there is none. */
+    clearSelectedPlaneNode() {
+        this._clearGroup(this._nodeSelectGroup);
+    }
+
+    /**
+     * Remove every annotated plane from the 3D scene.
+     */
+    clearPlanes() {
+        this._clearGroup(this._planeGroup);
+        // The ghost is a proposal about a plane that no longer exists here, so
+        // it must go with it rather than hang in the scene. Same for the role
+        // outlines, which name planes by id.
+        this._clearGroup(this._angleGroup);
+        this._clearGroup(this._planeRoleGroup);
+        // The marker names a node by id and is resolved through `_planes`, which
+        // is about to be empty — so it has nothing left to sit on.
+        this._clearGroup(this._nodeSelectGroup);
+        this._planes = [];
+        this._planeDrag = null;
+    }
+
+    /**
      * Create a cylinder mesh connecting two 3D points.
      *
      * @param {number[]} start - [x, y, z] start point
@@ -1501,17 +2830,21 @@ export class Viewport3D {
      * Positions the camera to see all camera pyramids and the skeleton.
      */
     resetCamera() {
-        this.threeCamera.position.set(500, -500, 400);
-        this.threeCamera.up.set(0, 0, 1);
-        this.controls.target.set(0, 0, 0);
-        this.controls.update();
+        // Relative to the DISPLAYED frame: with a user origin applied, "the
+        // default view" means the same angle onto their grid, not onto the
+        // calibration's.
+        const o = this.originPivot();
+        const off = this._frameDirection(500, -500, 400);
+        this.threeCamera.position.set(o.x + off.x, o.y + off.y, o.z + off.z);
+        this.controls.target.copy(o);
+        this._rebaseControls();
     }
 
     /**
-     * Center the orbit controls target on the world origin.
+     * Center the orbit controls target on the displayed origin.
      */
     lookAtOrigin() {
-        this.controls.target.set(0, 0, 0);
+        this.controls.target.copy(this.originPivot());
         this.controls.update();
     }
 
@@ -1556,8 +2889,28 @@ export class Viewport3D {
             });
         }
 
-        // Add origin
-        points.push([0, 0, 0]);
+        // Annotated planes (View ▸ Define Planes) count too — they are the
+        // reference geometry the mode exists to create, so "Fit 3D to Scene"
+        // must frame them. `_planeGroup` is only ever non-empty once a plane
+        // has been triangulated, so this cannot change framing for a project
+        // that has no planes. The `planeNode_` prefix deliberately does not
+        // match the `node_` test above, so nothing is counted twice.
+        if (this._planeGroup) {
+            this._planeGroup.traverse(function (child) {
+                if (child.name && child.name.indexOf('planeNode_') === 0) {
+                    var p = child.position;
+                    if (isFinite(p.x) && isFinite(p.y) && isFinite(p.z)) {
+                        points.push([p.x, p.y, p.z]);
+                    }
+                }
+            });
+        }
+
+        // Add the DISPLAYED origin — the user's once Set Origin has applied one,
+        // the calibration's until then. It is what orbit and zoom key on, so the
+        // framing has to account for it.
+        const pivot = this.originPivot();
+        points.push([pivot.x, pivot.y, pivot.z]);
 
         if (points.length === 0) return;
 
@@ -1571,6 +2924,18 @@ export class Viewport3D {
         cx /= points.length;
         cy /= points.length;
         cz /= points.length;
+
+        // With a user origin applied, fit AROUND that origin rather than around
+        // the point cloud's centroid. The two are different points, and framing
+        // one while orbiting the other is what makes the first drag after a fit
+        // swing the scene about something off-centre. The radius below is
+        // measured from the same point, so nothing leaves the frame — the view
+        // just sits a little further back when the origin is off to one side.
+        if (this._originFrame) {
+            cx = pivot.x;
+            cy = pivot.y;
+            cz = pivot.z;
+        }
 
         let maxDist = 0;
         for (let i = 0; i < points.length; i++) {
@@ -1603,14 +2968,20 @@ export class Viewport3D {
             this._axisHelper.scale.setScalar(axisScale / 50); // 50 was original size
         }
 
-        const direction = new THREE.Vector3(1, -1, 0.8).normalize();
+        // Stated in frame coordinates, so the canned angle means the same thing
+        // relative to the user's grid as it did relative to the calibration's.
+        const direction = this._frameDirection(1, -1, 0.8).normalize();
         this.threeCamera.position.set(
             cx + direction.x * cameraDistance,
             cy + direction.y * cameraDistance,
             cz + direction.z * cameraDistance
         );
         this.controls.target.set(cx, cy, cz);
-        this.controls.update();
+        // Only when the fit is already centred on the frame's origin: fitting on
+        // a centroid deliberately keeps that centroid as the pivot, and moving
+        // the target away from what was just framed would undo the fit.
+        if (this._originFrame) this._rebaseControls();
+        else this.controls.update();
     }
 
     /**
@@ -1643,6 +3014,26 @@ export class Viewport3D {
             this._resizeObserver.disconnect();
             this._resizeObserver = null;
         }
+
+        // Plane-drag listeners. The pointerdown one lives on the CONTAINER,
+        // which outlives this viewport — leaving it attached would keep a
+        // disposed instance alive and firing.
+        if (this._onPlaneDownCapture && this.container) {
+            this.container.removeEventListener('pointerdown', this._onPlaneDownCapture, true);
+            this._onPlaneDownCapture = null;
+        }
+        if (this.renderer && this.renderer.domElement) {
+            const dom = this.renderer.domElement;
+            if (this._onPlaneMoveBound) dom.removeEventListener('pointermove', this._onPlaneMoveBound);
+            if (this._onPlaneUpBound) {
+                dom.removeEventListener('pointerup', this._onPlaneUpBound);
+                dom.removeEventListener('pointercancel', this._onPlaneUpBound);
+            }
+        }
+        this._onPlaneMoveBound = null;
+        this._onPlaneUpBound = null;
+        this._planeDrag = null;
+        this._planes = [];
 
         // Dispose controls
         if (this.controls) {

@@ -5,39 +5,40 @@
 
 import {
     Skeleton, Camera, Session,
-} from '../pose/pose-data.js?v=97654ac0e810';
-import { getInstanceGroupsForFrame } from '../pose/triangulation.js?v=97654ac0e810';
-import { REPROJECTION_COLOR, getTrackColor, getGroupColor } from './overlays.js?v=97654ac0e810';
-import { drawAllOverlays, updateFrameCounters } from './rendering.js?v=97654ac0e810';
-import { isInteractiveClickTarget } from './interaction.js?v=97654ac0e810';
-import { refreshIdSwitchPanel } from './id-switch-modal.js?v=97654ac0e810';
-import { isInfoPanelVisible, markInfoPanelStale } from './panel-visibility.js?v=97654ac0e810';
+} from '../pose/pose-data.js?v=62a2ec3e1ea9';
+import { getInstanceGroupsForFrame } from '../pose/triangulation.js?v=62a2ec3e1ea9';
+import { REPROJECTION_COLOR, getTrackColor, getGroupColor } from './overlays.js?v=62a2ec3e1ea9';
+import { drawAllOverlays, updateFrameCounters } from './rendering.js?v=62a2ec3e1ea9';
+import { isInteractiveClickTarget } from './interaction.js?v=62a2ec3e1ea9';
+import { persistSectionState } from './section-state.js?v=62a2ec3e1ea9';
+import { refreshIdSwitchPanel } from './id-switch-modal.js?v=62a2ec3e1ea9';
+import { isInfoPanelVisible, markInfoPanelStale } from './panel-visibility.js?v=62a2ec3e1ea9';
 import { state, timeline, interactionManager, rememberSkeleton, buildRememberedSkeleton,
-         setProjectSkeleton, getProjectSkeleton } from './app-state.js?v=97654ac0e810';
-import { setStatus, markDirty } from '../import-export/save-load.js?v=97654ac0e810';
-import { buildSkeletonJSON, parseSkeletonJSON } from '../import-export/skeleton-json.js?v=97654ac0e810';
+         setProjectSkeleton, getProjectSkeleton } from './app-state.js?v=62a2ec3e1ea9';
+import { setStatus, markDirty } from '../import-export/save-load.js?v=62a2ec3e1ea9';
+import { buildSkeletonJSON, parseSkeletonJSON } from '../import-export/skeleton-json.js?v=62a2ec3e1ea9';
 import {
     handleLoadVideos, handleLoadCalibration, autoAssignVideosToCameras,
     createViewForVideoFile, rebuildVideoController, fitCanvasesToCells,
     loadSingleSessionFromCache,
-} from '../loading/session-loader.js?v=97654ac0e810';
+} from '../loading/session-loader.js?v=62a2ec3e1ea9';
 
 // Circular import — these are still defined in app.js for now. They will be
 // retargeted as later passes land:
 // - swapAssignTrack, propagateIdentityForward, unlinkGroup, showGroupContextMenu
 //   → ui/identity-assignment.js (Pass 3f)
 // Pass 3e-1: unlinkGroup + showGroupContextMenu moved to ui-wiring.js.
-import { unlinkGroup, showGroupContextMenu } from './ui-wiring.js?v=97654ac0e810';
+import { unlinkGroup, showGroupContextMenu } from './ui-wiring.js?v=62a2ec3e1ea9';
 // Pass 3f: swapAssignTrack + propagateIdentityForward moved to identity-assignment.js.
 // luc3d #172: every manual identity switch routes through applyIdentitySwitch,
 // which subsumes this file's former direct propagateIdentityForward calls.
 import {
     swapAssignTrack, applyIdentitySwitch, describeIdentitySwitch,
-} from './identity-assignment.js?v=97654ac0e810';
+} from './identity-assignment.js?v=62a2ec3e1ea9';
 // Pass 3h: populateSessionsPanel / populateViewStrip / populateSessionStrip moved to sessions-panes.js.
 import {
     populateSessionsPanel, populateViewStrip, populateSessionStrip,
-} from './sessions-panes.js?v=97654ac0e810';
+} from './sessions-panes.js?v=62a2ec3e1ea9';
 // Block 2 (Prompt 4): per-session timeline visibility toggles.
 import {
     toggleCameraVisibility,
@@ -46,7 +47,7 @@ import {
     getCameraVisibilityList,
     getTrackVisibilityList,
     getIdentityVisibilityList,
-} from './timeline-visibility.js?v=97654ac0e810';
+} from './timeline-visibility.js?v=62a2ec3e1ea9';
 
 // ============================================
 // Inline name entry for "+ New Track" / "+ New ID"
@@ -585,30 +586,9 @@ export function showCameraDetail(cam) {
 
 // Whether the Skeleton tab's Nodes / Edges sections are expanded. Browser-local
 // display taste, not project state, so it lives in localStorage alongside the
-// Visibility panel's global appearance prefs — never in the .slp.
+// Visibility panel's global appearance prefs — never in the .slp. The wiring
+// itself is `ui/section-state.js`, shared with the Define Planes panel.
 const SKELETON_SECTIONS_KEY = 'skeletonSectionsOpen';
-
-/**
- * Wire a collapsible <details> section so its open/closed state survives a
- * reload. Storage is best-effort: a browser that refuses it (private mode,
- * blocked site data) just gets the markup's default `open`.
- */
-function persistSectionState(id) {
-    const el = document.getElementById(id);
-    if (!el) return;
-    let saved = null;
-    try {
-        saved = JSON.parse(localStorage.getItem(SKELETON_SECTIONS_KEY) || '{}');
-    } catch (e) { saved = null; }
-    if (saved && typeof saved[id] === 'boolean') el.open = saved[id];
-    el.addEventListener('toggle', function () {
-        try {
-            const cur = JSON.parse(localStorage.getItem(SKELETON_SECTIONS_KEY) || '{}');
-            cur[id] = el.open;
-            localStorage.setItem(SKELETON_SECTIONS_KEY, JSON.stringify(cur));
-        } catch (e) { /* storage unavailable — the section still works */ }
-    });
-}
 
 function setSectionCount(id, n) {
     const el = document.getElementById(id);
@@ -861,8 +841,8 @@ export function promptImportSkeletonForAllSessions(onDone) {
 
 export function setupSkeletonEditing() {
     // Collapsible Nodes / Edges sections — restore last state, remember changes.
-    persistSectionState('skeletonNodesSection');
-    persistSectionState('skeletonEdgesSection');
+    persistSectionState('skeletonNodesSection', SKELETON_SECTIONS_KEY);
+    persistSectionState('skeletonEdgesSection', SKELETON_SECTIONS_KEY);
 
     // Add Node button
     document.getElementById('btnAddNode').addEventListener('click', function () {
