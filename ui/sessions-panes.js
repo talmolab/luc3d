@@ -371,11 +371,26 @@ const _paneManagerImpl = {
      * Add all views arranged in an optimal grid layout.
      * n<=3: 1 row. n<=8: 2 rows. n<=15: 3 rows.
      * Top row gets ceil(n/rows) items, remaining rows fill the rest.
+     *
+     * Laying every view out as a grid IS grid mode, so this also leaves solo
+     * mode. The loaders and session switches call it straight after
+     * `clearAll()`, and only `newProject` used to reset `state.viewMode` — so a
+     * load made while a view was solo'd showed the grid but stayed 'single',
+     * and `v` (a no-op when already solo) silently did nothing until `g`.
      */
     addAllViewsAsGrid() {
         var views = state.views;
         var n = views.length;
         if (n === 0) return;
+
+        if (state.viewMode !== 'grid') {
+            state.viewMode = 'grid';
+            // the solo chip ("cam4 (4/5)"), cleared as ui-wiring's showViewIndicator does in grid mode
+            var chip = document.getElementById('viewModeIndicator');
+            if (chip) chip.remove();
+            var dockEl = document.getElementById('videoDock');
+            if (dockEl) dockEl.classList.remove('has-view-indicator');
+        }
 
         // Calculate grid dimensions
         var rows, cols;
