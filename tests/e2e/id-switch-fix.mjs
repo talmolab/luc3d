@@ -8,11 +8,13 @@
  *   - the onset id_0 ↔ id_1, close 40..50, reaching the end of the session;
  *   - id_1 ↔ id_2 at 90, inside the crossed stretch (a follow-on).
  * Asserted:
- *  1. The selected row offers "Fix switch…"; the dialog names frames 52–120
- *     ("where they separate") from the lead-in, and 51–120 ("the frame you are
- *     paused on") from inside the close spell. Esc and Cancel change nothing, and
- *     no app shortcut fires under the dialog.
- *  2. Confirming swaps exactly that stretch: every frame's labels are right again,
+ *  1. The selected row offers "Fix switch…". The fix starts at the CURRENT frame
+ *     anywhere in the row's window (lead-in 10 .. 1 s after, 80): the dialog names
+ *     frames 11–120 from the lead-in and 51–120 from inside the close spell; outside
+ *     the window (frame 5) it falls back to where they separate, 52–120, and says
+ *     why. Esc and Cancel change nothing, and no app shortcut fires under it.
+ *  2. Confirming at frame 52 (index 51, in the lead-out — after the red section)
+ *     swaps exactly the crossed stretch: every frame's labels are right again,
  *     frames before it are untouched; the row stays, ticked and marked Fixed, the
  *     view is back at its lead-in, and the box still encloses the pair at frame 60.
  *  3. The follow-on row inside the stretch is renamed to the animals it is about
@@ -109,10 +111,14 @@ try {
     await page.waitForFunction(() => window.__lucid.state.currentFrame === 10, null, { timeout: 10000 }).catch(() => {});
     check(await page.isVisible(onsetRow + ' .id-switch-fix'), 'the selected row offers "Fix switch…"');
     check(!(await page.isVisible('#idSwitchPanel .id-switch-row[data-frame="90"] .id-switch-fix')), 'only the selected row does');
+    const goTo = async (f) => {
+        await page.evaluate(async (f) => { const I = await import('/pose/initialization.js'); I.navigateToFrame(f); }, f);
+        await page.waitForFunction((f) => window.__lucid.state.currentFrame === f, f, { timeout: 10000 }).catch(() => {});
+    };
     await page.click(onsetRow + ' .id-switch-fix');
     let t = await dialogText();
-    check(!!t && /frames 52–120/.test(t) && /where they separate/.test(t) && /the end of the video/.test(t),
-        `from the lead-in: frames 52–120, starting where they separate (${t && t.slice(0, 140)})`);
+    check(!!t && /frames 11–120/.test(t) && /the frame you are on\./.test(t) && /the end of the video/.test(t),
+        `from the lead-in: frames 11–120, starting at the frame you are on (${t && t.slice(0, 140)})`);
     await page.keyboard.press('v');
     check(await page.evaluate(() => window.__lucid.state.viewMode) === 'grid', 'an app shortcut (v) does not fire under the dialog');
     await page.keyboard.press('Escape');
@@ -122,14 +128,22 @@ try {
     await page.waitForFunction(() => window.__lucid.state.currentFrame === 50, null, { timeout: 10000 }).catch(() => {});
     await page.click(onsetRow + ' .id-switch-fix');
     t = await dialogText();
-    check(!!t && /frames 51–120/.test(t) && /paused on/.test(t), `paused inside the red section: frames 51–120, from the paused frame`);
+    check(!!t && /frames 51–120/.test(t) && /the frame you are on\./.test(t), `inside the red section: frames 51–120, from the frame you are on`);
     await page.click('#idSwitchFixCancel');
     check(await dialogText() === null && (await page.evaluate(() => window.__labels())).snap === before.snap, 'Cancel changes nothing');
 
-    // ---- 2. confirm from the lead-in (frames 52–120 = indices 51..119: exactly the crossed stretch)
-    await page.click(onsetRow + ' .id-switch-line1');
-    await page.waitForFunction(() => window.__lucid.state.currentFrame === 10, null, { timeout: 10000 }).catch(() => {});
+    await goTo(5);                                                                 // before the row's window
     await page.click(onsetRow + ' .id-switch-fix');
+    t = await dialogText();
+    check(!!t && /frames 52–120/.test(t) && /where they separate/.test(t) && /outside this switch/.test(t),
+        `outside the window: falls back to where they separate, 52–120, and says why (${t && t.slice(0, 160)})`);
+    await page.keyboard.press('Escape');
+
+    // ---- 2. confirm at index 51, in the lead-out (frames 52–120 = indices 51..119: exactly the crossed stretch)
+    await goTo(51);
+    await page.click(onsetRow + ' .id-switch-fix');
+    t = await dialogText();
+    check(!!t && /frames 52–120/.test(t) && /the frame you are on\./.test(t), 'in the lead-out, after the red section: still the frame you are on');
     await page.click('#idSwitchFixOk');
     await page.waitForTimeout(200);
     const after = await page.evaluate(() => window.__labels());

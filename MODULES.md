@@ -8069,14 +8069,18 @@ change point of the same pair within 1 s as `agree` — "Both");
 key, so untouched projects keep their bytes); `ingestIdSwitchReview(session,
 payload)` (rebuilds `session._idSwitch`, re-links "Both"; ignores anything
 malformed, never throws); `idSwitchFixPlan(m, res, {currentFrame,
-totalFrames})` -> `{key, partnerKey, nameA, nameB, from, to, start, edge}` or null
+totalFrames, window?})` -> `{key, partnerKey, nameA, nameB, from, to, start
+('current' | 'separate'), edge}` or null
 — what fixing row `m` swaps (see below); `idSwitchFixFor(st, m)` (the fix covering
 a row, its own or its partner's); `idSwitchRenameForFix(st, fix)` (renames the
 other pairs' rows inside a fixed stretch — an involution, keys follow).
 
-**What a fix swaps.** The boundary is chosen inside the close spell [s, e]: the
-frame the viewer is paused on when it is in [s, e + 1], else e + 1 (where the
-animals separate). An onset swaps from there to its `switchBackAt` encounter's last
+**What a fix swaps.** The boundary is the CURRENT frame whenever it is inside the
+row's window (`o.window` — in the app the whole progress bar, 1 s before the
+animals come close to 1 s after they separate), so the user puts it where they saw
+the labels flip by playing, stepping or clicking the bar; outside the window it
+falls back to e + 1 (where the animals separate). Without `o.window` the window is
+the close spell [s, e + 1]. An onset swaps from there to its `switchBackAt` encounter's last
 close frame, or the last frame; an 'end' swaps the stretch BEFORE it, from just
 after `switchedAt` (or frame 0) to the frame before its boundary. The change point
 at the other edge is the fix's `partnerKey` (the same stretch). Results restored

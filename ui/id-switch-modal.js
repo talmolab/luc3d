@@ -425,7 +425,8 @@ function afterIdentityChange(session) {
 /** The confirmation dialog for fixing row `f`. Cancel / Esc change nothing. */
 function openFixDialog(session, st, f) {
     var res = st.results[f.cue] || st.results.size;
-    var plan = idSwitchFixPlan(f, res, { currentFrame: state.currentFrame, totalFrames: state.totalFrames });
+    var rr = rowRange(f);                          // the row's window: its progress bar, lead-in .. 1 s after
+    var plan = idSwitchFixPlan(f, res, { currentFrame: state.currentFrame, totalFrames: state.totalFrames, window: [rr.p0, rr.p1] });
     if (!plan) { setStatus('Nothing to fix here: the stretch this switch covers is empty', 'warning'); return; }
     var idA = identityIdByName(session, plan.nameA), idB = identityIdByName(session, plan.nameB);
     if (idA == null || idB == null) {
@@ -437,9 +438,10 @@ function openFixDialog(session, st, f) {
     if (f.kind === 'end') {
         startWhy = plan.edge == null ? 'the start of the video, where the swapped stretch begins'
             : 'just after their encounter at ' + fmtTenths(plan.edge) + ', where the labels first look swapped';
-        endWhy = plan.start === 'paused' ? 'just before the frame you are paused on' : 'where they separate (the end of the red section)';
+        endWhy = plan.start === 'current' ? 'just before the frame you are on'
+            : 'where they separate (the end of the red section) — the frame you are on is outside this switch';
     } else {
-        startWhy = plan.start === 'paused' ? 'the frame you are paused on' : 'where they separate (just after the red section)';
+        startWhy = plan.start === 'current' ? 'the frame you are on' : 'where they separate (just after the red section) — the frame you are on is outside this switch';
         endWhy = plan.edge == null ? 'the end of the video'
             : 'the end of their next encounter (' + fmtTenths(plan.edge) + '), after which the labels look right again';
     }
@@ -454,7 +456,8 @@ function openFixDialog(session, st, f) {
         '<li>Ends at ' + fr(plan.to) + ': ' + endWhy + '.</li></ul>' +
         (f.followOf != null ? '<p class="id-switch-fix-warn">This flag follows the switch at ' + fmtTime(f.followOf) +
             ', and is often a side effect of it. Fix that one first if you have not.</p>' : '') +
-        '<p class="id-switch-fix-tip">To start somewhere else, pause inside the red section and click Fix switch again.</p>' +
+        '<p class="id-switch-fix-tip">To ' + (f.kind === 'end' ? 'end' : 'start') + ' somewhere else, go to that frame on the row\'s ' +
+        'progress bar (click it, step or play) and click Fix switch again.</p>' +
         '<div class="modal-actions"><button id="idSwitchFixCancel">Cancel</button>' +
         '<button id="idSwitchFixOk" class="primary">Swap identities</button></div></div>';
     document.body.appendChild(overlay);
