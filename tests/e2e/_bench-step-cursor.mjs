@@ -3,12 +3,15 @@
  * when stepping / jumping, with and without the open stepping stream
  * (loading/video.js `OnDemandVideoDecoder._mbGetFrame`, `LUCID_STEP_CURSOR`).
  *
- * Opens every .mp4 of a folder as an OnDemandVideoDecoder (the app's decoder,
+ * Opens every .mp4 of a folder as an OnDemandVideoDecoder (the app's decoder, cache 60 as in the app,
  * mediabunny backend) and times "all views show frame f" for: single forward
  * steps (arrow key), single back steps beyond anything shown, random jumps, and
  * a held arrow key (steps requested back-to-back). Each scenario runs with the
  * cursor off (LUCID_STEP_CURSOR = 0: today's fresh decode per frame) and on.
- * Also checks every stepped frame is pixel-identical between the two.
+ * Also checks every stepped frame is pixel-identical between the two. Then holds
+ * the LEFT arrow (72 steps back) for each back-step chunk size
+ * (`LUCID_STEP_BACK_CHUNK`, `_decodeBackChunk`): per-step latency, steps/s, the
+ * frame cache's peak size, and pixels vs no chunking.
  *
  * Not a test (needs HEVC: real Google Chrome, headed). Usage:
  *     DIRS=<dir>[,<dir>…] node tests/e2e/_bench-step-cursor.mjs
@@ -40,7 +43,7 @@ try {
         const r = await page.evaluate(async () => {
             const { OnDemandVideoDecoder } = await import('./loading/video.js');
             const decs = [];
-            for (const f of document.getElementById('__v').files) { const d = new OnDemandVideoDecoder({ cacheSize: 120 }); await d.init(f); decs.push(d); }
+            for (const f of document.getElementById('__v').files) { const d = new OnDemandVideoDecoder({ cacheSize: window.__CACHE || 60 }); await d.init(f); decs.push(d); }
             const n = decs[0].samples.length;
             const clear = () => decs.forEach(d => { d.releaseStepCursor(); d._mbBackend.cache.forEach(b => b.close()); d._mbBackend.cache.clear(); });
             const show = async (f) => { const t = performance.now(); const bms = await Promise.all(decs.map(d => d.getFrame(f))); return { ms: performance.now() - t, bms }; };
@@ -72,6 +75,30 @@ try {
                 const t0 = performance.now(); for (let i = 1; i <= 60; i++) await show(s2 + i); held.push(60 / ((performance.now() - t0) / 1000));
                 out[mode] = { fwd: [med(fwd), p90(fwd)], back: [med(back), p90(back)], jump: [med(jump), p90(jump)], heldFps: held[0], same, compared };
             }
+            // held LEFT arrow: 72 steps back from a mid-recording frame, per back-step chunk size
+            window.LUCID_STEP_CURSOR = undefined;
+            out.back = {};
+            const s3 = 2000;
+            const refPx = {};
+            for (const chunk of (window.__CHUNKS || [0, 8, 16, 24, 30])) {
+                window.LUCID_STEP_BACK_CHUNK = chunk;
+                clear(); decs.forEach(d => { d._lastStepFrame = null; });
+                await show(s3);
+                const per = []; let peak = 0, same = 0, compared = 0;
+                const t0 = performance.now();
+                for (let i = 1; i <= 72; i++) {
+                    const { ms, bms } = await show(s3 - i); per.push(ms);
+                    peak = Math.max(peak, decs.reduce((a, d) => a + d._mbBackend.cache.size, 0));
+                    if (i % 9 === 0) {                                   // pixels vs no chunking, camera 0
+                        const p = px(bms[0]);
+                        if (chunk === 0) refPx[i] = p; else { compared++; if (refPx[i] && refPx[i].every((v, j) => v === p[j])) same++; }
+                    }
+                }
+                const total = performance.now() - t0, bm = decs[0]._mbBackend.cache.values().next().value;
+                out.back[chunk] = { med: med(per), p90: p90(per), max: Math.max(...per), stepsPerS: 72 / (total / 1000),
+                    peakFrames: peak, peakMB: peak * (bm ? bm.width * bm.height * 4 : 0) / 1048576, same, compared };
+            }
+            window.LUCID_STEP_BACK_CHUNK = undefined;
             decs.forEach(d => d.close());
             return out;
         });
@@ -79,6 +106,9 @@ try {
         console.log(`\n• ${path.basename(dir)}`);
         for (const m of ['off', 'on']) console.log(`  cursor ${m.padEnd(3)}: step forward ${f(r[m].fwd)} · step back ${f(r[m].back)} · jump ${f(r[m].jump)} · held key ${r[m].heldFps.toFixed(1)} frames/s`);
         console.log(`  stepped frames pixel-identical on vs off: ${r.on.same}/${r.on.compared}`);
+        console.log('  held left arrow, 72 steps back (all views):');
+        for (const [chunk, b] of Object.entries(r.back)) console.log(`    chunk ${String(chunk).padStart(2)}: median ${Math.round(b.med)} ms, p90 ${Math.round(b.p90)} ms, worst ${Math.round(b.max)} ms · ` +
+            `${b.stepsPerS.toFixed(1)} steps/s · peak cache ${b.peakFrames} frames ≈ ${Math.round(b.peakMB)} MB` + (chunk === '0' ? '' : ` · pixel-identical ${b.same}/${b.compared}`));
     }
 } finally {
     if (browser) await browser.close().catch(() => {});

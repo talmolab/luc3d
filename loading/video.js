@@ -32,6 +32,24 @@ export function videoLog(msg, level) {
 /** A paused-stepping decode stream with no request for this long is closed (OnDemandVideoDecoder._mbGetFrame). */
 export const STEP_CURSOR_IDLE_MS = 3000;
 
+/**
+ * Frames decoded and kept per backward step (OnDemandVideoDecoder._decodeBackChunk):
+ * a step back must decode from the keyframe anyway, so it keeps up to this many
+ * frames ending at the target and the next steps back are cache hits. Must stay
+ * well under the decoder's frame cache (60 in the app). `window.LUCID_STEP_BACK_CHUNK`
+ * overrides it; 0 or 1 turns it off.
+ */
+export const STEP_BACK_CHUNK = 24;
+
+/** Index of the frame nearest timestamp `t` in the sorted `times` (within half a frame), or -1. */
+function frameNearTime(times, t) {
+    var lo = 0, hi = times.length - 1;
+    while (lo < hi) { var m = (lo + hi) >> 1; if (times[m] < t) lo = m + 1; else hi = m; }
+    if (lo > 0 && Math.abs(times[lo - 1] - t) < Math.abs(times[lo] - t)) lo--;
+    var half = times.length > 1 ? (times[times.length - 1] - times[0]) / (times.length - 1) / 2 : Infinity;
+    return Math.abs(times[lo] - t) <= half ? lo : -1;
+}
+
 // ---------------------------------------------------------------------------
 // OnDemandVideoDecoder
 // ---------------------------------------------------------------------------
@@ -507,11 +525,22 @@ export class OnDemandVideoDecoder {
         var be = this._mbBackend;
         var off = typeof window !== 'undefined' && window.LUCID_STEP_CURSOR === 0;
         if (off || !be.sink || typeof be.sink.samples !== 'function' || !be._frameTimes || !be.cache) return be.getFrame(frameIndex);
+        var prev = this._lastStepFrame;
+        this._lastStepFrame = frameIndex;
         var hit = be.cache.get(frameIndex);
         if (hit) { be.cache.delete(frameIndex); be.cache.set(frameIndex, hit); return hit; }
         if (be.decodingPromise) { await be.decodingPromise; if (be.cache.has(frameIndex)) return be.cache.get(frameIndex); }
         var ts = be._frameTimes[frameIndex];
         if (ts == null) return null;
+        // a step BACK (1-3 frames before the last request): decode the run up to it once and keep it
+        if (prev != null && prev - frameIndex >= 1 && prev - frameIndex <= 3) {
+            try {
+                var chunkHit = await this._decodeBackChunk(frameIndex);
+                if (chunkHit) return chunkHit;
+            } catch (e) {
+                videoLog("Back-step chunk failed for frame " + frameIndex + " (" + e.message + "), decoding it alone", "warn");
+            }
+        }
         try {
             var c = this._stepCursor;
             if (!(c && c.backend === be && frameIndex >= c.next && await this._sameKeyframeRun(c, ts))) {
@@ -545,12 +574,48 @@ export class OnDemandVideoDecoder {
 
     /** Can the open stream reach `ts` without passing a newer keyframe (i.e. is advancing it no costlier than reopening)? */
     async _sameKeyframeRun(c, ts) {
+        var keyTs = await this._keyTimestamp(c.backend, ts);
+        return keyTs != null && keyTs <= c.nextTs;
+    }
+
+    /** Timestamp of the keyframe that frame time `ts` decodes from (mediabunny's packet index), or null. */
+    async _keyTimestamp(be, ts) {
         if (!this._keySink) {
             var mb = await import('mediabunny');
-            this._keySink = new mb.EncodedPacketSink(await c.backend.input.getPrimaryVideoTrack());
+            this._keySink = new mb.EncodedPacketSink(await be.input.getPrimaryVideoTrack());
         }
         var key = await this._keySink.getKeyPacket(ts);
-        return !!key && key.timestamp <= c.nextTs;
+        return key ? key.timestamp : null;
+    }
+
+    /**
+     * A step back: frame `f` has to be decoded from its keyframe whatever happens,
+     * so decode that run once and cache up to STEP_BACK_CHUNK frames ending at `f`
+     * (never earlier than its keyframe — that would be a second run), making the
+     * next steps back cache hits instead of one keyframe-to-frame decode EACH (up to
+     * 250 frames per camera on the field recordings). Returns `f`'s bitmap, or null
+     * when chunking is off (the caller then decodes `f` alone).
+     */
+    async _decodeBackChunk(f) {
+        var be = this._mbBackend, times = be._frameTimes;
+        var n = (typeof window !== 'undefined' && window.LUCID_STEP_BACK_CHUNK != null) ? Math.floor(+window.LUCID_STEP_BACK_CHUNK) : STEP_BACK_CHUNK;
+        n = Math.min(n, Math.floor(be.cacheSize / 2));   // leave the cache room for what is on screen
+        if (!(n > 1)) return null;
+        var keyTs = await this._keyTimestamp(be, times[f]);
+        var kf = keyTs == null ? -1 : frameNearTime(times, keyTs);
+        var start = Math.max(kf >= 0 ? kf : 0, f - n + 1);
+        var half = times.length > 1 ? (times[times.length - 1] - times[0]) / (times.length - 1) / 2 : 0;
+        var out = null;
+        for await (var sample of be.sink.samples(times[start], times[f] + half)) {
+            var i = frameNearTime(times, sample.timestamp);
+            if (i < start || i > f || be.cache.has(i)) { sample.close(); continue; }
+            var vf = sample.toVideoFrame();
+            var bitmap = await createImageBitmap(vf);
+            vf.close(); sample.close();
+            be.cacheFrame(i, bitmap);
+            if (i === f) out = bitmap;
+        }
+        return out;
     }
 
     /** Close the paused-stepping decode stream (frees its decoder and buffered frames). */

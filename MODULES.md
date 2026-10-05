@@ -7265,10 +7265,26 @@ and 15.6 -> 366 frames/s. Steps back and jumps are unchanged apart from the
 stream's read-ahead (~40 extra packets decoded in the background on opening:
 jump 206 -> 214 ms, step back 405 -> 421 ms on the originals). Stepped frames are
 pixel-identical to the frame-accurate decode. Cost while paused: each open stream
-holds its few read-ahead frames (and a decoder) until it idles out. Guarded by
+holds its few read-ahead frames (and a decoder) until it idles out.
+**Stepping BACK decodes in chunks (`_decodeBackChunk`, 2026-10-05).** A frame can
+only be decoded forward from its keyframe, so each step back re-decoded the whole
+run from the keyframe — up to 250 frames per camera, ~420 ms for 8 views, and
+choppy (cheap just after a keyframe, dear just before the next). When a request is
+1–3 frames before the previous one, `_mbGetFrame` instead decodes that run once
+and caches up to `STEP_BACK_CHUNK` (24) frames ending at the target, never earlier
+than its keyframe, so the next steps back are cache hits. Capped at half the
+frame cache (60 in the app); `window.LUCID_STEP_BACK_CHUNK = 0` turns it off.
+Jumps and seekbar drags (larger moves) don't trigger it. Held left arrow, 72
+steps, 8 views, original recordings (`_bench-step-cursor.mjs`, app cache 60):
+2.3 -> **34.6 steps/s**, median step 428 -> 0 ms, but every 24th step costs ~0.7 s
+(the run + 24 bitmaps per camera); keyframe every 30: 15.1 -> 70.1 steps/s, worst
+step ~240 ms. Memory: the cache peaks at its existing ceiling (60 frames per
+camera, 480 here) with or without chunking — chunking fills it sooner, it does
+not raise it. Stepped-back frames pixel-identical to the unchunked decode. Guarded by
 `tests/e2e/step-cursor.mjs` (one packet per step vs every frame since the
 keyframe, pixel-identical stepped / stepped-back / jumped frames, reopening at the
-right keyframe, release on idle / request / close).
+right keyframe, chunked back steps — 2 of 30 steps decode, same frames — and
+release on idle / request / close).
 
 **Callers must coalesce rapid single-frame steps via `scrubToFrame`, never
 call `seekToFrame` directly for repeatable user input (issue #115
@@ -7395,6 +7411,7 @@ a zoomed-in image keeps the same region centered instead of jumping.
 **Key exports.**
 - `videoLog(msg, level)` — namespaced logger.
 - `STEP_CURSOR_IDLE_MS` (3000) — idle time before a paused-stepping stream closes.
+- `STEP_BACK_CHUNK` (24) — frames decoded and cached per backward step.
 - `OnDemandVideoDecoder` — class. Selected methods: `init(source)`,
   `getFrame(frameIndex)` (mediabunny: via `_mbGetFrame`, the open stepping
   stream), `releaseStepCursor()`, `_initMediabunny(source)` /

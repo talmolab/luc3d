@@ -14,7 +14,10 @@
  *     same frame decoded with the stream off (the frame-accurate path, #115).
  *  3. Stepping back reopens the stream (no wrong frame from the old one); a jump
  *     past the next keyframe reopens it AT that keyframe, not by decoding through.
- *  4. The stream is released after STEP_CURSOR_IDLE_MS idle, by
+ *  4. Stepping BACK (held left arrow) decodes the run from the keyframe once per
+ *     STEP_BACK_CHUNK frames instead of once per step, showing the same frames
+ *     (`_decodeBackChunk`; `LUCID_STEP_BACK_CHUNK = 0` for the per-step baseline).
+ *  5. The stream is released after STEP_CURSOR_IDLE_MS idle, by
  *     `releaseStepCursor()`, and by `close()`.
  *
  * Needs ffmpeg (libx264); skipped with a note if absent.
@@ -90,6 +93,14 @@ try {
         res.mixedIdentical = same(on2, off2);
         res.jumpPackets = on2[3].packets;               // 700 needs only keyframe 600 onward (+ read-ahead)
         res.cursorAfterJump = dec._stepCursor ? dec._stepCursor.next : null;
+        // held LEFT arrow: 30 steps back from 430 (keyframe 300) — chunked (default) vs off
+        const backSeq = []; for (let f = 430; f >= 400; f--) backSeq.push(f);
+        const chunkRun = async (chunk) => { window.LUCID_STEP_BACK_CHUNK = chunk; dec._lastStepFrame = null; const o = await run(true, backSeq); window.LUCID_STEP_BACK_CHUNK = undefined; return o; };
+        const back0 = await chunkRun(0), backC = await chunkRun(undefined);
+        res.backOffPackets = back0.slice(1).map(x => x.packets);
+        res.backChunkPackets = backC.slice(1).map(x => x.packets);
+        res.backIdentical = same(backC, back0);
+        res.chunkSize = V.STEP_BACK_CHUNK;
         // release: idle, explicit, close()
         window.LUCID_STEP_CURSOR = undefined;
         await dec.getFrame(702);
@@ -111,6 +122,12 @@ try {
     check(r.mixedIdentical, 'frames 430 → 420 → 410 → 700 → 701 pixel-identical to the frame-accurate decode');
     check(r.jumpPackets <= (700 - 600 + 1) + 50, `jump to 700 reopens at keyframe 600 (${r.jumpPackets} packets, not ~${700 - 410} decoded through)`);
     check(r.cursorAfterJump === 702, `stream positioned after 701 (next ${r.cursorAfterJump})`);
+    console.log('\n• held left arrow: 30 steps back from 430');
+    const bo = r.backOffPackets, bc = r.backChunkPackets, decodingSteps = bc.filter(p => p > 0).length;
+    check(bo.every((p, i) => p >= 429 - i - 300 + 1), `chunk off: every step back decodes from keyframe 300 (${bo[0]}…${bo[bo.length - 1]} packets, ${bo.reduce((a, b) => a + b, 0)} in all)`);
+    check(decodingSteps <= Math.ceil(30 / r.chunkSize), `chunk ${r.chunkSize}: only ${decodingSteps} of 30 steps decode anything (${bc.reduce((a, b) => a + b, 0)} packets in all); the rest are cache hits`);
+    check(r.backIdentical, 'every frame stepped back to is pixel-identical with and without chunking');
+
     console.log('\n• release');
     check(r.openBeforeIdle && r.closedAfterIdle, 'stream closed after STEP_CURSOR_IDLE_MS idle');
     check(r.reopened && r.closedExplicit, 'reopens on the next frame; releaseStepCursor() closes it');
