@@ -55,6 +55,10 @@ export function markDirty() { globalThis.__GUI.markDirty++; }
 const RENDERING_STUB = `
 export function drawAllOverlays(frame) { globalThis.__GUI.drawOverlays++; globalThis.__GUI.lastDrawFrame = frame; }
 export function setReprojErrorVisible() {}
+export function showReprojectionsOnly() { return false; }
+export const REPROJ_ONLY_NOTE = '';
+export function showPredictedOnly() { return false; }
+export const PREDICTED_ONLY_NOTE = '';
 `;
 
 const INFO_PANEL_STUB = `

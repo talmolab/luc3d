@@ -36,7 +36,7 @@ import {
   resolveIdentity,
   resolveVideoFilename,
   sessionsReadError
-} from "./chunk-H7G4PJNA.js";
+} from "./chunk-H7G4PJNA.js?v=d2625fcc2537";
 import {
   RemoteIOError,
   fetchRetrying,
@@ -48,7 +48,7 @@ import {
   redactedCauseSummary,
   resolveUrl,
   statusToMessage
-} from "./chunk-YS7Q6CO6.js";
+} from "./chunk-YS7Q6CO6.js?v=d2625fcc2537";
 
 // src/model/centroid.ts
 var _centroidSkeleton = null;
@@ -5087,7 +5087,13 @@ var MediaBunnyVideoBackend = class _MediaBunnyVideoBackend {
     const packetSink = new EncodedPacketSink(videoTrack);
     this._frameTimes = [];
     try {
-      for await (const packet of packetSink.packets()) {
+      // LUCID local patch (luc3d frame-index): metadataOnly — the index needs only
+      // each packet's timestamp, which mediabunny already has from the parsed
+      // sample table. Without it, packets() READS EVERY PACKET'S BYTES: the whole
+      // file (254 MB per HardFight_1kModels camera, ~2 GB for an 8-camera session
+      // load) just to collect timestamps. Same packets, same order, same
+      // timestamps — only the payload read is skipped.
+      for await (const packet of packetSink.packets(void 0, void 0, { metadataOnly: true })) {
         this._frameTimes.push(packet.timestamp);
       }
     } catch (error) {

@@ -9,6 +9,9 @@ __pycache__/
 
 # Video files (too large for git)
 *.mp4
+# Tiny (29 KB) B-frame fixture for tests/e2e/mediabunny-bframe-decode-order.mjs —
+# regenerate with tests/fixtures/bframes-test/make_fixture.sh.
+!tests/fixtures/bframes-test/bframes-test.mp4
 *.avi
 *.mov
 
@@ -31,17 +34,29 @@ verify/
 # Scratch
 scratch/
 
-# Local CDN fallback (NOT committed; kept on disk in case jsdelivr's +esm /
-# redirect endpoints loop again and hang init). To recover, repoint the CDN
-# imports at these local copies:
-#   index.html        dockview.css link  -> lib/dockview-core/dockview.css
-#   index.html        importmap "yaml"   -> ./lib/yaml/browser/index.js
-#   ui/sessions-panes.js  dockview +esm  -> ../lib/dockview-core/main.esm.mjs
-#   loading/frame-worker.js + slp-import-worker.js  h5wasm +esm -> ../lib/h5wasm/hdf5_hl.js
-# Re-fetch instructions live in each dir's PROVENANCE.txt. (lib/h5wasm and
-# lib/sleap-io are committed; only these two vendored fallbacks are ignored.)
-lib/dockview-core/
-lib/yaml/
+# Offline dependencies: the four packages the app normally streams from jsdelivr.
+# Declared in offline-deps.json, fetched on demand, never committed:
+#     python3 scripts/offline_deps.py install
+# Each directory keeps its own .gitignore + PROVENANCE.txt tracked, so lib/
+# documents what belongs there even when the payload is absent. Do NOT repoint
+# index.html or the ui/ imports at these by hand -- `server.py --offline` rewrites
+# them as it serves, and `offline_deps.py bundle` rewrites them in a zip.
+# (lib/h5wasm, lib/sleap-io, lib/mediabunny and lib/pako are committed.)
+lib/dockview-core/*
+!lib/dockview-core/.gitignore
+!lib/dockview-core/PROVENANCE.txt
+lib/yaml/*
+!lib/yaml/.gitignore
+!lib/yaml/PROVENANCE.txt
+lib/three/*
+!lib/three/.gitignore
+!lib/three/PROVENANCE.txt
+lib/mp4box/*
+!lib/mp4box/.gitignore
+!lib/mp4box/PROVENANCE.txt
+
+# Offline bundles built by `offline_deps.py bundle`
+luc3d-offline-*.zip
 
 # Bench driver node deps (not part of the served app)
 scripts/bench/node_modules/

@@ -9,41 +9,44 @@ import {
     Skeleton, Camera, Instance, UnlinkedInstance, FrameGroup, Identity,
     InstanceGroup, Session,
     toBoxedPoints3d, asPoints3d, someValidPoint3d,
-} from '../pose/pose-data.js';
+} from '../pose/pose-data.js?v=d2625fcc2537';
 import {
     getInstanceGroupsForFrame, storeReprojectedInstances, reprojectPoints,
-} from '../pose/triangulation.js';
-import { OnDemandVideoDecoder } from '../loading/video.js';
-import { createDemoSkeleton } from '../demo-data.js';
+} from '../pose/triangulation.js?v=d2625fcc2537';
+import { OnDemandVideoDecoder } from '../loading/video.js?v=d2625fcc2537';
+import { createDemoSkeleton } from '../demo-data.js?v=d2625fcc2537';
 import {
     pickFiles, parseCalibrationJSON, buildSlpLabelsAllViews,
-} from './file-io.js';
+} from './file-io.js?v=d2625fcc2537';
 import {
     state,
     videoController, interactionManager, viewport3d, timeline, paneManager,
     setVideoController, setInteractionManager,
-} from '../ui/app-state.js';
+} from '../ui/app-state.js?v=d2625fcc2537';
 import {
     autoAssignVideosToCameras, forceVideoSelection, showParentDirMatchSummary,
     forceVideoSelectionWithFolder, createViewForVideoFile, updateTotalFrames,
     rebuildVideoController, fitCanvasesToCells,
-} from '../loading/session-loader.js';
-import { drawAllOverlays, setReprojErrorVisible } from '../ui/rendering.js';
-import { updateInfoPanel } from '../ui/info-panel.js';
+} from '../loading/session-loader.js?v=d2625fcc2537';
+import { drawAllOverlays, setReprojErrorVisible } from '../ui/rendering.js?v=d2625fcc2537';
+import { updateInfoPanel } from '../ui/info-panel.js?v=d2625fcc2537';
 // Pass 3i-3: setupInteraction / setup3DViewport / hideWelcomeOverlay moved to pose/initialization.js.
 import {
     setupInteraction, setup3DViewport, hideWelcomeOverlay,
-} from '../pose/initialization.js';
+} from '../pose/initialization.js?v=d2625fcc2537';
 // Pass 3h: populateViewStrip / populateSessionStrip moved to sessions-panes.js.
-import { populateViewStrip, populateSessionStrip } from '../ui/sessions-panes.js';
-import { handleLoadSlpFile } from './slp-import.js';
+import { populateViewStrip, populateSessionStrip } from '../ui/sessions-panes.js?v=d2625fcc2537';
+import { handleLoadSlpFile } from './slp-import.js?v=d2625fcc2537';
 import {
     buildSessionSlpBytesStreaming, createProjectWriterContext, buildSessionRefGraph,
     openProjectWriter, streamSessionIntoWriter, finalizeProjectWriter,
-} from './slp-streaming-write.js';
-import { SioLazyLoader } from '../loading/sio-lazy-loader.js';
-import { getLoadingProgressModal } from '../ui/loading-progress-modal.js';
-import { writeVisibilityMetadata, readVisibilityMetadata } from './visibility-metadata.js';
+} from './slp-streaming-write.js?v=d2625fcc2537';
+import { SioLazyLoader } from '../loading/sio-lazy-loader.js?v=d2625fcc2537';
+import { getLoadingProgressModal } from '../ui/loading-progress-modal.js?v=d2625fcc2537';
+import { showLoading, hideLoading } from '../ui/loading-overlay.js?v=d2625fcc2537';
+import { writeVisibilityMetadata, readVisibilityMetadata } from './visibility-metadata.js?v=d2625fcc2537';
+import { writePlaneMetadata, readPlaneMetadata, resetPlaneState } from './plane-metadata.js?v=d2625fcc2537';
+import { fileSystemAccessHint } from '../ui/browser-hints.js?v=d2625fcc2537';
 
 /**
  * Confirmation modal shown when the user starts loading a real session while
@@ -153,6 +156,11 @@ export function newProject(force) {
     state.views = [];
     state.videoFiles = [];
 
+    // Define Planes state is project-scoped and lives on a module singleton,
+    // so it survives `state.session = null` — clear it explicitly or a new
+    // project opens carrying the previous one's nodes, planes and origin.
+    resetPlaneState();
+
     // Clear 3D viewport (remove skeletons and camera pyramids)
     if (viewport3d) {
         viewport3d.setFrame([]);
@@ -217,6 +225,12 @@ export function newProject(force) {
     if (skelBody) skelBody.innerHTML = '';
     var edgesBody = document.querySelector('#skeletonEdgesTable tbody');
     if (edgesBody) edgesBody.innerHTML = '';
+    // ...and the collapsible sections' row-count badges, which would otherwise
+    // keep advertising the rows we just removed.
+    var skelCount = document.getElementById('skeletonNodesCount');
+    if (skelCount) skelCount.textContent = '0';
+    var edgeCount = document.getElementById('skeletonEdgesCount');
+    if (edgeCount) edgeCount.textContent = '0';
     var srcSelect = document.getElementById('edgeSrcSelect');
     if (srcSelect) srcSelect.innerHTML = '';
     var dstSelect = document.getElementById('edgeDstSelect');
@@ -339,7 +353,7 @@ function serializeSessionFrames(session) {
 
 async function ensureSleapIO() {
     if (window.SleapIO) return window.SleapIO;
-    var mod = await import('./lib/sleap-io/index.browser.js');
+    var mod = await import('./lib/sleap-io/index.browser.js?v=d2625fcc2537');
     window.SleapIO = mod;
     return mod;
 }
@@ -975,8 +989,13 @@ export async function saveProjectSlp() {
         setStatus('No session to save', 'error');
         return;
     }
+    // In Brave the save-file picker is OFF by default, so Save lands here: the
+    // whole file is built in memory and downloaded (risky for a large
+    // project, and never updates the file in place). Say why, and how to fix.
+    var fsaHint = fileSystemAccessHint();
     try {
-        setStatus('Building SLP...', 'warning');
+        setStatus(fsaHint ? 'Building SLP in memory to download it (Brave cannot save straight to a file)...'
+            : 'Building SLP...', 'warning');
 
         var bytes = await buildSlpBytes();
         var blob = new Blob([bytes], { type: 'application/x-hdf5' });
@@ -995,14 +1014,15 @@ export async function saveProjectSlp() {
         document.body.removeChild(a);
         setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
 
-        setStatus('Project saved as SLP (' + (blob.size / 1024 / 1024).toFixed(1) + ' MB)', 'success');
+        setStatus('Project saved as SLP (' + (blob.size / 1024 / 1024).toFixed(1) + ' MB)' +
+            (fsaHint ? ' — downloaded, not saved in place. ' + fsaHint : ''), 'success');
     } catch (err) {
         if (err && err.name === 'SaveCancelledError') {
             setStatus('Save cancelled', 'warning');
             return;
         }
         console.error('Save project SLP failed:', err);
-        setStatus('Save failed: ' + err.message, 'error');
+        setStatus('Save failed: ' + err.message + (fsaHint ? ' ' + fsaHint : ''), 'error');
     }
 }
 
@@ -1060,7 +1080,10 @@ export function saveProject() {
                 // omit-the-defaults rule as the `.slp` writers — the project
                 // JSON puts them at the session-dict level rather than under a
                 // `metadata.lucid`.
-                return writeVisibilityMetadata(sessData, sess);
+                writeVisibilityMetadata(sessData, sess);
+                // Define Planes state, at the same session-dict level and under
+                // the same keys the `.slp` writers use.
+                return writePlaneMetadata(sessData, sess);
             }),
         };
 
@@ -1105,6 +1128,7 @@ export function saveProject() {
     // Session-scoped Visibility-panel state (see the v3 branch above). `_restoreProjectV2`
     // reads these at this same level for both the v2 and v3 shapes.
     writeVisibilityMetadata(projectData, state.session);
+    writePlaneMetadata(projectData, state.session);
 
     // Serialize each frame
     for (const [frameIdx, fg] of state.session.frameGroups) {
@@ -1233,7 +1257,7 @@ export async function handleLoadProject(prePickedFile) {
             var LARGE_SLP_BYTES = 200 * 1024 * 1024;
             if (ext === 'slp' && file.size > LARGE_SLP_BYTES) {
                 // Dynamic import avoids a session-loader ↔ save-load import cycle.
-                var _sl = await import('../loading/session-loader.js');
+                var _sl = await import('../loading/session-loader.js?v=d2625fcc2537');
                 if (_sl && typeof _sl.handleLoadProjectSlpLazy === 'function') {
                     return _sl.handleLoadProjectSlpLazy(file);
                 }
@@ -1255,6 +1279,11 @@ export async function handleLoadProject(prePickedFile) {
         const data = JSON.parse(text);
 
         // 1. Restore session data (cameras, skeleton, instances, groups)
+        // Define Planes state is project-scoped and lives on a module
+        // singleton, so it does not go away with the old sessions.
+        // `readPlaneMetadata` only restores into an EMPTY model, so without
+        // this the previous project's planes survive and this file's are lost.
+        resetPlaneState();
         var cameras;
         if (data.version === 3) {
             cameras = _restoreProjectV3(data);
@@ -1665,6 +1694,9 @@ function _restoreProjectV2(data) {
     // Session-scoped Visibility-panel state. Shared by the v2 (whole document)
     // and v3 (per-session dict) shapes — both put these keys at this level.
     readVisibilityMetadata(session, data);
+    // Define Planes state. Project-scoped keys are ingested by whichever
+    // session is read first; placements land on this one.
+    readPlaneMetadata(session, data);
     // Legacy global identity map (removed). Captured here and migrated to
     // per-frame entries after frame groups load (see end of this function).
     var legacyGlobalIdentities = data.trackIdentityMap || null;
@@ -2022,14 +2054,9 @@ function _restoreLegacySession(data) {
 // Loading / Status
 // ============================================
 
-export function showLoading(msg) {
-    document.getElementById('loadingOverlay').classList.remove('hidden');
-    document.getElementById('loadingStatus').textContent = msg || 'Loading...';
-}
-
-export function hideLoading() {
-    document.getElementById('loadingOverlay').classList.add('hidden');
-}
+// The overlay itself (and its progress bar) lives in ui/loading-overlay.js;
+// re-exported here because ~10 modules import these two from this one.
+export { showLoading, hideLoading };
 
 export function setStatus(text, type) {
     document.getElementById('statusText').textContent = text;

@@ -8,7 +8,8 @@
  * Dependencies: mp4box.all.min.js (MP4Box)
  */
 
-import { shouldIgnoreShortcut } from '../ui/keyboard-target.js';
+import { shouldIgnoreShortcut } from '../ui/keyboard-target.js?v=d2625fcc2537';
+import { diagnoseUnplayableVideo } from './video-codec-diagnosis.js?v=d2625fcc2537';
 
 // ---------------------------------------------------------------------------
 // Logging helper
@@ -65,6 +66,28 @@ export class OnDemandVideoDecoder {
         this._source = null;
     }
 
+    /**
+     * Await the <video> element's load; if the browser rejects the file, try to
+     * say WHY (video-codec-diagnosis.js reads the codec from the MP4 and checks
+     * it against this browser) and throw that instead of a bare "error code 4".
+     * The diagnosis is attached as `err.codecDiagnosis`; the original error is
+     * `err.cause`. Undiagnosable failures (corrupt file, …) rethrow unchanged.
+     */
+    async _awaitPlayable(metadataPromise, source) {
+        try {
+            await metadataPromise;
+        } catch (loadErr) {
+            var diag = null;
+            try { diag = await diagnoseUnplayableVideo(source); } catch (e) { /* keep the original error */ }
+            if (!diag) throw loadErr;
+            videoLog('Cannot play ' + diag.codecName + ' video: ' + diag.message, 'error');
+            var err = new Error(diag.message);
+            err.codecDiagnosis = diag;
+            err.cause = loadErr;
+            throw err;
+        }
+    }
+
     async init(source) {
         this._source = source;
 
@@ -119,7 +142,7 @@ export class OnDemandVideoDecoder {
 
         // Wait for video metadata (browser parses moov natively - very fast)
         this._emitProgress({ phase: 'canplay', ratio: 0 });
-        await metadataPromise;
+        await this._awaitPlayable(metadataPromise, source);
         this._emitProgress({ phase: 'canplay', ratio: 1 });
 
         var width = this._videoEl.videoWidth;
@@ -328,13 +351,13 @@ export class OnDemandVideoDecoder {
             this.config.description = description;
         }
 
-        // Check if WebCodecs supports this codec
-        var support = await VideoDecoder.isConfigSupported(this.config);
-        if (!support.supported) {
-            videoLog("WebCodecs does not support " + codec + ", using HTML5 fallback", "warn");
-            this.mp4boxFile = null;
-            return;
-        }
+        // No WebCodecs support check here: this pass never decodes with
+        // WebCodecs (see below — the <video> element decodes); it only reads the
+        // container's sample table for the real frame count and FPS, which is
+        // codec-independent. A check that returned early when WebCodecs can't
+        // decode the codec (Firefox 157 + HEVC) left `_fps` at the 30 fps
+        // placeholder, halving every frame index for 60 fps video — measured
+        // with tests/e2e/_verify-playback-loop.html (barcode frame numbers).
 
         // Get real sample table for accurate frame count and FPS
         var mp4Samples = this.mp4boxFile.getTrackSamplesInfo(videoTrackInfo.id);
@@ -817,6 +840,30 @@ export class OnDemandVideoDecoder {
     }
 
     /**
+     * Snapshot the frame the <video> element would draw right now as a
+     * WebCodecs `VideoFrame`, together with ITS frame index — derived from the
+     * captured frame's own timestamp, so drawing `frame` and overlaying `index`
+     * can never disagree (unlike `drawCurrentFrame` + a clock-derived index).
+     * Used by the per-refresh playback loop (`VideoController.startPlayback`).
+     *
+     * Returns null when it can't (no WebCodecs, not enough data yet, capture
+     * threw); the caller falls back to `drawCurrentFrame` + `getCurrentFrameIndex`.
+     * The CALLER owns the returned frame and must `close()` it.
+     *
+     * @returns {{frame: VideoFrame, index: number}|null}
+     */
+    captureCurrentFrame() {
+        var el = this._videoEl;
+        if (!el || el.readyState < 2 || typeof VideoFrame !== 'function') return null;
+        try {
+            var frame = new VideoFrame(el);
+            return { frame: frame, index: Math.round((frame.timestamp / 1e6) * this._fps) };
+        } catch (e) {
+            return null;
+        }
+    }
+
+    /**
      * Get the current frame index based on the video element's currentTime.
      *
      * Uses `floor` (not `round`): the <video> element displays the frame whose
@@ -952,7 +999,7 @@ export class OnDemandVideoDecoder {
 
         this._videoEl.src = URL.createObjectURL(source);
         this._emitProgress({ phase: 'canplay', ratio: 0 });
-        await metadataPromise;
+        await this._awaitPlayable(metadataPromise, source);
         this._emitProgress({ phase: 'canplay', ratio: 1 });
 
         var width = this._videoEl.videoWidth;
@@ -1229,6 +1276,232 @@ export class EmbeddedVideoDecoder {
 }
 
 // ---------------------------------------------------------------------------
+// Playback presentation schedule (per-refresh loop)
+// ---------------------------------------------------------------------------
+
+/**
+ * Decides which frame index SHOULD be on screen at each display refresh during
+ * native playback, from a frame clock locked to the refresh timestamps.
+ *
+ * Why: the per-refresh loop can only show whatever frame a `<video>` hands it
+ * at that moment. Sampling a free-running video clock once per refresh makes
+ * frames whose boundary falls near a refresh flip between being held 3 and 1
+ * refreshes (60 fps on 120 Hz: ~30% of frames irregular, measured with
+ * tests/e2e/_bench-playback.mjs). A clock that advances by exactly
+ * `rate * refreshInterval` per refresh gives the ideal cadence instead (2,2,2…
+ * for 60 fps on 120 Hz; 1,1,1,2… for 150 fps).
+ *
+ * The clock is anchored on the primary view's captured frame and its phase is
+ * chosen so frame boundaries sit as far as possible from refresh instants
+ * (a frame is `step` refreshes long with `step = rate * period`; for
+ * `step <= 1` the boundary is put `step/2` into the refresh interval, e.g. a
+ * quarter frame for 60 fps on 120 Hz). Clock drift is absorbed by a slow,
+ * dead-banded correction (rare whole adjustments rather than continuous
+ * nudges, which would themselves move boundaries back and forth); a large
+ * disagreement (stall, seek, rate change) re-anchors.
+ *
+ * Pure (no DOM, no timers): `update()` is fed the refresh timestamp, the
+ * primary's captured index and the content rate, and returns the target.
+ */
+export class PlaybackSchedule {
+    constructor() {
+        this.reset();
+    }
+
+    reset() {
+        this._t0 = null;      // anchor time (ms, refresh timestamp)
+        this._i0 = 0;         // continuous frame position p at the anchor
+        this._rate = 0;       // frames per ms
+        this._phase = 0.5;    // frac(p) chosen at the anchor (boundary margin)
+        this._ea = 0;         // smoothed clock error (frames)
+        this._lastNow = null;
+        this._period = null;  // refresh interval (ms), measured before anchoring
+        this._deltas = [];    // first few refresh intervals
+    }
+
+    /**
+     * @param {number} now - refresh timestamp (ms; the rAF callback argument)
+     * @param {number} capturedIdx - frame index the primary view handed us now
+     * @param {number} rate - content frames per ms (fps * playbackRate / 1000)
+     * @returns {number} the frame index that should be on screen this refresh
+     */
+    update(now, capturedIdx, rate) {
+        if (this._lastNow != null) this._observeInterval(now - this._lastNow);
+        this._lastNow = now;
+        // The anchor phase depends on frames-per-refresh, so don't anchor until
+        // the refresh interval is measured (a 60 Hz guess on a 120 Hz display
+        // put frame boundaries exactly ON refresh instants, where microsecond
+        // timestamp jitter flips frames between 1 and 3 refreshes for the whole
+        // playback). Until then, show what was captured.
+        if (this._period == null) return capturedIdx;
+
+        // Only schedule when a frame spans MORE than one refresh (60 fps on
+        // 120 Hz, 30 on 60): then the question is on WHICH refresh each frame
+        // changes, which naive sampling answers irregularly. When the video is
+        // as fast as the display or faster (60 on 60, 150 on 120), every
+        // refresh simply shows the newest frame; a schedule there can only add
+        // holds (simulated 59.94 fps on 60 Hz: 11–18% irregular scheduled vs
+        // 5–8% naive).
+        if (rate * this._period >= 0.9) {
+            this._t0 = null;            // re-anchor if the ratio changes later
+            return capturedIdx;
+        }
+
+        if (this._t0 == null || rate !== this._rate) {
+            this._anchor(now, capturedIdx, rate);
+        } else {
+            // Error between where the captures say the video is and the model.
+            // At the anchor p = capturedIdx + phase, so that is the expected
+            // relation; quantization noise (±0.5) averages out in `_ea`.
+            var err = (capturedIdx + this._phase) - this._position(now);
+            var step = this._rate * this._period;
+            if (Math.abs(err) > Math.max(3, 2 * step)) {
+                this._anchor(now, capturedIdx, rate);
+            } else {
+                this._ea = 0.9 * this._ea + 0.1 * err;
+                // Correct only GENUINE drift (the video and refresh clocks both
+                // run off the system clock, so it is rare; stalls/seeks
+                // re-anchor above): the anchor's single capture leaves a
+                // constant offset of up to ~½ frame, which must not trigger a
+                // correction — each one shifts the cadence by a refresh. Then
+                // correct in units that keep frame boundaries where the anchor
+                // put them (whole frames, or whole refresh-steps when a step is
+                // under a frame).
+                var unit = Math.min(step, 1);
+                if (Math.abs(this._ea) > Math.max(0.8, 0.75 * unit)) {
+                    this._i0 += Math.round(this._ea / unit) * unit;
+                    this._ea = 0;
+                }
+            }
+        }
+        return Math.floor(this._position(now));
+    }
+
+    _observeInterval(dt) {
+        if (!(dt > 3 && dt < 50)) return;
+        if (this._period == null) {
+            this._deltas.push(dt);
+            // min of the first few: a missed vsync only ever makes one LONGER
+            if (this._deltas.length >= 4) this._period = Math.min.apply(null, this._deltas);
+            return;
+        }
+        if (Math.abs(dt - this._period) < 0.25 * this._period) {
+            this._period = 0.95 * this._period + 0.05 * dt;
+        }
+    }
+
+    _position(now) {
+        return this._i0 + (now - this._t0) * this._rate;
+    }
+
+    _anchor(now, capturedIdx, rate) {
+        this._rate = rate;
+        // Refresh instants land at frac(p) = phase + k*step (mod 1). Put them
+        // half a lattice spacing away from a boundary: ¼ frame for 60 fps on
+        // 120 Hz (step ½), ⅛ for 150 on 120 (step 1¼), ½ for 60 on 60 (step 1).
+        var step = rate * this._period;
+        var fs = step - Math.floor(step);
+        var frac = (fs < 0.02 || fs > 0.98) ? 0.5 : fs / 2;
+        // …and run the clock one phase-preserving unit BEHIND the captures
+        // (a refresh-step when steps are under a frame, else a whole frame),
+        // so the frame each slot needs has normally been captured already —
+        // otherwise capture jitter leaves it missing and the loop holds the old
+        // frame a refresh then double-steps. Costs ≤ 1 frame of latency, never
+        // alignment.
+        var lag = Math.min(step, 1);
+        this._t0 = now;
+        this._i0 = capturedIdx + frac - lag;
+        this._ea = 0;
+        this._phase = frac - lag;
+    }
+}
+
+/**
+ * For one view at one refresh, pick which frame to show: the one already on
+ * the canvas (`shownIdx`), one captured earlier and held (`pendingIdx`), or
+ * this refresh's capture (`capIdx`). Any argument may be null.
+ *
+ * - The schedule hasn't moved past the shown frame (`target <= shownIdx`):
+ *   keep it (never run ahead of the schedule).
+ * - It has: show the NEWER candidate closest to `target` (lower on ties) —
+ *   never hold the old frame while a newer one is available. With 150 fps on a
+ *   120 Hz display the loop can only capture ~4 of every 5 frames, so the exact
+ *   target frame is often missing; a plain "closest, ties keep the lower" rule
+ *   then held the old frame whenever it and the next capture were equally far
+ *   from the target (measured: ~20% of frames held twice in a bad pass).
+ * - Nothing on screen yet: the candidate closest to `target`.
+ *
+ * @returns {'shown'|'pending'|'cap'|null}
+ */
+export function pickScheduledFrame(target, shownIdx, pendingIdx, capIdx) {
+    if (shownIdx != null && target <= shownIdx) return 'shown';
+    // Among frames newer than the one on screen: the largest not past the
+    // target; failing that, the smallest past it (never run further ahead than
+    // needed — running ahead makes the NEXT refresh hold).
+    var below = null, belowIdx = -Infinity, above = null, aboveIdx = Infinity;
+    var cands = [['pending', pendingIdx], ['cap', capIdx]];
+    for (var i = 0; i < cands.length; i++) {
+        var idx = cands[i][1];
+        if (idx == null || (shownIdx != null && idx <= shownIdx)) continue;
+        if (idx <= target) { if (idx > belowIdx) { below = cands[i][0]; belowIdx = idx; } }
+        else if (idx < aboveIdx) { above = cands[i][0]; aboveIdx = idx; }
+    }
+    if (below) return below;
+    if (above) return above;
+    return shownIdx != null ? 'shown' : null;
+}
+
+/**
+ * Whether this browser's requestVideoFrameCallback is COALESCED — fires at a
+ * fixed low rate covering several presented pictures per callback — rather
+ * than once per presented picture.
+ *
+ * Measured with tests/e2e/_probe-capabilities.mjs on real browsers: Firefox
+ * fires ~24 callbacks/s whatever the video rate (2–6 pictures each, while the
+ * picture itself changes 49–120×/s); Safari fires once per picture it shows
+ * (callbacks/s == picture changes/s, even when it can only show ~24/s with 8
+ * cameras); Chrome once per presented frame. rVFC exposes nothing that tells
+ * the two cases apart (Safari also reports presentedFrames +2 per callback),
+ * so this is the one engine check: Gecko.
+ */
+function rvfcCallbacksCoalesced() {
+    try { return /\bFirefox\//.test(navigator.userAgent); } catch (e) { return false; }
+}
+
+/**
+ * Decide, per decoder, whether `new VideoFrame(<video>).timestamp` tracks the
+ * picture — the per-refresh loop's frame index depends on it. Chrome: yes.
+ * Safari 27: the timestamp is 0 for ~98% of captures during playback. Firefox
+ * 157: a constant. Judged once the video clock has advanced a few frames since
+ * the first capture: usable only if the timestamp moved AND agrees with the
+ * clock to within 3 frames. Cached on the decoder as `_vfTimestamps`
+ * ('ok' | 'bad'); undefined while undecided.
+ *
+ * @returns {'ok'|'bad'|undefined}
+ */
+function judgeVideoFrameTimestamps(dec, cap) {
+    var el = dec._videoEl;
+    if (!el || !cap || !cap.frame) return undefined;
+    var fps = dec._fps || 30;
+    var ctIdx = Math.floor(el.currentTime * fps + 1e-6);
+    var chk = dec._vfTsCheck;
+    if (!chk || ctIdx < chk.ct) {   // first look (or the clock went back: a seek) — start over
+        dec._vfTsCheck = { ts: cap.frame.timestamp, ct: ctIdx };
+        return undefined;
+    }
+    if (ctIdx - chk.ct < 4) return undefined;
+    var moved = cap.frame.timestamp !== chk.ts;
+    var agrees = Math.abs(cap.index - ctIdx) <= 3;
+    dec._vfTsCheck = null;
+    dec._vfTimestamps = (moved && agrees) ? 'ok' : 'bad';
+    videoLog('Playback: VideoFrame timestamps ' + (dec._vfTimestamps === 'ok'
+        ? 'track the video — painting captured frames'
+        : 'do NOT track the video in this browser — drawing the <video> directly, frame index from '
+          + (el.requestVideoFrameCallback ? 'requestVideoFrameCallback' : 'its clock')));
+    return dec._vfTimestamps;
+}
+
+// ---------------------------------------------------------------------------
 // VideoController - Synchronized multi-view playback with overlay support
 // ---------------------------------------------------------------------------
 export class VideoController {
@@ -1374,6 +1647,22 @@ export class VideoController {
             return flag === 'buffered' || flag === 'mediabunny';
         } catch (_) { /* ignore */ }
         return false;
+    }
+
+    /**
+     * Which loop drives NATIVE playback:
+     * - `'refresh'` (default): redraw on every display refresh from per-view
+     *   `VideoFrame` captures, each view overlaid at its own captured frame.
+     * - `'rvfc'` (opt-in via `window.LUCID_PLAYBACK_LOOP='rvfc'`): the previous
+     *   loop, driven by the PRIMARY view's requestVideoFrameCallback — every
+     *   view redrawn at the primary's presented-frame index. Kept for A/B.
+     * @returns {'refresh'|'rvfc'}
+     */
+    _playbackLoopMode() {
+        try {
+            if (typeof window !== 'undefined' && window.LUCID_PLAYBACK_LOOP === 'rvfc') return 'rvfc';
+        } catch (_) { /* ignore */ }
+        return 'refresh';
     }
 
     /**
@@ -1609,12 +1898,189 @@ export class VideoController {
             return true;
         }
 
+        // Per-refresh playback (the default — see `_playbackLoopMode`). Each
+        // display refresh, capture every view's current video frame as a
+        // VideoFrame (`decoder.captureCurrentFrame`), and paint EXACTLY the
+        // frame chosen for that view, overlaying it at that frame's own index:
+        // video and overlay cannot disagree in any view, and the redraw rate is
+        // the display's — not whatever rate Chrome happens to present the
+        // (off-page) primary <video> at, which for high-fps video was measured
+        // to vary at random between ~60 and ~120 Hz per playback start on a
+        // 120 Hz display (tests/e2e/_bench-playback.mjs, 150 fps project).
+        //
+        // WHICH frame each view shows is set by a PlaybackSchedule — a frame
+        // clock locked to the refresh timestamps — so frames are held for a
+        // regular number of refreshes instead of whatever the sampling phase
+        // gives. A capture that arrives a refresh early is held (`pending`) and
+        // shown in its slot; all views aim at the same scheduled frame. A
+        // refresh where no view's frame changes draws nothing.
+        var schedule = new PlaybackSchedule();
+        var shown = null;     // per view: index currently painted on its canvas
+        var pending = null;   // per view: {frame, index} captured early, held for its slot
+        function closeCap(c) {
+            if (c && c.frame) { try { c.frame.close(); } catch (e) { /* ignore */ } }
+        }
+        // Fallback for views whose VideoFrame timestamps are unusable (Safari,
+        // Firefox — see judgeVideoFrameTimestamps): draw the <video> directly
+        // and take the frame index from its requestVideoFrameCallback
+        // mediaTime (Safari: exact, once per shown picture), projected forward
+        // from the last callback where callbacks are coalesced (Firefox,
+        // ~24/s), else from its clock. rVFC is registered ONLY for those views:
+        // registering it on every view changed Chrome's presentation behaviour.
+        var coalesced = rvfcCallbacksCoalesced();
+        var fallback = [];   // per view: { el, id, mt, at }
+        self._refreshFallback = fallback;   // diagnostics only (tests/e2e/_verify-playback-loop.html)
+        function fallbackIndex(j, view, now) {
+            var dec = view.decoder, el = dec._videoEl, fps = dec._fps || self.state.fps || 30;
+            var f = fallback[j];
+            if (!f && el && typeof el.requestVideoFrameCallback === 'function') {
+                f = fallback[j] = { el: el, id: null, mt: null, at: null };
+                var onVF = function (cbNow, md) {
+                    if (fallback[j] !== f) return;
+                    f.mt = md && typeof md.mediaTime === 'number' ? md.mediaTime : el.currentTime;
+                    f.at = cbNow;
+                    f.id = el.requestVideoFrameCallback(onVF);
+                };
+                f.id = el.requestVideoFrameCallback(onVF);
+            }
+            if (f && f.mt != null) {
+                var t = f.mt;
+                if (coalesced && !el.paused) {
+                    t += Math.min(Math.max(0, now - f.at), 100) / 1000 * (el.playbackRate || 1);
+                }
+                return Math.round(t * fps);
+            }
+            return dec.getCurrentFrameIndex ? dec.getCurrentFrameIndex() : self.state.currentFrame;
+        }
+        // Held VideoFrames and fallback rVFCs must not outlive playback
+        // (stopPlayback calls this).
+        self._refreshCleanup = function () {
+            if (pending) for (var p = 0; p < pending.length; p++) closeCap(pending[p]);
+            pending = null;
+            shown = null;
+            for (var r = 0; r < fallback.length; r++) {
+                var fb = fallback[r];
+                if (fb && fb.id != null && fb.el.cancelVideoFrameCallback) {
+                    try { fb.el.cancelVideoFrameCallback(fb.id); } catch (e) { /* ignore */ }
+                }
+            }
+            fallback = [];
+            self._refreshFallback = fallback;
+        };
+        function drawRefreshFrame(now) {
+            if (!self.state.isPlaying) return false;
+            var cur = self.state.views.filter(function (v) { return v.decoder; });
+            if (!cur.length) return false;
+            var n = cur.length;
+            if (!shown || shown.length !== n) {
+                if (pending) for (var q = 0; q < pending.length; q++) closeCap(pending[q]);
+                shown = new Array(n).fill(null);
+                pending = new Array(n).fill(null);
+                schedule.reset();
+            }
+            var caps = new Array(n), idx = new Array(n);
+            var keep = new Array(n).fill(false);   // capture retained as pending
+            try {
+                for (var j = 0; j < n; j++) {
+                    var dec = cur[j].decoder;
+                    var tsMode = dec._vfTimestamps;
+                    caps[j] = (tsMode !== 'bad' && dec.captureCurrentFrame) ? dec.captureCurrentFrame() : null;
+                    if (caps[j] && tsMode === undefined) tsMode = judgeVideoFrameTimestamps(dec, caps[j]);
+                    if (caps[j] && tsMode === 'ok') {
+                        idx[j] = caps[j].index;
+                    } else {
+                        // Undecided (first few frames) or unusable timestamps:
+                        // paint the <video> itself, index from rVFC / clock.
+                        closeCap(caps[j]); caps[j] = null;
+                        idx[j] = fallbackIndex(j, cur[j], now);
+                    }
+                }
+                var dec0 = cur[0].decoder, primaryEl = dec0._videoEl;
+                if (idx[0] >= self.state.totalFrames || (primaryEl && primaryEl.ended)) {
+                    self.stopPlayback();
+                    return false;
+                }
+                var rate = (dec0._fps || self.state.fps || 30) *
+                    ((primaryEl && primaryEl.playbackRate) || 1) / 1000;
+                var target = schedule.update(now, idx[0], rate);
+
+                var changed = false;
+                for (var k = 0; k < n; k++) {
+                    var view = cur[k];
+                    var pend = pending[k];
+                    // No SECONDARY view may run ahead of the primary: the
+                    // schedule is a free-running clock, so on a >60 Hz display
+                    // `target` can reach a frame only some views have captured
+                    // yet, and those would paint it while the primary holds —
+                    // cameras one frame apart, with the overlay drawn at the
+                    // primary's index.
+                    var tk = (k === 0 || shown[0] == null) ? target : Math.min(target, shown[0]);
+                    var pick = pickScheduledFrame(tk, shown[k], pend ? pend.index : null, idx[k]);
+                    if (pick === 'cap' && idx[k] !== shown[k]) {
+                        if (view.ctx && view.canvas) {
+                            if (caps[k]) view.ctx.drawImage(caps[k].frame, 0, 0, view.canvas.width, view.canvas.height);
+                            else if (view.decoder.drawCurrentFrame) view.decoder.drawCurrentFrame(view.ctx, view.canvas.width, view.canvas.height);
+                        }
+                        shown[k] = idx[k];
+                        changed = true;
+                    } else if (pick === 'pending' && pend.index !== shown[k]) {
+                        if (view.ctx && view.canvas) view.ctx.drawImage(pend.frame, 0, 0, view.canvas.width, view.canvas.height);
+                        shown[k] = pend.index;
+                        changed = true;
+                    }
+                    // Hold at most ONE future frame (the earliest still ahead of
+                    // the screen); everything else is released.
+                    var cand = caps[k] && idx[k] > shown[k] ? caps[k] : null;
+                    var curPend = pending[k] && pending[k].index > shown[k] ? pending[k] : null;
+                    if (pending[k] && pending[k] !== curPend) { closeCap(pending[k]); pending[k] = null; }
+                    if (cand && (!curPend || cand.index < curPend.index)) {
+                        if (curPend) closeCap(curPend);
+                        pending[k] = cand;
+                        keep[k] = true;
+                    }
+                }
+                if (!changed) return true;   // nothing new on screen: keep the last image
+
+                var mainIdx = shown[0];
+                self.state.currentFrame = mainIdx;
+                var viewFrames = {};
+                for (var m = 0; m < n; m++) {
+                    var v = cur[m];
+                    if (v.overlayCtx && v.overlayCanvas) {
+                        v.overlayCtx.clearRect(0, 0, v.overlayCanvas.width, v.overlayCanvas.height);
+                    }
+                    viewFrames[v.name] = shown[m];
+                }
+                if (self.callbacks.drawOverlays) self.callbacks.drawOverlays(mainIdx, viewFrames);
+                if (self.callbacks.updateSeekbar) self.callbacks.updateSeekbar(mainIdx);
+                return true;
+            } finally {
+                // VideoFrames hold decoder/GPU buffers: release every capture
+                // that wasn't kept as a pending frame.
+                for (var c = 0; c < caps.length; c++) if (!keep[c]) closeCap(caps[c]);
+            }
+        }
+
         function startLoop() {
             var live = self.state.views.filter(function (v) { return v.decoder; });
             var primaryDec = live.length ? live[0].decoder : null;
             var primaryEl = primaryDec && primaryDec._videoEl;
             var fps = (primaryDec && primaryDec._fps) || self.state.fps || 30;
 
+            if (self._playbackLoopMode() === 'refresh' && typeof requestAnimationFrame === 'function') {
+                videoLog('Playback loop: per-refresh, scheduled per-view VideoFrame capture');
+                var onRefresh = function (now) {
+                    if (!self.state.isPlaying) return;
+                    var keepGoing = true;
+                    try { keepGoing = drawRefreshFrame(now); }
+                    catch (e) { console.error('[playback] refresh draw failed:', e); }
+                    if (keepGoing !== false && self.state.isPlaying) self._playRAF = requestAnimationFrame(onRefresh);
+                };
+                self._playRAF = requestAnimationFrame(onRefresh);
+                return;
+            }
+
+            // Opt-in (`window.LUCID_PLAYBACK_LOOP='rvfc'`): the previous loop.
             // Prefer requestVideoFrameCallback: its `metadata.mediaTime` is the
             // timestamp of the frame ACTUALLY PRESENTED on screen. Deriving the
             // overlay frame from that (instead of the <video>.currentTime clock,
@@ -1678,6 +2144,11 @@ export class VideoController {
             this._playRVFC = null;
             this._playRVFCEl = null;
         }
+        // Release VideoFrames the per-refresh loop was holding for later slots.
+        if (this._refreshCleanup) {
+            try { this._refreshCleanup(); } catch (e) { /* non-fatal */ }
+            this._refreshCleanup = null;
+        }
         // Clear legacy interval if any
         if (this.state.playInterval) {
             clearInterval(this.state.playInterval);
@@ -1707,10 +2178,12 @@ export class VideoController {
 
         this.state.isPlaying = false;
 
-        // Settle the info panel, timeline playhead, and 3D viewport to the exact
-        // final frame: during playback those auxiliary updates are throttled
-        // (~10 Hz), so on stop they can be up to one throttle window stale. With
-        // isPlaying now false these run the full, unthrottled updates.
+        // Settle the info panel, timeline and status bar to the exact final
+        // frame: during playback those auxiliary updates are throttled (~10 Hz)
+        // or reduced (timeline playhead-only, status-bar counters skipped), so
+        // on stop they can be stale. With isPlaying now false these run the
+        // full, unthrottled updates. (The 3D viewport already follows every
+        // frame.)
         if (wasPlaying) {
             try { if (this.callbacks.drawOverlays) this.callbacks.drawOverlays(this.state.currentFrame); } catch (e) { /* non-fatal */ }
             try { if (this.callbacks.updateSeekbar) this.callbacks.updateSeekbar(this.state.currentFrame); } catch (e) { /* non-fatal */ }
@@ -2172,6 +2645,16 @@ export class VideoController {
         // ---- Mouse wheel zoom (cursor-centered) ----
         container.addEventListener("wheel", function (e) {
             e.preventDefault();
+            // Alt/Option turns the wheel into the instance-rotation control
+            // (`ui/interaction.js` `onWheel`, issue #198), so zoom stands down
+            // for as long as the key is held. The rotation handler lives on the
+            // OVERLAY CANVAS, which does not fill this cell — a video narrower
+            // or shorter than its pane leaves letterbox margin where no canvas
+            // sits under the cursor. Without this guard, an Option+scroll that
+            // strayed into that margin mid-gesture zoomed instead, yanking the
+            // view out from under the skeleton being rotated. Releasing Option
+            // brings zoom straight back.
+            if (e.altKey) return;
             var factor = e.deltaY < 0 ? 1.10 : 1 / 1.10;
             var rect = container.getBoundingClientRect();
             var cssX = e.clientX - rect.left;

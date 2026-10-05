@@ -114,7 +114,7 @@
 import {
     POINT3D_STRIDE,
     points3dNodeCount,
-} from './pose-data.js';
+} from './pose-data.js?v=d2625fcc2537';
 
 // Identity id meaning "no identity" (matches `InstanceGroup`'s default).
 const NO_IDENTITY = -1;

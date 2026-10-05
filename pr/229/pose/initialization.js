@@ -10,32 +10,37 @@
 
 import { state, videoController, interactionManager, viewport3d, timeline, paneManager,
          setVideoController, setInteractionManager, setViewport3D, setTimeline,
-         hasRealVideo, VIEW_NAMES } from '../ui/app-state.js';
-import { Instance, UnlinkedInstance, points3dNodeCount, getPoint3d } from './pose-data.js';
+         hasRealVideo, VIEW_NAMES } from '../ui/app-state.js?v=d2625fcc2537';
+import { Instance, UnlinkedInstance, points3dNodeCount, getPoint3d } from './pose-data.js?v=d2625fcc2537';
 import {
     getInstanceGroupsForFrame, updateTimelineForFrame,
     reTriangulateGroup, sessionHasCalibration, getOrComputeReprojectedInstance,
-} from './triangulation.js';
-import { OnDemandVideoDecoder, VideoController } from '../loading/video.js';
-import { rebuildVideoController } from '../loading/session-loader.js';
-import { markDirty, setStatus, showLoading, hideLoading } from '../import-export/save-load.js';
-import { createDemoSession } from '../demo-data.js';
-import { setupUI, setupMenus, updateSeekbar, onPlaybackStateChange, fitTimelineToData } from '../ui/ui-wiring.js';
-import { installTimelineShortcuts } from '../ui/timeline-controller.js';
-import { setupPanelTabs, setupSkeletonEditing, updateInfoPanel } from '../ui/info-panel.js';
-import { setupSplitHandles } from '../ui/layout-controls.js';
-import { drawAllOverlays, setReprojErrorVisible } from '../ui/rendering.js';
-import { populateViewStrip, populateSessionStrip } from '../ui/sessions-panes.js';
+} from './triangulation.js?v=d2625fcc2537';
+import { OnDemandVideoDecoder, VideoController } from '../loading/video.js?v=d2625fcc2537';
+import { rebuildVideoController } from '../loading/session-loader.js?v=d2625fcc2537';
+import { markDirty, setStatus, showLoading, hideLoading } from '../import-export/save-load.js?v=d2625fcc2537';
+import { resetPlaneState } from '../import-export/plane-metadata.js?v=d2625fcc2537';
+import { createDemoSession } from '../demo-data.js?v=d2625fcc2537';
+import { setupUI, setupMenus, updateSeekbar, onPlaybackStateChange, fitTimelineToData } from '../ui/ui-wiring.js?v=d2625fcc2537';
+import { installInfoTips } from '../ui/info-tip.js?v=d2625fcc2537';
+import { installTimelineShortcuts } from '../ui/timeline-controller.js?v=d2625fcc2537';
+import { setupPanelTabs, setupSkeletonEditing, updateInfoPanel } from '../ui/info-panel.js?v=d2625fcc2537';
+import {
+    setupPlaneDefinition, planeInteractionCallbacks, syncPlanes3D, refreshPlanePanel,
+} from '../ui/plane-definition.js?v=d2625fcc2537';
+import { setupSplitHandles } from '../ui/layout-controls.js?v=d2625fcc2537';
+import { drawAllOverlays, setReprojErrorVisible } from '../ui/rendering.js?v=d2625fcc2537';
+import { populateViewStrip, populateSessionStrip } from '../ui/sessions-panes.js?v=d2625fcc2537';
 import {
     manualAssignState, getTotalUnlinkedCount, cleanupManualAssignment, startManualAssignment,
     editGroupState, cancelEditGroup, finishEditGroup, updateEditGroupToast,
     purgeTriangulationDataForGroup,
-} from '../ui/identity-assignment.js';
-import { getTrackColor, getGroupColor } from '../ui/overlays.js';
-import { Viewport3D } from '../ui/viewport3d.js';
-import { isViewport3DVisible, markViewport3DSkipped } from '../ui/panel-visibility.js';
-import { Timeline } from '../ui/timeline.js';
-import { InteractionManager } from '../ui/interaction.js';
+} from '../ui/identity-assignment.js?v=d2625fcc2537';
+import { getTrackColor, getGroupColor } from '../ui/overlays.js?v=d2625fcc2537';
+import { Viewport3D } from '../ui/viewport3d.js?v=d2625fcc2537';
+import { isViewport3DVisible, markViewport3DSkipped } from '../ui/panel-visibility.js?v=d2625fcc2537';
+import { Timeline } from '../ui/timeline.js?v=d2625fcc2537';
+import { InteractionManager } from '../ui/interaction.js?v=d2625fcc2537';
 
 // ============================================
 // Logging
@@ -54,10 +59,15 @@ window.logMessage = function (msg, level) {
 async function init() {
     try {
         // Setup UI components (no data needed)
+        // Before any panel renders: one delegated set of listeners serving every
+        // ⓘ in the app, so a panel that rebuilds its rows does not have to
+        // re-wire them (and cannot forget to).
+        installInfoTips();
         setupEmptyVideoController();
         setupUI();
         setupPanelTabs();
         setupSkeletonEditing();
+        setupPlaneDefinition();
         setupInteraction();
         try {
             paneManager.init(document.getElementById('videoDock'));
@@ -137,6 +147,11 @@ export async function loadDemoSession() {
         state.session = null;
         state.sessions = [];
         state.triangulationResults = new Map();
+        // Plane state is project-scoped and lives on a module singleton, so
+        // it does NOT go away with `state.sessions`. `readPlaneMetadata`
+        // only restores into an EMPTY model, so without this the previous
+        // project's planes would survive and the new one's be dropped.
+        resetPlaneState();
         paneManager.clearAll();
 
         // Load videos and create view objects (no grid cells needed - dockview creates them)
@@ -364,7 +379,7 @@ export function addNewInstanceSmart() {
 // ============================================
 
 export function setupInteraction() {
-    setInteractionManager(new InteractionManager({
+    setInteractionManager(new InteractionManager(Object.assign({
         getState: function () { return state; },
 
         getInstanceGroups: function (frameIdx) {
@@ -833,7 +848,10 @@ export function setupInteraction() {
                 videoController.resetZoom(view);
             }
         },
-    }));
+    // Plane annotation (View ▸ Define Planes). Merged in as its own bag so
+    // `ui/interaction.js` needs no import of the plane feature and the plane
+    // module owns its own callback contract.
+    }, planeInteractionCallbacks())));
 
     // Attach to all overlay canvases
     interactionManager.attach(state.views);
@@ -904,6 +922,7 @@ export function setup3DViewport() {
             showCameraPyramids: _3dPyramidShow ? _3dPyramidShow.checked : true,
             skeletonNodeSize: (function() { var e = document.getElementById('vis3dNodeSize'); return e ? parseFloat(e.value) || 2 : 2; })(),
             skeletonEdgeWeight: (function() { var e = document.getElementById('vis3dEdgeWeight'); return e ? parseFloat(e.value) || 0.8 : 0.8; })(),
+            skeletonBrightness: (function() { var e = document.getElementById('vis3dBrightness'); var v = e ? parseFloat(e.value) : NaN; return isNaN(v) ? 0.5 : Math.min(100, Math.max(0, v)) / 100; })(),
             skeletonNodeShape: (function() { var e = document.getElementById('vis3dNodeStyle'); return e ? (e.getAttribute('data-value') || 'circle') : 'circle'; })(),
             showSkeletonNodes: (function() { var e = document.getElementById('vis3dNodeShow'); return e ? e.checked : true; })(),
             showSkeletonEdges: (function() { var e = document.getElementById('vis3dEdgeShow'); return e ? e.checked : true; })(),
@@ -928,6 +947,16 @@ export function setup3DViewport() {
 
         // Show initial frame's 3D points
         update3DViewport(state.currentFrame);
+
+        // Re-apply annotated planes. `setup3DViewport` disposes and re-creates
+        // the Viewport3D, which drops everything in its scene — without this
+        // a triangulated plane vanishes the next time the viewport is rebuilt
+        // (the same gap `setEnvironment` still has).
+        syncPlanes3D();
+        // …and the panel that lists them. Every project-load path rebuilds the
+        // viewport, so this is the one place a freshly RESTORED plane model
+        // reaches the Nodes / Planes tables.
+        refreshPlanePanel();
 
         // Fit after a short delay to ensure skeleton meshes are in the scene
         setTimeout(function () {

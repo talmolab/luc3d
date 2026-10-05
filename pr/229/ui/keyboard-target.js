@@ -40,6 +40,15 @@
 //
 // Text fields, selects and sliders are NEVER blurred — focus there is the start
 // of an interaction, not the end of one.
+//
+// ## The third owner: the browser
+//
+// A keystroke can belong to neither the focused control nor the app. `Mod+C` is
+// bound to Copy selected instance, and the catalog dispatcher `preventDefault()`s
+// whatever it matches — which cancelled the `copy` default action as well. Text
+// selected anywhere outside a field could therefore be highlighted and never
+// copied. `shouldIgnoreShortcut` hands the copy/cut chord back whenever there is
+// a live selection, and only then.
 
 // Input types that take free text. `el.type` reports 'text' for a missing or
 // unknown type, which lands in this set — the safe default, since this is the
@@ -55,6 +64,12 @@ const ACTIVATABLE_INPUT_TYPES = new Set([
 ]);
 
 const CHECKABLE_INPUT_TYPES = new Set(['checkbox', 'radio']);
+
+// Keys whose Ctrl/Cmd chord belongs to the CLIPBOARD rather than to the app,
+// whenever there is a selection for it to act on. Copy and cut are the pair a
+// text selection makes meaningful; paste is deliberately absent, because
+// nothing about having selected some text says the user wants to replace it.
+const CLIPBOARD_KEYS = new Set(['c', 'x']);
 
 // Keys a focused <input type="range"> consumes natively. Every one of them is
 // also an app shortcut (frame stepping, Home/End), which is why a slider has to
@@ -79,6 +94,37 @@ function roleOf(t) {
 
 function isSpaceKey(key) {
     return key === ' ' || key === 'Spacebar';
+}
+
+// True for the browser's own copy / cut chord. Alt disqualifies it: Mod+Alt+C
+// is a different chord and the app may bind it.
+function isClipboardChord(e) {
+    if (!e || e.altKey) return false;
+    if (!(e.ctrlKey || e.metaKey)) return false;
+    const k = e.key;
+    return typeof k === 'string' && CLIPBOARD_KEYS.has(k.toLowerCase());
+}
+
+/**
+ * True when `doc` holds a non-collapsed text selection — something a copy would
+ * actually put on the clipboard.
+ *
+ * `String(sel)` rather than `sel.toString()`, and the whole read wrapped: a
+ * selection inside a shadow root or a cross-origin frame can throw, and the
+ * honest answer there is "no selection I can speak for".
+ *
+ * @param {Document} [doc]
+ * @returns {boolean}
+ */
+export function hasTextSelection(doc) {
+    const d = doc || (typeof document !== 'undefined' ? document : null);
+    if (!d || typeof d.getSelection !== 'function') return false;
+    try {
+        const sel = d.getSelection();
+        return !!(sel && !sel.isCollapsed && String(sel).length > 0);
+    } catch (err) {
+        return false;
+    }
 }
 
 /**
@@ -145,7 +191,16 @@ export function targetOwnsKey(t, e) {
 
 /**
  * The one guard every global keydown handler uses: true when this keystroke
- * belongs to whatever has focus rather than to the app.
+ * belongs to whatever has focus — or to the browser — rather than to the app.
+ *
+ * **A selection owns the copy chord.** `Mod+C` is bound to Copy selected
+ * instance, and the catalog dispatcher `preventDefault()`s every binding it
+ * matches — which cancelled the browser's `copy` default action too. So text
+ * the user had selected anywhere outside a field (a panel, a modal, the status
+ * bar's error message) could be highlighted but never copied: the keystroke
+ * silently went to the pose annotation instead. With a live selection the
+ * clipboard chord is handed back, and with none — the normal case while
+ * annotating — Copy selected instance is untouched.
  *
  * @param {KeyboardEvent} e
  * @returns {boolean}
@@ -153,6 +208,8 @@ export function targetOwnsKey(t, e) {
 export function shouldIgnoreShortcut(e) {
     if (!e) return false;
     const t = e.target;
+    if (isClipboardChord(e) &&
+        hasTextSelection(t && t.ownerDocument)) return true;
     return isTextEntryTarget(t) || targetOwnsKey(t, e);
 }
 
@@ -219,6 +276,16 @@ let _focusReleaseDoc = null;
  * document after a pointer activates a checkbox, radio or button. Idempotent
  * per document.
  *
+ * Registered in the CAPTURE phase (issue #230). In the bubble phase any
+ * control whose own handler calls `e.stopPropagation()` — as the Triangulate /
+ * Triangulate All split buttons do, to keep their click from closing the
+ * toolbar menus — silently opts itself out of focus release, and then keeps
+ * focus after a pointer click: the button reads as "selected", and Space and
+ * Enter belong to it (`targetOwnsKey`) instead of to the app until something
+ * else is clicked. Capture runs before any target handler can stop the event,
+ * so no control can opt out by accident. The blur itself is still deferred, so
+ * running earlier changes nothing about when focus is actually released.
+ *
  * @param {Document} [doc]
  * @returns {boolean} whether a listener was installed by this call
  */
@@ -235,7 +302,7 @@ export function installFocusRelease(doc) {
         // `input`/`change` fire as part of the activation behavior — blurring
         // mid-dispatch would be reaching into someone else's event.
         setTimeout(function () { releaseTransientFocus(t, d); }, 0);
-    });
+    }, true);
     return true;
 }
 

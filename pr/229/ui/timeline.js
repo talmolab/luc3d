@@ -8,9 +8,9 @@
  * ES module. Exports `Timeline`.
  */
 
-import { getTrackColor, NULL_ID_COLOR } from './overlays.js';
-import { someValidPoint3d, points3dNodeCount, hasPoint3d } from '../pose/pose-data.js';
-import { isCameraTracked } from './settings.js';
+import { getTrackColor, NULL_ID_COLOR } from './overlays.js?v=d2625fcc2537';
+import { someValidPoint3d, points3dNodeCount, hasPoint3d } from '../pose/pose-data.js?v=d2625fcc2537';
+import { isCameraTracked } from './settings.js?v=d2625fcc2537';
 
 /**
  * Parse a `session.frameIdentityMap` key ("frameIdx:camName:trackIdx") into
@@ -78,6 +78,12 @@ export class Timeline {
 
         /** Current frame index (0-based) */
         this._currentFrame = 0;
+
+        /** Playback playhead fast path (see `setCurrentFrame`): while true,
+         *  `redraw()` snapshots the canvas minus the playhead into
+         *  `_staticCache`, which `setCurrentFrame` blits instead of redrawing. */
+        this._playbackMode = false;
+        this._staticCache = null;
 
         /** Horizontal zoom level (1 = all frames fit in view) */
         this._zoom = 1;
@@ -354,14 +360,79 @@ export class Timeline {
 
     /**
      * Update the current frame indicator.
+     *
+     * `opts.playback` (passed by `ui/rendering.js` while video is playing)
+     * enables a fast path: the playhead is the ONLY frame-dependent thing
+     * `redraw()` paints, so instead of repainting every track bar, marker and
+     * label (~4.5 ms on a 175-track project, plus a forced style recalc from
+     * `ctx.font` — enough to make the video-frame callback drop frames), it
+     * restores a snapshot of everything below the playhead and draws just the
+     * playhead. The snapshot is (re)taken by `redraw()` itself while in playback
+     * mode, so it is always the last full redraw; a scroll of the visible window
+     * falls back to a full redraw. Any call WITHOUT `opts.playback` leaves
+     * playback mode, frees the snapshot and redraws in full.
+     *
      * @param {number} frameIdx
+     * @param {{playback?: boolean}} [opts]
      */
-    setCurrentFrame(frameIdx) {
+    setCurrentFrame(frameIdx, opts) {
+        var playback = !!(opts && opts.playback);
+        if (!playback && this._playbackMode) {
+            this._playbackMode = false;
+            this._staticCache = null;   // ~one canvas worth of backing store
+            // `stopPlayback`'s settle redraw usually lands on the frame already
+            // shown, so the early return below would skip it — redraw anyway.
+            if (this._clampFrame(frameIdx) === this._currentFrame) { this.redraw(); return; }
+        }
         frameIdx = this._clampFrame(frameIdx);
         if (frameIdx === this._currentFrame) return;
         this._currentFrame = frameIdx;
+        var prevScroll = this._scrollFrame;
         this._ensureFrameVisible(frameIdx);
+        if (playback) {
+            if (this._playbackMode && this._scrollFrame === prevScroll && this._drawFromStaticCache()) return;
+            this._playbackMode = true;   // the redraw below takes the snapshot
+        }
         this.redraw();
+    }
+
+    /**
+     * Playback fast path for `setCurrentFrame`: blit the snapshot `redraw()`
+     * took just before its playhead, then draw the playhead. Returns false
+     * (caller does a full redraw) when there is no snapshot matching the
+     * current backing store.
+     * @returns {boolean}
+     * @private
+     */
+    _drawFromStaticCache() {
+        var cache = this._staticCache;
+        if (!cache || cache.width !== this._canvas.width || cache.height !== this._canvas.height) return false;
+        if (!this._cssWidth || !this._cssHeight) return false;
+        var ctx = this._ctx;
+        ctx.save();
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.drawImage(cache, 0, 0);
+        ctx.restore();
+        this._drawPlayhead(ctx, this._cssHeight);
+        return true;
+    }
+
+    /**
+     * Copy the canvas as it stands (everything but the playhead) into the
+     * playback snapshot. Only called from `redraw()` in playback mode.
+     * @private
+     */
+    _snapshotStatic() {
+        var src = this._canvas;
+        var cache = this._staticCache;
+        if (!cache) cache = this._staticCache = document.createElement('canvas');
+        if (cache.width !== src.width || cache.height !== src.height) {
+            cache.width = src.width;
+            cache.height = src.height;
+        }
+        var cctx = cache.getContext('2d');
+        cctx.clearRect(0, 0, cache.width, cache.height);
+        cctx.drawImage(src, 0, 0);
     }
 
     /**
@@ -652,6 +723,10 @@ export class Timeline {
             ctx.fillStyle = this.RANGE_COLOR;
             ctx.fillRect(x0, 0, x1 - x0, H);
         }
+
+        // During playback, keep a copy of everything drawn so far so
+        // `setCurrentFrame` can move the playhead without a full redraw.
+        if (this._playbackMode) this._snapshotStatic();
 
         // --- Current frame playhead ---
         this._drawPlayhead(ctx, H);
