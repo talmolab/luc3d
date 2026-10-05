@@ -348,8 +348,11 @@ function aboutHtml(st, ran) {
 // 0% at the row's landing frame (1 s before the animals come close), the close spell —
 // where a swap would happen — red in the middle, 100% at 1 s after they separate; the
 // lead-in and lead-out are orange. The box in the views wears the colour of the section
-// the frame is in (ID_SWITCH_SECTION_RGB, shared with ui/id-switch-highlight.js).
-var _prog = null, _progStale = true;        // {fill, p0, p1} of the selected row's bar
+// the frame is in (ID_SWITCH_SECTION_RGB, shared with ui/id-switch-highlight.js). A playhead
+// line marks the current frame (the fill's leading edge), standing proud of the bar so it reads
+// at a glance — which is why the coloured track is an inner element: the bar itself must not
+// clip, while the track keeps its rounded ends.
+var _prog = null, _progStale = true;        // {fill, head, p0, p1} of the selected row's bar
 
 /** A row's interval: p0 (landing, 1 s before the close spell) .. s (close starts) .. f.frame (close ends) .. p1 (1 s after). */
 function rowRange(f) {
@@ -374,12 +377,14 @@ function progressHtml(f) {
     // the track: orange lead-in | (band) | orange lead-out, hard stops at the close spell's edges
     var track = 'linear-gradient(to right, ' + lead + ' 0 ' + pct(s) + ', transparent ' + pct(s) + ' ' + pct(f.frame) +
         ', ' + lead + ' ' + pct(f.frame) + ' 100%)';
-    return '<div class="id-switch-pbar" data-p0="' + p0 + '" data-p1="' + p1 + '" style="background-image:' + track + '" title="' +
+    return '<div class="id-switch-pbar" data-p0="' + p0 + '" data-p1="' + p1 + '" title="' +
         ID_SWITCH_LEAD_IN_SECONDS + ' s before (orange) → close ' + fmtTenths(s) + '–' + fmtTenths(f.frame) + ' (red) → ' + ID_SWITCH_LEAD_IN_SECONDS + ' s after (orange)">' +
+        '<div class="id-switch-ptrack" style="background-image:' + track + '">' +
         // fill first, band over it: the red close spell stays visible as the fill passes it
         '<div class="id-switch-pfill" style="width:' + pct(cur) + '"></div>' +
         '<div class="id-switch-pband" style="left:' + pct(s) + ';width:calc(' + pct(f.frame) + ' - ' + pct(s) + ' + 2px);background:rgba(' +
-        ID_SWITCH_SECTION_RGB.close + ', 0.75)"></div></div>';
+        ID_SWITCH_SECTION_RGB.close + ', 0.75)"></div></div>' +
+        '<div class="id-switch-phead" style="left:' + pct(cur) + '"></div></div>';
 }
 
 /** Move the selected row's bar to `frame` (called on every frame change; a no-op without a selected row). */
@@ -388,12 +393,13 @@ export function updateIdSwitchProgress(frame) {
     if (_progStale) {
         _progStale = false;
         var el = typeof document !== 'undefined' && document.querySelector('#idSwitchPanel .id-switch-row.is-current .id-switch-pbar');
-        _prog = el ? { fill: el.querySelector('.id-switch-pfill'), p0: +el.dataset.p0, p1: +el.dataset.p1 } : null;
+        _prog = el ? { fill: el.querySelector('.id-switch-pfill'), head: el.querySelector('.id-switch-phead'),
+                       p0: +el.dataset.p0, p1: +el.dataset.p1 } : null;
     }
     if (!_prog) return;
     if (!_prog.fill.isConnected) { _prog = null; return; }
     var f = Math.min(1, Math.max(0, (frame - _prog.p0) / Math.max(1, _prog.p1 - _prog.p0)));
-    _prog.fill.style.width = (100 * f).toFixed(2) + '%';
+    _prog.fill.style.width = _prog.head.style.left = (100 * f).toFixed(2) + '%';
 }
 
 // ---- Fixing a switch ---------------------------------------------------------------

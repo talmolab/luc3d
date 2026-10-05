@@ -14,6 +14,8 @@
  *  4. The box wears the colour of the progress-bar section the frame is in:
  *     orange over the lead-in (10) and lead-out (51), red over the close spell
  *     (40..50) — and the bar itself is orange | red | orange.
+ *     The bar's playhead line sits on the fill's leading edge at every frame and
+ *     stands proud of the bar.
  *  5. "Clear" in the tab stops it.
  *
  * Run: node tests/e2e/id-switch-highlight.mjs     (HL_SHOT=/path.png saves a screenshot)
@@ -120,7 +122,7 @@ try {
         `lead-in (frame 10): the box is orange (${JSON.stringify(c1.map(v => [v.orange, v.red]))})`);
     const bar = await page.evaluate(() => {
         const b = document.querySelector('#idSwitchPanel .id-switch-row.is-current .id-switch-pbar');
-        return b && { track: b.style.backgroundImage, band: b.querySelector('.id-switch-pband').style.background };
+        return b && { track: b.querySelector('.id-switch-ptrack').style.backgroundImage, band: b.querySelector('.id-switch-pband').style.background };
     });
     check(!!bar && /rgba\(255, 176, 32/.test(bar.track) && /rgba\(240, 60, 50/.test(bar.band),
         `the bar is orange lead-in/out around a red close spell (${JSON.stringify(bar)})`);
@@ -130,6 +132,16 @@ try {
     await page.waitForFunction(() => window.__lucid.state.currentFrame === 50, null, { timeout: 10000 }).catch(() => {});
     await page.waitForTimeout(150);
     const close = await census();
+    const head = await page.evaluate(() => {
+        const b = document.querySelector('#idSwitchPanel .id-switch-row.is-current .id-switch-pbar');
+        const fill = b.querySelector('.id-switch-pfill').getBoundingClientRect(), h = b.querySelector('.id-switch-phead');
+        const bar = b.getBoundingClientRect(), r = h.getBoundingClientRect();
+        return { left: h.style.left, width: b.querySelector('.id-switch-pfill').style.width,
+                 centre: r.left + r.width / 2, edge: fill.right, above: bar.top - r.top, below: r.bottom - bar.bottom };
+    });
+    check(head.left === head.width && head.left === '57.14%',
+        `frame 50: the playhead is at the fill's edge, 40/70 of the way (${head.left} vs fill ${head.width})`);
+    check(head.above >= 3 && head.below >= 3, `the playhead stands proud of the bar (${head.above}px above, ${head.below}px below)`);
     check(close.every(v => v.red > 100 && v.red > 5 * v.orange),
         `close spell (frame 50): the box is red (${JSON.stringify(close.map(v => [v.orange, v.red]))})`);
     await page.keyboard.press('ArrowRight');

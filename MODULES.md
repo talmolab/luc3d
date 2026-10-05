@@ -7984,7 +7984,11 @@ selection and follows the viewer's frame (stepping, scrubbing, playback):
 0% at the landing frame (1 s before the close spell), the close spell — where a
 swap would happen — red in the middle, the lead-in and lead-out orange, 100% at
 1 s after the encounter's end; clamped outside that range. The section colours
-come from `ID_SWITCH_SECTION_RGB` (`ui/id-switch-highlight.js`), set inline. `updateIdSwitchProgress(frame)` is
+come from `ID_SWITCH_SECTION_RGB` (`ui/id-switch-highlight.js`), set inline.
+A **playhead** line (`.id-switch-phead`) marks the current frame at the fill's
+leading edge and stands 4 px proud of the bar, so the coloured track is an inner
+element (`.id-switch-ptrack`) that clips the fill and band to its rounded ends
+while the bar itself does not clip; both move in the same style write. `updateIdSwitchProgress(frame)` is
 called from `ui/ui-wiring.js` `updateSeekbarVisual` on every frame change: one
 style write, and a no-op without a selected row (the bar element is looked up
 once per render/selection, not per frame). The same interval drives an
