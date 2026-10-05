@@ -5,39 +5,40 @@
 
 import {
     Skeleton, Camera, Session,
-} from '../pose/pose-data.js';
-import { getInstanceGroupsForFrame } from '../pose/triangulation.js';
-import { REPROJECTION_COLOR, getTrackColor, getGroupColor } from './overlays.js';
-import { drawAllOverlays, updateFrameCounters } from './rendering.js';
-import { isInteractiveClickTarget } from './interaction.js';
-import { persistSectionState } from './section-state.js';
-import { isInfoPanelVisible, markInfoPanelStale } from './panel-visibility.js';
+} from '../pose/pose-data.js?v=be841f141e39';
+import { getInstanceGroupsForFrame } from '../pose/triangulation.js?v=be841f141e39';
+import { REPROJECTION_COLOR, getTrackColor, getGroupColor } from './overlays.js?v=be841f141e39';
+import { drawAllOverlays, updateFrameCounters } from './rendering.js?v=be841f141e39';
+import { isInteractiveClickTarget } from './interaction.js?v=be841f141e39';
+import { persistSectionState } from './section-state.js?v=be841f141e39';
+import { refreshIdSwitchPanel } from './id-switch-modal.js?v=be841f141e39';
+import { isInfoPanelVisible, markInfoPanelStale } from './panel-visibility.js?v=be841f141e39';
 import { state, timeline, interactionManager, rememberSkeleton, buildRememberedSkeleton,
-         setProjectSkeleton, getProjectSkeleton } from './app-state.js';
-import { setStatus, markDirty } from '../import-export/save-load.js';
-import { buildSkeletonJSON, parseSkeletonJSON } from '../import-export/skeleton-json.js';
+         setProjectSkeleton, getProjectSkeleton } from './app-state.js?v=be841f141e39';
+import { setStatus, markDirty } from '../import-export/save-load.js?v=be841f141e39';
+import { buildSkeletonJSON, parseSkeletonJSON } from '../import-export/skeleton-json.js?v=be841f141e39';
 import {
     handleLoadVideos, handleLoadCalibration, autoAssignVideosToCameras,
     createViewForVideoFile, rebuildVideoController, fitCanvasesToCells,
     loadSingleSessionFromCache,
-} from '../loading/session-loader.js';
+} from '../loading/session-loader.js?v=be841f141e39';
 
 // Circular import — these are still defined in app.js for now. They will be
 // retargeted as later passes land:
 // - swapAssignTrack, propagateIdentityForward, unlinkGroup, showGroupContextMenu
 //   → ui/identity-assignment.js (Pass 3f)
 // Pass 3e-1: unlinkGroup + showGroupContextMenu moved to ui-wiring.js.
-import { unlinkGroup, showGroupContextMenu } from './ui-wiring.js';
+import { unlinkGroup, showGroupContextMenu } from './ui-wiring.js?v=be841f141e39';
 // Pass 3f: swapAssignTrack + propagateIdentityForward moved to identity-assignment.js.
 // luc3d #172: every manual identity switch routes through applyIdentitySwitch,
 // which subsumes this file's former direct propagateIdentityForward calls.
 import {
     swapAssignTrack, applyIdentitySwitch, describeIdentitySwitch,
-} from './identity-assignment.js';
+} from './identity-assignment.js?v=be841f141e39';
 // Pass 3h: populateSessionsPanel / populateViewStrip / populateSessionStrip moved to sessions-panes.js.
 import {
     populateSessionsPanel, populateViewStrip, populateSessionStrip,
-} from './sessions-panes.js';
+} from './sessions-panes.js?v=be841f141e39';
 // Block 2 (Prompt 4): per-session timeline visibility toggles.
 import {
     toggleCameraVisibility,
@@ -46,7 +47,7 @@ import {
     getCameraVisibilityList,
     getTrackVisibilityList,
     getIdentityVisibilityList,
-} from './timeline-visibility.js';
+} from './timeline-visibility.js?v=be841f141e39';
 
 // ============================================
 // Inline name entry for "+ New Track" / "+ New ID"
@@ -1005,6 +1006,8 @@ export function updateInfoPanel() {
     // Block 2 (Prompt 4): refresh the per-session Timeline visibility
     // toggle lists in the Visibility tab.
     populateTimelineVisibility(state.session);
+    // The ID Switches tab (and its timeline markers) for this session.
+    refreshIdSwitchPanel(state.session);
 
     // Wire Videos tab buttons
     document.getElementById('btnAddVideos').onclick = function () { handleLoadVideos(); };
@@ -1264,12 +1267,20 @@ function aggregateReprojectionError(frameIdx) {
  * `#infoPanel` and is always on screen, so this runs whether or not the panel
  * is collapsed.
  *
+ * The project-wide counters (`updateFrameCounters`) are skipped during
+ * playback: they walk EVERY frame group to recount labeled / triangulated
+ * frames — ~8–9 ms on a 36,000-frame project — yet don't depend on the frame
+ * being shown, so recomputing them on the ~10 Hz playback updates only blocked
+ * the video-frame callback long enough to drop frames (measured with
+ * tests/e2e/_bench-playback.mjs). `VideoController.stopPlayback` redraws with
+ * `isPlaying` false, so they are refreshed the moment playback stops.
+ *
  * @param {number|null} meanError
  */
 function updateStatusBarForFrame(meanError) {
     document.getElementById('statusError').textContent = 'Error: ' +
         (meanError != null ? meanError.toFixed(2) + ' px' : '-');
-    updateFrameCounters();
+    if (!state.isPlaying) updateFrameCounters();
 }
 
 export function updateFrameInfo(frameIdx, instanceGroups) {

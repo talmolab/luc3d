@@ -20,10 +20,18 @@
  *   { type: 'error', message: string }
  */
 
-import * as h5wasm from '../lib/h5wasm/hdf5_hl.js';   // local vendored 0.10.3 ESM
+import * as h5wasm from '../lib/h5wasm/hdf5_hl.js?v=be841f141e39';   // local vendored 0.10.3 ESM
 
 var h5wasmReady = false;
 var FS = null;
+// `{ type: 'parse', slowCompound: true }` forces h5wasm's Dataset.value for the
+// compound tables instead of `readCompoundColumnsFast` — the equivalence test's
+// reference path (tests/e2e/slp-import-fast-compound.mjs), and a kill switch.
+var slowCompound = false;
+// `{ type: 'parse', columnar: true }` returns the pose data as flat transferable
+// typed arrays (`result.data.columnar`) instead of the nested `frames` objects —
+// see `buildColumnarFrames`. Opt-in per call; every other caller keeps `frames`.
+var wantColumnar = false;
 var pendingMessages = [];
 
 // --- Lazy H5 data service state ---
@@ -57,6 +65,8 @@ var lazyTracksVal = null;      // full decompressed tracks TypedArray (loaded on
 
 async function handleMessage(data) {
     if (data.type === 'parse' && data.file) {
+        slowCompound = !!data.slowCompound;
+        wantColumnar = !!data.columnar;
         await parseSlp(data.file);
     } else if (data.type === 'open' && data.file) {
         openH5Lazy(data.file);
@@ -348,7 +358,10 @@ async function parseSlp(file) {
         // --- Build frame array ---
         var numNodes = nodes.length;
         var frames = [];
-        if (framesData && instancesData) {
+        var columnar = null;
+        if (wantColumnar) {
+            columnar = buildColumnarFrames(framesData, instancesData, pointsData, predPointsData, numNodes);
+        } else if (framesData && instancesData) {
             for (var fi = 0; fi < framesData.frame_id.length; fi++) {
                 var frameIdx = Number(framesData.frame_idx[fi]);
                 var videoIdx = Number(framesData.video[fi]);
@@ -399,7 +412,8 @@ async function parseSlp(file) {
             }
         }
 
-        progress('Built ' + frames.length + ' frames with pose data');
+        progress('Built ' + (columnar ? columnar.nFrames : frames.length) + ' frames with pose data' +
+            (columnar ? ' (columnar)' : ''));
 
         // --- Sessions JSON ---
         var sessionsArr = [];
@@ -445,6 +459,11 @@ async function parseSlp(file) {
 
         // Count instances by type
         var userCount = 0, predCount = 0;
+        if (columnar) {
+            for (var _ct = 0; _ct < columnar.type.length; _ct++) {
+                if (columnar.type[_ct] === 1) predCount++; else userCount++;
+            }
+        }
         for (var _ci = 0; _ci < frames.length; _ci++) {
             for (var _cj = 0; _cj < frames[_ci].instances.length; _cj++) {
                 if (frames[_ci].instances[_cj].type === 'predicted') predCount++;
@@ -455,17 +474,25 @@ async function parseSlp(file) {
 
         progress('Done! Sending results...');
 
-        postMessage({
-            type: 'result',
-            data: {
-                skeleton: { name: skelName, nodes: nodes, edges: edges },
-                tracks: tracks,
-                frames: frames,
-                videos: videos,
-                sessions: sessionsArr,
-                identities: identitiesArr,
-            }
-        });
+        var resultData = {
+            skeleton: { name: skelName, nodes: nodes, edges: edges },
+            tracks: tracks,
+            frames: frames,
+            videos: videos,
+            sessions: sessionsArr,
+            identities: identitiesArr,
+        };
+        if (columnar) {
+            resultData.columnar = columnar;
+            // Transfer, don't clone: the buffers move to the main thread for free.
+            postMessage({ type: 'result', data: resultData }, [
+                columnar.frameIdx.buffer, columnar.videoIdx.buffer, columnar.instOffsets.buffer,
+                columnar.trackIdx.buffer, columnar.score.buffer, columnar.type.buffer,
+                columnar.xy.buffer, columnar.occluded.buffer,
+            ]);
+        } else {
+            postMessage({ type: 'result', data: resultData });
+        }
 
     } catch (err) {
         try { FS.unmount('/work'); } catch (e) { }
@@ -959,6 +986,165 @@ function closeLazy() {
 
 // --- Dataset reading helpers ---
 
+/**
+ * The pose data as flat typed arrays — the transferable twin of the nested
+ * `frames` array `parseSlp` builds by default, with IDENTICAL selection and
+ * values (same skipped instances and frames, same NaN-means-missing and
+ * occlusion rules), so a consumer can build `Instance`s straight from it:
+ *
+ *   frameIdx[f], videoIdx[f]           per frame that has >= 1 instance
+ *   instOffsets[f]..instOffsets[f+1]   that frame's instance range (length nFrames+1)
+ *   trackIdx[i], score[i]              per instance (Float64; -1 = no track)
+ *   type[i]                            1 = predicted, 0 = user
+ *   xy[(i*numNodes + k)*2 + 0|1]       node k's x,y — NaN,NaN when missing
+ *   occluded[i*numNodes + k]           1 when the node has coords but visible=false
+ *
+ * WHY: the nested form is ~1.6M boxed `[x, y]` arrays + ~200k objects per
+ * 36k-frame camera, and structured-cloning eight of those to the main thread was
+ * most of what remained of a "Load Single Session Folder" once the compound
+ * reads were fixed (~2 s of ~5 s on HardFight_1kModels). These buffers are
+ * TRANSFERRED (zero-copy) instead.
+ */
+function buildColumnarFrames(framesData, instancesData, pointsData, predPointsData, numNodes) {
+    var nRows = (framesData && instancesData) ? framesData.frame_id.length : 0;
+    var nInstRows = instancesData ? instancesData.instance_type.length : 0;
+    // Upper bounds; trimmed (copied) to the real counts at the end.
+    var frameIdx = new Float64Array(nRows);
+    var videoIdx = new Float64Array(nRows);
+    var instOffsets = new Uint32Array(nRows + 1);
+    // Float64, not Int32: a file without a `track` column yields NaN here, as
+    // the nested path does — Int32Array would silently turn that into track 0.
+    var trackIdx = new Float64Array(nInstRows);
+    var score = new Float64Array(nInstRows);
+    var type = new Uint8Array(nInstRows);
+    var xy = new Float64Array(nInstRows * numNodes * 2);
+    var occluded = new Uint8Array(nInstRows * numNodes);
+    xy.fill(NaN);
+    var nF = 0, nI = 0;
+    for (var fi = 0; fi < nRows; fi++) {
+        var instStart = Number(framesData.instance_id_start[fi]);
+        var instEnd = Number(framesData.instance_id_end[fi]);
+        var first = nI;
+        for (var ji = instStart; ji < instEnd; ji++) {
+            if (ji >= nInstRows) break;
+            var instType = Number(instancesData.instance_type[ji]);
+            var pts = instType === 1 ? (predPointsData || pointsData) : pointsData;
+            if (!pts) continue;
+            var ptStart = Number(instancesData.point_id_start[ji]);
+            var ptEnd = Number(instancesData.point_id_end[ji]);
+            var base = nI * numNodes;
+            for (var ki = ptStart, k = 0; ki < ptEnd && k < numNodes; ki++, k++) {
+                if (ki >= pts.x.length) continue;          // stays NaN, not occluded
+                var px = Number(pts.x[ki]);
+                var py = Number(pts.y[ki]);
+                if (!isNaN(px) && !isNaN(py)) {
+                    xy[(base + k) * 2] = px;
+                    xy[(base + k) * 2 + 1] = py;
+                    if (!pts.visible[ki]) occluded[base + k] = 1;
+                }
+            }
+            trackIdx[nI] = Number(instancesData.track[ji]);
+            score[nI] = Number(instancesData.score[ji]);
+            type[nI] = instType === 1 ? 1 : 0;
+            nI++;
+        }
+        if (nI > first) {
+            frameIdx[nF] = Number(framesData.frame_idx[fi]);
+            videoIdx[nF] = Number(framesData.video[fi]);
+            instOffsets[nF] = first;
+            nF++;
+        }
+    }
+    instOffsets[nF] = nI;
+    return {
+        numNodes: numNodes, nFrames: nF, nInstances: nI,
+        frameIdx: frameIdx.slice(0, nF), videoIdx: videoIdx.slice(0, nF),
+        instOffsets: instOffsets.slice(0, nF + 1),
+        trackIdx: trackIdx.slice(0, nI), score: score.slice(0, nI), type: type.slice(0, nI),
+        xy: xy.slice(0, nI * numNodes * 2), occluded: occluded.slice(0, nI * numNodes),
+    };
+}
+
+/**
+ * Read a fixed-size 1-D compound dataset column-wise straight from its record
+ * buffer: one `get_dataset_data` into the WASM heap, then a DataView decode per
+ * member into a Float64Array. Returns `{ field: Float64Array }` for every name in
+ * `fields`, or null (caller falls back to `Dataset.value`) for anything that is
+ * not a plain-numeric compound or lacks one of `fields`.
+ *
+ * WHY: `Dataset.value` on a compound dataset builds one JS array of small
+ * TypedArrays PER ROW — measured ~7 µs per cell. On the HardFight_1kModels set
+ * (8 cameras × 36,000 frames, ~1.6M `pred_points` rows per camera) that was
+ * ~52–58 s of a 72 s "Load Single Session Folder", every worker in parallel,
+ * plus ~7 s for `instances`. This is a port of sleap-io.js's
+ * `readCompoundColumnsWorker` (lib/sleap-io/chunk-X76PRJK6.js), which fixed the
+ * same cost on the project-open path; keep the decode rules in step with it.
+ *
+ * Values: identical to what the old path fed the frame builder (which wraps
+ * everything in Number()) — float32 widens exactly to f64, and int64/uint64
+ * come back as Number (frame/instance/point ids are far below 2^53). The bool
+ * `visible`/`complete` members are HDF5 enums (class 8) and decode as 0/1, used
+ * only for truthiness. Columns are looked up BY NAME, where the old `.value`
+ * path mapped `fields[j]` to the j-th member by POSITION.
+ */
+function readCompoundColumnsFast(ds, fields) {
+    if (slowCompound) return null;
+    var M = h5wasm.Module;
+    var md = ds.metadata;
+    var members = md && md.compound_type && md.compound_type.members;
+    if (!members || !members.length || md.vlen) return null;
+    var shape = ds.shape;
+    if (!shape || shape.length !== 1) return null;
+    var recSize = md.size;
+    if (!recSize || recSize <= 0) return null;
+    if (!(M && M._malloc && M.get_dataset_data && M.HEAPU8 && M._free)) return null;
+    var byName = {};
+    for (var k = 0; k < members.length; k++) {
+        var mt = members[k];
+        if (mt.type !== 0 && mt.type !== 1 && mt.type !== 8) return null;   // int, float, enum
+        if (mt.type === 1 && mt.size !== 8 && mt.size !== 4) return null;
+        if (mt.size !== 1 && mt.size !== 2 && mt.size !== 4 && mt.size !== 8) return null;
+        byName[mt.name] = mt;
+    }
+    for (var f0 = 0; f0 < fields.length; f0++) if (!byName[fields[f0]]) return null;
+
+    var n = shape[0];
+    var columns = {};
+    if (n === 0) {
+        for (var z = 0; z < fields.length; z++) columns[fields[z]] = new Float64Array(0);
+        return columns;
+    }
+    var nbytes = recSize * n;
+    var dptr = M._malloc(nbytes);
+    if (!dptr) return null;
+    var buf;
+    try {
+        M.get_dataset_data(ds.file_id, ds.path, [BigInt(n)], [0n], [1n], BigInt(dptr));
+        buf = M.HEAPU8.slice(dptr, dptr + nbytes);
+    } finally {
+        M._free(dptr);
+    }
+    var dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+    for (var j = 0; j < fields.length; j++) {
+        var m = byName[fields[j]];
+        var col = new Float64Array(n);
+        var off = m.offset, sz = m.size, isFloat = (m.type === 1);
+        var signed = (m.signed !== false), le = (m.littleEndian !== false);
+        for (var i = 0; i < n; i++) {
+            var p = i * recSize + off;
+            var v;
+            if (isFloat) v = sz === 8 ? dv.getFloat64(p, le) : dv.getFloat32(p, le);
+            else if (sz === 1) v = signed ? dv.getInt8(p) : dv.getUint8(p);
+            else if (sz === 2) v = signed ? dv.getInt16(p, le) : dv.getUint16(p, le);
+            else if (sz === 4) v = signed ? dv.getInt32(p, le) : dv.getUint32(p, le);
+            else v = Number(signed ? dv.getBigInt64(p, le) : dv.getBigUint64(p, le));
+            col[i] = v;
+        }
+        columns[fields[j]] = col;
+    }
+    return columns;
+}
+
 function readColumnar(h5file, name, fields) {
     var ds;
     try { ds = h5file.get(name); } catch (e) { return null; }
@@ -980,6 +1166,11 @@ function readColumnar(h5file, name, fields) {
 
     // Compound dataset
     progress('[readColumnar] ' + name + ': type=' + ds.type + ', dtype=' + (ds.dtype || '?') + ', shape=' + JSON.stringify(ds.shape));
+    var fast = readCompoundColumnsFast(ds, fields);
+    if (fast) {
+        progress('[readColumnar] ' + name + ': fast compound read, ' + ds.shape[0] + ' rows');
+        return fast;
+    }
     var raw;
     try { raw = ds.value; } catch (e) {
         progress('Warning: failed to read ' + name + '.value: ' + e.message);
@@ -1060,6 +1251,9 @@ function readPoints(h5file, name, fields) {
             if (result.x && result.x.length > 0) return result;
             return null;
         }
+
+        var fast = readCompoundColumnsFast(ds, fields);
+        if (fast) return fast.x.length > 0 ? fast : null;
 
         var raw;
         try { raw = ds.value; } catch (e) {

@@ -33,6 +33,13 @@ const THRESHOLD_DEFAULTS = {
     distanceThreshold: 25,
     timePenalty: 0.1,
     stale: 20,
+    matchGate: 1,
+    autoSwitchCheck: 1,
+    autoImageSwitchCheck: 0,
+    imageCheckThreshold: -25,
+    imageCheckHz: 2,
+    imageCheckMaxViews: 3,
+    imageCheckWebNN: 0,
 };
 
 const SETTINGS_STUB = `
@@ -96,6 +103,10 @@ export function markDirty() {}
 const RENDERING_STUB = `
 export function drawAllOverlays() {}
 export function setReprojErrorVisible() {}
+export function showReprojectionsOnly() { return false; }
+export const REPROJ_ONLY_NOTE = '';
+export function showPredictedOnly() { return false; }
+export const PREDICTED_ONLY_NOTE = '';
 `;
 
 const INFO_PANEL_STUB = `

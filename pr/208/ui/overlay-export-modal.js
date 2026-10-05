@@ -26,21 +26,21 @@
 // import in ui/sessions-panes.js (see CLAUDE.md › Dependencies).
 import { DockviewComponent, themeDark } from 'https://cdn.jsdelivr.net/npm/dockview-core@6.6.1/+esm';
 
-import { state, videoController, getActiveSession } from './app-state.js';
-import { Viewport3D } from './viewport3d.js';
+import { state, videoController, getActiveSession } from './app-state.js?v=be841f141e39';
+import { Viewport3D } from './viewport3d.js?v=be841f141e39';
 import {
     drawFrameOverlays, drawLegend, drawViewNameLabel, getTrackColor, getGroupColor,
-} from './overlays.js';
-import { getVisibilitySettings } from './rendering.js';
+} from './overlays.js?v=be841f141e39';
+import { getVisibilitySettings } from './rendering.js?v=be841f141e39';
 import {
     getInstanceGroupsForFrame,
     ensureLazyFrameData,
     triangulateAndReproject,
     storeReprojectedInstances,
     sessionHasCalibration,
-} from '../pose/triangulation.js';
-import { points3dNodeCount } from '../pose/pose-data.js';
-import { setStatus } from '../import-export/save-load.js';
+} from '../pose/triangulation.js?v=be841f141e39';
+import { points3dNodeCount } from '../pose/pose-data.js?v=be841f141e39';
+import { setStatus } from '../import-export/save-load.js?v=be841f141e39';
 
 import {
     TILE_3D, RES_PRESETS, RES_CUSTOM, MAX_OUT_DIM,
@@ -50,15 +50,16 @@ import {
     defaultOverlayExportSettings, applyStoredSettings, saveOverlayExportSettings,
     overlayOptionsFrom, seedLayoutPlan,
     distributeAxisSizes, SASH_SHARE_FAR,
-} from './overlay-export-layout.js';
-import { createMp4Writer, videoEncodingAvailable } from './video-encode.js';
+} from './overlay-export-layout.js?v=be841f141e39';
+import { createMp4Writer, videoEncodingAvailable } from './video-encode.js?v=be841f141e39';
+import { fileSystemAccessHint } from './browser-hints.js?v=be841f141e39';
 // The main window's per-camera display settings. `ui/video-filters.js` imports NO
 // project modules, so this adds no cycle — and going through the SAME
 // `buildVideoFilter` the live canvases use is what stops the export drifting from
 // what the user sees (`applyVideoFilters` in ui/sessions-panes.js).
 import {
     buildVideoFilter, getSessionBrightness, getSessionContrast, getSessionRotation,
-} from './video-filters.js';
+} from './video-filters.js?v=be841f141e39';
 
 // Re-exported so callers/tests have one import site for the feature.
 export { TILE_3D };
@@ -130,7 +131,7 @@ export function settingsFromVisibilityPanel() {
     copy(s.pred, vis.predictedOpts, ['nodeStyle', 'nodeSize', 'lineWidth', 'alpha']);
     if (vis.predictedOpts) s.pred.lineStyle = vis.predictedOpts.postLineStyle || 'solid';
     copy(s.reproj, vis.reprojOpts, ['nodeStyle', 'nodeSize', 'lineWidth', 'alpha', 'brightness', 'labelSize', 'labelAlpha']);
-    if (vis.reprojOpts) s.reproj.lineStyle = vis.reprojOpts.lineStyle || 'dotted';
+    if (vis.reprojOpts) s.reproj.lineStyle = vis.reprojOpts.lineStyle || 'solid';
     s.reproj.nodeColor = vis.reprojNodeColor || 'white';
     s.fps = Math.round(state.fps || 30);
     return s;
@@ -713,6 +714,7 @@ export function showOverlayExportModal() {
                 pyramidLength: num('vis3dPyramidLength', 40),
                 skeletonNodeSize: num('vis3dNodeSize', 2),
                 skeletonEdgeWeight: num('vis3dEdgeWeight', 0.8),
+                skeletonBrightness: (function() { var e = document.getElementById('vis3dBrightness'); var v = e ? parseFloat(e.value) : NaN; return isNaN(v) ? 0.5 : Math.min(100, Math.max(0, v)) / 100; })(),
                 showCameraLabels: bool('vis3dLabelShow', true),
                 showCameraSpheres: bool('vis3dSphereShow', true),
                 showCameraPyramids: bool('vis3dPyramidShow', true),
@@ -1887,9 +1889,10 @@ export function showOverlayExportModal() {
                 // No File System Access API (or it failed): the whole file has
                 // to be built in memory. Mirror the JSON exporter and let the
                 // user decide instead of risking the tab silently.
+                var fsaHint = fileSystemAccessHint();
                 if (!window.confirm('This export is about ' + fmtBytes(estTotal) + '. Without a ' +
                     'save-file picker it must be built entirely in memory, which may crash the ' +
-                    'tab.\n\nExport anyway?')) {
+                    'tab.' + (fsaHint ? '\n\n' + fsaHint : '') + '\n\nExport anyway?')) {
                     abortExport('Overlay video export cancelled');
                     return;
                 }

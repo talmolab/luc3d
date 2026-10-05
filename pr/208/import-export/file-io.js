@@ -12,13 +12,13 @@
  */
 
 import { Camera, Skeleton, Instance, Identity,
-         toBoxedPoints3d, getPoint3d, points3dNodeCount } from '../pose/pose-data.js';
-import { validateSkeletonCompatibility } from './slp-merge.js';
-import { getOrComputeReprojectedInstance, sweepLazyFrameWindows } from '../pose/triangulation.js';
+         toBoxedPoints3d, getPoint3d, points3dNodeCount } from '../pose/pose-data.js?v=be841f141e39';
+import { validateSkeletonCompatibility } from './slp-merge.js?v=be841f141e39';
+import { getOrComputeReprojectedInstance, sweepLazyFrameWindows } from '../pose/triangulation.js?v=be841f141e39';
 // Only pulls in the two dependency-free `ui/` leaf modules — safe for this
 // module's graph.
-import { writeVisibilityMetadata } from './visibility-metadata.js';
-import { writePlaneMetadata } from './plane-metadata.js';
+import { writeVisibilityMetadata } from './visibility-metadata.js?v=be841f141e39';
+import { writePlaneMetadata } from './plane-metadata.js?v=be841f141e39';
 
 // ============================================
 // Generic file picker
@@ -2611,9 +2611,14 @@ function _readColumnar(obj, fieldNames) {
  *
  * @param {File} file - The .slp file
  * @param {Function} [onProgress] - Optional progress callback
+ * @param {{columnar?: boolean}} [opts] - `columnar: true` asks the worker for
+ *   the pose data as flat TRANSFERRED typed arrays (`data.columnar`, see
+ *   `buildColumnarFrames` in loading/slp-import-worker.js) instead of the nested
+ *   `data.frames` objects, which are expensive to structured-clone. Only callers
+ *   that read `data.columnar` should ask for it; `data.frames` is then empty.
  * @returns {Promise<Object>} Raw parsed data from worker
  */
-export function parseSlpH5(file, onProgress) {
+export function parseSlpH5(file, onProgress, opts) {
     return new Promise(function (resolve, reject) {
         // Resolve worker URL relative to the document base so this works on
         // sub-path deployments (e.g. GitHub Pages /luc3d/, /luc3d/pr/N/) as well
@@ -2642,7 +2647,7 @@ export function parseSlpH5(file, onProgress) {
             reject(new Error('SLP worker error: ' + (err.message || 'unknown')));
         };
 
-        worker.postMessage({ type: 'parse', file: file });
+        worker.postMessage({ type: 'parse', file: file, columnar: !!(opts && opts.columnar) });
     });
 }
 
@@ -2698,7 +2703,7 @@ export async function parseSlpViaSleapIO(file, onProgress) {
         // Point the reader's importScripts I/O worker at LUCID's LOCAL h5wasm IIFE
         // (0.10.3) so it doesn't fetch h5wasm from a CDN. document.baseURI keeps
         // this correct on sub-path deployments (GitHub Pages /luc3d/...).
-        h5wasmUrl: new URL('lib/h5wasm/h5wasm.iife.js', document.baseURI).href,
+        h5wasmUrl: new URL('lib/h5wasm/h5wasm.iife.js?v=be841f141e39', document.baseURI).href,
         onProgress: function (n, total, message) {
             report((message || ('Reading SLP ' + n + '/' + total)) + '...');
         },

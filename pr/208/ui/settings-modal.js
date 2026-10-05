@@ -37,10 +37,10 @@ import {
     setCameraWeights,
     getTrackingThresholdDefs,
     setTrackingThresholds,
-} from './settings.js';
-import { getActiveSession, state, timeline } from './app-state.js';
-import { drawAllOverlays } from './rendering.js';
-import { installModalGeometry } from './modal-geometry.js';
+} from './settings.js?v=be841f141e39';
+import { getActiveSession, state, timeline } from './app-state.js?v=be841f141e39';
+import { drawAllOverlays } from './rendering.js?v=be841f141e39';
+import { installModalGeometry } from './modal-geometry.js?v=be841f141e39';
 
 // True when the running device is macOS/iOS, so the primary Ctrl-or-Cmd modifier
 // is recorded as the cross-platform `Mod` token (matching the catalog defaults).
@@ -157,6 +157,23 @@ export function showSettingsModal(initialPanel) {
     // Seed the working tracking-threshold map from the catalog's effective values.
     const thresholdDefs = getTrackingThresholdDefs();
     thresholdDefs.forEach(function (def) { working.thresholds[def.id] = def.value; });
+
+    // An on/off switch (the app's standard .toggle-switch) for a 0/1 setting.
+    function makeToggle(checked, ariaLabel, onChange) {
+        const sw = document.createElement('label');
+        sw.className = 'toggle-switch settings-toggle';
+        const box = document.createElement('input');
+        box.type = 'checkbox';
+        box.checked = !!checked;
+        box.setAttribute('role', 'switch');
+        box.setAttribute('aria-label', ariaLabel);
+        box.addEventListener('change', function () { onChange(box.checked); });
+        const slider = document.createElement('span');
+        slider.className = 'slider';
+        sw.appendChild(box);
+        sw.appendChild(slider);
+        return sw;
+    }
 
     // --- Build DOM --------------------------------------------------------
     const overlay = document.createElement('div');
@@ -501,9 +518,10 @@ export function showSettingsModal(initialPanel) {
     }
 
     // --- Camera Views section --------------------------------------------
-    // Each camera view gets a binary 0/1 weight controlling whether it takes part
-    // in cross-view tracking. 1 = included; 0 = excluded from the association math
-    // (the view stays visible/editable in the GUI). Excluded rows are greyed out.
+    // Each camera view gets an on/off switch (stored as a 0/1 weight) controlling
+    // whether it takes part in cross-view tracking: on = included; off = excluded
+    // from the association math (the view stays visible/editable in the GUI).
+    // Excluded rows are greyed out.
     // Edits mutate working.cameraWeights; committed on Apply.
     const cvSection = buildSection('Camera Views', cameraNames.length || null);
     wizPanel.appendChild(cvSection.root);
@@ -512,7 +530,7 @@ export function showSettingsModal(initialPanel) {
     cvHint.className = 'settings-kbd-hint';
     cvHint.style.marginTop = '0';
     cvHint.style.marginBottom = '8px';
-    cvHint.textContent = 'Whether each camera view is used in tracking (1 = included, 0 = excluded). ' +
+    cvHint.textContent = 'Whether each camera view is used in tracking (on = included, off = excluded). ' +
         'Excluded views are dropped from the association math but stay visible in the GUI. ' +
         'At least 2 views must stay included. Changes apply when you click Apply.';
     cvSection.body.appendChild(cvHint);
@@ -535,46 +553,28 @@ export function showSettingsModal(initialPanel) {
             label.className = 'settings-kbd-label';
             label.textContent = name;
 
-            const input = document.createElement('input');
-            input.type = 'number';
-            input.className = 'settings-num-input';
-            input.min = '0';
-            input.max = '1';
-            input.step = '1';
-            input.value = String(working.cameraWeights[name]);
-            input.setAttribute('aria-label', 'Include view ' + name + ' in tracking (0 or 1)');
-
             // Grey the row out when the view is excluded (weight 0).
             function reflectExcluded() {
                 row.classList.toggle('settings-view-excluded', working.cameraWeights[name] === 0);
             }
-
-            // Any nonzero value is treated as included (1); only an explicit 0
-            // excludes. Coerce on input so the row greys live; normalize on blur.
-            input.addEventListener('input', function () {
-                const v = parseFloat(input.value);
-                if (isFinite(v)) working.cameraWeights[name] = v === 0 ? 0 : 1;
-                reflectExcluded();
-            });
-            input.addEventListener('blur', function () {
-                let v = parseFloat(input.value);
-                if (!isFinite(v)) v = working.cameraWeights[name];
-                working.cameraWeights[name] = v === 0 ? 0 : 1;
-                input.value = String(working.cameraWeights[name]);
+            // An on/off switch: on = the view takes part in tracking (1), off = excluded (0).
+            const sw = makeToggle(working.cameraWeights[name] !== 0, 'Include view ' + name + ' in tracking', function (on) {
+                working.cameraWeights[name] = on ? 1 : 0;
                 reflectExcluded();
             });
 
             reflectExcluded();
             row.appendChild(label);
-            row.appendChild(input);
+            row.appendChild(sw);
             cvList.appendChild(row);
         });
     }
 
     // --- Tracking Thresholds section -------------------------------------
     // Tier A (scoring) + Tier B (reprojection gates) knobs of the cross-view
-    // tracker. Each renders a labelled number field (range/step from the catalog)
-    // with an inline description. Edits mutate working.thresholds; clamped to the
+    // tracker. Each renders a labelled number field (range/step from the catalog),
+    // or an on/off switch for a `kind: 'toggle'` setting, with an inline
+    // description. Edits mutate working.thresholds; numbers are clamped to the
     // catalog range on blur and on Apply.
     const thSection = buildSection('Tracking Thresholds', thresholdDefs.length || null);
     wizPanel.appendChild(thSection.root);
@@ -602,6 +602,12 @@ export function showSettingsModal(initialPanel) {
         labelWrap.appendChild(thTitle);
         labelWrap.appendChild(thDesc);
 
+        if (def.kind === 'toggle') {             // on/off settings: a switch, stored as 1 / 0
+            row.appendChild(labelWrap);
+            row.appendChild(makeToggle(working.thresholds[def.id] > 0, def.label, function (on) { working.thresholds[def.id] = on ? 1 : 0; }));
+            thSection.body.appendChild(row);
+            return;
+        }
         const input = document.createElement('input');
         input.type = 'number';
         input.className = 'settings-num-input';
