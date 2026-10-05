@@ -3133,7 +3133,11 @@ identities, sampledFrames, closeDistance, threshold, fps, step, sampleHz, cue}`
 `{ok:false, reason}`; `markChangePoints(scored, o)` (the change-point step,
 exported so calibration can re-apply thresholds to the same scores);
 `fitSoftmax(X, y, n, D, K, opts)` (L2 multinomial logistic regression, Adam);
-`fitPCA(X, n, D, k)` (randomized subspace iteration); `SIZE_BONES`;
+`fitPCA(X, n, D, k)` (randomized subspace iteration);
+`KEYFRAME_GAP_TOLERANCE` (1.1);
+`planKeyframeSamples(frames, keyframes, hasFrame)` -> `{decode, snapped, spacing,
+keyframeGap, maxShift}` (which frame each image sample decodes in one camera — see
+"Keyframe sampling" under `ui/image-embedder.js`); `SIZE_BONES`;
 `REFERENCE_HZ` (15); `SIZE_CHECK_DEFAULTS` (`fps` REQUIRED, `sampleHz` 15,
 `folds` 5, `gapSeconds` 10, `syncSeconds` 1, `threshold` -50, `continueBelow` 0,
 `followSeconds` 60, `minTrackedSeconds` 60, `sepFactor` 0.65, `signal`, ...);
@@ -3195,18 +3199,38 @@ at keyframes — every 250 frames, ~0.23/s on these files — would cut decoding
 white-dark 75% -> 55% -> 41%, image-only flags real 77% -> 57% -> 51%; 5-mouse
 false change points 21 -> 29 -> 40 / 30 min and the real switch missed at -25
 below 2/s. The tracklets after an encounter are short, so they need dense samples.
-The rate stays 2/s; cheaper decoding has to come from the recordings (keyframes
-every 0.5 s, so samples could land on keyframes) or from decode parallelism.
+The rate stays 2/s; cheaper decoding has to come from the recordings — which is
+what keyframe sampling does: on recordings with a keyframe every 0.5 s each sample
+moves to its nearest keyframe, <= 0.25 s away (`planKeyframeSamples`; see
+"Keyframe sampling" under `ui/image-embedder.js`). **Moving samples by up to
+±0.25 s does not change the result** (2026-10-04, 5-mouse recording, the real
+model and check, 3 views; snapped = moved to frames 0, 30, 60, …; control =
+every sample moved by a constant 16 frames, i.e. different frames with no
+keyframe logic). Gate-on tracking (no real switch): planted-swap AUC 0.880
+today / 0.880 snapped / 0.873 control, 43.5 / 43.8 / 44.4% caught at -25, change
+points 10 / 7 / 9; encounter scores vs today correlate 0.982 (snapped) and 0.977
+(control). Gate-off tracking: the real switch (74,544, id_2/id_3) is an onset in
+all three (-94 / -99 / -112), AUC 0.812 / 0.805 / 0.807, change points 11 / 14 /
+16, correlation 0.981 / 0.973. Snapping moves the scores less than the control
+does, so its differences are which-frames-were-sampled noise. Harness:
+`tests/e2e/_diag-image-keyframe-snap.mjs` (planted swaps cost no re-run: with
+blocked CV an encounter's tracklet rows are never in their own fold's training
+set, so swapping the two animals' labels after it turns its score S into exactly
+-S).
 
 **Imports from project modules.** `pose/pose-data.js` (`readPoint3d`).
 
-**Imported by.** `ui/id-switch-modal.js`.
+**Imported by.** `ui/id-switch-modal.js`, `ui/image-embedder.js` (`planKeyframeSamples`, `KEYFRAME_GAP_TOLERANCE`).
 
 **Coverage.** `tests/test-id-switch-check.mjs` (synthetic 3-animal sessions defined
 in time: clean -> no flags; minority / majority switch -> onset / end change point;
 25-120 fps invariance; images with synthetic embeddings catching a swap between
 animals of IDENTICAL size that size misses; cancellation; PCA; failure reasons;
-crop geometry of `ui/image-embedder.js`), `tests/e2e/size-switch-check.mjs`,
+crop geometry of `ui/image-embedder.js`; `planKeyframeSamples`: sparse/unknown
+keyframes move nothing, a keyframe every 30 frames moves every 32-frame sample
+<= 15 frames, strictly increasing, untracked keyframes skipped, gaps up to 1.1x
+the spacing qualify and beyond do not, a keyframe every 0.5 s at 100 and 50 fps),
+`tests/e2e/image-keyframe-sampling.mjs`, `tests/e2e/size-switch-check.mjs`,
 `tests/e2e/track-auto-size-switch-check.mjs`, `tests/e2e/id-switch-image-check.mjs`.
 
 ---
@@ -8098,7 +8122,8 @@ interval and redrawn on return, Clear stops it).
 
 **Purpose.** Appearance embeddings for the image ID-switch check: for a sampled
 frame and the identities present, decode that frame in every camera
-(streamed: see below), cut a masked, pose-aligned crop of each identity from
+(streamed, and moved to the nearest keyframe when keyframes are dense: see
+below), cut a masked, pose-aligned crop of each identity from
 its own 2D keypoints, and embed the crops with DINOv2-small on the GPU.
 
 **Speed.** `prepareFrames(frames)` opens one `streamingReader` per camera over the
@@ -8153,6 +8178,52 @@ busy (19–26% vs 44%) and dedicated GPU memory climbing in a GC sawtooth to 19.
 of 20 GB. Not reproducible on macOS (no unclosed-VideoFrame warnings), so it was
 removed rather than kept as an option. Cheaper decoding has to come from the
 recordings (keyframes every 0.5 s).
+**Keyframe sampling (2026-10-04).** `prepareFrames` reads each camera's keyframes
+from the container's packet index (`keyframeIndices`: mediabunny
+`EncodedPacketSink.packets(…, {metadataOnly: true})`, `type === 'key'`, mapped to
+frame indices through the backend's `_frameTimes`; no frame data read, cached per
+video) and plans the samples with `planKeyframeSamples` (pose/id-switch-check.js):
+when the median keyframe gap is <= `KEYFRAME_GAP_TOLERANCE` (1.1) x the sample
+spacing (32 frames at 60 fps and 2/s; the 10% lets a recorder's "keyframe every
+0.5 s" qualify at frame rates where rounding makes the spacing a little shorter —
+49 frames at 100 fps, 24 at 50 — at every rate up to 240 fps), each sample moves
+to its nearest keyframe within half of max(spacing, keyframe gap) that has
+tracking (`session.instanceGroups.has`), so `samplesAtTimestamps` decodes ONE
+frame per sample (mediabunny resets to the target's keyframe when it is past the
+last decoded packet). Each view crops its animals from the keypoints of the frame
+it actually decoded (`decodedFrame`; the same identity's group there — an
+identity seen twice in that frame is left out), while the evidence still counts
+at the grid frame, so encounters and tracklets are unchanged. Sparser keyframes
+move nothing: the timestamps are exactly the old ones. Per camera, so cameras
+encoded differently mix. `opts.keyframes`: `false` (or `window.
+LUCID_IMAGE_KEYFRAMES = 0`) turns it off; a function `(decoder) -> keyframe
+indices` replaces the index (diagnostics). `stats().keyframes` /
+`summarizeKeyframePlans` -> `{cameras, of, snappedPct, keyframeGap, spacing}`, and
+the speed line ends "· decoded at keyframes in 8/8 cameras (100% of samples)" or
+"· every frame decoded (keyframe every 250 frames; a keyframe every 0.5 s — 35
+frames or fewer — would decode only the samples)". Measured on the M2 Pro, 2-minute clips of the 8 cameras of the
+5-mouse recording decoded concurrently (`tests/e2e/_bench-image-keyframe-decode.mjs`,
+1,800 camera-samples): original files and x265 with a keyframe every 250 frames
+151 samples/s (53,768 frames decoded, ~4,500/s — the hardware decoder's limit);
+x265 with a keyframe every 30 frames 297 samples/s in place (27,000 frames:
+mediabunny already skips to each sample's GOP) and **2,800 samples/s snapped
+(1,800 frames) — 18.6x today**. On that HEVC (hardware decoder) a keyframe decoded
+alone is bit-identical to it decoded mid-stream (96/96 raw planes; embeddings of
+the same crops max |difference| 0). Cost of the keyframes (x265, same QP 24, P-only):
++42% file size over the 8 cameras (+30% to +65% per camera; the static views pay
+most), at slightly HIGHER quality vs the original (PSNR +0.6 to +0.75 dB on every
+camera, SSIM up ~0.0015); on camera 0, QP 26 restores the size at -0.35 dB.
+The field recordings come from campy's NVENC writer (`-preset fast -qp 24 -bf:v
+0`, no `-g`, so NVENC's default keyframe every 250 frames); from those files'
+own keyframe / P-frame sizes, a keyframe every 30 frames at QP 24 projects to
++53% (+43% to +70% per camera; 6.3 -> ~9.7 GB per 30-min 8-camera session).
+**AV1** (campy's `av1_nvenc` setups) works the same way: keyframes from the
+packet index, one decoded packet per sample, bit-identical keyframes (96/96,
+embeddings max |difference| 0). It costs more: SVT-AV1 (low-delay, CRF 32) +95%
+size for a keyframe every 30 frames; and on the M2 Pro, which has no AV1
+hardware (Chrome decodes it in software), it is only 2x faster: 140 samples/s
+today -> 272 snapped (134 in place; software AV1 keyframes are expensive). GPUs
+with AV1 decode (RTX 30/40, Ada) should look like the HEVC case; not measured.
 Embeddings are bit-identical across all of this (cosine 1.00000 vs seeking,
 top-k vs the same views at all-k, and max |difference| 0 for worker vs inline
 crops over 5,687 real crops).
@@ -8185,13 +8256,15 @@ decode + crop ceiling rose from 145 to ~270 crops/s at 3 views (decoding alone:
 7.9 s vs 8.3 s with cropping) — headroom for a GPU faster than ~145 crops/s.
 Numbers in `ui/id-switch-modal.js`.
 
-**Key exports.** `createImageEmbedder(session, {onStatus, maxViewsPerAnimal, webnn})` ->
+**Key exports.** `createImageEmbedder(session, {onStatus, maxViewsPerAnimal, webnn, keyframes})` ->
 `{getEmbeddings, prepareFrames, releaseFrames, backend, stats, inFlight, views}` (the provider
 `checkImageSwitches` needs; `releaseFrames` also terminates the crop pool and
 disposes a WebNN model);
 `loadImageModel(onStatus)` (once, cached promise); `hasWebGPU()`;
 `selectViews(geos, maxViews)`; `EMBED_MAX_BATCH`, `EMBED_IN_FLIGHT`,
-`summarizeEmbedTiming(tm, backend, dtype)`, `formatEmbedTiming(t)`; WebNN: `hasWebNN()`, `loadWebNNModel(onStatus)`,
+`summarizeEmbedTiming(tm, backend, dtype)`, `formatEmbedTiming(t)`;
+`keyframeIndices(decoder)` -> `Promise<Int32Array|null>` (cached per video);
+`summarizeKeyframePlans(plans)`; WebNN: `hasWebNN()`, `loadWebNNModel(onStatus)`,
 `chooseBackend(trial)`, `WEBNN_BATCH`, `WEBNN_TRIAL_FRAMES`; `createCropPool()` -> `{run(image, crops) ->
 Promise<Float32Array[]>, broken, terminate()}` or null; crop helpers
 `cropGeometry`, `cutCrop`, `convexHull`, `writeInputTensor`; constants
@@ -8214,13 +8287,21 @@ fp32 (~88 MB). WebGPU only: the CPU (WASM) runtime measured ~50x slower (3 vs 15
 crops/s) and its int8 model drifts (cosine 0.953 vs the calibrated model). Re-check
 the CLS extraction (`last_hidden_state` token 0) on any version bump.
 
-**Imports from project modules.** `ui/app-state.js` (`state.views`). Spawns
-`ui/image-crop-worker.js`.
+**Imports from project modules.** `ui/app-state.js` (`state.views`),
+`pose/id-switch-check.js` (`planKeyframeSamples`, `KEYFRAME_GAP_TOLERANCE`); `mediabunny`
+(`EncodedPacketSink`, imported LAZILY inside `keyframeIndices` — a static bare
+import would break this module in Node tests and in the crop worker, which has no
+importmap). Spawns `ui/image-crop-worker.js`.
 
 **Imported by.** `ui/id-switch-modal.js`, `ui/image-crop-worker.js`.
 
-**Coverage.** Crop geometry, `selectViews`, `chooseBackend` and the resize table in
+**Coverage.** Crop geometry, `selectViews`, `chooseBackend`, the resize table and
+the keyframe line of `formatEmbedTiming` in
 `tests/test-id-switch-check.mjs`; the crop pool in `tests/e2e/image-crop-worker.mjs`;
+keyframe sampling on generated 60 fps H.264 and AV1 (keyframes every 30 frames vs one) in
+`tests/e2e/image-keyframe-sampling.mjs` (keyframe index, one decoded packet per
+sample, bit-identical planes, sparse video unchanged); accuracy on real data by
+`tests/e2e/_diag-image-keyframe-snap.mjs` (diagnostic, not in the suite);
 the full path on real data by a scratch harness (not in the suite: it needs the
 proofread videos and GPU) — see the image-check notes above.
 
@@ -11093,6 +11174,70 @@ around calls into `_mbBackend.getFrame`. Covered by two unit tests in
 serialization contract; the real WebCodecs race itself isn't reproducible
 headlessly).
 
+**Paused stepping keeps a decode stream open (`_mbGetFrame`, 2026-10-04).**
+`MediaBunnyVideoBackend.getFrame` opens a fresh decoder per frame and decodes
+from the frame's keyframe, so on P-frame recordings with a keyframe every 250
+frames EVERY paused frame — an arrow-key step forward included — decoded ~125
+frames per camera. `getFrame` now goes through `_mbGetFrame`, which keeps one
+mediabunny `sink.samples(t)` stream per decoder (`_stepCursor`: decodes from the
+keyframe once, then stays a few frames ahead) and serves any request at or after
+its position that needs no newer keyframe (`_sameKeyframeRun`: the target's key
+packet, via a lazily created `EncodedPacketSink.getKeyPacket` — `import('mediabunny')`
+on first use — is at or before the stream's next frame) by advancing it; a step
+back or a jump past the next keyframe reopens it at the target, i.e. the same
+decode as before. Results go into the backend's frame cache as `getFrame`'s did,
+so stepping back over frames just shown stays a cache hit. Released after
+`STEP_CURSOR_IDLE_MS` (3 s) idle, by `releaseStepCursor()` (called for every view
+by `VideoController.startPlayback`), `switchSource` and `close`. Any failure
+falls back to the backend's own `getFrame`; `window.LUCID_STEP_CURSOR = 0` turns it
+off. Measured (M2 Pro, real Chrome, 2-min clips of the 8 cameras of the 5-mouse
+recording, all 8 views per frame; `tests/e2e/_bench-step-cursor.mjs`): on the
+original recordings (keyframe every 250) a step forward 148 -> **1 ms**, a held
+arrow key 2.6 -> **245 frames/s**; re-encoded with a keyframe every 30, 64 -> 1 ms
+and 15.6 -> 366 frames/s. Steps back and jumps are unchanged apart from the
+stream's read-ahead (~40 extra packets decoded in the background on opening:
+jump 206 -> 214 ms, step back 405 -> 421 ms on the originals). Stepped frames are
+pixel-identical to the frame-accurate decode. Cost while paused: each open stream
+holds its few read-ahead frames (and a decoder) until it idles out.
+**Stepping BACK decodes in chunks (`_decodeBackChunk`, 2026-10-05).** A frame can
+only be decoded forward from its keyframe, so each step back re-decoded the whole
+run from the keyframe — up to 250 frames per camera, ~420 ms for 8 views, and
+choppy (cheap just after a keyframe, dear just before the next). When a request is
+1–3 frames before the previous one, `_mbGetFrame` instead decodes that run once
+and caches up to `STEP_BACK_CHUNK` (24) frames ending at the target, never earlier
+than its keyframe, so the next steps back are cache hits. Capped at 40% of the
+frame cache (60 in the app), so the chunk on screen and the one being prefetched
+both fit; `window.LUCID_STEP_BACK_CHUNK = 0` turns it off.
+**Background prefetch + landing warm-up.** While stepping back, `_prefetchBack`
+decodes the chunk before the cached run in the background (its own decoder, not
+under `_mbSeekLock`; one at a time; a request for a frame it is decoding waits for
+it), and `_scheduleBackWarm` does the same `STEP_BACK_WARM_MS` (250 ms) after the
+user LANDS on a frame by a jump (seekbar, a flagged switch, end of playback) and
+stays — counted from when the frame is shown, so back-to-back jumps never start
+one. Anything but a step back cancels it (`job.cancelled`, checked per decoded
+frame; `releaseStepCursor` too). Chunk frames are cached by `_cacheNear`, which
+evicts the frame FARTHEST from the user rather than the least recently used:
+stepping back, the not-yet-reached prefetched frames ARE the least recently used,
+and LRU evicted exactly them (a hitch every ~30 steps).
+`window.LUCID_STEP_BACK_PREFETCH = 0` turns prefetch and warm-up off.
+Jumps and seekbar drags (larger moves) don't trigger it. Held left arrow, 72
+steps, 8 views, original recordings (`_bench-step-cursor.mjs`, app cache 60):
+2.3 -> **34.6 steps/s**, median step 428 -> 0 ms, but every 24th step costs ~0.7 s
+(the run + 24 bitmaps per camera); keyframe every 30: 15.1 -> 70.1 steps/s, worst
+step ~240 ms. With prefetch + warm-up, landing then holding the key at 30 steps/s:
+**0 of 72 steps over 50 ms** (29.8 steps/s achieved; chunks alone: 3 hitches of
+~0.5–0.6 s), keyframe every 30 also 0 (chunks alone: 4); stepping as fast as
+frames come, 45.7 steps/s, where it can outrun the prefetch. Jumps unchanged
+(208 -> 215 ms). Memory: the cache peaks at its existing ceiling (60 frames per
+camera, 480 here) with or without chunking — chunking fills it sooner, it does
+not raise it. Stepped-back frames pixel-identical to the unchunked decode. Guarded by
+`tests/e2e/step-cursor.mjs` (one packet per step vs every frame since the
+keyframe, pixel-identical stepped / stepped-back / jumped frames, reopening at the
+right keyframe, chunked back steps — 2 of 30 steps decode, same frames — the
+landing warm-up, a held left arrow finding 120/120 frames already cached in a
+30-frame cache (111/120 with plain LRU eviction, which the test was checked to
+fail on), cancellation by a jump, and release on idle / request / close).
+
 **Callers must coalesce rapid single-frame steps via `scrubToFrame`, never
 call `seekToFrame` directly for repeatable user input (issue #115
 followup-followup, `eric/seeking-regression`).** Adding `_mbSeekLock` above
@@ -11224,8 +11369,12 @@ a zoomed-in image keeps the same region centered instead of jumping.
 
 **Key exports.**
 - `videoLog(msg, level)` — namespaced logger.
+- `STEP_CURSOR_IDLE_MS` (3000) — idle time before a paused-stepping stream closes.
+- `STEP_BACK_CHUNK` (24) — frames decoded and cached per backward step.
+- `STEP_BACK_WARM_MS` (250) — pause after landing on a frame before warming the chunk behind it.
 - `OnDemandVideoDecoder` — class. Selected methods: `init(source)`,
-  `getFrame(frameIndex)`, `_initMediabunny(source)` /
+  `getFrame(frameIndex)` (mediabunny: via `_mbGetFrame`, the open stepping
+  stream), `releaseStepCursor()`, `_initMediabunny(source)` /
   `_mediabunnyEnabled()` (opt-in frame-accurate backend, issue #115),
   `decodeRange(start, end)`, `playNative`, `pauseNative`, `seekNative`,
   `switchSource`, `close`, `drawCurrentFrame`, `_awaitPlayable` (init and
@@ -11271,8 +11420,9 @@ a rotation in progress. Removing the line alone turns the margin check in
 
 **Imports from project modules.** `ui/keyboard-target.js` only — the
 `shouldIgnoreShortcut` guard its `setupKeyboardHandlers` keydown listener
-applies (issue #163); that module imports nothing itself. Otherwise none (uses
-the global `MP4Box` from script tag).
+applies (issue #163); that module imports nothing itself. `mediabunny`
+(`EncodedPacketSink`) is imported lazily by `_sameKeyframeRun`. Otherwise none
+(uses the global `MP4Box` from script tag).
 
 **Imported by.** `pose/initialization.js`, `import-export/save-load.js`,
 `import-export/slp-import.js`, `loading/session-loader.js`,
