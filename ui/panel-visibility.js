@@ -59,6 +59,31 @@ export function isInfoPanelVisible() {
     return isShown(INFO_PANEL_WRAPPER_ID);
 }
 
+/**
+ * Collapse the 3D viewport panel if it is expanded; a no-op when it is already
+ * collapsed (or absent). This is the collapse half of `toggle3DViewport`
+ * (`ui/ui-wiring.js`), which calls it — kept here so `pose/tracker.js` can
+ * close the panel after Track All without importing ui-wiring (an import loop).
+ * The viewport instance is passed in rather than imported, which keeps this
+ * module a leaf. The toolbar label follows via `ui/layout-controls.js`'s
+ * MutationObserver on the container's class.
+ *
+ * @param {Object|null} viewport3d - the live Viewport3D, if one exists
+ * @returns {boolean} true if it was expanded and is now collapsed
+ */
+export function collapseViewport3D(viewport3d) {
+    if (typeof document === 'undefined') return false;
+    const container = document.getElementById(VIEWPORT3D_CONTAINER_ID);
+    if (!container || container.classList.contains('collapsed')) return false;
+    // Save current width so expanding can restore it, then clear the inline
+    // width so the CSS `.collapsed { width: 0 }` rule takes effect.
+    container._savedWidth = container.style.width || '';
+    container.style.width = '';
+    container.classList.add('collapsed');
+    if (viewport3d) viewport3d.setVisible(false);
+    return true;
+}
+
 // --- Deferred-refresh bookkeeping -------------------------------------------
 // A skipped refresh is not a lost refresh: every info-panel populate function
 // is a stateless full rebuild from current `state`, so one call on re-show
@@ -92,6 +117,7 @@ if (typeof window !== 'undefined') {
         get skipped() { return skipped; },
         isViewport3DVisible,
         isInfoPanelVisible,
+        collapseViewport3D,
         get infoPanelStale() { return infoPanelStale; },
     };
 }
