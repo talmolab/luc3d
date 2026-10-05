@@ -522,6 +522,65 @@ export async function checkSizeSwitches(session, opts) {
 }
 
 /**
+ * How much sparser than the samples keyframes may be and still count as dense.
+ * The sample spacing comes from integer rounding (every round(fps / sampleHz)-th
+ * frame, every round(sampleHz / imageHz)-th of those), so it is a little under
+ * 0.5 s at many frame rates — 49 frames at 100 fps, 24 at 50 — and a recorder set
+ * to a keyframe every 0.5 s (`-g fps/2`) would otherwise just miss it. 1.1 covers
+ * every frame rate up to 240 (worst: 119 vs 112 frames at 239 fps).
+ */
+export const KEYFRAME_GAP_TOLERANCE = 1.1;
+
+/**
+ * Which frame to DECODE for each image sample in one camera, given that camera's
+ * keyframes. Decoding a frame costs every frame since its keyframe (P-frames
+ * depend on the one before), so on recordings with a keyframe every 250 frames
+ * the image samples (~2/s) still cost every frame of every camera. When the
+ * keyframes are about as dense as the samples (median keyframe gap G <=
+ * KEYFRAME_GAP_TOLERANCE x the median sample spacing S), each sample is moved to
+ * its nearest keyframe that is at most floor(max(S, G) / 2) frames away and has
+ * tracking (`hasFrame`), so it decodes as ONE frame. Moved samples stay strictly
+ * increasing (two samples never share a keyframe); a sample with no such
+ * keyframe keeps its own frame (decoded from its keyframe, as before). Sparser
+ * keyframes leave every sample where it is — today's decoding exactly.
+ * The encounter grid is untouched: the sample's evidence still counts at its
+ * grid frame, only the picture (and the keypoints it is cropped with) come from
+ * up to half a gap away — 0.25 s with a keyframe every 0.5 s.
+ * @param {number[]} frames      requested sample frames, increasing
+ * @param {?ArrayLike<number>} keyframes  this camera's keyframe indices, increasing (null = unknown)
+ * @param {function(number): boolean} [hasFrame]  can a sample move to this frame? (default: any)
+ * @returns {{decode: number[], snapped: number, spacing: number, keyframeGap: number, maxShift: number}}
+ *   decode[i] = the frame to decode for frames[i]; snapped = how many moved (0 = sparse/unknown)
+ */
+export function planKeyframeSamples(frames, keyframes, hasFrame) {
+    var decode = frames.slice(), n = frames.length;
+    var medianGap = function (a) {
+        var d = [];
+        for (var i = 1; i < a.length; i++) d.push(a[i] - a[i - 1]);
+        return d.length ? median(d) : Infinity;
+    };
+    var spacing = medianGap(frames), kfGap = keyframes && keyframes.length >= 2 ? medianGap(keyframes) : Infinity;
+    var plan = { decode: decode, snapped: 0, spacing: spacing, keyframeGap: kfGap, maxShift: 0 };
+    if (!(n >= 2 && isFinite(spacing) && kfGap <= KEYFRAME_GAP_TOLERANCE * spacing)) return plan;
+    var maxShift = plan.maxShift = Math.floor(Math.max(spacing, kfGap) / 2);
+    var ok = hasFrame || function () { return true; };
+    var j = 0, last = -Infinity;
+    for (var s = 0; s < n; s++) {
+        var f = frames[s];
+        while (j < keyframes.length && keyframes[j] < f - maxShift) j++;
+        var best = -1;
+        for (var q = j; q < keyframes.length && keyframes[q] <= f + maxShift; q++) {
+            var kf = keyframes[q];
+            if (kf <= last || !ok(kf)) continue;
+            if (best < 0 || Math.abs(kf - f) < Math.abs(best - f)) best = kf;
+        }
+        if (best >= 0) { decode[s] = best; plan.snapped++; }
+        last = Math.max(last, decode[s]);
+    }
+    return plan;
+}
+
+/**
  * Image check: score every close encounter by appearance. On every
  * round(sampleHz / imageHz)-th grid sample, `opts.getEmbeddings(frame, items)` is
  * awaited for the identities present (`items` = [{k, group}]) and returns, per
