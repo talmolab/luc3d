@@ -41,6 +41,13 @@ export const STEP_CURSOR_IDLE_MS = 3000;
  */
 export const STEP_BACK_CHUNK = 24;
 
+/**
+ * After landing on a frame by a jump (not a step), wait this long and, if no
+ * other frame was asked for meanwhile, decode the chunk before it in the
+ * background so even the FIRST step back is a cache hit (OnDemandVideoDecoder._mbGetFrame).
+ */
+export const STEP_BACK_WARM_MS = 250;
+
 /** Index of the frame nearest timestamp `t` in the sorted `times` (within half a frame), or -1. */
 function frameNearTime(times, t) {
     var lo = 0, hi = times.length - 1;
@@ -522,21 +529,46 @@ export class OnDemandVideoDecoder {
      * turns it off. Callers serialize (getFrame's `_mbSeekLock`).
      */
     async _mbGetFrame(frameIndex) {
+        var prev = this._lastStepFrame;
+        var bitmap = await this._mbGetFrameOnce(frameIndex);
+        // landed by a jump (seekbar, a flagged switch, end of playback) and still there: once the frame
+        // is on screen, warm the chunk behind it so even the first step back is a cache hit
+        var jumped = !(prev != null && Math.abs(frameIndex - prev) <= 3);
+        if (bitmap && jumped && this._lastStepFrame === frameIndex && this._stepCursorEnabled()) this._scheduleBackWarm(frameIndex);
+        return bitmap;
+    }
+
+    _stepCursorEnabled() {
+        return !(typeof window !== 'undefined' && window.LUCID_STEP_CURSOR === 0);
+    }
+
+    async _mbGetFrameOnce(frameIndex) {
         var be = this._mbBackend;
-        var off = typeof window !== 'undefined' && window.LUCID_STEP_CURSOR === 0;
+        var off = !this._stepCursorEnabled();
         if (off || !be.sink || typeof be.sink.samples !== 'function' || !be._frameTimes || !be.cache) return be.getFrame(frameIndex);
         var prev = this._lastStepFrame;
         this._lastStepFrame = frameIndex;
+        var back = prev != null && prev - frameIndex >= 1 && prev - frameIndex <= 3;   // a step BACK
+        // anything but a step back makes the background chunk moot: stop it (frees its decoder)
+        if (!back && this._backPrefetch) { this._backPrefetch.cancelled = true; this._backPrefetch = null; }
+        if (this._backWarmTimer) { clearTimeout(this._backWarmTimer); this._backWarmTimer = null; }
         var hit = be.cache.get(frameIndex);
-        if (hit) { be.cache.delete(frameIndex); be.cache.set(frameIndex, hit); return hit; }
+        if (hit) { be.cache.delete(frameIndex); be.cache.set(frameIndex, hit); if (back) this._prefetchBack(frameIndex); return hit; }
         if (be.decodingPromise) { await be.decodingPromise; if (be.cache.has(frameIndex)) return be.cache.get(frameIndex); }
+        // the background prefetch is decoding this frame: wait for it rather than decode it twice
+        var bp = this._backPrefetch;
+        if (bp && !bp.cancelled && frameIndex <= bp.end && frameIndex > bp.end - this._backChunkSize()) {
+            await bp.promise;
+            hit = be.cache.get(frameIndex);
+            if (hit) { be.cache.delete(frameIndex); be.cache.set(frameIndex, hit); if (back) this._prefetchBack(frameIndex); return hit; }
+        }
         var ts = be._frameTimes[frameIndex];
         if (ts == null) return null;
-        // a step BACK (1-3 frames before the last request): decode the run up to it once and keep it
-        if (prev != null && prev - frameIndex >= 1 && prev - frameIndex <= 3) {
+        // a step back: decode the run up to it once and keep it, and start on the run before it
+        if (back) {
             try {
                 var chunkHit = await this._decodeBackChunk(frameIndex);
-                if (chunkHit) return chunkHit;
+                if (chunkHit) { this._prefetchBack(frameIndex); return chunkHit; }
             } catch (e) {
                 videoLog("Back-step chunk failed for frame " + frameIndex + " (" + e.message + "), decoding it alone", "warn");
             }
@@ -544,7 +576,7 @@ export class OnDemandVideoDecoder {
         try {
             var c = this._stepCursor;
             if (!(c && c.backend === be && frameIndex >= c.next && await this._sameKeyframeRun(c, ts))) {
-                this.releaseStepCursor();
+                this._closeStepStream();
                 c = this._stepCursor = { backend: be, it: be.sink.samples(ts)[Symbol.asyncIterator](), next: frameIndex, nextTs: ts, timer: null };
             }
             if (c.timer) { clearTimeout(c.timer); c.timer = null; }
@@ -562,11 +594,11 @@ export class OnDemandVideoDecoder {
                 c.nextTs = times[frameIndex + 1] != null ? times[frameIndex + 1] : Infinity;
                 be.cacheFrame(frameIndex, bitmap);
                 var self = this;
-                c.timer = setTimeout(function () { if (self._stepCursor === c) self.releaseStepCursor(); }, STEP_CURSOR_IDLE_MS);
+                c.timer = setTimeout(function () { if (self._stepCursor === c) self._closeStepStream(); }, STEP_CURSOR_IDLE_MS);
                 return bitmap;
             }
         } catch (e) {
-            this.releaseStepCursor();
+            this._closeStepStream();
             videoLog("Step cursor failed for frame " + frameIndex + " (" + e.message + "), decoding it alone", "warn");
             return be.getFrame(frameIndex);
         }
@@ -597,29 +629,114 @@ export class OnDemandVideoDecoder {
      * when chunking is off (the caller then decodes `f` alone).
      */
     async _decodeBackChunk(f) {
-        var be = this._mbBackend, times = be._frameTimes;
-        var n = (typeof window !== 'undefined' && window.LUCID_STEP_BACK_CHUNK != null) ? Math.floor(+window.LUCID_STEP_BACK_CHUNK) : STEP_BACK_CHUNK;
-        n = Math.min(n, Math.floor(be.cacheSize / 2));   // leave the cache room for what is on screen
+        var be = this._mbBackend, n = this._backChunkSize();
         if (!(n > 1)) return null;
-        var keyTs = await this._keyTimestamp(be, times[f]);
+        var start = await this._backChunkStart(be, f, n);
+        return this._decodeIntoCache(be, start, f);
+    }
+
+    /**
+     * Frames per backward chunk: STEP_BACK_CHUNK (or `window.LUCID_STEP_BACK_CHUNK`),
+     * at most 40% of the frame cache, so the chunk on screen and the one being
+     * prefetched behind it (`_prefetchBack`) both fit without evicting each other.
+     */
+    _backChunkSize() {
+        var n = (typeof window !== 'undefined' && window.LUCID_STEP_BACK_CHUNK != null) ? Math.floor(+window.LUCID_STEP_BACK_CHUNK) : STEP_BACK_CHUNK;
+        return this._mbBackend ? Math.min(n, Math.floor(this._mbBackend.cacheSize * 0.4)) : 0;
+    }
+
+    /** First frame of the chunk ending at `f`: n frames back, but never before `f`'s keyframe. */
+    async _backChunkStart(be, f, n) {
+        var times = be._frameTimes, keyTs = await this._keyTimestamp(be, times[f]);
         var kf = keyTs == null ? -1 : frameNearTime(times, keyTs);
-        var start = Math.max(kf >= 0 ? kf : 0, f - n + 1);
+        return Math.max(kf >= 0 ? kf : 0, f - n + 1);
+    }
+
+    /** Decode frames [start, end] in one run into the backend's cache (skipping cached ones); returns `end`'s bitmap. `job.cancelled` stops it. */
+    async _decodeIntoCache(be, start, end, job) {
+        var times = be._frameTimes;
         var half = times.length > 1 ? (times[times.length - 1] - times[0]) / (times.length - 1) / 2 : 0;
         var out = null;
-        for await (var sample of be.sink.samples(times[start], times[f] + half)) {
+        for await (var sample of be.sink.samples(times[start], times[end] + half)) {
+            if (this._mbBackend !== be || (job && job.cancelled)) { sample.close(); break; }   // closed / switched / moved on
             var i = frameNearTime(times, sample.timestamp);
-            if (i < start || i > f || be.cache.has(i)) { sample.close(); continue; }
+            if (i < start || i > end || be.cache.has(i)) { sample.close(); continue; }
             var vf = sample.toVideoFrame();
             var bitmap = await createImageBitmap(vf);
             vf.close(); sample.close();
-            be.cacheFrame(i, bitmap);
-            if (i === f) out = bitmap;
+            this._cacheNear(be, i, bitmap);
+            if (i === end) out = bitmap;
         }
         return out;
     }
 
-    /** Close the paused-stepping decode stream (frees its decoder and buffered frames). */
+    /**
+     * Cache a chunk frame, evicting (when full) the cached frame FARTHEST from where
+     * the user is, not the least recently used: while stepping back, the frames not
+     * yet reached are the least recently used ones, and plain LRU evicted exactly
+     * those (measured: a hitch every ~30 steps with keyframes every 30 frames).
+     */
+    _cacheNear(be, i, bitmap) {
+        var here = this._lastStepFrame != null ? this._lastStepFrame : i;
+        while (be.cache.size >= be.cacheSize) {
+            var far = null, farD = -1;
+            be.cache.forEach(function (_, k) { var d = Math.abs(k - here); if (d > farD) { farD = d; far = k; } });
+            if (far === null) break;
+            var old = be.cache.get(far);
+            if (old && old.close) old.close();
+            be.cache.delete(far);
+        }
+        be.cache.set(i, bitmap);
+    }
+
+    /**
+     * While stepping back, decode the chunk BEFORE the cached run that ends at `f`
+     * in the background (its own decoder; not under getFrame's lock), so that run's
+     * first frame is not followed by a pause for the next chunk. One at a time;
+     * nothing to do when a chunk's worth is already cached behind `f`. A request
+     * for a frame it is decoding waits for it (`_mbGetFrame`).
+     * `window.LUCID_STEP_BACK_PREFETCH = 0` turns it off.
+     */
+    /** After STEP_BACK_WARM_MS with no other request, prefetch the chunk behind landed frame `f`. */
+    _scheduleBackWarm(f) {
+        if (this._backWarmTimer) clearTimeout(this._backWarmTimer);
+        var self = this;
+        this._backWarmTimer = setTimeout(function () {
+            self._backWarmTimer = null;
+            if (self._lastStepFrame === f) self._prefetchBack(f);
+        }, STEP_BACK_WARM_MS);
+    }
+
+    _prefetchBack(f) {
+        var be = this._mbBackend, n = this._backChunkSize();
+        if (this._backPrefetch || !be || !(n > 1)) return;
+        if (typeof window !== 'undefined' && window.LUCID_STEP_BACK_PREFETCH === 0) return;
+        var low = f;
+        while (low > 0 && be.cache.has(low - 1) && f - low < n) low--;
+        if (low <= 0 || f - low >= n) return;
+        var self = this, job = { end: low - 1, promise: null };
+        job.promise = (async function () {
+            var start = await self._backChunkStart(be, job.end, n);
+            await self._decodeIntoCache(be, start, job.end, job);
+        })().catch(function (e) {
+            videoLog("Back-step prefetch failed (" + e.message + ")", "warn");
+        }).then(function () { if (self._backPrefetch === job) self._backPrefetch = null; });
+        this._backPrefetch = job;
+    }
+
+    /**
+     * Stop all paused-stepping work: the forward stream, a back-step prefetch and a
+     * pending warm-up (frees their decoders and buffered frames). For playback,
+     * source switches and close.
+     */
     releaseStepCursor() {
+        if (this._backWarmTimer) { clearTimeout(this._backWarmTimer); this._backWarmTimer = null; }
+        if (this._backPrefetch) { this._backPrefetch.cancelled = true; this._backPrefetch = null; }
+        this._closeStepStream();
+    }
+
+    /** Close just the forward-stepping stream (reopened at a jump, or idle). */
+    _closeStepStream() {
         var c = this._stepCursor;
         this._stepCursor = null;
         if (!c) return;

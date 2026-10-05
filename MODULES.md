@@ -7272,19 +7272,38 @@ run from the keyframe — up to 250 frames per camera, ~420 ms for 8 views, and
 choppy (cheap just after a keyframe, dear just before the next). When a request is
 1–3 frames before the previous one, `_mbGetFrame` instead decodes that run once
 and caches up to `STEP_BACK_CHUNK` (24) frames ending at the target, never earlier
-than its keyframe, so the next steps back are cache hits. Capped at half the
-frame cache (60 in the app); `window.LUCID_STEP_BACK_CHUNK = 0` turns it off.
+than its keyframe, so the next steps back are cache hits. Capped at 40% of the
+frame cache (60 in the app), so the chunk on screen and the one being prefetched
+both fit; `window.LUCID_STEP_BACK_CHUNK = 0` turns it off.
+**Background prefetch + landing warm-up.** While stepping back, `_prefetchBack`
+decodes the chunk before the cached run in the background (its own decoder, not
+under `_mbSeekLock`; one at a time; a request for a frame it is decoding waits for
+it), and `_scheduleBackWarm` does the same `STEP_BACK_WARM_MS` (250 ms) after the
+user LANDS on a frame by a jump (seekbar, a flagged switch, end of playback) and
+stays — counted from when the frame is shown, so back-to-back jumps never start
+one. Anything but a step back cancels it (`job.cancelled`, checked per decoded
+frame; `releaseStepCursor` too). Chunk frames are cached by `_cacheNear`, which
+evicts the frame FARTHEST from the user rather than the least recently used:
+stepping back, the not-yet-reached prefetched frames ARE the least recently used,
+and LRU evicted exactly them (a hitch every ~30 steps).
+`window.LUCID_STEP_BACK_PREFETCH = 0` turns prefetch and warm-up off.
 Jumps and seekbar drags (larger moves) don't trigger it. Held left arrow, 72
 steps, 8 views, original recordings (`_bench-step-cursor.mjs`, app cache 60):
 2.3 -> **34.6 steps/s**, median step 428 -> 0 ms, but every 24th step costs ~0.7 s
 (the run + 24 bitmaps per camera); keyframe every 30: 15.1 -> 70.1 steps/s, worst
-step ~240 ms. Memory: the cache peaks at its existing ceiling (60 frames per
+step ~240 ms. With prefetch + warm-up, landing then holding the key at 30 steps/s:
+**0 of 72 steps over 50 ms** (29.8 steps/s achieved; chunks alone: 3 hitches of
+~0.5–0.6 s), keyframe every 30 also 0 (chunks alone: 4); stepping as fast as
+frames come, 45.7 steps/s, where it can outrun the prefetch. Jumps unchanged
+(208 -> 215 ms). Memory: the cache peaks at its existing ceiling (60 frames per
 camera, 480 here) with or without chunking — chunking fills it sooner, it does
 not raise it. Stepped-back frames pixel-identical to the unchunked decode. Guarded by
 `tests/e2e/step-cursor.mjs` (one packet per step vs every frame since the
 keyframe, pixel-identical stepped / stepped-back / jumped frames, reopening at the
-right keyframe, chunked back steps — 2 of 30 steps decode, same frames — and
-release on idle / request / close).
+right keyframe, chunked back steps — 2 of 30 steps decode, same frames — the
+landing warm-up, a held left arrow finding 120/120 frames already cached in a
+30-frame cache (111/120 with plain LRU eviction, which the test was checked to
+fail on), cancellation by a jump, and release on idle / request / close).
 
 **Callers must coalesce rapid single-frame steps via `scrubToFrame`, never
 call `seekToFrame` directly for repeatable user input (issue #115
@@ -7412,6 +7431,7 @@ a zoomed-in image keeps the same region centered instead of jumping.
 - `videoLog(msg, level)` — namespaced logger.
 - `STEP_CURSOR_IDLE_MS` (3000) — idle time before a paused-stepping stream closes.
 - `STEP_BACK_CHUNK` (24) — frames decoded and cached per backward step.
+- `STEP_BACK_WARM_MS` (250) — pause after landing on a frame before warming the chunk behind it.
 - `OnDemandVideoDecoder` — class. Selected methods: `init(source)`,
   `getFrame(frameIndex)` (mediabunny: via `_mbGetFrame`, the open stepping
   stream), `releaseStepCursor()`, `_initMediabunny(source)` /

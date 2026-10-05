@@ -75,29 +75,39 @@ try {
                 const t0 = performance.now(); for (let i = 1; i <= 60; i++) await show(s2 + i); held.push(60 / ((performance.now() - t0) / 1000));
                 out[mode] = { fwd: [med(fwd), p90(fwd)], back: [med(back), p90(back)], jump: [med(jump), p90(jump)], heldFps: held[0], same, compared };
             }
-            // held LEFT arrow: 72 steps back from a mid-recording frame, per back-step chunk size
+            // held LEFT arrow: 72 steps back from a mid-recording frame — as fast as frames come (throughput),
+            // and paced at 30 steps/s (a key's auto-repeat: a step taking > 50 ms is a visible hitch)
             window.LUCID_STEP_CURSOR = undefined;
             out.back = {};
             const s3 = 2000;
             const refPx = {};
-            for (const chunk of (window.__CHUNKS || [0, 8, 16, 24, 30])) {
+            const variants = window.__BACK_VARIANTS || [['off', 0, 0], ['chunk 24', 24, 0], ['chunk 24 + prefetch', 24, 1]];
+            for (const [label, chunk, prefetch] of variants) {
                 window.LUCID_STEP_BACK_CHUNK = chunk;
-                clear(); decs.forEach(d => { d._lastStepFrame = null; });
-                await show(s3);
-                const per = []; let peak = 0, same = 0, compared = 0;
-                const t0 = performance.now();
-                for (let i = 1; i <= 72; i++) {
-                    const { ms, bms } = await show(s3 - i); per.push(ms);
-                    peak = Math.max(peak, decs.reduce((a, d) => a + d._mbBackend.cache.size, 0));
-                    if (i % 9 === 0) {                                   // pixels vs no chunking, camera 0
-                        const p = px(bms[0]);
-                        if (chunk === 0) refPx[i] = p; else { compared++; if (refPx[i] && refPx[i].every((v, j) => v === p[j])) same++; }
+                window.LUCID_STEP_BACK_PREFETCH = prefetch ? undefined : 0;
+                const res = {};
+                for (const paced of [false, true]) {
+                    clear(); decs.forEach(d => { d._lastStepFrame = null; });
+                    await show(s3); await new Promise(r => setTimeout(r, 1500));   // settle (no prefetch in flight)
+                    const per = []; let same = 0, compared = 0;
+                    const t0 = performance.now();
+                    for (let i = 1; i <= 72; i++) {
+                        const ts0 = performance.now();
+                        const { ms, bms } = await show(s3 - i); per.push(ms);
+                        if (!paced && i % 9 === 0) {                     // pixels vs no chunking, camera 0
+                            const p = px(bms[0]);
+                            if (chunk === 0) refPx[i] = p; else { compared++; if (refPx[i] && refPx[i].every((v, j) => v === p[j])) same++; }
+                        }
+                        if (paced) { const wait = 1000 / 30 - (performance.now() - ts0); if (wait > 0) await new Promise(r => setTimeout(r, wait)); }
                     }
+                    const total = performance.now() - t0;
+                    res[paced ? 'paced' : 'fast'] = { med: med(per), p90: p90(per), max: Math.max(...per), stepsPerS: 72 / (total / 1000),
+                        hitches: per.filter(x => x > 50).length, hitchAt: per.map((x, i) => x > 50 ? `#${i + 1}:${Math.round(x)}ms` : null).filter(Boolean), same, compared };
                 }
-                const total = performance.now() - t0, bm = decs[0]._mbBackend.cache.values().next().value;
-                out.back[chunk] = { med: med(per), p90: p90(per), max: Math.max(...per), stepsPerS: 72 / (total / 1000),
-                    peakFrames: peak, peakMB: peak * (bm ? bm.width * bm.height * 4 : 0) / 1048576, same, compared };
+                res.peakFrames = decs.reduce((a, d) => a + d._mbBackend.cache.size, 0);
+                out.back[label] = res;
             }
+            window.LUCID_STEP_BACK_PREFETCH = undefined;
             window.LUCID_STEP_BACK_CHUNK = undefined;
             decs.forEach(d => d.close());
             return out;
@@ -107,8 +117,12 @@ try {
         for (const m of ['off', 'on']) console.log(`  cursor ${m.padEnd(3)}: step forward ${f(r[m].fwd)} · step back ${f(r[m].back)} · jump ${f(r[m].jump)} · held key ${r[m].heldFps.toFixed(1)} frames/s`);
         console.log(`  stepped frames pixel-identical on vs off: ${r.on.same}/${r.on.compared}`);
         console.log('  held left arrow, 72 steps back (all views):');
-        for (const [chunk, b] of Object.entries(r.back)) console.log(`    chunk ${String(chunk).padStart(2)}: median ${Math.round(b.med)} ms, p90 ${Math.round(b.p90)} ms, worst ${Math.round(b.max)} ms · ` +
-            `${b.stepsPerS.toFixed(1)} steps/s · peak cache ${b.peakFrames} frames ≈ ${Math.round(b.peakMB)} MB` + (chunk === '0' ? '' : ` · pixel-identical ${b.same}/${b.compared}`));
+        for (const [label, b] of Object.entries(r.back)) {
+            const f = b.fast, p = b.paced;
+            console.log(`    ${label.padEnd(20)} as fast as possible: ${f.stepsPerS.toFixed(1)} steps/s, worst ${Math.round(f.max)} ms · ` +
+                `at 30 steps/s: ${p.hitches} of 72 steps > 50 ms [${p.hitchAt.slice(0, 8).join(' ')}] (achieved ${p.stepsPerS.toFixed(1)}/s) · cache ${b.peakFrames} frames` +
+                (f.compared ? ` · pixel-identical ${f.same}/${f.compared}` : ''));
+        }
     }
 } finally {
     if (browser) await browser.close().catch(() => {});
