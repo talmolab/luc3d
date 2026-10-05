@@ -6757,9 +6757,17 @@ details[open] > summary.origin-rebase-block-title::before {
    1 s after (orange). The section colours are set inline from ID_SWITCH_SECTION_RGB
    (ui/id-switch-highlight.js), which the box in the views also wears. */
 .id-switch-pbar {
-  position: relative; height: 6px; margin-top: 5px; border-radius: 3px;
-  background: var(--bg-button); overflow: hidden;
+  position: relative; height: 6px; margin: 8px 0 3px;
   animation: id-switch-pbar-in 160ms ease-out;
+}
+/* The coloured track clips the fill and band to its rounded ends; the bar does not,
+   so the playhead can stand proud of it. */
+.id-switch-ptrack { position: absolute; inset: 0; border-radius: 3px; background-color: var(--bg-button); overflow: hidden; }
+/* The current frame: a line at the fill's leading edge, taller than the bar. */
+.id-switch-phead {
+  position: absolute; top: -4px; bottom: -4px; width: 2px; transform: translateX(-50%);
+  background: var(--text-primary); border-radius: 1px; box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.55);
+  pointer-events: none; transition: left 60ms linear;
 }
 @keyframes id-switch-pbar-in { from { opacity: 0; transform: scaleY(0.2); } to { opacity: 1; transform: none; } }
 .id-switch-pband { position: absolute; top: 0; bottom: 0; }
