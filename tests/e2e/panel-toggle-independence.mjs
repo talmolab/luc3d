@@ -162,10 +162,25 @@ try {
         };
     });
 
+    // Wait out every CSS transition on the panels. `getAnimations()` flushes
+    // style first, so a width written a moment ago has its transition CREATED
+    // by this call rather than slipping past it — a fixed sleep cannot promise
+    // that, since the transition only starts at the next style recalc and
+    // headless Chromium does not always produce a rendering update in time.
+    const settle = () => page.evaluate(async () => {
+        const els = ['infoPanelWrapper', 'infoPanel', 'viewport3dContainer']
+            .map(id => document.getElementById(id));
+        for (let i = 0; i < 10; i++) {
+            const running = els.flatMap(el => el.getAnimations({ subtree: false }));
+            if (!running.length) return;
+            await Promise.all(running.map(a => a.finished.catch(() => {})));
+        }
+    });
     const press = async (key) => {
         await page.evaluate(() => document.activeElement && document.activeElement.blur());
         await page.keyboard.press(key);
         await page.waitForTimeout(450); // CSS width transition is 250ms
+        await settle();
     };
     const step = async (n) => {
         for (let i = 0; i < n; i++) {
@@ -335,23 +350,40 @@ try {
     // splitHandle2 writes an inline width + min-width onto #infoPanel, which
     // outranks `.collapsed .info-panel { width: 0 }` exactly the way the 3D
     // container's inline width did — the same bug, one element over.
+    //
+    // A REAL drag of the handle, through the mousedown/mousemove/mouseup the
+    // app listens for (`setupDragHandle`), not a hand-written inline width —
+    // and then `settle()`, not a fixed sleep. `.info-panel` transitions
+    // `width`/`min-width` over 250ms, and this check used to read back after
+    // 100ms: on the runs where Chromium produced no rendering update in that
+    // window, the inline write had not even been STYLED yet, so the read's
+    // forced style recalc started the transition right there, at its 301px
+    // origin — "301 -> 301", about half the time.
     console.log('\nA resized info panel still collapses');
-    await page.evaluate(() => {
-        const p = document.getElementById('infoPanel');
-        p.style.width = '420px';
-        p.style.minWidth = '420px';
-    });
-    await page.waitForTimeout(100);
+    const DRAG_PX = 120;
+    const panelBefore = await page.evaluate(() => document.getElementById('infoPanel').offsetWidth);
+    const hb = await page.locator('#splitHandle2').boundingBox();
+    check(hb && hb.width > 0 && hb.height > 0, `info-panel split handle is laid out (${hb && hb.width}x${hb && hb.height})`);
+    const hx = hb.x + hb.width / 2, hy = hb.y + hb.height / 2;
+    check(await page.evaluate(([x, y]) => document.elementFromPoint(x, y) === document.getElementById('splitHandle2'), [hx, hy]),
+        'and is what a click at its centre hits');
+    await page.mouse.move(hx, hy);
+    await page.mouse.down();
+    await page.mouse.move(hx - DRAG_PX / 2, hy, { steps: 5 });
+    await page.mouse.move(hx - DRAG_PX, hy, { steps: 5 });
+    await page.mouse.up();
+    await settle();
     const widened = await geom();
-    check(widened.infoWidth > base.infoWidth + 20,
-        `info panel dragged wider (${base.infoWidth.toFixed(0)} -> ${widened.infoWidth.toFixed(0)}px)`);
+    check(Math.abs(widened.infoWidth - (base.infoWidth + DRAG_PX)) < 2
+        && panelBefore + DRAG_PX === await page.evaluate(() => document.getElementById('infoPanel').offsetWidth),
+        `info panel dragged ${DRAG_PX}px wider (${base.infoWidth.toFixed(0)} -> ${widened.infoWidth.toFixed(0)}px)`);
     await press('i');
     const widenedCollapsed = await geom();
     check(widenedCollapsed.infoCollapsed && widenedCollapsed.infoWidth < 2,
         `a dragged-wide info panel still collapses to 0 (${widenedCollapsed.infoWidth.toFixed(1)}px)`);
     await press('i');
     const widenedBack = await geom();
-    check(widenedBack.infoWidth > base.infoWidth + 20,
+    check(Math.abs(widenedBack.infoWidth - widened.infoWidth) < 2,
         `and comes back at the dragged width (${widenedBack.infoWidth.toFixed(0)}px)`);
 
     check(errs.length === 0, 'no page errors' + (errs.length ? ': ' + errs.slice(0, 3).join(' | ') : ''));
