@@ -9,9 +9,11 @@
  * ~4.5 ms plus a forced style recalc inside the video-frame callback, which
  * made playback drop frames (tests/e2e/_bench-playback.mjs).
  *
- * The risk of such a cache is showing something stale, so these assert PIXEL
- * equality against a full redraw, plus the fallbacks (scrolled window, resized
- * canvas) and that leaving playback mode drops the cache and redraws in full.
+ * The risk of such a cache is showing something stale, so these compare the
+ * canvas against a full redraw — bit-exactly where a snapshot is blitted, and
+ * by mean difference where the two sides are independently rasterized (see
+ * MAX_MEAN_DIFF) — plus the fallbacks (scrolled window, resized canvas) and
+ * that leaving playback mode drops the cache and redraws in full.
  *
  * Browser-only: needs a real 2D canvas for getImageData.
  */
@@ -75,25 +77,36 @@
         return c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
     }
 
-    // Near-equality, not bit-equality. A blitted snapshot IS bit-identical, but
-    // the fallback cases rasterize the same vector content twice, and a real
-    // GPU rasterizer (headed Chrome) is not bit-deterministic across two passes
-    // the way the headless software rasterizer is — measured: 18 bytes of
-    // 448,000 differing by <=2/255. A stale or shifted frame moves orders of
-    // magnitude more than that, so this still catches what the test is for.
-    var PIXEL_TOL = 8;          // per channel, out of 255
-    var PIXEL_FRAC = 0.001;     // at most 0.1% of channels may differ at all
+    // Bit-equality — the contract for the blit cases: restoring a snapshot
+    // reproduces the bytes exactly, so anything else is a real defect.
     function samePixels(a, b) {
         if (a.length !== b.length) return false;
-        var differing = 0;
-        for (var i = 0; i < a.length; i++) {
-            var d = a[i] > b[i] ? a[i] - b[i] : b[i] - a[i];
-            if (d === 0) continue;
-            if (d > PIXEL_TOL) return false;
-            differing++;
-        }
-        return differing <= a.length * PIXEL_FRAC;
+        for (var i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+        return true;
     }
+
+    // Mean absolute per-channel difference (0..255).
+    function meanAbsDiff(a, b) {
+        if (a.length !== b.length) return Infinity;
+        var sum = 0;
+        for (var i = 0; i < a.length; i++) sum += a[i] > b[i] ? a[i] - b[i] : b[i] - a[i];
+        return sum / a.length;
+    }
+
+    // The two FALLBACK cases cannot use bit-equality: they rasterize the same
+    // vector content twice and compare the passes. Chrome serves the first
+    // couple of getImageData calls on a canvas from the GPU and then gives up
+    // on acceleration and re-rasterizes in software, and the two engines do
+    // not agree to the byte (~13% of bytes differ, nearly all by 1/255); a
+    // real GPU is also not bit-reproducible once `setZoom` puts content on
+    // fractional device pixels (12 bytes differing by up to 15/255 at dpr 2 —
+    // which is why a fixed per-channel tolerance fitted at dpr 1 still failed
+    // on a Retina display). Compare by MEAN difference, not by bytes: byte
+    // counts do not separate the cases (same content across rasterizers moved
+    // 62,637 bytes, a genuinely stale frame 82,874), but the mean does —
+    // at most 0.27/255 versus 5.2/255, twenty times clear, in every
+    // configuration measured (headless/headed x dpr 1/2, Chromium and Chrome).
+    var MAX_MEAN_DIFF = 1.0;
 
     // Count full redraws via the most expensive layer.
     function spyTrackBars(tl) {
@@ -144,7 +157,7 @@
                 assertEqual(spy.count, 1, 'scrolled window must be fully redrawn, not blitted');
                 var fast = pixels(o.tl);
                 o.tl.redraw();
-                assertTrue(samePixels(fast, pixels(o.tl)), 'scrolled frame == full redraw');
+                assertTrue(meanAbsDiff(fast, pixels(o.tl)) <= MAX_MEAN_DIFF, 'scrolled frame == full redraw');
             } finally { cleanup(o); }
         });
 
@@ -159,7 +172,7 @@
                 assertEqual(spy.count, 0, 'fast path still used after resize');
                 var fast = pixels(o.tl);
                 o.tl.redraw();
-                assertTrue(samePixels(fast, pixels(o.tl)), 'post-resize fast frame == full redraw');
+                assertTrue(meanAbsDiff(fast, pixels(o.tl)) <= MAX_MEAN_DIFF, 'post-resize fast frame == full redraw');
             } finally { cleanup(o); }
         });
 
