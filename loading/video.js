@@ -2008,7 +2008,14 @@ export class VideoController {
                 for (var k = 0; k < n; k++) {
                     var view = cur[k];
                     var pend = pending[k];
-                    var pick = pickScheduledFrame(target, shown[k], pend ? pend.index : null, idx[k]);
+                    // No SECONDARY view may run ahead of the primary: the
+                    // schedule is a free-running clock, so on a >60 Hz display
+                    // `target` can reach a frame only some views have captured
+                    // yet, and those would paint it while the primary holds —
+                    // cameras one frame apart, with the overlay drawn at the
+                    // primary's index.
+                    var tk = (k === 0 || shown[0] == null) ? target : Math.min(target, shown[0]);
+                    var pick = pickScheduledFrame(tk, shown[k], pend ? pend.index : null, idx[k]);
                     if (pick === 'cap' && idx[k] !== shown[k]) {
                         if (view.ctx && view.canvas) {
                             if (caps[k]) view.ctx.drawImage(caps[k].frame, 0, 0, view.canvas.width, view.canvas.height);
