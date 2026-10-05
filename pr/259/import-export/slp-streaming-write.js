@@ -53,10 +53,10 @@
  * streams from the columnar store untouched.
  */
 
-import { _buildSioPoints } from './file-io.js?v=279c5feac5f3';
-import { points3dNodeCount } from '../pose/pose-data.js?v=279c5feac5f3';
-import { writeVisibilityMetadata } from './visibility-metadata.js?v=279c5feac5f3';
-import { writePlaneMetadata } from './plane-metadata.js?v=279c5feac5f3';
+import { _buildSioPoints } from './file-io.js?v=10aa69b44a20';
+import { points3dNodeCount } from '../pose/pose-data.js?v=10aa69b44a20';
+import { writeVisibilityMetadata } from './visibility-metadata.js?v=10aa69b44a20';
+import { writePlaneMetadata } from './plane-metadata.js?v=10aa69b44a20';
 
 function numAt(arr, i, dflt) {
     if (!arr || i < 0 || i >= arr.length) return dflt === undefined ? 0 : dflt;
