@@ -7883,6 +7883,15 @@ double-click docked a duplicate pane. `syncDockedViews()` re-derives the counts
 (and the dots) by walking `api.panels` through `panelRenderers`, and
 `setGridMode` calls it immediately after `fromJSON`.
 
+**`addAllViewsAsGrid()` leaves solo mode.** Laying every view out as a grid IS
+grid mode, so it sets `state.viewMode = 'grid'` and removes the solo chip
+(`#viewModeIndicator` + the dock's `has-view-indicator`). The loaders, session
+switches and `removeSession` all rebuild the dock with `clearAll()` +
+`addAllViewsAsGrid()`, and only `newProject` used to reset the mode — so a load
+made while a view was solo'd showed the grid with the mode still `'single'`, and
+`v` (a no-op when already solo) silently did nothing until `g`. Pinned by
+`tests/e2e/solo-view-navigation.mjs` §6.
+
 **Video display settings — brightness, contrast (issue #149) and rotation.**
 `populateVideoBrightnessTable`, `populateVideoContrastTable` and
 `populateVideoRotationTable` render the Visibility tab's per-view tables
