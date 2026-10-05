@@ -162,10 +162,22 @@ try {
         };
     });
 
+    // Wait for every running CSS transition to FINISH. A transition's clock
+    // is the document timeline, which only advances when the page produces a
+    // frame — and headless Chromium can go 150ms+ without one here (seen
+    // right after the 3D viewport is rebuilt), so a fixed sleep can read a
+    // width transition at 0% progress. Transitions only: they are finite,
+    // whereas `document.getAnimations()` could include an infinite animation
+    // and never settle. `getAnimations()` flushes style first, so a
+    // transition started by the preceding write is already listed.
+    const settle = () => page.evaluate(() => Promise.all(document.getAnimations()
+        .filter(a => a instanceof CSSTransition)
+        .map(a => a.finished.catch(() => {}))));
     const press = async (key) => {
         await page.evaluate(() => document.activeElement && document.activeElement.blur());
         await page.keyboard.press(key);
         await page.waitForTimeout(450); // CSS width transition is 250ms
+        await settle();
     };
     const step = async (n) => {
         for (let i = 0; i < n; i++) {
@@ -341,7 +353,8 @@ try {
         p.style.width = '420px';
         p.style.minWidth = '420px';
     });
-    await page.waitForTimeout(100);
+    // The width is transitioned (250ms); read it once it has landed.
+    await settle();
     const widened = await geom();
     check(widened.infoWidth > base.infoWidth + 20,
         `info panel dragged wider (${base.infoWidth.toFixed(0)} -> ${widened.infoWidth.toFixed(0)}px)`);

@@ -342,7 +342,21 @@ try {
     // panel — the two-table split is the claim being made about the operation,
     // so a fold made once must never be how the next re-base is confirmed.
     console.log('\n1b. The headline blocks fold, and do not remember it');
-    const readFold = () => page.evaluate(() => {
+    const readFold = () => page.evaluate(async () => {
+        // The caret's rotation is transitioned (120ms), and mid-transition the
+        // computed transform is an intermediate matrix — neither state — so
+        // wait for every running animation on the two summaries (their
+        // `::before` included, via `subtree`) to finish before reading. A
+        // fixed sleep was a race: 250ms once left 0.04° still to turn under a
+        // loaded full e2e run. `getAnimations()` flushes style first, so a
+        // transition started by the click just before is already listed.
+        const summaries = ['originRebaseCounts', 'originRebaseKeeps']
+            .map(id => document.getElementById(id)?.closest('details')
+                ?.querySelector(':scope > summary.origin-rebase-block-title'))
+            .filter(Boolean);
+        await Promise.all(summaries
+            .flatMap(s => s.getAnimations({ subtree: true }))
+            .map(a => a.finished.catch(() => {})));
         const one = (id) => {
             const t = document.getElementById(id);
             const d = t ? t.closest('details') : null;
@@ -409,10 +423,7 @@ try {
     const openH = fold.counts.blockH;
     await page.evaluate(() => document.getElementById('originRebaseCounts')
         .closest('details').querySelector('summary').click());
-    // The caret's rotation is transitioned (120ms), so let it land before
-    // reading it — mid-transition the computed transform is an intermediate
-    // matrix, which is neither state and would make the check a coin flip.
-    await page.waitForTimeout(250);
+    // readFold waits out the caret's rotation transition before reading it.
     fold = await readFold();
     check(!fold.counts.open && !fold.counts.bodyVisible &&
           fold.counts.blockH === fold.counts.summaryH,

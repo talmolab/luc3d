@@ -16,22 +16,22 @@ import {
     reprojectPoints,
     computeInstanceDistanceTo,
     hungarianAlgorithm
-} from './triangulation.js?v=0a12c3c47adf';
-import { CrossViewTracker, Detection } from './cross-view-tracker.js?v=0a12c3c47adf';
-import { InstanceGroup, points3dNodeCount, hasPoint3d, readPoint3d } from './pose-data.js?v=0a12c3c47adf';
+} from './triangulation.js?v=724de9b83ccb';
+import { CrossViewTracker, Detection } from './cross-view-tracker.js?v=724de9b83ccb';
+import { InstanceGroup, points3dNodeCount, hasPoint3d, readPoint3d } from './pose-data.js?v=724de9b83ccb';
 
 // Pass 3i-1: tracker UI/integration (was in app.js)
-import { state, interactionManager, timeline, viewport3d, getActiveSession } from '../ui/app-state.js?v=0a12c3c47adf';
-import { getNodeWeightArray, getTrackingThresholds, getTrackingThreshold, isCameraTracked } from '../ui/settings.js?v=0a12c3c47adf';
-import { setStatus, hideLoading } from '../import-export/save-load.js?v=0a12c3c47adf';
-import { showLoadingProgress, createProgressPacer, yieldToPaint } from '../ui/loading-overlay.js?v=0a12c3c47adf';
-import { loadAllLazyFrames, sweepLazyFrameWindows } from './triangulation.js?v=0a12c3c47adf';
-import { drawAllOverlays, showPredictedOnly, PREDICTED_ONLY_NOTE } from '../ui/rendering.js?v=0a12c3c47adf';
-import { updateInfoPanel } from '../ui/info-panel.js?v=0a12c3c47adf';
-import { setColorByIdentity } from '../ui/color-by.js?v=0a12c3c47adf';
-import { runIdSwitchChecks, clearIdSwitchResults } from '../ui/id-switch-modal.js?v=0a12c3c47adf';
-import { collapseTimeline } from '../ui/timeline-controller.js?v=0a12c3c47adf';
-import { collapseViewport3D } from '../ui/panel-visibility.js?v=0a12c3c47adf';
+import { state, interactionManager, timeline, viewport3d, getActiveSession } from '../ui/app-state.js?v=724de9b83ccb';
+import { getNodeWeightArray, getTrackingThresholds, getTrackingThreshold, isCameraTracked } from '../ui/settings.js?v=724de9b83ccb';
+import { setStatus, hideLoading } from '../import-export/save-load.js?v=724de9b83ccb';
+import { showLoadingProgress, createProgressPacer, yieldToPaint } from '../ui/loading-overlay.js?v=724de9b83ccb';
+import { loadAllLazyFrames, sweepLazyFrameWindows } from './triangulation.js?v=724de9b83ccb';
+import { drawAllOverlays, showPredictedOnly, PREDICTED_ONLY_NOTE } from '../ui/rendering.js?v=724de9b83ccb';
+import { updateInfoPanel } from '../ui/info-panel.js?v=724de9b83ccb';
+import { setColorByIdentity } from '../ui/color-by.js?v=724de9b83ccb';
+import { runIdSwitchChecks, clearIdSwitchResults } from '../ui/id-switch-modal.js?v=724de9b83ccb';
+import { collapseTimeline } from '../ui/timeline-controller.js?v=724de9b83ccb';
+import { collapseViewport3D } from '../ui/panel-visibility.js?v=724de9b83ccb';
 
 /**
  * A frame index as the USER sees it: 1-based.

@@ -19,7 +19,7 @@
 // what a plane node is — the input is a flat `points3d` and the output is a
 // centroid and a normal.
 
-import { points3dNodeCount, readPoint3d } from './pose-data.js?v=0a12c3c47adf';
+import { points3dNodeCount, readPoint3d } from './pose-data.js?v=724de9b83ccb';
 
 /**
  * Jacobi eigenvalue algorithm for an NxN symmetric matrix.
