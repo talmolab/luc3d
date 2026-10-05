@@ -28,21 +28,21 @@ import {
     state,
     videoController, interactionManager, viewport3d, timeline, paneManager,
     setVideoController, setPaneManager,
-} from './app-state.js?v=be841f141e39';
-import { FrameGroup, UnlinkedInstance, Camera, someValidPoint3d } from '../pose/pose-data.js?v=be841f141e39';
+} from './app-state.js?v=ca985068d033';
+import { FrameGroup, UnlinkedInstance, Camera, someValidPoint3d } from '../pose/pose-data.js?v=ca985068d033';
 import {
     triangulateAndReproject, storeReprojectedInstances, getInstanceGroupsForFrame,
     sessionHasCalibration, resolveTriangulationMethod,
-} from '../pose/triangulation.js?v=be841f141e39';
+} from '../pose/triangulation.js?v=ca985068d033';
 import {
     cellResizeObserver,
     createViewForVideoFile,
     rebuildVideoController,
     fitCanvasesToCells,
     updateTotalFrames,
-} from '../loading/session-loader.js?v=be841f141e39';
-import { OnDemandVideoDecoder } from '../loading/video.js?v=be841f141e39';
-import { setStatus, showLoading, hideLoading, quickSave, markDirty } from '../import-export/save-load.js?v=be841f141e39';
+} from '../loading/session-loader.js?v=ca985068d033';
+import { OnDemandVideoDecoder } from '../loading/video.js?v=ca985068d033';
+import { setStatus, showLoading, hideLoading, quickSave, markDirty } from '../import-export/save-load.js?v=ca985068d033';
 import {
     CONTRAST_MIN, CONTRAST_MAX, clampContrast,
     BRIGHTNESS_MIN, BRIGHTNESS_MAX, clampBrightness,
@@ -50,26 +50,26 @@ import {
     buildVideoFilter, getSessionContrast, setSessionContrast,
     getSessionBrightness, setSessionBrightness,
     getSessionRotation, setSessionRotation,
-} from './video-filters.js?v=be841f141e39';
+} from './video-filters.js?v=ca985068d033';
 // `clampRotation` moved to the dependency-free `video-filters.js` so the test
 // runners can bridge it; re-exported here because `ui/ui-wiring.js` (and the
 // module map) have always imported it from this module.
 export { clampRotation };
-import { drawAllOverlays, setReprojErrorVisible } from './rendering.js?v=be841f141e39';
+import { drawAllOverlays, setReprojErrorVisible } from './rendering.js?v=ca985068d033';
 // `ui/ui-wiring.js` imports this module, so this is a cycle — hoist-safe
 // because the only read is inside the view strip's click handler, which cannot
 // run during module evaluation.
-import { setSoloView } from './ui-wiring.js?v=be841f141e39';
-import { updateInfoPanel, populateTimelineVisibility } from './info-panel.js?v=be841f141e39';
-import { refreshIdSwitchPanel } from './id-switch-modal.js?v=be841f141e39';
+import { setSoloView } from './ui-wiring.js?v=ca985068d033';
+import { updateInfoPanel, populateTimelineVisibility } from './info-panel.js?v=ca985068d033';
+import { refreshIdSwitchPanel } from './id-switch-modal.js?v=ca985068d033';
 // `autoAssignState` is a mutable binding tracked via ESM live binding.
 // The cycle (identity-assignment imports panelRenderers from here) is
 // hoist-safe because both reads are inside function bodies.
-import { autoAssignState } from './identity-assignment.js?v=be841f141e39';
+import { autoAssignState } from './identity-assignment.js?v=ca985068d033';
 
 // Pass 3i-3: setup3DViewport moved to pose/initialization.js.
-import { setup3DViewport } from '../pose/initialization.js?v=be841f141e39';
-import { getLoadingProgressModal } from './loading-progress-modal.js?v=be841f141e39';
+import { setup3DViewport } from '../pose/initialization.js?v=ca985068d033';
+import { getLoadingProgressModal } from './loading-progress-modal.js?v=ca985068d033';
 
 // ============================================
 // Dockview Pane Manager
