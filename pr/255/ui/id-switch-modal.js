@@ -25,16 +25,17 @@
  * import-export/save-load.js (setStatus).
  */
 
-import { state, getActiveSession } from './app-state.js?v=fd8d087de46d';
-import { setSeekbarSwitchMarkers } from './seekbar-markers.js?v=fd8d087de46d';
-import { setIdSwitchHighlight, updateIdSwitchHighlight, ID_SWITCH_SECTION_RGB } from './id-switch-highlight.js?v=fd8d087de46d';
-import { setStatus, markDirty } from '../import-export/save-load.js?v=fd8d087de46d';
-import { showLoadingProgress, hideLoading, yieldToPaint } from './loading-overlay.js?v=fd8d087de46d';
-import { getTrackingThreshold } from './settings.js?v=fd8d087de46d';
-import { checkSizeSwitches, checkImageSwitches } from '../pose/id-switch-check.js?v=fd8d087de46d';
-import { hasWebGPU, createImageEmbedder, IMAGE_MODEL_MB, formatEmbedTiming } from './image-embedder.js?v=fd8d087de46d';
+import { state, getActiveSession } from './app-state.js?v=9208f4cf214f';
+import { setSeekbarSwitchMarkers } from './seekbar-markers.js?v=9208f4cf214f';
+import { setIdSwitchHighlight, updateIdSwitchHighlight, refreshIdSwitchHighlight, ID_SWITCH_SECTION_RGB } from './id-switch-highlight.js?v=9208f4cf214f';
+import { setStatus, markDirty } from '../import-export/save-load.js?v=9208f4cf214f';
+import { showLoadingProgress, hideLoading, yieldToPaint } from './loading-overlay.js?v=9208f4cf214f';
+import { getTrackingThreshold } from './settings.js?v=9208f4cf214f';
+import { checkSizeSwitches, checkImageSwitches } from '../pose/id-switch-check.js?v=9208f4cf214f';
+import { hasWebGPU, createImageEmbedder, IMAGE_MODEL_MB, formatEmbedTiming } from './image-embedder.js?v=9208f4cf214f';
 import { idSwitchRowKey as rowKey, idSwitchPrimary as primaryOf, idSwitchMarkers as markersOf, idSwitchOnsets as countOnsets,
-         idSwitchEncounterCount as encounterCount, linkIdSwitchResults as tagAndLink } from './id-switch-review.js?v=fd8d087de46d';
+         idSwitchEncounterCount as encounterCount, linkIdSwitchResults as tagAndLink,
+         idSwitchFixPlan, idSwitchFixFor, idSwitchRenameForFix } from './id-switch-review.js?v=9208f4cf214f';
 
 const CUE_LABEL = { size: 'body size', image: 'images' };
 
@@ -94,6 +95,13 @@ var _navigate = null;
 
 /** Register `navigateToFrame` for result rows (called once from ui/ui-wiring.js). */
 export function setIdSwitchNavigator(fn) { _navigate = fn; }
+
+// What the app repaints after a fix changed identities (overlays, 3D, info panel, timeline), registered
+// once by ui-wiring for the same reason as the navigator: this module stays a leaf.
+var _refresh = null;
+
+/** Register the repaint run after a fix / undo changes identities (called once from ui/ui-wiring.js). */
+export function setIdSwitchRefresher(fn) { _refresh = fn; }
 
 /**
  * The recording's frame rate, and whether it was measured from the video. The
@@ -249,8 +257,11 @@ export async function runIdSwitchChecks(opts) {
     var ran = cues.filter(function (c) { return results[c] && results[c].ok; });
     if (ran.length) {
         // A cue that ran replaces its own earlier results; a cue that didn't run (or failed) keeps them.
-        var st = session._idSwitch || (session._idSwitch = { results: {}, reviewed: new Set(), showRepeats: false, current: null });
+        var st = session._idSwitch || (session._idSwitch = { results: {}, reviewed: new Set(), fixes: [], showRepeats: false, current: null });
         ran.forEach(function (c) { st.results[c] = results[c]; });
+        // Fixes are now part of the identities this run analysed, so they cannot be undone from its rows
+        // (an undo would also rename rows that were scored on the fixed labels). The swaps themselves stay.
+        st.fixes = [];
         if (deps.navigateToFrame) st.navigate = deps.navigateToFrame;
         tagAndLink(st.results);
         var live = new Set(listRows(st, true).map(rowKey));
@@ -385,6 +396,112 @@ export function updateIdSwitchProgress(frame) {
     _prog.fill.style.width = (100 * f).toFixed(2) + '%';
 }
 
+// ---- Fixing a switch ---------------------------------------------------------------
+// "Fix switch…" on the selected row swaps the pair's identities over the stretch the detector says was
+// crossed (idSwitchFixPlan, ui/id-switch-review.js), after a confirmation that names the frames. The
+// row then stays, ticked and marked Fixed, and the view returns to its lead-in so playing it shows the
+// corrected labels. Undo (the latest fix only — later fixes may build on it) swaps the same frames back.
+
+function identityIdByName(session, name) {
+    var ids = (session && session.identities) || [];
+    for (var i = 0; i < ids.length; i++) if (ids[i] && ids[i].name === name) return ids[i].id;
+    return null;
+}
+
+/** Repaint everything that shows identities, then this tab and the box in the views. */
+function afterIdentityChange(session) {
+    if (_refresh) _refresh();
+    refreshIdSwitchPanel(session);
+    refreshIdSwitchHighlight();
+}
+
+/** The confirmation dialog for fixing row `f`. Cancel / Esc change nothing. */
+function openFixDialog(session, st, f) {
+    var res = st.results[f.cue] || st.results.size;
+    var plan = idSwitchFixPlan(f, res, { currentFrame: state.currentFrame, totalFrames: state.totalFrames });
+    if (!plan) { setStatus('Nothing to fix here: the stretch this switch covers is empty', 'warning'); return; }
+    var idA = identityIdByName(session, plan.nameA), idB = identityIdByName(session, plan.nameB);
+    if (idA == null || idB == null) {
+        setStatus('Cannot fix: identity "' + (idA == null ? plan.nameA : plan.nameB) + '" is not in this session', 'error');
+        return;
+    }
+    var fr = function (x) { return 'frame ' + (x + 1).toLocaleString(); };
+    var startWhy, endWhy;
+    if (f.kind === 'end') {
+        startWhy = plan.edge == null ? 'the start of the video, where the swapped stretch begins'
+            : 'just after their encounter at ' + fmtTenths(plan.edge) + ', where the labels first look swapped';
+        endWhy = plan.start === 'paused' ? 'just before the frame you are paused on' : 'where they separate (the end of the red section)';
+    } else {
+        startWhy = plan.start === 'paused' ? 'the frame you are paused on' : 'where they separate (just after the red section)';
+        endWhy = plan.edge == null ? 'the end of the video'
+            : 'the end of their next encounter (' + fmtTenths(plan.edge) + '), after which the labels look right again';
+    }
+    var overlay = document.createElement('div');
+    overlay.className = 'multi-frame-modal-overlay';
+    overlay.innerHTML = '<div class="multi-frame-modal id-switch-fix-modal" role="dialog" aria-labelledby="idSwitchFixTitle">' +
+        '<h3 id="idSwitchFixTitle">Fix ID switch</h3>' +
+        '<p>Swap ' + idName(session, plan.nameA) + ' ↔ ' + idName(session, plan.nameB) + ' on <b>frames ' +
+        (plan.from + 1).toLocaleString() + '–' + (plan.to + 1).toLocaleString() + '</b> (' + fmtTenths(plan.from) + '–' +
+        fmtTenths(plan.to) + '), in every camera view.</p>' +
+        '<ul class="id-switch-fix-why"><li>Starts at ' + fr(plan.from) + ': ' + startWhy + '.</li>' +
+        '<li>Ends at ' + fr(plan.to) + ': ' + endWhy + '.</li></ul>' +
+        (f.followOf != null ? '<p class="id-switch-fix-warn">This flag follows the switch at ' + fmtTime(f.followOf) +
+            ', and is often a side effect of it. Fix that one first if you have not.</p>' : '') +
+        '<p class="id-switch-fix-tip">To start somewhere else, pause inside the red section and click Fix switch again.</p>' +
+        '<div class="modal-actions"><button id="idSwitchFixCancel">Cancel</button>' +
+        '<button id="idSwitchFixOk" class="primary">Swap identities</button></div></div>';
+    document.body.appendChild(overlay);
+    var close = function () { document.removeEventListener('keydown', onKey, true); overlay.remove(); };
+    // Capture phase, and every key stops here: the app's shortcuts must not act under an open dialog.
+    // Enter / Space still press the focused button (a default action, not a listener).
+    var onKey = function (e) {
+        e.stopPropagation();
+        if (e.key === 'Escape') { e.preventDefault(); close(); }
+    };
+    document.addEventListener('keydown', onKey, true);
+    overlay.querySelector('#idSwitchFixCancel').addEventListener('click', close);
+    overlay.addEventListener('mousedown', function (e) { if (e.target === overlay) close(); });
+    overlay.querySelector('#idSwitchFixOk').addEventListener('click', function () {
+        close();
+        applyFix(session, st, f, plan, idA, idB);
+    });
+    overlay.querySelector('#idSwitchFixOk').focus();
+}
+
+/** Swap, record, rename the rows the swap re-labels, then replay the row from its lead-in. */
+function applyFix(session, st, f, plan, idA, idB) {
+    var r = session.swapIdentitiesInRange(plan.from, plan.to, idA, idB);
+    var fix = { key: plan.key, partnerKey: plan.partnerKey, nameA: plan.nameA, nameB: plan.nameB,
+                from: plan.from, to: plan.to, idA: idA, idB: idB };
+    (st.fixes || (st.fixes = [])).push(fix);
+    idSwitchRenameForFix(st, fix);
+    st.reviewed.add(fix.key);
+    st.current = fix.key;
+    markDirty();
+    var nav = st.navigate || _navigate;
+    if (nav) nav(idSwitchLeadInFrame(f, state.fps));          // back to the lead-in: play to see the fixed labels
+    afterIdentityChange(session);
+    updateIdSwitchProgress(state.currentFrame);
+    setStatus('Fixed: swapped ' + plan.nameA + ' ↔ ' + plan.nameB + ' on frames ' + (plan.from + 1).toLocaleString() + '–' +
+        (plan.to + 1).toLocaleString() + ' (' + r.frames.toLocaleString() + ' tracked frames changed) — press play to check it', 'success');
+}
+
+/** Swap the latest fix's frames back (the swap is its own inverse) and forget it. */
+function undoLastFix(session, st) {
+    var fix = st.fixes && st.fixes[st.fixes.length - 1];
+    if (!fix) return;
+    var idA = identityIdByName(session, fix.nameA), idB = identityIdByName(session, fix.nameB);
+    if (idA == null || idB == null) { setStatus('Cannot undo: identity "' + (idA == null ? fix.nameA : fix.nameB) + '" is gone', 'error'); return; }
+    session.swapIdentitiesInRange(fix.from, fix.to, idA, idB);
+    idSwitchRenameForFix(st, fix);
+    st.fixes.pop();
+    markDirty();
+    afterIdentityChange(session);
+    updateIdSwitchProgress(state.currentFrame);
+    setStatus('Undid the fix: ' + fix.nameA + ' ↔ ' + fix.nameB + ' swapped back on frames ' + (fix.from + 1).toLocaleString() + '–' +
+        (fix.to + 1).toLocaleString(), 'success');
+}
+
 /** An identity name in that identity's colour (the one the overlays and timeline use), when the session knows it. */
 function idName(session, name) {
     var ids = (session && session.identities) || [], hit = null;
@@ -399,7 +516,9 @@ function rowHtml(session, st, f, both) {
     var note = f.continues ? 'still swapped'
         : f.followOf != null ? 'follows the switch at ' + fmtTime(f.followOf)
         : f.kind === 'end' ? 'labelling changes here; earlier encounters look swapped' : '';
+    var fixed = idSwitchFixFor(st, f);
     return '<div class="id-switch-row cue-' + cue + (f.continues || f.followOf != null ? ' is-repeat' : '') + (rev ? ' is-reviewed' : '') +
+        (fixed ? ' is-fixed' : '') +
         (st.current === key ? ' is-current' : '') + '" data-frame="' + f.frame + '" data-go="' + idSwitchLeadInFrame(f, state.fps) +
         '" data-key="' + escapeHtml(key) + '">' +
         '<input type="checkbox" class="id-switch-tick" title="Reviewed"' + (rev ? ' checked' : '') + '>' +
@@ -408,7 +527,23 @@ function rowHtml(session, st, f, both) {
         '<span class="id-switch-score" title="Score' + (f.agree ? ' (size / images)' : '') + '">' + score + '</span></div>' +
         '<div class="id-switch-line2">' + spanHtml(f) +
         (both ? ' · ' + (cue === 'both' ? '<b>Both</b>' : cue === 'size' ? 'size' : 'images') : '') +
-        (note ? ' · ' + note : '') + '</div>' + (st.current === key ? progressHtml(f) : '') + '</div></div>';
+        (fixed ? ' · <span class="id-switch-fixed">Fixed</span>' : '') +
+        (note ? ' · ' + note : '') + '</div>' + (st.current === key ? selectedHtml(st, f) : '') + '</div></div>';
+}
+
+/** What the selected row shows under its lines: the progress bar, then Fix switch… (or what was fixed, and Undo). */
+function selectedHtml(st, f) {
+    var fix = idSwitchFixFor(st, f), last = st.fixes && st.fixes.length ? st.fixes[st.fixes.length - 1] : null;
+    var act;
+    if (fix) {
+        act = '<span class="id-switch-fixed-note">Fixed: ' + escapeHtml(fix.nameA) + ' ↔ ' + escapeHtml(fix.nameB) +
+            ' swapped on frames ' + (fix.from + 1).toLocaleString() + '–' + (fix.to + 1).toLocaleString() + '</span>' +
+            (fix === last ? '<button class="panel-btn id-switch-undo" title="Swap the same frames back">Undo fix</button>' : '');
+    } else if (!f.continues) {
+        act = '<button class="panel-btn id-switch-fix" title="Swap these two identities over the frames this switch covers — ' +
+            'a dialog shows exactly which, before anything changes">Fix switch…</button>';
+    } else return progressHtml(f);
+    return progressHtml(f) + '<div class="id-switch-actions">' + act + '</div>';
 }
 
 /** "close 2:00.3–2:01.2 (frames 7,218–7,317) [end ⇥]": the encounter, and a jump to its end. */
@@ -478,7 +613,8 @@ export function refreshIdSwitchPanel(session) {
         host.querySelectorAll('.id-switch-pbar').forEach(function (b) { b.remove(); });
         row.classList.add('is-current');
         var f = byKey.get(row.dataset.key);
-        if (f) row.querySelector('.id-switch-main').insertAdjacentHTML('beforeend', progressHtml(f));   // pops up at the selected row
+        host.querySelectorAll('.id-switch-actions').forEach(function (b) { b.remove(); });
+        if (f) row.querySelector('.id-switch-main').insertAdjacentHTML('beforeend', selectedHtml(st, f));   // pops up at the selected row
         _progStale = true;
         highlightRow(f);
         if (nav) nav(parseInt(toEnd ? row.dataset.frame : row.dataset.go, 10));
@@ -487,6 +623,8 @@ export function refreshIdSwitchPanel(session) {
     host.querySelector('#idSwitchList').addEventListener('click', function (e) {
         var row = e.target.closest('.id-switch-row');
         if (!row) return;
+        if (e.target.closest('.id-switch-fix')) { var fr = byKey.get(row.dataset.key); if (fr) openFixDialog(session, st, fr); return; }
+        if (e.target.closest('.id-switch-undo')) { undoLastFix(session, st); return; }
         if (e.target.classList.contains('id-switch-tick')) {
             if (e.target.checked) st.reviewed.add(row.dataset.key); else st.reviewed.delete(row.dataset.key);
             st.current = row.dataset.key;

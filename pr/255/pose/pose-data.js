@@ -2199,6 +2199,28 @@ export class Session {
      *   least one change.
      */
     swapIdentitiesForward(startFrame, identityA, identityB) {
+        return this.swapIdentitiesInRange(startFrame, Infinity, identityA, identityB);
+    }
+
+    /**
+     * `swapIdentitiesForward` bounded on BOTH sides: exchange two identities on
+     * frames `startFrame..endFrame` (inclusive), in every view. This is what
+     * fixing a flagged ID switch means (ui/id-switch-modal.js): the detector says
+     * the labels were crossed from one encounter until the pair's next one, so
+     * the frames after that are already right and must not be touched.
+     *
+     * The same two structures as `swapIdentitiesForward`, the same single pass,
+     * and the same by-VALUE semantics (no track continuity needed). It is its own
+     * inverse: applying it twice with the same arguments restores both
+     * structures exactly, which is how a fix is undone.
+     *
+     * @param {number} startFrame inclusive
+     * @param {number} endFrame   inclusive (`Infinity` = end of the project)
+     * @param {number} identityA
+     * @param {number} identityB
+     * @returns {{entries:number, groups:number, frames:number}}
+     */
+    swapIdentitiesInRange(startFrame, endFrame, identityA, identityB) {
         var entries = 0, groups = 0, frames = 0;
         if (identityA == null || identityB == null || identityA === identityB) {
             return { entries: 0, groups: 0, frames: 0 };
@@ -2218,13 +2240,13 @@ export class Session {
                 if (!parts) continue;
                 f = parts.frameIdx;
             }
-            if (f < startFrame) continue;
+            if (f < startFrame || f > endFrame) continue;
             this.frameIdentityMap.set(k, v === identityA ? identityB : identityA);
             entries++;
         }
         // Pass 2 — group-level identity (whole-project placeholders).
         for (var [gF, gList] of this.instanceGroups) {
-            if (gF < startFrame) continue;
+            if (gF < startFrame || gF > endFrame) continue;
             var touched = false;
             for (var gi = 0; gi < gList.length; gi++) {
                 var g = gList[gi];

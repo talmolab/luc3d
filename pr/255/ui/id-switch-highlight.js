@@ -30,8 +30,8 @@
  * `updateIdSwitchProgress`).
  */
 
-import { state } from './app-state.js?v=fd8d087de46d';
-import { makeVideoToCanvasTransform } from './overlays.js?v=fd8d087de46d';
+import { state } from './app-state.js?v=9208f4cf214f';
+import { makeVideoToCanvasTransform } from './overlays.js?v=9208f4cf214f';
 
 var _target = null;          // {nameA, nameB, p0, s, e, p1}
 var _frame = -1;             // frame the boxes were computed for
@@ -54,6 +54,12 @@ export function setIdSwitchHighlight(target) {
         _target.p0 === target.p0 && _target.s === target.s && _target.e === target.e && _target.p1 === target.p1;
     if (same) return;
     _target = target ? { nameA: target.nameA, nameB: target.nameB, p0: target.p0, s: target.s, e: target.e, p1: target.p1 } : null;
+    _frame = -1;
+    updateIdSwitchHighlight(state.currentFrame);
+}
+
+/** Recompute the boxes at the current frame — after the identities themselves changed (a fixed switch). */
+export function refreshIdSwitchHighlight() {
     _frame = -1;
     updateIdSwitchHighlight(state.currentFrame);
 }
