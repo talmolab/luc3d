@@ -65,10 +65,39 @@
  * derivation: `figs/out/tmp/corr12_run.log` and the manuscript pick-up notes in
  * the `talmolab/luc3d@eric/figs` worktree (2026-08-13/14).
  *
+ * -----------------------------------------------------------------------
+ * THE MATCH GATE (2026-10-03) — a second divergence from the reference
+ * -----------------------------------------------------------------------
+ * The reference Hungarian gives every target a detection whenever a view has
+ * at least as many detections as there are targets, however bad the match:
+ * `velocity_threshold` / `distance_threshold` only drive the adjacency
+ * negative, they never reject. So one extra detection (a reflection in the
+ * arena wall) plus one target with nothing real to follow (a spare target
+ * left over from an earlier false birth) is enough for the solver to trade a
+ * correct match away. Measured on a real 5-mouse, 8-camera recording
+ * (194366_05mice_flippers, frame 3,620, Camera4_topR): the spare target's
+ * forced match was cheapest on the real mouse (-26.7) while that mouse's own
+ * target scored +55.9 on it, and the reflection scored about -600 for both.
+ * Summed, giving the mouse to the spare and its own target the reflection
+ * won by ~21, and the mouse's identity moved to the reflection and stayed
+ * there.
+ * `matchGate` (default on, 0 = off and reproduces the pre-gate tracker
+ * exactly) splits each view's assignment into two stages:
+ *   1. **Tracked targets** (still holding a detection after stale eviction)
+ *      are matched with one "no match" option each at adjacency 0, so a
+ *      tracked target only takes a detection it scores POSITIVELY on — i.e.
+ *      within roughly `distanceThreshold` of where it is — and never has to
+ *      take a bad one to make the totals work.
+ *   2. **Lost targets** (every detection evicted as stale — the animal was
+ *      unseen for `stale` frames) then compete for the leftovers exactly as
+ *      before, forced. That is how an animal that vanished and reappeared
+ *      elsewhere is re-acquired; gating them too would orphan it for good.
+ *
  * Faithful-port quirks still preserved from the reference (do NOT "fix" these
  * without new measurement — they were not implicated by the fig8-bench search):
  *   - `velocity_threshold` / `distance_threshold` are SOFT (drive the cost term
- *     negative), not hard gates; negative-cost matches are not filtered out.
+ *     negative), not hard gates. With `matchGate` off, negative-cost matches
+ *     are not filtered out; with it on, see "THE MATCH GATE" above.
  *   - The 3D term ignores the time gap (Δt forced to 0 in the reference).
  *   - 3D velocity is zero (no motion prediction); re-triangulation is plain DLT
  *     over all of a target's (now freshness-filtered) per-view detections.
@@ -85,8 +114,8 @@ import {
     hungarianAlgorithm,
     computeFundamentalMatrix,
     epipolarErrorMatrix,
-} from './triangulation.js';
-import { points3dNodeCount, readPoint3d } from './pose-data.js';
+} from './triangulation.js?v=cd51175df002';
+import { points3dNodeCount, readPoint3d } from './pose-data.js?v=cd51175df002';
 
 // ---------------------------------------------------------------------------
 // Normalized-coordinate helpers
@@ -134,6 +163,7 @@ function Target(trackId) {
     this.identityId = null;       // filled at commit time
     this._touched = false;        // got a matched detection this frame (sync: re-fuse at frame end)
     this._snapMean = null;        // frame-start frameIdxMean() snapshot (sync); null outside a frame
+    this._lost = false;           // no detection left at frame start (match gate: matched ungated)
 }
 
 Target.prototype.frameIdxMean = function () {
@@ -200,6 +230,9 @@ export class CrossViewTracker {
      *   that frame's association runs. 0 disables eviction (reproduces the
      *   pre-fix, unbounded-staleness reference behavior) for reproducibility/
      *   debugging; any positive number is floored to an integer.
+     *   matchGate (1) — THE MATCH GATE (see file header). A tracked target only
+     *   takes a detection it scores positively on; lost targets re-acquire
+     *   ungated. 0 disables it (reproduces the pre-gate forced assignment).
      */
     constructor(hp) {
         hp = hp || {};
@@ -216,6 +249,8 @@ export class CrossViewTracker {
         this.nodeWeights = Array.isArray(hp.nodeWeights) ? hp.nodeWeights : null;
         // Stale-anchor fix (see file header). Default 20; 0 = off (pre-fix behavior).
         this.stale = Math.max(0, Math.floor(num(hp.stale, 20)));
+        // Match gate (see file header). Default on; 0 = off (pre-gate behavior).
+        this.matchGate = num(hp.matchGate, 1) > 0;
 
         this.targets = [];                 // list of live Target
         this.unmatchedByCam = new Map();   // camName -> Detection[] (births buffer)
@@ -272,6 +307,9 @@ export class CrossViewTracker {
             // camera processed later this frame doesn't see a mean already moved
             // by an earlier camera's match this same frame.
             tg._snapMean = tg.frameIdxMean();
+            // Match gate: a target with nothing left to anchor it is "lost" for
+            // the whole frame, even once an earlier camera re-acquires it.
+            tg._lost = tg.detsByCam.size === 0;
         }
     }
 
@@ -284,34 +322,26 @@ export class CrossViewTracker {
             if (tg._touched) tg._retriangulate();
             tg._touched = false;
             tg._snapMean = null;
+            tg._lost = false;
         }
     }
 
     _trackView(dets, cam) {
-        var self = this;
         var N = this.targets.length, M = dets.length;
         var matchedDet = new Array(M).fill(false);
 
         if (N > 0 && M > 0) {
-            // adjacency[t][d] = 2D term + 3D term (higher = better). We negate for
-            // LUCID's minimizing Hungarian (== maximize adjacency).
-            var cost = [];
-            for (var t = 0; t < N; t++) {
-                cost[t] = [];
-                for (var d = 0; d < M; d++) {
-                    cost[t][d] = -this._adjacency(this.targets[t], dets[d], cam);
+            if (!this.matchGate) {
+                this._assign(this.targets, dets, cam, matchedDet, false);
+            } else {
+                // Match gate (see file header): tracked targets first, gated;
+                // lost targets then take what is left, forced, as before.
+                var tracked = [], lost = [];
+                for (var t = 0; t < N; t++) {
+                    (this.targets[t]._lost ? lost : tracked).push(this.targets[t]);
                 }
-            }
-            var assign = hungarianAlgorithm(cost);   // assign[t] = det col, or out-of-range
-            for (var ti = 0; ti < N; ti++) {
-                var di = assign[ti];
-                if (di != null && di >= 0 && di < M) {
-                    // Sync fix: record the match now but defer re-triangulation to
-                    // _endFrame(), so a later camera THIS frame is scored against
-                    // the same points3d an earlier camera this frame was.
-                    this.targets[ti]._deferDetection(dets[di]);
-                    matchedDet[di] = true;
-                }
+                this._assign(tracked, dets, cam, matchedDet, true);
+                this._assign(lost, dets, cam, matchedDet, false);
             }
         }
 
@@ -321,6 +351,38 @@ export class CrossViewTracker {
         this.unmatchedByCam.set(cam.name, leftover);
 
         this._initializeTargets();
+    }
+
+    // One Hungarian over `targets` × this view's still-unmatched detections.
+    // adjacency[t][d] = 2D term + 3D term (higher = better), negated for LUCID's
+    // minimizing Hungarian (== maximize adjacency). Ungated, every target takes
+    // a detection while any are free (reference behavior). Gated, each target
+    // also gets a "no match" column at adjacency 0, so it takes a detection only
+    // when that raises the total — i.e. never one it scores at or below 0.
+    _assign(targets, dets, cam, matchedDet, gated) {
+        var cols = [];
+        for (var d = 0; d < dets.length; d++) if (!matchedDet[d]) cols.push(d);
+        var N = targets.length, M = cols.length;
+        if (N === 0 || M === 0) return;
+        var width = gated ? M + N : M;
+        var cost = [];
+        for (var t = 0; t < N; t++) {
+            cost[t] = new Array(width).fill(0);   // gated "no match" columns stay 0
+            for (var c = 0; c < M; c++) {
+                cost[t][c] = -this._adjacency(targets[t], dets[cols[c]], cam);
+            }
+        }
+        var assign = hungarianAlgorithm(cost);   // assign[t] = column, or out-of-range
+        for (var ti = 0; ti < N; ti++) {
+            var ci = assign[ti];
+            if (ci == null || ci < 0 || ci >= M) continue;   // unmatched / "no match"
+            if (gated && !(cost[ti][ci] < 0)) continue;      // tie at 0 or NaN: not a match
+            // Sync fix: record the match now but defer re-triangulation to
+            // _endFrame(), so a later camera THIS frame is scored against
+            // the same points3d an earlier camera this frame was.
+            targets[ti]._deferDetection(dets[cols[ci]]);
+            matchedDet[cols[ci]] = true;
+        }
     }
 
     // Cost = adjacency_2d + adjacency_3d (reference `set_adjacency_matrix`).

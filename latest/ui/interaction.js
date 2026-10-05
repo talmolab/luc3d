@@ -14,9 +14,53 @@
  * ES module. Exports `InteractionManager` and `isInteractiveClickTarget`.
  */
 
-import { Instance } from '../pose/pose-data.js';
-import { getOrComputeReprojectedInstance } from '../pose/triangulation.js';
-import { shouldIgnoreShortcut } from './keyboard-target.js';
+import { Instance } from '../pose/pose-data.js?v=cd51175df002';
+import { getOrComputeReprojectedInstance } from '../pose/triangulation.js?v=cd51175df002';
+import { shouldIgnoreShortcut } from './keyboard-target.js?v=cd51175df002';
+
+// ============================================
+// Alt + wheel instance rotation
+// ============================================
+
+/**
+ * Degrees the skeleton turns per wheel notch. Matches SLEAP, whose
+ * `QtNode.wheelEvent` does `angleDelta / 20` on Qt's 120-units-per-notch
+ * scale (`sleap/gui/widgets/video.py`) — 6 degrees a notch.
+ * @type {number}
+ */
+const ROTATE_DEG_PER_NOTCH = 6;
+
+/**
+ * How long (ms) a hover rotation gesture stays latched after the last wheel
+ * event before it commits. A wheel gesture has no "mouse up", so the commit —
+ * re-triangulation, the 3D rebuild, the timeline's modified flag — is deferred
+ * to the end of the burst instead of running on every tick, exactly as a drag
+ * commits once on release rather than on every mousemove.
+ * @type {number}
+ */
+const ROTATE_IDLE_COMMIT_MS = 200;
+
+/**
+ * Wheel movement in notches, positive for a downward/away scroll.
+ *
+ * `deltaY` is only comparable across devices after `deltaMode` is folded in:
+ * Chrome reports ~100 px per notch for a mouse, Firefox 3 lines. A macOS
+ * trackpad reports pixels too, just many small ones — which is what makes the
+ * rotation continuous rather than stepped there (see the module note on
+ * trackpad support).
+ *
+ * `deltaX` is deliberately ignored. SLEAP sums Qt's x and y deltas, but on a
+ * trackpad the incidental horizontal component of a two-finger scroll then
+ * fights the vertical one and can cancel it outright.
+ *
+ * @param {WheelEvent} e
+ * @returns {number}
+ */
+function wheelNotches(e) {
+    if (e.deltaMode === 1) return e.deltaY / 3;    // DOM_DELTA_LINE
+    if (e.deltaMode === 2) return e.deltaY;        // DOM_DELTA_PAGE
+    return e.deltaY / 100;                         // DOM_DELTA_PIXEL
+}
 
 // ============================================
 // InteractionManager
@@ -92,10 +136,36 @@ export class InteractionManager {
          *   nodeIdx: number,
          *   startPos: number[],
          *   currentPos: number[],
-         *   originalPoints: (number[]|null)[]|null
+         *   originalPoints: (number[]|null)[]|null,
+         *   pivot: number[]|null,
+         *   rotationDeg: number
          * }|null}
          */
         this.dragInfo = null;
+
+        // ------------------------------------------------------------------
+        // Alt + wheel rotation state
+        // ------------------------------------------------------------------
+
+        /**
+         * The in-flight hover rotation gesture (Alt+wheel over a node with no
+         * button held), or null. The button-held variant rides on `dragInfo`
+         * instead — see `_onDragWheel`.
+         * @type {{
+         *   viewName: string,
+         *   frameIdx: number,
+         *   instance: Instance,
+         *   group: InstanceGroup|null,
+         *   unlinked: UnlinkedInstance|null,
+         *   nodeIdx: number,
+         *   pivot: number[],
+         *   originalPoints: (number[]|null)[],
+         *   angleDeg: number,
+         *   timer: number|null
+         * }|null}
+         * @private
+         */
+        this._rotateGesture = null;
 
         // ------------------------------------------------------------------
         // Assignment mode state
@@ -678,6 +748,10 @@ export class InteractionManager {
         var state = this._getState();
         if (!state) return;
 
+        // Any click ends an in-flight Alt+wheel rotation, so it cannot be
+        // reinterpreted as part of whatever gesture starts here.
+        this._commitRotateGesture();
+
         this.lastInteractedView = viewName;
 
         // Guard: clean up any stale drag state from a missed mouseup
@@ -1147,7 +1221,11 @@ export class InteractionManager {
         // Only finalize if the drag actually moved
         const dx = info.currentPos[0] - info.startPos[0];
         const dy = info.currentPos[1] - info.startPos[1];
-        const didMove = info.thresholdMet && Math.sqrt(dx * dx + dy * dy) > 0.5;
+        // A pure Alt+wheel rotation never clears the drag deadzone, so it has
+        // to count as a change in its own right.
+        const didRotate = !!info.rotationDeg;
+        const didMove = didRotate ||
+            (info.thresholdMet && Math.sqrt(dx * dx + dy * dy) > 0.5);
 
         if (didMove) {
             // Determine the instance being dragged (linked or unlinked)
@@ -1165,16 +1243,10 @@ export class InteractionManager {
 
             if (instance && instance.numNodes > 0) {
                 if (info.mode === 'instance' && info.originalPoints) {
-                    // Whole-instance drag: finalize all translated points
-                    const fdx = info.currentPos[0] - info.startPos[0];
-                    const fdy = info.currentPos[1] - info.startPos[1];
-                    for (var fi = 0; fi < instance.numNodes; fi++) {
-                        if (info.originalPoints[fi]) {
-                            instance.setPoint(fi,
-                                info.originalPoints[fi][0] + fdx,
-                                info.originalPoints[fi][1] + fdy);
-                        }
-                    }
+                    // Whole-instance drag: finalize the rotate-then-translate
+                    const d = this._dragDelta(info);
+                    this._applyInstanceTransform(instance, info.originalPoints,
+                        info.pivot, info.rotationDeg, d[0], d[1]);
                     instance.type = 'user';
                 } else if (info.nodeIdx >= 0 && instance.numNodes > info.nodeIdx) {
                     // Single-node drag: finalize the single point
@@ -1235,6 +1307,299 @@ export class InteractionManager {
     }
 
     // ======================================================================
+    // Alt + wheel instance rotation
+    // ======================================================================
+
+    /**
+     * Rigidly place every point of `instance` from the snapshot in
+     * `originalPoints`: rotate `angleDeg` about `pivot`, then translate by
+     * (dx, dy).
+     *
+     * Always recomputed from the snapshot rather than applied incrementally,
+     * so a long burst of wheel ticks cannot accumulate rounding drift and the
+     * rotation composes cleanly with an Alt+drag happening at the same time.
+     *
+     * Video coordinates are y-down, so a positive `angleDeg` reads as
+     * clockwise on screen — the same sense as SLEAP's `setRotation`.
+     *
+     * Points absent from the snapshot stay absent; the pivot node is
+     * invariant under the rotation and only follows the translation.
+     *
+     * @param {Instance} instance
+     * @param {(number[]|null)[]} originalPoints
+     * @param {number[]|null} pivot - [x, y] in video coords; no rotation without one
+     * @param {number} angleDeg
+     * @param {number} dx
+     * @param {number} dy
+     * @private
+     */
+    _applyInstanceTransform(instance, originalPoints, pivot, angleDeg, dx, dy) {
+        const rad = (angleDeg || 0) * Math.PI / 180;
+        const cos = Math.cos(rad);
+        const sin = Math.sin(rad);
+        const px = pivot ? pivot[0] : 0;
+        const py = pivot ? pivot[1] : 0;
+        const rotate = !!pivot && rad !== 0;
+
+        for (let i = 0; i < instance.numNodes; i++) {
+            const p = originalPoints[i];
+            if (!p) continue;
+            if (rotate) {
+                const ox = p[0] - px;
+                const oy = p[1] - py;
+                instance.setPoint(i,
+                    px + ox * cos - oy * sin + dx,
+                    py + ox * sin + oy * cos + dy);
+            } else {
+                instance.setPoint(i, p[0] + dx, p[1] + dy);
+            }
+        }
+    }
+
+    /**
+     * Translation applied by the drag portion of an Alt+drag so far. Zero
+     * until the drag deadzone is cleared, so scrolling without moving the
+     * mouse rotates in place.
+     * @param {Object} info - `this.dragInfo`
+     * @returns {number[]} [dx, dy]
+     * @private
+     */
+    _dragDelta(info) {
+        if (!info.thresholdMet) return [0, 0];
+        return [info.currentPos[0] - info.startPos[0],
+                info.currentPos[1] - info.startPos[1]];
+    }
+
+    /**
+     * The instance an active drag is moving (grouped or ungrouped), or null.
+     * @param {Object} info - `this.dragInfo`
+     * @returns {Instance|null}
+     * @private
+     */
+    _dragInstance(info) {
+        if (info.unlinked) return info.unlinked.instance;
+        const state = this._getState();
+        if (!state) return null;
+        const groups = this._getInstanceGroups(state.currentFrame);
+        if (!groups || groups.length <= info.instanceGroupIdx) return null;
+        return groups[info.instanceGroupIdx].getInstance(info.viewName);
+    }
+
+    /**
+     * Wheel during an active Alt+drag (whole-instance drag): rotate the
+     * instance about the node the drag started on.
+     *
+     * This is SLEAP's gesture — Alt+press a node, keep the button down, then
+     * scroll (`QtNode.mousePressEvent` arms `dragParent` and sets the
+     * transform origin; `QtNode.wheelEvent` turns the instance). As there, the
+     * cursor does not have to stay over the node and Alt does not have to stay
+     * down once the drag is armed: the handler is document-level, in the
+     * capture phase, so it also beats the video cell's wheel-to-zoom.
+     *
+     * @param {WheelEvent} e
+     * @private
+     */
+    _onDragWheel(e) {
+        if (!this.isDragging || !this.dragInfo) return;
+        const info = this.dragInfo;
+        // A plain single-node drag has nothing to rotate — leave the wheel to
+        // the zoom handler rather than silently swallowing it.
+        if (info.mode !== 'instance' || !info.originalPoints || !info.pivot) return;
+
+        const notches = wheelNotches(e);
+        if (notches) {
+            // Scroll up (negative deltaY) turns clockwise, matching SLEAP.
+            info.rotationDeg -= notches * ROTATE_DEG_PER_NOTCH;
+            const instance = this._dragInstance(info);
+            if (instance && instance.numNodes > 0) {
+                const d = this._dragDelta(info);
+                this._applyInstanceTransform(instance, info.originalPoints,
+                    info.pivot, info.rotationDeg, d[0], d[1]);
+            }
+            this._requestRedraw();
+        }
+
+        e.preventDefault();
+        e.stopPropagation();
+    }
+
+    /**
+     * Handle a wheel event over an overlay canvas.
+     *
+     * Alt+wheel over a node rotates that node's instance about it, with no
+     * mouse button held. This is a deliberate superset of SLEAP's gesture:
+     * SLEAP requires the button to stay down, which on a macOS trackpad means
+     * click-and-hold while two-finger scrolling. Hold-free Alt+wheel makes the
+     * feature usable from a trackpad. The button-held form still works and is
+     * handled by `_onDragWheel`.
+     *
+     * A wheel with no Alt is left alone, so plain scroll still zooms. An
+     * Alt+wheel is ALWAYS consumed, even when there is nothing under the
+     * cursor to turn: while Option is held the wheel belongs to rotation, and
+     * a stray event that wandered off the skeleton must not zoom the view out
+     * from under a rotation in progress. `loading/video.js` stands its
+     * wheel-to-zoom down on `altKey` for the same reason, covering the
+     * letterbox margin of the cell where this canvas is not under the cursor
+     * at all. Releasing Option restores zoom immediately.
+     *
+     * @param {WheelEvent} e
+     * @param {string} viewName
+     */
+    onWheel(e, viewName) {
+        if (!e.altKey) return;
+        // An armed Alt+drag owns the wheel; its document-level capture handler
+        // normally stops the event before it reaches us, but never rotate twice.
+        if (this.isDragging) return;
+
+        const notches = wheelNotches(e);
+        if (!notches) { this._consumeWheel(e); return; }
+
+        const state = this._getState();
+        if (!state) { this._consumeWheel(e); return; }
+
+        let g = this._rotateGesture;
+        if (g && (g.viewName !== viewName || g.frameIdx !== state.currentFrame)) {
+            // The gesture belongs to another view or another frame — bank it
+            // and start over rather than turning a stale instance.
+            this._commitRotateGesture();
+            g = null;
+        }
+        if (!g) {
+            g = this._beginRotateGesture(e, viewName, state);
+            // Nothing rotatable under the cursor. Swallow it anyway rather
+            // than falling through to zoom — see the note above.
+            if (!g) { this._consumeWheel(e); return; }
+        }
+
+        g.angleDeg -= notches * ROTATE_DEG_PER_NOTCH;
+        this._applyInstanceTransform(g.instance, g.originalPoints, g.pivot,
+            g.angleDeg, 0, 0);
+        this._scheduleRotateCommit();
+        this._requestRedraw();
+        this._consumeWheel(e);
+    }
+
+    /**
+     * Take a wheel event out of circulation: no browser default, and no
+     * bubbling to the `.video-cell` wheel-to-zoom handler that encloses every
+     * overlay canvas.
+     * @param {WheelEvent} e
+     * @private
+     */
+    _consumeWheel(e) {
+        e.preventDefault();
+        e.stopPropagation();
+    }
+
+    /**
+     * Arm a hover rotation gesture on whatever editable instance sits under
+     * the cursor. Mirrors the Alt+drag entry rules: reprojected instances are
+     * not editable, a predicted one is converted to user first, and an edge
+     * hit resolves to its nearest node.
+     *
+     * @param {WheelEvent} e
+     * @param {string} viewName
+     * @param {Object} state
+     * @returns {Object|null} The new gesture, or null if there is nothing to rotate.
+     * @private
+     */
+    _beginRotateGesture(e, viewName, state) {
+        const coords = this.canvasToVideo(e.clientX, e.clientY, viewName);
+        const vx = coords[0], vy = coords[1];
+        const frameIdx = state.currentFrame;
+
+        let instance = null;
+        let group = null;
+        let unlinked = null;
+
+        const hit = this.findNearestNode(vx, vy, viewName, frameIdx);
+        if (hit && !hit.hitReprojected) {
+            group = hit.instanceGroup;
+            let inst = group.getInstance(viewName);
+            if (inst && inst.type === 'reprojected') return null;
+            if (inst && inst.type === 'predicted') {
+                this._convertToUserInstance(group);
+                inst = group.getInstance(viewName);
+            }
+            instance = inst;
+        } else if (!hit) {
+            const ulHit = this.findNearestUnlinkedNode(vx, vy, viewName, frameIdx);
+            // Predicted ungrouped instances are select-only, as for dragging.
+            if (ulHit && ulHit.unlinked.instance &&
+                ulHit.unlinked.instance.type !== 'predicted') {
+                unlinked = ulHit.unlinked;
+                instance = unlinked.instance;
+            }
+        }
+
+        if (!instance || instance.numNodes === 0) return null;
+
+        const nodeIdx = this._resolveNearestNode(instance, vx, vy);
+        if (nodeIdx < 0) return null;
+
+        const originalPoints = instance.toPointsArray();
+        const pivot = originalPoints[nodeIdx];
+        if (!pivot) return null;
+
+        // Same feedback as starting an Alt+drag on the instance.
+        if (group) this.select(group, -1);
+
+        this._rotateGesture = {
+            viewName: viewName,
+            frameIdx: frameIdx,
+            instance: instance,
+            group: group,
+            unlinked: unlinked,
+            nodeIdx: nodeIdx,
+            pivot: [pivot[0], pivot[1]],
+            originalPoints: originalPoints,
+            angleDeg: 0,
+            timer: null,
+        };
+        return this._rotateGesture;
+    }
+
+    /**
+     * (Re)start the idle timer that ends the current hover rotation gesture.
+     * @private
+     */
+    _scheduleRotateCommit() {
+        const g = this._rotateGesture;
+        if (!g) return;
+        if (g.timer !== null) clearTimeout(g.timer);
+        const self = this;
+        g.timer = setTimeout(function () { self._commitRotateGesture(); },
+            ROTATE_IDLE_COMMIT_MS);
+    }
+
+    /**
+     * End the in-flight hover rotation gesture, notifying the application the
+     * same way a finished drag does. The points were already moved on each
+     * wheel tick; this is the one deferred, expensive half (dirty flag,
+     * re-triangulation, 3D rebuild).
+     * @private
+     */
+    _commitRotateGesture() {
+        const g = this._rotateGesture;
+        if (!g) return;
+        if (g.timer !== null) clearTimeout(g.timer);
+        this._rotateGesture = null;
+
+        if (!g.angleDeg) return;
+
+        g.instance.type = 'user';
+        g.instance.modified = true;
+
+        if (g.group && this.callbacks.onNodeMoved) {
+            this.callbacks.onNodeMoved(g.viewName, g.group, g.nodeIdx,
+                [g.pivot[0], g.pivot[1]]);
+        } else if (g.unlinked && this.callbacks.onUnlinkedNodeMoved) {
+            this.callbacks.onUnlinkedNodeMoved(g.viewName, g.instance);
+        }
+        this._requestRedraw();
+    }
+
+    // ======================================================================
     // Keyboard event handler
     // ======================================================================
 
@@ -1248,6 +1613,15 @@ export class InteractionManager {
      * @param {KeyboardEvent} e
      */
     onKeyDown(e) {
+        // Bank a pending Alt+wheel rotation before a key that might change the
+        // frame (the arrows, Home/End, a frame jump) lands, so the commit
+        // cannot attribute the edit to the frame the user moved to. Modifiers
+        // are excluded — Alt is held down for the whole rotation gesture.
+        if (e.key !== 'Alt' && e.key !== 'Shift' && e.key !== 'Control' &&
+            e.key !== 'Meta' && e.key !== 'AltGraph') {
+            this._commitRotateGesture();
+        }
+
         // Do not intercept a key that belongs to whatever has focus (a text
         // field takes every key; a checkbox takes only Space) — see #163.
         if (shouldIgnoreShortcut(e)) return;
@@ -1337,6 +1711,7 @@ export class InteractionManager {
                     },
                     mouseleave: function () { self.onMouseLeave(vn); },
                     contextmenu: function (e) { e.preventDefault(); },
+                    wheel: function (e) { self.onWheel(e, vn); },
                 };
             })(viewName);
 
@@ -1345,6 +1720,11 @@ export class InteractionManager {
             canvas.addEventListener('mouseup', handlers.mouseup);
             canvas.addEventListener('mouseleave', handlers.mouseleave);
             canvas.addEventListener('contextmenu', handlers.contextmenu);
+            // Non-passive: Alt+wheel over a node rotates instead of zooming,
+            // which needs preventDefault. The listener sits on the overlay
+            // canvas, inside the `.video-cell` that owns wheel-to-zoom, so a
+            // stopPropagation here is what keeps the two from both firing.
+            canvas.addEventListener('wheel', handlers.wheel, { passive: false });
 
             this._boundHandlers.set(viewName, { canvas: canvas, handlers: handlers });
         }
@@ -1366,8 +1746,13 @@ export class InteractionManager {
             canvas.removeEventListener('mouseup', h.mouseup);
             canvas.removeEventListener('mouseleave', h.mouseleave);
             canvas.removeEventListener('contextmenu', h.contextmenu);
+            canvas.removeEventListener('wheel', h.wheel, { passive: false });
         }
         this._boundHandlers.clear();
+
+        // Bank an in-flight rotation before the listeners go away, so its
+        // already-applied points are not left uncommitted.
+        this._commitRotateGesture();
 
         // Clean up any active drag listeners
         this._removeDragListeners();
@@ -1479,12 +1864,17 @@ export class InteractionManager {
         this._removeDragListeners();
 
         var originalPoints = null;
+        var pivot = null;
         var mode = 'node';
         if (altDragSource) {
             mode = 'instance';
             var srcInst = unlinked ? unlinked.instance : altDragSource;
             if (srcInst && srcInst.numNodes > 0) {
                 originalPoints = srcInst.toPointsArray();
+                // The grabbed node is the rotation pivot for Alt+wheel, the
+                // same point SLEAP passes to `setTransformOriginPoint`.
+                var pv = (nodeIdx >= 0) ? originalPoints[nodeIdx] : null;
+                if (pv) pivot = [pv[0], pv[1]];
             }
         }
 
@@ -1501,6 +1891,8 @@ export class InteractionManager {
             currentPos: [vx, vy],
             unlinked: unlinked,
             originalPoints: originalPoints,
+            pivot: pivot,
+            rotationDeg: 0,
             thresholdMet: false,
         };
 
@@ -1508,8 +1900,13 @@ export class InteractionManager {
         var self = this;
         this._dragMoveHandler = function (e) { self._onDragMove(e); };
         this._dragUpHandler = function (e) { self._onDragUp(e); };
+        this._dragWheelHandler = function (e) { self._onDragWheel(e); };
         document.addEventListener('mousemove', this._dragMoveHandler, true); // capture phase
         document.addEventListener('mouseup', this._dragUpHandler, true); // capture phase
+        // Capture phase and non-passive so Alt+wheel rotation beats the video
+        // cell's wheel-to-zoom no matter where the cursor has wandered to.
+        document.addEventListener('wheel', this._dragWheelHandler,
+            { capture: true, passive: false });
     }
 
     /**
@@ -1572,15 +1969,11 @@ export class InteractionManager {
 
         if (instance && instance.numNodes > 0) {
             if (info.mode === 'instance' && info.originalPoints) {
-                var dx = vx - info.startPos[0];
-                var dy = vy - info.startPos[1];
-                for (var pi = 0; pi < instance.numNodes; pi++) {
-                    if (info.originalPoints[pi]) {
-                        instance.setPoint(pi,
-                            info.originalPoints[pi][0] + dx,
-                            info.originalPoints[pi][1] + dy);
-                    }
-                }
+                // Rotation (Alt+wheel) and translation share one transform so
+                // the two compose within a single gesture.
+                this._applyInstanceTransform(instance, info.originalPoints,
+                    info.pivot, info.rotationDeg,
+                    vx - info.startPos[0], vy - info.startPos[1]);
             } else if (info.nodeIdx >= 0 && instance.numNodes > info.nodeIdx) {
                 instance.setPoint(info.nodeIdx, vx, vy);
             }
@@ -1631,6 +2024,11 @@ export class InteractionManager {
         if (this._dragUpHandler) {
             document.removeEventListener('mouseup', this._dragUpHandler, true);
             this._dragUpHandler = null;
+        }
+        if (this._dragWheelHandler) {
+            document.removeEventListener('wheel', this._dragWheelHandler,
+                { capture: true });
+            this._dragWheelHandler = null;
         }
     }
 

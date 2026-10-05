@@ -3,10 +3,10 @@
 Multi-view pose annotation GUI. No build system — pure vanilla JS served as static files.
 
 ## Architecture
-ES modules, vanilla JS (no build step). `index.html` loads `app.js` as `<script type="module">`; `app.js` is a 2-line entry point that imports from `pose/`. The 48 modules are grouped into four directories:
-- `pose/` — data model, cross-view tracking, DLT triangulation, app initialization (6 files)
-- `ui/` — UI state, canvas rendering, mouse/keyboard interaction, info panel, modals, timeline, 3D viewport, panel visibility, video encoding, video display settings, keyboard-target arbitration, modal geometry, settings (28 files)
-- `loading/` — video decoding, session loading, SLP/package readers, web workers (6 files)
+ES modules, vanilla JS (no build step). `index.html` loads `app.js` as `<script type="module">`; `app.js` is a 2-line entry point that imports from `pose/`. The 66 modules are grouped into four directories:
+- `pose/` — data model, cross-view tracking, DLT triangulation (the pure math in `triangulation-core.js`, solved in parallel by `triangulation-pool.js` + `triangulation-worker.js`), app initialization, multi-view display alignment (`view-align.js`), the ID-switch checks by body size and images (`id-switch-check.js`) (11 files)
+- `ui/` — UI state, canvas rendering, mouse/keyboard interaction, info panel, modals, timeline, 3D viewport, panel visibility, video encoding, video display settings, keyboard-target arbitration, modal geometry, settings, browser-specific hints, the loading overlay + its progress bar, the Align Views to References dialog, the seekbar hover tooltip, the Color: Tracks/ID setting, the Check ID Switches runner + ID Switches panel tab (and its saved review checklist), its seekbar ticks and in-view highlight, its image embedder and crop worker (39 files)
+- `loading/` — video decoding, unplayable-codec diagnosis, session loading, SLP/package readers, web workers (8 files)
 - `import-export/` — file I/O, save/load, SLP import/merge, visibility metadata (8 files)
 - `demo-data.js` — synthetic skeleton and camera data
 - `styles.css` — all styling
@@ -15,10 +15,12 @@ See `MODULES.md` at the repo root for per-module details (purpose, exports, impo
 
 ## Local Development
 ```bash
-python3 -m http.server 8080
-# Or simply: python3 server.py
+python3 server.py 8080            # Windows: py server.py 8080
+# Or: python3 -m http.server 8080  (no --offline support)
 # App: http://localhost:8080/
 # Tests: http://localhost:8080/tests/test-runner.html
+
+python3 scripts/offline_deps.py install && python3 server.py --offline
 ```
 
 ## Deployment
@@ -28,34 +30,151 @@ host — `talmolab.github.io/luc3d/` 301-redirects to it, and the `CNAME` file a
 `gh-pages` root is what makes Pages answer for that name. Cloudflare proxies it;
 the origin is Pages.
 
-**`deploy.yml` never writes the site root.** `https://luc3d.sleap.ai/` — the live
-page — is managed by hand and is deliberately outside the workflow's reach; every
-target is a named sub-folder, and an empty/`.`/`/` target path is refused rather
-than silently becoming a root wipe. Keep it that way: adding a root target also
-re-introduces a wipe that can take the live page, the other channels and the PR
-previews with it. Promotion to root is a manual step, after checking `/stable/`.
+`deploy.yml` maintains five channels on `gh-pages`. There is no build step, so a
+"build" is a copy of the repo at some ref, and the app is **sub-path safe**
+(relative importmap, `document.baseURI` in the test harness) — which is why one
+tree serves correctly from every path. Do not introduce origin-root-relative URLs
+(`/lib/...`); they 404 on every channel but root.
 
-It maintains four channels on `gh-pages`. There is no build step, so a "build" is
-a copy of the repo at some ref, and the app is **sub-path safe** (relative
-importmap, `document.baseURI` in the test harness) — which is why one tree serves
-correctly from every path. Do not introduce origin-root-relative URLs
-(`/lib/...`); they 404 on every channel.
-
-- `/stable/` — newest **full release**. Moves only on `release: published`.
-- `/latest/` — newest release **including pre-releases**.
-- `/dev/` — every push to `main`.
+- `/` — **the live page.** Newest **full release**; the only place it is served.
+- `/stable/` — an **alias** that redirects to root. A lone `index.html`, not a
+  copy, so a deep link under it (`…/stable/tests/…`) 404s.
+- `/latest/` — newest release **including pre-releases**. A real copy.
+- `/dev/` — every push to `main`. A real copy.
 - `/pr/<n>/` — PR previews, owned by `pr-preview.yml`. `deploy.yml` never touches them.
+  Removed again when the PR closes — by a step that **re-syncs and retries** its
+  push, like `deploy.yml`'s. Both workflows push to `gh-pages` under different
+  concurrency groups, and a merge to `main` starts the `/dev/` deploy and the
+  preview cleanup in the same second; a single checkout-then-push lost that race
+  so often that 23 merged/closed PRs' previews were left on the live site. Any
+  new step that pushes to `gh-pages` needs the same loop.
 
-Both release channels only ever move forward (a republished older version is a
-no-op). `CNAME` is created only if missing, never rewritten, and no `.nojekyll`
-is added — both rules exist so the workflow's root footprint stays exactly zero.
+**Only a full release moves root.** A push to `main` goes to `/dev/` alone; a
+pre-release goes to `/latest/` alone; republishing an older release moves nothing
+(release channels only ever move forward). The same run refreshes the `/stable/`
+alias, so the two can never point at different builds — there is only one build.
+`workflow_dispatch` with target `root` is the manual promote escape hatch; it
+writes root *and* the `/stable/` alias in one run, exactly as a release does.
+
+A target with a non-empty `redirect` is written as an alias (one `index.html`
+whose target is **relative**, so it stays correct under the custom domain,
+`talmolab.github.io/luc3d/` or a PR preview) instead of a copy of the app.
+GitHub Pages cannot issue a real HTTP redirect — no `.htaccess`, no
+`_redirects` — so a meta-refresh/JS stub is the only mechanism available.
+
+**Every deployed copy is version-stamped.** Both workflows run
+`scripts/stamp-version.mjs <dir> <commit>` on the staged copy (never on the
+repo): every same-site code reference — relative imports, `new URL('…js', …)`
+worker URLs, `<script src>`, stylesheet `<link>`s, importmap entries — gets
+`?v=<commit>`. Cloudflare serves `.js`/`.css` with a 4-hour lifetime in browsers
+AND per data centre, while `index.html` is revalidated within minutes; without the
+stamp a visitor could run a new `index.html` with old modules for hours (seen on
+PR #249's preview, even in Incognito). An ES module's identity is its URL, so the
+stamp must be all-or-nothing: the script fails the deploy if any relative module
+reference is left unstamped (that module would load twice). Keep code references
+literal and relative — a computed `import(someVar)` or a root-absolute `/x.js`
+would defeat it. Covered by `tests/test-stamp-version.mjs` and
+`tests/e2e/stamped-build.mjs` (stamps the working tree, loads the app — every
+module once — and runs the browser suite on it).
+
+**Root is the only target that wipes — two rules keep that safe.** Every other
+channel owns its folder and can only damage itself, but root's previous output
+sits at the top of `gh-pages` beside every other channel and every PR preview:
+
+1. **Adding a channel means adding it to the keep-list** — the
+   `find . -maxdepth 1 ... ! -name` in `apply_targets`. A channel missing from
+   that list is deleted by the next full release. `stable` is listed for exactly
+   this reason, as are `.git` and `CNAME`.
+2. **Root is requested by an explicit `root: true` flag, never an empty path.**
+   The empty/`.`/`/` refusal is deliberately kept so an unset variable still
+   cannot turn `rm -rf "$path"` into `rm -rf` of everything.
+
+`CNAME` is excluded from the wipe and recreated if missing — losing it breaks the
+custom domain for everyone. No `.nojekyll` is added, since that would change how
+the live root is served and the app has no `_`-prefixed files.
 
 Releases are cut **by hand** (`gh release create v0.1.0 --generate-notes`).
 That is deliberate: a release created in Actions with `GITHUB_TOKEN` does not
 fire `release: published`, so a helper workflow could not trigger the deploy.
 Tags must be `vX.Y.Z` or `vX.Y.Z-N` (numeric pre-release), matching sleap-app.
 
-## Dependencies (CDN only)
+## Offline mode
+
+Four dependencies still load from jsdelivr (three.js, mp4box, dockview-core,
+yaml); everything else under `lib/` is committed. **`offline-deps.json` is the
+single source of truth** for their versions, npm tarball URLs, registry integrity
+hashes, extracted file lists, and which CDN URL each local path replaces. Three
+consumers read it, so the table exists exactly once:
+
+- `scripts/offline_deps.py` (`install` / `check` / `bundle` / `clean`) — stdlib
+  only, so offline setup needs no Node, curl, tar or Git Bash. Packages land in
+  **gitignored** `lib/<pkg>/`, each keeping a tracked `.gitignore` +
+  `PROVENANCE.txt` so `lib/` still documents what belongs there. Downloads honor
+  `LUCID_NPM_REGISTRY` for institutional mirrors.
+- `server.py --offline` (or `LUCID_OFFLINE=1`) — rewrites the mapped URLs in
+  served `.html`/`.js`/`.mjs`, so the working tree keeps its CDN URLs and nothing
+  is committed by accident. Refuses to start if a package is missing. **It must
+  cover `.js`:** two of the six references are ESM imports inside
+  `ui/sessions-panes.js` and `ui/overlay-export-modal.js`, not HTML tags.
+- `offline_deps.py bundle` — stages a copy with the URLs **already rewritten**,
+  so the zip runs under any static server. That is what keeps Python off the end
+  user's machine; the bundle ships `start-windows.ps1` (PowerShell, preinstalled)
+  plus `start-macos.command` / `start-linux.sh` (python3, else Ruby WEBrick).
+
+Rewritten paths are **depth-relative** (`./lib/…` at root, `../lib/…` from
+`tests/`), never origin-root-relative — the gh-pages sub-path rule applies here too.
+
+Two guards, because this rots silently otherwise:
+
+- **`check`** re-derives the dockview pin rather than trusting prose: any
+  `cdn.jsdelivr.net/npm/<pkg>@<ver>` in source that disagrees with the manifest
+  fails. The "pinned in THREE places" rule below is now enforced, not just documented.
+- **`check --strict`** fails on any CDN URL outside `lib/` the manifest does not
+  map, so a newly added CDN import cannot quietly break offline mode. A URL that
+  is deliberately not mapped goes in the manifest's **`unmapped`** block with a
+  reason — an allowlist, so the guard keeps failing on URLs nobody has considered.
+- **`tests/e2e/offline-server.mjs`** boots the app with every non-localhost
+  request *aborted* (not throttled — that would still hit the HTTP cache) and
+  asserts THREE/OrbitControls/MP4Box/h5wasm/dockview-css/`yaml` all resolved. It
+  skips cleanly when the packages are absent. Confirmed to fail without
+  `--offline`, so it pins behavior rather than the current state.
+
+`lib/sleap-io/chunk-X76PRJK6.js`'s `MP4BOX_CDN` (unpkg mp4box@0.5.4) is
+deliberately **not** mapped. Its `loadMp4box()` returns `globalThis.MP4Box`
+before reaching the fetch, and `index.html`'s mp4box script tag always sets that
+global (from `lib/mp4box/` in offline mode) — so the unpkg fallback is
+unreachable, which `tests/e2e/offline-server.mjs` confirms by asserting `MP4Box`
+exists with all off-origin requests blocked. Mapping it would also silently
+substitute the vendored 0.5.2 for the 0.5.4 it names. `--strict` skips `lib/`, so
+it does not flag this. If the mp4box script tag is ever removed from
+`index.html`, this becomes live: `await import("mp4box")` would throw (no
+importmap entry) and fall through to unpkg.
+
+**One feature does not work offline:** the image ID-switch check
+(`ui/image-embedder.js`, Tracks ▸ Check ID Switches (Images)). Its
+`TRANSFORMERS_URL` is in `unmapped`, because vendoring that URL would not be
+enough — transformers.js then fetches the `onnx-community/dinov2-small` **weights
+(44–88 MB) from huggingface.co** at runtime, so offline support means vendoring
+the model as well and setting `env.localModelPath`. It is lazily imported by that
+one opt-in command and nothing else touches it, so this degrades rather than
+breaking the app. Offline, the dynamic `import()` currently throws a raw
+"Failed to fetch dynamically imported module" instead of a reason string like
+`runImage`'s other preflight gates in `ui/id-switch-modal.js`.
+
+**Node-only `.mjs` is never rewritten** (`is_rewritable` in
+`scripts/offline_deps.py`, shared by `bundle` and `server.py --offline` so the zip
+and the served tree cannot drift). Every non-`lib/` `.mjs` in the repo is a test or
+a tool — the browser-served ones all live under `lib/` — and
+`tests/test-stamp-version.mjs` holds CDN URLs as **fixtures** asserting
+`scripts/stamp-version.mjs` leaves absolute URLs alone, so rewriting it would
+quietly invert what it checks. Same carve-out `stamp-version.mjs` itself makes.
+
+Licenses for everything under `lib/` are in **`lib/LICENSES.txt`**, and each
+package now carries its upstream `LICENSE` (previously none did — h5wasm's NIST
+terms require the notice be kept intact and mediabunny is MPL-2.0). dockview-core
+6.6.1 ships no LICENSE file upstream, so its MIT text is reproduced there.
+
+## Dependencies (CDN by default, vendorable — see Offline mode)
 - Three.js 0.147
 - dockview-core **pinned to 6.6.1** in THREE places (`index.html` CSS +
   `ui/sessions-panes.js` ESM import + `ui/overlay-export-modal.js` ESM import —
@@ -79,6 +198,15 @@ Tags must be `vX.Y.Z` or `vX.Y.Z-N` (numeric pre-release), matching sleap-app.
   DOM (`.dv-groupview` > `[.dv-tabs-and-actions-container][.dv-content-container]`)
   and on `--dv-tabs-and-actions-container-height`.
 - mp4box.js
+- **transformers.js pinned to 4.3.0** (`ui/image-embedder.js`, `/+esm` from
+  jsdelivr) + the `onnx-community/dinov2-small` model from the Hugging Face CDN —
+  fetched only when the IMAGE ID-switch check first runs (opt-in, default off),
+  then cached by the browser. Pinned for the dockview reason. The image check was
+  calibrated against this model's embeddings of `cutCrop`'s crops: a bump of
+  either, or any change to the crop, needs a recalibration (see MODULES.md
+  `pose/id-switch-check.js`). An opt-in (`imageCheckWebNN`) also tries the
+  same model on WebNN and keeps it only if a trial shows it faster AND
+  consistent with WebGPU (see MODULES.md `ui/image-embedder.js`).
 - **Video export = mediabunny, via `ui/video-encode.js` — the app's one encoding
   seam.** sleap-io.js has NO browser encoder (its `renderVideo()` shells out to a
   native `ffmpeg` and is Node-entry-only; its docs say "there is no encoder in the
@@ -159,7 +287,24 @@ Tags must be `vX.Y.Z` or `vX.Y.Z-N` (numeric pre-release), matching sleap-app.
   after. Fixed by sorting `_frameTimes` ascending by timestamp at the end of
   `initialize()`, marked `// LUCID local patch (#115)`. **Re-apply after any
   re-vendor** (grep the marker) and report upstream to sleap-io/mediabunny.
-  Covered by `tests/e2e/mediabunny-bframe-decode-order.mjs`.
+  Covered by `tests/e2e/mediabunny-bframe-decode-order.mjs`. Its fixture video
+  is committed through a `.gitignore` exception (`*.mp4` is otherwise ignored)
+  and regenerated — together with its ground-truth PNGs, never separately — by
+  `tests/fixtures/bframes-test/make_fixture.sh`.
+  **LOCAL PATCH (luc3d frame-index):** `lib/sleap-io/chunk-X76PRJK6.js`
+  `MediaBunnyVideoBackend.initialize()` walks `EncodedPacketSink.packets()` only
+  to collect each packet's timestamp, but without options that walk **reads
+  every packet's bytes — the whole file** (254–349 MB per HardFight_1kModels
+  camera, ~2.3 GB for one 8-camera "Load Single Session Folder"). Patched to
+  `packets(void 0, void 0, { metadataOnly: true })`: same packets, same order,
+  same timestamps, payload read skipped. Per video ~120 ms -> ~28 ms alone; in
+  the 8-camera load, where the decoders open in parallel and contend, all eight
+  finish in ~0.46 s instead of ~1.04 s (load ~2.35 s -> ~1.8 s). Guarded by
+  `tests/e2e/mediabunny-frame-index-metadata-only.mjs` (metadata-only == full
+  walk, `Object.is` per timestamp and in order, plus backend index == full walk
+  sorted; on a generated `-bf 3` B-frame video, and with `DATASET=` on real
+  files). Marked `// LUCID local patch (luc3d frame-index)`. **Re-apply after any
+  re-vendor** (grep the marker) and report upstream to sleap-io.js.
   **LOCAL PATCH (sleap-io.js#231):** `lib/sleap-io/chunk-X76PRJK6.js` writes the
   SLP `instances` table with dtype `"<d"` (h5wasm float64) instead of upstream's
   `"<f8"` — h5wasm does NOT speak numpy dtype strings and parses `"<f8"` as
@@ -354,7 +499,9 @@ Tags must be `vX.Y.Z` or `vX.Y.Z-N` (numeric pre-release), matching sleap-app.
 The Visibility panel's **session-scoped** state persists per session in the
 `.slp`, under LUCID's own `metadata.lucid` dict: `videoBrightness`,
 `videoContrast` and `videoRotation` (each `{ cameraName: int }`) plus
-`hiddenCameras` / `hiddenTracks` / `hiddenIdentities` (sorted name arrays).
+`hiddenCameras` / `hiddenTracks` / `hiddenIdentities` (sorted name arrays), plus
+the ID Switches tab's review checklist, `idSwitchReview` (`ui/id-switch-review.js`;
+absent unless a check left results on that session).
 Everything goes through **one** module, `import-export/visibility-metadata.js`
 (`writeVisibilityMetadata` / `readVisibilityMetadata`, `VISIBILITY_METADATA_KEYS`),
 which the four writers and three readers all call — adding a setting means
@@ -413,7 +560,7 @@ There are **three** test populations, each with its own runner. Run all three �
 they cover disjoint code, and a green run of one says nothing about the others.
 
 ```bash
-node tests/e2e/run-unit-tests.mjs     # tests/*.js  (browser suite, headless) — 1504 assertions
+node tests/e2e/run-unit-tests.mjs     # tests/*.js  (browser suite, headless) — 1535 assertions
 node tests/run-mjs-tests.mjs          # tests/test-*.mjs  (native-ESM Node tests)
 node tests/e2e/<name>.mjs             # tests/e2e/*.mjs  (Playwright, one file per behavior)
 ```

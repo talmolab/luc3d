@@ -9,41 +9,43 @@ import {
     Skeleton, Camera, Instance, UnlinkedInstance, FrameGroup, Identity,
     InstanceGroup, Session,
     toBoxedPoints3d, asPoints3d, someValidPoint3d,
-} from '../pose/pose-data.js';
+} from '../pose/pose-data.js?v=cd51175df002';
 import {
     getInstanceGroupsForFrame, storeReprojectedInstances, reprojectPoints,
-} from '../pose/triangulation.js';
-import { OnDemandVideoDecoder } from '../loading/video.js';
-import { createDemoSkeleton } from '../demo-data.js';
+} from '../pose/triangulation.js?v=cd51175df002';
+import { OnDemandVideoDecoder } from '../loading/video.js?v=cd51175df002';
+import { createDemoSkeleton } from '../demo-data.js?v=cd51175df002';
 import {
     pickFiles, parseCalibrationJSON, buildSlpLabelsAllViews,
-} from './file-io.js';
+} from './file-io.js?v=cd51175df002';
 import {
     state,
     videoController, interactionManager, viewport3d, timeline, paneManager,
     setVideoController, setInteractionManager,
-} from '../ui/app-state.js';
+} from '../ui/app-state.js?v=cd51175df002';
 import {
     autoAssignVideosToCameras, forceVideoSelection, showParentDirMatchSummary,
     forceVideoSelectionWithFolder, createViewForVideoFile, updateTotalFrames,
     rebuildVideoController, fitCanvasesToCells,
-} from '../loading/session-loader.js';
-import { drawAllOverlays, setReprojErrorVisible } from '../ui/rendering.js';
-import { updateInfoPanel } from '../ui/info-panel.js';
+} from '../loading/session-loader.js?v=cd51175df002';
+import { drawAllOverlays, setReprojErrorVisible } from '../ui/rendering.js?v=cd51175df002';
+import { updateInfoPanel } from '../ui/info-panel.js?v=cd51175df002';
 // Pass 3i-3: setupInteraction / setup3DViewport / hideWelcomeOverlay moved to pose/initialization.js.
 import {
     setupInteraction, setup3DViewport, hideWelcomeOverlay,
-} from '../pose/initialization.js';
+} from '../pose/initialization.js?v=cd51175df002';
 // Pass 3h: populateViewStrip / populateSessionStrip moved to sessions-panes.js.
-import { populateViewStrip, populateSessionStrip } from '../ui/sessions-panes.js';
-import { handleLoadSlpFile } from './slp-import.js';
+import { populateViewStrip, populateSessionStrip } from '../ui/sessions-panes.js?v=cd51175df002';
+import { handleLoadSlpFile } from './slp-import.js?v=cd51175df002';
 import {
     buildSessionSlpBytesStreaming, createProjectWriterContext, buildSessionRefGraph,
     openProjectWriter, streamSessionIntoWriter, finalizeProjectWriter,
-} from './slp-streaming-write.js';
-import { SioLazyLoader } from '../loading/sio-lazy-loader.js';
-import { getLoadingProgressModal } from '../ui/loading-progress-modal.js';
-import { writeVisibilityMetadata, readVisibilityMetadata } from './visibility-metadata.js';
+} from './slp-streaming-write.js?v=cd51175df002';
+import { SioLazyLoader } from '../loading/sio-lazy-loader.js?v=cd51175df002';
+import { getLoadingProgressModal } from '../ui/loading-progress-modal.js?v=cd51175df002';
+import { showLoading, hideLoading } from '../ui/loading-overlay.js?v=cd51175df002';
+import { writeVisibilityMetadata, readVisibilityMetadata } from './visibility-metadata.js?v=cd51175df002';
+import { fileSystemAccessHint } from '../ui/browser-hints.js?v=cd51175df002';
 
 /**
  * Confirmation modal shown when the user starts loading a real session while
@@ -345,7 +347,7 @@ function serializeSessionFrames(session) {
 
 async function ensureSleapIO() {
     if (window.SleapIO) return window.SleapIO;
-    var mod = await import('./lib/sleap-io/index.browser.js');
+    var mod = await import('./lib/sleap-io/index.browser.js?v=cd51175df002');
     window.SleapIO = mod;
     return mod;
 }
@@ -981,8 +983,13 @@ export async function saveProjectSlp() {
         setStatus('No session to save', 'error');
         return;
     }
+    // In Brave the save-file picker is OFF by default, so Save lands here: the
+    // whole file is built in memory and downloaded (risky for a large
+    // project, and never updates the file in place). Say why, and how to fix.
+    var fsaHint = fileSystemAccessHint();
     try {
-        setStatus('Building SLP...', 'warning');
+        setStatus(fsaHint ? 'Building SLP in memory to download it (Brave cannot save straight to a file)...'
+            : 'Building SLP...', 'warning');
 
         var bytes = await buildSlpBytes();
         var blob = new Blob([bytes], { type: 'application/x-hdf5' });
@@ -1001,14 +1008,15 @@ export async function saveProjectSlp() {
         document.body.removeChild(a);
         setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
 
-        setStatus('Project saved as SLP (' + (blob.size / 1024 / 1024).toFixed(1) + ' MB)', 'success');
+        setStatus('Project saved as SLP (' + (blob.size / 1024 / 1024).toFixed(1) + ' MB)' +
+            (fsaHint ? ' — downloaded, not saved in place. ' + fsaHint : ''), 'success');
     } catch (err) {
         if (err && err.name === 'SaveCancelledError') {
             setStatus('Save cancelled', 'warning');
             return;
         }
         console.error('Save project SLP failed:', err);
-        setStatus('Save failed: ' + err.message, 'error');
+        setStatus('Save failed: ' + err.message + (fsaHint ? ' ' + fsaHint : ''), 'error');
     }
 }
 
@@ -1239,7 +1247,7 @@ export async function handleLoadProject(prePickedFile) {
             var LARGE_SLP_BYTES = 200 * 1024 * 1024;
             if (ext === 'slp' && file.size > LARGE_SLP_BYTES) {
                 // Dynamic import avoids a session-loader ↔ save-load import cycle.
-                var _sl = await import('../loading/session-loader.js');
+                var _sl = await import('../loading/session-loader.js?v=cd51175df002');
                 if (_sl && typeof _sl.handleLoadProjectSlpLazy === 'function') {
                     return _sl.handleLoadProjectSlpLazy(file);
                 }
@@ -2028,14 +2036,9 @@ function _restoreLegacySession(data) {
 // Loading / Status
 // ============================================
 
-export function showLoading(msg) {
-    document.getElementById('loadingOverlay').classList.remove('hidden');
-    document.getElementById('loadingStatus').textContent = msg || 'Loading...';
-}
-
-export function hideLoading() {
-    document.getElementById('loadingOverlay').classList.add('hidden');
-}
+// The overlay itself (and its progress bar) lives in ui/loading-overlay.js;
+// re-exported here because ~10 modules import these two from this one.
+export { showLoading, hideLoading };
 
 export function setStatus(text, type) {
     document.getElementById('statusText').textContent = text;
