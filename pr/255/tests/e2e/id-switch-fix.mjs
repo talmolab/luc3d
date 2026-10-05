@@ -105,7 +105,7 @@ try {
     check(before.wrong.length === 69 && before.wrong[0] === 51, `fixture: labels crossed on frames 51..119 (${before.wrong.length})`);
 
     // ---- 1. the button and the dialog
-    await page.click(onsetRow + ' .id-switch-main');
+    await page.click(onsetRow + ' .id-switch-line1');
     await page.waitForFunction(() => window.__lucid.state.currentFrame === 10, null, { timeout: 10000 }).catch(() => {});
     check(await page.isVisible(onsetRow + ' .id-switch-fix'), 'the selected row offers "Fix switch…"');
     check(!(await page.isVisible('#idSwitchPanel .id-switch-row[data-frame="90"] .id-switch-fix')), 'only the selected row does');
@@ -127,7 +127,7 @@ try {
     check(await dialogText() === null && (await page.evaluate(() => window.__labels())).snap === before.snap, 'Cancel changes nothing');
 
     // ---- 2. confirm from the lead-in (frames 52–120 = indices 51..119: exactly the crossed stretch)
-    await page.click(onsetRow + ' .id-switch-main');
+    await page.click(onsetRow + ' .id-switch-line1');
     await page.waitForFunction(() => window.__lucid.state.currentFrame === 10, null, { timeout: 10000 }).catch(() => {});
     await page.click(onsetRow + ' .id-switch-fix');
     await page.click('#idSwitchFixOk');
@@ -170,7 +170,7 @@ try {
         return r && r.textContent;
     });
     check(follow === 'id_0 ↔ id_2', `the follow-on row now reads id_0 ↔ id_2 (${follow})`);
-    await page.click('#idSwitchPanel .id-switch-row[data-frame="90"] .id-switch-main');
+    await page.click('#idSwitchPanel .id-switch-row[data-frame="90"] .id-switch-line1');
     b = await boxAt(88);
     check(b.every(v => v.pair > 200 && v.far > 200), `its box encloses the id_0 animal and id_2 (${JSON.stringify(b)})`);
 
@@ -180,7 +180,7 @@ try {
         return R.serializeIdSwitchReview(window.__lucid.state.session).fixes;
     });
     check(JSON.stringify(saved) === JSON.stringify([['size:50:id_0:id_1', '', 'id_0', 'id_1', 51, 119]]), `saved with the checklist (${JSON.stringify(saved)})`);
-    await page.click(onsetRow + ' .id-switch-main');
+    await page.click(onsetRow + ' .id-switch-line1');
     await page.click(onsetRow + ' .id-switch-undo');
     await page.waitForTimeout(150);
     const undone = await page.evaluate(() => window.__labels());

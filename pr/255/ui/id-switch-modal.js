@@ -25,17 +25,17 @@
  * import-export/save-load.js (setStatus).
  */
 
-import { state, getActiveSession } from './app-state.js?v=38ff26e90865';
-import { setSeekbarSwitchMarkers } from './seekbar-markers.js?v=38ff26e90865';
-import { setIdSwitchHighlight, updateIdSwitchHighlight, refreshIdSwitchHighlight, ID_SWITCH_SECTION_RGB } from './id-switch-highlight.js?v=38ff26e90865';
-import { setStatus, markDirty } from '../import-export/save-load.js?v=38ff26e90865';
-import { showLoadingProgress, hideLoading, yieldToPaint } from './loading-overlay.js?v=38ff26e90865';
-import { getTrackingThreshold } from './settings.js?v=38ff26e90865';
-import { checkSizeSwitches, checkImageSwitches } from '../pose/id-switch-check.js?v=38ff26e90865';
-import { hasWebGPU, createImageEmbedder, IMAGE_MODEL_MB, formatEmbedTiming } from './image-embedder.js?v=38ff26e90865';
+import { state, getActiveSession } from './app-state.js?v=3983fc53865b';
+import { setSeekbarSwitchMarkers } from './seekbar-markers.js?v=3983fc53865b';
+import { setIdSwitchHighlight, updateIdSwitchHighlight, refreshIdSwitchHighlight, ID_SWITCH_SECTION_RGB } from './id-switch-highlight.js?v=3983fc53865b';
+import { setStatus, markDirty } from '../import-export/save-load.js?v=3983fc53865b';
+import { showLoadingProgress, hideLoading, yieldToPaint } from './loading-overlay.js?v=3983fc53865b';
+import { getTrackingThreshold } from './settings.js?v=3983fc53865b';
+import { checkSizeSwitches, checkImageSwitches } from '../pose/id-switch-check.js?v=3983fc53865b';
+import { hasWebGPU, createImageEmbedder, IMAGE_MODEL_MB, formatEmbedTiming } from './image-embedder.js?v=3983fc53865b';
 import { idSwitchRowKey as rowKey, idSwitchPrimary as primaryOf, idSwitchMarkers as markersOf, idSwitchOnsets as countOnsets,
          idSwitchEncounterCount as encounterCount, linkIdSwitchResults as tagAndLink,
-         idSwitchFixPlan, idSwitchFixFor, idSwitchRenameForFix } from './id-switch-review.js?v=38ff26e90865';
+         idSwitchFixPlan, idSwitchFixFor, idSwitchRenameForFix } from './id-switch-review.js?v=3983fc53865b';
 
 const CUE_LABEL = { size: 'body size', image: 'images' };
 
@@ -353,6 +353,7 @@ function aboutHtml(st, ran) {
 // at a glance — which is why the coloured track is an inner element: the bar itself must not
 // clip, while the track keeps its rounded ends.
 var _prog = null, _progStale = true;        // {fill, head, p0, p1} of the selected row's bar
+var _scrubbing = false, _scrubTo = null;    // a press on the bar is in progress / the frame it last sent
 
 /** A row's interval: p0 (landing, 1 s before the close spell) .. s (close starts) .. f.frame (close ends) .. p1 (1 s after). */
 function rowRange(f) {
@@ -378,7 +379,7 @@ function progressHtml(f) {
     var track = 'linear-gradient(to right, ' + lead + ' 0 ' + pct(s) + ', transparent ' + pct(s) + ' ' + pct(f.frame) +
         ', ' + lead + ' ' + pct(f.frame) + ' 100%)';
     return '<div class="id-switch-pbar" data-p0="' + p0 + '" data-p1="' + p1 + '" title="' +
-        ID_SWITCH_LEAD_IN_SECONDS + ' s before (orange) → close ' + fmtTenths(s) + '–' + fmtTenths(f.frame) + ' (red) → ' + ID_SWITCH_LEAD_IN_SECONDS + ' s after (orange)">' +
+        ID_SWITCH_LEAD_IN_SECONDS + ' s before (orange) → close ' + fmtTenths(s) + '–' + fmtTenths(f.frame) + ' (red) → ' + ID_SWITCH_LEAD_IN_SECONDS + ' s after (orange) — click or drag to go to a frame">' +
         '<div class="id-switch-ptrack" style="background-image:' + track + '">' +
         // fill first, band over it: the red close spell stays visible as the fill passes it
         '<div class="id-switch-pfill" style="width:' + pct(cur) + '"></div>' +
@@ -628,7 +629,7 @@ export function refreshIdSwitchPanel(session) {
     };
     host.querySelector('#idSwitchList').addEventListener('click', function (e) {
         var row = e.target.closest('.id-switch-row');
-        if (!row) return;
+        if (!row || e.target.closest('.id-switch-pbar') || _scrubbing) return;    // the bar seeks (below), not re-lands
         if (e.target.closest('.id-switch-fix')) { var fr = byKey.get(row.dataset.key); if (fr) openFixDialog(session, st, fr); return; }
         if (e.target.closest('.id-switch-undo')) { undoLastFix(session, st); return; }
         if (e.target.classList.contains('id-switch-tick')) {
@@ -639,6 +640,36 @@ export function refreshIdSwitchPanel(session) {
             return;
         }
         go(row, e.target.classList.contains('id-switch-end'));
+    });
+    // Click or drag on the selected row's bar: go to that frame, like the transport seekbar. Moves
+    // re-find the bar each time rather than holding the element, so a panel rebuilt mid-drag (an
+    // info-panel refresh) cannot strand the drag on a detached node; the interval is fixed at the press.
+    host.querySelector('#idSwitchList').addEventListener('pointerdown', function (e) {
+        var bar = e.target.closest('.id-switch-pbar');
+        if (!bar || e.button !== 0 || !nav) return;
+        e.preventDefault();                                // no text selection while dragging
+        var p0 = +bar.dataset.p0, p1 = +bar.dataset.p1;
+        var seek = function (ev) {
+            var b = host.querySelector('.id-switch-row.is-current .id-switch-pbar') || bar, r = b.getBoundingClientRect();
+            if (!(r.width > 0)) return;
+            var x = Math.min(1, Math.max(0, (ev.clientX - r.left) / r.width));
+            var fr = Math.round(p0 + x * (p1 - p0));
+            if (fr === _scrubTo) return;
+            _scrubTo = fr;
+            nav(fr);
+            updateIdSwitchProgress(fr);                     // the bar follows the pointer, not the decode
+        };
+        var up = function () {
+            window.removeEventListener('pointermove', seek);
+            window.removeEventListener('pointerup', up);
+            window.removeEventListener('pointercancel', up);
+            setTimeout(function () { _scrubbing = false; }, 0);   // swallow the click that ends this press
+        };
+        _scrubbing = true; _scrubTo = null;
+        seek(e);
+        window.addEventListener('pointermove', seek);
+        window.addEventListener('pointerup', up);
+        window.addEventListener('pointercancel', up);
     });
     host.querySelector('#idSwitchNext').addEventListener('click', function () {
         var list = Array.from(host.querySelectorAll('.id-switch-row')), at = list.findIndex(function (r) { return r.dataset.key === st.current; });
