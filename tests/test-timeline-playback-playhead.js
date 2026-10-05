@@ -75,10 +75,24 @@
         return c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
     }
 
+    // Near-equality, not bit-equality. A blitted snapshot IS bit-identical, but
+    // the fallback cases rasterize the same vector content twice, and a real
+    // GPU rasterizer (headed Chrome) is not bit-deterministic across two passes
+    // the way the headless software rasterizer is — measured: 18 bytes of
+    // 448,000 differing by <=2/255. A stale or shifted frame moves orders of
+    // magnitude more than that, so this still catches what the test is for.
+    var PIXEL_TOL = 8;          // per channel, out of 255
+    var PIXEL_FRAC = 0.001;     // at most 0.1% of channels may differ at all
     function samePixels(a, b) {
         if (a.length !== b.length) return false;
-        for (var i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
-        return true;
+        var differing = 0;
+        for (var i = 0; i < a.length; i++) {
+            var d = a[i] > b[i] ? a[i] - b[i] : b[i] - a[i];
+            if (d === 0) continue;
+            if (d > PIXEL_TOL) return false;
+            differing++;
+        }
+        return differing <= a.length * PIXEL_FRAC;
     }
 
     // Count full redraws via the most expensive layer.
