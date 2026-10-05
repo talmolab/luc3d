@@ -21,7 +21,7 @@
     // <app base>/lib/... — correct on localhost (root) AND on the GitHub Pages
     // sub-path preview (/luc3d/pr/<n>/). `location.origin + '/lib/...'` was
     // origin-root-relative and 404'd the h5wasm worker script on the sub-path.
-    const h5wasmUrl = new URL('../lib/h5wasm/h5wasm.iife.js?v=1915b267906d', document.baseURI).href;
+    const h5wasmUrl = new URL('../lib/h5wasm/h5wasm.iife.js?v=cd51175df002', document.baseURI).href;
 
     function mkVideo(S, fn, n) {
         const v = new S.Video({ filename: fn, backendMetadata: { type: 'MediaVideo', shape: [n, 64, 48, 1], filename: fn }, openBackend: false });
@@ -112,7 +112,7 @@
             const S = window.SleapIO;
             assertTrue(S && typeof S.openSlpWriter === 'function', 'streaming writer API not bridged');
             assertTrue(!!window.SioLazyLoader && !!window.Session, 'SioLazyLoader / pose-data not bridged');
-            const { buildSessionSlpBytesStreaming } = await import('../import-export/slp-streaming-write.js?v=1915b267906d');
+            const { buildSessionSlpBytesStreaming } = await import('../import-export/slp-streaming-write.js?v=cd51175df002');
 
             // Two per-camera predicted stores (4 frames each, 2 tracks).
             const labA = await openLazy(S, await storeBytes(S, 'cam0.mp4', 4), 'a.slp');
@@ -208,7 +208,7 @@
             // resolves to a valid, correctly-named track after a real
             // propagate + real streaming export + real readback — not a mock.
             const S = window.SleapIO;
-            const { buildSessionSlpBytesStreaming } = await import('../import-export/slp-streaming-write.js?v=1915b267906d');
+            const { buildSessionSlpBytesStreaming } = await import('../import-export/slp-streaming-write.js?v=cd51175df002');
 
             const N = 5; // >1 frame is the whole point — must catch "only frame 0 survives"
             const labA = await openLazy(S, await storeBytes(S, 'cam0.mp4', N), 'pa.slp');
@@ -289,7 +289,7 @@
             // (calibration round-trip) and offset the loaded cameras' video ids past
             // them — NOT throw "lazy store missing".
             const S = window.SleapIO;
-            const { buildSessionSlpBytesStreaming } = await import('../import-export/slp-streaming-write.js?v=1915b267906d');
+            const { buildSessionSlpBytesStreaming } = await import('../import-export/slp-streaming-write.js?v=cd51175df002');
             const labA = await openLazy(S, await storeBytes(S, 'cam0.mp4', 4), 'ca.slp');
             const labB = await openLazy(S, await storeBytes(S, 'cam1.mp4', 4), 'cb.slp');
 
@@ -356,7 +356,7 @@
             const S = window.SleapIO;
             assertTrue(S && typeof S.openSlpWriter === 'function', 'streaming writer API not bridged');
             assertTrue(!!window.SioLazyLoader && !!window.Session, 'SioLazyLoader / pose-data not bridged');
-            const { buildSessionSlpBytesStreaming } = await import('../import-export/slp-streaming-write.js?v=1915b267906d');
+            const { buildSessionSlpBytesStreaming } = await import('../import-export/slp-streaming-write.js?v=cd51175df002');
 
             // Two per-camera predicted stores (4 frames each, 2 tracks).
             const labA = await openLazy(S, await storeBytes(S, 'cam0.mp4', 4), 'ea.slp');
