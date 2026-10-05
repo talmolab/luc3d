@@ -27,7 +27,14 @@ import { updateFrameInfo } from './info-panel.js';
 // Reproj/Error visibility
 // ============================================
 
-export function setReprojErrorVisible(visible) {
+/**
+ * Show / hide the reprojection-error UI (Info Panel section + error columns).
+ * Showing it also ticks the toolbar's Reproj and Errors boxes — unless
+ * `opts.checkBoxes === false`, which the Triangulate All paths pass because
+ * they set the boxes themselves via `showReprojectionsOnly` (#243). Ticking
+ * Errors here first would make every run look like a change (and flicker it).
+ */
+export function setReprojErrorVisible(visible, opts) {
     var display = visible ? '' : 'none';
     var el = document.getElementById('reprojErrorSection');
     if (el) el.style.display = display;
@@ -37,12 +44,58 @@ export function setReprojErrorVisible(visible) {
         cols[i].style.display = display;
     }
     // Check the checkboxes when triangulation data is available
-    if (visible) {
+    if (visible && !(opts && opts.checkBoxes === false)) {
         var reproj = document.getElementById('visReprojections');
         if (reproj) reproj.checked = true;
         var errors = document.getElementById('visErrors');
         if (errors) errors.checked = true;
     }
+}
+
+/**
+ * After Triangulate All (#243): the next job is proofreading the 3D, so show
+ * the reprojections and hide what competes with them — User, Predicted and
+ * Errors off, Reproj on (the toolbar checkboxes). Each change fires the
+ * checkbox's own `change` event, exactly as a click would, so the existing
+ * handler deselects an instance whose type just got hidden and redraws.
+ *
+ * Pair it with `setReprojErrorVisible(true, { checkBoxes: false })` so the
+ * boxes are compared with what the USER had, not with Errors just re-ticked.
+ *
+ * @returns {boolean} whether any checkbox changed (for the status line)
+ */
+export function showReprojectionsOnly() {
+    return setToolbarLayers([['visUser', false], ['visPredicted', false], ['visErrors', false], ['visReprojections', true]]);
+}
+
+// Suffix for a Triangulate All status line when `showReprojectionsOnly` hid
+// anything, so the user knows where User / Predicted went.
+export var REPROJ_ONLY_NOTE = ' · showing Reproj only (toolbar)';
+
+/**
+ * After Track Frame / Track Frame Range / Track All: the run's product is the
+ * tracked PREDICTIONS (now colored by identity), so show only those — Predicted
+ * on; User, Reproj and Errors off. Same mechanics as `showReprojectionsOnly`
+ * (each box fires its own `change` event). Returns whether anything changed.
+ */
+export function showPredictedOnly() {
+    return setToolbarLayers([['visUser', false], ['visPredicted', true], ['visReprojections', false], ['visErrors', false]]);
+}
+
+// Suffix for a tracking status line when `showPredictedOnly` changed anything.
+export var PREDICTED_ONLY_NOTE = ' · showing Predicted only (toolbar)';
+
+/** Set toolbar layer checkboxes `[[id, checked], …]` as clicks would; true if any changed. */
+function setToolbarLayers(want) {
+    var changed = false;
+    for (var i = 0; i < want.length; i++) {
+        var el = document.getElementById(want[i][0]);
+        if (!el || el.checked === want[i][1]) continue;
+        el.checked = want[i][1];
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+        changed = true;
+    }
+    return changed;
 }
 
 // ============================================
@@ -85,7 +138,7 @@ export function getVisibilitySettings() {
             nodeStyle: styleVal('visUserNodeStyle', 'circle'),
         },
         predictedOpts: {
-            nodeSize: parseInt(document.getElementById('visPredNodeSize').value) || 4,
+            nodeSize: parseInt(document.getElementById('visPredNodeSize').value) || 6,
             lineWidth: parseInt(document.getElementById('visPredEdgeWeight').value) || 2,
             alpha: parseInt(document.getElementById('visPredEdgeTrans').value) / 100,
             showLabels: false,
@@ -101,7 +154,7 @@ export function getVisibilitySettings() {
             labelSize: parseInt(document.getElementById('visReprojLabelSize').value) || 11,
             labelAlpha: parseFloat(document.getElementById('visReprojLabelAlpha').value),
             showLabels: parseInt(document.getElementById('visReprojLabelSize').value) > 0,
-            lineStyle: document.getElementById('visReprojLineStyle').getAttribute('data-value') || 'dotted',
+            lineStyle: document.getElementById('visReprojLineStyle').getAttribute('data-value') || 'solid',
             nodeStyle: styleVal('visReprojNodeStyle', 'circle'),
         },
     };
@@ -112,28 +165,11 @@ export function getVisibilitySettings() {
 let _lastAuxUpdate = 0;
 const AUX_UPDATE_MS = 100;
 
-export function drawAllOverlays(frameIdx) {
-    if (!state.session) return;
-
-    // Lazy H5: fetch frame data on demand if not yet loaded
-    if (state.session.lazyLoader && !state.session.frameGroups.has(frameIdx)) {
-        ensureLazyFrameData(frameIdx).then(function () {
-            if (state.currentFrame === frameIdx) {
-                drawAllOverlays(frameIdx);
-            }
-        });
-        return;
-    }
-
-    // Auto-finish edit group mode on frame change
-    if (editGroupState && frameIdx !== state.currentFrame) {
-        finishEditGroup();
-    }
-
-    const frameGroup = state.session.getFrameGroup(frameIdx);
-    const instanceGroups = getInstanceGroupsForFrame(frameIdx);
-
-    // Lazily compute reprojections for groups that have points3d but no reprojected instances
+// Lazily compute reprojections for groups that have points3d but no
+// reprojected instances, on frame `fi` (whose groups are `instanceGroups`).
+// Runs for every frame drawAllOverlays draws — during playback the views can
+// be on different frames (see its `viewFrames`).
+function fillLazyReprojections(fi, instanceGroups) {
     if (instanceGroups && state.session.cameras.length >= 2) {
         var _lazyFrameResults = null;
         for (var _rg = 0; _rg < instanceGroups.length; _rg++) {
@@ -173,10 +209,48 @@ export function drawAllOverlays(frameIdx) {
             }
         }
         if (_lazyFrameResults) {
-            var _existing = state.triangulationResults.get(frameIdx) || [];
-            state.triangulationResults.set(frameIdx, _existing.concat(_lazyFrameResults));
+            var _existing = state.triangulationResults.get(fi) || [];
+            state.triangulationResults.set(fi, _existing.concat(_lazyFrameResults));
         }
     }
+}
+
+/**
+ * Redraw every view's pose overlay.
+ *
+ * @param {number} frameIdx - the frame being shown (drives selection, the info
+ *   panel, timeline, legend and the lazy-load gate).
+ * @param {Object<string, number>} [viewFrames] - optional per-view frame
+ *   indices, `{ viewName: frameIdx }`. Playback passes the frame each view's
+ *   canvas ACTUALLY shows (from its captured VideoFrame — see
+ *   `VideoController.startPlayback`), which can differ from `frameIdx` by a
+ *   frame or two across cameras; each view's overlay is then drawn for its own
+ *   frame so skeleton and video always agree. A view whose frame is not
+ *   hydrated (lazy project) falls back to `frameIdx`. Omitted = every view at
+ *   `frameIdx` (seek / step / edits).
+ */
+export function drawAllOverlays(frameIdx, viewFrames) {
+    if (!state.session) return;
+
+    // Lazy H5: fetch frame data on demand if not yet loaded
+    if (state.session.lazyLoader && !state.session.frameGroups.has(frameIdx)) {
+        ensureLazyFrameData(frameIdx).then(function () {
+            if (state.currentFrame === frameIdx) {
+                drawAllOverlays(frameIdx);
+            }
+        });
+        return;
+    }
+
+    // Auto-finish edit group mode on frame change
+    if (editGroupState && frameIdx !== state.currentFrame) {
+        finishEditGroup();
+    }
+
+    const frameGroup = state.session.getFrameGroup(frameIdx);
+    const instanceGroups = getInstanceGroupsForFrame(frameIdx);
+
+    fillLazyReprojections(frameIdx, instanceGroups);
 
     var vis = getVisibilitySettings();
 
@@ -230,8 +304,27 @@ export function drawAllOverlays(frameIdx) {
 
     var editGroupTarget = interactionManager ? interactionManager.editGroupTarget : null;
 
+    // Frames other than `frameIdx` that this call draws (per-view playback
+    // frames), each needing the same lazy reprojection fill — done once each.
+    var filledFrames = null;
+
     for (const view of state.views) {
         if (!view.overlayCtx || !view.overlayCanvas) continue;
+
+        // This view's frame: during playback, the frame ITS canvas shows
+        // (`viewFrames`); otherwise — or if that frame isn't hydrated in a lazy
+        // project — the shared `frameIdx`.
+        var vFrameGroup = frameGroup, vGroups = instanceGroups, vSelected = selectedInstanceGroup;
+        var vFrame = viewFrames ? viewFrames[view.name] : undefined;
+        if (vFrame != null && vFrame !== frameIdx &&
+            !(state.session.lazyLoader && !state.session.frameGroups.has(vFrame))) {
+            vFrameGroup = state.session.getFrameGroup(vFrame);
+            vGroups = getInstanceGroupsForFrame(vFrame);
+            if (!filledFrames) filledFrames = new Set();
+            if (!filledFrames.has(vFrame)) { filledFrames.add(vFrame); fillLazyReprojections(vFrame, vGroups); }
+            // Highlight the selection only where it exists on this view's frame.
+            if (vSelected && (!vGroups || vGroups.indexOf(vSelected) < 0)) vSelected = null;
+        }
 
         // Resize overlay canvas to match zoom level for sharp rendering.
         // Higher internal resolution at higher zoom keeps sizes constant
@@ -273,20 +366,20 @@ export function drawAllOverlays(frameIdx) {
 
         // Convert FrameGroup instances to the format expected by drawFrameOverlays
         let overlayFrameGroup = null;
-        if (frameGroup) {
+        if (vFrameGroup) {
             overlayFrameGroup = {
-                frameIdx: frameGroup.frameIdx,
+                frameIdx: vFrameGroup.frameIdx,
                 instances: {}
             };
-            for (const [camName, instances] of frameGroup.instances) {
+            for (const [camName, instances] of vFrameGroup.instances) {
                 overlayFrameGroup.instances[camName] = instances;
             }
         }
 
         // Get unlinked instances for this view, filtered by type visibility
         var viewUnlinked = [];
-        if (frameGroup && (vis.showUser || vis.showPredicted)) {
-            var allUnlinked = frameGroup.getUnlinkedInstances(view.name) || [];
+        if (vFrameGroup && (vis.showUser || vis.showPredicted)) {
+            var allUnlinked = vFrameGroup.getUnlinkedInstances(view.name) || [];
             for (var _ui = 0; _ui < allUnlinked.length; _ui++) {
                 var _ulType = allUnlinked[_ui].instance.type || 'user';
                 if (_ulType === 'predicted' && vis.showPredicted) viewUnlinked.push(allUnlinked[_ui]);
@@ -294,7 +387,7 @@ export function drawAllOverlays(frameIdx) {
             }
         }
 
-        drawFrameOverlays(view.overlayCtx, view.name, overlayFrameGroup, instanceGroups, state.session, {
+        drawFrameOverlays(view.overlayCtx, view.name, overlayFrameGroup, vGroups, state.session, {
             colorByIdentity: state.colorByIdentity,
             trailLength: state.trailLength,
             // NOT vis.showLegend: the live legend is pane chrome now
@@ -316,7 +409,7 @@ export function drawAllOverlays(frameIdx) {
             canvasHeight: view.overlayCanvas.height,
             labelDisplayScale: labelDisplayScale,
             labelRotation: labelRotation,
-            selectedInstanceGroup: selectedInstanceGroup,
+            selectedInstanceGroup: vSelected,
             selectedReprojected: interactionManager ? interactionManager.selectedReprojected : false,
             selectedNodeIdx: selectedNodeIdx,
             hoveredNode: hoveredNode,
@@ -358,7 +451,9 @@ export function drawAllOverlays(frameIdx) {
     if (!state.isPlaying || (_auxNow - _lastAuxUpdate) >= AUX_UPDATE_MS) {
         _lastAuxUpdate = _auxNow;
         updateFrameInfo(frameIdx, instanceGroups);
-        if (timeline) timeline.setCurrentFrame(frameIdx);
+        // While playing, only the playhead moves: let the timeline blit its
+        // cached track/marker layer instead of a full redraw (ui/timeline.js).
+        if (timeline) timeline.setCurrentFrame(frameIdx, state.isPlaying ? { playback: true } : undefined);
     }
 }
 

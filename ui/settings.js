@@ -136,9 +136,22 @@ export function getDefaultTriangulationMethod() {
     return _settings.triangulationMethod === 'ba' ? 'ba' : 'dlt';
 }
 
+// Listeners told when the default changes — the toolbar's Triangulate buttons
+// show it (#138). A listener that throws must not stop the others or the save.
+var _methodListeners = [];
+
+export function onDefaultTriangulationMethodChange(fn) {
+    if (typeof fn === 'function') _methodListeners.push(fn);
+}
+
 export function setDefaultTriangulationMethod(method) {
+    var prev = getDefaultTriangulationMethod();
     _settings.triangulationMethod = method === 'ba' ? 'ba' : 'dlt';
     persist();
+    if (_settings.triangulationMethod === prev) return;
+    for (var i = 0; i < _methodListeners.length; i++) {
+        try { _methodListeners[i](_settings.triangulationMethod); } catch (e) { /* ignore */ }
+    }
 }
 
 // --- Node weights ----------------------------------------------------------
@@ -340,6 +353,41 @@ const TRACKING_THRESHOLDS = [
         desc: 'The stale-anchor fix (pose/cross-view-tracker.js, 2026-08-14): evict a target\'s per-camera detection once it is older than this many frames, before that frame\'s matching runs, so a target cannot be re-triangulated from one fresh view fused with several ancient ones after an occlusion. 0 = off (reproduces the pre-fix, unbounded-staleness reference behavior). Validated default 20; measured to cut sustained ID switches roughly in half to 5x on both benchmark corpora when paired with a lower distance threshold.',
     },
     {
+        id: 'matchGate', label: 'Reject negative matches (gate)', default: 1,
+        min: 0, max: 1, step: 1, kind: 'toggle',     // an on/off switch in the wizard (stored as 1 / 0)
+        desc: 'The match gate (pose/cross-view-tracker.js, 2026-10-03). On: a tracked target only takes a detection it scores positively on (roughly, within the distance threshold of where it is), instead of being forced onto whatever is left. Stops a spare target and an extra detection (e.g. a reflection) from trading a correct match away. Targets lost for longer than the stale window still re-acquire ungated. Off: the pre-gate forced assignment.',
+    },
+    {
+        id: 'autoSwitchCheck', label: 'Check ID switches after tracking (body size)', default: 1,
+        min: 0, max: 1, step: 1, kind: 'toggle',     // an on/off switch in the wizard (stored as 1 / 0)
+        desc: 'After Track All or Track Frame Range, flag close encounters where the animals leaving it match each other\'s body size better than their own (Tracks ▸ Check ID Switches; pose/id-switch-check.js). Checks every tracked frame in the session (needs at least 60 s of tracking). Results are marked on the seekbar and listed in the ID Switches tab, which opens only when a possible switch is found.',
+    },
+    {
+        id: 'autoImageSwitchCheck', label: 'Check ID switches after tracking (image detection)', default: 0,
+        min: 0, max: 1, step: 1, kind: 'toggle',     // an on/off switch in the wizard (stored as 1 / 0)
+        desc: 'After Track All or Track Frame Range, also check close encounters by APPEARANCE: crops of each animal in every camera are embedded with an image model on the GPU (Tracks ▸ Check ID Switches (Images)). Catches animals of similar size that look different (e.g. coat colour), which the size check cannot. Slow — minutes for a long recording — and needs the videos loaded and WebGPU (current Chrome/Edge); the model (~44 MB) downloads on first use.',
+    },
+    {
+        id: 'imageCheckThreshold', label: 'Image check: flag threshold', default: -25,
+        min: -500, max: 0, step: 5,
+        desc: 'An encounter starts a possible image switch when its score falls below this. Closer to 0 catches more swaps between similar-sized animals but flags more clean encounters: on a 30-min, 5-mouse recording, -25 gave 18 false marks and caught the real switch; 0 gave 42; -50 gave 15 and missed it. Marks that the size check also finds ("Both") were almost always real.',
+    },
+    {
+        id: 'imageCheckHz', label: 'Image check: crops per second', default: 2,
+        min: 0.5, max: 15, step: 0.5,
+        desc: 'How many frames per second the image ID-switch check crops and embeds, per animal and camera. Higher catches more but takes proportionally longer (2 = ~10 min for 30 min of 5 animals x 8 cameras, 3 views each, on an M-series Mac).',
+    },
+    {
+        id: 'imageCheckMaxViews', label: 'Image check: views per animal', default: 3,
+        min: 0, max: 16, step: 1,
+        desc: 'Embed only each animal\'s N views where it appears largest (0 = every view it is visible in). The model is the slow part, so time scales with this: 3 views ran 2.5x faster than all 8 with the same accuracy; 2 starts to cost accuracy.',
+    },
+    {
+        id: 'imageCheckWebNN', label: 'Image check: try WebNN (experimental)', default: 0,
+        min: 0, max: 1, step: 1, kind: 'toggle',     // an on/off switch in the wizard (stored as 1 / 0)
+        desc: 'Also try the browser\'s WebNN API, which on Windows can use NVIDIA tensor cores (Chrome: enable chrome://flags/#web-machine-learning-neural-network). The first frames are embedded both ways; WebNN is kept only if it is faster and its embeddings match the calibrated WebGPU model. "About these flags" in the ID Switches tab says which was used. On macOS (Chrome 154) it measured ~10x slower, CPU only, so the trial keeps WebGPU there.',
+    },
+    {
         id: 'reprojErrorThreshold', label: 'Reprojection error threshold (px)', default: 0,
         min: 0, max: 500, step: 1,
         desc: 'Robust triangulation: after an initial 3D solve, drop any 2D node whose reprojection error in a view exceeds this many pixels, then re-triangulate that node from the remaining reliable views. A node left with fewer than 2 reliable views is dropped from 3D. 0 = disabled (use all views). Views excluded in the Camera Views panel never contribute to triangulation regardless.',
@@ -357,7 +405,8 @@ TRACKING_THRESHOLDS.forEach(function (t) { _thrById.set(t.id, t); });
 const WIZARD_THRESHOLD_IDS = new Set([
     'filterMinVisibleNodes', 'filterMinInstanceScore',
     'corr2dWeight', 'corr3dWeight', 'velocityThreshold', 'distanceThreshold', 'timePenalty',
-    'stale',
+    'stale', 'matchGate',
+    'autoSwitchCheck', 'autoImageSwitchCheck', 'imageCheckThreshold', 'imageCheckHz', 'imageCheckMaxViews', 'imageCheckWebNN',
     'reprojErrorThreshold',
 ]);
 
@@ -379,7 +428,7 @@ export function getTrackingThresholdDefs() {
         return {
             id: t.id, label: t.label, default: t.default,
             value: getTrackingThreshold(t.id),
-            min: t.min, max: t.max, step: t.step, desc: t.desc,
+            min: t.min, max: t.max, step: t.step, desc: t.desc, kind: t.kind || 'number',
         };
     });
 }

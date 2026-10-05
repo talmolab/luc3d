@@ -19,6 +19,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Same cache safety as deploy.yml's "Stage the site": every same-site code
+      # URL gets ?v=<commit>, so Cloudflare's 4-hour .js cache can never serve
+      # an earlier push's modules under this push's index.html. Rewrites only
+      # this throwaway checkout; fails if any module reference is left unstamped.
+      - name: Stamp code URLs with this commit
+        run: node scripts/stamp-version.mjs . "${GITHUB_SHA::12}"
+
       - name: Deploy PR Preview
         uses: JamesIves/github-pages-deploy-action@v4
         with:
@@ -58,16 +65,52 @@ jobs:
         with:
           ref: gh-pages
 
+      # deploy.yml pushes to this same branch from a different workflow with a
+      # different concurrency group — and a merge to main starts BOTH that deploy
+      # (/dev/) and this cleanup in the same second. A single checkout-then-push
+      # lost that race most of the time ("cannot lock ref 'refs/heads/gh-pages'"),
+      # leaving merged PRs' previews on the live site. So, like deploy.yml:
+      # re-sync to the current gh-pages, re-apply the removal, push, and retry on
+      # rejection rather than failing or force-pushing over someone else's work.
       - name: Remove PR preview
+        env:
+          PR_NUMBER: ${{ github.event.number }}
         run: |
-          if [ -d "pr/${{ github.event.number }}" ]; then
-            rm -rf "pr/${{ github.event.number }}"
-            git config user.name "github-actions[bot]"
-            git config user.email "github-actions[bot]@users.noreply.github.com"
-            git add -A
-            git commit -m "Remove PR #${{ github.event.number }} preview" || true
-            git push
+          # Never let an unset/odd number turn "pr/$PR_NUMBER" into "pr/" —
+          # that would remove EVERY preview.
+          if ! [[ "$PR_NUMBER" =~ ^[0-9]+$ ]]; then
+            echo "::error::refusing to clean up: PR number is '$PR_NUMBER'"
+            exit 1
           fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          for attempt in 1 2 3 4 5; do
+            git fetch -q --depth 1 origin gh-pages
+            git checkout -q -B gh-pages FETCH_HEAD
+            git reset -q --hard FETCH_HEAD
+            git clean -qfdx
+
+            if [ ! -d "pr/$PR_NUMBER" ]; then
+              echo "No preview at pr/$PR_NUMBER — nothing to remove."
+              exit 0
+            fi
+
+            git rm -rq -- "pr/$PR_NUMBER"
+            git commit -q -m "Remove PR #$PR_NUMBER preview"
+
+            if git push -q origin HEAD:gh-pages; then
+              echo "Removed pr/$PR_NUMBER."
+              exit 0
+            fi
+
+            echo "::warning::gh-pages push rejected (attempt $attempt/5) --"\
+                 "another deploy landed first. Re-syncing."
+            sleep $((attempt * 5))
+          done
+
+          echo "::error::could not remove pr/$PR_NUMBER from gh-pages after 5 attempts."
+          exit 1
 
       - name: Comment on PR (cleanup)
         uses: marocchino/sticky-pull-request-comment@v2
