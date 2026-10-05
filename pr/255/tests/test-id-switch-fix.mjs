@@ -6,8 +6,8 @@
  *     null at the session end), an 'end''s `switchedAt` (the run's first
  *     encounter, or null when the run starts the session) — including a LONE
  *     middle flag, whose switch-back encounter is not itself a change point.
- *  2. `idSwitchFixPlan` turns a row into frames: the boundary is the paused frame
- *     when it is inside [s, e+1], else e+1; an onset reaches its switch-back
+ *  2. `idSwitchFixPlan` turns a row into frames: the boundary is the current frame
+ *     anywhere in the row's window (lead-in .. 1 s after), else e+1; an onset reaches its switch-back
  *     encounter's last close frame or the last frame; an 'end' covers the stretch
  *     before it. Partner rows are paired. Results restored from an older file
  *     (no link) fall back to the nearest change point of the same pair.
@@ -78,21 +78,28 @@ console.log('2. idSwitchFixPlan');
     const r = resultOf(encounters(6, [2, 3]));                      // onset 300 (close 280..300), end 500 (480..500)
     RV.linkIdSwitchResults({ size: r });
     const on = r.flags.find(f => f.kind === 'onset'), end = r.changes[0];
-    let p = RV.idSwitchFixPlan(on, r, { currentFrame: 50, totalFrames: 1000 });
-    ok(p.from === 301 && p.to === 500 && p.start === 'separate', `onset, not paused inside: 301..500 (${p.from}..${p.to})`);
+    const W = [250, 330], WE = [450, 530];                         // each row's window: 1 s (30 fr) either side
+    const plan = (m, cur, window) => RV.idSwitchFixPlan(m, r, { currentFrame: cur, totalFrames: 1000, window });
+    let p = plan(on, 50, W);
+    ok(p.from === 301 && p.to === 500 && p.start === 'separate', `onset, current frame outside its window: 301..500 (${p.from}..${p.to})`);
     ok(p.partnerKey === RV.idSwitchRowKey(end), 'onset is paired with its \'end\' row');
-    p = RV.idSwitchFixPlan(on, r, { currentFrame: 290, totalFrames: 1000 });
-    ok(p.from === 290 && p.start === 'paused', `onset, paused at 290 inside the close spell: starts there (${p.from})`);
-    p = RV.idSwitchFixPlan(on, r, { currentFrame: 301, totalFrames: 1000 });
-    ok(p.from === 301 && p.start === 'paused', 'paused on the separation frame (e+1) counts as inside');
-    p = RV.idSwitchFixPlan(on, r, { currentFrame: 302, totalFrames: 1000 });
-    ok(p.start === 'separate', 'one frame later does not');
+    for (const [cur, where] of [[290, 'in the close spell'], [260, 'in the lead-in, before the red section'],
+                                [320, 'in the lead-out, after it'], [250, 'on the window\'s first frame'], [330, 'on its last']]) {
+        p = plan(on, cur, W);
+        ok(p.from === cur && p.to === 500 && p.start === 'current', `onset, current frame ${cur} ${where}: starts there (${p.from})`);
+    }
+    p = plan(on, 331, W);
+    ok(p.start === 'separate' && p.from === 301, 'one frame past the window falls back to where they separate');
+    p = plan(on, 260, undefined);
+    ok(p.start === 'separate', 'without a window, only the close spell counts');
 
-    p = RV.idSwitchFixPlan(end, r, { currentFrame: 0, totalFrames: 1000 });
+    p = plan(end, 0, WE);
     ok(p.from === 301 && p.to === 500, `'end': the same stretch, 301..500 (${p.from}..${p.to})`);
     ok(p.partnerKey === RV.idSwitchRowKey(on), '\'end\' is paired with its onset');
-    p = RV.idSwitchFixPlan(end, r, { currentFrame: 490, totalFrames: 1000 });
-    ok(p.to === 489, `'end', paused at 490: ends just before it (${p.to})`);
+    p = plan(end, 490, WE);
+    ok(p.to === 489 && p.start === 'current', `'end', current frame 490: ends just before it (${p.to})`);
+    p = plan(end, 460, WE);
+    ok(p.to === 459, `'end', current frame 460 in its lead-in: ends just before it (${p.to})`);
 
     const toEnd = resultOf(encounters(6, [4, 5]));
     const on2 = toEnd.flags.find(f => f.kind === 'onset');
