@@ -2573,10 +2573,13 @@ export class VideoController {
      * per-refresh loop that step was itself the jump on every pause: measured
      * with barcode clips in Chrome, Brave, Safari and Firefox at 60 and 120 Hz,
      * +1 moved the skeleton on 95–100% of pauses, while +0 ended aligned in
-     * 100% of camera-pauses and left Chrome/Brave's skeletons still in
-     * 90–100%. (Firefox HEVC was the one exception, at ~50%, until its
-     * stepping moved to mid-frame `<video>` seeks — see `_getFrameHTML5`'s
-     * `_html5Moved` — which brought +0 there to 100%.)
+     * 100% of camera-pauses. Chrome/Brave's skeletons stayed still in 90–100%
+     * at 120 Hz and on 60 fps video; for 150 fps video on a 60 Hz display it
+     * was 68–95%, because there the cameras drift out of step during playback
+     * and the re-decode brings each to camera 0's frame. (Firefox HEVC was the
+     * one exception to alignment, at ~50%, until its stepping moved to
+     * mid-frame `<video>` seeks — see `_getFrameHTML5`'s `_html5Moved` —
+     * which brought +0 there to 100%.)
      *
      * Internal stops (scrub, teardown, end-of-video) call `stopPlayback()`
      * directly and skip this re-decode; only the explicit pause controls use it.
