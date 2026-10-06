@@ -231,7 +231,9 @@
             // Add an InstanceGroup so we can verify dirty marking
             var group = new InstanceGroup(1, 0);
             group.addInstance('cam1', inst);
-            group.points3d = [[1, 2, 3], [4, 5, 6], [7, 8, 9]];
+            // Flat Float64Array(3N), the canonical shape since luc3d #189.
+            group.points3d = new Float64Array([1, 2, 3, 4, 5, 6, 7, 8, 9]);
+            group.reprojections = { cam1: [[1, 1], [2, 2], [3, 3]] };
             session.instanceGroups.set(0, [group]);
 
             // Remove middle node 'b'
@@ -248,9 +250,15 @@
             assertEqual(skeleton.nodes.length, 2);
             assertDeepEqual(skeleton.nodes, ['a', 'c']);
 
-            // Verify InstanceGroup marked dirty and 3D points cleared
+            // The group is marked dirty, its 3D is SPLICED (not discarded — one
+            // deleted node must not cost the project every triangulated
+            // keypoint it has), and its cached reprojections, which are arrays
+            // at the OLD node count, are dropped so they get recomputed.
             assertTrue(group.dirty, 'Group should be marked dirty');
-            assertNull(group.points3d, '3D points should be cleared');
+            assertEqual(group.points3d.length, 6, 'one keypoint spliced out of the 3D');
+            assertDeepEqual(Array.from(group.points3d), [1, 2, 3, 7, 8, 9],
+                'the removed node is gone and every other keypoint keeps its value');
+            assertNull(group.reprojections, 'stale per-node reprojections dropped');
         });
 
         it('adding an edge updates skeleton correctly', function () {

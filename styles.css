@@ -6491,7 +6491,8 @@ body.origin-mode-lock .timeline-container {
    for the same reason. It carries no caution and no todo list: it is a note
    saying which sessions loaded which calibration, and nothing else. */
 .origin-rebase-modal,
-.calib-notice-modal {
+.calib-notice-modal,
+.skeleton-edit-modal {
   min-width: 440px;
   max-width: 560px;
   /* Three tables plus two cautions is tall — ~975px on a multi-session
@@ -6507,7 +6508,8 @@ body.origin-mode-lock .timeline-container {
    below the fold. Still one scroller — sticky does not add another, it just
    keeps this row out of the scrolled flow. */
 .origin-rebase-modal .modal-actions,
-.calib-notice-modal .modal-actions {
+.calib-notice-modal .modal-actions,
+.skeleton-edit-modal .modal-actions {
   position: sticky;
   bottom: -20px;
   margin: 0 -22px -20px;
@@ -6554,6 +6556,16 @@ body.origin-mode-lock .timeline-container {
 .origin-rebase-quiet td {
   color: var(--text-muted);
   font-size: 11px;
+}
+
+/* The sum under a column of `.origin-rebase-sub` rows (the skeleton-edit
+   dialog's By-session block). Back at full weight and ruled off above, because
+   a total that looks like one more row is a row the reader adds in again. */
+.origin-rebase-total td {
+  color: var(--text-primary);
+  font-weight: 600;
+  padding-top: 5px;
+  border-top: 1px solid var(--border-color, #444);
 }
 
 /* One titled table. The dialog has two of these — what the re-base rewrites
@@ -6769,6 +6781,21 @@ details[open] > summary.origin-rebase-block-title::before {
   color: var(--text-secondary);
   margin-bottom: 6px;
   font-variant-numeric: tabular-nums;
+}
+
+/* Skeleton edit confirmation (ui/skeleton-edit-warning.js). Reuses the block,
+   table and caution classes above wholesale; the only thing it needs of its own
+   is the consequence list, which is prose rather than a count column. */
+.skeleton-edit-effects {
+  margin: 10px 0 2px;
+  padding-left: 18px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-primary);
+}
+
+.skeleton-edit-effects li + li {
+  margin-top: 6px;
 }
 /* Tracks ▸ Check ID Switches — the ID Switches tab of the right panel (ui/id-switch-modal.js
    refreshIdSwitchPanel). The tab content is the panel's one scroller; the toolbar sticks. */

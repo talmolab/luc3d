@@ -1144,6 +1144,116 @@ function spliceOcc(occ, n, idx, del) {
     return out;
 }
 
+// --------------------------------------------------------------------------
+// Skeleton-edit helpers (module-private)
+//
+// Used by `Session.propagateNodeAdded` / `propagateNodeRemoved`. They keep the
+// three things a skeleton node edit has to move — the 2D buffers, the per-
+// instance `nulledNodes` set, and the group's flat 3D — on ONE node index
+// space. Anything that drifts here mis-seats every node past the edit onto its
+// neighbour, which is the same class of bug the plane pool's "address by id,
+// never by index" rule exists to prevent.
+// --------------------------------------------------------------------------
+
+/** Fan-out radius, in source pixels, for a hidden node placed near a centroid. */
+const HIDDEN_NODE_SPREAD = 20;
+
+/**
+ * Give node `idx` a position near the instance's placed points and switch it
+ * off, so it draws a grey, clickable marker instead of nothing at all.
+ *
+ * Only for USER instances with something to centre on: a predicted instance's
+ * points are model output and must not be invented, and an instance with no
+ * placed points has no centroid, so both are left empty.
+ *
+ * The offset angle is derived from how many nodes are already switched off, so
+ * two nodes added in a row do not land on top of each other.
+ *
+ * @param {Instance} inst
+ * @param {number} idx
+ */
+function placeHiddenNode(inst, idx) {
+    if (!inst || inst.type !== 'user') return;
+    let cx = 0, cy = 0, c = 0;
+    for (let k = 0, n = inst.numNodes; k < n; k++) {
+        if (k === idx || !inst.hasPoint(k)) continue;
+        cx += inst.getX(k); cy += inst.getY(k); c++;
+    }
+    if (c === 0) return;
+    cx /= c; cy /= c;
+    if (!inst.nulledNodes) inst.nulledNodes = new Set();
+    const seq = inst.nulledNodes.size;
+    const angle = (2 * Math.PI * seq) / 8;
+    inst.setPoint(idx,
+        Math.round(cx + Math.cos(angle) * HIDDEN_NODE_SPREAD),
+        Math.round(cy + Math.sin(angle) * HIDDEN_NODE_SPREAD));
+    inst.nulledNodes.add(idx);
+}
+
+/**
+ * Re-seat `inst.nulledNodes` after node `idx` was spliced out. The set holds
+ * node INDICES, so every member above the removed one shifts down by one —
+ * leave it alone and a switched-off node silently becomes its neighbour.
+ * @param {Instance} inst
+ * @param {number} idx
+ */
+function dropNulledNode(inst, idx) {
+    const nn = inst && inst.nulledNodes;
+    if (!nn || nn.size === 0) return;
+    const next = new Set();
+    for (const k of nn) {
+        if (k === idx) continue;
+        next.add(k > idx ? k - 1 : k);
+    }
+    inst.nulledNodes = next;
+}
+
+/**
+ * Append one absent (all-NaN) keypoint to a flat `Float64Array(3N)`.
+ * @param {Float64Array} pts @returns {Float64Array}
+ */
+function grow3dByOneNode(pts) {
+    const out = new Float64Array(pts.length + POINT3D_STRIDE);
+    out.set(pts, 0);
+    for (let i = pts.length; i < out.length; i++) out[i] = NaN;
+    return out;
+}
+
+/**
+ * Splice keypoint `idx` out of a flat `Float64Array(3N)`, keeping every other
+ * keypoint's value exactly.
+ * @param {Float64Array} pts @param {number} idx @returns {Float64Array}
+ */
+function remove3dNode(pts, idx) {
+    const n = (pts.length / POINT3D_STRIDE) | 0;
+    if (idx < 0 || idx >= n) return pts;
+    const out = new Float64Array(pts.length - POINT3D_STRIDE);
+    const head = idx * POINT3D_STRIDE;
+    out.set(pts.subarray(0, head), 0);
+    out.set(pts.subarray(head + POINT3D_STRIDE), head);
+    return out;
+}
+
+/**
+ * Drop a group's cached reprojections. Both caches are per-node arrays built at
+ * the OLD node count — `reprojections` is the raw `{cam: [[x,y]|null, …]}` the
+ * triangulation sweeps store, and `reprojectedInstances` is the `Instance`
+ * form `getOrComputeReprojectedInstance` hands the renderer. Left behind, they
+ * draw the previous skeleton over the new one until something re-triangulates.
+ *
+ * `reprojectedInstances` is handed back to `NO_REPROJECTED_INSTANCES` rather
+ * than `clear()`ed: a group with nothing cached is exactly what the shared
+ * empty map is for, and a cleared Map of its own would keep the JSMap this
+ * project-wide sweep has just emptied.
+ * @param {InstanceGroup} group
+ */
+function clearGroupReprojections(group) {
+    if (group.reprojectedInstances !== NO_REPROJECTED_INSTANCES) {
+        group.reprojectedInstances = NO_REPROJECTED_INSTANCES;
+    }
+    if (group.reprojections) group.reprojections = null;
+}
+
 
 /** Auto-incrementing ID counter for UnlinkedInstance */
 let _unlinkedIdCounter = 0;
@@ -3035,21 +3145,69 @@ export class Session {
 
     /**
      * Propagate a skeleton node addition to all instances.
-     * Appends one empty node slot to every Instance.
+     * Appends one node slot to every Instance.
+     *
+     * **`opts.hidden` places the new node and switches it OFF**, rather than
+     * leaving the slot empty. An empty slot draws no marker, and a node with no
+     * marker can never be clicked — so on a USER instance the node the person
+     * just added to the skeleton would be unreachable, and they could never
+     * build a full-keypoint instance with it. That is the same failure
+     * `InteractionManager`'s instance-creation path already guards against;
+     * this takes the same remedy, fanning the node out from the centroid of the
+     * instance's placed points and recording it in `nulledNodes` so it draws
+     * grey and contributes nothing to triangulation until the user moves it.
+     * `nulledNodes` round-trips through the `.slp` (finite xy + `visible:
+     * false`), so the hidden state survives a save/reload.
+     *
+     * PREDICTED instances are deliberately left EMPTY: their points are model
+     * output, and fabricating one would make a prediction say something the
+     * model never did. `_convertToUserInstance` fills and flags them at the
+     * moment they become editable, which is the right time.
+     *
+     * Default `hidden: false` keeps the raw data-model behaviour (an empty
+     * slot) for callers that only want the arrays re-shaped; the skeleton
+     * editor passes `true`.
      *
      * RESIDENT-ONLY by necessity — see `_warnResidentOnlyStructuralEdit`.
+     * @param {{hidden?: boolean}} [opts]
      */
-    propagateNodeAdded() {
+    propagateNodeAdded(opts) {
         this._warnResidentOnlyStructuralEdit('Skeleton node added');
+        const hidden = !!(opts && opts.hidden);
         // Update all instances in FrameGroups. `insertNodeAt` grows the flat
         // coordinate/occlusion buffers AND any backup together, so a later
         // restorePoints() stays node-aligned (luc3d #189 follow-up #1).
         for (const fg of this.frameGroups.values()) {
             for (const instances of fg.instances.values()) {
-                for (const inst of instances) inst.insertNodeAt(inst.numNodes);
+                for (const inst of instances) {
+                    inst.insertNodeAt(inst.numNodes);
+                    if (hidden) placeHiddenNode(inst, inst.numNodes - 1);
+                }
             }
             for (const unlinkedList of fg.unlinkedInstances.values()) {
-                for (const ul of unlinkedList) ul.instance.insertNodeAt(ul.instance.numNodes);
+                for (const ul of unlinkedList) {
+                    ul.instance.insertNodeAt(ul.instance.numNodes);
+                    if (hidden) placeHiddenNode(ul.instance, ul.instance.numNodes - 1);
+                }
+            }
+        }
+        // Keep the 3D node-aligned with the 2D. `points3d` is a flat
+        // Float64Array(3N) on the SAME node index space, so a group left at the
+        // old length would report the new node as triangulated-at-garbage the
+        // moment the array grew for any other reason. Appending one NaN triple
+        // is the lossless answer: every solved keypoint keeps its value and the
+        // new node reads as absent. The cached reprojections go, because they
+        // are per-node arrays built from the old length. The re-shaped array
+        // goes back through `pooledPoints3d`: this walks every group in the
+        // project, which is a BULK path, and leaving each one on its own
+        // ArrayBuffer would undo the slab pooling for the whole project.
+        for (const groups of this.instanceGroups.values()) {
+            for (const group of groups) {
+                if (group.points3d) {
+                    group.points3d = pooledPoints3d(grow3dByOneNode(group.points3d));
+                }
+                clearGroupReprojections(group);
+                group.markDirty();
             }
         }
     }
@@ -3057,6 +3215,15 @@ export class Session {
     /**
      * Propagate a skeleton node removal to all instances.
      * Removes node `nodeIdx` from every Instance.
+     *
+     * The 3D is SPLICED, not discarded. `points3d` is indexed by the same node
+     * index as the 2D, so it has to lose exactly the one node — and dropping
+     * the whole array instead (which is what this used to do) threw away every
+     * triangulated keypoint in the project because one node was deleted, with
+     * no way to get them back short of re-running Triangulate All. Groups are
+     * still marked dirty, so a re-solve is still offered; it is just no longer
+     * compulsory. Cached reprojections are cleared for the same reason as in
+     * `propagateNodeAdded`.
      *
      * RESIDENT-ONLY by necessity — see `_warnResidentOnlyStructuralEdit`.
      * @param {number} nodeIdx - The index of the removed node
@@ -3067,17 +3234,28 @@ export class Session {
         // backup together (luc3d #189 follow-up #1).
         for (const fg of this.frameGroups.values()) {
             for (const instances of fg.instances.values()) {
-                for (const inst of instances) inst.removeNodeAt(nodeIdx);
+                for (const inst of instances) {
+                    inst.removeNodeAt(nodeIdx);
+                    dropNulledNode(inst, nodeIdx);
+                }
             }
             for (const unlinkedList of fg.unlinkedInstances.values()) {
-                for (const ul of unlinkedList) ul.instance.removeNodeAt(nodeIdx);
+                for (const ul of unlinkedList) {
+                    ul.instance.removeNodeAt(nodeIdx);
+                    dropNulledNode(ul.instance, nodeIdx);
+                }
             }
         }
         // Mark all instance groups as dirty (triangulation needs recomputing)
+        // and splice the removed node out of their 3D, re-pooling it for the
+        // same reason as in `propagateNodeAdded`.
         for (const groups of this.instanceGroups.values()) {
             for (const group of groups) {
+                if (group.points3d) {
+                    group.points3d = pooledPoints3d(remove3dNode(group.points3d, nodeIdx));
+                }
+                clearGroupReprojections(group);
                 group.markDirty();
-                group.points3d = null;
             }
         }
     }

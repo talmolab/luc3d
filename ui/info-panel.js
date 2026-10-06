@@ -12,6 +12,7 @@ import { drawAllOverlays, updateFrameCounters } from './rendering.js';
 import { isInteractiveClickTarget } from './interaction.js';
 import { persistSectionState } from './section-state.js';
 import { buildLazySelect } from './lazy-select.js';
+import { confirmSkeletonEdit } from './skeleton-edit-warning.js';
 import { refreshIdSwitchPanel } from './id-switch-modal.js';
 import { isInfoPanelVisible, markInfoPanelStale } from './panel-visibility.js';
 import { state, timeline, interactionManager, rememberSkeleton, buildRememberedSkeleton,
@@ -709,10 +710,21 @@ export function populateSkeletonTable() {
         nameInput.addEventListener('change', function () {
             const newName = nameInput.value.trim();
             if (!newName) { nameInput.value = sk.nodes[i]; return; }
-            sk.nodes[i] = newName;
-            setProjectSkeleton(sk); // one skeleton per project — keep all sessions on it
-            populateSkeletonTable();
-            drawAllOverlays(state.currentFrame);
+            if (newName === sk.nodes[i]) return;
+            // Confirm against what is already annotated. A rename moves no
+            // coordinates, but the node NAME is how every other tool — a
+            // trained model, an analysis script, a SLEAP project — identifies
+            // it, so it is still a skeleton edit and still goes through the
+            // dialog. Cancelling has to put the typed text back, or the field
+            // would keep showing a name the skeleton does not have.
+            confirmSkeletonEdit({ kind: 'rename-node', label: newName }, function () {
+                sk.nodes[i] = newName;
+                setProjectSkeleton(sk); // one skeleton per project — keep all sessions on it
+                markDirty();
+                populateSkeletonTable();
+                drawAllOverlays(state.currentFrame);
+            });
+            nameInput.value = sk.nodes[i];
         });
         tdName.appendChild(nameInput);
 
@@ -723,13 +735,18 @@ export function populateSkeletonTable() {
         delBtn.style.cssText = 'padding:0 5px;font-size:14px;line-height:1;min-width:0;color:var(--error);';
         delBtn.title = 'Remove node';
         delBtn.addEventListener('click', function () {
-            sk.removeNode(i);
-            // One skeleton per project: unify + drop the node's point from every
-            // session's instances.
-            setProjectSkeleton(sk);
-            propagateNodeRemovedAllSessions(i);
-            populateSkeletonTable();
-            drawAllOverlays(state.currentFrame);
+            // The destructive one: this deletes the node's coordinates from
+            // every instance in every session, with no undo.
+            confirmSkeletonEdit({ kind: 'remove-node', label: sk.nodes[i] }, function () {
+                sk.removeNode(i);
+                // One skeleton per project: unify + drop the node's point from
+                // every session's instances.
+                setProjectSkeleton(sk);
+                propagateNodeRemovedAllSessions(i);
+                markDirty();
+                populateSkeletonTable();
+                drawAllOverlays(state.currentFrame);
+            });
         });
         tdDel.appendChild(delBtn);
 
@@ -756,10 +773,16 @@ export function populateSkeletonTable() {
         delBtn.style.cssText = 'padding:0 5px;font-size:14px;line-height:1;min-width:0;color:var(--error);';
         delBtn.title = 'Remove edge';
         delBtn.addEventListener('click', function () {
-            sk.removeEdge(edgeIdx);
-            setProjectSkeleton(sk); // one skeleton per project — keep all sessions on it
-            populateSkeletonTable();
-            drawAllOverlays(state.currentFrame);
+            // An edge moves no coordinates, but it IS part of the skeleton that
+            // gets exported and matched against, so it confirms like the rest.
+            var edgeLabel = sk.nodes[edge[0]] + ' – ' + sk.nodes[edge[1]];
+            confirmSkeletonEdit({ kind: 'remove-edge', label: edgeLabel }, function () {
+                sk.removeEdge(edgeIdx);
+                setProjectSkeleton(sk); // one skeleton per project — keep all sessions on it
+                markDirty();
+                populateSkeletonTable();
+                drawAllOverlays(state.currentFrame);
+            });
         });
         tdDel.appendChild(delBtn);
 
@@ -852,9 +875,16 @@ function showOneSkeletonWarning(onConfirm) {
 
 // After the shared project skeleton gains/loses a node, keep every session's
 // per-session instance point-arrays in sync.
+// `hidden: true` because this is the INTERACTIVE path: the user just added the
+// node and has to be able to reach it. An empty slot draws no marker and so can
+// never be clicked, which would make a node added to an annotated project
+// permanently unplaceable on every instance that already exists. See
+// `Session.propagateNodeAdded`.
 function propagateNodeAddedAllSessions() {
     var ss = state.sessions || [];
-    for (var i = 0; i < ss.length; i++) if (ss[i] && ss[i].propagateNodeAdded) ss[i].propagateNodeAdded();
+    for (var i = 0; i < ss.length; i++) {
+        if (ss[i] && ss[i].propagateNodeAdded) ss[i].propagateNodeAdded({ hidden: true });
+    }
 }
 function propagateNodeRemovedAllSessions(nodeIdx) {
     var ss = state.sessions || [];
@@ -936,14 +966,20 @@ export function setupSkeletonEditing() {
             setStatus('Node "' + name + '" already exists', 'warning');
             return;
         }
-        state.session.skeleton.addNode(name);
-        // One skeleton per project: unify the reference across all sessions and
-        // extend every session's instance point-arrays for the new node.
-        setProjectSkeleton(state.session.skeleton);
-        propagateNodeAddedAllSessions();
-        input.value = '';
-        populateSkeletonTable();
-        drawAllOverlays(state.currentFrame);
+        confirmSkeletonEdit({ kind: 'add-node', label: name }, function () {
+            state.session.skeleton.addNode(name);
+            // One skeleton per project: unify the reference across all sessions
+            // and extend every session's instance point-arrays for the new
+            // node. `hidden` places it beside the animal and switches it off on
+            // hand-labelled instances, so the node the user just added is
+            // reachable instead of being an invisible empty slot.
+            setProjectSkeleton(state.session.skeleton);
+            propagateNodeAddedAllSessions();
+            markDirty();
+            input.value = '';
+            populateSkeletonTable();
+            drawAllOverlays(state.currentFrame);
+        });
     });
 
     // Allow Enter key in the node name input
@@ -960,13 +996,28 @@ export function setupSkeletonEditing() {
         const src = parseInt(document.getElementById('edgeSrcSelect').value, 10);
         const dst = parseInt(document.getElementById('edgeDstSelect').value, 10);
         if (isNaN(src) || isNaN(dst)) return;
-        if (!state.session.skeleton.addEdge(src, dst)) {
+        var sk = state.session.skeleton;
+        // Validate BEFORE confirming: a duplicate or self-edge is a no-op, and
+        // asking the user to approve something that then does nothing would
+        // make the dialog read as noise.
+        if (src === dst || sk.nodes[src] == null || sk.nodes[dst] == null ||
+            sk.edges.some(function (e) {
+                return (e[0] === src && e[1] === dst) || (e[0] === dst && e[1] === src);
+            })) {
             setStatus('Cannot add edge: duplicate or same node', 'warning');
             return;
         }
-        setProjectSkeleton(state.session.skeleton); // one skeleton per project
-        populateSkeletonTable();
-        drawAllOverlays(state.currentFrame);
+        var edgeLabel = sk.nodes[src] + ' – ' + sk.nodes[dst];
+        confirmSkeletonEdit({ kind: 'add-edge', label: edgeLabel }, function () {
+            if (!sk.addEdge(src, dst)) {
+                setStatus('Cannot add edge: duplicate or same node', 'warning');
+                return;
+            }
+            setProjectSkeleton(sk); // one skeleton per project
+            markDirty();
+            populateSkeletonTable();
+            drawAllOverlays(state.currentFrame);
+        });
     });
 
     // Save Skeleton button
