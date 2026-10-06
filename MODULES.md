@@ -11623,23 +11623,64 @@ from that frame's own timestamp), `drawImage`s exactly that frame, and calls
 a refresh where no view's frame changes draws nothing, captures are always
 `close()`d (held ones on `stopPlayback` via `_refreshCleanup`), and playback
 stops when the primary `<video>` ends. **Browsers whose `VideoFrame(<video>)`
-timestamps don't track the picture** (Safari 27: 0 in ~98% of captures;
-Firefox 157: a constant — measured with `tests/e2e/_probe-capabilities.mjs`)
-are detected per decoder by `judgeVideoFrameTimestamps` (the timestamp must
-move with the clock and agree within 3 frames; cached as
-`decoder._vfTimestamps = 'ok'|'bad'`). A `'bad'` view stops capturing (also
-avoiding Firefox's 5–11 ms/refresh capture cost), is painted with
-`drawCurrentFrame`, and takes its index from a per-view
-requestVideoFrameCallback `mediaTime` — exact in Safari (one callback per shown
-picture), projected forward ≤ 100 ms where callbacks are coalesced
-(`rvfcCallbacksCoalesced()`: Firefox, ~24 callbacks/s covering 2–6 pictures),
-else the clock. rVFC is registered only for fallback views (registering it on
-every view altered Chrome's presentation). Without this the loop froze in
-Safari/Firefox. Verified in the real browsers with
-`tests/e2e/_verify-playback-loop.html` (barcode frame numbers read back from
-each canvas): painted == overlay 100% in Chrome, 96–100% in Safari, ~30–95%
-(within ±1 frame) in Firefox, which exposes no exact per-picture timing.
-`self._refreshFallback` exposes the fallback state for that check. WHICH frame each view shows is chosen
+timestamps don't track the picture** (Safari 27: 0, or an exact copy of
+`currentTime`; Firefox 157: a constant) are detected per decoder by
+`judgeVideoFrameTimestamps` (the timestamp must move, agree with the clock
+within max(3 frames, 50 ms) — 3 frames alone misjudged Chrome/Brave at 150 fps
+on 60 Hz, where the presented frame trails the clock by more — and not BE the
+clock: equal to `currentTime` to the µs while off the frame grid; cached as
+`decoder._vfTimestamps = 'ok'|'bad'`). **WebKit never captures at all**
+(`videoFrameCaptureUnsafe()`, an engine check like `rvfcCallbacksCoalesced`):
+Safari's capture timestamp is 0 or an exact copy of `currentTime` and named the
+captured picture in 0–3% of captures, yet a clock reading can pass judging (the
+old judge passed it at 150 fps: picture 1–13 frames behind the overlay), and
+drawing captures cost ~25% of Safari's presented pictures. While a view is
+still being judged it is not drawn (its canvas keeps the paused frame). A
+`'bad'` view stops capturing (also avoiding Firefox's 5–11 ms/refresh capture
+cost), is painted with `drawCurrentFrame`, and is indexed from a per-view
+requestVideoFrameCallback: **Safari** (one callback per shown picture) is
+painted INSIDE the callback at its `mediaTime` (where `drawImage` and
+`mediaTime` are the same frame; by the refresh a 150 fps video can be 1–2 on),
+but only once the reported frame first changes — the first callback after the
+pre-play seek carries the pre-seek frame's metadata. **Firefox** (coalesced,
+~24 callbacks/s: `rvfcCallbacksCoalesced()`) is painted on the refresh and
+indexed by a **`CoalescedFrameClock`** evaluated at the instant of the draw:
+Firefox paints the last queued frame due by `TimeStamp::Now()`, and each
+callback bounds that frame's due time to one refresh (`expectedDisplayTime ==
+now` → the refresh before, `> now` → the refresh after), so the intersection
+says when a draw is CERTAIN. With ≤ ~½ frame per refresh (60 fps on 120 Hz)
+the loop skips an uncertain refresh when the next would be certain (≤ 2 in a
+row) — the frame lands a refresh later, cadence unchanged; with more (60 fps
+on 60 Hz, where every bound is a whole refresh wide; 150 fps) it draws the
+midpoint guess. A Firefox estimate never steps backwards. With no rVFC, the
+clock. (Tried and dropped: at 60 Hz, deferring Firefox's draw to a timer just
+before the next vsync raised 60 fps alignment to ~70–85%, but Firefox's timers
+slip under load and 8 cameras fell to 48–56 distinct frames/s, below the old
+loop's 58.6.) **Until a fallback view's first usable callback its index is unknown
+and it is not drawn**: its canvas still shows the paused `startFrame`, which
+is what it is overlaid at — the clock is no stand-in (after a seek Safari kept
+painting the PRE-seek picture: frame 279 overlaid on 66). rVFC is registered
+only for fallback views (registering it on every view altered Chrome's
+presentation). Measured on real browsers with `verify/play-xb.html` (app's
+decoder + this loop on barcode clips, every camera's canvas read back against
+its overlay frame at random instants; under the headed-browser lock, no hidden
+tabs; % aligned for 5×H.264 60 fps / 5×H.264 150 fps / 8×HEVC 60 fps, the
+previous loop → this one, both on the same main):
+
+| | 120 Hz display | 60 Hz display |
+|---|---|---|
+| Chrome | 100/100/100 → 100/100/100 | 100/87.3/100 → 100/100/100 (judging tolerance) |
+| Brave | 100/100/100 → 100/100/100 | 100/100/100 → 100/100/100 |
+| Safari | 83.5/1.6/69.0 → 100/96.2/100 | 76.5/1.3/24.5 → 100/94.8/100 |
+| Firefox | 48.7/49.7/52.2 → 98.1/89.6/91.9 | 12.2/1.7/47.3 → 77.3/28.5/80.4 |
+
+Firefox's camera 0 also shows every frame now (60 fps video: 34 → 60
+distinct frames/s at 120 Hz, 50 → 60 at 60 Hz). What remains is
+what the browsers expose: at 150 fps Safari shows ~26 of 150 frames/s and
+occasionally hands `drawImage` a buffer 1–2 older than its callback's; Firefox
+gives no certainty within a refresh at 60 Hz, and at 150 fps cannot keep its
+frames on its own clock. `self._refreshFallback` exposes the fallback state
+(each Firefox view's `clock`). WHICH frame each view shows is chosen
 by an exported, pure **`PlaybackSchedule`**, with
 **`pickScheduledFrame(target, shown, pending, cap)`** choosing per view between
 the frame on screen, ONE capture held from an earlier refresh, and this
@@ -11731,6 +11772,16 @@ a zoomed-in image keeps the same region centered instead of jumping.
 - `pickScheduledFrame(target, shownIdx, pendingIdx, capIdx)` →
   `'shown'|'pending'|'cap'|null` (hold until the target passes the shown
   frame; then the newest candidate not past it, else the oldest past it).
+- `CoalescedFrameClock` — class (pure); which frame Firefox's
+  `drawImage(<video>)` paints, from its coalesced rVFC callbacks.
+  `observe(now, index, expectedDisplayTime, framesPerMs, fallbackPeriodMs)`
+  per callback; `frameAt(t, slackMs)` → `{index, certain, step}` (index = the
+  midpoint guess when not certain; step = frames per refresh) or null while
+  unknown; `reset()`. Ignores a callback that only re-reports a frame (the
+  paused start frame, a stall), forgets the clock when the frame goes back,
+  and adopts a jump AHEAD only once the next callback confirms it (Firefox
+  sometimes reports a frame ~10 ahead that is never painted). Unit-tested on
+  simulated Firefox callbacks in `tests/test-playback-frame-sync.js`.
 - `EmbeddedVideoDecoder` — class for SLP-embedded frames. `getFrame`,
   `hasFrame`, `close`.
 - `VideoController` — class. Selected methods: `seekToFrame`,
