@@ -6704,20 +6704,11 @@ details[open] > summary.origin-rebase-block-title::before {
   font-variant-numeric: tabular-nums;
 }
 
-/* Skeleton edit confirmation (ui/skeleton-edit-warning.js). Reuses the block,
-   table and caution classes above wholesale; the only thing it needs of its own
-   is the consequence list, which is prose rather than a count column. */
-.skeleton-edit-effects {
-  margin: 10px 0 2px;
-  padding-left: 18px;
-  font-size: 12px;
-  line-height: 1.5;
-  color: var(--text-primary);
-}
+/* Skeleton edit confirmation (ui/skeleton-edit-warning.js) needs no rules of
+   its own beyond `.skeleton-edit-modal` in the geometry block above: it reuses
+   `.origin-rebase-block` / `-table` / `-caution` wholesale, and its one
+   addition is the `.origin-rebase-total` row. */
 
-.skeleton-edit-effects li + li {
-  margin-top: 6px;
-}
 /* Tracks ▸ Check ID Switches — the ID Switches tab of the right panel (ui/id-switch-modal.js
    refreshIdSwitchPanel). The tab content is the panel's one scroller; the toolbar sticks. */
 .id-switch-summary { font-size: 12px; margin: 2px 0; }

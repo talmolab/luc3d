@@ -153,8 +153,14 @@ try {
     let txt = await modalText();
     check(/Add node .?ear.? to the skeleton\?/.test(txt),
         'its title names the node being added');
-    check(/hidden/i.test(txt),
-        'and it says the node arrives HIDDEN on hand-labelled instances');
+    check(/switched off/i.test(txt),
+        'and its one-sentence lead says the node arrives switched off on hand-labelled instances');
+    // The dialog is a title, one sentence and the COUNTS. A bulleted "What
+    // changes" list and an always-on "there is no undo" caution both used to
+    // sit between the lead and the numbers; copy like that creeps back one
+    // paragraph at a time, so their ABSENCE is asserted rather than assumed.
+    check(/What changes/i.test(txt) === false, 'no bulleted "What changes" block');
+    check(/no undo/i.test(txt) === false, 'and no always-on caution box');
 
     console.log('\n--- 2. The counts are the WHOLE project, not the open session ---');
     check(await rowValue('skeletonEditTotals', 'Sessions on this skeleton') === '2',
@@ -295,7 +301,8 @@ try {
     check(await modalOpen() === true, 'removing a node raises it');
     txt = await modalText();
     check(/Remove node .?ear.? from the skeleton\?/.test(txt), 'naming the node');
-    check(/cannot be undone/i.test(txt), 'and saying there is no undo');
+    check(/deletes that node.s 2D and 3D coordinates/.test(txt),
+        'and saying what is deleted — the destructive edit is the one whose lead names losses');
     await page.click('#btnSkeletonEditConfirm');
     await page.waitForTimeout(120);
     const removed = await page.evaluate(() => {
