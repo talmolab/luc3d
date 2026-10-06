@@ -848,19 +848,36 @@ try {
         // rather than reaching into module state.
         const origPrompt = window.prompt;
         window.prompt = () => '2';
+        // Start clean, so the dirty flag afterwards is Track All's own doing.
+        // The automatic ID-switch checks that follow Track All are switched off
+        // for this one run: when one runs it calls markDirty() itself, which
+        // would hide a tracker that never marks the project.
+        const saveLoad = await import('/import-export/save-load.js');
+        const settings = await import('/ui/settings.js');
+        const prevThresholds = settings.getTrackingThresholds();
+        settings.setTrackingThresholds(Object.assign({}, prevThresholds,
+            { autoSwitchCheck: 0, autoImageSwitchCheck: 0 }));
+        saveLoad.clearDirty();
         try {
             const tk = await import('/pose/tracker.js');
             const t = performance.now();
+            const wasDirty = window.__lucid.state.isDirty;
             await tk.trackAll();
-            return { ms: Math.round(performance.now() - t) };
+            return { ms: Math.round(performance.now() - t), wasDirty, isDirty: window.__lucid.state.isDirty };
         } catch (e) {
             return { err: String(e && e.stack || e).slice(0, 400) };
         } finally {
             window.prompt = origPrompt;
+            settings.setTrackingThresholds(prevThresholds);
         }
     });
     check('Track All did not throw', !(trackRes.r && trackRes.r.err),
         trackRes.r && trackRes.r.err);
+    // The tracking result is the project's newest state; without the flag the
+    // save dot never shows and closing the tab loses it without a prompt.
+    check('Track All marked the project dirty (unsaved changes)',
+        trackRes.r && trackRes.r.wasDirty === false && trackRes.r.isDirty === true,
+        trackRes.r && { wasDirty: trackRes.r.wasDirty, isDirty: trackRes.r.isDirty });
     check('Track All rebuilt grouping for ~every frame (not resident-only)',
         trackRes.s.igFrames >= FRAMES * 0.95,
         { igFrames: trackRes.s.igFrames, frames: FRAMES });

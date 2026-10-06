@@ -16,22 +16,22 @@ import {
     reprojectPoints,
     computeInstanceDistanceTo,
     hungarianAlgorithm
-} from './triangulation.js?v=b54fb5cf29d8';
-import { CrossViewTracker, Detection } from './cross-view-tracker.js?v=b54fb5cf29d8';
-import { InstanceGroup, points3dNodeCount, hasPoint3d, readPoint3d } from './pose-data.js?v=b54fb5cf29d8';
+} from './triangulation.js?v=25e582f66c71';
+import { CrossViewTracker, Detection } from './cross-view-tracker.js?v=25e582f66c71';
+import { InstanceGroup, points3dNodeCount, hasPoint3d, readPoint3d } from './pose-data.js?v=25e582f66c71';
 
 // Pass 3i-1: tracker UI/integration (was in app.js)
-import { state, interactionManager, timeline, viewport3d, getActiveSession } from '../ui/app-state.js?v=b54fb5cf29d8';
-import { getNodeWeightArray, getTrackingThresholds, getTrackingThreshold, isCameraTracked } from '../ui/settings.js?v=b54fb5cf29d8';
-import { setStatus, hideLoading } from '../import-export/save-load.js?v=b54fb5cf29d8';
-import { showLoadingProgress, createProgressPacer, yieldToPaint } from '../ui/loading-overlay.js?v=b54fb5cf29d8';
-import { loadAllLazyFrames, sweepLazyFrameWindows } from './triangulation.js?v=b54fb5cf29d8';
-import { drawAllOverlays, showPredictedOnly, PREDICTED_ONLY_NOTE } from '../ui/rendering.js?v=b54fb5cf29d8';
-import { updateInfoPanel } from '../ui/info-panel.js?v=b54fb5cf29d8';
-import { setColorByIdentity } from '../ui/color-by.js?v=b54fb5cf29d8';
-import { runIdSwitchChecks, clearIdSwitchResults } from '../ui/id-switch-modal.js?v=b54fb5cf29d8';
-import { collapseTimeline } from '../ui/timeline-controller.js?v=b54fb5cf29d8';
-import { collapseViewport3D } from '../ui/panel-visibility.js?v=b54fb5cf29d8';
+import { state, interactionManager, timeline, viewport3d, getActiveSession } from '../ui/app-state.js?v=25e582f66c71';
+import { getNodeWeightArray, getTrackingThresholds, getTrackingThreshold, isCameraTracked } from '../ui/settings.js?v=25e582f66c71';
+import { markDirty, setStatus, hideLoading } from '../import-export/save-load.js?v=25e582f66c71';
+import { showLoadingProgress, createProgressPacer, yieldToPaint } from '../ui/loading-overlay.js?v=25e582f66c71';
+import { loadAllLazyFrames, sweepLazyFrameWindows } from './triangulation.js?v=25e582f66c71';
+import { drawAllOverlays, showPredictedOnly, PREDICTED_ONLY_NOTE } from '../ui/rendering.js?v=25e582f66c71';
+import { updateInfoPanel } from '../ui/info-panel.js?v=25e582f66c71';
+import { setColorByIdentity } from '../ui/color-by.js?v=25e582f66c71';
+import { runIdSwitchChecks, clearIdSwitchResults } from '../ui/id-switch-modal.js?v=25e582f66c71';
+import { collapseTimeline } from '../ui/timeline-controller.js?v=25e582f66c71';
+import { collapseViewport3D } from '../ui/panel-visibility.js?v=25e582f66c71';
 
 /**
  * A frame index as the USER sees it: 1-based.
@@ -1124,6 +1124,10 @@ export function trackCurrentFrame() {
         return;
     }
 
+    // Every bail-out is above; from here on the frame's tracking state is
+    // rewritten, so the project no longer matches its file — see the matching
+    // call in runTrackingPass for why this is unconditional.
+    markDirty();
     try {
         // Single-frame pass (births only — no cross-frame history). Populates
         // identities + per-frame map + InstanceGroups for this frame;
@@ -1376,6 +1380,15 @@ async function runTrackingPass(range) {
         'frames:', totalFrameCount, windowed ? '(windowed)' : '',
         isRange ? '(range ' + lo + '–' + hi + ', 0-based)' : '');
     console.time('[' + label + '] total');
+
+    // Every bail-out is above; this is where the pass starts rewriting project
+    // state, so flag it unsaved here (save dot, `• Lucid` title, and the
+    // unload / switch-session prompts) — as triangulateAllFrames does. It is
+    // deliberately NOT conditional on what the run finds: the clear below runs
+    // first, so a re-run that matches nothing (or throws partway) has still
+    // wiped the previous result, and gating on numTargets/numIdentities would
+    // leave exactly that unflagged. Covers both sweeps (windowed and not).
+    markDirty();
 
     // ID-switch results (Tracks ▸ Check ID Switches; the ID Switches tab + timeline markers)
     // describe the identities this pass is about to replace — drop them, for a range too.
