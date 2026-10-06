@@ -3,7 +3,8 @@
 // - getVisibilitySettings: collects user-controlled visibility/style settings from the DOM.
 // - drawAllOverlays: per-frame multi-view overlay rendering (calls drawFrameOverlays).
 // - setReprojErrorVisible: toggles reprojection-error column visibility in info panels.
-// - updateFrameCounters: status-bar frame counters (labeled / triangulated / instances).
+// - updateFrameCounters: status-bar frame counters (labeled / triangulated / instances),
+//   whole-project on a lazy project too (counting logic in ui/frame-counters.js).
 
 import { state, interactionManager, timeline } from './app-state.js';
 import { points3dNodeCount } from '../pose/pose-data.js';
@@ -22,6 +23,10 @@ import { drawPlaneOverlays, applyPlaneModeToolbarLock } from './plane-definition
 // Pass 3f: editGroupState + finishEditGroup moved to ui/identity-assignment.js.
 import { editGroupState, finishEditGroup } from './identity-assignment.js';
 import { updateFrameInfo } from './info-panel.js';
+import {
+    computeFrameCounterBaseline, computeLazyCameraBaseline, createFrameCounterBaselineBuilder,
+    countFrameCounters, nonResidentCameraCounts,
+} from './frame-counters.js';
 
 // ============================================
 // Reproj/Error visibility
@@ -461,59 +466,154 @@ export function drawAllOverlays(frameIdx, viewFrames) {
 // Frame counters (status bar)
 // ============================================
 
-export function updateFrameCounters() {
-    if (!state.session) return;
+// Whole-project baselines for the counters (see ui/frame-counters.js), one per
+// session: `{ loader, tri, cams: Map<camera, half>, lastFrame }`. A WeakMap so
+// a closed project's baseline — and the session and store it was read from — is
+// never kept alive by the status bar.
+var _counterBaselines = new WeakMap();
+// Rebuild this long after the last redraw that asked for one: coalesces a drag
+// or a burst of edits into one rebuild, and lands well before anyone reads the
+// counter after a bulk operation.
+var COUNTER_REBUILD_DELAY_MS = 250;
+// Frames per rebuild slice (a few ms each on a real project), so a rebuild never
+// holds the page for the ~100 ms a 108,000-frame x 8-camera one takes in total.
+var COUNTER_REBUILD_STEP = 8192;
+// `pending`: asked for and not yet installed — survives a rebuild abandoned to
+// playback, so the next paused update finishes the job.
+var _counterRebuild = { timer: 0, running: false, again: false, pending: false };
 
-    // Determine active camera
-    var activeCam = interactionManager ? interactionManager.lastInteractedView : null;
-    if (!activeCam && state.views.length > 0) activeCam = state.views[0].name;
+function counterCamera() {
+    var cam = interactionManager ? interactionManager.lastInteractedView : null;
+    if (!cam && state.views.length > 0) cam = state.views[0].name;
+    return cam || null;
+}
 
-    var cameraEl = document.getElementById('statusCamera');
-    if (cameraEl) cameraEl.textContent = 'Camera: ' + (activeCam || '-');
+/**
+ * Give `baseline` a camera half for `cam` if it has none — synchronously, since
+ * without it the count would be the resident window, the very number this
+ * replaces. Once per view per session, or after a bulk change dropped it.
+ */
+function ensureCameraHalf(session, baseline, cam) {
+    if (!cam || !session.lazyLoader || baseline.cams.has(cam)) return;
+    var half = computeLazyCameraBaseline(session, cam);
+    if (half) baseline.cams.set(cam, half);
+}
 
-    var labeledCount = 0;
-    var instanceCount = 0;
-    var triangulatedCount = 0;
-
-    state.session.frameGroups.forEach(function(fg, frameIdx) {
-        // Per-camera: labeled if frame has a grouped/ungrouped UserInstance
-        // or grouped PredictedInstance in this view
-        var hasLabeled = false;
-        if (activeCam) {
-            // Check grouped instances for this camera
-            var camInstances = fg.instances.get(activeCam) || [];
-            for (var i = 0; i < camInstances.length; i++) {
-                var t = camInstances[i].type || 'user';
-                if (t === 'user') {
-                    hasLabeled = true;
-                    instanceCount++;
-                } else if (t === 'predicted') {
-                    hasLabeled = true;
-                }
-            }
-            // Check ungrouped UserInstances for this camera
-            var ulInstances = fg.getUnlinkedInstances(activeCam);
-            for (var u = 0; u < ulInstances.length; u++) {
-                var ulType = ulInstances[u].instance.type || 'user';
-                if (ulType === 'user') {
-                    hasLabeled = true;
-                    instanceCount++;
-                }
-            }
-        }
-        if (hasLabeled) labeledCount++;
-
-        // Triangulated: frame has at least one InstanceGroup with points3d
-        var frameGroupsList = state.session.instanceGroups.get(frameIdx) || [];
-        for (var g = 0; g < frameGroupsList.length; g++) {
-            if (frameGroupsList[g].points3d) { triangulatedCount++; break; }
-        }
-    });
-
+function renderFrameCounters(session, activeCam, baseline) {
+    var c = countFrameCounters(session, activeCam, baseline);
     var labeledEl = document.getElementById('statusLabeledFrames');
     var triangulatedEl = document.getElementById('statusTriangulatedFrames');
     var instancesEl = document.getElementById('statusInstances');
-    if (labeledEl) labeledEl.textContent = 'Labeled Frames: ' + labeledCount;
-    if (instancesEl) instancesEl.textContent = 'Instances: ' + instanceCount;
-    if (triangulatedEl) triangulatedEl.textContent = 'Triangulated: ' + triangulatedCount;
+    if (labeledEl) labeledEl.textContent = 'Labeled Frames: ' + c.labeled;
+    if (instancesEl) instancesEl.textContent = 'Instances: ' + c.instances;
+    if (triangulatedEl) triangulatedEl.textContent = 'Triangulated: ' + c.triangulated;
+}
+
+function requestCounterRebuild() {
+    _counterRebuild.pending = true;
+    if (_counterRebuild.running) { _counterRebuild.again = true; return; }
+    if (_counterRebuild.timer) clearTimeout(_counterRebuild.timer);
+    _counterRebuild.timer = setTimeout(runCounterRebuild, COUNTER_REBUILD_DELAY_MS);
+}
+
+function runCounterRebuild() {
+    _counterRebuild.timer = 0;
+    var session = state.session;
+    // Playback skips the counters (`updateStatusBarForFrame`); the redraw that
+    // stops it sees `pending` and asks again.
+    if (!session || state.isPlaying) return;
+    var cam = counterCamera();
+    var builder = createFrameCounterBaselineBuilder(session, cam);
+    _counterRebuild.running = true;
+    _counterRebuild.again = false;
+    var slice = function () {
+        if (state.session !== session || state.isPlaying) {
+            _counterRebuild.timer = 0;
+            _counterRebuild.running = false;   // abandoned; `pending` stays set
+            return;
+        }
+        if (!builder.step(COUNTER_REBUILD_STEP)) {
+            _counterRebuild.timer = setTimeout(slice, 0);
+            return;
+        }
+        _counterRebuild.timer = 0;
+        _counterRebuild.running = false;
+        _counterRebuild.pending = false;
+        var prev = _counterBaselines.get(session);
+        var next = builder.result;
+        next.loader = session.lazyLoader;
+        if (prev && prev.loader === next.loader) {
+            next.lastFrame = prev.lastFrame;
+            // The other views' halves can only be behind on frames that changed
+            // while NOT resident — a bulk operation. If this view's own
+            // non-resident part moved, one happened: drop them, so each is
+            // rebuilt exactly when its view is next active instead of showing a
+            // pre-operation count until then. An edit to the current frame
+            // moves only resident frames, so annotating keeps view switches free.
+            var oldHalf = prev.cams.get(cam), newHalf = next.cams.get(cam);
+            var bulkChange = false;
+            if (oldHalf && newHalf) {
+                var a = nonResidentCameraCounts(session, oldHalf);
+                var b = nonResidentCameraCounts(session, newHalf);
+                bulkChange = a.labeled !== b.labeled || a.instances !== b.instances;
+            }
+            if (!bulkChange) {
+                prev.cams.forEach(function (half, c) { if (!next.cams.has(c)) next.cams.set(c, half); });
+            }
+        }
+        _counterBaselines.set(session, next);
+        var shownCam = counterCamera();   // the view may have changed mid-build
+        ensureCameraHalf(session, next, shownCam);
+        renderFrameCounters(session, shownCam, next);
+        if (_counterRebuild.again) requestCounterRebuild();
+    };
+    slice();
+}
+
+/**
+ * Status-bar counters: Labeled Frames and Instances for the active camera, and
+ * Triangulated, all over the WHOLE project.
+ *
+ * On a lazy project most frames are not resident, so the count is the live
+ * count of the resident frames plus a cached whole-project baseline for the
+ * rest (`countFrameCounters`) — O(resident frames) per call, like the
+ * resident-only count it replaced. Building the baseline is a walk of every
+ * frame's groups (~100 ms on a 108,000-frame x 8-camera project), so:
+ *
+ * - It is built SYNCHRONOUSLY only when there is none: the first update of a
+ *   session (or after its lazy loader changes), and the first time a view
+ *   becomes active (its camera half).
+ * - Otherwise it is REBUILT in the background, in slices, shortly after a
+ *   redraw of the SAME frame as the previous update. Every operation that
+ *   changes data redraws the current frame — an edit, Track All, Triangulate
+ *   All, a session-wide delete — so the counts follow all of them without each
+ *   having to invalidate anything (Track All does not even mark the project
+ *   dirty). A redraw on a NEW frame is navigation, which changes no data:
+ *   stepping and scrubbing cost no whole-project work at all.
+ * - An edit to the current frame needs no rebuild to show: the current frame is
+ *   resident, and resident frames are always counted live.
+ */
+export function updateFrameCounters() {
+    var session = state.session;
+    if (!session) return;
+
+    var activeCam = counterCamera();
+    var cameraEl = document.getElementById('statusCamera');
+    if (cameraEl) cameraEl.textContent = 'Camera: ' + (activeCam || '-');
+
+    var baseline = _counterBaselines.get(session);
+    var fresh = false;
+    if (!baseline || baseline.loader !== session.lazyLoader) {
+        baseline = computeFrameCounterBaseline(session, activeCam);
+        baseline.loader = session.lazyLoader;
+        _counterBaselines.set(session, baseline);
+        fresh = true;
+    } else {
+        ensureCameraHalf(session, baseline, activeCam);
+    }
+    renderFrameCounters(session, activeCam, baseline);
+
+    var sameFrame = baseline.lastFrame === state.currentFrame;
+    baseline.lastFrame = state.currentFrame;
+    if (!fresh && (sameFrame || _counterRebuild.pending)) requestCounterRebuild();
 }

@@ -378,6 +378,11 @@
         // `collectDeletionTargets`/`previewCascade` are too generic to be globals.
         import * as __CustomDeleteOps from '../ui/custom-delete-ops.js';
         window.__CustomDeleteOps = __CustomDeleteOps;
+        // The status bar's counting rules (Labeled Frames / Instances /
+        // Triangulated). Imports no project modules; namespaced because names
+        // like `countFrameCounters` read as the app's, not a test helper's.
+        import * as __FrameCounters from '../ui/frame-counters.js';
+        window.__FrameCounters = __FrameCounters;
         // Pure geometry/settings half of "Export Video Overlays" — imports no
         // project modules (and, deliberately, no dockview), so it bridges without
         // dragging the modal's DOM/WebCodecs dependencies in. Own namespace: names
