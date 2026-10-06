@@ -32,6 +32,7 @@ import {
     updateGridLayout, createVideoPromptCell, fitCanvasesToCells,
     rebuildVideoController, resolveImportTrackIdx, isCalibrationVideoFile,
 } from '../loading/session-loader.js';
+import { preferNonCalibrationVideos } from '../loading/video-file-pick.js';
 import { remapGlobalTrackToSession, nulledNodesFromOcclusion } from './import-track-resolve.js';
 import {
     showLoading, hideLoading, setStatus, clearDirty, ensureNo3dImportBlockingLoad,
@@ -1367,6 +1368,44 @@ export async function handleLoadSlpFile(slpFile) {
                 });
                 var cameraNames = cameras.map(function (c) { return c.name; });
 
+                // The camera a picked video belongs to: parent directory, then
+                // exact stem, then the filename the SLP references for that
+                // camera. Hoisted out of the post-load assignment loop so the
+                // de-prioritization below can group by the SAME answer the
+                // assignment will give — matching twice with two different
+                // rules is how a video gets dropped for one camera and bound to
+                // another.
+                var slpMatchCam = function (vFile) {
+                    var mStem = vFile.name.replace(/\.[^.]+$/, '');
+                    var mRel = vFile.webkitRelativePath || vFile.name;
+                    var mParts = mRel.split('/');
+                    var mParentDir = mParts.length >= 2 ? mParts[mParts.length - 2] : null;
+
+                    if (mParentDir && cameraNames.indexOf(mParentDir) >= 0) return mParentDir;
+                    if (cameraNames.indexOf(mStem) >= 0) return mStem;
+                    for (var cmi in videoIdxToCameraName) {
+                        var camN = videoIdxToCameraName[cmi];
+                        var vMeta = slpData.videos[cmi];
+                        if (!vMeta) continue;
+                        var refPath = vMeta.sourceFilename || vMeta.filename || '';
+                        if (refPath === '.') continue;
+                        var refBase = refPath.replace(/^.*[\/\\]/, '').replace(/\.[^.]+$/, '').toLowerCase();
+                        if (mStem.toLowerCase() === refBase || mStem.toLowerCase().indexOf(refBase) >= 0) return camN;
+                    }
+                    return null;
+                };
+
+                // A `-calibration` stem loses to a plainly-named video of the
+                // SAME camera, but still loads when it is that camera's only
+                // candidate (#199). Applied before the decoders open so a
+                // superseded clip is never decoded.
+                var _slpPref = preferNonCalibrationVideos(vidFiles, slpMatchCam);
+                if (_slpPref.dropped.length) {
+                    console.log('[load-slp] preferring plainly-named videos over calibration-named ' +
+                        _slpPref.dropped.map(function (f) { return '"' + f.name + '"'; }).join(', '));
+                    vidFiles = _slpPref.kept;
+                }
+
                 var slpModal = getLoadingProgressModal({ title: 'Importing project' });
                 slpModal.show();
 
@@ -1423,35 +1462,9 @@ export async function handleLoadSlpFile(slpFile) {
                     var vFile = slpEntry.file;
                     var stem = vFile.name.replace(/\.[^.]+$/, '');
 
-                    // Match to camera by parent directory name or filename
-                    var assignedCam = null;
-                    var relPath = vFile.webkitRelativePath || vFile.name;
-                    var pathParts = relPath.split('/');
-                    var parentDir = pathParts.length >= 2 ? pathParts[pathParts.length - 2] : null;
-
-                    // Try parent directory name → camera name
-                    if (parentDir && cameraNames.indexOf(parentDir) >= 0) {
-                        assignedCam = parentDir;
-                    }
-                    // Try video stem → camera name
-                    if (!assignedCam && cameraNames.indexOf(stem) >= 0) {
-                        assignedCam = stem;
-                    }
-                    // Try matching against SLP video references
-                    if (!assignedCam) {
-                        for (var cmi in videoIdxToCameraName) {
-                            var camN = videoIdxToCameraName[cmi];
-                            var vMeta = slpData.videos[cmi];
-                            if (!vMeta) continue;
-                            var refPath = vMeta.sourceFilename || vMeta.filename || '';
-                            if (refPath === '.') continue;
-                            var refBase = refPath.replace(/^.*[\/\\]/, '').replace(/\.[^.]+$/, '').toLowerCase();
-                            if (stem.toLowerCase() === refBase || stem.toLowerCase().indexOf(refBase) >= 0) {
-                                assignedCam = camN;
-                                break;
-                            }
-                        }
-                    }
+                    // Match to camera by parent directory name or filename —
+                    // the same answer the de-prioritization above grouped by.
+                    var assignedCam = slpMatchCam(vFile);
 
                     state.videoFiles.push({
                         file: vFile, name: stem, decoder: slpEntry.decoder,
