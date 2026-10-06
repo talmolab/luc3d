@@ -8,8 +8,8 @@
  * Dependencies: mp4box.all.min.js (MP4Box)
  */
 
-import { shouldIgnoreShortcut } from '../ui/keyboard-target.js?v=ee8bba04c574';
-import { diagnoseUnplayableVideo } from './video-codec-diagnosis.js?v=ee8bba04c574';
+import { shouldIgnoreShortcut } from '../ui/keyboard-target.js?v=ae3882834712';
+import { diagnoseUnplayableVideo } from './video-codec-diagnosis.js?v=ae3882834712';
 
 // ---------------------------------------------------------------------------
 // Logging helper
@@ -1824,13 +1824,37 @@ function rvfcCallbacksCoalesced() {
 }
 
 /**
+ * Whether `new VideoFrame(<video>)` is pointless, so never called: WebKit.
+ * Measured in Safari 27 on off-DOM playing `<video>`s made like the decoder's
+ * (verify/probe-paint.html, barcode clips): the timestamp is 0 or an exact
+ * copy of `currentTime` — the CLOCK, never the captured frame's own time — and
+ * named the captured picture in 0–3% of captures. A clock reading can still
+ * pass `judgeVideoFrameTimestamps` (the old judge passed it at 150 fps, and
+ * the picture then lagged the overlay by 1–13 frames; one on the frame grid
+ * would pass the current one), while drawing the captures cost ~25% of the
+ * pictures Safari presents. Skipping even the judging captures loses nothing,
+ * and the engine is the only signal before the first one. (Every iOS browser
+ * is WebKit, hence no `Safari/` test.)
+ */
+function videoFrameCaptureUnsafe() {
+    try {
+        var ua = navigator.userAgent;
+        return /AppleWebKit\//.test(ua) && !/(Chrome|Chromium|Firefox)\//.test(ua);
+    } catch (e) { return false; }
+}
+
+/**
  * Decide, per decoder, whether `new VideoFrame(<video>).timestamp` tracks the
  * picture — the per-refresh loop's frame index depends on it. Chrome: yes.
- * Safari 27: the timestamp is 0 for ~98% of captures during playback. Firefox
- * 157: a constant. Judged once the video clock has advanced a few frames since
- * the first capture: usable only if the timestamp moved AND agrees with the
- * clock to within 3 frames. Cached on the decoder as `_vfTimestamps`
- * ('ok' | 'bad'); undefined while undecided.
+ * Safari 27: 0 or the clock (and never asked — `videoFrameCaptureUnsafe`).
+ * Firefox 157: a constant. Judged once the video clock has advanced a few
+ * frames since the first capture: usable only if the timestamp moved, agrees
+ * with the clock to within max(3 frames, 50 ms) — the presented frame trails
+ * the clock by the compositor's latency, which at 150 fps on a 60 Hz display
+ * exceeds 3 frames and made Brave fall back mid-session — and is not simply
+ * the clock itself (equal to `currentTime` to the microsecond while off the
+ * frame grid: a real frame's timestamp sits on it). Cached on the decoder as
+ * `_vfTimestamps` ('ok' | 'bad'); undefined while undecided.
  *
  * @returns {'ok'|'bad'|undefined}
  */
@@ -1845,15 +1869,163 @@ function judgeVideoFrameTimestamps(dec, cap) {
         return undefined;
     }
     if (ctIdx - chk.ct < 4) return undefined;
-    var moved = cap.frame.timestamp !== chk.ts;
-    var agrees = Math.abs(cap.index - ctIdx) <= 3;
+    var ts = cap.frame.timestamp;
+    var moved = ts !== chk.ts;
+    var agrees = Math.abs(cap.index - ctIdx) <= Math.max(3, Math.ceil(0.05 * fps));
+    var pos = ts / 1e6 * fps;
+    var isClock = Math.abs(ts - el.currentTime * 1e6) < 1 && Math.abs(pos - Math.round(pos)) > 0.02;
     dec._vfTsCheck = null;
-    dec._vfTimestamps = (moved && agrees) ? 'ok' : 'bad';
+    dec._vfTimestamps = (moved && agrees && !isClock) ? 'ok' : 'bad';
     videoLog('Playback: VideoFrame timestamps ' + (dec._vfTimestamps === 'ok'
         ? 'track the video — painting captured frames'
         : 'do NOT track the video in this browser — drawing the <video> directly, frame index from '
           + (el.requestVideoFrameCallback ? 'requestVideoFrameCallback' : 'its clock')));
     return dec._vfTimestamps;
+}
+
+/**
+ * Which frame `drawImage(<video>)` paints at a given instant, in a browser
+ * whose requestVideoFrameCallback is COALESCED (Firefox — see
+ * `rvfcCallbacksCoalesced`), from those callbacks alone.
+ *
+ * Firefox queues decoded frames with wall-clock due times T_k = T_0 + k/fps
+ * and `drawImage` paints the last one due by the instant of the call, so the
+ * painted frame is floor(t·r + φ) with r = frames/ms and one unknown phase φ
+ * per element (measured: the picture-implied φ is constant to ~0.02 frame over
+ * a 2.5 s playback, verify/ff-phase.mjs). Each callback bounds T_m of the
+ * frame it reports: `expectedDisplayTime == now` ("composited") means
+ * T_m ∈ (now − P, now]; `expectedDisplayTime > now` (the next frame, due by
+ * the next refresh) means T_m ∈ (now, expectedDisplayTime] — P the refresh
+ * interval, read off the latter. Every bound is one refresh wide and, since
+ * callbacks fire on refreshes, 60 fps on 120 Hz keeps landing on the same two
+ * phases, so the intersection stays ~½ frame wide: a draw is CERTAIN only when
+ * no frame boundary can fall between the instant and the bound's edges.
+ * With ≤ ~½ frame per refresh (60 fps at 120 Hz) `VideoController` skips an
+ * uncertain refresh when the next would be certain — the frame lands one
+ * refresh later, at no cost in cadence; with more (60 fps at 60 Hz, where
+ * every bound is a whole refresh wide; 150 fps) it draws the midpoint guess.
+ * The previous projection, `round(mediaTime + (now − callback))`, ran 1–3
+ * frames AHEAD of the picture: it projected from the callback rather than the
+ * frame's due time, and rounded.
+ *
+ * A bound that contradicts the others replaces them — frames arriving late
+ * at once, a jump AHEAD only once the next callback confirms it (Firefox
+ * sometimes reports a frame ~10 ahead that is never painted) — and a callback
+ * that only re-reports a frame (the paused start frame, a stall) is ignored.
+ * Pure — unit-tested in tests/test-playback-frame-sync.js.
+ */
+export class CoalescedFrameClock {
+    constructor() { this.reset(); }
+
+    reset() {
+        this._lo = -Infinity;   // φ ∈ [_lo, _hi)
+        this._hi = Infinity;
+        this._rate = 0;         // frames per ms
+        this._period = null;    // refresh interval (ms), from 'next-frame' callbacks
+        this._fallbackPeriod = null;   // …or as measured by the caller, until then
+        this._lastNow = null;
+        this._suspect = null;   // an unconfirmed jump ahead: {lo, hi}
+        this.lastIndex = null;  // frame index of the latest callback
+    }
+
+    /**
+     * @param {number} now - the callback's `now` (ms)
+     * @param {number} index - round(metadata.mediaTime * fps)
+     * @param {number|undefined} expectedDisplayTime - metadata.expectedDisplayTime (ms)
+     * @param {number} rate - frames per ms (fps * playbackRate / 1000)
+     * @param {number} [fallbackPeriod] - refresh interval to assume until one is seen (ms)
+     */
+    observe(now, index, expectedDisplayTime, rate, fallbackPeriod) {
+        if (rate !== this._rate) { this.reset(); this._rate = rate; }
+        if (fallbackPeriod) this._fallbackPeriod = fallbackPeriod;
+        var edt = (typeof expectedDisplayTime === 'number') ? expectedDisplayTime : now;
+        var E = 0.25;   // ms of slack on every bound (vsync timestamp jitter; wider only lost certainty, measured)
+        var L, H;
+        if (edt - now > 0.5) {           // the next frame, due by the next refresh
+            this._period = edt - now;
+            L = index - (edt + E) * rate;
+            H = index - (now - E) * rate;
+        } else {
+            // Already due (T_m <= now) while the NEXT frame isn't due by the
+            // next refresh: T_m > now + P - 1/fps. When a frame is shorter than
+            // a refresh that can't happen with frames queued on time — the
+            // decoder is behind — so assume only that m is under a frame old.
+            // Only for a NEW frame, though: the first callback of a playback
+            // reports the paused start frame, which is on screen because of
+            // the pause, not the frame clock — measured 1–20 ms outside this
+            // bound, and on EITHER side (it pinned the phase ~6 ms early and
+            // the frame one ahead for cameras drawn late in the refresh) — and
+            // a stall keeps reporting one frame long after it was due. Such a
+            // callback says nothing about the clock.
+            if (this.lastIndex == null || index <= this.lastIndex) {
+                // Reported frame went BACK (seek, decoder glitch — measured
+                // once: 154 -> 147 mid-play): the clock is unknown again.
+                if (this.lastIndex != null && index < this.lastIndex - 1) {
+                    var keepRate = this._rate, keepP = this._period, keepFP = this._fallbackPeriod;
+                    this.reset();
+                    this._rate = keepRate; this._period = keepP; this._fallbackPeriod = keepFP;
+                }
+                this._suspect = null;
+                this._lastNow = now;
+                this.lastIndex = index;
+                return;
+            }
+            var P = this._period || this._fallbackPeriod || 1000 / 60, F = 1 / rate;
+            var back = F > P ? F - P : F;
+            L = index - (now + E) * rate;
+            H = index - (now - back - E) * rate;
+        }
+        // Slack for clock drift between callbacks (≤ 0.05 frame/s).
+        if (this._lastNow != null) {
+            var w = 5e-5 * Math.max(0, now - this._lastNow);
+            this._lo -= w; this._hi += w;
+        }
+        var lo = Math.max(this._lo, L), hi = Math.min(this._hi, H);
+        if (lo < hi) {
+            this._lo = lo; this._hi = hi;
+            this._suspect = null;
+        } else if (L >= this._hi && !(this._suspect && L < this._suspect.hi && H > this._suspect.lo)) {
+            // Puts the frame further AHEAD than the clock allows. Firefox
+            // occasionally reports a frame ~10 ahead that is never painted
+            // (measured, 8 HEVC cameras: 448 -> 460 -> 452 within 80 ms), so
+            // adopt it only once the next callback agrees. Not its index
+            // either, or the true frame after it would look like a step back.
+            this._suspect = { lo: L, hi: H };
+            this._lastNow = now;
+            return;
+        } else {
+            // Behind the clock (frames arriving late), or an ahead jump the
+            // next callback confirmed: start over from the latest evidence.
+            if (this._suspect && L < this._suspect.hi && H > this._suspect.lo) {
+                L = Math.max(L, this._suspect.lo); H = Math.min(H, this._suspect.hi);
+            }
+            this._lo = L; this._hi = H;
+            this._suspect = null;
+        }
+        this._lastNow = now;
+        this.lastIndex = index;
+    }
+
+    /**
+     * The frame painted at wall time `t` (ms; performance.now()).
+     * @param {number} t
+     * @param {number} [slackMs] - uncertainty of `t` itself (Firefox rounds
+     *   performance.now() to 1 ms)
+     * @returns {{index: number, certain: boolean, step: number|null}|null} —
+     *   `index` is the midpoint guess when not `certain`; `step` is frames per
+     *   refresh (null until a refresh interval is seen); null until a
+     *   callback has said something about the frame clock
+     */
+    frameAt(t, slackMs) {
+        if (!isFinite(this._lo) || !isFinite(this._hi)) return null;
+        var s = slackMs || 0, r = this._rate;
+        var a = Math.floor((t - s) * r + this._lo + 1e-9);
+        var b = Math.floor((t + s) * r + this._hi - 1e-9);
+        var mid = Math.floor(t * r + (this._lo + this._hi) / 2);
+        var P = this._period || this._fallbackPeriod;
+        // With a jump ahead awaiting confirmation, nothing is certain.
+        return { index: a === b ? a : mid, certain: a === b && !this._suspect, step: P ? r * P : null };
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2280,34 +2452,70 @@ export class VideoController {
         // Fallback for views whose VideoFrame timestamps are unusable (Safari,
         // Firefox — see judgeVideoFrameTimestamps): draw the <video> directly
         // and take the frame index from its requestVideoFrameCallback
-        // mediaTime (Safari: exact, once per shown picture), projected forward
-        // from the last callback where callbacks are coalesced (Firefox,
-        // ~24/s), else from its clock. rVFC is registered ONLY for those views:
-        // registering it on every view changed Chrome's presentation behaviour.
+        // (Safari, one callback per shown picture: painted IN the callback at
+        // its `mediaTime`; Firefox, ~24 coalesced callbacks/s: painted on the
+        // refresh, indexed by a CoalescedFrameClock evaluated at the instant
+        // of the draw), else from its clock when there is no rVFC.
+        // rVFC is registered ONLY for those views: registering it on every
+        // view changed Chrome's presentation behaviour.
+        //
+        // Until a view's first callback its index is UNKNOWN (null) and its
+        // canvas keeps the paused frame it showed — `startFrame`. The clock is
+        // not a stand-in: after the pre-play seek Safari's `drawImage` keeps
+        // painting the PRE-seek picture until it presents a new one, which
+        // overlaid frame 279 on a picture of frame 66 (verify/pause-xb.html).
         var coalesced = rvfcCallbacksCoalesced();
-        var fallback = [];   // per view: { el, id, mt, at }
+        var fallback = [];   // per view: { el, id, mt, clock|null, skips, firstIdx, trusted, painted }
         self._refreshFallback = fallback;   // diagnostics only (tests/e2e/_verify-playback-loop.html)
-        function fallbackIndex(j, view, now) {
-            var dec = view.decoder, el = dec._videoEl, fps = dec._fps || self.state.fps || 30;
+        var refreshMs = null;                // display refresh interval (ms), as PlaybackSchedule measures it
+        var refreshDeltas = [], lastNow = null;
+        function fallbackState(j, view) {
+            var dec = view.decoder, el = dec._videoEl;
             var f = fallback[j];
             if (!f && el && typeof el.requestVideoFrameCallback === 'function') {
-                f = fallback[j] = { el: el, id: null, mt: null, at: null };
+                f = fallback[j] = { el: el, id: null, mt: null, clock: coalesced ? new CoalescedFrameClock() : null,
+                    skips: 0, firstIdx: null, trusted: false, painted: null };
                 var onVF = function (cbNow, md) {
-                    if (fallback[j] !== f) return;
+                    if (fallback[j] !== f || !self.state.isPlaying) return;
                     f.mt = md && typeof md.mediaTime === 'number' ? md.mediaTime : el.currentTime;
-                    f.at = cbNow;
+                    var fps = dec._fps || self.state.fps || 30;
+                    var vi = Math.round(f.mt * fps);
+                    if (f.clock) {
+                        f.clock.observe(cbNow, vi, md && md.expectedDisplayTime,
+                            fps * (el.playbackRate || 1) / 1000, refreshMs);
+                    } else {
+                        // One callback per shown picture (Safari): paint it
+                        // HERE, where `drawImage` and `mediaTime` are the same
+                        // frame (measured 100%); by the refresh a 150 fps
+                        // video could already be 1–2 frames on. But not until
+                        // the reported frame first CHANGES: the first callback
+                        // after the pre-play seek carries stale metadata —
+                        // the pre-seek frame (541 over a picture of 210), or
+                        // the seek target over the frame before it.
+                        if (f.firstIdx == null) f.firstIdx = vi;
+                        else if (vi !== f.firstIdx) f.trusted = true;
+                        if (f.trusted && vi !== f.painted && view.ctx && view.canvas && dec.drawCurrentFrame
+                            && dec.drawCurrentFrame(view.ctx, view.canvas.width, view.canvas.height) !== false) {
+                            f.painted = vi;
+                        }
+                    }
                     f.id = el.requestVideoFrameCallback(onVF);
                 };
                 f.id = el.requestVideoFrameCallback(onVF);
             }
-            if (f && f.mt != null) {
-                var t = f.mt;
-                if (coalesced && !el.paused) {
-                    t += Math.min(Math.max(0, now - f.at), 100) / 1000 * (el.playbackRate || 1);
-                }
-                return Math.round(t * fps);
+            return f;
+        }
+        // The frame a fallback view's `drawImage(<video>)` paints at time `t`
+        // (performance.now(); {index, certain}), or null while unknown (above).
+        function fallbackFrame(j, view, t) {
+            var dec = view.decoder;
+            var f = fallbackState(j, view);
+            if (!f) {
+                var ci = dec.getCurrentFrameIndex ? dec.getCurrentFrameIndex() : null;
+                return ci == null ? null : { index: ci, certain: true };
             }
-            return dec.getCurrentFrameIndex ? dec.getCurrentFrameIndex() : self.state.currentFrame;
+            if (f.clock) return f.mt == null ? null : f.clock.frameAt(t, 1);   // Firefox rounds now() to 1 ms
+            return f.painted == null ? null : { index: f.painted, certain: true, painted: true };
         }
         // Held VideoFrames and fallback rVFCs must not outlive playback
         // (stopPlayback calls this).
@@ -2335,35 +2543,96 @@ export class VideoController {
                 pending = new Array(n).fill(null);
                 schedule.reset();
             }
+            if (lastNow != null) {
+                // min of the first few (a missed vsync only makes one longer), then tracked
+                var dt = now - lastNow;
+                if (dt > 3 && dt < 50) {
+                    if (refreshMs == null) {
+                        refreshDeltas.push(dt);
+                        if (refreshDeltas.length >= 4) refreshMs = Math.min.apply(null, refreshDeltas);
+                    } else if (Math.abs(dt - refreshMs) < 0.25 * refreshMs) {
+                        refreshMs = 0.95 * refreshMs + 0.05 * dt;
+                    }
+                }
+            }
+            lastNow = now;
             var caps = new Array(n), idx = new Array(n);
+            var live = new Array(n).fill(false);   // painted from the <video> itself (fallback)
             var keep = new Array(n).fill(false);   // capture retained as pending
             try {
                 for (var j = 0; j < n; j++) {
                     var dec = cur[j].decoder;
+                    if (dec._vfTimestamps === undefined && videoFrameCaptureUnsafe()) {
+                        dec._vfTimestamps = 'bad';
+                        videoLog('Playback: WebKit — never capturing VideoFrames from a <video> (their timestamps are the clock); '
+                            + 'drawing the <video> directly, frame index from requestVideoFrameCallback');
+                    }
                     var tsMode = dec._vfTimestamps;
                     caps[j] = (tsMode !== 'bad' && dec.captureCurrentFrame) ? dec.captureCurrentFrame() : null;
                     if (caps[j] && tsMode === undefined) tsMode = judgeVideoFrameTimestamps(dec, caps[j]);
                     if (caps[j] && tsMode === 'ok') {
                         idx[j] = caps[j].index;
-                    } else {
-                        // Undecided (first few frames) or unusable timestamps:
-                        // paint the <video> itself, index from rVFC / clock.
+                    } else if (caps[j] && tsMode === undefined) {
+                        // Still judging the timestamps: nothing about this
+                        // view's picture is known yet — keep the paused frame.
                         closeCap(caps[j]); caps[j] = null;
-                        idx[j] = fallbackIndex(j, cur[j], now);
+                        idx[j] = null;
+                    } else {
+                        // Unusable timestamps, or no capture: paint the
+                        // <video> itself, index from rVFC / clock.
+                        closeCap(caps[j]); caps[j] = null;
+                        live[j] = true;
+                        var ff = fallbackFrame(j, cur[j], performance.now());
+                        idx[j] = ff ? ff.index : null;
                     }
                 }
                 var dec0 = cur[0].decoder, primaryEl = dec0._videoEl;
-                if (idx[0] >= self.state.totalFrames || (primaryEl && primaryEl.ended)) {
+                if ((idx[0] != null && idx[0] >= self.state.totalFrames) || (primaryEl && primaryEl.ended)) {
                     self.stopPlayback();
                     return false;
                 }
                 var rate = (dec0._fps || self.state.fps || 30) *
                     ((primaryEl && primaryEl.playbackRate) || 1) / 1000;
-                var target = schedule.update(now, idx[0], rate);
+                // The schedule follows the primary's CAPTURES; with none, every
+                // captured view simply shows its newest frame.
+                var target = (idx[0] != null && !live[0]) ? schedule.update(now, idx[0], rate) : Infinity;
 
                 var changed = false;
                 for (var k = 0; k < n; k++) {
                     var view = cur[k];
+                    if (live[k]) {
+                        // Painted live: the frame is whatever the <video> shows
+                        // at the instant of the draw, so take the index THEN
+                        // (8 views take milliseconds to draw). Firefox: when a
+                        // frame boundary may fall right at that instant, a
+                        // frame spans ~2+ refreshes (60 fps on 120 Hz) and the
+                        // next refresh would be certain, keep the frame already
+                        // on the canvas (before the first draw, the paused one)
+                        // instead — the new one lands certain a refresh later,
+                        // normally with every frame still shown for the same
+                        // number of refreshes. With ~1 frame per refresh a skip
+                        // would be a hold then a jump, so there it draws the
+                        // midpoint guess. An estimate never steps backwards
+                        // (Firefox's picture doesn't).
+                        var tDraw = performance.now();
+                        var fbk = idx[k] == null ? null : fallbackFrame(k, view, tDraw);
+                        if (!fbk) continue;
+                        var fs = fallback[k];
+                        var est = !!(fs && fs.clock);
+                        if (est && !fbk.certain && fbk.step != null && fbk.step <= 0.55 && fs.skips < 2) {
+                            var nxt = fs.clock.frameAt(tDraw + (refreshMs || 1000 / 60), 1);
+                            if (nxt && nxt.certain) { fs.skips++; continue; }
+                        }
+                        if (fs) fs.skips = 0;
+                        if (shown[k] != null && (est ? fbk.index <= shown[k] : fbk.index === shown[k])) continue;
+                        if (fbk.painted) { shown[k] = fbk.index; changed = true; continue; }   // drawn in its rVFC
+                        if (view.ctx && view.canvas && view.decoder.drawCurrentFrame
+                            && view.decoder.drawCurrentFrame(view.ctx, view.canvas.width, view.canvas.height) !== false) {
+                            shown[k] = fbk.index;
+                            changed = true;
+                        }
+                        continue;
+                    }
                     var pend = pending[k];
                     // No SECONDARY view may run ahead of the primary: the
                     // schedule is a free-running clock, so on a >60 Hz display
@@ -2371,13 +2640,10 @@ export class VideoController {
                     // yet, and those would paint it while the primary holds —
                     // cameras one frame apart, with the overlay drawn at the
                     // primary's index.
-                    var tk = (k === 0 || shown[0] == null) ? target : Math.min(target, shown[0]);
+                    var tk = (k === 0 || shown[0] == null || live[0]) ? target : Math.min(target, shown[0]);
                     var pick = pickScheduledFrame(tk, shown[k], pend ? pend.index : null, idx[k]);
                     if (pick === 'cap' && idx[k] !== shown[k]) {
-                        if (view.ctx && view.canvas) {
-                            if (caps[k]) view.ctx.drawImage(caps[k].frame, 0, 0, view.canvas.width, view.canvas.height);
-                            else if (view.decoder.drawCurrentFrame) view.decoder.drawCurrentFrame(view.ctx, view.canvas.width, view.canvas.height);
-                        }
+                        if (view.ctx && view.canvas) view.ctx.drawImage(caps[k].frame, 0, 0, view.canvas.width, view.canvas.height);
                         shown[k] = idx[k];
                         changed = true;
                     } else if (pick === 'pending' && pend.index !== shown[k]) {
@@ -2398,7 +2664,8 @@ export class VideoController {
                 }
                 if (!changed) return true;   // nothing new on screen: keep the last image
 
-                var mainIdx = shown[0];
+                // A view not yet drawn still shows the paused frame.
+                var mainIdx = shown[0] != null ? shown[0] : startFrame;
                 self.state.currentFrame = mainIdx;
                 var viewFrames = {};
                 for (var m = 0; m < n; m++) {
@@ -2406,7 +2673,7 @@ export class VideoController {
                     if (v.overlayCtx && v.overlayCanvas) {
                         v.overlayCtx.clearRect(0, 0, v.overlayCanvas.width, v.overlayCanvas.height);
                     }
-                    viewFrames[v.name] = shown[m];
+                    viewFrames[v.name] = shown[m] != null ? shown[m] : startFrame;
                 }
                 if (self.callbacks.drawOverlays) self.callbacks.drawOverlays(mainIdx, viewFrames);
                 if (self.callbacks.updateSeekbar) self.callbacks.updateSeekbar(mainIdx);
@@ -2562,10 +2829,11 @@ export class VideoController {
      * In Chrome/Brave this repaints the picture already on screen: the
      * per-refresh loop paints each view's captured VideoFrame and overlays it
      * at that frame's own index. It is needed where playback is less exact —
-     * the Safari/Firefox fallback loop (timestamps judged 'bad') overlays an
-     * index from rVFC or the clock that can be a frame or more off the drawn
-     * picture, and on any browser a secondary camera can stop a frame out of
-     * step with camera 0, whose index `stopPlayback` redraws every overlay at.
+     * the Safari/Firefox fallback loop (timestamps judged 'bad') can still
+     * overlay a frame off the drawn picture (Firefox's index is an estimate:
+     * CoalescedFrameClock), and on any browser a secondary camera can stop a
+     * frame out of step with camera 0, whose index `stopPlayback` redraws
+     * every overlay at.
      *
      * It used to step ONE FRAME FORWARD (current + 1), copying the manual
      * "press next frame after pausing" fix from the old loop, whose overlay
