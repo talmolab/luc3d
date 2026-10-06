@@ -1,0 +1,1390 @@
+
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Multi-View Pose Proofreader</title>
+    <link rel="stylesheet" href="styles.css?v=d5a19a468bf3">
+    <!-- Pinned: dockview-core 7.x renamed api.onUnhandledDragOverEvent →
+         onUnhandledDragOver, so the unpinned /+esm import broke pane docking
+         whenever the CDN cache refreshed. Keep this pin in sync with the
+         import in ui/sessions-panes.js. -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/dockview-core@6.6.1/dist/styles/dockview.css">
+    <!-- MP4 demuxing -->
+    <script src="https://cdn.jsdelivr.net/npm/mp4box@0.5.2/dist/mp4box.all.js"></script>
+    <!-- Three.js for 3D viewport (v0.147 is the last version with examples/js/) -->
+    <script src="https://cdn.jsdelivr.net/npm/three@0.147.0/build/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.147.0/examples/js/controls/OrbitControls.js"></script>
+    <!-- h5wasm for in-browser HDF5 read/write — local vendored 0.10.3 IIFE (global `h5wasm`); see lib/h5wasm/PROVENANCE.txt -->
+    <script src="./lib/h5wasm/h5wasm.iife.js?v=d5a19a468bf3"></script>
+    <!-- Video encode AND decode both go through mediabunny (importmap below):
+         export via ui/video-encode.js, decode via sleap-io.js's backend. -->
+    <!-- Import map for sleap-io.js ESM dependencies -->
+    <script type="importmap">
+    {
+        "imports": {
+            "h5wasm": "./lib/h5wasm/hdf5_hl.js?v=d5a19a468bf3",
+            "yaml": "https://cdn.jsdelivr.net/npm/yaml@2.8.0/browser/index.js",
+            "mediabunny": "./lib/mediabunny/mediabunny.min.mjs?v=d5a19a468bf3",
+            "pako": "./lib/pako/pako.esm.mjs?v=d5a19a468bf3"
+        }
+    }
+    </script>
+</head>
+
+<body>
+    <div class="app-container">
+        <!-- Loading overlay -->
+        <div class="loading-overlay" id="loadingOverlay">
+            <div class="spinner" id="loadingSpinner"></div>
+            <div id="loadingStatus">Initializing...</div>
+            <div class="loading-eta hidden" id="loadingEta" aria-live="off"></div>
+            <!-- Determinate progress (ui/loading-overlay.js showLoadingProgress) -->
+            <div class="loading-progress hidden" id="loadingProgress" role="progressbar"
+                 aria-labelledby="loadingStatus" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+                <div class="loading-progress-fill" id="loadingProgressFill"></div>
+            </div>
+            <div class="loading-substatus hidden" id="loadingSubstatus"></div>
+            <button class="btn" id="loadingDismiss" data-dismiss="true" style="display:none;margin-top:12px;">Dismiss</button>
+        </div>
+
+        <!-- Tracker progress overlay -->
+        <div class="tracker-progress" id="trackerProgress" style="display:none;">
+            <div class="tracker-progress-inner">
+                <div class="tracker-progress-bar" id="trackerProgressBar" style="width:0%"></div>
+            </div>
+            <span id="trackerProgressText">Tracking...</span>
+            <button class="toolbar-btn" id="trackerCancel" style="margin-left:8px;">Cancel</button>
+        </div>
+
+        <!-- Menu Bar -->
+        <div class="menu-bar" id="menuBar">
+            <div class="menu-item" data-menu="file">
+                File
+                <div class="menu-dropdown" id="menuFile">
+                    <div class="menu-dropdown-item" id="menuNewProject">New Project</div>
+                    <div class="menu-dropdown-item" id="menuSaveProject">Save<span style="float:right;opacity:0.5;font-size:11px;">Ctrl+S</span></div>
+                    <div class="menu-dropdown-item" id="menuSaveAs">Save As...</div>
+                    <div class="menu-dropdown-item" id="menuLoadProject">Load Project...</div>
+                    <div class="menu-separator"></div>
+                    <div class="menu-dropdown-item" id="menuSessionFolderWizard">Session Folder Wizard...</div>
+                    <div class="menu-dropdown-item" id="menuLoadSessionFolder">Load Single Session Folder</div>
+                    <div class="menu-dropdown-item" id="menuLoadMultiSessionFolder">Load Multi-Session Folder</div>
+                    <div class="menu-dropdown-item" id="menuLoadVideos">Load Videos...</div>
+                    <div class="menu-dropdown-item" id="menuLoadCalibration">Load Calibration...</div>
+                    <div class="menu-dropdown-item" id="menuLoadSlp">Load SLP...</div>
+                    <div class="menu-dropdown-item" id="menuLoadPoints3dH5">Load 3D Points (H5)...</div>
+                    <div class="menu-dropdown-item" id="menuLoadSkeletonMenu">Load Skeleton...</div>
+                    <div class="menu-separator"></div>
+                    <div class="menu-dropdown-item" id="menuSaveSkeleton">Save Skeleton (JSON)</div>
+                    <div class="menu-dropdown-item" id="menuExportLabels">Export Labels (JSON)</div>
+                    <div class="menu-dropdown-item" id="menuExportSlpPerSession">Export SLEAP File Per Session</div>
+                    <div class="menu-dropdown-item" id="menuExportSlpByCam">Export SLEAP File By Cam</div>
+                    <!-- Deprecated: "Export 2D SLP (All Views)" removed from the File menu.
+                         The backing modal (showSlpExportAllModal) is retained but no longer wired. -->
+                    <!-- <div class="menu-dropdown-item" id="menuExportSlp">Export 2D SLP (All Views)</div> -->
+                    <div class="menu-dropdown-item" id="menuExportOverlayVideo">Export Video Overlays</div>
+                    <div class="menu-dropdown-item" id="menuExportVideo3d">Export 3D Video</div>
+                    <div class="menu-dropdown-item" id="menuExportPoints3dH5">Export 3D Points (H5)</div>
+                    <div class="menu-dropdown-item" id="menuExportReprojH5">Export Reprojections (H5)</div>
+                    <div class="menu-dropdown-item" id="menuExportCalib">Export Calibration (TOML)</div>
+                </div>
+            </div>
+            <div class="menu-item" data-menu="edit">
+                Edit
+                <div class="menu-dropdown" id="menuEdit">
+                    <div class="menu-dropdown-item" id="menuAddInstance">Add Instance <span
+                            class="shortcut-hint">N</span></div>
+                    <div class="menu-dropdown-item" id="menuDeleteInstance">Delete Instance <span
+                            class="shortcut-hint">Del / Shift+Del</span></div>
+                    <div class="menu-dropdown-item" id="menuCustomDeleteInstance">Custom Instance Delete...</div>
+                    <div class="menu-separator"></div>
+                    <div class="menu-dropdown-item" id="menuUnlinkGroup">Unlink Group <span
+                            class="shortcut-hint">U</span></div>
+                    <div class="menu-separator"></div>
+                    <div class="menu-dropdown-item" id="menuTriangulate">Triangulate Current Frame <span
+                            class="shortcut-hint">T</span></div>
+                    <div class="menu-dropdown-item" id="menuTriangulateMulti">Triangulate Multiple Frames</div>
+                    <div class="menu-separator"></div>
+                    <div class="menu-dropdown-item" id="menuGroupByTrack">Group by Track &amp; Triangulate All</div>
+                    <div class="menu-dropdown-item" id="menuGroupByIdentity">Group by Identity &amp; Triangulate All</div>
+                </div>
+            </div>
+            <div class="menu-item" data-menu="calibrate">
+                Calibrate
+                <div class="menu-dropdown" id="menuCalibrate">
+                    <div class="menu-dropdown-item" id="menuCalibrateNewTab">Calibrate in New Tab</div>
+                </div>
+            </div>
+            <div class="menu-item" data-menu="tracks">
+                Tracks
+                <div class="menu-dropdown" id="menuTracks">
+                    <div class="menu-dropdown-item" id="menuNewTrack">New Track...</div>
+                    <div class="menu-dropdown-item" id="menuRenameTrack">Rename Track...</div>
+                    <div class="menu-dropdown-item" id="menuDeleteTrack">Delete Track...</div>
+                    <div class="menu-separator"></div>
+                    <div class="menu-dropdown-item" id="menuSwapTracks">Swap Tracks...</div>
+                    <div class="menu-separator"></div>
+                    <div class="menu-dropdown-item" id="menuNewIdentity">New Identity...</div>
+                    <div class="menu-dropdown-item" id="menuRenameIdentity">Rename Identity...</div>
+                    <div class="menu-dropdown-item" id="menuDeleteIdentity">Delete Identity...</div>
+                    <div class="menu-separator"></div>
+                    <div class="menu-dropdown-item" id="menuPropagateTracksToIds">Propagate Tracks → IDs</div>
+                    <div class="menu-dropdown-item" id="menuPropagateIdsToTracks">Propagate IDs → Tracks</div>
+                    <div class="menu-separator"></div>
+                    <div class="menu-dropdown-item" id="menuCheckSizeSwitches">Check ID Switches (Body Size)…</div>
+                    <div class="menu-dropdown-item" id="menuCheckImageSwitches">Check ID Switches (Images)…</div>
+                    <div class="menu-separator"></div>
+                    <div class="menu-dropdown-item has-submenu" id="menuTrailsParent">
+                        <span>Node Trails</span>
+                        <span class="submenu-arrow">▶</span>
+                        <div class="menu-dropdown submenu" id="menuTrailsSubmenu">
+                            <div class="menu-dropdown-item" id="menuTrailsOff"><span><span class="trail-check">✓</span>Off</span></div>
+                            <div class="menu-dropdown-item" id="menuTrails10"><span><span class="trail-check"></span>10 frames</span></div>
+                            <div class="menu-dropdown-item" id="menuTrails50"><span><span class="trail-check"></span>50 frames</span></div>
+                            <div class="menu-dropdown-item" id="menuTrails100"><span><span class="trail-check"></span>100 frames</span></div>
+                            <div class="menu-dropdown-item" id="menuTrails250"><span><span class="trail-check"></span>250 frames</span></div>
+                            <div class="menu-dropdown-item" id="menuTrails500"><span><span class="trail-check"></span>500 frames</span></div>
+                        </div>
+                    </div>
+                    <div class="menu-separator"></div>
+                    <div class="menu-dropdown-item" id="menuTrackingWizard">Tracking Wizard...</div>
+                </div>
+            </div>
+            <div class="menu-item" data-menu="view">
+                View
+                <div class="menu-dropdown" id="menuView">
+                    <div class="menu-dropdown-item" id="menuToggle3D">Toggle 3D Viewport <span
+                            class="shortcut-hint">\</span></div>
+                    <div class="menu-dropdown-item" id="menuToggleTimeline">Toggle Timeline <span
+                            class="shortcut-hint">Ctrl/Cmd+J</span></div>
+                    <div class="menu-dropdown-item" id="menuToggleInfo">Toggle Info Panel <span
+                            class="shortcut-hint">I</span></div>
+                    <div class="menu-separator"></div>
+                    <div class="menu-dropdown-item" id="menuResetView">Reset 3D View</div>
+                    <div class="menu-dropdown-item" id="menuFitScene">Fit 3D to Scene</div>
+                    <div class="menu-separator"></div>
+                    <div class="menu-dropdown-item" id="menuDefinePlanes">Define Planes <span
+                            class="shortcut-hint">Ctrl/Cmd+Shift+P</span></div>
+                    <div class="menu-dropdown-item" id="menuAlignViews">Align Views to References...</div>
+                </div>
+            </div>
+            <div class="menu-item" id="menuHotkeys" style="cursor:pointer;">Hot Keys</div>
+            <div class="menu-item" data-menu="help">
+                Help
+                <div class="menu-dropdown" id="menuHelp">
+                    <div class="menu-dropdown-item" id="menuDocumentation">Docs</div>
+                    <div class="menu-dropdown-item" id="menuSettings">Settings</div>
+                </div>
+            </div>
+            <!-- #138: Docs and Settings also as direct buttons on the right, so
+                 they are one click away instead of hidden under a menu. -->
+            <div class="menu-item menu-bar-button" id="menuBarDocs" style="margin-left:auto;"
+                title="Open the LUCID documentation in a new tab">Docs</div>
+            <div class="menu-item menu-bar-button" id="menuBarSettings"
+                title="Settings: default triangulation, keyboard shortcuts, Tracking Wizard">Settings</div>
+        </div>
+
+        <!-- Toolbar -->
+        <div class="toolbar" id="toolbar">
+            <div class="toolbar-group">
+                <button class="toolbar-btn active" id="tbSessions" title="Toggle Sessions sidebar">Sessions</button>
+                <button class="toolbar-btn" id="tbAddInstance" title="Add new instance (Ctrl+I)">+ Instance</button>
+                <button class="toolbar-btn" id="tbDeleteInstance" title="Delete selected instance (Del)">-
+                    Instance</button>
+            </div>
+            <div class="toolbar-separator"></div>
+            <div class="toolbar-group">
+                <button class="toolbar-btn" id="tbGroup" title="Group selected instances (⇧G or C)">Group</button>
+                <button class="toolbar-btn" id="tbEditGroup" title="Edit selected group membership">Edit Group</button>
+                <div class="tri-dropdown" id="triangulateDropdown">
+                    <button class="toolbar-btn" id="tbTriangulate" title="Triangulate selected group (t)">Triangulate<span class="tri-method"></span> <span class="tri-caret">▾</span></button>
+                    <div class="tri-dropdown-menu">
+                        <div class="tri-dropdown-item" data-method="dlt">DLT <span class="tri-dropdown-hint">Fast</span></div>
+                        <div class="tri-dropdown-item" data-method="ba">Ref <span class="tri-dropdown-hint">Slow &amp; Accurate</span></div>
+                    </div>
+                </div>
+                <div class="tri-dropdown" id="triangulateAllDropdown">
+                    <button class="toolbar-btn" id="tbTriangulateAll" title="Triangulate all frames with instance groups">Triangulate All<span class="tri-method"></span> <span class="tri-caret">▾</span></button>
+                    <div class="tri-dropdown-menu">
+                        <div class="tri-dropdown-item" data-method="dlt">DLT <span class="tri-dropdown-hint">Fast</span></div>
+                        <div class="tri-dropdown-item" data-method="ba">Ref <span class="tri-dropdown-hint">Slow &amp; Accurate</span></div>
+                    </div>
+                </div>
+            </div>
+            <span class="triangulation-badge" id="triangulationBadge" style="display:none"></span>
+            <div class="toolbar-separator"></div>
+            <div class="toolbar-group">
+                <div class="tri-dropdown" id="trackFrameDropdown">
+                    <button class="toolbar-btn" id="tbTrackFrame" title="Track current frame (Shift+T)">Track Frame <span class="tri-caret">▾</span></button>
+                    <div class="tri-dropdown-menu">
+                        <div class="tri-dropdown-item" id="tbTrackFrameRange">Track Frame Range… <span class="tri-dropdown-hint">Start–End</span></div>
+                    </div>
+                </div>
+                <button class="toolbar-btn" id="tbTrackAll" title="Track all frames (Ctrl+Shift+T)">Track All</button>
+            </div>
+            <div class="toolbar-separator"></div>
+            <div class="toolbar-group toolbar-checkboxes">
+                <label><input type="checkbox" id="visUser" checked> User</label>
+                <label><input type="checkbox" id="visPredicted" checked> Predicted</label>
+                <label><input type="checkbox" id="visReprojections" checked> Reproj</label>
+                <label><input type="checkbox" id="visErrors" checked> Errors</label>
+            </div>
+            <div class="toolbar-separator"></div>
+            <div class="toolbar-group">
+                <span class="toolbar-checkboxes" style="margin-right:6px;font-weight:bold;">Color</span>
+                <button class="toolbar-btn active" id="colorByTracks" title="Color instances by track">Tracks</button>
+                <button class="toolbar-btn" id="colorById" title="Color instances by identity">ID</button>
+            </div>
+            <div class="toolbar-group panel-toggles">
+                <button class="toolbar-btn panel-toggle-btn" id="viewport3dToggleBtn" title="Toggle 3D viewer (\)">Hide 3D View</button>
+                <button class="toolbar-btn panel-toggle-btn" id="infoPanelToggleBtn" title="Toggle info panel (I)">Hide Panel</button>
+            </div>
+        </div>
+
+        <!-- Defining Plane Mode banner (View ▸ Define Planes). Hidden unless the
+             mode is active; see ui/plane-definition.js. -->
+        <div class="plane-mode-bar" id="planeModeBar" style="display:none;">
+            <span class="plane-mode-dot"></span>
+            <span class="plane-mode-label">Defining Plane Mode</span>
+            <span class="plane-mode-hint" id="planeModeHint">Drag a plane from the panel onto a video view</span>
+            <button class="toolbar-btn plane-mode-exit" id="planeModeExit" title="Leave Defining Plane Mode">Exit</button>
+        </div>
+
+        <!-- Set Origin Mode. Replaces the plane bar while active (both at once
+             would advertise two modes). Exit and Esc are the only ways out. -->
+        <div class="plane-mode-bar origin-mode-bar" id="originModeBar" style="display:none;">
+            <span class="plane-mode-dot"></span>
+            <span class="plane-mode-label">Set Origin Mode</span>
+            <span class="plane-mode-hint" id="originModeHint"></span>
+            <button class="toolbar-btn plane-mode-exit" id="originModeExit" title="Leave Set Origin Mode (Esc)">Exit</button>
+        </div>
+
+        <!-- Main content: video grid + 3D viewport + info panel -->
+        <div class="main-content">
+            <!-- Video Grid Section (left/center) -->
+            <div class="video-grid-section">
+                <!-- Session strip sidebar (far left) -->
+                <div class="session-strip" id="sessionStrip">
+                    <div class="session-strip-resize" id="sessionStripResize"></div>
+                    <div class="session-strip-list" id="sessionStripList">
+                        <!-- Populated dynamically -->
+                    </div>
+                    <button class="session-strip-add" id="btnAddSession" title="Add session">+</button>
+                    <button class="session-strip-add" id="btnRemoveSession" title="Remove active session" style="margin-top:0;">&minus;</button>
+                </div>
+                <!-- View strip sidebar (scrollable list of video thumbnails) -->
+                <div class="view-strip" id="viewStrip">
+                    <div class="view-strip-header">Views</div>
+                    <div class="view-strip-list" id="viewStripList">
+                        <!-- Populated dynamically -->
+                    </div>
+                </div>
+
+                <!-- Main video viewing area (split-panel dock) -->
+                <div class="video-dock" id="videoDock">
+                    <div class="video-dock-empty" id="videoDockEmpty">
+                        <div class="dock-empty-icon">&#128249;</div>
+                        <div id="dockEmptyText">Drag and Drop videos</div>
+                        <div id="dockEmptySubtext" style="font-size:11px;margin-top:4px;color:var(--text-muted);">Drag from the view strip or double-click to add</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Split handle: video grid | 3D viewport -->
+            <div class="split-handle vertical" id="splitHandle1"></div>
+
+            <!-- 3D Viewport (center-right) -->
+            <div class="viewport3d-container" id="viewport3dContainer">
+                <div class="viewport3d-message" id="viewport3dMessage">Load Calibration File to View Cameras</div>
+                <div id="viewport3dCanvas" style="width:100%;height:100%;"></div>
+                <button class="viewport3d-show-cam-btn" id="btnShowCameraView" title="Show selected camera's perspective">Show Camera View</button>
+                <button class="viewport3d-show-cam-btn" id="btnShowInitialView" title="Reset to initial view" style="display:none; top:36px;">Show Initial View</button>
+                <button class="viewport3d-show-cam-btn" id="btnSetEnv" title="Freeze current frame's 3D groups as persistent environment reference" style="bottom:6px; top:auto;">Set Env</button>
+                <button class="viewport3d-show-cam-btn" id="btnClearEnv" title="Remove environment overlay" style="bottom:6px; top:auto; left:70px; display:none;">Clear Env</button>
+                <!-- Set Origin Mode wizard: instructions live over the 3D view
+                     because that is where the clicking happens. -->
+                <div class="origin-instruction" id="originInstruction" style="display:none;">
+                    <!-- The box floats over the very geometry the user has to
+                         click, so it can be dragged out of the way. Only the
+                         grip takes pointer events (see styles.css). -->
+                    <div class="origin-drag-handle" id="originDragHandle" title="Drag to move">&#8942;&#8942;&#8942;</div>
+                    <div class="origin-step" id="originStepText"></div>
+                    <div class="origin-legend" id="originLegend" style="display:none;">
+                        <span class="origin-swatch origin-swatch-pos"></span><span>Red arrow = +Z</span>
+                        <span class="origin-swatch origin-swatch-neg"></span><span>Blue arrow = +Z</span>
+                    </div>
+                    <div class="origin-confirm-row" id="originConfirmRow" style="display:none;">
+                        <button class="panel-btn" id="btnOriginCancel">Cancel</button>
+                        <button class="panel-btn origin-continue" id="btnOriginContinue">Continue</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Split handle: 3D viewport | info panel -->
+            <div class="split-handle vertical" id="splitHandle2"></div>
+
+            <!-- Info Panel wrapper (toggle button + panel) -->
+            <div class="info-panel-wrapper" id="infoPanelWrapper">
+                <div class="info-panel" id="infoPanel">
+                <!-- Tab bar -->
+                <div class="panel-tabs">
+                    <button class="panel-tab active" data-tab="tabInstances">Instances</button>
+                    <button class="panel-tab" data-tab="tabVisibility">Visibility</button>
+                    <button class="panel-tab" data-tab="tabIdSwitches">ID Switches</button>
+                    <button class="panel-tab" data-tab="tabVideos">Videos</button>
+                    <button class="panel-tab" data-tab="tabCameras">Cameras</button>
+                    <button class="panel-tab" data-tab="tabSkeleton">Skeleton</button>
+                    <button class="panel-tab" data-tab="tabSession">Session</button>
+                </div>
+
+                <!-- ==================== Instances Tab ==================== -->
+                <div class="panel-tab-content active" id="tabInstances">
+                    <!-- Reprojection Error -->
+                    <div class="info-section" id="reprojErrorSection" style="display:none">
+                        <h3>Reprojection Error</h3>
+                        <div class="error-method" id="errorMethod" style="display:none"></div>
+                        <div class="error-display" id="errorDisplay">-</div>
+                        <div class="error-display-undist" id="errorDisplayUndist"></div>
+                        <div id="perCameraErrors"></div>
+                        <details id="errorBreakdownDetails" style="margin-top:6px;" open>
+                            <summary style="cursor:pointer;font-size:11px;color:var(--text-muted);user-select:none;">Per-instance node breakdown</summary>
+                            <div id="errorBreakdownTable" style="margin-top:4px;overflow-x:auto;"></div>
+                        </details>
+                    </div>
+
+                    <!-- Selected Instance -->
+                    <div class="info-section">
+                        <h3>Selected</h3>
+                        <div id="selectedInfo" style="font-size:12px;color:var(--text-secondary);">None</div>
+                    </div>
+
+                    <!-- Grouped Instances -->
+                    <div class="info-section">
+                        <h3>Grouped Instances</h3>
+                        <table class="data-table" id="instanceGroupsTable">
+                            <thead>
+                                <tr>
+                                    <th>Track</th>
+                                    <th>Identity</th>
+                                    <th>Views</th>
+                                    <th>Type</th>
+                                    <th class="reproj-error-col" style="display:none">Error</th>
+                                    <th style="width:24px;"></th>
+                                </tr>
+                            </thead>
+                            <tbody></tbody>
+                        </table>
+                        <div class="table-empty" id="instanceGroupsEmpty">No grouped instances</div>
+                    </div>
+
+                    <!-- Ungrouped Instances -->
+                    <div class="info-section">
+                        <h3>Ungrouped Instances</h3>
+                        <table class="data-table" id="unlinkedTable">
+                            <thead>
+                                <tr>
+                                    <th>Track</th>
+                                    <th>ID</th>
+                                    <th>Type</th>
+                                    <th>Points</th>
+                                    <th>Score</th>
+                                </tr>
+                            </thead>
+                            <tbody></tbody>
+                        </table>
+                        <div class="table-empty" id="unlinkedEmpty">No ungrouped instances</div>
+                    </div>
+                </div>
+
+                <!-- ==================== Visibility Tab ==================== -->
+                <div class="panel-tab-content" id="tabVisibility">
+                    <h3>Timeline</h3>
+                    <div class="vis-timeline-toggles">
+                        <h4 style="margin:6px 0 4px 0;font-size:11px;color:var(--text-secondary);">Views</h4>
+                        <div id="visTimelineCameras" class="vis-toggle-list"></div>
+                        <h4 style="margin:6px 0 4px 0;font-size:11px;color:var(--text-secondary);">Tracks</h4>
+                        <div id="visTimelineTracks" class="vis-toggle-list"></div>
+                        <h4 style="margin:6px 0 4px 0;font-size:11px;color:var(--text-secondary);">Identities</h4>
+                        <div id="visTimelineIdentities" class="vis-toggle-list"></div>
+                    </div>
+                    <hr style="border:none;border-top:1px solid var(--border-subtle);margin:10px 0;">
+                    <h3>User</h3>
+                    <div class="vis-slider-row">
+                        <span>Node Size</span>
+                        <input type="range" id="visUserNodeSize" min="1" max="50" value="11" step="1">
+                        <span class="vis-val" id="visUserNodeSizeVal">11</span>
+                    </div>
+                    <div class="vis-line-style-row">
+                        <span>Node Style</span>
+                        <div class="line-style-options" id="visUserNodeStyle" data-value="circle">
+                            <button class="line-style-btn active" data-style="circle" title="Circle"><svg width="18" height="12"><circle cx="9" cy="6" r="4.5" fill="currentColor"/></svg></button>
+                            <button class="line-style-btn" data-style="x" title="X"><svg width="18" height="12"><line x1="5" y1="2" x2="13" y2="10" stroke="currentColor" stroke-width="2.2"/><line x1="13" y1="2" x2="5" y2="10" stroke="currentColor" stroke-width="2.2"/></svg></button>
+                            <button class="line-style-btn" data-style="triangle" title="Triangle"><svg width="18" height="12"><polygon points="9,1.5 15,10.5 3,10.5" fill="currentColor"/></svg></button>
+                            <button class="line-style-btn" data-style="square" title="Square"><svg width="18" height="12"><rect x="4.5" y="1.5" width="9" height="9" fill="currentColor"/></svg></button>
+                        </div>
+                    </div>
+                    <div class="vis-slider-row">
+                        <span>Edge Weight</span>
+                        <input type="range" id="visUserEdgeWeight" min="1" max="10" value="3" step="1">
+                        <span class="vis-val" id="visUserEdgeWeightVal">3</span>
+                    </div>
+                    <div class="vis-slider-row">
+                        <span>Edge Transparency</span>
+                        <input type="range" id="visUserEdgeTrans" min="0" max="100" value="100" step="1">
+                        <span class="vis-val" id="visUserEdgeTransVal">1.0</span>
+                    </div>
+                    <div class="vis-slider-row">
+                        <span>Label Size</span>
+                        <input type="range" id="visUserLabelSize" min="0" max="24" value="12" step="1">
+                        <span class="vis-val" id="visUserLabelSizeVal">12</span>
+                    </div>
+                    <div class="vis-slider-row">
+                        <span>Label Transparency</span>
+                        <input type="range" id="visUserLabelAlpha" min="0" max="1" value="1" step="0.01">
+                        <span class="vis-val" id="visUserLabelAlphaVal">1.00</span>
+                    </div>
+                    <div class="vis-line-style-row">
+                        <span>Pre-ID Edge</span>
+                        <div class="line-style-options" id="visUserPreLineStyle" data-value="solid">
+                            <button class="line-style-btn active" data-style="solid" title="Solid"><svg width="40" height="12"><line x1="2" y1="6" x2="38" y2="6" stroke="currentColor" stroke-width="2"/></svg></button>
+                            <button class="line-style-btn" data-style="dotted" title="Dotted"><svg width="40" height="12"><line x1="2" y1="6" x2="38" y2="6" stroke="currentColor" stroke-width="2" stroke-dasharray="2,3"/></svg></button>
+                            <button class="line-style-btn" data-style="dashed" title="Dashed"><svg width="40" height="12"><line x1="2" y1="6" x2="38" y2="6" stroke="currentColor" stroke-width="2" stroke-dasharray="6,4"/></svg></button>
+                        </div>
+                    </div>
+                    <div class="vis-line-style-row">
+                        <span>Post-ID Edge</span>
+                        <div class="line-style-options" id="visUserPostLineStyle" data-value="solid">
+                            <button class="line-style-btn active" data-style="solid" title="Solid"><svg width="40" height="12"><line x1="2" y1="6" x2="38" y2="6" stroke="currentColor" stroke-width="2"/></svg></button>
+                            <button class="line-style-btn" data-style="dotted" title="Dotted"><svg width="40" height="12"><line x1="2" y1="6" x2="38" y2="6" stroke="currentColor" stroke-width="2" stroke-dasharray="2,3"/></svg></button>
+                            <button class="line-style-btn" data-style="dashed" title="Dashed"><svg width="40" height="12"><line x1="2" y1="6" x2="38" y2="6" stroke="currentColor" stroke-width="2" stroke-dasharray="6,4"/></svg></button>
+                        </div>
+                    </div>
+                    <h3>Predicted</h3>
+                    <div class="vis-slider-row">
+                        <span>Node Size</span>
+                        <input type="range" id="visPredNodeSize" min="1" max="50" value="6" step="1">
+                        <span class="vis-val" id="visPredNodeSizeVal">6</span>
+                    </div>
+                    <div class="vis-line-style-row">
+                        <span>Node Style</span>
+                        <div class="line-style-options" id="visPredNodeStyle" data-value="x">
+                            <button class="line-style-btn" data-style="circle" title="Circle"><svg width="18" height="12"><circle cx="9" cy="6" r="4.5" fill="currentColor"/></svg></button>
+                            <button class="line-style-btn active" data-style="x" title="X"><svg width="18" height="12"><line x1="5" y1="2" x2="13" y2="10" stroke="currentColor" stroke-width="2.2"/><line x1="13" y1="2" x2="5" y2="10" stroke="currentColor" stroke-width="2.2"/></svg></button>
+                            <button class="line-style-btn" data-style="triangle" title="Triangle"><svg width="18" height="12"><polygon points="9,1.5 15,10.5 3,10.5" fill="currentColor"/></svg></button>
+                            <button class="line-style-btn" data-style="square" title="Square"><svg width="18" height="12"><rect x="4.5" y="1.5" width="9" height="9" fill="currentColor"/></svg></button>
+                        </div>
+                    </div>
+                    <div class="vis-slider-row">
+                        <span>Edge Weight</span>
+                        <input type="range" id="visPredEdgeWeight" min="1" max="10" value="2" step="1">
+                        <span class="vis-val" id="visPredEdgeWeightVal">2</span>
+                    </div>
+                    <div class="vis-slider-row">
+                        <span>Edge Transparency</span>
+                        <input type="range" id="visPredEdgeTrans" min="0" max="100" value="60" step="1">
+                        <span class="vis-val" id="visPredEdgeTransVal">0.6</span>
+                    </div>
+                    <div class="vis-line-style-row">
+                        <span>Pre-ID Edge</span>
+                        <div class="line-style-options" id="visPredPreLineStyle" data-value="dotted">
+                            <button class="line-style-btn" data-style="solid" title="Solid"><svg width="40" height="12"><line x1="2" y1="6" x2="38" y2="6" stroke="currentColor" stroke-width="2"/></svg></button>
+                            <button class="line-style-btn active" data-style="dotted" title="Dotted"><svg width="40" height="12"><line x1="2" y1="6" x2="38" y2="6" stroke="currentColor" stroke-width="2" stroke-dasharray="2,3"/></svg></button>
+                            <button class="line-style-btn" data-style="dashed" title="Dashed"><svg width="40" height="12"><line x1="2" y1="6" x2="38" y2="6" stroke="currentColor" stroke-width="2" stroke-dasharray="6,4"/></svg></button>
+                        </div>
+                    </div>
+                    <div class="vis-line-style-row">
+                        <span>Post-ID Edge</span>
+                        <div class="line-style-options" id="visPredPostLineStyle" data-value="dotted">
+                            <button class="line-style-btn" data-style="solid" title="Solid"><svg width="40" height="12"><line x1="2" y1="6" x2="38" y2="6" stroke="currentColor" stroke-width="2"/></svg></button>
+                            <button class="line-style-btn active" data-style="dotted" title="Dotted"><svg width="40" height="12"><line x1="2" y1="6" x2="38" y2="6" stroke="currentColor" stroke-width="2" stroke-dasharray="2,3"/></svg></button>
+                            <button class="line-style-btn" data-style="dashed" title="Dashed"><svg width="40" height="12"><line x1="2" y1="6" x2="38" y2="6" stroke="currentColor" stroke-width="2" stroke-dasharray="6,4"/></svg></button>
+                        </div>
+                    </div>
+                    <h3>Reprojections</h3>
+                    <div class="vis-slider-row">
+                        <span>Node Size</span>
+                        <input type="range" id="visReprojNodeSize" min="1" max="50" value="4" step="1">
+                        <span class="vis-val" id="visReprojNodeSizeVal">4</span>
+                    </div>
+                    <div class="vis-line-style-row">
+                        <span>Node Style</span>
+                        <div class="line-style-options" id="visReprojNodeStyle" data-value="circle">
+                            <button class="line-style-btn active" data-style="circle" title="Circle"><svg width="18" height="12"><circle cx="9" cy="6" r="4.5" fill="currentColor"/></svg></button>
+                            <button class="line-style-btn" data-style="x" title="X"><svg width="18" height="12"><line x1="5" y1="2" x2="13" y2="10" stroke="currentColor" stroke-width="2.2"/><line x1="13" y1="2" x2="5" y2="10" stroke="currentColor" stroke-width="2.2"/></svg></button>
+                            <button class="line-style-btn" data-style="triangle" title="Triangle"><svg width="18" height="12"><polygon points="9,1.5 15,10.5 3,10.5" fill="currentColor"/></svg></button>
+                            <button class="line-style-btn" data-style="square" title="Square"><svg width="18" height="12"><rect x="4.5" y="1.5" width="9" height="9" fill="currentColor"/></svg></button>
+                        </div>
+                    </div>
+                    <div class="vis-slider-row">
+                        <span>Edge Weight</span>
+                        <input type="range" id="visReprojEdgeWeight" min="1" max="10" value="3" step="1">
+                        <span class="vis-val" id="visReprojEdgeWeightVal">3</span>
+                    </div>
+                    <div class="vis-slider-row">
+                        <span>Edge Transparency</span>
+                        <input type="range" id="visReprojEdgeTrans" min="0" max="100" value="100" step="1">
+                        <span class="vis-val" id="visReprojEdgeTransVal">1.0</span>
+                    </div>
+                    <div class="vis-slider-row">
+                        <span>Brightness</span>
+                        <input type="range" id="visReprojBrightness" min="0" max="100" value="50" step="1">
+                        <span class="vis-val" id="visReprojBrightnessVal">50%</span>
+                    </div>
+                    <div class="vis-slider-row">
+                        <span>Label Size</span>
+                        <input type="range" id="visReprojLabelSize" min="0" max="24" value="0" step="1">
+                        <span class="vis-val" id="visReprojLabelSizeVal">0</span>
+                    </div>
+                    <div class="vis-slider-row">
+                        <span>Label Transparency</span>
+                        <input type="range" id="visReprojLabelAlpha" min="0" max="1" value="1" step="0.01">
+                        <span class="vis-val" id="visReprojLabelAlphaVal">1.00</span>
+                    </div>
+                    <div class="vis-line-style-row">
+                        <span>Edge Style</span>
+                        <div class="line-style-options" id="visReprojLineStyle" data-value="solid">
+                            <button class="line-style-btn active" data-style="solid" title="Solid"><svg width="40" height="12"><line x1="2" y1="6" x2="38" y2="6" stroke="currentColor" stroke-width="2"/></svg></button>
+                            <button class="line-style-btn" data-style="dotted" title="Dotted"><svg width="40" height="12"><line x1="2" y1="6" x2="38" y2="6" stroke="currentColor" stroke-width="2" stroke-dasharray="2,3"/></svg></button>
+                            <button class="line-style-btn" data-style="dashed" title="Dashed"><svg width="40" height="12"><line x1="2" y1="6" x2="38" y2="6" stroke="currentColor" stroke-width="2" stroke-dasharray="6,4"/></svg></button>
+                        </div>
+                    </div>
+                    <div class="vis-line-style-row">
+                        <span>Node Color</span>
+                        <div class="line-style-options" id="visReprojNodeColor" data-value="white">
+                            <button class="line-style-btn active" data-style="white" title="White">White</button>
+                            <button class="line-style-btn" data-style="black" title="Black">Black</button>
+                            <button class="line-style-btn" data-style="track" title="Track Color">Track</button>
+                        </div>
+                    </div>
+                    <h3>Unlinked Instances</h3>
+                    <div class="vis-slider-row">
+                        <span title="The amber &quot;?&quot; badge on an instance that is not yet assigned to a cross-view group. Untick to keep the dashed edges and reduced opacity without the badge.">Show "?" badge</span>
+                        <label class="toggle-switch" style="margin-left:auto;">
+                            <input type="checkbox" id="visUnlinkedBadge" checked>
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                    <!-- Planes. The planes the user annotated are scene geometry
+                         and are drawn in EVERY mode, so these four say which of
+                         their parts survive OUTSIDE Defining Plane Mode. Inside
+                         the mode all four are forced on (ui/plane-visibility.js):
+                         the panel edits parts the user has to be able to see.
+                         Planes and nodes are separate because a node outlives
+                         the planes referencing it, and 2D/3D are separate
+                         because they are two different kinds of clutter —
+                         filled walls over the frame being labelled, versus a
+                         cage in the 3D view that is the whole point of it. -->
+                    <h3>Planes</h3>
+                    <div class="vis-slider-row">
+                        <span title="Draw the annotated planes (View > Define Planes) over the 2D views, filled. Always on inside Defining Plane Mode.">Planes in 2D Views</span>
+                        <label class="toggle-switch" style="margin-left:auto;">
+                            <input type="checkbox" id="visPlanes2D" checked>
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                    <div class="vis-slider-row">
+                        <span title="Draw the annotated planes in the 3D viewer, filled. Always on inside Defining Plane Mode.">Planes in 3D Views</span>
+                        <label class="toggle-switch" style="margin-left:auto;">
+                            <input type="checkbox" id="visPlanes3D" checked>
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                    <div class="vis-slider-row">
+                        <span title="Draw the plane NODES — the corner dots and their names — over the 2D views. Independent of the planes themselves. Always on inside Defining Plane Mode.">Nodes in 2D Views</span>
+                        <label class="toggle-switch" style="margin-left:auto;">
+                            <input type="checkbox" id="visPlaneNodes2D" checked>
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                    <div class="vis-slider-row">
+                        <span title="Draw the plane nodes as corners in the 3D viewer. Independent of the planes themselves. Always on inside Defining Plane Mode.">Nodes in 3D Views</span>
+                        <label class="toggle-switch" style="margin-left:auto;">
+                            <input type="checkbox" id="visPlaneNodes3D" checked>
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                    <h3>Display Legend</h3>
+                    <div class="vis-slider-row">
+                        <span>Show</span>
+                        <label class="toggle-switch" style="margin-left:auto;">
+                            <input type="checkbox" id="visLegend">
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                    <h3>Video Brightness</h3>
+                    <div class="vis-slider-row">
+                        <span>Select All Videos</span>
+                        <label class="toggle-switch" style="margin-left:auto;">
+                            <input type="checkbox" id="visVideoBrightnessLink" checked>
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                    <div id="visVideoBrightnessTable" style="max-height:200px;overflow-y:auto;"></div>
+                    <h3>Video Contrast</h3>
+                    <div class="vis-slider-row">
+                        <span>Select All Videos</span>
+                        <label class="toggle-switch" style="margin-left:auto;">
+                            <input type="checkbox" id="visVideoContrastLink" checked>
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                    <div id="visVideoContrastTable" style="max-height:200px;overflow-y:auto;"></div>
+                    <h3>Video Rotation</h3>
+                    <div id="visVideoRotationTable" style="max-height:200px;overflow-y:auto;"></div>
+                    <hr style="border:none;border-top:1px solid var(--border-subtle);margin:10px 0;">
+                    <h3>3D Viewer</h3>
+                    <table style="width:100%;border-collapse:collapse;font-size:11px;color:var(--text-secondary);">
+                        <thead>
+                            <tr style="border-bottom:1px solid var(--border-subtle);">
+                                <th style="text-align:left;padding:2px 4px;font-weight:700;">Widget</th>
+                                <th style="text-align:center;padding:2px 4px;font-weight:700;">Size</th>
+                                <th style="text-align:center;padding:2px 4px;font-weight:700;">Display</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td style="padding:3px 4px;">Camera Label</td>
+                                <td style="text-align:center;padding:3px 4px;"><span style="display:inline-flex;align-items:center;"><input type="number" id="vis3dLabelSize" value="28" min="1" max="200" step="1" class="no-spinner" style="width:48px;background:var(--bg-tertiary,#2a2a2a);color:var(--text-primary,#e0e0e0);border:1px solid var(--border-color,#444);border-radius:3px;font-size:11px;text-align:center;padding:2px 4px;-moz-appearance:textfield;"><span class="vis3d-stepper"><button data-dir="up">&#9650;</button><button data-dir="down">&#9660;</button></span></span></td>
+                                <td style="text-align:center;padding:3px 4px;"><label class="toggle-switch"><input type="checkbox" id="vis3dLabelShow" checked><span class="slider"></span></label></td>
+                            </tr>
+                            <tr>
+                                <td style="padding:3px 4px;">Camera Sphere</td>
+                                <td style="text-align:center;padding:3px 4px;"><span style="display:inline-flex;align-items:center;"><input type="number" id="vis3dSphereSize" value="3" min="0.5" max="50" step="0.5" class="no-spinner" style="width:48px;background:var(--bg-tertiary,#2a2a2a);color:var(--text-primary,#e0e0e0);border:1px solid var(--border-color,#444);border-radius:3px;font-size:11px;text-align:center;padding:2px 4px;-moz-appearance:textfield;"><span class="vis3d-stepper"><button data-dir="up">&#9650;</button><button data-dir="down">&#9660;</button></span></span></td>
+                                <td style="text-align:center;padding:3px 4px;"><label class="toggle-switch"><input type="checkbox" id="vis3dSphereShow" checked><span class="slider"></span></label></td>
+                            </tr>
+                            <tr>
+                                <td style="padding:3px 4px;">Pyramid</td>
+                                <td style="text-align:center;padding:3px 4px;"><span style="display:inline-flex;align-items:center;"><input type="number" id="vis3dPyramidLength" value="40" min="1" max="200" step="1" class="no-spinner" style="width:48px;background:var(--bg-tertiary,#2a2a2a);color:var(--text-primary,#e0e0e0);border:1px solid var(--border-color,#444);border-radius:3px;font-size:11px;text-align:center;padding:2px 4px;-moz-appearance:textfield;"><span class="vis3d-stepper"><button data-dir="up">&#9650;</button><button data-dir="down">&#9660;</button></span></span></td>
+                                <td style="text-align:center;padding:3px 4px;"><label class="toggle-switch"><input type="checkbox" id="vis3dPyramidShow" checked><span class="slider"></span></label></td>
+                            </tr>
+                            <tr>
+                                <td style="padding:3px 4px;">Node Size</td>
+                                <td style="text-align:center;padding:3px 4px;"><span style="display:inline-flex;align-items:center;"><input type="number" id="vis3dNodeSize" value="2" min="0" max="50" step="0.1" class="no-spinner" style="width:48px;background:var(--bg-tertiary,#2a2a2a);color:var(--text-primary,#e0e0e0);border:1px solid var(--border-color,#444);border-radius:3px;font-size:11px;text-align:center;padding:2px 4px;-moz-appearance:textfield;"><span class="vis3d-stepper"><button data-dir="up">&#9650;</button><button data-dir="down">&#9660;</button></span></span></td>
+                                <td style="text-align:center;padding:3px 4px;"><label class="toggle-switch"><input type="checkbox" id="vis3dNodeShow" checked><span class="slider"></span></label></td>
+                            </tr>
+                            <tr>
+                                <td style="padding:3px 4px;">Node Style</td>
+                                <td colspan="2" style="text-align:center;padding:3px 4px;">
+                                    <div class="line-style-options" id="vis3dNodeStyle" data-value="circle" style="justify-content:center;">
+                                        <button class="line-style-btn active" data-style="circle" title="Sphere"><svg width="18" height="12"><circle cx="9" cy="6" r="4.5" fill="currentColor"/></svg></button>
+                                        <button class="line-style-btn" data-style="x" title="Cross"><svg width="18" height="12"><line x1="5" y1="2" x2="13" y2="10" stroke="currentColor" stroke-width="2.2"/><line x1="13" y1="2" x2="5" y2="10" stroke="currentColor" stroke-width="2.2"/></svg></button>
+                                        <button class="line-style-btn" data-style="triangle" title="Tetrahedron"><svg width="18" height="12"><polygon points="9,1.5 15,10.5 3,10.5" fill="currentColor"/></svg></button>
+                                        <button class="line-style-btn" data-style="square" title="Cube"><svg width="18" height="12"><rect x="4.5" y="1.5" width="9" height="9" fill="currentColor"/></svg></button>
+                                    </div>
+                                </td>
+                            </tr>
+                            <tr>
+                                <td style="padding:3px 4px;" title="Dims the 3D skeleton's track/identity color. 100% is the full color.">Brightness (%)</td>
+                                <td style="text-align:center;padding:3px 4px;"><span style="display:inline-flex;align-items:center;"><input type="number" id="vis3dBrightness" value="50" min="0" max="100" step="5" class="no-spinner" style="width:48px;background:var(--bg-tertiary,#2a2a2a);color:var(--text-primary,#e0e0e0);border:1px solid var(--border-color,#444);border-radius:3px;font-size:11px;text-align:center;padding:2px 4px;-moz-appearance:textfield;"><span class="vis3d-stepper"><button data-dir="up">&#9650;</button><button data-dir="down">&#9660;</button></span></span></td>
+                                <td></td>
+                            </tr>
+                            <tr>
+                                <td style="padding:3px 4px;">Edge Weight</td>
+                                <td style="text-align:center;padding:3px 4px;"><span style="display:inline-flex;align-items:center;"><input type="number" id="vis3dEdgeWeight" value="0.8" min="0" max="20" step="0.1" class="no-spinner" style="width:48px;background:var(--bg-tertiary,#2a2a2a);color:var(--text-primary,#e0e0e0);border:1px solid var(--border-color,#444);border-radius:3px;font-size:11px;text-align:center;padding:2px 4px;-moz-appearance:textfield;"><span class="vis3d-stepper"><button data-dir="up">&#9650;</button><button data-dir="down">&#9660;</button></span></span></td>
+                                <td style="text-align:center;padding:3px 4px;"><label class="toggle-switch"><input type="checkbox" id="vis3dEdgeShow" checked><span class="slider"></span></label></td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <!-- ==================== ID Switches Tab ==================== -->
+                <!-- Rendered by ui/id-switch-modal.js refreshIdSwitchPanel: the review checklist of
+                     Tracks ▸ Check ID Switches results for the active session. -->
+                <div class="panel-tab-content" id="tabIdSwitches">
+                    <div id="idSwitchPanel"></div>
+                </div>
+
+                <!-- ==================== Videos Tab ==================== -->
+                <div class="panel-tab-content" id="tabVideos">
+                    <div class="info-section">
+                        <h3>Video List</h3>
+                        <table class="data-table" id="videosTable">
+                            <thead>
+                                <tr>
+                                    <th>Name</th>
+                                    <th>Path</th>
+                                    <th>Frames</th>
+                                    <th>Size</th>
+                                    <th>Labeled</th>
+                                    <th>Groups</th>
+                                    <th>Score</th>
+                                </tr>
+                            </thead>
+                            <tbody></tbody>
+                        </table>
+                        <div class="table-empty" id="videosEmpty">No videos loaded</div>
+                    </div>
+
+                    <div class="info-section">
+                        <h3>Selected Video</h3>
+                        <div id="videoDetail" style="font-size:12px;color:var(--text-secondary);">
+                            Click a video row above
+                        </div>
+                    </div>
+
+                    <div class="info-section">
+                        <div class="panel-button-row">
+                            <button class="panel-btn" id="btnAddVideos" title="Add videos to session">Add
+                                Videos</button>
+                            <button class="panel-btn" id="btnRemoveVideo" title="Remove selected video"
+                                disabled>Remove</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ==================== Cameras Tab ==================== -->
+                <div class="panel-tab-content" id="tabCameras">
+                    <div class="info-section">
+                        <h3>Camera List</h3>
+                        <table class="data-table" id="camerasTable">
+                            <thead>
+                                <tr>
+                                    <th>Name</th>
+                                    <th>Size</th>
+                                    <th>Focal</th>
+                                </tr>
+                            </thead>
+                            <tbody></tbody>
+                        </table>
+                    </div>
+
+                    <div class="info-section">
+                        <h3>Selected Camera</h3>
+                        <div id="cameraDetail" style="font-size:12px;color:var(--text-secondary);">
+                            Click a camera row above
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ==================== Skeleton Tab ==================== -->
+                <div class="panel-tab-content" id="tabSkeleton">
+                    <details class="info-section info-collapsible" id="skeletonNodesSection" open>
+                        <summary>
+                            <h3>Nodes</h3>
+                            <span class="info-collapsible-count" id="skeletonNodesCount">0</span>
+                        </summary>
+                        <table class="data-table" id="skeletonNodesTable">
+                            <thead>
+                                <tr>
+                                    <th>#</th>
+                                    <th>Name</th>
+                                    <th style="width:30px"></th>
+                                </tr>
+                            </thead>
+                            <tbody></tbody>
+                        </table>
+                        <div class="panel-button-row" style="margin-top:6px">
+                            <input type="text" id="nodeNameInput" placeholder="Node name"
+                                style="flex:1;padding:3px;font-size:12px;background:var(--bg-tertiary);border:1px solid var(--border);color:var(--text-primary);border-radius:3px;" />
+                            <button class="panel-btn" id="btnAddNode" title="Add skeleton node">+ Node</button>
+                        </div>
+                    </details>
+
+                    <details class="info-section info-collapsible" id="skeletonEdgesSection" open>
+                        <summary>
+                            <h3>Edges</h3>
+                            <span class="info-collapsible-count" id="skeletonEdgesCount">0</span>
+                        </summary>
+                        <table class="data-table" id="skeletonEdgesTable">
+                            <thead>
+                                <tr>
+                                    <th>Source</th>
+                                    <th>Destination</th>
+                                    <th style="width:30px"></th>
+                                </tr>
+                            </thead>
+                            <tbody></tbody>
+                        </table>
+                        <div class="panel-button-row" style="margin-top:6px">
+                            <select id="edgeSrcSelect"
+                                style="flex:1;padding:3px;font-size:12px;background:var(--bg-tertiary);border:1px solid var(--border);color:var(--text-primary);border-radius:3px;"></select>
+                            <select id="edgeDstSelect"
+                                style="flex:1;padding:3px;font-size:12px;background:var(--bg-tertiary);border:1px solid var(--border);color:var(--text-primary);border-radius:3px;"></select>
+                            <button class="panel-btn" id="btnAddEdge" title="Add skeleton edge">+ Edge</button>
+                        </div>
+                    </details>
+
+                    <div style="margin-top:10px;display:flex;gap:6px">
+                        <button class="panel-btn" id="btnLoadSkeleton" title="Load skeleton from JSON file" style="flex:1">Load Skeleton</button>
+                        <button class="panel-btn" id="btnSaveSkeleton" title="Save skeleton in SLEAP format" style="flex:1">Save Skeleton</button>
+                    </div>
+                </div>
+
+                <!-- ==================== Session Tab ==================== -->
+                <div class="panel-tab-content" id="tabSession">
+                    <!-- Sessions List -->
+                    <div class="info-section">
+                        <h3>Sessions</h3>
+                        <div id="sessionsListPanel">
+                            <table class="info-table" id="sessionsTable" style="display:none">
+                                <thead><tr>
+                                    <th>Name</th>
+                                    <th>Cams</th>
+                                    <th>Frames</th>
+                                    <th>Tracks</th>
+                                    <th></th>
+                                </tr></thead>
+                                <tbody></tbody>
+                            </table>
+                            <div id="sessionsEmpty" style="font-size:11px;color:var(--text-muted);">No sessions loaded</div>
+                        </div>
+                        <div style="margin-top:6px;display:flex;gap:4px;">
+                            <button class="btn btn-sm" id="btnAddSessionFolder">Load Folder...</button>
+                            <button class="btn btn-sm" id="btnAddSessionCalib">From Calibration...</button>
+                        </div>
+                    </div>
+
+                    <div class="info-section">
+                        <h3>Session Info</h3>
+                        <div class="session-info-row">
+                            <span class="label">Cameras</span>
+                            <span class="value" id="infoCameras">-</span>
+                        </div>
+                        <div class="session-info-row">
+                            <span class="label">Skeleton</span>
+                            <span class="value" id="infoSkeleton">-</span>
+                        </div>
+                        <div class="session-info-row">
+                            <span class="label">Tracks</span>
+                            <span class="value" id="infoTracks">-</span>
+                        </div>
+                        <div class="session-info-row">
+                            <span class="label">Frames</span>
+                            <span class="value" id="infoFrames">-</span>
+                        </div>
+                    </div>
+
+                    <div class="info-section">
+                        <h3>Camera-Video Assignment</h3>
+                        <table class="data-table" id="sessionAssignTable">
+                            <thead>
+                                <tr>
+                                    <th>Camera</th>
+                                    <th>Video</th>
+                                    <th>Status</th>
+                                </tr>
+                            </thead>
+                            <tbody></tbody>
+                        </table>
+                        <div class="table-empty" id="sessionAssignEmpty">Load calibration to see cameras</div>
+                        <div class="panel-button-row" style="margin-top:6px">
+                            <button class="panel-btn" id="btnAutoAssign"
+                                title="Match videos to cameras by filename">Auto-Assign</button>
+                            <button class="panel-btn" id="btnAddAllViews"
+                                title="Create views for all assigned cameras">Add All Views</button>
+                        </div>
+                    </div>
+
+                    <div class="info-section" id="unassignedVideosSection" style="display:none;">
+                        <h3>Unassigned Videos</h3>
+                        <table class="data-table" id="unassignedVideosTable" style="table-layout:fixed;width:100%;">
+                            <tbody></tbody>
+                        </table>
+                    </div>
+
+                    <div class="info-section">
+                        <h3>Shortcuts</h3>
+                        <div style="font-size:11px;color:var(--text-muted);line-height:1.8;">
+                            <div><kbd>Tab</kbd> Cycle instances</div>
+                            <div><kbd>Escape</kbd> Clear selection</div>
+                            <div><kbd>N</kbd> New instance</div>
+                            <div><kbd>Del</kbd> Delete instance (Shift: all views)</div>
+                            <div><kbd>T</kbd> Triangulate</div>
+                            <div><kbd>3</kbd> Toggle 3D view</div>
+                            <div><kbd>I</kbd> Toggle info panel</div>
+                            <div><kbd>V</kbd> Cycle single-view mode</div>
+                            <div><kbd>G</kbd> Return to grid view</div>
+                            <div><kbd>A</kbd> Toggle assignment mode</div>
+                            <div><kbd>Enter</kbd> Create group (assign)</div>
+                            <div><kbd>Alt+Drag</kbd> Move whole instance</div>
+                            <div><kbd>Alt+Wheel</kbd> Rotate instance about node</div>
+                            <div><kbd>Space</kbd> Play/Pause</div>
+                            <div><kbd>Left/Right</kbd> Prev/Next frame</div>
+                            <div>Drag empty: Box zoom / Pan</div>
+                            <div>Double-click: Reset zoom / Convert</div>
+                            <div>Right-click: Toggle node visibility</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ==================== Define Plane Panel ====================
+                     Shown INSTEAD of the tab bar + tab contents while Defining
+                     Plane Mode is active (View ▸ Define Planes). Populated by
+                     ui/plane-definition.js.
+
+                     TWO SIBLING SECTIONS, in the order the work happens:
+                     Nodes (the project-wide pool) -> Planes (the roster, and
+                     the editor for whichever plane is selected). Node creation
+                     is deliberately NOT nested inside the plane editor: a node
+                     outlives the planes that use it and may belong to several
+                     at once, so presenting it as a sub-step of editing one
+                     plane would misstate the model. That is the one split this
+                     panel keeps; picking a plane and editing it were two
+                     sections and are now one, because they are one job. -->
+                <div class="plane-panel" id="planePanel" style="display:none;">
+
+                    <!-- 1 — NODES: the PROJECT-WIDE pool. Everything in this
+                         table acts on the NODE, so it applies to every plane
+                         using it. + Node ONLY mints a pool node — putting one
+                         into a plane is + Add in the Planes section. -->
+                    <div class="info-section">
+                        <details class="plane-details" id="planeNodesDetails" open>
+                            <summary>Nodes<button type="button" class="plane-section-info" id="planeNodesInfo"></button></summary>
+                            <div class="plane-details-body">
+                                <!-- Every column is named except the chevron,
+                                     which names itself. The icon columns are
+                                     content-sized, so the Name field takes
+                                     whatever is left. Pinned carries an info
+                                     button because what the THREE states MEAN
+                                     is the one thing a padlock cannot say. -->
+                                <table class="data-table plane-nodes-table" id="planeNodesTable">
+                                    <thead>
+                                        <tr>
+                                            <th style="width:14px"></th>
+                                            <th class="th-center">Color</th>
+                                            <th>Name</th>
+                                            <th class="th-center th-pin">Pinned<button type="button" class="plane-pin-info" id="planePinInfo"></button></th>
+                                            <th class="th-center">Delete</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody></tbody>
+                                </table>
+                                <div class="table-empty" id="planeNodesEmpty">No nodes yet</div>
+                                <!-- Pinned-but-never-triangulated nodes, named in the
+                                     open: that state cannot resolve itself, so a
+                                     tooltip would not reach the user who caused it. -->
+                                <div class="plane-warning" id="planeFrozenWarning" style="display:none;"></div>
+                                <div class="panel-button-row" style="margin-top:6px">
+                                    <input type="text" id="planeNodeNameInput" class="plane-text-input" placeholder="Node name" />
+                                    <button class="panel-btn" id="btnAddPlaneNode" title="Mint a node in the project-wide pool. It joins NO plane and creates none — put it in a plane with + Add in the Planes section.">+ Node</button>
+                                </div>
+                            </div>
+                        </details>
+                    </div>
+
+                    <!-- 2 — PLANES: the roster AND the editor for whichever
+                         plane is selected, in ONE section. They used to be two
+                         — "Edit Plane" above "Planes" — and the split made the
+                         reader hold a plane in their head while scrolling
+                         between the list that picks it and the controls that
+                         act on it.
+
+                         Top to bottom: the roster, `+ New Plane`, then the
+                         selected plane's name and its three foldable parts
+                         (Nodes In This Plane / Node Connections / Actions), and
+                         Plane Appearance last because it styles every plane in
+                         the table rather than the selected one.
+
+                         A plane is an ordered set of nodes from the Nodes pool
+                         above, plus optional connections. Deleting a plane
+                         KEEPS its nodes — the Nodes table is the only place a
+                         node is destroyed. Its members are references into that
+                         pool, so the × in Nodes In This Plane takes the node out
+                         of THIS plane only and the node itself survives. -->
+                    <div class="info-section">
+                        <details class="plane-details" id="planePlanesDetails" open>
+                            <summary><span class="plane-summary-label">Planes</span><span class="plane-summary-name" id="planeEditorTitle"></span><button type="button" class="plane-section-info" id="planePlanesInfo"></button></summary>
+                            <div class="plane-details-body">
+                                <!-- THE roster, and the only selector: a row
+                                     click picks the plane everything below
+                                     edits. Also the drag source — a row dropped
+                                     onto a video view places that plane there.
+                                     Fixed column widths (see
+                                     `table-layout: fixed` in styles.css): the
+                                     panel is ~300px and an auto-layout table
+                                     grows to fit its widest cell, which is what
+                                     gave the section a horizontal scrollbar.
+                                     Name takes whatever is left and ellipses. -->
+                                <table class="data-table" id="planeSkeletonsTable">
+                                    <thead>
+                                        <tr>
+                                            <th style="width:20px"></th>
+                                            <th>Name</th>
+                                            <th style="width:46px">Nodes</th>
+                                            <!-- 62px: "VIEWS" measures 37px at the
+                                                 header's 10px/0.5px uppercase, plus
+                                                 the 16px ⓘ and its 3px margin, plus
+                                                 6px of cell padding. Under 62 the
+                                                 header ellipses to "VIEWS…". -->
+                                            <th style="width:62px">Views<button type="button" class="plane-pin-info" id="planeViewsInfo"></button></th>
+                                            <th style="width:28px"></th>
+                                        </tr>
+                                    </thead>
+                                    <tbody></tbody>
+                                </table>
+                                <div class="table-empty" id="planeSkeletonsEmpty">No planes yet</div>
+
+                                <!-- CREATE, ruled off from the editor below it:
+                                     everything under the rule acts on the
+                                     SELECTED plane, and this is the one control
+                                     that makes one. It sits OUTSIDE
+                                     #planeEditorContent so it stays live with
+                                     nothing selected — with no planes at all it
+                                     is the only thing here that does anything,
+                                     so it cannot be empty-stated away. It does
+                                     not select, either: the roster above does
+                                     that, the same way a 3D Mesh Object is
+                                     chosen by clicking its row. -->
+                                <div class="panel-button-row plane-create-row">
+                                    <button class="panel-btn" id="btnNewPlaneSkeleton" title="Create a new plane and edit it below">+ New Plane</button>
+                                </div>
+
+                                <!-- Everything below needs a plane to act on, so
+                                     it is empty-stated as a whole rather than
+                                     shown half-dead. -->
+                                <div class="table-empty" id="planeEditorEmpty" style="display:none;">No plane selected — click a plane in the table above, or + New Plane.</div>
+                                <div id="planeEditorContent">
+                                    <!-- The plane's name, the only place it is
+                                         renamed — the same label 3D Mesh Objects
+                                         uses for the same control. -->
+                                    <div class="plane-name-row">
+                                        <span>Name</span>
+                                        <input type="text" id="planeSkeletonName" placeholder="plane_1" />
+                                    </div>
+
+                                    <details class="plane-details plane-subdetails" id="planeMembersDetails" open>
+                                        <summary>Nodes In This Plane</summary>
+                                        <div class="plane-details-body">
+                                            <table class="data-table" id="planeMembersTable">
+                                                <thead>
+                                                    <tr>
+                                                        <th>Name</th>
+                                                        <!-- Wide enough for the
+                                                             header word: the table
+                                                             is fixed-layout now, so
+                                                             a too-narrow column
+                                                             ellipses "COLOR". -->
+                                                        <th style="width:46px">Color</th>
+                                                        <th style="width:30px"></th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody></tbody>
+                                            </table>
+                                            <div class="table-empty" id="planeMembersEmpty">No nodes in this plane yet</div>
+                                            <!-- THE way a node comes to be shared: pick a
+                                                 node that is already in the pool and add it
+                                                 here as well. -->
+                                            <div class="panel-button-row" style="margin-top:6px">
+                                                <select id="planeAddNodeSelect" class="plane-select"></select>
+                                                <button class="panel-btn" id="btnAddExistingPlaneNode" title="Add the selected existing node to this plane. A node may belong to several planes — that is how two planes share an intersection line.">+ Add</button>
+                                            </div>
+                                            <div class="plane-hint" id="planeAddNodeHint"></div>
+                                        </div>
+                                    </details>
+
+                                    <details class="plane-details plane-subdetails" id="planeEdgesDetails" open>
+                                        <summary>Node Connections<button type="button" class="plane-section-info" id="planeEdgesInfo"></button></summary>
+                                        <div class="plane-details-body">
+                                            <table class="data-table" id="planeEdgesTable">
+                                                <thead>
+                                                    <tr>
+                                                        <th>Source</th>
+                                                        <th>Destination</th>
+                                                        <th style="width:30px"></th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody></tbody>
+                                            </table>
+                                            <div class="table-empty" id="planeEdgesEmpty">No connections</div>
+                                            <div class="panel-button-row" style="margin-top:6px">
+                                                <select id="planeEdgeSrcSelect" class="plane-select"></select>
+                                                <select id="planeEdgeDstSelect" class="plane-select"></select>
+                                                <button class="panel-btn" id="btnAddPlaneEdge" title="Connect two nodes of this plane">+ Link</button>
+                                            </div>
+                                        </div>
+                                    </details>
+
+                                    <!-- Everything that RUNS on the selected
+                                         plane, in one place — it used to be
+                                         three loose button rows under the Planes
+                                         table, where they read as actions on the
+                                         table rather than on one plane. Foldable
+                                         like its two siblings, so a user editing
+                                         membership can put the solve controls
+                                         away. Each button is still gated on its
+                                         own precondition (Set Origin needs a
+                                         fit, Set Angle two of them), so the
+                                         section is never a list of live buttons
+                                         that do nothing. -->
+                                    <details class="plane-details plane-subdetails" id="planeActionsDetails" open>
+                                        <summary>Actions</summary>
+                                        <div class="plane-details-body">
+                                            <!-- Populated with icons by ui/plane-definition.js. -->
+                                            <div class="panel-button-row plane-action-row">
+                                                <button class="panel-btn" id="btnPlaneTriangulate" disabled>Triangulate</button>
+                                                <button class="panel-btn" id="btnPlaneFill" disabled>Fill</button>
+                                                <button class="panel-btn" id="btnPlaneFit" disabled>Fit</button>
+                                            </div>
+                                            <div class="panel-button-row" style="margin-top:6px">
+                                                <button class="panel-btn" id="btnSetOrigin" disabled>Set Origin</button>
+                                            </div>
+                                            <!-- Assert a real-world relationship between two
+                                                 planes (0 deg = parallel, 90 = perpendicular).
+                                                 Needs TWO fitted planes, so it is gated
+                                                 separately from Set Origin. -->
+                                            <div class="panel-button-row" style="margin-top:6px">
+                                                <button class="panel-btn" id="btnSetPlaneAngle" disabled>Set Angle Between Planes</button>
+                                            </div>
+                                        </div>
+                                    </details>
+                                </div>
+
+                                <!-- Shared across every plane, by design: one node
+                                     size and one edge weight for all of them (see
+                                     ui/plane-definition.js). Last in the section
+                                     and OUTSIDE #planeEditorContent, because it
+                                     styles what the roster lists rather than the
+                                     one plane being edited — so it stays usable
+                                     with nothing selected. -->
+                                <details class="plane-details plane-subdetails" id="planeAppearanceDetails" open>
+                                    <summary>Plane Appearance</summary>
+                                    <div class="plane-details-body">
+                                        <div class="vis-slider-row">
+                                            <span>2D Node Size</span>
+                                            <input type="range" id="planeNodeSize" min="1" max="20" value="13" step="1">
+                                            <span class="vis-val" id="planeNodeSizeVal">13</span>
+                                        </div>
+                                        <div class="vis-slider-row">
+                                            <span>Edge Weight</span>
+                                            <input type="range" id="planeEdgeWeight" min="1" max="12" value="3" step="1">
+                                            <span class="vis-val" id="planeEdgeWeightVal">3</span>
+                                        </div>
+                                        <!-- Sizes plane corners in the 3D scene ONLY.
+                                             Pose skeleton nodes keep their own size
+                                             (`skeletonNodeSize`). -->
+                                        <div class="vis-slider-row">
+                                            <span>3D Node Size</span>
+                                            <input type="range" id="planeNodeSize3d" min="1" max="20" value="4" step="1">
+                                            <span class="vis-val" id="planeNodeSize3dVal">4</span>
+                                        </div>
+                                    </div>
+                                </details>
+                            </div>
+                        </details>
+                    </div>
+
+                    <!-- 3D Mesh Objects: a group of PLANES, the way a plane is a group
+                         of NODES. The shape is derived from how the member planes are
+                         connected (which nodes they share) and is never stored — see
+                         pose/mesh-object-geometry.js. Sits below Planes because you
+                         cannot group planes that do not exist yet. -->
+                    <div class="info-section">
+                        <details class="plane-details" id="meshObjectsDetails" open>
+                            <summary>3D Mesh Objects<button type="button" class="plane-section-info" id="meshObjectsInfo"></button></summary>
+                            <div class="plane-details-body">
+                                <table class="data-table" id="meshObjectsTable">
+                                    <thead>
+                                        <tr>
+                                            <th style="width:30px"></th>
+                                            <th>Name</th>
+                                            <th style="width:52px">Planes</th>
+                                            <th style="width:28px"></th>
+                                        </tr>
+                                    </thead>
+                                    <tbody></tbody>
+                                </table>
+                                <div class="table-empty" id="meshObjectsEmpty">No 3D mesh objects yet</div>
+                                <div class="panel-button-row" style="margin-top:6px">
+                                    <button class="panel-btn" id="btnNewMeshObject" title="Group planes into one 3D mesh object">+ New 3D Mesh Object</button>
+                                </div>
+
+                                <!-- Membership editor for the SELECTED object. Hidden
+                                     entirely when nothing is selected: every control in
+                                     it needs an object to act on. -->
+                                <div id="meshObjectEditor" style="display:none;">
+                                    <div class="plane-name-row" style="margin-top:8px">
+                                        <span>Name</span>
+                                        <input type="text" id="meshObjectName" placeholder="cage" />
+                                        <input type="color" id="meshObjectColor" class="plane-node-color" title="Colour for this object in the 3D viewport" />
+                                    </div>
+                                    <div class="mesh-object-report" id="meshObjectReport"></div>
+                                    <div class="plane-hint" style="margin-top:6px">Planes in this object</div>
+                                    <div class="mesh-object-members" id="meshObjectMembers"></div>
+                                    <div class="table-empty" id="meshObjectMembersEmpty">No planes in this object yet</div>
+                                    <!-- Pick-and-add, the same shape as the Planes section's
+                                         "+ Add" for an existing node: the list offers
+                                         only what is NOT already a member, so it empties
+                                         as the object is filled in. -->
+                                    <div class="panel-button-row" style="margin-top:6px">
+                                        <select id="meshObjectAddPlaneSelect" class="plane-select"></select>
+                                        <button class="panel-btn" id="btnAddMeshObjectPlane" title="Add the selected plane to this object. Its nodes join the object's shape, and any it shares with a plane already here becomes a seam.">+ Add</button>
+                                    </div>
+                                    <div class="plane-hint" id="meshObjectAddPlaneHint"></div>
+
+                                    <!-- Export acts on the SELECTED object, so it lives
+                                         in the editor with everything else that does.
+                                         Two formats for two audiences: STL is written in
+                                         LUCID's own Z-up millimetres for CAD, GLB is
+                                         converted to the Y-up the glTF spec mandates so
+                                         Blender's importer lands it back upright. -->
+                                    <div class="panel-button-row" style="margin-top:8px">
+                                        <button class="panel-btn" id="btnExportMeshStl" title="Binary STL — triangles only, no colour or units, in the calibration's millimetres (Z-up, as CAD expects)">Export .stl</button>
+                                        <button class="panel-btn" id="btnExportMeshGlb" title="Binary glTF — welded vertices and this object's colour, converted to the Y-up glTF requires so Blender imports it upright">Export .glb</button>
+                                    </div>
+                                </div>
+                            </div>
+                        </details>
+                    </div>
+
+                    <!-- The output of the whole feature: the transform from the
+                         calibration's world frame to the user's. Populated by
+                         ui/origin-definition.js; hidden until an origin is set.
+                         Collapsible because it is a dozen labelled vectors plus a
+                         3x3 — read once, then in the way of everything below it. -->
+                    <div class="info-section" id="originResultSection" style="display:none;">
+                        <details class="plane-details" id="originResultDetails" open>
+                            <summary>Defined Origin</summary>
+                            <div class="plane-details-body">
+                                <div class="origin-result" id="originResult"></div>
+                            </div>
+                        </details>
+                    </div>
+
+                    <!-- Danger Zone: the actions that leave this app — they rewrite
+                         the calibration every downstream tool reads, or throw the
+                         defined origin away. Collapsed by default and visible only
+                         once an origin exists, since all three are meaningless
+                         without one. See ui/origin-definition.js. -->
+                    <div class="info-section origin-danger-section" id="originDangerSection" style="display:none;">
+                        <details class="plane-details plane-details-danger" id="originDangerDetails">
+                            <summary>Danger Zone</summary>
+                            <div class="plane-details-body">
+                                <div class="panel-button-row">
+                                    <button class="panel-btn" id="btnExportCalibration" title="Download calibration-updated.toml: every camera's extrinsics re-expressed in the defined origin">Export New Calibration</button>
+                                </div>
+                                <div class="panel-button-row">
+                                    <button class="panel-btn panel-btn-danger" id="btnSetCalibration" title="Re-base every 3D point in the project onto the defined origin and export a new calibration file to match. Your calibration.toml is not overwritten.">Set as New Calibration</button>
+                                </div>
+                                <div class="panel-button-row">
+                                    <button class="panel-btn panel-btn-danger" id="btnClearOrigin">Reset to Calibration Origin</button>
+                                </div>
+                            </div>
+                        </details>
+                    </div>
+                </div>
+
+                <details class="tracker-settings" id="trackerSettingsPanel" style="display:none;">
+                    <summary>Tracker Settings</summary>
+                    <div class="tracker-settings-body">
+                        <label>2D Weight <input type="range" min="0.1" max="10" step="0.1" value="1.0" id="trackerWeight2d"><span id="trackerWeight2dVal">1.0</span></label>
+                        <label>3D Weight <input type="range" min="0.1" max="10" step="0.1" value="1.0" id="trackerWeight3d"><span id="trackerWeight3dVal">1.0</span></label>
+                        <label>Velocity <input type="range" min="0.1" max="10" step="0.1" value="1.0" id="trackerVelocity"><span id="trackerVelocityVal">1.0</span></label>
+                        <label>Distance <input type="range" min="0.1" max="10" step="0.1" value="1.0" id="trackerDistance"><span id="trackerDistanceVal">1.0</span></label>
+                        <label>Time Penalty <input type="range" min="0" max="5" step="0.1" value="1.0" id="trackerTimePenalty"><span id="trackerTimePenaltyVal">1.0</span></label>
+                    </div>
+                </details>
+
+                <!-- Hidden legacy element for backward compat -->
+                <div class="instance-list" id="instanceList" style="display:none;"></div>
+            </div>
+            </div><!-- end info-panel-wrapper -->
+        </div>
+
+        <!-- Timeline resize handle -->
+        <div class="split-handle horizontal" id="timelineResizeHandle"></div>
+        <!-- Timeline -->
+        <div class="timeline-container" id="timelineContainer">
+            <div class="timeline-mode-toggle" id="timelineModeToggle">
+                <button class="timeline-mode-btn active" data-mode="tracks" title="Show tracks">Tracks</button>
+                <button class="timeline-mode-btn" data-mode="identities" title="Show identities">IDs</button>
+                <button class="timeline-mode-btn" data-mode="both" title="Show both">Both</button>
+            </div>
+        </div>
+
+        <!-- Playback Controls -->
+        <div class="controls-bar">
+            <div class="frame-display">
+                <span class="current-frame" id="currentFrame">1</span>
+                <span>/ <span id="totalFrames">0</span></span>
+            </div>
+
+            <div class="transport-controls">
+                <button id="btnFirst" title="First frame (Home)">|&#9664;</button>
+                <button id="btnPrevLabeled" title="Previous labeled frame (Shift+Left)">&#10094;&#9733;</button>
+                <button id="btnPrev" title="Previous frame (Left)">&#10094;</button>
+                <button id="btnPlay" title="Play/Pause (Space)">&#9654;</button>
+                <button id="btnNext" title="Next frame (Right)">&#10095;</button>
+                <button id="btnNextLabeled" title="Next labeled frame (Shift+Right)">&#9733;&#10095;</button>
+                <button id="btnLast" title="Last frame (End)">&#9654;|</button>
+            </div>
+
+            <div class="seekbar-container" id="seekbar">
+                <div class="seekbar-track">
+                    <div class="seekbar-progress" id="seekbarProgress"></div>
+                </div>
+                <!-- Possible-ID-switch ticks (ui/seekbar-markers.js) -->
+                <div class="seekbar-marks" id="seekbarMarks"></div>
+                <div class="seekbar-thumb" id="seekbarThumb"></div>
+            </div>
+
+            <div class="fps-pill" title="Double-click to edit FPS">
+                <span class="fps-display" id="fpsDisplay"></span>
+            </div>
+
+            <div style="position:relative;display:inline-block;">
+                <button class="toolbar-btn" id="speedBtn" title="Playback speed" style="font-size:11px;padding:2px 8px;line-height:1.2;white-space:normal;height:auto;display:inline-block;text-align:center;">Speed<br><span id="speedBtnValue">1.00x</span></button>
+                <div id="speedPopover" class="speed-popover" style="display:none;"></div>
+            </div>
+
+            <button class="toolbar-btn" id="timelineToggleBtn" title="Toggle timeline" style="font-size:11px;padding:2px 8px;">Timeline</button>
+        </div>
+
+        <!-- Status Bar -->
+        <div class="status-bar">
+            <div class="status-left">
+                <span class="status-item">
+                    <span class="status-dot" id="statusDot"></span>
+                    <span id="statusText">Ready</span>
+                    <span id="saveDirtyDot" style="display:none;width:8px;height:8px;border-radius:50%;background:var(--warning-color);margin-left:6px;vertical-align:middle;" title="Unsaved changes"></span>
+                </span>
+                <span class="status-item" id="statusNullNodes" style="display:none;" title="Total null (non-triangulated) 3D nodes across all groups formed by the last tracking run">Null nodes: 0</span>
+            </div>
+            <div class="status-right">
+                <span class="status-item" id="statusCamera">Camera: -</span>
+                <span class="status-item" id="statusLabeledFrames">Labeled Frames: 0</span>
+                <span class="status-item" id="statusInstances">Instances: -</span>
+                <span class="status-item" id="statusTriangulatedFrames">Triangulated: 0</span>
+                <span class="status-item" id="statusError">Error: -</span>
+                <span class="status-item" id="statusSelection">Selection: none</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Context menu for instance groups -->
+    <div class="context-menu" id="groupContextMenu" style="display:none;">
+        <div class="context-menu-item" id="ctxUnlinkGroup">Unlink Group</div>
+        <div class="context-menu-item danger" id="ctxDeleteGroup">Delete Group</div>
+    </div>
+
+    <!-- sleap-io.js bridge: expose saveSlpToBytes and data model to window -->
+    <script type="module">
+        import {
+            Labels, LabeledFrame, Instance, PredictedInstance,
+            Skeleton, Node, Edge, Video, Track, saveSlpToBytes,
+            readSlpStreaming,
+            openSlpWriter, saveSlpMergedFromStores, saveSlpMergedToSink, SlpStreamWriter,
+            Camera as SioCamera, CameraGroup, RecordingSession,
+            InstanceGroup as SioInstanceGroup, FrameGroup as SioFrameGroup,
+            Identity as SioIdentity, Instance3D, PredictedInstance3D,
+            MediaBunnyVideoBackend
+        } from './lib/sleap-io/index.browser.js?v=d5a19a468bf3';
+        window.SleapIO = {
+            Labels, LabeledFrame, Instance, PredictedInstance,
+            Skeleton, Node, Edge, Video, Track, saveSlpToBytes,
+            readSlpStreaming,
+            openSlpWriter, saveSlpMergedFromStores, saveSlpMergedToSink, SlpStreamWriter,
+            Camera: SioCamera, CameraGroup, RecordingSession,
+            InstanceGroup: SioInstanceGroup, FrameGroup: SioFrameGroup,
+            Identity: SioIdentity, Instance3D, PredictedInstance3D,
+            MediaBunnyVideoBackend
+        };
+        window.dispatchEvent(new Event('sleapio-ready'));
+    </script>
+
+    <script type="module" src="app.js?v=d5a19a468bf3"></script>
+</body>
+
+</html>
