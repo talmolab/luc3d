@@ -20,7 +20,7 @@ import { buildSkeletonJSON, parseSkeletonJSON } from '../import-export/skeleton-
 import {
     handleLoadVideos, handleLoadCalibration, autoAssignVideosToCameras,
     createViewForVideoFile, rebuildVideoController, fitCanvasesToCells,
-    loadSingleSessionFromCache,
+    loadSingleSessionFromCache, removeVideoFile,
 } from '../loading/session-loader.js';
 
 // Circular import — these are still defined in app.js for now. They will be
@@ -359,10 +359,55 @@ export function populateTimelineVisibility(session) {
 // Videos table
 // ============================================
 
+// The Videos table row the user last clicked, held by IDENTITY rather than by
+// row index: `Load Videos` and `Remove Video` both rebuild the table, and an
+// index into the OLD table names a different video in the new one.
+var selectedVideoFile = null;
+
+/**
+ * Wire the Videos tab's two buttons, ONCE, at startup.
+ *
+ * They used to be wired inside `updateInfoPanel`, which returns early when
+ * there is no session — so on a freshly-opened app, which is exactly when you
+ * reach for `Load Videos`, the button carried no handler at all and clicking it
+ * did nothing (luc3d #216; `File ▸ Load Videos…` was wired at setup and so kept
+ * working, which is how the two came to disagree). The same early return fires
+ * while the info panel is collapsed. Nothing here reads `state`, so there is no
+ * reason for it to live in a per-session rebuild.
+ */
+export function setupVideosTab() {
+    const btnLoad = document.getElementById('btnLoadVideos');
+    const btnRemove = document.getElementById('btnRemoveVideo');
+    if (!btnLoad || !btnRemove) return;
+
+    btnLoad.addEventListener('click', function () { handleLoadVideos(); });
+
+    btnRemove.addEventListener('click', function () {
+        if (!selectedVideoFile) return;
+        var name = selectedVideoFile.assignedCamera || selectedVideoFile.name;
+        if (!removeVideoFile(selectedVideoFile)) {
+            setStatus('Could not remove video: ' + name, 'error');
+            return;
+        }
+        // `removeVideoFile` repaints the panel, which clears the selection.
+        setStatus('Removed video: ' + name, 'success');
+    });
+}
+
 export function populateVideosTable() {
     const tbody = document.querySelector('#videosTable tbody');
     const empty = document.getElementById('videosEmpty');
     tbody.textContent = '';
+
+    // A rebuild drops the selection: the detail block and the Remove button
+    // describe a row that no longer exists, and after a removal the row is
+    // genuinely gone. Cleared here rather than in the two callers so no future
+    // caller can forget it.
+    selectedVideoFile = null;
+    const btnRemove = document.getElementById('btnRemoveVideo');
+    if (btnRemove) btnRemove.disabled = true;
+    const detail = document.getElementById('videoDetail');
+    if (detail) detail.textContent = 'Click a video row above';
 
     // Use videoFiles if available, otherwise fall back to views
     const videoList = state.videoFiles.length > 0 ? state.videoFiles : state.views.map(function (v) {
@@ -386,6 +431,7 @@ export function populateVideosTable() {
         tr.addEventListener('click', function () {
             tbody.querySelectorAll('tr').forEach(function (r) { r.classList.remove('selected'); });
             tr.classList.add('selected');
+            selectedVideoFile = vf;
             document.getElementById('btnRemoveVideo').disabled = false;
             showVideoFileDetail(vf);
         });
@@ -1008,36 +1054,6 @@ export function updateInfoPanel() {
     populateTimelineVisibility(state.session);
     // The ID Switches tab (and its timeline markers) for this session.
     refreshIdSwitchPanel(state.session);
-
-    // Wire Videos tab buttons
-    document.getElementById('btnAddVideos').onclick = function () { handleLoadVideos(); };
-    document.getElementById('btnRemoveVideo').onclick = function () {
-        // Get selected row
-        const selected = document.querySelector('#videosTable tbody tr.selected');
-        if (!selected) return;
-        const idx = Array.from(selected.parentNode.children).indexOf(selected);
-        var videoList = state.videoFiles.length > 0 ? state.videoFiles : state.views;
-        if (idx >= 0 && idx < videoList.length) {
-            var removed = videoList[idx];
-            videoList.splice(idx, 1);
-            // Also remove the view if it exists
-            if (removed.assignedCamera || removed.name) {
-                var viewName = removed.assignedCamera || removed.name;
-                var viewIdx = -1;
-                for (var vi = 0; vi < state.views.length; vi++) {
-                    if (state.views[vi].name === viewName) { viewIdx = vi; break; }
-                }
-                if (viewIdx >= 0) {
-                    var viewEl = state.views[viewIdx].canvas.closest('.video-cell');
-                    if (viewEl) viewEl.remove();
-                    state.views.splice(viewIdx, 1);
-                }
-            }
-            populateVideosTable();
-            populateSessionAssignTable();
-            document.getElementById('btnRemoveVideo').disabled = true;
-        }
-    };
 
     // Wire Session tab buttons
     document.getElementById('btnAutoAssign').onclick = function () {

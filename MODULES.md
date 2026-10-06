@@ -83,7 +83,9 @@ the old `app.js` entry point.
   panel renders: the listeners are delegated, so they must be in place before
   the first `[data-infotip]` element exists.
 - `../ui/info-panel.js` — `setupPanelTabs`, `setupSkeletonEditing`,
-  `updateInfoPanel`.
+  `setupVideosTab` (the Videos tab's Load/Remove buttons, wired once here
+  because `updateInfoPanel`'s no-session early return used to leave them dead on
+  a fresh app — luc3d #216), `updateInfoPanel`.
 - `../ui/plane-definition.js` — `setupPlaneDefinition` (called from `init()`
   right after `setupSkeletonEditing`, and **before** `paneManager.init` — its
   drop listeners are delegated on the `#videoDock` container, which is static
@@ -3944,8 +3946,27 @@ back into the bar one at a time. At least the first tab always stays in the bar.
 The dropdown closes on outside-click or `Esc`; the More button shows the active
 highlight when the selected tab currently lives inside it.
 
+**The Videos tab's two buttons are wired at SETUP, not per-session.**
+`setupVideosTab()` (called once from `pose/initialization.js`) installs the
+`#btnLoadVideos` → `handleLoadVideos` and `#btnRemoveVideo` → `removeVideoFile`
+handlers. They used to be assigned inside `updateInfoPanel`, which returns early
+when `state.session` is null (and while the panel is collapsed) — so on a
+freshly-opened app, exactly when you reach for **Load Videos**, the button
+carried no handler at all and clicking it did nothing, while `File ▸ Load
+Videos…` kept working because *that* is wired at setup (luc3d #216). Nothing in
+the wiring reads `state`, so it has no business in a per-session rebuild.
+Two details ride along:
+- The button is **`Load Videos`**, named after the menu item it duplicates, and
+  **`Remove Video`** (singular — it acts on the one selected row).
+- The selected row is held by **identity** (`selectedVideoFile`), not by row
+  index. Both buttons rebuild the table, and an index into the OLD table names a
+  different video in the new one; `populateVideosTable` clears the selection,
+  disables `Remove Video` and resets the detail block on every rebuild, so the
+  button can never act on a row that is no longer on screen.
+Covered by `tests/e2e/videos-panel-buttons.mjs`.
+
 **Key exports.**
-- Tab control: `setupPanelTabs`.
+- Tab control: `setupPanelTabs`, `setupVideosTab`.
 - Tables: `populateVideosTable`, `populateCamerasTable`,
   `populateSkeletonTable`, `populateSessionAssignTable`,
   `populateUnassignedVideos`.
@@ -7826,6 +7847,24 @@ existing pane instead), so no click sequence can produce a duplicate pane;
 duplicates come only from the drag/drop docking path and `addAllViewsAsGrid`.
 See **Single-view ("solo") mode** under `ui/ui-wiring.js`.
 
+**`removeVideoPanel(viewName)` — the counterpart to `addVideoPanel`.** Closes
+EVERY pane showing that view and returns how many it closed. Used by
+`removeVideoFile` (`loading/session-loader.js`) so the Videos tab's **Remove
+Video** takes the whole panel out of the dock instead of leaving an empty,
+still-titled one behind (luc3d #216). Three things about it:
+- It goes through `panel.api.close()`, exactly as the pane's own × and
+  `clearAll` do — `onDidRemovePanel` is what decrements `dockedViews` and clears
+  the strip's in-dock dot, so tearing the element out by hand would leave both
+  claiming the view is still docked.
+- **Every** pane, not the first: a view can be docked more than once (a dropped
+  multi-selection, or an `addAllViewsAsGrid` restore), and a survivor would go
+  on rendering a view that no longer exists.
+- Panes are matched through `panelRenderers`, never by parsing the panel id —
+  the id is `video-<name>-<counter>` and a view name may itself contain dashes.
+It also deletes the `dockedViews` entry outright afterwards, so a view left in
+the map with no pane (bookkeeping that got out of step) cannot block a later
+re-add.
+
 **`syncDockedViews()` — `fromJSON` builds panels behind `addVideoPanel`'s back.**
 `paneManager.dockedViews` (viewName → pane count) is maintained by
 `addVideoPanel` / `addAllViewsAsGrid` / `onDidRemovePanel`, and it drives both
@@ -10321,9 +10360,25 @@ filesystem enumeration, decoder rebuild.
   Applied in the parent-directory pick (both FSA + webkitdirectory branches),
   the "Select Session Folder" scan, and the SLP-import video filter so the
   calibration video never loads as a session view.
-- View/grid: `createViewForVideoFile`, `updateGridLayout`,
+- View/grid: `createViewForVideoFile`, `removeVideoFile`, `updateGridLayout`,
   `createVideoPromptCell`, `fitCanvasesToCells`, `cellResizeObserver`,
   `rebuildVideoController`, `updateTotalFrames`.
+  `removeVideoFile(videoFile)` is `createViewForVideoFile`'s inverse and the
+  whole of the Videos tab's **Remove Video** (luc3d #216): it closes the dock
+  pane (`paneManager.removeVideoPanel`), drops the view from `state.views` —
+  which is what takes the view-strip thumbnail with it — splices
+  `state.videoFiles`, **remaps every session's `videoFileIndices`** across that
+  splice (they are indices INTO `state.videoFiles`, so a stale one re-points a
+  session at its neighbour's video on the next switch), `close()`s the decoder
+  and removes it from `state.decoderPool`/`_decoderPoolCold`, then resettles
+  everything derived from the view list. The old handler removed only the
+  view's `.video-cell` ELEMENT, leaving the pane docked and titled with an empty
+  body plus a live thumbnail. The session's CAMERA is deliberately kept — it
+  carries the calibration and the annotations; "no video loaded for this camera"
+  is an ordinary state that `recomputeUploadedCameras` already models. Accepts a
+  `{name, assignedCamera}` descriptor too, since the Videos table synthesises
+  rows from `state.views` when `state.videoFiles` is empty. Covered by
+  `tests/e2e/videos-panel-buttons.mjs`.
 - Session-mode UI: `showSessionModeModal`, `showMissingFilesPopup`.
 - Filesystem: `enumerateDirectoryHandle`.
 - Misc: `resolveImportTrackIdx` — re-exported from
@@ -11027,6 +11082,18 @@ the end of `switchSource()`, mirroring `init()`'s setup. Covered by
 `tests/e2e/switchsource-mediabunny-refresh.mjs` (proves it via decoded pixel
 content, not just the backend's `filename`, since the fixture videos happen
 to share a frame count).
+
+**The `<video>` `error` listener reads the ELEMENT it was attached to, not
+`this._videoEl`.** Both `init()` and `switchSource()` register a `once: true`
+`error` listener that rejects their metadata promise. That listener OUTLIVES a
+successful load, and `close()` ends with `src = ""` + `load()` — which fires one
+last `error` event, asynchronously, after `close()` has already nulled
+`this._videoEl`. Reading the code through `self._videoEl` therefore threw
+`Cannot read properties of null (reading 'error')` out of an event handler on
+every decoder that is CLOSED rather than garbage-collected. Latent until
+`removeVideoFile` (luc3d #216) made closing a decoder an ordinary user action;
+the cold-pool eviction path hit it too, just invisibly. Both sites now capture
+`var el = this._videoEl` at registration and read `el.error`.
 
 **A cached HTML5 fallback permanently shadowed mediabunny for that frame
 index (issue #115 followup, `eric/seeking-regression`).** `getFrame()`

@@ -85,3 +85,15 @@ Override the base URL with `BASE=http://host:port`. Exit code `0` = pass.
   with no error; the sink throws instead, and this test proves it. Every
   assertion was validated against the pre-patch writer first, so it pins
   equivalence rather than merely current behavior.
+- **`videos-panel-buttons.mjs`** — the Videos tab's two buttons (luc3d #216).
+  Clicks **Load Videos** on a FRESH page with no session loaded (the bug: both
+  handlers were assigned inside `updateInfoPanel`, which returns early when
+  `state.session` is null, so the button carried no handler at all while
+  `File ▸ Load Videos…` worked), then selects a row and clicks **Remove Video**
+  and asserts the whole video goes: no dockview pane, no `.video-cell`, no
+  view-strip thumbnail, the decoder `close()`d and out of the pool, and
+  `session.videoFileIndices` remapped across the `state.videoFiles` splice —
+  with the second video keeping all of it as the control. Generates its own
+  tiny H.264 clips with ffmpeg (headless Chromium cannot decode the HEVC the
+  real sessions ship) and skips cleanly if ffmpeg is absent. Every behavioural
+  assertion was confirmed to fail on the pre-fix build.

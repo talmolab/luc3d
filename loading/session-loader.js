@@ -75,7 +75,9 @@ import {
     hideWelcomeOverlay,
 } from '../pose/initialization.js';
 // Pass 3h: populateViewStrip / populateSessionStrip / switchSession moved to sessions-panes.js.
-import { populateViewStrip, populateSessionStrip, switchSession } from '../ui/sessions-panes.js';
+import {
+    populateViewStrip, populateSessionStrip, switchSession, multiSelectViews,
+} from '../ui/sessions-panes.js';
 // Pass 3e-1: updateSeekbar / fitTimelineToData / onPlaybackStateChange moved to ui-wiring.js.
 import { updateSeekbar, fitTimelineToData, onPlaybackStateChange } from '../ui/ui-wiring.js';
 import { getLoadingProgressModal } from '../ui/loading-progress-modal.js';
@@ -850,6 +852,147 @@ export function createViewForVideoFile(videoFile) {
     }
 
     return view;
+}
+
+/**
+ * Undo `createViewForVideoFile` + the `state.videoFiles` entry behind it:
+ * take one loaded video out of the project entirely (luc3d #216).
+ *
+ * The Videos tab's `Remove Video` used to splice the video out of
+ * `state.videoFiles` and remove the view's `.video-cell` ELEMENT, which left
+ * the dockview panel and the view-strip thumbnail in place — so the viewer
+ * showed an empty, still-titled pane for a video that no longer existed. The
+ * whole teardown has to happen, in this order:
+ *
+ *  - the dock pane closes (`removeVideoPanel`), which is also what clears the
+ *    strip item's in-dock dot;
+ *  - the view leaves `state.views`, which is what `populateViewStrip` renders
+ *    the thumbnails from, so the strip item goes with it;
+ *  - the DECODER is closed. Nothing will ask it for a frame again, and it
+ *    holds a WebCodecs `VideoDecoder`, a mediabunny `Input` and a cache of
+ *    decoded frames — all of which survive the view being dropped, since the
+ *    pool keeps its own reference.
+ *
+ * The session's CAMERA is deliberately kept: it carries the calibration and
+ * every annotation made against it, and "this camera has no video loaded" is
+ * an ordinary state (`recomputeUploadedCameras` is what keeps the timeline
+ * from drawing a gutter row for it).
+ *
+ * Accepts an entry of `state.videoFiles`, or any `{name, assignedCamera}`
+ * descriptor naming a view — the Videos table falls back to synthesising rows
+ * from `state.views` when `state.videoFiles` is empty, and a row the user can
+ * select has to be a row they can remove. A descriptor that matches a real
+ * `state.videoFiles` entry by name is resolved to it first, so the file entry
+ * is never left behind.
+ *
+ * @param {Object} videoFile - an entry of `state.videoFiles`, or a view descriptor
+ * @returns {boolean} true if the video was found and removed
+ */
+export function removeVideoFile(videoFile) {
+    if (!videoFile) return false;
+    var viewName = videoFile.assignedCamera || videoFile.name;
+    if (!viewName) return false;
+    var vfIdx = state.videoFiles.indexOf(videoFile);
+    if (vfIdx < 0) {
+        for (var ri = 0; ri < state.videoFiles.length; ri++) {
+            var cand = state.videoFiles[ri];
+            if ((cand.assignedCamera || cand.name) === viewName) { vfIdx = ri; videoFile = cand; break; }
+        }
+    }
+    var hasView = state.views.some(function (v) { return v.name === viewName; });
+    if (vfIdx < 0 && !hasView) return false;
+    var decoder = videoFile.decoder;
+
+    // 1. Close the dock pane(s) for this view — the whole panel, not just its
+    //    canvases, so the viewer area loses it rather than going blank.
+    if (paneManager && typeof paneManager.removeVideoPanel === 'function') {
+        paneManager.removeVideoPanel(viewName);
+    }
+
+    // 2. Drop the view. Matched by NAME (what the pane, the strip and every
+    //    overlay key off), and by decoder identity as a fallback for a view
+    //    whose camera was renamed out from under `assignedCamera`.
+    for (var i = state.views.length - 1; i >= 0; i--) {
+        var v = state.views[i];
+        if (v.name !== viewName && !(decoder && v.decoder === decoder)) continue;
+        if (v.wrapper && v.wrapper.parentNode) v.wrapper.remove();
+        v.canvas = null; v.ctx = null;
+        v.overlayCanvas = null; v.overlayCtx = null;
+        v.wrapper = null; v.decoder = null;
+        state.views.splice(i, 1);
+    }
+
+    // 3. Splice the video file out, then REMAP every session's
+    //    `videoFileIndices` — they are indices INTO `state.videoFiles`, so a
+    //    splice shifts every later one down by one. Leaving them alone
+    //    re-associates each session with its neighbour's video on the next
+    //    session switch.
+    if (vfIdx >= 0) {
+        state.videoFiles.splice(vfIdx, 1);
+        for (var si = 0; si < state.sessions.length; si++) {
+            var sess = state.sessions[si];
+            if (!sess || !sess.videoFileIndices) continue;
+            var remapped = [];
+            for (var fi = 0; fi < sess.videoFileIndices.length; fi++) {
+                var idx = sess.videoFileIndices[fi];
+                if (idx === vfIdx) continue;
+                remapped.push(idx > vfIdx ? idx - 1 : idx);
+            }
+            sess.videoFileIndices = remapped;
+        }
+    }
+
+    // 4. Release the decoder. It is reachable from the cross-session pool too,
+    //    so drop it there first or the next session switch hands a closed
+    //    decoder to `switchSource`.
+    if (decoder) {
+        var poolIdx = state.decoderPool ? state.decoderPool.indexOf(decoder) : -1;
+        if (poolIdx >= 0) state.decoderPool.splice(poolIdx, 1);
+        var coldIdx = state._decoderPoolCold ? state._decoderPoolCold.indexOf(decoder) : -1;
+        if (coldIdx >= 0) {
+            if (decoder._coldTimer) { clearTimeout(decoder._coldTimer); decoder._coldTimer = null; }
+            state._decoderPoolCold.splice(coldIdx, 1);
+        }
+        if (typeof decoder.close === 'function') {
+            try { decoder.close(); } catch (_e) { /* already closed */ }
+        }
+        videoFile.decoder = null;
+    }
+
+    // 5. Single-view mode indexes `state.views` positionally, so a removal
+    //    past the solo'd view leaves the index dangling.
+    if (state.singleViewIndex >= state.views.length) {
+        state.singleViewIndex = Math.max(0, state.views.length - 1);
+    }
+    if (state.views.length === 0) state.viewMode = 'grid';
+    if (interactionManager && interactionManager.lastInteractedView === viewName) {
+        interactionManager.lastInteractedView = state.views.length > 0 ? state.views[0].name : null;
+    }
+    // A stale name in the strip's multi-selection is not merely cosmetic: a
+    // non-empty `multiSelectViews` is what suppresses the active-pane
+    // highlight, so one left behind would mute it for the rest of the session.
+    multiSelectViews.delete(viewName);
+
+    // 6. Resettle everything derived from the view list.
+    updateTotalFrames();
+    populateViewStrip();
+    populateSessionStrip();
+    rebuildVideoController();
+    if (state.session) {
+        recomputeUploadedCameras(state.session, state);
+        if (timeline) timeline.refreshTracks(state.session);
+    }
+    if (state.views.length > 0) {
+        fitCanvasesToCells();
+        if (videoController) videoController.seekToFrame(state.currentFrame);
+    } else {
+        var emptyMsg = document.getElementById('videoDockEmpty');
+        if (emptyMsg) emptyMsg.classList.remove('hidden');
+    }
+    drawAllOverlays(state.currentFrame);
+    updateInfoPanel();
+
+    return true;
 }
 
 /**
