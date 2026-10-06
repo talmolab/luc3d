@@ -240,9 +240,9 @@ try {
     }
     // leave the tab and come back; re-run; switch sessions away and back — results and ticks persist
     await page.click('.panel-tab[data-tab="tabInstances"]');
-    // at the default panel width the tab sits in "More ▾" — reach it the way a user would
-    if (await page.isVisible('.panel-tab[data-tab="tabIdSwitches"]')) await page.click('.panel-tab[data-tab="tabIdSwitches"]');
-    else { await page.click('.panel-tab-more-btn'); await page.click('.panel-tab-more-item:has-text("ID Switches")'); }
+    // Every tab is always in the bar now; at the default panel width this one
+    // is scrolled out of sight, which Playwright's own auto-scroll handles.
+    await page.click('.panel-tab[data-tab="tabIdSwitches"]');
     let back = await rowsNow();
     check(back.length === ui.rows.length && back[0].reviewed, `reopening the tab shows the same ${back.length} rows, first still ticked`);
     await page.evaluate(() => document.getElementById('menuCheckSizeSwitches').click());
