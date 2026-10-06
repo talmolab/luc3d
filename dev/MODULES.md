@@ -11149,7 +11149,11 @@ per camera: 14 tracks for a 9-track union in the e2e fixture). On the real data
 (every list `track_0..track_{n-1}`) every map is the identity, so the cost is
 one read pass over each camera's track column. `reopenSessionLazyLoader`
 (multi-session save, pass 2) re-opens through the same `open()`, so it
-re-derives the same columns. `remapTracksFromIdentity` resets each camera's
+re-derives the same columns — which is why `_unifyTracks` does not set
+`_storeEditedInMemory`, while `remapTracksFromIdentity` and
+`deleteInstanceRows` do (the multi-session save then keeps the live frame +
+instance columns for pass 2; see `import-export/save-load.js`). `close()`
+clears it. `remapTracksFromIdentity` resets each camera's
 own names to the propagated list (and `trackNames` with it), so a later
 `_unifyTracks` starts from that. Covered by `tests/e2e/percam-track-union.mjs`.
 
@@ -12726,9 +12730,32 @@ loading-overlay/status-text UI helpers.
   order (= the ORIGINAL load's resolution order); neither order matters, since
   `SioLazyLoader._unifyTracks` re-indexes every store into the union of the
   cameras' track names in camera-NAME order — so pass 2 re-derives the track
-  columns the original load had. It cannot re-derive an in-memory store edit
-  made since (`remapTracksFromIdentity`, `deleteInstanceRows`): those are not
-  in the files.
+  columns the original load had.
+  **A store edited in memory is written AS EDITED.** Propagate IDs → Tracks
+  (and every other `remapTracksFromIdentity` caller) and Custom Instance
+  Delete (`deleteInstanceRows`) change the live store's columns, which are not
+  in the source files — but pass 1 builds the header tracks, each camera's
+  `trackBase` and every group's `(frame, instance offset)` refs from that live
+  store. Pass 2 used to append the files' columns under it: every propagated
+  instance came out on the wrong track name, deleted instances came back, and a
+  group member sitting after a deleted row in its camera-frame resolved to the
+  deleted instance's points. Now `commitSessionForMultiSessionSave` keeps the
+  loader's `framesData` + `instancesData` per camera when
+  `SioLazyLoader._storeEditedInMemory` is set (`keepEditedStoreColumns`, stored
+  as `editedColumns` on `handle.pending`), and `finalizeMultiSessionSave` puts
+  them back over the re-opened stores before `streamSessionIntoWriter`
+  (`restoreEditedStoreColumns`). Those two are all either edit touches: a
+  delete keeps every survivor's `point_id_start/end`, pointing into the
+  unchanged points table — so `pointsData`/`predPointsData`, by far the
+  largest part of a store, are still evicted and re-read, and an UNEDITED
+  session keeps nothing at all. `restoreEditedStoreColumns` throws if the
+  re-opened file no longer fits the kept columns (another frame-row count, or a
+  points table shorter than the largest kept `point_id_end`): the file changed
+  on disk after loading, and writing edited instances against its rows would be
+  silent corruption. The single-session save streams from the live loader and
+  never had this. Covered by `tests/e2e/multi-session-save-store-edits.mjs`
+  (confirmed to fail pre-fix: wrong track names, resurrected rows, the group on
+  the deleted instance, no refusal).
 
   **GC-timing finding (real cage5×3) — resolved.** Dereferencing a session's
   heavy state makes it *eligible* for GC but doesn't force reclamation —

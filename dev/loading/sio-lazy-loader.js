@@ -31,7 +31,7 @@
  * (`loading/track-union.js`) — see `_unifyTracks`.
  */
 
-import { unionTrackNames } from './track-union.js?v=da35f225cdb0';
+import { unionTrackNames } from './track-union.js?v=160718ff0c06';
 
 /**
  * Adapt a materialized sleap-io.js typed Instance/PredictedInstance into the flat
@@ -121,6 +121,15 @@ export class SioLazyLoader {
         this._trackSourceByCam = new Map();
         /** camName -> skeleton dict, so `skeleton` is chosen by camera name, not by I/O timing. */
         this._skeletonByCam = new Map();
+        /**
+         * True once a store has been edited IN MEMORY (`remapTracksFromIdentity`,
+         * `deleteInstanceRows`) — i.e. the columns no longer match the source
+         * files. The multi-session save's pass 2 re-opens those files, so it
+         * keeps this loader's frame + instance columns from pass 1 when set
+         * (`commitSessionForMultiSessionSave`, import-export/save-load.js).
+         * `_unifyTracks`' load-time re-index does NOT set it: a re-open repeats it.
+         */
+        this._storeEditedInMemory = false;
         // Embedded calibration recovered from a project .slp's sessions_json
         // (raw calibration dict + camcorder→video map), used by the session
         // builder when the folder has no separate calibration.toml.
@@ -151,7 +160,7 @@ export class SioLazyLoader {
         }
         // Point the reader's internal I/O worker at LUCID's local vendored h5wasm
         // IIFE (document.baseURI keeps this correct on sub-path deployments).
-        var h5wasmUrl = new URL('lib/h5wasm/h5wasm.iife.js?v=da35f225cdb0', document.baseURI).href;
+        var h5wasmUrl = new URL('lib/h5wasm/h5wasm.iife.js?v=160718ff0c06', document.baseURI).href;
         var labels = await SIO.readSlpStreaming(file, {
             lazy: true,
             openVideos: false,
@@ -381,7 +390,7 @@ export class SioLazyLoader {
         if (!SIO || typeof SIO.readSlpStreaming !== 'function') {
             throw new Error('sleap-io.js readSlpStreaming not available on window.SleapIO');
         }
-        var h5wasmUrl = new URL('lib/h5wasm/h5wasm.iife.js?v=da35f225cdb0', document.baseURI).href;
+        var h5wasmUrl = new URL('lib/h5wasm/h5wasm.iife.js?v=160718ff0c06', document.baseURI).href;
         var labels = await SIO.readSlpStreaming(file, {
             lazy: true,
             openVideos: false,
@@ -925,6 +934,7 @@ export class SioLazyLoader {
             }
         }
         this.trackNames = newTrackNames.map(String);
+        if (changed > 0 || rebuiltLabels.size > 0) this._storeEditedInMemory = true;
         if (errorRows > 0) {
             console.error('[remapTracksFromIdentity] ' + errorRows + ' row(s) failed and were left with their ' +
                 'OLD (now likely out-of-range) track index — those rows will show as trackless once ' +
@@ -1165,6 +1175,7 @@ export class SioLazyLoader {
                 'PROJECT — the delete is incomplete and the caller must report it rather than claim ' +
                 'success. First error:', firstError);
         }
+        if (deleted > 0) this._storeEditedInMemory = true;
         return { deleted: deleted, errorRows: errorRows, firstError: firstError, byCamera: byCamera };
     }
 
@@ -1176,6 +1187,7 @@ export class SioLazyLoader {
         this.numNodesByCam.clear();
         this._trackSourceByCam.clear();
         this._skeletonByCam.clear();
+        this._storeEditedInMemory = false;
         this.cache.clear();
         this.cacheOrder = [];
         this.videos.clear();
