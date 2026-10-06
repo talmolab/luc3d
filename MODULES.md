@@ -1820,6 +1820,25 @@ the new IDs get the space back — there is no 3D pose to look at until Triangul
 All runs. A closed panel stays closed. Track Frame Range and Track Frame leave
 both as they were. Covered by `tests/e2e/track-all-closes-timeline-and-3d.mjs`.
 
+**Every tracking pass marks the project dirty.** Track Frame, Track Frame Range
+and Track All rewrite `session.instanceGroups`, `session.frameIdentityMap` and
+`session.identities`, so each calls `markDirty()` — `trackCurrentFrame` before it
+drops the frame's groups, `runTrackingPass` before `clearIdSwitchResults` and its
+own clear, so both sweeps (`runCrossViewTrackerProgress` and the windowed
+`sweepTrackAllFrames`) are covered by the one call. For a long time none did:
+after Track All on a fresh project the save dot and `• Lucid` title never
+appeared and closing the tab lost the result without a prompt. The call sits
+AFTER every bail-out (a refused click is not an edit) and is deliberately NOT
+conditional on what the run found: the clear runs first, so a re-run that
+matches nothing — or throws partway — has still wiped the previous result, and
+gating on `numTargets`/`numIdentities` would leave exactly that unflagged. Same
+placement rule as `triangulateAllFrames`. Covered by
+`tests/e2e/track-marks-dirty.mjs` (all three entry points, eager and windowed,
+the zero-match re-run, and the bail-outs as negative controls), the Track All
+step of `tests/e2e/sequence-lazy-workflow.mjs` and `tests/test-tracker-gui.mjs`.
+Those tests switch the automatic ID-switch checks off, because a check that runs
+calls `markDirty()` itself and would hide a tracker that never does.
+
 **Animal-count auto-detect is a resident SAMPLE, deliberately.**
 `computeMaxInstancesPerView` (used when the user has not set a count) reads
 `session.frameGroups`, so on a lazy project it samples the resident window rather
@@ -1982,7 +2001,8 @@ drifts upward (e.g., 4 → 11 on the test fixture).
   `getTrackingThreshold`, `isCameraTracked` (both `trackAll`/`trackCurrentFrame`
   drop cameras where `isCameraTracked(name)` is false before tracking; abort with
   a warning if fewer than 2 views remain included).
-- `../import-export/save-load.js` — `setStatus`, `hideLoading`.
+- `../import-export/save-load.js` — `markDirty` (every tracking pass, once its
+  bail-outs are behind it — see above), `setStatus`, `hideLoading`.
 - `../ui/loading-overlay.js` — `showLoadingProgress`, `createProgressPacer`,
   `yieldToPaint`.
 - `../ui/rendering.js` — `drawAllOverlays`, `showPredictedOnly`,
