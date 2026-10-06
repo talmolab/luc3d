@@ -4788,6 +4788,12 @@ project looking saved. Three details:
 - **`propagateNodeAddedAllSessions` passes `{hidden: true}`** — this is the
   INTERACTIVE path, so the new node has to be reachable. See
   `Session.propagateNodeAdded`.
+- **`#skeletonWarnOffNote` is the way back from "Do not show again."**
+  `populateSkeletonTable` sets its `display` from
+  `isSkeletonEditWarningSuppressed()` (so it costs nothing in the ordinary
+  case), and `setupSkeletonEditing` wires `#btnSkeletonWarnOn` at SETUP — like
+  the Videos tab's two buttons and for the same reason: a handler assigned
+  inside a per-session rebuild is missing exactly when there is no session yet.
 
 **Skeleton persistence.** `populateSkeletonTable` calls `rememberSkeleton` on every
 refresh — the central point after any editor mutation (add/remove node or edge,
@@ -4809,7 +4815,8 @@ on reload); see `ui/app-state.js`.
 - `./lazy-select.js` — `buildLazySelect`, behind `buildTrackSelect` (both
   instance tables' Track `<select>`s).
 - `./skeleton-edit-warning.js` — `confirmSkeletonEdit`, wrapped around all five
-  node/edge mutations.
+  node/edge mutations, plus `isSkeletonEditWarningSuppressed` /
+  `setSkeletonEditWarningSuppressed` for `#skeletonWarnOffNote`.
 - `./id-switch-modal.js` — `refreshIdSwitchPanel`: `updateInfoPanel` re-renders
   the ID Switches tab (and its seekbar markers) for the active session.
 - `./app-state.js` — `state`, `timeline`, `interactionManager`,
@@ -11501,7 +11508,7 @@ shape every annotation is stored against (`Instance` keeps one flat
 so a node typed into that box re-shapes every instance in every loaded session at
 once. The only prior signal was a `console.warn`.
 
-Five things about it:
+Six things about it:
 - **It is a title, ONE SENTENCE, and the counts.** It used to carry a bulleted
   `What changes` block and an always-on `There is no undo…` caution as well:
   four paragraphs of prose above the one thing a reader can act on, restating
@@ -11510,11 +11517,14 @@ Five things about it:
   per-edit detail lives here instead. `tests/e2e/skeleton-edit-warning.mjs`
   asserts both are ABSENT, because copy like that creeps back one paragraph at
   a time.
-- **It states a TOTAL and a per-session split.** The headline block is the whole
-  project; a `By session` block with its own `Total` row appears when more than
-  one session is loaded, so the user can see which session the number is in. The
-  two cannot disagree — both are folds of the same `perSession` records from
-  `pose/skeleton-edit-impact.js`.
+- **It states a TOTAL, then WHICH session.** The headline block is the whole
+  project — every session sharing the skeleton, folded from `perSession`
+  (`pose/skeleton-edit-impact.js`). A `By session` block appears when more than
+  one session is loaded, answering the one question the block above cannot. It
+  carries **no `Total` row of its own**: that is the headline block restated a
+  few rows down, and two copies of one number invite the reader to check them
+  against each other instead of reading either. `tests/e2e/skeleton-edit-warning.mjs`
+  asserts its absence.
 - **A lazy project gets a RED warning advising against the edit**, naming the
   non-resident frame count. Propagation is resident-only by necessity, so those
   frames come back on the PREVIOUS skeleton with no error and nothing on screen
@@ -11523,6 +11533,25 @@ Five things about it:
 - **It is SKIPPED when there is nothing to warn about**
   (`skeletonEditNeedsConfirmation`). Building the first skeleton is N node names
   typed into a box, and a modal per node would make the feature unusable.
+- **"Do not show again" is the user's own version of that gate.** Cached in
+  `localStorage.skeletonEditWarningOff` — browser-local display taste, the same
+  class as the panel's section folds, so it must NOT reach the `.slp`: it is a
+  property of this browser, not the project, and opening a colleague's project
+  must not silence their warnings. Three rules:
+  - **The suppression check runs FIRST, before the tally**, which walks a lazy
+    project's whole columnar store. A user who turned the dialog off should not
+    keep paying for one that will not open.
+  - **It is recorded only when the edit is APPLIED.** Ticked and then cancelled
+    it does nothing: "do not show this again" alongside "do not do this" is two
+    different intentions, and guessing which won would silence a warning about
+    silent data loss on the strength of a dialog the user rejected.
+  - **Storage is best-effort, and the failure direction is to WARN.** A private
+    window throws on read and on write; a browser that cannot remember the
+    preference keeps showing the dialog.
+  The way back on is `#skeletonWarnOffNote` in the Skeleton tab (shown only
+  while the preference is set, wired at setup by `setupSkeletonEditing`,
+  displayed by `populateSkeletonTable`) — a setting a user can switch off and
+  never find again is a trap.
 - **The caller owns the mutation.** This module shows a dialog and calls back; it
   never touches the skeleton. Each edit's propagation differs (a node add grows
   instance buffers, an edge add only repaints), so it stays in `ui/info-panel.js`
@@ -11531,6 +11560,9 @@ Five things about it:
 **Key exports.**
 - `confirmSkeletonEdit(edit, onConfirm)` — `edit` is
   `{kind: 'add-node'|'remove-node'|'rename-node'|'add-edge'|'remove-edge', label}`.
+- `isSkeletonEditWarningSuppressed()` / `setSkeletonEditWarningSuppressed(off)` —
+  the "Do not show again" preference, read and cleared by `ui/info-panel.js`'s
+  Skeleton-tab note.
 - `describeSkeletonEdit(edit)` → `{title, lead}`. One table rather than strings
   at the five call sites: the edits differ in exactly this, and a consequence
   written beside the button that causes it is a consequence that drifts from
@@ -11542,8 +11574,10 @@ Five things about it:
 (`.origin-rebase-block` / `-table` / `-caution`, plus `.skeleton-edit-modal` on
 the same `max-height` + sticky-actions rule), for the reason
 `ui/calibration-notice.js` shares them: same kind of dialog, a stack of titled
-blocks whose height depends on the project. Its only addition is the
-`.origin-rebase-total` row.
+blocks whose height depends on the project. All it adds of its own is the action
+row (`.skeleton-edit-actions` / `-buttons` / `-again`, which puts the checkbox on
+the LEFT of the two buttons — it is not a third action, it qualifies the one the
+user is about to take) and `#skeletonWarnOffNote`.
 
 **Imports from project modules.** `./app-state.js` (`state`),
 `../pose/skeleton-edit-impact.js`.

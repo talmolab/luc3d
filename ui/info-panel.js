@@ -12,7 +12,8 @@ import { drawAllOverlays, updateFrameCounters } from './rendering.js';
 import { isInteractiveClickTarget } from './interaction.js';
 import { persistSectionState } from './section-state.js';
 import { buildLazySelect } from './lazy-select.js';
-import { confirmSkeletonEdit } from './skeleton-edit-warning.js';
+import { confirmSkeletonEdit, isSkeletonEditWarningSuppressed,
+         setSkeletonEditWarningSuppressed } from './skeleton-edit-warning.js';
 import { refreshIdSwitchPanel } from './id-switch-modal.js';
 import { isInfoPanelVisible, markInfoPanelStale } from './panel-visibility.js';
 import { state, timeline, interactionManager, rememberSkeleton, buildRememberedSkeleton,
@@ -686,6 +687,14 @@ export function populateSkeletonTable() {
     setSectionCount('skeletonNodesCount', sk.nodes.length);
     setSectionCount('skeletonEdgesCount', sk.edges.length);
 
+    // The way back on after "Do not show again" in the edit confirmation. Shown
+    // only while the preference is set — the control that undoes a setting has
+    // to be findable, and the panel the setting governs is where it is looked
+    // for. Driven from here because this is the one refresh point after every
+    // skeleton mutation.
+    const warnNote = document.getElementById('skeletonWarnOffNote');
+    if (warnNote) warnNote.style.display = isSkeletonEditWarningSuppressed() ? '' : 'none';
+
     // Remember this skeleton for the current app session so newly loaded videos
     // inherit it (rememberSkeleton ignores empty skeletons, so viewing a blank
     // session never clobbers a good remembered one). Called here because this is
@@ -954,6 +963,17 @@ export function setupSkeletonEditing() {
     // Collapsible Nodes / Edges sections — restore last state, remember changes.
     persistSectionState('skeletonNodesSection', SKELETON_SECTIONS_KEY);
     persistSectionState('skeletonEdgesSection', SKELETON_SECTIONS_KEY);
+
+    // Undo "Do not show again". Wired at SETUP, like the Videos tab's two
+    // buttons and for the same reason: a handler assigned inside a per-session
+    // rebuild is missing exactly when there is no session yet.
+    const warnOnBtn = document.getElementById('btnSkeletonWarnOn');
+    if (warnOnBtn) warnOnBtn.addEventListener('click', function () {
+        setSkeletonEditWarningSuppressed(false);
+        const note = document.getElementById('skeletonWarnOffNote');
+        if (note) note.style.display = 'none';
+        setStatus('Skeleton edits will ask for confirmation again', 'success');
+    });
 
     // Add Node button
     document.getElementById('btnAddNode').addEventListener('click', function () {

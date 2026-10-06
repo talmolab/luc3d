@@ -815,6 +815,11 @@
                         <button class="panel-btn" id="btnLoadSkeleton" title="Load skeleton from JSON file" style="flex:1">Load Skeleton</button>
                         <button class="panel-btn" id="btnSaveSkeleton" title="Save skeleton in SLEAP format" style="flex:1">Save Skeleton</button>
                     </div>
+                    <!-- The way back on after "Do not show again" in the skeleton-edit
+                         confirmation (ui/skeleton-edit-warning.js). Hidden unless the
+                         preference is set; populateSkeletonTable owns its display. -->
+                    <div id="skeletonWarnOffNote" style="display:none">Warnings before a skeleton edit are off.<button
+                            type="button" id="btnSkeletonWarnOn">Turn them back on</button></div>
                 </div>
 
                 <!-- ==================== Session Tab ==================== -->

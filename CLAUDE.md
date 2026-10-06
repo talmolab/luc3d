@@ -1385,7 +1385,7 @@ sees.
 
 All five edits — add node, remove node, rename node, add edge, remove edge —
 now go through `confirmSkeletonEdit` (`ui/skeleton-edit-warning.js`), counting
-with `pose/skeleton-edit-impact.js`. Seven things are load-bearing:
+with `pose/skeleton-edit-impact.js`. Eight things are load-bearing:
 
 - **The dialog is a title, ONE SENTENCE and the counts.** A bulleted
   `What changes` block and an always-on `There is no undo…` caution were both
@@ -1401,11 +1401,13 @@ with `pose/skeleton-edit-impact.js`. Seven things are load-bearing:
   an imported `.slp` is ungrouped predictions in `unlinkedInstances`). Lazy →
   `lazyLoader.forEachInstanceRow`; eager → frame-group instances plus the
   unlinked pool, which are disjoint by construction.
-- **The by-session rows and the Total row are one arithmetic.** Every headline
-  total is a FOLD of `perSession`, so a multi-session project cannot be shown
-  a split that does not add up to its own sum. A session on a
-  DIFFERENT-shaped skeleton is NOT counted — the edit does not reach it — and
-  is named separately instead of silently shortening the total.
+- **The headline block IS the total; the by-session block says WHICH session.**
+  Every headline number is a FOLD of `perSession`, so the two cannot disagree —
+  and the by-session block deliberately carries **no `Total` row**, because
+  that is the headline restated a few rows down and two copies of one number
+  invite the reader to check them against each other instead of reading either.
+  A session on a DIFFERENT-shaped skeleton is NOT counted — the edit does not
+  reach it — and is named separately instead of silently shortening the total.
 - **A lazy project is told, loudly, not to do this.** Both propagation methods
   are RESIDENT-ONLY by necessity: the columnar store has a fixed node count
   per instance, so a skeleton edit cannot be expressed in it at all and a
@@ -1417,6 +1419,17 @@ with `pose/skeleton-edit-impact.js`. Seven things are load-bearing:
 - **No annotations, no dialog.** Building the first skeleton is N node names
   typed into a box; `skeletonEditNeedsConfirmation` applies the edit straight
   through when there are no instances, no groups and nothing lazy.
+- **"Do not show again" is the user's own version of that gate**, cached in
+  `localStorage.skeletonEditWarningOff`. Browser-local display taste, so it
+  must NOT reach the `.slp` — it is a property of this browser, not the
+  project, and opening a colleague's project must not silence their warnings.
+  It is checked BEFORE the tally (which walks a lazy project's whole columnar
+  store), recorded **only when the edit is APPLIED** (ticked and then cancelled
+  it does nothing — guessing which of two opposite intentions won would silence
+  a data-loss warning on the strength of a dialog the user rejected), and
+  storage failures fall back to WARNING, never to skipping. The way back on is
+  `#skeletonWarnOffNote` in the Skeleton tab, shown only while it is set: a
+  setting a user can switch off and never find again is a trap.
 - **A new node arrives HIDDEN on hand-labelled instances** — placed beside the
   animal (fanned off the centroid of its placed points) and added to
   `nulledNodes`, so it draws a grey, CLICKABLE marker. An empty slot draws
