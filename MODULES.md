@@ -11735,10 +11735,21 @@ a zoomed-in image keeps the same region centered instead of jumping.
   `hasFrame`, `close`.
 - `VideoController` — class. Selected methods: `seekToFrame`,
   `scrubToFrame`, `togglePlayback`, `startPlayback`, `stopPlayback`,
-  `pausePlayback` (user-pause: stop + frame-accurate mediabunny step one
-  frame forward so the video lands exactly on-frame with the pose overlay,
-  issue #115 — the play button and spacebar call this, internal stops call
-  `stopPlayback`),
+  `pausePlayback` (user-pause: stop, then `seekToFrame(currentFrame)` — a
+  frame-accurate re-decode of the frame the primary camera was showing, so
+  every camera's picture and the overlay land on that one index; the play
+  button and spacebar call this, internal stops call `stopPlayback`. It used
+  to step ONE FRAME FORWARD, a workaround from when the overlay index came
+  from the video clock (issue #115); with the per-refresh loop the index is
+  the painted frame, so +1 moved every picture and skeleton forward a frame on
+  essentially every pause. Measured with barcode clips (gitignored
+  `verify/pause-xb.html`) in Chrome, Brave, Safari and Firefox at 60 and 120
+  Hz: with +0 the paused picture matches the skeleton on 100% of pauses
+  (Firefox + HEVC since the mid-frame `<video>` seek), and the skeleton stays
+  put on most of them (36–40 of 40 camera-pauses at 60 fps in Chrome/Brave;
+  at 150 fps, cameras that were out of step are brought to the primary's
+  frame). Stopping without the re-decode left Firefox and Safari 22–80%
+  aligned at 60 fps and as low as 0% at 150 fps, so the re-decode stays),
   `_startBufferedPlayback` / `_bufferedPlaybackEnabled` (buffered
   video-led mediabunny playback, issue #115),
   `setupSeekbar`, `setupKeyboardHandlers`, `initZoom`, `applyZoom`,

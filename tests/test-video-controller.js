@@ -274,31 +274,41 @@
             }
         });
 
-        it('pausePlayback stops and steps one frame forward (frame-accurate snap)', async function () {
+        // +0, not +1: the per-refresh loop's index IS the painted frame, so the
+        // old one-frame-forward snap moved every picture and skeleton on pause.
+        it('pausePlayback stops and re-decodes the CURRENT frame (no step forward)', async function () {
             ctrl.startPlayback();
             await new Promise(function (r) { setTimeout(r, 0); });
             state.currentFrame = 10;
+            state.views.forEach(function (v) { v.decoder.lastSeekedFrame = null; });
             ctrl.pausePlayback();
             await new Promise(function (r) { setTimeout(r, 0); });   // seekToFrame is async
             assertFalse(state.isPlaying, 'paused');
-            assertEqual(state.currentFrame, 11, 'snapped one frame forward via frame-accurate seek');
+            assertEqual(state.currentFrame, 10, 'stays on the frame it paused on');
+            state.views.forEach(function (v, i) {
+                assertEqual(v.decoder.lastSeekedFrame, 10, 'view ' + i + ' re-decoded the paused frame');
+            });
         });
 
-        it('pausePlayback clamps at the last frame', async function () {
+        it('pausePlayback on the last frame re-decodes the last frame', async function () {
             ctrl.startPlayback();
             await new Promise(function (r) { setTimeout(r, 0); });
             state.currentFrame = state.totalFrames - 1;   // 99
+            state.views.forEach(function (v) { v.decoder.lastSeekedFrame = null; });
             ctrl.pausePlayback();
             await new Promise(function (r) { setTimeout(r, 0); });
-            assertEqual(state.currentFrame, state.totalFrames - 1, 'does not advance past the last frame');
+            assertEqual(state.currentFrame, state.totalFrames - 1, 'stays on the last frame');
+            assertEqual(state.views[0].decoder.lastSeekedFrame, state.totalFrames - 1, 'last frame re-decoded');
         });
 
-        it('pausePlayback does not snap when not playing', async function () {
+        it('pausePlayback does not re-decode when not playing', async function () {
             state.currentFrame = 20;
             assertFalse(state.isPlaying);
-            ctrl.pausePlayback();   // no-op snap (wasPlaying false)
+            state.views.forEach(function (v) { v.decoder.lastSeekedFrame = null; });
+            ctrl.pausePlayback();   // wasPlaying false: nothing to settle
             await new Promise(function (r) { setTimeout(r, 0); });
-            assertEqual(state.currentFrame, 20, 'no forward step when already paused');
+            assertEqual(state.currentFrame, 20, 'frame unchanged');
+            assertTrue(state.views[0].decoder.lastSeekedFrame === null, 'no decode when already paused');
         });
 
         it('stopPlayback cancels animation frame', async function () {

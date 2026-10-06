@@ -2554,25 +2554,35 @@ export class VideoController {
     }
 
     /**
-     * User-initiated pause. Stops playback, then does a frame-accurate mediabunny
-     * seek ONE FRAME FORWARD so we land exactly on-frame with the pose overlay.
+     * User-initiated pause. Stops playback, then RE-DECODES THE CURRENT FRAME —
+     * the one the primary camera was showing — through the frame-accurate
+     * stepping path, so every camera's picture and the pose overlay land on
+     * that same index.
      *
-     * Native <video> playback can settle a hair off (the residual "tracking
-     * leads the video" lag), and the user already found that pressing "next
-     * frame" after pausing snaps everything back into place — because a step
-     * goes through the frame-accurate mediabunny decode path. This just does
-     * that step automatically on pause. Internal stops (scrub, teardown,
-     * end-of-video) call `stopPlayback()` directly and skip this snap, so only
-     * the explicit pause buttons advance/realign.
+     * The re-decode is needed: once paused, a camera's <video> picture need not
+     * match the overlay, and the cameras need not match each other. Measured
+     * with barcode clips (frame number burned into the pixels, 5–8 cameras),
+     * stopping alone left picture and skeleton aligned on only 22–80% of
+     * pauses in Firefox and Safari at 60 fps, and on as few as 0% at 150 fps.
+     *
+     * It used to step ONE FRAME FORWARD (+1), a workaround from when the
+     * overlay index came from the video clock. With the per-refresh loop the
+     * index IS the painted frame, so +1 moved every picture and skeleton
+     * forward a frame on essentially every pause, in every browser. With +0
+     * the paused picture matches the skeleton on 100% of pauses in Chrome,
+     * Brave, Safari and Firefox (HEVC included, since the mid-frame <video>
+     * seek in _getFrameHTML5), and the skeleton stays where it was on most of
+     * them; what moves is a picture, or a camera, that was out of step with
+     * it. Internal stops (scrub, teardown, end-of-video) call `stopPlayback()`
+     * directly and skip this.
      */
     pausePlayback() {
         var wasPlaying = this.state.isPlaying;
         this.stopPlayback();
         if (!wasPlaying) return;
-        var target = Math.min(this.state.currentFrame + 1, (this.state.totalFrames || 1) - 1);
-        // seekToFrame decodes via the frame-accurate mediabunny backend and
-        // redraws the video + overlay for the SAME index → guaranteed aligned.
-        this.seekToFrame(target);
+        // seekToFrame decodes every view and redraws video + overlay for the
+        // SAME index (it also clamps to the frame range).
+        this.seekToFrame(this.state.currentFrame);
     }
 
     /**
