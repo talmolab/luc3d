@@ -9416,9 +9416,28 @@ camera highlight all follow from that one `setActive()` via
 panels behind `addVideoPanel`'s back, so `paneManager.syncDockedViews()` runs
 first to re-derive the docked bookkeeping.
 
+**The cached layout is VALIDATED at the point of use, not invalidated at each
+mutation.** `savedGridLayout` is a snapshot taken when `v` was pressed, and
+`state.views` can change while solo — removing a video (`removeVideoFile`),
+loading one, or switching sessions, which replaces the list wholesale. `g` then
+`fromJSON`'d the snapshot and rebuilt a pane for a view that no longer exists:
+an empty pane wearing the removed camera's name, which is what a user reads as
+"the video went blank" (luc3d #216). A view ADDED while solo is the same mistake
+mirrored — `g` would restore a grid missing it. `savedGridLayoutMatchesViews()`
+compares the snapshot's panel set against the live view list as a SET (both
+directions), and `setGridMode` drops the layout when it disagrees, falling back
+to a fresh `addAllViewsAsGrid()`. Validating at the one reader rather than
+invalidating at every writer is deliberate: a list of invalidation call sites is
+a list something can be left off, and this cache has exactly one reader. It
+reads `params.viewName` off the SERIALIZED panel records — the `params` every
+pane is added with, part of dockview's documented `toJSON` shape, not one of the
+private internals `ui/overlay-export-modal.js` depends on.
+
 Covered end to end by `tests/e2e/solo-view-navigation.mjs` (real keyboard/mouse
-events against the real dock and strip); `tests/test-view-mode.js` only
-simulates the index arithmetic in isolation.
+events against the real dock and strip) and `tests/e2e/videos-panel-buttons.mjs`
+§7 (the stale snapshot, the positional drift of `singleViewIndex`, and removing
+the solo'd view itself);
+`tests/test-view-mode.js` only simulates the index arithmetic in isolation.
 
 **Visibility panel — the global/session split.** `saveVisSettings` /
 `restoreVisSettings` cache the panel's **global appearance preferences** (the
@@ -10379,6 +10398,15 @@ filesystem enumeration, decoder rebuild.
   `{name, assignedCamera}` descriptor too, since the Videos table synthesises
   rows from `state.views` when `state.videoFiles` is empty. Covered by
   `tests/e2e/videos-panel-buttons.mjs`.
+  **It re-seats `state.singleViewIndex` BY NAME, not by clamping.** That index
+  is a position in `state.views`, so removing a video that sits BEFORE the
+  solo'd one slides the next camera into its slot — a clamp only catches a
+  dangling index, so solo silently showed a different view from the one the
+  user put it on. The solo'd view's name is noted before the splice and the
+  index re-derived from it; removing the solo'd view itself has no right
+  answer, so that case falls back to the clamp AND re-renders the dock
+  (`updateVideoGridDisplay`), since the pane just closed was the only one and
+  single-view mode would otherwise be left showing nothing.
 - Session-mode UI: `showSessionModeModal`, `showMissingFilesPopup`.
 - Filesystem: `enumerateDirectoryHandle`.
 - Misc: `resolveImportTrackIdx` — re-exported from

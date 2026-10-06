@@ -95,5 +95,10 @@ Override the base URL with `BASE=http://host:port`. Exit code `0` = pass.
   `session.videoFileIndices` remapped across the `state.videoFiles` splice —
   with the second video keeping all of it as the control. Generates its own
   tiny H.264 clips with ffmpeg (headless Chromium cannot decode the HEVC the
-  real sessions ship) and skips cleanly if ffmpeg is absent. Every behavioural
-  assertion was confirmed to fail on the pre-fix build.
+  real sessions ship) and skips cleanly if ffmpeg is absent. §7 then covers the
+  solo-mode edge case: with `v` active, removing a *different* video used to
+  (a) leave the removed view in `savedGridLayout`, so `g` rebuilt an empty pane
+  wearing its name, and (b) drift `state.singleViewIndex`, which is positional,
+  onto the next camera along; removing the solo'd view itself (c) closed the
+  only pane and left the dock empty. Every behavioural assertion was confirmed
+  to fail on the pre-fix build.

@@ -79,7 +79,9 @@ import {
     populateViewStrip, populateSessionStrip, switchSession, multiSelectViews,
 } from '../ui/sessions-panes.js';
 // Pass 3e-1: updateSeekbar / fitTimelineToData / onPlaybackStateChange moved to ui-wiring.js.
-import { updateSeekbar, fitTimelineToData, onPlaybackStateChange } from '../ui/ui-wiring.js';
+import {
+    updateSeekbar, fitTimelineToData, onPlaybackStateChange, updateVideoGridDisplay,
+} from '../ui/ui-wiring.js';
 import { getLoadingProgressModal } from '../ui/loading-progress-modal.js';
 import { readVisibilityMetadata } from '../import-export/visibility-metadata.js';
 import { readPlaneMetadata, resetPlaneState } from '../import-export/plane-metadata.js';
@@ -902,6 +904,11 @@ export function removeVideoFile(videoFile) {
     var hasView = state.views.some(function (v) { return v.name === viewName; });
     if (vfIdx < 0 && !hasView) return false;
     var decoder = videoFile.decoder;
+    // Single-view mode names its view by POSITION in `state.views`, so the
+    // splice below has to be followed by a re-derivation, not a clamp. Noted
+    // before anything moves.
+    var soloView = state.views[state.singleViewIndex];
+    var soloName = soloView ? soloView.name : null;
 
     // 1. Close the dock pane(s) for this view — the whole panel, not just its
     //    canvases, so the viewer area loses it rather than going blank.
@@ -959,11 +966,18 @@ export function removeVideoFile(videoFile) {
         videoFile.decoder = null;
     }
 
-    // 5. Single-view mode indexes `state.views` positionally, so a removal
-    //    past the solo'd view leaves the index dangling.
-    if (state.singleViewIndex >= state.views.length) {
-        state.singleViewIndex = Math.max(0, state.views.length - 1);
-    }
+    // 5. Re-seat `singleViewIndex` on the view it was NAMING, not on the
+    //    position it happened to hold. Removing a video that sits BEFORE the
+    //    solo'd one shifts every later view down a slot, so a clamp (which
+    //    only catches a dangling index) left the index in range and pointing
+    //    at the next camera along — solo silently showed a different view
+    //    from the one the user put it on. Removing the solo'd view itself has
+    //    no right answer, so it falls back to the clamp.
+    var soloIdx = soloName === null ? -1
+        : state.views.findIndex(function (v) { return v.name === soloName; });
+    state.singleViewIndex = soloIdx >= 0
+        ? soloIdx
+        : Math.min(state.singleViewIndex, Math.max(0, state.views.length - 1));
     if (state.views.length === 0) state.viewMode = 'grid';
     if (interactionManager && interactionManager.lastInteractedView === viewName) {
         interactionManager.lastInteractedView = state.views.length > 0 ? state.views[0].name : null;
@@ -982,7 +996,16 @@ export function removeVideoFile(videoFile) {
         recomputeUploadedCameras(state.session, state);
         if (timeline) timeline.refreshTracks(state.session);
     }
-    if (state.views.length > 0) {
+    var soloNow = state.viewMode === 'single' ? state.views[state.singleViewIndex] : null;
+    if (soloNow && !(paneManager.dockedViews.get(soloNow.name) > 0)) {
+        // Single-view mode shows exactly one pane, and that pane was the one
+        // just closed — so the dock is empty while views remain. Re-render it
+        // on the view solo now falls to, rather than leaving the user in solo
+        // mode staring at nothing with no way back but `g`.
+        // `updateVideoGridDisplay` ends in `refreshPaneInteractions`, which
+        // subsumes the fit/seek/redraw below.
+        updateVideoGridDisplay();
+    } else if (state.views.length > 0) {
         fitCanvasesToCells();
         if (videoController) videoController.seekToFrame(state.currentFrame);
     } else {
