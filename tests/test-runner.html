@@ -125,6 +125,9 @@
     <script src="test-timeline-sparse-occupancy.js"></script>
     <script src="test-timeline-playback-playhead.js"></script>
     <script src="test-grouped-track-dropdown.js"></script>
+    <!-- The info panel's lazily-filled Track <select> (ui/lazy-select.js). Needs
+         window.__LazySelect from the bridge below. -->
+    <script src="test-lazy-select.js"></script>
     <script src="test-track-identity-modals.js"></script>
     <script src="test-video-controller.js"></script>
     <script src="test-playback-frame-sync.js"></script>
@@ -404,6 +407,10 @@
         // above, so it bridges without pulling app.js in.
         import * as __VisibilityMetadata from '../import-export/visibility-metadata.js';
         window.__VisibilityMetadata = __VisibilityMetadata;
+        // The info panel's lazily-filled Track <select>. Imports nothing, so it
+        // bridges without app.js. Namespaced: `buildLazySelect` is generic.
+        import * as __LazySelect from '../ui/lazy-select.js';
+        window.__LazySelect = __LazySelect;
         Object.assign(window, __PoseData, __AppState, __SkeletonJSON, __Triangulation, __Overlays,
                               __Viewport3D, __Timeline, __Interaction,
                               __SlpMerge, __FileIO, __Video,

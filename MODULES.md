@@ -4017,6 +4017,33 @@ the removed Tracks-menu "Assign Track" / "Assign Identity" submenus; the reusabl
 track/identity edit never regrows the bottom timeline panel — it rebuilds +
 repaints at the user's current height instead of growing to fit all rows.
 
+**The Track `<select>` is built LAZILY** (`buildTrackSelect`, via
+`ui/lazy-select.js`). Until the user presses or focuses it, it holds three
+options — the head (`(none)` / `—`), the current track and `(+) New Track` —
+and the full list is filled in on that first `mousedown` / `focus`, both of
+which fire before the browser opens the list or acts on a key. An eager select
+held an `<option>` per session track, and `updateFrameInfo` builds one per row
+on every update: an un-tracked 8-camera prediction project with 863 tracks made
+~35,000 options per update, the rebuild plus its style/layout took ~200 ms, and
+because that outlasted `AUX_UPDATE_MS` the 10 Hz throttle in `ui/rendering.js`
+let it run on EVERY frame — playback capped at ~5 fps, against 60 with the panel
+hidden. Lazy, the same project plays at 59.9 new frames/s against 60 hidden
+(`tests/e2e/_bench-playback.mjs`, `PREP=none SCENARIOS=full,noInfo`), with no
+long tasks. What a closed select shows is unchanged — same value, same label,
+nothing selected for an index past the track list — except its closed WIDTH,
+which now fits three options rather than every track (capped by `max-width`
+either way). The **Identity** selects stay eager: one option per identity, i.e.
+per animal, they were never part of the measured cost, and a lazy select
+ignores a scripted `.value` until focused, which
+`tests/e2e/ungroup-retains-identity.mjs` and `ungroup-trackless-reopen.mjs`
+rely on. Covered by `tests/test-lazy-select.js` (the helper: closed size
+independent of the entry count; filled, option-for-option the eager list) and
+`tests/e2e/info-panel-many-tracks.mjs` (the real `updateFrameInfo` with 10 and
+1,000 tracks gives the same option count; a real click fills the list without
+resizing the select; picking a track, `(none)` and `(+) New Track` still work).
+That e2e fails on the eager build — 43,387 options and ~228 ms per update at
+1,000 tracks, against 421 and ~7 ms.
+
 **The panel tab bar is ONE horizontal scroller.** `setupPanelTabs` makes
 `.panel-tabs` scroll sideways with every tab (Instances, Visibility, ID
 Switches, Videos, Cameras, Skeleton, Session) always inside it, in markup
@@ -4171,6 +4198,8 @@ on reload); see `ui/app-state.js`.
 - `./panel-visibility.js` — `isInfoPanelVisible`, `markInfoPanelStale`.
 - `./section-state.js` — `persistSectionState` (Skeleton ▸ Nodes / Edges,
   under the `skeletonSectionsOpen` key).
+- `./lazy-select.js` — `buildLazySelect`, behind `buildTrackSelect` (both
+  instance tables' Track `<select>`s).
 - `./id-switch-modal.js` — `refreshIdSwitchPanel`: `updateInfoPanel` re-renders
   the ID Switches tab (and its seekbar markers) for the active session.
 - `./app-state.js` — `state`, `timeline`, `interactionManager`,
@@ -10477,6 +10506,41 @@ Coverage: `tests/e2e/plane-section-state.mjs` — the reload round trip, that a
 repaint does not reopen what the user just collapsed, the Danger Zone negative
 control, that nothing reaches the project metadata or the dirty flag, and a
 context whose `localStorage` throws.
+
+### ui/lazy-select.js
+
+**Purpose.** A `<select>` that builds its full option list only when the user
+reaches for it — the info panel's per-row Track dropdown, which `updateFrameInfo`
+rebuilds on every update (see `ui/info-panel.js` ▸ "The Track `<select>` is
+built LAZILY" for the measurement that motivated it).
+
+A **LEAF module** — it imports nothing — so the browser suite bridges it
+(`window.__LazySelect`) without loading the app.
+
+**Key exports.**
+- `buildLazySelect({ head, tail, value, label, entries, cssText })` — returns a
+  select holding `head`, the entry `[value, label]`, and `tail`, with `value`
+  selected. The middle option is omitted when `value` is the head's or the
+  tail's, or when `label` is `undefined` — meaning no entry has that value, so
+  nothing is selected, exactly as an eager select would show. On the first
+  `mousedown` or `focus` it calls `entries()` once and inserts every
+  `[value, label]` between head and tail, keeping the selection.
+
+Three things about it:
+- **`mousedown` AND `focus`.** Both fire before the browser opens the list
+  (mouse) or acts on a key (keyboard), so the user always picks from the
+  complete list, in the eager order. Script that assigns `.value` without
+  either selects nothing — as on any select lacking that option; dispatch
+  `focus` first.
+- **Filling locks the closed width** (`style.width = offsetWidth`) before
+  inserting, so a long track name does not widen the select under the pointer
+  as its list opens.
+- **The caller supplies `label`**, not the helper, so finding the current
+  entry's label never builds the list the helper exists to avoid.
+
+**Imported by.** `ui/info-panel.js`.
+
+Coverage: `tests/test-lazy-select.js`, `tests/e2e/info-panel-many-tracks.mjs`.
 
 ### ui/panel-visibility.js
 
