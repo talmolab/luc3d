@@ -19,6 +19,7 @@ import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import fs from 'node:fs';
+import { acquireBrowserLock } from '../../scripts/browser-lock.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
@@ -42,6 +43,8 @@ const tag = path.basename(DATASET).replace(/[^\w.-]+/g, '_');
 const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
 await sleep(1200);
 
+// a visible browser window: one such run at a time across sessions (scripts/browser-lock.mjs)
+const releaseBrowserLock = process.env.HEADED === '1' ? await acquireBrowserLock({ label: '_diag-real-align-views' }) : async () => {};
 let browser;
 try {
     browser = await chromium.launch({ channel: 'chrome', headless: process.env.HEADED !== '1' });
@@ -141,5 +144,6 @@ try {
     log('screenshots in ' + OUT_DIR);
 } finally {
     if (browser) await browser.close();
+    await releaseBrowserLock();
     server.kill();
 }
