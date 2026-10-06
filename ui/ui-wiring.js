@@ -2985,6 +2985,43 @@ export {
 var savedGridLayout = null; // cached dockview layout JSON from grid mode
 
 /**
+ * Is the cached grid layout still a layout of THIS set of views?
+ *
+ * `savedGridLayout` is a snapshot taken when `v` was pressed, and the view list
+ * can change while solo: removing a video (`removeVideoFile`) or loading one,
+ * and switching sessions replaces the list wholesale. Restoring the snapshot
+ * then re-created a pane for a view that no longer exists — an empty pane
+ * wearing the removed camera's name, which is the state the user sees as "the
+ * video went blank" (luc3d #216). A view that was ADDED while solo is the same
+ * mistake in the other direction: `g` would restore a grid missing it.
+ *
+ * Validated HERE, at the point of use, rather than invalidated at each site
+ * that mutates `state.views` — a list of invalidation call sites is a list
+ * something can be left off, and this cache has exactly one reader. A layout
+ * that fails is dropped so `setGridMode` falls back to a fresh
+ * `addAllViewsAsGrid()`, which is the honest answer: the arrangement the user
+ * saved is not an arrangement of the views they now have.
+ *
+ * Reads `params.viewName` off the SERIALIZED panel records — the `params` every
+ * pane is added with, part of dockview's documented `toJSON` shape, not one of
+ * the private internals `ui/overlay-export-modal.js` depends on.
+ */
+function savedGridLayoutMatchesViews() {
+    if (!savedGridLayout || !savedGridLayout.panels) return false;
+    var saved = [];
+    for (var id in savedGridLayout.panels) {
+        var rec = savedGridLayout.panels[id];
+        var name = rec && rec.params && rec.params.viewName;
+        if (name && saved.indexOf(name) < 0) saved.push(name);
+    }
+    if (saved.length !== state.views.length) return false;
+    for (var i = 0; i < state.views.length; i++) {
+        if (saved.indexOf(state.views[i].name) < 0) return false;
+    }
+    return true;
+}
+
+/**
  * Enter single-view ("solo") mode — the dock shows exactly ONE camera.
  *
  * Pressing the shortcut again while already solo is a deliberate NO-OP. It used
@@ -3072,6 +3109,10 @@ export function setGridMode() {
         ? state.views[state.singleViewIndex].name
         : null;
     state.viewMode = 'grid';
+    // A snapshot of a view list that no longer exists is worse than no
+    // snapshot: `fromJSON` would rebuild a pane for every view it names,
+    // including ones that have since been removed.
+    if (savedGridLayout && !savedGridLayoutMatchesViews()) savedGridLayout = null;
     if (savedGridLayout && paneManager.api) {
         // Restore saved grid layout
         var savedZoom = {};
