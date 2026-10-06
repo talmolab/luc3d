@@ -95,38 +95,45 @@ function startInlineNameEntry(selectEl, defaultName, onCommit) {
 export function setupPanelTabs() {
     const tabBar = document.querySelector('.panel-tabs');
     if (!tabBar) return;
-    // The real tab buttons (Instances, Visibility, Videos, …). The overflow
-    // "More" control is appended after these and excluded from the list.
     const tabs = Array.from(tabBar.querySelectorAll('.panel-tab'));
 
-    // --- Build the "More ▾" overflow dropdown (once) -------------------
-    // Tabs that don't fit the panel's current width are demoted into this
-    // dropdown. As the panel widens, layoutPanelTabs() promotes them back
-    // into the bar one at a time — but only when the full name fits, never
-    // truncated. See styles.css `.panel-tab-more*`.
-    const moreWrap = document.createElement('div');
-    moreWrap.className = 'panel-tab-more';
-    const moreBtn = document.createElement('button');
-    moreBtn.type = 'button';
-    moreBtn.className = 'panel-tab panel-tab-more-btn';
-    moreBtn.innerHTML = 'More <span class="more-caret">▾</span>';
-    const moreMenu = document.createElement('div');
-    moreMenu.className = 'panel-tab-more-menu';
-    moreWrap.appendChild(moreBtn);
-    moreWrap.appendChild(moreMenu);
-    tabBar.appendChild(moreWrap);
+    // --- The bar scrolls sideways; every tab is always IN it -------------
+    // This replaced a "More ▾" dropdown that demoted the tabs which did not
+    // fit. Two tabs visible out of seven meant the panel's own name for the
+    // thing you were looking at was usually behind a control you had to open
+    // first — and WHICH tabs were behind it moved as the panel was resized,
+    // so the bar never looked the same twice. A scroller shows every tab in
+    // one fixed order, and the one you want is a swipe away rather than a
+    // click, a read and a second click.
 
-    moreBtn.addEventListener('click', function (e) {
-        e.stopPropagation();
-        moreWrap.classList.toggle('open');
-    });
-    // Click anywhere else (or Esc) closes the dropdown.
-    document.addEventListener('click', function () {
-        moreWrap.classList.remove('open');
-    });
-    document.addEventListener('keydown', function (e) {
-        if (e.key === 'Escape') moreWrap.classList.remove('open');
-    });
+    // Does the bar overflow, and which way? The fades keyed off these classes
+    // are the ONLY thing saying there is more past an edge: the scrollbar is
+    // suppressed because this strip is ~31px tall and a horizontal bar under
+    // it would sit on top of the active tab's 2px underline.
+    function updateScrollAffordance() {
+        const max = tabBar.scrollWidth - tabBar.clientWidth;
+        // Sub-pixel layout widths leave a fraction of a pixel of "scroll" on
+        // a bar that visibly fits, which would fade an edge for no reason.
+        tabBar.classList.toggle('scroll-left', tabBar.scrollLeft > 1);
+        tabBar.classList.toggle('scroll-right', tabBar.scrollLeft < max - 1);
+    }
+
+    // Bring a tab fully into view, by hand rather than with
+    // `scrollIntoView`: that walks EVERY scrollable ancestor, so revealing a
+    // tab could scroll the app's own layout out from under it. `.panel-tabs`
+    // is `position: relative` in styles.css precisely so that it is each
+    // tab's `offsetParent` and `offsetLeft` is measured in the scroller's
+    // own coordinate space.
+    function scrollTabIntoView(btn) {
+        if (!btn) return;
+        const left = btn.offsetLeft;
+        const right = left + btn.offsetWidth;
+        if (left < tabBar.scrollLeft) tabBar.scrollLeft = left;
+        else if (right > tabBar.scrollLeft + tabBar.clientWidth) {
+            tabBar.scrollLeft = right - tabBar.clientWidth;
+        }
+        updateScrollAffordance();
+    }
 
     // --- Tab selection -------------------------------------------------
     function selectTab(tabId) {
@@ -138,8 +145,10 @@ export function setupPanelTabs() {
         if (btn) btn.classList.add('active');
         const target = document.getElementById(tabId);
         if (target) target.classList.add('active');
-        // Re-run layout so the active-state highlight on "More" stays correct.
-        layoutPanelTabs();
+        // A tab selected from code (`openIdSwitchPanel`) is very often one
+        // that is scrolled out of sight, and an active tab nobody can see
+        // reads as no tab being active at all.
+        scrollTabIntoView(btn);
     }
 
     tabs.forEach(function (tab) {
@@ -148,74 +157,99 @@ export function setupPanelTabs() {
         });
     });
 
-    // --- Responsive overflow -------------------------------------------
-    function buildMoreMenu(overflow) {
-        moreMenu.innerHTML = '';
-        overflow.forEach(function (t) {
-            const item = document.createElement('button');
-            item.type = 'button';
-            item.className = 'panel-tab-more-item';
-            item.textContent = t.textContent;
-            if (t.classList.contains('active')) item.classList.add('active');
-            item.addEventListener('click', function (e) {
-                e.stopPropagation();
-                moreWrap.classList.remove('open');
-                selectTab(t.getAttribute('data-tab'));
-            });
-            moreMenu.appendChild(item);
-        });
-    }
+    // --- Trackpad ------------------------------------------------------
+    // A trackpad over a 31px strip gives a VERTICAL two-finger swipe, so map
+    // that onto the horizontal axis. It steals nothing: the bar sits outside
+    // `.panel-tab-content`, which is the panel's one vertical scroller, so a
+    // vertical wheel here moved nothing at all before this existed.
+    tabBar.addEventListener('wheel', function (e) {
+        const max = tabBar.scrollWidth - tabBar.clientWidth;
+        if (max <= 0) return;
+        // A sideways swipe is already on the right axis; take whichever one
+        // the gesture is actually on rather than summing the two.
+        const delta = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
+        if (!delta) return;
+        const before = tabBar.scrollLeft;
+        tabBar.scrollLeft = Math.max(0, Math.min(max, before + delta));
+        updateScrollAffordance();
+        // Swallow the gesture only when it actually moved the bar, so a swipe
+        // that runs past either end is still the page's to handle.
+        if (tabBar.scrollLeft !== before) e.preventDefault();
+    }, { passive: false });
 
-    function layoutPanelTabs() {
-        // Reveal every tab so we can measure its natural (full-name) width.
-        tabs.forEach(function (t) { t.style.display = ''; });
-        moreWrap.style.display = 'none';
+    // --- Click and drag ------------------------------------------------
+    // A few pixels of travel while pressing a tab is a click with a shaky
+    // hand, not a drag. Below this the bar does not move and the tab fires.
+    const DRAG_THRESHOLD_PX = 4;
+    var dragPointerId = null;
+    var dragStartX = 0;
+    var dragStartScroll = 0;
+    var dragging = false;
+    var suppressClick = false;
 
-        const barWidth = tabBar.clientWidth;
-        if (barWidth === 0) return; // panel hidden/collapsed — nothing to do
-        const widths = tabs.map(function (t) { return t.offsetWidth; });
-        const total = widths.reduce(function (a, b) { return a + b; }, 0);
+    tabBar.addEventListener('pointerdown', function (e) {
+        // Touch already gets the browser's own momentum panning out of
+        // `overflow-x: auto`; driving `scrollLeft` on top of it would move
+        // the bar twice per gesture.
+        if (e.pointerType === 'touch' || e.button !== 0) return;
+        // Clear a suppression left behind by a drag that ended without ever
+        // producing a click, so that it cannot eat this press instead.
+        suppressClick = false;
+        dragging = false;
+        dragPointerId = e.pointerId;
+        dragStartX = e.clientX;
+        dragStartScroll = tabBar.scrollLeft;
+    });
 
-        // Everything fits — no dropdown needed.
-        if (total <= barWidth) {
-            moreWrap.classList.remove('open');
-            moreBtn.classList.remove('active');
-            return;
+    tabBar.addEventListener('pointermove', function (e) {
+        if (dragPointerId === null || e.pointerId !== dragPointerId) return;
+        const dx = e.clientX - dragStartX;
+        if (!dragging && Math.abs(dx) < DRAG_THRESHOLD_PX) return;
+        if (!dragging) {
+            dragging = true;
+            tabBar.classList.add('dragging');
+            // Captured only once the drag is real: capturing on every press
+            // would re-target the plain click that follows one.
+            tabBar.setPointerCapture(dragPointerId);
         }
+        tabBar.scrollLeft = dragStartScroll - dx;
+        updateScrollAffordance();
+    });
 
-        // Otherwise reserve room for the "More" button and greedily keep the
-        // leading tabs whose full names fit.
-        moreWrap.style.display = '';
-        const budget = barWidth - moreWrap.offsetWidth;
-        let used = 0;
-        const overflow = [];
-        tabs.forEach(function (t, i) {
-            if (used + widths[i] <= budget) {
-                used += widths[i];
-                t.style.display = '';
-            } else {
-                t.style.display = 'none';
-                overflow.push(t);
-            }
-        });
-        // Always keep at least the first tab in the bar.
-        if (overflow.length === tabs.length && tabs.length) {
-            tabs[0].style.display = '';
-            overflow.shift();
+    function endDrag(e) {
+        if (dragPointerId === null || e.pointerId !== dragPointerId) return;
+        if (dragging) {
+            tabBar.releasePointerCapture(dragPointerId);
+            tabBar.classList.remove('dragging');
+            // The pointerup that ends a drag still produces a click on
+            // whatever tab it landed on — dragging the bar across a tab must
+            // not also switch to it.
+            suppressClick = true;
         }
-
-        buildMoreMenu(overflow);
-        moreBtn.classList.toggle(
-            'active',
-            overflow.some(function (t) { return t.classList.contains('active'); })
-        );
+        dragging = false;
+        dragPointerId = null;
     }
+    tabBar.addEventListener('pointerup', endDrag);
+    tabBar.addEventListener('pointercancel', endDrag);
 
-    // Recompute whenever the panel (and thus the tab bar) is resized.
+    // Capture phase, so this runs BEFORE the tab's own listener rather than
+    // after it has already switched.
+    tabBar.addEventListener('click', function (e) {
+        if (!suppressClick) return;
+        suppressClick = false;
+        e.stopPropagation();
+        e.preventDefault();
+    }, true);
+
+    // The bar also scrolls without going through any of the above: a
+    // keyboard Tab onto an off-screen button, or a trackpad's own sideways
+    // inertia once `preventDefault` has stopped being called.
+    tabBar.addEventListener('scroll', updateScrollAffordance, { passive: true });
+    // Resizing the panel changes WHETHER it overflows, not just by how much.
     if (typeof ResizeObserver !== 'undefined') {
-        new ResizeObserver(function () { layoutPanelTabs(); }).observe(tabBar);
+        new ResizeObserver(updateScrollAffordance).observe(tabBar);
     }
-    layoutPanelTabs();
+    updateScrollAffordance();
 }
 
 // ============================================

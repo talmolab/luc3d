@@ -3936,15 +3936,57 @@ the removed Tracks-menu "Assign Track" / "Assign Identity" submenus; the reusabl
 track/identity edit never regrows the bottom timeline panel — it rebuilds +
 repaints at the user's current height instead of growing to fit all rows.
 
-**Responsive panel tabs.** `setupPanelTabs` makes the tab bar (Instances,
-Visibility, Videos, Cameras, Skeleton, Session) width-aware. Each tab sizes to
-its full name (never ellipsis-truncated); a `ResizeObserver` on `.panel-tabs`
-runs `layoutPanelTabs()`, which greedily keeps the leading tabs whose names fit
-the panel's current width and demotes the rest into an auto-built **"More ▾"**
-dropdown (`.panel-tab-more*` in styles.css). Widening the panel promotes tabs
-back into the bar one at a time. At least the first tab always stays in the bar.
-The dropdown closes on outside-click or `Esc`; the More button shows the active
-highlight when the selected tab currently lives inside it.
+**The panel tab bar is ONE horizontal scroller.** `setupPanelTabs` makes
+`.panel-tabs` scroll sideways with every tab (Instances, Visibility, ID
+Switches, Videos, Cameras, Skeleton, Session) always inside it, in markup
+order. Each tab still sizes to its full name, never truncated.
+
+This replaced a **"More ▾" overflow dropdown** that demoted whichever tabs did
+not fit. At the default 300px panel width that was five of seven, so the
+panel's own name for the thing the user was looking at was usually behind a
+control they had to open first — and WHICH tabs were behind it moved as the
+panel was resized, so the bar never looked the same twice. `layoutPanelTabs`
+and every `.panel-tab-more*` rule are gone; do not bring them back.
+
+Five things about it:
+- **Three ways to scroll it, and a vertical wheel is one of them.** A trackpad
+  over a ~31px strip gives a two-finger VERTICAL swipe, so the `wheel` handler
+  takes whichever axis the gesture is actually on and applies it to
+  `scrollLeft`. That steals nothing from the app's "one scroller per panel"
+  rule: the bar sits OUTSIDE `.panel-tab-content`, which is the panel's one
+  vertical scroller, so a vertical wheel here moved nothing before. It
+  `preventDefault()`s only when the bar actually moved, so a swipe past either
+  end is still the page's.
+- **Click-and-drag has a 4px threshold, and a real drag SUPPRESSES the click.**
+  A row of buttons that can be dragged will otherwise switch tabs every time
+  the user flicks it — the pointerup that ends a drag still produces a click on
+  whatever tab it landed on. The suppression is a capture-phase `click`
+  listener on the bar (capture, so it runs before the tab's own handler rather
+  than after it has already switched), and it is cleared on the next
+  `pointerdown` so a drag that never produced a click cannot eat the press
+  after it. Pointer capture is taken only once the threshold is crossed:
+  capturing on every press re-targets the plain click that follows one. Touch
+  pointers are skipped outright — `overflow-x: auto` + `touch-action: pan-x`
+  already give them native momentum panning, and driving `scrollLeft` on top
+  would move the bar twice per gesture.
+- **Selecting a tab scrolls it into view**, by hand rather than with
+  `scrollIntoView`, which walks every scrollable ancestor and could scroll the
+  app's layout out from under it. This is what keeps `openIdSwitchPanel`
+  (`ui/id-switch-modal.js`, which just `.click()`s the button) from leaving the
+  active tab off-screen — an active tab nobody can see reads as no tab being
+  active. `.panel-tabs` is `position: relative` precisely so each tab's
+  `offsetLeft` is measured in the scroller's own space.
+- **The edge fades are the only affordance**, toggled by the `scroll-left` /
+  `scroll-right` classes and drawn with `mask-image` (painted in the element's
+  own box, so it stays pinned to the edges while the tabs move underneath, and
+  costs no extra element — a gradient overlay inside a scroller would scroll
+  away). The scrollbar is suppressed: the strip is ~31px tall and a horizontal
+  bar under it would sit on the active tab's 2px underline. A `ResizeObserver`
+  recomputes them, since resizing the panel changes WHETHER it overflows.
+- **`user-select: none` on the bar** — the documented exception for "a surface
+  whose job is to be dragged". Without it a drag smears a selection across the
+  tab names.
+Covered by `tests/e2e/panel-tabs-scroller.mjs`.
 
 **The Videos tab's two buttons are wired at SETUP, not per-session.**
 `setupVideosTab()` (called once from `pose/initialization.js`) installs the
@@ -6376,8 +6418,8 @@ plane.
 - `enterPlaneMode()` / `exitPlaneMode()` / `togglePlaneMode()` /
   `isPlaneModeActive()` — show/hide the `#planeModeBar` banner and swap the
   info panel's `.panel-tabs` + `.panel-tab-content` for `#planePanel`. The swap
-  only toggles inline `display`, so `setupPanelTabs`' own layout state is
-  untouched and exiting restores exactly the previously-active tab. Exiting also
+  only toggles inline `display`, so the tab bar's scroll position and active
+  tab are untouched and exiting restores exactly the previously-active tab. Exiting also
   clears the plane selection/hover, and unwinds both things entered from inside
   the mode that lock this panel: `exitOriginMode()` and `closeAngleModal()`.
 - `handlePlaneDrop(planeId, viewName, clientX, clientY)` — the drop listener is
@@ -7980,8 +8022,9 @@ attached to the result as `model` and its note shown under "About these flags";
 as "Image check speed on this machine: …". Passes `inFlight: embedder.inFlight`.
 
 **User-facing features.** The **ID Switches** tab (`#tabIdSwitches` /
-`#idSwitchPanel` in `index.html`, third tab; at the default panel width it sits in
-"More ▾"). Results are stored per session on `session._idSwitch` (`{results:
+`#idSwitchPanel` in `index.html`, third tab; at the default panel width it is
+scrolled off the right of the tab bar, and `openIdSwitchPanel` scrolls it back
+into view). Results are stored per session on `session._idSwitch` (`{results:
 {size?, image?}, reviewed: Set, showRepeats, current}`), so they survive
 closing/reopening the tab and switching sessions — and are SAVED in the `.slp`
 (`metadata.lucid.idSwitchReview`, see `ui/id-switch-review.js`; ticking a row,

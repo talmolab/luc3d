@@ -2889,16 +2889,69 @@ body {
 }
 
 /* ---- Panel Tabs ---- */
+/* One horizontal scroller holding EVERY tab, in a fixed order. The JS half
+   (setupPanelTabs) adds trackpad and click-drag scrolling and the two
+   `scroll-*` classes below; see ui/info-panel.js for why this replaced a
+   "More ▾" overflow dropdown. */
 .panel-tabs {
   display: flex;
+  /* Each tab's offsetParent, so setupPanelTabs can read offsetLeft in the
+     scroller's own coordinate space when it scrolls one into view. */
+  position: relative;
+  overflow-x: auto;
+  overflow-y: hidden;
+  /* The bar is the end of the line for a sideways swipe — never hand the
+     overscroll up to the app layout, let alone to the browser's back gesture. */
+  overscroll-behavior-x: contain;
+  /* Let touch pan it natively; setupPanelTabs deliberately skips touch
+     pointers so the gesture is not applied twice. */
+  touch-action: pan-x;
+  /* A surface whose job is to be dragged — the documented exception to the
+     app's "panel text can be selected" rule. Without it a drag smears a
+     selection across the tab names. */
+  user-select: none;
+  -webkit-user-select: none;
+  /* No scrollbar: the strip is ~31px tall and a horizontal bar under it would
+     sit on the active tab's 2px underline. The edge fades below say there is
+     more instead. */
+  scrollbar-width: none;
+  -ms-overflow-style: none;
   border-bottom: 1px solid var(--border-color);
   background: var(--bg-secondary);
   flex-shrink: 0;
 }
 
+.panel-tabs::-webkit-scrollbar {
+  height: 0;
+  width: 0;
+}
+
+/* Fade whichever edge has tabs behind it. A mask is painted in the element's
+   own box rather than with its scrolled content, so this stays pinned to the
+   edges while the tabs move underneath — and it costs no extra element, which
+   a gradient overlay inside a scroller would (it would scroll away). */
+.panel-tabs.scroll-left {
+  -webkit-mask-image: linear-gradient(to right, transparent 0, #000 18px);
+  mask-image: linear-gradient(to right, transparent 0, #000 18px);
+}
+
+.panel-tabs.scroll-right {
+  -webkit-mask-image: linear-gradient(to left, transparent 0, #000 18px);
+  mask-image: linear-gradient(to left, transparent 0, #000 18px);
+}
+
+.panel-tabs.scroll-left.scroll-right {
+  -webkit-mask-image: linear-gradient(to right, transparent 0, #000 18px, #000 calc(100% - 18px), transparent 100%);
+  mask-image: linear-gradient(to right, transparent 0, #000 18px, #000 calc(100% - 18px), transparent 100%);
+}
+
+.panel-tabs.dragging {
+  cursor: grabbing;
+}
+
 .panel-tab {
-  /* Size to the tab's full name — never squished/truncated. Overflow tabs
-     are demoted into the "More" dropdown by layoutPanelTabs() instead. */
+  /* Size to the tab's full name — never squished or truncated. The ones that
+     don't fit are reached by scrolling the bar. */
   flex: 0 0 auto;
   padding: 8px 12px;
   font-size: 11px;
@@ -2914,6 +2967,10 @@ body {
   white-space: nowrap;
 }
 
+.panel-tabs.dragging .panel-tab {
+  cursor: grabbing;
+}
+
 .panel-tab:hover {
   color: var(--text-secondary);
 }
@@ -2921,68 +2978,6 @@ body {
 .panel-tab.active {
   color: var(--accent);
   border-bottom-color: var(--accent);
-}
-
-/* ---- "More ▾" overflow dropdown for panel tabs ---- */
-.panel-tab-more {
-  position: relative;
-  margin-left: auto; /* anchor to the right edge of the tab bar */
-  flex: 0 0 auto;
-}
-
-.panel-tab-more-btn {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.panel-tab-more-btn .more-caret {
-  font-size: 9px;
-  line-height: 1;
-}
-
-.panel-tab-more-menu {
-  display: none;
-  position: absolute;
-  top: 100%;
-  right: 0;
-  z-index: 100;
-  min-width: 130px;
-  padding: 4px 0;
-  background: var(--bg-secondary);
-  border: 1px solid var(--border-color);
-  border-radius: 4px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.45);
-}
-
-.panel-tab-more.open .panel-tab-more-menu {
-  display: block;
-}
-
-.panel-tab-more-item {
-  display: block;
-  width: 100%;
-  padding: 7px 14px;
-  text-align: left;
-  font-size: 11px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  color: var(--text-muted);
-  background: none;
-  border: none;
-  white-space: nowrap;
-  cursor: pointer;
-  transition: color var(--transition-fast), background var(--transition-fast);
-}
-
-.panel-tab-more-item:hover {
-  color: var(--text-secondary);
-  background: var(--bg-tertiary);
-}
-
-.panel-tab-more-item.active {
-  color: var(--accent);
 }
 
 .panel-tab-content {
