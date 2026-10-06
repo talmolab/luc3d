@@ -3993,7 +3993,7 @@ on every update: an un-tracked 8-camera prediction project with 863 tracks made
 because that outlasted `AUX_UPDATE_MS` the 10 Hz throttle in `ui/rendering.js`
 let it run on EVERY frame — playback capped at ~5 fps, against 60 with the panel
 hidden. Lazy, the same project plays at 59.9 new frames/s against 60 hidden
-(`tests/e2e/_bench-playback.mjs`, `full` vs `noInfo`, played as loaded), with no
+(`tests/e2e/_bench-playback.mjs`, `PREP=none SCENARIOS=full,noInfo`), with no
 long tasks. What a closed select shows is unchanged — same value, same label,
 nothing selected for an index past the track list — except its closed WIDTH,
 which now fits three options rather than every track (capped by `max-width`
