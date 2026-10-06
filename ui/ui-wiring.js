@@ -33,7 +33,7 @@ import { updateInfoPanel, updateFrameInfo, updateTriangulationBadge,
          setupPanelTabs, setupSkeletonEditing, exportSkeletonJSON,
          ensureSession, populateSessionAssignTable, populateUnassignedVideos,
          populateTimelineVisibility } from './info-panel.js';
-import { consumeInfoPanelStale } from './panel-visibility.js';
+import { consumeInfoPanelStale, collapseViewport3D } from './panel-visibility.js';
 // Block 2 (Prompt 4): rename migration for the per-session hidden-track
 // / hidden-identity Sets when the user renames an entity.
 import { renameHiddenTrack, renameHiddenIdentity } from './timeline-visibility.js';
@@ -66,7 +66,7 @@ import { shouldIgnoreShortcut, installFocusRelease } from './keyboard-target.js'
 import { showSettingsModal } from './settings-modal.js';
 // Pass 3i-3: addNewInstanceSmart and update3DViewport moved to pose/initialization.js.
 import { addNewInstanceSmart, update3DViewport, navigateToFrame } from '../pose/initialization.js';
-import { runIdSwitchChecks, setIdSwitchNavigator, updateIdSwitchProgress } from './id-switch-modal.js';
+import { runIdSwitchChecks, setIdSwitchNavigator, setIdSwitchRefresher, updateIdSwitchProgress } from './id-switch-modal.js';
 // Pass 3f / 3i-4: identity-assignment workflow symbols moved out of app.js.
 // (`swapTracks` joined this module in 3i-4; `seekToLabeledFrame` is now in-module.)
 import {
@@ -862,6 +862,13 @@ export function setupMenus() {
     // Tracks ▸ Check ID Switches (Body Size): flag close encounters whose
     // post-encounter body sizes favour swapped identities (ui/id-switch-modal.js).
     setIdSwitchNavigator(navigateToFrame);   // also used when a tracking pass runs the checks itself
+    // After the tab fixes (or un-fixes) a switch, repaint everything that shows identities.
+    setIdSwitchRefresher(function () {
+        drawAllOverlays(state.currentFrame);
+        update3DViewport(state.currentFrame);
+        updateInfoPanel();
+        if (timeline) timeline.refreshTracks(state.session, { keepSize: true });
+    });
     document.getElementById('menuCheckSizeSwitches').addEventListener('click', function () {
         closeMenus();
         runIdSwitchChecks({ size: true, navigateToFrame: navigateToFrame });
@@ -2933,12 +2940,7 @@ export function toggle3DViewport() {
     const container = document.getElementById('viewport3dContainer');
     var isCollapsing = !container.classList.contains('collapsed');
     if (isCollapsing) {
-        // Save current width so we can restore it when expanding
-        container._savedWidth = container.style.width || '';
-        // Clear inline width so the CSS .collapsed { width: 0 } rule takes effect
-        container.style.width = '';
-        container.classList.add('collapsed');
-        if (viewport3d) viewport3d.setVisible(false);
+        collapseViewport3D(viewport3d);
     } else {
         // Class off + width back FIRST: everything below reads the container's
         // collapse state (via ui/panel-visibility.js) or its size.

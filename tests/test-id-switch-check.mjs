@@ -245,6 +245,17 @@ group('Image check — timing summary (ui/image-embedder.js)');
         `summary: 150 crops/s, GPU busy 90%, batches of 50, decode 30 ms/frame (${JSON.stringify(t).slice(0, 120)}…)`);
     eq(E.formatEmbedTiming(t), '150 crops/s over 10 s · GPU busy 90% (30 batches of ~50, 6.0 ms/crop) · per frame: decode 30 ms, crop 50 ms, queue 200 ms · WebGPU fp16', 'one-line format, with the backend and precision that ran');
     eq(E.formatEmbedTiming({ crops: 0 }), '', 'nothing embedded → no line');
+    // how the samples were decoded: at keyframes, or every frame (and what keyframe spacing would fix it)
+    const frames = []; for (let f = 0; f < 3200; f += 32) frames.push(f);
+    const kf = (gop) => { const k = []; for (let f = 0; f < 3200; f += gop) k.push(f); return k; };
+    const plan = (gop, streamed = true) => Object.assign(SC.planKeyframeSamples(frames, kf(gop)), { streamed });
+    const dense = E.summarizeKeyframePlans([plan(30), plan(30), plan(30, false)]);
+    ok(dense.cameras === 2 && dense.of === 2 && dense.snappedPct === 100, 'keyframes every 30: 2/2 streamed cameras at keyframes (' + JSON.stringify(dense) + ')');
+    ok(E.formatEmbedTiming(Object.assign({}, t, { keyframes: dense })).endsWith(' · decoded at keyframes in 2/2 cameras (100% of samples)'), 'line says keyframe decoding');
+    const sparse = E.summarizeKeyframePlans([plan(250), plan(250)]);
+    ok(sparse.cameras === 0 && sparse.keyframeGap === 250, 'keyframes every 250: none at keyframes');
+    ok(E.formatEmbedTiming(Object.assign({}, t, { keyframes: sparse })).endsWith(' · every frame decoded (keyframe every 250 frames; a keyframe every 0.5 s — 35 frames or fewer — would decode only the samples)'),
+        'line says every frame was decoded, and what keyframe spacing would avoid it');
 }
 
 group('Image check — cancellation and failure reasons');
@@ -389,6 +400,48 @@ group('Progress callback — awaited between folds, ends at total');
     const seen = [];
     await SC.checkSizeSwitches(session, { fps: 60, onProgress: async (d, t) => { seen.push([d, t]); } });
     ok(seen.length >= 2 && seen[seen.length - 1][0] === seen[seen.length - 1][1], `progress reported (${seen.length} calls, last ${seen[seen.length - 1]})`);
+}
+
+group('Keyframe sampling plan — samples move to keyframes only when keyframes are dense enough');
+{
+    // the image check's samples at 60 fps: every 32nd frame (15 Hz grid, every 8th sample)
+    const frames = []; for (let f = 0; f < 6000; f += 32) frames.push(f);
+    const kf = (gop, n = 6000) => { const k = []; for (let f = 0; f < n; f += gop) k.push(f); return k; };
+    // sparse keyframes (the recordings measured: every 250 frames) → nothing moves: today's decoding exactly
+    const sparse = SC.planKeyframeSamples(frames, kf(250));
+    eq(sparse.snapped, 0, 'keyframe every 250 frames: no sample moves');
+    ok(sparse.decode.every((f, i) => f === frames[i]), 'sparse: every sample decodes its own frame');
+    eq(SC.planKeyframeSamples(frames, null).snapped, 0, 'unknown keyframes: no sample moves');
+    // every 0.5 s at 60 fps → every sample on a keyframe at most 15 frames (0.25 s) away, strictly increasing
+    const p = SC.planKeyframeSamples(frames, kf(30));
+    eq(p.snapped, frames.length, 'keyframe every 30 frames: every sample moves to a keyframe');
+    ok(p.decode.every(f => f % 30 === 0), 'every decoded frame is a keyframe');
+    const shift = Math.max(...p.decode.map((f, i) => Math.abs(f - frames[i])));
+    ok(shift <= 15, 'largest move ' + shift + ' frames ≤ 15 (0.25 s)');
+    eq(p.maxShift, 16, 'max shift = half the sample spacing');
+    ok(p.decode.every((f, i) => i === 0 || f > p.decode[i - 1]), 'decoded frames strictly increasing (no keyframe shared)');
+    // GOP up to 10% over the sample spacing still qualifies (32 → 35); beyond, nothing moves
+    eq(SC.planKeyframeSamples(frames, kf(32)).snapped, frames.length, 'keyframe every 32 frames (= spacing): all move');
+    ok(SC.planKeyframeSamples(frames, kf(35)).snapped > 0.9 * frames.length, 'keyframe every 35 frames (≤ 1.1 × spacing): nearly all move');
+    eq(SC.planKeyframeSamples(frames, kf(36)).snapped, 0, 'keyframe every 36 frames (> 1.1 × spacing): none move');
+    // a recorder set to a keyframe every 0.5 s at frame rates where the check samples a bit more often:
+    // 100 fps → samples every 49 frames, keyframes every 50; 50 fps → every 24, keyframes every 25
+    for (const [fps, spacing, gop] of [[100, 49, 50], [50, 24, 25]]) {
+        const fr = []; for (let f = 0; f < 120 * fps; f += spacing) fr.push(f);
+        const k = []; for (let f = 0; f < 120 * fps; f += gop) k.push(f);
+        const pl = SC.planKeyframeSamples(fr, k);
+        const move = Math.max(...pl.decode.map((f, i) => Math.abs(f - fr[i])));
+        ok(pl.snapped >= 0.95 * fr.length && move <= gop / 2 && move / fps <= 0.25 && pl.decode.every((f, i) => i === 0 || f > pl.decode[i - 1]),
+            `${fps} fps, keyframe every 0.5 s (${gop} frames vs samples every ${spacing}): ${pl.snapped}/${fr.length} move, largest ${move} frames = ${(move / fps).toFixed(2)} s`);
+    }
+    // a keyframe without tracking is skipped for the next nearest; none within reach → the sample stays
+    const noTrack = new Set([60, 90]);
+    const q = SC.planKeyframeSamples([0, 64, 128], kf(30, 200), f => !noTrack.has(f));
+    eq(q.decode.join(','), '0,64,120', 'untracked keyframes skipped; a sample with none in reach keeps its frame');
+    // two samples closer than a keyframe gap can't share one keyframe
+    const r = SC.planKeyframeSamples([0, 32, 40, 64, 96], kf(30, 200));
+    eq(r.decode.join(','), '0,30,40,60,90', 'no keyframe used twice: 40 keeps its frame rather than share 30');
+    eq(r.snapped, 4, '…and the other four move');
 }
 
 console.log(`\n${failed === 0 ? '✓ PASS' : '✗ FAIL'} — ${passed} passed, ${failed} failed`);

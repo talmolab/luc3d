@@ -417,7 +417,7 @@ function finish(grid, LP, present, weight, o, extra) {
  * @param {Array} scored  encounters sorted by frame
  */
 export function markChangePoints(scored, o) {
-    scored.forEach(function (sc) { delete sc.kind; delete sc.followOf; });
+    scored.forEach(function (sc) { delete sc.kind; delete sc.followOf; delete sc.switchBackAt; });
     // The model learns from the tracker's labels, so it can tell that the labelling on the two sides
     // of an encounter disagrees, not which side is right: whichever side covers MORE of the session
     // reads as "correct". Mark the CHANGE POINT of each run of flagged encounters per pair:
@@ -447,8 +447,13 @@ export function markChangePoints(scored, o) {
             var m2 = n; while (m2 + 1 < L.length && L[m2 + 1].flagged) m2++;
             var atStart = n === 0, atEnd = m2 === L.length - 1;
             for (var r6 = n; r6 <= m2; r6++) L[r6].continues = r6 > n || (atStart && !atEnd);
-            if (!atEnd && (atStart || m2 > n)) changes.push(Object.assign({}, L[m2 + 1], { kind: 'end', continues: false }));
-            if (!(atStart && !atEnd)) L[n].kind = 'onset';
+            // Each change point also names the OTHER edge of its swapped stretch, which is what fixing it
+            // swaps (ui/id-switch-modal.js): an onset, the encounter after the run where the labels look
+            // right again (`switchBackAt`, null when the run reaches the session end); an 'end', the run's
+            // first encounter (`switchedAt`, null when the run starts the session — swapped from frame 0).
+            if (!atEnd && (atStart || m2 > n)) changes.push(Object.assign({}, L[m2 + 1], { kind: 'end', continues: false,
+                switchedAt: atStart ? null : L[n].frame }));
+            if (!(atStart && !atEnd)) { L[n].kind = 'onset'; L[n].switchBackAt = atEnd ? null : L[m2 + 1].frame; }
             n = m2;
         }
     });
@@ -499,7 +504,10 @@ function failure(reason) { return { ok: false, reason: reason, flags: [], change
  *   point is the first UNflagged encounter after it, returned in `changes`
  *   (`kind: 'end'`, not itself flagged). Markers to show = `flags` + `changes`.
  *   A change point with `followOf: <frame>` is a follow-on of the switch at that
- *   frame (a swapped identity's next encounter with a third animal).
+ *   frame (a swapped identity's next encounter with a third animal). An onset
+ *   carries `switchBackAt` (the frame of the encounter after its run, or null
+ *   when the run reaches the session end); an 'end' carries `switchedAt` (the run's first
+ *   encounter, or null when the run starts the session).
  */
 export async function checkSizeSwitches(session, opts) {
     var o = Object.assign({}, SIZE_CHECK_DEFAULTS, opts || {});
@@ -519,6 +527,65 @@ export async function checkSizeSwitches(session, opts) {
         { bones: grid.bones.map(function (b) { return b.join('–'); }), cue: 'size' });
     if (o.onProgress) await o.onProgress(o.folds, o.folds);
     return res;
+}
+
+/**
+ * How much sparser than the samples keyframes may be and still count as dense.
+ * The sample spacing comes from integer rounding (every round(fps / sampleHz)-th
+ * frame, every round(sampleHz / imageHz)-th of those), so it is a little under
+ * 0.5 s at many frame rates — 49 frames at 100 fps, 24 at 50 — and a recorder set
+ * to a keyframe every 0.5 s (`-g fps/2`) would otherwise just miss it. 1.1 covers
+ * every frame rate up to 240 (worst: 119 vs 112 frames at 239 fps).
+ */
+export const KEYFRAME_GAP_TOLERANCE = 1.1;
+
+/**
+ * Which frame to DECODE for each image sample in one camera, given that camera's
+ * keyframes. Decoding a frame costs every frame since its keyframe (P-frames
+ * depend on the one before), so on recordings with a keyframe every 250 frames
+ * the image samples (~2/s) still cost every frame of every camera. When the
+ * keyframes are about as dense as the samples (median keyframe gap G <=
+ * KEYFRAME_GAP_TOLERANCE x the median sample spacing S), each sample is moved to
+ * its nearest keyframe that is at most floor(max(S, G) / 2) frames away and has
+ * tracking (`hasFrame`), so it decodes as ONE frame. Moved samples stay strictly
+ * increasing (two samples never share a keyframe); a sample with no such
+ * keyframe keeps its own frame (decoded from its keyframe, as before). Sparser
+ * keyframes leave every sample where it is — today's decoding exactly.
+ * The encounter grid is untouched: the sample's evidence still counts at its
+ * grid frame, only the picture (and the keypoints it is cropped with) come from
+ * up to half a gap away — 0.25 s with a keyframe every 0.5 s.
+ * @param {number[]} frames      requested sample frames, increasing
+ * @param {?ArrayLike<number>} keyframes  this camera's keyframe indices, increasing (null = unknown)
+ * @param {function(number): boolean} [hasFrame]  can a sample move to this frame? (default: any)
+ * @returns {{decode: number[], snapped: number, spacing: number, keyframeGap: number, maxShift: number}}
+ *   decode[i] = the frame to decode for frames[i]; snapped = how many moved (0 = sparse/unknown)
+ */
+export function planKeyframeSamples(frames, keyframes, hasFrame) {
+    var decode = frames.slice(), n = frames.length;
+    var medianGap = function (a) {
+        var d = [];
+        for (var i = 1; i < a.length; i++) d.push(a[i] - a[i - 1]);
+        return d.length ? median(d) : Infinity;
+    };
+    var spacing = medianGap(frames), kfGap = keyframes && keyframes.length >= 2 ? medianGap(keyframes) : Infinity;
+    var plan = { decode: decode, snapped: 0, spacing: spacing, keyframeGap: kfGap, maxShift: 0 };
+    if (!(n >= 2 && isFinite(spacing) && kfGap <= KEYFRAME_GAP_TOLERANCE * spacing)) return plan;
+    var maxShift = plan.maxShift = Math.floor(Math.max(spacing, kfGap) / 2);
+    var ok = hasFrame || function () { return true; };
+    var j = 0, last = -Infinity;
+    for (var s = 0; s < n; s++) {
+        var f = frames[s];
+        while (j < keyframes.length && keyframes[j] < f - maxShift) j++;
+        var best = -1;
+        for (var q = j; q < keyframes.length && keyframes[q] <= f + maxShift; q++) {
+            var kf = keyframes[q];
+            if (kf <= last || !ok(kf)) continue;
+            if (best < 0 || Math.abs(kf - f) < Math.abs(best - f)) best = kf;
+        }
+        if (best >= 0) { decode[s] = best; plan.snapped++; }
+        last = Math.max(last, decode[s]);
+    }
+    return plan;
 }
 
 /**

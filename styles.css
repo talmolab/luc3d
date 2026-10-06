@@ -6721,6 +6721,15 @@ details[open] > summary.origin-rebase-block-title::before {
 .id-switch-row.is-repeat .id-switch-main { opacity: 0.65; }
 .id-switch-row.is-reviewed .id-switch-main { opacity: 0.45; }
 .id-switch-row.is-reviewed .id-switch-pair { text-decoration: line-through; }
+/* A fixed row is not struck through (it was dealt with, not dismissed), and the row
+   being looked at is never dimmed: its bar and buttons are what the user is using. */
+.id-switch-row.is-fixed .id-switch-pair { text-decoration: none; }
+.id-switch-row.is-current .id-switch-main { opacity: 1; }
+.id-switch-fixed { color: var(--success-color); font-weight: 600; }
+.id-switch-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-top: 6px; font-size: 11px; }
+.id-switch-actions .panel-btn { flex: none; }
+.id-switch-fix:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.id-switch-fixed-note { color: var(--success-color); flex: 1; min-width: 0; }
 .id-switch-tick { margin: 2px 0 0; flex: none; cursor: pointer; }
 .id-switch-main { flex: 1; min-width: 0; }
 .id-switch-line1 { display: flex; gap: 8px; font-size: 12px; }
@@ -6739,15 +6748,35 @@ details[open] > summary.origin-rebase-block-title::before {
 .id-switch-canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; }
 
 /* The selected row's progress bar, driven by the viewer's frame: 1 s before the
-   animals come close -> the close spell (shaded, where a swap would happen) -> 1 s after. */
+   animals come close (orange) -> the close spell (red, where a swap would happen) ->
+   1 s after (orange). The section colours are set inline from ID_SWITCH_SECTION_RGB
+   (ui/id-switch-highlight.js), which the box in the views also wears. */
 .id-switch-pbar {
-  position: relative; height: 6px; margin-top: 5px; border-radius: 3px;
-  background: var(--bg-button); overflow: hidden;
+  position: relative; height: 6px; margin: 8px 0 3px;
   animation: id-switch-pbar-in 160ms ease-out;
 }
+/* Click or drag on it to go to a frame: a hit area taller than the 6 px bar. */
+.id-switch-pbar { cursor: pointer; touch-action: none; }
+.id-switch-pbar::before { content: ''; position: absolute; inset: -7px 0; }
+/* The coloured track clips the fill and band to its rounded ends; the bar does not,
+   so the playhead can stand proud of it. */
+.id-switch-ptrack { position: absolute; inset: 0; border-radius: 3px; background-color: var(--bg-button); overflow: hidden; }
+/* The current frame: a line at the fill's leading edge, taller than the bar. */
+.id-switch-phead {
+  position: absolute; top: -4px; bottom: -4px; width: 2px; transform: translateX(-50%);
+  background: var(--text-primary); border-radius: 1px; box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.55);
+  pointer-events: none; transition: left 60ms linear;
+}
 @keyframes id-switch-pbar-in { from { opacity: 0; transform: scaleY(0.2); } to { opacity: 1; transform: none; } }
-.id-switch-pband { position: absolute; top: 0; bottom: 0; background: rgba(255, 176, 32, 0.45); }
+.id-switch-pband { position: absolute; top: 0; bottom: 0; }
 .id-switch-pfill { position: absolute; left: 0; top: 0; bottom: 0; width: 0; background: var(--accent); opacity: 0.85; transition: width 60ms linear; }
+
+/* Fix switch… confirmation (ui/id-switch-modal.js openFixDialog) */
+.id-switch-fix-modal { max-width: 480px; }
+.id-switch-fix-modal p { margin-bottom: 10px; }
+.id-switch-fix-why { margin: 0 0 10px; padding-left: 18px; font-size: 12px; color: var(--text-secondary); line-height: 1.5; }
+.id-switch-fix-warn { color: var(--warning-color) !important; font-size: 12px !important; }
+.id-switch-fix-tip { font-size: 12px !important; color: var(--text-muted) !important; }
 
 /* Image ID-switch check — progress dialog (ui/id-switch-modal.js) */
 .id-switch-progress { max-width: 520px; }
