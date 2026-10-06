@@ -34,6 +34,9 @@
  * - frameIdentityMap size, identity/track assignment on probe frames
  * - resident frameGroups (memory-bound regression guard)
  * - usedJSHeapSize, so a step that quietly retains the project is visible
+ * - the status bar's Labeled Frames / Instances / Triangulated, which must be
+ *   WHOLE-PROJECT counts, not the resident window (at reopen, around Triangulate
+ *   All and after Track All — see `checkCounters`)
  *
  * ## Usage
  *   node tests/e2e/sequence-lazy-workflow.mjs                 # default: 6000 frames
@@ -178,6 +181,62 @@ try {
                 probes,
             };
         };
+
+        /** What the status bar shows right now. */
+        window.__seqCountersShown = () => {
+            const num = (id) => {
+                const m = ((document.getElementById(id) || {}).textContent || '').match(/-?\d+/);
+                return m ? Number(m[0]) : null;
+            };
+            return {
+                cam: ((document.getElementById('statusCamera') || {}).textContent || '').replace(/^Camera:\s*/, ''),
+                labeled: num('statusLabeledFrames'),
+                instances: num('statusInstances'),
+                triangulated: num('statusTriangulatedFrames'),
+            };
+        };
+
+        /**
+         * Ground truth for the status bar, derived independently of the app's
+         * counting code. Triangulated: frames with 3D, straight off the
+         * whole-project `instanceGroups`. Labeled Frames / Instances: hydrate
+         * EVERY frame through the app's own loader, then apply the counters'
+         * original resident rule — on a fully resident project that is the
+         * whole-project answer. The resident window is put back afterwards, so
+         * the steps after this one see the residency they would have seen.
+         */
+        window.__seqCounterTruth = async (cam) => {
+            const st = window.__lucid.state;
+            const s = st.session;
+            const tri = await import('/pose/triangulation.js');
+            let triangulated = 0;
+            for (const [, gs] of s.instanceGroups) {
+                for (const g of gs) { if (g.points3d) { triangulated++; break; } }
+            }
+            const before = new Set(s.frameGroups.keys());
+            await tri.batchLoadLazyFrames(0, s.lazyLoader.nFrames);
+            let labeled = 0, instances = 0;
+            s.frameGroups.forEach((fg) => {
+                let has = false;
+                for (const inst of (fg.instances.get(cam) || [])) {
+                    const t = inst.type || 'user';
+                    if (t === 'user') { has = true; instances++; } else if (t === 'predicted') has = true;
+                }
+                for (const ul of fg.getUnlinkedInstances(cam)) {
+                    if ((ul.instance.type || 'user') === 'user') { has = true; instances++; }
+                }
+                if (has) labeled++;
+            });
+            const hydrated = s.frameGroups.size;
+            for (const [f, fg] of [...s.frameGroups]) {
+                if (before.has(f) || f === st.currentFrame) continue;
+                let user = false;
+                for (const [, insts] of fg.instances) if (insts.some(i => i.type === 'user')) { user = true; break; }
+                if (!user) s.frameGroups.delete(f);
+            }
+            s.lazyLoader.releaseWindow(0, s.lazyLoader.nFrames);
+            return { labeled, instances, triangulated, residentBefore: before.size, hydrated };
+        };
     });
 
     // ---------------- build the fixture ----------------
@@ -321,6 +380,53 @@ try {
         return { r, s: await snap(`after ${label}`) };
     };
 
+    /**
+     * The status bar must count the WHOLE project. On a lazy project
+     * `frameGroups` is a small resident window, and the counters used to walk
+     * it: "Triangulated: 5789" right after triangulating all 108,000 frames.
+     * Prompt a redraw the way any paused frame change does, then give the
+     * counters' deferred baseline rebuild (`updateFrameCounters`) time to land —
+     * that rebuild is what picks up an operation on non-resident frames.
+     */
+    const checkCounters = async (label, want) => {
+        const shownCam = await page.evaluate(async () => {
+            // This fixture has no videos, hence no views and no default camera:
+            // make one active the way clicking into its view does. The LAST
+            // camera, so a count that ignored the active camera would show.
+            const s = window.__lucid.state.session;
+            const im = window.__lucid.interactionManager;
+            if (im && s && s.cameras.length) im.lastInteractedView = s.cameras[s.cameras.length - 1].name;
+            const rendering = await import('/ui/rendering.js');
+            rendering.updateFrameCounters();
+            return window.__seqCountersShown().cam;
+        });
+        check(`${label}: status bar names a camera (${shownCam})`, !!shownCam && shownCam !== '-');
+        const truth = await page.evaluate((c) => window.__seqCounterTruth(c), shownCam);
+        // `want` pins the fixture's own expectation, so a truth that drifted
+        // (e.g. hydration losing frames) cannot quietly agree with a wrong count.
+        for (const k of Object.keys(want || {})) {
+            check(`${label}: fixture sanity — ${k} is ${want[k]}`, truth[k] === want[k], { truth: truth[k], want: want[k] });
+        }
+        const target = { labeled: truth.labeled, instances: truth.instances, triangulated: truth.triangulated };
+        let shown = null;
+        const t = Date.now();
+        for (let i = 0; i < 50; i++) {
+            shown = await page.evaluate(() => window.__seqCountersShown());
+            if (shown.labeled === target.labeled && shown.instances === target.instances &&
+                shown.triangulated === target.triangulated) break;
+            await new Promise(r => setTimeout(r, 100));
+        }
+        log(`  counters ${label}: shown ${JSON.stringify(shown)} want ${JSON.stringify(target)} ` +
+            `(resident ${truth.residentBefore}, settled in ${Date.now() - t} ms)`);
+        check(`${label}: Triangulated = frames with 3D across the WHOLE project (${target.triangulated})`,
+            shown.triangulated === target.triangulated, { shown: shown.triangulated, want: target.triangulated });
+        check(`${label}: Labeled Frames = whole-project count for ${shownCam} (${target.labeled})`,
+            shown.labeled === target.labeled, { shown: shown.labeled, want: target.labeled });
+        check(`${label}: Instances = whole-project user instances in ${shownCam} (${target.instances})`,
+            shown.instances === target.instances, { shown: shown.instances, want: target.instances });
+        return { shown, truth };
+    };
+
     const save = async (tag) => {
         step++;
         log(`\n[step ${step}] SAVE -> _seq-${tag}.slp`);
@@ -356,6 +462,24 @@ try {
     check('reopen leaves few members hydrated (placeholders)',
         s1.realMembers < s1.members / 10, { realMembers: s1.realMembers, members: s1.members });
 
+    // ---- Status-bar counters at reopen: whole project, not the resident window ----
+    const c1 = await checkCounters('after reopen', { triangulated: FRAMES });
+    check('after reopen: the counters are not the resident window (so this check can fail)',
+        c1.truth.residentBefore < FRAMES / 10 && c1.shown.labeled > c1.truth.residentBefore,
+        { resident: c1.truth.residentBefore, labeled: c1.shown.labeled });
+
+    // Start Triangulate All from a project with NO 3D, which is what it is run on
+    // in practice (per-camera .slp -> Track All -> Triangulate All), so every 3D
+    // point it reports is one it made — and so the counters have to follow a
+    // change to thousands of frames that are not resident.
+    await runOp('CLEAR all 3D (a project not yet triangulated)', async () => {
+        const s = window.__lucid.state.session;
+        let n = 0;
+        for (const [, gs] of s.instanceGroups) for (const g of gs) { if (g.points3d) { g.points3d = null; n++; } }
+        return { cleared: n };
+    });
+    await checkCounters('before Triangulate All', { triangulated: 0 });
+
     // ---- Triangulate All on the lazy project (luc3d #194 regression) ----
     const triA = await runOp('TRIANGULATE ALL', async () => {
         const tri = await import('/pose/triangulation.js');
@@ -369,6 +493,57 @@ try {
         triA.s.triResults <= 2, { triResults: triA.s.triResults });
     check('Triangulate All released its windows',
         triA.s.resident < FRAMES / 10, { resident: triA.s.resident });
+    // The reported bug: "Triangulated: <resident count>" after triangulating
+    // every frame of a lazy project.
+    const cTri = await checkCounters('after Triangulate All', { triangulated: FRAMES });
+    check('after Triangulate All: Triangulated is not the resident count',
+        cTri.shown.triangulated !== cTri.truth.residentBefore,
+        { shown: cTri.shown.triangulated, resident: cTri.truth.residentBefore });
+
+    // The counters' cost model. Their whole-project baseline is rebuilt after a
+    // redraw of the SAME frame — which every edit and operation ends in — and
+    // never because the frame changed: stepping and scrubbing must cost no
+    // whole-project work, or the fix would trade a wrong number for a slow app.
+    // A rebuild is observable as `forEachInstanceRow` walking a frame RANGE,
+    // which only the counters do.
+    const nav = await page.evaluate(async () => {
+        const st = window.__lucid.state;
+        const loader = st.session.lazyLoader;
+        const init = await import('/pose/initialization.js');
+        const rendering = await import('/ui/rendering.js');
+        const wait = (ms) => new Promise(r => setTimeout(r, ms));
+        const orig = loader.forEachInstanceRow;
+        let ranged = 0;
+        loader.forEachInstanceRow = function (fn, opts) {
+            if (opts && opts.start != null) ranged++;
+            return orig.call(this, fn, opts);
+        };
+        try {
+            await wait(1000);                    // let a rebuild already asked for land
+            ranged = 0;
+            const start = st.currentFrame;
+            const visited = [];
+            for (let i = 1; i <= 12; i++) {      // the app's own navigation entry point
+                init.navigateToFrame(start + i * 37);
+                visited.push(st.currentFrame);
+                await wait(80);
+            }
+            await wait(1200);
+            const onNavigate = ranged;
+            rendering.drawAllOverlays(st.currentFrame);   // what an edit ends in
+            await wait(1200);
+            const onRedraw = ranged - onNavigate;
+            init.navigateToFrame(start);
+            await wait(300);
+            return { visited: new Set(visited).size, onNavigate, onRedraw };
+        } finally {
+            loader.forEachInstanceRow = orig;
+        }
+    });
+    check('stepping through frames starts NO whole-project counter rebuild',
+        nav.visited === 12 && nav.onNavigate === 0, nav);
+    check('a same-frame redraw (what every edit and operation ends in) does rebuild them',
+        nav.onRedraw > 0, nav);
 
     // ---- save, reload, and confirm it PERSISTED ----
     const save1 = await save('c1');
@@ -694,6 +869,9 @@ try {
         { fim: trackRes.s.fim, expectAtLeast: Math.round(FRAMES * CAMS * 0.95) });
     check('Track All released its windows (memory bounded)',
         trackRes.s.resident < FRAMES / 10, { resident: trackRes.s.resident });
+    // Track All rebuilds the grouping of every frame, almost none of them
+    // resident; the counters must follow it.
+    await checkCounters('after Track All');
 
     const save6 = await save('c6');
     const s7 = await reopen(save6.target, 'after Track All');

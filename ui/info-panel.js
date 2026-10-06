@@ -1319,12 +1319,14 @@ function aggregateReprojectionError(frameIdx) {
  * is collapsed.
  *
  * The project-wide counters (`updateFrameCounters`) are skipped during
- * playback: they walk EVERY frame group to recount labeled / triangulated
- * frames — ~8–9 ms on a 36,000-frame project — yet don't depend on the frame
- * being shown, so recomputing them on the ~10 Hz playback updates only blocked
- * the video-frame callback long enough to drop frames (measured with
- * tests/e2e/_bench-playback.mjs). `VideoController.stopPlayback` redraws with
- * `isPlaying` false, so they are refreshed the moment playback stops.
+ * playback: they walk every RESIDENT frame group to recount labeled /
+ * triangulated frames — every frame of an eager project, ~8–9 ms at 36,000
+ * frames (a lazy project adds a cached baseline for the rest) — yet don't
+ * depend on the frame being shown, so recomputing them on the ~10 Hz playback
+ * updates only blocked the video-frame callback long enough to drop frames
+ * (measured with tests/e2e/_bench-playback.mjs). `VideoController.stopPlayback`
+ * redraws with `isPlaying` false, so they are refreshed the moment playback
+ * stops.
  *
  * @param {number|null} meanError
  */

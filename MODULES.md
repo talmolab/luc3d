@@ -3566,6 +3566,89 @@ PR #153 implementation silently matched nothing, making its prune dead code.
 
 ---
 
+### ui/frame-counters.js
+
+**Purpose.** Pure, DOM-free logic behind the status bar's **Labeled Frames**,
+**Instances** and **Triangulated** counters; `updateFrameCounters`
+(`ui/rendering.js`) is the DOM/scheduling half. Imports **no project modules**
+— it only reads the `Session` it is handed — so a Node test drives it with real
+`pose/pose-data.js` objects and a real `SioLazyLoader` (same contract as
+`ui/custom-delete-ops.js`), and it bridges into both browser-suite runners.
+
+**The counting rules** (unchanged from the old in-place loop): a frame is
+labeled in the active camera if it holds a user instance, grouped or not, or a
+GROUPED prediction — an ungrouped prediction is raw tracker output and does not
+count; **Instances** counts user instances in that camera; **Triangulated**
+counts frames with at least one `InstanceGroup` carrying `points3d`, in any
+camera.
+
+**Why it is not a walk of `session.frameGroups`.** On a lazy project that map is
+the resident window, so the old loop reported a plausible, tiny number ("5789"
+of 108,000 frames — the #194/#195 class). A count is now split in two:
+- **Resident frames** are counted LIVE from their `FrameGroup`. They are what is
+  on screen, they carry in-memory edits the store does not know about, and the
+  current frame is one of them, so an edit shows up immediately.
+- **Every other frame** comes from a per-frame **baseline** built without
+  hydrating anything: Triangulated straight off `session.instanceGroups` (never
+  windowed — it also catches a frame with 3D but no 2D `FrameGroup`, which the
+  old loop missed on any project); Labeled / Instances from the columnar store
+  via `lazyLoader.forEachInstanceRow({camera, start, end})` plus
+  `instanceGroups` membership, **mirroring `finalizeLazyFrameGroup`**
+  (`pose/triangulation.js`): a row whose in-frame offset is some member's
+  `_rawInstIndex` is that member, with the MEMBER's type; a member with no
+  `_rawInstIndex`, or one past the frame's last row, is dropped; every other row
+  is ungrouped, with the store's type. That is what makes the baseline "what
+  the frame would count as if it were visited now", and
+  `tests/test-frame-counters.mjs` checks it against the real hydration path.
+
+The baseline is per-FRAME, not a total, so resident frames can be taken back
+out of it: `total − Σbaseline(resident) + Σlive(resident)`. That is
+O(resident) per call and exact whatever the resident set is — scrubbing,
+eviction and sweeps' window release need no rebuild. Only a change to frames
+that are NOT resident (a bulk operation) does.
+
+**Exports.**
+- `residentFrameUserCount(fg, cam)` -> `-1` if the frame is not labeled in
+  `cam`, else its user-instance count (one number, so the per-frame loop
+  allocates nothing).
+- `groupsHaveTriangulation(groups)` -> boolean.
+- `createFrameCounterBaselineBuilder(session, cam, {tri}?)` -> `{step(budget),
+  result}` — the baseline as a RESUMABLE build: ~100 ms at 108,000 frames x 8
+  cameras, nearly all memory latency on each frame's groups (no reordering
+  avoids it), so the caller spreads it over short tasks. `step` does about
+  `budget` frames / `instanceGroups` entries and returns true when done.
+  `result` = `{tri: {byFrame: Uint8Array, total}, cams: Map<cam, {byFrame:
+  Int32Array, labeledTotal, usersTotal}>}`; the camera half is absent when the
+  project is not lazy or its loader cannot enumerate rows (the worker-backed
+  analysis-`.h5` loader — every frame with data is then resident). `tri: false`
+  skips the 3D half. The session is read live between steps; a change mid-build
+  can leave the result stale, and the caller rebuilds after changes anyway.
+- `computeFrameCounterBaseline(session, cam)` / `computeLazyCameraBaseline(session, cam)`
+  — the same, run to completion (whole baseline / camera half only).
+- `countFrameCounters(session, cam, baseline)` -> `{labeled, instances,
+  triangulated}`. With no baseline (or none for `cam`), Labeled / Instances are
+  the old resident-only count.
+- `nonResidentCameraCounts(session, half)` -> `{labeled, instances}` — the part
+  of a camera half that `countFrameCounters` actually uses. Two builds that
+  differ here saw a change to non-resident frames (a bulk operation), which
+  `updateFrameCounters` takes as its cue to drop the other views' halves.
+
+**Imports from project modules.** None.
+
+**Imported by.** `ui/rendering.js`; bridged as `window.__FrameCounters` by
+`tests/test-runner.html` and loaded as globals by `tests/run-node.js`.
+
+**Tests.** `tests/test-frame-counters.mjs` (lazy: counts equal a fully-hydrated
+count through the real `batchLoadLazyFrames`, with negative controls; residency
+changes need no rebuild; a bulk change does; sliced == one-shot build),
+`tests/test-bottom-bar.js` (the rules, on eager sessions, against this module
+rather than a copy), and `tests/e2e/sequence-lazy-workflow.mjs`'s
+`checkCounters` (the real status bar on a lazily reopened project: at reopen,
+around Triangulate All and after Track All; confirmed to fail on the pre-fix
+build, which showed "Triangulated: 3" with 3 frames resident).
+
+---
+
 ### ui/export-modals.js
 
 **Purpose.** Modal dialogs for bulk-triangulation and export (Group-by-Track,
@@ -4147,7 +4230,8 @@ Three things deliberately stay outside the gate:
   `updateInfoPanel`'s hidden branch calls `updateFrameInfo` for the same
   reason. Only the panel's own DOM is skipped. `updateStatusBarForFrame` does
   **not** call `updateFrameCounters()` while `state.isPlaying`: those counters
-  walk every frame group (~8–9 ms at 36,000 frames), are independent of the
+  walk every resident frame group (every frame of an eager project, ~8–9 ms at
+  36,000 frames; a lazy project adds a cached baseline), are independent of the
   current frame, and recomputing them on the 10 Hz playback updates stalled the
   video-frame callback enough to drop frames
   (`tests/e2e/_bench-playback.mjs`). `VideoController.stopPlayback` redraws
@@ -5845,7 +5929,45 @@ data sources. Plus visibility-toggle helpers and frame counter updates.
   permanently deny the panel numbers it could never recompute. The gate lives
   one level down, in `updateFrameInfo` itself, which is where the panel
   *consumes* `state.triangulationResults`.
-- `updateFrameCounters()` — updates status-bar frame counters.
+- `updateFrameCounters()` — the status bar's Camera / Labeled Frames /
+  Instances / Triangulated, over the **WHOLE project**, lazy ones included.
+  It used to walk `session.frameGroups`, which on a lazy project is the
+  resident window — after Track All + Triangulate All on a 108,000-frame,
+  8-camera project it read "Labeled Frames: 5789" and "Triangulated: 5789"
+  (the #194/#195 resident-only bug class). The counting rules and the
+  whole-project baseline live in `ui/frame-counters.js`; this function owns
+  WHICH camera (`interactionManager.lastInteractedView`, else the first view),
+  WHEN to (re)build the baseline, and the DOM. Per call it is
+  O(resident frames) — `countFrameCounters` counts resident frames live and
+  takes everything else from the cached baseline — the same work the old loop
+  did. Still skipped during playback (`updateStatusBarForFrame`,
+  `ui/info-panel.js`).
+
+  The baseline is cached per session in a `WeakMap` (so a closed project and
+  its store are never retained by the status bar), with one camera half per
+  view visited. Building it is ~100 ms at 108,000 frames x 8 cameras, nearly all
+  memory latency on each frame's groups, so:
+  - **Synchronous** only when there is none: the first update of a session
+    (or after its `lazyLoader` changes) and the first time each view becomes
+    active (`computeLazyCameraBaseline`) — once per view per session.
+  - Otherwise **rebuilt in the background** (`runCounterRebuild`), 250 ms after
+    the last update that asked, in 8,192-frame slices (≤ ~8 ms each) via
+    `createFrameCounterBaselineBuilder`. An update asks when it redraws the
+    SAME frame as the previous one (or a rebuild is still pending, e.g. one
+    abandoned to playback): every data change — an edit, Track All, Triangulate
+    All, a session-wide delete — redraws the current frame, so the counts follow
+    all of them with no per-operation invalidation (Track All does not even
+    mark the project dirty), while a redraw on a NEW frame is navigation and
+    costs no whole-project work. A rebuild in flight sets `again` instead of
+    restarting, so a stream of updates cannot starve it. The other views'
+    halves are carried over — they can only lag a bulk operation — UNLESS the
+    rebuild shows this view's non-resident part moved
+    (`nonResidentCameraCounts`), which means one just happened: then they are
+    dropped and each is recomputed exactly on its next activation. An edit to
+    the current frame moves only resident frames, so annotating keeps view
+    switches free.
+  - An edit to the current frame shows immediately — resident frames are always
+    counted live.
 
   **Plane placements draw last.** After `drawFrameOverlays` returns for a view,
   the loop calls `drawPlaneOverlays(view)` (`ui/plane-definition.js`) on the
@@ -5877,6 +5999,9 @@ data sources. Plus visibility-toggle helpers and frame counter updates.
   `trackingExcluded` so views excluded in the Tracking Wizard render grey).
 - `./identity-assignment.js` — `editGroupState`, `finishEditGroup`.
 - `./info-panel.js` — `updateFrameInfo`.
+- `./frame-counters.js` — `computeFrameCounterBaseline`,
+  `computeLazyCameraBaseline`, `createFrameCounterBaselineBuilder`,
+  `countFrameCounters`.
 - `./plane-definition.js` — `drawPlaneOverlays`, `applyPlaneModeToolbarLock`.
   **Circular** (that module imports `drawAllOverlays` back); safe because both
   call sites are inside function bodies.
@@ -11360,7 +11485,12 @@ from each camera's columnar store (`framesData.instance_id_start/end` +
 `instancesData.track`) — zero frame/instance materialization, independent of
 what's resident. Used by `Session.propagateTracksToIdentities`
 (`pose/pose-data.js`) so an unvisited frame's track still gets stamped to
-identity. `remapTracksFromIdentity(newTrackNames, remapFn)` — the write-side
+identity. An optional second argument `{camera, start, end}` narrows the walk
+to one camera and/or a frame range (`[start, end)`, visited in ascending frame
+order via the row map instead of its iteration order); added for the status
+bar's whole-project counters (`ui/frame-counters.js`), which read one camera
+and spread the walk over short tasks. Without it the walk is exactly as before.
+`remapTracksFromIdentity(newTrackNames, remapFn)` — the write-side
 companion, used by `Session.propagateIdentitiesToTracks`: rebuilds each
 underlying `labels.tracks` (shared by reference with its
 `_lazyDataStore.tracks` — mutated in place, so both stay in sync; a shared

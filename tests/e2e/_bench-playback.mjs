@@ -825,13 +825,12 @@ try {
             window.__lucid.videoController.stopPlayback();
             // The status bar's project-wide counters are not recomputed during
             // playback; stopPlayback's final redraw must leave them correct.
+            // Triangulated = frames with 3D over the WHOLE project
+            // (`instanceGroups`), not the resident `frameGroups` window.
             {
                 const s = window.__lucid.state.session;
                 let tri = 0;
-                s.frameGroups.forEach((fg, fi) => {
-                    const gs = s.instanceGroups.get(fi) || [];
-                    if (gs.some(g => g.points3d)) tri++;
-                });
+                for (const [, gs] of s.instanceGroups) if (gs.some(g => g.points3d)) tri++;
                 const el = document.getElementById('statusTriangulatedFrames');
                 R.statusBar = { expectedTriangulated: tri, shown: el ? el.textContent : null };
             }
