@@ -179,9 +179,9 @@ try {
                         const x = inst.getX(0);
                         if (x > 900) {
                             out.trackless++;
-                            // Eager hydration says `null`, lazy hydration passes the
-                            // store's `-1` through — both mean no track.
-                            if (inst.trackIdx != null && inst.trackIdx >= 0) {
+                            // `null` on both paths: lazy hydration maps the store's
+                            // `-1` to it (tests/e2e/lazy-trackless-null.mjs).
+                            if (inst.trackIdx !== null) {
                                 out.bad.push(cam + '@' + f + ': trackless got ' + inst.trackIdx);
                             }
                             continue;
