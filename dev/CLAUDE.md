@@ -1447,7 +1447,8 @@ as stuck:
 `user-select: none` is now kept for one thing only: a surface whose job is to be
 dragged or repeatedly clicked, where a stray selection is debris — the menu bar,
 the toolbars, the view strip, the video overlays, the ✓/✗ toggle cells in the
-SLP chooser, and **every modal drag handle** (dragging a dialog by its title
+SLP chooser, the info panel's **tab bar** (a horizontal scroller the user drags;
+see MODULES.md `setupPanelTabs`), and **every modal drag handle** (dragging a dialog by its title
 would otherwise smear a selection across it). Covered by
 `tests/e2e/copy-panel-text.mjs`, which drives the REAL clipboard — Playwright's
 `keyboard.press` dispatches the key without running Chromium's edit command, so

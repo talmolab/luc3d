@@ -83,7 +83,9 @@ the old `app.js` entry point.
   panel renders: the listeners are delegated, so they must be in place before
   the first `[data-infotip]` element exists.
 - `../ui/info-panel.js` — `setupPanelTabs`, `setupSkeletonEditing`,
-  `updateInfoPanel`.
+  `setupVideosTab` (the Videos tab's Load/Remove buttons, wired once here
+  because `updateInfoPanel`'s no-session early return used to leave them dead on
+  a fresh app — luc3d #216), `updateInfoPanel`.
 - `../ui/plane-definition.js` — `setupPlaneDefinition` (called from `init()`
   right after `setupSkeletonEditing`, and **before** `paneManager.init` — its
   drop listeners are delegated on the `#videoDock` container, which is static
@@ -3980,18 +3982,79 @@ the removed Tracks-menu "Assign Track" / "Assign Identity" submenus; the reusabl
 track/identity edit never regrows the bottom timeline panel — it rebuilds +
 repaints at the user's current height instead of growing to fit all rows.
 
-**Responsive panel tabs.** `setupPanelTabs` makes the tab bar (Instances,
-Visibility, Videos, Cameras, Skeleton, Session) width-aware. Each tab sizes to
-its full name (never ellipsis-truncated); a `ResizeObserver` on `.panel-tabs`
-runs `layoutPanelTabs()`, which greedily keeps the leading tabs whose names fit
-the panel's current width and demotes the rest into an auto-built **"More ▾"**
-dropdown (`.panel-tab-more*` in styles.css). Widening the panel promotes tabs
-back into the bar one at a time. At least the first tab always stays in the bar.
-The dropdown closes on outside-click or `Esc`; the More button shows the active
-highlight when the selected tab currently lives inside it.
+**The panel tab bar is ONE horizontal scroller.** `setupPanelTabs` makes
+`.panel-tabs` scroll sideways with every tab (Instances, Visibility, ID
+Switches, Videos, Cameras, Skeleton, Session) always inside it, in markup
+order. Each tab still sizes to its full name, never truncated.
+
+This replaced a **"More ▾" overflow dropdown** that demoted whichever tabs did
+not fit. At the default 300px panel width that was five of seven, so the
+panel's own name for the thing the user was looking at was usually behind a
+control they had to open first — and WHICH tabs were behind it moved as the
+panel was resized, so the bar never looked the same twice. `layoutPanelTabs`
+and every `.panel-tab-more*` rule are gone; do not bring them back.
+
+Five things about it:
+- **Three ways to scroll it, and a vertical wheel is one of them.** A trackpad
+  over a ~31px strip gives a two-finger VERTICAL swipe, so the `wheel` handler
+  takes whichever axis the gesture is actually on and applies it to
+  `scrollLeft`. That steals nothing from the app's "one scroller per panel"
+  rule: the bar sits OUTSIDE `.panel-tab-content`, which is the panel's one
+  vertical scroller, so a vertical wheel here moved nothing before. It
+  `preventDefault()`s only when the bar actually moved, so a swipe past either
+  end is still the page's.
+- **Click-and-drag has a 4px threshold, and a real drag SUPPRESSES the click.**
+  A row of buttons that can be dragged will otherwise switch tabs every time
+  the user flicks it — the pointerup that ends a drag still produces a click on
+  whatever tab it landed on. The suppression is a capture-phase `click`
+  listener on the bar (capture, so it runs before the tab's own handler rather
+  than after it has already switched), and it is cleared on the next
+  `pointerdown` so a drag that never produced a click cannot eat the press
+  after it. Pointer capture is taken only once the threshold is crossed:
+  capturing on every press re-targets the plain click that follows one. Touch
+  pointers are skipped outright — `overflow-x: auto` + `touch-action: pan-x`
+  already give them native momentum panning, and driving `scrollLeft` on top
+  would move the bar twice per gesture.
+- **Selecting a tab scrolls it into view**, by hand rather than with
+  `scrollIntoView`, which walks every scrollable ancestor and could scroll the
+  app's layout out from under it. This is what keeps `openIdSwitchPanel`
+  (`ui/id-switch-modal.js`, which just `.click()`s the button) from leaving the
+  active tab off-screen — an active tab nobody can see reads as no tab being
+  active. `.panel-tabs` is `position: relative` precisely so each tab's
+  `offsetLeft` is measured in the scroller's own space.
+- **The edge fades are the only affordance**, toggled by the `scroll-left` /
+  `scroll-right` classes and drawn with `mask-image` (painted in the element's
+  own box, so it stays pinned to the edges while the tabs move underneath, and
+  costs no extra element — a gradient overlay inside a scroller would scroll
+  away). The scrollbar is suppressed: the strip is ~31px tall and a horizontal
+  bar under it would sit on the active tab's 2px underline. A `ResizeObserver`
+  recomputes them, since resizing the panel changes WHETHER it overflows.
+- **`user-select: none` on the bar** — the documented exception for "a surface
+  whose job is to be dragged". Without it a drag smears a selection across the
+  tab names.
+Covered by `tests/e2e/panel-tabs-scroller.mjs`.
+
+**The Videos tab's two buttons are wired at SETUP, not per-session.**
+`setupVideosTab()` (called once from `pose/initialization.js`) installs the
+`#btnLoadVideos` → `handleLoadVideos` and `#btnRemoveVideo` → `removeVideoFile`
+handlers. They used to be assigned inside `updateInfoPanel`, which returns early
+when `state.session` is null (and while the panel is collapsed) — so on a
+freshly-opened app, exactly when you reach for **Load Videos**, the button
+carried no handler at all and clicking it did nothing, while `File ▸ Load
+Videos…` kept working because *that* is wired at setup (luc3d #216). Nothing in
+the wiring reads `state`, so it has no business in a per-session rebuild.
+Two details ride along:
+- The button is **`Load Videos`**, named after the menu item it duplicates, and
+  **`Remove Video`** (singular — it acts on the one selected row).
+- The selected row is held by **identity** (`selectedVideoFile`), not by row
+  index. Both buttons rebuild the table, and an index into the OLD table names a
+  different video in the new one; `populateVideosTable` clears the selection,
+  disables `Remove Video` and resets the detail block on every rebuild, so the
+  button can never act on a row that is no longer on screen.
+Covered by `tests/e2e/videos-panel-buttons.mjs`.
 
 **Key exports.**
-- Tab control: `setupPanelTabs`.
+- Tab control: `setupPanelTabs`, `setupVideosTab`.
 - Tables: `populateVideosTable`, `populateCamerasTable`,
   `populateSkeletonTable`, `populateSessionAssignTable`,
   `populateUnassignedVideos`.
@@ -6430,8 +6493,8 @@ plane.
 - `enterPlaneMode()` / `exitPlaneMode()` / `togglePlaneMode()` /
   `isPlaneModeActive()` — show/hide the `#planeModeBar` banner and swap the
   info panel's `.panel-tabs` + `.panel-tab-content` for `#planePanel`. The swap
-  only toggles inline `display`, so `setupPanelTabs`' own layout state is
-  untouched and exiting restores exactly the previously-active tab. Exiting also
+  only toggles inline `display`, so the tab bar's scroll position and active
+  tab are untouched and exiting restores exactly the previously-active tab. Exiting also
   clears the plane selection/hover, and unwinds both things entered from inside
   the mode that lock this panel: `exitOriginMode()` and `closeAngleModal()`.
 - `handlePlaneDrop(planeId, viewName, clientX, clientY)` — the drop listener is
@@ -7901,6 +7964,24 @@ existing pane instead), so no click sequence can produce a duplicate pane;
 duplicates come only from the drag/drop docking path and `addAllViewsAsGrid`.
 See **Single-view ("solo") mode** under `ui/ui-wiring.js`.
 
+**`removeVideoPanel(viewName)` — the counterpart to `addVideoPanel`.** Closes
+EVERY pane showing that view and returns how many it closed. Used by
+`removeVideoFile` (`loading/session-loader.js`) so the Videos tab's **Remove
+Video** takes the whole panel out of the dock instead of leaving an empty,
+still-titled one behind (luc3d #216). Three things about it:
+- It goes through `panel.api.close()`, exactly as the pane's own × and
+  `clearAll` do — `onDidRemovePanel` is what decrements `dockedViews` and clears
+  the strip's in-dock dot, so tearing the element out by hand would leave both
+  claiming the view is still docked.
+- **Every** pane, not the first: a view can be docked more than once (a dropped
+  multi-selection, or an `addAllViewsAsGrid` restore), and a survivor would go
+  on rendering a view that no longer exists.
+- Panes are matched through `panelRenderers`, never by parsing the panel id —
+  the id is `video-<name>-<counter>` and a view name may itself contain dashes.
+It also deletes the `dockedViews` entry outright afterwards, so a view left in
+the map with no pane (bookkeeping that got out of step) cannot block a later
+re-add.
+
 **`syncDockedViews()` — `fromJSON` builds panels behind `addVideoPanel`'s back.**
 `paneManager.dockedViews` (viewName → pane count) is maintained by
 `addVideoPanel` / `addAllViewsAsGrid` / `onDidRemovePanel`, and it drives both
@@ -8026,8 +8107,9 @@ attached to the result as `model` and its note shown under "About these flags";
 as "Image check speed on this machine: …". Passes `inFlight: embedder.inFlight`.
 
 **User-facing features.** The **ID Switches** tab (`#tabIdSwitches` /
-`#idSwitchPanel` in `index.html`, third tab; at the default panel width it sits in
-"More ▾"). Results are stored per session on `session._idSwitch` (`{results:
+`#idSwitchPanel` in `index.html`, third tab; at the default panel width it is
+scrolled off the right of the tab bar, and `openIdSwitchPanel` scrolls it back
+into view). Results are stored per session on `session._idSwitch` (`{results:
 {size?, image?}, reviewed: Set, showRepeats, current}`), so they survive
 closing/reopening the tab and switching sessions — and are SAVED in the `.slp`
 (`metadata.lucid.idSwitchReview`, see `ui/id-switch-review.js`; ticking a row,
@@ -9596,9 +9678,28 @@ camera highlight all follow from that one `setActive()` via
 panels behind `addVideoPanel`'s back, so `paneManager.syncDockedViews()` runs
 first to re-derive the docked bookkeeping.
 
+**The cached layout is VALIDATED at the point of use, not invalidated at each
+mutation.** `savedGridLayout` is a snapshot taken when `v` was pressed, and
+`state.views` can change while solo — removing a video (`removeVideoFile`),
+loading one, or switching sessions, which replaces the list wholesale. `g` then
+`fromJSON`'d the snapshot and rebuilt a pane for a view that no longer exists:
+an empty pane wearing the removed camera's name, which is what a user reads as
+"the video went blank" (luc3d #216). A view ADDED while solo is the same mistake
+mirrored — `g` would restore a grid missing it. `savedGridLayoutMatchesViews()`
+compares the snapshot's panel set against the live view list as a SET (both
+directions), and `setGridMode` drops the layout when it disagrees, falling back
+to a fresh `addAllViewsAsGrid()`. Validating at the one reader rather than
+invalidating at every writer is deliberate: a list of invalidation call sites is
+a list something can be left off, and this cache has exactly one reader. It
+reads `params.viewName` off the SERIALIZED panel records — the `params` every
+pane is added with, part of dockview's documented `toJSON` shape, not one of the
+private internals `ui/overlay-export-modal.js` depends on.
+
 Covered end to end by `tests/e2e/solo-view-navigation.mjs` (real keyboard/mouse
-events against the real dock and strip); `tests/test-view-mode.js` only
-simulates the index arithmetic in isolation.
+events against the real dock and strip) and `tests/e2e/videos-panel-buttons.mjs`
+§7 (the stale snapshot, the positional drift of `singleViewIndex`, and removing
+the solo'd view itself);
+`tests/test-view-mode.js` only simulates the index arithmetic in isolation.
 
 **Visibility panel — the global/session split.** `saveVisSettings` /
 `restoreVisSettings` cache the panel's **global appearance preferences** (the
@@ -10547,9 +10648,34 @@ filesystem enumeration, decoder rebuild.
   Applied in the parent-directory pick (both FSA + webkitdirectory branches),
   the "Select Session Folder" scan, and the SLP-import video filter so the
   calibration video never loads as a session view.
-- View/grid: `createViewForVideoFile`, `updateGridLayout`,
+- View/grid: `createViewForVideoFile`, `removeVideoFile`, `updateGridLayout`,
   `createVideoPromptCell`, `fitCanvasesToCells`, `cellResizeObserver`,
   `rebuildVideoController`, `updateTotalFrames`.
+  `removeVideoFile(videoFile)` is `createViewForVideoFile`'s inverse and the
+  whole of the Videos tab's **Remove Video** (luc3d #216): it closes the dock
+  pane (`paneManager.removeVideoPanel`), drops the view from `state.views` —
+  which is what takes the view-strip thumbnail with it — splices
+  `state.videoFiles`, **remaps every session's `videoFileIndices`** across that
+  splice (they are indices INTO `state.videoFiles`, so a stale one re-points a
+  session at its neighbour's video on the next switch), `close()`s the decoder
+  and removes it from `state.decoderPool`/`_decoderPoolCold`, then resettles
+  everything derived from the view list. The old handler removed only the
+  view's `.video-cell` ELEMENT, leaving the pane docked and titled with an empty
+  body plus a live thumbnail. The session's CAMERA is deliberately kept — it
+  carries the calibration and the annotations; "no video loaded for this camera"
+  is an ordinary state that `recomputeUploadedCameras` already models. Accepts a
+  `{name, assignedCamera}` descriptor too, since the Videos table synthesises
+  rows from `state.views` when `state.videoFiles` is empty. Covered by
+  `tests/e2e/videos-panel-buttons.mjs`.
+  **It re-seats `state.singleViewIndex` BY NAME, not by clamping.** That index
+  is a position in `state.views`, so removing a video that sits BEFORE the
+  solo'd one slides the next camera into its slot — a clamp only catches a
+  dangling index, so solo silently showed a different view from the one the
+  user put it on. The solo'd view's name is noted before the splice and the
+  index re-derived from it; removing the solo'd view itself has no right
+  answer, so that case falls back to the clamp AND re-renders the dock
+  (`updateVideoGridDisplay`), since the pane just closed was the only one and
+  single-view mode would otherwise be left showing nothing.
 - Session-mode UI: `showSessionModeModal`, `showMissingFilesPopup`.
 - Filesystem: `enumerateDirectoryHandle`.
 - Misc: `resolveImportTrackIdx` — re-exported from
@@ -11253,6 +11379,18 @@ the end of `switchSource()`, mirroring `init()`'s setup. Covered by
 `tests/e2e/switchsource-mediabunny-refresh.mjs` (proves it via decoded pixel
 content, not just the backend's `filename`, since the fixture videos happen
 to share a frame count).
+
+**The `<video>` `error` listener reads the ELEMENT it was attached to, not
+`this._videoEl`.** Both `init()` and `switchSource()` register a `once: true`
+`error` listener that rejects their metadata promise. That listener OUTLIVES a
+successful load, and `close()` ends with `src = ""` + `load()` — which fires one
+last `error` event, asynchronously, after `close()` has already nulled
+`this._videoEl`. Reading the code through `self._videoEl` therefore threw
+`Cannot read properties of null (reading 'error')` out of an event handler on
+every decoder that is CLOSED rather than garbage-collected. Latent until
+`removeVideoFile` (luc3d #216) made closing a decoder an ordinary user action;
+the cold-pool eviction path hit it too, just invisibly. Both sites now capture
+`var el = this._videoEl` at registration and read `el.error`.
 
 **A cached HTML5 fallback permanently shadowed mediabunny for that frame
 index (issue #115 followup, `eric/seeking-regression`).** `getFrame()`

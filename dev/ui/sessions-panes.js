@@ -28,21 +28,21 @@ import {
     state,
     videoController, interactionManager, viewport3d, timeline, paneManager,
     setVideoController, setPaneManager,
-} from './app-state.js?v=ab208f091fc4';
-import { FrameGroup, UnlinkedInstance, Camera, someValidPoint3d } from '../pose/pose-data.js?v=ab208f091fc4';
+} from './app-state.js?v=97a671a860ac';
+import { FrameGroup, UnlinkedInstance, Camera, someValidPoint3d } from '../pose/pose-data.js?v=97a671a860ac';
 import {
     triangulateAndReproject, storeReprojectedInstances, getInstanceGroupsForFrame,
     sessionHasCalibration, resolveTriangulationMethod,
-} from '../pose/triangulation.js?v=ab208f091fc4';
+} from '../pose/triangulation.js?v=97a671a860ac';
 import {
     cellResizeObserver,
     createViewForVideoFile,
     rebuildVideoController,
     fitCanvasesToCells,
     updateTotalFrames,
-} from '../loading/session-loader.js?v=ab208f091fc4';
-import { OnDemandVideoDecoder } from '../loading/video.js?v=ab208f091fc4';
-import { setStatus, showLoading, hideLoading, quickSave, markDirty } from '../import-export/save-load.js?v=ab208f091fc4';
+} from '../loading/session-loader.js?v=97a671a860ac';
+import { OnDemandVideoDecoder } from '../loading/video.js?v=97a671a860ac';
+import { setStatus, showLoading, hideLoading, quickSave, markDirty } from '../import-export/save-load.js?v=97a671a860ac';
 import {
     CONTRAST_MIN, CONTRAST_MAX, clampContrast,
     BRIGHTNESS_MIN, BRIGHTNESS_MAX, clampBrightness,
@@ -50,26 +50,26 @@ import {
     buildVideoFilter, getSessionContrast, setSessionContrast,
     getSessionBrightness, setSessionBrightness,
     getSessionRotation, setSessionRotation,
-} from './video-filters.js?v=ab208f091fc4';
+} from './video-filters.js?v=97a671a860ac';
 // `clampRotation` moved to the dependency-free `video-filters.js` so the test
 // runners can bridge it; re-exported here because `ui/ui-wiring.js` (and the
 // module map) have always imported it from this module.
 export { clampRotation };
-import { drawAllOverlays, setReprojErrorVisible } from './rendering.js?v=ab208f091fc4';
+import { drawAllOverlays, setReprojErrorVisible } from './rendering.js?v=97a671a860ac';
 // `ui/ui-wiring.js` imports this module, so this is a cycle — hoist-safe
 // because the only read is inside the view strip's click handler, which cannot
 // run during module evaluation.
-import { setSoloView } from './ui-wiring.js?v=ab208f091fc4';
-import { updateInfoPanel, populateTimelineVisibility } from './info-panel.js?v=ab208f091fc4';
-import { refreshIdSwitchPanel } from './id-switch-modal.js?v=ab208f091fc4';
+import { setSoloView } from './ui-wiring.js?v=97a671a860ac';
+import { updateInfoPanel, populateTimelineVisibility } from './info-panel.js?v=97a671a860ac';
+import { refreshIdSwitchPanel } from './id-switch-modal.js?v=97a671a860ac';
 // `autoAssignState` is a mutable binding tracked via ESM live binding.
 // The cycle (identity-assignment imports panelRenderers from here) is
 // hoist-safe because both reads are inside function bodies.
-import { autoAssignState } from './identity-assignment.js?v=ab208f091fc4';
+import { autoAssignState } from './identity-assignment.js?v=97a671a860ac';
 
 // Pass 3i-3: setup3DViewport moved to pose/initialization.js.
-import { setup3DViewport } from '../pose/initialization.js?v=ab208f091fc4';
-import { getLoadingProgressModal } from './loading-progress-modal.js?v=ab208f091fc4';
+import { setup3DViewport } from '../pose/initialization.js?v=97a671a860ac';
+import { getLoadingProgressModal } from './loading-progress-modal.js?v=97a671a860ac';
 
 // ============================================
 // Dockview Pane Manager
@@ -462,6 +462,40 @@ const _paneManagerImpl = {
                 });
             }
         }
+    },
+
+    /**
+     * Close EVERY pane showing `viewName`, so removing a video takes its panel
+     * out of the dock instead of leaving an empty one behind (luc3d #216).
+     *
+     * The panel's own × and `clearAll` both go through `panel.api.close()`, and
+     * so does this — `onDidRemovePanel` is what decrements `dockedViews` and
+     * clears the strip's in-dock dot, so closing the panel by hand (removing
+     * its element, say) would leave both of those claiming the view is still
+     * docked. Every pane, not the first: a view can be docked more than once
+     * (a dropped multi-selection, or a grid-layout restore), and a survivor
+     * would still be rendering a view that no longer exists.
+     *
+     * Resolves panes through `panelRenderers` rather than the panel id, since
+     * the id embeds a counter (`video-<name>-<n>`) and a view name may itself
+     * contain dashes.
+     */
+    removeVideoPanel(viewName) {
+        if (!viewName || !this.api) return 0;
+        var panels = Array.from(this.api.panels);
+        var closed = 0;
+        for (var i = 0; i < panels.length; i++) {
+            var renderer = panelRenderers.get(panels[i].id);
+            if (!renderer || renderer.getViewName() !== viewName) continue;
+            panels[i].api.close();
+            closed++;
+        }
+        // `onDidRemovePanel` keeps the count, but only for panes that existed.
+        // A view docked in `dockedViews` with no pane left (a restore that got
+        // out of step) would otherwise keep blocking a later re-add.
+        this.dockedViews.delete(viewName);
+        updateStripItemStatus(viewName, false);
+        return closed;
     },
 
     clearAll() {

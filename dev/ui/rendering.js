@@ -5,23 +5,23 @@
 // - setReprojErrorVisible: toggles reprojection-error column visibility in info panels.
 // - updateFrameCounters: status-bar frame counters (labeled / triangulated / instances).
 
-import { state, interactionManager, timeline } from './app-state.js?v=ab208f091fc4';
-import { points3dNodeCount } from '../pose/pose-data.js?v=ab208f091fc4';
+import { state, interactionManager, timeline } from './app-state.js?v=97a671a860ac';
+import { points3dNodeCount } from '../pose/pose-data.js?v=97a671a860ac';
 import {
     ensureLazyFrameData, getInstanceGroupsForFrame,
     triangulateAndReproject, storeReprojectedInstances,
-} from '../pose/triangulation.js?v=ab208f091fc4';
-import { drawFrameOverlays } from './overlays.js?v=ab208f091fc4';
-import { syncViewLegends } from './view-legend.js?v=ab208f091fc4';
-import { isCameraTracked } from './settings.js?v=ab208f091fc4';
+} from '../pose/triangulation.js?v=97a671a860ac';
+import { drawFrameOverlays } from './overlays.js?v=97a671a860ac';
+import { syncViewLegends } from './view-legend.js?v=97a671a860ac';
+import { isCameraTracked } from './settings.js?v=97a671a860ac';
 // Plane placements draw on the same overlay canvas, so they must run AFTER
 // drawFrameOverlays (which opens with a clearRect). Circular import — safe
 // because the call site is inside drawAllOverlays' body.
-import { drawPlaneOverlays, applyPlaneModeToolbarLock } from './plane-definition.js?v=ab208f091fc4';
+import { drawPlaneOverlays, applyPlaneModeToolbarLock } from './plane-definition.js?v=97a671a860ac';
 
 // Pass 3f: editGroupState + finishEditGroup moved to ui/identity-assignment.js.
-import { editGroupState, finishEditGroup } from './identity-assignment.js?v=ab208f091fc4';
-import { updateFrameInfo } from './info-panel.js?v=ab208f091fc4';
+import { editGroupState, finishEditGroup } from './identity-assignment.js?v=97a671a860ac';
+import { updateFrameInfo } from './info-panel.js?v=97a671a860ac';
 
 // ============================================
 // Reproj/Error visibility

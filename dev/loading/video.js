@@ -8,8 +8,8 @@
  * Dependencies: mp4box.all.min.js (MP4Box)
  */
 
-import { shouldIgnoreShortcut } from '../ui/keyboard-target.js?v=ab208f091fc4';
-import { diagnoseUnplayableVideo } from './video-codec-diagnosis.js?v=ab208f091fc4';
+import { shouldIgnoreShortcut } from '../ui/keyboard-target.js?v=97a671a860ac';
+import { diagnoseUnplayableVideo } from './video-codec-diagnosis.js?v=97a671a860ac';
 
 // ---------------------------------------------------------------------------
 // Logging helper
@@ -129,15 +129,22 @@ export class OnDemandVideoDecoder {
 
         // Set up event listeners BEFORE setting src to avoid race condition.
         // Wait for 'canplay' (not just 'loadedmetadata') so the first frame is available to draw.
-        var self = this;
+        // Read the error off the ELEMENT this listener was attached to, not
+        // off `self._videoEl`. `close()` clears `src` and calls `load()`, which
+        // fires a last `error` event — asynchronously, by which time `close()`
+        // has already nulled `self._videoEl`, so reading through `self` threw
+        // `Cannot read properties of null` out of an event handler. The
+        // `once: true` listener outlives a successful load, so every decoder
+        // that is closed rather than garbage-collected hits this.
+        var el = this._videoEl;
         var metadataPromise = new Promise(function (resolve, reject) {
-            if (self._videoEl.readyState >= 3) {
+            if (el.readyState >= 3) {
                 resolve();
                 return;
             }
-            self._videoEl.addEventListener("canplay", function () { resolve(); }, { once: true });
-            self._videoEl.addEventListener("error", function () {
-                var err = self._videoEl.error;
+            el.addEventListener("canplay", function () { resolve(); }, { once: true });
+            el.addEventListener("error", function () {
+                var err = el.error;
                 var msg = err ? ("Video error code " + err.code + ": " + (err.message || "unknown")) : "Browser could not load video";
                 reject(new Error(msg));
             }, { once: true });
@@ -1252,12 +1259,14 @@ export class OnDemandVideoDecoder {
             URL.revokeObjectURL(this._videoEl.src);
         }
 
-        // Reuse existing video element — just change src
-        var self = this;
+        // Reuse existing video element — just change src. Captured locally for
+        // the same reason as in `init()`: `close()` nulls `this._videoEl` while
+        // a last `error` event is still in flight.
+        var el = this._videoEl;
         var metadataPromise = new Promise(function (resolve, reject) {
-            self._videoEl.addEventListener("canplay", function () { resolve(); }, { once: true });
-            self._videoEl.addEventListener("error", function () {
-                var err = self._videoEl.error;
+            el.addEventListener("canplay", function () { resolve(); }, { once: true });
+            el.addEventListener("error", function () {
+                var err = el.error;
                 reject(new Error(err ? "Video error " + err.code : "Video load failed"));
             }, { once: true });
         });

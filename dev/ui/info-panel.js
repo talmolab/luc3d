@@ -5,40 +5,40 @@
 
 import {
     Skeleton, Camera, Session,
-} from '../pose/pose-data.js?v=ab208f091fc4';
-import { getInstanceGroupsForFrame } from '../pose/triangulation.js?v=ab208f091fc4';
-import { REPROJECTION_COLOR, getTrackColor, getGroupColor } from './overlays.js?v=ab208f091fc4';
-import { drawAllOverlays, updateFrameCounters } from './rendering.js?v=ab208f091fc4';
-import { isInteractiveClickTarget } from './interaction.js?v=ab208f091fc4';
-import { persistSectionState } from './section-state.js?v=ab208f091fc4';
-import { refreshIdSwitchPanel } from './id-switch-modal.js?v=ab208f091fc4';
-import { isInfoPanelVisible, markInfoPanelStale } from './panel-visibility.js?v=ab208f091fc4';
+} from '../pose/pose-data.js?v=97a671a860ac';
+import { getInstanceGroupsForFrame } from '../pose/triangulation.js?v=97a671a860ac';
+import { REPROJECTION_COLOR, getTrackColor, getGroupColor } from './overlays.js?v=97a671a860ac';
+import { drawAllOverlays, updateFrameCounters } from './rendering.js?v=97a671a860ac';
+import { isInteractiveClickTarget } from './interaction.js?v=97a671a860ac';
+import { persistSectionState } from './section-state.js?v=97a671a860ac';
+import { refreshIdSwitchPanel } from './id-switch-modal.js?v=97a671a860ac';
+import { isInfoPanelVisible, markInfoPanelStale } from './panel-visibility.js?v=97a671a860ac';
 import { state, timeline, interactionManager, rememberSkeleton, buildRememberedSkeleton,
-         setProjectSkeleton, getProjectSkeleton } from './app-state.js?v=ab208f091fc4';
-import { setStatus, markDirty } from '../import-export/save-load.js?v=ab208f091fc4';
-import { buildSkeletonJSON, parseSkeletonJSON } from '../import-export/skeleton-json.js?v=ab208f091fc4';
+         setProjectSkeleton, getProjectSkeleton } from './app-state.js?v=97a671a860ac';
+import { setStatus, markDirty } from '../import-export/save-load.js?v=97a671a860ac';
+import { buildSkeletonJSON, parseSkeletonJSON } from '../import-export/skeleton-json.js?v=97a671a860ac';
 import {
     handleLoadVideos, handleLoadCalibration, autoAssignVideosToCameras,
     createViewForVideoFile, rebuildVideoController, fitCanvasesToCells,
-    loadSingleSessionFromCache,
-} from '../loading/session-loader.js?v=ab208f091fc4';
+    loadSingleSessionFromCache, removeVideoFile,
+} from '../loading/session-loader.js?v=97a671a860ac';
 
 // Circular import — these are still defined in app.js for now. They will be
 // retargeted as later passes land:
 // - swapAssignTrack, propagateIdentityForward, unlinkGroup, showGroupContextMenu
 //   → ui/identity-assignment.js (Pass 3f)
 // Pass 3e-1: unlinkGroup + showGroupContextMenu moved to ui-wiring.js.
-import { unlinkGroup, showGroupContextMenu } from './ui-wiring.js?v=ab208f091fc4';
+import { unlinkGroup, showGroupContextMenu } from './ui-wiring.js?v=97a671a860ac';
 // Pass 3f: swapAssignTrack + propagateIdentityForward moved to identity-assignment.js.
 // luc3d #172: every manual identity switch routes through applyIdentitySwitch,
 // which subsumes this file's former direct propagateIdentityForward calls.
 import {
     swapAssignTrack, applyIdentitySwitch, describeIdentitySwitch,
-} from './identity-assignment.js?v=ab208f091fc4';
+} from './identity-assignment.js?v=97a671a860ac';
 // Pass 3h: populateSessionsPanel / populateViewStrip / populateSessionStrip moved to sessions-panes.js.
 import {
     populateSessionsPanel, populateViewStrip, populateSessionStrip,
-} from './sessions-panes.js?v=ab208f091fc4';
+} from './sessions-panes.js?v=97a671a860ac';
 // Block 2 (Prompt 4): per-session timeline visibility toggles.
 import {
     toggleCameraVisibility,
@@ -47,7 +47,7 @@ import {
     getCameraVisibilityList,
     getTrackVisibilityList,
     getIdentityVisibilityList,
-} from './timeline-visibility.js?v=ab208f091fc4';
+} from './timeline-visibility.js?v=97a671a860ac';
 
 // ============================================
 // Inline name entry for "+ New Track" / "+ New ID"
@@ -95,38 +95,45 @@ function startInlineNameEntry(selectEl, defaultName, onCommit) {
 export function setupPanelTabs() {
     const tabBar = document.querySelector('.panel-tabs');
     if (!tabBar) return;
-    // The real tab buttons (Instances, Visibility, Videos, …). The overflow
-    // "More" control is appended after these and excluded from the list.
     const tabs = Array.from(tabBar.querySelectorAll('.panel-tab'));
 
-    // --- Build the "More ▾" overflow dropdown (once) -------------------
-    // Tabs that don't fit the panel's current width are demoted into this
-    // dropdown. As the panel widens, layoutPanelTabs() promotes them back
-    // into the bar one at a time — but only when the full name fits, never
-    // truncated. See styles.css `.panel-tab-more*`.
-    const moreWrap = document.createElement('div');
-    moreWrap.className = 'panel-tab-more';
-    const moreBtn = document.createElement('button');
-    moreBtn.type = 'button';
-    moreBtn.className = 'panel-tab panel-tab-more-btn';
-    moreBtn.innerHTML = 'More <span class="more-caret">▾</span>';
-    const moreMenu = document.createElement('div');
-    moreMenu.className = 'panel-tab-more-menu';
-    moreWrap.appendChild(moreBtn);
-    moreWrap.appendChild(moreMenu);
-    tabBar.appendChild(moreWrap);
+    // --- The bar scrolls sideways; every tab is always IN it -------------
+    // This replaced a "More ▾" dropdown that demoted the tabs which did not
+    // fit. Two tabs visible out of seven meant the panel's own name for the
+    // thing you were looking at was usually behind a control you had to open
+    // first — and WHICH tabs were behind it moved as the panel was resized,
+    // so the bar never looked the same twice. A scroller shows every tab in
+    // one fixed order, and the one you want is a swipe away rather than a
+    // click, a read and a second click.
 
-    moreBtn.addEventListener('click', function (e) {
-        e.stopPropagation();
-        moreWrap.classList.toggle('open');
-    });
-    // Click anywhere else (or Esc) closes the dropdown.
-    document.addEventListener('click', function () {
-        moreWrap.classList.remove('open');
-    });
-    document.addEventListener('keydown', function (e) {
-        if (e.key === 'Escape') moreWrap.classList.remove('open');
-    });
+    // Does the bar overflow, and which way? The fades keyed off these classes
+    // are the ONLY thing saying there is more past an edge: the scrollbar is
+    // suppressed because this strip is ~31px tall and a horizontal bar under
+    // it would sit on top of the active tab's 2px underline.
+    function updateScrollAffordance() {
+        const max = tabBar.scrollWidth - tabBar.clientWidth;
+        // Sub-pixel layout widths leave a fraction of a pixel of "scroll" on
+        // a bar that visibly fits, which would fade an edge for no reason.
+        tabBar.classList.toggle('scroll-left', tabBar.scrollLeft > 1);
+        tabBar.classList.toggle('scroll-right', tabBar.scrollLeft < max - 1);
+    }
+
+    // Bring a tab fully into view, by hand rather than with
+    // `scrollIntoView`: that walks EVERY scrollable ancestor, so revealing a
+    // tab could scroll the app's own layout out from under it. `.panel-tabs`
+    // is `position: relative` in styles.css precisely so that it is each
+    // tab's `offsetParent` and `offsetLeft` is measured in the scroller's
+    // own coordinate space.
+    function scrollTabIntoView(btn) {
+        if (!btn) return;
+        const left = btn.offsetLeft;
+        const right = left + btn.offsetWidth;
+        if (left < tabBar.scrollLeft) tabBar.scrollLeft = left;
+        else if (right > tabBar.scrollLeft + tabBar.clientWidth) {
+            tabBar.scrollLeft = right - tabBar.clientWidth;
+        }
+        updateScrollAffordance();
+    }
 
     // --- Tab selection -------------------------------------------------
     function selectTab(tabId) {
@@ -138,8 +145,10 @@ export function setupPanelTabs() {
         if (btn) btn.classList.add('active');
         const target = document.getElementById(tabId);
         if (target) target.classList.add('active');
-        // Re-run layout so the active-state highlight on "More" stays correct.
-        layoutPanelTabs();
+        // A tab selected from code (`openIdSwitchPanel`) is very often one
+        // that is scrolled out of sight, and an active tab nobody can see
+        // reads as no tab being active at all.
+        scrollTabIntoView(btn);
     }
 
     tabs.forEach(function (tab) {
@@ -148,74 +157,99 @@ export function setupPanelTabs() {
         });
     });
 
-    // --- Responsive overflow -------------------------------------------
-    function buildMoreMenu(overflow) {
-        moreMenu.innerHTML = '';
-        overflow.forEach(function (t) {
-            const item = document.createElement('button');
-            item.type = 'button';
-            item.className = 'panel-tab-more-item';
-            item.textContent = t.textContent;
-            if (t.classList.contains('active')) item.classList.add('active');
-            item.addEventListener('click', function (e) {
-                e.stopPropagation();
-                moreWrap.classList.remove('open');
-                selectTab(t.getAttribute('data-tab'));
-            });
-            moreMenu.appendChild(item);
-        });
-    }
+    // --- Trackpad ------------------------------------------------------
+    // A trackpad over a 31px strip gives a VERTICAL two-finger swipe, so map
+    // that onto the horizontal axis. It steals nothing: the bar sits outside
+    // `.panel-tab-content`, which is the panel's one vertical scroller, so a
+    // vertical wheel here moved nothing at all before this existed.
+    tabBar.addEventListener('wheel', function (e) {
+        const max = tabBar.scrollWidth - tabBar.clientWidth;
+        if (max <= 0) return;
+        // A sideways swipe is already on the right axis; take whichever one
+        // the gesture is actually on rather than summing the two.
+        const delta = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
+        if (!delta) return;
+        const before = tabBar.scrollLeft;
+        tabBar.scrollLeft = Math.max(0, Math.min(max, before + delta));
+        updateScrollAffordance();
+        // Swallow the gesture only when it actually moved the bar, so a swipe
+        // that runs past either end is still the page's to handle.
+        if (tabBar.scrollLeft !== before) e.preventDefault();
+    }, { passive: false });
 
-    function layoutPanelTabs() {
-        // Reveal every tab so we can measure its natural (full-name) width.
-        tabs.forEach(function (t) { t.style.display = ''; });
-        moreWrap.style.display = 'none';
+    // --- Click and drag ------------------------------------------------
+    // A few pixels of travel while pressing a tab is a click with a shaky
+    // hand, not a drag. Below this the bar does not move and the tab fires.
+    const DRAG_THRESHOLD_PX = 4;
+    var dragPointerId = null;
+    var dragStartX = 0;
+    var dragStartScroll = 0;
+    var dragging = false;
+    var suppressClick = false;
 
-        const barWidth = tabBar.clientWidth;
-        if (barWidth === 0) return; // panel hidden/collapsed — nothing to do
-        const widths = tabs.map(function (t) { return t.offsetWidth; });
-        const total = widths.reduce(function (a, b) { return a + b; }, 0);
+    tabBar.addEventListener('pointerdown', function (e) {
+        // Touch already gets the browser's own momentum panning out of
+        // `overflow-x: auto`; driving `scrollLeft` on top of it would move
+        // the bar twice per gesture.
+        if (e.pointerType === 'touch' || e.button !== 0) return;
+        // Clear a suppression left behind by a drag that ended without ever
+        // producing a click, so that it cannot eat this press instead.
+        suppressClick = false;
+        dragging = false;
+        dragPointerId = e.pointerId;
+        dragStartX = e.clientX;
+        dragStartScroll = tabBar.scrollLeft;
+    });
 
-        // Everything fits — no dropdown needed.
-        if (total <= barWidth) {
-            moreWrap.classList.remove('open');
-            moreBtn.classList.remove('active');
-            return;
+    tabBar.addEventListener('pointermove', function (e) {
+        if (dragPointerId === null || e.pointerId !== dragPointerId) return;
+        const dx = e.clientX - dragStartX;
+        if (!dragging && Math.abs(dx) < DRAG_THRESHOLD_PX) return;
+        if (!dragging) {
+            dragging = true;
+            tabBar.classList.add('dragging');
+            // Captured only once the drag is real: capturing on every press
+            // would re-target the plain click that follows one.
+            tabBar.setPointerCapture(dragPointerId);
         }
+        tabBar.scrollLeft = dragStartScroll - dx;
+        updateScrollAffordance();
+    });
 
-        // Otherwise reserve room for the "More" button and greedily keep the
-        // leading tabs whose full names fit.
-        moreWrap.style.display = '';
-        const budget = barWidth - moreWrap.offsetWidth;
-        let used = 0;
-        const overflow = [];
-        tabs.forEach(function (t, i) {
-            if (used + widths[i] <= budget) {
-                used += widths[i];
-                t.style.display = '';
-            } else {
-                t.style.display = 'none';
-                overflow.push(t);
-            }
-        });
-        // Always keep at least the first tab in the bar.
-        if (overflow.length === tabs.length && tabs.length) {
-            tabs[0].style.display = '';
-            overflow.shift();
+    function endDrag(e) {
+        if (dragPointerId === null || e.pointerId !== dragPointerId) return;
+        if (dragging) {
+            tabBar.releasePointerCapture(dragPointerId);
+            tabBar.classList.remove('dragging');
+            // The pointerup that ends a drag still produces a click on
+            // whatever tab it landed on — dragging the bar across a tab must
+            // not also switch to it.
+            suppressClick = true;
         }
-
-        buildMoreMenu(overflow);
-        moreBtn.classList.toggle(
-            'active',
-            overflow.some(function (t) { return t.classList.contains('active'); })
-        );
+        dragging = false;
+        dragPointerId = null;
     }
+    tabBar.addEventListener('pointerup', endDrag);
+    tabBar.addEventListener('pointercancel', endDrag);
 
-    // Recompute whenever the panel (and thus the tab bar) is resized.
+    // Capture phase, so this runs BEFORE the tab's own listener rather than
+    // after it has already switched.
+    tabBar.addEventListener('click', function (e) {
+        if (!suppressClick) return;
+        suppressClick = false;
+        e.stopPropagation();
+        e.preventDefault();
+    }, true);
+
+    // The bar also scrolls without going through any of the above: a
+    // keyboard Tab onto an off-screen button, or a trackpad's own sideways
+    // inertia once `preventDefault` has stopped being called.
+    tabBar.addEventListener('scroll', updateScrollAffordance, { passive: true });
+    // Resizing the panel changes WHETHER it overflows, not just by how much.
     if (typeof ResizeObserver !== 'undefined') {
-        new ResizeObserver(function () { layoutPanelTabs(); }).observe(tabBar);
+        new ResizeObserver(updateScrollAffordance).observe(tabBar);
     }
-    layoutPanelTabs();
+    updateScrollAffordance();
 }
 
 // ============================================
@@ -359,10 +393,55 @@ export function populateTimelineVisibility(session) {
 // Videos table
 // ============================================
 
+// The Videos table row the user last clicked, held by IDENTITY rather than by
+// row index: `Load Videos` and `Remove Video` both rebuild the table, and an
+// index into the OLD table names a different video in the new one.
+var selectedVideoFile = null;
+
+/**
+ * Wire the Videos tab's two buttons, ONCE, at startup.
+ *
+ * They used to be wired inside `updateInfoPanel`, which returns early when
+ * there is no session — so on a freshly-opened app, which is exactly when you
+ * reach for `Load Videos`, the button carried no handler at all and clicking it
+ * did nothing (luc3d #216; `File ▸ Load Videos…` was wired at setup and so kept
+ * working, which is how the two came to disagree). The same early return fires
+ * while the info panel is collapsed. Nothing here reads `state`, so there is no
+ * reason for it to live in a per-session rebuild.
+ */
+export function setupVideosTab() {
+    const btnLoad = document.getElementById('btnLoadVideos');
+    const btnRemove = document.getElementById('btnRemoveVideo');
+    if (!btnLoad || !btnRemove) return;
+
+    btnLoad.addEventListener('click', function () { handleLoadVideos(); });
+
+    btnRemove.addEventListener('click', function () {
+        if (!selectedVideoFile) return;
+        var name = selectedVideoFile.assignedCamera || selectedVideoFile.name;
+        if (!removeVideoFile(selectedVideoFile)) {
+            setStatus('Could not remove video: ' + name, 'error');
+            return;
+        }
+        // `removeVideoFile` repaints the panel, which clears the selection.
+        setStatus('Removed video: ' + name, 'success');
+    });
+}
+
 export function populateVideosTable() {
     const tbody = document.querySelector('#videosTable tbody');
     const empty = document.getElementById('videosEmpty');
     tbody.textContent = '';
+
+    // A rebuild drops the selection: the detail block and the Remove button
+    // describe a row that no longer exists, and after a removal the row is
+    // genuinely gone. Cleared here rather than in the two callers so no future
+    // caller can forget it.
+    selectedVideoFile = null;
+    const btnRemove = document.getElementById('btnRemoveVideo');
+    if (btnRemove) btnRemove.disabled = true;
+    const detail = document.getElementById('videoDetail');
+    if (detail) detail.textContent = 'Click a video row above';
 
     // Use videoFiles if available, otherwise fall back to views
     const videoList = state.videoFiles.length > 0 ? state.videoFiles : state.views.map(function (v) {
@@ -386,6 +465,7 @@ export function populateVideosTable() {
         tr.addEventListener('click', function () {
             tbody.querySelectorAll('tr').forEach(function (r) { r.classList.remove('selected'); });
             tr.classList.add('selected');
+            selectedVideoFile = vf;
             document.getElementById('btnRemoveVideo').disabled = false;
             showVideoFileDetail(vf);
         });
@@ -1008,36 +1088,6 @@ export function updateInfoPanel() {
     populateTimelineVisibility(state.session);
     // The ID Switches tab (and its timeline markers) for this session.
     refreshIdSwitchPanel(state.session);
-
-    // Wire Videos tab buttons
-    document.getElementById('btnAddVideos').onclick = function () { handleLoadVideos(); };
-    document.getElementById('btnRemoveVideo').onclick = function () {
-        // Get selected row
-        const selected = document.querySelector('#videosTable tbody tr.selected');
-        if (!selected) return;
-        const idx = Array.from(selected.parentNode.children).indexOf(selected);
-        var videoList = state.videoFiles.length > 0 ? state.videoFiles : state.views;
-        if (idx >= 0 && idx < videoList.length) {
-            var removed = videoList[idx];
-            videoList.splice(idx, 1);
-            // Also remove the view if it exists
-            if (removed.assignedCamera || removed.name) {
-                var viewName = removed.assignedCamera || removed.name;
-                var viewIdx = -1;
-                for (var vi = 0; vi < state.views.length; vi++) {
-                    if (state.views[vi].name === viewName) { viewIdx = vi; break; }
-                }
-                if (viewIdx >= 0) {
-                    var viewEl = state.views[viewIdx].canvas.closest('.video-cell');
-                    if (viewEl) viewEl.remove();
-                    state.views.splice(viewIdx, 1);
-                }
-            }
-            populateVideosTable();
-            populateSessionAssignTable();
-            document.getElementById('btnRemoveVideo').disabled = true;
-        }
-    };
 
     // Wire Session tab buttons
     document.getElementById('btnAutoAssign').onclick = function () {

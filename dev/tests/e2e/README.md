@@ -85,3 +85,36 @@ Override the base URL with `BASE=http://host:port`. Exit code `0` = pass.
   with no error; the sink throws instead, and this test proves it. Every
   assertion was validated against the pre-patch writer first, so it pins
   equivalence rather than merely current behavior.
+- **`panel-tabs-scroller.mjs`** — the info panel's tab bar is ONE horizontal
+  scroller holding every tab, not a short bar plus a **"More ▾"** dropdown. The
+  dropdown demoted whichever tabs did not fit; at the default 300px width that
+  was five of the seven, so the panel's own name for what the user was looking
+  at was usually behind a control they had to open first, and which tabs were
+  behind it moved as the panel was resized. Asserts all seven tabs are in the
+  bar in markup order with no "More" control anywhere, that the bar really does
+  overflow at the default width (the precondition, so the rest cannot silently
+  stop testing a scroller), that a trackpad's VERTICAL two-finger swipe scrolls
+  it sideways (the gesture a 31px strip gets, and nothing else was using it),
+  that click-and-drag scrolls it **without** also switching tabs while a 2px
+  click still does — the whole risk in making a row of buttons draggable — that
+  a tab selected from code is scrolled into view, and that the edge fades track
+  which side has tabs behind it and both vanish once the panel is wide enough.
+  Confirmed to fail on the pre-change build (11 red, then the Cameras tab is
+  `display: none` and has no box to click, which is the bug itself).
+- **`videos-panel-buttons.mjs`** — the Videos tab's two buttons (luc3d #216).
+  Clicks **Load Videos** on a FRESH page with no session loaded (the bug: both
+  handlers were assigned inside `updateInfoPanel`, which returns early when
+  `state.session` is null, so the button carried no handler at all while
+  `File ▸ Load Videos…` worked), then selects a row and clicks **Remove Video**
+  and asserts the whole video goes: no dockview pane, no `.video-cell`, no
+  view-strip thumbnail, the decoder `close()`d and out of the pool, and
+  `session.videoFileIndices` remapped across the `state.videoFiles` splice —
+  with the second video keeping all of it as the control. Generates its own
+  tiny H.264 clips with ffmpeg (headless Chromium cannot decode the HEVC the
+  real sessions ship) and skips cleanly if ffmpeg is absent. §7 then covers the
+  solo-mode edge case: with `v` active, removing a *different* video used to
+  (a) leave the removed view in `savedGridLayout`, so `g` rebuilt an empty pane
+  wearing its name, and (b) drift `state.singleViewIndex`, which is positional,
+  onto the next camera along; removing the solo'd view itself (c) closed the
+  only pane and left the dock empty. Every behavioural assertion was confirmed
+  to fail on the pre-fix build.

@@ -9,7 +9,7 @@
 
 import { state, videoController, interactionManager, viewport3d, timeline, paneManager,
          setVideoController, setInteractionManager, setViewport3D, setTimeline, VIEW_NAMES,
-         getActiveSession, hasRealVideo, setInstanceClipboard, getInstanceClipboard } from './app-state.js?v=ab208f091fc4';
+         getActiveSession, hasRealVideo, setInstanceClipboard, getInstanceClipboard } from './app-state.js?v=97a671a860ac';
 // Block 1 (Prompt 4): the timeline collapse/fit/sync helpers and the
 // Ctrl/Cmd+J keyboard shortcut installer live in `timeline-controller.js`.
 // Import them explicitly so the local call sites in this file (menu
@@ -21,52 +21,52 @@ import {
     installTimelineShortcuts,
     getCachedTimelineHeight,
     setCachedTimelineHeight,
-} from './timeline-controller.js?v=ab208f091fc4';
+} from './timeline-controller.js?v=97a671a860ac';
 import { Skeleton, Camera, Instance, InstanceGroup, FrameGroup, UnlinkedInstance, Identity, Session,
-         someValidPoint3d } from '../pose/pose-data.js?v=ab208f091fc4';
+         someValidPoint3d } from '../pose/pose-data.js?v=97a671a860ac';
 import { ensureLazyFrameData, batchLoadLazyFrames, getInstanceGroupsForFrame, evictLazyFrames,
          loadAllLazyFrames, updateTimelineForFrame, triangulateAndReproject,
-         resolveTriangulationMethod } from '../pose/triangulation.js?v=ab208f091fc4';
-import { drawAllOverlays, getVisibilitySettings, updateFrameCounters, setReprojErrorVisible } from './rendering.js?v=ab208f091fc4';
+         resolveTriangulationMethod } from '../pose/triangulation.js?v=97a671a860ac';
+import { drawAllOverlays, getVisibilitySettings, updateFrameCounters, setReprojErrorVisible } from './rendering.js?v=97a671a860ac';
 import { updateInfoPanel, updateFrameInfo, updateTriangulationBadge,
          populateVideosTable, populateCamerasTable, populateSkeletonTable,
          setupPanelTabs, setupSkeletonEditing, exportSkeletonJSON,
          ensureSession, populateSessionAssignTable, populateUnassignedVideos,
-         populateTimelineVisibility } from './info-panel.js?v=ab208f091fc4';
-import { consumeInfoPanelStale, collapseViewport3D } from './panel-visibility.js?v=ab208f091fc4';
+         populateTimelineVisibility } from './info-panel.js?v=97a671a860ac';
+import { consumeInfoPanelStale, collapseViewport3D } from './panel-visibility.js?v=97a671a860ac';
 // Block 2 (Prompt 4): rename migration for the per-session hidden-track
 // / hidden-identity Sets when the user renames an entity.
-import { renameHiddenTrack, renameHiddenIdentity } from './timeline-visibility.js?v=ab208f091fc4';
+import { renameHiddenTrack, renameHiddenIdentity } from './timeline-visibility.js?v=97a671a860ac';
 // View ▸ Define Planes — "Defining Plane Mode".
-import { togglePlaneMode, syncPlanes3D } from './plane-definition.js?v=ab208f091fc4';
+import { togglePlaneMode, syncPlanes3D } from './plane-definition.js?v=97a671a860ac';
 // The Visibility panel's `Planes` section — the four ids, named from the one
 // module that reads them so this file cannot drift from it.
-import { PLANE_VIS_IDS } from './plane-visibility.js?v=ab208f091fc4';
+import { PLANE_VIS_IDS } from './plane-visibility.js?v=97a671a860ac';
 import { newProject, markDirty, clearDirty, quickSave, saveAs, saveProjectSlp, saveProject,
-         handleLoadProject, showLoading, hideLoading, setStatus } from '../import-export/save-load.js?v=ab208f091fc4';
-import { handleLoadSlpFile, handleAddSlp, handleLoadPoints3dH5 } from '../import-export/slp-import.js?v=ab208f091fc4';
-import { pickFiles, parseCalibrationJSON, exportCalibrationTOML, downloadTOML, parseSlpH5 } from '../import-export/file-io.js?v=ab208f091fc4';
+         handleLoadProject, showLoading, hideLoading, setStatus } from '../import-export/save-load.js?v=97a671a860ac';
+import { handleLoadSlpFile, handleAddSlp, handleLoadPoints3dH5 } from '../import-export/slp-import.js?v=97a671a860ac';
+import { pickFiles, parseCalibrationJSON, exportCalibrationTOML, downloadTOML, parseSlpH5 } from '../import-export/file-io.js?v=97a671a860ac';
 import { handleLoadCalibration, handleLoadVideos, handleLoadMultiSession,
-         loadSingleSessionFromCache, handleEmptySession, showSessionModeModal, autoAssignVideosToCameras } from '../loading/session-loader.js?v=ab208f091fc4';
-import { OnDemandVideoDecoder, VideoController } from '../loading/video.js?v=ab208f091fc4';
+         loadSingleSessionFromCache, handleEmptySession, showSessionModeModal, autoAssignVideosToCameras } from '../loading/session-loader.js?v=97a671a860ac';
+import { OnDemandVideoDecoder, VideoController } from '../loading/video.js?v=97a671a860ac';
 
 // Pass 3i-1: tracker functions moved out of app.js.
-import { trackCurrentFrame, trackAll, findMatchForSelected } from '../pose/tracker.js?v=ab208f091fc4';
+import { trackCurrentFrame, trackAll, findMatchForSelected } from '../pose/tracker.js?v=97a671a860ac';
 // Track Frame Range (#212): the Track Frame split button's dropdown entry.
-import { showTrackRangeModal } from './track-range-modal.js?v=ab208f091fc4';
-import { showAlignViewsModal } from './view-align-modal.js?v=ab208f091fc4';
-import { onColorByChange, setColorByIdentity } from './color-by.js?v=ab208f091fc4';
-import { installSeekbarTooltip } from './seekbar-tooltip.js?v=ab208f091fc4';
-import { installSeekbarMarkers, seekbarMarkerAt, describeSwitchMarker, setSeekbarMarkerFrames } from './seekbar-markers.js?v=ab208f091fc4';
+import { showTrackRangeModal } from './track-range-modal.js?v=97a671a860ac';
+import { showAlignViewsModal } from './view-align-modal.js?v=97a671a860ac';
+import { onColorByChange, setColorByIdentity } from './color-by.js?v=97a671a860ac';
+import { installSeekbarTooltip } from './seekbar-tooltip.js?v=97a671a860ac';
+import { installSeekbarMarkers, seekbarMarkerAt, describeSwitchMarker, setSeekbarMarkerFrames } from './seekbar-markers.js?v=97a671a860ac';
 // Pass 3i-2: triangulation orchestration moved out of app.js.
-import { triangulateCurrentFrame, triangulateAllFrames } from '../pose/triangulation.js?v=ab208f091fc4';
+import { triangulateCurrentFrame, triangulateAllFrames } from '../pose/triangulation.js?v=97a671a860ac';
 // User settings: default triangulation method + editable keyboard bindings.
-import { getDefaultTriangulationMethod, onDefaultTriangulationMethodChange, setHandler, dispatchEvent, getActions, formatBinding } from './settings.js?v=ab208f091fc4';
-import { shouldIgnoreShortcut, installFocusRelease } from './keyboard-target.js?v=ab208f091fc4';
-import { showSettingsModal } from './settings-modal.js?v=ab208f091fc4';
+import { getDefaultTriangulationMethod, onDefaultTriangulationMethodChange, setHandler, dispatchEvent, getActions, formatBinding } from './settings.js?v=97a671a860ac';
+import { shouldIgnoreShortcut, installFocusRelease } from './keyboard-target.js?v=97a671a860ac';
+import { showSettingsModal } from './settings-modal.js?v=97a671a860ac';
 // Pass 3i-3: addNewInstanceSmart and update3DViewport moved to pose/initialization.js.
-import { addNewInstanceSmart, update3DViewport, navigateToFrame } from '../pose/initialization.js?v=ab208f091fc4';
-import { runIdSwitchChecks, setIdSwitchNavigator, setIdSwitchRefresher, updateIdSwitchProgress } from './id-switch-modal.js?v=ab208f091fc4';
+import { addNewInstanceSmart, update3DViewport, navigateToFrame } from '../pose/initialization.js?v=97a671a860ac';
+import { runIdSwitchChecks, setIdSwitchNavigator, setIdSwitchRefresher, updateIdSwitchProgress } from './id-switch-modal.js?v=97a671a860ac';
 // Pass 3f / 3i-4: identity-assignment workflow symbols moved out of app.js.
 // (`swapTracks` joined this module in 3i-4; `seekToLabeledFrame` is now in-module.)
 import {
@@ -75,10 +75,10 @@ import {
     startManualAssignment, runSingleFrameTriangulation, showMultiFrameModal,
     purgeTriangulationDataForGroup,
     swapTracks,
-} from './identity-assignment.js?v=ab208f091fc4';
+} from './identity-assignment.js?v=97a671a860ac';
 // Custom Instance Delete: DOM-free matching/cascade/durability logic. Imports no
 // project modules itself, which is why it can also be unit tested in isolation.
-import { collectDeletionTargets, executeDeletion } from './custom-delete-ops.js?v=ab208f091fc4';
+import { collectDeletionTargets, executeDeletion } from './custom-delete-ops.js?v=97a671a860ac';
 // Pass 3g: export-modals workflow symbols moved out of app.js.
 import {
     exportLabels, exportPoints3dH5, exportReprojH5,
@@ -86,19 +86,19 @@ import {
     showSlpExportPerSessionModal,
     showTriangulateMultiFrameModal,
     showGroupByTrackModal, groupByIdentityAndTriangulateAll, showExport3DVideoModal,
-} from './export-modals.js?v=ab208f091fc4';
-import { showOverlayExportModal } from './overlay-export-modal.js?v=ab208f091fc4';
+} from './export-modals.js?v=97a671a860ac';
+import { showOverlayExportModal } from './overlay-export-modal.js?v=97a671a860ac';
 // Pass 3h: sessions-panes workflow symbols moved out of app.js.
 import {
     panelRenderers, multiSelectViews, activatePanelForView, scrollViewStripTo,
     refreshPaneInteractions, clearMultiSelect, clampRotation, syncRotationUI,
     populateViewStrip, populateSessionsPanel, populateSessionStrip,
     showMoveVideoModal, removeSession, switchSession,
-} from './sessions-panes.js?v=ab208f091fc4';
+} from './sessions-panes.js?v=97a671a860ac';
 import {
     nameExists, countNulledByCamera, deleteTrackAt, deleteIdentityAt,
-} from './track-identity-ops.js?v=ab208f091fc4';
-import { setSessionRotation } from './video-filters.js?v=ab208f091fc4';
+} from './track-identity-ops.js?v=97a671a860ac';
+import { setSessionRotation } from './video-filters.js?v=97a671a860ac';
 
 // ============================================
 // Rename Track / Identity modal
@@ -2985,6 +2985,43 @@ export {
 var savedGridLayout = null; // cached dockview layout JSON from grid mode
 
 /**
+ * Is the cached grid layout still a layout of THIS set of views?
+ *
+ * `savedGridLayout` is a snapshot taken when `v` was pressed, and the view list
+ * can change while solo: removing a video (`removeVideoFile`) or loading one,
+ * and switching sessions replaces the list wholesale. Restoring the snapshot
+ * then re-created a pane for a view that no longer exists — an empty pane
+ * wearing the removed camera's name, which is the state the user sees as "the
+ * video went blank" (luc3d #216). A view that was ADDED while solo is the same
+ * mistake in the other direction: `g` would restore a grid missing it.
+ *
+ * Validated HERE, at the point of use, rather than invalidated at each site
+ * that mutates `state.views` — a list of invalidation call sites is a list
+ * something can be left off, and this cache has exactly one reader. A layout
+ * that fails is dropped so `setGridMode` falls back to a fresh
+ * `addAllViewsAsGrid()`, which is the honest answer: the arrangement the user
+ * saved is not an arrangement of the views they now have.
+ *
+ * Reads `params.viewName` off the SERIALIZED panel records — the `params` every
+ * pane is added with, part of dockview's documented `toJSON` shape, not one of
+ * the private internals `ui/overlay-export-modal.js` depends on.
+ */
+function savedGridLayoutMatchesViews() {
+    if (!savedGridLayout || !savedGridLayout.panels) return false;
+    var saved = [];
+    for (var id in savedGridLayout.panels) {
+        var rec = savedGridLayout.panels[id];
+        var name = rec && rec.params && rec.params.viewName;
+        if (name && saved.indexOf(name) < 0) saved.push(name);
+    }
+    if (saved.length !== state.views.length) return false;
+    for (var i = 0; i < state.views.length; i++) {
+        if (saved.indexOf(state.views[i].name) < 0) return false;
+    }
+    return true;
+}
+
+/**
  * Enter single-view ("solo") mode — the dock shows exactly ONE camera.
  *
  * Pressing the shortcut again while already solo is a deliberate NO-OP. It used
@@ -3072,6 +3109,10 @@ export function setGridMode() {
         ? state.views[state.singleViewIndex].name
         : null;
     state.viewMode = 'grid';
+    // A snapshot of a view list that no longer exists is worse than no
+    // snapshot: `fromJSON` would rebuild a pane for every view it names,
+    // including ones that have since been removed.
+    if (savedGridLayout && !savedGridLayoutMatchesViews()) savedGridLayout = null;
     if (savedGridLayout && paneManager.api) {
         // Restore saved grid layout
         var savedZoom = {};
