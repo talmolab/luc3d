@@ -10689,7 +10689,14 @@ opening devtools. Any view with a real decoder but no `_mbBackend` (its
 `_initMediabunny`/`switchSource` init silently failed) now triggers
 `setStatus('N of M camera(s) fell back to HTML5 seeking...', 'warning')` so
 it's visible at a glance right after every load/session-switch, without
-needing to check the console or set anything manually.
+needing to check the console or set anything manually. A decoder that dropped
+its backend ON PURPOSE because this browser's WebCodecs cannot decode the
+codec (`decoder._mbUnavailable.reason === 'codec'` — Firefox + HEVC, see
+`loading/video.js`) gets its own clause instead: `N of M camera(s) step with
+<video> seeks: this browser cannot decode HEVC with WebCodecs, so stepping is
+slower` — not "init failed … a frame or two off", which is neither the cause
+nor (since the mid-frame seek) the measured result. Both clauses can appear,
+joined by `; `.
 
 Fresh-session creation sites (video-only, calibration-only, multi-cam directory)
 seed the skeleton from `buildRememberedSkeleton()` (falling back to an empty
@@ -11298,6 +11305,72 @@ tolerance (half a frame period, `0.5/_fps`) so high-fps recordings
 (e.g. 400 fps) step every frame instead of freezing under a fixed
 constant (issue #89).
 
+**`<video>` seeks aim at the MIDDLE of the frame (`html5SeekTime`).**
+`_getFrameHTML5` sets `currentTime = (i + 0.5) / fps`, not `i / fps`. A
+frame-start time sits on the boundary with frame i−1 and browsers round it
+either way: on barcode clips (frame number burned into the pixels, 8 cameras
+seeking at once, gitignored `verify/seek-probe.html`), Firefox 157 showed i−1
+for every frame with `i % 3 == 2` at 60 and 150 fps (63–70% exact, HEVC and
+H.264 alike), Chrome/Brave/Safari for most frames (7–33%). Mid-interval was
+exact in all 2,160 Firefox seeks and in every H.264 seek in the other three
+(their `<video>` HEVC: 80–90% vs 7–15% — they step HEVC through mediabunny, so
+only a decode failure reaches this). Seeking to mediabunny's exact PTS
+(`_frameTimes[i]`) is the frame start again and missed identically; the
+midpoint of two PTSs matched `(i + 0.5) / fps`. **`requestVideoFrameCallback`
+cannot verify a landing in Firefox**: its `mediaTime` echoes the seek target,
+not the frame shown (Chrome's does report the shown frame). `seekNativeSettled`
+(play start) treats an element parked on the frame's middle as already there:
+`(i+0.5)/fps − i/fps` comes out an ulp over half a frame for ~30% of frames,
+and re-seeking to the frame start would land on i−1 in Firefox. **Only a
+position `_getFrameHTML5` set itself skips the seek** (`_html5Moved`, set by
+`playNative`, `seekNative` and a real `seekNativeSettled` seek, cleared by the
+next `_getFrameHTML5` seek and by `switchSource`): after playback the picture
+need not match `currentTime`, and the +0 pause re-decode (asking for the frame
+already under the playhead) drew the NEXT frame on 1 Firefox HEVC pause in 10
+by skipping its seek. Measured with the pause harness (gitignored
+`verify/pause-xb.html`, 8 cameras, Firefox, HEVC): paused picture == skeleton
+for the shipped +1 re-decode 31% → 100%, for +0 28% → 100%.
+
+**A codec WebCodecs cannot decode drops the backend up front
+(`_mbCannotDecode`).** Firefox 157 demuxes HEVC — `MediaBunnyVideoBackend`
+initializes — but has no WebCodecs HEVC decoder, so every `getFrame` failed
+twice (the step stream, then the backend's own `getFrame`) before falling back:
+1,544 warnings in one 8-camera stepping run. `_initMediabunny` now asks
+mediabunny's `track.canDecode()` (`VideoDecoder.isConfigSupported` on the full
+decoder config; ~0 ms) once, AFTER adopting the backend's frame count and fps
+(container metadata, still right), and on `false` closes the backend and sets
+`_mbUnavailable = { reason: 'codec', codec, codecString }`; a failed init sets
+`{ reason: 'init', message }`, and both `init` and `switchSource` reset it.
+Measured `false` only for HEVC in Firefox; `true` for H.264 there and for both
+in Chrome, Brave and Safari, whose path is therefore unchanged. A check that
+cannot be asked answers null, leaving the per-frame fallback to cover it.
+End to end (gitignored `verify/step-probe.html`, the real decoder, HEAD vs
+this, 8 cameras, Firefox, HEVC 60 fps): exact 67–70% → 100%, fallback warnings
+1,544 → 0; step time unchanged within run-to-run noise (8-camera medians
+~0.7 s per jump or forward step, ~1.2 s back, both builds — Firefox's own
+`<video>` HEVC seek is the cost, and the skipped attempts were cheap). Chrome,
+Brave and Safari: identical before and after (mediabunny on every camera, 100%
+exact, same step times). With no backend, the image
+ID-switch check's `keyframeIndices` / `streamingReader`
+(`ui/image-embedder.js`) take their `getFrame` path rather than a stream that
+cannot decode.
+
+Covered by `tests/test-mediabunny-backend.js` (stubbed backend: dropped on
+`false`, kept on `true`, kept when the question cannot be asked, no per-frame
+warning afterwards), `tests/test-html5-seek-tolerance.js` (the mid target, the
+play-start parking, the `_html5Moved` rule) and
+`tests/e2e/html5-step-mid-frame.mjs` — real Chromium made to answer "cannot
+decode" (`VideoDecoder.isConfigSupported` stubbed for the whole run, which
+mediabunny also consults before each decode, so a KEPT backend fails every
+frame exactly as in Firefox + HEVC), stepping the real decoder forward,
+backward and by jumps through `tests/fixtures/barcode-60/barcode-60.mp4`
+(4 KB, 60 fps, frame number as a barcode; `make_fixture.sh` regenerates it)
+and reading every frame number back. On the pre-fix build it fails with 256
+fallback warnings and most steps one frame behind; its control decoder,
+seeking to the frame START, must land wrong (89 of 128 headless) or the test
+could not tell the targets apart. The fixture is 60 fps on purpose: at 10 fps
+(`bframes-test`) frame times are whole microseconds and both targets land.
+
 **Frame-accurate mediabunny backend (default-on, issue #115).** HTML5
 `<video>.currentTime` seeking is NOT frame-accurate — it can return a
 frame a whole GOP behind the one requested, so the pose overlay (drawn
@@ -11635,7 +11708,11 @@ a zoomed-in image keeps the same region centered instead of jumping.
 - `OnDemandVideoDecoder` — class. Selected methods: `init(source)`,
   `getFrame(frameIndex)` (mediabunny: via `_mbGetFrame`, the open stepping
   stream), `releaseStepCursor()`, `_initMediabunny(source)` /
-  `_mediabunnyEnabled()` (opt-in frame-accurate backend, issue #115),
+  `_mediabunnyEnabled()` (default-on frame-accurate backend, issue #115),
+  `_mbCannotDecode(backend)` (null, or `{reason: 'codec', codec, codecString}`
+  when WebCodecs cannot decode the track — the backend is then dropped and
+  that object kept as `_mbUnavailable`), `html5SeekTime(i)` (`(i + 0.5)/fps`,
+  the `<video>` stepping seek target),
   `decodeRange(start, end)`, `playNative`, `pauseNative`, `seekNative`,
   `switchSource`, `close`, `drawCurrentFrame`, `_awaitPlayable` (init and
   switchSource await the element's load through it: when the browser refuses
@@ -11678,11 +11755,13 @@ Option+scroll that strayed into the margin from zooming the view out from under
 a rotation in progress. Removing the line alone turns the margin check in
 `tests/e2e/alt-wheel-rotate-instance.mjs` red.
 
-**Imports from project modules.** `ui/keyboard-target.js` only — the
+**Imports from project modules.** `ui/keyboard-target.js` — the
 `shouldIgnoreShortcut` guard its `setupKeyboardHandlers` keydown listener
-applies (issue #163); that module imports nothing itself. `mediabunny`
-(`EncodedPacketSink`) is imported lazily by `_sameKeyframeRun`. Otherwise none
-(uses the global `MP4Box` from script tag).
+applies (issue #163); that module imports nothing itself — and
+`loading/video-codec-diagnosis.js` (`diagnoseUnplayableVideo`, for
+`_awaitPlayable`). `mediabunny` (`EncodedPacketSink`) is imported lazily by
+`_keyTimestamp`. Otherwise none (uses the global `MP4Box` from script tag, and
+`window.SleapIO.MediaBunnyVideoBackend`).
 
 **Imported by.** `pose/initialization.js`, `import-export/save-load.js`,
 `import-export/slp-import.js`, `loading/session-loader.js`,

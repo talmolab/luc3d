@@ -16,12 +16,12 @@
  * Depends on: pose/tracker.js (the run itself), ui/app-state.js, save-load.js.
  */
 
-import { state, getActiveSession } from './app-state.js?v=370755246a04';
-import { setStatus } from '../import-export/save-load.js?v=370755246a04';
+import { state, getActiveSession } from './app-state.js?v=fa278b904ea3';
+import { setStatus } from '../import-export/save-load.js?v=fa278b904ea3';
 import {
     trackFrameRange, trackableFrameBounds,
     getTrackerNumAnimals, setTrackerNumAnimals,
-} from '../pose/tracker.js?v=370755246a04';
+} from '../pose/tracker.js?v=fa278b904ea3';
 
 // Frames pre-filled into the End field, measured from the current frame. The
 // feature is for narrow windows around a suspected switch, so the default is a
