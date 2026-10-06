@@ -156,7 +156,7 @@
 
         it('multi-view 3D grouping + per-session identity round-trip via readSlpStreaming', async function () {
             const raw = await window.SleapIO.saveSlpToBytes(buildMultiViewLabels());
-            const h5wasmUrl = new URL('../lib/h5wasm/h5wasm.iife.js?v=313e094c3104', document.baseURI).href;
+            const h5wasmUrl = new URL('../lib/h5wasm/h5wasm.iife.js?v=4e6195bc2938', document.baseURI).href;
             const lab = await window.SleapIO.readSlpStreaming(new File([raw], 'mv-rt.slp'),
                 { openVideos: false, rawSessions: true, h5wasmUrl: h5wasmUrl });
             const sess = (lab.sessions || [])[0];
