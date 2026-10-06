@@ -21,66 +21,70 @@
 import {
     state, videoController, interactionManager, viewport3d, timeline, paneManager,
     setVideoController, VIEW_NAMES, buildRememberedSkeleton, setProjectSkeleton,
-} from '../ui/app-state.js?v=d5a19a468bf3';
+} from '../ui/app-state.js?v=a3ee9edbf020';
 
 import {
     Session, Skeleton, Camera, Instance, UnlinkedInstance, FrameGroup, Identity,
-} from '../pose/pose-data.js?v=d5a19a468bf3';
+} from '../pose/pose-data.js?v=a3ee9edbf020';
 
-import { OnDemandVideoDecoder, VideoController } from './video.js?v=d5a19a468bf3';
-import { videoLoadFailureText } from './video-codec-diagnosis.js?v=d5a19a468bf3';
-import { fileSystemAccessHint } from '../ui/browser-hints.js?v=d5a19a468bf3';
+import { OnDemandVideoDecoder, VideoController } from './video.js?v=a3ee9edbf020';
+import { videoLoadFailureText } from './video-codec-diagnosis.js?v=a3ee9edbf020';
+import { fileSystemAccessHint } from '../ui/browser-hints.js?v=a3ee9edbf020';
 
 import {
     pickFiles, pickFolder, pickVideoFiles,
     parseCalibrationTOML, parseCalibrationJSON, parseSlpH5, parseSlpViaSleapIO,
     loadCalibrationFile,
-} from '../import-export/file-io.js?v=d5a19a468bf3';
+} from '../import-export/file-io.js?v=a3ee9edbf020';
 
-import { resolveImportTrackIdx, nulledNodesFromOcclusion } from '../import-export/import-track-resolve.js?v=d5a19a468bf3';
+import { resolveImportTrackIdx, nulledNodesFromOcclusion } from '../import-export/import-track-resolve.js?v=a3ee9edbf020';
 // Pure `.slp`-per-camera selection rule. Extracted so it can be bridged into
 // the browser test runner (session-loader itself pulls app.js) — same reason
 // and same shape as `resolveImportTrackIdx` above.
-import { chooseCameraSlp } from './percam-slp-choice.js?v=d5a19a468bf3';
+import { chooseCameraSlp } from './percam-slp-choice.js?v=a3ee9edbf020';
 // Shared SLP grouped-reconstruction (identities + InstanceGroups + nulledNodes/
 // occlusion + 3D points). Circular ESM import (slp-import imports back
 // recomputeUploadedCameras); only invoked inside a function body.
-import { restoreGroupingAndUnlink, reconstructInstanceGroupsFromSessionLazy } from '../import-export/slp-import.js?v=d5a19a468bf3';
-import { REBASED_CALIBRATION_NAME, pickCalibrationFile } from './calibration-pick.js?v=d5a19a468bf3';
+import { restoreGroupingAndUnlink, reconstructInstanceGroupsFromSessionLazy } from '../import-export/slp-import.js?v=a3ee9edbf020';
+import { REBASED_CALIBRATION_NAME, pickCalibrationFile } from './calibration-pick.js?v=a3ee9edbf020';
 
 import {
     LazyFrameLoader, shouldUseLazyH5, shouldUseLazySlp, getInstanceGroupsForFrame,
     ensureLazyFrameData,
-} from '../pose/triangulation.js?v=d5a19a468bf3';
-import { SioLazyLoader } from './sio-lazy-loader.js?v=d5a19a468bf3';
+} from '../pose/triangulation.js?v=a3ee9edbf020';
+import { SioLazyLoader } from './sio-lazy-loader.js?v=a3ee9edbf020';
 
 // Status UI moved to import-export/save-load.js in Pass 3c-1.
 import {
     setStatus, showLoading, hideLoading, ensureNo3dImportBlockingLoad,
-} from '../import-export/save-load.js?v=d5a19a468bf3';
-import { showLoadingProgress, createProgressPacer, yieldToPaint } from '../ui/loading-overlay.js?v=d5a19a468bf3';
+} from '../import-export/save-load.js?v=a3ee9edbf020';
+import { showLoadingProgress, createProgressPacer, yieldToPaint } from '../ui/loading-overlay.js?v=a3ee9edbf020';
 
 // Circular import — these are still defined in app.js for now. See module
 // header note. They are only invoked inside function bodies, never at
 // module-init time, so live-binding lookup keeps them functional.
-import { drawAllOverlays, setReprojErrorVisible } from '../ui/rendering.js?v=d5a19a468bf3';
-import { updateInfoPanel, promptImportSkeletonForAllSessions } from '../ui/info-panel.js?v=d5a19a468bf3';
-import { noteSessionCalibrationDivergence } from '../ui/calibration-notice.js?v=d5a19a468bf3';
-import { parseSkeletonJSON } from '../import-export/skeleton-json.js?v=d5a19a468bf3';
+import { drawAllOverlays, setReprojErrorVisible } from '../ui/rendering.js?v=a3ee9edbf020';
+import { updateInfoPanel, promptImportSkeletonForAllSessions } from '../ui/info-panel.js?v=a3ee9edbf020';
+import { noteSessionCalibrationDivergence } from '../ui/calibration-notice.js?v=a3ee9edbf020';
+import { parseSkeletonJSON } from '../import-export/skeleton-json.js?v=a3ee9edbf020';
 // Pass 3i-3: setupInteraction / setup3DViewport / setupTimeline / updateFpsDisplay /
 // hideWelcomeOverlay moved to pose/initialization.js.
 import {
     setupInteraction, setup3DViewport, setupTimeline,
     updateFpsDisplay,
     hideWelcomeOverlay,
-} from '../pose/initialization.js?v=d5a19a468bf3';
+} from '../pose/initialization.js?v=a3ee9edbf020';
 // Pass 3h: populateViewStrip / populateSessionStrip / switchSession moved to sessions-panes.js.
-import { populateViewStrip, populateSessionStrip, switchSession } from '../ui/sessions-panes.js?v=d5a19a468bf3';
+import {
+    populateViewStrip, populateSessionStrip, switchSession, multiSelectViews,
+} from '../ui/sessions-panes.js?v=a3ee9edbf020';
 // Pass 3e-1: updateSeekbar / fitTimelineToData / onPlaybackStateChange moved to ui-wiring.js.
-import { updateSeekbar, fitTimelineToData, onPlaybackStateChange } from '../ui/ui-wiring.js?v=d5a19a468bf3';
-import { getLoadingProgressModal } from '../ui/loading-progress-modal.js?v=d5a19a468bf3';
-import { readVisibilityMetadata } from '../import-export/visibility-metadata.js?v=d5a19a468bf3';
-import { readPlaneMetadata, resetPlaneState } from '../import-export/plane-metadata.js?v=d5a19a468bf3';
+import {
+    updateSeekbar, fitTimelineToData, onPlaybackStateChange, updateVideoGridDisplay,
+} from '../ui/ui-wiring.js?v=a3ee9edbf020';
+import { getLoadingProgressModal } from '../ui/loading-progress-modal.js?v=a3ee9edbf020';
+import { readVisibilityMetadata } from '../import-export/visibility-metadata.js?v=a3ee9edbf020';
+import { readPlaneMetadata, resetPlaneState } from '../import-export/plane-metadata.js?v=a3ee9edbf020';
 
 // Module-private debounce timer for the zoom-redraw callback in
 // rebuildVideoController(). app.js's setupEmptyVideoController() has its own
@@ -853,6 +857,168 @@ export function createViewForVideoFile(videoFile) {
 }
 
 /**
+ * Undo `createViewForVideoFile` + the `state.videoFiles` entry behind it:
+ * take one loaded video out of the project entirely (luc3d #216).
+ *
+ * The Videos tab's `Remove Video` used to splice the video out of
+ * `state.videoFiles` and remove the view's `.video-cell` ELEMENT, which left
+ * the dockview panel and the view-strip thumbnail in place — so the viewer
+ * showed an empty, still-titled pane for a video that no longer existed. The
+ * whole teardown has to happen, in this order:
+ *
+ *  - the dock pane closes (`removeVideoPanel`), which is also what clears the
+ *    strip item's in-dock dot;
+ *  - the view leaves `state.views`, which is what `populateViewStrip` renders
+ *    the thumbnails from, so the strip item goes with it;
+ *  - the DECODER is closed. Nothing will ask it for a frame again, and it
+ *    holds a WebCodecs `VideoDecoder`, a mediabunny `Input` and a cache of
+ *    decoded frames — all of which survive the view being dropped, since the
+ *    pool keeps its own reference.
+ *
+ * The session's CAMERA is deliberately kept: it carries the calibration and
+ * every annotation made against it, and "this camera has no video loaded" is
+ * an ordinary state (`recomputeUploadedCameras` is what keeps the timeline
+ * from drawing a gutter row for it).
+ *
+ * Accepts an entry of `state.videoFiles`, or any `{name, assignedCamera}`
+ * descriptor naming a view — the Videos table falls back to synthesising rows
+ * from `state.views` when `state.videoFiles` is empty, and a row the user can
+ * select has to be a row they can remove. A descriptor that matches a real
+ * `state.videoFiles` entry by name is resolved to it first, so the file entry
+ * is never left behind.
+ *
+ * @param {Object} videoFile - an entry of `state.videoFiles`, or a view descriptor
+ * @returns {boolean} true if the video was found and removed
+ */
+export function removeVideoFile(videoFile) {
+    if (!videoFile) return false;
+    var viewName = videoFile.assignedCamera || videoFile.name;
+    if (!viewName) return false;
+    var vfIdx = state.videoFiles.indexOf(videoFile);
+    if (vfIdx < 0) {
+        for (var ri = 0; ri < state.videoFiles.length; ri++) {
+            var cand = state.videoFiles[ri];
+            if ((cand.assignedCamera || cand.name) === viewName) { vfIdx = ri; videoFile = cand; break; }
+        }
+    }
+    var hasView = state.views.some(function (v) { return v.name === viewName; });
+    if (vfIdx < 0 && !hasView) return false;
+    var decoder = videoFile.decoder;
+    // Single-view mode names its view by POSITION in `state.views`, so the
+    // splice below has to be followed by a re-derivation, not a clamp. Noted
+    // before anything moves.
+    var soloView = state.views[state.singleViewIndex];
+    var soloName = soloView ? soloView.name : null;
+
+    // 1. Close the dock pane(s) for this view — the whole panel, not just its
+    //    canvases, so the viewer area loses it rather than going blank.
+    if (paneManager && typeof paneManager.removeVideoPanel === 'function') {
+        paneManager.removeVideoPanel(viewName);
+    }
+
+    // 2. Drop the view. Matched by NAME (what the pane, the strip and every
+    //    overlay key off), and by decoder identity as a fallback for a view
+    //    whose camera was renamed out from under `assignedCamera`.
+    for (var i = state.views.length - 1; i >= 0; i--) {
+        var v = state.views[i];
+        if (v.name !== viewName && !(decoder && v.decoder === decoder)) continue;
+        if (v.wrapper && v.wrapper.parentNode) v.wrapper.remove();
+        v.canvas = null; v.ctx = null;
+        v.overlayCanvas = null; v.overlayCtx = null;
+        v.wrapper = null; v.decoder = null;
+        state.views.splice(i, 1);
+    }
+
+    // 3. Splice the video file out, then REMAP every session's
+    //    `videoFileIndices` — they are indices INTO `state.videoFiles`, so a
+    //    splice shifts every later one down by one. Leaving them alone
+    //    re-associates each session with its neighbour's video on the next
+    //    session switch.
+    if (vfIdx >= 0) {
+        state.videoFiles.splice(vfIdx, 1);
+        for (var si = 0; si < state.sessions.length; si++) {
+            var sess = state.sessions[si];
+            if (!sess || !sess.videoFileIndices) continue;
+            var remapped = [];
+            for (var fi = 0; fi < sess.videoFileIndices.length; fi++) {
+                var idx = sess.videoFileIndices[fi];
+                if (idx === vfIdx) continue;
+                remapped.push(idx > vfIdx ? idx - 1 : idx);
+            }
+            sess.videoFileIndices = remapped;
+        }
+    }
+
+    // 4. Release the decoder. It is reachable from the cross-session pool too,
+    //    so drop it there first or the next session switch hands a closed
+    //    decoder to `switchSource`.
+    if (decoder) {
+        var poolIdx = state.decoderPool ? state.decoderPool.indexOf(decoder) : -1;
+        if (poolIdx >= 0) state.decoderPool.splice(poolIdx, 1);
+        var coldIdx = state._decoderPoolCold ? state._decoderPoolCold.indexOf(decoder) : -1;
+        if (coldIdx >= 0) {
+            if (decoder._coldTimer) { clearTimeout(decoder._coldTimer); decoder._coldTimer = null; }
+            state._decoderPoolCold.splice(coldIdx, 1);
+        }
+        if (typeof decoder.close === 'function') {
+            try { decoder.close(); } catch (_e) { /* already closed */ }
+        }
+        videoFile.decoder = null;
+    }
+
+    // 5. Re-seat `singleViewIndex` on the view it was NAMING, not on the
+    //    position it happened to hold. Removing a video that sits BEFORE the
+    //    solo'd one shifts every later view down a slot, so a clamp (which
+    //    only catches a dangling index) left the index in range and pointing
+    //    at the next camera along — solo silently showed a different view
+    //    from the one the user put it on. Removing the solo'd view itself has
+    //    no right answer, so it falls back to the clamp.
+    var soloIdx = soloName === null ? -1
+        : state.views.findIndex(function (v) { return v.name === soloName; });
+    state.singleViewIndex = soloIdx >= 0
+        ? soloIdx
+        : Math.min(state.singleViewIndex, Math.max(0, state.views.length - 1));
+    if (state.views.length === 0) state.viewMode = 'grid';
+    if (interactionManager && interactionManager.lastInteractedView === viewName) {
+        interactionManager.lastInteractedView = state.views.length > 0 ? state.views[0].name : null;
+    }
+    // A stale name in the strip's multi-selection is not merely cosmetic: a
+    // non-empty `multiSelectViews` is what suppresses the active-pane
+    // highlight, so one left behind would mute it for the rest of the session.
+    multiSelectViews.delete(viewName);
+
+    // 6. Resettle everything derived from the view list.
+    updateTotalFrames();
+    populateViewStrip();
+    populateSessionStrip();
+    rebuildVideoController();
+    if (state.session) {
+        recomputeUploadedCameras(state.session, state);
+        if (timeline) timeline.refreshTracks(state.session);
+    }
+    var soloNow = state.viewMode === 'single' ? state.views[state.singleViewIndex] : null;
+    if (soloNow && !(paneManager.dockedViews.get(soloNow.name) > 0)) {
+        // Single-view mode shows exactly one pane, and that pane was the one
+        // just closed — so the dock is empty while views remain. Re-render it
+        // on the view solo now falls to, rather than leaving the user in solo
+        // mode staring at nothing with no way back but `g`.
+        // `updateVideoGridDisplay` ends in `refreshPaneInteractions`, which
+        // subsumes the fit/seek/redraw below.
+        updateVideoGridDisplay();
+    } else if (state.views.length > 0) {
+        fitCanvasesToCells();
+        if (videoController) videoController.seekToFrame(state.currentFrame);
+    } else {
+        var emptyMsg = document.getElementById('videoDockEmpty');
+        if (emptyMsg) emptyMsg.classList.remove('hidden');
+    }
+    drawAllOverlays(state.currentFrame);
+    updateInfoPanel();
+
+    return true;
+}
+
+/**
  * Update grid layout — no-op with dockview (layout managed by dock system).
  */
 export function updateGridLayout() {
@@ -1053,14 +1219,32 @@ export function rebuildVideoController() {
     // silently failed and it's falling back to less-precise HTML5 seeking;
     // this makes that visible at a glance instead of requiring the user to
     // dig through the console to confirm which backend is actually active.
-    var decodersMissingMediabunny = state.views.filter(function (v) {
+    //
+    // A decoder whose codec this browser's WebCodecs cannot decode (Firefox +
+    // HEVC) dropped its backend ON PURPOSE (`_mbUnavailable.reason === 'codec'`,
+    // see OnDemandVideoDecoder._initMediabunny); it is told apart from a failed
+    // init, since its stepping is exact (mid-frame <video> seeks), just slower.
+    var missing = state.views.filter(function (v) {
         return v.decoder && !v.decoder._mbBackend;
-    }).length;
-    if (decodersMissingMediabunny > 0) {
-        setStatus(decodersMissingMediabunny + ' of ' + state.views.length
-            + ' camera(s) fell back to HTML5 seeking (frame-accurate mediabunny init failed) — stepping may be a frame or two off',
-            'warning');
+    });
+    var undecodable = missing.filter(function (v) {
+        return v.decoder._mbUnavailable && v.decoder._mbUnavailable.reason === 'codec';
+    });
+    var initFailed = missing.length - undecodable.length;
+    var parts = [];
+    if (undecodable.length > 0) {
+        var CODEC_NAMES = { avc: 'H.264', hevc: 'HEVC', vp8: 'VP8', vp9: 'VP9', av1: 'AV1' };
+        var u = undecodable[0].decoder._mbUnavailable;
+        var codecName = CODEC_NAMES[u.codec] || u.codecString || 'this video';
+        parts.push(undecodable.length + ' of ' + state.views.length
+            + ' camera(s) step with <video> seeks: this browser cannot decode ' + codecName
+            + ' with WebCodecs, so stepping is slower');
     }
+    if (initFailed > 0) {
+        parts.push(initFailed + ' of ' + state.views.length
+            + ' camera(s) fell back to HTML5 seeking (frame-accurate mediabunny init failed) — stepping may be a frame or two off');
+    }
+    if (parts.length) setStatus(parts.join('; '), 'warning');
 }
 
 export function updateTotalFrames() {

@@ -97,6 +97,7 @@ import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import fs from 'node:fs';
+import { acquireBrowserLock } from '../../scripts/browser-lock.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
@@ -157,6 +158,8 @@ const summary = {
     when: new Date().toISOString(), env: {}, scenarios: {}, trace: null,
 };
 
+// a visible browser window: one such run at a time across sessions (scripts/browser-lock.mjs)
+const releaseBrowserLock = await acquireBrowserLock({ label: '_bench-playback' });
 try {
     browser = await chromium.launch({
         // real Chrome (HEVC + hardware decode); EXECUTABLE=<path> drives another
@@ -1129,6 +1132,7 @@ try {
     fs.writeFileSync(path.join(OUT_DIR, 'summary.json'), JSON.stringify(summary, null, 2));
     log(`\nsummary: ${path.join(OUT_DIR, 'summary.json')}`);
     if (browser && !process.env.KEEP_OPEN) { try { await browser.close(); } catch (e) {} }
+    await releaseBrowserLock({ refocus: !process.env.KEEP_OPEN });
     server.kill();
 }
 

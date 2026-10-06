@@ -774,6 +774,8 @@
         });
 
         it('keeps a label size of 0 at 0 — the floor must not create labels', () => {
+            // Unreachable from the modal (its field floors at 1), but a stored blob
+            // from an older build can still carry one.
             const s = __OverlayExportLayout.defaultOverlayExportSettings();
             s.user.labelSize = 0;
             const o = __OverlayExportLayout.overlayOptionsFrom(s, 4000, 3000, 40, 30);
@@ -781,12 +783,46 @@
             assertEqual(o.userOpts.showLabels, false, 'still off');
         });
 
-        it('derives showLabels from the label size', () => {
+        it('gates node labels on showLabels, not on the size (issue #223)', () => {
             const s = __OverlayExportLayout.defaultOverlayExportSettings();
-            s.user.labelSize = 0;
-            assertEqual(__OverlayExportLayout.overlayOptionsFrom(s, 1, 1, 1, 1).userOpts.showLabels, false, 'size 0 → off');
-            s.user.labelSize = 12;
-            assertEqual(__OverlayExportLayout.overlayOptionsFrom(s, 1, 1, 1, 1).userOpts.showLabels, true, 'size 12 → on');
+            // Default: user labels on, reprojection labels off — the Visibility
+            // panel's own defaults.
+            assertEqual(__OverlayExportLayout.overlayOptionsFrom(s, 1, 1, 1, 1).userOpts.showLabels, true, 'user on by default');
+            assertEqual(__OverlayExportLayout.overlayOptionsFrom(s, 1, 1, 1, 1).reprojOpts.showLabels, false, 'reproj off by default');
+            // The toggle turns them off at an unchanged, perfectly usable size —
+            // which is the whole point of having it.
+            s.user.showLabels = false;
+            const off = __OverlayExportLayout.overlayOptionsFrom(s, 1, 1, 1, 1);
+            assertEqual(off.userOpts.showLabels, false, 'toggle off → off');
+            assertTrue(off.userOpts.labelSize > 0, 'size untouched by the toggle');
+            s.reproj.showLabels = true;
+            assertEqual(__OverlayExportLayout.overlayOptionsFrom(s, 1, 1, 1, 1).reprojOpts.showLabels, true, 'reproj toggle on → on');
+        });
+
+        it('has no predicted node-label toggle — the app has no such layer', () => {
+            const s = __OverlayExportLayout.defaultOverlayExportSettings();
+            assertEqual(s.pred.showLabels, undefined, 'no setting');
+            assertEqual(__OverlayExportLayout.overlayOptionsFrom(s, 1, 1, 1, 1).predictedOpts.showLabels, false, 'always off');
+        });
+
+        it('folds an old build\'s labelSize-of-0 into the toggle', () => {
+            // Before #223 a size of 0 WAS the off switch. A blob written then
+            // carries no `showLabels`, so without this the setting would come back
+            // ON — and the toggle would be dead, since 0px labels draw nothing.
+            const s = __OverlayExportLayout.sanitizeSettings(
+                Object.assign(__OverlayExportLayout.defaultOverlayExportSettings(), {
+                    user: Object.assign(__OverlayExportLayout.defaultOverlayExportSettings().user, { labelSize: 0 }),
+                }));
+            assertEqual(s.user.showLabels, false, 'old 0 means off');
+            assertEqual(s.user.labelSize, 12, 'size restored so the toggle has something to draw');
+            // A size the user really chose is left exactly alone.
+            const keep = __OverlayExportLayout.sanitizeSettings(
+                Object.assign(__OverlayExportLayout.defaultOverlayExportSettings(), {
+                    user: Object.assign(__OverlayExportLayout.defaultOverlayExportSettings().user,
+                        { labelSize: 7, showLabels: true }),
+                }));
+            assertEqual(keep.user.labelSize, 7, 'size kept');
+            assertEqual(keep.user.showLabels, true, 'toggle kept');
         });
 
         it('forwards the geometry the caller drew the video with', () => {

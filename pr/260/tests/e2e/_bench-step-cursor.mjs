@@ -22,6 +22,7 @@ import { spawn } from 'node:child_process';
 import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { acquireBrowserLock } from '../../scripts/browser-lock.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
@@ -30,6 +31,8 @@ const PORT = Number(process.env.PORT || 8134);
 if (!DIRS.length) { console.error('set DIRS'); process.exit(2); }
 const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
 await new Promise(r => setTimeout(r, 1200));
+// a visible browser window: one such run at a time across sessions (scripts/browser-lock.mjs)
+const releaseBrowserLock = await acquireBrowserLock({ label: '_bench-step-cursor' });
 let browser;
 try {
     browser = await chromium.launch({ headless: false, channel: 'chrome', args: ['--window-size=900,600'] });
@@ -126,5 +129,6 @@ try {
     }
 } finally {
     if (browser) await browser.close().catch(() => {});
+    await releaseBrowserLock();
     server.kill();
 }
