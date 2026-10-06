@@ -20,6 +20,7 @@ import { spawn } from 'node:child_process';
 import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { acquireBrowserLock } from '../../scripts/browser-lock.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
@@ -30,6 +31,8 @@ const log = (m) => process.stdout.write(m + '\n');
 
 const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
 await new Promise(r => setTimeout(r, 1200));
+// a visible browser window: one such run at a time across sessions (scripts/browser-lock.mjs)
+const releaseBrowserLock = await acquireBrowserLock({ label: '_bench-image-keyframe-decode' });
 let browser;
 const results = [];
 try {
@@ -142,5 +145,6 @@ try {
     fs.mkdirSync(path.join(repoRoot, 'verify', 'keyframe-snap'), { recursive: true });
     fs.writeFileSync(path.join(repoRoot, 'verify', 'keyframe-snap', 'decode-bench-' + Date.now() + '.json'), JSON.stringify(results, null, 1));
     if (browser) await browser.close().catch(() => {});
+    await releaseBrowserLock();
     server.kill();
 }

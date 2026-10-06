@@ -1447,7 +1447,8 @@ as stuck:
 `user-select: none` is now kept for one thing only: a surface whose job is to be
 dragged or repeatedly clicked, where a stray selection is debris — the menu bar,
 the toolbars, the view strip, the video overlays, the ✓/✗ toggle cells in the
-SLP chooser, and **every modal drag handle** (dragging a dialog by its title
+SLP chooser, the info panel's **tab bar** (a horizontal scroller the user drags;
+see MODULES.md `setupPanelTabs`), and **every modal drag handle** (dragging a dialog by its title
 would otherwise smear a selection across it). Covered by
 `tests/e2e/copy-panel-text.mjs`, which drives the REAL clipboard — Playwright's
 `keyboard.press` dispatches the key without running Chromium's edit command, so
@@ -1621,6 +1622,26 @@ node tests/e2e/<name>.mjs             # tests/e2e/*.mjs  (Playwright, one file p
     promised dimensions.
   - `_real-roundtrip.mjs` — the real-data acceptance run (needs a large `.slp`);
     `RELOAD_FILE=`, `MODIFY_RESAVE=1`, `KEEP_RESAVE=1`, `ATTRIBUTE=1`.
+
+**One VISIBLE-browser run at a time, machine-wide (`scripts/browser-lock.mjs`).**
+Several Claude sessions often work on this repo at once, and headed runs —
+`open -a` into the user's real Chrome/Firefox/Safari/Brave, Playwright
+`headless: false`, `HEADED=1` — invalidate each other: opening a tab pushes
+another session's tab to the background (its requestAnimationFrame is then
+throttled, logged as "TAB HIDDEN"), bringing an app to the front covers
+another run's window, and every timing shares one CPU/GPU. On 2026-10-05 three
+sessions overlapped this way. The lock is a directory, `/tmp/luc3d-browser.lock`
+(mkdir is atomic), whose `owner.json` names the holder; a dead or reused owner
+pid is broken automatically. The headed runners above (`_probe-capabilities`,
+`_bench-playback`, `_bench-step-cursor`, `_bench-image-keyframe-decode`,
+`_bench-progress-overlay`, `_diag-image-keyframe-snap`, and
+`_diag-real-align-views` / `run-unit-tests` under `HEADED=1`) take it
+themselves; wrap any other headed run, or a sequence of them, with
+`node scripts/browser-lock.mjs --label="what" -- <command>` (`status` shows the
+holder; a runner inside the wrapper does not wait on it). Releasing brings the
+Claude app to the front BEFORE freeing the lock, so the next holder's window
+opens on top of it — do not add a separate `osascript … activate` after a
+wrapped run. Headless runs do not take it. Covered by `tests/test-browser-lock.mjs`.
 
 ## Python Scripts
 - `scripts/json_to_slp.py` — Convert JSON export to SLEAP .slp format
