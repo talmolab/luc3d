@@ -56,7 +56,8 @@ const mk = (name, src) => {
 };
 const camA = mk('camA.mp4', 'testsrc');
 const camB = mk('camB.mp4', 'testsrc2');
-if (!camA || !camB) {
+const camC = mk('camC.mp4', 'smptebars');
+if (!camA || !camB || !camC) {
     console.log('  (ffmpeg unavailable — skipping videos-panel-buttons.mjs)');
     fs.rmSync(tmp, { recursive: true, force: true });
     process.exit(0);
@@ -195,6 +196,93 @@ try {
         const st = window.__lucid.state;
         return st.session.videoFileIndices.every(i => !!st.videoFiles[i]);
     }), 'every index still resolves to a loaded video');
+
+    // ---- §7 removing while in single-view ("solo") mode --------------------
+    // Done before §6, which empties the dock. Three separate failures live
+    // here, all from state that names a view by POSITION or by a stale
+    // snapshot:
+    //   a) `g` restores `savedGridLayout`, the snapshot `v` took — which still
+    //      lists the removed view, so `fromJSON` rebuilds an empty pane
+    //      wearing its name;
+    //   b) `state.singleViewIndex` indexes `state.views`, so removing a view
+    //      BEFORE the solo'd one slides the next camera into its slot and solo
+    //      silently shows a different view;
+    //   c) removing the solo'd view itself closes the only pane, leaving the
+    //      dock empty while views remain.
+    console.log('\n§7 removing a video while solo (v) does not leave a ghost pane on g');
+    // Addressed by NAME throughout: §3 already removed camA, so the reload
+    // below appends rather than starting clean and `state.views` is not in
+    // alphabetical order. An index-based fixture here would be the very bug
+    // under test, written into its own test.
+    const solo = async (name) => {
+        await page.evaluate((n) => {
+            const item = document.querySelector('.view-strip-item[data-view-name="' + n + '"]');
+            if (item) item.click();
+        }, name);
+        await page.waitForTimeout(150);
+        await page.keyboard.press('v');
+        await page.waitForTimeout(500);
+    };
+    const removeByName = async (name) => {
+        await page.evaluate((n) => {
+            const rows = [...document.querySelectorAll('#videosTable tbody tr')];
+            const row = rows.find(r => r.children[0].textContent === n);
+            if (row) row.click();
+        }, name);
+        await page.click('#btnRemoveVideo');
+        await page.waitForTimeout(700);
+    };
+    const pressG = async () => {
+        await page.evaluate(() => document.body.click());
+        await page.keyboard.press('g');
+        await page.waitForTimeout(700);
+    };
+    const mode = () => page.evaluate(() => ({
+        mode: window.__lucid.state.viewMode,
+        soloName: (window.__lucid.state.views[window.__lucid.state.singleViewIndex] || {}).name,
+    }));
+
+    // Get back to three views (§3 left only camB), then read the live order.
+    page.once('filechooser', (fc) => fc.setFiles([camA, camC]));
+    await page.click('#btnLoadVideos');
+    await page.waitForFunction(() => window.__lucid.state.views.length >= 3, null, { timeout: 60000 });
+    await page.waitForTimeout(600);
+    s = await snapshot(page);
+    check(s.views.length === 3, 'precondition: three views (' + s.views.join() + ')');
+    const [first, second, third] = s.views;
+
+    // (b) solo the SECOND view, then remove the FIRST — the one before it.
+    await solo(second);
+    check((await mode()).soloName === second, 'v solos ' + second);
+    await removeByName(first);
+    let m = await mode();
+    check(m.soloName === second,
+        'solo stays on ' + second + ' after removing the view before it (positional drift would give '
+        + third + ') — got ' + m.soloName);
+    s = await snapshot(page);
+    check(s.panes.join() === second, 'still exactly one pane, and it is ' + second + ': ' + JSON.stringify(s.panes));
+
+    // (a) back to grid — the snapshot `v` took still lists the removed view.
+    const live = [second, third].sort().join();
+    await pressG();
+    s = await snapshot(page);
+    check((await mode()).mode === 'grid', 'g returns to grid mode');
+    check(s.panes.slice().sort().join() === live,
+        'the restored grid holds exactly the live views, no ' + first + ' ghost: ' + JSON.stringify(s.panes));
+    check(s.cells.slice().sort().join() === live, 'and no ghost .video-cell: ' + JSON.stringify(s.cells));
+
+    // (c) solo a view, then remove THAT view.
+    await solo(second);
+    check((await mode()).soloName === second, 'v solos ' + second + ' again');
+    await removeByName(second);
+    m = await mode();
+    s = await snapshot(page);
+    check(m.soloName === third, 'solo falls to the next view when the solo\'d one is removed (got ' + m.soloName + ')');
+    check(s.panes.join() === third,
+        'the dock re-renders that view instead of being left empty: ' + JSON.stringify(s.panes));
+    await pressG();
+    s = await snapshot(page);
+    check(s.panes.join() === third, 'and g still restores only the live view: ' + JSON.stringify(s.panes));
 
     // ---- §6 removing the last one ------------------------------------------
     console.log('\n§6 removing the last video empties the dock');

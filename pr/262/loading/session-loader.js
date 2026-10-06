@@ -21,68 +21,70 @@
 import {
     state, videoController, interactionManager, viewport3d, timeline, paneManager,
     setVideoController, VIEW_NAMES, buildRememberedSkeleton, setProjectSkeleton,
-} from '../ui/app-state.js?v=1823044fe713';
+} from '../ui/app-state.js?v=f655d571a57a';
 
 import {
     Session, Skeleton, Camera, Instance, UnlinkedInstance, FrameGroup, Identity,
-} from '../pose/pose-data.js?v=1823044fe713';
+} from '../pose/pose-data.js?v=f655d571a57a';
 
-import { OnDemandVideoDecoder, VideoController } from './video.js?v=1823044fe713';
-import { videoLoadFailureText } from './video-codec-diagnosis.js?v=1823044fe713';
-import { fileSystemAccessHint } from '../ui/browser-hints.js?v=1823044fe713';
+import { OnDemandVideoDecoder, VideoController } from './video.js?v=f655d571a57a';
+import { videoLoadFailureText } from './video-codec-diagnosis.js?v=f655d571a57a';
+import { fileSystemAccessHint } from '../ui/browser-hints.js?v=f655d571a57a';
 
 import {
     pickFiles, pickFolder, pickVideoFiles,
     parseCalibrationTOML, parseCalibrationJSON, parseSlpH5, parseSlpViaSleapIO,
     loadCalibrationFile,
-} from '../import-export/file-io.js?v=1823044fe713';
+} from '../import-export/file-io.js?v=f655d571a57a';
 
-import { resolveImportTrackIdx, nulledNodesFromOcclusion } from '../import-export/import-track-resolve.js?v=1823044fe713';
+import { resolveImportTrackIdx, nulledNodesFromOcclusion } from '../import-export/import-track-resolve.js?v=f655d571a57a';
 // Pure `.slp`-per-camera selection rule. Extracted so it can be bridged into
 // the browser test runner (session-loader itself pulls app.js) — same reason
 // and same shape as `resolveImportTrackIdx` above.
-import { chooseCameraSlp } from './percam-slp-choice.js?v=1823044fe713';
+import { chooseCameraSlp } from './percam-slp-choice.js?v=f655d571a57a';
 // Shared SLP grouped-reconstruction (identities + InstanceGroups + nulledNodes/
 // occlusion + 3D points). Circular ESM import (slp-import imports back
 // recomputeUploadedCameras); only invoked inside a function body.
-import { restoreGroupingAndUnlink, reconstructInstanceGroupsFromSessionLazy } from '../import-export/slp-import.js?v=1823044fe713';
-import { REBASED_CALIBRATION_NAME, pickCalibrationFile } from './calibration-pick.js?v=1823044fe713';
+import { restoreGroupingAndUnlink, reconstructInstanceGroupsFromSessionLazy } from '../import-export/slp-import.js?v=f655d571a57a';
+import { REBASED_CALIBRATION_NAME, pickCalibrationFile } from './calibration-pick.js?v=f655d571a57a';
 
 import {
     LazyFrameLoader, shouldUseLazyH5, shouldUseLazySlp, getInstanceGroupsForFrame,
     ensureLazyFrameData,
-} from '../pose/triangulation.js?v=1823044fe713';
-import { SioLazyLoader } from './sio-lazy-loader.js?v=1823044fe713';
+} from '../pose/triangulation.js?v=f655d571a57a';
+import { SioLazyLoader } from './sio-lazy-loader.js?v=f655d571a57a';
 
 // Status UI moved to import-export/save-load.js in Pass 3c-1.
 import {
     setStatus, showLoading, hideLoading, ensureNo3dImportBlockingLoad,
-} from '../import-export/save-load.js?v=1823044fe713';
-import { showLoadingProgress, createProgressPacer, yieldToPaint } from '../ui/loading-overlay.js?v=1823044fe713';
+} from '../import-export/save-load.js?v=f655d571a57a';
+import { showLoadingProgress, createProgressPacer, yieldToPaint } from '../ui/loading-overlay.js?v=f655d571a57a';
 
 // Circular import — these are still defined in app.js for now. See module
 // header note. They are only invoked inside function bodies, never at
 // module-init time, so live-binding lookup keeps them functional.
-import { drawAllOverlays, setReprojErrorVisible } from '../ui/rendering.js?v=1823044fe713';
-import { updateInfoPanel, promptImportSkeletonForAllSessions } from '../ui/info-panel.js?v=1823044fe713';
-import { noteSessionCalibrationDivergence } from '../ui/calibration-notice.js?v=1823044fe713';
-import { parseSkeletonJSON } from '../import-export/skeleton-json.js?v=1823044fe713';
+import { drawAllOverlays, setReprojErrorVisible } from '../ui/rendering.js?v=f655d571a57a';
+import { updateInfoPanel, promptImportSkeletonForAllSessions } from '../ui/info-panel.js?v=f655d571a57a';
+import { noteSessionCalibrationDivergence } from '../ui/calibration-notice.js?v=f655d571a57a';
+import { parseSkeletonJSON } from '../import-export/skeleton-json.js?v=f655d571a57a';
 // Pass 3i-3: setupInteraction / setup3DViewport / setupTimeline / updateFpsDisplay /
 // hideWelcomeOverlay moved to pose/initialization.js.
 import {
     setupInteraction, setup3DViewport, setupTimeline,
     updateFpsDisplay,
     hideWelcomeOverlay,
-} from '../pose/initialization.js?v=1823044fe713';
+} from '../pose/initialization.js?v=f655d571a57a';
 // Pass 3h: populateViewStrip / populateSessionStrip / switchSession moved to sessions-panes.js.
 import {
     populateViewStrip, populateSessionStrip, switchSession, multiSelectViews,
-} from '../ui/sessions-panes.js?v=1823044fe713';
+} from '../ui/sessions-panes.js?v=f655d571a57a';
 // Pass 3e-1: updateSeekbar / fitTimelineToData / onPlaybackStateChange moved to ui-wiring.js.
-import { updateSeekbar, fitTimelineToData, onPlaybackStateChange } from '../ui/ui-wiring.js?v=1823044fe713';
-import { getLoadingProgressModal } from '../ui/loading-progress-modal.js?v=1823044fe713';
-import { readVisibilityMetadata } from '../import-export/visibility-metadata.js?v=1823044fe713';
-import { readPlaneMetadata, resetPlaneState } from '../import-export/plane-metadata.js?v=1823044fe713';
+import {
+    updateSeekbar, fitTimelineToData, onPlaybackStateChange, updateVideoGridDisplay,
+} from '../ui/ui-wiring.js?v=f655d571a57a';
+import { getLoadingProgressModal } from '../ui/loading-progress-modal.js?v=f655d571a57a';
+import { readVisibilityMetadata } from '../import-export/visibility-metadata.js?v=f655d571a57a';
+import { readPlaneMetadata, resetPlaneState } from '../import-export/plane-metadata.js?v=f655d571a57a';
 
 // Module-private debounce timer for the zoom-redraw callback in
 // rebuildVideoController(). app.js's setupEmptyVideoController() has its own
@@ -902,6 +904,11 @@ export function removeVideoFile(videoFile) {
     var hasView = state.views.some(function (v) { return v.name === viewName; });
     if (vfIdx < 0 && !hasView) return false;
     var decoder = videoFile.decoder;
+    // Single-view mode names its view by POSITION in `state.views`, so the
+    // splice below has to be followed by a re-derivation, not a clamp. Noted
+    // before anything moves.
+    var soloView = state.views[state.singleViewIndex];
+    var soloName = soloView ? soloView.name : null;
 
     // 1. Close the dock pane(s) for this view — the whole panel, not just its
     //    canvases, so the viewer area loses it rather than going blank.
@@ -959,11 +966,18 @@ export function removeVideoFile(videoFile) {
         videoFile.decoder = null;
     }
 
-    // 5. Single-view mode indexes `state.views` positionally, so a removal
-    //    past the solo'd view leaves the index dangling.
-    if (state.singleViewIndex >= state.views.length) {
-        state.singleViewIndex = Math.max(0, state.views.length - 1);
-    }
+    // 5. Re-seat `singleViewIndex` on the view it was NAMING, not on the
+    //    position it happened to hold. Removing a video that sits BEFORE the
+    //    solo'd one shifts every later view down a slot, so a clamp (which
+    //    only catches a dangling index) left the index in range and pointing
+    //    at the next camera along — solo silently showed a different view
+    //    from the one the user put it on. Removing the solo'd view itself has
+    //    no right answer, so it falls back to the clamp.
+    var soloIdx = soloName === null ? -1
+        : state.views.findIndex(function (v) { return v.name === soloName; });
+    state.singleViewIndex = soloIdx >= 0
+        ? soloIdx
+        : Math.min(state.singleViewIndex, Math.max(0, state.views.length - 1));
     if (state.views.length === 0) state.viewMode = 'grid';
     if (interactionManager && interactionManager.lastInteractedView === viewName) {
         interactionManager.lastInteractedView = state.views.length > 0 ? state.views[0].name : null;
@@ -982,7 +996,16 @@ export function removeVideoFile(videoFile) {
         recomputeUploadedCameras(state.session, state);
         if (timeline) timeline.refreshTracks(state.session);
     }
-    if (state.views.length > 0) {
+    var soloNow = state.viewMode === 'single' ? state.views[state.singleViewIndex] : null;
+    if (soloNow && !(paneManager.dockedViews.get(soloNow.name) > 0)) {
+        // Single-view mode shows exactly one pane, and that pane was the one
+        // just closed — so the dock is empty while views remain. Re-render it
+        // on the view solo now falls to, rather than leaving the user in solo
+        // mode staring at nothing with no way back but `g`.
+        // `updateVideoGridDisplay` ends in `refreshPaneInteractions`, which
+        // subsumes the fit/seek/redraw below.
+        updateVideoGridDisplay();
+    } else if (state.views.length > 0) {
         fitCanvasesToCells();
         if (videoController) videoController.seekToFrame(state.currentFrame);
     } else {

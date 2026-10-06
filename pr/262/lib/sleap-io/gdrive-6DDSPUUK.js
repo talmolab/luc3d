@@ -4,7 +4,7 @@ import {
   openGdrive,
   parseGdrive,
   urlFromConfirmation
-} from "./chunk-YS7Q6CO6.js?v=1823044fe713";
+} from "./chunk-YS7Q6CO6.js?v=f655d571a57a";
 export {
   DEFAULT_MAX_BYTES,
   checkDownloadHost,
