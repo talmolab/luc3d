@@ -758,6 +758,12 @@ async function reopenSessionLazyLoader(session, sourceFileEntries, wasSharedStor
         session.lazyLoader = loader;
         return loader;
     }
+    // Parallel, and `sourceFiles` is in the ORIGINAL load's open-resolution
+    // order — neither matters: each store is re-indexed into the union of the
+    // cameras' track names in camera-NAME order (`SioLazyLoader._unifyTracks`),
+    // so this re-derives the track columns the original load had. (Only those:
+    // a store edit made in memory since — `remapTracksFromIdentity`,
+    // `deleteInstanceRows` — is not in the files and is not reproduced here.)
     var opens = [];
     for (var i = 0; i < sourceFileEntries.length; i++) {
         var entry = sourceFileEntries[i];

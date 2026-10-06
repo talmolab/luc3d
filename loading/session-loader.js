@@ -56,6 +56,7 @@ import {
     ensureLazyFrameData,
 } from '../pose/triangulation.js';
 import { SioLazyLoader } from './sio-lazy-loader.js';
+import { unionTrackNames, remapTrackIdx } from './track-union.js';
 
 // Status UI moved to import-export/save-load.js in Pass 3c-1.
 import {
@@ -2603,6 +2604,11 @@ export async function handleLoadProjectSlpLazy(slpFile) {
  * `subarray` view): a view would pin the whole camera buffer, and structured-
  * cloning a view (e.g. posting an instance to a worker) copies its entire
  * underlying buffer.
+ *
+ * `trackRemap` maps this camera's OWN track index to the session's
+ * (`unionTrackNames`, `loading/track-union.js`); an index it does not cover is
+ * trackless (`remapTrackIdx`), never kept raw — a raw index would name
+ * whichever session track happens to sit there.
  */
 export function addColumnarFramesToSession(session, camName, col, trackRemap) {
     var nn = col.numNodes;
@@ -2615,7 +2621,7 @@ export function addColumnarFramesToSession(session, camName, col, trackRemap) {
         var fg = session.getFrameGroup(frameIdx);
         for (var i = col.instOffsets[f], end = col.instOffsets[f + 1]; i < end; i++) {
             var rawTrackIdx = col.trackIdx[i];
-            var remappedTrackIdx = trackRemap[rawTrackIdx] !== undefined ? trackRemap[rawTrackIdx] : rawTrackIdx;
+            var remappedTrackIdx = remapTrackIdx(trackRemap, rawTrackIdx);
             var instType = col.type[i] === 1 ? 'predicted' : 'user';
             var trackIdx = resolveImportTrackIdx(session, remappedTrackIdx, instType);
             var instance = new Instance(col.xy.slice(i * stride, (i + 1) * stride),
@@ -3073,6 +3079,15 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
             showLoading('Building session data...');
         }
 
+        // ONE session track list for the whole folder, built before any camera's
+        // instances: the union of every parsed camera's own track names, cameras
+        // in sorted name order (`loading/track-union.js` — the same rule both
+        // lazy loaders apply, so a folder gives the same `session.tracks` on
+        // either path). Each camera's own indices are mapped into it below.
+        var trackUnion = unionTrackNames(parseJobs.map(function (job, j) {
+            return { camName: job.camName, names: (parseResults[j] && parseResults[j].tracks) || [] };
+        }).filter(function (entry, j) { return !!parseResults[j]; }));
+
         for (var pri = 0; pri < parseJobs.length; pri++) {
             if (pri > 0 && buildPacer.due()) {
                 showLoadingProgress('Building session', pri, parseJobs.length, loadStep(2, 'cameras'));
@@ -3088,7 +3103,7 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
 
             if (!state.session) {
                 var skeleton = new Skeleton('skeleton', [], []);
-                var tracks = slpData.tracks || ['track_0'];
+                var tracks = trackUnion.names;
                 var sessionName = folderName || ('Session ' + (state.sessions.length + 1));
                 state.session = new Session(cameras.length > 0 ? cameras : [], skeleton, tracks, sessionName);
                 firstSession = state.session;
@@ -3098,18 +3113,7 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
                 }
             }
 
-            var trackRemap = {};
-            if (slpData.tracks) {
-                for (var ti = 0; ti < slpData.tracks.length; ti++) {
-                    var existingIdx = state.session.tracks.indexOf(slpData.tracks[ti]);
-                    if (existingIdx >= 0) {
-                        trackRemap[ti] = existingIdx;
-                    } else {
-                        trackRemap[ti] = state.session.tracks.length;
-                        state.session.tracks.push(slpData.tracks[ti]);
-                    }
-                }
-            }
+            var trackRemap = trackUnion.remapByCam.get(camName) || new Int32Array(0);
 
             if (slpData.columnar) {
                 addColumnarFramesToSession(state.session, camName, slpData.columnar, trackRemap);
@@ -3125,7 +3129,7 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
                         for (var ii = 0; ii < frameData.instances.length; ii++) {
                             var inst = frameData.instances[ii];
                             var rawTrackIdx = inst.trackIdx !== undefined ? inst.trackIdx : (inst.track_idx !== undefined ? inst.track_idx : 0);
-                            var remappedTrackIdx = trackRemap[rawTrackIdx] !== undefined ? trackRemap[rawTrackIdx] : rawTrackIdx;
+                            var remappedTrackIdx = remapTrackIdx(trackRemap, rawTrackIdx);
                             var instType = inst.type || (inst.from_predicted !== undefined ? 'predicted' : 'user');
                             var trackIdx = resolveImportTrackIdx(state.session, remappedTrackIdx, instType);
                             var instance = new Instance(inst.points || [], trackIdx, instType, inst.score || 1.0);
@@ -3137,11 +3141,15 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
             }
         }
 
-        // Integrate lazy loader metadata into session
+        // Integrate lazy loader metadata into session. The folder is routed as ONE
+        // unit (above), so a lazy load has no eager cameras and no session yet.
         if (lazyLoader) {
             if (!state.session) {
                 var lazySkel = lazyLoader.skeleton || { name: 'skeleton', nodes: [], edges: [] };
                 var lazySkeleton = new Skeleton(lazySkel.name || 'skeleton', lazySkel.nodes || [], lazySkel.edges || []);
+                // The union of every camera's own tracks, each camera's store
+                // already re-indexed into it — the same list whichever camera's
+                // file finished opening first (`_unifyTracks` in both loaders).
                 var lazyTracks = lazyLoader.trackNames.length > 0 ? lazyLoader.trackNames : ['track_0'];
                 var sessionName = folderName || ('Session ' + (state.sessions.length + 1));
                 state.session = new Session(cameras.length > 0 ? cameras : [], lazySkeleton, lazyTracks, sessionName);
@@ -3150,14 +3158,6 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
                 if (state.sessions.indexOf(state.session) < 0) {
                     state.sessions.push(state.session);
                     state.activeSessionIdx = state.sessions.length - 1;
-                }
-            } else {
-                if (lazyLoader.trackNames) {
-                    for (var lti = 0; lti < lazyLoader.trackNames.length; lti++) {
-                        if (state.session.tracks.indexOf(lazyLoader.trackNames[lti]) < 0) {
-                            state.session.tracks.push(lazyLoader.trackNames[lti]);
-                        }
-                    }
                 }
             }
             state.session.lazyLoader = lazyLoader;

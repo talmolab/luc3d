@@ -24,6 +24,7 @@ import { isCameraTracked, getTrackingThreshold, getDefaultTriangulationMethod } 
 import { markDirty, setStatus, showLoading, hideLoading } from '../import-export/save-load.js';
 import { showLoadingProgress, createProgressPacer, yieldToPaint } from '../ui/loading-overlay.js';
 import { createGroupSolver } from './triangulation-pool.js';
+import { unionTrackNames, remapTrackIdx, isIdentityRemap } from '../loading/track-union.js';
 // Pass 3i-3: update3DViewport moved to pose/initialization.js.
 import { update3DViewport } from './initialization.js';
 // The pure math (DLT, refinement, reprojection, triangulateAndReproject) lives
@@ -1535,6 +1536,36 @@ export function getOrComputeReprojectedInstance(group, camName) {
 // ============================================
 
 /**
+ * Re-key a worker's dense occupancy grid (`data[frame * nTracks + ownTrack]`)
+ * into the SPARSE form `SioLazyLoader` produces, keyed by SESSION track index —
+ * for a camera whose own indices are not already the session's
+ * (`LazyFrameLoader._unifyTracks`). Sparse rather than a wider dense grid
+ * because a wider grid costs nFrames x the WHOLE union per camera.
+ * `ui/timeline.js` reads both forms.
+ */
+function denseOccupancyToSparse(data, nTracks, nFrames, remap, nSessionTracks) {
+    var segments = new Map();
+    var counts = new Map();
+    for (var tr = 0; tr < nTracks; tr++) {
+        var key = remapTrackIdx(remap, tr);
+        if (key < 0) continue;
+        var segs = [], count = 0, start = -1;
+        for (var fi = 0; fi < nFrames; fi++) {
+            if (data[fi * nTracks + tr]) {
+                if (start < 0) start = fi;
+                count++;
+            } else if (start >= 0) {
+                segs.push({ start: start, end: fi - 1 });
+                start = -1;
+            }
+        }
+        if (start >= 0) segs.push({ start: start, end: nFrames - 1 });
+        if (segs.length > 0) { segments.set(key, segs); counts.set(key, count); }
+    }
+    return { sparse: true, nTracks: nSessionTracks, nFrames: nFrames, segments: segments, counts: counts };
+}
+
+/**
  * Per-camera worker-backed lazy loader for analysis H5 files. Spawns one
  * `loading/slp-import-worker.js` per camera, holds metadata, and serves
  * frame requests with prefetch + LRU caching.
@@ -1549,11 +1580,94 @@ export class LazyFrameLoader {
         this.prefetchAhead = 20;
         this.nFrames = 0;
         this.skeleton = null;
+        /** Session track list: the union of every camera's own track names (see `_unifyTracks`). */
         this.trackNames = [];
         this.videos = new Map();
         this.trackOccupancy = new Map();
         this._requestId = 0;
         this._pending = new Map();
+        /** camName -> Int32Array own track index -> session index; absent when it is the identity. */
+        this._trackRemapByCam = new Map();
+    }
+
+    /**
+     * Record one camera's worker metadata. Cameras open in PARALLEL, so this
+     * must not depend on arrival order: the skeleton comes from the first
+     * camera BY NAME, and `trackNames` is rebuilt as the union over every camera
+     * so far (`_unifyTracks`).
+     */
+    _registerCamera(cameraName, worker, data) {
+        this.workers.set(cameraName, worker);
+        this.metadata.set(cameraName, data);
+        var cams = Array.from(this.metadata.keys()).sort();
+        this.skeleton = null;
+        for (var i = 0; i < cams.length && !this.skeleton; i++) {
+            this.skeleton = this.metadata.get(cams[i]).skeleton || null;
+        }
+        if (data.nFrames > this.nFrames) this.nFrames = data.nFrames;
+        this.videos.set(cameraName, data.videos ? data.videos[0] : null);
+        this._unifyTracks();
+    }
+
+    /**
+     * Re-derive `trackNames` — the union of every camera's own track names,
+     * cameras in sorted name order (`loading/track-union.js`) — and how each
+     * camera's own track index maps into it. A worker only knows its own file,
+     * so its frames carry OWN indices and are re-indexed as they arrive
+     * (`_remapFrameTracks`); the occupancy grid, keyed by own index, is
+     * re-keyed here. Computed from the metadata, never from a previous union,
+     * so the result is the same whichever worker answers first.
+     */
+    _unifyTracks() {
+        var self = this;
+        var cams = Array.from(this.metadata.keys());
+        var union = unionTrackNames(cams.map(function (c) {
+            return { camName: c, names: self._ownTrackNames(self.metadata.get(c)) };
+        }));
+        var changed = false;
+        for (var ci = 0; ci < cams.length; ci++) {
+            var cam = cams[ci];
+            var remap = union.remapByCam.get(cam);
+            var nextRemap = isIdentityRemap(remap) ? null : remap;
+            var prev = this._trackRemapByCam.get(cam) || null;
+            var same = prev === nextRemap || (prev !== null && nextRemap !== null &&
+                prev.length === nextRemap.length && prev.every(function (v, k) { return v === nextRemap[k]; }));
+            if (!same) changed = true;
+            if (nextRemap) this._trackRemapByCam.set(cam, nextRemap);
+            else this._trackRemapByCam.delete(cam);
+
+            var md = this.metadata.get(cam);
+            if (md.trackOccupancy) {
+                this.trackOccupancy.set(cam, nextRemap
+                    ? denseOccupancyToSparse(md.trackOccupancy, md.nTracks, md.nFrames, nextRemap, union.names.length)
+                    : { data: md.trackOccupancy, nTracks: md.nTracks, nFrames: md.nFrames });
+            }
+        }
+        // A cached frame carries the indices of the map it arrived under.
+        if (changed) { this.cache.clear(); this.cacheOrder = []; }
+        this.trackNames = union.names;
+    }
+
+    /**
+     * A camera's own track names, padded to its column count with the worker's
+     * own `track_<i>` convention: `nTracks` comes from the data's shape and
+     * `track_names` can be shorter, and an unnamed column is still a track.
+     */
+    _ownTrackNames(md) {
+        var names = (md.trackNames || []).map(String);
+        var n = md.nTracks || 0;
+        for (var i = names.length; i < n; i++) names.push(n === 1 ? 'track' : 'track_' + i);
+        return names;
+    }
+
+    /** Re-index one worker frame's instances (own -> session track index), in place. */
+    _remapFrameTracks(cameraName, instances) {
+        var remap = this._trackRemapByCam.get(cameraName);
+        if (!remap || !instances) return;
+        for (var i = 0; i < instances.length; i++) {
+            var inst = instances[i];
+            if (inst && inst.trackIdx != null && inst.trackIdx >= 0) inst.trackIdx = remapTrackIdx(remap, inst.trackIdx);
+        }
     }
 
     open(cameraName, file, onProgress) {
@@ -1569,26 +1683,19 @@ export class LazyFrameLoader {
             worker.onmessage = function (e) {
                 var msg = e.data;
                 if (msg.type === 'metadata') {
-                    self.workers.set(cameraName, worker);
-                    self.metadata.set(cameraName, msg.data);
-                    if (!self.skeleton) {
-                        self.skeleton = msg.data.skeleton;
-                        self.trackNames = msg.data.trackNames;
-                    }
-                    if (msg.data.nFrames > self.nFrames) self.nFrames = msg.data.nFrames;
-                    self.videos.set(cameraName, msg.data.videos ? msg.data.videos[0] : null);
-                    if (msg.data.trackOccupancy) {
-                        self.trackOccupancy.set(cameraName, {
-                            data: msg.data.trackOccupancy,
-                            nTracks: msg.data.nTracks,
-                            nFrames: msg.data.nFrames,
-                        });
-                    }
+                    self._registerCamera(cameraName, worker, msg.data);
                     resolve(msg.data);
                 } else if (msg.type === 'frameData') {
+                    // Re-indexed HERE, the one place every frame passes through —
+                    // `getFrame`, `prefetch` and `batchLoadLazyFrames` all post
+                    // to the worker directly.
+                    self._remapFrameTracks(cameraName, msg.instances);
                     var cb = self._pending.get(msg.requestId);
                     if (cb) { self._pending.delete(msg.requestId); cb.resolve({ frameIdx: msg.frameIdx, instances: msg.instances }); }
                 } else if (msg.type === 'framesData') {
+                    for (var fdi = 0; fdi < (msg.frames || []).length; fdi++) {
+                        self._remapFrameTracks(cameraName, msg.frames[fdi] && msg.frames[fdi].instances);
+                    }
                     var cb2 = self._pending.get(msg.requestId);
                     if (cb2) { self._pending.delete(msg.requestId); cb2.resolve(msg.frames); }
                 } else if (msg.type === 'error') {
@@ -1679,7 +1786,7 @@ export class LazyFrameLoader {
         for (var entry of this.workers) {
             try { entry[1].postMessage({ type: 'close' }); entry[1].terminate(); } catch (e) { }
         }
-        this.workers.clear(); this.metadata.clear(); this.cache.clear();
+        this.workers.clear(); this.metadata.clear(); this.cache.clear(); this._trackRemapByCam.clear();
         this.cacheOrder = []; this._pending.clear();
     }
 }
