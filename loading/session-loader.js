@@ -1219,14 +1219,32 @@ export function rebuildVideoController() {
     // silently failed and it's falling back to less-precise HTML5 seeking;
     // this makes that visible at a glance instead of requiring the user to
     // dig through the console to confirm which backend is actually active.
-    var decodersMissingMediabunny = state.views.filter(function (v) {
+    //
+    // A decoder whose codec this browser's WebCodecs cannot decode (Firefox +
+    // HEVC) dropped its backend ON PURPOSE (`_mbUnavailable.reason === 'codec'`,
+    // see OnDemandVideoDecoder._initMediabunny); it is told apart from a failed
+    // init, since its stepping is exact (mid-frame <video> seeks), just slower.
+    var missing = state.views.filter(function (v) {
         return v.decoder && !v.decoder._mbBackend;
-    }).length;
-    if (decodersMissingMediabunny > 0) {
-        setStatus(decodersMissingMediabunny + ' of ' + state.views.length
-            + ' camera(s) fell back to HTML5 seeking (frame-accurate mediabunny init failed) — stepping may be a frame or two off',
-            'warning');
+    });
+    var undecodable = missing.filter(function (v) {
+        return v.decoder._mbUnavailable && v.decoder._mbUnavailable.reason === 'codec';
+    });
+    var initFailed = missing.length - undecodable.length;
+    var parts = [];
+    if (undecodable.length > 0) {
+        var CODEC_NAMES = { avc: 'H.264', hevc: 'HEVC', vp8: 'VP8', vp9: 'VP9', av1: 'AV1' };
+        var u = undecodable[0].decoder._mbUnavailable;
+        var codecName = CODEC_NAMES[u.codec] || u.codecString || 'this video';
+        parts.push(undecodable.length + ' of ' + state.views.length
+            + ' camera(s) step with <video> seeks: this browser cannot decode ' + codecName
+            + ' with WebCodecs, so stepping is slower');
     }
+    if (initFailed > 0) {
+        parts.push(initFailed + ' of ' + state.views.length
+            + ' camera(s) fell back to HTML5 seeking (frame-accurate mediabunny init failed) — stepping may be a frame or two off');
+    }
+    if (parts.length) setStatus(parts.join('; '), 'warning');
 }
 
 export function updateTotalFrames() {
