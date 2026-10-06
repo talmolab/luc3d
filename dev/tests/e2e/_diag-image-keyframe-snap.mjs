@@ -31,6 +31,7 @@ import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import fs from 'node:fs';
+import { acquireBrowserLock } from '../../scripts/browser-lock.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
@@ -53,6 +54,8 @@ const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repo
 await sleep(1200);
 const summary = { dataset: DATASET, gate: GATE, tri: TRI, variants: {} };
 const save = () => fs.writeFileSync(path.join(OUT_DIR, 'summary.json'), JSON.stringify(summary, null, 1));
+// a visible browser window: one such run at a time across sessions (scripts/browser-lock.mjs)
+const releaseBrowserLock = await acquireBrowserLock({ label: '_diag-image-keyframe-snap' });
 let browser;
 try {
     browser = await chromium.launch({ headless: false, channel: 'chrome',
@@ -164,5 +167,6 @@ try {
     save();
     log('wrote ' + path.relative(repoRoot, OUT_DIR));
     if (browser) await browser.close().catch(() => {});
+    await releaseBrowserLock();
     server.kill();
 }
