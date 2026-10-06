@@ -66,10 +66,30 @@
  *         idswitch = full with an ID Switches row selected whose interval
  *         covers the whole run, so the animated box in every view, the
  *         row's progress bar and its playhead all update every frame
- *     (append #N to repeat a scenario, e.g. full#2)
+ *     (append #N to repeat a scenario, e.g. full#2; append @<frame> to start
+ *     that scenario somewhere other than START, e.g. full#2@40000 — a region
+ *     no earlier scenario played reads COLD video, which is what a run from a
+ *     network share is about)
  *     TRI=0                  skip the explicit Triangulate All (measures the
  *                            lazy per-frame re-solve path after Track All)
- *     START=3000             start frame for every scenario
+ *     START=3000             start frame for every scenario without an @<frame>
+ *     SEEKS=0                after the scenarios, N paused random JUMPS (each
+ *                            followed by STEPS single forward steps): time until
+ *                            every view shows the frame (VideoController
+ *                            .seekToFrame). Targets avoid every scenario's
+ *                            played range, so each jump reads cold video.
+ *     STEPS=5                forward steps after each jump
+ *     SEED=12345             seed for the SEEKS targets (change it to get cold
+ *                            targets on a second run against the same files)
+ *     SEEK_TARGETS=f1,f2,…   explicit jump targets instead of seeded ones (e.g.
+ *                            frames known to be unread on a network share)
+ *     PREP=none              play the project as loaded: no Track All, no
+ *                            Triangulate All (2D predictions only)
+ *     SEEKS_FIRST=1          run the SEEKS test before the scenarios instead of
+ *                            after (a fresh page rather than one that has
+ *                            played every scenario)
+ * Every scenario also samples the JS heap (performance.memory, 1 Hz) and the
+ * number of RESIDENT frame groups (lazy projects hydrate as they play).
  *     WARMUP=2               seconds of playback discarded before measuring
  *     DUR=20                 measured seconds per scenario
  *     TRACE_SECS=8           seconds of the traced `full` pass (0 = no trace)
@@ -107,6 +127,14 @@ const DATASET = process.env.DATASET ||
 const LABEL = process.env.LABEL || 'baseline';
 const SCENARIOS = (process.env.SCENARIOS || 'full,noReproj,noOverlay,overlayOnly,noInfo,no3d,lean,rvfc').split(',').map(s => s.trim()).filter(Boolean);
 const START = Number(process.env.START || 3000);
+// `name@frame` — a per-scenario start frame.
+const startOf = (name) => { const m = /@(\d+)$/.exec(name); return m ? Number(m[1]) : START; };
+const SEEKS = Number(process.env.SEEKS || 0);
+const STEPS = Number(process.env.STEPS ?? 5);
+const SEEKS_FIRST = process.env.SEEKS_FIRST === '1';
+const SEED = Number(process.env.SEED || 12345);
+const SEEK_TARGETS = (process.env.SEEK_TARGETS || '').split(',').map(x => x.trim()).filter(Boolean).map(Number);
+const PREP = process.env.PREP || 'full';
 const WARMUP = Number(process.env.WARMUP || 2);
 const DUR = Number(process.env.DUR || 20);
 const TRACE_SECS = Number(process.env.TRACE_SECS ?? 8);
@@ -286,7 +314,8 @@ try {
     // as a user would. Track All asks for the animal count via window.prompt(),
     // answered by the dialog handler (NANIMALS, default 3: ~95% of frames in
     // the HardFight set hold 3 instances per camera).
-    if (ps.with3d === 0 && ps.identities === 0 && ps.groups === 0) {
+    if (PREP === 'none') log(`\n[${el()}] PREP=none — playing the project as loaded (no Track All / Triangulate All)`);
+    if (PREP !== 'none' && ps.with3d === 0 && ps.identities === 0 && ps.groups === 0) {
         log(`\n[${el()}] no identities — running Track All (NANIMALS=${process.env.NANIMALS || 3})`);
         const r = await page.evaluate(async () => {
             const t = performance.now();
@@ -306,7 +335,7 @@ try {
     // scenarios incomparable. So unless TRI=0, Triangulate All explicitly (the
     // "Track All -> Triangulate All" user state); TRI=0 measures the lazy path.
     const wantTri = process.env.TRI !== '0' && ps.withReproj < ps.groups * 0.9;
-    if (ps.with3d === 0 || wantTri) {
+    if (PREP !== 'none' && (ps.with3d === 0 || wantTri)) {
         log(`\n[${el()}] running Triangulate All (toolbar routing)`);
         const r = await page.evaluate(async () => {
             const st = window.__lucid.state;
@@ -330,7 +359,7 @@ try {
         log(`[${el()}] project: ${JSON.stringify(ps)}`);
     }
     summary.project = ps;
-    if (ps.with3d === 0) log('  !! WARNING: still no 3D — reprojections will not be drawn; results will not reflect the user scenario');
+    if (ps.with3d === 0 && PREP !== 'none') log('  !! WARNING: still no 3D — reprojections will not be drawn; results will not reflect the user scenario');
 
     // Make sure the Visibility state is the user's: everything on.
     await page.evaluate(() => {
@@ -420,7 +449,19 @@ try {
                 origDraw: vc.callbacks.drawOverlays,
                 origCopy: views.map(v => v.decoder.drawCurrentFrame),
                 origCap: views.map(v => v.decoder.captureCurrentFrame),
+                // <video> ran out of data ('waiting') / its fetch stopped
+                // progressing ('stalled'): during warm-up and while measuring.
+                waiting: views.map(() => 0), stalled: views.map(() => 0), warmWaiting: views.map(() => 0),
+                // startPlayback -> first draw past the start frame (set by the runner)
+                startup: { t0: null, startFrame: window.__lucid.state.currentFrame, firstAdvanceMs: null },
             };
+            R.mediaOff = views.map((v, i) => {
+                const vel = v.decoder._videoEl;
+                const w = () => { if (R.measuring) R.waiting[i]++; else R.warmWaiting[i]++; };
+                const s = () => { if (R.measuring) R.stalled[i]++; };
+                vel.addEventListener('waiting', w); vel.addEventListener('stalled', s);
+                return () => { vel.removeEventListener('waiting', w); vel.removeEventListener('stalled', s); };
+            });
             let pendingVidMs = 0, pendingTlMs = 0, pendingSeekMs = 0, tlCalled = false;
             // Index of the VideoFrame actually painted into each view's canvas
             // this draw (refresh loop only; drawImage(<video>) has no timestamp).
@@ -520,6 +561,8 @@ try {
                 const t = performance.now();
                 const r = realDraw.apply(this, arguments);
                 const ovMs = performance.now() - t;
+                if (!R.measuring && st.isPlaying && R.startup.t0 != null && R.startup.firstAdvanceMs == null &&
+                    f > R.startup.startFrame) R.startup.firstAdvanceMs = performance.now() - R.startup.t0;
                 if (R.measuring && st.isPlaying) {
                     const drift = [];
                     for (let i = 1; i < views.length; i++) {
@@ -608,10 +651,26 @@ try {
             return { name: v.name, total: q.totalVideoFrames, dropped: q.droppedVideoFrames, corrupted: q.corruptedVideoFrames };
         });
 
-        B.beginMeasure = () => { B.rec.q0 = B.quality(); B.rec.t0 = performance.now(); B.rec.measuring = true; };
+        B.beginMeasure = () => {
+            const R = B.rec, su = R.startup;
+            if (su.t0 != null) {   // how far warm-up got vs. a clean start
+                su.warmupMs = performance.now() - su.t0;
+                su.warmupFrames = window.__lucid.state.currentFrame - su.startFrame;
+                su.warmupExpected = Math.round(su.warmupMs / 1000 * R.fps * (window.__lucid.state.speedMultiplier || 1));
+            }
+            R.mem = [B.memNow()];
+            R.memTimer = setInterval(() => R.mem.push(B.memNow()), 1000);
+            R.q0 = B.quality(); R.t0 = performance.now(); R.measuring = true;
+        };
+        B.memNow = () => {
+            const m = performance.memory || {}, s = window.__lucid.state.session;
+            return { used: m.usedJSHeapSize, total: m.totalJSHeapSize, limit: m.jsHeapSizeLimit,
+                     resident: s && s.frameGroups ? s.frameGroups.size : null };
+        };
         B.endMeasure = () => {
             const R = B.rec;
             R.measuring = false; R.t1 = performance.now(); R.q1 = B.quality();
+            clearInterval(R.memTimer); delete R.memTimer; R.mem.push(B.memNow());
             R.endFrame = window.__lucid.state.currentFrame;
             return true;
         };
@@ -631,6 +690,8 @@ try {
             });
             try { R.obsLT.disconnect(); } catch (e) {}
             try { R.obsLoaf && R.obsLoaf.disconnect(); } catch (e) {}
+            for (const off of (R.mediaOff || [])) off();
+            delete R.mediaOff;
             B.rec = null;
             return R;
         };
@@ -642,18 +703,24 @@ try {
     log(`\n[${el()}] idle rAF interval: ${JSON.stringify(summary.idleRaf)}  ` +
         `(=> display ~${(1000 / summary.idleRaf.median).toFixed(0)} Hz)`);
 
-    async function seekStart() {
-        await page.evaluate(async (START) => {
+    // Returns how long the (paused) seek took to show `start` in every view.
+    async function seekStart(start = START) {
+        const ms = await page.evaluate(async (start) => {
             const vc = window.__lucid.videoController;
             if (window.__lucid.state.isPlaying) vc.stopPlayback();
-            await vc.seekToFrame(START);
-        }, START);
+            const t = performance.now();
+            await vc.seekToFrame(start);
+            return performance.now() - t;
+        }, start);
         await sleep(1500);
+        return ms;
     }
 
     async function runScenario(name, { trace = false, secs = DUR } = {}) {
-        log(`\n[${el()}] === scenario ${name}${trace ? ' (TRACED)' : ''} ===`);
-        await seekStart();
+        const start = startOf(name);
+        log(`\n[${el()}] === scenario ${name}${trace ? ' (TRACED)' : ''} === (start frame ${start})`);
+        const seekMs = await seekStart(start);
+        name = name.replace(/@\d+$/, '');
         await page.evaluate((name) => {
             const c = document.getElementById('visReprojections');
             const want = name !== 'noReproj';
@@ -725,13 +792,14 @@ try {
                 M.refreshIdSwitchPanel(s); M.openIdSwitchPanel(); M.updateIdSwitchProgress(S.currentFrame);
                 const H = await import('/ui/id-switch-highlight.js');
                 return { target: H.getIdSwitchHighlight(), bar: !!document.querySelector('#idSwitchPanel .id-switch-row.is-current .id-switch-phead') };
-            }, { START, W: WARMUP + secs });
+            }, { START: start, W: WARMUP + secs });
             log(`  idswitch: ${JSON.stringify(sel)}`);
             await sleep(500);
         }
         const info = await page.evaluate((n) => window.__bench.install(n), base);
         await page.evaluate((SPEED) => {
             window.__lucid.state.speedMultiplier = SPEED;
+            window.__bench.rec.startup.t0 = performance.now();
             window.__lucid.videoController.startPlayback();
         }, SPEED);
         await sleep(WARMUP * 1000);
@@ -794,7 +862,7 @@ try {
                 box.remove();
             }
         });
-        return { info, R, tracePath };
+        return { info, R, tracePath, seekMs, start };
     }
 
     // What the SCREEN showed, refresh by refresh. The display can show at most
@@ -967,6 +1035,25 @@ try {
             longTasks: { count: R.longtasks.length, totalMs: Math.round(R.longtasks.reduce((a, e) => a + e.dur, 0)), ...(() => { const d = dist(R.longtasks.map(e => e.dur)); return { median: d.median, max: d.max }; })() },
             loaf: { count: R.loaf.length, totalMs: Math.round(loafTotal), blockingMs: Math.round(loafBlocking), err: R.loafErr || null, top: loafTop },
             rvfc,
+            memory: (() => {
+                const m = R.mem || []; if (!m.length || m[0].used == null) return null;
+                const MB = (x) => Math.round(x / 1048576);
+                const used = m.map(x => x.used);
+                return { usedStartMB: MB(used[0]), usedEndMB: MB(used[used.length - 1]),
+                         usedMaxMB: MB(Math.max(...used)), usedMinMB: MB(Math.min(...used)),
+                         totalMaxMB: MB(Math.max(...m.map(x => x.total))), limitMB: MB(m[0].limit),
+                         residentStart: m[0].resident, residentEnd: m[m.length - 1].resident };
+            })(),
+            media: {   // per view: <video> 'waiting' (ran out of data) / 'stalled' events
+                waiting: R.waiting, stalled: R.stalled, warmupWaiting: R.warmWaiting,
+                waitingTotal: R.waiting.reduce((a, b) => a + b, 0),
+                warmupWaitingTotal: R.warmWaiting.reduce((a, b) => a + b, 0),
+            },
+            startup: R.startup && {
+                firstAdvanceMs: R.startup.firstAdvanceMs == null ? null : Math.round(R.startup.firstAdvanceMs),
+                warmupMs: Math.round(R.startup.warmupMs || 0),
+                warmupFrames: R.startup.warmupFrames, warmupExpected: R.startup.warmupExpected,
+            },
             blankOverlayDraws: R.draws.filter(d => d.blank).length,
             // per view: (frame PAINTED into the canvas) - (frame overlaid on it)
             drawnVsOverlay: (() => {
@@ -1031,6 +1118,9 @@ try {
         log(`  advance    : ${a.appDraws.framesAdvanced}/${a.appDraws.expectedFrames} frames (speed ${a.appDraws.effectiveSpeed}x), unique frames shown ${a.appDraws.uniqueFramesShownPerSec}/s`);
         log(`  cost/draw  : overlay median ${a.cost.overlayMs.median} p95 ${a.cost.overlayMs.p95} max ${a.cost.overlayMs.max} ms | video copies median ${a.cost.videoCopyMs.median} p95 ${a.cost.videoCopyMs.p95} ms | lazy re-tri draws ${a.cost.drawsWithLazyRetriangulation}`);
         log(`  aux split  : ${a.cost.auxDraws} aux draws — overlay(aux) median ${a.cost.overlayMsAux.median} p95 ${a.cost.overlayMsAux.p95} max ${a.cost.overlayMsAux.max} [timeline ${a.cost.timelineMsAux.median}] | overlay(plain) median ${a.cost.overlayMsPlain.median} p95 ${a.cost.overlayMsPlain.p95} max ${a.cost.overlayMsPlain.max} | seekbar+3D p95 ${a.cost.seekbarMs.p95} max ${a.cost.seekbarMs.max} | whole callback median ${a.cost.totalCallbackMs.median} p95 ${a.cost.totalCallbackMs.p95}`);
+        if (a.memory) log(`  JS heap    : used ${a.memory.usedStartMB} -> ${a.memory.usedEndMB} MB (min ${a.memory.usedMinMB}, max ${a.memory.usedMaxMB}; allocated max ${a.memory.totalMaxMB} of limit ${a.memory.limitMB} MB) | resident frame groups ${a.memory.residentStart} -> ${a.memory.residentEnd}`);
+        if (a.startup) log(`  startup    : seek to start ${a.seekToStartMs != null ? Math.round(a.seekToStartMs) + ' ms' : '?'} | play -> first new frame ${a.startup.firstAdvanceMs} ms | warm-up advanced ${a.startup.warmupFrames}/${a.startup.warmupExpected} frames`);
+        log(`  <video> wait: measured ${a.media.waitingTotal} 'waiting' (${a.media.waiting.join(' ')}), ${a.media.stalled.reduce((x, y) => x + y, 0)} 'stalled' | warm-up ${a.media.warmupWaitingTotal} 'waiting'`);
         log(`  dropped    : total ${a.droppedTotal} — ` + a.videoQuality.map(q => `${q.name.replace(/^Camera/, 'C')}:${q.dropped}/${q.presented}`).join(' '));
         {
             const sc = a.screen || {};
@@ -1091,10 +1181,52 @@ try {
         summary.diag3d = d;
     }
 
+    // ---------------------------------------------------------------------
+    // SEEKS: paused random jumps (+ forward steps), each into video no
+    // scenario played — what a jump costs when the bytes are not cached.
+    // ---------------------------------------------------------------------
+    async function runSeeks() {
+        log(`\n[${el()}] === seeks: ${SEEK_TARGETS.length || SEEKS} ${SEEK_TARGETS.length ? 'listed' : 'random'} jumps x ${STEPS} forward steps (paused) ===`);
+        const playedS = SCENARIOS.map(n => [startOf(n), (WARMUP + DUR + 3) * SPEED]);
+        const r = await page.evaluate(async ({ SEEKS, STEPS, playedS, SEED, SEEK_TARGETS }) => {
+            const st = window.__lucid.state, vc = window.__lucid.videoController;
+            const played = playedS.map(([a, secs]) => [a, a + Math.ceil(secs * (st.fps || 30))]);
+            if (st.isPlaying) vc.stopPlayback();
+            let seed = SEED; const rnd = () => ((seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967296);
+            const n = st.totalFrames, targets = SEEK_TARGETS.length ? SEEK_TARGETS.slice() : [];
+            // spread over the file: one target per equal slice, avoiding played ranges (+-600 frames)
+            for (let i = 0; i < (SEEK_TARGETS.length ? 0 : SEEKS); i++) {
+                for (let tries = 0; tries < 50; tries++) {
+                    const f = Math.floor((i + rnd()) / SEEKS * (n - STEPS - 2));
+                    if (!played.some(([a, b]) => f > a - 600 && f < b + 600)) { targets.push(f); break; }
+                }
+            }
+            const jumps = [], steps = [];
+            for (const f of targets) {
+                let t = performance.now(); await vc.seekToFrame(f); jumps.push({ f, ms: performance.now() - t });
+                for (let k = 1; k <= STEPS; k++) {
+                    t = performance.now(); await vc.seekToFrame(f + k); steps.push(performance.now() - t);
+                }
+                await new Promise(r => setTimeout(r, 300));
+            }
+            const m = performance.memory || {};
+            return { jumps, steps, usedMB: Math.round((m.usedJSHeapSize || 0) / 1048576), resident: st.session.frameGroups.size };
+        }, { SEEKS, STEPS, playedS, SEED, SEEK_TARGETS });
+        summary.seeks = { order: SEEKS_FIRST ? 'before scenarios' : 'after scenarios', heapUsedMBAfter: r.usedMB, residentAfter: r.resident, jumps: r.jumps.map(j => ({ f: j.f, ms: Math.round(j.ms) })), jumpMs: dist(r.jumps.map(j => j.ms)), stepMs: dist(r.steps) };
+        log(`  jump (all views show a random frame): ${JSON.stringify(summary.seeks.jumpMs)}`);
+        log(`  jumps: ` + summary.seeks.jumps.map(j => `${j.f}:${j.ms}`).join(' '));
+        log(`  step (+1 frame after a jump)        : ${JSON.stringify(summary.seeks.stepMs)}`);
+        log(`  (${summary.seeks.order}; JS heap used after ${r.usedMB} MB, resident frame groups ${r.resident})`);
+        fs.writeFileSync(path.join(OUT_DIR, 'summary.json'), JSON.stringify(summary, null, 2));
+    }
+
+    if (SEEKS > 0 && SEEKS_FIRST) await runSeeks();
+
     for (const name of SCENARIOS) {
-        const { info, R } = await runScenario(name);
+        const { info, R, seekMs, start } = await runScenario(name);
         const a = analyze(name, info, R);
-        summary.scenarios[name] = { views: info.views, primary: info.primary, panels: R.panels, statusBar: R.statusBar, ...a };
+        a.seekToStartMs = seekMs;
+        summary.scenarios[name] = { start, views: info.views, primary: info.primary, panels: R.panels, statusBar: R.statusBar, ...a };
         if (process.env.RAW === '1') {
             fs.writeFileSync(path.join(OUT_DIR, `raw-${name.replace(/[^a-z0-9#-]/gi, '_')}.json`), JSON.stringify({
                 fps: R.fps, speed: SPEED, idleRafMedian: summary.idleRaf && summary.idleRaf.median,
@@ -1112,6 +1244,8 @@ try {
         printScenario(name, a);
         fs.writeFileSync(path.join(OUT_DIR, 'summary.json'), JSON.stringify(summary, null, 2));
     }
+
+    if (SEEKS > 0 && !SEEKS_FIRST) await runSeeks();
 
     // ---------------------------------------------------------------------
     // Traced pass (separate, so tracing overhead never pollutes the metrics).
