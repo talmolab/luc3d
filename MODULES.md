@@ -2810,6 +2810,22 @@ subtitle is populated for loaded projects, not just freshly triangulated ones.
   `LazyFrameLoader` spawns `loading/slp-import-worker.js` (resolved against
   `document.baseURI` so sub-path deployments work — see ISSUES.md I-8) for HDF5
   reads.
+  **`LazyFrameLoader`'s tracks are the union over its cameras, whichever worker
+  answers first.** Each worker's `metadata` message goes through
+  `_registerCamera`, which picks the skeleton of the first camera BY NAME and
+  calls `_unifyTracks`: `trackNames` = the union of every camera's own names
+  (`loading/track-union.js`; `_ownTrackNames` pads a list shorter than the
+  data's `nTracks` with the worker's own `track_<i>` convention), plus a
+  per-camera own→session map kept only where it is not the identity. It used to
+  take `trackNames` from the first `metadata` to arrive — the same first-wins
+  bug as `SioLazyLoader`. A worker only knows its own file, so frames are
+  re-indexed as they ARRIVE, in `onmessage` (`_remapFrameTracks` on
+  `frameData` and `framesData`) — the one place `getFrame`, `prefetch` and
+  `batchLoadLazyFrames` (which posts to the workers directly) all pass through.
+  A camera whose map moved has its dense occupancy grid re-keyed into the SPARSE
+  form by `denseOccupancyToSparse` (a wider dense grid would cost nFrames × the
+  whole union); an identity camera keeps its grid as is. Covered by
+  `tests/test-lazy-track-union.js`.
   **A FrameGroup that exists is not necessarily complete.**
   `ensureLazyFrameData` used to open with a bare
   `if (session.frameGroups.has(frameIdx)) return;`, which is only sound when
@@ -2955,6 +2971,8 @@ subtitle is populated for loaded projects, not just freshly triangulated ones.
 - `./triangulation-core.js` — the pure math (re-exported) and
   `setTriangulationSettingsHooks`.
 - `./triangulation-pool.js` — `createGroupSolver` (Triangulate All's parallel solve).
+- `../loading/track-union.js` — `unionTrackNames`, `remapTrackIdx`,
+  `isIdentityRemap` (`LazyFrameLoader`'s track union).
 - `./initialization.js` — `update3DViewport` (circular).
 
 **Imported by.** `pose/tracker.js`, `pose/initialization.js`,
@@ -10651,6 +10669,76 @@ single-SLP folder loader, and `attachVideosForLazyReopen`),
 `tests/e2e/calibration-named-videos-load.mjs` (both real loaders; confirmed to
 fail on the pre-fix build, each loader on a different half).
 
+### loading/track-union.js
+
+**Purpose.** What `session.tracks` IS for a per-camera session folder, where
+every camera's `.slp`/`.h5` carries its own track list, as one pure rule shared
+by all three per-camera paths: the eager loop in
+`handleLoadSessionFolderPerCamera`, `SioLazyLoader` and `LazyFrameLoader`.
+
+**The decision.** `session.tracks` is **the union of the cameras' track NAMES,
+cameras taken in sorted camera-name order, each camera's names in its file
+order**, and every camera's own track index is re-expressed as an index into
+it. Per-camera track lists were considered and rejected: every consumer of a
+trackIdx indexes ONE list — overlays (`session.tracks[trackIdx]` names,
+`getTrackColor(trackIdx)`), the info panel's Track select, the Tracks Timeline
+(`_buildTrackSegments`, keyed per camera but named from `session.tracks`), the
+export modal's track stats and Custom Delete's track filter (both aggregate
+`forEachInstanceRow` track values ACROSS cameras), `remapTracksFromIdentity`
+(treats the column as `session.tracks` indices), and the streaming writer — so a
+per-camera list would mean giving every one of them a camera argument.
+Concatenation (one block per camera, as the streaming writer used to produce)
+was rejected too: it is what the eager path never did, it multiplies the list by
+the camera count (3,507 entries for the real folder below) with duplicate names,
+and it would make `metadata.lucid.hiddenTracks` (saved by NAME) ambiguous.
+Merging by name means a name two cameras share is one session track — one index,
+colour and Track-select entry. It says nothing about the animal (a raw
+per-camera tracker's `track_0` is unrelated across cameras), and nothing needs
+it to: the cross-view tracker keys association, `trustTracks` votes and
+`frameIdentityMap` by **(camera, trackIdx)**, which any per-camera-injective map
+preserves.
+
+**Why it exists.** Both lazy loaders took `trackNames` from whichever camera's
+file finished opening FIRST (`open()` runs for every camera in parallel), while
+each camera's instances kept indices into their OWN list. On the real folder
+`20260713_174659-194366_05mice_flippers` (8 cameras holding 262, 443, 249, 863,
+483, 405, 388 and 414 tracks, all `track_0..track_{n-1}`), five loads gave
+`session.tracks.length` = 262, 863, 863, 863, 388 — local SSD vs SMB share
+changed the winner. A camera with more tracks than the winner had trackIdx
+values past the end of the list (Camera3_sideC's 249–862 when Camera2_mid won),
+and any camera's names/colours were read off another camera's list wherever
+the lists differ. On that data the union is `track_0..track_862` and every map
+is the identity, so the fix rewrites no column there.
+
+**Key exports.**
+- `unionTrackNames(perCamera)` → `{names, remapByCam}` for
+  `[{camName, names}]`. Input order is irrelevant. Names are matched as a
+  MULTISET (the k-th `x` of a camera maps to the k-th `x` slot), so a camera
+  that repeats a name keeps distinct tracks and every per-camera map is
+  injective. Camera names compare by UTF-16 code unit (`<`), so the order is
+  locale-independent.
+- `remapTrackIdx(remap, ownIdx)` → session index or `-1`. Trackless stays
+  trackless, and so does an index OUTSIDE the camera's own list — what
+  sleap-io's lazy materializer always made of one (`tracks[id]` undefined → no
+  track). Keeping it raw would name whatever session track sits at that index.
+  Accepts an `Int32Array` or a plain object map.
+- `isIdentityRemap(remap)`.
+
+**Imports from project modules.** None (deliberately) — loads in Node.
+
+**Imported by.** `loading/session-loader.js` (the eager per-camera loop and
+`addColumnarFramesToSession`), `loading/sio-lazy-loader.js` (`_unifyTracks`),
+`pose/triangulation.js` (`LazyFrameLoader._unifyTracks`,
+`denseOccupancyToSparse`, `_remapFrameTracks`).
+
+**Tests.** `tests/test-track-union.mjs` (the rule, incl. 200 orderings of the
+real folder's shape), `tests/test-lazy-track-union.js` (`LazyFrameLoader`
+through its real `onmessage`, all six metadata orders),
+`tests/e2e/percam-track-union.mjs` (the real folder loader, lazy in all six
+open-resolution orders plus eager, the store, occupancy and the streaming
+writer's header). The e2e file and the `LazyFrameLoader` tests were confirmed
+to FAIL on the pre-fix build.
+
 ### loading/session-loader.js
 
 **Purpose.** Orchestrator for every session-loading workflow — empty
@@ -10851,6 +10939,22 @@ on 100k-frame predictions. The lazy loader is chosen when all lazy jobs are `.sl
 an error rather than falling back to the OOM-prone eager path. It plugs into the
 existing `state.session.lazyLoader` seam, so rendering/scrubbing are unchanged.
 
+**One `session.tracks` for the folder, whichever path and whichever file
+opens first.** Each camera's file has its own track list; the session's is
+their union in camera-name order, each camera's indices mapped into it
+(`loading/track-union.js` has the rule and the reasons). The eager loop builds
+that union from every parse result BEFORE adding any camera's instances and
+maps each through `remapTrackIdx` (an index outside the camera's own list
+becomes trackless instead of staying raw); it used to merge in calibration
+camera order as it went, and to keep an out-of-list index as is. The lazy
+branch takes `lazyLoader.trackNames`, which both loaders now build the same way
+— they used to take the list of the first camera to finish opening (262 / 863 /
+388 tracks across loads of one real 8-camera folder), with every other camera's
+indices still in its own list. The dead `else` that appended lazy names to an
+eager session's list (impossible since the per-folder routing below) is gone.
+Covered by `tests/e2e/percam-track-union.mjs` (all six lazy open orders and the
+eager path give the same list; confirmed to fail pre-fix).
+
 **The routing decision is per FOLDER, not per file.** Deciding per file let one
 folder come back part eager and part lazy, and that combination is silently
 lossy: the eager cameras populate `session.frameGroups` during load, and
@@ -10932,6 +11036,7 @@ blank until the user manually re-ran Triangulate All. Covered by
   multi-session "needs a folder picker" message), `./video.js`, `../import-export/file-io.js`, `../pose/triangulation.js`
   (`shouldUseLazyH5`, `shouldUseLazySlp`, `LazyFrameLoader`),
   `./sio-lazy-loader.js` (`SioLazyLoader`),
+  `./track-union.js` (`unionTrackNames`, `remapTrackIdx`),
   `../import-export/save-load.js`,
   `../ui/rendering.js` (`drawAllOverlays`, `setReprojErrorVisible`),
   `../ui/info-panel.js` (`updateInfoPanel`, `promptImportSkeletonForAllSessions`),
@@ -10988,8 +11093,11 @@ worker. Frames are materialized on demand via `labels.frameAt(row)`, so
 `getFrameSync` returns data synchronously.
 
 **Key export.** class `SioLazyLoader` — `open(camName, file, onProgress)` (reads
-metadata + builds a videoFrameIdx→store-row map, first camera's skeleton/tracks
-win), `openProjectSlp(file, onProgress)` (lazy reopen of a SINGLE multi-camera
+metadata + builds a videoFrameIdx→store-row map; the skeleton is the first
+camera BY NAME's and `trackNames` is the union over every opened camera, with
+each store re-indexed into it — see "Track indices" below — so nothing depends
+on which parallel open resolves first; returns THIS camera's own track names),
+`openProjectSlp(file, onProgress)` (lazy reopen of a SINGLE multi-camera
 project `.slp` — the "Load Project" path for large projects: one interleaved
 store shared by every camera, split into the same per-camera maps `open()`
 builds; sets `_sharedStore = true` so the streaming re-save appends the store
@@ -11014,6 +11122,36 @@ handle, not a resident copy of the bytes, so retaining these costs ~nothing and
 lets a caller reopen a fresh loader for the SAME cameras later without
 re-picking files; used by the multi-session streaming save's pass-2 restream,
 `reopenSessionLazyLoader` in `import-export/save-load.js`).
+
+**Track indices: one list, every store re-indexed into it (`_unifyTracks`).**
+`session.tracks` for a per-camera folder is the union of the cameras' own track
+names, cameras in name order (`loading/track-union.js` has the rule and why).
+`open()` used to set `trackNames` from whichever camera's open resolved FIRST
+and leave every store holding its own file's indices — nondeterministic
+(262/863/388 tracks across loads of one real folder) and wrong for every other
+camera (indices past the end, names from another camera's list). Now `open()`
+records the camera's OWN names in `_trackSourceByCam` (`{names, toSession}`,
+`toSession` = the session index each own track currently holds) and calls
+`_unifyTracks(newCam)`, which re-derives the union FROM THE OWN NAMES (never
+from a previous union — that would make the result order-dependent) and, per
+camera: rewrites `instancesData.track` through the old map's inverse when its
+indices moved (always for the new camera, whose out-of-list values become `-1`
+rather than coming to name an appended track); rebuilds `labels.tracks` IN
+PLACE to the union (shared with `_lazyDataStore.tracks`; own `Track` objects
+kept at their new indices); recomputes that camera's occupancy if its column
+changed, else just updates `nTracks`; clears the frame caches it invalidated.
+After it, every column value is a `trackNames` index in every camera, which is
+what `adaptTypedInstance`, `forEachInstanceRow`, `_computeSparseOccupancy`,
+`remapTracksFromIdentity`, Custom Delete and the streaming writer all assume —
+and since every camera's `labels.tracks` is then the same name list, the
+writer's name-signature dedup writes the tracks ONCE (it used to write one copy
+per camera: 14 tracks for a 9-track union in the e2e fixture). On the real data
+(every list `track_0..track_{n-1}`) every map is the identity, so the cost is
+one read pass over each camera's track column. `reopenSessionLazyLoader`
+(multi-session save, pass 2) re-opens through the same `open()`, so it
+re-derives the same columns. `remapTracksFromIdentity` resets each camera's
+own names to the propagated list (and `trackNames` with it), so a later
+`_unifyTracks` starts from that. Covered by `tests/e2e/percam-track-union.mjs`.
 
 `trackOccupancy` (phase-5) is populated per camera by `_computeSparseOccupancy(labels,
 nFrames, rowMap?)` — one O(nInstances) pass over the columnar store (`framesData.frame_idx` +
@@ -11190,8 +11328,10 @@ points at step 2's filtering, not this method) and folds `errorRows` into its
 own return value; `ui/ui-wiring.js`'s propagate handler reports a nonzero
 `lazyErrorRows` as an error status instead of a false "success".
 
-**Imports.** `window.SleapIO.readSlpStreaming` (via the index.html bridge) and the
-local vendored `lib/h5wasm/h5wasm.iife.js` (passed as `h5wasmUrl`).
+**Imports.** `./track-union.js` (`unionTrackNames`);
+`window.SleapIO.readSlpStreaming` / `window.SleapIO.Track` (via the index.html
+bridge) and the local vendored `lib/h5wasm/h5wasm.iife.js` (passed as
+`h5wasmUrl`).
 
 **Imported by.** `loading/session-loader.js`
 (`handleLoadSessionFolderPerCamera` routing, `handleLoadProjectSlpLazy`) and
@@ -12582,6 +12722,13 @@ loading-overlay/status-text UI helpers.
   shared store N times (duplicating every frame/track).
   `commitSessionForMultiSessionSave` records the flag as `sharedStore` on
   `handle.pending`, and `finalizeMultiSessionSave` passes it through.
+  A per-camera session reopens through parallel `open()`s in `sourceFiles`
+  order (= the ORIGINAL load's resolution order); neither order matters, since
+  `SioLazyLoader._unifyTracks` re-indexes every store into the union of the
+  cameras' track names in camera-NAME order — so pass 2 re-derives the track
+  columns the original load had. It cannot re-derive an in-memory store edit
+  made since (`remapTracksFromIdentity`, `deleteInstanceRows`): those are not
+  in the files.
 
   **GC-timing finding (real cage5×3) — resolved.** Dereferencing a session's
   heavy state makes it *eligible* for GC but doesn't force reclamation —
