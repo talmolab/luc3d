@@ -3,7 +3,8 @@
  * right ways", exactly like the current luc3d tracker: trackCurrentFrame()
  * assigns tracks + identities on the session AND refreshes the overlays, info
  * panel and timeline tracks; trackAll() also switches Color: Tracks -> ID
- * (#242). Uses tracker-gui-hooks.mjs (spy UI stubs).
+ * (#242). Every pass that rewrites tracking state also calls markDirty(), and a
+ * refused one does not. Uses tracker-gui-hooks.mjs (spy UI stubs).
  *
  * Run:  node tests/test-tracker-gui.mjs
  */
@@ -33,7 +34,7 @@ register(pathToFileURL(path.join(HERE, 'tracker-gui-hooks.mjs')).href);
 const { Camera, Instance, FrameGroup, Session } =
     await import(pathToFileURL(path.join(POSE_DIR, 'pose-data.js')).href);
 const appState = await import(pathToFileURL(path.join(ROOT, 'ui', 'app-state.js')).href);
-const { trackCurrentFrame, trackAll } =
+const { trackCurrentFrame, trackAll, trackFrameRange } =
     await import(pathToFileURL(path.join(POSE_DIR, 'tracker.js')).href);
 const colorBy = await import(pathToFileURL(path.join(ROOT, 'ui', 'color-by.js')).href);
 
@@ -59,6 +60,7 @@ appState.state.session = session;
 appState.state.currentFrame = 0;
 
 console.log('• trackCurrentFrame() updates tracks/identities + GUI');
+let dirtyBefore = globalThis.__GUI.markDirty;
 trackCurrentFrame();
 
 // Track/identity assignment happened.
@@ -74,14 +76,18 @@ eq(globalThis.__GUI.lastStatus && globalThis.__GUI.lastStatus.level, 'success', 
 // Track Frame (one frame) leaves the Color setting alone; only the whole-run
 // passes switch it (#242).
 ok(!appState.state.colorByIdentity, 'Track Frame does not switch Color to ID');
+// The tracking result is unsaved project state (save dot, unload prompt).
+ok(globalThis.__GUI.markDirty > dirtyBefore, 'Track Frame marks the project dirty (markDirty called)');
 
 // --- Track All switches Color: Tracks -> ID (#242) ---------------------------
 console.log('• trackAll() switches Color from Tracks to ID');
 let colorChanges = [];
 colorBy.onColorByChange(on => colorChanges.push(on));   // stands in for ui-wiring's handler
 appState.state.colorByIdentity = false;
+dirtyBefore = globalThis.__GUI.markDirty;
 let res = await trackAll();
 ok(res && res.ok, 'Track All succeeded');
+ok(globalThis.__GUI.markDirty > dirtyBefore, 'Track All marks the project dirty (markDirty called)');
 eq(appState.state.colorByIdentity, true, 'Color is now ID');
 eq(JSON.stringify(colorChanges), '[true]', 'the change handler ran once (buttons + 2D/3D recolor in the app)');
 ok(/now coloring by ID/.test(globalThis.__GUI.lastStatus.msg), 'the status line says so: "' + globalThis.__GUI.lastStatus.msg + '"');
@@ -94,6 +100,16 @@ eq(appState.state.colorByIdentity, true, 'Color stays ID');
 eq(colorChanges.length, 0, 'no redundant recolor');
 ok(!/now coloring by ID/.test(globalThis.__GUI.lastStatus.msg), 'and the status line does not claim a switch');
 colorBy.onColorByChange(null);
+
+// --- Track Frame Range: marks dirty when it runs, not when it is refused -----
+console.log('• trackFrameRange() marks dirty only when it rewrites state');
+dirtyBefore = globalThis.__GUI.markDirty;
+res = await trackFrameRange(0, NaN);
+ok(res && !res.ok, 'a NaN range is refused');
+eq(globalThis.__GUI.markDirty, dirtyBefore, 'a refused range does not call markDirty');
+res = await trackFrameRange(0, 0);
+ok(res && res.ok, 'Track Frame Range succeeded');
+ok(globalThis.__GUI.markDirty > dirtyBefore, 'Track Frame Range marks the project dirty (markDirty called)');
 
 console.log(`\n${failed === 0 ? '✓ PASS' : '✗ FAIL'} — ${passed} passed, ${failed} failed`);
 if (failed > 0) { console.error('\nFailures:\n - ' + failures.join('\n - ')); process.exit(1); }
