@@ -21,70 +21,73 @@
 import {
     state, videoController, interactionManager, viewport3d, timeline, paneManager,
     setVideoController, VIEW_NAMES, buildRememberedSkeleton, setProjectSkeleton,
-} from '../ui/app-state.js?v=ae3882834712';
+} from '../ui/app-state.js?v=75a060c30a48';
 
 import {
     Session, Skeleton, Camera, Instance, UnlinkedInstance, FrameGroup, Identity,
-} from '../pose/pose-data.js?v=ae3882834712';
+} from '../pose/pose-data.js?v=75a060c30a48';
 
-import { OnDemandVideoDecoder, VideoController } from './video.js?v=ae3882834712';
-import { videoLoadFailureText } from './video-codec-diagnosis.js?v=ae3882834712';
-import { fileSystemAccessHint } from '../ui/browser-hints.js?v=ae3882834712';
+import { OnDemandVideoDecoder, VideoController } from './video.js?v=75a060c30a48';
+import { videoLoadFailureText } from './video-codec-diagnosis.js?v=75a060c30a48';
+import { fileSystemAccessHint } from '../ui/browser-hints.js?v=75a060c30a48';
 
 import {
     pickFiles, pickFolder, pickVideoFiles,
     parseCalibrationTOML, parseCalibrationJSON, parseSlpH5, parseSlpViaSleapIO,
     loadCalibrationFile,
-} from '../import-export/file-io.js?v=ae3882834712';
+} from '../import-export/file-io.js?v=75a060c30a48';
 
-import { resolveImportTrackIdx, nulledNodesFromOcclusion } from '../import-export/import-track-resolve.js?v=ae3882834712';
+import { resolveImportTrackIdx, nulledNodesFromOcclusion } from '../import-export/import-track-resolve.js?v=75a060c30a48';
 // Pure `.slp`-per-camera selection rule. Extracted so it can be bridged into
 // the browser test runner (session-loader itself pulls app.js) — same reason
 // and same shape as `resolveImportTrackIdx` above.
-import { chooseCameraSlp } from './percam-slp-choice.js?v=ae3882834712';
+import { chooseCameraSlp } from './percam-slp-choice.js?v=75a060c30a48';
 // Shared SLP grouped-reconstruction (identities + InstanceGroups + nulledNodes/
 // occlusion + 3D points). Circular ESM import (slp-import imports back
 // recomputeUploadedCameras); only invoked inside a function body.
-import { restoreGroupingAndUnlink, reconstructInstanceGroupsFromSessionLazy } from '../import-export/slp-import.js?v=ae3882834712';
-import { REBASED_CALIBRATION_NAME, pickCalibrationFile } from './calibration-pick.js?v=ae3882834712';
+import { restoreGroupingAndUnlink, reconstructInstanceGroupsFromSessionLazy } from '../import-export/slp-import.js?v=75a060c30a48';
+import { REBASED_CALIBRATION_NAME, pickCalibrationFile } from './calibration-pick.js?v=75a060c30a48';
+import {
+    isCalibrationImagesVideo, preferNonCalibrationVideos, matchVideoToCamera,
+} from './video-file-pick.js?v=75a060c30a48';
 
 import {
     LazyFrameLoader, shouldUseLazyH5, shouldUseLazySlp, getInstanceGroupsForFrame,
     ensureLazyFrameData,
-} from '../pose/triangulation.js?v=ae3882834712';
-import { SioLazyLoader } from './sio-lazy-loader.js?v=ae3882834712';
+} from '../pose/triangulation.js?v=75a060c30a48';
+import { SioLazyLoader } from './sio-lazy-loader.js?v=75a060c30a48';
 
 // Status UI moved to import-export/save-load.js in Pass 3c-1.
 import {
     setStatus, showLoading, hideLoading, ensureNo3dImportBlockingLoad,
-} from '../import-export/save-load.js?v=ae3882834712';
-import { showLoadingProgress, createProgressPacer, yieldToPaint } from '../ui/loading-overlay.js?v=ae3882834712';
+} from '../import-export/save-load.js?v=75a060c30a48';
+import { showLoadingProgress, createProgressPacer, yieldToPaint } from '../ui/loading-overlay.js?v=75a060c30a48';
 
 // Circular import — these are still defined in app.js for now. See module
 // header note. They are only invoked inside function bodies, never at
 // module-init time, so live-binding lookup keeps them functional.
-import { drawAllOverlays, setReprojErrorVisible } from '../ui/rendering.js?v=ae3882834712';
-import { updateInfoPanel, promptImportSkeletonForAllSessions } from '../ui/info-panel.js?v=ae3882834712';
-import { noteSessionCalibrationDivergence } from '../ui/calibration-notice.js?v=ae3882834712';
-import { parseSkeletonJSON } from '../import-export/skeleton-json.js?v=ae3882834712';
+import { drawAllOverlays, setReprojErrorVisible } from '../ui/rendering.js?v=75a060c30a48';
+import { updateInfoPanel, promptImportSkeletonForAllSessions } from '../ui/info-panel.js?v=75a060c30a48';
+import { noteSessionCalibrationDivergence } from '../ui/calibration-notice.js?v=75a060c30a48';
+import { parseSkeletonJSON } from '../import-export/skeleton-json.js?v=75a060c30a48';
 // Pass 3i-3: setupInteraction / setup3DViewport / setupTimeline / updateFpsDisplay /
 // hideWelcomeOverlay moved to pose/initialization.js.
 import {
     setupInteraction, setup3DViewport, setupTimeline,
     updateFpsDisplay,
     hideWelcomeOverlay,
-} from '../pose/initialization.js?v=ae3882834712';
+} from '../pose/initialization.js?v=75a060c30a48';
 // Pass 3h: populateViewStrip / populateSessionStrip / switchSession moved to sessions-panes.js.
 import {
     populateViewStrip, populateSessionStrip, switchSession, multiSelectViews,
-} from '../ui/sessions-panes.js?v=ae3882834712';
+} from '../ui/sessions-panes.js?v=75a060c30a48';
 // Pass 3e-1: updateSeekbar / fitTimelineToData / onPlaybackStateChange moved to ui-wiring.js.
 import {
     updateSeekbar, fitTimelineToData, onPlaybackStateChange, updateVideoGridDisplay,
-} from '../ui/ui-wiring.js?v=ae3882834712';
-import { getLoadingProgressModal } from '../ui/loading-progress-modal.js?v=ae3882834712';
-import { readVisibilityMetadata } from '../import-export/visibility-metadata.js?v=ae3882834712';
-import { readPlaneMetadata, resetPlaneState } from '../import-export/plane-metadata.js?v=ae3882834712';
+} from '../ui/ui-wiring.js?v=75a060c30a48';
+import { getLoadingProgressModal } from '../ui/loading-progress-modal.js?v=75a060c30a48';
+import { readVisibilityMetadata } from '../import-export/visibility-metadata.js?v=75a060c30a48';
+import { readPlaneMetadata, resetPlaneState } from '../import-export/plane-metadata.js?v=75a060c30a48';
 
 // Module-private debounce timer for the zoom-redraw callback in
 // rebuildVideoController(). app.js's setupEmptyVideoController() has its own
@@ -420,15 +423,17 @@ export async function handleLoadVideos() {
  * loaded as a session video. Their filenames embed the camera name, so the
  * substring matcher in autoAssignVideosToCameras (and the SLP-import camera
  * matcher) would otherwise bind them to a real camera and surface them as an
- * extra view. Detect by path segment (robust to whichever directory the user
- * picked as the root) OR by the `-calibration` / `_calibration` filename stem.
+ * extra view. Detected by path segment, so the answer does not depend on which
+ * directory the user picked as the root.
+ *
+ * This used to ALSO exclude any `-calibration` / `_calibration` filename stem,
+ * which silently dropped `cam1-calibration.mp4` — an ordinary session video an
+ * alpha tester had named that way (#199). That stem is now a de-prioritizing
+ * hint instead of an exclusion, applied per camera by
+ * `preferNonCalibrationVideos`; see `loading/video-file-pick.js`.
  */
 export function isCalibrationVideoFile(file) {
-    if (!file) return false;
-    var relPath = (file.webkitRelativePath || file.name || '').replace(/\\/g, '/').toLowerCase();
-    if (relPath.split('/').indexOf('calibration_images') >= 0) return true;
-    var stem = (file.name || '').toLowerCase().replace(/\.[^.]+$/, '');
-    return stem.endsWith('-calibration') || stem.endsWith('_calibration');
+    return isCalibrationImagesVideo(file);
 }
 
 export function autoAssignVideosToCameras() {
@@ -2090,6 +2095,20 @@ export async function handleLoadSessionFolderSingleSlp() {
         setVideoController(null);
         paneManager.clearAll();
 
+        // Within each camera, a `-calibration` stem loses to a plainly-named
+        // sibling but is loaded when it is that camera's only candidate (#199).
+        if (cameras.length > 0) {
+            var _camNames = cameras.map(function (c) { return c.name; });
+            var _vPref = preferNonCalibrationVideos(videoFiles, function (f) {
+                return matchVideoToCamera(f, _camNames);
+            });
+            if (_vPref.dropped.length) {
+                console.log('[single-slp] preferring plainly-named videos over calibration-named ' +
+                    _vPref.dropped.map(function (f) { return '"' + f.name + '"'; }).join(', '));
+                videoFiles = _vPref.kept;
+            }
+        }
+
         // Order videos by calibration camera index so the 2D viewers appear in
         // the project's camera order, not the folder's file-enumeration order
         // (pickFolder returns files in an OS-dependent order, which made the
@@ -2245,34 +2264,37 @@ export async function attachVideosForLazyReopen(session, loader, pickedFilesOver
 
     // Filter to real session videos and match each to a camera.
     var vidExts = ['.mp4', '.avi', '.mov', '.mkv', '.webm'];
+    var candidates = [];
+    for (var cfi = 0; cfi < picked.length; cfi++) {
+        var cFile = picked[cfi];
+        if (!cFile || !cFile.name) continue;
+        var cExt = cFile.name.substring(cFile.name.lastIndexOf('.')).toLowerCase();
+        if (vidExts.indexOf(cExt) < 0 || isCalibrationVideoFile(cFile)) continue;
+        var cStem = cFile.name.replace(/\.[^.]+$/, '');
+        if (state.videoFiles.some(function (vf) { return vf.name === cStem; })) continue;
+        candidates.push(cFile);
+    }
+
+    // De-prioritize a `-calibration` stem WITHIN its camera, so a plainly-named
+    // sibling wins the first-wins pick below whatever the enumeration order is,
+    // while a camera whose only candidate is calibration-named still loads it
+    // (#199).
+    var _lrPref = preferNonCalibrationVideos(candidates, function (f) {
+        return matchVideoToCamera(f, camNames, refBaseByCam);
+    });
+    if (_lrPref.dropped.length) {
+        console.log('[lazy-reopen] preferring plainly-named videos over calibration-named ' +
+            _lrPref.dropped.map(function (f) { return '"' + f.name + '"'; }).join(', '));
+        candidates = _lrPref.kept;
+    }
+
     var toLoad = [];
     var unmatched = 0;
-    for (var pfi = 0; pfi < picked.length; pfi++) {
-        var pFile = picked[pfi];
-        if (!pFile || !pFile.name) continue;
-        var pExt = pFile.name.substring(pFile.name.lastIndexOf('.')).toLowerCase();
-        if (vidExts.indexOf(pExt) < 0 || isCalibrationVideoFile(pFile)) continue;
+    for (var pfi = 0; pfi < candidates.length; pfi++) {
+        var pFile = candidates[pfi];
         var pStem = pFile.name.replace(/\.[^.]+$/, '');
-        var pStemLower = pStem.toLowerCase();
-        if (state.videoFiles.some(function (vf) { return vf.name === pStem; })) continue;
-
         var pRel = pFile.webkitRelativePath || pFile.name;
-        var pParts = pRel.split('/');
-        var pParentDir = pParts.length >= 2 ? pParts[pParts.length - 2].toLowerCase() : null;
-
-        var assignedCam = null;
-        for (var mci = 0; mci < camNames.length && !assignedCam; mci++) {
-            if (pParentDir && pParentDir === camNames[mci].toLowerCase()) assignedCam = camNames[mci];
-        }
-        for (var sci = 0; sci < camNames.length && !assignedCam; sci++) {
-            if (pStemLower.indexOf(camNames[sci].toLowerCase()) >= 0) assignedCam = camNames[sci];
-        }
-        for (var bci = 0; bci < camNames.length && !assignedCam; bci++) {
-            var refBase = refBaseByCam.get(camNames[bci]);
-            if (refBase && (pStemLower === refBase || pStemLower.indexOf(refBase) >= 0 || refBase.indexOf(pStemLower) >= 0)) {
-                assignedCam = camNames[bci];
-            }
-        }
+        var assignedCam = matchVideoToCamera(pFile, camNames, refBaseByCam);
         if (!assignedCam) { unmatched++; continue; }
         if (toLoad.some(function (e) { return e.assignedCam === assignedCam; })) continue;
         toLoad.push({ file: pFile, stem: pStem, rel: pRel, assignedCam: assignedCam });
@@ -2698,6 +2720,20 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
                         cameraDirs[dirName].slps.push(file);
                     }
                 }
+            }
+        }
+
+        // One camera directory is one camera, so the directory IS the group a
+        // `-calibration` stem is de-prioritized within: a dir holding both
+        // `cam1.mp4` and `cam1-calibration.mp4` loads the former, a dir holding
+        // only the latter loads it. Applied before the counts below so the
+        // "no video" popup and the progress total see the real candidates.
+        for (var pdn in cameraDirs) {
+            var _pref = preferNonCalibrationVideos(cameraDirs[pdn].videos, function () { return pdn; });
+            if (_pref.dropped.length) {
+                console.log('[session-folder] ' + pdn + ': preferring "' + _pref.kept[0].name +
+                    '" over calibration-named ' + _pref.dropped.map(function (f) { return '"' + f.name + '"'; }).join(', '));
+                cameraDirs[pdn].videos = _pref.kept;
             }
         }
 

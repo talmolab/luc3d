@@ -8,54 +8,55 @@ import {
     Skeleton, Camera, Instance, UnlinkedInstance, FrameGroup, Identity,
     InstanceGroup, Session,
     asPoints3d, points3dNodeCount, someValidPoint3d,
-} from '../pose/pose-data.js?v=ae3882834712';
+} from '../pose/pose-data.js?v=75a060c30a48';
 import {
     reprojectPointsCamera, reprojectPoints, computeReprojectionErrors,
     storeReprojectedInstances, getInstanceGroupsForFrame,
-} from '../pose/triangulation.js?v=ae3882834712';
+} from '../pose/triangulation.js?v=75a060c30a48';
 import {
     parseSlpH5, parseSlpViaSleapIO, instanceMatchesPoints, parsePoints3dH5, pickFiles,
-} from './file-io.js?v=ae3882834712';
+} from './file-io.js?v=75a060c30a48';
 import {
     validateSkeletonCompatibility, mergeTracksIntoSession,
     mergeSlpFramesIntoSession, rebuildInstanceGroupsForFrames,
-} from './slp-merge.js?v=ae3882834712';
-import { OnDemandVideoDecoder, EmbeddedVideoDecoder } from '../loading/video.js?v=ae3882834712';
+} from './slp-merge.js?v=75a060c30a48';
+import { OnDemandVideoDecoder, EmbeddedVideoDecoder } from '../loading/video.js?v=75a060c30a48';
 import {
     state,
     videoController, interactionManager, viewport3d, timeline, paneManager,
     setVideoController,
-} from '../ui/app-state.js?v=ae3882834712';
+} from '../ui/app-state.js?v=75a060c30a48';
 import {
     autoAssignVideosToCameras, forceVideoSelection, forceVideoSelectionWithFolder,
     showParentDirMatchSummary, createViewForVideoFile, updateTotalFrames,
     updateGridLayout, createVideoPromptCell, fitCanvasesToCells,
     rebuildVideoController, resolveImportTrackIdx, isCalibrationVideoFile,
-} from '../loading/session-loader.js?v=ae3882834712';
-import { remapGlobalTrackToSession, nulledNodesFromOcclusion } from './import-track-resolve.js?v=ae3882834712';
+} from '../loading/session-loader.js?v=75a060c30a48';
+import { preferNonCalibrationVideos } from '../loading/video-file-pick.js?v=75a060c30a48';
+import { remapGlobalTrackToSession, nulledNodesFromOcclusion } from './import-track-resolve.js?v=75a060c30a48';
 import {
     showLoading, hideLoading, setStatus, clearDirty, ensureNo3dImportBlockingLoad,
-} from './save-load.js?v=ae3882834712';
+} from './save-load.js?v=75a060c30a48';
 
 // Circular import — these are still defined in app.js for now. They are only
 // invoked inside function bodies, never at module-init time, so live-binding
 // lookup keeps them functional.
-import { drawAllOverlays, setReprojErrorVisible } from '../ui/rendering.js?v=ae3882834712';
-import { updateInfoPanel, promptImportSkeletonForAllSessions } from '../ui/info-panel.js?v=ae3882834712';
-import { noteSessionCalibrationDivergence } from '../ui/calibration-notice.js?v=ae3882834712';
+import { drawAllOverlays, setReprojErrorVisible } from '../ui/rendering.js?v=75a060c30a48';
+import { updateInfoPanel, promptImportSkeletonForAllSessions } from '../ui/info-panel.js?v=75a060c30a48';
+import { noteSessionCalibrationDivergence } from '../ui/calibration-notice.js?v=75a060c30a48';
 // Pass 3i-3: setup3DViewport moved to pose/initialization.js.
-import { setup3DViewport } from '../pose/initialization.js?v=ae3882834712';
+import { setup3DViewport } from '../pose/initialization.js?v=75a060c30a48';
 // Pass 3e-1: fitTimelineToData moved to ui-wiring.js.
-import { fitTimelineToData, updateSeekbar } from '../ui/ui-wiring.js?v=ae3882834712';
+import { fitTimelineToData, updateSeekbar } from '../ui/ui-wiring.js?v=75a060c30a48';
 // Block 1 (Prompt 4): keep timeline._uploadedCameras in sync after SLP
 // load so the gutter filters to the cameras that actually have video
 // assignments rather than every calibration camera.
-import { recomputeUploadedCameras } from '../loading/session-loader.js?v=ae3882834712';
+import { recomputeUploadedCameras } from '../loading/session-loader.js?v=75a060c30a48';
 // Pass 3h: populateViewStrip / populateSessionStrip moved to sessions-panes.js.
-import { populateViewStrip, populateSessionStrip } from '../ui/sessions-panes.js?v=ae3882834712';
-import { getLoadingProgressModal } from '../ui/loading-progress-modal.js?v=ae3882834712';
-import { readVisibilityMetadata } from './visibility-metadata.js?v=ae3882834712';
-import { readPlaneMetadata, resetPlaneState } from './plane-metadata.js?v=ae3882834712';
+import { populateViewStrip, populateSessionStrip } from '../ui/sessions-panes.js?v=75a060c30a48';
+import { getLoadingProgressModal } from '../ui/loading-progress-modal.js?v=75a060c30a48';
+import { readVisibilityMetadata } from './visibility-metadata.js?v=75a060c30a48';
+import { readPlaneMetadata, resetPlaneState } from './plane-metadata.js?v=75a060c30a48';
 
 /**
  * SLP import parse dispatcher (PR 5.1). Routes real `.slp` files through
@@ -1220,7 +1221,7 @@ export async function handleLoadSlpFile(slpFile) {
             // --- Embedded videos: use frame-worker for on-demand extraction ---
             showLoading('Loading embedded video frames...');
 
-            var frameWorker = new Worker(new URL('../loading/frame-worker.js?v=ae3882834712', import.meta.url), { type: 'module' });
+            var frameWorker = new Worker(new URL('../loading/frame-worker.js?v=75a060c30a48', import.meta.url), { type: 'module' });
             var embeddedVideoInfos = await new Promise(function (resolve, reject) {
                 frameWorker.onmessage = function (e) {
                     var msg = e.data;
@@ -1367,6 +1368,44 @@ export async function handleLoadSlpFile(slpFile) {
                 });
                 var cameraNames = cameras.map(function (c) { return c.name; });
 
+                // The camera a picked video belongs to: parent directory, then
+                // exact stem, then the filename the SLP references for that
+                // camera. Hoisted out of the post-load assignment loop so the
+                // de-prioritization below can group by the SAME answer the
+                // assignment will give — matching twice with two different
+                // rules is how a video gets dropped for one camera and bound to
+                // another.
+                var slpMatchCam = function (vFile) {
+                    var mStem = vFile.name.replace(/\.[^.]+$/, '');
+                    var mRel = vFile.webkitRelativePath || vFile.name;
+                    var mParts = mRel.split('/');
+                    var mParentDir = mParts.length >= 2 ? mParts[mParts.length - 2] : null;
+
+                    if (mParentDir && cameraNames.indexOf(mParentDir) >= 0) return mParentDir;
+                    if (cameraNames.indexOf(mStem) >= 0) return mStem;
+                    for (var cmi in videoIdxToCameraName) {
+                        var camN = videoIdxToCameraName[cmi];
+                        var vMeta = slpData.videos[cmi];
+                        if (!vMeta) continue;
+                        var refPath = vMeta.sourceFilename || vMeta.filename || '';
+                        if (refPath === '.') continue;
+                        var refBase = refPath.replace(/^.*[\/\\]/, '').replace(/\.[^.]+$/, '').toLowerCase();
+                        if (mStem.toLowerCase() === refBase || mStem.toLowerCase().indexOf(refBase) >= 0) return camN;
+                    }
+                    return null;
+                };
+
+                // A `-calibration` stem loses to a plainly-named video of the
+                // SAME camera, but still loads when it is that camera's only
+                // candidate (#199). Applied before the decoders open so a
+                // superseded clip is never decoded.
+                var _slpPref = preferNonCalibrationVideos(vidFiles, slpMatchCam);
+                if (_slpPref.dropped.length) {
+                    console.log('[load-slp] preferring plainly-named videos over calibration-named ' +
+                        _slpPref.dropped.map(function (f) { return '"' + f.name + '"'; }).join(', '));
+                    vidFiles = _slpPref.kept;
+                }
+
                 var slpModal = getLoadingProgressModal({ title: 'Importing project' });
                 slpModal.show();
 
@@ -1423,35 +1462,9 @@ export async function handleLoadSlpFile(slpFile) {
                     var vFile = slpEntry.file;
                     var stem = vFile.name.replace(/\.[^.]+$/, '');
 
-                    // Match to camera by parent directory name or filename
-                    var assignedCam = null;
-                    var relPath = vFile.webkitRelativePath || vFile.name;
-                    var pathParts = relPath.split('/');
-                    var parentDir = pathParts.length >= 2 ? pathParts[pathParts.length - 2] : null;
-
-                    // Try parent directory name → camera name
-                    if (parentDir && cameraNames.indexOf(parentDir) >= 0) {
-                        assignedCam = parentDir;
-                    }
-                    // Try video stem → camera name
-                    if (!assignedCam && cameraNames.indexOf(stem) >= 0) {
-                        assignedCam = stem;
-                    }
-                    // Try matching against SLP video references
-                    if (!assignedCam) {
-                        for (var cmi in videoIdxToCameraName) {
-                            var camN = videoIdxToCameraName[cmi];
-                            var vMeta = slpData.videos[cmi];
-                            if (!vMeta) continue;
-                            var refPath = vMeta.sourceFilename || vMeta.filename || '';
-                            if (refPath === '.') continue;
-                            var refBase = refPath.replace(/^.*[\/\\]/, '').replace(/\.[^.]+$/, '').toLowerCase();
-                            if (stem.toLowerCase() === refBase || stem.toLowerCase().indexOf(refBase) >= 0) {
-                                assignedCam = camN;
-                                break;
-                            }
-                        }
-                    }
+                    // Match to camera by parent directory name or filename —
+                    // the same answer the de-prioritization above grouped by.
+                    var assignedCam = slpMatchCam(vFile);
 
                     state.videoFiles.push({
                         file: vFile, name: stem, decoder: slpEntry.decoder,
@@ -1819,7 +1832,7 @@ export async function handleAddSlp() {
         if (hasEmbedded) {
             showLoading('Loading embedded video frames...');
 
-            var frameWorker = new Worker(new URL('../loading/frame-worker.js?v=ae3882834712', import.meta.url), { type: 'module' });
+            var frameWorker = new Worker(new URL('../loading/frame-worker.js?v=75a060c30a48', import.meta.url), { type: 'module' });
             var embeddedVideoInfos = await new Promise(function (resolve, reject) {
                 frameWorker.onmessage = function (e) {
                     var msg = e.data;
