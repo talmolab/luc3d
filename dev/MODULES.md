@@ -4781,7 +4781,12 @@ the classic-script unit runner and exercised without a browser dock.
   set — the list has already changed once (`360` → `480`), and a stored key
   nothing recognises would blank the `<select>` while `outputSizeFor` quietly fell
   back to `DEFAULT_RES`, leaving the summary quoting a size the visible control
-  doesn't name.
+  doesn't name. `sanitizeSettings` also **folds a stored `labelSize` of 0 into
+  `showLabels: false` and restores the default size** (issue #223): a blob written
+  before the toggle existed encodes "off" as a 0 and carries no `showLabels`, so
+  without this the setting would come back ON *and* the toggle would be dead,
+  since 0px labels draw nothing. A 0 is unreachable from the current modal, so
+  this can only ever be reading the old meaning.
   `UNRESTORED_KEYS` (`res`, `outW`, `outH`) are **written to storage but never read
   back**, so the modal always opens at `DEFAULT_RES` = **1080p**. The tier decides
   pixel count, bitrate and therefore file size, and a value silently inherited from a
@@ -4797,6 +4802,20 @@ the classic-script unit runner and exercised without a browser dock.
   settings → `drawFrameOverlays()` options translation. Explicitly nulls ALL
   interaction state (selection / hover / drag / assignment): an export has no
   cursor, and a stray highlight would be burned into the video.
+  **Node labels are gated by `showLabels`, never by their size** (issue #223).
+  `settings.user.showLabels` / `settings.reproj.showLabels` are real booleans the
+  modal surfaces as `Show node labels`, beside `Show nodes` / `Show edges`;
+  `labelSize` is only a size, floored at 1 in the modal. Before #223 the only off
+  switch was a size of 0, which is undiscoverable and reads as "make it tiny".
+  Defaults are user **on** / reproj **off**, matching the Visibility panel's own
+  (`visUserLabelSize` 12, `visReprojLabelSize` 0), so a fresh export renders what
+  the app is already showing. **Predicted has no toggle because the app has no
+  such layer**: `ui/rendering.js` hardcodes `predictedOpts.showLabels: false`
+  too, so predicted instances have never carried node names and an export toggle
+  would be inventing one. Note `showLabels` also gates the TRACK-name labels
+  (`drawInstanceLabels`), exactly as the size-of-0 gate did — one meaning of
+  "labels", shared with the live app, rather than a split only the export knows
+  about.
 - `seedLayoutPlan(viewNames, include3D)` — the mirror-the-main-window seed (same
   row-count heuristic as `addAllViewsAsGrid`, 3D docked right of the whole grid).
   Returns add-panel steps whose positions reference **earlier** entries by index,
@@ -4854,6 +4873,16 @@ version: `index.html`'s CSS, `sessions-panes.js`, and this module), seeded via
 `seedLayoutPlan` to mirror the main window. The settings panel carries the frame
 range (**1-based display**, 0-based internally, matching the issue) at the top,
 then layers, per-layer appearance, background, and quality/output.
+**`Show node labels`** (issue #223) sits in the User and Reprojection Appearance
+groups with `Show nodes` / `Show edges`, and the `Node label size` field below it
+floors at **1** — an off switch hidden at the bottom of a numeric range is
+precisely what the toggle replaces. The Reprojection group gained its own
+`Node label size` / `Label opacity` fields at the same time, so the toggle it
+grew is not the only reprojection-label control. `settingsFromVisibilityPanel`
+SPLITS the panel's folded encoding on the way in: the panel says "off" with a
+size of 0, so a 0 seeds `showLabels: false` and leaves the export's size at its
+default — copying the 0 through would leave the toggle able to turn on nothing.
+There is no Predicted entry; see `overlayOptionsFrom` above for why.
 
 **Output dimensions.** Quality & Output has a Resolution picker — the four shared
 tiers **480p (854×480) / 720p (1280×720) / 1080p (1920×1080) / 2160p (3840×2160)**
