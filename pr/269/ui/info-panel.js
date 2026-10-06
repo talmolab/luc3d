@@ -5,41 +5,42 @@
 
 import {
     Skeleton, Camera, Session,
-} from '../pose/pose-data.js?v=3f305df9804f';
-import { getInstanceGroupsForFrame } from '../pose/triangulation.js?v=3f305df9804f';
-import { REPROJECTION_COLOR, getTrackColor, getGroupColor } from './overlays.js?v=3f305df9804f';
-import { drawAllOverlays, updateFrameCounters } from './rendering.js?v=3f305df9804f';
-import { isInteractiveClickTarget } from './interaction.js?v=3f305df9804f';
-import { persistSectionState } from './section-state.js?v=3f305df9804f';
-import { confirmSkeletonEdit } from './skeleton-edit-warning.js?v=3f305df9804f';
-import { refreshIdSwitchPanel } from './id-switch-modal.js?v=3f305df9804f';
-import { isInfoPanelVisible, markInfoPanelStale } from './panel-visibility.js?v=3f305df9804f';
+} from '../pose/pose-data.js?v=5742b520de9a';
+import { getInstanceGroupsForFrame } from '../pose/triangulation.js?v=5742b520de9a';
+import { REPROJECTION_COLOR, getTrackColor, getGroupColor } from './overlays.js?v=5742b520de9a';
+import { drawAllOverlays, updateFrameCounters } from './rendering.js?v=5742b520de9a';
+import { isInteractiveClickTarget } from './interaction.js?v=5742b520de9a';
+import { persistSectionState } from './section-state.js?v=5742b520de9a';
+import { confirmSkeletonEdit, isSkeletonEditWarningSuppressed,
+         setSkeletonEditWarningSuppressed } from './skeleton-edit-warning.js?v=5742b520de9a';
+import { refreshIdSwitchPanel } from './id-switch-modal.js?v=5742b520de9a';
+import { isInfoPanelVisible, markInfoPanelStale } from './panel-visibility.js?v=5742b520de9a';
 import { state, timeline, interactionManager, rememberSkeleton, buildRememberedSkeleton,
-         setProjectSkeleton, getProjectSkeleton } from './app-state.js?v=3f305df9804f';
-import { setStatus, markDirty } from '../import-export/save-load.js?v=3f305df9804f';
-import { buildSkeletonJSON, parseSkeletonJSON } from '../import-export/skeleton-json.js?v=3f305df9804f';
+         setProjectSkeleton, getProjectSkeleton } from './app-state.js?v=5742b520de9a';
+import { setStatus, markDirty } from '../import-export/save-load.js?v=5742b520de9a';
+import { buildSkeletonJSON, parseSkeletonJSON } from '../import-export/skeleton-json.js?v=5742b520de9a';
 import {
     handleLoadVideos, handleLoadCalibration, autoAssignVideosToCameras,
     createViewForVideoFile, rebuildVideoController, fitCanvasesToCells,
     loadSingleSessionFromCache, removeVideoFile,
-} from '../loading/session-loader.js?v=3f305df9804f';
+} from '../loading/session-loader.js?v=5742b520de9a';
 
 // Circular import — these are still defined in app.js for now. They will be
 // retargeted as later passes land:
 // - swapAssignTrack, propagateIdentityForward, unlinkGroup, showGroupContextMenu
 //   → ui/identity-assignment.js (Pass 3f)
 // Pass 3e-1: unlinkGroup + showGroupContextMenu moved to ui-wiring.js.
-import { unlinkGroup, showGroupContextMenu } from './ui-wiring.js?v=3f305df9804f';
+import { unlinkGroup, showGroupContextMenu } from './ui-wiring.js?v=5742b520de9a';
 // Pass 3f: swapAssignTrack + propagateIdentityForward moved to identity-assignment.js.
 // luc3d #172: every manual identity switch routes through applyIdentitySwitch,
 // which subsumes this file's former direct propagateIdentityForward calls.
 import {
     swapAssignTrack, applyIdentitySwitch, describeIdentitySwitch,
-} from './identity-assignment.js?v=3f305df9804f';
+} from './identity-assignment.js?v=5742b520de9a';
 // Pass 3h: populateSessionsPanel / populateViewStrip / populateSessionStrip moved to sessions-panes.js.
 import {
     populateSessionsPanel, populateViewStrip, populateSessionStrip,
-} from './sessions-panes.js?v=3f305df9804f';
+} from './sessions-panes.js?v=5742b520de9a';
 // Block 2 (Prompt 4): per-session timeline visibility toggles.
 import {
     toggleCameraVisibility,
@@ -48,7 +49,7 @@ import {
     getCameraVisibilityList,
     getTrackVisibilityList,
     getIdentityVisibilityList,
-} from './timeline-visibility.js?v=3f305df9804f';
+} from './timeline-visibility.js?v=5742b520de9a';
 
 // ============================================
 // Inline name entry for "+ New Track" / "+ New ID"
@@ -685,6 +686,14 @@ export function populateSkeletonTable() {
     setSectionCount('skeletonNodesCount', sk.nodes.length);
     setSectionCount('skeletonEdgesCount', sk.edges.length);
 
+    // The way back on after "Do not show again" in the edit confirmation. Shown
+    // only while the preference is set — the control that undoes a setting has
+    // to be findable, and the panel the setting governs is where it is looked
+    // for. Driven from here because this is the one refresh point after every
+    // skeleton mutation.
+    const warnNote = document.getElementById('skeletonWarnOffNote');
+    if (warnNote) warnNote.style.display = isSkeletonEditWarningSuppressed() ? '' : 'none';
+
     // Remember this skeleton for the current app session so newly loaded videos
     // inherit it (rememberSkeleton ignores empty skeletons, so viewing a blank
     // session never clobbers a good remembered one). Called here because this is
@@ -953,6 +962,17 @@ export function setupSkeletonEditing() {
     // Collapsible Nodes / Edges sections — restore last state, remember changes.
     persistSectionState('skeletonNodesSection', SKELETON_SECTIONS_KEY);
     persistSectionState('skeletonEdgesSection', SKELETON_SECTIONS_KEY);
+
+    // Undo "Do not show again". Wired at SETUP, like the Videos tab's two
+    // buttons and for the same reason: a handler assigned inside a per-session
+    // rebuild is missing exactly when there is no session yet.
+    const warnOnBtn = document.getElementById('btnSkeletonWarnOn');
+    if (warnOnBtn) warnOnBtn.addEventListener('click', function () {
+        setSkeletonEditWarningSuppressed(false);
+        const note = document.getElementById('skeletonWarnOffNote');
+        if (note) note.style.display = 'none';
+        setStatus('Skeleton edits will ask for confirmation again', 'success');
+    });
 
     // Add Node button
     document.getElementById('btnAddNode').addEventListener('click', function () {

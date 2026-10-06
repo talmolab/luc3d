@@ -6479,16 +6479,6 @@ body.origin-mode-lock .timeline-container {
   font-size: 11px;
 }
 
-/* The sum under a column of `.origin-rebase-sub` rows (the skeleton-edit
-   dialog's By-session block). Back at full weight and ruled off above, because
-   a total that looks like one more row is a row the reader adds in again. */
-.origin-rebase-total td {
-  color: var(--text-primary);
-  font-weight: 600;
-  padding-top: 5px;
-  border-top: 1px solid var(--border-color, #444);
-}
-
 /* One titled table. The dialog has two of these — what the re-base rewrites
    and what it leaves alone — plus a third for the per-session split, because
    a single table answering both questions in one column left the reader
@@ -6704,10 +6694,60 @@ details[open] > summary.origin-rebase-block-title::before {
   font-variant-numeric: tabular-nums;
 }
 
-/* Skeleton edit confirmation (ui/skeleton-edit-warning.js) needs no rules of
-   its own beyond `.skeleton-edit-modal` in the geometry block above: it reuses
-   `.origin-rebase-block` / `-table` / `-caution` wholesale, and its one
-   addition is the `.origin-rebase-total` row. */
+/* Skeleton edit confirmation (ui/skeleton-edit-warning.js). It reuses
+   `.origin-rebase-block` / `-table` / `-caution` wholesale; all it needs of its
+   own is the action row, which carries "Do not show again" on the LEFT of the
+   two buttons. The checkbox is not a third action — it qualifies the one the
+   user is about to take — so it sits apart from them rather than in the row. */
+.skeleton-edit-actions {
+  justify-content: space-between;
+  align-items: center;
+}
+
+.skeleton-edit-buttons {
+  display: flex;
+  gap: 8px;
+}
+
+.skeleton-edit-again {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.skeleton-edit-again input {
+  margin: 0;
+  cursor: pointer;
+}
+
+/* The way back on, in the Skeleton tab. Present in the markup always and shown
+   only while the preference is set, so it costs nothing in the ordinary case —
+   and `display` is driven from `populateSkeletonTable`, the one refresh point
+   after every skeleton mutation. */
+#skeletonWarnOffNote {
+  margin-top: 8px;
+  padding: 6px 8px;
+  border-radius: 3px;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+}
+
+#skeletonWarnOffNote button {
+  margin-left: 4px;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: var(--accent, #4a9eff);
+  text-decoration: underline;
+  cursor: pointer;
+}
 
 /* Tracks ▸ Check ID Switches — the ID Switches tab of the right panel (ui/id-switch-modal.js
    refreshIdSwitchPanel). The tab content is the panel's one scroller; the toolbar sticks. */

@@ -38,6 +38,14 @@
 //   intolerable. `skeletonEditNeedsConfirmation` gates it: no instances, no
 //   groups, nothing lazy → the edit applies straight through.
 //
+// - **"Do not show again" is the user's own version of that gate**, kept in
+//   `localStorage` (browser-local display taste, never the `.slp`). It is
+//   recorded only when the edit is APPLIED — ticked and then cancelled it does
+//   nothing — and the Skeleton tab grows a `#skeletonWarnOffNote` line while it
+//   is set, so the way back on sits where the thing it governs happens. A
+//   preference you can set and never unset is a trap, and this one hides a
+//   warning about silent data loss.
+//
 // - **The caller owns the mutation.** This module shows a dialog and calls
 //   back; it never touches the skeleton. That keeps each edit's propagation
 //   (which differs per kind — a node add has to grow instance buffers, an edge
@@ -49,14 +57,54 @@
 // `ui/calibration-notice.js` shares them: it is the same kind of dialog — a
 // stack of titled blocks whose height depends on the project.
 
-import { state } from './app-state.js?v=3f305df9804f';
+import { state } from './app-state.js?v=5742b520de9a';
 import {
     splitSessionsBySkeleton, countSkeletonEditImpact, skeletonEditNeedsConfirmation,
-} from '../pose/skeleton-edit-impact.js?v=3f305df9804f';
+} from '../pose/skeleton-edit-impact.js?v=5742b520de9a';
 
 /** `1,234` rather than `1234`, because these numbers get large. */
 function n(v) {
     return (v || 0).toLocaleString();
+}
+
+// ============================================
+// "Do not show again"
+// ============================================
+//
+// Browser-local display taste, the same class as the Define Planes panel's
+// section folds and the Visibility panel's global appearance prefs — so it
+// lives in `localStorage` and MUST NOT reach the `.slp`: it is a property of
+// this person's browser, not of the project, and opening a colleague's project
+// should not silence their warnings (nor `save-golden-digest.mjs` move).
+//
+// Every access is try/caught. A private window and blocked site data throw on
+// read AND on write, and a browser that cannot remember the preference has to
+// keep WARNING — the failure direction is the one that shows the dialog, never
+// the one that silently skips it.
+
+const SKELETON_EDIT_WARN_KEY = 'skeletonEditWarningOff';
+
+/** Has the user asked not to be shown this again? @returns {boolean} */
+export function isSkeletonEditWarningSuppressed() {
+    try {
+        return localStorage.getItem(SKELETON_EDIT_WARN_KEY) === '1';
+    } catch (e) {
+        return false;
+    }
+}
+
+/**
+ * Remember (or forget) the preference. The Skeleton tab's
+ * `#skeletonWarnOffNote` is the way back on — a setting a user can switch off
+ * and never find again is a trap, and this one hides a warning about silent
+ * data loss.
+ * @param {boolean} off
+ */
+export function setSkeletonEditWarningSuppressed(off) {
+    try {
+        if (off) localStorage.setItem(SKELETON_EDIT_WARN_KEY, '1');
+        else localStorage.removeItem(SKELETON_EDIT_WARN_KEY);
+    } catch (e) { /* best effort — see above */ }
 }
 
 /**
@@ -122,14 +170,24 @@ export function describeSkeletonEdit(edit) {
 /**
  * Show the confirmation and run `onConfirm()` if the user accepts.
  *
- * Applies the edit immediately, without a dialog, when there is nothing to
- * warn about — see `skeletonEditNeedsConfirmation`. The callback is what
- * mutates; this function never touches the skeleton.
+ * Applies the edit immediately, without a dialog, in two cases: when there is
+ * nothing to warn about (`skeletonEditNeedsConfirmation`), and when the user
+ * has ticked "Do not show again". The callback is what mutates; this function
+ * never touches the skeleton.
+ *
+ * **The suppression check comes FIRST**, before the tally. The tally walks a
+ * lazy project's whole columnar store, and a user who has turned the dialog off
+ * should not keep paying for a dialog that will not open.
  *
  * @param {{kind: string, label?: string}} edit
  * @param {Function} onConfirm
  */
 export function confirmSkeletonEdit(edit, onConfirm) {
+    if (isSkeletonEditWarningSuppressed()) {
+        if (onConfirm) onConfirm();
+        return;
+    }
+
     var sessions = (state.sessions && state.sessions.length)
         ? state.sessions
         : (state.session ? [state.session] : []);
@@ -178,11 +236,17 @@ export function confirmSkeletonEdit(edit, onConfirm) {
     ];
     buildTable(modal, 'skeletonEditTotals', 'Annotations affected — whole project', null, rows);
 
-    // ---- per session, with a TOTAL row ----
+    // ---- per session ----
     //
     // Only when there is more than one, because with one session the table
     // above IS the per-session table and repeating it would read as two
     // different measurements of the same thing.
+    //
+    // **No Total row.** It used to carry one, and it was the same arithmetic
+    // printed twice: the whole-project block directly above IS the total, so a
+    // second copy of it a few rows down invites the reader to check one against
+    // the other instead of reading either. This block answers the one question
+    // the block above cannot — WHICH session the number is in.
     if (t.perSession.length > 1) {
         var perRows = [];
         for (var i = 0; i < t.perSession.length; i++) {
@@ -194,12 +258,6 @@ export function confirmSkeletonEdit(edit, onConfirm) {
                 'sub',
             ]);
         }
-        perRows.push([
-            'Total',
-            n(t.userInstances) + ' user · ' + n(t.predictedInstances) +
-                ' pred · ' + n(t.groups) + ' 3D',
-            'total',
-        ]);
         buildTable(modal, 'skeletonEditBySession', 'By session',
             'One skeleton is shared by every session, so this edit applies to all of them.',
             perRows);
@@ -248,7 +306,7 @@ export function confirmSkeletonEdit(edit, onConfirm) {
 
     // ---- actions ----
     var actions = document.createElement('div');
-    actions.className = 'modal-actions';
+    actions.className = 'modal-actions skeleton-edit-actions';
 
     function close() {
         document.removeEventListener('keydown', onKey, true);
@@ -261,11 +319,34 @@ export function confirmSkeletonEdit(edit, onConfirm) {
         close();
     }
 
+    // "Do not show again", on the LEFT of the two buttons, because it is not a
+    // third action — it qualifies the one the user is about to take.
+    //
+    // **It is recorded only when the edit is APPLIED.** Ticked and then
+    // cancelled it does nothing: "do not show this again" alongside "do not do
+    // this" is two different intentions, and guessing which one won would
+    // silence a warning about silent data loss on the strength of a dialog the
+    // user rejected. `#skeletonWarnOffNote` in the Skeleton tab is the way back
+    // on — it appears only while this is set.
+    var again = document.createElement('label');
+    again.className = 'skeleton-edit-again';
+    var againBox = document.createElement('input');
+    againBox.type = 'checkbox';
+    againBox.id = 'skeletonEditDontAsk';
+    var againText = document.createElement('span');
+    againText.textContent = 'Do not show again';
+    again.appendChild(againBox);
+    again.appendChild(againText);
+    actions.appendChild(again);
+
+    var buttons = document.createElement('div');
+    buttons.className = 'skeleton-edit-buttons';
+
     var cancel = document.createElement('button');
     cancel.id = 'btnSkeletonEditCancel';
     cancel.textContent = 'Cancel';
     cancel.addEventListener('click', close);
-    actions.appendChild(cancel);
+    buttons.appendChild(cancel);
 
     var ok = document.createElement('button');
     ok.id = 'btnSkeletonEditConfirm';
@@ -274,11 +355,13 @@ export function confirmSkeletonEdit(edit, onConfirm) {
         ? 'Apply to all ' + n(t.sessions) + ' sessions'
         : 'Apply';
     ok.addEventListener('click', function () {
+        if (againBox.checked) setSkeletonEditWarningSuppressed(true);
         close();
         if (onConfirm) onConfirm();
     });
-    actions.appendChild(ok);
+    buttons.appendChild(ok);
 
+    actions.appendChild(buttons);
     modal.appendChild(actions);
     overlay.appendChild(modal);
     document.body.appendChild(overlay);
