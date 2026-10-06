@@ -1385,8 +1385,15 @@ sees.
 
 All five edits — add node, remove node, rename node, add edge, remove edge —
 now go through `confirmSkeletonEdit` (`ui/skeleton-edit-warning.js`), counting
-with `pose/skeleton-edit-impact.js`. Six things are load-bearing:
+with `pose/skeleton-edit-impact.js`. Seven things are load-bearing:
 
+- **The dialog is a title, ONE SENTENCE and the counts.** A bulleted
+  `What changes` block and an always-on `There is no undo…` caution were both
+  removed: four paragraphs of prose above the one thing a reader can act on,
+  restating per edit what the lead already said, plus a box that by its third
+  appearance is scenery — which costs the lazy warning its weight too. Keep the
+  per-edit detail in MODULES.md; `tests/e2e/skeleton-edit-warning.mjs` asserts
+  both are absent, because copy like that creeps back one paragraph at a time.
 - **The counts are the WHOLE project, and the enumeration is the same one
   `pose/origin-rebase.js` uses.** Never `frameGroups` alone on a lazy project
   (a resident window — 31 of 180,210 frames on the real project, so the tally

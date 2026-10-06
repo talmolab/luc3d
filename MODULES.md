@@ -11501,7 +11501,15 @@ shape every annotation is stored against (`Instance` keeps one flat
 so a node typed into that box re-shapes every instance in every loaded session at
 once. The only prior signal was a `console.warn`.
 
-Four things about it:
+Five things about it:
+- **It is a title, ONE SENTENCE, and the counts.** It used to carry a bulleted
+  `What changes` block and an always-on `There is no undo…` caution as well:
+  four paragraphs of prose above the one thing a reader can act on, restating
+  per edit what the lead already said, plus a box that by its third appearance
+  is scenery — which costs the lazy warning below it its weight too. The
+  per-edit detail lives here instead. `tests/e2e/skeleton-edit-warning.mjs`
+  asserts both are ABSENT, because copy like that creeps back one paragraph at
+  a time.
 - **It states a TOTAL and a per-session split.** The headline block is the whole
   project; a `By session` block with its own `Total` row appears when more than
   one session is loaded, so the user can see which session the number is in. The
@@ -11523,18 +11531,19 @@ Four things about it:
 **Key exports.**
 - `confirmSkeletonEdit(edit, onConfirm)` — `edit` is
   `{kind: 'add-node'|'remove-node'|'rename-node'|'add-edge'|'remove-edge', label}`.
-- `describeSkeletonEdit(edit)` → `{title, lead, effects[]}`. One table rather
-  than strings at the five call sites: the edits differ in exactly this, and a
-  consequence written beside the button that causes it is a consequence that
-  drifts from what the code does. The effects list includes what is NOT lost — a
-  dialog that only ever lists damage trains the user to dismiss it.
+- `describeSkeletonEdit(edit)` → `{title, lead}`. One table rather than strings
+  at the five call sites: the edits differ in exactly this, and a consequence
+  written beside the button that causes it is a consequence that drifts from
+  what the code does. One sentence each, and the three non-destructive edits
+  open on *"No coordinates move"* — a dialog that only ever lists damage trains
+  the user to dismiss it.
 
 **Geometry and classes are shared with `ui/origin-rebase.js`'s confirmation**
 (`.origin-rebase-block` / `-table` / `-caution`, plus `.skeleton-edit-modal` on
 the same `max-height` + sticky-actions rule), for the reason
 `ui/calibration-notice.js` shares them: same kind of dialog, a stack of titled
-blocks whose height depends on the project. Its own CSS is the
-`.skeleton-edit-effects` list and the `.origin-rebase-total` row.
+blocks whose height depends on the project. Its only addition is the
+`.origin-rebase-total` row.
 
 **Imports from project modules.** `./app-state.js` (`state`),
 `../pose/skeleton-edit-impact.js`.
