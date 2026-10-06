@@ -69,7 +69,12 @@ the old `app.js` entry point.
 
 **Imports from project modules.**
 - `../ui/app-state.js` — `state`, controller singletons + setters, `VIEW_NAMES`.
-- `./pose-data.js` — `Instance`, `UnlinkedInstance`.
+- `./pose-data.js` — `Instance`, `UnlinkedInstance`, `points3dNodeCount`,
+  `getPoint3d`, `groupDisplayName` (the group name in every interaction status
+  line — `onInstanceConverted`, `onClonePredictedGroup`,
+  `onDoubleClickReprojected`, `onInstanceDeleted`, `onAssignmentGroupCreated`.
+  Never index `session.tracks` by a group's `trackIdx` (it has none) or by its
+  `identityId`).
 - `./triangulation.js` — `getInstanceGroupsForFrame`, `updateTimelineForFrame`,
   `reTriangulateGroup`, `sessionHasCalibration`.
 - `../loading/video.js` — `OnDemandVideoDecoder`, `VideoController`.
@@ -1433,6 +1438,17 @@ session graph that holds them.
   error under a "DLT" label for BA points (measured on the regression fixture:
   1.62 px shown instead of 1.43 px). Guarded by
   `tests/e2e/triangulate-all-ba-file-roundtrip.mjs`.
+- `groupDisplayName(session, group, frameIdx)` — the name a status line gives an
+  `InstanceGroup`, never `undefined`/`null`. A group has **no `trackIdx`** (its
+  member instances do, and a member's can be `null` since luc3d #273), and
+  `identityId` is an identity id, not an index into `session.tracks` — reading
+  either as a track index printed "Converted Track undefined to user instance".
+  Resolved in `getGroupColor`'s order: the per-frame identity of a member's own
+  (camera, trackIdx) at `frameIdx`, then `group.identityId` via `getIdentity`,
+  then the first member's track name (`'Track N'` for an unnamed index, as the
+  2D labels do), then `'group'`. Only a non-negative integer `trackIdx` counts as
+  a track (a pre-#273 `-1` is trackless). Used by the five group-naming status
+  lines in `pose/initialization.js`. Tested by `tests/test-group-display-name.mjs`.
 - `Session` — top-level container: cameras, skeleton, tracks, identities,
   frameGroups, instanceGroups. The `numFrames` getter returns
   `lazyLoader.nFrames` on a lazy session (`frameGroups` there holds only the

@@ -1106,6 +1106,57 @@ export class InstanceGroup {
     }
 }
 
+/** True for a trackIdx that can index `session.tracks` / key `frameIdentityMap`. */
+function _isTrackIdx(t) {
+    return Number.isInteger(t) && t >= 0;
+}
+
+/**
+ * The name a status line uses for an InstanceGroup — never `undefined`/`null`.
+ *
+ * A group has NO `trackIdx` (its members do, and since luc3d #273 a member's can
+ * be `null`), and `identityId` is an identity id, not an index into
+ * `session.tracks`. Reading either as a track index is what printed
+ * "Converted Track undefined to user instance". Resolved in the order the
+ * overlays label and color a group (`getGroupColor`, `resolveLabelIdentity` in
+ * `ui/overlays.js`):
+ *
+ *   1. the per-frame identity of a member's (camera, trackIdx) at `frameIdx` —
+ *      first, because `group.identityId` goes stale off the frame it was set on
+ *      (issue #155);
+ *   2. the group's own `identityId`;
+ *   3. a member's track name (`'Track N'` for an index with no name, as the
+ *      2D labels do);
+ *   4. `'group'`.
+ *
+ * @param {Session|null} session
+ * @param {InstanceGroup|null} group
+ * @param {number} [frameIdx] - frame the group is on; without it step 1 is skipped
+ * @returns {string}
+ */
+export function groupDisplayName(session, group, frameIdx) {
+    if (!group) return 'group';
+    var members = group.instances instanceof Map ? group.instances : new Map();
+    if (session) {
+        if (frameIdx != null && session.getIdentityForTrack) {
+            for (var [cam, inst] of members) {
+                if (!inst || !_isTrackIdx(inst.trackIdx)) continue;
+                var ident = session.getIdentityForTrack(inst.trackIdx, cam, frameIdx);
+                if (ident && ident.name) return ident.name;
+            }
+        }
+        if (group.identityId != null && group.identityId >= 0 && session.getIdentity) {
+            var gIdent = session.getIdentity(group.identityId);
+            if (gIdent && gIdent.name) return gIdent.name;
+        }
+    }
+    var tracks = session && session.tracks ? session.tracks : [];
+    for (var m of members.values()) {
+        if (m && _isTrackIdx(m.trackIdx)) return tracks[m.trackIdx] || ('Track ' + m.trackIdx);
+    }
+    return 'group';
+}
+
 
 export class Session {
     /**
