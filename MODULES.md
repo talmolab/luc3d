@@ -10664,6 +10664,57 @@ number looks plausible, and every reprojection is wrong.
 
 **Tests.** `tests/test-calibration-file-pick.mjs`.
 
+### loading/video-file-pick.js
+
+**Purpose.** Which of a camera's candidate videos is the session recording.
+Two rules about calibration-named files that four load paths need and that must
+not disagree.
+
+**No imports, deliberately** — the same reason as `loading/calibration-pick.js`:
+`loading/session-loader.js` reaches Three.js through a CDN specifier and cannot
+be loaded by a Node test at all, and this decision is pure and worth pinning.
+
+**Key exports.**
+- `isCalibrationImagesVideo(file)` — the HARD exclusion. True for a clip under a
+  `calibration_images/` path segment (matched at ANY depth, so the answer does
+  not depend on which directory the user picked as the root). No such file is
+  ever the session recording. `session-loader.js`'s `isCalibrationVideoFile` is
+  now just this.
+- `hasCalibrationStem(file)` — the SOFT signal: a stem ending in `-calibration`
+  or `_calibration`. Positional, not about the separator — `calibration-cam1.mp4`
+  is not a match.
+- `preferNonCalibrationVideos(files, groupKeyFn)` → `{kept, dropped}`. Drops each
+  calibration-STEMMED video that has a non-calibration sibling under the same
+  group key. Order-preserving, does not mutate its argument, and a file whose key
+  is null is never dropped (nothing says it is redundant).
+- `matchVideoToCamera(file, cameraNames, refBaseByCam)` — the camera a video
+  belongs to, by parent directory, then the camera name ANYWHERE in the stem,
+  then the filename the project references for that camera. All case-insensitive;
+  null when nothing matches. Used both to assign a camera and, in the same load,
+  as the group key above — matching twice with two different rules is how a video
+  gets dropped for one camera and bound to another.
+
+**Why it exists (#199).** The stem used to be a hard exclusion sharing one
+predicate with the path rule, so `cam1-calibration.mp4` — an ordinary session
+video an alpha tester had simply named that way — was dropped outright and the
+folder load produced ZERO views with no message saying why. On the real session
+folders all 38 calibration clips live under `calibration_images/` and none
+outside it, so the stem rule excluded only false positives. It is now a hint
+about which of several candidates is the recording, never proof that a file is
+not one.
+
+**The grouping is per CAMERA, not per folder.** That is the scope in which "is
+there a better candidate?" is a meaningful question; a folder-wide rule would let
+one camera's plain video suppress another camera's only video.
+
+**Imported by.** `loading/session-loader.js` (the per-camera folder loader, the
+single-SLP folder loader, and `attachVideosForLazyReopen`),
+`import-export/slp-import.js`.
+
+**Tests.** `tests/test-video-file-pick.mjs` (the rules),
+`tests/e2e/calibration-named-videos-load.mjs` (both real loaders; confirmed to
+fail on the pre-fix build, each loader on a different half).
+
 ### loading/session-loader.js
 
 **Purpose.** Orchestrator for every session-loading workflow — empty
@@ -10705,13 +10756,20 @@ filesystem enumeration, decoder rebuild.
   `null`; used by the lazy project reopen) and closes on `Esc` (resolving
   `null`, per the modal UI convention) — every caller treats `null` as "no
   videos picked".
-- `isCalibrationVideoFile(file)` — true for per-camera calibration clips
+- `isCalibrationVideoFile(file)` — true for per-camera calibration clips,
+  identified by a `calibration_images/` PATH segment
   (`<cam>/calibration_images/<date>-<cam>-calibration.mp4`). The folder scans
   recurse into camera subfolders, so these clips would otherwise be collected
   and substring-matched to a camera (their filename embeds the camera name).
   Applied in the parent-directory pick (both FSA + webkitdirectory branches),
   the "Select Session Folder" scan, and the SLP-import video filter so the
-  calibration video never loads as a session view.
+  calibration video never loads as a session view. Now a thin re-export of
+  `isCalibrationImagesVideo` (`loading/video-file-pick.js`): it used to ALSO
+  exclude any `-calibration` / `_calibration` filename stem, which silently
+  dropped ordinary session videos named that way (#199). That stem is now a
+  per-camera de-prioritizing hint — see `preferNonCalibrationVideos`, applied by
+  the per-camera folder loader, the single-SLP folder loader,
+  `attachVideosForLazyReopen` and the SLP import.
 - View/grid: `createViewForVideoFile`, `removeVideoFile`, `updateGridLayout`,
   `createVideoPromptCell`, `fitCanvasesToCells`, `cellResizeObserver`,
   `rebuildVideoController`, `updateTotalFrames`.
