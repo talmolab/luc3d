@@ -88,7 +88,9 @@ export class OnDemandVideoDecoder {
         this._mp4Initialized = false;
         this._mp4InitPromise = null;
         this._html5SeekLock = null; // Prevent concurrent HTML5 seeks
+        this._html5Moved = false;   // <video> played or frame-start-seeked since _getFrameHTML5 last positioned it
         this._mbBackend = null; // Optional mediabunny frame-accurate backend (issue #115)
+        this._mbUnavailable = null; // why there is no _mbBackend: { reason: 'codec'|'init', ... } (see _initMediabunny)
         this._stepCursor = null; // open decode stream for paused forward steps (see _mbGetFrame)
         this._keySink = null;    // mediabunny EncodedPacketSink: which keyframe a frame needs
 
@@ -259,12 +261,14 @@ export class OnDemandVideoDecoder {
         // force the old (frame-inaccurate) HTML5 seek, set
         //   localStorage.LUCID_VIDEO_BACKEND = 'html5'   (then reload)
         // or window.LUCID_VIDEO_BACKEND = 'html5' before loading a session.
+        this._mbUnavailable = null;
         if (this._mediabunnyEnabled() && (source instanceof Blob || source instanceof File)) {
             try {
                 await this._initMediabunny(source);
             } catch (e) {
                 videoLog("Mediabunny backend init failed (HTML5 seek will be used): " + e.message, "warn");
                 this._mbBackend = null;
+                this._mbUnavailable = { reason: 'init', message: e.message };
             }
         }
 
@@ -325,8 +329,48 @@ export class OnDemandVideoDecoder {
         if (this._mbBackend.fps && this._mbBackend.fps > 0) {
             this._fps = this._mbBackend.fps;
         }
+
+        // Demuxing is not decoding: Firefox 157 reads an HEVC file's index fine
+        // (so the backend above initializes) but has no WebCodecs HEVC decoder,
+        // so EVERY decode then failed and fell back to the <video> seek anyway —
+        // 1,544 "decode failed, falling back" warnings in one 8-camera stepping
+        // run. Ask once. The frame count and fps adopted above are container
+        // metadata and stay.
+        var undecodable = await this._mbCannotDecode(this._mbBackend);
+        if (undecodable) {
+            try { this._mbBackend.close(); } catch (_) {}
+            this._mbBackend = null;
+            this._mbUnavailable = undecodable;
+            videoLog("This browser cannot decode " + (undecodable.codecString || undecodable.codec || 'this codec')
+                + " with WebCodecs: stepping uses <video> seeks instead", "warn");
+            return;
+        }
         videoLog("Mediabunny ready: " + n + " frames, fps=" + (this._fps ? this._fps.toFixed(2) : '?')
             + " (frame-accurate decode)");
+    }
+
+    /**
+     * `{ reason: 'codec', codec, codecString }` when this browser's WebCodecs
+     * reports it cannot decode the backend's video track, else null. Uses
+     * mediabunny's `canDecode()` — `VideoDecoder.isConfigSupported` on the
+     * track's full decoder config (codec string + hvcC/avcC description).
+     * Measured (verify/seek-probe.html, barcode clips): false for HEVC in
+     * Firefox 157 (whose decode then throws "cannot be decoded by this
+     * browser"); true for H.264 there and for HEVC + H.264 in Chrome, Brave and
+     * Safari. A check that cannot be asked (no `canDecode`, or it throws)
+     * answers null: the per-frame fallback in getFrame still covers a failure.
+     */
+    async _mbCannotDecode(be) {
+        try {
+            var track = be && be.input && await be.input.getPrimaryVideoTrack();
+            if (!track || typeof track.canDecode !== 'function') return null;
+            if (await track.canDecode()) return null;
+            var codecString = null;
+            try { codecString = await track.getCodecParameterString(); } catch (_) { /* name only */ }
+            return { reason: 'codec', codec: track.codec || null, codecString: codecString };
+        } catch (e) {
+            return null;
+        }
     }
 
     _emitProgress(event) {
@@ -822,7 +866,17 @@ export class OnDemandVideoDecoder {
     }
 
     /**
-     * Get a frame using the HTML5 <video> element (always works, slightly less precise).
+     * The `<video>.currentTime` a stepping seek to `frameIndex` sets: the middle
+     * of the frame's presentation interval, `(i + 0.5) / fps` (why: _getFrameHTML5).
+     */
+    html5SeekTime(frameIndex) {
+        var fps = this._fps > 0 ? this._fps : 30;
+        return (frameIndex + 0.5) / fps;
+    }
+
+    /**
+     * Get a frame using the HTML5 <video> element (always works, slower than
+     * mediabunny; the path for codecs this browser's WebCodecs cannot decode).
      */
     async _getFrameHTML5(frameIndex) {
         if (!this._videoEl || !this._videoReady) return null;
@@ -838,7 +892,15 @@ export class OnDemandVideoDecoder {
         this._html5SeekLock = new Promise(function (r) { resolveLock = r; });
 
         try {
-            var time = frameIndex / this._fps;
+            // Seek to the MIDDLE of the frame's interval, not its start. A seek
+            // to exactly i/fps sits on the boundary with frame i-1, and browsers
+            // round it either way: measured on barcode clips (verify/seek-probe.html,
+            // 8 cameras), Firefox 157 showed i-1 for every frame with i % 3 == 2
+            // at 60 and 150 fps (63–70% exact), Chrome, Brave and Safari for most
+            // frames (7–33%). (i + 0.5)/fps was exact in all 2,160 Firefox seeks
+            // (HEVC + H.264) and all H.264 seeks in the other three. rVFC cannot
+            // verify it in Firefox: its mediaTime echoes the seek target.
+            var time = this.html5SeekTime(frameIndex);
 
             // Only seek if we're not already at the target time. The tolerance
             // must scale with the frame rate: a fixed constant (e.g. 10 ms)
@@ -848,15 +910,21 @@ export class OnDemandVideoDecoder {
             // "already on this frame?" threshold — the gap between adjacent
             // frames (1/fps) always exceeds it, so every step re-seeks, while a
             // redundant request for the current frame still short-circuits.
+            // Around the frame's middle, that band is the frame's own interval.
+            // But only trust currentTime if THIS method put it there: after
+            // playback (or a frame-start seek) the picture need not match it —
+            // in Firefox the +0 pause re-decode drew the frame AFTER the paused
+            // one on 1 pause in 10 by skipping the seek (`_html5Moved`).
             var framePeriod = (this._fps > 0) ? (1 / this._fps) : (1 / 30);
             var currentTime = this._videoEl.currentTime;
-            if (Math.abs(currentTime - time) > framePeriod / 2) {
+            if (this._html5Moved || Math.abs(currentTime - time) > framePeriod / 2) {
                 var seekPromise = new Promise(function (resolve) {
                     self._videoEl.addEventListener("seeked", function () { resolve(); }, { once: true });
                     setTimeout(resolve, 5000);
                 });
                 this._videoEl.currentTime = time;
                 await seekPromise;
+                this._html5Moved = false;
             }
 
             // Ensure the video has renderable data (readyState >= 2 = HAVE_CURRENT_DATA)
@@ -1155,6 +1223,7 @@ export class OnDemandVideoDecoder {
      */
     playNative() {
         if (this._videoEl) {
+            this._html5Moved = true;
             this._videoEl.play().catch(function () {});
         }
     }
@@ -1173,6 +1242,7 @@ export class OnDemandVideoDecoder {
      */
     seekNative(frameIndex) {
         if (this._videoEl) {
+            this._html5Moved = true;
             this._videoEl.currentTime = frameIndex / this._fps;
         }
     }
@@ -1197,7 +1267,12 @@ export class OnDemandVideoDecoder {
             if (!el) return resolve();
             var time = frameIndex / self._fps;
             var framePeriod = (self._fps > 0) ? (1 / self._fps) : (1 / 30);
-            if (Math.abs(el.currentTime - time) <= framePeriod / 2) {
+            // Also already there when _getFrameHTML5 parked the element on this
+            // frame's middle: (i+0.5)/fps - i/fps comes out a hair over half a
+            // frame for ~30% of frames in floating point, and re-seeking to the
+            // frame START would land on i-1 in Firefox (see _getFrameHTML5).
+            if (Math.abs(el.currentTime - time) <= framePeriod / 2
+                || el.currentTime === self.html5SeekTime(frameIndex)) {
                 return resolve();   // already on this frame — no seek needed
             }
             var done = false;
@@ -1209,6 +1284,7 @@ export class OnDemandVideoDecoder {
             }
             el.addEventListener('seeked', finish, { once: true });
             setTimeout(finish, 2000);   // never hang if `seeked` doesn't fire
+            self._html5Moved = true;
             el.currentTime = time;
         });
     }
@@ -1271,6 +1347,7 @@ export class OnDemandVideoDecoder {
             }, { once: true });
         });
 
+        this._html5Moved = false;   // a new source starts at 0, on frame 0
         this._videoEl.src = URL.createObjectURL(source);
         this._emitProgress({ phase: 'canplay', ratio: 0 });
         await this._awaitPlayable(metadataPromise, source);
@@ -1330,12 +1407,14 @@ export class OnDemandVideoDecoder {
         // switchSource(), not just the first init(), or a reused pooled
         // decoder keeps stepping through the previous video after a session
         // switch/reopen.
+        this._mbUnavailable = null;
         if (this._mediabunnyEnabled() && (source instanceof Blob || source instanceof File)) {
             try {
                 await this._initMediabunny(source);
             } catch (e) {
                 videoLog("Mediabunny backend init failed on source switch (HTML5 seek will be used): " + e.message, "warn");
                 this._mbBackend = null;
+                this._mbUnavailable = { reason: 'init', message: e.message };
             }
         }
 
