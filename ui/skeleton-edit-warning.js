@@ -8,7 +8,14 @@
 // annotation in every loaded session at once. Before this dialog the only
 // signal was a `console.warn` nobody sees.
 //
-// Four things about it:
+// Five things about it:
+//
+// - **It is a title, one sentence, and the COUNTS.** It used to carry a
+//   bulleted "What changes" block and an always-on "there is no undo" caution
+//   as well: four paragraphs of prose above the one thing a reader can act on,
+//   restating per edit what the lead already said, and a box that by its third
+//   appearance is scenery — which would cost the lazy warning below its weight
+//   too. The per-edit detail belongs in MODULES.md, not over the panel.
 //
 // - **It states a TOTAL and a per-session split.** A multi-session project
 //   shares one skeleton object, so "4,812 user instances" is the project's
@@ -53,18 +60,20 @@ function n(v) {
 }
 
 /**
- * What each kind of edit does to existing annotations, in the user's terms.
+ * What each kind of edit is, in one sentence, in the user's terms.
  *
  * Kept as one table rather than as strings at the five call sites: the five
  * edits differ in exactly this and in nothing else, and a consequence written
  * beside the button that causes it is a consequence that drifts from what the
  * code does. `title` is a question, because the dialog is one.
  *
- * The effects are the honest list, including the ones that are NOT losses — a
- * dialog that only ever lists damage trains the user to dismiss it.
+ * **One sentence, and no bulleted "What changes" list.** That list was four
+ * paragraphs of prose above the one thing a reader can act on — the counts —
+ * restating per edit what the lead already says. The counts, the by-session
+ * split and the lazy warning are the dialog; everything else is MODULES.md.
  *
  * @param {{kind: string, label?: string}} edit
- * @returns {{title: string, lead: string, effects: string[]}}
+ * @returns {{title: string, lead: string}}
  */
 export function describeSkeletonEdit(edit) {
     var what = (edit && edit.label) || '';
@@ -73,72 +82,40 @@ export function describeSkeletonEdit(edit) {
         return {
             title: 'Add node “' + what + '” to the skeleton?',
             lead: 'This project already has annotations. The skeleton is the shape every one ' +
-                'of them is stored against, so adding a node re-shapes all of them.',
-            effects: [
-                'Every existing instance gains the node at the end.',
-                'On hand-labelled instances it is added HIDDEN — placed beside the animal ' +
-                    'and switched off, so it draws a grey marker you can drag into position. It ' +
-                    'contributes nothing to triangulation until you move it.',
-                'Predicted instances get an empty slot: their points come from a model, so ' +
-                    'nothing is invented for them. Converting one to a user instance fills it in.',
-                'Triangulated 3D keeps every solved keypoint and gains an empty one; instance ' +
-                    'groups are marked for re-triangulation.',
-            ],
+                'of them is stored against, so adding a node re-shapes all of them — hand-' +
+                'labelled instances get the node placed beside the animal and switched off, ' +
+                'predicted ones get an empty slot.',
         };
     }
     if (k === 'remove-node') {
         return {
             title: 'Remove node “' + what + '” from the skeleton?',
             lead: 'This project already has annotations. Removing a node deletes that node’s ' +
-                'coordinates from every one of them, in every session. This cannot be undone.',
-            effects: [
-                'The node’s 2D coordinates are deleted from every instance.',
-                'The node’s 3D coordinates are deleted from every instance group. Every other ' +
-                    'keypoint is kept exactly as it was.',
-                'Every edge touching the node is removed from the skeleton.',
-                'Cached reprojections are discarded and instance groups are marked for ' +
-                    're-triangulation.',
-            ],
+                '2D and 3D coordinates from every one of them, in every session, and removes ' +
+                'every edge touching it.',
         };
     }
     if (k === 'rename-node') {
         return {
             title: 'Rename node to “' + what + '”?',
             lead: 'No coordinates move — a rename changes the node’s NAME, which is how ' +
-                'every other tool identifies it.',
-            effects: [
-                'All 2D and 3D coordinates are kept: node order is unchanged, so nothing is ' +
-                    're-seated.',
-                'Exported .slp files carry the new name. A model, an analysis script or a ' +
-                    'SLEAP project keyed on the old name will no longer match this skeleton.',
-                'Copying an instance between projects requires matching node names, so a ' +
-                    'clipboard instance copied before the rename will no longer paste.',
-            ],
+                'every other tool identifies it. A model, an analysis script or a SLEAP project ' +
+                'keyed on the old name will no longer match this skeleton.',
         };
     }
     if (k === 'add-edge') {
         return {
             title: 'Add edge “' + what + '”?',
             lead: 'No coordinates move — an edge is how the skeleton is DRAWN and exported, ' +
-                'not where any point is.',
-            effects: [
-                'All 2D and 3D coordinates are kept exactly as they are.',
-                'The new edge is drawn on every instance, in every view and in 3D.',
-                'Exported .slp files carry the new edge, so this skeleton no longer matches a ' +
-                    'model or project built on the old one.',
-            ],
+                'not where any point is. Exported .slp files carry the new edge, so this ' +
+                'skeleton no longer matches a model or project built on the old one.',
         };
     }
     return {
         title: 'Remove edge “' + what + '”?',
         lead: 'No coordinates move — an edge is how the skeleton is DRAWN and exported, ' +
-            'not where any point is.',
-        effects: [
-            'All 2D and 3D coordinates are kept exactly as they are.',
-            'The edge stops being drawn on every instance, in every view and in 3D.',
-            'Exported .slp files no longer carry the edge, so this skeleton no longer matches ' +
-                'a model or project built on the old one.',
-        ],
+            'not where any point is. Exported .slp files no longer carry the edge, so this ' +
+            'skeleton no longer matches a model or project built on the old one.',
     };
 }
 
@@ -183,24 +160,6 @@ export function confirmSkeletonEdit(edit, onConfirm) {
     lead.id = 'skeletonEditLead';
     lead.textContent = copy.lead;
     modal.appendChild(lead);
-
-    // ---- what changes ----
-    var effBlock = document.createElement('div');
-    effBlock.className = 'origin-rebase-block';
-    var effTitle = document.createElement('div');
-    effTitle.className = 'origin-rebase-block-title';
-    effTitle.textContent = 'What changes';
-    effBlock.appendChild(effTitle);
-    var ul = document.createElement('ul');
-    ul.className = 'skeleton-edit-effects';
-    ul.id = 'skeletonEditEffects';
-    copy.effects.forEach(function (line) {
-        var li = document.createElement('li');
-        li.textContent = line;
-        ul.appendChild(li);
-    });
-    effBlock.appendChild(ul);
-    modal.appendChild(effBlock);
 
     // ---- the totals ----
     //
@@ -281,13 +240,11 @@ export function confirmSkeletonEdit(edit, onConfirm) {
         modal.appendChild(lazyWarn);
     }
 
-    var caution = document.createElement('div');
-    caution.className = 'origin-rebase-caution origin-rebase-caution-warn';
-    caution.id = 'skeletonEditCaution';
-    caution.textContent =
-        'There is no undo for a skeleton edit. Save the project first if you want a copy of ' +
-        'it on the current skeleton, and re-run Triangulate afterwards so the 3D matches.';
-    modal.appendChild(caution);
+    // There is deliberately no second, always-on caution here. The lazy
+    // warning above is the only hazard that is SILENT; "there is no undo" and
+    // "re-run Triangulate" are things the Cancel button and the panel already
+    // say, and a box that appears on every edit is a box nobody reads by the
+    // third one — which would cost the lazy warning its weight too.
 
     // ---- actions ----
     var actions = document.createElement('div');
