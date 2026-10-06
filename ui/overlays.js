@@ -2250,9 +2250,23 @@ export function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, ses
         labelRotation: options.labelRotation,
     };
 
+    // Node radii and line widths are in BACKING pixels. `ui/rendering.js` no
+    // longer supersamples the backing store by the full zoom factor (luc3d
+    // #200), so it passes the ratio it did use and those sizes are scaled by it
+    // to keep a constant on-screen size. 1 (or absent, as for the overlay-video
+    // export, which does its own sizing) leaves every size exactly as it was.
+    const sizeScale = Number.isFinite(options.overlaySizeScale) && options.overlaySizeScale > 0
+        ? options.overlaySizeScale : 1;
+    const scaleSize = (v, dflt) => (v != null ? v : dflt) * sizeScale;
+
     // Build per-type render option sets with geometry info
     function makeRenderOpts(typeOpts) {
-        return Object.assign({}, typeOpts, geoOpts);
+        const o = Object.assign({}, typeOpts, geoOpts);
+        if (sizeScale !== 1) {
+            o.nodeSize = scaleSize(o.nodeSize, 4);
+            o.lineWidth = scaleSize(o.lineWidth, 2);
+        }
+        return o;
     }
 
     var userRender = makeRenderOpts(userOpts);
@@ -2272,8 +2286,8 @@ export function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, ses
             videoHeight: videoH,
             canvasWidth: canvasW,
             canvasHeight: canvasH,
-            nodeSize: (userOpts && userOpts.nodeSize) || 3,
-            lineWidth: (userOpts && userOpts.lineWidth) || 2,
+            nodeSize: scaleSize((userOpts && userOpts.nodeSize) || null, 3),
+            lineWidth: scaleSize((userOpts && userOpts.lineWidth) || null, 2),
         });
     }
 
