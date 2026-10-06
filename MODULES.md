@@ -11215,7 +11215,7 @@ video element", added to dodge Chrome browser-process crashes from repeated
 updated when it landed: it closed the WebCodecs `this.decoder` but left
 `_mbBackend` untouched, still bound to the PREVIOUS video. Every
 frame-accurate `getFrame()` after a pooled-decoder session switch/reopen
-(stepping, the `pausePlayback()` snap) then silently decoded from the wrong,
+(stepping, the `pausePlayback()` re-decode) then silently decoded from the wrong,
 stale video — reproducing the exact pose/video misalignment #141 fixed, but
 only on switch/reopen (a fresh `init()` was always fine, which is why this
 was hard to pin down from a fresh-load repro). Fixed by closing the old
@@ -11491,10 +11491,16 @@ a zoomed-in image keeps the same region centered instead of jumping.
   `hasFrame`, `close`.
 - `VideoController` — class. Selected methods: `seekToFrame`,
   `scrubToFrame`, `togglePlayback`, `startPlayback`, `stopPlayback`,
-  `pausePlayback` (user-pause: stop + frame-accurate mediabunny step one
-  frame forward so the video lands exactly on-frame with the pose overlay,
-  issue #115 — the play button and spacebar call this, internal stops call
-  `stopPlayback`),
+  `pausePlayback` (user-pause: stop + frame-accurate mediabunny re-decode of
+  the frame playback stopped on, so every camera rests exactly on-frame with
+  the pose overlay — the play button and spacebar call this, internal stops
+  call `stopPlayback`. It used to step one frame FORWARD (issue #115), which
+  the per-refresh loop made a visible jump on every pause; re-decoding the
+  current frame repaints an identical picture in Chrome/Brave and still lines
+  up the Safari/Firefox fallback loop and any camera that stopped a frame out
+  of step with camera 0. Measured in all four browsers at 60/120 Hz with
+  barcode clips: +0 ends aligned in 100% of camera-pauses except Firefox HEVC,
+  which has no frame-accurate decode at all),
   `_startBufferedPlayback` / `_bufferedPlaybackEnabled` (buffered
   video-led mediabunny playback, issue #115),
   `setupSeekbar`, `setupKeyboardHandlers`, `initZoom`, `applyZoom`,
