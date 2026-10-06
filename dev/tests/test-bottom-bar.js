@@ -2,9 +2,12 @@
  * test-bottom-bar.js - Tests for per-camera bottom bar counter logic.
  *
  * Tests the counting rules for Labeled Frames, Instances, and Triangulated
- * that drive the status bar. Since updateFrameCounters() is embedded in
- * index.html and depends on DOM/state, we replicate and test the counting
- * logic directly against the data model.
+ * that drive the status bar, against the REAL counting module
+ * (`ui/frame-counters.js`, the DOM-free half of `updateFrameCounters` in
+ * ui/rendering.js) — this file used to carry its own copy of the loop, which
+ * could drift from the app's without either noticing. Every session here is
+ * eager (fully resident); the lazy, mostly-non-resident case is
+ * tests/test-frame-counters.mjs.
  */
 
 (function () {
@@ -14,43 +17,19 @@
     var assertEqual = TestFramework.assertEqual;
     var assertTrue  = TestFramework.assertTrue;
 
-    // Replicate the counting logic from updateFrameCounters
+    // Bridged as a namespace by the browser runner, left on the sandbox global
+    // by `tests/run-node.js`. Resolve through both.
+    function pick(name) {
+        if (typeof window !== 'undefined' && window.__FrameCounters) return window.__FrameCounters[name];
+        if (typeof globalThis !== 'undefined' && globalThis[name] !== undefined) return globalThis[name];
+        return undefined;
+    }
+
+    // What the status bar shows: the live count plus the whole-project baseline,
+    // exactly as `updateFrameCounters` combines them.
     function computeCounters(session, activeCam) {
-        var labeledCount = 0;
-        var instanceCount = 0;
-        var triangulatedCount = 0;
-
-        session.frameGroups.forEach(function (fg, frameIdx) {
-            var hasLabeled = false;
-            if (activeCam) {
-                var camInstances = fg.instances.get(activeCam) || [];
-                for (var i = 0; i < camInstances.length; i++) {
-                    var t = camInstances[i].type || 'user';
-                    if (t === 'user') {
-                        hasLabeled = true;
-                        instanceCount++;
-                    } else if (t === 'predicted') {
-                        hasLabeled = true;
-                    }
-                }
-                var ulInstances = fg.getUnlinkedInstances(activeCam);
-                for (var u = 0; u < ulInstances.length; u++) {
-                    var ulType = ulInstances[u].instance.type || 'user';
-                    if (ulType === 'user') {
-                        hasLabeled = true;
-                        instanceCount++;
-                    }
-                }
-            }
-            if (hasLabeled) labeledCount++;
-
-            var frameGroups = session.instanceGroups.get(frameIdx) || [];
-            for (var g = 0; g < frameGroups.length; g++) {
-                if (frameGroups[g].points3d) { triangulatedCount++; break; }
-            }
-        });
-
-        return { labeled: labeledCount, instances: instanceCount, triangulated: triangulatedCount };
+        var baseline = pick('computeFrameCounterBaseline')(session, activeCam);
+        return pick('countFrameCounters')(session, activeCam, baseline);
     }
 
     // ============================================
@@ -258,6 +237,24 @@
 
             var c = computeCounters(session, 'cam1');
             assertEqual(c.triangulated, 1, 'at most 1 per frame');
+        });
+
+        it('counts a frame with 3D but no FrameGroup', function () {
+            // `instanceGroups` is the whole project; a 3D-only frame (no 2D
+            // FrameGroup) still has 3D. The old frameGroups-driven loop never
+            // reached it.
+            var session = makeSession();
+            var fg = new FrameGroup(0);
+            fg.addInstance('cam1', new Instance([[100,100],[200,200]], 0, 'user', 1));
+            session.addFrameGroup(fg);
+
+            var g = new InstanceGroup(1, 0);
+            g.points3d = [[1,2,3],[4,5,6]];
+            session.instanceGroups.set(7, [g]);
+
+            var c = computeCounters(session, 'cam1');
+            assertEqual(c.triangulated, 1, 'frame 7 counted from instanceGroups');
+            assertEqual(c.labeled, 1, 'labeled still comes from the 2D');
         });
     });
 

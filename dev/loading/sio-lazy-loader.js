@@ -31,7 +31,7 @@
  * (`loading/track-union.js`) — see `_unifyTracks`.
  */
 
-import { unionTrackNames } from './track-union.js?v=9b087dc831a8';
+import { unionTrackNames } from './track-union.js?v=20aab0dc074a';
 
 /**
  * Adapt a materialized sleap-io.js typed Instance/PredictedInstance into the flat
@@ -160,7 +160,7 @@ export class SioLazyLoader {
         }
         // Point the reader's internal I/O worker at LUCID's local vendored h5wasm
         // IIFE (document.baseURI keeps this correct on sub-path deployments).
-        var h5wasmUrl = new URL('lib/h5wasm/h5wasm.iife.js?v=9b087dc831a8', document.baseURI).href;
+        var h5wasmUrl = new URL('lib/h5wasm/h5wasm.iife.js?v=20aab0dc074a', document.baseURI).href;
         var labels = await SIO.readSlpStreaming(file, {
             lazy: true,
             openVideos: false,
@@ -390,7 +390,7 @@ export class SioLazyLoader {
         if (!SIO || typeof SIO.readSlpStreaming !== 'function') {
             throw new Error('sleap-io.js readSlpStreaming not available on window.SleapIO');
         }
-        var h5wasmUrl = new URL('lib/h5wasm/h5wasm.iife.js?v=9b087dc831a8', document.baseURI).href;
+        var h5wasmUrl = new URL('lib/h5wasm/h5wasm.iife.js?v=20aab0dc074a', document.baseURI).href;
         var labels = await SIO.readSlpStreaming(file, {
             lazy: true,
             openVideos: false,
@@ -734,16 +734,26 @@ export class SioLazyLoader {
      *   and `type` is `'predicted'`/`'user'` decoded from `instance_type`
      *   (1 = predicted, matching `appendStore`). Pre-existing callers take three
      *   parameters and are unaffected.
+     * @param {{camera?: string, start?: number, end?: number}} [opts] - Narrow
+     *   the walk, for the status bar's per-camera counters
+     *   (`ui/frame-counters.js`), which read ONE camera and spread a
+     *   whole-project walk over several short tasks. `camera` visits that
+     *   camera's rows only. `start`/`end` (frame indices, end exclusive) visit
+     *   just that range, in ascending frame order; without them every frame is
+     *   visited in the row map's own order, as before.
      */
-    forEachInstanceRow(visitFn) {
+    forEachInstanceRow(visitFn, opts) {
+        var onlyCamera = opts && opts.camera != null ? opts.camera : null;
+        var ranged = !!opts && opts.start != null && opts.end != null;
         for (var camName of this.labelsByCam.keys()) {
+            if (onlyCamera !== null && camName !== onlyCamera) continue;
             var labels = this.labelsByCam.get(camName);
             var store = labels && labels._lazyDataStore;
             var rowMap = this.frameRowByCam.get(camName);
             if (!store || !rowMap) continue;
             var fd = store.framesData || {};
             var idn = store.instancesData || {};
-            for (var [frameIdx, frameRow] of rowMap) {
+            var visitFrame = function (frameIdx, frameRow) {
                 var iStart = Number(fd.instance_id_start ? fd.instance_id_start[frameRow] : 0) || 0;
                 var iEnd = Number(fd.instance_id_end ? fd.instance_id_end[frameRow] : 0) || 0;
                 for (var j = iStart; j < iEnd; j++) {
@@ -756,6 +766,14 @@ export class SioLazyLoader {
                         type: (idn.instance_type && Number(idn.instance_type[j]) === 1) ? 'predicted' : 'user',
                     });
                 }
+            };
+            if (ranged) {
+                for (var f = Math.max(0, opts.start); f < opts.end; f++) {
+                    var r = rowMap.get(f);
+                    if (r !== undefined) visitFrame(f, r);
+                }
+            } else {
+                for (var [frameIdx, frameRow] of rowMap) visitFrame(frameIdx, frameRow);
             }
         }
     }

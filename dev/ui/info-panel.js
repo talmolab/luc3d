@@ -5,41 +5,41 @@
 
 import {
     Skeleton, Camera, Session,
-} from '../pose/pose-data.js?v=9b087dc831a8';
-import { getInstanceGroupsForFrame } from '../pose/triangulation.js?v=9b087dc831a8';
-import { REPROJECTION_COLOR, getTrackColor, getGroupColor } from './overlays.js?v=9b087dc831a8';
-import { drawAllOverlays, updateFrameCounters } from './rendering.js?v=9b087dc831a8';
-import { isInteractiveClickTarget } from './interaction.js?v=9b087dc831a8';
-import { persistSectionState } from './section-state.js?v=9b087dc831a8';
-import { buildLazySelect } from './lazy-select.js?v=9b087dc831a8';
-import { refreshIdSwitchPanel } from './id-switch-modal.js?v=9b087dc831a8';
-import { isInfoPanelVisible, markInfoPanelStale } from './panel-visibility.js?v=9b087dc831a8';
+} from '../pose/pose-data.js?v=20aab0dc074a';
+import { getInstanceGroupsForFrame } from '../pose/triangulation.js?v=20aab0dc074a';
+import { REPROJECTION_COLOR, getTrackColor, getGroupColor } from './overlays.js?v=20aab0dc074a';
+import { drawAllOverlays, updateFrameCounters } from './rendering.js?v=20aab0dc074a';
+import { isInteractiveClickTarget } from './interaction.js?v=20aab0dc074a';
+import { persistSectionState } from './section-state.js?v=20aab0dc074a';
+import { buildLazySelect } from './lazy-select.js?v=20aab0dc074a';
+import { refreshIdSwitchPanel } from './id-switch-modal.js?v=20aab0dc074a';
+import { isInfoPanelVisible, markInfoPanelStale } from './panel-visibility.js?v=20aab0dc074a';
 import { state, timeline, interactionManager, rememberSkeleton, buildRememberedSkeleton,
-         setProjectSkeleton, getProjectSkeleton } from './app-state.js?v=9b087dc831a8';
-import { setStatus, markDirty } from '../import-export/save-load.js?v=9b087dc831a8';
-import { buildSkeletonJSON, parseSkeletonJSON } from '../import-export/skeleton-json.js?v=9b087dc831a8';
+         setProjectSkeleton, getProjectSkeleton } from './app-state.js?v=20aab0dc074a';
+import { setStatus, markDirty } from '../import-export/save-load.js?v=20aab0dc074a';
+import { buildSkeletonJSON, parseSkeletonJSON } from '../import-export/skeleton-json.js?v=20aab0dc074a';
 import {
     handleLoadVideos, handleLoadCalibration, autoAssignVideosToCameras,
     createViewForVideoFile, rebuildVideoController, fitCanvasesToCells,
     loadSingleSessionFromCache, removeVideoFile,
-} from '../loading/session-loader.js?v=9b087dc831a8';
+} from '../loading/session-loader.js?v=20aab0dc074a';
 
 // Circular import — these are still defined in app.js for now. They will be
 // retargeted as later passes land:
 // - swapAssignTrack, propagateIdentityForward, unlinkGroup, showGroupContextMenu
 //   → ui/identity-assignment.js (Pass 3f)
 // Pass 3e-1: unlinkGroup + showGroupContextMenu moved to ui-wiring.js.
-import { unlinkGroup, showGroupContextMenu } from './ui-wiring.js?v=9b087dc831a8';
+import { unlinkGroup, showGroupContextMenu } from './ui-wiring.js?v=20aab0dc074a';
 // Pass 3f: swapAssignTrack + propagateIdentityForward moved to identity-assignment.js.
 // luc3d #172: every manual identity switch routes through applyIdentitySwitch,
 // which subsumes this file's former direct propagateIdentityForward calls.
 import {
     swapAssignTrack, applyIdentitySwitch, describeIdentitySwitch,
-} from './identity-assignment.js?v=9b087dc831a8';
+} from './identity-assignment.js?v=20aab0dc074a';
 // Pass 3h: populateSessionsPanel / populateViewStrip / populateSessionStrip moved to sessions-panes.js.
 import {
     populateSessionsPanel, populateViewStrip, populateSessionStrip,
-} from './sessions-panes.js?v=9b087dc831a8';
+} from './sessions-panes.js?v=20aab0dc074a';
 // Block 2 (Prompt 4): per-session timeline visibility toggles.
 import {
     toggleCameraVisibility,
@@ -48,7 +48,7 @@ import {
     getCameraVisibilityList,
     getTrackVisibilityList,
     getIdentityVisibilityList,
-} from './timeline-visibility.js?v=9b087dc831a8';
+} from './timeline-visibility.js?v=20aab0dc074a';
 
 // ============================================
 // Inline name entry for "+ New Track" / "+ New ID"
@@ -1319,12 +1319,14 @@ function aggregateReprojectionError(frameIdx) {
  * is collapsed.
  *
  * The project-wide counters (`updateFrameCounters`) are skipped during
- * playback: they walk EVERY frame group to recount labeled / triangulated
- * frames — ~8–9 ms on a 36,000-frame project — yet don't depend on the frame
- * being shown, so recomputing them on the ~10 Hz playback updates only blocked
- * the video-frame callback long enough to drop frames (measured with
- * tests/e2e/_bench-playback.mjs). `VideoController.stopPlayback` redraws with
- * `isPlaying` false, so they are refreshed the moment playback stops.
+ * playback: they walk every RESIDENT frame group to recount labeled /
+ * triangulated frames — every frame of an eager project, ~8–9 ms at 36,000
+ * frames (a lazy project adds a cached baseline for the rest) — yet don't
+ * depend on the frame being shown, so recomputing them on the ~10 Hz playback
+ * updates only blocked the video-frame callback long enough to drop frames
+ * (measured with tests/e2e/_bench-playback.mjs). `VideoController.stopPlayback`
+ * redraws with `isPlaying` false, so they are refreshed the moment playback
+ * stops.
  *
  * @param {number|null} meanError
  */
