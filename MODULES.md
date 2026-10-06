@@ -83,7 +83,9 @@ the old `app.js` entry point.
   panel renders: the listeners are delegated, so they must be in place before
   the first `[data-infotip]` element exists.
 - `../ui/info-panel.js` — `setupPanelTabs`, `setupSkeletonEditing`,
-  `updateInfoPanel`.
+  `setupVideosTab` (the Videos tab's Load/Remove buttons, wired once here
+  because `updateInfoPanel`'s no-session early return used to leave them dead on
+  a fresh app — luc3d #216), `updateInfoPanel`.
 - `../ui/plane-definition.js` — `setupPlaneDefinition` (called from `init()`
   right after `setupSkeletonEditing`, and **before** `paneManager.init` — its
   drop listeners are delegated on the `#videoDock` container, which is static
@@ -1490,7 +1492,13 @@ session graph that holds them.
   correction history. No frame materialization, so nothing hydrates or evicts.
   Returns `{entries, groups, frames}`. Guarded by the `swapIdentitiesForward
   (#172)` block in `tests/test-identity.js` and end to end by
-  `tests/e2e/identity-switch-propagates-to-end.mjs`;
+  `tests/e2e/identity-switch-propagates-to-end.mjs`. It is
+  `swapIdentitiesInRange(startFrame, Infinity, …)`;
+  `swapIdentitiesInRange(startFrame, endFrame, identityA, identityB)` — the same
+  swap bounded on BOTH sides (inclusive), what fixing a flagged ID switch does
+  (`ui/id-switch-modal.js`): the frames after the pair's switch-back are already
+  right. Its own inverse, which is how a fix is undone. Covered by
+  `tests/test-id-switch-fix.mjs` §3;
   `swapIdentitiesForwardInCamera(startFrame, cameraName, identityA, identityB)` —
   the **single-view** counterpart (luc3d #201). Same dense value swap, forward to
   the end of the project, but restricted to ONE camera: this is how an ID is
@@ -1789,6 +1797,13 @@ which was removed during the ESM migration).
 epipolar/reprojection scoring, Hungarian assignment, multi-frame
 identity propagation.
 
+**Track All closes the Timeline and the 3D viewer.** On success, a full Track
+All calls `collapseTimeline()` (`ui/timeline-controller.js`) and
+`collapseViewport3D(viewport3d)` (`ui/panel-visibility.js`) so the views showing
+the new IDs get the space back — there is no 3D pose to look at until Triangulate
+All runs. A closed panel stays closed. Track Frame Range and Track Frame leave
+both as they were. Covered by `tests/e2e/track-all-closes-timeline-and-3d.mjs`.
+
 **Animal-count auto-detect is a resident SAMPLE, deliberately.**
 `computeMaxInstancesPerView` (used when the user has not set a count) reads
 `session.frameGroups`, so on a lazy project it samples the resident window rather
@@ -1946,7 +1961,7 @@ drifts upward (e.g., 4 → 11 on the test fixture).
   `triangulatePoints`, `reprojectPoint`, `reprojectPoints`,
   `computeInstanceDistance`, `hungarianAlgorithm`.
 - `../ui/app-state.js` — `state`, `interactionManager`, `timeline`,
-  `getActiveSession`.
+  `viewport3d`, `getActiveSession`.
 - `../ui/settings.js` — `getNodeWeightArray`, `getTrackingThresholds`,
   `getTrackingThreshold`, `isCameraTracked` (both `trackAll`/`trackCurrentFrame`
   drop cameras where `isCameraTracked(name)` is false before tracking; abort with
@@ -1968,6 +1983,10 @@ drifts upward (e.g., 4 → 11 on the test fixture).
   per `autoImageSwitchCheck` (default off)) and awaits them, so the pass resolves
   after the checks. It also drops the session's earlier results and their
   markers (`clearIdSwitchResults(session)`) before clearing identities, for both paths.
+- `../ui/timeline-controller.js` — `collapseTimeline`: a successful Track All
+  (not a range) closes the Timeline if it is open.
+- `../ui/panel-visibility.js` — `collapseViewport3D`: the same, for the 3D viewer
+  (passed `viewport3d` from `../ui/app-state.js`, which is also imported).
   No cycle: that module imports app-state, save-load, loading-overlay, settings,
   `pose/id-switch-check.js` and `ui/image-embedder.js`, none of which import the
   tracker.
@@ -3122,7 +3141,11 @@ identities, sampledFrames, closeDistance, threshold, fps, step, sampleHz, cue}`
 `{ok:false, reason}`; `markChangePoints(scored, o)` (the change-point step,
 exported so calibration can re-apply thresholds to the same scores);
 `fitSoftmax(X, y, n, D, K, opts)` (L2 multinomial logistic regression, Adam);
-`fitPCA(X, n, D, k)` (randomized subspace iteration); `SIZE_BONES`;
+`fitPCA(X, n, D, k)` (randomized subspace iteration);
+`KEYFRAME_GAP_TOLERANCE` (1.1);
+`planKeyframeSamples(frames, keyframes, hasFrame)` -> `{decode, snapped, spacing,
+keyframeGap, maxShift}` (which frame each image sample decodes in one camera — see
+"Keyframe sampling" under `ui/image-embedder.js`); `SIZE_BONES`;
 `REFERENCE_HZ` (15); `SIZE_CHECK_DEFAULTS` (`fps` REQUIRED, `sampleHz` 15,
 `folds` 5, `gapSeconds` 10, `syncSeconds` 1, `threshold` -50, `continueBelow` 0,
 `followSeconds` 60, `minTrackedSeconds` 60, `sepFactor` 0.65, `signal`, ...);
@@ -3154,7 +3177,12 @@ below `threshold`, continuing FORWARD while below `continueBelow`) yields one
 change point: its start (`kind: 'onset'`) when it reaches the session end, else
 the first unflagged encounter after it (`kind: 'end'`, in `changes`) when it
 starts the session; both for a middle run of 2+. Other members are repeats
-(`continues`). A change point within `followSeconds` after another of a different
+(`continues`). Each change point also names the other edge of its swapped
+stretch, which is what fixing it swaps: an onset's `switchBackAt` (the pair's
+encounter after the run — for a lone middle flag that encounter is no change
+point of its own — or null when the run reaches the end) and an 'end''s
+`switchedAt` (the run's first encounter, or null when the run starts the
+session). A change point within `followSeconds` after another of a different
 pair sharing an identity is its follow-on (`followOf`).
 
 **Calibration (2026-10-03).** Size: on the 5-mouse tail-mark recording
@@ -3184,18 +3212,38 @@ at keyframes — every 250 frames, ~0.23/s on these files — would cut decoding
 white-dark 75% -> 55% -> 41%, image-only flags real 77% -> 57% -> 51%; 5-mouse
 false change points 21 -> 29 -> 40 / 30 min and the real switch missed at -25
 below 2/s. The tracklets after an encounter are short, so they need dense samples.
-The rate stays 2/s; cheaper decoding has to come from the recordings (keyframes
-every 0.5 s, so samples could land on keyframes) or from decode parallelism.
+The rate stays 2/s; cheaper decoding has to come from the recordings — which is
+what keyframe sampling does: on recordings with a keyframe every 0.5 s each sample
+moves to its nearest keyframe, <= 0.25 s away (`planKeyframeSamples`; see
+"Keyframe sampling" under `ui/image-embedder.js`). **Moving samples by up to
+±0.25 s does not change the result** (2026-10-04, 5-mouse recording, the real
+model and check, 3 views; snapped = moved to frames 0, 30, 60, …; control =
+every sample moved by a constant 16 frames, i.e. different frames with no
+keyframe logic). Gate-on tracking (no real switch): planted-swap AUC 0.880
+today / 0.880 snapped / 0.873 control, 43.5 / 43.8 / 44.4% caught at -25, change
+points 10 / 7 / 9; encounter scores vs today correlate 0.982 (snapped) and 0.977
+(control). Gate-off tracking: the real switch (74,544, id_2/id_3) is an onset in
+all three (-94 / -99 / -112), AUC 0.812 / 0.805 / 0.807, change points 11 / 14 /
+16, correlation 0.981 / 0.973. Snapping moves the scores less than the control
+does, so its differences are which-frames-were-sampled noise. Harness:
+`tests/e2e/_diag-image-keyframe-snap.mjs` (planted swaps cost no re-run: with
+blocked CV an encounter's tracklet rows are never in their own fold's training
+set, so swapping the two animals' labels after it turns its score S into exactly
+-S).
 
 **Imports from project modules.** `pose/pose-data.js` (`readPoint3d`).
 
-**Imported by.** `ui/id-switch-modal.js`.
+**Imported by.** `ui/id-switch-modal.js`, `ui/image-embedder.js` (`planKeyframeSamples`, `KEYFRAME_GAP_TOLERANCE`).
 
 **Coverage.** `tests/test-id-switch-check.mjs` (synthetic 3-animal sessions defined
 in time: clean -> no flags; minority / majority switch -> onset / end change point;
 25-120 fps invariance; images with synthetic embeddings catching a swap between
 animals of IDENTICAL size that size misses; cancellation; PCA; failure reasons;
-crop geometry of `ui/image-embedder.js`), `tests/e2e/size-switch-check.mjs`,
+crop geometry of `ui/image-embedder.js`; `planKeyframeSamples`: sparse/unknown
+keyframes move nothing, a keyframe every 30 frames moves every 32-frame sample
+<= 15 frames, strictly increasing, untracked keyframes skipped, gaps up to 1.1x
+the spacing qualify and beyond do not, a keyframe every 0.5 s at 100 and 50 fps),
+`tests/e2e/image-keyframe-sampling.mjs`, `tests/e2e/size-switch-check.mjs`,
 `tests/e2e/track-auto-size-switch-check.mjs`, `tests/e2e/id-switch-image-check.mjs`.
 
 ---
@@ -3934,18 +3982,79 @@ the removed Tracks-menu "Assign Track" / "Assign Identity" submenus; the reusabl
 track/identity edit never regrows the bottom timeline panel — it rebuilds +
 repaints at the user's current height instead of growing to fit all rows.
 
-**Responsive panel tabs.** `setupPanelTabs` makes the tab bar (Instances,
-Visibility, Videos, Cameras, Skeleton, Session) width-aware. Each tab sizes to
-its full name (never ellipsis-truncated); a `ResizeObserver` on `.panel-tabs`
-runs `layoutPanelTabs()`, which greedily keeps the leading tabs whose names fit
-the panel's current width and demotes the rest into an auto-built **"More ▾"**
-dropdown (`.panel-tab-more*` in styles.css). Widening the panel promotes tabs
-back into the bar one at a time. At least the first tab always stays in the bar.
-The dropdown closes on outside-click or `Esc`; the More button shows the active
-highlight when the selected tab currently lives inside it.
+**The panel tab bar is ONE horizontal scroller.** `setupPanelTabs` makes
+`.panel-tabs` scroll sideways with every tab (Instances, Visibility, ID
+Switches, Videos, Cameras, Skeleton, Session) always inside it, in markup
+order. Each tab still sizes to its full name, never truncated.
+
+This replaced a **"More ▾" overflow dropdown** that demoted whichever tabs did
+not fit. At the default 300px panel width that was five of seven, so the
+panel's own name for the thing the user was looking at was usually behind a
+control they had to open first — and WHICH tabs were behind it moved as the
+panel was resized, so the bar never looked the same twice. `layoutPanelTabs`
+and every `.panel-tab-more*` rule are gone; do not bring them back.
+
+Five things about it:
+- **Three ways to scroll it, and a vertical wheel is one of them.** A trackpad
+  over a ~31px strip gives a two-finger VERTICAL swipe, so the `wheel` handler
+  takes whichever axis the gesture is actually on and applies it to
+  `scrollLeft`. That steals nothing from the app's "one scroller per panel"
+  rule: the bar sits OUTSIDE `.panel-tab-content`, which is the panel's one
+  vertical scroller, so a vertical wheel here moved nothing before. It
+  `preventDefault()`s only when the bar actually moved, so a swipe past either
+  end is still the page's.
+- **Click-and-drag has a 4px threshold, and a real drag SUPPRESSES the click.**
+  A row of buttons that can be dragged will otherwise switch tabs every time
+  the user flicks it — the pointerup that ends a drag still produces a click on
+  whatever tab it landed on. The suppression is a capture-phase `click`
+  listener on the bar (capture, so it runs before the tab's own handler rather
+  than after it has already switched), and it is cleared on the next
+  `pointerdown` so a drag that never produced a click cannot eat the press
+  after it. Pointer capture is taken only once the threshold is crossed:
+  capturing on every press re-targets the plain click that follows one. Touch
+  pointers are skipped outright — `overflow-x: auto` + `touch-action: pan-x`
+  already give them native momentum panning, and driving `scrollLeft` on top
+  would move the bar twice per gesture.
+- **Selecting a tab scrolls it into view**, by hand rather than with
+  `scrollIntoView`, which walks every scrollable ancestor and could scroll the
+  app's layout out from under it. This is what keeps `openIdSwitchPanel`
+  (`ui/id-switch-modal.js`, which just `.click()`s the button) from leaving the
+  active tab off-screen — an active tab nobody can see reads as no tab being
+  active. `.panel-tabs` is `position: relative` precisely so each tab's
+  `offsetLeft` is measured in the scroller's own space.
+- **The edge fades are the only affordance**, toggled by the `scroll-left` /
+  `scroll-right` classes and drawn with `mask-image` (painted in the element's
+  own box, so it stays pinned to the edges while the tabs move underneath, and
+  costs no extra element — a gradient overlay inside a scroller would scroll
+  away). The scrollbar is suppressed: the strip is ~31px tall and a horizontal
+  bar under it would sit on the active tab's 2px underline. A `ResizeObserver`
+  recomputes them, since resizing the panel changes WHETHER it overflows.
+- **`user-select: none` on the bar** — the documented exception for "a surface
+  whose job is to be dragged". Without it a drag smears a selection across the
+  tab names.
+Covered by `tests/e2e/panel-tabs-scroller.mjs`.
+
+**The Videos tab's two buttons are wired at SETUP, not per-session.**
+`setupVideosTab()` (called once from `pose/initialization.js`) installs the
+`#btnLoadVideos` → `handleLoadVideos` and `#btnRemoveVideo` → `removeVideoFile`
+handlers. They used to be assigned inside `updateInfoPanel`, which returns early
+when `state.session` is null (and while the panel is collapsed) — so on a
+freshly-opened app, exactly when you reach for **Load Videos**, the button
+carried no handler at all and clicking it did nothing, while `File ▸ Load
+Videos…` kept working because *that* is wired at setup (luc3d #216). Nothing in
+the wiring reads `state`, so it has no business in a per-session rebuild.
+Two details ride along:
+- The button is **`Load Videos`**, named after the menu item it duplicates, and
+  **`Remove Video`** (singular — it acts on the one selected row).
+- The selected row is held by **identity** (`selectedVideoFile`), not by row
+  index. Both buttons rebuild the table, and an index into the OLD table names a
+  different video in the new one; `populateVideosTable` clears the selection,
+  disables `Remove Video` and resets the detail block on every rebuild, so the
+  button can never act on a row that is no longer on screen.
+Covered by `tests/e2e/videos-panel-buttons.mjs`.
 
 **Key exports.**
-- Tab control: `setupPanelTabs`.
+- Tab control: `setupPanelTabs`, `setupVideosTab`.
 - Tables: `populateVideosTable`, `populateCamerasTable`,
   `populateSkeletonTable`, `populateSessionAssignTable`,
   `populateUnassignedVideos`.
@@ -4735,7 +4844,12 @@ the classic-script unit runner and exercised without a browser dock.
   set — the list has already changed once (`360` → `480`), and a stored key
   nothing recognises would blank the `<select>` while `outputSizeFor` quietly fell
   back to `DEFAULT_RES`, leaving the summary quoting a size the visible control
-  doesn't name.
+  doesn't name. `sanitizeSettings` also **folds a stored `labelSize` of 0 into
+  `showLabels: false` and restores the default size** (issue #223): a blob written
+  before the toggle existed encodes "off" as a 0 and carries no `showLabels`, so
+  without this the setting would come back ON *and* the toggle would be dead,
+  since 0px labels draw nothing. A 0 is unreachable from the current modal, so
+  this can only ever be reading the old meaning.
   `UNRESTORED_KEYS` (`res`, `outW`, `outH`) are **written to storage but never read
   back**, so the modal always opens at `DEFAULT_RES` = **1080p**. The tier decides
   pixel count, bitrate and therefore file size, and a value silently inherited from a
@@ -4751,6 +4865,20 @@ the classic-script unit runner and exercised without a browser dock.
   settings → `drawFrameOverlays()` options translation. Explicitly nulls ALL
   interaction state (selection / hover / drag / assignment): an export has no
   cursor, and a stray highlight would be burned into the video.
+  **Node labels are gated by `showLabels`, never by their size** (issue #223).
+  `settings.user.showLabels` / `settings.reproj.showLabels` are real booleans the
+  modal surfaces as `Show node labels`, beside `Show nodes` / `Show edges`;
+  `labelSize` is only a size, floored at 1 in the modal. Before #223 the only off
+  switch was a size of 0, which is undiscoverable and reads as "make it tiny".
+  Defaults are user **on** / reproj **off**, matching the Visibility panel's own
+  (`visUserLabelSize` 12, `visReprojLabelSize` 0), so a fresh export renders what
+  the app is already showing. **Predicted has no toggle because the app has no
+  such layer**: `ui/rendering.js` hardcodes `predictedOpts.showLabels: false`
+  too, so predicted instances have never carried node names and an export toggle
+  would be inventing one. Note `showLabels` also gates the TRACK-name labels
+  (`drawInstanceLabels`), exactly as the size-of-0 gate did — one meaning of
+  "labels", shared with the live app, rather than a split only the export knows
+  about.
 - `seedLayoutPlan(viewNames, include3D)` — the mirror-the-main-window seed (same
   row-count heuristic as `addAllViewsAsGrid`, 3D docked right of the whole grid).
   Returns add-panel steps whose positions reference **earlier** entries by index,
@@ -4808,6 +4936,16 @@ version: `index.html`'s CSS, `sessions-panes.js`, and this module), seeded via
 `seedLayoutPlan` to mirror the main window. The settings panel carries the frame
 range (**1-based display**, 0-based internally, matching the issue) at the top,
 then layers, per-layer appearance, background, and quality/output.
+**`Show node labels`** (issue #223) sits in the User and Reprojection Appearance
+groups with `Show nodes` / `Show edges`, and the `Node label size` field below it
+floors at **1** — an off switch hidden at the bottom of a numeric range is
+precisely what the toggle replaces. The Reprojection group gained its own
+`Node label size` / `Label opacity` fields at the same time, so the toggle it
+grew is not the only reprojection-label control. `settingsFromVisibilityPanel`
+SPLITS the panel's folded encoding on the way in: the panel says "off" with a
+size of 0, so a 0 seeds `showLabels: false` and leaves the export's size at its
+default — copying the 0 through would leave the toggle able to turn on nothing.
+There is no Predicted entry; see `overlayOptionsFrom` above for why.
 
 **Output dimensions.** Quality & Output has a Resolution picker — the four shared
 tiers **480p (854×480) / 720p (1280×720) / 1080p (1920×1080) / 2160p (3840×2160)**
@@ -6413,8 +6551,8 @@ plane.
 - `enterPlaneMode()` / `exitPlaneMode()` / `togglePlaneMode()` /
   `isPlaneModeActive()` — show/hide the `#planeModeBar` banner and swap the
   info panel's `.panel-tabs` + `.panel-tab-content` for `#planePanel`. The swap
-  only toggles inline `display`, so `setupPanelTabs`' own layout state is
-  untouched and exiting restores exactly the previously-active tab. Exiting also
+  only toggles inline `display`, so the tab bar's scroll position and active
+  tab are untouched and exiting restores exactly the previously-active tab. Exiting also
   clears the plane selection/hover, and unwinds both things entered from inside
   the mode that lock this panel: `exitOriginMode()` and `closeAngleModal()`.
 - `handlePlaneDrop(planeId, viewName, clientX, clientY)` — the drop listener is
@@ -7884,6 +8022,24 @@ existing pane instead), so no click sequence can produce a duplicate pane;
 duplicates come only from the drag/drop docking path and `addAllViewsAsGrid`.
 See **Single-view ("solo") mode** under `ui/ui-wiring.js`.
 
+**`removeVideoPanel(viewName)` — the counterpart to `addVideoPanel`.** Closes
+EVERY pane showing that view and returns how many it closed. Used by
+`removeVideoFile` (`loading/session-loader.js`) so the Videos tab's **Remove
+Video** takes the whole panel out of the dock instead of leaving an empty,
+still-titled one behind (luc3d #216). Three things about it:
+- It goes through `panel.api.close()`, exactly as the pane's own × and
+  `clearAll` do — `onDidRemovePanel` is what decrements `dockedViews` and clears
+  the strip's in-dock dot, so tearing the element out by hand would leave both
+  claiming the view is still docked.
+- **Every** pane, not the first: a view can be docked more than once (a dropped
+  multi-selection, or an `addAllViewsAsGrid` restore), and a survivor would go
+  on rendering a view that no longer exists.
+- Panes are matched through `panelRenderers`, never by parsing the panel id —
+  the id is `video-<name>-<counter>` and a view name may itself contain dashes.
+It also deletes the `dockedViews` entry outright afterwards, so a view left in
+the map with no pane (bookkeeping that got out of step) cannot block a later
+re-add.
+
 **`syncDockedViews()` — `fromJSON` builds panels behind `addVideoPanel`'s back.**
 `paneManager.dockedViews` (viewName → pane count) is maintained by
 `addVideoPanel` / `addAllViewsAsGrid` / `onDidRemovePanel`, and it drives both
@@ -7894,6 +8050,15 @@ a plain strip click on a view that is visibly on screen did nothing, and a
 double-click docked a duplicate pane. `syncDockedViews()` re-derives the counts
 (and the dots) by walking `api.panels` through `panelRenderers`, and
 `setGridMode` calls it immediately after `fromJSON`.
+
+**`addAllViewsAsGrid()` leaves solo mode.** Laying every view out as a grid IS
+grid mode, so it sets `state.viewMode = 'grid'` and removes the solo chip
+(`#viewModeIndicator` + the dock's `has-view-indicator`). The loaders, session
+switches and `removeSession` all rebuild the dock with `clearAll()` +
+`addAllViewsAsGrid()`, and only `newProject` used to reset the mode — so a load
+made while a view was solo'd showed the grid with the mode still `'single'`, and
+`v` (a no-op when already solo) silently did nothing until `g`. Pinned by
+`tests/e2e/solo-view-navigation.mjs` §6.
 
 **Video display settings — brightness, contrast (issue #149) and rotation.**
 `populateVideoBrightnessTable`, `populateVideoContrastTable` and
@@ -7959,7 +8124,8 @@ change point and repeat on the transport seekbar (`setSeekbarSwitchMarkers`, `ui
 **Key exports.** `runIdSwitchChecks({size?, image?, auto?, statusPrefix?,
 navigateToFrame?, inject?})`; `setIdSwitchNavigator(fn)` (ui-wiring registers
 `navigateToFrame` once, so rows stay clickable when the tracker started the
-check); `refreshIdSwitchPanel(session?)` (render the tab and put that session's
+check); `setIdSwitchRefresher(fn)` (ui-wiring registers the repaint run after a
+fix / undo — overlays, 3D, info panel, timeline — keeping this module a leaf); `refreshIdSwitchPanel(session?)` (render the tab and put that session's
 markers on the seekbar — called after a check, from `updateInfoPanel` and from
 `switchSession`); `openIdSwitchPanel()` (show the panel, if hidden, on the tab);
 `clearIdSwitchResults(session?)` (called by `runTrackingPass` before it relabels);
@@ -7999,8 +8165,9 @@ attached to the result as `model` and its note shown under "About these flags";
 as "Image check speed on this machine: …". Passes `inFlight: embedder.inFlight`.
 
 **User-facing features.** The **ID Switches** tab (`#tabIdSwitches` /
-`#idSwitchPanel` in `index.html`, third tab; at the default panel width it sits in
-"More ▾"). Results are stored per session on `session._idSwitch` (`{results:
+`#idSwitchPanel` in `index.html`, third tab; at the default panel width it is
+scrolled off the right of the tab bar, and `openIdSwitchPanel` scrolls it back
+into view). Results are stored per session on `session._idSwitch` (`{results:
 {size?, image?}, reviewed: Set, showRepeats, current}`), so they survive
 closing/reopening the tab and switching sessions — and are SAVED in the `.slp`
 (`metadata.lucid.idSwitchReview`, see `ui/id-switch-review.js`; ticking a row,
@@ -8028,13 +8195,25 @@ shows the whole interaction; **end ⇥** jumps to the end frame, and Next
 unreviewed uses the lead-in too. **The selected row's progress bar** pops up on
 selection and follows the viewer's frame (stepping, scrubbing, playback):
 0% at the landing frame (1 s before the close spell), the close spell — where a
-swap would happen — shaded amber in the middle, 100% at 1 s after the
-encounter's end; clamped outside that range. `updateIdSwitchProgress(frame)` is
+swap would happen — red in the middle, the lead-in and lead-out orange, 100% at
+1 s after the encounter's end; clamped outside that range. The section colours
+come from `ID_SWITCH_SECTION_RGB` (`ui/id-switch-highlight.js`), set inline.
+A **playhead** line (`.id-switch-phead`) marks the current frame at the fill's
+leading edge and stands 4 px proud of the bar, so the coloured track is an inner
+element (`.id-switch-ptrack`) that clips the fill and band to its rounded ends
+while the bar itself does not clip; both move in the same style write.
+**Clicking or dragging the bar goes to that frame** (`round(p0 + x·(p1 − p0))`),
+like the transport seekbar; a `::before` gives it a hit area 7 px taller on each
+side. It is a `pointerdown` on the list (window-level move/up listeners, the bar
+re-found on every move so a panel rebuilt mid-drag cannot strand it, repeats of
+the same frame skipped), and the click that ends the press is swallowed so it
+never re-lands the row on its lead-in. `updateIdSwitchProgress(frame)` is
 called from `ui/ui-wiring.js` `updateSeekbarVisual` on every frame change: one
 style write, and a no-op without a selected row (the bar element is looked up
 once per render/selection, not per frame). The same interval drives an
 **animated box around the pair in every camera view** (`ui/id-switch-highlight.js`,
-set by row selection and panel renders, advanced by `updateIdSwitchProgress`). A check run from the menu always opens the tab; an
+set by row selection and panel renders, advanced by `updateIdSwitchProgress`),
+which wears the colour of the bar section the frame is in. A check run from the menu always opens the tab; an
 automatic one only when it found something. The tab content is the panel's one
 scroller (the list has none of its own). With no results it says so and offers
 "Check by body size" / "Check by images…" (they click the menu items).
@@ -8044,16 +8223,33 @@ scroller (the list has none of its own). With no results it says so and offers
 and the tab button), not by importing ui-wiring. The module keeps its `-modal`
 name for the image check's progress dialog, which is still modal.
 
+**Fixing a switch.** The selected row shows **Fix switch…** under its bar. It
+opens a confirmation naming the frames (`idSwitchFixPlan`, `ui/id-switch-review.js`)
+and why each edge is where it is; Esc / Cancel / a click outside change nothing,
+and every keystroke stops at the dialog (capture phase) so no app shortcut acts
+under it. Confirming calls `Session.swapIdentitiesInRange` (every view), records
+the fix in `st.fixes`, renames the other rows the swap re-labels, ticks the row,
+marks the project dirty, repaints through the registered refresher and returns the
+view to the row's lead-in, so pressing play shows the corrected labels. The row
+then reads **Fixed** (not struck through) with the swapped frames and, on the
+LATEST fix only, **Undo fix** — later fixes may build on an earlier one, so only
+the last is exactly reversible; undo swaps the same frames back. A follow-on row's
+dialog says to fix the switch it follows first. Re-running a check forgets the
+fixes (the swaps stay): its rows were scored on the fixed labels, so an undo would
+rename them wrongly.
+
 **Imports from project modules.** `ui/app-state.js` (`state`, `timeline`,
 `getActiveSession`), `import-export/save-load.js` (`setStatus`),
 `ui/loading-overlay.js` (`showLoadingProgress`, `hideLoading`, `yieldToPaint`),
 `ui/settings.js` (`getTrackingThreshold`), `pose/id-switch-check.js`,
 `ui/image-embedder.js` (`hasWebGPU`, `createImageEmbedder`),
-`ui/id-switch-review.js` (row keys, change-point helpers, `linkIdSwitchResults`),
-`ui/id-switch-highlight.js` (`setIdSwitchHighlight`, `updateIdSwitchHighlight`).
+`ui/id-switch-review.js` (row keys, change-point helpers, `linkIdSwitchResults`,
+`idSwitchFixPlan`, `idSwitchFixFor`, `idSwitchRenameForFix`),
+`ui/id-switch-highlight.js` (`setIdSwitchHighlight`, `updateIdSwitchHighlight`,
+`refreshIdSwitchHighlight`, `ID_SWITCH_SECTION_RGB`).
 
 **Imported by.** `ui/ui-wiring.js` (`#menuCheckSizeSwitches`,
-`#menuCheckImageSwitches`, `setIdSwitchNavigator`, `updateIdSwitchProgress`), `pose/tracker.js` (the
+`#menuCheckImageSwitches`, `setIdSwitchNavigator`, `setIdSwitchRefresher`, `updateIdSwitchProgress`), `pose/tracker.js` (the
 automatic run, `clearIdSwitchResults`), `ui/info-panel.js` and
 `ui/sessions-panes.js` (`refreshIdSwitchPanel`).
 
@@ -8063,7 +8259,9 @@ Clear, one scroller),
 `tests/e2e/track-auto-size-switch-check.mjs` (after Track All / Track Frame Range),
 `tests/e2e/id-switch-image-check.mjs` (images with an injected embedder: "Both"
 merge, identical-size animals found by images only, Esc cancel, no WebGPU, menu,
-default off).
+default off), `tests/e2e/id-switch-fix.mjs` (Fix switch…: both start rules in the
+dialog, Esc / Cancel / shortcuts, the swap fixes exactly the crossed stretch, the
+row afterwards, the renamed follow-on, saved, Undo exact).
 
 ---
 
@@ -8083,14 +8281,36 @@ change point of the same pair within 1 s as `agree` — "Both");
 `serializeIdSwitchReview(session)` -> payload or `null` (no check results -> no
 key, so untouched projects keep their bytes); `ingestIdSwitchReview(session,
 payload)` (rebuilds `session._idSwitch`, re-links "Both"; ignores anything
-malformed, never throws).
+malformed, never throws); `idSwitchFixPlan(m, res, {currentFrame,
+totalFrames, window?})` -> `{key, partnerKey, nameA, nameB, from, to, start
+('current' | 'separate'), edge}` or null
+— what fixing row `m` swaps (see below); `idSwitchFixFor(st, m)` (the fix covering
+a row, its own or its partner's); `idSwitchRenameForFix(st, fix)` (renames the
+other pairs' rows inside a fixed stretch — an involution, keys follow).
+
+**What a fix swaps.** The boundary is the CURRENT frame whenever it is inside the
+row's window (`o.window` — in the app the whole progress bar, 1 s before the
+animals come close to 1 s after they separate), so the user puts it where they saw
+the labels flip by playing, stepping or clicking the bar; outside the window it
+falls back to e + 1 (where the animals separate). Without `o.window` the window is
+the close spell [s, e + 1]. An onset swaps from there to its `switchBackAt` encounter's last
+close frame, or the last frame; an 'end' swaps the stretch BEFORE it, from just
+after `switchedAt` (or frame 0) to the frame before its boundary. The change point
+at the other edge is the fix's `partnerKey` (the same stretch). Results restored
+from a file saved before the links existed pair by the nearest change point of
+the same pair on the right side. After a fix, every OTHER row in the stretch that
+names exactly one of the pair is about the animal that now carries the other
+name, so it is renamed (selecting it must still box the same animals); the fixed
+pair's own rows are not.
 
 **Format.** `{v: 1, checks: {size?|image?: {encounters, sampleHz, step, fps,
 fpsFromVideo, [imageHz, crops, cameras, model: {name, note}], points: [[frame,
 nameA, nameB, score (0.1), kind ('' | 'end'), followOf (frame | -1), continues
 (0 | 1), startFrame (the encounter's first close frame | -1; absent in files saved
-before it existed — they still open, rows then land on the end frame)], …]}},
-reviewed: [rowKey, …]}` — only what the tab and the timeline
+before it existed — they still open, rows then land on the end frame), link
+(`switchBackAt` / `switchedAt` | -1 for none; absent in older files)], …]}},
+reviewed: [rowKey, …], fixes?: [[key, partnerKey, nameA, nameB, from, to], …]}`
+(`fixes` oldest first, only when something was fixed) — only what the tab and the timeline
 draw; not the encounters or the fitted models. A restored check result has
 `restored: true` and `encounterCount` instead of `encounters`.
 
@@ -8101,6 +8321,7 @@ draw; not the encounters or the fitted models. A restored check result has
 
 **Coverage.** `tests/test-id-switch-check.mjs` (lossless reopen -> re-save,
 "Both" re-link, ticks, garbage tolerance, nothing written without results);
+`tests/test-id-switch-fix.mjs` (the links, the plans, renaming, fixes round trip);
 `tests/e2e/visibility-settings-roundtrip.mjs` (both writers, real reader).
 
 ---
@@ -8111,9 +8332,13 @@ draw; not the encounters or the fitted models. A restored check result has
 every camera view, while the viewer's frame is inside that row's interval (1 s
 before they come close -> 1 s after they separate — the row's progress-bar span).
 
-**Key exports.** `setIdSwitchHighlight({nameA, nameB, p0, p1} | null)`;
-`updateIdSwitchHighlight(frame)` (every frame change, via
-`ui/id-switch-modal.js` `updateIdSwitchProgress`); `getIdSwitchHighlight()`.
+**Key exports.** `setIdSwitchHighlight({nameA, nameB, p0, s, e, p1} | null)`
+(`s..e` is the close spell); `updateIdSwitchHighlight(frame)` (every frame
+change, via `ui/id-switch-modal.js` `updateIdSwitchProgress`);
+`refreshIdSwitchHighlight()` (recompute the boxes at the current frame after the
+identities changed — a fix); `getIdSwitchHighlight()`; `ID_SWITCH_SECTION_RGB` (`{lead, close}` as `r, g, b`
+strings — orange / red) and `idSwitchSection(target, frame)` (`'close'` over
+`[s, e]`, else `'lead'`).
 
 **How.** Draws on its OWN canvas per view (`.id-switch-canvas`, appended to the
 view's `.canvas-wrapper`, `pointer-events: none`), backing size video × zoom like
@@ -8122,11 +8347,20 @@ overlay redraw paths (which clear the overlay canvas every frame) never touch it
 and the overlay-video export does not include it. A `requestAnimationFrame` loop
 runs ONLY while the frame is in the interval — the outline marches (dash offset)
 and pulses even when paused — and stops after clearing the canvases once outside
-it. Boxes are recomputed only when the frame changes: per camera, the instances
+it. It is kept cheap because it runs during playback on every view: a view is
+repainted when the frame changes and otherwise at most every `ANIM_MS` (33 ms; the
+animation is timed from the clock, so its speed does not depend on the rate), and
+a repaint clears only the rectangle the previous one drew (`_dirty`) instead of
+the whole video-sized canvas — repainting all eight full canvases at the display
+rate (120 Hz) was twice the video's own rate. Boxes are recomputed only when the frame changes: per camera, the instances
 whose identity NAME is one of the pair at that frame (per-frame track identity
 first, then the group's `identityId`; unlinked instances via
 `getIdentityIdForUnlinkedInstance`), one box around both (or the one visible),
-labelled "id_a ↔ id_b" in the identities' colours. Lines, padding and text are
+labelled "id_a ↔ id_b" in the identities' colours. The outline wears the
+colour of the row's progress-bar SECTION the frame is in — orange over the
+lead-in and lead-out, red over the close spell — from `ID_SWITCH_SECTION_RGB`,
+which the bar (`ui/id-switch-modal.js` `progressHtml`) also reads, so the two
+cannot drift. Lines, padding and text are
 sized in SCREEN pixels (canvas width / (layout width × zoom)), so a small tile
 of a large video stays readable. Lazy projects: nothing for a non-resident frame.
 
@@ -8136,8 +8370,12 @@ of a large video stays readable. Lazy projects: nothing for a non-resident frame
 **Imported by.** `ui/id-switch-modal.js`.
 
 **Coverage.** `tests/e2e/id-switch-highlight.mjs` (two real views: box around
-the pair and not the third animal, animates while paused, cleared past the
-interval and redrawn on return, Clear stops it).
+the pair and not the third animal, animates while paused, orange in the
+lead-in / red in the close spell / orange in the lead-out with the bar's
+sections matching, the bar's playhead and click / drag seeking, cleared past the
+interval and redrawn on return, a moved box leaves nothing behind, Clear stops
+it); `tests/e2e/_bench-playback.mjs` scenario `idswitch` (playback cost on a real
+project with a row selected over the whole run).
 
 ---
 
@@ -8145,7 +8383,8 @@ interval and redrawn on return, Clear stops it).
 
 **Purpose.** Appearance embeddings for the image ID-switch check: for a sampled
 frame and the identities present, decode that frame in every camera
-(streamed: see below), cut a masked, pose-aligned crop of each identity from
+(streamed, and moved to the nearest keyframe when keyframes are dense: see
+below), cut a masked, pose-aligned crop of each identity from
 its own 2D keypoints, and embed the crops with DINOv2-small on the GPU.
 
 **Speed.** `prepareFrames(frames)` opens one `streamingReader` per camera over the
@@ -8200,6 +8439,52 @@ busy (19–26% vs 44%) and dedicated GPU memory climbing in a GC sawtooth to 19.
 of 20 GB. Not reproducible on macOS (no unclosed-VideoFrame warnings), so it was
 removed rather than kept as an option. Cheaper decoding has to come from the
 recordings (keyframes every 0.5 s).
+**Keyframe sampling (2026-10-04).** `prepareFrames` reads each camera's keyframes
+from the container's packet index (`keyframeIndices`: mediabunny
+`EncodedPacketSink.packets(…, {metadataOnly: true})`, `type === 'key'`, mapped to
+frame indices through the backend's `_frameTimes`; no frame data read, cached per
+video) and plans the samples with `planKeyframeSamples` (pose/id-switch-check.js):
+when the median keyframe gap is <= `KEYFRAME_GAP_TOLERANCE` (1.1) x the sample
+spacing (32 frames at 60 fps and 2/s; the 10% lets a recorder's "keyframe every
+0.5 s" qualify at frame rates where rounding makes the spacing a little shorter —
+49 frames at 100 fps, 24 at 50 — at every rate up to 240 fps), each sample moves
+to its nearest keyframe within half of max(spacing, keyframe gap) that has
+tracking (`session.instanceGroups.has`), so `samplesAtTimestamps` decodes ONE
+frame per sample (mediabunny resets to the target's keyframe when it is past the
+last decoded packet). Each view crops its animals from the keypoints of the frame
+it actually decoded (`decodedFrame`; the same identity's group there — an
+identity seen twice in that frame is left out), while the evidence still counts
+at the grid frame, so encounters and tracklets are unchanged. Sparser keyframes
+move nothing: the timestamps are exactly the old ones. Per camera, so cameras
+encoded differently mix. `opts.keyframes`: `false` (or `window.
+LUCID_IMAGE_KEYFRAMES = 0`) turns it off; a function `(decoder) -> keyframe
+indices` replaces the index (diagnostics). `stats().keyframes` /
+`summarizeKeyframePlans` -> `{cameras, of, snappedPct, keyframeGap, spacing}`, and
+the speed line ends "· decoded at keyframes in 8/8 cameras (100% of samples)" or
+"· every frame decoded (keyframe every 250 frames; a keyframe every 0.5 s — 35
+frames or fewer — would decode only the samples)". Measured on the M2 Pro, 2-minute clips of the 8 cameras of the
+5-mouse recording decoded concurrently (`tests/e2e/_bench-image-keyframe-decode.mjs`,
+1,800 camera-samples): original files and x265 with a keyframe every 250 frames
+151 samples/s (53,768 frames decoded, ~4,500/s — the hardware decoder's limit);
+x265 with a keyframe every 30 frames 297 samples/s in place (27,000 frames:
+mediabunny already skips to each sample's GOP) and **2,800 samples/s snapped
+(1,800 frames) — 18.6x today**. On that HEVC (hardware decoder) a keyframe decoded
+alone is bit-identical to it decoded mid-stream (96/96 raw planes; embeddings of
+the same crops max |difference| 0). Cost of the keyframes (x265, same QP 24, P-only):
++42% file size over the 8 cameras (+30% to +65% per camera; the static views pay
+most), at slightly HIGHER quality vs the original (PSNR +0.6 to +0.75 dB on every
+camera, SSIM up ~0.0015); on camera 0, QP 26 restores the size at -0.35 dB.
+The field recordings come from campy's NVENC writer (`-preset fast -qp 24 -bf:v
+0`, no `-g`, so NVENC's default keyframe every 250 frames); from those files'
+own keyframe / P-frame sizes, a keyframe every 30 frames at QP 24 projects to
++53% (+43% to +70% per camera; 6.3 -> ~9.7 GB per 30-min 8-camera session).
+**AV1** (campy's `av1_nvenc` setups) works the same way: keyframes from the
+packet index, one decoded packet per sample, bit-identical keyframes (96/96,
+embeddings max |difference| 0). It costs more: SVT-AV1 (low-delay, CRF 32) +95%
+size for a keyframe every 30 frames; and on the M2 Pro, which has no AV1
+hardware (Chrome decodes it in software), it is only 2x faster: 140 samples/s
+today -> 272 snapped (134 in place; software AV1 keyframes are expensive). GPUs
+with AV1 decode (RTX 30/40, Ada) should look like the HEVC case; not measured.
 Embeddings are bit-identical across all of this (cosine 1.00000 vs seeking,
 top-k vs the same views at all-k, and max |difference| 0 for worker vs inline
 crops over 5,687 real crops).
@@ -8232,13 +8517,15 @@ decode + crop ceiling rose from 145 to ~270 crops/s at 3 views (decoding alone:
 7.9 s vs 8.3 s with cropping) — headroom for a GPU faster than ~145 crops/s.
 Numbers in `ui/id-switch-modal.js`.
 
-**Key exports.** `createImageEmbedder(session, {onStatus, maxViewsPerAnimal, webnn})` ->
+**Key exports.** `createImageEmbedder(session, {onStatus, maxViewsPerAnimal, webnn, keyframes})` ->
 `{getEmbeddings, prepareFrames, releaseFrames, backend, stats, inFlight, views}` (the provider
 `checkImageSwitches` needs; `releaseFrames` also terminates the crop pool and
 disposes a WebNN model);
 `loadImageModel(onStatus)` (once, cached promise); `hasWebGPU()`;
 `selectViews(geos, maxViews)`; `EMBED_MAX_BATCH`, `EMBED_IN_FLIGHT`,
-`summarizeEmbedTiming(tm, backend, dtype)`, `formatEmbedTiming(t)`; WebNN: `hasWebNN()`, `loadWebNNModel(onStatus)`,
+`summarizeEmbedTiming(tm, backend, dtype)`, `formatEmbedTiming(t)`;
+`keyframeIndices(decoder)` -> `Promise<Int32Array|null>` (cached per video);
+`summarizeKeyframePlans(plans)`; WebNN: `hasWebNN()`, `loadWebNNModel(onStatus)`,
 `chooseBackend(trial)`, `WEBNN_BATCH`, `WEBNN_TRIAL_FRAMES`; `createCropPool()` -> `{run(image, crops) ->
 Promise<Float32Array[]>, broken, terminate()}` or null; crop helpers
 `cropGeometry`, `cutCrop`, `convexHull`, `writeInputTensor`; constants
@@ -8261,13 +8548,21 @@ fp32 (~88 MB). WebGPU only: the CPU (WASM) runtime measured ~50x slower (3 vs 15
 crops/s) and its int8 model drifts (cosine 0.953 vs the calibrated model). Re-check
 the CLS extraction (`last_hidden_state` token 0) on any version bump.
 
-**Imports from project modules.** `ui/app-state.js` (`state.views`). Spawns
-`ui/image-crop-worker.js`.
+**Imports from project modules.** `ui/app-state.js` (`state.views`),
+`pose/id-switch-check.js` (`planKeyframeSamples`, `KEYFRAME_GAP_TOLERANCE`); `mediabunny`
+(`EncodedPacketSink`, imported LAZILY inside `keyframeIndices` — a static bare
+import would break this module in Node tests and in the crop worker, which has no
+importmap). Spawns `ui/image-crop-worker.js`.
 
 **Imported by.** `ui/id-switch-modal.js`, `ui/image-crop-worker.js`.
 
-**Coverage.** Crop geometry, `selectViews`, `chooseBackend` and the resize table in
+**Coverage.** Crop geometry, `selectViews`, `chooseBackend`, the resize table and
+the keyframe line of `formatEmbedTiming` in
 `tests/test-id-switch-check.mjs`; the crop pool in `tests/e2e/image-crop-worker.mjs`;
+keyframe sampling on generated 60 fps H.264 and AV1 (keyframes every 30 frames vs one) in
+`tests/e2e/image-keyframe-sampling.mjs` (keyframe index, one decoded packet per
+sample, bit-identical planes, sparse video unchanged); accuracy on real data by
+`tests/e2e/_diag-image-keyframe-snap.mjs` (diagnostic, not in the suite);
 the full path on real data by a scratch harness (not in the suite: it needs the
 proofread videos and GPU) — see the image-check notes above.
 
@@ -8787,14 +9082,18 @@ Frame Number") keyboard-shortcut installer. Has zero transitive
 `app.js` imports so it can be bridged into the test runner.
 
 **Key exports.**
-- `toggleTimeline`, `fitTimelineToData`, `syncTimelineToggleButton`,
-  `installTimelineShortcuts`, `getCachedTimelineHeight`,
-  `setCachedTimelineHeight`.
+- `toggleTimeline`, `collapseTimeline`, `fitTimelineToData`,
+  `syncTimelineToggleButton`, `installTimelineShortcuts`,
+  `getCachedTimelineHeight`, `setCachedTimelineHeight`.
+- `collapseTimeline()` closes the timeline only if it is open (never opens
+  it), via `toggleTimeline()` so the height cache and toolbar button match a
+  manual collapse. Returns whether it collapsed anything.
 
 **Imports from project modules.**
 - `./app-state.js` — `state` (for `state.timeline`).
 
-**Imported by.** `pose/initialization.js`, `ui/ui-wiring.js`
+**Imported by.** `pose/initialization.js`, `pose/tracker.js`
+(`collapseTimeline`, after Track All), `ui/ui-wiring.js`
 (re-exports the same surface so legacy `import { toggleTimeline, … } from
 './ui-wiring.js'` keeps working).
 
@@ -9249,8 +9548,9 @@ stopping at the last frame; the step transport buttons/keys stop it first.
   Tracks ▸ **Check ID Switches (Body Size)…** (`menuCheckSizeSwitches`) calls
   `runIdSwitchChecks({size: true, navigateToFrame})`, and Tracks ▸ **Check ID
   Switches (Images)…** (`menuCheckImageSwitches`) `runIdSwitchChecks({image: true,
-  navigateToFrame})`, from `ui/id-switch-modal.js`; `setIdSwitchNavigator` is
-  called once at setup.
+  navigateToFrame})`, from `ui/id-switch-modal.js`; `setIdSwitchNavigator` and
+  `setIdSwitchRefresher` (the repaint after the tab fixes a switch) are called
+  once at setup.
 - Color-by toggle: the "Color by" Tracks/ID control lives in the top
   toolbar (buttons `colorByTracks` / `colorById`, next to the Errors
   checkbox), not the Tracks menu. `updateColorByToggle()` reflects
@@ -9364,7 +9664,8 @@ split handles write inline widths there, which would defeat the collapse the
 same way).
 
 Each toggle also drives the work, not just the pixels — see
-`ui/panel-visibility.js`. Hiding the 3D viewport calls
+`ui/panel-visibility.js`. Hiding the 3D viewport goes through that module's
+`collapseViewport3D` (shared with Track All, which closes the panel) and calls
 `Viewport3D.setVisible(false)` (render loop stopped, scene rebuilds deferred)
 and lets `update3DViewport` skip out; showing it calls `setVisible(true)` then
 `update3DViewport(state.currentFrame)`, which also auto-inits the viewport if a
@@ -9435,9 +9736,28 @@ camera highlight all follow from that one `setActive()` via
 panels behind `addVideoPanel`'s back, so `paneManager.syncDockedViews()` runs
 first to re-derive the docked bookkeeping.
 
+**The cached layout is VALIDATED at the point of use, not invalidated at each
+mutation.** `savedGridLayout` is a snapshot taken when `v` was pressed, and
+`state.views` can change while solo — removing a video (`removeVideoFile`),
+loading one, or switching sessions, which replaces the list wholesale. `g` then
+`fromJSON`'d the snapshot and rebuilt a pane for a view that no longer exists:
+an empty pane wearing the removed camera's name, which is what a user reads as
+"the video went blank" (luc3d #216). A view ADDED while solo is the same mistake
+mirrored — `g` would restore a grid missing it. `savedGridLayoutMatchesViews()`
+compares the snapshot's panel set against the live view list as a SET (both
+directions), and `setGridMode` drops the layout when it disagrees, falling back
+to a fresh `addAllViewsAsGrid()`. Validating at the one reader rather than
+invalidating at every writer is deliberate: a list of invalidation call sites is
+a list something can be left off, and this cache has exactly one reader. It
+reads `params.viewName` off the SERIALIZED panel records — the `params` every
+pane is added with, part of dockview's documented `toJSON` shape, not one of the
+private internals `ui/overlay-export-modal.js` depends on.
+
 Covered end to end by `tests/e2e/solo-view-navigation.mjs` (real keyboard/mouse
-events against the real dock and strip); `tests/test-view-mode.js` only
-simulates the index arithmetic in isolation.
+events against the real dock and strip) and `tests/e2e/videos-panel-buttons.mjs`
+§7 (the stale snapshot, the positional drift of `singleViewIndex`, and removing
+the solo'd view itself);
+`tests/test-view-mode.js` only simulates the index arithmetic in isolation.
 
 **Visibility panel — the global/session split.** `saveVisSettings` /
 `restoreVisSettings` cache the panel's **global appearance preferences** (the
@@ -10210,6 +10530,12 @@ be readable by the code doing it.
   also on `window.__lucidPanelVis`) — diagnostics. A visibility gate that
   looks right and still does the work has no visual signature at all, so the
   counters are what `tests/e2e/panel-toggle-independence.mjs` reads.
+- `collapseViewport3D(viewport3d)` — collapse the 3D panel if expanded (no-op
+  otherwise; returns whether it did): park the inline width, add `collapsed`,
+  `viewport3d.setVisible(false)`. The collapse half of `toggle3DViewport`, which
+  calls it; it lives here so `pose/tracker.js` can close the panel after Track
+  All without importing `ui/ui-wiring.js` (an import loop). The viewport is a
+  PARAMETER, not an import, to keep this module a leaf.
 
 **Imports from project modules.** **None — this is a leaf module by design.**
 `ui/info-panel.js`, `ui/ui-wiring.js` and `pose/initialization.js` all need to
@@ -10217,8 +10543,9 @@ ask it, and several of those already import each other, so any import here
 would close a cycle.
 
 **Imported by.** `ui/info-panel.js` (gates `updateInfoPanel` /
-`updateFrameInfo`), `ui/ui-wiring.js` (`refreshInfoPanelAfterShow`),
-`pose/initialization.js` (gates `update3DViewport` and `setup3DViewport`).
+`updateFrameInfo`), `ui/ui-wiring.js` (`refreshInfoPanelAfterShow`,
+`toggle3DViewport`), `pose/initialization.js` (gates `update3DViewport` and
+`setup3DViewport`), `pose/tracker.js` (`collapseViewport3D` after Track All).
 
 **Note.** `ui/viewport3d.js` deliberately does NOT import this — it takes a
 per-instance `visible` flag instead, because the export modals mount their own
@@ -10379,9 +10706,34 @@ filesystem enumeration, decoder rebuild.
   Applied in the parent-directory pick (both FSA + webkitdirectory branches),
   the "Select Session Folder" scan, and the SLP-import video filter so the
   calibration video never loads as a session view.
-- View/grid: `createViewForVideoFile`, `updateGridLayout`,
+- View/grid: `createViewForVideoFile`, `removeVideoFile`, `updateGridLayout`,
   `createVideoPromptCell`, `fitCanvasesToCells`, `cellResizeObserver`,
   `rebuildVideoController`, `updateTotalFrames`.
+  `removeVideoFile(videoFile)` is `createViewForVideoFile`'s inverse and the
+  whole of the Videos tab's **Remove Video** (luc3d #216): it closes the dock
+  pane (`paneManager.removeVideoPanel`), drops the view from `state.views` —
+  which is what takes the view-strip thumbnail with it — splices
+  `state.videoFiles`, **remaps every session's `videoFileIndices`** across that
+  splice (they are indices INTO `state.videoFiles`, so a stale one re-points a
+  session at its neighbour's video on the next switch), `close()`s the decoder
+  and removes it from `state.decoderPool`/`_decoderPoolCold`, then resettles
+  everything derived from the view list. The old handler removed only the
+  view's `.video-cell` ELEMENT, leaving the pane docked and titled with an empty
+  body plus a live thumbnail. The session's CAMERA is deliberately kept — it
+  carries the calibration and the annotations; "no video loaded for this camera"
+  is an ordinary state that `recomputeUploadedCameras` already models. Accepts a
+  `{name, assignedCamera}` descriptor too, since the Videos table synthesises
+  rows from `state.views` when `state.videoFiles` is empty. Covered by
+  `tests/e2e/videos-panel-buttons.mjs`.
+  **It re-seats `state.singleViewIndex` BY NAME, not by clamping.** That index
+  is a position in `state.views`, so removing a video that sits BEFORE the
+  solo'd one slides the next camera into its slot — a clamp only catches a
+  dangling index, so solo silently showed a different view from the one the
+  user put it on. The solo'd view's name is noted before the splice and the
+  index re-derived from it; removing the solo'd view itself has no right
+  answer, so that case falls back to the clamp AND re-renders the dock
+  (`updateVideoGridDisplay`), since the pane just closed was the only one and
+  single-view mode would otherwise be left showing nothing.
 - Session-mode UI: `showSessionModeModal`, `showMissingFilesPopup`.
 - Filesystem: `enumerateDirectoryHandle`.
 - Misc: `resolveImportTrackIdx` — re-exported from
@@ -10395,7 +10747,14 @@ opening devtools. Any view with a real decoder but no `_mbBackend` (its
 `_initMediabunny`/`switchSource` init silently failed) now triggers
 `setStatus('N of M camera(s) fell back to HTML5 seeking...', 'warning')` so
 it's visible at a glance right after every load/session-switch, without
-needing to check the console or set anything manually.
+needing to check the console or set anything manually. A decoder that dropped
+its backend ON PURPOSE because this browser's WebCodecs cannot decode the
+codec (`decoder._mbUnavailable.reason === 'codec'` — Firefox + HEVC, see
+`loading/video.js`) gets its own clause instead: `N of M camera(s) step with
+<video> seeks: this browser cannot decode HEVC with WebCodecs, so stepping is
+slower` — not "init failed … a frame or two off", which is neither the cause
+nor (since the mid-frame seek) the measured result. Both clauses can appear,
+joined by `; `.
 
 Fresh-session creation sites (video-only, calibration-only, multi-cam directory)
 seed the skeleton from `buildRememberedSkeleton()` (falling back to an empty
@@ -11004,6 +11363,72 @@ tolerance (half a frame period, `0.5/_fps`) so high-fps recordings
 (e.g. 400 fps) step every frame instead of freezing under a fixed
 constant (issue #89).
 
+**`<video>` seeks aim at the MIDDLE of the frame (`html5SeekTime`).**
+`_getFrameHTML5` sets `currentTime = (i + 0.5) / fps`, not `i / fps`. A
+frame-start time sits on the boundary with frame i−1 and browsers round it
+either way: on barcode clips (frame number burned into the pixels, 8 cameras
+seeking at once, gitignored `verify/seek-probe.html`), Firefox 157 showed i−1
+for every frame with `i % 3 == 2` at 60 and 150 fps (63–70% exact, HEVC and
+H.264 alike), Chrome/Brave/Safari for most frames (7–33%). Mid-interval was
+exact in all 2,160 Firefox seeks and in every H.264 seek in the other three
+(their `<video>` HEVC: 80–90% vs 7–15% — they step HEVC through mediabunny, so
+only a decode failure reaches this). Seeking to mediabunny's exact PTS
+(`_frameTimes[i]`) is the frame start again and missed identically; the
+midpoint of two PTSs matched `(i + 0.5) / fps`. **`requestVideoFrameCallback`
+cannot verify a landing in Firefox**: its `mediaTime` echoes the seek target,
+not the frame shown (Chrome's does report the shown frame). `seekNativeSettled`
+(play start) treats an element parked on the frame's middle as already there:
+`(i+0.5)/fps − i/fps` comes out an ulp over half a frame for ~30% of frames,
+and re-seeking to the frame start would land on i−1 in Firefox. **Only a
+position `_getFrameHTML5` set itself skips the seek** (`_html5Moved`, set by
+`playNative`, `seekNative` and a real `seekNativeSettled` seek, cleared by the
+next `_getFrameHTML5` seek and by `switchSource`): after playback the picture
+need not match `currentTime`, and the +0 pause re-decode (asking for the frame
+already under the playhead) drew the NEXT frame on 1 Firefox HEVC pause in 10
+by skipping its seek. Measured with the pause harness (gitignored
+`verify/pause-xb.html`, 8 cameras, Firefox, HEVC): paused picture == skeleton
+for the shipped +1 re-decode 31% → 100%, for +0 28% → 100%.
+
+**A codec WebCodecs cannot decode drops the backend up front
+(`_mbCannotDecode`).** Firefox 157 demuxes HEVC — `MediaBunnyVideoBackend`
+initializes — but has no WebCodecs HEVC decoder, so every `getFrame` failed
+twice (the step stream, then the backend's own `getFrame`) before falling back:
+1,544 warnings in one 8-camera stepping run. `_initMediabunny` now asks
+mediabunny's `track.canDecode()` (`VideoDecoder.isConfigSupported` on the full
+decoder config; ~0 ms) once, AFTER adopting the backend's frame count and fps
+(container metadata, still right), and on `false` closes the backend and sets
+`_mbUnavailable = { reason: 'codec', codec, codecString }`; a failed init sets
+`{ reason: 'init', message }`, and both `init` and `switchSource` reset it.
+Measured `false` only for HEVC in Firefox; `true` for H.264 there and for both
+in Chrome, Brave and Safari, whose path is therefore unchanged. A check that
+cannot be asked answers null, leaving the per-frame fallback to cover it.
+End to end (gitignored `verify/step-probe.html`, the real decoder, HEAD vs
+this, 8 cameras, Firefox, HEVC 60 fps): exact 67–70% → 100%, fallback warnings
+1,544 → 0; step time unchanged within run-to-run noise (8-camera medians
+~0.7 s per jump or forward step, ~1.2 s back, both builds — Firefox's own
+`<video>` HEVC seek is the cost, and the skipped attempts were cheap). Chrome,
+Brave and Safari: identical before and after (mediabunny on every camera, 100%
+exact, same step times). With no backend, the image
+ID-switch check's `keyframeIndices` / `streamingReader`
+(`ui/image-embedder.js`) take their `getFrame` path rather than a stream that
+cannot decode.
+
+Covered by `tests/test-mediabunny-backend.js` (stubbed backend: dropped on
+`false`, kept on `true`, kept when the question cannot be asked, no per-frame
+warning afterwards), `tests/test-html5-seek-tolerance.js` (the mid target, the
+play-start parking, the `_html5Moved` rule) and
+`tests/e2e/html5-step-mid-frame.mjs` — real Chromium made to answer "cannot
+decode" (`VideoDecoder.isConfigSupported` stubbed for the whole run, which
+mediabunny also consults before each decode, so a KEPT backend fails every
+frame exactly as in Firefox + HEVC), stepping the real decoder forward,
+backward and by jumps through `tests/fixtures/barcode-60/barcode-60.mp4`
+(4 KB, 60 fps, frame number as a barcode; `make_fixture.sh` regenerates it)
+and reading every frame number back. On the pre-fix build it fails with 256
+fallback warnings and most steps one frame behind; its control decoder,
+seeking to the frame START, must land wrong (89 of 128 headless) or the test
+could not tell the targets apart. The fixture is 60 fps on purpose: at 10 fps
+(`bframes-test`) frame times are whole microseconds and both targets land.
+
 **Frame-accurate mediabunny backend (default-on, issue #115).** HTML5
 `<video>.currentTime` seeking is NOT frame-accurate — it can return a
 frame a whole GOP behind the one requested, so the pose overlay (drawn
@@ -11076,7 +11501,7 @@ video element", added to dodge Chrome browser-process crashes from repeated
 updated when it landed: it closed the WebCodecs `this.decoder` but left
 `_mbBackend` untouched, still bound to the PREVIOUS video. Every
 frame-accurate `getFrame()` after a pooled-decoder session switch/reopen
-(stepping, the `pausePlayback()` snap) then silently decoded from the wrong,
+(stepping, the `pausePlayback()` re-decode) then silently decoded from the wrong,
 stale video — reproducing the exact pose/video misalignment #141 fixed, but
 only on switch/reopen (a fresh `init()` was always fine, which is why this
 was hard to pin down from a fresh-load repro). Fixed by closing the old
@@ -11085,6 +11510,18 @@ the end of `switchSource()`, mirroring `init()`'s setup. Covered by
 `tests/e2e/switchsource-mediabunny-refresh.mjs` (proves it via decoded pixel
 content, not just the backend's `filename`, since the fixture videos happen
 to share a frame count).
+
+**The `<video>` `error` listener reads the ELEMENT it was attached to, not
+`this._videoEl`.** Both `init()` and `switchSource()` register a `once: true`
+`error` listener that rejects their metadata promise. That listener OUTLIVES a
+successful load, and `close()` ends with `src = ""` + `load()` — which fires one
+last `error` event, asynchronously, after `close()` has already nulled
+`this._videoEl`. Reading the code through `self._videoEl` therefore threw
+`Cannot read properties of null (reading 'error')` out of an event handler on
+every decoder that is CLOSED rather than garbage-collected. Latent until
+`removeVideoFile` (luc3d #216) made closing a decoder an ordinary user action;
+the cold-pool eviction path hit it too, just invisibly. Both sites now capture
+`var el = this._videoEl` at registration and read `el.error`.
 
 **A cached HTML5 fallback permanently shadowed mediabunny for that frame
 index (issue #115 followup, `eric/seeking-regression`).** `getFrame()`
@@ -11127,6 +11564,70 @@ around calls into `_mbBackend.getFrame`. Covered by two unit tests in
 `tests/test-mediabunny-backend.js` (stubbed backend — proves the
 serialization contract; the real WebCodecs race itself isn't reproducible
 headlessly).
+
+**Paused stepping keeps a decode stream open (`_mbGetFrame`, 2026-10-04).**
+`MediaBunnyVideoBackend.getFrame` opens a fresh decoder per frame and decodes
+from the frame's keyframe, so on P-frame recordings with a keyframe every 250
+frames EVERY paused frame — an arrow-key step forward included — decoded ~125
+frames per camera. `getFrame` now goes through `_mbGetFrame`, which keeps one
+mediabunny `sink.samples(t)` stream per decoder (`_stepCursor`: decodes from the
+keyframe once, then stays a few frames ahead) and serves any request at or after
+its position that needs no newer keyframe (`_sameKeyframeRun`: the target's key
+packet, via a lazily created `EncodedPacketSink.getKeyPacket` — `import('mediabunny')`
+on first use — is at or before the stream's next frame) by advancing it; a step
+back or a jump past the next keyframe reopens it at the target, i.e. the same
+decode as before. Results go into the backend's frame cache as `getFrame`'s did,
+so stepping back over frames just shown stays a cache hit. Released after
+`STEP_CURSOR_IDLE_MS` (3 s) idle, by `releaseStepCursor()` (called for every view
+by `VideoController.startPlayback`), `switchSource` and `close`. Any failure
+falls back to the backend's own `getFrame`; `window.LUCID_STEP_CURSOR = 0` turns it
+off. Measured (M2 Pro, real Chrome, 2-min clips of the 8 cameras of the 5-mouse
+recording, all 8 views per frame; `tests/e2e/_bench-step-cursor.mjs`): on the
+original recordings (keyframe every 250) a step forward 148 -> **1 ms**, a held
+arrow key 2.6 -> **245 frames/s**; re-encoded with a keyframe every 30, 64 -> 1 ms
+and 15.6 -> 366 frames/s. Steps back and jumps are unchanged apart from the
+stream's read-ahead (~40 extra packets decoded in the background on opening:
+jump 206 -> 214 ms, step back 405 -> 421 ms on the originals). Stepped frames are
+pixel-identical to the frame-accurate decode. Cost while paused: each open stream
+holds its few read-ahead frames (and a decoder) until it idles out.
+**Stepping BACK decodes in chunks (`_decodeBackChunk`, 2026-10-05).** A frame can
+only be decoded forward from its keyframe, so each step back re-decoded the whole
+run from the keyframe — up to 250 frames per camera, ~420 ms for 8 views, and
+choppy (cheap just after a keyframe, dear just before the next). When a request is
+1–3 frames before the previous one, `_mbGetFrame` instead decodes that run once
+and caches up to `STEP_BACK_CHUNK` (24) frames ending at the target, never earlier
+than its keyframe, so the next steps back are cache hits. Capped at 40% of the
+frame cache (60 in the app), so the chunk on screen and the one being prefetched
+both fit; `window.LUCID_STEP_BACK_CHUNK = 0` turns it off.
+**Background prefetch + landing warm-up.** While stepping back, `_prefetchBack`
+decodes the chunk before the cached run in the background (its own decoder, not
+under `_mbSeekLock`; one at a time; a request for a frame it is decoding waits for
+it), and `_scheduleBackWarm` does the same `STEP_BACK_WARM_MS` (250 ms) after the
+user LANDS on a frame by a jump (seekbar, a flagged switch, end of playback) and
+stays — counted from when the frame is shown, so back-to-back jumps never start
+one. Anything but a step back cancels it (`job.cancelled`, checked per decoded
+frame; `releaseStepCursor` too). Chunk frames are cached by `_cacheNear`, which
+evicts the frame FARTHEST from the user rather than the least recently used:
+stepping back, the not-yet-reached prefetched frames ARE the least recently used,
+and LRU evicted exactly them (a hitch every ~30 steps).
+`window.LUCID_STEP_BACK_PREFETCH = 0` turns prefetch and warm-up off.
+Jumps and seekbar drags (larger moves) don't trigger it. Held left arrow, 72
+steps, 8 views, original recordings (`_bench-step-cursor.mjs`, app cache 60):
+2.3 -> **34.6 steps/s**, median step 428 -> 0 ms, but every 24th step costs ~0.7 s
+(the run + 24 bitmaps per camera); keyframe every 30: 15.1 -> 70.1 steps/s, worst
+step ~240 ms. With prefetch + warm-up, landing then holding the key at 30 steps/s:
+**0 of 72 steps over 50 ms** (29.8 steps/s achieved; chunks alone: 3 hitches of
+~0.5–0.6 s), keyframe every 30 also 0 (chunks alone: 4); stepping as fast as
+frames come, 45.7 steps/s, where it can outrun the prefetch. Jumps unchanged
+(208 -> 215 ms). Memory: the cache peaks at its existing ceiling (60 frames per
+camera, 480 here) with or without chunking — chunking fills it sooner, it does
+not raise it. Stepped-back frames pixel-identical to the unchunked decode. Guarded by
+`tests/e2e/step-cursor.mjs` (one packet per step vs every frame since the
+keyframe, pixel-identical stepped / stepped-back / jumped frames, reopening at the
+right keyframe, chunked back steps — 2 of 30 steps decode, same frames — the
+landing warm-up, a held left arrow finding 120/120 frames already cached in a
+30-frame cache (111/120 with plain LRU eviction, which the test was checked to
+fail on), cancellation by a jump, and release on idle / request / close).
 
 **Callers must coalesce rapid single-frame steps via `scrubToFrame`, never
 call `seekToFrame` directly for repeatable user input (issue #115
@@ -11259,9 +11760,17 @@ a zoomed-in image keeps the same region centered instead of jumping.
 
 **Key exports.**
 - `videoLog(msg, level)` — namespaced logger.
+- `STEP_CURSOR_IDLE_MS` (3000) — idle time before a paused-stepping stream closes.
+- `STEP_BACK_CHUNK` (24) — frames decoded and cached per backward step.
+- `STEP_BACK_WARM_MS` (250) — pause after landing on a frame before warming the chunk behind it.
 - `OnDemandVideoDecoder` — class. Selected methods: `init(source)`,
-  `getFrame(frameIndex)`, `_initMediabunny(source)` /
-  `_mediabunnyEnabled()` (opt-in frame-accurate backend, issue #115),
+  `getFrame(frameIndex)` (mediabunny: via `_mbGetFrame`, the open stepping
+  stream), `releaseStepCursor()`, `_initMediabunny(source)` /
+  `_mediabunnyEnabled()` (default-on frame-accurate backend, issue #115),
+  `_mbCannotDecode(backend)` (null, or `{reason: 'codec', codec, codecString}`
+  when WebCodecs cannot decode the track — the backend is then dropped and
+  that object kept as `_mbUnavailable`), `html5SeekTime(i)` (`(i + 0.5)/fps`,
+  the `<video>` stepping seek target),
   `decodeRange(start, end)`, `playNative`, `pauseNative`, `seekNative`,
   `switchSource`, `close`, `drawCurrentFrame`, `_awaitPlayable` (init and
   switchSource await the element's load through it: when the browser refuses
@@ -11284,10 +11793,17 @@ a zoomed-in image keeps the same region centered instead of jumping.
   `hasFrame`, `close`.
 - `VideoController` — class. Selected methods: `seekToFrame`,
   `scrubToFrame`, `togglePlayback`, `startPlayback`, `stopPlayback`,
-  `pausePlayback` (user-pause: stop + frame-accurate mediabunny step one
-  frame forward so the video lands exactly on-frame with the pose overlay,
-  issue #115 — the play button and spacebar call this, internal stops call
-  `stopPlayback`),
+  `pausePlayback` (user-pause: stop + frame-accurate re-decode — mediabunny,
+  or the mid-frame `<video>` seek where WebCodecs cannot decode — of the frame
+  playback stopped on, so every camera rests exactly on-frame with the pose
+  overlay; the play button and spacebar call this, internal stops call
+  `stopPlayback`. It used to step one frame FORWARD (issue #115), which the
+  per-refresh loop made a visible jump on every pause; re-decoding the current
+  frame repaints an identical picture in Chrome/Brave and still lines up the
+  Safari/Firefox fallback loop and any camera that stopped a frame out of step
+  with camera 0. Measured in all four browsers at 60/120 Hz with barcode
+  clips: +0 ends aligned in 100% of camera-pauses — Firefox HEVC included
+  since its stepping moved to mid-frame seeks, see `_html5Moved` above),
   `_startBufferedPlayback` / `_bufferedPlaybackEnabled` (buffered
   video-led mediabunny playback, issue #115),
   `setupSeekbar`, `setupKeyboardHandlers`, `initZoom`, `applyZoom`,
@@ -11304,10 +11820,13 @@ Option+scroll that strayed into the margin from zooming the view out from under
 a rotation in progress. Removing the line alone turns the margin check in
 `tests/e2e/alt-wheel-rotate-instance.mjs` red.
 
-**Imports from project modules.** `ui/keyboard-target.js` only — the
+**Imports from project modules.** `ui/keyboard-target.js` — the
 `shouldIgnoreShortcut` guard its `setupKeyboardHandlers` keydown listener
-applies (issue #163); that module imports nothing itself. Otherwise none (uses
-the global `MP4Box` from script tag).
+applies (issue #163); that module imports nothing itself — and
+`loading/video-codec-diagnosis.js` (`diagnoseUnplayableVideo`, for
+`_awaitPlayable`). `mediabunny` (`EncodedPacketSink`) is imported lazily by
+`_keyTimestamp`. Otherwise none (uses the global `MP4Box` from script tag, and
+`window.SleapIO.MediaBunnyVideoBackend`).
 
 **Imported by.** `pose/initialization.js`, `import-export/save-load.js`,
 `import-export/slp-import.js`, `loading/session-loader.js`,

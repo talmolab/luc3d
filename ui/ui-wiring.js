@@ -33,7 +33,7 @@ import { updateInfoPanel, updateFrameInfo, updateTriangulationBadge,
          setupPanelTabs, setupSkeletonEditing, exportSkeletonJSON,
          ensureSession, populateSessionAssignTable, populateUnassignedVideos,
          populateTimelineVisibility } from './info-panel.js';
-import { consumeInfoPanelStale } from './panel-visibility.js';
+import { consumeInfoPanelStale, collapseViewport3D } from './panel-visibility.js';
 // Block 2 (Prompt 4): rename migration for the per-session hidden-track
 // / hidden-identity Sets when the user renames an entity.
 import { renameHiddenTrack, renameHiddenIdentity } from './timeline-visibility.js';
@@ -66,7 +66,7 @@ import { shouldIgnoreShortcut, installFocusRelease } from './keyboard-target.js'
 import { showSettingsModal } from './settings-modal.js';
 // Pass 3i-3: addNewInstanceSmart and update3DViewport moved to pose/initialization.js.
 import { addNewInstanceSmart, update3DViewport, navigateToFrame } from '../pose/initialization.js';
-import { runIdSwitchChecks, setIdSwitchNavigator, updateIdSwitchProgress } from './id-switch-modal.js';
+import { runIdSwitchChecks, setIdSwitchNavigator, setIdSwitchRefresher, updateIdSwitchProgress } from './id-switch-modal.js';
 // Pass 3f / 3i-4: identity-assignment workflow symbols moved out of app.js.
 // (`swapTracks` joined this module in 3i-4; `seekToLabeledFrame` is now in-module.)
 import {
@@ -862,6 +862,13 @@ export function setupMenus() {
     // Tracks ▸ Check ID Switches (Body Size): flag close encounters whose
     // post-encounter body sizes favour swapped identities (ui/id-switch-modal.js).
     setIdSwitchNavigator(navigateToFrame);   // also used when a tracking pass runs the checks itself
+    // After the tab fixes (or un-fixes) a switch, repaint everything that shows identities.
+    setIdSwitchRefresher(function () {
+        drawAllOverlays(state.currentFrame);
+        update3DViewport(state.currentFrame);
+        updateInfoPanel();
+        if (timeline) timeline.refreshTracks(state.session, { keepSize: true });
+    });
     document.getElementById('menuCheckSizeSwitches').addEventListener('click', function () {
         closeMenus();
         runIdSwitchChecks({ size: true, navigateToFrame: navigateToFrame });
@@ -2933,12 +2940,7 @@ export function toggle3DViewport() {
     const container = document.getElementById('viewport3dContainer');
     var isCollapsing = !container.classList.contains('collapsed');
     if (isCollapsing) {
-        // Save current width so we can restore it when expanding
-        container._savedWidth = container.style.width || '';
-        // Clear inline width so the CSS .collapsed { width: 0 } rule takes effect
-        container.style.width = '';
-        container.classList.add('collapsed');
-        if (viewport3d) viewport3d.setVisible(false);
+        collapseViewport3D(viewport3d);
     } else {
         // Class off + width back FIRST: everything below reads the container's
         // collapse state (via ui/panel-visibility.js) or its size.
@@ -2981,6 +2983,43 @@ export {
 // ============================================
 
 var savedGridLayout = null; // cached dockview layout JSON from grid mode
+
+/**
+ * Is the cached grid layout still a layout of THIS set of views?
+ *
+ * `savedGridLayout` is a snapshot taken when `v` was pressed, and the view list
+ * can change while solo: removing a video (`removeVideoFile`) or loading one,
+ * and switching sessions replaces the list wholesale. Restoring the snapshot
+ * then re-created a pane for a view that no longer exists — an empty pane
+ * wearing the removed camera's name, which is the state the user sees as "the
+ * video went blank" (luc3d #216). A view that was ADDED while solo is the same
+ * mistake in the other direction: `g` would restore a grid missing it.
+ *
+ * Validated HERE, at the point of use, rather than invalidated at each site
+ * that mutates `state.views` — a list of invalidation call sites is a list
+ * something can be left off, and this cache has exactly one reader. A layout
+ * that fails is dropped so `setGridMode` falls back to a fresh
+ * `addAllViewsAsGrid()`, which is the honest answer: the arrangement the user
+ * saved is not an arrangement of the views they now have.
+ *
+ * Reads `params.viewName` off the SERIALIZED panel records — the `params` every
+ * pane is added with, part of dockview's documented `toJSON` shape, not one of
+ * the private internals `ui/overlay-export-modal.js` depends on.
+ */
+function savedGridLayoutMatchesViews() {
+    if (!savedGridLayout || !savedGridLayout.panels) return false;
+    var saved = [];
+    for (var id in savedGridLayout.panels) {
+        var rec = savedGridLayout.panels[id];
+        var name = rec && rec.params && rec.params.viewName;
+        if (name && saved.indexOf(name) < 0) saved.push(name);
+    }
+    if (saved.length !== state.views.length) return false;
+    for (var i = 0; i < state.views.length; i++) {
+        if (saved.indexOf(state.views[i].name) < 0) return false;
+    }
+    return true;
+}
 
 /**
  * Enter single-view ("solo") mode — the dock shows exactly ONE camera.
@@ -3070,6 +3109,10 @@ export function setGridMode() {
         ? state.views[state.singleViewIndex].name
         : null;
     state.viewMode = 'grid';
+    // A snapshot of a view list that no longer exists is worse than no
+    // snapshot: `fromJSON` would rebuild a pane for every view it names,
+    // including ones that have since been removed.
+    if (savedGridLayout && !savedGridLayoutMatchesViews()) savedGridLayout = null;
     if (savedGridLayout && paneManager.api) {
         // Restore saved grid layout
         var savedZoom = {};

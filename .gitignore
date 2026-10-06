@@ -12,6 +12,9 @@ __pycache__/
 # Tiny (29 KB) B-frame fixture for tests/e2e/mediabunny-bframe-decode-order.mjs —
 # regenerate with tests/fixtures/bframes-test/make_fixture.sh.
 !tests/fixtures/bframes-test/bframes-test.mp4
+# Tiny (4 KB) 60 fps barcode clip for tests/e2e/html5-step-mid-frame.mjs —
+# regenerate with tests/fixtures/barcode-60/make_fixture.sh.
+!tests/fixtures/barcode-60/barcode-60.mp4
 *.avi
 *.mov
 

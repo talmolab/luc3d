@@ -371,11 +371,26 @@ const _paneManagerImpl = {
      * Add all views arranged in an optimal grid layout.
      * n<=3: 1 row. n<=8: 2 rows. n<=15: 3 rows.
      * Top row gets ceil(n/rows) items, remaining rows fill the rest.
+     *
+     * Laying every view out as a grid IS grid mode, so this also leaves solo
+     * mode. The loaders and session switches call it straight after
+     * `clearAll()`, and only `newProject` used to reset `state.viewMode` — so a
+     * load made while a view was solo'd showed the grid but stayed 'single',
+     * and `v` (a no-op when already solo) silently did nothing until `g`.
      */
     addAllViewsAsGrid() {
         var views = state.views;
         var n = views.length;
         if (n === 0) return;
+
+        if (state.viewMode !== 'grid') {
+            state.viewMode = 'grid';
+            // the solo chip ("cam4 (4/5)"), cleared as ui-wiring's showViewIndicator does in grid mode
+            var chip = document.getElementById('viewModeIndicator');
+            if (chip) chip.remove();
+            var dockEl = document.getElementById('videoDock');
+            if (dockEl) dockEl.classList.remove('has-view-indicator');
+        }
 
         // Calculate grid dimensions
         var rows, cols;
@@ -447,6 +462,40 @@ const _paneManagerImpl = {
                 });
             }
         }
+    },
+
+    /**
+     * Close EVERY pane showing `viewName`, so removing a video takes its panel
+     * out of the dock instead of leaving an empty one behind (luc3d #216).
+     *
+     * The panel's own × and `clearAll` both go through `panel.api.close()`, and
+     * so does this — `onDidRemovePanel` is what decrements `dockedViews` and
+     * clears the strip's in-dock dot, so closing the panel by hand (removing
+     * its element, say) would leave both of those claiming the view is still
+     * docked. Every pane, not the first: a view can be docked more than once
+     * (a dropped multi-selection, or a grid-layout restore), and a survivor
+     * would still be rendering a view that no longer exists.
+     *
+     * Resolves panes through `panelRenderers` rather than the panel id, since
+     * the id embeds a counter (`video-<name>-<n>`) and a view name may itself
+     * contain dashes.
+     */
+    removeVideoPanel(viewName) {
+        if (!viewName || !this.api) return 0;
+        var panels = Array.from(this.api.panels);
+        var closed = 0;
+        for (var i = 0; i < panels.length; i++) {
+            var renderer = panelRenderers.get(panels[i].id);
+            if (!renderer || renderer.getViewName() !== viewName) continue;
+            panels[i].api.close();
+            closed++;
+        }
+        // `onDidRemovePanel` keeps the count, but only for panes that existed.
+        // A view docked in `dockedViews` with no pane left (a restore that got
+        // out of step) would otherwise keep blocking a later re-add.
+        this.dockedViews.delete(viewName);
+        updateStripItemStatus(viewName, false);
+        return closed;
     },
 
     clearAll() {

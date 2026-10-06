@@ -29,6 +29,34 @@ export function videoLog(msg, level) {
     }
 }
 
+/** A paused-stepping decode stream with no request for this long is closed (OnDemandVideoDecoder._mbGetFrame). */
+export const STEP_CURSOR_IDLE_MS = 3000;
+
+/**
+ * Frames decoded and kept per backward step (OnDemandVideoDecoder._decodeBackChunk):
+ * a step back must decode from the keyframe anyway, so it keeps up to this many
+ * frames ending at the target and the next steps back are cache hits. Must stay
+ * well under the decoder's frame cache (60 in the app). `window.LUCID_STEP_BACK_CHUNK`
+ * overrides it; 0 or 1 turns it off.
+ */
+export const STEP_BACK_CHUNK = 24;
+
+/**
+ * After landing on a frame by a jump (not a step), wait this long and, if no
+ * other frame was asked for meanwhile, decode the chunk before it in the
+ * background so even the FIRST step back is a cache hit (OnDemandVideoDecoder._mbGetFrame).
+ */
+export const STEP_BACK_WARM_MS = 250;
+
+/** Index of the frame nearest timestamp `t` in the sorted `times` (within half a frame), or -1. */
+function frameNearTime(times, t) {
+    var lo = 0, hi = times.length - 1;
+    while (lo < hi) { var m = (lo + hi) >> 1; if (times[m] < t) lo = m + 1; else hi = m; }
+    if (lo > 0 && Math.abs(times[lo - 1] - t) < Math.abs(times[lo] - t)) lo--;
+    var half = times.length > 1 ? (times[times.length - 1] - times[0]) / (times.length - 1) / 2 : Infinity;
+    return Math.abs(times[lo] - t) <= half ? lo : -1;
+}
+
 // ---------------------------------------------------------------------------
 // OnDemandVideoDecoder
 // ---------------------------------------------------------------------------
@@ -60,7 +88,11 @@ export class OnDemandVideoDecoder {
         this._mp4Initialized = false;
         this._mp4InitPromise = null;
         this._html5SeekLock = null; // Prevent concurrent HTML5 seeks
+        this._html5Moved = false;   // <video> played or frame-start-seeked since _getFrameHTML5 last positioned it
         this._mbBackend = null; // Optional mediabunny frame-accurate backend (issue #115)
+        this._mbUnavailable = null; // why there is no _mbBackend: { reason: 'codec'|'init', ... } (see _initMediabunny)
+        this._stepCursor = null; // open decode stream for paused forward steps (see _mbGetFrame)
+        this._keySink = null;    // mediabunny EncodedPacketSink: which keyframe a frame needs
 
         // Source reference for mp4box lazy init
         this._source = null;
@@ -99,15 +131,22 @@ export class OnDemandVideoDecoder {
 
         // Set up event listeners BEFORE setting src to avoid race condition.
         // Wait for 'canplay' (not just 'loadedmetadata') so the first frame is available to draw.
-        var self = this;
+        // Read the error off the ELEMENT this listener was attached to, not
+        // off `self._videoEl`. `close()` clears `src` and calls `load()`, which
+        // fires a last `error` event — asynchronously, by which time `close()`
+        // has already nulled `self._videoEl`, so reading through `self` threw
+        // `Cannot read properties of null` out of an event handler. The
+        // `once: true` listener outlives a successful load, so every decoder
+        // that is closed rather than garbage-collected hits this.
+        var el = this._videoEl;
         var metadataPromise = new Promise(function (resolve, reject) {
-            if (self._videoEl.readyState >= 3) {
+            if (el.readyState >= 3) {
                 resolve();
                 return;
             }
-            self._videoEl.addEventListener("canplay", function () { resolve(); }, { once: true });
-            self._videoEl.addEventListener("error", function () {
-                var err = self._videoEl.error;
+            el.addEventListener("canplay", function () { resolve(); }, { once: true });
+            el.addEventListener("error", function () {
+                var err = el.error;
                 var msg = err ? ("Video error code " + err.code + ": " + (err.message || "unknown")) : "Browser could not load video";
                 reject(new Error(msg));
             }, { once: true });
@@ -222,12 +261,14 @@ export class OnDemandVideoDecoder {
         // force the old (frame-inaccurate) HTML5 seek, set
         //   localStorage.LUCID_VIDEO_BACKEND = 'html5'   (then reload)
         // or window.LUCID_VIDEO_BACKEND = 'html5' before loading a session.
+        this._mbUnavailable = null;
         if (this._mediabunnyEnabled() && (source instanceof Blob || source instanceof File)) {
             try {
                 await this._initMediabunny(source);
             } catch (e) {
                 videoLog("Mediabunny backend init failed (HTML5 seek will be used): " + e.message, "warn");
                 this._mbBackend = null;
+                this._mbUnavailable = { reason: 'init', message: e.message };
             }
         }
 
@@ -288,8 +329,48 @@ export class OnDemandVideoDecoder {
         if (this._mbBackend.fps && this._mbBackend.fps > 0) {
             this._fps = this._mbBackend.fps;
         }
+
+        // Demuxing is not decoding: Firefox 157 reads an HEVC file's index fine
+        // (so the backend above initializes) but has no WebCodecs HEVC decoder,
+        // so EVERY decode then failed and fell back to the <video> seek anyway —
+        // 1,544 "decode failed, falling back" warnings in one 8-camera stepping
+        // run. Ask once. The frame count and fps adopted above are container
+        // metadata and stay.
+        var undecodable = await this._mbCannotDecode(this._mbBackend);
+        if (undecodable) {
+            try { this._mbBackend.close(); } catch (_) {}
+            this._mbBackend = null;
+            this._mbUnavailable = undecodable;
+            videoLog("This browser cannot decode " + (undecodable.codecString || undecodable.codec || 'this codec')
+                + " with WebCodecs: stepping uses <video> seeks instead", "warn");
+            return;
+        }
         videoLog("Mediabunny ready: " + n + " frames, fps=" + (this._fps ? this._fps.toFixed(2) : '?')
             + " (frame-accurate decode)");
+    }
+
+    /**
+     * `{ reason: 'codec', codec, codecString }` when this browser's WebCodecs
+     * reports it cannot decode the backend's video track, else null. Uses
+     * mediabunny's `canDecode()` — `VideoDecoder.isConfigSupported` on the
+     * track's full decoder config (codec string + hvcC/avcC description).
+     * Measured (verify/seek-probe.html, barcode clips): false for HEVC in
+     * Firefox 157 (whose decode then throws "cannot be decoded by this
+     * browser"); true for H.264 there and for HEVC + H.264 in Chrome, Brave and
+     * Safari. A check that cannot be asked (no `canDecode`, or it throws)
+     * answers null: the per-frame fallback in getFrame still covers a failure.
+     */
+    async _mbCannotDecode(be) {
+        try {
+            var track = be && be.input && await be.input.getPrimaryVideoTrack();
+            if (!track || typeof track.canDecode !== 'function') return null;
+            if (await track.canDecode()) return null;
+            var codecString = null;
+            try { codecString = await track.getCodecParameterString(); } catch (_) { /* name only */ }
+            return { reason: 'codec', codec: track.codec || null, codecString: codecString };
+        } catch (e) {
+            return null;
+        }
     }
 
     _emitProgress(event) {
@@ -481,6 +562,239 @@ export class OnDemandVideoDecoder {
         return best;
     }
 
+    /**
+     * One paused frame from the mediabunny backend, keeping a decode stream OPEN
+     * between calls so stepping forward costs one decoded frame instead of every
+     * frame since the keyframe. `MediaBunnyVideoBackend.getFrame` opens a fresh
+     * decoder per frame and decodes from the frame's keyframe — on P-frame
+     * recordings with a keyframe every 250 frames, ~125 frames per camera for
+     * every arrow-key step. Here the stream (mediabunny `samples(t)`, which
+     * decodes from the keyframe once and then keeps a few frames ahead) serves
+     * every request at or after its position that needs no newer keyframe;
+     * anything else (a step back, a jump past the next keyframe) reopens it at
+     * the target — exactly the fresh decode it replaces. Results go into the
+     * backend's frame cache like `getFrame`'s, so a step back over frames just
+     * shown is still a cache hit. Idle streams close after STEP_CURSOR_IDLE_MS;
+     * playback, a source switch and `close()` close them at once. Any failure
+     * falls back to the backend's own `getFrame`. `window.LUCID_STEP_CURSOR = 0`
+     * turns it off. Callers serialize (getFrame's `_mbSeekLock`).
+     */
+    async _mbGetFrame(frameIndex) {
+        var prev = this._lastStepFrame;
+        var bitmap = await this._mbGetFrameOnce(frameIndex);
+        // landed by a jump (seekbar, a flagged switch, end of playback) and still there: once the frame
+        // is on screen, warm the chunk behind it so even the first step back is a cache hit
+        var jumped = !(prev != null && Math.abs(frameIndex - prev) <= 3);
+        if (bitmap && jumped && this._lastStepFrame === frameIndex && this._stepCursorEnabled()) this._scheduleBackWarm(frameIndex);
+        return bitmap;
+    }
+
+    _stepCursorEnabled() {
+        return !(typeof window !== 'undefined' && window.LUCID_STEP_CURSOR === 0);
+    }
+
+    async _mbGetFrameOnce(frameIndex) {
+        var be = this._mbBackend;
+        var off = !this._stepCursorEnabled();
+        if (off || !be.sink || typeof be.sink.samples !== 'function' || !be._frameTimes || !be.cache) return be.getFrame(frameIndex);
+        var prev = this._lastStepFrame;
+        this._lastStepFrame = frameIndex;
+        var back = prev != null && prev - frameIndex >= 1 && prev - frameIndex <= 3;   // a step BACK
+        // anything but a step back makes the background chunk moot: stop it (frees its decoder)
+        if (!back && this._backPrefetch) { this._backPrefetch.cancelled = true; this._backPrefetch = null; }
+        if (this._backWarmTimer) { clearTimeout(this._backWarmTimer); this._backWarmTimer = null; }
+        var hit = be.cache.get(frameIndex);
+        if (hit) { be.cache.delete(frameIndex); be.cache.set(frameIndex, hit); if (back) this._prefetchBack(frameIndex); return hit; }
+        if (be.decodingPromise) { await be.decodingPromise; if (be.cache.has(frameIndex)) return be.cache.get(frameIndex); }
+        // the background prefetch is decoding this frame: wait for it rather than decode it twice
+        var bp = this._backPrefetch;
+        if (bp && !bp.cancelled && frameIndex <= bp.end && frameIndex > bp.end - this._backChunkSize()) {
+            await bp.promise;
+            hit = be.cache.get(frameIndex);
+            if (hit) { be.cache.delete(frameIndex); be.cache.set(frameIndex, hit); if (back) this._prefetchBack(frameIndex); return hit; }
+        }
+        var ts = be._frameTimes[frameIndex];
+        if (ts == null) return null;
+        // a step back: decode the run up to it once and keep it, and start on the run before it
+        if (back) {
+            try {
+                var chunkHit = await this._decodeBackChunk(frameIndex);
+                if (chunkHit) { this._prefetchBack(frameIndex); return chunkHit; }
+            } catch (e) {
+                videoLog("Back-step chunk failed for frame " + frameIndex + " (" + e.message + "), decoding it alone", "warn");
+            }
+        }
+        try {
+            var c = this._stepCursor;
+            if (!(c && c.backend === be && frameIndex >= c.next && await this._sameKeyframeRun(c, ts))) {
+                this._closeStepStream();
+                c = this._stepCursor = { backend: be, it: be.sink.samples(ts)[Symbol.asyncIterator](), next: frameIndex, nextTs: ts, timer: null };
+            }
+            if (c.timer) { clearTimeout(c.timer); c.timer = null; }
+            var times = be._frameTimes, half = times.length > 1 ? (times[times.length - 1] - times[0]) / (times.length - 1) / 2 : Infinity;
+            for (;;) {
+                var r = await c.it.next();
+                if (r.done || !r.value) throw new Error('stream ended before frame ' + frameIndex);
+                var sample = r.value;
+                if (sample.timestamp < ts - half) { sample.close(); continue; }   // passed over on the way
+                if (sample.timestamp > ts + half) { sample.close(); throw new Error('stream skipped frame ' + frameIndex); }
+                var vf = sample.toVideoFrame();
+                var bitmap = await createImageBitmap(vf);
+                vf.close(); sample.close();
+                c.next = frameIndex + 1;
+                c.nextTs = times[frameIndex + 1] != null ? times[frameIndex + 1] : Infinity;
+                be.cacheFrame(frameIndex, bitmap);
+                var self = this;
+                c.timer = setTimeout(function () { if (self._stepCursor === c) self._closeStepStream(); }, STEP_CURSOR_IDLE_MS);
+                return bitmap;
+            }
+        } catch (e) {
+            this._closeStepStream();
+            videoLog("Step cursor failed for frame " + frameIndex + " (" + e.message + "), decoding it alone", "warn");
+            return be.getFrame(frameIndex);
+        }
+    }
+
+    /** Can the open stream reach `ts` without passing a newer keyframe (i.e. is advancing it no costlier than reopening)? */
+    async _sameKeyframeRun(c, ts) {
+        var keyTs = await this._keyTimestamp(c.backend, ts);
+        return keyTs != null && keyTs <= c.nextTs;
+    }
+
+    /** Timestamp of the keyframe that frame time `ts` decodes from (mediabunny's packet index), or null. */
+    async _keyTimestamp(be, ts) {
+        if (!this._keySink) {
+            var mb = await import('mediabunny');
+            this._keySink = new mb.EncodedPacketSink(await be.input.getPrimaryVideoTrack());
+        }
+        var key = await this._keySink.getKeyPacket(ts);
+        return key ? key.timestamp : null;
+    }
+
+    /**
+     * A step back: frame `f` has to be decoded from its keyframe whatever happens,
+     * so decode that run once and cache up to STEP_BACK_CHUNK frames ending at `f`
+     * (never earlier than its keyframe — that would be a second run), making the
+     * next steps back cache hits instead of one keyframe-to-frame decode EACH (up to
+     * 250 frames per camera on the field recordings). Returns `f`'s bitmap, or null
+     * when chunking is off (the caller then decodes `f` alone).
+     */
+    async _decodeBackChunk(f) {
+        var be = this._mbBackend, n = this._backChunkSize();
+        if (!(n > 1)) return null;
+        var start = await this._backChunkStart(be, f, n);
+        return this._decodeIntoCache(be, start, f);
+    }
+
+    /**
+     * Frames per backward chunk: STEP_BACK_CHUNK (or `window.LUCID_STEP_BACK_CHUNK`),
+     * at most 40% of the frame cache, so the chunk on screen and the one being
+     * prefetched behind it (`_prefetchBack`) both fit without evicting each other.
+     */
+    _backChunkSize() {
+        var n = (typeof window !== 'undefined' && window.LUCID_STEP_BACK_CHUNK != null) ? Math.floor(+window.LUCID_STEP_BACK_CHUNK) : STEP_BACK_CHUNK;
+        return this._mbBackend ? Math.min(n, Math.floor(this._mbBackend.cacheSize * 0.4)) : 0;
+    }
+
+    /** First frame of the chunk ending at `f`: n frames back, but never before `f`'s keyframe. */
+    async _backChunkStart(be, f, n) {
+        var times = be._frameTimes, keyTs = await this._keyTimestamp(be, times[f]);
+        var kf = keyTs == null ? -1 : frameNearTime(times, keyTs);
+        return Math.max(kf >= 0 ? kf : 0, f - n + 1);
+    }
+
+    /** Decode frames [start, end] in one run into the backend's cache (skipping cached ones); returns `end`'s bitmap. `job.cancelled` stops it. */
+    async _decodeIntoCache(be, start, end, job) {
+        var times = be._frameTimes;
+        var half = times.length > 1 ? (times[times.length - 1] - times[0]) / (times.length - 1) / 2 : 0;
+        var out = null;
+        for await (var sample of be.sink.samples(times[start], times[end] + half)) {
+            if (this._mbBackend !== be || (job && job.cancelled)) { sample.close(); break; }   // closed / switched / moved on
+            var i = frameNearTime(times, sample.timestamp);
+            if (i < start || i > end || be.cache.has(i)) { sample.close(); continue; }
+            var vf = sample.toVideoFrame();
+            var bitmap = await createImageBitmap(vf);
+            vf.close(); sample.close();
+            this._cacheNear(be, i, bitmap);
+            if (i === end) out = bitmap;
+        }
+        return out;
+    }
+
+    /**
+     * Cache a chunk frame, evicting (when full) the cached frame FARTHEST from where
+     * the user is, not the least recently used: while stepping back, the frames not
+     * yet reached are the least recently used ones, and plain LRU evicted exactly
+     * those (measured: a hitch every ~30 steps with keyframes every 30 frames).
+     */
+    _cacheNear(be, i, bitmap) {
+        var here = this._lastStepFrame != null ? this._lastStepFrame : i;
+        while (be.cache.size >= be.cacheSize) {
+            var far = null, farD = -1;
+            be.cache.forEach(function (_, k) { var d = Math.abs(k - here); if (d > farD) { farD = d; far = k; } });
+            if (far === null) break;
+            var old = be.cache.get(far);
+            if (old && old.close) old.close();
+            be.cache.delete(far);
+        }
+        be.cache.set(i, bitmap);
+    }
+
+    /**
+     * While stepping back, decode the chunk BEFORE the cached run that ends at `f`
+     * in the background (its own decoder; not under getFrame's lock), so that run's
+     * first frame is not followed by a pause for the next chunk. One at a time;
+     * nothing to do when a chunk's worth is already cached behind `f`. A request
+     * for a frame it is decoding waits for it (`_mbGetFrame`).
+     * `window.LUCID_STEP_BACK_PREFETCH = 0` turns it off.
+     */
+    /** After STEP_BACK_WARM_MS with no other request, prefetch the chunk behind landed frame `f`. */
+    _scheduleBackWarm(f) {
+        if (this._backWarmTimer) clearTimeout(this._backWarmTimer);
+        var self = this;
+        this._backWarmTimer = setTimeout(function () {
+            self._backWarmTimer = null;
+            if (self._lastStepFrame === f) self._prefetchBack(f);
+        }, STEP_BACK_WARM_MS);
+    }
+
+    _prefetchBack(f) {
+        var be = this._mbBackend, n = this._backChunkSize();
+        if (this._backPrefetch || !be || !(n > 1)) return;
+        if (typeof window !== 'undefined' && window.LUCID_STEP_BACK_PREFETCH === 0) return;
+        var low = f;
+        while (low > 0 && be.cache.has(low - 1) && f - low < n) low--;
+        if (low <= 0 || f - low >= n) return;
+        var self = this, job = { end: low - 1, promise: null };
+        job.promise = (async function () {
+            var start = await self._backChunkStart(be, job.end, n);
+            await self._decodeIntoCache(be, start, job.end, job);
+        })().catch(function (e) {
+            videoLog("Back-step prefetch failed (" + e.message + ")", "warn");
+        }).then(function () { if (self._backPrefetch === job) self._backPrefetch = null; });
+        this._backPrefetch = job;
+    }
+
+    /**
+     * Stop all paused-stepping work: the forward stream, a back-step prefetch and a
+     * pending warm-up (frees their decoders and buffered frames). For playback,
+     * source switches and close.
+     */
+    releaseStepCursor() {
+        if (this._backWarmTimer) { clearTimeout(this._backWarmTimer); this._backWarmTimer = null; }
+        if (this._backPrefetch) { this._backPrefetch.cancelled = true; this._backPrefetch = null; }
+        this._closeStepStream();
+    }
+
+    /** Close just the forward-stepping stream (reopened at a jump, or idle). */
+    _closeStepStream() {
+        var c = this._stepCursor;
+        this._stepCursor = null;
+        if (!c) return;
+        if (c.timer) clearTimeout(c.timer);
+        try { if (c.it && c.it.return) c.it.return(); } catch (_) { /* ignore */ }
+    }
+
     async getFrame(frameIndex) {
         if (frameIndex < 0 || frameIndex >= this.samples.length) {
             videoLog("Frame index out of range: " + frameIndex, "warn");
@@ -518,7 +832,7 @@ export class OnDemandVideoDecoder {
             var resolveMbLock;
             this._mbSeekLock = new Promise(function (r) { resolveMbLock = r; });
             try {
-                var mbFrame = await this._mbBackend.getFrame(frameIndex);
+                var mbFrame = await this._mbGetFrame(frameIndex);
                 if (mbFrame) return mbFrame;
                 videoLog("Mediabunny returned no frame for " + frameIndex + ", falling back to HTML5", "warn");
             } catch (e) {
@@ -552,7 +866,17 @@ export class OnDemandVideoDecoder {
     }
 
     /**
-     * Get a frame using the HTML5 <video> element (always works, slightly less precise).
+     * The `<video>.currentTime` a stepping seek to `frameIndex` sets: the middle
+     * of the frame's presentation interval, `(i + 0.5) / fps` (why: _getFrameHTML5).
+     */
+    html5SeekTime(frameIndex) {
+        var fps = this._fps > 0 ? this._fps : 30;
+        return (frameIndex + 0.5) / fps;
+    }
+
+    /**
+     * Get a frame using the HTML5 <video> element (always works, slower than
+     * mediabunny; the path for codecs this browser's WebCodecs cannot decode).
      */
     async _getFrameHTML5(frameIndex) {
         if (!this._videoEl || !this._videoReady) return null;
@@ -568,7 +892,15 @@ export class OnDemandVideoDecoder {
         this._html5SeekLock = new Promise(function (r) { resolveLock = r; });
 
         try {
-            var time = frameIndex / this._fps;
+            // Seek to the MIDDLE of the frame's interval, not its start. A seek
+            // to exactly i/fps sits on the boundary with frame i-1, and browsers
+            // round it either way: measured on barcode clips (verify/seek-probe.html,
+            // 8 cameras), Firefox 157 showed i-1 for every frame with i % 3 == 2
+            // at 60 and 150 fps (63–70% exact), Chrome, Brave and Safari for most
+            // frames (7–33%). (i + 0.5)/fps was exact in all 2,160 Firefox seeks
+            // (HEVC + H.264) and all H.264 seeks in the other three. rVFC cannot
+            // verify it in Firefox: its mediaTime echoes the seek target.
+            var time = this.html5SeekTime(frameIndex);
 
             // Only seek if we're not already at the target time. The tolerance
             // must scale with the frame rate: a fixed constant (e.g. 10 ms)
@@ -578,15 +910,21 @@ export class OnDemandVideoDecoder {
             // "already on this frame?" threshold — the gap between adjacent
             // frames (1/fps) always exceeds it, so every step re-seeks, while a
             // redundant request for the current frame still short-circuits.
+            // Around the frame's middle, that band is the frame's own interval.
+            // But only trust currentTime if THIS method put it there: after
+            // playback (or a frame-start seek) the picture need not match it —
+            // in Firefox the +0 pause re-decode drew the frame AFTER the paused
+            // one on 1 pause in 10 by skipping the seek (`_html5Moved`).
             var framePeriod = (this._fps > 0) ? (1 / this._fps) : (1 / 30);
             var currentTime = this._videoEl.currentTime;
-            if (Math.abs(currentTime - time) > framePeriod / 2) {
+            if (this._html5Moved || Math.abs(currentTime - time) > framePeriod / 2) {
                 var seekPromise = new Promise(function (resolve) {
                     self._videoEl.addEventListener("seeked", function () { resolve(); }, { once: true });
                     setTimeout(resolve, 5000);
                 });
                 this._videoEl.currentTime = time;
                 await seekPromise;
+                this._html5Moved = false;
             }
 
             // Ensure the video has renderable data (readyState >= 2 = HAVE_CURRENT_DATA)
@@ -885,6 +1223,7 @@ export class OnDemandVideoDecoder {
      */
     playNative() {
         if (this._videoEl) {
+            this._html5Moved = true;
             this._videoEl.play().catch(function () {});
         }
     }
@@ -903,6 +1242,7 @@ export class OnDemandVideoDecoder {
      */
     seekNative(frameIndex) {
         if (this._videoEl) {
+            this._html5Moved = true;
             this._videoEl.currentTime = frameIndex / this._fps;
         }
     }
@@ -927,7 +1267,12 @@ export class OnDemandVideoDecoder {
             if (!el) return resolve();
             var time = frameIndex / self._fps;
             var framePeriod = (self._fps > 0) ? (1 / self._fps) : (1 / 30);
-            if (Math.abs(el.currentTime - time) <= framePeriod / 2) {
+            // Also already there when _getFrameHTML5 parked the element on this
+            // frame's middle: (i+0.5)/fps - i/fps comes out a hair over half a
+            // frame for ~30% of frames in floating point, and re-seeking to the
+            // frame START would land on i-1 in Firefox (see _getFrameHTML5).
+            if (Math.abs(el.currentTime - time) <= framePeriod / 2
+                || el.currentTime === self.html5SeekTime(frameIndex)) {
                 return resolve();   // already on this frame — no seek needed
             }
             var done = false;
@@ -939,6 +1284,7 @@ export class OnDemandVideoDecoder {
             }
             el.addEventListener('seeked', finish, { once: true });
             setTimeout(finish, 2000);   // never hang if `seeked` doesn't fire
+            self._html5Moved = true;
             el.currentTime = time;
         });
     }
@@ -969,6 +1315,8 @@ export class OnDemandVideoDecoder {
         // WRONG video — frame-accurate for a video nobody is looking at
         // anymore, which reads as the pose overlay drifting off the video.
         // Re-initialized below, after the new element's metadata loads.
+        this.releaseStepCursor();
+        this._keySink = null;
         if (this._mbBackend) {
             try { this._mbBackend.close(); } catch (_) {}
             this._mbBackend = null;
@@ -987,16 +1335,19 @@ export class OnDemandVideoDecoder {
             URL.revokeObjectURL(this._videoEl.src);
         }
 
-        // Reuse existing video element — just change src
-        var self = this;
+        // Reuse existing video element — just change src. Captured locally for
+        // the same reason as in `init()`: `close()` nulls `this._videoEl` while
+        // a last `error` event is still in flight.
+        var el = this._videoEl;
         var metadataPromise = new Promise(function (resolve, reject) {
-            self._videoEl.addEventListener("canplay", function () { resolve(); }, { once: true });
-            self._videoEl.addEventListener("error", function () {
-                var err = self._videoEl.error;
+            el.addEventListener("canplay", function () { resolve(); }, { once: true });
+            el.addEventListener("error", function () {
+                var err = el.error;
                 reject(new Error(err ? "Video error " + err.code : "Video load failed"));
             }, { once: true });
         });
 
+        this._html5Moved = false;   // a new source starts at 0, on frame 0
         this._videoEl.src = URL.createObjectURL(source);
         this._emitProgress({ phase: 'canplay', ratio: 0 });
         await this._awaitPlayable(metadataPromise, source);
@@ -1056,12 +1407,14 @@ export class OnDemandVideoDecoder {
         // switchSource(), not just the first init(), or a reused pooled
         // decoder keeps stepping through the previous video after a session
         // switch/reopen.
+        this._mbUnavailable = null;
         if (this._mediabunnyEnabled() && (source instanceof Blob || source instanceof File)) {
             try {
                 await this._initMediabunny(source);
             } catch (e) {
                 videoLog("Mediabunny backend init failed on source switch (HTML5 seek will be used): " + e.message, "warn");
                 this._mbBackend = null;
+                this._mbUnavailable = { reason: 'init', message: e.message };
             }
         }
 
@@ -1086,6 +1439,8 @@ export class OnDemandVideoDecoder {
         }
 
         // Release the mediabunny backend (frees its Input/decoder + cached frames)
+        this.releaseStepCursor();
+        this._keySink = null;
         if (this._mbBackend) {
             try { this._mbBackend.close(); } catch (_) {}
             this._mbBackend = null;
@@ -1820,6 +2175,8 @@ export class VideoController {
 
         this.state.isPlaying = true;
         var self = this;
+        // playback decodes on its own; free the paused-stepping streams' decoders
+        this.state.views.forEach(function (v) { if (v.decoder && v.decoder.releaseStepCursor) v.decoder.releaseStepCursor(); });
 
         // ------------------------------------------------------------------
         // Buffered mediabunny playback (issue #115 follow-up) — OPT-IN.
@@ -2197,25 +2554,43 @@ export class VideoController {
     }
 
     /**
-     * User-initiated pause. Stops playback, then does a frame-accurate mediabunny
-     * seek ONE FRAME FORWARD so we land exactly on-frame with the pose overlay.
+     * User-initiated pause. Stops playback, then re-decodes the frame it stopped
+     * on (`state.currentFrame`) through `getFrame`'s frame-accurate path
+     * (mediabunny, or the mid-frame `<video>` seek where WebCodecs cannot
+     * decode), so every camera rests on exactly that frame with its overlay.
      *
-     * Native <video> playback can settle a hair off (the residual "tracking
-     * leads the video" lag), and the user already found that pressing "next
-     * frame" after pausing snaps everything back into place — because a step
-     * goes through the frame-accurate mediabunny decode path. This just does
-     * that step automatically on pause. Internal stops (scrub, teardown,
-     * end-of-video) call `stopPlayback()` directly and skip this snap, so only
-     * the explicit pause buttons advance/realign.
+     * In Chrome/Brave this repaints the picture already on screen: the
+     * per-refresh loop paints each view's captured VideoFrame and overlays it
+     * at that frame's own index. It is needed where playback is less exact —
+     * the Safari/Firefox fallback loop (timestamps judged 'bad') overlays an
+     * index from rVFC or the clock that can be a frame or more off the drawn
+     * picture, and on any browser a secondary camera can stop a frame out of
+     * step with camera 0, whose index `stopPlayback` redraws every overlay at.
+     *
+     * It used to step ONE FRAME FORWARD (current + 1), copying the manual
+     * "press next frame after pausing" fix from the old loop, whose overlay
+     * index came from `<video>.currentTime` and led the picture. With the
+     * per-refresh loop that step was itself the jump on every pause: measured
+     * with barcode clips in Chrome, Brave, Safari and Firefox at 60 and 120 Hz,
+     * +1 moved the skeleton on 95–100% of pauses, while +0 ended aligned in
+     * 100% of camera-pauses. Chrome/Brave's skeletons stayed still in 90–100%
+     * at 120 Hz and on 60 fps video; for 150 fps video on a 60 Hz display it
+     * was 68–95%, because there the cameras drift out of step during playback
+     * and the re-decode brings each to camera 0's frame. (Firefox HEVC was the
+     * one exception to alignment, at ~50%, until its stepping moved to
+     * mid-frame `<video>` seeks — see `_getFrameHTML5`'s `_html5Moved` —
+     * which brought +0 there to 100%.)
+     *
+     * Internal stops (scrub, teardown, end-of-video) call `stopPlayback()`
+     * directly and skip this re-decode; only the explicit pause controls use it.
      */
     pausePlayback() {
         var wasPlaying = this.state.isPlaying;
         this.stopPlayback();
         if (!wasPlaying) return;
-        var target = Math.min(this.state.currentFrame + 1, (this.state.totalFrames || 1) - 1);
-        // seekToFrame decodes via the frame-accurate mediabunny backend and
-        // redraws the video + overlay for the SAME index → guaranteed aligned.
-        this.seekToFrame(target);
+        // seekToFrame decodes via getFrame's frame-accurate path and redraws
+        // the video + overlay for the SAME index → guaranteed aligned.
+        this.seekToFrame(this.state.currentFrame);
     }
 
     /**

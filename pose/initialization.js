@@ -24,7 +24,7 @@ import { createDemoSession } from '../demo-data.js';
 import { setupUI, setupMenus, updateSeekbar, onPlaybackStateChange, fitTimelineToData } from '../ui/ui-wiring.js';
 import { installInfoTips } from '../ui/info-tip.js';
 import { installTimelineShortcuts } from '../ui/timeline-controller.js';
-import { setupPanelTabs, setupSkeletonEditing, updateInfoPanel } from '../ui/info-panel.js';
+import { setupPanelTabs, setupSkeletonEditing, setupVideosTab, updateInfoPanel } from '../ui/info-panel.js';
 import {
     setupPlaneDefinition, planeInteractionCallbacks, syncPlanes3D, refreshPlanePanel,
 } from '../ui/plane-definition.js';
@@ -67,6 +67,7 @@ async function init() {
         setupUI();
         setupPanelTabs();
         setupSkeletonEditing();
+        setupVideosTab();
         setupPlaneDefinition();
         setupInteraction();
         try {
