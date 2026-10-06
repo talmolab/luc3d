@@ -2826,6 +2826,23 @@ subtitle is populated for loaded projects, not just freshly triangulated ones.
   form by `denseOccupancyToSparse` (a wider dense grid would cost nFrames × the
   whole union); an identity camera keeps its grid as is. Covered by
   `tests/test-lazy-track-union.js`.
+  **A hydrated trackless instance is `trackIdx: null`, never `-1`.** Both lazy
+  loaders hand over the columnar store's trackless value, `-1`, and the four
+  hydration paths — `ensureLazyFrameData`, `hydrateLazyCameras`,
+  `buildLazyFrameGroupSync`, `batchLoadLazyFrames` (both branches) — passed it
+  straight into `new Instance`, while every eager path normalizes to `null`
+  (`resolveImportTrackIdx`) and the readers test `trackIdx == null`. So a lazily
+  hydrated trackless instance drew in the palette's LAST track colour
+  (`getTrackColor(-1)` wraps) instead of `UNGROUPED_USER_COLOR`, got a
+  "Track -1" pill from `getInstanceLabelName`, and lost the identity an
+  ungrouped trackless instance retains (luc3d #201). All four now go through
+  `lazyInstanceTrackIdx` (`>= 0` kept, anything else `null`). The STORE keeps
+  `-1` — `appendStore`, `forEachInstanceRow` and `remapTracksFromIdentity`
+  speak it — so the mapping happens exactly where a store row becomes an
+  `Instance`. `frameIdentityMap` keys `null` and `-1` alike (`Session._fimKey`),
+  so no saved identity moves. Covered by `tests/e2e/lazy-trackless-null.mjs`
+  (every path, the colour, the label and the retained identity; confirmed to
+  fail pre-fix).
   **A FrameGroup that exists is not necessarily complete.**
   `ensureLazyFrameData` used to open with a bare
   `if (session.frameGroups.has(frameIdx)) return;`, which is only sound when
@@ -11111,7 +11128,8 @@ real Playwright test run (`tests/test-lazy-reopen.js`): reopening an
 already-saved project left the Tracks Timeline with NO occupancy data for any
 camera until a propagate action happened to rebuild it, unlike the per-camera
 `open()` path which always had it from the start), `getFrame` / `getFrameSync`
-(adapt typed instances → `{trackIdx, score,
+(adapt typed instances → `{trackIdx (-1 = none, as in the store; hydration
+maps it to `null`), score,
 type, points, occluded}`, LRU-cached), `prefetch`, `close` (also clears
 `videoIdByCam`); fields `nFrames`,
 `skeleton`, `trackNames`, `videos`, `trackOccupancy`, `videoIdByCam` (only set

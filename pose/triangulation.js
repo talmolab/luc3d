@@ -1961,6 +1961,28 @@ export function lazyCamerasMissingFrom(session, fg) {
 }
 
 /**
+ * The trackIdx an `Instance` hydrated from a lazy loader carries: the loader's
+ * own index, or `null` for no track. Both lazy loaders hand over the COLUMNAR
+ * store's trackless value, `-1` (`SioLazyLoader`'s `adaptTypedInstance`; a
+ * `LazyFrameLoader` frame re-indexed out of range), and the four hydration
+ * paths below — `ensureLazyFrameData`, `hydrateLazyCameras`,
+ * `buildLazyFrameGroupSync`, `batchLoadLazyFrames` — used to pass it straight
+ * into `new Instance`. The in-memory sentinel is `null`
+ * (`resolveImportTrackIdx`, which every eager path applies), and the code that
+ * reads it tests `trackIdx == null`: with `-1`, `getInstanceColor` drew a
+ * trackless instance in the palette's last track colour instead of the
+ * ungrouped one, `getInstanceLabelName` gave it a "Track -1" pill, and both
+ * ignored the identity an ungrouped trackless instance retains (luc3d #201).
+ * The store itself keeps `-1` — `appendStore`, `forEachInstanceRow` and
+ * `remapTracksFromIdentity` all speak it — so this is applied here, where a
+ * store row becomes an `Instance`, and nowhere earlier. `frameIdentityMap`
+ * keys both the same (`Session._fimKey`), so no saved identity moves.
+ */
+function lazyInstanceTrackIdx(trackIdx) {
+    return (typeof trackIdx === 'number' && trackIdx >= 0) ? trackIdx : null;
+}
+
+/**
  * Hydrate ONLY `camNames` into the frame's existing FrameGroup.
  *
  * The rows are staged in a throwaway FrameGroup first so
@@ -1987,7 +2009,7 @@ async function hydrateLazyCameras(session, frameIdx, camNames) {
         if (haveUl && haveUl.length > 0) continue;
         for (var ii = 0; ii < instances.length; ii++) {
             var d = instances[ii];
-            var inst = new Instance(d.points || [], d.trackIdx, d.type || 'predicted', d.score || 0);
+            var inst = new Instance(d.points || [], lazyInstanceTrackIdx(d.trackIdx), d.type || 'predicted', d.score || 0);
             inst._rawInstIndex = ii;   // see the note in ensureLazyFrameData
             staged.addInstance(camName, inst);
             added++;
@@ -2036,7 +2058,7 @@ export async function ensureLazyFrameData(frameIdx) {
             var instData = instances[ii];
             var inst = new Instance(
                 instData.points || [],
-                instData.trackIdx,
+                lazyInstanceTrackIdx(instData.trackIdx),
                 instData.type || 'predicted',
                 instData.score || 0
             );
@@ -2085,7 +2107,7 @@ export function buildLazyFrameGroupSync(frameIdx) {
             var instData = instances[ii];
             var inst = new Instance(
                 instData.points || [],
-                instData.trackIdx,
+                lazyInstanceTrackIdx(instData.trackIdx),
                 instData.type || 'predicted',
                 instData.score || 0
             );
@@ -2157,7 +2179,7 @@ export async function batchLoadLazyFrames(startIdx, count, onProgress) {
             for (var ii = 0; ii < camData.instances.length; ii++) {
                 var instData = camData.instances[ii];
                 var inst = new Instance(
-                    instData.points || [], instData.trackIdx,
+                    instData.points || [], lazyInstanceTrackIdx(instData.trackIdx),
                     instData.type || 'predicted', instData.score || 0
                 );
                 // See ensureLazyFrameData's identical tag above.
