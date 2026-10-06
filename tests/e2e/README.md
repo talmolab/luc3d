@@ -118,3 +118,15 @@ Override the base URL with `BASE=http://host:port`. Exit code `0` = pass.
   onto the next camera along; removing the solo'd view itself (c) closed the
   only pane and left the dock empty. Every behavioural assertion was confirmed
   to fail on the pre-fix build.
+- **`info-panel-many-tracks.mjs`** — the Instances panel must not cost
+  O(rows x tracks) per update. Its Track `<select>`s are rebuilt on every
+  `updateFrameInfo` (~10 Hz in playback), and each used to hold an `<option>`
+  per session track: 863 tracks x ~40 rows on a real prediction project capped
+  playback at ~5 fps. Drives the real `updateFrameInfo` on 8 cameras with 10 and
+  with 1,000 tracks and asserts the same `<option>` count for both (at most 3
+  per closed Track select), that every closed select shows what the eager build
+  did, that a real click (and focus, the keyboard path) fills head + every track
+  in order + tail without resizing the select, and that picking a track (with
+  its swap), `(none)` on a group and `(+) New Track` still work. Confirmed to
+  fail on the eager build (43,387 options, ~228 ms per update, against 421 and
+  ~7 ms); the behaviour checks pass on both, so they pin equivalence.
