@@ -8,8 +8,8 @@
  * Dependencies: mp4box.all.min.js (MP4Box)
  */
 
-import { shouldIgnoreShortcut } from '../ui/keyboard-target.js?v=fa278b904ea3';
-import { diagnoseUnplayableVideo } from './video-codec-diagnosis.js?v=fa278b904ea3';
+import { shouldIgnoreShortcut } from '../ui/keyboard-target.js?v=ee8bba04c574';
+import { diagnoseUnplayableVideo } from './video-codec-diagnosis.js?v=ee8bba04c574';
 
 // ---------------------------------------------------------------------------
 // Logging helper
@@ -2554,25 +2554,43 @@ export class VideoController {
     }
 
     /**
-     * User-initiated pause. Stops playback, then does a frame-accurate mediabunny
-     * seek ONE FRAME FORWARD so we land exactly on-frame with the pose overlay.
+     * User-initiated pause. Stops playback, then re-decodes the frame it stopped
+     * on (`state.currentFrame`) through `getFrame`'s frame-accurate path
+     * (mediabunny, or the mid-frame `<video>` seek where WebCodecs cannot
+     * decode), so every camera rests on exactly that frame with its overlay.
      *
-     * Native <video> playback can settle a hair off (the residual "tracking
-     * leads the video" lag), and the user already found that pressing "next
-     * frame" after pausing snaps everything back into place — because a step
-     * goes through the frame-accurate mediabunny decode path. This just does
-     * that step automatically on pause. Internal stops (scrub, teardown,
-     * end-of-video) call `stopPlayback()` directly and skip this snap, so only
-     * the explicit pause buttons advance/realign.
+     * In Chrome/Brave this repaints the picture already on screen: the
+     * per-refresh loop paints each view's captured VideoFrame and overlays it
+     * at that frame's own index. It is needed where playback is less exact —
+     * the Safari/Firefox fallback loop (timestamps judged 'bad') overlays an
+     * index from rVFC or the clock that can be a frame or more off the drawn
+     * picture, and on any browser a secondary camera can stop a frame out of
+     * step with camera 0, whose index `stopPlayback` redraws every overlay at.
+     *
+     * It used to step ONE FRAME FORWARD (current + 1), copying the manual
+     * "press next frame after pausing" fix from the old loop, whose overlay
+     * index came from `<video>.currentTime` and led the picture. With the
+     * per-refresh loop that step was itself the jump on every pause: measured
+     * with barcode clips in Chrome, Brave, Safari and Firefox at 60 and 120 Hz,
+     * +1 moved the skeleton on 95–100% of pauses, while +0 ended aligned in
+     * 100% of camera-pauses. Chrome/Brave's skeletons stayed still in 90–100%
+     * at 120 Hz and on 60 fps video; for 150 fps video on a 60 Hz display it
+     * was 68–95%, because there the cameras drift out of step during playback
+     * and the re-decode brings each to camera 0's frame. (Firefox HEVC was the
+     * one exception to alignment, at ~50%, until its stepping moved to
+     * mid-frame `<video>` seeks — see `_getFrameHTML5`'s `_html5Moved` —
+     * which brought +0 there to 100%.)
+     *
+     * Internal stops (scrub, teardown, end-of-video) call `stopPlayback()`
+     * directly and skip this re-decode; only the explicit pause controls use it.
      */
     pausePlayback() {
         var wasPlaying = this.state.isPlaying;
         this.stopPlayback();
         if (!wasPlaying) return;
-        var target = Math.min(this.state.currentFrame + 1, (this.state.totalFrames || 1) - 1);
-        // seekToFrame decodes via the frame-accurate mediabunny backend and
-        // redraws the video + overlay for the SAME index → guaranteed aligned.
-        this.seekToFrame(target);
+        // seekToFrame decodes via getFrame's frame-accurate path and redraws
+        // the video + overlay for the SAME index → guaranteed aligned.
+        this.seekToFrame(this.state.currentFrame);
     }
 
     /**
