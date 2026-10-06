@@ -14,8 +14,9 @@
  *  1. All five edits — add node, remove node, rename node, add edge, remove
  *     edge — raise the dialog, with copy naming the one being made.
  *  2. The counts are the WHOLE project: both sessions, grouped and ungrouped
- *     instances alike, with a per-session block whose rows sum to the Total
- *     row printed under them. A dialog quoting only the open session would
+ *     instances alike, with a per-session block that says WHICH session each
+ *     number is in and prints no Total row of its own (the whole-project block
+ *     above it IS the total). A dialog quoting only the open session would
  *     understate the edit by however many sessions are loaded.
  *  3. Esc and Cancel leave the project BYTE-IDENTICAL — the skeleton, every
  *     instance's node count, and the 3D. This is the control that keeps the
@@ -33,6 +34,11 @@
  *  6. A project with nothing annotated raises NO dialog. Building the first
  *     skeleton is N node names typed into a box, and a modal per node would
  *     make the feature unusable.
+ *  7. "Do not show again" is cached in `localStorage` and recorded only when
+ *     the edit is APPLIED — ticked and then cancelled it does nothing — and the
+ *     Skeleton tab's `#skeletonWarnOffNote` turns it back on. A preference you
+ *     can set and never unset is a trap, and this one hides a warning about
+ *     silent data loss.
  *
  * Run: node skeleton-edit-warning.mjs   (spawns its own http.server)
  */
@@ -66,6 +72,10 @@ try {
 
     await page.goto(`http://localhost:${PORT}/index.html`);
     await page.waitForFunction(() => window.__lucid && window.__lucid.state, { timeout: 20000 });
+    // §9 writes `skeletonEditWarningOff`. A fresh context starts clean, but
+    // clear it anyway so a re-run against a persisted profile cannot start with
+    // the dialog already suppressed and pass every "no modal" check for free.
+    await page.evaluate(() => { try { localStorage.removeItem('skeletonEditWarningOff'); } catch (e) {} });
 
     // ---- a two-session project on ONE shared skeleton -------------------
     //
@@ -174,14 +184,17 @@ try {
     check(await rowValue('skeletonEditTotals', 'Cached reprojections') === '1',
         'one cached reprojection, which the edit will invalidate');
 
-    console.log('\n--- 2b. The by-session block adds up to its Total row ---');
+    console.log('\n--- 2b. The by-session block says WHICH session, and nothing else ---');
     const perA = await rowValue('skeletonEditBySession', 'sessionA');
     const perB = await rowValue('skeletonEditBySession', 'sessionB');
-    const perTotal = await rowValue('skeletonEditBySession', 'Total');
     check(perA === '1 user · 2 pred · 1 3D', `sessionA's own row (got ${perA})`);
     check(perB === '1 user · 0 pred · 0 3D', `sessionB's own row (got ${perB})`);
-    check(perTotal === '2 user · 2 pred · 1 3D',
-        `and the Total row is their sum (got ${perTotal})`);
+    // The rows still sum to the whole-project block — that is the invariant —
+    // but the block does NOT print the sum itself. A Total row here is the
+    // table above restated a few rows down, which invites the reader to check
+    // one against the other instead of reading either.
+    check(await rowValue('skeletonEditBySession', 'Total') === null,
+        'and carries no Total row: the whole-project block above IS the total');
     check(await page.evaluate(() =>
         document.querySelector('#btnSkeletonEditConfirm').textContent) === 'Apply to all 2 sessions',
         'the confirm button says how far the edit reaches');
@@ -369,6 +382,74 @@ try {
         'building the first skeleton raises no modal — a dialog per node typed would be unusable');
     check(await page.evaluate(() => window.__t.skel.nodes.join(',')) === 'nose',
         'and the node was added straight through');
+
+    console.log('\n--- 9. "Do not show again" ---');
+    // Back to a project with annotation in it, so the dialog is in play again.
+    const reAnnotate = () => page.evaluate(async () => {
+        const pd = await import('/pose/pose-data.js');
+        const AS = await import('/ui/app-state.js');
+        const IP = await import('/ui/info-panel.js');
+        const { Skeleton, Camera, Instance, FrameGroup, UnlinkedInstance, Session } = pd;
+        const mtx = [[1000, 0, 255.5], [0, 1000, 255.5], [0, 0, 1]];
+        const skel = new Skeleton('mouse', ['nose', 'tail'], [[0, 1]]);
+        const S = new Session([new Camera('cam1', mtx, [0, 0, 0, 0, 0], [0, 0, 0], [0, 0, 0], [512, 512])],
+            skel, ['t0'], 'solo');
+        const fg = new FrameGroup(0); S.addFrameGroup(fg);
+        fg.addUnlinkedInstance('cam1', new UnlinkedInstance(
+            new Instance([[10, 10], [10, 50]], 0, 'user', 1), 'cam1'));
+        AS.state.sessions = [S];
+        AS.state.session = S;
+        AS.state.activeSessionIdx = 0;
+        AS.setProjectSkeleton(skel);
+        IP.populateSkeletonTable();
+        window.__t = { skel };
+    });
+    const noteShown = () => page.evaluate(() => {
+        const el = document.getElementById('skeletonWarnOffNote');
+        return !!el && el.style.display !== 'none';
+    });
+
+    await reAnnotate();
+    check(await noteShown() === false,
+        'with warnings on, the Skeleton tab carries no "warnings are off" note');
+
+    // CONTROL: ticked and then CANCELLED records nothing. "Do not show this
+    // again" alongside "do not do this" is two different intentions, and
+    // guessing which one won would silence a warning about silent data loss on
+    // the strength of a dialog the user rejected.
+    await openAddNode('ear');
+    check(await modalOpen() === true, 'the dialog opens');
+    await page.check('#skeletonEditDontAsk');
+    await page.click('#btnSkeletonEditCancel');
+    await page.waitForTimeout(80);
+    await openAddNode('ear');
+    check(await modalOpen() === true,
+        'ticking the box and then CANCELLING suppresses nothing — the dialog is back');
+
+    // Ticked and APPLIED: recorded.
+    await page.check('#skeletonEditDontAsk');
+    await page.click('#btnSkeletonEditConfirm');
+    await page.waitForTimeout(120);
+    check(await page.evaluate(() => window.__t.skel.nodes.join(',')) === 'nose,tail,ear',
+        'the edit still went through');
+    check(await page.evaluate(() => {
+        try { return localStorage.getItem('skeletonEditWarningOff'); } catch (e) { return 'threw'; }
+    }) === '1', 'and the preference is cached in localStorage, not in the project');
+
+    await openAddNode('whisker');
+    check(await modalOpen() === false, 'the next edit raises no dialog');
+    check(await page.evaluate(() => window.__t.skel.nodes.join(',')) === 'nose,tail,ear,whisker',
+        'and applies straight through');
+
+    // The way back on, where the thing it governs happens.
+    check(await noteShown() === true,
+        'the Skeleton tab now says warnings are off');
+    await page.click('#btnSkeletonWarnOn');
+    await page.waitForTimeout(80);
+    check(await noteShown() === false, 'turning them back on hides the note');
+    await openAddNode('tip');
+    check(await modalOpen() === true, 'and the dialog is back');
+    await page.keyboard.press('Escape');
 
     console.log(fails === 0 ? '\nPASS — 0 failure(s)' : `\nFAIL — ${fails} failure(s)`);
 } catch (err) {
