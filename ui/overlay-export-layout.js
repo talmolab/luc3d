@@ -266,10 +266,16 @@ export function defaultOverlayExportSettings() {
         trailLength: 0,
         colorBy: 'track',
         background: 'video',
+        // `showLabels` is the node-name toggle, and it is the ONLY off switch:
+        // `labelSize` is a size, never a hidden "0 means off" second gate (the
+        // modal's field floors at 1 for exactly that reason). Default ON for user
+        // instances and OFF for reprojections, matching the Visibility panel's own
+        // defaults (`visUserLabelSize` 12, `visReprojLabelSize` 0) so a fresh
+        // export renders what the app is already showing.
         user: {
             nodeStyle: 'circle', nodeSize: 4, lineWidth: 2, alpha: 1.0,
-            labelSize: 0, labelAlpha: 0.9, lineStyle: 'solid',
-            showNodes: true, showEdges: true,
+            labelSize: 12, labelAlpha: 0.9, lineStyle: 'solid',
+            showNodes: true, showEdges: true, showLabels: true,
         },
         pred: {
             nodeStyle: 'x', nodeSize: 6, lineWidth: 2, alpha: 0.85,
@@ -278,7 +284,8 @@ export function defaultOverlayExportSettings() {
         reproj: {
             nodeStyle: 'circle', nodeSize: 4, lineWidth: 2, alpha: 0.9,
             brightness: 0.5, nodeColor: 'white', lineStyle: 'solid',
-            labelSize: 0, labelAlpha: 0.9, showNodes: true, showEdges: true,
+            labelSize: 12, labelAlpha: 0.9, showNodes: true, showEdges: true,
+            showLabels: false,
         },
         res: DEFAULT_RES,
         outW: 1920,          // only consulted when res === RES_CUSTOM
@@ -323,10 +330,26 @@ export function mergeSettings(base, saved) {
  * Retired tiers fall back to `DEFAULT_RES` rather than to the nearest surviving
  * tier ON PURPOSE: promoting a stored `1440` to `2160` would silently ~2.25x the
  * pixel count, the bitrate and the file size of the next export the user runs.
+ *
+ * The `labelSize === 0` fold is the other half of the same job. Before the
+ * explicit `showLabels` toggle existed, a size of 0 WAS the off switch, and a
+ * blob written by such a build carries no `showLabels` — so `mergeSettings`
+ * would leave it at its new default and resurrect node labels the user had
+ * turned off. Worse, the toggle would then be DEAD: 0px labels draw nothing, so
+ * clicking it would do nothing either. Fold the old encoding into the new one —
+ * 0 means off, and the size goes back to its default so the toggle has something
+ * to draw. A 0 is unreachable from the current modal (its field floors at 1), so
+ * this can only ever be reading the old meaning.
  */
 export function sanitizeSettings(s) {
     if (!s) return s;
     if (s.res !== RES_CUSTOM && !RES_PRESETS[s.res]) s.res = DEFAULT_RES;
+    var dflt = defaultOverlayExportSettings();
+    ['user', 'reproj'].forEach(function (k) {
+        if (!s[k] || s[k].labelSize !== 0) return;
+        s[k].showLabels = false;
+        s[k].labelSize = dflt[k].labelSize;
+    });
     return s;
 }
 
@@ -399,8 +422,9 @@ export function overlayOptionsFrom(settings, videoW, videoH, canvasW, canvasH) {
     // Scale, but never all the way to invisibility on a small preview tile.
     var sz = function (v) { return Math.max(0.75, v * gs); };
     var lw = function (v) { return Math.max(0.5, v * gs); };
-    // A label size of 0 means "no labels" — it must NOT be floored into
-    // existence, so scale it without a floor and let `showLabels` gate it.
+    // Labels are gated by `showLabels`, never by their size — but a blob from an
+    // older build (or a hand-edited one) can still carry a 0, which must NOT be
+    // floored into existence, so scale it without a floor and draw nothing.
     var lb = function (v) { return v > 0 ? Math.max(6, v * gs) : 0; };
     return {
         colorByIdentity: settings.colorBy === 'identity',
@@ -418,12 +442,17 @@ export function overlayOptionsFrom(settings, videoW, videoH, canvasW, canvasH) {
         userOpts: {
             nodeSize: sz(u.nodeSize), lineWidth: lw(u.lineWidth), alpha: u.alpha,
             labelSize: lb(u.labelSize), labelAlpha: u.labelAlpha,
-            showLabels: u.labelSize > 0,
+            showLabels: !!u.showLabels && u.labelSize > 0,
             preLineStyle: u.lineStyle, postLineStyle: u.lineStyle,
             nodeStyle: u.nodeStyle, showNodes: u.showNodes, showEdges: u.showEdges,
         },
         predictedOpts: {
             nodeSize: sz(p.nodeSize), lineWidth: lw(p.lineWidth), alpha: p.alpha,
+            // No toggle for predicted node labels, because there is nothing to
+            // toggle: the live app hardcodes `predictedOpts.showLabels: false`
+            // too (`ui/rendering.js`), so predicted instances have never carried
+            // node names and the export would be inventing a layer the app
+            // cannot show.
             showLabels: false,
             preLineStyle: p.lineStyle, postLineStyle: p.lineStyle,
             nodeStyle: p.nodeStyle, showNodes: p.showNodes, showEdges: p.showEdges,
@@ -431,7 +460,7 @@ export function overlayOptionsFrom(settings, videoW, videoH, canvasW, canvasH) {
         reprojOpts: {
             nodeSize: sz(r.nodeSize), lineWidth: lw(r.lineWidth), alpha: r.alpha,
             brightness: r.brightness, labelSize: lb(r.labelSize), labelAlpha: r.labelAlpha,
-            showLabels: r.labelSize > 0, lineStyle: r.lineStyle,
+            showLabels: !!r.showLabels && r.labelSize > 0, lineStyle: r.lineStyle,
             nodeStyle: r.nodeStyle, showNodes: r.showNodes, showEdges: r.showEdges,
         },
         videoWidth: videoW,

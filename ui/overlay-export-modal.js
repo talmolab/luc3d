@@ -126,11 +126,22 @@ export function settingsFromVisibilityPanel() {
             if (src[keys[i]] != null && !Number.isNaN(src[keys[i]])) dst[keys[i]] = src[keys[i]];
         }
     }
-    copy(s.user, vis.userOpts, ['nodeStyle', 'nodeSize', 'lineWidth', 'alpha', 'labelSize', 'labelAlpha']);
+    // The Visibility panel folds "no node labels" into a SIZE OF 0; the export has
+    // an explicit `showLabels` toggle instead, so the two are split on the way in.
+    // A 0 becomes `showLabels: false` and leaves the size at its default — copy it
+    // through and turning the toggle back on would draw 0px labels, i.e. nothing.
+    function seedLabels(dst, src) {
+        if (!src) return;
+        dst.showLabels = !!src.showLabels;
+        if (src.labelSize > 0) dst.labelSize = src.labelSize;
+    }
+    copy(s.user, vis.userOpts, ['nodeStyle', 'nodeSize', 'lineWidth', 'alpha', 'labelAlpha']);
+    seedLabels(s.user, vis.userOpts);
     if (vis.userOpts) s.user.lineStyle = vis.userOpts.postLineStyle || 'solid';
     copy(s.pred, vis.predictedOpts, ['nodeStyle', 'nodeSize', 'lineWidth', 'alpha']);
     if (vis.predictedOpts) s.pred.lineStyle = vis.predictedOpts.postLineStyle || 'solid';
-    copy(s.reproj, vis.reprojOpts, ['nodeStyle', 'nodeSize', 'lineWidth', 'alpha', 'brightness', 'labelSize', 'labelAlpha']);
+    copy(s.reproj, vis.reprojOpts, ['nodeStyle', 'nodeSize', 'lineWidth', 'alpha', 'brightness', 'labelAlpha']);
+    seedLabels(s.reproj, vis.reprojOpts);
     if (vis.reprojOpts) s.reproj.lineStyle = vis.reprojOpts.lineStyle || 'solid';
     s.reproj.nodeColor = vis.reprojNodeColor || 'white';
     s.fps = Math.round(state.fps || 30);
@@ -1353,7 +1364,12 @@ export function showOverlayExportModal() {
         addSelect(gUser.body, 'Line style', settings.user, 'lineStyle', LINES);
         addCheck(gUser.body, 'Show nodes', settings.user, 'showNodes');
         addCheck(gUser.body, 'Show edges', settings.user, 'showEdges');
-        addNumber(gUser.body, 'Node label size', settings.user, 'labelSize', 0, 40, 1);
+        // The node-name toggle sits WITH the other two "show" switches, and the
+        // size field below it floors at 1: a size is a size, and an off switch
+        // hidden at the bottom of a numeric range is exactly what this toggle
+        // exists to replace (issue #223).
+        addCheck(gUser.body, 'Show node labels', settings.user, 'showLabels');
+        addNumber(gUser.body, 'Node label size', settings.user, 'labelSize', 1, 40, 1);
         addNumber(gUser.body, 'Label opacity', settings.user, 'labelAlpha', 0, 1, 0.05);
 
         var gPred = group('Predicted Appearance', false);
@@ -1376,6 +1392,9 @@ export function showOverlayExportModal() {
         addNumber(gRep.body, 'Brightness', settings.reproj, 'brightness', 0.1, 1, 0.05);
         addCheck(gRep.body, 'Show nodes', settings.reproj, 'showNodes');
         addCheck(gRep.body, 'Show edges', settings.reproj, 'showEdges');
+        addCheck(gRep.body, 'Show node labels', settings.reproj, 'showLabels');
+        addNumber(gRep.body, 'Node label size', settings.reproj, 'labelSize', 1, 40, 1);
+        addNumber(gRep.body, 'Label opacity', settings.reproj, 'labelAlpha', 0, 1, 0.05);
 
         // --- Quality / output ---
         var gOut = group('Quality & Output');
