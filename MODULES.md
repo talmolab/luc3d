@@ -2392,7 +2392,11 @@ this module and used by EVERY operation that must touch every frame. Hydrate a
 2,000-frame window (`batchLoadLazyFrames`) → run the callback → drop the window's
 non-user `frameGroups` (pinning the on-screen frame and any user-edited frame) →
 `releaseWindow` → force a real collection every 5 windows. `opts.start`/`opts.end`
-restrict it to a range. **Progress/yielding is clock-paced**
+restrict it to a range. The playback eviction is HELD for the whole sweep
+(`holdLazyResidency`, released in a `finally` by the exported wrapper around
+`_sweepLazyFrameWindowsHeld`): it protects windows around the on-screen frame,
+not the window being swept, so a draw landing in one of the sweep's yields could
+otherwise drop frames the sweep hydrated but has not visited yet. **Progress/yielding is clock-paced**
 (`createProgressPacer`, `ui/loading-overlay.js`): `opts.onProgress(done, total)`
 is awaited just before each ~250 ms yield and once at the end, where `done` is the
 sweep POSITION (frames passed, data or not), so it rises monotonically to `total`
@@ -2846,10 +2850,19 @@ subtitle is populated for loaded projects, not just freshly triangulated ones.
   large prediction `.slp` to the main-thread `SioLazyLoader`
   (`loading/sio-lazy-loader.js`). Shared consumers: `ensureLazyFrameData`,
   `buildLazyFrameGroupSync`, `batchLoadLazyFrames` (branches on `loader.isSync`
-  for worker-free loaders), `loadAllLazyFrames`, `evictLazyFrames` (prunes
-  `session.frameGroups`, and on its throttled tick also calls
-  `SioLazyLoader.capInternalCaches` to bound the loader's internal typed-frame
-  caches — which `frameGroups` eviction alone leaks).
+  for worker-free loaders), `loadAllLazyFrames`, and `evictLazyFrames(anchorFrame)`
+  — the app-state wrapper around `pose/lazy-residency.js`'s
+  `evictLazyFrameGroups`. A no-op until `session.frameGroups` exceeds
+  `LAZY_RESIDENT_CAP`; then it protects windows around the on-screen frame and
+  `anchorFrame`, keeps at least the node-trail length behind them, passes every
+  object the InteractionManager holds (`_uiHeldObjects`: selection, Group-mode
+  picks, an unlinked drag, the Edit Group target) and `state.triangulationResults`.
+  Called after a NEW frame is hydrated by `ensureLazyFrameData` and by the playback
+  loader (`ui/ui-wiring.js`), never from `batchLoadLazyFrames`. It had existed
+  since before the module split with no caller at all, which is why playback
+  kept every frame it ever hydrated (see `pose/lazy-residency.js`). The loader's
+  own caches are bounded separately (its 100-frame adapted-dict LRU and
+  sleap-io.js's `frameCacheLimit`).
   `LazyFrameLoader` spawns `loading/slp-import-worker.js` (resolved against
   `document.baseURI` so sub-path deployments work — see ISSUES.md I-8) for HDF5
   reads.
@@ -2974,9 +2987,9 @@ subtitle is populated for loaded projects, not just freshly triangulated ones.
   time it was (re)visited after being evicted — reported as Bundle-Adjustment
   reprojections "becoming predictions" starting around frame ~5,500, which
   lines up with `loadAllLazyFrames`'s `BATCH = 5000` sweep window and
-  `ui/ui-wiring.js`'s 5000-frame playback preload (`batchLoadLazyFrames(cur,
-  5000)`) — any frame outside what's already resident takes this branch on
-  first touch. Fixed by calling `finalizeLazyFrameGroup(session, fg,
+  `ui/ui-wiring.js`'s then-5000-frame playback preload (`batchLoadLazyFrames(cur,
+  5000)`, now `LAZY_PLAYBACK_AHEAD`) — any frame outside what's already resident
+  takes this branch on first touch. Fixed by calling `finalizeLazyFrameGroup(session, fg,
   frameIdx)` here too, exactly mirroring the `isSync` branch. Regression test:
   `tests/e2e/batch-lazy-hydration-worker-loader.mjs` (fakes the worker with a
   synchronous `postMessage` stand-in; confirmed failing pre-fix — both the
@@ -3018,7 +3031,10 @@ subtitle is populated for loaded projects, not just freshly triangulated ones.
 **Imports from project modules.**
 - `./pose-data.js` — `mat3x3Multiply`, `FrameGroup`, `Instance`,
   `UnlinkedInstance`, `InstanceGroup`.
-- `../ui/app-state.js` — `state`, `timeline`, `viewport3d`.
+- `../ui/app-state.js` — `state`, `timeline`, `viewport3d`, `interactionManager`
+  (the objects `evictLazyFrames` must not drop out from under the UI).
+- `./lazy-residency.js` — `evictLazyFrameGroups`, `holdLazyResidency`,
+  `releaseLazyResidency`, `LAZY_RESIDENT_CAP`, `LAZY_KEEP_BEHIND`.
 - `../ui/rendering.js` — `setReprojErrorVisible`, `showReprojectionsOnly`,
   `REPROJ_ONLY_NOTE` (Triangulate All ends Reproj-only — #243), `drawAllOverlays`.
 - `../ui/info-panel.js` — `updateTriangulationBadge`.
@@ -3044,6 +3060,70 @@ subtitle is populated for loaded projects, not just freshly triangulated ones.
 **User-facing features.** "Triangulate" key (`T`), Edit menu Triangulate
 Frame / All / Multi-Frame, reprojection-error visualization, lazy SLP
 loading, "Triangulation needed" badge.
+
+---
+
+### pose/lazy-residency.js
+
+**Purpose.** Keep a LAZY project's resident frames bounded during playback,
+without ever dropping a frame that holds anything the store cannot rebuild. On a
+lazy project `session.frameGroups` is meant to be a window, but nothing evicted
+it: `evictLazyFrames` had no caller, and the playback loader kept 5,000 frames
+hydrated ahead of the playhead, so every played frame stayed. Measured on the
+8-camera `05mice_flippers` project (108,000 frames, per-camera `.slp` > 150 MB):
+resident frame groups 5,145 -> 31,600 over five 20 s runs, heap toward the
+renderer's ~4.2 GB limit. After a Triangulate All the draw path also caches
+reprojections for every drawn frame (`fillLazyReprojections`), forever.
+
+**Key exports.** `evictLazyFrameGroups(session, { anchors, ahead, behind, cap,
+refs, triangulationResults })` -> `{ resident, evicted, protected, blocked }` or
+null (no lazy loader, at/under `cap`, or held); `frameEvictionBlocker(session,
+frameIdx, fg, refs)` -> a reason string or null; `holdLazyResidency` /
+`releaseLazyResidency` / `isLazyResidencyHeld` (nestable); `lastLazyEvictionPass()`
+(diagnostics); `LAZY_PLAYBACK_AHEAD` (600, the playback loader's lookahead),
+`LAZY_KEEP_BEHIND` (512, > the 500-frame maximum node trail),
+`LAZY_RESIDENT_CAP` (1536), `LAZY_PREFETCH_MARGIN` (32, covers
+`ensureLazyFrameData`'s 30-frame scrub prefetch).
+
+**Contract — a frame is dropped only if ALL hold:**
+- It is outside every protected window `[anchor - behind, anchor + ahead]`
+  (default `ahead` = `LAZY_PLAYBACK_AHEAD + LAZY_PREFETCH_MARGIN`).
+- No hold is active (the windowed sweeps hold for their whole run).
+- **Re-hydration would rebuild exactly what is resident** (`frameEvictionBlocker`
+  returns null). Re-hydration makes one Instance per store row tagged
+  `_rawInstIndex`, re-seats this frame's `instanceGroups` members by
+  `_rawInstIndex` (`finalizeLazyFrameGroup`) and unlinks the rest. So: every
+  camera with data must be backed by the loader (`'camera'`); per camera the
+  resident instances must be a bijection onto the store rows (`'count'`, `'row'`);
+  linked instances must be exactly the members re-seated there and unlinked ones
+  must not be (`'grouping'`); no instance may be `'user'` (the streaming save
+  reads its edit overlay from RESIDENT frames — `buildSessionRefGraph`), modified,
+  backed-up mid-edit or nulled (`'modified'`), resized by a skeleton edit
+  (`'skeleton'`), or held by the UI (`'ui'`); and each unlinked instance must
+  still match its row — track (`'track'`), type (`'type'`), and no #201 identity
+  stamped on the instance (`'identity'`, not persisted). Group members' own fields
+  are not compared: they survive in `instanceGroups` (never evicted) and come back
+  as the SAME objects. Points are not compared — every 2D edit path promotes to
+  `user`, sets `modified` or `nulledNodes`. A loader without
+  `describeStoreFrame` (the worker-backed `LazyFrameLoader`) never evicts.
+- Dropping a frame also drops its DERIVED reprojection caches
+  (`group.reprojections`, `group.reprojectedInstances`, its
+  `triangulationResults` entry) — the state `sweepTriangulateAllFrames` leaves
+  every frame in; `fillLazyReprojections` re-derives them on the next draw.
+
+**Imports from project modules.** None (DOM-free, so the Node test can drive it).
+
+**Imported by.** `pose/triangulation.js` (`evictLazyFrames`,
+`sweepLazyFrameWindows`), `ui/ui-wiring.js` (`LAZY_PLAYBACK_AHEAD`).
+
+**Coverage.** `tests/test-lazy-residency.mjs` (every blocker against an untouched
+twin, windows, cap, holds, the reprojection drop, a simulated 20,000-frame
+playback, and the constants against the code they protect; fails 28 checks with
+the predicate gutted); `tests/e2e/lazy-playback-eviction.mjs` (`describeStoreFrame`
+vs the real sleap-io.js materializer on every row, and evict -> re-hydrate through
+the real path rebuilding every frame identically); `tests/e2e/sequence-lazy-workflow.mjs`
+cycle 7 (edits, the real playback loader played far past the cap, save, reopen —
+fails with the `user`/`modified` blockers removed: a member's edit is lost on save).
 
 ---
 
@@ -9846,7 +9926,14 @@ stopping at the last frame; the step transport buttons/keys stop it first.
   `Paste not supported for different skeletons!`. Occlusion flags are not carried
   (coordinates + per-node visibility are).
 - Seekbar: `updateSeekbar`, `updateSeekbarVisual`,
-  `onPlaybackStateChange`.
+  `onPlaybackStateChange`. On a lazy project, starting playback runs the
+  background `lazyPlaybackLoader`: it keeps `LAZY_PLAYBACK_AHEAD` (600) frames
+  hydrated ahead of the playhead and calls `evictLazyFrames(cur)` after each
+  top-up, so what playback leaves behind is dropped (`pose/lazy-residency.js`).
+  The Play button and Space preload the same window before starting. It was
+  5000 frames with no eviction, which kept every played frame resident; the
+  lookahead and the eviction's protected ahead-window are one constant, so they
+  cannot drift apart.
 - Toggles: `toggleInfoPanel`, `refreshInfoPanelAfterShow`,
   `updateInfoPanelToggleBtn`, `toggle3DViewport`,
   `update3DViewportToggleBtn`, `lockPanelToggleWidths`, `toggleTimeline`,
@@ -10046,7 +10133,8 @@ hides the chip, or the legend would sit low in grid mode forever.
 
 **Imports from project modules.** Nearly every other module — see file
 header for the full list. Notable ones: `app-state.js`,
-`timeline-controller.js`, `pose-data.js`, `triangulation.js`,
+`timeline-controller.js`, `pose-data.js`, `triangulation.js`
+(incl. `evictLazyFrames`), `lazy-residency.js` (`LAZY_PLAYBACK_AHEAD`),
 `rendering.js`, `info-panel.js`, `save-load.js`, `slp-import.js`,
 `file-io.js`, `session-loader.js`, `video.js`, `tracker.js`,
 `initialization.js`, `identity-assignment.js`, `export-modals.js`,
@@ -11666,6 +11754,16 @@ points at step 2's filtering, not this method) and folds `errorRows` into its
 own return value; `ui/ui-wiring.js`'s propagate handler reports a nonzero
 `lazyErrorRows` as an error status instead of a false "success".
 
+**`describeStoreFrame(camName, frameIdx)`** — what re-hydrating one
+camera-frame WOULD build, read straight from the columns with nothing
+materialized: `{ count, trackIdx: Int32Array, predicted: Uint8Array }` (entry `k`
+= the row an `Instance._rawInstIndex` of `k` names; trackless and a track id with
+no `Track` behind it are -1; an absent `instance_type` reads as 0, a user row,
+exactly as `materializeFrame` defaults it), `count: 0` for a frame with no row,
+null for a camera this loader does not back. The playback eviction
+(`pose/lazy-residency.js`) proves a resident frame rebuildable against it;
+`tests/e2e/lazy-playback-eviction.mjs` pins it to the real materializer.
+
 **Imports.** `./track-union.js` (`unionTrackNames`);
 `window.SleapIO.readSlpStreaming` / `window.SleapIO.Track` (via the index.html
 bridge) and the local vendored `lib/h5wasm/h5wasm.iife.js` (passed as
@@ -11673,7 +11771,8 @@ bridge) and the local vendored `lib/h5wasm/h5wasm.iife.js` (passed as
 
 **Imported by.** `loading/session-loader.js`
 (`handleLoadSessionFolderPerCamera` routing, `handleLoadProjectSlpLazy`) and
-`import-export/save-load.js` (`reopenSessionLazyLoader`).
+`import-export/save-load.js` (`reopenSessionLazyLoader`). `describeStoreFrame` is
+called duck-typed from `pose/lazy-residency.js`.
 
 **User-facing features.** Lets a session folder of large multi-camera prediction
 `.slp` files — and a large saved project `.slp` (Load Project) — load and render

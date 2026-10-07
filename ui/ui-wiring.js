@@ -27,6 +27,7 @@ import { Skeleton, Camera, Instance, InstanceGroup, FrameGroup, UnlinkedInstance
 import { ensureLazyFrameData, batchLoadLazyFrames, getInstanceGroupsForFrame, evictLazyFrames,
          loadAllLazyFrames, updateTimelineForFrame, triangulateAndReproject,
          resolveTriangulationMethod } from '../pose/triangulation.js';
+import { LAZY_PLAYBACK_AHEAD } from '../pose/lazy-residency.js';
 import { drawAllOverlays, getVisibilitySettings, updateFrameCounters, setReprojErrorVisible } from './rendering.js';
 import { updateInfoPanel, updateFrameInfo, updateTriangulationBadge,
          populateVideosTable, populateCamerasTable, populateSkeletonTable,
@@ -1673,7 +1674,7 @@ export function setupUI() {
         // Pre-load frames before starting playback for lazy sessions
         if (state.session && state.session.lazyLoader) {
             showLoading('Loading frames...');
-            batchLoadLazyFrames(state.currentFrame, 5000).then(function () {
+            batchLoadLazyFrames(state.currentFrame, LAZY_PLAYBACK_AHEAD).then(function () {
                 hideLoading();
                 if (videoController) videoController.startPlayback();
             }).catch(function(e) { hideLoading(); });
@@ -1938,7 +1939,7 @@ export function setupUI() {
                 e.preventDefault();
                 if (state.isPlaying) { videoController.pausePlayback(); }
                 else if (state.session && state.session.lazyLoader) {
-                    batchLoadLazyFrames(state.currentFrame, 5000).then(function () {
+                    batchLoadLazyFrames(state.currentFrame, LAZY_PLAYBACK_AHEAD).then(function () {
                         if (videoController) videoController.startPlayback();
                     });
                 } else { videoController.togglePlayback(); }
@@ -2764,13 +2765,19 @@ export function onPlaybackStateChange(isPlaying) {
     // Lazy H5: batch-load frames during playback
     if (state.session && state.session.lazyLoader) {
         if (isPlaying) {
-            // Background batch loader — loads 500 frames at a time ahead of playback
+            // Background batch loader: keeps LAZY_PLAYBACK_AHEAD frames hydrated
+            // ahead of the playhead, and lets the eviction drop what playback
+            // left behind (pose/lazy-residency.js) — without it every played
+            // frame stayed resident and the heap grew for as long as the video
+            // played. The lookahead was 5000 frames; eviction protects exactly
+            // this window, so the two must stay in step.
             (async function lazyPlaybackLoader() {
                 var session = state.session;
                 if (!session || !session.lazyLoader) return;
                 while (state.isPlaying && state.session === session) {
                     var cur = state.currentFrame;
-                    var loaded = await batchLoadLazyFrames(cur, 5000);
+                    var loaded = await batchLoadLazyFrames(cur, LAZY_PLAYBACK_AHEAD);
+                    evictLazyFrames(cur);
                     if (loaded === 0) {
                         // All nearby frames loaded, wait before checking again
                         await new Promise(function(r) { setTimeout(r, 100); });
