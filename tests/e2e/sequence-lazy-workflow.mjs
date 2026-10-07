@@ -916,7 +916,10 @@ try {
     //            object, so eviction would lose it even with a revisit.
     //   E_UNGRP  one animal ungrouped (predicted) -> may be evicted; must come
     //            back with that animal UNLINKED, not regrouped and not doubled
-    //   E_DEL    a predicted unlinked instance deleted -> must stay resident
+    //   E_DEL    a predicted unlinked instance deleted with the Delete key
+    //            (`_deleteSelected`) -> must never come back. Where only memory
+    //            holds the delete, that means staying resident; where the store
+    //            holds it too (#279), the frame is rebuildable and may go.
     //   E_SEL    the UI holds a selected unlinked instance -> must stay resident
     // E_EDIT sits far from the frames revisited below: a revisit also builds
     // the next 30 frames in the scrub direction (`ensureLazyFrameData`), which
@@ -949,8 +952,22 @@ try {
         const ud = ungroup(E_DEL);
         const doomed = ud && ud.find(u => u.cameraName === 'cam0');
         if (!doomed) return { err: 'no unlinked cam0 instance on E_DEL' };
-        s.frameGroups.get(E_DEL).removeUnlinkedById(doomed.id);    // what Delete does to an unlinked instance
-        out.deleted = { cam: 'cam0', raw: doomed.instance._rawInstIndex };
+        // The real Delete key: select the instance on its own frame and run
+        // `_deleteSelected`, which acts on `state.currentFrame`.
+        const im = window.__lucid.interactionManager;
+        const frameWas = st.currentFrame;
+        st.currentFrame = E_DEL;
+        im.clearSelection();
+        im.selectedUnlinked = doomed;
+        im.lastInteractedView = 'cam0';
+        im._deleteSelected();
+        st.currentFrame = frameWas;
+        const stillPooled = s.frameGroups.get(E_DEL).getUnlinkedInstances('cam0').includes(doomed);
+        if (stillPooled) return { err: 'the Delete key left the instance in the E_DEL pool' };
+        // Did the delete reach the store? Two rows on (cam0, E_DEL) before.
+        let storeRows = 0;
+        s.lazyLoader.forEachInstanceRow(() => { storeRows++; }, { camera: 'cam0', start: E_DEL, end: E_DEL + 1 });
+        out.deleted = { cam: 'cam0', raw: doomed.instance._rawInstIndex, storeRows, durable: storeRows === 1 };
         const us = ungroup(E_SEL);
         window.__lucid.interactionManager.selectedUnlinked = us[0];
         out.selected = us[0].cameraName;
@@ -1021,7 +1038,11 @@ try {
         !kept.E_UNGRP, kept);
     check('cycle 7: the frame with an edited group member stayed resident', kept.E_EDIT, kept);
     check('cycle 7: the frame with an edited unlinked instance stayed resident', kept.E_UL, kept);
-    check('cycle 7: the frame with a deleted prediction stayed resident', kept.E_DEL, kept);
+    // The property is that eviction never undoes a delete, so it holds in both
+    // states: a delete only memory has pins the frame; one the store has lets
+    // it go, and the `back.del` revisit below then re-hydrates it from the store.
+    check('cycle 7: eviction did not drop the deleted prediction\'s frame while only memory had the delete',
+        kept.E_DEL || !!(e7.deleted && e7.deleted.durable), { kept: kept.E_DEL, deleted: e7.deleted });
     check('cycle 7: the frame holding the selection stayed resident', kept.E_SEL, kept);
     check('cycle 7: no reprojection cache outlives its evicted frame',
         pr.staleTri === 0 && pr.staleReproj === 0, { staleTri: pr.staleTri, staleReproj: pr.staleReproj });
@@ -1078,11 +1099,17 @@ try {
             delCam0: fgDel.getInstances('cam0').length + fgDel.getUnlinkedInstances('cam0').length,
         };
     }, { E7 });
-    // NOT an eviction property, so logged rather than asserted: deleting an
-    // UNLINKED prediction edits only the resident frame, and the streaming save
-    // writes a frame's store rows unless it carries a user instance — so the
-    // deletion is not in the saved file whether or not eviction ever ran.
-    log(`  info: cam0 instances on E_DEL after save+reload: ${after7.delCam0} (1 = the deletion persisted, 2 = it did not)`);
+    // NOT an eviction property: whether a Delete-key delete is in the saved
+    // file depends on whether it reached the store (#279), not on eviction —
+    // the streaming save writes a frame's store rows unless it carries a user
+    // instance. Asserted where the store has the delete; logged otherwise.
+    if (e7.deleted && e7.deleted.durable) {
+        check('cycle 7: the Delete-key delete persisted through save+reload',
+            after7.delCam0 === 1, { delCam0: after7.delCam0 });
+    } else {
+        log(`  info: the delete never reached the store (storeRows=${e7.deleted && e7.deleted.storeRows}); ` +
+            `cam0 instances on E_DEL after save+reload: ${after7.delCam0} (1 = persisted, 2 = it did not)`);
+    }
     const near = (pts, xy) => !!xy && pts.some(([x, y]) => Math.abs(x - xy[0]) < 1e-3 && Math.abs(y - xy[1]) < 1e-3);
     const editXY = e7.edit && e7.edit.xy;
     check('cycle 7: E_EDIT was still resident at save time WITHOUT this test revisiting it',
