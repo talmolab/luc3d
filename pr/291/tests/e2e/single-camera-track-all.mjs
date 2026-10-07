@@ -17,6 +17,11 @@
  *     is found by Tracks ▸ Check ID Switches (Body Size) as a row; Fix switch
  *     names the TRACKS in its dialog and puts every detection back on its
  *     animal's track; Undo plants the swap back exactly.
+ *  4. Where to look: Track All leaves candidate moments on the session, and the
+ *     checks test them. A swap planted while the two animals are far apart,
+ *     with a candidate moment there, gets a row AT the moment, saying why it was
+ *     looked at — which survives the saved checklist (metadata.lucid.idSwitchReview)
+ *     — on top of the encounter rows, which are what they were without it.
  *
  * Run: node tests/e2e/single-camera-track-all.mjs
  */
@@ -136,6 +141,38 @@ try {
     await page.click(rowSel + ' .id-switch-line1');
     await page.click(rowSel + ' .id-switch-undo');
     check(JSON.stringify(await page.evaluate(() => window.__tracks())) === JSON.stringify(planted), 'Undo puts the planted swap back exactly');
+
+    console.log('\n4. A switch away from every encounter, found at a candidate moment');
+    const cand = await page.evaluate(() => Array.isArray(window.__lucid.state.session._idSwitchCandidates));
+    check(cand, 'Track All left the candidate moments on the session');
+    const row4 = await page.evaluate(async ([t0, t1, tr]) => {
+        const S = window.__lucid.state.session;
+        // back to the clean tracks, then swap animals 0 and 1 from frame 1800 (the last 20%), where they are 280 px apart
+        for (let f = 0; f < 2250; f++) S.frameGroups.get(f).getUnlinkedInstances('mouse_video').forEach((u, a) => {
+            u.instance.trackIdx = f >= 1800 && a < 2 ? tr[f][1 - a] : tr[f][a];
+        });
+        S._idSwitchCandidates = [{ frame: 1800, startFrame: 1796, identityA: Math.min(t0, t1), identityB: Math.max(t0, t1), cues: ['tracklet'] }];
+        const M = await import('/ui/id-switch-modal.js');
+        const cands = S._idSwitchCandidates;
+        S._idSwitchCandidates = null;
+        await M.runIdSwitchChecks({ size: true });
+        const without = Array.from(document.querySelectorAll('#idSwitchPanel .id-switch-row')).map(r => Number(r.dataset.frame));
+        S._idSwitchCandidates = cands;
+        await M.runIdSwitchChecks({ size: true });
+        const rows = Array.from(document.querySelectorAll('#idSwitchPanel .id-switch-row')).map(r => ({ frame: Number(r.dataset.frame), text: r.textContent }));
+        const R = await import('/ui/id-switch-review.js');
+        const saved = JSON.parse(JSON.stringify(R.serializeIdSwitchReview(S)));
+        const copy = { _idSwitch: null };
+        R.ingestIdSwitchReview(copy, saved);
+        const back = copy._idSwitch ? copy._idSwitch.results.size.flags.filter(m => m.look) : [];
+        return { rows, without, back: back.map(m => [m.frame, m.look]) };
+    }, [t0, t1, tr]);
+    const mrow = row4.rows.find(r => Math.abs(r.frame - 1800) <= 2);
+    check(!row4.without.some(f => Math.abs(f - 1800) <= 2) && mrow, `the moment adds a row AT the switch (rows ${row4.rows.map(r => r.frame).join(', ')}; without it ${row4.without.join(', ')})`);
+    check(JSON.stringify(row4.rows.filter(r => r !== mrow).map(r => r.frame)) === JSON.stringify(row4.without), '…and every other row is as it was without moments');
+    check(mrow && /input tracklet changes animal/.test(mrow.text) && !/close/.test(mrow.text),
+        'the row says why it was looked at, and does not call it a close encounter: ' + (mrow || {}).text);
+    check(row4.back.length === 1 && JSON.stringify(row4.back[0][1]) === '["tracklet"]', 'the cue survives the saved checklist: ' + JSON.stringify(row4.back));
 
     check(errs.length === 0, 'no page errors' + (errs.length ? ': ' + errs.join(' | ') : ''));
 } finally {

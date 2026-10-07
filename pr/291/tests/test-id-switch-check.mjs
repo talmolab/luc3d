@@ -65,8 +65,10 @@ function pose(scale, cx, cy, heading, r) {
  * of them walk to a meeting point, stay within ~20 mm for a while, and walk back.
  * `swapAfter` = index of the encounter after which the two animals' identity
  * labels are exchanged for the rest of the session (null = clean).
+ * `opts.swapAtU` + `opts.swapPair` instead exchange two animals' labels at an
+ * arbitrary time — e.g. while they are far apart, away from every encounter.
  */
-function buildSession(swapAfter, fps = 60, scales = SCALES) {
+function buildSession(swapAfter, fps = 60, scales = SCALES, opts = {}) {
     const r = rng(7);
     const home = [[0, 0], [400, 0], [200, 350]];
     const PAIRS = [[0, 1], [1, 2], [0, 2]];
@@ -76,7 +78,8 @@ function buildSession(swapAfter, fps = 60, scales = SCALES) {
     const session = new PD.Session([], new PD.Skeleton('m', NODES, []), [], 'synthetic');
     for (let i = 0; i < 3; i++) session.addIdentity('id_' + i);
     const encounterEnds = events.map(ev => ({ frame: Math.round((ev.t0 + 60) / 15 * fps), pair: ev.pair }));
-    const swapU = swapAfter != null ? events[swapAfter].t0 + 60 : Infinity;
+    const swapU = opts.swapAtU != null ? opts.swapAtU : swapAfter != null ? events[swapAfter].t0 + 60 : Infinity;
+    const swapPair = opts.swapPair || (swapAfter != null ? events[swapAfter].pair : null);
     let gid = 1;
     for (let f = 0; f < nFrames; f++) {
         const u = f * 15 / fps;
@@ -93,7 +96,7 @@ function buildSession(swapAfter, fps = 60, scales = SCALES) {
             }
         }
         const label = [0, 1, 2];
-        if (u >= swapU) { const [a, b] = events[swapAfter].pair; [label[a], label[b]] = [label[b], label[a]]; }
+        if (u >= swapU) { const [a, b] = swapPair; [label[a], label[b]] = [label[b], label[a]]; }
         session.instanceGroups.set(f, [0, 1, 2].map(k => {
             const g = new PD.InstanceGroup(gid++, session.identities[label[k]].id);
             g.points3d = pose(scales[k], pos[k][0], pos[k][1], (u / 50 + k) % (2 * Math.PI), r);
@@ -159,6 +162,47 @@ await switchCase(16, 'onset');
 
 group('A switch early in the session (swapped stretch is the MAJORITY) — change point still at the switch');
 await switchCase(7, 'end');
+
+group('Moments — a switch AWAY from every encounter is found at the moment it happened');
+{
+    // animals 0 and 1 exchange labels at home, 400 mm apart, between their encounters 18 and 21
+    const FPS = 60, sig = r => JSON.stringify(r.encounters.map(e => [e.frame, e.nameA, e.nameB, e.score, !!e.flagged, e.kind || '']));
+    const isPair01 = e => [e.nameA, e.nameB].sort().join() === 'id_0,id_1';
+    const late = 300 + 18 * 260 + 160, lateFrame = Math.round(late / 15 * FPS);
+    const { session, events } = buildSession(null, FPS, SCALES, { swapAtU: late, swapPair: [0, 1] });
+    const ids = session.identities;
+    const plain = await SC.checkSizeSwitches(session, { fps: FPS });
+    const prevEnc = Math.round((events[18].t0 + 60) / 15 * FPS);
+    const p0 = plain.flags.filter(f => !f.continues && isPair01(f)).concat(plain.changes.filter(isPair01));
+    ok(p0.length === 1 && Math.abs(p0[0].frame - prevEnc) < FPS,
+        `without moments it is put on the pair's PREVIOUS encounter, whose time apart runs across it (${p0.map(x => x.frame)} vs switch ${lateFrame})`);
+    const moment = { frame: lateFrame, startFrame: lateFrame - 10, identityA: ids[0].id, identityB: ids[1].id, cues: ['tracklet'] };
+    const decoys = [0.3, 0.55].map(q => ({ frame: Math.round(q * lateFrame), startFrame: Math.round(q * lateFrame), identityA: ids[0].id, identityB: ids[2].id, cues: ['ambiguity'] }));
+    const withM = await SC.checkSizeSwitches(session, { fps: FPS, moments: [moment].concat(decoys) });
+    eq(sig(withM), sig(plain), 'moments only ADD change points: every encounter scores and flags exactly as without them');
+    const mrow = withM.flags.concat(withM.changes).filter(x => x.look);
+    ok(mrow.length === 1 && Math.abs(mrow[0].frame - lateFrame) <= 4 && mrow[0].kind === 'onset' && mrow[0].side === 'after',
+        `the switch is a change point AT the moment, an onset (the swapped stretch is after it): ${JSON.stringify(mrow.map(x => [x.frame, x.kind, Math.round(x.score)]))}`);
+    eq(JSON.stringify(mrow[0] && mrow[0].look), '["tracklet"]', 'it carries the moment\'s cues');
+    ok(mrow[0] && mrow[0].switchBackAt === null, '…and its swapped stretch runs to the end of the session (nothing switches it back)');
+    eq(withM.moments.length, 3, 'all three moments were tested');
+    ok(withM.moments.filter(m => !isPair01(m)).every(m => m.score > 0), 'the moments on a clean pair agree on both sides (positive)');
+
+    // a switch EARLY, so the swapped labelling is the session's majority: the stretch BEFORE the moment is the odd one
+    const early = 300 + 2 * 260 + 160, earlyFrame = Math.round(early / 15 * FPS);
+    const E = buildSession(null, FPS, SCALES, { swapAtU: early, swapPair: [0, 1] }).session;
+    const eM = await SC.checkSizeSwitches(E, { fps: FPS, moments: [{ frame: earlyFrame, startFrame: earlyFrame, identityA: E.identities[0].id, identityB: E.identities[1].id, cues: ['ambiguity'] }] });
+    const er = eM.flags.concat(eM.changes).filter(x => x.look);
+    ok(er.length === 1 && er[0].kind === 'end' && er[0].side === 'before' && er[0].switchedAt === null && eM.changes.includes(er[0]),
+        `a majority swap: the moment is an 'end' (fix the stretch before it, from the session start): ${JSON.stringify(er.map(x => [x.frame, x.kind, x.switchedAt]))}`);
+
+    // a moment at one of the pair's encounter change points yields to it (one row, the encounter's)
+    const { session: S3, encounterEnds } = buildSession(19);
+    const onsetF = encounterEnds[19].frame;
+    const r3 = await SC.checkSizeSwitches(S3, { fps: 60, moments: [{ frame: onsetF + 30, startFrame: onsetF, identityA: S3.identities[1].id, identityB: S3.identities[2].id, cues: ['ambiguity'] }] });
+    ok(r3.moments.length === 1 && r3.moments[0].score < -200, 'the moment at an encounter switch is tested and disagrees');
+    eq(r3.flags.concat(r3.changes).filter(x => x.look).length, 0, '…but adds no row: the encounter\'s change point within 3 s stands');
+}
 
 group('Frame-rate independence — the same scenario recorded at 25, 30, 60 and 120 fps');
 {
@@ -374,6 +418,14 @@ group('Checklist save / reopen (ui/id-switch-review.js)');
         catch (e) { threw = true; }
     }
     ok(!threw && n === 8, `malformed payloads are ignored without throwing (${n}/8)`);
+    // a single-camera candidate moment's cues ride along as a 10th column, written only for such a point
+    const withLook = { size: { ok: true, encounters: [1], sampleHz: 15, step: 2, fps: 30, fpsFromVideo: true,
+        flags: [pt(300, 'id_0', 'id_1', -400, { kind: 'onset', look: ['tracklet', 'ambiguity'] }), pt(600, 'id_0', 'id_2', -80)], changes: [] } };
+    R.linkIdSwitchResults(withLook);
+    const pl = JSON.parse(JSON.stringify(R.serializeIdSwitchReview({ _idSwitch: { results: withLook, reviewed: new Set() } })));
+    ok(pl.checks.size.points[0].length === 10 && pl.checks.size.points[1].length === 9, 'a moment point has a 10th column; an encounter point keeps 9');
+    const lk = R.ingestIdSwitchReview({}, pl)._idSwitch.results.size.flags;
+    eq(JSON.stringify(lk.map(m => m.look || null)), '[["tracklet","ambiguity"],null]', 'the cues come back on the moment point only');
 }
 
 group('Failure reasons');

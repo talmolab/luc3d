@@ -16,23 +16,23 @@ import {
     reprojectPoints,
     computeInstanceDistanceTo,
     hungarianAlgorithm
-} from './triangulation.js?v=50cd62cd900e';
-import { CrossViewTracker, Detection } from './cross-view-tracker.js?v=50cd62cd900e';
-import { singleCameraName, singleCameraTrackerConfig, trackSingleCamera, SINGLE_CAMERA_LAZY_REASON } from './single-camera-tracking.js?v=50cd62cd900e';
-import { InstanceGroup, points3dNodeCount, hasPoint3d, readPoint3d, pooledPoints3d } from './pose-data.js?v=50cd62cd900e';
+} from './triangulation.js?v=5a03e15d4836';
+import { CrossViewTracker, Detection } from './cross-view-tracker.js?v=5a03e15d4836';
+import { singleCameraName, singleCameraTrackerConfig, trackSingleCamera, SINGLE_CAMERA_LAZY_REASON } from './single-camera-tracking.js?v=5a03e15d4836';
+import { InstanceGroup, points3dNodeCount, hasPoint3d, readPoint3d, pooledPoints3d } from './pose-data.js?v=5a03e15d4836';
 
 // Pass 3i-1: tracker UI/integration (was in app.js)
-import { state, interactionManager, timeline, viewport3d, getActiveSession } from '../ui/app-state.js?v=50cd62cd900e';
-import { getNodeWeightArray, getTrackingThresholds, getTrackingThreshold, isCameraTracked } from '../ui/settings.js?v=50cd62cd900e';
-import { markDirty, setStatus, hideLoading } from '../import-export/save-load.js?v=50cd62cd900e';
-import { showLoadingProgress, createProgressPacer, yieldToPaint } from '../ui/loading-overlay.js?v=50cd62cd900e';
-import { loadAllLazyFrames, sweepLazyFrameWindows } from './triangulation.js?v=50cd62cd900e';
-import { drawAllOverlays, showPredictedOnly, PREDICTED_ONLY_NOTE } from '../ui/rendering.js?v=50cd62cd900e';
-import { updateInfoPanel } from '../ui/info-panel.js?v=50cd62cd900e';
-import { setColorByIdentity } from '../ui/color-by.js?v=50cd62cd900e';
-import { runIdSwitchChecks, clearIdSwitchResults } from '../ui/id-switch-modal.js?v=50cd62cd900e';
-import { collapseTimeline } from '../ui/timeline-controller.js?v=50cd62cd900e';
-import { collapseViewport3D } from '../ui/panel-visibility.js?v=50cd62cd900e';
+import { state, interactionManager, timeline, viewport3d, getActiveSession } from '../ui/app-state.js?v=5a03e15d4836';
+import { getNodeWeightArray, getTrackingThresholds, getTrackingThreshold, isCameraTracked } from '../ui/settings.js?v=5a03e15d4836';
+import { markDirty, setStatus, hideLoading } from '../import-export/save-load.js?v=5a03e15d4836';
+import { showLoadingProgress, createProgressPacer, yieldToPaint } from '../ui/loading-overlay.js?v=5a03e15d4836';
+import { loadAllLazyFrames, sweepLazyFrameWindows } from './triangulation.js?v=5a03e15d4836';
+import { drawAllOverlays, showPredictedOnly, PREDICTED_ONLY_NOTE } from '../ui/rendering.js?v=5a03e15d4836';
+import { updateInfoPanel } from '../ui/info-panel.js?v=5a03e15d4836';
+import { setColorByIdentity } from '../ui/color-by.js?v=5a03e15d4836';
+import { runIdSwitchChecks, clearIdSwitchResults } from '../ui/id-switch-modal.js?v=5a03e15d4836';
+import { collapseTimeline } from '../ui/timeline-controller.js?v=5a03e15d4836';
+import { collapseViewport3D } from '../ui/panel-visibility.js?v=5a03e15d4836';
 
 /**
  * A frame index as the USER sees it: 1-based.
@@ -1543,15 +1543,19 @@ async function runSingleCameraTrackAll(session, bail) {
     clearIdSwitchResults(session);
     session.identities = [];
     session.frameIdentityMap = new Map();
+    session._idSwitchCandidates = null;    // replaced below; never left over from an earlier run
 
     var total = session.frameGroups.size;
     showLoadingProgress('Tracking (SLEAP tracker)', 0, total);
     try {
         await yieldToPaint();
         var res = await trackSingleCamera(session, cfg, {
+            fps: state.fps,
             onProgress: async function (done, n) { showLoadingProgress('Tracking (SLEAP tracker)', done, n); await yieldToPaint(); },
         });
         hideLoading();
+        // Where else a switch could be (not saved: the input tracklets they come from are rewritten).
+        session._idSwitchCandidates = res.moments;
         var switchedToIds = res.numIdentities > 0 && setColorByIdentity(state, true);
         var predOnly = res.numIdentities > 0 && showPredictedOnly();
         drawAllOverlays(state.currentFrame);

@@ -105,8 +105,12 @@ try {
         const st = ses._idSwitch, results = {};
         if (st) for (const [cue, r] of Object.entries(st.results)) {
             results[cue] = r && r.ok ? { encounters: r.encounters.map(e => ({ frame: e.frame, startFrame: e.startFrame, a: e.identityA, b: e.identityB, score: e.score, flagged: e.flagged, kind: e.kind || null })),
-                                       changes: r.changes.map(e => ({ frame: e.frame, a: e.identityA, b: e.identityB, kind: e.kind })), sampleHz: r.sampleHz, closeDistance: r.closeDistance,
-                                       timing: r.timing || null, crops: r.crops || null }
+                                       changes: r.changes.map(e => ({ frame: e.frame, a: e.identityA, b: e.identityB, kind: e.kind, look: e.look || null })),
+                                       flags: r.flags.map(e => ({ frame: e.frame, startFrame: e.startFrame, a: e.identityA, b: e.identityB, kind: e.kind || null, continues: !!e.continues, look: e.look || null, score: e.score })),
+                                       moments: (r.moments || []).map(e => ({ frame: e.frame, startFrame: e.startFrame, a: e.identityA, b: e.identityB, score: e.score, side: e.side, look: e.look })),
+                                       candidates: (ses._idSwitchCandidates || []).length,
+                                       sampleHz: r.sampleHz, closeDistance: r.closeDistance,
+                                       timing: r.timing || null, crops: r.crops || null, debug: r._debug || null }
                                     : { ok: false, reason: r && r.reason };
         }
         return { tracks: ses.tracks, identities: ses.identities.map(i => i.name), det, results };

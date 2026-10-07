@@ -66,7 +66,9 @@ function build() {
         const frag = Math.floor(f / 120);                     // a new "SLEAP" tracklet every 4 s
         for (let a = 0; a < 3; a++) {
             const type = (f === 900 && a === 1) ? 'user' : 'predicted';
-            s.addUnlinkedInstance(f, CAM, new PD.Instance(pose(a, f), (3 * frag + a) % 60, type, 0.9));
+            // the input's own tracker crosses animals 0 and 1 at frame 1000 (far apart), until its tracklets break at 1080
+            const inTrack = f >= 1000 && f < 1080 && a < 2 ? (3 * frag + (1 - a)) % 60 : (3 * frag + a) % 60;
+            s.addUnlinkedInstance(f, CAM, new PD.Instance(pose(a, f), inTrack, type, 0.9));
         }
         if (f % 211 === 7) s.addUnlinkedInstance(f, CAM, new PD.Instance(pose(2, f).map(([x, y]) => [x - 300, y - 250]), null, 'predicted', 0.2));
     }
@@ -104,6 +106,39 @@ eq(s.identities.map(i => i.id + ':' + i.name).join(','), '0:id_0,1:id_1,2:id_2',
         'each animal keeps one track for all 75 s, across the 18 tracklet breaks of the input: ' + trackOfAnimal.map(t => [...t].join('/')).join(', '));
     eq(instancesAt(s, 900)[1].trackIdx, trackOfAnimal[1].values().next().value, 'the user instance is tracked, on its animal\'s track');
     ok(res.untracked >= Math.floor(FRAMES / 211) + 2, `untracked counted (${res.untracked})`);
+}
+
+group('1b. Where to look: candidate moments from the tracking');
+{
+    const t0 = instancesAt(s, 0)[0].trackIdx, t1 = instancesAt(s, 0)[1].trackIdx, t2 = instancesAt(s, 0)[2].trackIdx;
+    const pair = (m, x, y) => (m.identityA === Math.min(x, y) && m.identityB === Math.max(x, y));
+    const tl = res.moments.filter(m => m.cues.includes('tracklet'));
+    ok(tl.some(m => pair(m, t0, t1) && m.frame === 1000),
+        'the input tracklet crossing animals 0 and 1 at frame 1000 is a moment for their two identities: ' + JSON.stringify(tl.map(m => [m.frame, m.cues.join('+')])));
+    ok(tl.every(m => m.frame === 1000 || m.frame === 1080), 'no other tracklet moment (its tracklets end at 1080, where the crossing undoes)');
+    eq(res.moments.filter(m => m.cues.includes('ambiguity')).length, 0,
+        'no ambiguity moment where poses never look alike (different sizes, meeting head to head)');
+    ok(!res.moments.some(m => pair(m, t0, t2) || pair(m, t1, t2)), 'nothing for the animal that keeps to itself');
+
+    // Two animals of the SAME size walking side by side, merging for a moment every 8 s: there the
+    // tracker cannot tell them apart, and those are the ambiguity moments.
+    const cam = new PD.Camera(CAM, [[600, 0, 320], [0, 600, 240], [0, 0, 1]], [0, 0, 0, 0, 0], [0, 0, 0], [0, 0, 0], [640, 480]);
+    const twins = new PD.Session([cam], new PD.Skeleton('mouse', NODES, []), ['t'], 'twins');
+    const MERGES = [120, 360, 600, 840];
+    for (let f = 0; f < 960; f++) {
+        const gap = Math.min(...MERGES.map(m => Math.abs(f - m))), dy = Math.min(90, 3 * gap);   // 0 at a merge
+        for (let a = 0; a < 2; a++) {
+            const cx = 100 + 0.45 * f, cy = 240 + (a ? dy / 2 : -dy / 2);
+            twins.addUnlinkedInstance(f, CAM, new PD.Instance(NODES.map(n => [cx + 0.7 * T[n][0] + (rnd() - 0.5), cy + 0.7 * T[n][1] + (rnd() - 0.5)]), null, 'predicted', 0.9));
+        }
+    }
+    twins.identities = []; twins.frameIdentityMap = new Map();
+    const tw = await SCT.trackSingleCamera(twins, SCT.singleCameraTrackerConfig(2, {}), { fps: FPS });
+    const amb = tw.moments.filter(m => m.cues.includes('ambiguity'));
+    ok(amb.length >= 3 && amb.every(m => MERGES.some(c => m.startFrame <= c + 15 && m.frame >= c - 15)),
+        `ambiguity moments at the merges (${amb.map(m => m.startFrame + '-' + m.frame).join(', ')})`);
+    eq(tw.moments.filter(m => m.cues.includes('tracklet')).length, 0, 'no tracklet moments when the input has no tracks');
+    ok(tw.moments.every((m, i) => i === 0 || m.frame >= tw.moments[i - 1].frame), 'moments come sorted by frame');
 }
 
 group('2. The check view, and the size check on it');

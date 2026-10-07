@@ -27,18 +27,18 @@
  * import-export/save-load.js (setStatus).
  */
 
-import { state, getActiveSession } from './app-state.js?v=50cd62cd900e';
-import { setSeekbarSwitchMarkers } from './seekbar-markers.js?v=50cd62cd900e';
-import { setIdSwitchHighlight, updateIdSwitchHighlight, refreshIdSwitchHighlight, ID_SWITCH_SECTION_RGB } from './id-switch-highlight.js?v=50cd62cd900e';
-import { setStatus, markDirty } from '../import-export/save-load.js?v=50cd62cd900e';
-import { showLoadingProgress, hideLoading, yieldToPaint } from './loading-overlay.js?v=50cd62cd900e';
-import { getTrackingThreshold } from './settings.js?v=50cd62cd900e';
-import { checkSizeSwitches, checkImageSwitches } from '../pose/id-switch-check.js?v=50cd62cd900e';
-import { singleCameraName, singleCameraCheckSession, swapSingleCameraIdentities } from '../pose/single-camera-tracking.js?v=50cd62cd900e';
-import { hasWebGPU, createImageEmbedder, IMAGE_MODEL_MB, formatEmbedTiming } from './image-embedder.js?v=50cd62cd900e';
+import { state, getActiveSession } from './app-state.js?v=5a03e15d4836';
+import { setSeekbarSwitchMarkers } from './seekbar-markers.js?v=5a03e15d4836';
+import { setIdSwitchHighlight, updateIdSwitchHighlight, refreshIdSwitchHighlight, ID_SWITCH_SECTION_RGB } from './id-switch-highlight.js?v=5a03e15d4836';
+import { setStatus, markDirty } from '../import-export/save-load.js?v=5a03e15d4836';
+import { showLoadingProgress, hideLoading, yieldToPaint } from './loading-overlay.js?v=5a03e15d4836';
+import { getTrackingThreshold } from './settings.js?v=5a03e15d4836';
+import { checkSizeSwitches, checkImageSwitches } from '../pose/id-switch-check.js?v=5a03e15d4836';
+import { singleCameraName, singleCameraCheckSession, swapSingleCameraIdentities } from '../pose/single-camera-tracking.js?v=5a03e15d4836';
+import { hasWebGPU, createImageEmbedder, IMAGE_MODEL_MB, formatEmbedTiming } from './image-embedder.js?v=5a03e15d4836';
 import { idSwitchRowKey as rowKey, idSwitchPrimary as primaryOf, idSwitchMarkers as markersOf, idSwitchOnsets as countOnsets,
          idSwitchEncounterCount as encounterCount, linkIdSwitchResults as tagAndLink,
-         idSwitchFixPlan, idSwitchFixFor, idSwitchRenameForFix } from './id-switch-review.js?v=50cd62cd900e';
+         idSwitchFixPlan, idSwitchFixFor, idSwitchRenameForFix } from './id-switch-review.js?v=5a03e15d4836';
 
 const CUE_LABEL = { size: 'body size', image: 'images' };
 
@@ -157,19 +157,20 @@ function openProgressDialog(title) {
 // Running the checks
 // ---------------------------------------------------------------------------
 
-async function runSize(session, rate) {
+async function runSize(session, rate, moments) {
     var label = 'Checking ID switches (body size)';
     showLoadingProgress(label, 0, 1);
     await yieldToPaint();
     try {
         return await checkSizeSwitches(session, {
             fps: rate.fps,
+            moments: moments,
             onProgress: async function (done, total) { showLoadingProgress(label, done, total); await yieldToPaint(); },
         });
     } finally { hideLoading(); }
 }
 
-async function runImage(session, rate, inject) {
+async function runImage(session, rate, inject, moments) {
     inject = inject || {};
     var views = (state.views || []).filter(function (v) { return v && v.decoder; });
     if (!views.length && !inject.createEmbedder) return { ok: false, reason: 'needs the session\'s videos to be loaded' };
@@ -185,6 +186,7 @@ async function runImage(session, rate, inject) {
             fps: rate.fps,
             imageHz: getTrackingThreshold('imageCheckHz') || 2,
             threshold: getTrackingThreshold('imageCheckThreshold'),
+            moments: moments,
             getEmbeddings: embedder.getEmbeddings,
             prepareFrames: embedder.prepareFrames,
             inFlight: embedder.inFlight || 2,
@@ -252,10 +254,13 @@ export async function runIdSwitchChecks(opts) {
             return null;
         }
     }
+    // Single-camera Track All also leaves the moments where a switch could have happened outside an encounter
+    // (pose/single-camera-tracking.js `candidateMoments`); the checks score those too.
+    var moments = single && session._idSwitchCandidates ? session._idSwitchCandidates : null;
     var rate = recordingFps(session), results = {}, parts = [], level = 'success';
     for (var cue of cues) {
         var res;
-        try { res = cue === 'size' ? await runSize(target, rate) : await runImage(target, rate, opts.inject); }
+        try { res = cue === 'size' ? await runSize(target, rate, moments) : await runImage(target, rate, opts.inject, moments); }
         catch (e) {
             console.error('[id-switch-check:' + cue + ']', e);
             res = { ok: false, reason: 'failed — ' + e.message, failed: true };
@@ -505,6 +510,12 @@ function openFixDialog(session, st, f) {
  * identities. Returns {frames}. Its own inverse, so undo calls it again.
  */
 function swapForFix(session, from, to, idA, idB) {
+    // The stored candidate moments name identities too: keep them on the same animals for the next run.
+    (session._idSwitchCandidates || []).forEach(function (m) {
+        if (m.frame < from || m.frame > to) return;
+        if (m.identityA === idA || m.identityA === idB) m.identityA = m.identityA === idA ? idB : idA;
+        if (m.identityB === idA || m.identityB === idB) m.identityB = m.identityB === idA ? idB : idA;
+    });
     return swapSingleCameraIdentities(session, from, to, idA, idB) || session.swapIdentitiesInRange(from, to, idA, idB);
 }
 
@@ -556,6 +567,11 @@ function rowHtml(session, st, f, both) {
     var note = f.continues ? 'still swapped'
         : f.followOf != null ? 'follows the switch at ' + fmtTime(f.followOf)
         : f.kind === 'end' ? 'labelling changes here; earlier encounters look swapped' : '';
+    if (f.look && f.look.length) {
+        // a candidate moment, not an encounter: say why it was looked at, and which side looks swapped
+        note = lookNote(f.look) + (f.kind === 'end' ? ' · the labels BEFORE it look swapped' : '') +
+            (f.followOf != null ? ' · follows the switch at ' + fmtTime(f.followOf) : '');
+    }
     var fixed = idSwitchFixFor(st, f);
     return '<div class="id-switch-row cue-' + cue + (f.continues || f.followOf != null ? ' is-repeat' : '') + (rev ? ' is-reviewed' : '') +
         (fixed ? ' is-fixed' : '') +
@@ -569,6 +585,13 @@ function rowHtml(session, st, f, both) {
         (both ? ' · ' + (cue === 'both' ? '<b>Both</b>' : cue === 'size' ? 'size' : 'images') : '') +
         (fixed ? ' · <span class="id-switch-fixed">Fixed</span>' : '') +
         (note ? ' · ' + note : '') + '</div>' + (st.current === key ? selectedHtml(st, f) : '') + '</div></div>';
+}
+
+/** Why a row that is not a close encounter was looked at (its candidate moment's cues). */
+function lookNote(cues) {
+    return cues.map(function (c) {
+        return c === 'ambiguity' ? 'tracker nearly chose the swap' : c === 'tracklet' ? 'input tracklet changes animal' : c;
+    }).join(', ');
 }
 
 /** What the selected row shows under its lines: the progress bar, then Fix switch… (or what was fixed, and Undo). */
@@ -589,10 +612,13 @@ function selectedHtml(st, f) {
 /** "close 2:00.3–2:01.2 (frames 7,218–7,317) [end ⇥]": the encounter, and a jump to its end. */
 function spanHtml(f) {
     var s = f.startFrame != null && f.startFrame <= f.frame ? f.startFrame : null;
+    // A candidate moment (`look`) is not a close encounter: say "at", and what its end is.
+    var what = f.look && f.look.length ? 'at' : 'close';
     var end = '<button class="id-switch-end" title="Jump to frame ' + (f.frame + 1).toLocaleString() +
-        ', the end of the encounter — where the animals separate and their labels are read">end ⇥</button>';
-    if (s == null || s === f.frame) return 'close at ' + fmtTenths(f.frame) + ' (frame ' + (f.frame + 1).toLocaleString() + ') ' + end;
-    return 'close ' + fmtTenths(s) + '–' + fmtTenths(f.frame) + ' (frames ' + (s + 1).toLocaleString() + '–' + (f.frame + 1).toLocaleString() + ') ' + end;
+        (f.look && f.look.length ? ', the end of this moment — where the labels after it are read'
+            : ', the end of the encounter — where the animals separate and their labels are read') + '">end ⇥</button>';
+    if (s == null || s === f.frame) return (what === 'at' ? 'at ' : 'close at ') + fmtTenths(f.frame) + ' (frame ' + (f.frame + 1).toLocaleString() + ') ' + end;
+    return what + ' ' + fmtTenths(s) + '–' + fmtTenths(f.frame) + ' (frames ' + (s + 1).toLocaleString() + '–' + (f.frame + 1).toLocaleString() + ') ' + end;
 }
 
 /**

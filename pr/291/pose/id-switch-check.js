@@ -43,7 +43,7 @@
  * Depends on: pose-data.js (readPoint3d). Pure — no DOM, no app state.
  */
 
-import { readPoint3d } from './pose-data.js?v=50cd62cd900e';
+import { readPoint3d } from './pose-data.js?v=5a03e15d4836';
 
 /** Bone (node-pair) lengths used as the size signature. Pairs whose nodes the
  *  session skeleton lacks are skipped. */
@@ -74,6 +74,12 @@ export const SIZE_CHECK_DEFAULTS = {
     maxTrainRows: 20000,
     iterations: 300,
     signal: null,       // AbortSignal: the check throws an AbortError when it fires
+    moments: null,      // places a switch may have happened outside a close encounter: [{frame, startFrame,
+                        // identityA, identityB, cues}] (pose/single-camera-tracking.js `candidateMoments`). Each is
+                        // tested on its own: do the labels before it and after it disagree? See momentChangePoints.
+    momentSeconds: 15,  // evidence read on EACH side of a moment
+    momentThreshold: -200, // a moment is a change point when its two sides disagree by more than this
+                           // (calibrated 2026-10-07 on images, see MODULES.md: 13 of 59 real swaps, 0 false rows)
 };
 
 /** Image-check options on top of the shared ones. Threshold: see the calibration notes in MODULES.md. */
@@ -401,12 +407,115 @@ function finish(grid, LP, present, weight, o, extra) {
                  nameA: idents[e.a].name, nameB: idents[e.b].name, score: S };
     }).sort(function (x, y) { return x.frame - y.frame; });
     var changes = markChangePoints(scored, o);
+    var flags = scored.filter(function (s) { return s.flagged; });
+    // Candidate moments are tested separately and only ADD change points: encounters score exactly as without them.
+    var moments = o.moments && o.moments.length ? testMoments(grid, LP, present, weight, o) : [];
+    if (moments.length) {
+        momentChangePoints(moments, flags.concat(changes), o).forEach(function (m) { (m.kind === 'end' ? changes : flags).push(m); });
+        flags.sort(function (x, y) { return x.frame - y.frame; });
+        changes.sort(function (x, y) { return x.frame - y.frame; });
+    }
     return Object.assign({
-        ok: true, flags: scored.filter(function (s) { return s.flagged; }), changes: changes, encounters: scored,
+        ok: true, flags: flags, changes: changes, encounters: scored, moments: moments,
         identities: idents.map(function (id) { return id.name; }),
         sampledFrames: T, closeDistance: grid.sep, threshold: o.threshold,
         fps: o.fps, step: grid.step, sampleHz: grid.hz,
     }, extra || {});
+}
+
+/**
+ * Test each of `o.moments` — a place a switch may have happened outside a close
+ * encounter — on its own. The evidence for "a is a, b is b" (a-as-a against
+ * a-as-b, and b-as-b against b-as-a) is summed over the `momentSeconds` BEFORE
+ * the moment and, separately, the `momentSeconds` AFTER it, from samples in
+ * which each animal is apart from every other. If the labels changed there, the
+ * two sides disagree in sign; the score is then minus the weaker side's evidence
+ * (so a confident change is very negative), and otherwise plus it.
+ *
+ * Why both sides: the classifier learns from the tracker's own labels, so when a
+ * swap covers MOST of the session it is the swapped labelling that reads as
+ * right, and evidence after the swap alone agrees with it. Which side disagrees
+ * (`side`) says which one to fix. Measured on 35 proofread single-camera SLAP
+ * videos with the image check: reading only after each moment added 1 of 59 real
+ * swaps; the two-sided test adds 7 (13 on its own at -200, with no false rows).
+ * Windows are fixed, NOT cut at the pair's neighbouring encounters: mice in
+ * contact meet every few seconds, and cut windows left almost no evidence.
+ * A moment with no evidence on either side is skipped. Returns every tested
+ * moment, sorted by frame: {frame, startFrame, identityA, identityB, nameA,
+ * nameB, score, side: 'before'|'after', look: cues}.
+ */
+function testMoments(grid, LP, present, weight, o) {
+    var T = grid.T, K = grid.K, frames = grid.frames, idents = grid.idents, out = [];
+    var kOf = new Map(idents.map(function (id, k) { return [id.id, k]; }));
+    var alone = new Uint8Array(T * K);
+    grid.tl.forEach(function (t) { for (var i = t.start; i <= t.end; i++) alone[i * K + t.k] = 1; });
+    var sampleOf = function (f) {             // last sample at or before frame f, or -1
+        if (!(f >= frames[0])) return -1;
+        var lo = 0, hi = T - 1;
+        while (lo < hi) { var m = (lo + hi + 1) >> 1; if (frames[m] <= f) lo = m; else hi = m - 1; }
+        return lo;
+    };
+    var W = grid.secToSamples(o.momentSeconds);
+    var side = function (a, b, i0, i1) {      // evidence that a is a and b is b over samples [i0, i1]
+        var S = 0, n = 0;
+        for (var i = Math.max(0, i0); i <= Math.min(T - 1, i1); i++) {
+            if (alone[i * K + a] && present(i, a)) { S += LP[(i * K + a) * K + a] - LP[(i * K + a) * K + b]; n++; }
+            if (alone[i * K + b] && present(i, b)) { S += LP[(i * K + b) * K + b] - LP[(i * K + b) * K + a]; n++; }
+        }
+        return n ? S * weight : null;
+    };
+    o.moments.forEach(function (m) {
+        var a = kOf.get(m.identityA), b = kOf.get(m.identityB), e = sampleOf(m.frame);
+        if (a == null || b == null || a === b || e < 0) return;
+        var s0 = Math.max(0, Math.min(e, sampleOf(m.startFrame != null ? m.startFrame : m.frame)));
+        var before = side(a, b, s0 - W, s0 - 1), after = side(a, b, e + 1, e + W);
+        if (before == null || after == null) return;
+        var mag = Math.min(Math.abs(before), Math.abs(after));
+        var lo = Math.min(a, b), hi = Math.max(a, b);
+        out.push({ frame: frames[e], startFrame: frames[s0], identityA: idents[lo].id, identityB: idents[hi].id,
+                   nameA: idents[lo].name, nameB: idents[hi].name, score: (before < 0) !== (after < 0) ? -mag : mag,
+                   side: after < 0 ? 'after' : 'before', look: (m.cues || []).slice() });
+    });
+    return out.sort(function (x, y) { return x.frame - y.frame; });
+}
+
+/**
+ * The tested moments that become change points: scored below `momentThreshold`,
+ * and not within 3 s of one of the pair's encounter change points (`existing`),
+ * which stands. A moment whose AFTER side disagrees is an 'onset' (the stretch
+ * after it looks swapped; `switchBackAt` = the pair's next change point, or null
+ * at the session's end); one whose BEFORE side disagrees is an 'end' (the stretch
+ * before it; `switchedAt` = the pair's previous change point, or null at the
+ * start). `followOf` as for encounters (markChangePoints).
+ */
+function momentChangePoints(moments, existing, o) {
+    var near = 3 * o.fps, out = [];
+    var samePair = function (x, y) { return x.identityA === y.identityA && x.identityB === y.identityB; };
+    moments.forEach(function (m) {
+        if (!(m.score < o.momentThreshold)) return;
+        if (existing.some(function (x) { return !x.continues && samePair(x, m) && Math.abs(x.frame - m.frame) < near; })) return;
+        out.push(Object.assign({}, m, { flagged: m.side === 'after', continues: false, kind: m.side === 'after' ? 'onset' : 'end' }));
+    });
+    var all = existing.filter(function (x) { return !x.continues; }).concat(out).sort(function (x, y) { return x.frame - y.frame; });
+    out.forEach(function (m) {
+        var pair = all.filter(function (x) { return x !== m && samePair(x, m); });
+        if (m.kind === 'onset') {
+            var nx = pair.filter(function (x) { return x.frame > m.frame; })[0];
+            m.switchBackAt = nx ? nx.frame : null;
+        } else {
+            var pv = pair.filter(function (x) { return x.frame < m.frame; }).pop();
+            m.switchedAt = pv ? pv.frame : null;
+        }
+        for (var i = all.length - 1; i >= 0; i--) {
+            var p = all[i];
+            if (p === m || p.frame >= m.frame) continue;
+            if (m.frame - p.frame > o.followSeconds * o.fps) break;
+            if (p.followOf != null) continue;
+            var shared = [p.identityA, p.identityB].filter(function (id) { return id === m.identityA || id === m.identityB; });
+            if (shared.length === 1) { m.followOf = p.frame; break; }
+        }
+    });
+    return out;
 }
 
 /**
