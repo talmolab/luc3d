@@ -3,8 +3,8 @@
 Multi-view pose annotation GUI. No build system — pure vanilla JS served as static files.
 
 ## Architecture
-ES modules, vanilla JS (no build step). `index.html` loads `app.js` as `<script type="module">`; `app.js` is a 2-line entry point that imports from `pose/`. The 99 modules are grouped into four directories:
-- `pose/` — data model, cross-view tracking, DLT triangulation (the pure math in `triangulation-core.js`, solved in parallel by `triangulation-pool.js` + `triangulation-worker.js`), plane annotation model (planes + the global plane-node pool), 3D mesh objects (groups of planes) and their derived geometry, plane/origin serialization, origin transform, whole-project origin re-base, cross-session calibration comparison, plane-to-plane angle, the least-squares plane fit, multi-view display alignment (`view-align.js`), the ID-switch checks by body size and images (`id-switch-check.js`), the lazy project's playback eviction (`lazy-residency.js`), app initialization (22 files)
+ES modules, vanilla JS (no build step). `index.html` loads `app.js` as `<script type="module">`; `app.js` is a 2-line entry point that imports from `pose/`. The 101 modules are grouped into four directories:
+- `pose/` — data model, cross-view tracking, DLT triangulation (the pure math in `triangulation-core.js`, solved in parallel by `triangulation-pool.js` + `triangulation-worker.js`), plane annotation model (planes + the global plane-node pool), 3D mesh objects (groups of planes) and their derived geometry, plane/origin serialization, origin transform, whole-project origin re-base, cross-session calibration comparison, plane-to-plane angle, the least-squares plane fit, multi-view display alignment (`view-align.js`), the ID-switch checks by body size and images (`id-switch-check.js`), the lazy project's playback eviction (`lazy-residency.js`), SLEAP's single-camera tracker ported from sleap-nn (`sleap-tracker.js`) and single-camera Track All + its ID-switch checks (`single-camera-tracking.js`), app initialization (24 files)
 - `ui/` — UI state, canvas rendering, mouse/keyboard interaction, info panel (and its lazily-filled Track dropdown), modals, timeline, 3D viewport, panel visibility, video encoding, video display settings, keyboard-target arbitration, modal geometry, view legend, plane definition, 3D mesh objects, origin definition, origin re-base, cross-session calibration notice, plane angle, frame-range tracking, collapsible section state, info tooltips, plane visibility, browser-specific hints, the loading overlay + its progress bar, the Align Views to References dialog, the seekbar hover tooltip, the status bar's whole-project frame counters, the Color: Tracks/ID setting, the Check ID Switches runner + ID Switches panel tab (and its saved review checklist), its seekbar ticks and in-view highlight, its image embedder and crop worker, settings — the Define Planes panel is split across `plane-definition.js` (the hub) plus its three section modules and three helpers (56 files)
 - `loading/` — video decoding, unplayable-codec diagnosis, session loading, SLP/package readers, per-camera SLP choice, calibration-file selection, video-file selection, the per-camera track-list union (`session.tracks` for a per-camera folder), web workers (11 files)
 - `import-export/` — file I/O, save/load, SLP import/merge, visibility metadata, plane metadata, 3D mesh export (10 files)
@@ -640,6 +640,44 @@ post-Track-All playback degrading run over run. Three more rules:
   with `hydrateFrameMembers2d` / `releaseFrameMembers2d`. The image ID-switch
   check was the one such reader (`frameCropGeometry`, `ui/image-embedder.js`);
   reading the members directly found no keypoints on every such frame.
+
+## Single-camera Track All is sleap-nn's tracker — keep it a faithful port
+
+A session with ONE camera (a plain SLEAP predictions file opened with File ▸
+Load SLP) has no cross-view matching and no 3D, so Track All runs SLEAP's own
+tracker instead: `pose/sleap-tracker.js` is a port of `sleap_nn.tracking`
+(talmolab/sleap-nn @ `3d21684419ca`), driven by `pose/single-camera-tracking.js`
+in sleap-nn's known-count setup (`local_queues`, `max_tracks` = target count =
+the animal count, connect single breaks). Rules:
+
+- **It must give `sleap-nn track`'s answer, ties included.** OKS at sleap-nn's
+  default stddev underflows to exactly 0 for poses ~1.5 body lengths apart, so
+  ties are routine and whatever breaks them decides real tracks. That is why
+  the port carries SciPy's `linear_sum_assignment` line for line, numpy's
+  unstable argsort (`SMALL_QUICKSORT = 15`), CPython 3.11's set iteration order
+  (`fixed_window`'s column order) and numpy's pairwise summation. Do not
+  "simplify" any of them to a JS built-in: a stable sort or a different
+  Hungarian is still optimal and still wrong. Measured identical on ~520,000
+  real detections; `tests/test-sleap-tracker.mjs` compares every track id on a
+  synthetic fixture tracked by upstream (regenerate it with
+  `tests/fixtures/sleap-tracker/make_fixture.py` when moving to a newer sleap-nn).
+- **It writes the TRACKS**, as sleap-nn does, plus one identity per track
+  (`track_k` <-> `id_k`, identity following the track through the map) —
+  unlike multi-camera Track All, which writes identities only. On one camera a
+  track is the animal's identity and is what the saved `.slp` hands back to
+  SLEAP; for the same reason an ID Switches tab Fix swaps tracks there.
+- **The one deliberate departure is the default OKS tolerance: 0.1, not 0.025**
+  (Tracking Wizard `scOksStddev`; sleap-nn's own value for its noisier Kalman
+  keypoints). On 35 proofread 10-min SLAP videos it took sleap-nn's known-count
+  setup from 85.8% to 93.6% correct and 156 to 102 lasting swaps. Everything
+  else is sleap-nn's default.
+- **The ID-switch checks read a 2D stand-in** (`singleCameraCheckSession`:
+  `points3d` = (x, y, 0)). They are unit-free, so this is sound, but body size
+  in 2D is not a usable cue (2 of 59 real swaps caught, AUC 0.55), so Track All
+  does not run it automatically on one camera — it says so in the status line,
+  and the menu still runs it. The image check needs nothing 3D.
+- **Eager only.** A lazy (> 150 MB) single-camera project is refused with a
+  reason, never tracked from its resident window — the resident-only bug class.
 
 ## Triangulation must not depend on where the origin is
 

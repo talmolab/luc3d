@@ -12,7 +12,9 @@
  * 1 s) is shown once as "Both". Repeats (other encounters of a pair that is
  * still swapped) are counted and can be shown.
  *
- * The size check only reads the tracker's 3D skeletons (seconds, no video). The
+ * The size check only reads the tracker's 3D skeletons (seconds, no video) — on a
+ * single-camera session, the one view's 2D poses instead (pose/single-camera-tracking.js
+ * `singleCameraCheckSession`), and a fix swaps the two TRACKS there. The
  * image check decodes video and embeds crops on the GPU (ui/image-embedder.js):
  * minutes, needs the session's videos and WebGPU, and runs under its own
  * cancellable progress dialog (Cancel / Esc).
@@ -32,6 +34,7 @@ import { setStatus, markDirty } from '../import-export/save-load.js';
 import { showLoadingProgress, hideLoading, yieldToPaint } from './loading-overlay.js';
 import { getTrackingThreshold } from './settings.js';
 import { checkSizeSwitches, checkImageSwitches } from '../pose/id-switch-check.js';
+import { singleCameraName, singleCameraCheckSession, swapSingleCameraIdentities } from '../pose/single-camera-tracking.js';
 import { hasWebGPU, createImageEmbedder, IMAGE_MODEL_MB, formatEmbedTiming } from './image-embedder.js';
 import { idSwitchRowKey as rowKey, idSwitchPrimary as primaryOf, idSwitchMarkers as markersOf, idSwitchOnsets as countOnsets,
          idSwitchEncounterCount as encounterCount, linkIdSwitchResults as tagAndLink,
@@ -79,9 +82,13 @@ function fmtDuration(sec) {
     return Math.round(sec / 60) + ' min';
 }
 
-/** True when at least one tracked frame has a 3D skeleton with an identity. */
+/**
+ * True when there is something to check: a tracked frame with a 3D skeleton and an identity, or — on a
+ * single-camera session, which has no 3D — any detection with an identity (they live in the map).
+ */
 function hasTrackedIdentities(session) {
     if (!session || !session.instanceGroups || !(session.identities || []).length) return false;
+    if (singleCameraName(session)) return session.frameIdentityMap.size > 0;
     for (var groups of session.instanceGroups.values()) {
         for (var i = 0; i < groups.length; i++) if (groups[i].points3d && groups[i].identityId >= 0) return true;
     }
@@ -228,15 +235,27 @@ export async function runIdSwitchChecks(opts) {
     var deps = { navigateToFrame: opts.navigateToFrame || null };
     var session = getActiveSession();
     var head = function (cue) { return auto ? 'ID-switch check (' + CUE_LABEL[cue] + ')' : (cue === 'size' ? 'Check ID Switches' : 'Check ID Switches (images)'); };
+    var single = singleCameraName(session) != null;
     if (!hasTrackedIdentities(session)) {
-        if (auto) setStatus((opts.statusPrefix ? opts.statusPrefix + ' · ' : '') + head(cues[0]) + ': skipped — no tracked 3D skeletons', 'success');
-        else setStatus('Check ID Switches needs tracked identities with 3D — run Track All first', 'warning');
+        if (auto) setStatus((opts.statusPrefix ? opts.statusPrefix + ' · ' : '') + head(cues[0]) + ': skipped — no tracked ' +
+            (single ? 'identities' : '3D skeletons'), 'success');
+        else setStatus('Check ID Switches needs tracked identities' + (single ? '' : ' with 3D') + ' — run Track All first', 'warning');
         return null;
+    }
+    // A single-camera session has no 3D: the checks read a stand-in built from its 2D (see the module doc).
+    var target = session;
+    if (single) {
+        target = singleCameraCheckSession(session);
+        if (target.fail) {
+            setStatus((auto && opts.statusPrefix ? opts.statusPrefix + ' · ' : '') + head(cues[0]) + ': ' +
+                (auto ? 'skipped — ' : '') + target.fail, auto ? 'success' : 'warning');
+            return null;
+        }
     }
     var rate = recordingFps(session), results = {}, parts = [], level = 'success';
     for (var cue of cues) {
         var res;
-        try { res = cue === 'size' ? await runSize(session, rate) : await runImage(session, rate, opts.inject); }
+        try { res = cue === 'size' ? await runSize(target, rate) : await runImage(target, rate, opts.inject); }
         catch (e) {
             console.error('[id-switch-check:' + cue + ']', e);
             res = { ok: false, reason: 'failed — ' + e.message, failed: true };
@@ -248,6 +267,7 @@ export async function runIdSwitchChecks(opts) {
             continue;
         }
         res.fpsFromVideo = rate.fromVideo;
+        res.singleCamera = single;
         var n = countOnsets(res);
         parts.push(head(cue) + ': ' + (n
             ? n + ' possible switch' + (n === 1 ? '' : 'es') + ' in ' + res.encounters.length + ' close encounters'
@@ -326,7 +346,9 @@ export function clearIdSwitchResults(session) {
 function aboutHtml(st, ran) {
     var r0 = st.results[ran[0]], im = st.results.image;
     return '<p>Each close encounter between two identities is scored by whether the animals leaving it look like the ' +
-        'identities they now carry — by 3D body size' + (im && im.ok ? ' and/or by appearance in the videos' : '') +
+        'identities they now carry — by ' + (r0.singleCamera
+            ? 'body size in the one camera view (2D, so it also changes with posture and distance from the camera)'
+            : '3D body size') + (im && im.ok ? ' and/or by appearance in the videos' : '') +
         ', learned from the tracker\'s own labels. Flags are leads to review, not certainties: size cannot tell apart ' +
         'animals of near-equal size, and images struggle with animals that look alike.' +
         (ran.length === 2 ? ' <b>Review "Both" rows first</b> — when both checks flag the same encounter it was a real swap ' +
@@ -451,7 +473,7 @@ function openFixDialog(session, st, f) {
         '<h3 id="idSwitchFixTitle">Fix ID switch</h3>' +
         '<p>Swap ' + idName(session, plan.nameA) + ' ↔ ' + idName(session, plan.nameB) + ' on <b>frames ' +
         (plan.from + 1).toLocaleString() + '–' + (plan.to + 1).toLocaleString() + '</b> (' + fmtTenths(plan.from) + '–' +
-        fmtTenths(plan.to) + '), in every camera view.</p>' +
+        fmtTenths(plan.to) + ')' + (singleCameraName(session) ? ' (their tracks)' : ', in every camera view') + '.</p>' +
         '<ul class="id-switch-fix-why"><li>Starts at ' + fr(plan.from) + ': ' + startWhy + '.</li>' +
         '<li>Ends at ' + fr(plan.to) + ': ' + endWhy + '.</li></ul>' +
         (f.followOf != null ? '<p class="id-switch-fix-warn">This flag follows the switch at ' + fmtTime(f.followOf) +
@@ -478,9 +500,17 @@ function openFixDialog(session, st, f) {
     overlay.querySelector('#idSwitchFixOk').focus();
 }
 
+/**
+ * The swap itself: on a single camera the two TRACKS (so a saved .slp carries the fix), elsewhere the
+ * identities. Returns {frames}. Its own inverse, so undo calls it again.
+ */
+function swapForFix(session, from, to, idA, idB) {
+    return swapSingleCameraIdentities(session, from, to, idA, idB) || session.swapIdentitiesInRange(from, to, idA, idB);
+}
+
 /** Swap, record, rename the rows the swap re-labels, then replay the row from its lead-in. */
 function applyFix(session, st, f, plan, idA, idB) {
-    var r = session.swapIdentitiesInRange(plan.from, plan.to, idA, idB);
+    var r = swapForFix(session, plan.from, plan.to, idA, idB);
     var fix = { key: plan.key, partnerKey: plan.partnerKey, nameA: plan.nameA, nameB: plan.nameB,
                 from: plan.from, to: plan.to, idA: idA, idB: idB };
     (st.fixes || (st.fixes = [])).push(fix);
@@ -502,7 +532,7 @@ function undoLastFix(session, st) {
     if (!fix) return;
     var idA = identityIdByName(session, fix.nameA), idB = identityIdByName(session, fix.nameB);
     if (idA == null || idB == null) { setStatus('Cannot undo: identity "' + (idA == null ? fix.nameA : fix.nameB) + '" is gone', 'error'); return; }
-    session.swapIdentitiesInRange(fix.from, fix.to, idA, idB);
+    swapForFix(session, fix.from, fix.to, idA, idB);
     idSwitchRenameForFix(st, fix);
     st.fixes.pop();
     markDirty();
@@ -579,7 +609,7 @@ export function refreshIdSwitchPanel(session) {
     var ran = st ? ['size', 'image'].filter(function (c) { return st.results[c] && st.results[c].ok; }) : [];
     if (!ran.length) {
         host.innerHTML = '<div class="info-section"><h3>Possible ID switches</h3><p class="table-empty id-switch-empty">' +
-            (hasTrackedIdentities(session) ? 'No ID-switch check has run on this session yet.' : 'Run Track All first: the checks need tracked identities with 3D.') +
+            (hasTrackedIdentities(session) ? 'No ID-switch check has run on this session yet.' : (singleCameraName(session) ? 'Run Track All first: the checks need tracked identities.' : 'Run Track All first: the checks need tracked identities with 3D.')) +
             '</p><div class="id-switch-run"><button class="panel-btn" data-run="menuCheckSizeSwitches">Check by body size</button>' +
             '<button class="panel-btn" data-run="menuCheckImageSwitches">Check by images…</button></div></div>';
         setIdSwitchHighlight(null);

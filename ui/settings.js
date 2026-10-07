@@ -357,6 +357,22 @@ const TRACKING_THRESHOLDS = [
         min: 0, max: 1, step: 1, kind: 'toggle',     // an on/off switch in the wizard (stored as 1 / 0)
         desc: 'The match gate (pose/cross-view-tracker.js, 2026-10-03). On: a tracked target only takes a detection it scores positively on (roughly, within the distance threshold of where it is), instead of being forced onto whatever is left. Stops a spare target and an extra detection (e.g. a reflection) from trading a correct match away. Targets lost for longer than the stale window still re-acquire ungated. Off: the pre-gate forced assignment.',
     },
+    // --- Single-camera tracker (pose/sleap-tracker.js, sleap-nn's tracker) ---
+    {
+        id: 'scWindowSize', label: 'Single camera: candidate window (frames)', default: 5,
+        min: 1, max: 100, step: 1,
+        desc: 'Single-camera Track All runs SLEAP\'s tracker (sleap-nn track, local queues): each animal is matched against its last this-many detections. sleap-nn\'s default is 5. On 35 proofread 10-min videos 10 was about the same and 30 much worse (old detections from before a crossing outvote new ones).',
+    },
+    {
+        id: 'scOksStddev', label: 'Single camera: OKS tolerance', default: 0.1,
+        min: 0.005, max: 1, step: 0.005,
+        desc: 'Keypoint spread of the OKS match score (sleap-nn --oks_stddev). sleap-nn\'s default 0.025 is strict: two poses more than ~1.5 body lengths apart score exactly 0, so after a fast move or a gap every animal scores 0 and the assignment is a coin flip. On 35 proofread videos 0.1 cut lasting swaps from 156 to 102 (accuracy 85.8% -> 93.6%); 0.2 and above get worse again.',
+    },
+    {
+        id: 'scConnectBreaks', label: 'Single camera: connect single breaks', default: 1,
+        min: 0, max: 1, step: 1, kind: 'toggle',     // an on/off switch in the wizard (stored as 1 / 0)
+        desc: 'sleap-nn --post_connect_single_breaks: after tracking, where exactly one animal\'s track ends and exactly one new track starts on the same frame, join them.',
+    },
     {
         id: 'autoSwitchCheck', label: 'Check ID switches after tracking (body size)', default: 1,
         min: 0, max: 1, step: 1, kind: 'toggle',     // an on/off switch in the wizard (stored as 1 / 0)
@@ -406,6 +422,7 @@ const WIZARD_THRESHOLD_IDS = new Set([
     'filterMinVisibleNodes', 'filterMinInstanceScore',
     'corr2dWeight', 'corr3dWeight', 'velocityThreshold', 'distanceThreshold', 'timePenalty',
     'stale', 'matchGate',
+    'scWindowSize', 'scOksStddev', 'scConnectBreaks',
     'autoSwitchCheck', 'autoImageSwitchCheck', 'imageCheckThreshold', 'imageCheckHz', 'imageCheckMaxViews', 'imageCheckWebNN',
     'reprojErrorThreshold',
 ]);

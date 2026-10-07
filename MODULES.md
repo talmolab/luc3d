@@ -1891,6 +1891,23 @@ which was removed during the ESM migration).
 epipolar/reprojection scoring, Hungarian assignment, multi-frame
 identity propagation.
 
+**One camera: SLEAP's tracker.** A session with a single camera (a plain SLEAP
+predictions file opened with Load SLP) has nothing to match across views and no
+3D, so `runTrackingPass` hands Track All to `runSingleCameraTrackAll`, which
+runs sleap-nn's tracker (`pose/sleap-tracker.js`, via
+`pose/single-camera-tracking.js`) with the animal count as its track cap and the
+Tracking Wizard's `scWindowSize` / `scOksStddev` / `scConnectBreaks`. It writes
+the TRACKS, as `sleap-nn track` does, plus one identity per track, then follows
+the multi-camera pass's contract: `markDirty()` after the last bail-out, the
+previous identities and ID-switch results cleared, Color: ID, predictions only,
+Timeline and 3D viewer closed, and the automatic IMAGE check when it is on.
+The automatic body-size check is deliberately not run on one camera — the
+status line says so (`SINGLE_CAMERA_SIZE_SKIP_NOTE`) and the menu still runs
+it: in the app on 35 proofread SLAP videos it caught 2 of 59 real swaps at -50
+(encounter AUC 0.55) for 6 false rows. Track Frame and Track Frame Range refuse
+on one camera, saying why, as does Track All on a lazy one-camera project.
+~1 s for an 18,000-frame, 3-mouse video in the app.
+
 **Track All closes the Timeline and the 3D viewer.** On success, a full Track
 All calls `collapseTimeline()` (`ui/timeline-controller.js`) and
 `collapseViewport3D(viewport3d)` (`ui/panel-visibility.js`) so the views showing
@@ -2070,6 +2087,8 @@ drifts upward (e.g., 4 → 11 on the test fixture).
   across every frame with temporal continuity signals.
 
 **Imports from project modules.**
+- `./single-camera-tracking.js` — `singleCameraName`, `singleCameraTrackerConfig`,
+  `trackSingleCamera`, `SINGLE_CAMERA_LAZY_REASON` (the one-camera Track All).
 - `./pose-data.js` — `InstanceGroup`, `points3dNodeCount`, `hasPoint3d`,
   `readPoint3d`, `pooledPoints3d` (`commitTrackedFrame` stores a COPY of the
   target's 3D in the slab pool — one ArrayBuffer per group was 539,545 for a
@@ -2411,6 +2430,153 @@ reused by passing the bare extrinsic + normalized points:
 `epipolarErrorMatrix`).
 
 **Imported by.** `pose/tracker.js`.
+
+---
+
+### pose/sleap-tracker.js
+
+**Purpose.** SLEAP's single-camera pose tracker: a port of `sleap_nn.tracking`
+(talmolab/sleap-nn @ 3d21684419ca, 2026-10-02 — `Tracker`, `run_tracker`,
+`connect_single_breaks`, the `fixed_window` and `local_queues` candidates,
+`utils.py`) and of `evaluation.compute_oks`. It is what `sleap-nn track` runs on
+an existing predictions file. Used by single-camera Track All
+(`pose/single-camera-tracking.js`). Pure — no DOM, no app state, no imports.
+
+**It agrees with upstream on every track id**, ties included, and that is the
+point of the module: a SLEAP user re-tracking in LUCID gets the answer
+`sleap-nn track` would give. Measured: 9 full proofread SLAP videos (both
+candidate methods) and 9 option combinations, ~520,000 detections, all
+identical; ~0.35–0.65 s per 18,000-frame video in JS against ~50 s in Python
+(most of which is sleap-nn decoding every video frame it never reads). Ties are
+common — OKS at the default stddev underflows to exactly 0 for poses more than
+~1.5 body lengths apart — so everything that decides one is ported exactly:
+- `linearSumAssignment` — SciPy's `rectangular_lsap.cpp` (Crouse's shortest
+  augmenting path), line for line, including its reverse `remaining` order and
+  the transpose of a tall matrix.
+- `numpyArgsort` — `np.argsort`'s generic introsort (median-of-3 partitions,
+  `SMALL_QUICKSORT = 15`, insertion sort below), which greedy matching and NMS
+  read their ties from. It is NOT stable. This is what numpy runs on arm64 and
+  on x86 without AVX-512; with AVX-512 numpy dispatches to x86-simd-sort, so
+  upstream itself breaks those ties differently there. Checked on 406
+  tie-heavy arrays.
+- `pySetOrder` — CPython 3.11's set iteration order (open addressing, 9 linear
+  probes, ×4 resize at 3/5 full). `fixed_window`'s `current_tracks` is
+  `list(set(...))`, so this IS its score-matrix column order.
+- OKS sums the per-node similarities in numpy's pairwise order (`pairwiseSum`;
+  plain pairwise over all elements, confirmed bit-exact on 20,000 sums).
+What is not bit-exact: `Math.exp` vs numpy's `exp` (last ulp) and
+`euclidean_dist` on keypoints (BLAS `dot` in numpy). Both only matter in a
+near-tie; none showed up on the real data.
+
+**Not ported:** `FlowShiftTracker` (optical flow on the video),
+`KalmanShiftTracker` (EM-fitted Kalman filter — on 6 proofread cameras sleap-nn's
+own Kalman tracker made 39 lasting swap events to the base tracker's 16), the
+appearance blend and the `embeddings`/`masks` features.
+
+**Key exports.** `SLEAP_TRACKER_DEFAULTS` (sleap-nn's `run_tracker` defaults, in
+camelCase: `windowSize` 5, `candidatesMethod` 'fixed_window', `features`
+'keypoints', `scoringMethod` 'oks', `scoringReduction` 'mean', `oksStddev`
+null -> 0.025, `trackMatchingMethod` 'hungarian', `maxTracks`,
+`postConnectSingleBreaks`, `targetInstanceCount`, pre-/clean-cull options);
+`SleapTracker` (class: `track(dets, frameIdx)` -> per detection a track id,
+`null` = dropped, `undefined` = a prediction left alone on a frame with user
+instances — sleap-nn tracks only those there); `runSleapTracker(frames, cfg)` /
+`runSleapTrackerAsync(frames, cfg, {onProgress, signal, yieldEvery})` (the
+whole `run_tracker`, post-processing included); `connectSingleBreaks`;
+`instancesOverCount` (culling); `computeOks`; `countValidPoints`;
+`linearSumAssignment`; `numpyArgsort`; `pySetOrder`. A detection is
+`{points: Float64Array(2K) NaN-missing, score, isUser?}`.
+
+**Imports from project modules.** None.
+
+**Imported by.** `pose/single-camera-tracking.js`.
+
+**Coverage.** `tests/test-sleap-tracker.mjs` against
+`tests/fixtures/sleap-tracker/reference.json` — 900 frames of synthetic
+detections (close passes, missed detections, missing nodes, spurious poses,
+empty frames) tracked by upstream sleap-nn under six configs, every track id
+compared — plus SciPy's / numpy's / CPython's answers on tie cases. Regenerate
+the fixture with `tests/fixtures/sleap-tracker/make_fixture.py <sleap-nn
+checkout>` (run with sleap-nn's own Python) when moving the port to a newer
+sleap-nn.
+
+---
+
+### pose/single-camera-tracking.js
+
+**Purpose.** Track All and the ID-switch checks on a session with ONE camera — a
+plain SLEAP predictions file opened with File ▸ Load SLP, which gets one
+placeholder `Camera` and every detection unlinked. With one view there is no
+cross-view matching and no 3D, so Track All runs SLEAP's tracker
+(`pose/sleap-tracker.js`) instead, in sleap-nn's recommended known-count setup:
+`local_queues`, `max_tracks` = `tracking_target_instance_count` = the animal
+count, connect single breaks.
+
+**It writes the TRACKS**, as `sleap-nn track` does — unlike multi-camera Track
+All, which writes identities only and leaves Propagate IDs → Tracks to the
+user. On one camera a track IS an animal's identity, and tracks are what a
+saved `.slp` hands back to SLEAP. `session.tracks` becomes `track_0…`, every
+instance's `trackIdx` is rewritten, and identity `id_k` (id k) is tied to track
+k through `frameIdentityMap` — keyed by track, so identity follows the track
+from then on. A detection the tracker drops (over the animal count, too few
+points) becomes trackless, as do predictions on a frame that has user instances.
+Occluded nodes are fed to the tracker as missing: SLEAP's invisible points read
+as NaN in sleap-nn.
+
+**The default OKS tolerance is 0.1, not sleap-nn's 0.025** (Tracking Wizard
+`scOksStddev`). On 35 proofread 10-min SLAP camera videos (3–4 mice, different
+coat colours; each track paired 1:1 with a proofread animal): sleap-nn's
+known-count defaults 85.8% correct, 156 lasting swaps; at 0.1, 93.6% and 102;
+0.15 93.1%; 0.2 and above worse again (0.5: 75.1%). The mechanism is general —
+at 0.025 every pose more than ~1.5 body lengths from a track scores exactly 0,
+so after a fast move or a gap the assignment is decided by tie-breaking.
+Window 10 was about the same as 5 (88.4% at 0.025), 30 much worse.
+
+**The ID-switch checks read a stand-in** (`singleCameraCheckSession`): one
+InstanceGroup-shaped object per identified detection, its 2D as `points3d`
+(x, y, 0), the detection under `instances` (what the image check crops). The
+checks are relative to the median body size and standardise their features, so
+pixels instead of millimetres cost nothing; but a 2D bone length also changes
+with posture and distance from the camera, so body size is not a usable cue on
+one camera, and single-camera Track All does not run it automatically. Measured
+in the app on 35 proofread 10-min SLAP videos (59 real swaps after Track All):
+size caught 2 at -50 (encounter AUC 0.55, 6 false rows); the image check —
+with talmolab/luc3d#286's episode scoring, which was unmerged at the time —
+caught 19 at its -200 default for 15 false rows (0.4 per 10 min), 32 s per
+10-min, 3-mouse video. Most of the swaps it misses are not at an encounter it
+scores (multi-animal contacts, or one animal's detection missing for seconds
+while its track takes another animal).
+
+**A fix swaps the tracks** (`swapSingleCameraIdentities`), so the saved file
+carries it, when each of the two identities is one track over the range (always
+true after single-camera Track All); otherwise — identities hand-edited apart
+from their tracks — it swaps the identity layer alone, like a multi-camera fix.
+It is its own inverse, which is how Undo works.
+
+**Eager sessions only.** A lazy (> 150 MB) single-camera project is refused with
+`SINGLE_CAMERA_LAZY_REASON` rather than tracked from its resident window. Track
+Frame and Track Frame Range are refused on one camera (the tracker is temporal,
+and a range would need its new tracks mapped onto the old ones).
+
+**Key exports.** `singleCameraName(session)` (the camera, or null);
+`singleCameraTrackerConfig(numAnimals, {windowSize, oksStddev, connectBreaks})`;
+`trackSingleCamera(session, cfg, {onProgress, signal})` ->
+`{numIdentities, frames, tracked, untracked}`; `singleCameraCheckSession(session)`
+-> stand-in | null | `{fail}`; `swapSingleCameraIdentities(session, from, to, idA, idB)`
+-> `{frames, tracks: boolean}` | null; `SINGLE_CAMERA_LAZY_REASON`.
+
+**Imports from project modules.** `pose/sleap-tracker.js`.
+
+**Imported by.** `pose/tracker.js` (Track All), `ui/id-switch-modal.js` (the
+checks and the fix).
+
+**Coverage.** `tests/test-single-camera-tracking.mjs` (one track per animal
+across 18 input tracklet breaks, the spurious detection and the user frame, the
+stand-in and a planted swap found by the real size check, the track swap and
+its fallback, the refusals) and `tests/e2e/single-camera-track-all.mjs` (the
+real buttons, the refusals, and a planted swap found, fixed and undone through
+the ID Switches tab). `tests/e2e/_real-single-camera.mjs` runs the whole thing
+on a real SLEAP file through File ▸ Load SLP.
 
 ---
 
@@ -8583,6 +8749,18 @@ line ("Assigned N identities … · ID-switch check (body size): …; ID-switch 
 a check that cannot run as "skipped — reason", never as a failure of the pass. It
 always analyses the WHOLE session's identities.
 
+**On a single-camera session** (`pose/single-camera-tracking.js`) the checks run
+on `singleCameraCheckSession`'s stand-in — the one view's 2D as `points3d`
+(x, y, 0) — since there is no 3D; "nothing to check" means no identified
+detection rather than no 3D skeleton, and "About these flags" calls the size cue
+2D. A fix swaps the two TRACKS there (`swapSingleCameraIdentities`, which is
+also the undo), so the saved `.slp` carries it; its dialog says "(their tracks)"
+instead of "in every camera view". Results are kept on the real session as
+usual. Single-camera Track All runs only the image check automatically (body
+size from one view is not a usable cue — see `pose/single-camera-tracking.js`).
+On a real 10-min single-camera SLAP video in headless Chrome the image check
+took 32 s (one view, 3 mice, 2 crops/s).
+
 **The image check.** Needs the session's videos and WebGPU (else it says why).
 Runs under its own cancellable progress dialog (Cancel / Esc -> "cancelled", no
 markers added): model download (first use), "Cropping and embedding N views:
@@ -8681,6 +8859,8 @@ rename them wrongly.
 `getActiveSession`), `import-export/save-load.js` (`setStatus`),
 `ui/loading-overlay.js` (`showLoadingProgress`, `hideLoading`, `yieldToPaint`),
 `ui/settings.js` (`getTrackingThreshold`), `pose/id-switch-check.js`,
+`pose/single-camera-tracking.js` (`singleCameraName`, `singleCameraCheckSession`,
+`swapSingleCameraIdentities`),
 `ui/image-embedder.js` (`hasWebGPU`, `createImageEmbedder`),
 `ui/id-switch-review.js` (row keys, change-point helpers, `linkIdSwitchResults`,
 `idSwitchFixPlan`, `idSwitchFixFor`, `idSwitchRenameForFix`),
@@ -9091,13 +9271,18 @@ Shortcuts and the Hot Keys modal where people look for them.
   included or tracking aborts with a warning.
 - `getTrackingThresholdDefs()` / `getTrackingThreshold(id)` /
   `getTrackingThresholds()` / `setTrackingThresholds(map)` — read/write the
-  tracker's user-editable thresholds. `getTrackingThresholdDefs` returns the
+  tracker's user-editable thresholds. Three of them configure single-camera
+  Track All (SLEAP's tracker, `pose/single-camera-tracking.js`): `scWindowSize`
+  (sleap-nn `--tracking_window_size`, default 5), `scOksStddev` (`--oks_stddev`,
+  default **0.1**, not sleap-nn's 0.025 — see that module) and `scConnectBreaks`
+  (0/1, `--post_connect_single_breaks`, default 1). `getTrackingThresholdDefs` returns the
   wizard's render catalog `[{ id, label, default, value, min, max, step, desc, kind }]`
   (`kind`: `'toggle'` for on/off settings, drawn as a switch; else `'number'`),
   **filtered to `WIZARD_THRESHOLD_IDS`** — the CrossViewTracker's free parameters
   only (`filterMinVisibleNodes`, `filterMinInstanceScore`, `corr2dWeight`,
   `corr3dWeight`, `velocityThreshold`, `distanceThreshold`, `timePenalty`,
   `stale`, `matchGate` (0/1 toggle for the CrossViewTracker match gate),
+  `scWindowSize`, `scOksStddev`, `scConnectBreaks` (single camera),
   `reprojErrorThreshold`, `autoSwitchCheck` — 0/1, run the body-size ID-switch
   check after Track All / Track Frame Range, default 1; `autoImageSwitchCheck` —
   0/1, the image check likewise, default 0; `imageCheckThreshold` -25;
