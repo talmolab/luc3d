@@ -3222,6 +3222,63 @@ export function asPoints3d(v) {
     return fromBoxedPoints3d(v);
 }
 
+// --------------------------------------------------------------------------
+// Pooled `InstanceGroup.points3d` storage
+// --------------------------------------------------------------------------
+
+/**
+ * Doubles per slab: 1 MB, ~2,900 groups at 15 nodes. Small enough that a
+ * re-solved group's dead region pins little; large enough that a project's
+ * 539,545 groups need ~185 ArrayBuffers instead of one each.
+ */
+var P3_SLAB_DOUBLES = 1 << 17;
+var _p3Slab = null;
+var _p3Used = 0;
+/** The slabs' ArrayBuffers, so an already-pooled array is not copied again. */
+var _p3SlabBuffers = new WeakSet();
+
+/**
+ * `points` (a group's flat 3D, as `asPoints3d` normalizes it) copied into the
+ * shared slab pool: the returned `Float64Array` is a VIEW of exactly its own
+ * 3N doubles in a 1 MB slab. Assign it as `group.points3d` on every BULK path —
+ * Triangulate All, Track All, reopen, the origin re-base.
+ *
+ * WHY: one `Float64Array` per group meant one ArrayBuffer per group — 539,545
+ * on the 8-camera, 108,000-frame project after Triangulate All — and every full
+ * GC sweeps every ArrayBuffer (`_bench-playback.mjs HEAPPROBE=1 STRIP=1`).
+ *
+ * A view behaves like an owned array for everything `points3d` is used for:
+ * indexing, in-place writes (they stay inside its own region), `length`,
+ * `slice()`, `new Float64Array(view)`, `ArrayBuffer.isView`. What it must
+ * never be is TRANSFERRED or re-wrapped by `.buffer` — that is the whole slab.
+ * Nothing does either today; keep it that way (a `postMessage` of one would also
+ * copy the whole slab). A pooled array is returned unchanged; null/empty pass
+ * through; anything too large for a slab keeps its own buffer.
+ * @param {Float64Array|Array|null} points
+ * @returns {Float64Array|null}
+ */
+export function pooledPoints3d(points) {
+    var src = asPoints3d(points);
+    if (!src || src.length === 0) return src;
+    if (_p3SlabBuffers.has(src.buffer)) return src;
+    var n = src.length;
+    if (n > P3_SLAB_DOUBLES >> 4) return src;
+    if (!_p3Slab || _p3Used + n > _p3Slab.length) {
+        _p3Slab = new Float64Array(P3_SLAB_DOUBLES);
+        _p3SlabBuffers.add(_p3Slab.buffer);
+        _p3Used = 0;
+    }
+    var view = _p3Slab.subarray(_p3Used, _p3Used + n);
+    view.set(src);
+    _p3Used += n;
+    return view;
+}
+
+/** Is `points3d` a view into the slab pool? (diagnostics / tests) */
+export function isPooledPoints3d(points3d) {
+    return !!points3d && ArrayBuffer.isView(points3d) && _p3SlabBuffers.has(points3d.buffer);
+}
+
 
 // --------------------------------------------------------------------------
 // Linear algebra helpers (module-level utility functions)

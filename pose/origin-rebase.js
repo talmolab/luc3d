@@ -67,7 +67,7 @@
 // DOM-free, so it is testable directly.
 
 import { applyOriginFrame, mulMat3Vec3, rebaseExtrinsics } from './origin-frame.js';
-import { points3dNodeCount, hasPoint3d } from './pose-data.js';
+import { points3dNodeCount, hasPoint3d, pooledPoints3d } from './pose-data.js';
 
 /**
  * The SESSION-scoped tally fields — exactly what one `perSession` record
@@ -513,7 +513,9 @@ export async function planOriginRebase(sessions, model, frame, opts) {
 export function applyOriginRebase(plan) {
     var i;
     for (i = 0; i < plan.groups.length; i++) {
-        plan.groups[i].group.points3d = plan.groups[i].next;
+        // Into the slab pool (pose-data.js `pooledPoints3d`), not one
+        // ArrayBuffer per group. The plan's own buffers are left for the GC.
+        plan.groups[i].group.points3d = pooledPoints3d(plan.groups[i].next);
     }
     for (i = 0; i < plan.nodes.length; i++) {
         var node = plan.nodes[i].node, nn = plan.nodes[i].next;

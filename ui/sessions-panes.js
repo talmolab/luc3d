@@ -29,7 +29,7 @@ import {
     videoController, interactionManager, viewport3d, timeline, paneManager,
     setVideoController, setPaneManager,
 } from './app-state.js';
-import { FrameGroup, UnlinkedInstance, Camera, someValidPoint3d } from '../pose/pose-data.js';
+import { FrameGroup, UnlinkedInstance, Camera, someValidPoint3d, pooledPoints3d } from '../pose/pose-data.js';
 import {
     triangulateAndReproject, storeReprojectedInstances, getInstanceGroupsForFrame,
     sessionHasCalibration, resolveTriangulationMethod,
@@ -1473,7 +1473,7 @@ function moveVideosToSession(viewNames, fromIdx, toIdx) {
                                 { method: resolveTriangulationMethod(group) });
                             var valid = someValidPoint3d(result.points3d);
                             if (valid) {
-                                group.points3d = result.points3d;
+                                group.points3d = pooledPoints3d(result.points3d);
                                 group.triangulationMethod = result.method;
                                 group.reprojections = result.reprojections;
                                 storeReprojectedInstances(group, result, fromSession.cameras);
