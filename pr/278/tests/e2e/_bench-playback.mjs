@@ -106,6 +106,7 @@
  *                            (Not `Runtime.queryObjects`: on Object.prototype
  *                            it materializes every object in the heap, which
  *                            crashed the renderer on the real project.)
+ *     GC_REPS=3              forced full GCs per measurement (median and min reported)
  *     STRIP=1                with HEAPPROBE: then DESTROY the graph one
  *                            structure at a time, timing a full GC after each,
  *                            to attribute GC cost per structure. Ends the run.
@@ -735,11 +736,12 @@ try {
     if (HEAPPROBE) {
         log(`\n[${el()}] === heap probe ===`);
         const cdp = await page.context().newCDPSession(page);
-        const timedGc = () => page.evaluate(() => {
-            const t = []; for (let i = 0; i < 3; i++) { const a = performance.now(); gc(); t.push(performance.now() - a); }
+        const GC_REPS = Number(process.env.GC_REPS || 3);
+        const timedGc = () => page.evaluate((reps) => {
+            const t = []; for (let i = 0; i < reps; i++) { const a = performance.now(); gc(); t.push(performance.now() - a); }
             const m = performance.memory || {};
             return { gcMs: t.map(x => Math.round(x)), usedMB: Math.round((m.usedJSHeapSize || 0) / 1048576) };
-        });
+        }, GC_REPS);
         const heapUsage = async () => { const h = await cdp.send('Runtime.getHeapUsage'); return { v8UsedMB: Math.round(h.usedSize / 1048576), v8TotalMB: Math.round(h.totalSize / 1048576), embedderMB: h.embedderHeapUsedSize != null ? Math.round(h.embedderHeapUsedSize / 1048576) : null, backingStoreMB: h.backingStorageSize != null ? Math.round(h.backingStorageSize / 1048576) : null }; };
         await timedGc();
         const census = await page.evaluate(() => {
@@ -785,7 +787,8 @@ try {
         log(`  census: ${JSON.stringify(census)}`);
         const base = await timedGc();
         const hu = await heapUsage();
-        log(`  forced full GC (x3): ${JSON.stringify(base.gcMs)} ms | usedJSHeapSize ${base.usedMB} MB | ${JSON.stringify(hu)}`);
+        { const so = base.gcMs.slice().sort((a, b) => a - b);
+          log(`  forced full GC (x${so.length}): ${JSON.stringify(base.gcMs)} ms — median ${so[so.length >> 1]}, min ${so[0]} | usedJSHeapSize ${base.usedMB} MB | ${JSON.stringify(hu)}`); }
         summary.heapProbe = { census, gc: base, heapUsage: hu };
         if (STRIP) {
             const steps = [

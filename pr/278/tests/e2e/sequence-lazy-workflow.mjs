@@ -447,6 +447,26 @@ try {
         return { target, bytes };
     };
 
+    // Groups whose points3d live in the slab pool (pose-data.js
+    // `pooledPoints3d`), and how many ArrayBuffers they share between them —
+    // one per group was the GC cost the pool removes.
+    const pooled3d = () => page.evaluate(async () => {
+        const pd = await import('/pose/pose-data.js');
+        const s = window.__lucid.state.session;
+        let with3d = 0, pooled = 0; const bufs = new Set();
+        for (const [, gs] of s.instanceGroups) for (const g of gs) {
+            if (!g.points3d) continue;
+            with3d++; if (pd.isPooledPoints3d(g.points3d)) pooled++;
+            bufs.add(g.points3d.buffer);
+        }
+        return { with3d, pooled, buffers: bufs.size };
+    });
+    const checkPooled = async (label) => {
+        const p = await pooled3d();
+        check(`${label}: every group's 3D is in the slab pool, sharing few buffers (${p.buffers} for ${p.with3d} groups)`,
+            p.with3d > 0 && p.pooled === p.with3d && p.buffers * 50 < p.with3d, p);
+    };
+
     // =========================================================
     // CYCLE 1 — reopen the fixture, verify the lazy precondition
     // =========================================================
@@ -493,6 +513,7 @@ try {
         triA.s.triResults <= 2, { triResults: triA.s.triResults });
     check('Triangulate All released its windows',
         triA.s.resident < FRAMES / 10, { resident: triA.s.resident });
+    await checkPooled('after Triangulate All');
     // The reported bug: "Triangulated: <resident count>" after triangulating
     // every frame of a lazy project.
     const cTri = await checkCounters('after Triangulate All', { triangulated: FRAMES });
@@ -834,6 +855,180 @@ try {
         badDel.length === 0, { bad: badDel.slice(0, 12), nTracks: s6b.tracks });
 
     // =========================================================
+    // CYCLE 5c — an interactive DELETE is durable
+    // =========================================================
+    // The Delete key, Edit ▸ Delete Instance, the toolbar's "- Instance" and the
+    // group context menu's "Delete group" used to edit only the RESIDENT frame.
+    // On a lazy project the store is the source of truth, so the deleted
+    // instance came straight back twice over: a windowed sweep (here Triangulate
+    // All) releases a frame with no user instance and re-hydrates it from the
+    // store, and the streaming save writes the store rows of any camera-frame
+    // with no user instance. Every case below is predicted-only, which is
+    // exactly the frame both of those treat as rebuildable.
+    //   D_UL    an ungrouped prediction, deleted (the reported case)
+    //   D_MEM   one view of a group (per-camera delete; the group keeps >=2)
+    //   D_GRP   a whole group (Shift+Delete)
+    //   D_CTX   a whole group, from the group context menu
+    //   D_LONE  every view but one of a group -> the survivor is auto-ungrouped
+    // D_MEM and D_LONE delete animal 0's row 0 / animal 1's rows, so the rows
+    // left in those camera-frames are renumbered — the saved grouping is only
+    // right if the survivors' `_rawInstIndex` followed the compaction.
+    const D = { D_UL: 210, D_MEM: 220, D_GRP: 230, D_CTX: 240, D_LONE: 250 };
+    const AWAY = Math.floor(FRAMES * 0.8);
+    await page.evaluate(() => {
+        /** Per camera: node-0 positions of the grouped and ungrouped instances. */
+        window.__seqFrameShape = (f) => {
+            const s = window.__lucid.state.session;
+            const fg = s.frameGroups.get(f);
+            if (!fg) return null;
+            const key = (inst) => inst.hasPoint(0) ? inst.getX(0).toFixed(3) + ',' + inst.getY(0).toFixed(3) : 'none';
+            const cams = {};
+            for (const c of s.cameras) {
+                cams[c.name] = {
+                    linked: fg.getInstances(c.name).map(key).sort(),
+                    unlinked: fg.getUnlinkedInstances(c.name).map(u => key(u.instance)).sort(),
+                };
+            }
+            return { groups: (s.instanceGroups.get(f) || []).length, cams };
+        };
+        window.__seqStoreRows = () => {
+            let n = 0;
+            window.__lucid.state.session.lazyLoader.forEachInstanceRow(() => { n++; });
+            return n;
+        };
+    });
+    const del5c = await runOp('DELETE through the real Delete paths (5 frames)', async ({ D, AWAY }) => {
+        const st = window.__lucid.state;
+        const s = st.session;
+        const im = window.__lucid.interactionManager;
+        const tri = await import('/pose/triangulation.js');
+        const wiring = await import('/ui/ui-wiring.js');
+        const saveLoad = await import('/import-export/save-load.js');
+        const rowsBefore = window.__seqStoreRows();
+        const cams = s.cameras.map(c => c.name);
+        const groupsOf = (f) => (s.instanceGroups.get(f) || []).slice();
+        // Each delete starts from a CLEAN project, so `dirty[k]` is that delete's
+        // own doing: an unmarked delete is lost without a prompt on closing the
+        // tab, or on switching sessions (which evicts the session's store).
+        const at = async (f) => {
+            await tri.ensureLazyFrameData(f); st.currentFrame = f; im.clearSelection(); saveLoad.clearDirty();
+        };
+        const out = { before: {}, after: {}, dirty: {} };
+        let expectDeleted = 0;
+
+        await at(D.D_UL);
+        out.before.D_UL = window.__seqFrameShape(D.D_UL);
+        const ul = s.unlinkGroup(D.D_UL, groupsOf(D.D_UL)[1]).find(u => u.cameraName === cams[0]);
+        if (!ul) return { err: 'no ungrouped instance on D_UL' };
+        im.selectedUnlinked = ul;
+        im.lastInteractedView = cams[0];
+        im._deleteSelected();
+        expectDeleted += 1;
+        out.dirty.D_UL = st.isDirty && s.isDirty;
+
+        await at(D.D_MEM);
+        out.before.D_MEM = window.__seqFrameShape(D.D_MEM);
+        im.select(groupsOf(D.D_MEM)[0], -1);
+        im.lastInteractedView = cams[1];
+        im._deleteSelected(false);
+        expectDeleted += 1;
+        out.dirty.D_MEM = st.isDirty && s.isDirty;
+
+        await at(D.D_GRP);
+        out.before.D_GRP = window.__seqFrameShape(D.D_GRP);
+        im.select(groupsOf(D.D_GRP)[1], -1);
+        im.lastInteractedView = cams[0];
+        im._deleteSelected(true);
+        expectDeleted += cams.length;
+        out.dirty.D_GRP = st.isDirty && s.isDirty;
+
+        await at(D.D_CTX);
+        out.before.D_CTX = window.__seqFrameShape(D.D_CTX);
+        wiring.showGroupContextMenu(0, 0, groupsOf(D.D_CTX)[1]);
+        document.getElementById('ctxDeleteGroup').click();
+        expectDeleted += cams.length;
+        out.dirty.D_CTX = st.isDirty && s.isDirty;
+
+        await at(D.D_LONE);
+        out.before.D_LONE = window.__seqFrameShape(D.D_LONE);
+        const lone = groupsOf(D.D_LONE)[1];
+        for (let c = 0; c < cams.length - 1; c++) {
+            im.select(lone, -1);
+            im.lastInteractedView = cams[c];
+            im._deleteSelected(false);
+            expectDeleted += 1;
+        }
+        out.dirty.D_LONE = st.isDirty && s.isDirty;
+
+        for (const k in D) out.after[k] = window.__seqFrameShape(D[k]);
+        st.currentFrame = AWAY;
+        im.clearSelection();
+        return { ...out, rowsBefore, rowsAfter: window.__seqStoreRows(), expectDeleted };
+    }, { D, AWAY });
+    const d5 = del5c.r || {};
+    check('cycle 5c: the deletes ran', !!(d5.after && d5.expectDeleted), d5.err || undefined);
+    check('cycle 5c: every delete marked the project (and its session) dirty',
+        !!d5.dirty && Object.keys(D).every(k => d5.dirty[k] === true), d5.dirty);
+    // What each delete must have done to its frame in memory. These pin the
+    // in-memory semantics (unchanged by the store write) so a later "came
+    // back" cannot be a delete that never happened.
+    const shapeOf = (k) => (d5.after || {})[k] || null;
+    const n = (sh, cam) => sh ? sh.cams[cam].linked.length + sh.cams[cam].unlinked.length : -1;
+    check('cycle 5c: D_UL lost exactly the deleted ungrouped instance',
+        !!shapeOf('D_UL') && n(shapeOf('D_UL'), 'cam0') === 1 && shapeOf('D_UL').cams.cam0.unlinked.length === 0 &&
+        shapeOf('D_UL').groups === 1, shapeOf('D_UL'));
+    check('cycle 5c: D_MEM lost one view of a group, which kept the rest',
+        !!shapeOf('D_MEM') && n(shapeOf('D_MEM'), 'cam1') === 1 && shapeOf('D_MEM').groups === ANIMALS, shapeOf('D_MEM'));
+    check('cycle 5c: D_GRP and D_CTX each lost a whole group',
+        ['D_GRP', 'D_CTX'].every(k => shapeOf(k) && shapeOf(k).groups === ANIMALS - 1 &&
+            Object.keys(shapeOf(k).cams).every(c => n(shapeOf(k), c) === 1)),
+        { D_GRP: shapeOf('D_GRP'), D_CTX: shapeOf('D_CTX') });
+    check('cycle 5c: D_LONE\'s survivor was auto-ungrouped',
+        !!shapeOf('D_LONE') && shapeOf('D_LONE').groups === ANIMALS - 1 &&
+        shapeOf('D_LONE').cams['cam' + (CAMS - 1)].unlinked.length === 1, shapeOf('D_LONE'));
+    // THE durability property: the rows left the store, not just the window.
+    check(`cycle 5c: the store lost exactly the ${d5.expectDeleted} deleted rows`,
+        d5.rowsBefore - d5.rowsAfter === d5.expectDeleted,
+        { before: d5.rowsBefore, after: d5.rowsAfter, want: d5.expectDeleted });
+
+    // A windowed sweep releases every predicted-only frame and re-hydrates it
+    // from the store — the in-memory way a delete used to be undone.
+    const sweep5c = await runOp('TRIANGULATE ALL (releases the deleted frames)', async ({ D }) => {
+        const tri = await import('/pose/triangulation.js');
+        const s = window.__lucid.state.session;
+        try { await tri.triangulateAllFrames('dlt'); } catch (e) { return { err: String(e && e.stack || e).slice(0, 400) }; }
+        const released = {};
+        for (const k in D) released[k] = !s.frameGroups.has(D[k]);
+        const shapes = {};
+        for (const k in D) { await tri.ensureLazyFrameData(D[k]); shapes[k] = window.__seqFrameShape(D[k]); }
+        return { released, shapes };
+    }, { D });
+    const sw = sweep5c.r || {};
+    check('cycle 5c: Triangulate All released the deleted frames (so re-hydration is really tested)',
+        !!sw.released && Object.values(sw.released).every(Boolean), sw.released);
+    for (const k of Object.keys(D)) {
+        check(`cycle 5c: ${k} re-hydrated after the sweep exactly as deleted`,
+            !!sw.shapes && JSON.stringify(sw.shapes[k]) === JSON.stringify(shapeOf(k)),
+            { got: sw.shapes && sw.shapes[k], want: shapeOf(k) });
+    }
+
+    const save5c = await save('c5c');
+    await reopen(save5c.target, 'after interactive deletes');
+    const after5c = await page.evaluate(async ({ D }) => {
+        const tri = await import('/pose/triangulation.js');
+        const shapes = {};
+        for (const k in D) { await tri.ensureLazyFrameData(D[k]); shapes[k] = window.__seqFrameShape(D[k]); }
+        return { shapes, rows: window.__seqStoreRows() };
+    }, { D });
+    check('cycle 5c: the reopened store holds the post-delete row count',
+        after5c.rows === d5.rowsAfter, { got: after5c.rows, want: d5.rowsAfter });
+    for (const k of Object.keys(D)) {
+        check(`cycle 5c: ${k}'s delete persisted through save+reload (instances AND grouping)`,
+            JSON.stringify(after5c.shapes[k]) === JSON.stringify(shapeOf(k)),
+            { got: after5c.shapes[k], want: shapeOf(k) });
+    }
+
+    // =========================================================
     // CYCLE 6 — TRACK ALL on the reopened project
     // =========================================================
     // Direct coverage for `sweepTrackAllFrames`, which luc3d #195 re-pointed at the
@@ -916,6 +1111,7 @@ try {
     const s7 = await reopen(save6.target, 'after Track All');
     check('grouping from Track All survived save+reload',
         s7.igFrames >= FRAMES * 0.95, { igFrames: s7.igFrames, frames: FRAMES });
+    await checkPooled('after Track All + save + reopen');
     check('frameIdentityMap from Track All survived save+reload',
         s7.fim >= FRAMES * CAMS * 0.95, { fim: s7.fim });
 

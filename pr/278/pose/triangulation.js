@@ -9,26 +9,26 @@
 
 import { mat3x3Multiply, Camera, FrameGroup, Instance, UnlinkedInstance, InstanceGroup,
          makePoints3d, points3dNodeCount, hasPoint3d, getPoint3d, readPoint3d,
-         setPoint3d, clearPoint3d, someValidPoint3d, countPoints3d } from './pose-data.js?v=394ad6d8241c';
+         setPoint3d, clearPoint3d, someValidPoint3d, countPoints3d, pooledPoints3d } from './pose-data.js?v=43f1992b9acd';
 // The Jacobi eigensolver and the least-squares plane fit live in
 // `pose/plane-fit.js`, so `pose/plane-data.js` can reach the fit without
 // importing this module — and the whole UI with it. `fitPlaneToPoints3d` is
 // re-exported unchanged, because every existing caller and test reads it here.
-import { jacobiEigen, fitPlaneToPoints3d } from './plane-fit.js?v=394ad6d8241c';
+import { jacobiEigen, fitPlaneToPoints3d } from './plane-fit.js?v=43f1992b9acd';
 export { fitPlaneToPoints3d };
-import { state, timeline, viewport3d } from '../ui/app-state.js?v=394ad6d8241c';
+import { state, timeline, viewport3d } from '../ui/app-state.js?v=43f1992b9acd';
 // Pass 3i-2: triangulation orchestration moved out of app.js
-import { setReprojErrorVisible, showReprojectionsOnly, REPROJ_ONLY_NOTE, drawAllOverlays } from '../ui/rendering.js?v=394ad6d8241c';
-import { updateTriangulationBadge } from '../ui/info-panel.js?v=394ad6d8241c';
-import { isCameraTracked, getTrackingThreshold, getDefaultTriangulationMethod } from '../ui/settings.js?v=394ad6d8241c';
-import { markDirty, setStatus, showLoading, hideLoading } from '../import-export/save-load.js?v=394ad6d8241c';
-import { showLoadingProgress, createProgressPacer, yieldToPaint } from '../ui/loading-overlay.js?v=394ad6d8241c';
-import { createGroupSolver } from './triangulation-pool.js?v=394ad6d8241c';
+import { setReprojErrorVisible, showReprojectionsOnly, REPROJ_ONLY_NOTE, drawAllOverlays } from '../ui/rendering.js?v=43f1992b9acd';
+import { updateTriangulationBadge } from '../ui/info-panel.js?v=43f1992b9acd';
+import { isCameraTracked, getTrackingThreshold, getDefaultTriangulationMethod } from '../ui/settings.js?v=43f1992b9acd';
+import { markDirty, setStatus, showLoading, hideLoading } from '../import-export/save-load.js?v=43f1992b9acd';
+import { showLoadingProgress, createProgressPacer, yieldToPaint } from '../ui/loading-overlay.js?v=43f1992b9acd';
+import { createGroupSolver } from './triangulation-pool.js?v=43f1992b9acd';
 import { holdLazyResidency, lazyInstanceTrackIdx, trimLazyResidency, LAZY_NAV_WINDOW,
-         releaseFrameMembers2D } from './lazy-residency.js?v=394ad6d8241c';
-import { unionTrackNames, remapTrackIdx, isIdentityRemap } from '../loading/track-union.js?v=394ad6d8241c';
+         releaseFrameMembers2D } from './lazy-residency.js?v=43f1992b9acd';
+import { unionTrackNames, remapTrackIdx, isIdentityRemap } from '../loading/track-union.js?v=43f1992b9acd';
 // Pass 3i-3: update3DViewport moved to pose/initialization.js.
-import { update3DViewport } from './initialization.js?v=394ad6d8241c';
+import { update3DViewport } from './initialization.js?v=43f1992b9acd';
 // The pure math (DLT, refinement, reprojection, triangulateAndReproject) lives
 // in ./triangulation-core.js so a worker can load it; re-exported below so every
 // existing import of these names from this module keeps working.
@@ -45,7 +45,7 @@ import {
     computeReprojectionError, computeReprojectionErrors, computeMeanReprojectionError,
     invert3x3, triangulateAndReproject, __triangulationKernelsForTest,
     setTriangulationSettingsHooks,
-} from './triangulation-core.js?v=394ad6d8241c';
+} from './triangulation-core.js?v=43f1992b9acd';
 export {
     triangulatePointDLT, triangulatePoints, BA_ROBUST_SCALE_PX,
     triangulatePointBA, triangulatePointsBA,
@@ -2936,7 +2936,7 @@ function _prepareGroupStep(group, cameras) {
 /** Store a solve's result on the group (the tail of `_triangulateGroupStep`). */
 function _applyGroupStep(group, prep, result) {
     group.triangulationMethod = result.method;
-    group.points3d = result.points3d;
+    group.points3d = pooledPoints3d(result.points3d);   // one slab, not one ArrayBuffer per group
     group.usedCameras = prep.usedCameras;
 }
 

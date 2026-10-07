@@ -31,7 +31,15 @@
  * (`loading/track-union.js`) — see `_unifyTracks`.
  */
 
-import { unionTrackNames } from './track-union.js?v=394ad6d8241c';
+import { unionTrackNames } from './track-union.js?v=43f1992b9acd';
+
+/**
+ * `deleteInstanceRows` moves surviving rows with one `copyWithin` per run when
+ * at most this many rows go, element by element otherwise. Measured on 2.7M rows
+ * x 10 columns: runs ~5 ms for a single delete vs ~70 ms for the loop, and the
+ * loop wins once runs get short and numerous.
+ */
+var DELETE_RUN_COPY_MAX = 4096;
 
 /**
  * Adapt a materialized sleap-io.js typed Instance/PredictedInstance into the flat
@@ -160,7 +168,7 @@ export class SioLazyLoader {
         }
         // Point the reader's internal I/O worker at LUCID's local vendored h5wasm
         // IIFE (document.baseURI keeps this correct on sub-path deployments).
-        var h5wasmUrl = new URL('lib/h5wasm/h5wasm.iife.js?v=394ad6d8241c', document.baseURI).href;
+        var h5wasmUrl = new URL('lib/h5wasm/h5wasm.iife.js?v=43f1992b9acd', document.baseURI).href;
         var labels = await SIO.readSlpStreaming(file, {
             lazy: true,
             openVideos: false,
@@ -390,7 +398,7 @@ export class SioLazyLoader {
         if (!SIO || typeof SIO.readSlpStreaming !== 'function') {
             throw new Error('sleap-io.js readSlpStreaming not available on window.SleapIO');
         }
-        var h5wasmUrl = new URL('lib/h5wasm/h5wasm.iife.js?v=394ad6d8241c', document.baseURI).href;
+        var h5wasmUrl = new URL('lib/h5wasm/h5wasm.iife.js?v=43f1992b9acd', document.baseURI).href;
         var labels = await SIO.readSlpStreaming(file, {
             lazy: true,
             openVideos: false,
@@ -1053,6 +1061,27 @@ export class SioLazyLoader {
      * whose target was deleted to `-1` — mirroring what `appendStore`'s own
      * `outIdxOf` already does for rows skipped by the overlay.
      *
+     * ## Cost: one keypress, not one bulk operation
+     *
+     * Every interactive Delete goes through here too (`ui/interaction.js`
+     * `_deleteSelected`, via `deleteTargetsFromStore`), so a single-row delete
+     * must not cost what a whole-project one does. Measured on a real-size
+     * shared store (180,210 frames x 5 cameras, 2.7M instance rows) it used to
+     * be 130-200 ms and ~216 MB of fresh column buffers per keypress, from three
+     * whole-project passes. Each is now bounded by what was deleted:
+     *  - `opts.only` walks just the named (camera, frame) rows instead of
+     *    calling `shouldDeleteFn` on all 2.7M;
+     *  - columns are compacted IN PLACE from the first deleted row (rows before
+     *    it do not move) and re-exposed as a shorter `subarray` view — no new
+     *    buffer, unless more than half the rows went, when a right-sized copy
+     *    gives the memory back as the old fresh-array compaction did;
+     *  - track occupancy is rebuilt only for a camera that LOST a row. On a
+     *    shared store every camera's ranges shift, but a camera's occupancy is
+     *    its frames' track values, which only its own deletions change.
+     * In place is safe because every reader indexes `store.instancesData.<col>`
+     * element-wise and fresh (`appendStore`, the store's own `materializeFrame`,
+     * `forEachInstanceRow`); nothing holds a column across a delete.
+     *
      * CALLER CONTRACT: this only touches the store. The caller must also
      * renumber `_rawInstIndex` on every surviving resident/group instance in
      * each touched (camera, frame) — otherwise `refFor` writes grouping refs
@@ -1064,9 +1093,15 @@ export class SioLazyLoader {
      *   Called once per instance row per camera. `offsetInFrame` is the row's
      *   position within its (camera, frame) list — i.e. the value an
      *   `Instance._rawInstIndex` would carry.
+     * @param {{only?: Map<string, Map<number, *>|Set<number>>}} [opts]
+     *   `only` — camName -> the frame indices (a Map's keys or a Set) whose rows
+     *   may be deleted. `shouldDeleteFn` is then called for those camera-frames'
+     *   rows ONLY; a camera or frame not named is never visited. Purely a
+     *   narrowing of the walk: the predicate still decides every row.
      * @returns {{deleted: number, errorRows: number, firstError: Error|null, byCamera: Object.<string, number>}}
      */
-    deleteInstanceRows(shouldDeleteFn) {
+    deleteInstanceRows(shouldDeleteFn, opts) {
+        var only = opts && opts.only ? opts.only : null;
         var deleted = 0;
         var errorRows = 0;
         var firstError = null;
@@ -1107,11 +1142,26 @@ export class SioLazyLoader {
             // spent two PRs removing.
             var kill = new Uint8Array(nInst);
             var storeDeleted = 0;
+            var firstKill = nInst;          // rows before it keep their index
+            var camsHit = [];               // cameras that lost a row (occupancy)
             for (var ci = 0; ci < camNames.length; ci++) {
                 var cn = camNames[ci];
                 var rowMap = this.frameRowByCam.get(cn);
                 var camDeleted = 0;
-                for (var [frameIdx, frameRow] of rowMap) {
+                // `opts.only` narrows the walk to the named camera-frames (see
+                // the cost note above); without it every row is offered.
+                var frameRows = rowMap;
+                if (only) {
+                    var wanted = only.get(cn);
+                    frameRows = [];
+                    if (wanted) {
+                        for (var wf of wanted.keys()) {
+                            var wr = rowMap.get(wf);
+                            if (wr !== undefined) frameRows.push([wf, wr]);
+                        }
+                    }
+                }
+                for (var [frameIdx, frameRow] of frameRows) {
                     var iStart = Number(fd.instance_id_start[frameRow]) || 0;
                     var iEnd = Number(fd.instance_id_end[frameRow]) || 0;
                     if (iStart < 0) iStart = 0;
@@ -1123,6 +1173,7 @@ export class SioLazyLoader {
                         try {
                             if (!kill[j] && shouldDeleteFn(cn, frameIdx, j - iStart, j)) {
                                 kill[j] = 1;
+                                if (j < firstKill) firstKill = j;
                                 deleted++; storeDeleted++; camDeleted++;
                             }
                         } catch (rowErr) {
@@ -1136,6 +1187,7 @@ export class SioLazyLoader {
                     }
                 }
                 byCamera[cn] = (byCamera[cn] || 0) + camDeleted;
+                if (camDeleted > 0) camsHit.push(cn);
             }
             if (storeDeleted === 0) continue;   // nothing matched in this store
 
@@ -1148,22 +1200,60 @@ export class SioLazyLoader {
             // Iterating `Object.keys` instead of a hardcoded column list so a
             // future schema addition is carried through rather than silently
             // left at the old length (which would desync the columns).
-            // `col.constructor` preserves typed-vs-plain and the element type
-            // (#193 made these typed arrays; `score` is float, `track` is int).
+            // In place, from `firstKill` (see the cost note above): survivors
+            // only ever move DOWN, so a forward copy never reads a slot it has
+            // already overwritten. A typed column is then re-exposed as a
+            // `subarray` view (#193 made these typed arrays; the view keeps
+            // the element type — `score` float, `track` int); a plain one is
+            // truncated. When more than half the rows went, `slice` hands back
+            // a right-sized copy so a bulk delete still releases its memory.
+            // A FEW deleted rows (an interactive delete) leave a few long runs of
+            // survivors, and `copyWithin` moves each run as one memmove: 10
+            // columns x 2.7M rows in ~5 ms against ~70 ms element by element.
+            // MANY deleted rows leave many short runs, where the per-call cost
+            // loses to the plain loop — hence the cutoff.
+            var runs = null;   // flat [start, end) pairs of surviving rows past firstKill
+            if (storeDeleted <= DELETE_RUN_COPY_MAX) {
+                runs = [];
+                var rs = firstKill;
+                while (rs < nInst) {
+                    while (rs < nInst && kill[rs]) rs++;
+                    var re = rs;
+                    while (re < nInst && !kill[re]) re++;
+                    if (re > rs) runs.push(rs, re);
+                    rs = re;
+                }
+            }
+            var shrink = nSurv * 2 < nInst;
+            var compacted = new Map();   // column -> its output: an array under two keys moves ONCE
             var idnKeys = Object.keys(idn);
             for (var ki = 0; ki < idnKeys.length; ki++) {
                 var col = idn[idnKeys[ki]];
+                if (compacted.has(col)) { idn[idnKeys[ki]] = compacted.get(col); continue; }
                 if (!col || typeof col.length !== 'number' || col.length !== nInst) continue;
-                var isTyped = typeof col.subarray === 'function';
-                var out = isTyped ? new col.constructor(nSurv) : new Array(nSurv);
-                var w = 0;
-                for (var s = 0; s < nInst; s++) if (!kill[s]) out[w++] = col[s];
+                var w = firstKill;
+                if (runs) {
+                    for (var rr = 0; rr < runs.length; rr += 2) {
+                        col.copyWithin(w, runs[rr], runs[rr + 1]);
+                        w += runs[rr + 1] - runs[rr];
+                    }
+                } else {
+                    for (var s = firstKill; s < nInst; s++) if (!kill[s]) col[w++] = col[s];
+                }
+                var out;
+                if (typeof col.subarray === 'function') {
+                    out = shrink ? col.slice(0, nSurv) : col.subarray(0, nSurv);
+                } else {
+                    col.length = nSurv;
+                    out = col;
+                }
                 // Reassign the PROPERTY on the same `instancesData` object —
                 // never replace the object itself. `appendStore` and
                 // `_computeSparseOccupancy` both read `store.instancesData.<col>`
                 // fresh on each access, so this is picked up; replacing the
                 // container would orphan any held reference to it.
                 idn[idnKeys[ki]] = out;
+                compacted.set(col, out);
             }
 
             // ---- 4. Remap from_predicted through the same table. Values are
@@ -1198,9 +1288,10 @@ export class SioLazyLoader {
             // the compacted columns, exactly as remapTracksFromIdentity does —
             // `session.trackOccupancy` is this same Map by reference, so the
             // Tracks Timeline picks it up. Without this it shows presence bars
-            // for deleted instances forever.
-            for (var ci2 = 0; ci2 < camNames.length; ci2++) {
-                var cn2 = camNames[ci2];
+            // for deleted instances forever. Only the cameras that LOST a row:
+            // on a shared store the others' ranges moved, but not their content.
+            for (var ci2 = 0; ci2 < camsHit.length; ci2++) {
+                var cn2 = camsHit[ci2];
                 try {
                     var newOcc = this._computeSparseOccupancy(labels, this.nFrames, this.frameRowByCam.get(cn2));
                     if (newOcc) this.trackOccupancy.set(cn2, newOcc);

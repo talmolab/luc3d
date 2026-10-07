@@ -70,7 +70,7 @@
  * (loaded by Node tests too) can take `hydrateGroupMembers2D` from here.
  */
 
-import { Instance } from './pose-data.js?v=394ad6d8241c';
+import { Instance } from './pose-data.js?v=43f1992b9acd';
 
 /** Frames kept behind the playhead while playing (5 s at 60 fps). */
 export var LAZY_PLAYBACK_BEHIND = 300;
