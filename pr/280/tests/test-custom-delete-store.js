@@ -307,4 +307,135 @@
             assertDeepEqual(rangeOf(store, 0), [0, 2], 'ranges untouched');
         });
     });
+
+    /**
+     * Every interactive Delete now goes through `deleteInstanceRows`, so its
+     * single-row cost matters as much as its bulk correctness. These pin the
+     * three things that made one keypress cheap — the narrowed walk, the
+     * in-place compaction (and its two strategies), the per-camera occupancy
+     * rebuild — against the same answers the original whole-store pass gave.
+     */
+    describe('deleteInstanceRows — one keypress, not one bulk pass', function () {
+        /** `nFrames` frames on one camera, 3 tracked instances each (tracks 0,1,2). */
+        function bigSpecs(nFrames, cam) {
+            const specs = [];
+            for (let f = 0; f < nFrames; f++) {
+                specs.push({ cam: cam || 'camA', frameIdx: f, insts: [{ track: 0 }, { track: 1 }, { track: 2 }] });
+            }
+            return specs;
+        }
+        /** The answer, computed independently: the surviving rows' instance_id. */
+        function survivorsOf(store, kill) {
+            const ids = Array.from(store.instancesData.instance_id);
+            return ids.filter((_, j) => !kill(j));
+        }
+
+        it('opts.only walks just the named camera-frames, with the same result', function () {
+            const specs = bigSpecs(50);
+            const a = buildLoader(specs, false);
+            const b = buildLoader(specs, false);
+            let callsA = 0, callsB = 0;
+            const pred = (cam, f, off) => f === 30 && off === 1;
+            const resA = a.loader.deleteInstanceRows((c, f, o) => { callsA++; return pred(c, f, o); });
+            const resB = b.loader.deleteInstanceRows((c, f, o) => { callsB++; return pred(c, f, o); },
+                { only: new Map([['camA', new Set([30])]]) });
+            assertEqual(callsA, 150, 'without `only` every row is offered (50 frames x 3)');
+            assertEqual(callsB, 3, 'with `only` just frame 30\'s 3 rows are (got ' + callsB + ')');
+            assertEqual(resB.deleted, resA.deleted, 'same deletion count');
+            for (const k of Object.keys(a.store.instancesData)) {
+                assertDeepEqual(Array.from(b.store.instancesData[k]), Array.from(a.store.instancesData[k]),
+                    'column ' + k + ' identical to the unnarrowed delete');
+            }
+            assertDeepEqual(Array.from(b.store.framesData.instance_id_start),
+                Array.from(a.store.framesData.instance_id_start), 'ranges identical');
+        });
+
+        it('opts.only accepts a Map keyed by frame (what deleteTargetsFromStore passes)', function () {
+            const { loader, store } = buildLoader(bigSpecs(5), false);
+            const res = loader.deleteInstanceRows((c, f, off) => off === 2,
+                { only: new Map([['camA', new Map([[4, new Set([2])]])]]) });
+            assertEqual(res.deleted, 1, 'only frame 4 was walked, so only its offset-2 row went');
+            assertEqual(rowCount(store), 14, '15 - 1 rows');
+        });
+
+        it('opts.only naming no row of a camera deletes nothing there', function () {
+            const { loader, store } = buildLoader(bigSpecs(5), false);
+            const res = loader.deleteInstanceRows(() => true, { only: new Map([['camZ', new Set([0])]]) });
+            assertEqual(res.deleted, 0, 'an unknown camera is never walked');
+            assertEqual(rowCount(store), 15, 'nothing removed');
+        });
+
+        it('a few deletions (one copyWithin per run) match an independent compaction', function () {
+            const { loader, store } = buildLoader(bigSpecs(400), false);
+            const kills = new Set([4, 5, 600, 1199]);   // adjacent, middle, last row
+            const want = survivorsOf(store, j => kills.has(j));
+            const res = loader.deleteInstanceRows((c, f, off, row) => kills.has(row));
+            assertEqual(res.deleted, 4, '4 rows deleted');
+            assertDeepEqual(Array.from(store.instancesData.instance_id), want,
+                'instance_id column equals the reference filter');
+            assertTrue(store.instancesData.track instanceof Int32Array, 'int column kept its kind');
+            const lens = Object.keys(store.instancesData).map(k => store.instancesData[k].length);
+            assertTrue(lens.every(l => l === 1196), 'every column 1196 long (got ' + [...new Set(lens)] + ')');
+            // In place: the survivors now live in the column's ORIGINAL buffer,
+            // exposed as a shorter view — no fresh buffer per keypress.
+            const tr = store.instancesData.track;
+            assertEqual(tr.buffer.byteLength, 1200 * Int32Array.BYTES_PER_ELEMENT,
+                'a small delete reuses the original buffer (a view onto it)');
+        });
+
+        it('many deletions (element loop, past the run cutoff) match an independent compaction', function () {
+            const { loader, store } = buildLoader(bigSpecs(3000), false);   // 9000 rows
+            // Every other row below 8600: 4300 rows — past the cutoff, under half.
+            const kill = j => (j % 2) === 1 && j < 8600;
+            const want = survivorsOf(store, kill);
+            const res = loader.deleteInstanceRows((c, f, off, row) => kill(row));
+            assertTrue(res.deleted > 4096 && res.deleted * 2 < 9000,
+                'precondition: past the copyWithin cutoff, under the shrink point (' + res.deleted + ')');
+            assertDeepEqual(Array.from(store.instancesData.instance_id), want,
+                'instance_id column equals the reference filter');
+            // The frame ranges tile the compacted column exactly, in order.
+            let cursor = 0, tiled = true;
+            for (let r = 0; r < 3000; r++) {
+                const [s, e] = rangeOf(store, r);
+                if (s !== cursor || e < s) { tiled = false; break; }
+                cursor = e;
+            }
+            assertTrue(tiled, 'every frame range starts where the previous one ended');
+            assertEqual(cursor, rowCount(store), 'ranges cover every surviving row');
+        });
+
+        it('deleting more than half the rows gives the memory back (right-sized columns)', function () {
+            const { loader, store } = buildLoader(bigSpecs(100), false);   // 300 rows
+            loader.deleteInstanceRows((c, f, off) => off !== 0);           // 200 go
+            const tr = store.instancesData.track;
+            assertEqual(tr.length, 100, '100 rows survive');
+            assertEqual(tr.buffer.byteLength, 100 * Int32Array.BYTES_PER_ELEMENT,
+                'a bulk delete leaves a right-sized buffer, not a view onto the old one');
+            assertTrue(tr instanceof Int32Array, 'and keeps the column kind');
+        });
+
+        it('an array under two column names is compacted once', function () {
+            const { loader, store } = buildLoader(bigSpecs(4), false);
+            store.instancesData.alias = store.instancesData.instance_id;   // same array, two keys
+            loader.deleteInstanceRows((c, f, off) => off === 0);
+            assertDeepEqual(Array.from(store.instancesData.instance_id), [1, 2, 4, 5, 7, 8, 10, 11],
+                'instance_id compacted correctly');
+            assertTrue(store.instancesData.alias === store.instancesData.instance_id,
+                'the alias points at the same compacted column, not a twice-compacted one');
+        });
+
+        it('rebuilds track occupancy only for a camera that lost a row', function () {
+            const { loader } = buildLoader([
+                { cam: 'camA', frameIdx: 0, insts: [{ track: 0 }, { track: 1 }] },
+                { cam: 'camB', frameIdx: 0, insts: [{ track: 0 }, { track: 1 }] },
+            ], true);
+            const sentinelA = { sentinel: 'A' }, sentinelB = { sentinel: 'B' };
+            loader.trackOccupancy.set('camA', sentinelA);
+            loader.trackOccupancy.set('camB', sentinelB);
+            loader.deleteInstanceRows((cam, f, off) => cam === 'camA' && off === 1);
+            assertTrue(loader.trackOccupancy.get('camA') !== sentinelA, 'camA (lost a row) was rebuilt');
+            assertTrue(loader.trackOccupancy.get('camB') === sentinelB,
+                'camB (only its ranges shifted) kept its occupancy object');
+        });
+    });
 })();
