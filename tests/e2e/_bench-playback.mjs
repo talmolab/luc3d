@@ -88,6 +88,16 @@
  *     SEEKS_FIRST=1          run the SEEKS test before the scenarios instead of
  *                            after (a fresh page rather than one that has
  *                            played every scenario)
+ *     SCENARIOS=none         no playback scenarios (e.g. with EXPORT_FRAMES)
+ *     EXPORT_FRAMES=0        after the scenarios, run File ▸ Export Video
+ *                            Overlays (the real modal, default layout: every
+ *                            view + 3D, stitched) over this many frames and
+ *                            sample memory while it encodes: JS heap, resident
+ *                            frame groups, groups carrying cached reprojections,
+ *                            long tasks, and frames/s per quarter. Output goes
+ *                            to a byte-counting stand-in for the save picker,
+ *                            so the file itself never sits in memory.
+ *     EXPORT_START=20000     first frame of the export (0-based)
  * Every scenario also samples the JS heap (performance.memory, 1 Hz) and the
  * number of RESIDENT frame groups (lazy projects hydrate as they play).
  *     WARMUP=2               seconds of playback discarded before measuring
@@ -125,7 +135,10 @@ const repoRoot = path.resolve(__dirname, '..', '..');
 const DATASET = process.env.DATASET ||
     '/Users/soline/Documents/luc3d/LabMeetingPrep/Oline/20260605_133431-HardFight_1kModels';
 const LABEL = process.env.LABEL || 'baseline';
-const SCENARIOS = (process.env.SCENARIOS || 'full,noReproj,noOverlay,overlayOnly,noInfo,no3d,lean,rvfc').split(',').map(s => s.trim()).filter(Boolean);
+const SCENARIOS = process.env.SCENARIOS === 'none' ? [] :
+    (process.env.SCENARIOS || 'full,noReproj,noOverlay,overlayOnly,noInfo,no3d,lean,rvfc').split(',').map(s => s.trim()).filter(Boolean);
+const EXPORT_FRAMES = Number(process.env.EXPORT_FRAMES || 0);
+const EXPORT_START = Number(process.env.EXPORT_START || 20000);
 const START = Number(process.env.START || 3000);
 // `name@frame` — a per-scenario start frame.
 const startOf = (name) => { const m = /@(\d+)$/.exec(name); return m ? Number(m[1]) : START; };
@@ -1255,6 +1268,115 @@ try {
     }
 
     if (SEEKS > 0 && !SEEKS_FIRST) await runSeeks();
+
+    // ---------------------------------------------------------------------
+    // EXPORT_FRAMES: the overlay-video export over a long range, with memory
+    // sampled while it runs. The export hydrates frames one at a time through
+    // `ensureLazyFrameData` (playback stopped) and derives reprojections for
+    // every exported frame (`ensureReprojections`), so this is where an
+    // unbounded resident window shows up outside playback.
+    // ---------------------------------------------------------------------
+    if (EXPORT_FRAMES > 0) {
+        log(`\n[${el()}] === overlay export: frames ${EXPORT_START}..${EXPORT_START + EXPORT_FRAMES - 1} (${EXPORT_FRAMES}) ===`);
+        await page.evaluate(async ({ S, N }) => {
+            const st = window.__lucid.state;
+            if (st.isPlaying) window.__lucid.videoController.stopPlayback();
+            // A destination that counts bytes and keeps none: the export streams
+            // (it is far past `shouldStreamToDisk`), and no native picker opens.
+            const X = window.__benchExport = { bytes: 0, closed: 0, longTasks: 0, longMs: 0 };
+            const sink = () => ({
+                kind: 'file', name: 'bench-null.mp4',
+                async createWritable() {
+                    return new WritableStream({
+                        write(chunk) {
+                            const d = (chunk && chunk.type === 'write') ? chunk.data : (chunk && chunk.type ? null : chunk);
+                            if (d) X.bytes += (d.byteLength != null ? d.byteLength : (d.size || 0));
+                        },
+                        close() { X.closed++; }, abort() { X.closed++; },
+                    });
+                },
+            });
+            window.showSaveFilePicker = async () => sink();
+            window.showDirectoryPicker = async () => ({ async getFileHandle() { return sink(); } });
+            try {
+                X.obs = new PerformanceObserver((l) => { for (const e of l.getEntries()) { X.longTasks++; X.longMs += e.duration; } });
+                X.obs.observe({ type: 'longtask', buffered: false });
+            } catch (e) { /* no longtask support */ }
+            const m = await import('/ui/overlay-export-modal.js');
+            m.showOverlayExportModal();
+            for (let i = 0; i < 100 && !document.getElementById('ovStartField'); i++) await new Promise(r => setTimeout(r, 100));
+            const sf = document.getElementById('ovStartField'), ef = document.getElementById('ovEndField');
+            ef.value = String(S + N); ef.dispatchEvent(new Event('change', { bubbles: true }));
+            sf.value = String(S + 1); sf.dispatchEvent(new Event('change', { bubbles: true }));
+            ef.value = String(S + N); ef.dispatchEvent(new Event('change', { bubbles: true }));
+            return { start: sf.value, end: ef.value };
+        }, { S: EXPORT_START, N: EXPORT_FRAMES });
+        const sample = () => page.evaluate(({ S, N }) => {
+            const st = window.__lucid.state, s = st.session, mem = performance.memory || {};
+            let cachedGroups = 0;
+            for (let f = S; f < S + N; f++) {
+                const gs = s.instanceGroups.get(f); if (!gs) continue;
+                for (const g of gs) if (g.reprojections || (g.reprojectedInstances && g.reprojectedInstances.size)) cachedGroups++;
+            }
+            const lab = document.getElementById('ovProgressLabel');
+            const mt = lab && /Encoding (\d+)/.exec(lab.textContent || '');
+            const X = window.__benchExport;
+            return {
+                t: performance.now(), done: mt ? Number(mt[1]) : null, label: lab ? lab.textContent : null,
+                open: !!document.getElementById('ovExportOverlay'),
+                status: (document.getElementById('statusMessage') || document.getElementById('statusText') || {}).textContent || null,
+                usedMB: Math.round((mem.usedJSHeapSize || 0) / 1048576), totalMB: Math.round((mem.totalJSHeapSize || 0) / 1048576),
+                resident: s.frameGroups.size, cachedGroups, triResults: st.triangulationResults.size,
+                bytes: X.bytes, longTasks: X.longTasks, longMs: Math.round(X.longMs),
+            };
+        }, { S: EXPORT_START, N: EXPORT_FRAMES });
+        const before = await sample();
+        await page.click('#ovExport');
+        const series = [before];
+        const t0 = Date.now();
+        let last = before;
+        for (;;) {
+            await sleep(2000);
+            const smp = await sample();
+            series.push(smp);
+            if (series.length % 15 === 0 || !smp.open) {
+                log(`  [${el()}] encoded ${smp.done}/${EXPORT_FRAMES} | heap used ${smp.usedMB} MB (alloc ${smp.totalMB}) | resident ${smp.resident} | groups w/ cached reproj in range ${smp.cachedGroups} | long tasks ${smp.longTasks} (${smp.longMs} ms)`);
+            }
+            last = smp;
+            if (!smp.open) break;
+            if (Date.now() - t0 > 4 * 3600 * 1000) { log('  !! export timed out'); break; }
+        }
+        // frames/s per quarter of the range, from the samples' (time, encoded) pairs
+        const pts = series.filter(x => x.done != null);
+        const quarters = [];
+        for (let q = 0; q < 4; q++) {
+            const lo = EXPORT_FRAMES * q / 4, hi = EXPORT_FRAMES * (q + 1) / 4;
+            const inQ = pts.filter(x => x.done >= lo && x.done <= hi);
+            if (inQ.length >= 2) {
+                const a = inQ[0], b = inQ[inQ.length - 1];
+                quarters.push(+((b.done - a.done) / ((b.t - a.t) / 1000)).toFixed(1));
+            } else quarters.push(null);
+        }
+        const maxOf = (k) => Math.max(...series.map(x => x[k] || 0));
+        summary.export = {
+            start: EXPORT_START, frames: EXPORT_FRAMES, wallS: Math.round((Date.now() - t0) / 1000),
+            status: last.status, mbWritten: +(last.bytes / 1048576).toFixed(1),
+            fpsByQuarter: quarters, heapUsedMB: { before: before.usedMB, max: maxOf('usedMB'), end: last.usedMB },
+            heapAllocMaxMB: maxOf('totalMB'),
+            resident: { before: before.resident, max: maxOf('resident'), end: last.resident },
+            cachedGroupsInRange: { max: maxOf('cachedGroups'), end: last.cachedGroups },
+            longTasks: last.longTasks, longTaskMs: last.longMs,
+            series: series.map(x => ({ s: +((x.t - before.t) / 1000).toFixed(1), done: x.done, usedMB: x.usedMB, resident: x.resident, cachedGroups: x.cachedGroups })),
+        };
+        const E = summary.export;
+        log(`  export     : ${E.status || '(no status)'} | ${E.wallS} s, ${E.mbWritten} MB written`);
+        log(`  frames/s   : by quarter ${JSON.stringify(E.fpsByQuarter)}`);
+        log(`  JS heap    : used ${E.heapUsedMB.before} -> max ${E.heapUsedMB.max} -> end ${E.heapUsedMB.end} MB (allocated max ${E.heapAllocMaxMB})`);
+        log(`  resident   : frame groups ${E.resident.before} -> max ${E.resident.max} -> end ${E.resident.end}`);
+        log(`  reproj     : groups in the range carrying cached reprojections: max ${E.cachedGroupsInRange.max}, end ${E.cachedGroupsInRange.end}`);
+        log(`  long tasks : ${E.longTasks} (${E.longTaskMs} ms)`);
+        fs.writeFileSync(path.join(OUT_DIR, 'summary.json'), JSON.stringify(summary, null, 2));
+    }
 
     // ---------------------------------------------------------------------
     // Traced pass (separate, so tracing overhead never pollutes the metrics).
