@@ -65,9 +65,12 @@
  * `holdLazyResidency()` for their whole run and eviction is a no-op meanwhile.
  * A new operation of that shape must do the same.
  *
- * DOM-free, and imports nothing from the project, so `tests/test-lazy-residency.mjs`
- * runs it against the real hydration path in Node.
+ * DOM-free, and imports only `pose/pose-data.js`, so `tests/test-lazy-residency.mjs`
+ * runs it against the real hydration path in Node, and `ui/image-embedder.js`
+ * (loaded by Node tests too) can take `hydrateGroupMembers2D` from here.
  */
+
+import { Instance } from './pose-data.js?v=394ad6d8241c';
 
 /** Frames kept behind the playhead while playing (5 s at 60 fps). */
 export var LAZY_PLAYBACK_BEHIND = 300;
@@ -274,9 +277,118 @@ export function evictLazyFramesOutside(session, lo, hi, opts) {
     for (var i = 0; i < victims.length; i++) {
         session.frameGroups.delete(victims[i]);
         dropDerivedFrameCaches(session, victims[i], tri);
+        releaseFrameMembers2D(session, victims[i]);
     }
     res.evicted = victims.length;
     return res;
+}
+
+/**
+ * May group member `m` (camera `cam`, frame `frameIdx`) give its 2D back to the
+ * store? Only when that 2D IS the store row's: a predicted, unedited member
+ * (no `modified`, no backup, no nulled nodes) of a camera the loader backs,
+ * whose `_rawInstIndex` names a row the frame still has — the row hydration
+ * (`finalizeLazyFrameGroup`) will adopt again.
+ */
+function memberIsStoreRow(loader, cam, frameIdx, m) {
+    if (!m || m._lazy2d || typeof m.releaseLazy2d !== 'function') return false;
+    if (m.type !== 'predicted' || m.modified || m._originalXY) return false;
+    if (m.nulledNodes && m.nulledNodes.size > 0) return false;
+    if (!loader.labelsByCam.has(cam)) return false;
+    var r = m._rawInstIndex;
+    if (typeof r !== 'number' || !(r >= 0) || r !== Math.floor(r)) return false;
+    var span = loader.instanceRowSpan(cam, frameIdx, _span);
+    return !!span && r < span[1] - span[0];
+}
+
+/**
+ * Give the 2D of a NON-resident frame's group members back to the store
+ * (`Instance.releaseLazy2d`): each eligible member becomes a `_lazy2d`
+ * placeholder on the shared all-NaN buffer — exactly the state a lazily
+ * reopened project's members are in — and is re-hydrated from its store row
+ * the next time the frame is materialized. A resident frame is left alone: its
+ * FrameGroup is showing those members.
+ *
+ * WHY: after Track All every member keeps the 2D its window was hydrated with
+ * — 4,152,565 `Float64Array`s, each with its own ArrayBuffer, on the 8-camera,
+ * 108,000-frame project. Every full GC marks and sweeps all of them: ~188 ms of
+ * a ~373 ms full GC (`_bench-playback.mjs HEAPPROBE=1 STRIP=1`).
+ *
+ * @returns {number} members released
+ */
+export function releaseFrameMembers2D(session, frameIdx) {
+    var loader = session && session.lazyLoader;
+    if (!loader || !loader.labelsByCam || typeof loader.instanceRowSpan !== 'function') return 0;
+    if (session.frameGroups && session.frameGroups.has(frameIdx)) return 0;
+    var groups = session.instanceGroups ? session.instanceGroups.get(frameIdx) : null;
+    if (!groups) return 0;
+    var n = 0;
+    for (var gi = 0; gi < groups.length; gi++) {
+        for (var [cam, m] of groups[gi].instances) {
+            if (memberIsStoreRow(loader, cam, frameIdx, m)) { m.releaseLazy2d(); n++; }
+        }
+    }
+    return n;
+}
+
+/**
+ * `releaseFrameMembers2D` for every non-resident frame — what a bulk operation
+ * that hydrated the whole project (Track All, Triangulate All) leaves behind.
+ * A no-op while residency is held. Synchronous: ~4M members in well under a
+ * second, and nothing can observe a half-released project.
+ * @returns {{frames: number, members: number, held: boolean}}
+ */
+export function releaseNonResidentMembers2D(session) {
+    var res = { frames: 0, members: 0, held: _holds > 0 };
+    if (res.held || !session || !session.lazyLoader || !session.instanceGroups) return res;
+    for (var f of session.instanceGroups.keys()) {
+        var k = releaseFrameMembers2D(session, f);
+        if (k) { res.frames++; res.members += k; }
+    }
+    return res;
+}
+
+/**
+ * Give `frameIdx`'s `_lazy2d` group members their 2D from the store WITHOUT
+ * making the frame resident — for code that reads members' keypoints at frames
+ * it never shows (the image ID-switch check's crop geometry). A lazily reopened
+ * project's members, and after Track All / Triangulate All every unedited
+ * member of a non-resident frame (`releaseFrameMembers2D`, above), are placeholders whose 2D is all-NaN until a frame
+ * is hydrated; reading them directly sees no points at all.
+ *
+ * Builds each row exactly as the hydration paths do and adopts it
+ * (`adoptPointsFrom`), so the member is indistinguishable from one hydrated by
+ * `finalizeLazyFrameGroup`. Needs a synchronous loader (`getFrameSync`); a no-op
+ * for a resident frame (already hydrated) or when no member is a placeholder.
+ * @param {Object} session
+ * @param {number} frameIdx
+ * @returns {number} members hydrated
+ */
+export function hydrateGroupMembers2D(session, frameIdx) {
+    var loader = session && session.lazyLoader;
+    if (!loader || typeof loader.getFrameSync !== 'function' || !loader.isSync) return 0;
+    var groups = session.instanceGroups ? session.instanceGroups.get(frameIdx) : null;
+    if (!groups) return 0;
+    var any = false;
+    for (var gi = 0; gi < groups.length && !any; gi++) {
+        for (var [, m0] of groups[gi].instances) { if (m0 && m0._lazy2d) { any = true; break; } }
+    }
+    if (!any) return 0;
+    var data = loader.getFrameSync(frameIdx);
+    if (!data) return 0;
+    var n = 0;
+    for (var gj = 0; gj < groups.length; gj++) {
+        for (var [cam, m] of groups[gj].instances) {
+            if (!m || !m._lazy2d || m._rawInstIndex == null) continue;
+            var rows = data.get(cam);
+            var d = rows ? rows[m._rawInstIndex] : null;
+            if (!d) continue;
+            m.adoptPointsFrom(new Instance(d.points || [], lazyInstanceTrackIdx(d.trackIdx), d.type || 'predicted', d.score || 0));
+            m._lazy2d = false;
+            n++;
+        }
+    }
+    return n;
 }
 
 // session -> frames the last scan had to keep outside its window (edited ones).

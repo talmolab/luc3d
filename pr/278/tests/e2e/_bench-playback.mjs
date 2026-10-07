@@ -98,6 +98,17 @@
  *                            to a byte-counting stand-in for the save picker,
  *                            so the file itself never sits in memory.
  *     EXPORT_START=20000     first frame of the export (0-based)
+ *     HEAPPROBE=1            after prep (and before any scenario), census the
+ *                            live object graph — the session's structures
+ *                            (members, their buffers, maps, sets,
+ *                            frameIdentityMap keys) — and the time of a forced
+ *                            full GC (`gc()`; launches with --expose-gc).
+ *                            (Not `Runtime.queryObjects`: on Object.prototype
+ *                            it materializes every object in the heap, which
+ *                            crashed the renderer on the real project.)
+ *     STRIP=1                with HEAPPROBE: then DESTROY the graph one
+ *                            structure at a time, timing a full GC after each,
+ *                            to attribute GC cost per structure. Ends the run.
  * Every scenario also samples the JS heap (performance.memory, 1 Hz) and the
  * number of RESIDENT frame groups (lazy projects hydrate as they play).
  *     WARMUP=2               seconds of playback discarded before measuring
@@ -139,6 +150,8 @@ const SCENARIOS = process.env.SCENARIOS === 'none' ? [] :
     (process.env.SCENARIOS || 'full,noReproj,noOverlay,overlayOnly,noInfo,no3d,lean,rvfc').split(',').map(s => s.trim()).filter(Boolean);
 const EXPORT_FRAMES = Number(process.env.EXPORT_FRAMES || 0);
 const EXPORT_START = Number(process.env.EXPORT_START || 20000);
+const HEAPPROBE = process.env.HEAPPROBE === '1';
+const STRIP = process.env.STRIP === '1';
 const START = Number(process.env.START || 3000);
 // `name@frame` — a per-scenario start frame.
 const startOf = (name) => { const m = /@(\d+)$/.exec(name); return m ? Number(m[1]) : START; };
@@ -211,7 +224,8 @@ try {
         ...(process.env.EXECUTABLE ? { executablePath: process.env.EXECUTABLE } : { channel: 'chrome' }),
         headless: false,
         args: ['--window-size=1800,1120', '--window-position=0,0',
-               '--enable-precise-memory-info'],
+               '--enable-precise-memory-info',
+               ...(HEAPPROBE ? ['--js-flags=--expose-gc'] : [])],
     });
     const context = await browser.newContext({ viewport: null });
     const page = await context.newPage();
@@ -714,6 +728,110 @@ try {
             return R;
         };
     }, { RVFC_ALL, VFPROBE });
+
+    // ---------------------------------------------------------------------
+    // HEAPPROBE: what is the live graph made of, and what does a full GC cost?
+    // ---------------------------------------------------------------------
+    if (HEAPPROBE) {
+        log(`\n[${el()}] === heap probe ===`);
+        const cdp = await page.context().newCDPSession(page);
+        const timedGc = () => page.evaluate(() => {
+            const t = []; for (let i = 0; i < 3; i++) { const a = performance.now(); gc(); t.push(performance.now() - a); }
+            const m = performance.memory || {};
+            return { gcMs: t.map(x => Math.round(x)), usedMB: Math.round((m.usedJSHeapSize || 0) / 1048576) };
+        });
+        const heapUsage = async () => { const h = await cdp.send('Runtime.getHeapUsage'); return { v8UsedMB: Math.round(h.usedSize / 1048576), v8TotalMB: Math.round(h.totalSize / 1048576), embedderMB: h.embedderHeapUsedSize != null ? Math.round(h.embedderHeapUsedSize / 1048576) : null, backingStoreMB: h.backingStorageSize != null ? Math.round(h.backingStorageSize / 1048576) : null }; };
+        await timedGc();
+        const census = await page.evaluate(() => {
+            const s = window.__lucid.state.session;
+            const C = { nodes: s.skeleton ? s.skeleton.nodes.length : null, cams: s.cameras.length,
+                groupFrames: s.instanceGroups.size, groups: 0, members: 0, membersLazy2d: 0,
+                xyBytes: {}, xyOnHeap: 0, xyViews: 0, xyOwnBuffer: 0, occTypes: {}, originalXY: 0, nulledSets: 0,
+                memberOwnKeys: {}, reprojMaps: 0, reprojEntries: 0, reprojObjs: 0, usedCameras: 0, usedCamerasPrevSame: 0,
+                points3d: 0, points3dBytes: {}, p3dOwnBuffer: 0, groupOwnKeys: {},
+                fimSize: s.frameIdentityMap.size, fimHeapNumberKeys: 0, fimStringKeys: 0, resident: s.frameGroups.size };
+            let prevUc = null;
+            for (const [, gs] of s.instanceGroups) {
+                for (const g of gs) {
+                    C.groups++;
+                    const gk = Object.keys(g).length; C.groupOwnKeys[gk] = (C.groupOwnKeys[gk] || 0) + 1;
+                    if (g.reprojectedInstances) { C.reprojMaps++; C.reprojEntries += g.reprojectedInstances.size; }
+                    if (g.reprojections) C.reprojObjs++;
+                    if (g.usedCameras) { C.usedCameras++; if (g.usedCameras === prevUc) C.usedCamerasPrevSame++; prevUc = g.usedCameras; }
+                    if (g.points3d) { C.points3d++; const b = g.points3d.byteLength; C.points3dBytes[b] = (C.points3dBytes[b] || 0) + 1; if (g.points3d.buffer.byteLength === b) C.p3dOwnBuffer++; }
+                    for (const [, m] of g.instances) {
+                        C.members++;
+                        if (m._lazy2d) C.membersLazy2d++;
+                        const xy = m._xy;
+                        if (xy) {
+                            C.xyBytes[xy.byteLength] = (C.xyBytes[xy.byteLength] || 0) + 1;
+                            if (xy.byteLength <= 64) C.xyOnHeap++;
+                            if (xy.byteOffset !== 0 || xy.buffer.byteLength !== xy.byteLength) C.xyViews++;
+                            else C.xyOwnBuffer++;
+                        }
+                        const ot = typeof m._occ; C.occTypes[ot] = (C.occTypes[ot] || 0) + 1;
+                        if (m._originalXY) C.originalXY++;
+                        if (m.nulledNodes) C.nulledSets++;
+                        const mk = Object.keys(m).length; C.memberOwnKeys[mk] = (C.memberOwnKeys[mk] || 0) + 1;
+                    }
+                }
+            }
+            for (const k of s.frameIdentityMap.keys()) {
+                if (typeof k === 'string') C.fimStringKeys++;
+                else if (!(k <= 1073741823 && k >= -1073741824 && (k | 0) === k)) C.fimHeapNumberKeys++;
+            }
+            return C;
+        });
+        log(`  census: ${JSON.stringify(census)}`);
+        const base = await timedGc();
+        const hu = await heapUsage();
+        log(`  forced full GC (x3): ${JSON.stringify(base.gcMs)} ms | usedJSHeapSize ${base.usedMB} MB | ${JSON.stringify(hu)}`);
+        summary.heapProbe = { census, gc: base, heapUsage: hu };
+        if (STRIP) {
+            const steps = [
+                ['frameIdentityMap', () => { window.__lucid.state.session.frameIdentityMap.clear(); }],
+                ['member _xy -> one shared buffer', () => {
+                    const s = window.__lucid.state.session; const shared = new Float64Array(64);
+                    for (const [, gs] of s.instanceGroups) for (const g of gs) for (const [, m] of g.instances) { m._xy = shared.subarray(0, m._xy ? m._xy.length : 0); m._originalXY = null; }
+                }],
+                ['member _xy views -> one shared view', () => {
+                    const s = window.__lucid.state.session; const shared = new Float64Array(64);
+                    for (const [, gs] of s.instanceGroups) for (const g of gs) for (const [, m] of g.instances) m._xy = shared;
+                }],
+                ['members (instances Maps emptied)', () => {
+                    const s = window.__lucid.state.session;
+                    for (const [, gs] of s.instanceGroups) for (const g of gs) g.instances = null;
+                }],
+                ['reprojectedInstances Maps', () => {
+                    const s = window.__lucid.state.session;
+                    for (const [, gs] of s.instanceGroups) for (const g of gs) g.reprojectedInstances = null;
+                }],
+                ['usedCameras Sets', () => {
+                    const s = window.__lucid.state.session;
+                    for (const [, gs] of s.instanceGroups) for (const g of gs) g.usedCameras = null;
+                }],
+                ['points3d', () => {
+                    const s = window.__lucid.state.session;
+                    for (const [, gs] of s.instanceGroups) for (const g of gs) g.points3d = null;
+                }],
+                ['instanceGroups', () => { window.__lucid.state.session.instanceGroups.clear(); }],
+                ['frameGroups', () => { window.__lucid.state.session.frameGroups.clear(); }],
+            ];
+            summary.heapProbe.strip = [];
+            let prev = base;
+            for (const [label, fn] of steps) {
+                await page.evaluate(`(${fn.toString()})()`);
+                const r = await timedGc();
+                const med = (a) => a.slice().sort((x, y) => x - y)[1];
+                log(`  strip ${label.padEnd(36)} -> full GC ${JSON.stringify(r.gcMs)} ms (median ${med(r.gcMs)}, was ${med(prev.gcMs)}) | used ${r.usedMB} MB (was ${prev.usedMB})`);
+                summary.heapProbe.strip.push({ label, gcMs: r.gcMs, usedMB: r.usedMB });
+                prev = r;
+            }
+            fs.writeFileSync(path.join(OUT_DIR, 'summary.json'), JSON.stringify(summary, null, 2));
+            throw new Error('STRIP=1 destroyed the session (by design) — run over');
+        }
+        fs.writeFileSync(path.join(OUT_DIR, 'summary.json'), JSON.stringify(summary, null, 2));
+    }
 
     // Baseline display cadence while idle (no playback).
     const idle = await page.evaluate(() => window.__bench.idleRaf(3000));

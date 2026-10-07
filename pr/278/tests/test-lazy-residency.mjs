@@ -52,7 +52,7 @@ register(pathToFileURL(path.join(ROOT, 'scripts', 'bench', 'hooks.mjs')).href);
 const { state } = await imp('ui/app-state.js');
 const { batchLoadLazyFrames, sweepLazyFrameWindows, loadAllLazyFrames, ensureLazyFrameData } = await imp('pose/triangulation.js');
 const { SioLazyLoader } = await imp('loading/sio-lazy-loader.js');
-const { Session, Skeleton, Camera, Instance, InstanceGroup, UnlinkedInstance } = await imp('pose/pose-data.js');
+const { Session, Skeleton, Camera, Instance, InstanceGroup, UnlinkedInstance, lazyPlaceholderXY, isLazyPlaceholderXY } = await imp('pose/pose-data.js');
 const LR = await imp('pose/lazy-residency.js');
 
 const CAMS = ['c0', 'c1', 'c2'];
@@ -315,7 +315,7 @@ group('evictLazyFramesOutside: the window, the kept frame, the edits, and the de
     for (const [f, gs] of s.instanceGroups) {
         for (const g of gs) {
             g.reprojections = { c0: [[1, 2]] };
-            g.reprojectedInstances.set('c0', new Instance([[1, 2], null, null], 0, 'reprojected', 1));
+            g.addReprojectedInstance('c0', new Instance([[1, 2], null, null], 0, 'reprojected', 1));
         }
         tri.set(f, gs.map(g => ({ group: g, meanError: 1 })).concat([{ group: null, meanError: 2 }]));
     }
@@ -495,6 +495,69 @@ group('Paused navigation: ensureLazyFrameData bounds the window around the frame
     release();
     await ensureLazyFrameData(3600);
     ok(!p.frameGroups.has(1200), 'released -> the next navigation trims');
+}
+
+// ---------------------------------------------------------------------------
+group('Members of non-resident frames give their 2D back to the store, and get it back');
+{
+    /** Every member's 2D on frame f, by value, keyed by camera + store row. */
+    const members2d = (s, f) => (s.instanceGroups.get(f) || []).map(g =>
+        [...g.instances].map(([c, m]) => `${c}#${m._rawInstIndex}:${m.type}:${Array.from(m._xy).join(',')}:${m._occ}`).sort().join(' ')).join(' | ');
+    const s = await trackedSession();
+    state.session = s;
+    const before = new Map();
+    for (const f of s.instanceGroups.keys()) before.set(f, members2d(s, f));
+    // An edited member, a promoted one, one with a nulled node, and a resident frame.
+    const g3 = s.instanceGroups.get(3)[0], m3 = [...g3.instances.values()][0];
+    m3.setPoint(0, 1.5, 2.5); m3.modified = true;
+    const g6 = s.instanceGroups.get(6)[0], m6 = [...g6.instances.values()][0]; m6.type = 'user';
+    const g9 = s.instanceGroups.get(9)[0], m9 = [...g9.instances.values()][0]; m9.nulledNodes = new Set([1]);
+    before.set(3, members2d(s, 3)); before.set(6, members2d(s, 6)); before.set(9, members2d(s, 9));
+    for (const f of [...s.frameGroups.keys()]) if (f !== 12) s.frameGroups.delete(f);   // only frame 12 resident
+    const r = LR.releaseNonResidentMembers2D(s);
+    let placeholders = 0, sharedOk = 0, kept = 0;
+    for (const [f, gs] of s.instanceGroups) for (const g of gs) for (const [, m] of g.instances) {
+        if (m._lazy2d) { placeholders++; if (isLazyPlaceholderXY(m._xy) && m._xy === lazyPlaceholderXY(NODES)) sharedOk++; }
+        else kept++;
+    }
+    ok(r.members > 50 && r.members === placeholders, `released members became placeholders (${r.members})`);
+    eq(sharedOk, placeholders, 'every placeholder shares the one all-NaN buffer');
+    ok(!m3._lazy2d && !m6._lazy2d && !m9._lazy2d, 'edited, promoted and nulled members keep their 2D');
+    ok([...s.instanceGroups.get(12)].every(g => [...g.instances.values()].every(m => !m._lazy2d)), "the resident frame's members keep their 2D");
+    // Writing to a placeholder must never reach the shared buffer.
+    const ph = [...s.instanceGroups.get(15)[0].instances.values()][0];
+    ok(ph._lazy2d, 'fixture: frame 15 member is a placeholder');
+    ph.setPoint(0, 9, 9);
+    ok(Number.isNaN(lazyPlaceholderXY(NODES)[0]) && !isLazyPlaceholderXY(ph._xy), 'setPoint on a placeholder copies first (shared buffer still NaN)');
+    ph.releaseLazy2d();
+    // Hydrating again gives every member exactly its old 2D.
+    s.frameGroups.clear();
+    await hydrate(s, 0, N_FRAMES);
+    let same = 0, n = 0;
+    for (const [f, want] of before) { n++; if (members2d(s, f) === want) same++; else console.error('    frame ' + f + ' differs'); }
+    eq(same, n, 'after re-hydration every frame\'s members have exactly their old 2D (edited ones included)');
+    // Eviction releases too, and a hold stops the bulk release.
+    const s2 = await trackedSession();
+    LR.evictLazyFramesOutside(s2, 0, 5, {});
+    ok([...s2.instanceGroups.get(30)[0].instances.values()].every(m => m._lazy2d), 'evicting a frame releases its members');
+    const s3 = await trackedSession();
+    for (const f of [...s3.frameGroups.keys()]) s3.frameGroups.delete(f);
+    const release = LR.holdLazyResidency();
+    const rh = LR.releaseNonResidentMembers2D(s3);
+    release();
+    ok(rh.held && rh.members === 0, 'held -> no bulk release');
+
+    // hydrateGroupMembers2D: the 2D back WITHOUT the frame becoming resident.
+    const s4 = await trackedSession();
+    state.session = s4;
+    const want = members2d(s4, 21);
+    s4.frameGroups.delete(21);
+    LR.releaseFrameMembers2D(s4, 21);
+    ok([...s4.instanceGroups.get(21)[0].instances.values()].every(m => m._lazy2d), 'fixture: frame 21 released');
+    const nh = LR.hydrateGroupMembers2D(s4, 21);
+    ok(nh > 0 && members2d(s4, 21) === want, `hydrateGroupMembers2D restores the exact 2D (${nh} members)`);
+    ok(!s4.frameGroups.has(21), '...without making the frame resident');
+    eq(LR.hydrateGroupMembers2D(s4, 21), 0, 'a second call has nothing to do');
 }
 
 // ---------------------------------------------------------------------------

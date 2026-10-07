@@ -59,7 +59,7 @@ try {
         const gPred = new InstanceGroup(2, 1);
         gPred.addInstance('camA', new Instance([[50, 60], [70, 80]], 1, 'predicted', 0.8));
         gPred.addInstance('camB', new Instance([[51, 61], [71, 81]], 1, 'predicted', 0.8));
-        gPred.reprojectedInstances.set('camA', new Instance([[50, 60], [70, 80]], 1, 'reprojected', 1));
+        gPred.addReprojectedInstance('camA', new Instance([[50, 60], [70, 80]], 1, 'reprojected', 1));
         gPred.points3d = makePoints3d(2);
         setPoint3d(gPred.points3d, 0, [300, -120, 188]);
         setPoint3d(gPred.points3d, 1, [5, 5, 230]);

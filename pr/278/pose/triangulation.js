@@ -9,25 +9,26 @@
 
 import { mat3x3Multiply, Camera, FrameGroup, Instance, UnlinkedInstance, InstanceGroup,
          makePoints3d, points3dNodeCount, hasPoint3d, getPoint3d, readPoint3d,
-         setPoint3d, clearPoint3d, someValidPoint3d, countPoints3d } from './pose-data.js?v=0399e3a2e91c';
+         setPoint3d, clearPoint3d, someValidPoint3d, countPoints3d } from './pose-data.js?v=394ad6d8241c';
 // The Jacobi eigensolver and the least-squares plane fit live in
 // `pose/plane-fit.js`, so `pose/plane-data.js` can reach the fit without
 // importing this module — and the whole UI with it. `fitPlaneToPoints3d` is
 // re-exported unchanged, because every existing caller and test reads it here.
-import { jacobiEigen, fitPlaneToPoints3d } from './plane-fit.js?v=0399e3a2e91c';
+import { jacobiEigen, fitPlaneToPoints3d } from './plane-fit.js?v=394ad6d8241c';
 export { fitPlaneToPoints3d };
-import { state, timeline, viewport3d } from '../ui/app-state.js?v=0399e3a2e91c';
+import { state, timeline, viewport3d } from '../ui/app-state.js?v=394ad6d8241c';
 // Pass 3i-2: triangulation orchestration moved out of app.js
-import { setReprojErrorVisible, showReprojectionsOnly, REPROJ_ONLY_NOTE, drawAllOverlays } from '../ui/rendering.js?v=0399e3a2e91c';
-import { updateTriangulationBadge } from '../ui/info-panel.js?v=0399e3a2e91c';
-import { isCameraTracked, getTrackingThreshold, getDefaultTriangulationMethod } from '../ui/settings.js?v=0399e3a2e91c';
-import { markDirty, setStatus, showLoading, hideLoading } from '../import-export/save-load.js?v=0399e3a2e91c';
-import { showLoadingProgress, createProgressPacer, yieldToPaint } from '../ui/loading-overlay.js?v=0399e3a2e91c';
-import { createGroupSolver } from './triangulation-pool.js?v=0399e3a2e91c';
-import { holdLazyResidency, lazyInstanceTrackIdx, trimLazyResidency, LAZY_NAV_WINDOW } from './lazy-residency.js?v=0399e3a2e91c';
-import { unionTrackNames, remapTrackIdx, isIdentityRemap } from '../loading/track-union.js?v=0399e3a2e91c';
+import { setReprojErrorVisible, showReprojectionsOnly, REPROJ_ONLY_NOTE, drawAllOverlays } from '../ui/rendering.js?v=394ad6d8241c';
+import { updateTriangulationBadge } from '../ui/info-panel.js?v=394ad6d8241c';
+import { isCameraTracked, getTrackingThreshold, getDefaultTriangulationMethod } from '../ui/settings.js?v=394ad6d8241c';
+import { markDirty, setStatus, showLoading, hideLoading } from '../import-export/save-load.js?v=394ad6d8241c';
+import { showLoadingProgress, createProgressPacer, yieldToPaint } from '../ui/loading-overlay.js?v=394ad6d8241c';
+import { createGroupSolver } from './triangulation-pool.js?v=394ad6d8241c';
+import { holdLazyResidency, lazyInstanceTrackIdx, trimLazyResidency, LAZY_NAV_WINDOW,
+         releaseFrameMembers2D } from './lazy-residency.js?v=394ad6d8241c';
+import { unionTrackNames, remapTrackIdx, isIdentityRemap } from '../loading/track-union.js?v=394ad6d8241c';
 // Pass 3i-3: update3DViewport moved to pose/initialization.js.
-import { update3DViewport } from './initialization.js?v=0399e3a2e91c';
+import { update3DViewport } from './initialization.js?v=394ad6d8241c';
 // The pure math (DLT, refinement, reprojection, triangulateAndReproject) lives
 // in ./triangulation-core.js so a worker can load it; re-exported below so every
 // existing import of these names from this module keeps working.
@@ -44,7 +45,7 @@ import {
     computeReprojectionError, computeReprojectionErrors, computeMeanReprojectionError,
     invert3x3, triangulateAndReproject, __triangulationKernelsForTest,
     setTriangulationSettingsHooks,
-} from './triangulation-core.js?v=0399e3a2e91c';
+} from './triangulation-core.js?v=394ad6d8241c';
 export {
     triangulatePointDLT, triangulatePoints, BA_ROBUST_SCALE_PX,
     triangulatePointBA, triangulatePointsBA,
@@ -3021,11 +3022,27 @@ export async function sweepLazyFrameWindows(session, onFrame, opts) {
     // trim evicting part of it in between would make the sweep skip those
     // frames silently (the #194/#195 class). Hold residency for the whole run.
     var release = holdLazyResidency();
+    var processed;
     try {
-        return await _sweepLazyFrameWindowsHeld(session, onFrame, opts);
+        processed = await _sweepLazyFrameWindowsHeld(session, onFrame, opts);
     } finally {
         release();
     }
+    // Releasing a window drops its FrameGroups, but every group member it
+    // hydrated kept its 2D — after Track All, 4,152,565 Float64Arrays with an
+    // ArrayBuffer each on the 8-camera, 108,000-frame project, about half the
+    // cost of every later full GC. Give back what is plain store data now that
+    // nothing in the sweep can still read it (the tracker carries detections
+    // across window boundaries, so not per window), leaving the project in the
+    // state a lazy reopen leaves it in (pose/lazy-residency.js).
+    var loader = session && session.lazyLoader;
+    if (loader && loader.isSync) {
+        var o = opts || {};
+        var from = o.start != null ? Math.max(0, o.start) : 0;
+        var to = o.end != null ? Math.min(loader.nFrames - 1, o.end) : loader.nFrames - 1;
+        for (var rf = from; rf <= to; rf++) releaseFrameMembers2D(session, rf);
+    }
+    return processed;
 }
 
 async function _sweepLazyFrameWindowsHeld(session, onFrame, opts) {

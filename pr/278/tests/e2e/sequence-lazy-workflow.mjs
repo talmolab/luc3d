@@ -886,6 +886,28 @@ try {
         { fim: trackRes.s.fim, expectAtLeast: Math.round(FRAMES * CAMS * 0.95) });
     check('Track All released its windows (memory bounded)',
         trackRes.s.resident < FRAMES / 10, { resident: trackRes.s.resident });
+    // ...and the 2D of the members it hydrated: outside the resident frames every
+    // unedited member is back to a placeholder on the ONE shared NaN buffer, as
+    // after a reopen (pose/lazy-residency.js `releaseFrameMembers2D`). Before,
+    // all of them kept an ArrayBuffer each — half the cost of every full GC on a
+    // real project.
+    const after2d = await page.evaluate(async () => {
+        const pd = await import('/pose/pose-data.js');
+        const s = window.__lucid.state.session;
+        let members = 0, placeholders = 0, sharedBuf = 0, ownOffResident = 0;
+        for (const [f, gs] of s.instanceGroups) {
+            const resident = s.frameGroups.has(f);
+            for (const g of gs) for (const [, m] of g.instances) {
+                members++;
+                if (m._lazy2d) { placeholders++; if (pd.isLazyPlaceholderXY(m._xy)) sharedBuf++; }
+                else if (!resident && m.type === 'predicted' && !m.modified) ownOffResident++;
+            }
+        }
+        return { members, placeholders, sharedBuf, ownOffResident, resident: s.frameGroups.size };
+    });
+    check('after Track All, unedited members of non-resident frames gave their 2D back (one shared buffer)',
+        after2d.ownOffResident === 0 && after2d.placeholders > after2d.members * 0.9 && after2d.sharedBuf === after2d.placeholders,
+        after2d);
     // Track All rebuilds the grouping of every frame, almost none of them
     // resident; the counters must follow it.
     await checkCounters('after Track All');

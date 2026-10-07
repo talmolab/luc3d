@@ -28,21 +28,22 @@ import {
     state,
     videoController, interactionManager, viewport3d, timeline, paneManager,
     setVideoController, setPaneManager,
-} from './app-state.js?v=0399e3a2e91c';
-import { FrameGroup, UnlinkedInstance, Camera, someValidPoint3d } from '../pose/pose-data.js?v=0399e3a2e91c';
+} from './app-state.js?v=394ad6d8241c';
+import { FrameGroup, UnlinkedInstance, Camera, someValidPoint3d } from '../pose/pose-data.js?v=394ad6d8241c';
+import { hydrateGroupMembers2D, releaseFrameMembers2D } from '../pose/lazy-residency.js?v=394ad6d8241c';
 import {
     triangulateAndReproject, storeReprojectedInstances, getInstanceGroupsForFrame,
     sessionHasCalibration, resolveTriangulationMethod,
-} from '../pose/triangulation.js?v=0399e3a2e91c';
+} from '../pose/triangulation.js?v=394ad6d8241c';
 import {
     cellResizeObserver,
     createViewForVideoFile,
     rebuildVideoController,
     fitCanvasesToCells,
     updateTotalFrames,
-} from '../loading/session-loader.js?v=0399e3a2e91c';
-import { OnDemandVideoDecoder } from '../loading/video.js?v=0399e3a2e91c';
-import { setStatus, showLoading, hideLoading, quickSave, markDirty } from '../import-export/save-load.js?v=0399e3a2e91c';
+} from '../loading/session-loader.js?v=394ad6d8241c';
+import { OnDemandVideoDecoder } from '../loading/video.js?v=394ad6d8241c';
+import { setStatus, showLoading, hideLoading, quickSave, markDirty } from '../import-export/save-load.js?v=394ad6d8241c';
 import {
     CONTRAST_MIN, CONTRAST_MAX, clampContrast,
     BRIGHTNESS_MIN, BRIGHTNESS_MAX, clampBrightness,
@@ -50,26 +51,26 @@ import {
     buildVideoFilter, getSessionContrast, setSessionContrast,
     getSessionBrightness, setSessionBrightness,
     getSessionRotation, setSessionRotation,
-} from './video-filters.js?v=0399e3a2e91c';
+} from './video-filters.js?v=394ad6d8241c';
 // `clampRotation` moved to the dependency-free `video-filters.js` so the test
 // runners can bridge it; re-exported here because `ui/ui-wiring.js` (and the
 // module map) have always imported it from this module.
 export { clampRotation };
-import { drawAllOverlays, setReprojErrorVisible } from './rendering.js?v=0399e3a2e91c';
+import { drawAllOverlays, setReprojErrorVisible } from './rendering.js?v=394ad6d8241c';
 // `ui/ui-wiring.js` imports this module, so this is a cycle — hoist-safe
 // because the only read is inside the view strip's click handler, which cannot
 // run during module evaluation.
-import { setSoloView } from './ui-wiring.js?v=0399e3a2e91c';
-import { updateInfoPanel, populateTimelineVisibility } from './info-panel.js?v=0399e3a2e91c';
-import { refreshIdSwitchPanel } from './id-switch-modal.js?v=0399e3a2e91c';
+import { setSoloView } from './ui-wiring.js?v=394ad6d8241c';
+import { updateInfoPanel, populateTimelineVisibility } from './info-panel.js?v=394ad6d8241c';
+import { refreshIdSwitchPanel } from './id-switch-modal.js?v=394ad6d8241c';
 // `autoAssignState` is a mutable binding tracked via ESM live binding.
 // The cycle (identity-assignment imports panelRenderers from here) is
 // hoist-safe because both reads are inside function bodies.
-import { autoAssignState } from './identity-assignment.js?v=0399e3a2e91c';
+import { autoAssignState } from './identity-assignment.js?v=394ad6d8241c';
 
 // Pass 3i-3: setup3DViewport moved to pose/initialization.js.
-import { setup3DViewport } from '../pose/initialization.js?v=0399e3a2e91c';
-import { getLoadingProgressModal } from './loading-progress-modal.js?v=0399e3a2e91c';
+import { setup3DViewport } from '../pose/initialization.js?v=394ad6d8241c';
+import { getLoadingProgressModal } from './loading-progress-modal.js?v=394ad6d8241c';
 
 // ============================================
 // Dockview Pane Manager
@@ -1451,6 +1452,13 @@ function moveVideosToSession(viewNames, fromIdx, toIdx) {
 
         // 2. Remove view from InstanceGroups and re-triangulate
         for (var [frameIdx2, groups] of fromSession.instanceGroups) {
+            // The re-solve reads the remaining members' 2D. On a lazy project a
+            // member of a frame that is not resident is a `_lazy2d` placeholder
+            // (after a reopen, and after Track All / Triangulate All), all-NaN
+            // until hydrated — triangulating it found no 3D and silently kept the
+            // OLD points3d, solved with the view that just moved. Hydrate this
+            // frame's members from the store first, and give them back after.
+            var hydrated2d = hydrateGroupMembers2D(fromSession, frameIdx2);
             for (var gi = 0; gi < groups.length; gi++) {
                 var group = groups[gi];
                 if (group.instances.has(viewName) || group.reprojectedInstances.has(viewName)) {
@@ -1488,6 +1496,7 @@ function moveVideosToSession(viewNames, fromIdx, toIdx) {
                     }
                 }
             }
+            if (hydrated2d) releaseFrameMembers2D(fromSession, frameIdx2);
         }
 
         // 3. Move video file reference (only search within origin session's indices)

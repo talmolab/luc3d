@@ -584,6 +584,7 @@ export class Instance {
     setPoint(k, x, y) {
         if (k < 0 || k >= this.numNodes) return;
         const o = k << 1;
+        if (isLazyPlaceholderXY(this._xy)) this._xy = new Float64Array(this._xy);
         this._xy[o] = x; this._xy[o + 1] = y;
     }
 
@@ -600,6 +601,7 @@ export class Instance {
     clearPoint(k) {
         if (k < 0 || k >= this.numNodes) return;
         const o = k << 1;
+        if (isLazyPlaceholderXY(this._xy)) this._xy = new Float64Array(this._xy);
         this._xy[o] = NaN; this._xy[o + 1] = NaN;
         this._occ = occSet(this._occ, k, false);
     }
@@ -699,6 +701,21 @@ export class Instance {
     }
 
     /**
+     * Give this instance's 2D back to the lazy store: become a `_lazy2d`
+     * placeholder again, its coordinates the SHARED all-NaN buffer for its node
+     * count (`lazyPlaceholderXY`) and its occlusion cleared. The next hydration
+     * of its frame (`finalizeLazyFrameGroup`) adopts the store row's 2D, exactly
+     * as for a member of a freshly reopened project. Only for an instance whose
+     * 2D IS its store row — `pose/lazy-residency.js` decides that.
+     */
+    releaseLazy2d() {
+        const n = this.numNodes;
+        this._xy = lazyPlaceholderXY(n);
+        this._occ = makeOccSet(n);
+        this._lazy2d = true;
+    }
+
+    /**
      * Toggle the occluded state of a node.
      * Only works if the point has valid coordinates.
      * @param {number} nodeIdx
@@ -722,6 +739,7 @@ export class Instance {
             const o = nodeIdx << 1;
             if (!this.hasPoint(nodeIdx) && this._originalXY &&
                     !Number.isNaN(this._originalXY[o])) {
+                if (isLazyPlaceholderXY(this._xy)) this._xy = new Float64Array(this._xy);
                 this._xy[o] = this._originalXY[o];
                 this._xy[o + 1] = this._originalXY[o + 1];
             }
@@ -783,6 +801,39 @@ export class Instance {
     }
 }
 
+
+// --------------------------------------------------------------------------
+// Lazy-2D placeholder coordinates
+// --------------------------------------------------------------------------
+
+/**
+ * One all-NaN `_xy` buffer per node count, SHARED by every lazy-2D placeholder
+ * (`_lazy2d` members of a lazily reopened project, and members whose 2D went
+ * back to the store — `Instance.releaseLazy2d`). A placeholder used to own a
+ * NaN-filled `Float64Array(2n)`: on the 8-camera, 108,000-frame project that is
+ * 4,152,565 ArrayBuffers (240 B each at 15 nodes), and each one is a backing
+ * store every full GC has to sweep — measured at ~142 ms of a ~373 ms full GC,
+ * plus ~46 ms for the typed-array objects themselves
+ * (`_bench-playback.mjs HEAPPROBE=1 STRIP=1`).
+ *
+ * The three methods that write INTO `_xy` (`setPoint`, `clearPoint`,
+ * `setPointVisible`) copy it first when it is one of these, so a write can never
+ * reach the shared buffer. Everything else replaces `_xy` rather than writing
+ * into it. Do not write `inst._xy[i] = ...` from outside this class.
+ */
+var _lazyPlaceholderXY = new Map();   // nNodes -> Float64Array(2n) of NaN
+
+/** The shared all-NaN coordinate buffer for `n` nodes. @param {number} n @returns {Float64Array} */
+export function lazyPlaceholderXY(n) {
+    var xy = _lazyPlaceholderXY.get(n);
+    if (!xy) { xy = new Float64Array(n * 2); xy.fill(NaN); _lazyPlaceholderXY.set(n, xy); }
+    return xy;
+}
+
+/** Is `xy` a shared placeholder buffer (never write into it)? @param {Float64Array} xy */
+export function isLazyPlaceholderXY(xy) {
+    return !!xy && _lazyPlaceholderXY.get(xy.length >> 1) === xy;
+}
 
 // --------------------------------------------------------------------------
 // Instance storage helpers (module-private)
@@ -978,6 +1029,28 @@ export class Identity {
     }
 }
 
+/**
+ * The `reprojectedInstances` every InstanceGroup starts with: ONE shared, empty,
+ * read-only Map. A group gets a Map of its own on its first
+ * `addReprojectedInstance` — which almost none ever do: the bulk sweeps keep
+ * reprojections as raw points (`group.reprojections`) and only the single-frame
+ * paths build reprojected Instances. On the 8-camera, 108,000-frame project
+ * after Track All + Triangulate All that was 539,545 empty Maps (each a JSMap
+ * plus its hash table) holding 40 entries between them; marking them was a
+ * measured ~22 ms of every full GC (`_bench-playback.mjs HEAPPROBE=1 STRIP=1`).
+ *
+ * Reading, iterating, `clear()` and `delete()` behave exactly as on any empty
+ * Map. `set()` THROWS, so a writer that bypasses `addReprojectedInstance` fails
+ * loudly instead of filling the map every group shares.
+ */
+class SharedEmptyReprojectedInstances extends Map {
+    set() {
+        throw new Error('InstanceGroup.reprojectedInstances is the shared empty map until ' +
+            'addReprojectedInstance() gives the group its own — add through it, or assign a new Map');
+    }
+}
+export var NO_REPROJECTED_INSTANCES = new SharedEmptyReprojectedInstances();
+
 export class InstanceGroup {
     /**
      * @param {number} id
@@ -1006,8 +1079,12 @@ export class InstanceGroup {
          * @type {'ba'|'dlt'|undefined}
          */
         this.triangulationMethod = undefined;
-        /** @type {Map<string, Instance>} camera name -> reprojected instance */
-        this.reprojectedInstances = new Map();
+        /**
+         * @type {Map<string, Instance>} camera name -> reprojected instance.
+         * Starts as the shared read-only `NO_REPROJECTED_INSTANCES`; write
+         * through `addReprojectedInstance`.
+         */
+        this.reprojectedInstances = NO_REPROJECTED_INSTANCES;
     }
 
     /**
@@ -1093,6 +1170,9 @@ export class InstanceGroup {
      * @param {Instance} instance
      */
     addReprojectedInstance(cameraName, instance) {
+        if (this.reprojectedInstances === NO_REPROJECTED_INSTANCES || !this.reprojectedInstances) {
+            this.reprojectedInstances = new Map();
+        }
         this.reprojectedInstances.set(cameraName, instance);
     }
 

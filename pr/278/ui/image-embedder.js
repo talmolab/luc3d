@@ -32,8 +32,9 @@
  * (planKeyframeSamples, KEYFRAME_GAP_TOLERANCE), mediabunny (EncodedPacketSink, imported lazily, for the keyframe index).
  */
 
-import { state } from './app-state.js?v=0399e3a2e91c';
-import { planKeyframeSamples, KEYFRAME_GAP_TOLERANCE } from '../pose/id-switch-check.js?v=0399e3a2e91c';
+import { state } from './app-state.js?v=394ad6d8241c';
+import { planKeyframeSamples, KEYFRAME_GAP_TOLERANCE } from '../pose/id-switch-check.js?v=394ad6d8241c';
+import { hydrateGroupMembers2D } from '../pose/lazy-residency.js?v=394ad6d8241c';
 
 export const TRANSFORMERS_URL = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.0/+esm';
 export const IMAGE_MODEL_ID = 'onnx-community/dinov2-small';
@@ -480,7 +481,7 @@ export function createCropPool() {
     };
     try {
         for (let i = 0; i < n; i++) {
-            const w = { worker: new Worker(new URL('./image-crop-worker.js?v=0399e3a2e91c', import.meta.url), { type: 'module' }), load: 0 };
+            const w = { worker: new Worker(new URL('./image-crop-worker.js?v=394ad6d8241c', import.meta.url), { type: 'module' }), load: 0 };
             w.worker.onmessage = function (e) {
                 const p = pending.get(e.data.id); if (!p) return;
                 pending.delete(e.data.id); w.load--;
@@ -629,10 +630,15 @@ export async function createImageEmbedder(session, opts) {
         const tStart = performance.now();
         if (!tm.t0) tm.t0 = tStart;
         // crop geometry comes from the 2D keypoints alone, so the views to embed are known before decoding;
-        // a view whose sample moved to a keyframe crops each animal (same identity) from THAT frame's keypoints
+        // a view whose sample moved to a keyframe crops each animal (same identity) from THAT frame's keypoints.
+        // On a lazy project those keypoints may still be in the store: a member of a frame that is not
+        // resident is a `_lazy2d` placeholder (after a reopen, and after Track All / Triangulate All),
+        // whose 2D reads as all-NaN until hydrated — so hydrate every frame read here first.
+        hydrateGroupMembers2D(session, frame);
         const geo = views.map(function (v, vi) {
             const cam = v.cameraName || v.name, r = readers && readers[vi];
             const at = r ? r.decodedFrame(frame) : frame;
+            if (at !== frame) hydrateGroupMembers2D(session, at);
             const groups = at === frame ? null : identityGroups(at);
             return items.map(function (it) {
                 const g = groups ? groups.get(it.group.identityId) : it.group;
