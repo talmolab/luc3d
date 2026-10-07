@@ -10,37 +10,37 @@
 
 import { state, videoController, interactionManager, viewport3d, timeline, paneManager,
          setVideoController, setInteractionManager, setViewport3D, setTimeline,
-         hasRealVideo, VIEW_NAMES } from '../ui/app-state.js?v=d029b976d3b8';
-import { Instance, UnlinkedInstance, points3dNodeCount, getPoint3d, groupDisplayName } from './pose-data.js?v=d029b976d3b8';
+         hasRealVideo, VIEW_NAMES } from '../ui/app-state.js?v=f97729c5a8b1';
+import { Instance, UnlinkedInstance, points3dNodeCount, getPoint3d, groupDisplayName } from './pose-data.js?v=f97729c5a8b1';
 import {
     getInstanceGroupsForFrame, updateTimelineForFrame,
     reTriangulateGroup, sessionHasCalibration, getOrComputeReprojectedInstance,
-} from './triangulation.js?v=d029b976d3b8';
-import { OnDemandVideoDecoder, VideoController } from '../loading/video.js?v=d029b976d3b8';
-import { rebuildVideoController } from '../loading/session-loader.js?v=d029b976d3b8';
-import { markDirty, setStatus, showLoading, hideLoading } from '../import-export/save-load.js?v=d029b976d3b8';
-import { resetPlaneState } from '../import-export/plane-metadata.js?v=d029b976d3b8';
-import { createDemoSession } from '../demo-data.js?v=d029b976d3b8';
-import { setupUI, setupMenus, updateSeekbar, onPlaybackStateChange, fitTimelineToData } from '../ui/ui-wiring.js?v=d029b976d3b8';
-import { installInfoTips } from '../ui/info-tip.js?v=d029b976d3b8';
-import { installTimelineShortcuts } from '../ui/timeline-controller.js?v=d029b976d3b8';
-import { setupPanelTabs, setupSkeletonEditing, setupVideosTab, updateInfoPanel } from '../ui/info-panel.js?v=d029b976d3b8';
+} from './triangulation.js?v=f97729c5a8b1';
+import { OnDemandVideoDecoder, VideoController } from '../loading/video.js?v=f97729c5a8b1';
+import { rebuildVideoController } from '../loading/session-loader.js?v=f97729c5a8b1';
+import { markDirty, setStatus, showLoading, hideLoading } from '../import-export/save-load.js?v=f97729c5a8b1';
+import { resetPlaneState } from '../import-export/plane-metadata.js?v=f97729c5a8b1';
+import { createDemoSession } from '../demo-data.js?v=f97729c5a8b1';
+import { setupUI, setupMenus, updateSeekbar, onPlaybackStateChange, fitTimelineToData } from '../ui/ui-wiring.js?v=f97729c5a8b1';
+import { installInfoTips } from '../ui/info-tip.js?v=f97729c5a8b1';
+import { installTimelineShortcuts } from '../ui/timeline-controller.js?v=f97729c5a8b1';
+import { setupPanelTabs, setupSkeletonEditing, setupVideosTab, updateInfoPanel } from '../ui/info-panel.js?v=f97729c5a8b1';
 import {
     setupPlaneDefinition, planeInteractionCallbacks, syncPlanes3D, refreshPlanePanel,
-} from '../ui/plane-definition.js?v=d029b976d3b8';
-import { setupSplitHandles } from '../ui/layout-controls.js?v=d029b976d3b8';
-import { drawAllOverlays, setReprojErrorVisible } from '../ui/rendering.js?v=d029b976d3b8';
-import { populateViewStrip, populateSessionStrip } from '../ui/sessions-panes.js?v=d029b976d3b8';
+} from '../ui/plane-definition.js?v=f97729c5a8b1';
+import { setupSplitHandles } from '../ui/layout-controls.js?v=f97729c5a8b1';
+import { drawAllOverlays, setReprojErrorVisible } from '../ui/rendering.js?v=f97729c5a8b1';
+import { populateViewStrip, populateSessionStrip } from '../ui/sessions-panes.js?v=f97729c5a8b1';
 import {
     manualAssignState, getTotalUnlinkedCount, cleanupManualAssignment, startManualAssignment,
     editGroupState, cancelEditGroup, finishEditGroup, updateEditGroupToast,
     purgeTriangulationDataForGroup,
-} from '../ui/identity-assignment.js?v=d029b976d3b8';
-import { getTrackColor, getGroupColor } from '../ui/overlays.js?v=d029b976d3b8';
-import { Viewport3D } from '../ui/viewport3d.js?v=d029b976d3b8';
-import { isViewport3DVisible, markViewport3DSkipped } from '../ui/panel-visibility.js?v=d029b976d3b8';
-import { Timeline } from '../ui/timeline.js?v=d029b976d3b8';
-import { InteractionManager } from '../ui/interaction.js?v=d029b976d3b8';
+} from '../ui/identity-assignment.js?v=f97729c5a8b1';
+import { getTrackColor, getGroupColor } from '../ui/overlays.js?v=f97729c5a8b1';
+import { Viewport3D } from '../ui/viewport3d.js?v=f97729c5a8b1';
+import { isViewport3DVisible, markViewport3DSkipped } from '../ui/panel-visibility.js?v=f97729c5a8b1';
+import { Timeline } from '../ui/timeline.js?v=f97729c5a8b1';
+import { InteractionManager } from '../ui/interaction.js?v=f97729c5a8b1';
 
 // ============================================
 // Logging
@@ -666,6 +666,13 @@ export function setupInteraction() {
         },
 
         onInstanceDeleted: function (frameIdx, group, deletedViews) {
+            // A delete is an unsaved change. Without this the Delete key (and
+            // Edit ▸ Delete Instance / the toolbar, which share this path) left
+            // the project clean: no prompt on closing the tab, and none on
+            // switching sessions, which evicts the session's lazy store and with
+            // it the delete. Custom Instance Delete and "Delete group" already
+            // marked it.
+            markDirty();
             var trackName = group ? groupDisplayName(state.session, group, frameIdx) : 'unlinked instance';
             setStatus('Deleted ' + trackName, 'success');
 
