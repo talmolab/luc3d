@@ -429,8 +429,18 @@ export function instancesOverCount(dets, count, iouThreshold) {
  * user instances there and leaves the predictions as they were).
  */
 export class SleapTracker {
-    constructor(cfg) {
+    /**
+     * @param {object} cfg  see SLEAP_TRACKER_DEFAULTS
+     * @param {function(object)} [observe]  called after each frame's matching with
+     *   `{frameIdx, dets, tracks, cost, nr, nc, pairs}` — the detection index of each
+     *   row (into the frame's `dets`), the track id of each column, the row-major cost
+     *   matrix (Infinity where sleap-nn scores NaN) and the kept [row, col] pairs.
+     *   Read-only: it cannot change an assignment, so the port's answers stay
+     *   sleap-nn's. Not called on a frame with no tracks to match against.
+     */
+    constructor(cfg, observe) {
         var c = Object.assign({}, SLEAP_TRACKER_DEFAULTS, cfg || {});
+        this.observe = typeof observe === 'function' ? observe : null;
         // from_config: a track cap under fixed_window switches to local_queues
         if (c.maxTracks != null && c.candidatesMethod === 'fixed_window') c.candidatesMethod = 'local_queues';
         if (c.candidatesMethod !== 'fixed_window' && c.candidatesMethod !== 'local_queues') {
@@ -537,6 +547,8 @@ export class SleapTracker {
             var m = this.match(cost, nr, nc);
             var pairs = m.rows.map(function (row, k) { return [row, m.cols[k]]; });
             pairs = this._dropInfeasible(pairs, cost, nc, cur);
+            if (this.observe) this.observe({ frameIdx: frameIdx, dets: idx.slice(), tracks: ids.slice(), cost: cost, nr: nr, nc: nc,
+                                             pairs: pairs.map(function (p) { return p.slice(); }) });
             if (this.local) {
                 pairs.forEach(function (p) { assigned[p[0]] = p[1]; order.push(p[0]); });
                 for (var r2 = 0; r2 < nr; r2++) if (assigned[r2] != null) this._pushQueue(assigned[r2], { det: cur[r2], feature: feats[r2] });
@@ -639,8 +651,8 @@ export function connectSingleBreaks(frames) {
  * frame, an array of track ids aligned with its `dets` (null = dropped,
  * undefined = a prediction left alone on a user-labelled frame). Post-processing
  * as in `run_tracker`: the clean cull, then `connect_single_breaks`.
- * `opts.onProgress(done, total)` is called every 1000 frames (may return a
- * promise only when `runSleapTrackerAsync` is used).
+ * `opts.observe` is passed to the tracker (see `SleapTracker`); the track ids it
+ * sees are from BEFORE post-processing, so read final ids through its `dets`.
  */
 export function runSleapTracker(frames, cfg, opts) {
     var gen = sleapTrackerSteps(frames, cfg, opts);
@@ -649,7 +661,10 @@ export function runSleapTracker(frames, cfg, opts) {
     return r.value;
 }
 
-/** As `runSleapTracker`, yielding to the event loop every `opts.yieldEvery` frames (default 2000). */
+/**
+ * As `runSleapTracker`, yielding to the event loop every `opts.yieldEvery` frames
+ * (default 2000) — through `await opts.onProgress(done, total)` when given.
+ */
 export async function runSleapTrackerAsync(frames, cfg, opts) {
     var gen = sleapTrackerSteps(frames, cfg, opts);
     var r = gen.next();
@@ -668,7 +683,7 @@ function* sleapTrackerSteps(frames, cfg, opts) {
         throw new Error('post_connect_single_breaks requires tracking_target_instance_count to be set');
     }
     var every = (opts && opts.yieldEvery) || 2000;
-    var tracker = new SleapTracker(c);
+    var tracker = new SleapTracker(c, opts && opts.observe);
     var out = [], ordered = [];
     for (var f = 0; f < frames.length; f++) {
         var ids = tracker.track(frames[f].dets, frames[f].frameIdx);

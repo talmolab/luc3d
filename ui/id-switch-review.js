@@ -18,7 +18,8 @@
  *   { v: 1,
  *     checks: { size?|image?: { encounters, sampleHz, step, fps, fpsFromVideo,
  *                                [imageHz, crops, cameras, model: {name, note}],
- *                                points: [[frame, nameA, nameB, score, kind, followOf, continues, startFrame, link], …] } },
+ *                                points: [[frame, nameA, nameB, score, kind, followOf, continues, startFrame, link,
+ *                                          look?], …] } },
  *     reviewed: [rowKey, …],
  *     fixes: [[key, partnerKey, nameA, nameB, from, to], …] }      // only when something was fixed
  *
@@ -28,7 +29,9 @@
  * it was added, which then land on `frame`. `link` is the other edge of a change
  * point's swapped stretch — an onset's `switchBackAt`, an 'end''s `switchedAt` —
  * or -1 for none (the session's end / start); files saved before it was added
- * have no `link`, and a fix then pairs rows by what the list shows. Rows are keyed by check,
+ * have no `link`, and a fix then pairs rows by what the list shows. `look`,
+ * written only for a point scored at a candidate moment rather than an encounter
+ * (single camera, see pose/single-camera-tracking.js), lists its cues. Rows are keyed by check,
  * frame and identity NAMES (`rowKey`) — names, not ids, are what a reopened
  * project still agrees on. Nothing is written for a session no check has run on,
  * so such a project's bytes are unchanged. Reads tolerate absence and garbage.
@@ -194,9 +197,11 @@ export function serializeIdSwitchReview(session) {
         var c = {
             encounters: idSwitchEncounterCount(r), sampleHz: r.sampleHz, step: r.step, fps: r.fps, fpsFromVideo: !!r.fpsFromVideo,
             points: idSwitchMarkers(r).map(function (m) {
-                return [m.frame, String(m.nameA), String(m.nameB), Math.round(m.score * 10) / 10, m.kind === 'end' ? 'end' : '',
-                        m.followOf == null ? -1 : m.followOf, m.continues ? 1 : 0, m.startFrame == null ? -1 : m.startFrame,
-                        linkOf(m)];
+                var p = [m.frame, String(m.nameA), String(m.nameB), Math.round(m.score * 10) / 10, m.kind === 'end' ? 'end' : '',
+                         m.followOf == null ? -1 : m.followOf, m.continues ? 1 : 0, m.startFrame == null ? -1 : m.startFrame,
+                         linkOf(m)];
+                if (m.look && m.look.length) p.push(m.look.map(String));   // a candidate moment's cues; absent otherwise
+                return p;
             }),
         };
         if (cue === 'image') {
@@ -241,6 +246,10 @@ export function ingestIdSwitchReview(session, payload) {
                 if (isNum(p[8]) && !m.continues) {                // absent in older files: pairing falls back (linkedFrame)
                     var link = p[8] >= 0 ? p[8] : null;
                     if (m.kind === 'end') m.switchedAt = link; else m.switchBackAt = link;
+                }
+                if (Array.isArray(p[9])) {                        // written only for a candidate moment (its cues)
+                    var look = p[9].filter(function (x) { return typeof x === 'string'; });
+                    if (look.length) m.look = look;
                 }
                 flags.push(m);
             });

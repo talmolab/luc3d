@@ -1543,15 +1543,19 @@ async function runSingleCameraTrackAll(session, bail) {
     clearIdSwitchResults(session);
     session.identities = [];
     session.frameIdentityMap = new Map();
+    session._idSwitchCandidates = null;    // replaced below; never left over from an earlier run
 
     var total = session.frameGroups.size;
     showLoadingProgress('Tracking (SLEAP tracker)', 0, total);
     try {
         await yieldToPaint();
         var res = await trackSingleCamera(session, cfg, {
+            fps: state.fps,
             onProgress: async function (done, n) { showLoadingProgress('Tracking (SLEAP tracker)', done, n); await yieldToPaint(); },
         });
         hideLoading();
+        // Where else a switch could be (not saved: the input tracklets they come from are rewritten).
+        session._idSwitchCandidates = res.moments;
         var switchedToIds = res.numIdentities > 0 && setColorByIdentity(state, true);
         var predOnly = res.numIdentities > 0 && showPredictedOnly();
         drawAllOverlays(state.currentFrame);

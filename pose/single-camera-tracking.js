@@ -93,26 +93,37 @@ function trackerPoints(inst) {
  *
  * The caller has already cleared the previous identities (as Track All does).
  *
+ * Also collects the moments where an identity switch could have happened
+ * (`candidateMoments`) — read from the tracking itself, so they cost nothing.
+ *
  * @param {Session} session  eager, one camera
  * @param {object} cfg       from `singleCameraTrackerConfig`
- * @param {{onProgress?: function(number, number): (void|Promise), signal?: AbortSignal}} [opts]
- * @returns {Promise<{numIdentities: number, frames: number, tracked: number, untracked: number}>}
+ * @param {{onProgress?: function(number, number): (void|Promise), signal?: AbortSignal,
+ *          fps?: number, look?: object}} [opts]  `look` overrides `CANDIDATE_DEFAULTS`
+ * @returns {Promise<{numIdentities: number, frames: number, tracked: number, untracked: number,
+ *          moments: Array}>}
  */
 export async function trackSingleCamera(session, cfg, opts) {
     var cam = singleCameraName(session);
     if (!cam) throw new Error('not a single-camera session');
     if (session.lazyLoader) throw new Error(SINGLE_CAMERA_LAZY_REASON);
     var frameIdx = Array.from(session.frameGroups.keys()).sort(function (a, b) { return a - b; });
-    var frames = [], insts = [];
+    var frames = [], insts = [], inputTracks = [];
     for (var i = 0; i < frameIdx.length; i++) {
         var list = instancesOf(session.frameGroups.get(frameIdx[i]), cam);
         if (!list.length) continue;
         insts.push(list);
+        inputTracks.push(list.map(function (inst) { return inst.trackIdx; }));   // the file's own tracklets, before they are rewritten
         frames.push({ frameIdx: frameIdx[i], dets: list.map(function (inst) {
             return { points: trackerPoints(inst), score: typeof inst.score === 'number' ? inst.score : NaN, isUser: inst.type === 'user' };
         }) });
     }
-    var out = await runSleapTrackerAsync(frames, cfg, opts);
+    var look = Object.assign({}, CANDIDATE_DEFAULTS, (opts && opts.look) || {});
+    var ambiguous = [], posOf = new Map();
+    frames.forEach(function (fr, p) { posOf.set(fr.frameIdx, p); });
+    var out = await runSleapTrackerAsync(frames, cfg, Object.assign({}, opts, {
+        observe: function (m) { collectAmbiguous(m, posOf.get(m.frameIdx), look.ambiguityMargin, ambiguous); },
+    }));
 
     var nTracks = 0;
     out.forEach(function (ids) { ids.forEach(function (t) { if (t != null && t + 1 > nTracks) nTracks = t + 1; }); });
@@ -138,7 +149,85 @@ export async function trackSingleCamera(session, cfg, opts) {
             groups[g].identityId = m && m.trackIdx != null ? m.trackIdx : null;
         }
     }
-    return { numIdentities: nTracks, frames: frames.length, tracked: tracked, untracked: untracked };
+    var moments = candidateMoments(frames, out, inputTracks, ambiguous, look, (opts && opts.fps) || session.fps || 30);
+    return { numIdentities: nTracks, frames: frames.length, tracked: tracked, untracked: untracked, moments: moments };
+}
+
+/**
+ * Where to look for an identity switch on one camera. Most real switches are NOT
+ * at an encounter the checks score — they happen in contacts of three animals, or
+ * while one animal's detection is missing for seconds and its track takes another
+ * animal — so the checks also test these moments, both read from the tracking:
+ *   - 'ambiguity': two tracks whose EXCHANGED assignment would have cost the
+ *     tracker less than `ambiguityMargin` more than the one it chose (its own
+ *     OKS-similarity cost, so the margin is in OKS units).
+ *   - 'tracklet': a tracklet of the INPUT file (SLEAP's own tracking, before
+ *     Track All rewrote it) that passes from one identity to another within
+ *     `trackletGapFrames`: two independent trackers disagreeing about which
+ *     animal this is. Only when the input had tracks.
+ * On 35 proofread 10-min SLAP videos the two together put a candidate within
+ * 3 s of 44 of the 59 real switches (the contact episodes alone: see MODULES.md).
+ */
+export const CANDIDATE_DEFAULTS = {
+    ambiguityMargin: 0.1,
+    trackletGapFrames: 5,
+    clusterSeconds: 3,     // per pair, candidates this close are one moment (at the run's last frame)
+};
+
+/** Observer for the tracker: keep each pair of matched detections whose exchange is nearly as cheap. */
+function collectAmbiguous(m, pos, maxMargin, outList) {
+    for (var i = 0; i < m.pairs.length; i++) for (var j = i + 1; j < m.pairs.length; j++) {
+        var r1 = m.pairs[i][0], c1 = m.pairs[i][1], r2 = m.pairs[j][0], c2 = m.pairs[j][1];
+        var keep = m.cost[r1 * m.nc + c1] + m.cost[r2 * m.nc + c2];
+        var swap = m.cost[r1 * m.nc + c2] + m.cost[r2 * m.nc + c1];
+        if (isFinite(keep) && isFinite(swap) && swap - keep < maxMargin) {
+            outList.push({ pos: pos, d1: m.dets[r1], d2: m.dets[r2] });
+        }
+    }
+}
+
+/**
+ * The candidate moments, in FINAL identity ids (track k = identity k): one per
+ * pair per run of candidates no more than `clusterSeconds` apart, placed at the
+ * run's last frame (`frame`; `startFrame` = its first). Ambiguity is observed
+ * before connect-single-breaks renumbers tracks, so ids are read through the
+ * final output, never from the observer.
+ */
+export function candidateMoments(frames, out, inputTracks, ambiguous, look, fps) {
+    var cands = [];
+    var push = function (f, a, b, cue) {
+        if (a == null || b == null || a === b) return;
+        cands.push({ f: f, a: Math.min(a, b), b: Math.max(a, b), cue: cue });
+    };
+    ambiguous.forEach(function (x) { push(frames[x.pos].frameIdx, out[x.pos][x.d1], out[x.pos][x.d2], 'ambiguity'); });
+    var last = new Map();
+    for (var p = 0; p < frames.length; p++) {
+        var f = frames[p].frameIdx;
+        for (var q = 0; q < out[p].length; q++) {
+            var t = inputTracks[p][q], id = out[p][q];
+            if (t == null || t < 0 || id == null) continue;
+            var prev = last.get(t);
+            if (prev && prev.id !== id && f - prev.f <= look.trackletGapFrames) push(f, prev.id, id, 'tracklet');
+            last.set(t, { id: id, f: f });
+        }
+    }
+    var byPair = new Map(), moments = [], gap = look.clusterSeconds * fps;
+    cands.forEach(function (c) {
+        var k = c.a + ':' + c.b;
+        if (!byPair.has(k)) byPair.set(k, []);
+        byPair.get(k).push(c);
+    });
+    byPair.forEach(function (L) {
+        L.sort(function (x, y) { return x.f - y.f; });
+        var run = [L[0]];
+        for (var i = 1; i <= L.length; i++) {
+            if (i < L.length && L[i].f - run[run.length - 1].f <= gap) { run.push(L[i]); continue; }
+            var cues = Array.from(new Set(run.map(function (c) { return c.cue; }))).sort();
+            moments.push({ frame: run[run.length - 1].f, startFrame: run[0].f, identityA: run[0].a, identityB: run[0].b, cues: cues });
+            if (i < L.length) run = [L[i]];
+        }
+    });
+    return moments.sort(function (x, y) { return x.frame - y.frame || x.identityA - y.identityA || x.identityB - y.identityB; });
 }
 
 /**

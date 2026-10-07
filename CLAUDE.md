@@ -676,6 +676,16 @@ the animal count, connect single breaks). Rules:
   in 2D is not a usable cue (2 of 59 real swaps caught, AUC 0.55), so Track All
   does not run it automatically on one camera — it says so in the status line,
   and the menu still runs it. The image check needs nothing 3D.
+- **Where to look comes from the tracking; whether it switched comes from both
+  sides.** Track All also returns candidate moments (`candidateMoments`: the
+  tracker nearly chose the exchange — read through `SleapTracker`'s read-only
+  observer — or the input file's own tracklet changes animal), and the checks
+  test each one by comparing the evidence BEFORE and AFTER it
+  (`pose/id-switch-check.js` `testMoments`, 15 s each side, -200). Reading only
+  after a moment caught 1 more real swap of 59: the classifier is fit to the
+  tracker's own labels, and a swap covering most of the video is what it
+  learns. Moments only ADD change points; encounters score exactly as without
+  them. They are not saved (their input tracklets are rewritten).
 - **Eager only.** A lazy (> 150 MB) single-camera project is refused with a
   reason, never tracked from its resident window — the resident-only bug class.
 
