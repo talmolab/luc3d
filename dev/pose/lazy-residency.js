@@ -39,9 +39,30 @@
  * Triangulate All leaves every frame in (`sweepTriangulateAllFrames`), from
  * which the draw path re-derives them on the next visit.
  *
- * DOM-free and import-free so `tests/test-lazy-residency.mjs` can drive it
- * directly; `pose/triangulation.js` `evictLazyFrames` supplies the app state.
+ * ## Group members' 2D goes back to the store too
+ *
+ * `instanceGroups` is never evicted, but its members' 2D need not stay. A
+ * Track All reuses the instances it hydrated, so afterwards every member holds
+ * its own `Float64Array` — a private copy of a store row. Measured on the
+ * 8-camera 108,000-frame project: 4,152,565 members, 1.39 GB (443 MB of
+ * wrapper objects + 951 MB of backing stores) and ~4.2M ArrayBuffers that
+ * every full GC sweeps; with them released, playback after Track All stopped
+ * degrading run over run. `releaseFrameMembers2d` points each releasable
+ * member of a NON-resident frame at the shared `lazyPlaceholderXY` and marks it
+ * `_lazy2d` — exactly a reopened project's lightweight member — and
+ * `finalizeLazyFrameGroup` re-adopts its row's 2D the next time the frame is
+ * hydrated. It runs where a frame stops being resident: the windowed sweeps'
+ * window release (`sweepLazyFrameWindows`) and `evictLazyFrameGroups`. A
+ * reader that needs member 2D of a frame it does not hydrate brackets the read
+ * with `hydrateFrameMembers2d` / `releaseFrameMembers2d` (the image ID-switch
+ * check, `ui/image-embedder.js`).
+ *
+ * DOM-free (it imports only `pose/pose-data.js`) so `tests/test-lazy-residency.mjs`
+ * can drive it directly; `pose/triangulation.js` `evictLazyFrames` supplies the
+ * app state.
  */
+
+import { Instance, lazyPlaceholderXY } from './pose-data.js?v=aa6b0dc3653b';
 
 /** Frames the playback loader keeps hydrated ahead of the playhead. */
 export const LAZY_PLAYBACK_AHEAD = 600;
@@ -231,15 +252,126 @@ export function evictLazyFrameGroups(session, opts) {
         if (why) { blocked[why] = (blocked[why] || 0) + 1; continue; }
         doomed.push(f);
     }
+    var released = 0;
     for (var d = 0; d < doomed.length; d++) {
         session.frameGroups.delete(doomed[d]);
         dropDerivedReprojections(session, doomed[d], opts.triangulationResults);
+        released += releaseFrameMembers2d(session, doomed[d], { refs: opts.refs });
     }
     _lastPass = {
         resident: session.frameGroups.size,
         evicted: doomed.length,
         protected: protectedCount,
         blocked: blocked,
+        membersReleased: released,
     };
     return _lastPass;
+}
+
+// ---------------------------------------------------------------------------
+// Group members' 2D
+// ---------------------------------------------------------------------------
+
+function occAllClear(occ) {
+    if (typeof occ === 'number') return occ === 0;
+    if (!occ) return true;
+    for (var i = 0; i < occ.length; i++) if (occ[i] !== 0) return false;
+    return true;
+}
+
+/**
+ * Why group member `m` (camera `cam`) must keep its own 2D, or null when
+ * re-hydration would give it back exactly. Re-hydration adopts the points of
+ * the store row at `m._rawInstIndex` with occlusion all clear (the hydration
+ * paths never read the store's visibility), so the member must still BE that
+ * row: an untouched prediction — not user, modified, mid-edit or nulled, no
+ * occlusion set, no skeleton-node change — whose row exists and is a
+ * prediction. Its other fields (track, type, score, identity) are on the
+ * member object, which stays; only `_xy` is given back.
+ *
+ * @returns {string|null} 'released', 'ui', 'user', 'modified', 'occlusion',
+ *   'row', 'skeleton'
+ */
+export function member2dReleaseBlocker(m, desc, numNodes, refs) {
+    if (m._lazy2d) return 'released';
+    if (refs && refs.has(m)) return 'ui';
+    if (m.type !== 'predicted') return 'user';
+    if (m.modified) return 'modified';
+    if (typeof m.hasBackup === 'function' && m.hasBackup()) return 'modified';
+    if (m.nulledNodes && m.nulledNodes.size > 0) return 'modified';
+    if (!occAllClear(m._occ)) return 'occlusion';
+    var k = m._rawInstIndex;
+    if (typeof k !== 'number' || !(k >= 0 && k < desc.count) || k !== Math.floor(k)) return 'row';
+    if (desc.predicted[k] !== 1) return 'row';
+    if (!(numNodes > 0) || m.numNodes !== numNodes) return 'skeleton';
+    return null;
+}
+
+/**
+ * Give the 2D of every releasable member of `frameIdx`'s groups back to the
+ * store (see the file header). Never for a RESIDENT frame — its members are
+ * what is on screen — nor for a group (or member) the UI holds.
+ *
+ * @param {Object} session
+ * @param {number} frameIdx
+ * @param {{refs?: Set<Object>}} [opts]
+ * @returns {number} members released
+ */
+export function releaseFrameMembers2d(session, frameIdx, opts) {
+    var loader = session && session.lazyLoader;
+    if (!loader || typeof loader.describeStoreFrame !== 'function') return 0;
+    if (session.frameGroups && session.frameGroups.has(frameIdx)) return 0;
+    var groups = session.instanceGroups ? session.instanceGroups.get(frameIdx) : null;
+    if (!groups || groups.length === 0) return 0;
+    var refs = opts && opts.refs;
+    var descByCam = null;
+    var n = 0;
+    for (var gi = 0; gi < groups.length; gi++) {
+        var g = groups[gi];
+        if (refs && refs.has(g)) continue;
+        for (var [cam, m] of g.instances) {
+            if (!m || m._lazy2d) continue;
+            if (!descByCam) descByCam = new Map();
+            var desc = descByCam.get(cam);
+            if (desc === undefined) { desc = loader.describeStoreFrame(cam, frameIdx); descByCam.set(cam, desc); }
+            if (!desc) continue;                       // a camera the loader does not back
+            var numNodes = (loader.numNodesByCam && loader.numNodesByCam.get(cam)) || 0;
+            if (member2dReleaseBlocker(m, desc, numNodes, refs)) continue;
+            m._xy = lazyPlaceholderXY(m.numNodes);
+            m._lazy2d = true;
+            n++;
+        }
+    }
+    return n;
+}
+
+/**
+ * Give `frameIdx`'s released group members their 2D back WITHOUT making the
+ * frame resident — for a reader that needs member 2D of frames it does not
+ * hydrate. Builds each member's row exactly as `buildLazyFrameGroupSync` +
+ * `finalizeLazyFrameGroup` do (`getFrameSync`, `new Instance(points)`,
+ * `adoptPointsFrom`). Pair with `releaseFrameMembers2d` once read, or the
+ * members stay hydrated.
+ *
+ * @returns {number} members hydrated
+ */
+export function hydrateFrameMembers2d(session, frameIdx) {
+    var loader = session && session.lazyLoader;
+    if (!loader || typeof loader.getFrameSync !== 'function') return 0;
+    var groups = session.instanceGroups ? session.instanceGroups.get(frameIdx) : null;
+    if (!groups || groups.length === 0) return 0;
+    var data = null, n = 0;
+    for (var gi = 0; gi < groups.length; gi++) {
+        for (var [cam, m] of groups[gi].instances) {
+            if (!m || !m._lazy2d || m._rawInstIndex == null) continue;
+            if (!data) { data = loader.getFrameSync(frameIdx); if (!data) return n; }
+            var rows = data.get(cam);
+            var d = rows ? rows[m._rawInstIndex] : null;
+            if (!d) continue;
+            m.adoptPointsFrom(new Instance(d.points || [], null, d.type || 'predicted', d.score || 0));
+            m._lazy2d = false;
+            n++;
+        }
+    }
+    return n;
 }

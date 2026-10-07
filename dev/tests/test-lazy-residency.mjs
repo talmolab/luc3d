@@ -26,12 +26,13 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '..');
 const imp = (rel) => import(pathToFileURL(path.join(ROOT, rel)).href);
 
-const { Instance, FrameGroup, UnlinkedInstance, InstanceGroup } = await imp('pose/pose-data.js');
+const { Instance, FrameGroup, UnlinkedInstance, InstanceGroup, lazyPlaceholderXY, isLazyPlaceholderXY } = await imp('pose/pose-data.js');
 const { SioLazyLoader } = await imp('loading/sio-lazy-loader.js');
 const R = await imp('pose/lazy-residency.js');
 const { frameEvictionBlocker, evictLazyFrameGroups, holdLazyResidency, releaseLazyResidency,
         isLazyResidencyHeld, LAZY_PLAYBACK_AHEAD, LAZY_KEEP_BEHIND, LAZY_RESIDENT_CAP,
-        LAZY_PREFETCH_MARGIN } = R;
+        LAZY_PREFETCH_MARGIN, releaseFrameMembers2d, hydrateFrameMembers2d, member2dReleaseBlocker } = R;
+const E = await imp('ui/image-embedder.js');
 
 let passed = 0, failed = 0;
 function ok(cond, msg) {
@@ -84,6 +85,19 @@ function makeLoader(nFrames, spec, opts = {}) {
         loader.numNodesByCam.set(cam, NODES);
     }
     loader.nFrames = nFrames;
+    // What `getFrameSync` (via `_extractCamFrame`) hands the hydration paths:
+    // one adapted dict per store row, points as built by `pts`.
+    loader.getFrameSync = (f) => {
+        const out = new Map();
+        for (const cam of CAMS) {
+            const d = loader.describeStoreFrame(cam, f), rows = [];
+            for (let k = 0; k < d.count; k++) {
+                rows.push({ points: pts(f, k), trackIdx: d.trackIdx[k], type: d.predicted[k] ? 'predicted' : 'user', score: 0.9 });
+            }
+            out.set(cam, rows);
+        }
+        return out;
+    };
     return loader;
 }
 
@@ -100,7 +114,7 @@ function pts(f, k) {
     return out;
 }
 
-/** Mirror of buildLazyFrameGroupSync + finalizeLazyFrameGroup. */
+/** Mirror of buildLazyFrameGroupSync + finalizeLazyFrameGroup (incl. re-adopting a released member's 2D). */
 function hydrate(session, f) {
     const fg = new FrameGroup(f);
     const groups = session.instanceGroups.get(f) || [];
@@ -120,8 +134,10 @@ function hydrate(session, f) {
                 d.predicted[k] ? 'predicted' : 'user', 0.9);
             inst._rawInstIndex = k;
             const member = groups.length ? memberAt.get(cam)?.get(k) : undefined;
-            if (member) linked.push(member);
-            else fg.addUnlinkedInstance(cam, new UnlinkedInstance(inst, cam));
+            if (member) {
+                if (member._lazy2d) { member.adoptPointsFrom(inst); member._lazy2d = false; }
+                linked.push(member);
+            } else fg.addUnlinkedInstance(cam, new UnlinkedInstance(inst, cam));
         }
         fg.instances.set(cam, linked);
     }
@@ -334,6 +350,123 @@ group('simulated playback stays under the cap; edits survive');
     ok(max <= LAZY_RESIDENT_CAP + 6, `resident never exceeds the cap plus one top-up (max ${max})`);
     ok(S.frameGroups.has(5) && firstUnlinked(S.frameGroups.get(5)).instance.modified,
         'the edited frame played past 20,000 frames ago is still resident, edit intact');
+}
+
+// ---------------------------------------------------------------------------
+group('the shared lazy placeholder is never written');
+{
+    const p = lazyPlaceholderXY(NODES);
+    ok(p === lazyPlaceholderXY(NODES), 'one buffer per node count');
+    ok(Array.from(p).every(Number.isNaN) && p.length === NODES * 2, 'NaN-filled, node-aligned');
+    ok(isLazyPlaceholderXY(p) && !isLazyPlaceholderXY(new Float64Array(NODES * 2).fill(NaN)),
+        'recognised by identity, not by content');
+    const a = new Instance(p, 0, 'predicted', 1), b = new Instance(p, 0, 'predicted', 1);
+    ok(a._xy === p && b._xy === p, 'the constructor adopts it by reference');
+    a.setPoint(0, 5, 6);
+    ok(a._xy !== p && a.getX(0) === 5 && b._xy === p && Number.isNaN(b.getX(0)), 'setPoint copies first');
+    const c = new Instance(p, 0, 'predicted', 1);
+    c.clearPoint(1);
+    ok(c._xy !== p, 'clearPoint copies first');
+    const d = new Instance(p, 0, 'predicted', 1);
+    d._originalXY = Float64Array.from([1, 2, 3, 4, 5, 6]);
+    d.setPointVisible(0, true);
+    ok(d._xy !== p && d.getX(0) === 1, 'setPointVisible (restore) copies first');
+    ok(Array.from(p).every(Number.isNaN), 'after all three writers the placeholder is still all NaN');
+}
+
+// ---------------------------------------------------------------------------
+group('a member gives its 2D back only when re-hydration returns exactly it');
+{
+    const S = makeSession(60, (cam, f) => f === 9 ? [{ track: 0, type: 0 }, { track: 1, type: 1 }] : twoPredicted());
+    const release = (f, mutate, refsOf) => {
+        const { g } = groupFrame(S, f);
+        S.frameGroups.delete(f);                                   // the frame is no longer resident
+        if (mutate) mutate(g);
+        const n = releaseFrameMembers2d(S, f, { refs: refsOf ? refsOf(g) : undefined });
+        return { n, g, a: g.instances.get('A'), b: g.instances.get('B') };
+    };
+    const ctl = release(0);
+    eq(ctl.n, CAMS.length, 'control: both members of an untouched grouped frame are released');
+    ok(ctl.a._lazy2d && ctl.a._xy === lazyPlaceholderXY(NODES) && ctl.b._xy === lazyPlaceholderXY(NODES),
+        'released = the shared placeholder + _lazy2d (a reopened project\'s lightweight member)');
+    eq(releaseFrameMembers2d(S, 0), 0, 'releasing again is a no-op');
+
+    const { g: gRes } = groupFrame(S, 1);
+    eq(releaseFrameMembers2d(S, 1), 0, 'a RESIDENT frame keeps its members\' 2D (it is on screen)');
+    ok(!gRes.instances.get('A')._lazy2d, '...untouched');
+
+    const kept = (f, mutate, refsOf) => { const r = release(f, mutate, refsOf); return [r.n, !!r.a._lazy2d, !!r.b._lazy2d]; };
+    eq(kept(2, g => { g.instances.get('A').type = 'user'; }).join(), '1,false,true', 'a user member keeps its 2D');
+    eq(kept(3, g => { g.instances.get('A').modified = true; }).join(), '1,false,true', 'a modified member keeps its 2D');
+    eq(kept(4, g => { g.instances.get('A').backupPoints(); }).join(), '1,false,true', 'a member mid-edit keeps its 2D');
+    eq(kept(5, g => { g.instances.get('A').nulledNodes = new Set([0]); }).join(), '1,false,true', 'a nulled member keeps its 2D');
+    eq(kept(6, g => { g.instances.get('A').setOccluded(0, true); }).join(), '1,false,true',
+        'an occluded node keeps its 2D (hydration brings occlusion back clear)');
+    eq(kept(7, g => { g.instances.get('A')._rawInstIndex = 5; }).join(), '1,false,true', 'a member with no store row keeps its 2D');
+    eq(kept(8, g => { g.instances.get('A').insertNodeAt(NODES); }).join(), '1,false,true', 'a skeleton-node change keeps its 2D');
+    eq(kept(9, g => { g.instances.get('A').type = 'predicted'; }).join(), '0,false,false',
+        'a prediction whose store row is a USER row keeps its 2D (re-hydration would bring the user row)');
+    eq(kept(10, null, g => new Set([g])).join(), '0,false,false', 'a group the UI holds keeps all its members\' 2D');
+    eq(kept(11, null, g => new Set([g.instances.get('B')])).join(), '1,true,false', 'a member the UI holds keeps its 2D');
+
+    const twin = new Instance(pts(0, 0), 0, 'predicted', 0.9); twin._rawInstIndex = 0;
+    const desc = S.lazyLoader.describeStoreFrame('A', 12);
+    eq(member2dReleaseBlocker(twin, desc, NODES), null, 'blocker: an untouched prediction is releasable');
+    twin.setOccluded(1, true);
+    eq(member2dReleaseBlocker(twin, desc, NODES), 'occlusion', 'blocker names the reason');
+    const noApi = { ...S, lazyLoader: { labelsByCam: S.lazyLoader.labelsByCam } };
+    eq(releaseFrameMembers2d(noApi, 0), 0, 'a loader that cannot describe its store never releases');
+}
+
+// ---------------------------------------------------------------------------
+group('evicted members come back with their exact 2D');
+{
+    const S = makeSession(100);
+    const { g } = groupFrame(S, 3);
+    const before = [...g.instances].map(([c, m]) => c + ':' + m.toPointsArray().flat().join(' '));
+    const pass = evictLazyFrameGroups(S, { anchors: [90], ahead: 2, behind: 2 });
+    eq(pass.membersReleased, CAMS.length, 'the eviction pass released the evicted frame\'s members');
+    ok([...g.instances.values()].every(m => m._lazy2d), 'they are lightweight now');
+    // A reader that does not hydrate the frame (the image check):
+    eq(hydrateFrameMembers2d(S, 3), CAMS.length, 'hydrateFrameMembers2d gives them their row back');
+    ok(!S.frameGroups.has(3), '...without making the frame resident');
+    eq([...g.instances].map(([c, m]) => c + ':' + m.toPointsArray().flat().join(' ')).join('|'), before.join('|'),
+        '...exactly the 2D they had');
+    eq(releaseFrameMembers2d(S, 3), CAMS.length, 'and give it back again');
+    // The real path back: the frame is shown again.
+    const fg = hydrate(S, 3);
+    eq([...g.instances].map(([c, m]) => c + ':' + m.toPointsArray().flat().join(' ')).join('|'), before.join('|'),
+        're-hydrating the frame re-adopts exactly the 2D they had');
+    ok(fg.getInstances('A')[0] === g.instances.get('A'), '...on the same member objects');
+}
+
+// ---------------------------------------------------------------------------
+group('the image ID-switch check reads released members through hydration');
+{
+    // A 15-node mouse the crop geometry accepts (Nose + TTI + >= 6 body nodes, L >= 15).
+    const MOUSE = ['Nose', 'Ear_R', 'Ear_L', 'TTI', 'TailTip', 'Head', 'Trunk', 'Tail_0', 'Tail_1', 'Tail_2',
+        'Shoulder_left', 'Shoulder_right', 'Haunch_left', 'Haunch_right', 'Neck'];
+    const mousePts = MOUSE.map((_, i) => [100 + i * 12 + (i % 3) * 7, 200 + i * 5 - (i % 4) * 9]);
+    const F = 42, cam = 'A';
+    const member = new Instance(lazyPlaceholderXY(MOUSE.length), 0, 'predicted', 0.9);
+    member._rawInstIndex = 0; member._lazy2d = true;
+    const g = new InstanceGroup(1, 0); g.addInstance(cam, member);
+    const session = {
+        instanceGroups: new Map([[F, [g]]]), frameGroups: new Map(),
+        lazyLoader: {
+            labelsByCam: new Map([[cam, {}]]), numNodesByCam: new Map([[cam, MOUSE.length]]),
+            describeStoreFrame: () => ({ count: 1, trackIdx: Int32Array.of(0), predicted: Uint8Array.of(1) }),
+            getFrameSync: (f) => new Map([[cam, f === F ? [{ points: mousePts, trackIdx: 0, type: 'predicted', score: 0.9 }] : []]]),
+        },
+    };
+    const sk = E.skeletonIndex(MOUSE);
+    ok(E.cropGeometry(new Instance(mousePts, 0, 'predicted', 0.9), sk), 'precondition: the hydrated mouse has crop geometry');
+    eq(E.cropGeometry(member, sk), null, 'control: read directly, a released member has no geometry (what the check used to see)');
+    const geo = E.frameCropGeometry(session, F, [{ group: g }], [cam], [F], sk);
+    const want = E.cropGeometry(new Instance(mousePts, 0, 'predicted', 0.9), sk);
+    ok(geo[0][0] && want && Math.abs(geo[0][0].cx - want.cx) < 1e-9 && Math.abs(geo[0][0].L - want.L) < 1e-9,
+        'frameCropGeometry gets the geometry of the row\'s real 2D');
+    ok(member._lazy2d && member._xy === lazyPlaceholderXY(MOUSE.length), 'and gives the 2D back afterwards');
 }
 
 // ---------------------------------------------------------------------------

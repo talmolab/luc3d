@@ -1395,6 +1395,20 @@ resize any backup alongside, so `restorePoints()` stays node-aligned),
 `Float64Array`, adopted by reference) and normalizes, so all 23 construction
 sites were untouched. Only readers changed.
 
+**The shared lazy placeholder.** `lazyPlaceholderXY(numNodes)` returns ONE
+NaN-filled `Float64Array(2n)` per node count, and `isLazyPlaceholderXY(xy)`
+recognises it by identity. Every lazy `InstanceGroup` member whose 2D lives only
+in the store points at it: a reopened project's placeholders
+(`reconstructInstanceGroupsFromSessionLazy`) and members whose frame went
+non-resident (`releaseFrameMembers2d`, `pose/lazy-residency.js`). A private
+buffer each was 1.39 GB and ~4.2M ArrayBuffers after a Track All on the 8-camera
+108,000-frame project. **It is never written:** the three IN-PLACE writers —
+`setPoint`, `clearPoint` and `setPointVisible`'s restore — call the private
+`_ownXY()` first, which swaps in a copy when `_xy` is the placeholder. Writers
+that assign a new array (`setPointsFrom`, `adoptPointsFrom`, `restorePoints`,
+`insertNodeAt`/`removeNodeAt`) need no guard. A NEW in-place writer must call
+`_ownXY()`, or one edit moves every lightweight member in the project.
+
 f64 rather than f32 is deliberate: identical cage cost, and bit-exact values keep
 `tests/e2e/save-golden-digest.mjs` byte-for-byte unchanged across the conversion.
 
@@ -2396,7 +2410,14 @@ restrict it to a range. The playback eviction is HELD for the whole sweep
 (`holdLazyResidency`, released in a `finally` by the exported wrapper around
 `_sweepLazyFrameWindowsHeld`): it protects windows around the on-screen frame,
 not the window being swept, so a draw landing in one of the sweep's yields could
-otherwise drop frames the sweep hydrated but has not visited yet. **Progress/yielding is clock-paced**
+otherwise drop frames the sweep hydrated but has not visited yet. **The window
+release also gives each released frame's group members' 2D back to the store**
+(`releaseFrameMembers2d`, `pose/lazy-residency.js`): each window's hydration
+re-adopts every member's row, and Track All builds its groups from the
+instances it hydrated, so without this one sweep left every member of the
+project holding a private copy of its 2D (4,152,565 members / 1.39 GB on the
+real 8-camera project). Solver jobs capture their 2D at submit, so releasing a
+window whose solves are still in flight is safe. **Progress/yielding is clock-paced**
 (`createProgressPacer`, `ui/loading-overlay.js`): `opts.onProgress(done, total)`
 is awaited just before each ~250 ms yield and once at the end, where `done` is the
 sweep POSITION (frames passed, data or not), so it rises monotonically to `total`
@@ -3076,9 +3097,13 @@ renderer's ~4.2 GB limit. After a Triangulate All the draw path also caches
 reprojections for every drawn frame (`fillLazyReprojections`), forever.
 
 **Key exports.** `evictLazyFrameGroups(session, { anchors, ahead, behind, cap,
-refs, triangulationResults })` -> `{ resident, evicted, protected, blocked }` or
-null (no lazy loader, at/under `cap`, or held); `frameEvictionBlocker(session,
-frameIdx, fg, refs)` -> a reason string or null; `holdLazyResidency` /
+refs, triangulationResults })` -> `{ resident, evicted, protected, blocked,
+membersReleased }` or null (no lazy loader, at/under `cap`, or held);
+`frameEvictionBlocker(session, frameIdx, fg, refs)` -> a reason string or null;
+`releaseFrameMembers2d(session, frameIdx, { refs })` -> members released;
+`hydrateFrameMembers2d(session, frameIdx)` -> members hydrated;
+`member2dReleaseBlocker(member, desc, numNodes, refs)` -> a reason or null;
+`holdLazyResidency` /
 `releaseLazyResidency` / `isLazyResidencyHeld` (nestable); `lastLazyEvictionPass()`
 (diagnostics); `LAZY_PLAYBACK_AHEAD` (600, the playback loader's lookahead),
 `LAZY_KEEP_BEHIND` (512, > the 500-frame maximum node trail),
@@ -3111,10 +3136,42 @@ frameIdx, fg, refs)` -> a reason string or null; `holdLazyResidency` /
   `triangulationResults` entry) — the state `sweepTriangulateAllFrames` leaves
   every frame in; `fillLazyReprojections` re-derives them on the next draw.
 
-**Imports from project modules.** None (DOM-free, so the Node test can drive it).
+**Group members' 2D goes back to the store too.** `instanceGroups` is never
+evicted, but a member of a frame that is NOT resident need not hold its 2D.
+Measured after Track All + Triangulate All on the 8-camera 108,000-frame
+project: 4,152,565 members, every one an untouched prediction holding a private
+`Float64Array` copy of its store row — 1.39 GB (443 MB V8 heap + 951 MB backing
+stores) and ~4.2M ArrayBuffers that every full GC sweeps; with them released,
+`usedJSHeapSize` went 5,057 -> 3,745 MB and the five-run tracked playback bench
+stopped degrading (57.5 ... 51.6 -> 58.7 ... 58.8 new images/s, 0 long
+animation frames). `releaseFrameMembers2d` points each releasable member at the
+shared `lazyPlaceholderXY` and sets `_lazy2d` — exactly a reopened project's
+lightweight member — and `finalizeLazyFrameGroup` re-adopts the row's 2D the
+next time the frame is hydrated. Rules:
+- **Only for a NON-resident frame** (its members are what is on screen), never
+  for a group or member the UI holds, and only for a member re-hydration would
+  give back exactly (`member2dReleaseBlocker`): an untouched prediction — not
+  `'user'`, `'modified'`/mid-edit/nulled, no `'occlusion'` set (hydration brings
+  occlusion back clear), no `'skeleton'` change — whose store `'row'` exists and
+  is a prediction. Its other fields (track, type, score, identity) stay on the
+  member object; only `_xy` is given back.
+- **Re-adoption keys on the member's CURRENT `_rawInstIndex`**, never a cached
+  row or position — a store compaction (Custom Delete, interactive deletes)
+  renumbers released members too, and must keep pointing each at its own row.
+- **Where it runs:** wherever a frame stops being resident — the windowed
+  sweeps' window release and `evictLazyFrameGroups`. A reader that needs member
+  2D of a frame it does not hydrate brackets the read with
+  `hydrateFrameMembers2d` / `releaseFrameMembers2d` (the image ID-switch check's
+  `frameCropGeometry`, `ui/image-embedder.js`); `hydrateFrameMembers2d` builds
+  each row exactly as `buildLazyFrameGroupSync` + `finalizeLazyFrameGroup` do
+  and does NOT make the frame resident.
+
+**Imports from project modules.** `./pose-data.js` (`Instance`,
+`lazyPlaceholderXY`) — still DOM-free, so the Node test can drive it.
 
 **Imported by.** `pose/triangulation.js` (`evictLazyFrames`,
-`sweepLazyFrameWindows`), `ui/ui-wiring.js` (`LAZY_PLAYBACK_AHEAD`).
+`sweepLazyFrameWindows`), `ui/ui-wiring.js` (`LAZY_PLAYBACK_AHEAD`),
+`ui/image-embedder.js` (`hydrateFrameMembers2d`, `releaseFrameMembers2d`).
 
 **Coverage.** `tests/test-lazy-residency.mjs` (every blocker against an untouched
 twin, windows, cap, holds, the reprojection drop, a simulated 20,000-frame
@@ -8834,7 +8891,8 @@ disposes a WebNN model);
 `summarizeKeyframePlans(plans)`; WebNN: `hasWebNN()`, `loadWebNNModel(onStatus)`,
 `chooseBackend(trial)`, `WEBNN_BATCH`, `WEBNN_TRIAL_FRAMES`; `createCropPool()` -> `{run(image, crops) ->
 Promise<Float32Array[]>, broken, terminate()}` or null; crop helpers
-`cropGeometry`, `cutCrop`, `convexHull`, `writeInputTensor`; constants
+`cropGeometry`, `cutCrop`, `convexHull`, `writeInputTensor`, `skeletonIndex(nodes)`,
+`frameCropGeometry(session, frame, items, cams, atFrames, sk)` -> `geo[view][item]`; constants
 `TRANSFORMERS_URL`, `IMAGE_MODEL_ID`, `IMAGE_MODEL_MB`, `CROP` (160), `INPUT` (224).
 
 **The crop** (must match the calibration): rotate so the nose points right
@@ -8846,6 +8904,17 @@ length is black, and so are the other animals' hulls in that view; resized to
 real crops: pixel correlation 0.994 (median), 99% mask agreement; embeddings
 cosine 0.971 (vs 0.644 between different crops).
 
+**Crop geometry on a lazy project: `frameCropGeometry`.** The geometry comes from
+group members' 2D, for frames the check never makes resident — and on a lazy
+project those members hold no 2D (a reopened project's placeholders never had
+it; a Track All's are given back to the store as each window is released —
+`pose/lazy-residency.js`). Read directly, every such member yields no geometry,
+so the check embedded nothing there. `frameCropGeometry` hydrates the members of
+each frame it reads (the sampled frame and any keyframe-snapped `atFrames`) with
+`hydrateFrameMembers2d`, computes the geometry, and gives the 2D back with
+`releaseFrameMembers2d` — so the check costs no residency and leaves nothing
+inflated.
+
 **Dependencies.** transformers.js **pinned to 4.3.0** (`/+esm` from jsdelivr —
 pinned for the reason dockview is) and `onnx-community/dinov2-small` from the
 Hugging Face CDN, both fetched on FIRST USE and cached by the browser; nothing
@@ -8855,7 +8924,9 @@ crops/s) and its int8 model drifts (cosine 0.953 vs the calibrated model). Re-ch
 the CLS extraction (`last_hidden_state` token 0) on any version bump.
 
 **Imports from project modules.** `ui/app-state.js` (`state.views`),
-`pose/id-switch-check.js` (`planKeyframeSamples`, `KEYFRAME_GAP_TOLERANCE`); `mediabunny`
+`pose/id-switch-check.js` (`planKeyframeSamples`, `KEYFRAME_GAP_TOLERANCE`),
+`pose/lazy-residency.js` (`hydrateFrameMembers2d`, `releaseFrameMembers2d` — DOM-free,
+so the crop worker can load it); `mediabunny`
 (`EncodedPacketSink`, imported LAZILY inside `keyframeIndices` — a static bare
 import would break this module in Node tests and in the crop worker, which has no
 importmap). Spawns `ui/image-crop-worker.js`.
@@ -8864,7 +8935,8 @@ importmap). Spawns `ui/image-crop-worker.js`.
 
 **Coverage.** Crop geometry, `selectViews`, `chooseBackend`, the resize table and
 the keyframe line of `formatEmbedTiming` in
-`tests/test-id-switch-check.mjs`; the crop pool in `tests/e2e/image-crop-worker.mjs`;
+`tests/test-id-switch-check.mjs`; `frameCropGeometry` on a released member (with
+the direct-read control that finds nothing) in `tests/test-lazy-residency.mjs`; the crop pool in `tests/e2e/image-crop-worker.mjs`;
 keyframe sampling on generated 60 fps H.264 and AV1 (keyframes every 30 frames vs one) in
 `tests/e2e/image-keyframe-sampling.mjs` (keyframe index, one decoded packet per
 sample, bit-identical planes, sparse video unchanged); accuracy on real data by
@@ -13403,8 +13475,17 @@ onto the first track label (e.g. `global_0`) after an export/reload round-trip.
 closes every decoder in `state.decoderPool` and `state._decoderPoolCold`,
 cancels every cold eviction timer, and re-initialises both arrays.
 
+**Lazy reopen's lightweight members share ONE placeholder.**
+`reconstructInstanceGroupsFromSessionLazy` builds each group member WITHOUT its
+2D (it is hydrated on scrub by `_rawInstIndex`, `finalizeLazyFrameGroup`); the
+stand-in is now the shared `lazyPlaceholderXY(numNodes)` (`pose/pose-data.js`),
+adopted by reference, instead of a private NaN-filled `Float64Array` per member
+— ~335 B and one ArrayBuffer each, 2.66M of them on the real cage5 project. The
+same placeholder is what `pose/lazy-residency.js` releases members back to, so a
+reopened project and a freshly tracked one look alike off-screen.
+
 **Imports from project modules.**
-- `../pose/pose-data.js`, `../pose/triangulation.js`, `./file-io.js`,
+- `../pose/pose-data.js` (incl. `lazyPlaceholderXY`), `../pose/triangulation.js`, `./file-io.js`,
   `./slp-merge.js`, `../loading/video.js`, `../ui/app-state.js`,
   `../loading/session-loader.js`, `./save-load.js`,
   `../ui/rendering.js`, `../ui/info-panel.js`,

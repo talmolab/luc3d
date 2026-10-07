@@ -7,56 +7,56 @@
 import {
     Skeleton, Camera, Instance, UnlinkedInstance, FrameGroup, Identity,
     InstanceGroup, Session,
-    asPoints3d, points3dNodeCount, someValidPoint3d,
-} from '../pose/pose-data.js?v=14f2f5cff61e';
+    asPoints3d, points3dNodeCount, someValidPoint3d, lazyPlaceholderXY,
+} from '../pose/pose-data.js?v=aa6b0dc3653b';
 import {
     reprojectPointsCamera, reprojectPoints, computeReprojectionErrors,
     storeReprojectedInstances, getInstanceGroupsForFrame,
-} from '../pose/triangulation.js?v=14f2f5cff61e';
+} from '../pose/triangulation.js?v=aa6b0dc3653b';
 import {
     parseSlpH5, parseSlpViaSleapIO, instanceMatchesPoints, parsePoints3dH5, pickFiles,
-} from './file-io.js?v=14f2f5cff61e';
+} from './file-io.js?v=aa6b0dc3653b';
 import {
     validateSkeletonCompatibility, mergeTracksIntoSession,
     mergeSlpFramesIntoSession, rebuildInstanceGroupsForFrames,
-} from './slp-merge.js?v=14f2f5cff61e';
-import { OnDemandVideoDecoder, EmbeddedVideoDecoder } from '../loading/video.js?v=14f2f5cff61e';
+} from './slp-merge.js?v=aa6b0dc3653b';
+import { OnDemandVideoDecoder, EmbeddedVideoDecoder } from '../loading/video.js?v=aa6b0dc3653b';
 import {
     state,
     videoController, interactionManager, viewport3d, timeline, paneManager,
     setVideoController,
-} from '../ui/app-state.js?v=14f2f5cff61e';
+} from '../ui/app-state.js?v=aa6b0dc3653b';
 import {
     autoAssignVideosToCameras, forceVideoSelection, forceVideoSelectionWithFolder,
     showParentDirMatchSummary, createViewForVideoFile, updateTotalFrames,
     updateGridLayout, createVideoPromptCell, fitCanvasesToCells,
     rebuildVideoController, resolveImportTrackIdx, isCalibrationVideoFile,
-} from '../loading/session-loader.js?v=14f2f5cff61e';
-import { preferNonCalibrationVideos } from '../loading/video-file-pick.js?v=14f2f5cff61e';
-import { remapGlobalTrackToSession, nulledNodesFromOcclusion } from './import-track-resolve.js?v=14f2f5cff61e';
+} from '../loading/session-loader.js?v=aa6b0dc3653b';
+import { preferNonCalibrationVideos } from '../loading/video-file-pick.js?v=aa6b0dc3653b';
+import { remapGlobalTrackToSession, nulledNodesFromOcclusion } from './import-track-resolve.js?v=aa6b0dc3653b';
 import {
     showLoading, hideLoading, setStatus, clearDirty, ensureNo3dImportBlockingLoad,
-} from './save-load.js?v=14f2f5cff61e';
+} from './save-load.js?v=aa6b0dc3653b';
 
 // Circular import — these are still defined in app.js for now. They are only
 // invoked inside function bodies, never at module-init time, so live-binding
 // lookup keeps them functional.
-import { drawAllOverlays, setReprojErrorVisible } from '../ui/rendering.js?v=14f2f5cff61e';
-import { updateInfoPanel, promptImportSkeletonForAllSessions } from '../ui/info-panel.js?v=14f2f5cff61e';
-import { noteSessionCalibrationDivergence } from '../ui/calibration-notice.js?v=14f2f5cff61e';
+import { drawAllOverlays, setReprojErrorVisible } from '../ui/rendering.js?v=aa6b0dc3653b';
+import { updateInfoPanel, promptImportSkeletonForAllSessions } from '../ui/info-panel.js?v=aa6b0dc3653b';
+import { noteSessionCalibrationDivergence } from '../ui/calibration-notice.js?v=aa6b0dc3653b';
 // Pass 3i-3: setup3DViewport moved to pose/initialization.js.
-import { setup3DViewport } from '../pose/initialization.js?v=14f2f5cff61e';
+import { setup3DViewport } from '../pose/initialization.js?v=aa6b0dc3653b';
 // Pass 3e-1: fitTimelineToData moved to ui-wiring.js.
-import { fitTimelineToData, updateSeekbar } from '../ui/ui-wiring.js?v=14f2f5cff61e';
+import { fitTimelineToData, updateSeekbar } from '../ui/ui-wiring.js?v=aa6b0dc3653b';
 // Block 1 (Prompt 4): keep timeline._uploadedCameras in sync after SLP
 // load so the gutter filters to the cameras that actually have video
 // assignments rather than every calibration camera.
-import { recomputeUploadedCameras } from '../loading/session-loader.js?v=14f2f5cff61e';
+import { recomputeUploadedCameras } from '../loading/session-loader.js?v=aa6b0dc3653b';
 // Pass 3h: populateViewStrip / populateSessionStrip moved to sessions-panes.js.
-import { populateViewStrip, populateSessionStrip } from '../ui/sessions-panes.js?v=14f2f5cff61e';
-import { getLoadingProgressModal } from '../ui/loading-progress-modal.js?v=14f2f5cff61e';
-import { readVisibilityMetadata } from './visibility-metadata.js?v=14f2f5cff61e';
-import { readPlaneMetadata, resetPlaneState } from './plane-metadata.js?v=14f2f5cff61e';
+import { populateViewStrip, populateSessionStrip } from '../ui/sessions-panes.js?v=aa6b0dc3653b';
+import { getLoadingProgressModal } from '../ui/loading-progress-modal.js?v=aa6b0dc3653b';
+import { readVisibilityMetadata } from './visibility-metadata.js?v=aa6b0dc3653b';
+import { readPlaneMetadata, resetPlaneState } from './plane-metadata.js?v=aa6b0dc3653b';
 
 /**
  * SLP import parse dispatcher (PR 5.1). Routes real `.slp` files through
@@ -539,12 +539,14 @@ export async function reconstructInstanceGroupsFromSessionLazy(session, typedSes
                 // each member's 2D here materializes the lazy store frame-by-frame
                 // (~324k times on a real cage5 project) and degrades to hours. The
                 // 2D is instead hydrated on scrub from the lazy store by
-                // `_rawInstIndex` (see `hydrateLazyFrameGroups` in triangulation.js).
-                // A null-filled placeholder keeps the Instance valid until then; the
-                // constructor turns it into a NaN-filled Float64Array of the right
-                // node count (and an all-clear occlusion set), so nothing else is
-                // needed to make the placeholder node-aligned.
-                var points = new Array(numNodes).fill(null);
+                // `_rawInstIndex` (see `finalizeLazyFrameGroup` in triangulation.js).
+                // The placeholder keeps the Instance valid and node-aligned until
+                // then: ONE NaN-filled Float64Array per node count, SHARED by every
+                // placeholder member (`lazyPlaceholderXY`) — the constructor adopts
+                // it by reference. A private buffer each was ~335 B and one
+                // ArrayBuffer per member (2.66M members on the real cage5 project);
+                // `Instance._ownXY` copies it before any in-place write.
+                var points = lazyPlaceholderXY(numNodes);
 
                 var instMeta = instanceMetaMap[igCamName] || {};
                 var _isPred = PredI ? (typedInst instanceof PredI)
@@ -1221,7 +1223,7 @@ export async function handleLoadSlpFile(slpFile) {
             // --- Embedded videos: use frame-worker for on-demand extraction ---
             showLoading('Loading embedded video frames...');
 
-            var frameWorker = new Worker(new URL('../loading/frame-worker.js?v=14f2f5cff61e', import.meta.url), { type: 'module' });
+            var frameWorker = new Worker(new URL('../loading/frame-worker.js?v=aa6b0dc3653b', import.meta.url), { type: 'module' });
             var embeddedVideoInfos = await new Promise(function (resolve, reject) {
                 frameWorker.onmessage = function (e) {
                     var msg = e.data;
@@ -1832,7 +1834,7 @@ export async function handleAddSlp() {
         if (hasEmbedded) {
             showLoading('Loading embedded video frames...');
 
-            var frameWorker = new Worker(new URL('../loading/frame-worker.js?v=14f2f5cff61e', import.meta.url), { type: 'module' });
+            var frameWorker = new Worker(new URL('../loading/frame-worker.js?v=aa6b0dc3653b', import.meta.url), { type: 'module' });
             var embeddedVideoInfos = await new Promise(function (resolve, reject) {
                 frameWorker.onmessage = function (e) {
                     var msg = e.data;
