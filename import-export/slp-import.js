@@ -48,6 +48,7 @@ import { noteSessionCalibrationDivergence } from '../ui/calibration-notice.js';
 import { setup3DViewport } from '../pose/initialization.js';
 // Pass 3e-1: fitTimelineToData moved to ui-wiring.js.
 import { fitTimelineToData, updateSeekbar } from '../ui/ui-wiring.js';
+import { refreshReadoutTotals } from '../ui/frame-readout.js';
 // Block 1 (Prompt 4): keep timeline._uploadedCameras in sync after SLP
 // load so the gutter filters to the cameras that actually have video
 // assignments rather than every calibration camera.
@@ -2188,8 +2189,7 @@ export async function handleLoadPoints3dH5() {
             // No decoders exist, so updateTotalFrames() (which reads decoder
             // sample counts) would reset this to 0 — write the frame-counter
             // DOM directly instead.
-            var totalEl = document.getElementById('totalFrames');
-            if (totalEl) totalEl.textContent = state.totalFrames;
+            refreshReadoutTotals();
         }
 
         drawAllOverlays(state.currentFrame);

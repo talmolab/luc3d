@@ -136,7 +136,7 @@ try {
         await page.mouse.move(x, bar.y);
         const shown = (await tipState()).text.match(/^Frame ([\d,]+)/)[1].replace(/,/g, '');
         await page.mouse.down(); await page.mouse.up();
-        const landed = await page.evaluate(() => document.getElementById('currentFrame').textContent);
+        const landed = await page.evaluate(() => document.getElementById('currentFrame').textContent.replace(/,/g, ''));
         check(shown === landed, `after the bar resized under the pointer, tooltip said ${shown}, click landed on ${landed}`);
     }
     await page.evaluate(() => { document.querySelector('.frame-display').style.minWidth = ''; });
@@ -148,7 +148,7 @@ try {
         await page.mouse.move(xAt(frac), bar.y);
         const shown = (await tipState()).text.match(/^Frame ([\d,]+)/)[1].replace(/,/g, '');
         await page.mouse.down(); await page.mouse.up();
-        const landed = await page.evaluate(() => document.getElementById('currentFrame').textContent);
+        const landed = await page.evaluate(() => document.getElementById('currentFrame').textContent.replace(/,/g, ''));
         check(shown === landed, `at ${(frac * 100).toFixed(1)}% the tooltip said ${shown}, a click landed on ${landed}`);
     }
 
