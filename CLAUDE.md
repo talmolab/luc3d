@@ -622,7 +622,24 @@ while the heap climbed toward the renderer's ~4.2 GB limit.
 
 `session.instanceGroups` is NOT evicted, deliberately: it is the project's
 grouping and 3D, bounded by project size rather than by playback, and the save
-reads it whole.
+reads it whole. **Its members' 2D, though, goes back to the store** whenever
+their frame stops being resident (`releaseFrameMembers2d`): after a Track All
+every one of the 4,152,565 members held a private copy of its store row —
+1.39 GB and ~4.2M ArrayBuffers for every full GC to sweep, which is what kept
+post-Track-All playback degrading run over run. Three more rules:
+
+- **The shared placeholder is never written.** Released members — and a
+  reopened project's — all point at `lazyPlaceholderXY(numNodes)`; the three
+  in-place writers on `Instance` call `_ownXY()` first. A new in-place writer
+  must too, or one edit moves every lightweight member in the project.
+- **Release only what re-hydration gives back exactly** (`member2dReleaseBlocker`):
+  an untouched prediction on a non-resident frame, with no occlusion set and its
+  store row present. Re-adoption keys on the member's CURRENT `_rawInstIndex`,
+  never a cached row — store compaction renumbers released members too.
+- **A reader of member 2D on a frame it does not hydrate must bracket the read**
+  with `hydrateFrameMembers2d` / `releaseFrameMembers2d`. The image ID-switch
+  check was the one such reader (`frameCropGeometry`, `ui/image-embedder.js`);
+  reading the members directly found no keypoints on every such frame.
 
 ## Triangulation must not depend on where the origin is
 

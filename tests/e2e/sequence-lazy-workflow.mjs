@@ -129,7 +129,7 @@ try {
             const st = window.__lucid.state;
             const s = st.session;
             if (!s) return { err: 'no session' };
-            let groups = 0, with3d = 0, finite3d = 0, nan3d = 0, members = 0, realMembers = 0;
+            let groups = 0, with3d = 0, finite3d = 0, nan3d = 0, members = 0, realMembers = 0, lazy2d = 0;
             for (const [, gs] of s.instanceGroups) {
                 for (const g of gs) {
                     groups++;
@@ -144,6 +144,7 @@ try {
                         members += g.instances.size;
                         for (const [, inst] of g.instances) {
                             if (inst && inst.hasAnyUsablePoint && inst.hasAnyUsablePoint()) realMembers++;
+                            if (inst && inst._lazy2d) lazy2d++;
                         }
                     }
                 }
@@ -170,7 +171,7 @@ try {
                 probes.push(rec);
             }
             return {
-                groups, with3d, finite3d, nan3d, members, realMembers,
+                groups, with3d, finite3d, nan3d, members, realMembers, lazy2d,
                 fim: s.frameIdentityMap ? s.frameIdentityMap.size : 0,
                 identities: s.identities ? s.identities.length : 0,
                 tracks: s.tracks ? s.tracks.length : 0,
@@ -367,7 +368,7 @@ try {
         const s = await page.evaluate((p) => window.__seqSnap(p), PROBES);
         history.push({ step, label, snap: s });
         log(`  ${label}: groups=${s.groups} 3D=${s.with3d} (finite ${s.finite3d}/NaN ${s.nan3d}) ` +
-            `fim=${s.fim} resident=${s.resident} triRes=${s.triResults} heap=${s.usedMB}MB`);
+            `fim=${s.fim} resident=${s.resident} triRes=${s.triResults} members2d=${s.realMembers}/${s.members} heap=${s.usedMB}MB`);
         return s;
     };
 
@@ -493,6 +494,11 @@ try {
         triA.s.triResults <= 2, { triResults: triA.s.triResults });
     check('Triangulate All released its windows',
         triA.s.resident < FRAMES / 10, { resident: triA.s.resident });
+    // Each window's hydration hands its members their row's 2D; the window's
+    // release must take it back, or one Triangulate All re-inflates every member.
+    check('Triangulate All gave its members\' 2D back to the store (members stay lightweight)',
+        triA.s.realMembers < triA.s.members / 10 && triA.s.lazy2d > triA.s.members * 0.9,
+        { realMembers: triA.s.realMembers, lazy2d: triA.s.lazy2d, members: triA.s.members });
     // The reported bug: "Triangulated: <resident count>" after triangulating
     // every frame of a lazy project.
     const cTri = await checkCounters('after Triangulate All', { triangulated: FRAMES });
@@ -886,6 +892,11 @@ try {
         { fim: trackRes.s.fim, expectAtLeast: Math.round(FRAMES * CAMS * 0.95) });
     check('Track All released its windows (memory bounded)',
         trackRes.s.resident < FRAMES / 10, { resident: trackRes.s.resident });
+    // Track All builds its groups from the instances it hydrated, so without the
+    // release every member of the project kept a private copy of its 2D row.
+    check('Track All gave its new members\' 2D back to the store (members stay lightweight)',
+        trackRes.s.realMembers < trackRes.s.members / 10 && trackRes.s.lazy2d > trackRes.s.members * 0.9,
+        { realMembers: trackRes.s.realMembers, lazy2d: trackRes.s.lazy2d, members: trackRes.s.members });
     // Track All rebuilds the grouping of every frame, almost none of them
     // resident; the counters must follow it.
     await checkCounters('after Track All');

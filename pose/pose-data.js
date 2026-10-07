@@ -580,9 +580,22 @@ export class Instance {
         return out;
     }
 
+    /**
+     * Give this instance a private copy of its coordinates before an IN-PLACE
+     * write, if it is still on the shared lazy placeholder (`lazyPlaceholderXY`):
+     * that one buffer stands in for the 2D of every group member whose frame is
+     * not resident, so writing into it would move them all. Every in-place writer
+     * below calls this first; writers that assign a new array need not.
+     * @private
+     */
+    _ownXY() {
+        if (isLazyPlaceholderXY(this._xy)) this._xy = new Float64Array(this._xy);
+    }
+
     /** Set node `k`. @param {number} k @param {number} x @param {number} y */
     setPoint(k, x, y) {
         if (k < 0 || k >= this.numNodes) return;
+        this._ownXY();
         const o = k << 1;
         this._xy[o] = x; this._xy[o + 1] = y;
     }
@@ -599,6 +612,7 @@ export class Instance {
     /** Remove node `k`'s position (and its occlusion flag). @param {number} k */
     clearPoint(k) {
         if (k < 0 || k >= this.numNodes) return;
+        this._ownXY();
         const o = k << 1;
         this._xy[o] = NaN; this._xy[o + 1] = NaN;
         this._occ = occSet(this._occ, k, false);
@@ -722,6 +736,7 @@ export class Instance {
             const o = nodeIdx << 1;
             if (!this.hasPoint(nodeIdx) && this._originalXY &&
                     !Number.isNaN(this._originalXY[o])) {
+                this._ownXY();
                 this._xy[o] = this._originalXY[o];
                 this._xy[o + 1] = this._originalXY[o + 1];
             }
@@ -814,6 +829,31 @@ function xyFromPoints(points) {
 }
 
 /** Fresh all-clear occlusion set for `n` nodes. */
+/**
+ * ONE NaN-filled `Float64Array(2n)` per node count, shared by every lazy
+ * InstanceGroup member whose 2D lives only in the store: a reopened project's
+ * placeholders (`reconstructInstanceGroupsFromSessionLazy`) and members whose
+ * frame went non-resident (`releaseFrameMembers2d`, pose/lazy-residency.js).
+ * After a Track All on the 8-camera 108,000-frame project that is 4,152,565
+ * members, and a buffer EACH was 1.39 GB and ~4.2M ArrayBuffers for every GC
+ * to sweep. Re-hydration replaces the reference (`adoptPointsFrom`), and
+ * `Instance._ownXY` copies it before any in-place write, so it is never
+ * written.
+ * @param {number} numNodes
+ * @returns {Float64Array}
+ */
+const _lazyPlaceholders = new Map();
+export function lazyPlaceholderXY(numNodes) {
+    var a = _lazyPlaceholders.get(numNodes);
+    if (!a) { a = new Float64Array(numNodes * 2).fill(NaN); _lazyPlaceholders.set(numNodes, a); }
+    return a;
+}
+
+/** Is `xy` the shared placeholder for its node count? @param {Float64Array} xy */
+export function isLazyPlaceholderXY(xy) {
+    return xy != null && _lazyPlaceholders.get(xy.length >> 1) === xy;
+}
+
 function makeOccSet(n) {
     return n <= 32 ? 0 : new Uint32Array((n + 31) >> 5);
 }

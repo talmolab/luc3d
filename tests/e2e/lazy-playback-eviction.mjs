@@ -142,7 +142,8 @@ try {
         const ids = new WeakMap(); let nextId = 1;
         const oid = (o) => { if (!ids.has(o)) ids.set(o, nextId++); return ids.get(o); };
         const shape = (fg) => CAMS.map(cam => {
-            const lk = fg.getInstances(cam).map(i => 'L' + i._rawInstIndex + '#' + oid(i));
+            const lk = fg.getInstances(cam).map(i => 'L' + i._rawInstIndex + '#' + oid(i) + '/' +
+                i.toPointsArray().map(p => p ? p.join(':') : '-').join(' ') + '/' + i.toOccludedArray().map(Number).join(''));
             const ul = fg.getUnlinkedInstances(cam).map(u => {
                 const i = u.instance;
                 return ['U' + i._rawInstIndex, i.trackIdx, i.type, i.score,
@@ -179,6 +180,17 @@ try {
         st.currentFrame = NF - 1;
         const pass = tri.evictLazyFrames(NF - 1);
         const afterEvict = session.frameGroups.size;
+        // Group members of evicted frames gave their 2D back (pose/lazy-residency.js).
+        const { lazyPlaceholderXY } = await import('/pose/pose-data.js');
+        let evictedMembers = 0, releasedMembers = 0, residentReleased = 0;
+        for (const [f, gs] of session.instanceGroups) {
+            for (const g of gs) for (const [, m] of g.instances) {
+                const isReleased = m._lazy2d && m._xy === lazyPlaceholderXY(NODES.length);
+                if (session.frameGroups.has(f)) { if (isReleased) residentReleased++; continue; }
+                evictedMembers++;
+                if (isReleased) releasedMembers++;
+            }
+        }
         const stillPinned = Object.fromEntries(Object.entries(PIN).map(([k, f]) => [k, session.frameGroups.has(f)]));
         const reproj = { evictedDropped: g0.reprojections === null && !st.triangulationResults.has(0),
                          keptKept: !!gKeep.reprojections && st.triangulationResults.has(KEEP_F) };
@@ -197,7 +209,7 @@ try {
 
         return {
             NF, rows, mism: mism.slice(0, 5), mismCount: mism.length, camCRemapped, trackNames: loader.trackNames,
-            hydrated, grouped, pass, afterEvict, stillPinned, reproj,
+            hydrated, grouped, pass, afterEvict, stillPinned, reproj, evictedMembers, releasedMembers, residentReleased,
             diffs: diffs.slice(0, 3), diffCount: diffs.length, pinsIntact, sensitive,
             userFrameKept: session.frameGroups.has(USER_FRAME),
         };
@@ -216,10 +228,14 @@ try {
     check(r.pass && Object.keys(r.pass.blocked).length === 4, 'nothing else was blocked (an unedited frame is always rebuildable)', r.pass && r.pass.blocked);
     check(Object.values(r.stillPinned).every(Boolean) && r.userFrameKept, 'every pinned frame is still resident', r.stillPinned);
     check(r.afterEvict === r.pass.resident && r.afterEvict < r.NF / 3, `resident dropped to the protected window (${r.afterEvict})`);
+    check(r.evictedMembers > 300 && r.releasedMembers === r.evictedMembers && r.pass.membersReleased === r.releasedMembers,
+        `every group member of an evicted frame gave its 2D back to the store (${r.releasedMembers}/${r.evictedMembers})`,
+        { evicted: r.evictedMembers, released: r.releasedMembers, pass: r.pass.membersReleased });
+    check(r.residentReleased === 0, 'no member of a RESIDENT frame was released', r.residentReleased);
     check(r.reproj.evictedDropped, 'an evicted frame\'s reprojection caches were dropped');
     check(r.reproj.keptKept, 'a protected frame\'s reprojection caches were kept');
     check(r.sensitive, 'the frame comparator distinguishes different frames (so the next check can fail)');
-    check(r.diffCount === 0, 'every evicted frame re-hydrated IDENTICALLY (rows, seating, member identity, track, type, score, points, occlusion)', r.diffs);
+    check(r.diffCount === 0, 'every evicted frame re-hydrated IDENTICALLY (rows, seating, member identity AND 2D, track, type, score, points, occlusion)', r.diffs);
     check(r.pinsIntact, 'the four pinned frames kept their edits');
     check(errs.length === 0, 'no page errors', errs);
 } catch (e) {

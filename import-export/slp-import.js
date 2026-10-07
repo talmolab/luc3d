@@ -7,7 +7,7 @@
 import {
     Skeleton, Camera, Instance, UnlinkedInstance, FrameGroup, Identity,
     InstanceGroup, Session,
-    asPoints3d, points3dNodeCount, someValidPoint3d,
+    asPoints3d, points3dNodeCount, someValidPoint3d, lazyPlaceholderXY,
 } from '../pose/pose-data.js';
 import {
     reprojectPointsCamera, reprojectPoints, computeReprojectionErrors,
@@ -539,12 +539,14 @@ export async function reconstructInstanceGroupsFromSessionLazy(session, typedSes
                 // each member's 2D here materializes the lazy store frame-by-frame
                 // (~324k times on a real cage5 project) and degrades to hours. The
                 // 2D is instead hydrated on scrub from the lazy store by
-                // `_rawInstIndex` (see `hydrateLazyFrameGroups` in triangulation.js).
-                // A null-filled placeholder keeps the Instance valid until then; the
-                // constructor turns it into a NaN-filled Float64Array of the right
-                // node count (and an all-clear occlusion set), so nothing else is
-                // needed to make the placeholder node-aligned.
-                var points = new Array(numNodes).fill(null);
+                // `_rawInstIndex` (see `finalizeLazyFrameGroup` in triangulation.js).
+                // The placeholder keeps the Instance valid and node-aligned until
+                // then: ONE NaN-filled Float64Array per node count, SHARED by every
+                // placeholder member (`lazyPlaceholderXY`) — the constructor adopts
+                // it by reference. A private buffer each was ~335 B and one
+                // ArrayBuffer per member (2.66M members on the real cage5 project);
+                // `Instance._ownXY` copies it before any in-place write.
+                var points = lazyPlaceholderXY(numNodes);
 
                 var instMeta = instanceMetaMap[igCamName] || {};
                 var _isPred = PredI ? (typedInst instanceof PredI)
