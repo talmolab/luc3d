@@ -35,6 +35,16 @@ Override the base URL with `BASE=http://host:port`. Exit code `0` = pass.
 
 ## Tests
 
+- **`move-video-lazy-members.mjs`** — moving a view to another session must
+  re-solve the origin session's groups from REAL 2D on a lazy project. A
+  synthetic 4-camera project is reopened lazily (so non-resident frames' group
+  members are `_lazy2d` placeholders, as after Track All since #280), a second
+  session is added, and one camera is moved through the real "Move videos"
+  modal. Each probed group's 3D must equal the app's own solve on its hydrated
+  2D without that camera — on non-resident frames and on the resident current
+  frame — no group may keep its stale 3D, and the members must be placeholders
+  again afterwards. (Fails against `moveVideosToSession` without the hydration:
+  0/10 non-resident groups re-solved, all 10 kept their stale 3D.)
 - **`session-video-scoping.mjs`** — regression guard for the multi-session
   "second session shows both videos" bug. Verifies that loading a video into one
   session never leaks its view / camera / `videoFileIndices` into another
