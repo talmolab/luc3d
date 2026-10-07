@@ -32,9 +32,9 @@
  * (planKeyframeSamples, KEYFRAME_GAP_TOLERANCE), mediabunny (EncodedPacketSink, imported lazily, for the keyframe index).
  */
 
-import { state } from './app-state.js?v=a4f8e0f4f807';
-import { planKeyframeSamples, KEYFRAME_GAP_TOLERANCE } from '../pose/id-switch-check.js?v=a4f8e0f4f807';
-import { hydrateFrameMembers2d, releaseFrameMembers2d } from '../pose/lazy-residency.js?v=a4f8e0f4f807';
+import { state } from './app-state.js?v=e2c09b9d9e71';
+import { planKeyframeSamples, KEYFRAME_GAP_TOLERANCE } from '../pose/id-switch-check.js?v=e2c09b9d9e71';
+import { hydrateFrameMembers2d, releaseFrameMembers2d } from '../pose/lazy-residency.js?v=e2c09b9d9e71';
 
 export const TRANSFORMERS_URL = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.0/+esm';
 export const IMAGE_MODEL_ID = 'onnx-community/dinov2-small';
@@ -534,7 +534,7 @@ export function createCropPool() {
     };
     try {
         for (let i = 0; i < n; i++) {
-            const w = { worker: new Worker(new URL('./image-crop-worker.js?v=a4f8e0f4f807', import.meta.url), { type: 'module' }), load: 0 };
+            const w = { worker: new Worker(new URL('./image-crop-worker.js?v=e2c09b9d9e71', import.meta.url), { type: 'module' }), load: 0 };
             w.worker.onmessage = function (e) {
                 const p = pending.get(e.data.id); if (!p) return;
                 pending.delete(e.data.id); w.load--;
