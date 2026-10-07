@@ -98,6 +98,242 @@ function _fimUnpack(key) {
     return { frameIdx: frameIdx, camIdx: camIdx, trackIdx: (rem - camIdx * FIM_TRACK_STRIDE) - 1 };
 }
 
+/**
+ * `Session.frameIdentityMap`'s storage: a `Map` whose numeric keys and values
+ * live in TYPED ARRAYS instead of in V8's hash table.
+ *
+ * WHY: a packed key (`frameIdx * 2^23 + ...`) is above V8's small-integer range
+ * for every frame past 127, so a plain Map stores each one as its own heap
+ * Number — 4,147,806 of them on the 8-camera, 108,000-frame project after Track
+ * All, each marked by every full GC, on top of the Map's multi-million-slot
+ * table, which every full GC scans as well. Measured at ~28 ms of a ~178 ms full
+ * GC (`_bench-playback.mjs HEAPPROBE=1 STRIP=1`). Here a key is 8 bytes in a
+ * `Float64Array`, its value 8 more, and the hash index an `Int32Array`: all
+ * backing stores, none of them scanned.
+ *
+ * It IS a Map (`extends Map`, so `instanceof Map` holds) and keeps a Map's
+ * semantics exactly — every method is overridden and the inherited storage is
+ * never used:
+ *   - INSERTION ORDER is iteration order, and `set` on an existing key keeps its
+ *     place. This is load-bearing: `exportFrameIdentityEntries` writes entries in
+ *     this order, so a different order would move the saved bytes
+ *     (`tests/e2e/save-golden-digest.mjs`).
+ *   - SameValueZero keys (`-0` is `0`); any value. Keys that are not plain
+ *     numbers (the legacy `"frame:cam:null"` strings, NaN) and values that are
+ *     not numbers go to small side Maps — still in insertion order.
+ *   - Iteration is live like a Map's: an entry deleted before it is reached is
+ *     skipped, one added during iteration is visited.
+ * One difference, by design: deleted entries leave a hole that is reclaimed only
+ * when the arrays next GROW (if most entries are dead, they are compacted
+ * instead). Compacting renumbers entries, so an iterator still open across it
+ * THROWS rather than silently skipping or repeating — adding many new keys
+ * while iterating a map that is mostly deleted entries is the only way to get
+ * there, and nothing in the app does.
+ */
+var _fimMixF = new Float64Array(1), _fimMixU = new Uint32Array(_fimMixF.buffer);
+function _fimHashNum(k) {
+    var lo, hi;
+    if (k >= 0 && k <= 9007199254740991 && Math.floor(k) === k) {
+        lo = k >>> 0; hi = ((k - lo) / 4294967296) >>> 0;
+    } else {
+        _fimMixF[0] = k; lo = _fimMixU[0]; hi = _fimMixU[1];
+    }
+    var h = lo ^ Math.imul(hi, 0x9e3779b1);
+    h = Math.imul(h ^ (h >>> 16), 0x85ebca6b);
+    h = Math.imul(h ^ (h >>> 13), 0xc2b2ae35);
+    return (h ^ (h >>> 16)) >>> 0;
+}
+var FIM_LIVE = 1, FIM_BOXED_KEY = 2, FIM_BOXED_VAL = 4;
+
+export class FrameIdentityMap extends Map {
+    /** @param {Iterable<[any, any]>} [entries] - copied in iteration order */
+    constructor(entries) {
+        super();
+        this._reset(16);
+        if (entries) for (var e of entries) this.set(e[0], e[1]);
+    }
+
+    /** A FrameIdentityMap holding `m`'s entries in `m`'s order. */
+    static from(m) { return new FrameIdentityMap(m); }
+
+    _reset(cap) {
+        this._keys = new Float64Array(cap);
+        this._vals = new Float64Array(cap);
+        this._state = new Uint8Array(cap);
+        this._slots = new Int32Array(cap * 2);   // entry index + 1; 0 empty, -1 deleted
+        this._mask = cap * 2 - 1;
+        this._n = 0;           // entries used (live + deleted)
+        this._size = 0;        // live entries
+        this._slotsUsed = 0;   // occupied + tombstoned slots
+        this._clears = (this._clears || 0) + 1;       // an open iterator just ends
+        this._compactions = this._compactions || 0;   // an open iterator throws
+        this._boxKeyIdx = null;   // non-number key -> entry index
+        this._boxKeyOf = null;    // entry index -> non-number key
+        this._boxVal = null;      // entry index -> non-number value
+    }
+
+    get size() { return this._size; }
+
+    _isNumKey(k) { return typeof k === 'number' && k === k; }
+
+    /** Entry index of `k`, or -1. */
+    _find(k) {
+        if (this._isNumKey(k)) {
+            if (k === 0) k = 0;   // -0 -> 0 (SameValueZero)
+            var mask = this._mask, slots = this._slots, keys = this._keys;
+            for (var i = _fimHashNum(k) & mask; ; i = (i + 1) & mask) {
+                var s = slots[i];
+                if (s === 0) return -1;
+                if (s > 0 && keys[s - 1] === k && (this._state[s - 1] & (FIM_LIVE | FIM_BOXED_KEY)) === FIM_LIVE) return s - 1;
+            }
+        }
+        if (!this._boxKeyIdx) return -1;
+        var bi = this._boxKeyIdx.get(k);
+        return bi === undefined ? -1 : bi;
+    }
+
+    get(k) {
+        var i = this._find(k);
+        if (i < 0) return undefined;
+        return (this._state[i] & FIM_BOXED_VAL) ? this._boxVal.get(i) : this._vals[i];
+    }
+
+    has(k) { return this._find(k) >= 0; }
+
+    set(k, v) {
+        var i = this._find(k);
+        if (i < 0) i = this._append(k);
+        if (typeof v === 'number') {
+            this._vals[i] = v;
+            if (this._state[i] & FIM_BOXED_VAL) { this._state[i] &= ~FIM_BOXED_VAL; this._boxVal.delete(i); }
+        } else {
+            if (!this._boxVal) this._boxVal = new Map();
+            this._boxVal.set(i, v);
+            this._state[i] |= FIM_BOXED_VAL;
+        }
+        return this;
+    }
+
+    _append(k) {
+        if (this._n === this._keys.length) this._growOrCompact();
+        if (this._isNumKey(k)) {
+            if (k === 0) k = 0;
+            // Room in the index FIRST (rehashing re-inserts every live entry, so
+            // the new one must not be live yet or it would get two slots).
+            if ((this._slotsUsed + 1) * 2 > this._slots.length) {
+                // Sized from the LIVE count, so a table full of deleted slots
+                // shrinks back rather than doubling again.
+                var ns = 32; while (ns < (this._size + 2) * 4) ns <<= 1;
+                this._rehash(ns);
+            }
+            var ni = this._n++;
+            this._size++;
+            this._keys[ni] = k;
+            this._state[ni] = FIM_LIVE;
+            this._insertSlot(k, ni);
+            return ni;
+        }
+        var bi = this._n++;
+        this._size++;
+        this._keys[bi] = NaN;
+        this._state[bi] = FIM_LIVE | FIM_BOXED_KEY;
+        if (!this._boxKeyIdx) { this._boxKeyIdx = new Map(); this._boxKeyOf = new Map(); }
+        this._boxKeyIdx.set(k, bi);
+        this._boxKeyOf.set(bi, k);
+        return bi;
+    }
+
+    _insertSlot(k, i) {
+        var mask = this._mask, slots = this._slots;
+        var j = _fimHashNum(k) & mask;
+        while (slots[j] > 0) j = (j + 1) & mask;
+        if (slots[j] === 0) this._slotsUsed++;
+        slots[j] = i + 1;
+    }
+
+    _rehash(nSlots) {
+        this._slots = new Int32Array(nSlots);
+        this._mask = nSlots - 1;
+        this._slotsUsed = 0;
+        for (var i = 0; i < this._n; i++) {
+            if ((this._state[i] & (FIM_LIVE | FIM_BOXED_KEY)) === FIM_LIVE) this._insertSlot(this._keys[i], i);
+        }
+    }
+
+    _growOrCompact() {
+        var dead = this._n - this._size;
+        if (dead > this._size) {
+            // Mostly holes: renumber the live entries in order instead of growing.
+            var keys = this._keys, vals = this._vals, state = this._state;
+            var bKeyOf = this._boxKeyOf, bVal = this._boxVal, w = 0;
+            var nKeyIdx = bKeyOf ? new Map() : null, nKeyOf = bKeyOf ? new Map() : null, nVal = bVal ? new Map() : null;
+            for (var r = 0; r < this._n; r++) {
+                if (!(state[r] & FIM_LIVE)) continue;
+                keys[w] = keys[r]; vals[w] = vals[r]; state[w] = state[r];
+                if (state[r] & FIM_BOXED_KEY) { var bk = bKeyOf.get(r); nKeyIdx.set(bk, w); nKeyOf.set(w, bk); }
+                if (state[r] & FIM_BOXED_VAL) nVal.set(w, bVal.get(r));
+                w++;
+            }
+            state.fill(0, w, this._n);
+            this._n = w;
+            if (bKeyOf) { this._boxKeyIdx = nKeyIdx; this._boxKeyOf = nKeyOf; }
+            if (bVal) this._boxVal = nVal;
+            this._compactions++;
+            this._rehash(this._slots.length);
+            if (this._n < this._keys.length) return;
+        }
+        var cap = this._keys.length * 2;
+        var nk = new Float64Array(cap); nk.set(this._keys); this._keys = nk;
+        var nv = new Float64Array(cap); nv.set(this._vals); this._vals = nv;
+        var ns = new Uint8Array(cap); ns.set(this._state); this._state = ns;
+    }
+
+    delete(k) {
+        var i = this._find(k);
+        if (i < 0) return false;
+        if (this._state[i] & FIM_BOXED_KEY) {
+            this._boxKeyIdx.delete(k);
+            this._boxKeyOf.delete(i);
+        } else {
+            var mask = this._mask, slots = this._slots;
+            for (var j = _fimHashNum(this._keys[i]) & mask; slots[j] !== 0; j = (j + 1) & mask) {
+                if (slots[j] === i + 1) { slots[j] = -1; break; }
+            }
+        }
+        if (this._state[i] & FIM_BOXED_VAL) this._boxVal.delete(i);
+        this._state[i] = 0;
+        this._size--;
+        return true;
+    }
+
+    clear() { this._reset(16); }
+
+    _keyAt(i) { return (this._state[i] & FIM_BOXED_KEY) ? this._boxKeyOf.get(i) : this._keys[i]; }
+    _valAt(i) { return (this._state[i] & FIM_BOXED_VAL) ? this._boxVal.get(i) : this._vals[i]; }
+
+    /** Live entries in insertion order; `kind` 0 = [k, v], 1 = key, 2 = value. */
+    *_iter(kind) {
+        var compactions = this._compactions, clears = this._clears;
+        for (var i = 0; i < this._n; i++) {
+            if (this._clears !== clears) return;   // cleared: iteration ends, as a Map's does
+            if (this._compactions !== compactions) {
+                throw new Error('FrameIdentityMap compacted while being iterated');
+            }
+            if (!(this._state[i] & FIM_LIVE)) continue;
+            yield kind === 1 ? this._keyAt(i) : kind === 2 ? this._valAt(i) : [this._keyAt(i), this._valAt(i)];
+        }
+    }
+
+    entries() { return this._iter(0); }
+    keys() { return this._iter(1); }
+    values() { return this._iter(2); }
+    [Symbol.iterator]() { return this._iter(0); }
+
+    forEach(cb, thisArg) {
+        for (var e of this._iter(0)) cb.call(thisArg, e[1], e[0], this);
+    }
+}
+
 export class Skeleton {
     /**
      * @param {string} name
@@ -1205,6 +1441,20 @@ export class Session {
      * @param {string[]} tracks - Track names
      * @param {string} name - Session name (optional, defaults to 'Session 1')
      */
+    /**
+     * (frameIdx, camera, raw trackIdx) -> identityId, one entry per 2D
+     * detection project-wide. Always a `FrameIdentityMap`: its packed keys would
+     * each cost a heap Number in a plain Map (4,147,806 after Track All on an
+     * 8-camera, 108,000-frame project, ~28 ms of every full GC). Assigning a
+     * plain Map — `deleteTrackAt`, Track All, tests — converts it, keeping its
+     * order; null stays null.
+     * @type {FrameIdentityMap|null}
+     */
+    get frameIdentityMap() { return this._frameIdentityMap; }
+    set frameIdentityMap(m) {
+        this._frameIdentityMap = (m == null || m instanceof FrameIdentityMap) ? m : new FrameIdentityMap(m);
+    }
+
     constructor(cameras, skeleton, tracks, name) {
         this.cameras = cameras;
         this.skeleton = skeleton;
@@ -1230,7 +1480,9 @@ export class Session {
          * property (tracklets swap), and a global fallback painted stale
          * duplicate identities whenever per-frame reality diverged from it.
          */
-        this.frameIdentityMap = new Map();
+        // A FrameIdentityMap (typed-array storage, Map semantics) — see the
+        // accessor below; assigning a plain Map converts it.
+        this.frameIdentityMap = new FrameIdentityMap();
         /**
          * @type {Object<string, number>} cameraName -> contrast setting, an
          * integer in [-100, 100]. Display-only (a CSS filter on the view
@@ -1496,7 +1748,7 @@ export class Session {
         //    in the map. Entries whose identity is unused/explicit-none are
         //    intentionally dropped (that instance is trackless post-
         //    propagate, so no "frame:cam:track" entry is needed for it).
-        var newFrameMap = new Map();   // packed (frame,cam,newTrackIdx) → identityId
+        var newFrameMap = new FrameIdentityMap();   // packed (frame,cam,newTrackIdx) → identityId
         // packed (frame,cam,oldTrackIdx) → newTrackIdx, for step 4's lazy
         // columnar remap below. Collected free while we're already iterating
         // every entry here, so step 4's per-instance-row callback can do ONE
@@ -1504,7 +1756,7 @@ export class Session {
         // getIdentityIdForTrack + idToTrackIdx (two hash lookups per row,
         // across potentially millions of rows). Both maps use the packed key
         // codec, so neither holds a per-entry string.
-        var oldKeyToNewTrackIdx = new Map();
+        var oldKeyToNewTrackIdx = new FrameIdentityMap();   // packed keys: no heap Number each
         for (var rec of this.frameIdentityEntries()) {
             var oldIdVal = rec.identityId;
             if (oldIdVal == null || oldIdVal < 0 || !idToTrackIdx.has(oldIdVal)) continue;
@@ -1559,7 +1811,7 @@ export class Session {
         //    own group's identity even when two animals share one raw trackIdx on
         //    that frame. That is what makes the genuine collision recoverable
         //    rather than merely detected.
-        var rowClaim = new Map();       // (frame, cam, offsetInFrame) -> newTrackIdx
+        var rowClaim = new FrameIdentityMap();   // (frame, cam, offsetInFrame) -> newTrackIdx
         var rawClaim = new Map();       // (frame, cam, rawTrack) -> identityId, or -1 when contested
         for (var [frameIdxG, groupsG] of this.instanceGroups) {
             for (var giG = 0; giG < groupsG.length; giG++) {
@@ -2125,7 +2377,7 @@ export class Session {
      * @returns {number} entries ingested
      */
     ingestFrameIdentityEntries(entries) {
-        this.frameIdentityMap = new Map();
+        this.frameIdentityMap = new FrameIdentityMap();
         if (!entries) return 0;
         var n = 0;
         for (var i = 0; i < entries.length; i++) {

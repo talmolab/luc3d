@@ -1267,6 +1267,29 @@ origin contributes zero however it is wound — a unit cube at `[0,1]³` measure
 
 ### pose/pose-data.js
 
+**`frameIdentityMap` is a `FrameIdentityMap`.** A packed key is above V8's
+small-integer range for every frame past 127, so in a plain Map every entry
+cost a heap Number — 4,147,806 after Track All on the 8-camera, 108,000-frame
+project, plus a multi-million-slot hash table, all marked or scanned by every
+full GC (~28 ms of ~178 ms, `_bench-playback.mjs HEAPPROBE=1 STRIP=1`).
+`FrameIdentityMap extends Map` and overrides every method: numeric keys and
+values live in `Float64Array`s in insertion order, with an open-addressing
+`Int32Array` index; other keys (the legacy `"frame:cam:null"` strings, NaN) and
+non-number values go to small side Maps. Map semantics are kept exactly —
+insertion order (load-bearing: `exportFrameIdentityEntries` writes in it, so the
+saved bytes depend on it), `set` on an existing key keeping its place,
+SameValueZero keys, live iteration (deleted-before-reached skipped, added
+visited, `clear()` ends it). One difference: deleted entries are holes until the
+arrays next grow, and if most are dead they are COMPACTED instead — an iterator
+open across a compaction throws rather than skip or repeat silently. `Session`
+exposes `frameIdentityMap` through an accessor that converts any plain Map
+assigned to it (keeping order), so `deleteTrackAt`'s and Track All's
+`= new Map()` still end up compact; `propagateIdentitiesToTracks` builds its new
+map and its two transient packed-key maps as `FrameIdentityMap`s directly. It
+must not be structured-cloned or posted to a worker (its Map slot is empty);
+nothing does. Covered by `tests/test-frame-identity-map.mjs` — 60,000 random
+operations in lockstep with a real Map, compared in full order.
+
 **`frameIdentityMap` packed keys (luc3d #185 follow-up #3).** `frameIdentityMap`
 maps (frameIdx, camera, raw trackIdx) → identityId with **one entry per 2D
 detection project-wide** — 2,627,447 of them on the real 180,210-frame ×
