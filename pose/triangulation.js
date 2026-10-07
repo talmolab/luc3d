@@ -16,7 +16,7 @@ import { mat3x3Multiply, Camera, FrameGroup, Instance, UnlinkedInstance, Instanc
 // re-exported unchanged, because every existing caller and test reads it here.
 import { jacobiEigen, fitPlaneToPoints3d } from './plane-fit.js';
 export { fitPlaneToPoints3d };
-import { state, timeline, viewport3d } from '../ui/app-state.js';
+import { state, timeline, viewport3d, interactionManager } from '../ui/app-state.js';
 // Pass 3i-2: triangulation orchestration moved out of app.js
 import { setReprojErrorVisible, showReprojectionsOnly, REPROJ_ONLY_NOTE, drawAllOverlays } from '../ui/rendering.js';
 import { updateTriangulationBadge } from '../ui/info-panel.js';
@@ -25,6 +25,8 @@ import { markDirty, setStatus, showLoading, hideLoading } from '../import-export
 import { showLoadingProgress, createProgressPacer, yieldToPaint } from '../ui/loading-overlay.js';
 import { createGroupSolver } from './triangulation-pool.js';
 import { unionTrackNames, remapTrackIdx, isIdentityRemap } from '../loading/track-union.js';
+import { evictLazyFrameGroups, holdLazyResidency, releaseLazyResidency,
+         LAZY_RESIDENT_CAP, LAZY_KEEP_BEHIND } from './lazy-residency.js';
 // Pass 3i-3: update3DViewport moved to pose/initialization.js.
 import { update3DViewport } from './initialization.js';
 // The pure math (DLT, refinement, reprojection, triangulateAndReproject) lives
@@ -2087,6 +2089,9 @@ export async function ensureLazyFrameData(frameIdx) {
         if (session.frameGroups.has(pfIdx)) continue;
         buildLazyFrameGroupSync(pfIdx);
     }
+
+    // A new frame came in: drop far-away, rebuildable ones once over the cap.
+    evictLazyFrames(frameIdx);
 }
 
 /**
@@ -2219,57 +2224,62 @@ export async function loadAllLazyFrames(onStatus) {
 }
 
 /**
- * Evict old lazy-loaded frames to keep memory bounded.
+ * Keep a lazy session's resident frames bounded — a no-op until
+ * `session.frameGroups` holds more than `LAZY_RESIDENT_CAP` frames, then one
+ * pass of `evictLazyFrameGroups` (pose/lazy-residency.js) with the app state it
+ * needs: windows around the on-screen frame and `anchorFrame` (the frame just
+ * hydrated, which a sequential consumer such as the overlay export reads next),
+ * a keep-behind that covers the node-trail length, everything the
+ * InteractionManager holds, and `state.triangulationResults`.
+ *
+ * Called after a NEW frame is hydrated by `ensureLazyFrameData` and by the
+ * playback loader (`ui/ui-wiring.js` `onPlaybackStateChange`) — never from
+ * `batchLoadLazyFrames`, whose sweep callers read a window back after awaits.
+ *
+ * @param {number} [anchorFrame] - defaults to the on-screen frame
+ * @returns {Object|null} the pass report, or null when nothing ran
  */
-export function evictLazyFrames(currentFrame) {
+export function evictLazyFrames(anchorFrame) {
     var session = state.session;
-    if (!session || !session.lazyLoader) return;
-
-    // (The loader's internal per-camera typed-frame cache is bounded automatically
-    // by `frameCacheLimit`, set in SioLazyLoader.open — no manual cap needed here.)
-    var maxKeep = 500;
-    var keys = Array.from(session.frameGroups.keys());
-    if (keys.length <= maxKeep) return;
-
-    if (!evictLazyFrames._counter) evictLazyFrames._counter = 0;
-    if (++evictLazyFrames._counter % 50 !== 0) return;
-
-    keys.sort(function (a, b) {
-        return Math.abs(a - currentFrame) - Math.abs(b - currentFrame);
+    if (!session || !session.lazyLoader) return null;
+    if (session.frameGroups.size <= LAZY_RESIDENT_CAP) return null;
+    return evictLazyFrameGroups(session, {
+        anchors: [state.currentFrame, anchorFrame != null ? anchorFrame : state.currentFrame],
+        behind: Math.max(LAZY_KEEP_BEHIND, (state.trailLength | 0) + 1),
+        refs: _uiHeldObjects(),
+        triangulationResults: state.triangulationResults,
     });
+}
 
-    var evicted = 0;
-    for (var i = maxKeep; i < keys.length; i++) {
-        var fIdx = keys[i];
-        if (fIdx === currentFrame) continue;
-
-        var fgEvict = session.frameGroups.get(fIdx);
-        if (!fgEvict) continue;
-
-        var hasUserData = false;
-        for (var [, insts] of fgEvict.instances) {
-            for (var instCheck of insts) {
-                if (instCheck.type === 'user') { hasUserData = true; break; }
-            }
-            if (hasUserData) break;
-        }
-        if (!hasUserData) {
-            for (var [, uInsts] of fgEvict.unlinkedInstances) {
-                for (var uInst of uInsts) {
-                    if (uInst.instance && uInst.instance.type === 'user') { hasUserData = true; break; }
-                }
-                if (hasUserData) break;
-            }
-        }
-        if (!hasUserData && session.instanceGroups.has(fIdx)) {
-            hasUserData = true;
-        }
-
-        if (!hasUserData) {
-            session.frameGroups.delete(fIdx);
-            evicted++;
-        }
+/**
+ * The pose objects the InteractionManager holds across frame changes — its
+ * selection, the Group-mode assignment pick, the drag in progress and the
+ * Edit Group target. None of them records a frame, so a frame containing one
+ * is kept rather than rebuilt with new objects behind the UI's back.
+ */
+function _uiHeldObjects() {
+    var im = interactionManager;
+    if (!im) return null;
+    var refs = new Set();
+    function addGroup(g) {
+        if (!g) return;
+        refs.add(g);
+        if (g.instances) for (var [, m] of g.instances) if (m) refs.add(m);
     }
+    function addUnlinked(ul) {
+        if (!ul) return;
+        refs.add(ul);
+        if (ul.instance) refs.add(ul.instance);
+    }
+    addGroup(im.selectedInstanceGroup);
+    addGroup(im.editGroupTarget);
+    addUnlinked(im.selectedUnlinked);
+    var picks = im.assignmentSelection || [];
+    for (var i = 0; i < picks.length; i++) addUnlinked(picks[i]);
+    // A grouped drag names its group by index into the ON-SCREEN frame, which
+    // is always protected; an unlinked drag holds the object itself.
+    if (im.dragInfo) addUnlinked(im.dragInfo.unlinked);
+    return refs;
 }
 
 /**
@@ -3040,6 +3050,11 @@ function _applyGroupStep(group, prep, result) {
  * land in a durable structure (the store's own columns, `frameIdentityMap`,
  * `instanceGroups`) or mark the instance user-edited so its frame is pinned.
  *
+ * The playback eviction (`evictLazyFrames`, pose/lazy-residency.js) is HELD for
+ * the whole sweep: it protects windows around the on-screen frame, not around
+ * the window being swept, so a draw landing during one of the sweep's yields
+ * could otherwise drop frames the sweep hydrated and has not visited yet.
+ *
  * `opts.start`/`opts.end` (inclusive) restrict the sweep to a frame range — used
  * by the range operations (Triangulate Range). Omit both to sweep everything.
  *
@@ -3068,6 +3083,15 @@ function _hasFrameData(session, frameIdx) {
 }
 
 export async function sweepLazyFrameWindows(session, onFrame, opts) {
+    holdLazyResidency();
+    try {
+        return await _sweepLazyFrameWindowsHeld(session, onFrame, opts);
+    } finally {
+        releaseLazyResidency();
+    }
+}
+
+async function _sweepLazyFrameWindowsHeld(session, onFrame, opts) {
     opts = opts || {};
     var loader = session.lazyLoader;
     var windowed = loader && loader.isSync && typeof loader.releaseWindow === 'function';

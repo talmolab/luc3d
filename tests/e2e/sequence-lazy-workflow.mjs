@@ -898,6 +898,204 @@ try {
         s7.fim >= FRAMES * CAMS * 0.95, { fim: s7.fim });
 
     // =========================================================
+    // CYCLE 7 — edits survive PLAYBACK EVICTION, then save+reload
+    // =========================================================
+    // Playback used to keep every frame it hydrated (19,393 resident after four
+    // 20 s runs on a real project). The playback loader now evicts far-away
+    // frames that re-hydration would rebuild exactly (pose/lazy-residency.js).
+    // This cycle edits frames near the start, plays the REAL playback loader far
+    // past the residency cap, then saves and reopens. Five frames, each testing
+    // one side of the eviction rule:
+    //   E_EDIT   a GROUP MEMBER's keypoint edited (user) -> must stay resident.
+    //            NOT revisited before the save: a member object survives
+    //            eviction in `instanceGroups` and comes back on a revisit, but
+    //            the save reads its 2D user overlay from RESIDENT frames only,
+    //            so saving while the frame is evicted is what would lose it.
+    //   E_UL     an UNLINKED instance's keypoint edited (user) -> must stay
+    //            resident. Revisited before the save: nothing else holds this
+    //            object, so eviction would lose it even with a revisit.
+    //   E_UNGRP  one animal ungrouped (predicted) -> may be evicted; must come
+    //            back with that animal UNLINKED, not regrouped and not doubled
+    //   E_DEL    a predicted unlinked instance deleted -> must stay resident
+    //   E_SEL    the UI holds a selected unlinked instance -> must stay resident
+    // E_EDIT sits far from the frames revisited below: a revisit also builds
+    // the next 30 frames in the scrub direction (`ensureLazyFrameData`), which
+    // would quietly re-hydrate a neighbour before the save.
+    const [E_EDIT, E_UNGRP, E_DEL, E_SEL, E_UL] = [600, 110, 120, 130, 140];
+    const PLAY_FROM = Math.floor(FRAMES / 3), PLAY_TO = FRAMES - 200;
+    const E7 = { E_EDIT, E_UNGRP, E_DEL, E_SEL, E_UL };
+    const edits7 = await runOp('EDIT five frames near the start', async ({ E_EDIT, E_UNGRP, E_DEL, E_SEL, E_UL }) => {
+        const st = window.__lucid.state;
+        const s = st.session;
+        const tri = await import('/pose/triangulation.js');
+        const saveLoad = await import('/import-export/save-load.js');
+        const out = {};
+        for (const f of [E_EDIT, E_UNGRP, E_DEL, E_SEL, E_UL]) await tri.ensureLazyFrameData(f);
+        // E_EDIT: the same edit as cycle 2, on a group member.
+        const g0 = (s.instanceGroups.get(E_EDIT) || [])[0];
+        if (!g0) return { err: 'no group on E_EDIT' };
+        const [ecam, einst] = [...g0.instances][0];
+        einst.setPoint(0, einst.getX(0) + 4.5, einst.getY(0) + 2.25);
+        einst.type = 'user'; einst.modified = true; g0.markDirty();
+        out.edit = { cam: ecam, xy: [einst.getX(0), einst.getY(0)] };
+        // The rest start by ungrouping the second animal.
+        const ungroup = (f) => {
+            const gs = s.instanceGroups.get(f) || [];
+            if (gs.length < 2) return null;
+            return s.unlinkGroup(f, gs[1]);
+        };
+        const ug = ungroup(E_UNGRP);
+        out.ungrouped = ug ? ug.length : 0;
+        const ud = ungroup(E_DEL);
+        const doomed = ud && ud.find(u => u.cameraName === 'cam0');
+        if (!doomed) return { err: 'no unlinked cam0 instance on E_DEL' };
+        s.frameGroups.get(E_DEL).removeUnlinkedById(doomed.id);    // what Delete does to an unlinked instance
+        out.deleted = { cam: 'cam0', raw: doomed.instance._rawInstIndex };
+        const us = ungroup(E_SEL);
+        window.__lucid.interactionManager.selectedUnlinked = us[0];
+        out.selected = us[0].cameraName;
+        // E_UL: what finishing a node drag does to an unlinked prediction.
+        const uu = ungroup(E_UL);
+        const ulEd = uu && uu.find(u => u.cameraName === 'cam0');
+        if (!ulEd) return { err: 'no unlinked cam0 instance on E_UL' };
+        ulEd.instance.setPoint(0, ulEd.instance.getX(0) - 6.5, ulEd.instance.getY(0) + 1.75);
+        ulEd.instance.type = 'user'; ulEd.instance.modified = true;
+        out.ul = { cam: 'cam0', xy: [ulEd.instance.getX(0), ulEd.instance.getY(0)] };
+        saveLoad.markDirty();
+        return out;
+    }, E7);
+    const e7 = edits7.r || {};
+    check('cycle 7: the five edits applied',
+        !!(e7.edit && e7.ungrouped === CAMS && e7.deleted && e7.selected && e7.ul), e7);
+
+    const play = await runOp(`PLAY frames ${PLAY_FROM}..${PLAY_TO} through the real playback loader`,
+        async ({ PLAY_FROM, PLAY_TO, E7 }) => {
+            const st = window.__lucid.state;
+            const s = st.session;
+            const wiring = await import('/ui/ui-wiring.js');
+            const rendering = await import('/ui/rendering.js');
+            const residency = await import('/pose/lazy-residency.js');
+            const wait = (ms) => new Promise(r => setTimeout(r, ms));
+            let maxResident = 0, passes = 0, lastPass = null;
+            st.currentFrame = PLAY_FROM;
+            st.isPlaying = true;
+            wiring.onPlaybackStateChange(true);              // starts lazyPlaybackLoader
+            try {
+                for (let f = PLAY_FROM; f <= PLAY_TO; f++) {
+                    st.currentFrame = f;
+                    rendering.drawAllOverlays(f);            // what each playback tick does
+                    maxResident = Math.max(maxResident, s.frameGroups.size);
+                    const p = residency.lastLazyEvictionPass();
+                    if (p && p !== lastPass) { passes++; lastPass = p; }
+                    if (f % 4 === 0) await wait(0);          // let the loader loop run
+                }
+            } finally {
+                st.isPlaying = false;
+                wiring.onPlaybackStateChange(false);
+            }
+            await wait(300);
+            // Derived reprojection caches must not outlive their frame.
+            let staleTri = 0, staleReproj = 0;
+            for (const [f] of st.triangulationResults) if (!s.frameGroups.has(f)) staleTri++;
+            for (let f = PLAY_FROM; f < PLAY_TO - 2000; f++) {
+                if (s.frameGroups.has(f)) continue;
+                for (const g of (s.instanceGroups.get(f) || [])) {
+                    if (g.reprojections || (g.reprojectedInstances && g.reprojectedInstances.size)) staleReproj++;
+                }
+            }
+            const kept = { playStart: s.frameGroups.has(PLAY_FROM) };
+            for (const k in E7) kept[k] = s.frameGroups.has(E7[k]);
+            return {
+                maxResident, passes, resident: s.frameGroups.size, cap: residency.LAZY_RESIDENT_CAP,
+                lastBlocked: lastPass && lastPass.blocked, kept,
+                triResults: st.triangulationResults.size, staleTri, staleReproj,
+            };
+        }, { PLAY_FROM, PLAY_TO, E7 });
+    const pr = play.r || {};
+    const kept = pr.kept || {};
+    check('cycle 7: playback ran eviction passes', pr.passes > 0, pr);
+    check(`cycle 7: resident frames stayed bounded while playing ${PLAY_TO - PLAY_FROM} frames`,
+        pr.maxResident <= pr.cap + 700, { maxResident: pr.maxResident, cap: pr.cap });
+    check('cycle 7: frames played long ago were evicted', !kept.playStart, kept);
+    check('cycle 7: the ungrouped (rebuildable) frame WAS evicted — so this cycle really tests eviction',
+        !kept.E_UNGRP, kept);
+    check('cycle 7: the frame with an edited group member stayed resident', kept.E_EDIT, kept);
+    check('cycle 7: the frame with an edited unlinked instance stayed resident', kept.E_UL, kept);
+    check('cycle 7: the frame with a deleted prediction stayed resident', kept.E_DEL, kept);
+    check('cycle 7: the frame holding the selection stayed resident', kept.E_SEL, kept);
+    check('cycle 7: no reprojection cache outlives its evicted frame',
+        pr.staleTri === 0 && pr.staleReproj === 0, { staleTri: pr.staleTri, staleReproj: pr.staleReproj });
+
+    // Come back to every frame EXCEPT E_EDIT (see the cycle header).
+    const back = await page.evaluate(async ({ E7, CAMS }) => {
+        const st = window.__lucid.state;
+        const s = st.session;
+        const tri = await import('/pose/triangulation.js');
+        window.__lucid.interactionManager.clearSelection();
+        const out = {};
+        for (const f of [E7.E_UNGRP, E7.E_DEL, E7.E_UL]) await tri.ensureLazyFrameData(f);
+        const counts = (f) => {
+            const fg = s.frameGroups.get(f);
+            const r = {};
+            for (let c = 0; c < CAMS; c++) {
+                const cn = 'cam' + c;
+                r[cn] = [fg.getInstances(cn).length, fg.getUnlinkedInstances(cn).length];
+            }
+            return r;
+        };
+        out.ungrpGroups = (s.instanceGroups.get(E7.E_UNGRP) || []).length;
+        out.ungrp = counts(E7.E_UNGRP);
+        out.del = counts(E7.E_DEL);
+        out.ul = s.frameGroups.get(E7.E_UL).getUnlinkedInstances('cam0')
+            .map(u => [u.instance.getX(0), u.instance.getY(0), u.instance.type]);
+        out.editStillResidentAtSave = s.frameGroups.has(E7.E_EDIT);
+        return out;
+    }, { E7, CAMS });
+    const ulXY = e7.ul && e7.ul.xy;
+    check('cycle 7: back at E_UL the unlinked instance\'s edit is intact',
+        !!ulXY && back.ul.some(([x, y, t]) => x === ulXY[0] && y === ulXY[1] && t === 'user'), { got: back.ul, want: ulXY });
+    check('cycle 7: the re-hydrated ungrouped frame has ONE group, and the other animal unlinked in every camera (not regrouped, not doubled)',
+        back.ungrpGroups === 1 && Object.values(back.ungrp).every(([l, u]) => l === 1 && u === 1), back);
+    check('cycle 7: the deleted prediction is still gone',
+        back.del.cam0 && back.del.cam0[0] === 1 && back.del.cam0[1] === 0 &&
+        Object.entries(back.del).every(([cn, [l, u]]) => cn === 'cam0' || (l === 1 && u === 1)), back.del);
+
+    const save7 = await save('c7');
+    const s8 = await reopen(save7.target, 'after the playback-eviction edits');
+    const after7 = await page.evaluate(async ({ E7 }) => {
+        const s = window.__lucid.state.session;
+        const tri = await import('/pose/triangulation.js');
+        for (const f of [E7.E_EDIT, E7.E_UL, E7.E_DEL]) await tri.ensureLazyFrameData(f);
+        const node0 = (f, cam) => {
+            const fg = s.frameGroups.get(f);
+            return fg.getInstances(cam).concat(fg.getUnlinkedInstances(cam).map(u => u.instance))
+                .filter(i => i.hasPoint(0)).map(i => [i.getX(0), i.getY(0)]);
+        };
+        const fgDel = s.frameGroups.get(E7.E_DEL);
+        return {
+            edit: node0(E7.E_EDIT, 'cam0'), ul: node0(E7.E_UL, 'cam0'),
+            ungrpGroups: (s.instanceGroups.get(E7.E_UNGRP) || []).length,
+            delCam0: fgDel.getInstances('cam0').length + fgDel.getUnlinkedInstances('cam0').length,
+        };
+    }, { E7 });
+    // NOT an eviction property, so logged rather than asserted: deleting an
+    // UNLINKED prediction edits only the resident frame, and the streaming save
+    // writes a frame's store rows unless it carries a user instance — so the
+    // deletion is not in the saved file whether or not eviction ever ran.
+    log(`  info: cam0 instances on E_DEL after save+reload: ${after7.delCam0} (1 = the deletion persisted, 2 = it did not)`);
+    const near = (pts, xy) => !!xy && pts.some(([x, y]) => Math.abs(x - xy[0]) < 1e-3 && Math.abs(y - xy[1]) < 1e-3);
+    const editXY = e7.edit && e7.edit.xy;
+    check('cycle 7: E_EDIT was still resident at save time WITHOUT this test revisiting it',
+        back.editStillResidentAtSave === true);
+    check('cycle 7: a group member\'s edit, saved after playing away, persisted through save+reload',
+        near(after7.edit, editXY), { seen: after7.edit, want: editXY });
+    check('cycle 7: an unlinked instance\'s edit, saved after playing away and back, persisted through save+reload',
+        near(after7.ul, ulXY), { seen: after7.ul, want: ulXY });
+    check('cycle 7: the ungroup made before playing away persisted through save+reload',
+        after7.ungrpGroups === 1, after7);
+    check('cycle 7: grouping elsewhere unchanged by the cycle', s8.igFrames >= FRAMES * 0.95, { igFrames: s8.igFrames });
+
+    // =========================================================
     // Memory: the whole point is that N cycles do not grow without bound
     // =========================================================
     log('');

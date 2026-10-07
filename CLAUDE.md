@@ -3,8 +3,8 @@
 Multi-view pose annotation GUI. No build system — pure vanilla JS served as static files.
 
 ## Architecture
-ES modules, vanilla JS (no build step). `index.html` loads `app.js` as `<script type="module">`; `app.js` is a 2-line entry point that imports from `pose/`. The 98 modules are grouped into four directories:
-- `pose/` — data model, cross-view tracking, DLT triangulation (the pure math in `triangulation-core.js`, solved in parallel by `triangulation-pool.js` + `triangulation-worker.js`), plane annotation model (planes + the global plane-node pool), 3D mesh objects (groups of planes) and their derived geometry, plane/origin serialization, origin transform, whole-project origin re-base, cross-session calibration comparison, plane-to-plane angle, the least-squares plane fit, multi-view display alignment (`view-align.js`), the ID-switch checks by body size and images (`id-switch-check.js`), app initialization (21 files)
+ES modules, vanilla JS (no build step). `index.html` loads `app.js` as `<script type="module">`; `app.js` is a 2-line entry point that imports from `pose/`. The 99 modules are grouped into four directories:
+- `pose/` — data model, cross-view tracking, DLT triangulation (the pure math in `triangulation-core.js`, solved in parallel by `triangulation-pool.js` + `triangulation-worker.js`), plane annotation model (planes + the global plane-node pool), 3D mesh objects (groups of planes) and their derived geometry, plane/origin serialization, origin transform, whole-project origin re-base, cross-session calibration comparison, plane-to-plane angle, the least-squares plane fit, multi-view display alignment (`view-align.js`), the ID-switch checks by body size and images (`id-switch-check.js`), the lazy project's playback eviction (`lazy-residency.js`), app initialization (22 files)
 - `ui/` — UI state, canvas rendering, mouse/keyboard interaction, info panel (and its lazily-filled Track dropdown), modals, timeline, 3D viewport, panel visibility, video encoding, video display settings, keyboard-target arbitration, modal geometry, view legend, plane definition, 3D mesh objects, origin definition, origin re-base, cross-session calibration notice, plane angle, frame-range tracking, collapsible section state, info tooltips, plane visibility, browser-specific hints, the loading overlay + its progress bar, the Align Views to References dialog, the seekbar hover tooltip, the status bar's whole-project frame counters, the Color: Tracks/ID setting, the Check ID Switches runner + ID Switches panel tab (and its saved review checklist), its seekbar ticks and in-view highlight, its image embedder and crop worker, settings — the Define Planes panel is split across `plane-definition.js` (the hub) plus its three section modules and three helpers (56 files)
 - `loading/` — video decoding, unplayable-codec diagnosis, session loading, SLP/package readers, per-camera SLP choice, calibration-file selection, video-file selection, the per-camera track-list union (`session.tracks` for a per-camera folder), web workers (11 files)
 - `import-export/` — file I/O, save/load, SLP import/merge, visibility metadata, plane metadata, 3D mesh export (10 files)
@@ -585,6 +585,44 @@ Rules, each with a test pinning it:
 Coverage: `tests/test-plane-serialization.mjs` (unit, the mapping) and
 `tests/e2e/plane-persistence-roundtrip.mjs` (real app, both `.slp` writers, the
 dirty flag, the scope split, and both negative controls).
+
+## A lazy project's resident frames are a WINDOW — and eviction must be lossless
+
+On a lazy project `session.frameGroups` holds the hydrated frames only. Playback
+used to keep every frame it ever hydrated: the playback loader topped up 5,000
+frames ahead and `evictLazyFrames` had no caller, so on the 8-camera
+`05mice_flippers` project resident frames went 5,145 -> 31,600 over five 20 s runs
+while the heap climbed toward the renderer's ~4.2 GB limit.
+`pose/lazy-residency.js` now evicts during playback. Five rules:
+
+- **Drop a frame only if re-hydrating it rebuilds EXACTLY what is resident**
+  (`frameEvictionBlocker`, compared against `SioLazyLoader.describeStoreFrame`,
+  which `tests/e2e/lazy-playback-eviction.mjs` pins to the real materializer).
+  Anything only the resident frame knows keeps it: a user instance, a modified /
+  backed-up / nulled one, a deleted or added row, a track changed only in memory,
+  a #201 identity on a trackless instance, a skeleton-node change, a camera the
+  loader does not back, or an object the InteractionManager holds.
+- **A user instance ALWAYS pins its frame, group member or not.** A member does
+  survive eviction (it lives in `instanceGroups` and comes back as the same
+  object on a revisit), but the streaming save reads its 2D edit overlay from
+  RESIDENT frames only (`buildSessionRefGraph`). Save while it is evicted and the
+  store's original row is written instead — `sequence-lazy-workflow.mjs` cycle 7
+  fails exactly that way with the `user`/`modified` blockers removed.
+- **Never evict from `batchLoadLazyFrames`, and hold eviction during a sweep.**
+  The sweeps hydrate a window and read it back after awaits; the protected
+  windows follow the on-screen frame, not the sweep. `sweepLazyFrameWindows`
+  holds residency for its whole run.
+- **The playback lookahead IS the protected ahead-window** — one constant,
+  `LAZY_PLAYBACK_AHEAD`, used by the loader and the eviction. Grow one without
+  the other and playback evicts what it just loaded, then reloads it.
+  `LAZY_KEEP_BEHIND` must stay above the longest node trail (500): trails draw
+  resident frames only.
+- **Dropping a frame drops its derived reprojection caches too** — exactly the
+  state Triangulate All leaves every frame in; the draw path re-derives them.
+
+`session.instanceGroups` is NOT evicted, deliberately: it is the project's
+grouping and 3D, bounded by project size rather than by playback, and the save
+reads it whole.
 
 ## Triangulation must not depend on where the origin is
 
