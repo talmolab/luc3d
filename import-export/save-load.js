@@ -8,7 +8,7 @@
 import {
     Skeleton, Camera, Instance, UnlinkedInstance, FrameGroup, Identity,
     InstanceGroup, Session,
-    toBoxedPoints3d, asPoints3d, someValidPoint3d,
+    toBoxedPoints3d, someValidPoint3d, pooledPoints3d,
 } from '../pose/pose-data.js';
 import {
     getInstanceGroupsForFrame, storeReprojectedInstances, reprojectPoints,
@@ -1806,7 +1806,7 @@ function _restoreProjectV2(data) {
                         : (groupData.trackIdx != null ? groupData.trackIdx : -1);
                     var group = new InstanceGroup(groupData.id || Date.now(), loadedIdentityId);
                     if (groupData.points3d) {
-                        group.points3d = asPoints3d(groupData.points3d);
+                        group.points3d = pooledPoints3d(groupData.points3d);
                     }
                     if (groupData.reprojections) {
                         group.reprojections = groupData.reprojections;

@@ -876,7 +876,7 @@ last few ULPs.
 resident-only hazard (#194/#195): nothing this module reads can be absent.
 
 **Imports from project modules.** `./origin-frame.js` (`applyOriginFrame`,
-`mulMat3Vec3`, `rebaseExtrinsics`), `./pose-data.js` (`points3dNodeCount`,
+`mulMat3Vec3`, `rebaseExtrinsics`), `./pose-data.js` (`pooledPoints3d` — `applyOriginRebase` stores each re-based group in the slab pool — `points3dNodeCount`,
 `hasPoint3d`). DOM-free.
 
 **Imported by.** `ui/origin-rebase.js`.
@@ -1276,6 +1276,29 @@ from outside the class.** Why: after Track All + Triangulate All on the
 and the ArrayBuffers plus typed-array objects were ~188 ms of a ~373 ms full GC
 (`_bench-playback.mjs HEAPPROBE=1 STRIP=1`); a reopened project's placeholders
 owned the same number of all-NaN ones.
+
+**`InstanceGroup.points3d` on the bulk paths lives in a slab pool.**
+`pooledPoints3d(points)` copies a group's flat 3D into a 1 MB slab and returns a
+`Float64Array` VIEW of exactly its 3N doubles (`isPooledPoints3d` tells them
+apart); an already-pooled array comes back unchanged, null/empty pass through,
+boxed rows are normalized first (`asPoints3d`), and anything over a sixteenth of
+a slab keeps its own buffer. Every bulk writer stores through it: Triangulate
+All (`_applyGroupStep`, pose/triangulation.js; `applyIdentitySolve` and
+Group by Track, ui/export-modals.js), Track All (`commitTrackedFrame`,
+pose/tracker.js — which also stops the group sharing the tracker target's live
+array), reopen and the other import paths (import-export/slp-import.js; the JSON
+project loader in save-load.js), the origin re-base (`applyOriginRebase`) and
+`moveVideosToSession`. Single-frame solves keep their own buffers (bounded). A
+view behaves like an owned array for everything `points3d` is used for —
+indexing, in-place writes (they stay in its own region), `length`, `slice()`,
+`new Float64Array(view)`, `ArrayBuffer.isView` — but must never be TRANSFERRED
+or re-wrapped through `.buffer` (that is the whole slab; a `postMessage` of one
+would also copy it). Nothing does either. Why: 539,545 groups owned 539,545
+ArrayBuffers after Triangulate All on the 8-camera, 108,000-frame project, and
+every full GC sweeps every ArrayBuffer. Dead regions of re-solved groups pin
+their slab until its last view goes — a Triangulate All replaces every group, so
+old slabs die whole. Covered by `tests/test-points3d-pool.mjs` and
+`tests/e2e/sequence-lazy-workflow.mjs` (`checkPooled`).
 
 **`InstanceGroup.reprojectedInstances` starts as the shared
 `NO_REPROJECTED_INSTANCES`**, an empty read-only Map (a subclass whose `set`
@@ -2017,6 +2040,10 @@ drifts upward (e.g., 4 → 11 on the test fixture).
   across every frame with temporal continuity signals.
 
 **Imports from project modules.**
+- `./pose-data.js` — `InstanceGroup`, `points3dNodeCount`, `hasPoint3d`,
+  `readPoint3d`, `pooledPoints3d` (`commitTrackedFrame` stores a COPY of the
+  target's 3D in the slab pool — one ArrayBuffer per group was 539,545 for a
+  full Track All, and the group no longer shares the target's live array).
 - `./triangulation.js` — `computeFundamentalMatrix`, `triangulatePointDLT`,
   `triangulatePoints`, `reprojectPoint`, `reprojectPoints`,
   `computeInstanceDistance`, `hungarianAlgorithm`.
@@ -3047,7 +3074,8 @@ subtitle is populated for loaded projects, not just freshly triangulated ones.
 
 **Imports from project modules.**
 - `./pose-data.js` — `mat3x3Multiply`, `FrameGroup`, `Instance`,
-  `UnlinkedInstance`, `InstanceGroup`.
+  `UnlinkedInstance`, `InstanceGroup`, `pooledPoints3d` (`_applyGroupStep`
+  stores every Triangulate All result in the slab pool).
 - `../ui/app-state.js` — `state`, `timeline`, `viewport3d`.
 - `../ui/rendering.js` — `setReprojErrorVisible`, `showReprojectionsOnly`,
   `REPROJ_ONLY_NOTE` (Triangulate All ends Reproj-only — #243), `drawAllOverlays`.
@@ -4070,7 +4098,8 @@ SLP all-sessions, JSON labels, points3d H5, reproj H5).
 - `./app-state.js` — `state`, `viewport3d`, `timeline`, `getActiveSession`.
 - `./browser-hints.js` — `fileSystemAccessHint` (appended to the 3D-video and
   JSON-export "must be built in memory" confirms in Brave).
-- `../pose/pose-data.js` — `InstanceGroup`.
+- `../pose/pose-data.js` — `InstanceGroup`, `UnlinkedInstance`, `pooledPoints3d`
+  (Group by Identity / Track & Triangulate All store each solve in the slab pool).
 - `../pose/triangulation.js` — `triangulateAndReproject`,
   `storeReprojectedInstances`, `frameHasGroupedUserInstances`,
   `loadAllLazyFrames`, `triangulateMultiFrameInstances`,
@@ -8253,7 +8282,8 @@ multi-video docking layout.
 - `./id-switch-modal.js` — `refreshIdSwitchPanel`: `switchSession` shows the new
   session's ID-switch results and markers (try/catch, like `populateTimelineVisibility`).
 - `./app-state.js` — `state`, controllers + setters.
-- `../pose/pose-data.js` — `FrameGroup`, `UnlinkedInstance`, `Camera`.
+- `../pose/pose-data.js` — `FrameGroup`, `UnlinkedInstance`, `Camera`,
+  `pooledPoints3d` (the re-solved groups' 3D).
 - `../pose/lazy-residency.js` — `hydrateGroupMembers2D`, `releaseFrameMembers2D`:
   `moveVideosToSession` re-solves every group of the origin session, and on a
   lazy project the members of a non-resident frame are `_lazy2d` placeholders
@@ -13433,6 +13463,11 @@ null-filled array the constructor turned into an all-NaN buffer of its own:
 4,152,565 ArrayBuffers on an 8-camera, 108,000-frame project, about half the cost
 of every full GC. Hydration (`finalizeLazyFrameGroup`) replaces the reference,
 and the writers in `Instance` copy before writing.
+Likewise every restored group's 3D goes into the slab pool
+(`pooledPoints3d`, `pose/pose-data.js`) — the reader hands one compacted
+`Float64Array` per group (#189), i.e. one ArrayBuffer each; the copy is ~360 B of
+backing store per group, outside V8's pointer cage, and the reader's array is
+released with its typed group.
 
 **Imports from project modules.**
 - `../pose/pose-data.js`, `../pose/triangulation.js`, `./file-io.js`,

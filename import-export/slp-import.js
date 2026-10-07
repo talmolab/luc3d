@@ -7,7 +7,7 @@
 import {
     Skeleton, Camera, Instance, UnlinkedInstance, FrameGroup, Identity,
     InstanceGroup, Session,
-    asPoints3d, points3dNodeCount, someValidPoint3d, lazyPlaceholderXY,
+    asPoints3d, points3dNodeCount, someValidPoint3d, lazyPlaceholderXY, pooledPoints3d,
 } from '../pose/pose-data.js';
 import {
     reprojectPointsCamera, reprojectPoints, computeReprojectionErrors,
@@ -236,7 +236,7 @@ export async function reconstructInstanceGroupsFromDicts(session, fgDicts, camKe
             // Restore 3D points
             var _igPts = asPoints3d(igDict.points);
             if (points3dNodeCount(_igPts) > 0) {
-                group.points3d = _igPts;
+                group.points3d = pooledPoints3d(_igPts);
                 restoredWith3d++;
                 // Which solver produced this 3D (persisted in metadata.lucid;
                 // absent = DLT). Without it a reopened project has BA 3D with an
@@ -432,7 +432,7 @@ export async function reconstructInstanceGroupsFromSession(session, typedSession
             var i3d = typedIG.instance3d;
             var _i3dPts = asPoints3d(i3d && i3d.points);
             if (points3dNodeCount(_i3dPts) > 0) {
-                group.points3d = _i3dPts;
+                group.points3d = pooledPoints3d(_i3dPts);
                 restoredWith3d++;
                 // Which solver produced this 3D (persisted in metadata.lucid;
                 // absent = DLT). Without it a reopened project has BA 3D with an
@@ -577,7 +577,13 @@ export async function reconstructInstanceGroupsFromSessionLazy(session, typedSes
             var i3d = typedIG.instance3d;
             var _i3dPts = asPoints3d(i3d && i3d.points);
             if (points3dNodeCount(_i3dPts) > 0) {
-                group.points3d = _i3dPts; // REUSE — asPoints3d passes a flat array through uncopied
+                // Copied into the slab pool (pose-data.js `pooledPoints3d`): the
+                // reader hands one compacted Float64Array per group (#189), i.e.
+                // one ArrayBuffer per group — 539,545 on an 8-camera, 108,000-frame
+                // project, each swept by every full GC. The copy is ~360 B per
+                // group of backing store (outside V8's pointer cage), and the
+                // reader's array is released with its typed group.
+                group.points3d = pooledPoints3d(_i3dPts);
                 restoredWith3d++;
                 // Which solver produced this 3D (persisted in metadata.lucid;
                 // absent = DLT). Without it a reopened project has BA 3D with an
@@ -2141,12 +2147,12 @@ export async function handleLoadPoints3dH5() {
                 }
                 if (existingGroup) {
                     // Assign 3D points to existing group
-                    existingGroup.points3d = asPoints3d(pts3d);
+                    existingGroup.points3d = pooledPoints3d(pts3d);
                     existingGroup.markClean();
                 } else {
                     // Create a new InstanceGroup with just 3D data
                     var newGroup = new InstanceGroup(Date.now() + frameIdx * 100 + trackIdx, trackIdx); // identityId = trackIdx
-                    newGroup.points3d = asPoints3d(pts3d);
+                    newGroup.points3d = pooledPoints3d(pts3d);
                     newGroup.markClean();
                     frameGroupsList.push(newGroup);
                 }
