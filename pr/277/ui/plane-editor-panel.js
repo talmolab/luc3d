@@ -30,12 +30,12 @@
 // a function body only, never at this module's top level. Same rule as the
 // other two sections; see the note in `ui/plane-nodes-panel.js`.
 
-import { markDirty } from '../import-export/save-load.js?v=ccee20f1c4cf';
-import { renderNodesTable, renderFrozenWarning } from './plane-nodes-panel.js?v=ccee20f1c4cf';
+import { markDirty } from '../import-export/save-load.js?v=d029b976d3b8';
+import { renderNodesTable, renderFrozenWarning } from './plane-nodes-panel.js?v=d029b976d3b8';
 import {
     makeDeleteButton, setEmptyState, redraw, planeModel, planePool,
     getSelectedPlane, refreshPlanePanel, syncPlanes3D,
-} from './plane-definition.js?v=ccee20f1c4cf';
+} from './plane-definition.js?v=d029b976d3b8';
 
 /**
  * The editor: what the SELECTED plane is made of (its name, which nodes are in
