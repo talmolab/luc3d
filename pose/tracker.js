@@ -18,7 +18,7 @@ import {
     hungarianAlgorithm
 } from './triangulation.js';
 import { CrossViewTracker, Detection } from './cross-view-tracker.js';
-import { InstanceGroup, points3dNodeCount, hasPoint3d, readPoint3d } from './pose-data.js';
+import { InstanceGroup, points3dNodeCount, hasPoint3d, readPoint3d, pooledPoints3d } from './pose-data.js';
 
 // Pass 3i-1: tracker UI/integration (was in app.js)
 import { state, interactionManager, timeline, viewport3d, getActiveSession } from '../ui/app-state.js';
@@ -976,7 +976,10 @@ export function commitTrackedFrame(session, trk, frameIdx, trackToIdentity, iden
         }
 
         var group = new InstanceGroup(nextGroupId(), identityId);
-        group.points3d = target.points3d;
+        // A COPY in the slab pool (pose-data.js `pooledPoints3d`): one
+        // ArrayBuffer per group was 539,545 of them for a full Track All, and it
+        // also stops the group sharing the tracker target's live array.
+        group.points3d = pooledPoints3d(target.points3d);
         for (var m = 0; m < members.length; m++) {
             var camName = members[m].camName;
             var det = members[m].det;
