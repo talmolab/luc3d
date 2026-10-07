@@ -1610,6 +1610,14 @@ node tests/e2e/<name>.mjs             # tests/e2e/*.mjs  (Playwright, one file p
     returns a plausible count, and only shows up a cycle later once the wrong
     state has been saved. `FRAMES=`/`CAMS=`/`NODES=`/`KEEP=1` are configurable; it
     asserts its own lazy precondition so it cannot silently stop testing that.
+    Its sibling class is the **resident-only EDIT**: a change made to a resident
+    predicted-only frame and nowhere else is undone by the next window release
+    (sweeps, playback eviction) and by the streaming save, which writes the
+    store rows of any camera-frame without a user instance. Cycle 5c pins this
+    for the interactive deletes — which must go through `deleteTargetsFromStore`
+    (`ui/custom-delete-ops.js`) — by deleting through the real Delete paths,
+    asserting the frames were RELEASED before re-hydrating them, then saving and
+    reopening.
   - `video-encode-streaming.mjs` — the **only** coverage of the streaming video
     export path. Headless Chromium exposes `showSaveFilePicker()` but rejects it
     instantly with `AbortError`, so neither video modal can reach that path under

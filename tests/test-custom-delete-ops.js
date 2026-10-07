@@ -425,6 +425,149 @@
         });
     });
 
+    /**
+     * The interactive deletes — the Delete key / Edit ▸ Delete Instance / the
+     * toolbar (`InteractionManager._deleteSelected`) and the group context
+     * menu — used to edit the resident frame only. On a lazy project that is
+     * not a delete: re-hydration and the streaming save both bring the row back.
+     * They now remove the store rows first, through the same
+     * `deleteTargetsFromStore` Custom Instance Delete uses. The store here is a
+     * stub recording which (camera, frame, offset) rows it was asked to drop,
+     * honouring `opts.only` the way the real one does.
+     *
+     * buildSession's store offsets: cam1 0 gA, 1 gB, 2 gC, 3 ungrouped
+     * prediction; cam2 0 gA, 1 gB, 2 gC, 3 ungrouped user; cam3 0 gC.
+     */
+    describe('custom-delete-ops — interactive deletes reach the store', function () {
+        const ROWS = [
+            ['cam1', 0, 0], ['cam1', 0, 1], ['cam1', 0, 2], ['cam1', 0, 3],
+            ['cam2', 0, 0], ['cam2', 0, 1], ['cam2', 0, 2], ['cam2', 0, 3],
+            ['cam3', 0, 0],
+        ];
+        function attachRecordingStore(session) {
+            const store = { deleted: [], offered: 0, calls: 0, lastOpts: null };
+            session.lazyLoader = {
+                deleteInstanceRows(shouldDeleteFn, opts) {
+                    store.calls++;
+                    store.lastOpts = opts || null;
+                    let n = 0;
+                    for (const [cam, frameIdx, off] of ROWS) {
+                        if (opts && opts.only) {
+                            const w = opts.only.get(cam);
+                            if (!w || !w.has(frameIdx)) continue;
+                        }
+                        store.offered++;
+                        if (shouldDeleteFn(cam, frameIdx, off, off)) { store.deleted.push(cam + '@' + off); n++; }
+                    }
+                    return { deleted: n, errorRows: 0, firstError: null, byCamera: {} };
+                },
+            };
+            return store;
+        }
+        function manager(session) {
+            const notes = [];
+            const mgr = new InteractionManager({
+                getState: () => ({ currentFrame: 0, session: session, views: [] }),
+                getInstanceGroups: (f) => session.getInstanceGroupsForFrame(f || 0),
+                onInstanceDeleted: (frameIdx, group, views) => notes.push({ frameIdx, group, views }),
+                requestRedraw: () => {},
+            });
+            return { mgr, notes };
+        }
+
+        it('target builders carry the store offset (`_rawInstIndex`) of each instance', function () {
+            const { fg, gC } = buildSession();
+            const ul = fg.getUnlinkedInstances('cam1')[0];
+            const t = __CustomDeleteOps.unlinkedTarget(0, ul);
+            assertEqual(t.kind, 'ungrouped', 'an unlinked target');
+            assertEqual(t.camName, 'cam1', 'camera from the UnlinkedInstance, not the last-clicked view');
+            assertEqual(t.rawIdx, 3, 'store offset 3');
+            const all = __CustomDeleteOps.groupMemberTargets(0, gC);
+            assertDeepEqual(all.map(x => x.camName + '@' + x.rawIdx), ['cam1@2', 'cam2@2', 'cam3@0'],
+                'every member when no cameras are named');
+            const one = __CustomDeleteOps.groupMemberTargets(0, gC, ['cam3', 'camX']);
+            assertDeepEqual(one.map(x => x.camName + '@' + x.rawIdx), ['cam3@0'],
+                'named cameras only; one the group has no member in is skipped');
+        });
+
+        it('deleteTargetsFromStore drops the rows, walks only their camera-frames, and leaves memory to the caller', function () {
+            const { session, fg } = buildSession();
+            const store = attachRecordingStore(session);
+            const ul = fg.getUnlinkedInstances('cam1')[0];
+            const res = __CustomDeleteOps.deleteTargetsFromStore(session, [__CustomDeleteOps.unlinkedTarget(0, ul)]);
+            assertDeepEqual(store.deleted, ['cam1@3'], 'exactly the selected prediction\'s row');
+            assertEqual(res.durable, 1, 'reported as durable');
+            assertTrue(!!(store.lastOpts && store.lastOpts.only), 'passed `only` to narrow the walk');
+            assertEqual(store.offered, 4, 'only cam1/frame 0\'s 4 rows were offered, not all 9');
+            assertTrue(fg.getUnlinkedInstances('cam1').indexOf(ul) >= 0,
+                'the resident pool is untouched — removing it is the caller\'s job');
+        });
+
+        it('a memory-only instance (no store row) never reaches the store', function () {
+            const { session, fg } = buildSession();
+            const store = attachRecordingStore(session);
+            const added = new UnlinkedInstance(new Instance([[5, 5], [6, 6]], null, 'user', 1), 'cam3');
+            fg.addUnlinkedInstance('cam3', added);
+            const res = __CustomDeleteOps.deleteTargetsFromStore(session, [__CustomDeleteOps.unlinkedTarget(0, added)]);
+            assertEqual(store.calls, 0, 'deleteInstanceRows not called');
+            assertEqual(res.durable, null, 'nothing durable to report');
+        });
+
+        it('the Delete key on an UNGROUPED prediction removes its store row (the reported bug)', function () {
+            const { session, fg } = buildSession();
+            const store = attachRecordingStore(session);
+            const { mgr, notes } = manager(session);
+            const ul = fg.getUnlinkedInstances('cam1')[0];
+            mgr.selectedUnlinked = ul;
+            mgr.lastInteractedView = 'cam2';   // a different view than the instance's own
+            mgr._deleteSelected();
+            assertDeepEqual(store.deleted, ['cam1@3'],
+                'the row of the instance\'s OWN camera went, not the last-clicked view\'s');
+            assertEqual(fg.getUnlinkedInstances('cam1').length, 0, 'and it left the resident pool');
+            assertEqual(notes.length, 1, 'onInstanceDeleted still fires');
+        });
+
+        it('a per-view delete removes that member\'s row and renumbers the rows after it', function () {
+            const { session, fg, gB } = buildSession();
+            const store = attachRecordingStore(session);
+            const { mgr } = manager(session);
+            const gC = session.instanceGroups.get(0)[2];
+            const pred = fg.getUnlinkedInstances('cam1')[0].instance;
+            mgr.select(gB, -1);
+            mgr.lastInteractedView = 'cam1';
+            mgr._deleteSelected(false);
+            assertDeepEqual(store.deleted, ['cam1@1'], 'gB\'s cam1 row went');
+            assertEqual(gC.instances.get('cam1')._rawInstIndex, 1, 'gC.cam1 renumbered 2 -> 1');
+            assertEqual(pred._rawInstIndex, 2, 'the ungrouped cam1 prediction renumbered 3 -> 2');
+            assertEqual(gC.instances.get('cam2')._rawInstIndex, 2, 'another camera\'s rows untouched');
+            assertTrue(!(session.instanceGroups.get(0) || []).includes(gB),
+                'gB (2 members) dropped to one and was auto-ungrouped, as before');
+        });
+
+        it('Shift+Delete removes every member\'s row', function () {
+            const { session, gA } = buildSession();
+            const store = attachRecordingStore(session);
+            const { mgr } = manager(session);
+            mgr.select(gA, -1);
+            mgr.lastInteractedView = 'cam1';
+            mgr._deleteSelected(true);
+            assertDeepEqual(store.deleted.sort(), ['cam1@0', 'cam2@0'], 'both of gA\'s rows went');
+            assertTrue(!(session.instanceGroups.get(0) || []).includes(gA), 'and the group is gone');
+        });
+
+        it('an eager session (no store) deletes exactly as before', function () {
+            const { session, fg } = buildSession();
+            assertTrue(!session.lazyLoader, 'precondition: no lazy loader');
+            const { mgr } = manager(session);
+            const ul = fg.getUnlinkedInstances('cam1')[0];
+            mgr.selectedUnlinked = ul;
+            let threw = null;
+            try { mgr._deleteSelected(); } catch (e) { threw = e; }
+            assertTrue(threw === null, 'no store, no error (got ' + (threw && threw.message) + ')');
+            assertEqual(fg.getUnlinkedInstances('cam1').length, 0, 'removed from the pool');
+        });
+    });
+
     describe('custom-delete-ops — frameIdentityMap pruning (packed keys)', function () {
 
         it('prunes orphaned entries through deleteFrameIdentity, and keeps live ones', function () {
