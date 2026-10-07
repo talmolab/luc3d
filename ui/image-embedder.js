@@ -34,6 +34,7 @@
 
 import { state } from './app-state.js';
 import { planKeyframeSamples, KEYFRAME_GAP_TOLERANCE } from '../pose/id-switch-check.js';
+import { hydrateFrameMembers2d, releaseFrameMembers2d } from '../pose/lazy-residency.js';
 
 export const TRANSFORMERS_URL = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.0/+esm';
 export const IMAGE_MODEL_ID = 'onnx-community/dinov2-small';
@@ -186,7 +187,7 @@ function cosine(a, b) {
 }
 
 /** Body-node indices of a skeleton (everything but the tail), plus Nose / TTI. */
-function skeletonIndex(nodes) {
+export function skeletonIndex(nodes) {
     const names = nodes.map(function (n) { return typeof n === 'string' ? n : n && n.name; });
     return {
         nose: names.indexOf(NOSE), tti: names.indexOf(TTI),
@@ -225,6 +226,59 @@ export function cropGeometry(inst, sk) {
     let cx = 0, cy = 0; for (const q of body) { cx += q[0]; cy += q[1]; }
     cx /= body.length; cy /= body.length;
     return { cx: cx, cy: cy, angle: Math.atan2(vy, vx), scale: CROP / (1.3 * L), L: L, hull: convexHull(body) };
+}
+
+/** identity -> its InstanceGroup at `frame` (an identity seen twice there is ambiguous: left out). */
+function identityGroupsAt(session, frame) {
+    const out = new Map(), dup = new Set();
+    for (const g of (session.instanceGroups && session.instanceGroups.get(frame)) || []) {
+        if (g.identityId == null) continue;
+        if (out.has(g.identityId)) dup.add(g.identityId); else out.set(g.identityId, g);
+    }
+    dup.forEach(function (id) { out.delete(id); });
+    return out;
+}
+
+/**
+ * Crop geometry (`cropGeometry`, or null) for each camera `cams[vi]` and each
+ * item (`{ group }`, an InstanceGroup at `frame`), from the 2D keypoints alone.
+ * `atFrames[vi]` is the frame view vi actually decodes: a keyframe sample may
+ * move it, and that view then crops each animal (same identity) from THAT
+ * frame's keypoints.
+ *
+ * On a lazy project the group members of a frame that is not resident hold no
+ * 2D — it has been given back to the store (`releaseFrameMembers2d`,
+ * pose/lazy-residency.js), as a reopened project's members never had it — so
+ * each frame read is hydrated for the read and released after it. Reading the
+ * members directly found no keypoints on every such frame, i.e. the check
+ * silently embedded nothing there.
+ *
+ * @param {Session} session
+ * @param {number} frame
+ * @param {Array<{group: Object}>} items
+ * @param {string[]} cams
+ * @param {number[]} atFrames
+ * @param {Object} sk - `skeletonIndex(...)`
+ * @returns {Array<Array<Object|null>>} geo[vi][itemIndex]
+ */
+export function frameCropGeometry(session, frame, items, cams, atFrames, sk) {
+    const touched = new Set([frame]);
+    atFrames.forEach(function (f) { touched.add(f); });
+    const hydrated = [];
+    touched.forEach(function (f) { if (hydrateFrameMembers2d(session, f) > 0) hydrated.push(f); });
+    try {
+        return cams.map(function (cam, vi) {
+            const at = atFrames[vi];
+            const groups = at === frame ? null : identityGroupsAt(session, at);
+            return items.map(function (it) {
+                const g = groups ? groups.get(it.group.identityId) : it.group;
+                const inst = g && g.instances && g.instances.get(cam);
+                return inst ? cropGeometry(inst, sk) : null;
+            });
+        });
+    } finally {
+        hydrated.forEach(function (f) { releaseFrameMembers2d(session, f); });
+    }
 }
 
 /**
@@ -577,16 +631,6 @@ export async function createImageEmbedder(session, opts) {
     };
     const canvas = new OffscreenCanvas(CROP, CROP);
     let readers = null, pool;   // pool: undefined = not made yet, null = inline
-    // identity -> its InstanceGroup at `frame` (an identity seen twice there is ambiguous: left out)
-    const identityGroups = function (frame) {
-        const out = new Map(), dup = new Set();
-        for (const g of (session.instanceGroups && session.instanceGroups.get(frame)) || []) {
-            if (g.identityId == null) continue;
-            if (out.has(g.identityId)) dup.add(g.identityId); else out.set(g.identityId, g);
-        }
-        dup.forEach(function (id) { out.delete(id); });
-        return out;
-    };
     // per view: how its samples were decoded (keyframe sampling or streamed), for stats()
     let plans = [];
     const useKeyframes = opts.keyframes !== false &&
@@ -628,18 +672,11 @@ export async function createImageEmbedder(session, opts) {
     const getEmbeddings = async function (frame, items) {
         const tStart = performance.now();
         if (!tm.t0) tm.t0 = tStart;
-        // crop geometry comes from the 2D keypoints alone, so the views to embed are known before decoding;
-        // a view whose sample moved to a keyframe crops each animal (same identity) from THAT frame's keypoints
-        const geo = views.map(function (v, vi) {
-            const cam = v.cameraName || v.name, r = readers && readers[vi];
-            const at = r ? r.decodedFrame(frame) : frame;
-            const groups = at === frame ? null : identityGroups(at);
-            return items.map(function (it) {
-                const g = groups ? groups.get(it.group.identityId) : it.group;
-                const inst = g && g.instances && g.instances.get(cam);
-                return inst ? cropGeometry(inst, sk) : null;
-            });
-        });
+        // crop geometry comes from the 2D keypoints alone, so the views to embed are known before decoding
+        const geo = frameCropGeometry(session, frame, items,
+            views.map(function (v) { return v.cameraName || v.name; }),
+            views.map(function (v, vi) { const r = readers && readers[vi]; return r ? r.decodedFrame(frame) : frame; }),
+            sk);
         const want = items.map(function (it, ii) { return selectViews(geo.map(function (g) { return g[ii]; }), maxViews); });
         const cropsFor = function (vi) {        // the crops to cut in view vi (every other animal masked out, picked for it or not)
             const gv = geo[vi], crops = [], who = [];

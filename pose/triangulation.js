@@ -25,7 +25,7 @@ import { markDirty, setStatus, showLoading, hideLoading } from '../import-export
 import { showLoadingProgress, createProgressPacer, yieldToPaint } from '../ui/loading-overlay.js';
 import { createGroupSolver } from './triangulation-pool.js';
 import { unionTrackNames, remapTrackIdx, isIdentityRemap } from '../loading/track-union.js';
-import { evictLazyFrameGroups, holdLazyResidency, releaseLazyResidency,
+import { evictLazyFrameGroups, holdLazyResidency, releaseLazyResidency, releaseFrameMembers2d,
          LAZY_RESIDENT_CAP, LAZY_KEEP_BEHIND } from './lazy-residency.js';
 // Pass 3i-3: update3DViewport moved to pose/initialization.js.
 import { update3DViewport } from './initialization.js';
@@ -3127,10 +3127,16 @@ async function _sweepLazyFrameWindowsHeld(session, onFrame, opts) {
             }
             // Release the window. Keep the on-screen current frame and any
             // user-edited frame; everything else is predicted-only and rebuildable.
+            // A released frame's group members give their 2D back to the store
+            // too (pose/lazy-residency.js) — or a Track All leaves every member
+            // of the project holding a private copy of its row (1.39 GB on the
+            // real 8-camera project).
+            var heldRefs = _uiHeldObjects();
             for (var rf = start; rf < end; rf++) {
                 if (rf === state.currentFrame) continue;
                 var rfg = session.frameGroups.get(rf);
                 if (rfg && !_fgHasUserInstances(rfg)) session.frameGroups.delete(rf);
+                releaseFrameMembers2d(session, rf, { refs: heldRefs });
             }
             loader.releaseWindow(start, end);
             windowCount++;
