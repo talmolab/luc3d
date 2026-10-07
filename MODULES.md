@@ -1271,7 +1271,8 @@ origin contributes zero however it is wound — a unit cube at `[0,1]³` measure
 small-integer range for every frame past 127, so in a plain Map every entry
 cost a heap Number — 4,147,806 after Track All on the 8-camera, 108,000-frame
 project, plus a multi-million-slot hash table, all marked or scanned by every
-full GC (~28 ms of ~178 ms, `_bench-playback.mjs HEAPPROBE=1 STRIP=1`).
+full GC — measured at ~29 ms of a ~195 ms full GC and 103 MB of V8 heap
+(`_bench-playback.mjs HEAPPROBE=1`, #282).
 `FrameIdentityMap extends Map` and overrides every method: numeric keys and
 values live in `Float64Array`s in insertion order, with an open-addressing
 `Int32Array` index; other keys (the legacy `"frame:cam:null"` strings, NaN) and

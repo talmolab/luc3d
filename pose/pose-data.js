@@ -106,8 +106,8 @@ function _fimUnpack(key) {
  * for every frame past 127, so a plain Map stores each one as its own heap
  * Number — 4,147,806 of them on the 8-camera, 108,000-frame project after Track
  * All, each marked by every full GC, on top of the Map's multi-million-slot
- * table, which every full GC scans as well. Measured at ~28 ms of a ~178 ms full
- * GC (`_bench-playback.mjs HEAPPROBE=1 STRIP=1`). Here a key is 8 bytes in a
+ * table, which every full GC scans as well. Measured at ~29 ms of a ~195 ms full
+ * GC, and 103 MB of V8 heap (`_bench-playback.mjs HEAPPROBE=1`). Here a key is 8 bytes in a
  * `Float64Array`, its value 8 more, and the hash index an `Int32Array`: all
  * backing stores, none of them scanned.
  *
@@ -1445,7 +1445,7 @@ export class Session {
      * (frameIdx, camera, raw trackIdx) -> identityId, one entry per 2D
      * detection project-wide. Always a `FrameIdentityMap`: its packed keys would
      * each cost a heap Number in a plain Map (4,147,806 after Track All on an
-     * 8-camera, 108,000-frame project, ~28 ms of every full GC). Assigning a
+     * 8-camera, 108,000-frame project, ~29 ms of every full GC). Assigning a
      * plain Map — `deleteTrackAt`, Track All, tests — converts it, keeping its
      * order; null stays null.
      * @type {FrameIdentityMap|null}
