@@ -79,7 +79,7 @@ import {
 } from './identity-assignment.js';
 // Custom Instance Delete: DOM-free matching/cascade/durability logic. Imports no
 // project modules itself, which is why it can also be unit tested in isolation.
-import { collectDeletionTargets, executeDeletion } from './custom-delete-ops.js';
+import { collectDeletionTargets, executeDeletion, deleteTargetsFromStore, groupMemberTargets } from './custom-delete-ops.js';
 // Pass 3g: export-modals workflow symbols moved out of app.js.
 import {
     exportLabels, exportPoints3dH5, exportReprojH5,
@@ -2691,6 +2691,10 @@ export function setupUI() {
             if (interactionManager && interactionManager.selectedInstanceGroup === group) {
                 interactionManager.clearSelection();
             }
+            // The store rows first, exactly as the Delete key does — on a lazy
+            // project removing the group from memory alone is undone by the next
+            // re-hydration or save (see `_deleteSelected`, ui/interaction.js).
+            deleteTargetsFromStore(state.session, groupMemberTargets(state.currentFrame, group));
             state.session.removeInstanceGroup(state.currentFrame, group);
             markDirty();
             setStatus('Deleted group', 'success');
