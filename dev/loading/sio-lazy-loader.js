@@ -31,7 +31,7 @@
  * (`loading/track-union.js`) — see `_unifyTracks`.
  */
 
-import { unionTrackNames } from './track-union.js?v=892883cc9bc5';
+import { unionTrackNames } from './track-union.js?v=14f2f5cff61e';
 
 /**
  * `deleteInstanceRows` moves surviving rows with one `copyWithin` per run when
@@ -168,7 +168,7 @@ export class SioLazyLoader {
         }
         // Point the reader's internal I/O worker at LUCID's local vendored h5wasm
         // IIFE (document.baseURI keeps this correct on sub-path deployments).
-        var h5wasmUrl = new URL('lib/h5wasm/h5wasm.iife.js?v=892883cc9bc5', document.baseURI).href;
+        var h5wasmUrl = new URL('lib/h5wasm/h5wasm.iife.js?v=14f2f5cff61e', document.baseURI).href;
         var labels = await SIO.readSlpStreaming(file, {
             lazy: true,
             openVideos: false,
@@ -398,7 +398,7 @@ export class SioLazyLoader {
         if (!SIO || typeof SIO.readSlpStreaming !== 'function') {
             throw new Error('sleap-io.js readSlpStreaming not available on window.SleapIO');
         }
-        var h5wasmUrl = new URL('lib/h5wasm/h5wasm.iife.js?v=892883cc9bc5', document.baseURI).href;
+        var h5wasmUrl = new URL('lib/h5wasm/h5wasm.iife.js?v=14f2f5cff61e', document.baseURI).href;
         var labels = await SIO.readSlpStreaming(file, {
             lazy: true,
             openVideos: false,
@@ -784,6 +784,62 @@ export class SioLazyLoader {
                 for (var [frameIdx, frameRow] of rowMap) visitFrame(frameIdx, frameRow);
             }
         }
+    }
+
+    /**
+     * What re-hydrating one camera-frame from the store WOULD produce, read
+     * straight from the columns — no frame or instance is materialized. The
+     * playback eviction (`pose/lazy-residency.js`) compares a resident
+     * FrameGroup against this to prove it is rebuildable before dropping it.
+     *
+     * Entry `k` is the store instance at in-frame offset `k`, i.e. the row an
+     * `Instance._rawInstIndex` of `k` names. Mirrors what `_extractCamFrame`
+     * (via the store's `materializeFrame` + `adaptTypedInstance`) would build:
+     *   - `trackIdx[k]`: the session track index, or -1 for trackless. A track
+     *     id with no `Track` behind it is trackless there too.
+     *   - `predicted[k]`: 1 unless `instance_type` is 0 (a user instance).
+     *
+     * @param {string} camName
+     * @param {number} frameIdx - video frame index
+     * @returns {{count: number, trackIdx: Int32Array, predicted: Uint8Array}|null}
+     *   null when this loader does not back `camName` at all (the caller must
+     *   then treat that camera's data as NOT rebuildable). A camera with no row
+     *   for this frame reports `count: 0`.
+     */
+    describeStoreFrame(camName, frameIdx) {
+        var labels = this.labelsByCam.get(camName);
+        var rowMap = this.frameRowByCam.get(camName);
+        var store = labels && labels._lazyDataStore;
+        if (!store || !rowMap) return null;
+        var row = rowMap.get(frameIdx);
+        if (row === undefined) return { count: 0, trackIdx: new Int32Array(0), predicted: new Uint8Array(0) };
+        var fd = store.framesData || {};
+        var idn = store.instancesData || {};
+        var iStart = Number(fd.instance_id_start ? fd.instance_id_start[row] : 0) || 0;
+        var iEnd = Number(fd.instance_id_end ? fd.instance_id_end[row] : 0) || 0;
+        var n = Math.max(0, iEnd - iStart);
+        // `materializeFrame` resolves the column against the STORE's list and
+        // `adaptTypedInstance` takes `indexOf` in `labels.tracks`. They are one
+        // array (see `_unifyTracks`), in which case the id IS the index — a
+        // duplicated Track object would make `indexOf` smaller, which reads here
+        // as a mismatch, i.e. "not rebuildable": the safe direction.
+        var storeTracks = store.tracks || labels.tracks || [];
+        var labelTracks = labels.tracks || [];
+        var sameList = storeTracks === labelTracks;
+        var trackIdx = new Int32Array(n);
+        var predicted = new Uint8Array(n);
+        for (var k = 0; k < n; k++) {
+            var j = iStart + k;
+            // Same defaults as `materializeFrame`: an absent track is -1, an
+            // absent type is 0 (a user instance).
+            var rawTrack = idn.track ? idn.track[j] : undefined;
+            var tid = Number(rawTrack == null ? -1 : rawTrack);
+            var t = tid >= 0 ? storeTracks[tid] : null;
+            trackIdx[k] = !t ? -1 : (sameList ? tid : labelTracks.indexOf(t));
+            var rawType = idn.instance_type ? idn.instance_type[j] : undefined;
+            predicted[k] = Number(rawType == null ? 0 : rawType) === 0 ? 0 : 1;
+        }
+        return { count: n, trackIdx: trackIdx, predicted: predicted };
     }
 
     /**
