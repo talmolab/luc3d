@@ -129,10 +129,15 @@
         let worse = 0, better = 0, total = 0, worstRatio = 1;
         for (let t = 0; t < opts.trials; t++) {
             const t1 = makeGroup(cams, r, opts.nNodes, opts.noisePx, opts.outlierPx || 0);
+            // Threshold pinned OFF: this sweeps the solver, not the user setting
+            // (Tracking Wizard default 25 px). With it on, each method excludes
+            // views on its OWN solution while `meanError` still counts the excluded
+            // ones, which BA's guard never sees — so rarely (1/150 groups, 1.005x,
+            // in the gross-outlier scenario) BA reports a hair above DLT.
             const rd = triangulateAndReproject(t1.group, cams,
-                { method: 'dlt', includedCameras: names });
+                { method: 'dlt', includedCameras: names, reprojErrorThreshold: 0 });
             const rb = triangulateAndReproject(t1.group, cams,
-                { method: 'ba', includedCameras: names });
+                { method: 'ba', includedCameras: names, reprojErrorThreshold: 0 });
             if (rd.meanError == null || rb.meanError == null) continue;
             total++;
             if (rb.meanError > rd.meanError + 1e-9) {
