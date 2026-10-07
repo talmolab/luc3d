@@ -3425,8 +3425,9 @@ keyframeGap, maxShift}` (which frame each image sample decodes in one camera —
 "Keyframe sampling" under `ui/image-embedder.js`); `SIZE_BONES`;
 `REFERENCE_HZ` (15); `SIZE_CHECK_DEFAULTS` (`fps` REQUIRED, `sampleHz` 15,
 `folds` 5, `gapSeconds` 10, `syncSeconds` 1, `threshold` -50, `continueBelow` 0,
-`followSeconds` 60, `minTrackedSeconds` 60, `sepFactor` 0.65, `signal`, ...);
-`IMAGE_CHECK_DEFAULTS` (+ `imageHz` 2, `threshold` -25, `pcaDims` 32,
+`followSeconds` 60, `minTrackedSeconds` 60, `sepFactor` 0.65, `scoring` 'tracklet',
+`episodeGapSeconds` 3, `episodeWindowSeconds` 60, `signal`, ...);
+`IMAGE_CHECK_DEFAULTS` (+ `imageHz` 2, `scoring` 'episode', `threshold` -200, `pcaDims` 32,
 `getEmbeddings` REQUIRED: `async (frame, items[{k, group}]) -> per item
 [{camera, vector}]`, STARTED in increasing frame order with up to `inFlight`
 (default 2; the image embedder asks for 8) in flight; optional `prepareFrames(frames)` (awaited once with the
@@ -3442,8 +3443,9 @@ CV (each fold excludes `gapSeconds` either side) — on bone lengths (size), or 
 camera on PCA-reduced embeddings, averaged over cameras (images, sampled every
 round(sampleHz / imageHz)-th grid sample). Log-probabilities are normalised within
 each frame across the identities present; an encounter's score = summed evidence
-for the claimed labelling minus the exchanged one over the two following
-tracklets. Each sample is weighted by `REFERENCE_HZ` / that cue's sample rate, so
+for the claimed labelling minus the exchanged one — over the two following
+tracklets for size (`scoring: 'tracklet'`), and for images over all of the pair's
+time apart until their next contact (`scoring: 'episode'`, below). Each sample is weighted by `REFERENCE_HZ` / that cue's sample rate, so
 scores are evidence per unit TIME and thresholds hold at any frame rate (25-120
 fps tested within 0.4%). `opts.signal` cancels (AbortError).
 
@@ -3462,7 +3464,41 @@ point of its own — or null when the run reaches the end) and an 'end''s
 session). A change point within `followSeconds` after another of a different
 pair sharing an identity is its follow-on (`followOf`).
 
-**Calibration (2026-10-03).** Size: on the 5-mouse tail-mark recording
+**Episode scoring (images, 2026-10-07).** Two identities can only exchange labels
+while in contact — directly, or through a third animal both touch (one connected
+component of the close graph). Per pair, an EPISODE is a run of samples in one
+component, runs less than `episodeGapSeconds` apart merged; its score is the
+evidence from every sample until the pair's next episode (at most
+`episodeWindowSeconds`) in which either animal is apart from all others. An episode
+with no such sample is dropped, not scored 0 — a 0 ends a flagged run (it is not
+below `continueBelow`), which split swaps at the session's end. Change points are
+unchanged. Why: measured on the real check (a copy of the module with `buildGrid`
+exported reproduced its 72/314 encounters and scores exactly), the 'tracklet'
+scoring had NO evidence for 20-68% of image encounters per session (score exactly
+0: no crop in the tracklet). A brown/black pair that huddles touched again a
+median 0.07 s after each encounter (one crop every 0.53 s); 13 of 14 swapped
+encounters scored 0 or ~0, and its swap happened inside a three-animal contact,
+where no encounter between the two exists. Their time apart (31.6 s and 5.1 s,
+64 crops, while swapped) came after contacts with the third animal; 'tracklet'
+read 4.4 s of it.
+**Calibration of 'episode' (2026-10-07)**, real model and crops, against ground
+truth: the 6 proofread SLAP sessions (2022-10-07: 3x white/brown/black,
+3x 2 white + brown + black) and the 5-mouse recording tracked with the gate on and
+off, its identities read from the tail marks. NOTE: the app's default Track All
+(every node weight 1) swaps the 0- and 3-mark mice at 20:42.3 there; the
+"switch-free gate-on run" below was tracked with the tail nodes weighted 0. Over
+the 8 runs: swapped-vs-clean AUC 0.896 ('tracklet') -> 0.948 ('episode'),
+brown-black 0.76 -> 0.99; encounters with no evidence 35% -> 0%. At -200 every
+lasting real swap is caught, each as one stretch in the right place (144215
+brown/black 7:15.7 -> end; 145420 white/brown 0:16 -> 3:39; 5-mouse 20:42.3 ->
+end), with 1 false stretch in ~2 h (144215, brown/black 1:12-2:07) and 0 in the
+four clean sessions; 'tracklet' at -25 missed 144215, split 145420 into 5 rows
+and the 5-mouse swap into 6 stretches, with 33 false stretches on the 5-mouse
+runs. Not caught: three-animal relabels, which no pairwise test expresses (the
+first 16 s of 145420; part of the gate-off run). -200 was chosen on these same
+runs. Harnesses: `verify/gt-trackall-2026-10-07/` (untracked).
+
+**Calibration (2026-10-03, 'tracklet' scoring — images moved to 'episode' on 2026-10-07).** Size: on the 5-mouse tail-mark recording
 (194366_05mice_flippers, 108k frames, 8 cameras) planted swaps AUC 0.95; the real
 gate-off switch (frame 74,544) is an onset; the verified run gets 7 false change
 points / 30 min. Images, calibrated with this code on DINOv2 embeddings of the
@@ -3515,7 +3551,10 @@ set, so swapping the two animals' labels after it turns its score S into exactly
 **Coverage.** `tests/test-id-switch-check.mjs` (synthetic 3-animal sessions defined
 in time: clean -> no flags; minority / majority switch -> onset / end change point;
 25-120 fps invariance; images with synthetic embeddings catching a swap between
-animals of IDENTICAL size that size misses; cancellation; PCA; failure reasons;
+animals of IDENTICAL size that size misses; 'episode' scoring catching a swap
+between animals that huddle and one made only through a third animal, with
+'tracklet' as the negative control (all its A–B scores exactly 0 / no A–B
+encounter at all); cancellation; PCA; failure reasons;
 crop geometry of `ui/image-embedder.js`; `planKeyframeSamples`: sparse/unknown
 keyframes move nothing, a keyframe every 30 frames moves every 32-frame sample
 <= 15 frames, strictly increasing, untracked keyframes skipped, gaps up to 1.1x
@@ -8587,7 +8626,7 @@ always analyses the WHOLE session's identities.
 Runs under its own cancellable progress dialog (Cancel / Esc -> "cancelled", no
 markers added): model download (first use), "Cropping and embedding N views:
 frame i of n — about X min left", then fitting. Reads `imageCheckHz` (default 2)
-and `imageCheckThreshold` (default -25). Measured on a real 5-min, 3-animal,
+and `imageCheckThreshold` (default -200, on the episode-scoring scale; see `pose/id-switch-check.js`). Measured on a real 5-min, 3-animal,
 8-camera session in Chrome (HEVC from Google Drive), before streaming decode and
 view selection: 370 s, ~20 crops/s end to end. Its encounter scores matched the
 offline-calibrated ones (correlation 0.999). Speed now (5-mouse, 8 cameras, local
@@ -9100,7 +9139,7 @@ Shortcuts and the Hot Keys modal where people look for them.
   `stale`, `matchGate` (0/1 toggle for the CrossViewTracker match gate),
   `reprojErrorThreshold`, `autoSwitchCheck` — 0/1, run the body-size ID-switch
   check after Track All / Track Frame Range, default 1; `autoImageSwitchCheck` —
-  0/1, the image check likewise, default 0; `imageCheckThreshold` -25;
+  0/1, the image check likewise, default 0; `imageCheckThreshold` -200 (episode-scoring scale, range -2000..0);
   `imageCheckHz` 2; `imageCheckMaxViews` 3; `imageCheckWebNN` — 0/1, try WebNN,
   default 0). The remaining catalog entries (`epipolarDecay`, `reprojSigma`, `epipolarWeight`,
   `reprojWeight`, `minMatchScore`, `prevIdentityBonus`, `reprojGate2/3/4`,

@@ -31,6 +31,15 @@
  * (-50) caught it with ~16 false alarms in 30 minutes. Animals of near-equal
  * size are the size check's blind spot — which is what the image check is for.
  *
+ * The two checks differ in ONE step, how an encounter is scored (`scoring`). Size
+ * reads the two tracklets right after each encounter ('tracklet'). Images read all
+ * of the pair's time apart until their next contact ('episode', `episodeScores`):
+ * animals that huddle get almost no time apart right after touching, and a swap
+ * inside a three-animal contact has no encounter between the swapped pair at all.
+ * On 8 runs with ground truth (2026-10-07) that took the image check from missing
+ * a brown/black swap and splitting others into fragments to one stretch per real
+ * swap — at a threshold on its own scale (-200; more evidence per score).
+ *
  * Frame-rate independence: everything time-dependent is set in SECONDS and
  * converted with the recording's frame rate (`opts.fps`, required). Encounters
  * are found on a ~`sampleHz` grid (every round(fps / sampleHz)-th frame); each
@@ -68,6 +77,9 @@ export const SIZE_CHECK_DEFAULTS = {
     continueBelow: 0,   // ...and continues while the pair's next encounters still score below this
                         // (hysteresis: a persisting switch keeps scoring negative, if not always < -50)
     followSeconds: 60,  // a change point this soon after one sharing an identity is its follow-on
+    scoring: 'tracklet',       // how encounters are formed and scored: 'tracklet' or 'episode' (see episodeScores)
+    episodeGapSeconds: 3,      // 'episode': contacts of a pair less than this apart are one episode
+    episodeWindowSeconds: 60,  // 'episode': evidence is read until the pair's next episode, at most this long
     minTrackedSeconds: 60, // refuse with less tracked data than this: the model can't be learned reliably
     sepFactor: 0.65,    // "close" = centroids nearer than sepFactor x median body extent
     sepDistance: null,  // override the close distance directly (world units)
@@ -79,9 +91,10 @@ export const SIZE_CHECK_DEFAULTS = {
 /** Image-check options on top of the shared ones. Threshold: see the calibration notes in MODULES.md. */
 export const IMAGE_CHECK_DEFAULTS = Object.assign({}, SIZE_CHECK_DEFAULTS, {
     imageHz: 2,         // crops per second per identity (on the encounter grid)
-    threshold: -25,     // image-score threshold, calibrated 2026-10-03 (see MODULES.md): on the 5-mouse
-                        // recording 18 false change points / 30 min (size at -50: 7) and the real switch
-                        // caught (image score -46); -50 misses it and still gives 15
+    scoring: 'episode', // all time apart until the pair's next contact, not just the next tracklet
+    threshold: -200,    // image-score threshold for 'episode' scoring, calibrated 2026-10-07 (see MODULES.md):
+                        // every lasting real swap in 8 runs (5-mouse x2, 6 proofread SLAP) caught as one
+                        // stretch, 1 false stretch in 2 h of video; the 'tracklet' scale's -25 is far too loose
     pcaDims: 32,        // embeddings are reduced to this many dimensions per camera before the classifier
     maxTrainRows: 6000,
     iterations: 200,
@@ -374,8 +387,104 @@ function fitRows(rows, D, K, o, feat) {
 }
 
 /**
+ * `scoring: 'tracklet'` (the size check): one entry per encounter, scored over
+ * the two identities' NEXT tracklets only — the stretch until either comes close
+ * to ANY animal again.
+ */
+function trackletScores(grid, LP, present, weight) {
+    var K = grid.K, idents = grid.idents, frames = grid.frames;
+    var sumTl = function (t, cls) {
+        var s = 0;
+        for (var i = t.start; i <= t.end; i++) if (present(i, t.k)) s += LP[(i * K + t.k) * K + cls];
+        return s * weight;
+    };
+    return grid.enc.map(function (e) {
+        var S = (sumTl(e.ta, e.a) + sumTl(e.tb, e.b)) - (sumTl(e.ta, e.b) + sumTl(e.tb, e.a));
+        return { frame: frames[e.end], startFrame: frames[e.start], identityA: idents[e.a].id, identityB: idents[e.b].id,
+                 nameA: idents[e.a].name, nameB: idents[e.b].name, score: S };
+    }).sort(function (x, y) { return x.frame - y.frame; });
+}
+
+/**
+ * `scoring: 'episode'` (the image check): one entry per CONTACT EPISODE of a pair,
+ * scored over ALL the time each of the two spends apart from every animal until the
+ * pair's next episode (at most `episodeWindowSeconds`).
+ *
+ * Two identities can only exchange labels while they are in contact — directly, or
+ * through a third animal both are touching (the same connected component of the
+ * "close" graph). So per pair, an episode is a run of samples in which the two are
+ * in one component, with runs less than `episodeGapSeconds` apart merged, and the
+ * pair's labels are fixed from one episode to the next. Every sample in between in
+ * which either animal is apart from all others is evidence for that labelling — not
+ * only the stretch right after the contact, which is all `trackletScores` reads.
+ *
+ * Why (measured 2026-10-07, see MODULES.md): animals that huddle touch again within
+ * a fraction of a second, so the tracklet after their encounters holds no image
+ * sample (a median 0.07 s on a real brown/black pair, against one sample every
+ * 0.53 s) and the encounter scores exactly 0; their time apart comes after contacts
+ * with OTHER animals. And a swap made while three animals are in contact has no
+ * encounter between the swapped pair at all.
+ */
+function episodeScores(grid, LP, present, weight, o) {
+    var T = grid.T, K = grid.K, C = grid.C, sep = grid.sep, idents = grid.idents, frames = grid.frames;
+    var close = function (i, a, b) {
+        var x = C[(i * K + a) * 3] - C[(i * K + b) * 3], y = C[(i * K + a) * 3 + 1] - C[(i * K + b) * 3 + 1],
+            z = C[(i * K + a) * 3 + 2] - C[(i * K + b) * 3 + 2];
+        return Math.hypot(x, y, z) <= sep;
+    };
+    // component of each (sample, identity) in the close graph; -1 = no centroid
+    var comp = new Int16Array(T * K).fill(-1);
+    for (var i = 0; i < T; i++) {
+        var next = 0;
+        for (var k = 0; k < K; k++) {
+            if (!grid.hasCen(i, k) || comp[i * K + k] >= 0) continue;
+            var stack = [k]; comp[i * K + k] = next;
+            while (stack.length) {
+                var u = stack.pop();
+                for (var v = 0; v < K; v++) {
+                    if (v !== u && comp[i * K + v] < 0 && grid.hasCen(i, v) && close(i, u, v)) { comp[i * K + v] = next; stack.push(v); }
+                }
+            }
+            next++;
+        }
+    }
+    // apart from every other animal = inside a tracklet (the samples tracklet scoring reads)
+    var alone = new Uint8Array(T * K);
+    grid.tl.forEach(function (t) { for (var i2 = t.start; i2 <= t.end; i2++) alone[i2 * K + t.k] = 1; });
+    var gap = grid.secToSamples(o.episodeGapSeconds), wmax = grid.secToSamples(o.episodeWindowSeconds);
+    var lp = function (i3, k3, cls) { return LP[(i3 * K + k3) * K + cls]; };
+    var out = [];
+    for (var a = 0; a < K; a++) for (var b = a + 1; b < K; b++) {
+        var eps = [], s0 = -1;
+        for (var i4 = 0; i4 <= T; i4++) {
+            var together = i4 < T && comp[i4 * K + a] >= 0 && comp[i4 * K + a] === comp[i4 * K + b];
+            if (together && s0 < 0) s0 = i4;
+            if (!together && s0 >= 0) {
+                var last = eps[eps.length - 1];
+                if (last && s0 - last[1] <= gap) last[1] = i4 - 1; else eps.push([s0, i4 - 1]);
+                s0 = -1;
+            }
+        }
+        for (var q = 0; q < eps.length; q++) {
+            var end = eps[q][1], until = Math.min(q + 1 < eps.length ? eps[q + 1][0] - 1 : T - 1, end + wmax), S = 0, n = 0;
+            for (var i5 = end + 1; i5 <= until; i5++) {
+                if (alone[i5 * K + a] && present(i5, a)) { S += lp(i5, a, a) - lp(i5, a, b); n++; }
+                if (alone[i5 * K + b] && present(i5, b)) { S += lp(i5, b, b) - lp(i5, b, a); n++; }
+            }
+            // No evidence, no encounter: a score of 0 would end a flagged run (it is not below
+            // `continueBelow`) and split one swapped stretch in two — e.g. at the session's end.
+            if (!n) continue;
+            out.push({ frame: frames[end], startFrame: frames[eps[q][0]], identityA: idents[a].id, identityB: idents[b].id,
+                       nameA: idents[a].name, nameB: idents[b].name, score: S * weight });
+        }
+    }
+    return out.sort(function (x, y) { return x.frame - y.frame; });
+}
+
+/**
  * Within-frame contrast, encounter scores and change points (shared by both checks).
  * `present(i, k)` = evidence exists; `weight` = per-sample weight (REFERENCE_HZ / cue Hz).
+ * `o.scoring` picks how encounters are formed and scored: 'tracklet' (size) or 'episode' (images).
  */
 function finish(grid, LP, present, weight, o, extra) {
     var T = grid.T, K = grid.K, idents = grid.idents, frames = grid.frames;
@@ -390,16 +499,7 @@ function finish(grid, LP, present, weight, o, extra) {
         lse = mx + Math.log(lse);
         for (var z2 = 0; z2 < ks.length; z2++) LP[(i6 * K + ks[z2]) * K + c] -= lse;
     }
-    var sumTl = function (t, cls) {
-        var s = 0;
-        for (var i7 = t.start; i7 <= t.end; i7++) if (present(i7, t.k)) s += LP[(i7 * K + t.k) * K + cls];
-        return s * weight;
-    };
-    var scored = grid.enc.map(function (e) {
-        var S = (sumTl(e.ta, e.a) + sumTl(e.tb, e.b)) - (sumTl(e.ta, e.b) + sumTl(e.tb, e.a));
-        return { frame: frames[e.end], startFrame: frames[e.start], identityA: idents[e.a].id, identityB: idents[e.b].id,
-                 nameA: idents[e.a].name, nameB: idents[e.b].name, score: S };
-    }).sort(function (x, y) { return x.frame - y.frame; });
+    var scored = (o.scoring === 'episode' ? episodeScores : trackletScores)(grid, LP, present, weight, o);
     var changes = markChangePoints(scored, o);
     return Object.assign({
         ok: true, flags: scored.filter(function (s) { return s.flagged; }), changes: changes, encounters: scored,
