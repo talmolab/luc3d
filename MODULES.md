@@ -1290,6 +1290,16 @@ their slab until its last view goes — a Triangulate All replaces every group, 
 old slabs die whole. Covered by `tests/test-points3d-pool.mjs` and
 `tests/e2e/sequence-lazy-workflow.mjs` (`checkPooled`).
 
+**`InstanceGroup.reprojectedInstances` starts as the shared
+`NO_REPROJECTED_INSTANCES`**, an empty read-only Map (a subclass whose `set`
+throws); `addReprojectedInstance` gives the group a Map of its own on its first
+write. Reading, iterating, `clear()` and `delete()` behave as on any empty Map,
+and replacing the whole Map by assignment is fine. After Track All + Triangulate
+All on the 8-camera, 108,000-frame project, 539,545 groups each owned an empty
+Map (a JSMap plus its hash table) and held 40 entries between them. Writers must
+go through `addReprojectedInstance`, test fixtures included — a direct `.set` on
+the shared Map throws rather than leaking an entry into every group.
+
 **`frameIdentityMap` packed keys (luc3d #185 follow-up #3).** `frameIdentityMap`
 maps (frameIdx, camera, raw trackIdx) → identityId with **one entry per 2D
 detection project-wide** — 2,627,447 of them on the real 180,210-frame ×
