@@ -50,7 +50,7 @@ globalThis.SleapIO = { PredictedInstance: FakePredictedInstance };
 
 register(pathToFileURL(path.join(ROOT, 'scripts', 'bench', 'hooks.mjs')).href);
 const { state } = await imp('ui/app-state.js');
-const { batchLoadLazyFrames, sweepLazyFrameWindows, loadAllLazyFrames } = await imp('pose/triangulation.js');
+const { batchLoadLazyFrames, sweepLazyFrameWindows, loadAllLazyFrames, ensureLazyFrameData } = await imp('pose/triangulation.js');
 const { SioLazyLoader } = await imp('loading/sio-lazy-loader.js');
 const { Session, Skeleton, Camera, Instance, InstanceGroup, UnlinkedInstance } = await imp('pose/pose-data.js');
 const LR = await imp('pose/lazy-residency.js');
@@ -71,14 +71,14 @@ function nRows(cam, f) {
 const rowTrack = (cam, f, k) => ((f + k + CAMS.indexOf(cam)) % 4 === 0) ? -1 : (f + k) % TRACKS.length;
 
 /** A real SioLazyLoader over a hand-built columnar store, one store per camera. */
-function makeLoader() {
+function makeLoader(nFrames = N_FRAMES) {
     const loader = new SioLazyLoader();
-    loader.nFrames = N_FRAMES;
+    loader.nFrames = nFrames;
     for (const cam of CAMS) {
         const start = [], end = [], type = [], track = [];
         const rowMap = new Map();
         const tracks = TRACKS.map(name => ({ name }));
-        for (let f = 0; f < N_FRAMES; f++) {
+        for (let f = 0; f < nFrames; f++) {
             const n = nRows(cam, f);
             if (n === null) continue;
             rowMap.set(f, start.length);
@@ -108,11 +108,11 @@ function makeLoader() {
     return loader;
 }
 
-function makeSession() {
+function makeSession(nFrames = N_FRAMES) {
     const cameras = CAMS.map(n => new Camera(n, [[500, 0, 256], [0, 500, 256], [0, 0, 1]],
         [0, 0, 0, 0, 0], [0, 0, 0], [0, 0, 0], [512, 512]));
     const session = new Session(cameras, new Skeleton('s', ['a', 'b', 'c'], [[0, 1], [1, 2]]), TRACKS.slice(), 'S');
-    session.lazyLoader = makeLoader();
+    session.lazyLoader = makeLoader(nFrames);
     return session;
 }
 
@@ -434,6 +434,67 @@ group('trimLazyResidency: no scan within budget; a bounded window as playback ad
     ok(scans > 3 && scans < N_FRAMES / 2, `the slack spaces scans out (${scans} scans over ${N_FRAMES} ticks)`);
     eq(snapshot(p, 8), edited, 'the edited frame survived the whole run, edit intact');
     ok(!p.frameGroups.has(20) && p.frameGroups.has(N_FRAMES - 1), 'played frames behind the window are gone; the current one is resident');
+}
+
+// ---------------------------------------------------------------------------
+group('Paused navigation: ensureLazyFrameData bounds the window around the frame it hydrates');
+{
+    const NF = 4000;
+    const s = makeSession(NF);
+    state.session = s;
+    state.isPlaying = false;
+    state.trailLength = 0;
+    state.triangulationResults = new Map();
+    const W = LR.LAZY_NAV_WINDOW;
+    // Every frame ensureLazyFrameData adds comes with 30 prefetched; a jump
+    // anywhere is what scrubbing does.
+    const budget = 2 * W + 1 + LR.LAZY_TRIM_SLACK;
+    // An edit the scrubbing must not undo: a deleted prediction on frame 7.
+    state.currentFrame = 7;
+    await ensureLazyFrameData(7);
+    const fg7 = s.frameGroups.get(7);
+    const ul7 = [...fg7.unlinkedInstances.values()].find(l => l.length)[0];
+    fg7.removeUnlinkedById(ul7.id);
+    const edited = snapshot(s, 7);
+    let maxResident = 0, missingOnScreen = 0;
+    const jumps = [];
+    for (let k = 0; k < 200; k++) jumps.push((k * 2671 + 113) % NF);   // scattered, both directions
+    for (const f of jumps) {
+        state.currentFrame = f;
+        await ensureLazyFrameData(f);
+        if (!s.frameGroups.has(f)) missingOnScreen++;
+        maxResident = Math.max(maxResident, s.frameGroups.size);
+    }
+    ok(maxResident <= budget + 31 + 1, `resident stays bounded while scrubbing (${maxResident} <= ${budget + 31 + 1})`);
+    eq(missingOnScreen, 0, 'the frame just navigated to is always resident');
+    eq(snapshot(s, 7), edited, 'the edited frame survived 200 jumps, edit intact');
+    // Stepping forward frame by frame keeps everything within reach resident.
+    state.currentFrame = 2000;
+    for (let f = 2000; f < 2400; f++) { state.currentFrame = f; await ensureLazyFrameData(f); }
+    let gaps = 0;
+    for (let f = 2400 - W; f <= 2400; f++) if (!s.frameGroups.has(f) && nRows('c0', f) !== null) gaps++;
+    eq(gaps, 0, `stepping keeps the last ${W} frames resident (trails, stepping back)`);
+    ok(s.frameGroups.size <= budget + 31 + 1, `...and the window stays bounded (${s.frameGroups.size})`);
+
+    // While playing, a frame missed by the playback loader must not trim with
+    // the paused window (the loader's window runs 600 ahead).
+    const p = makeSession(NF);
+    state.session = p;
+    await batchLoadLazyFrames(1000, 1500);
+    const before = p.frameGroups.size;
+    state.isPlaying = true;
+    state.currentFrame = 1000;
+    await ensureLazyFrameData(3000);
+    state.isPlaying = false;
+    ok(p.frameGroups.size >= before, `no paused trim during playback (${before} -> ${p.frameGroups.size})`);
+    // ...and a sweep in progress holds it off too.
+    const release = LR.holdLazyResidency();
+    state.currentFrame = 3500;
+    await ensureLazyFrameData(3500);
+    ok(p.frameGroups.has(1200), 'held -> no trim on navigation either');
+    release();
+    await ensureLazyFrameData(3600);
+    ok(!p.frameGroups.has(1200), 'released -> the next navigation trims');
 }
 
 // ---------------------------------------------------------------------------

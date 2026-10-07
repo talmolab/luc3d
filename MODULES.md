@@ -2844,8 +2844,10 @@ subtitle is populated for loaded projects, not just freshly triangulated ones.
   predicate refused every frame with an `instanceGroups` entry) is gone.
   `loadAllLazyFrames` and `sweepLazyFrameWindows` (a thin wrapper around
   `_sweepLazyFrameWindowsHeld`) each take `holdLazyResidency()` for their whole
-  run, so no playback trim can evict a frame they hydrated and will read back
-  after an `await`.
+  run, so no trim can evict a frame they hydrated and will read back after an
+  `await`. `ensureLazyFrameData` ends, when it hydrated a new frame and playback
+  is NOT running, with `trimLazyResidency` around that frame — so stepping and
+  scrubbing stay bounded the way playback does.
   `LazyFrameLoader` spawns `loading/slp-import-worker.js` (resolved against
   `document.baseURI` so sub-path deployments work — see ISSUES.md I-8) for HDF5
   reads.
@@ -3030,7 +3032,8 @@ subtitle is populated for loaded projects, not just freshly triangulated ones.
   `setTriangulationSettingsHooks`.
 - `./triangulation-pool.js` — `createGroupSolver` (Triangulate All's parallel solve).
 - `./lazy-residency.js` — `holdLazyResidency` (the bulk loaders' hold),
-  `lazyInstanceTrackIdx` (the hydration paths).
+  `lazyInstanceTrackIdx` (the hydration paths), `trimLazyResidency` +
+  `LAZY_NAV_WINDOW` (`ensureLazyFrameData`'s paused-navigation trim).
 - `../loading/track-union.js` — `unionTrackNames`, `remapTrackIdx`,
   `isIdentityRemap` (`LazyFrameLoader`'s track union).
 - `./initialization.js` — `update3DViewport` (circular).
@@ -3096,9 +3099,19 @@ first new frame 170–340 ms instead of 840–1,550 ms (the 600-frame lookahead)
   `triangulationResults` entries (entries with no group are kept). Returns
   `{evicted, keptOutside, held}`.
 - `trimLazyResidency(session, center, {ahead, behind, keep, slack,
-  triangulationResults})` — the playback trim: scans only once
+  triangulationResults})` — the trim both callers use: scans only once
   `frameGroups.size` exceeds the window + the frames the last scan had to keep +
-  `LAZY_TRIM_SLACK` (120), so a tick is one comparison in the steady state.
+  `LAZY_TRIM_SLACK` (120), so a call is one comparison in the steady state.
+  Called by the playback loader (`ui/ui-wiring.js`, window running ahead of the
+  playhead) and, while NOT playing, by `ensureLazyFrameData`
+  (pose/triangulation.js) — the one place a frame enters during paused
+  navigation (stepping, scrubbing, seeking, jumping to an ID switch), which adds
+  the frame and 30 prefetched ones per call. That trim keeps `LAZY_NAV_WINDOW`
+  (300) frames either side of the frame it hydrated (behind raised to the trail
+  length), plus the on-screen frame. It is skipped while playing, where the
+  loader's window runs 600 ahead and a paused-shaped trim would fight it.
+  Measured in `sequence-lazy-workflow.mjs`: 200 scattered jumps through
+  `navigateToFrame` peak at 717 resident frames, against 5,020 without it.
 - `holdLazyResidency()` -> `release()` / `lazyResidencyHeld()` — eviction is a
   no-op while held. `sweepLazyFrameWindows` and `loadAllLazyFrames` hold for
   their whole run: they hydrate a window, `await`, and read it back, and an
@@ -3118,8 +3131,9 @@ first new frame 170–340 ms instead of 840–1,550 ms (the 600-frame lookahead)
 results map as arguments).
 
 **Imported by.** `pose/triangulation.js` (`holdLazyResidency`,
-`lazyInstanceTrackIdx`), `ui/ui-wiring.js` (`trimLazyResidency`,
-`lazyPlaybackLookahead`, `LAZY_PLAYBACK_BEHIND`).
+`lazyInstanceTrackIdx`, `trimLazyResidency`, `LAZY_NAV_WINDOW`),
+`ui/ui-wiring.js` (`trimLazyResidency`, `lazyPlaybackLookahead`,
+`LAZY_PLAYBACK_BEHIND`).
 
 **Coverage.** `tests/test-lazy-residency.mjs` — against the REAL hydration path
 (`batchLoadLazyFrames` over a real `SioLazyLoader` with a hand-built store): every
@@ -3128,9 +3142,15 @@ identically; eight in-memory edits are each refused, with a negative control
 showing a forced round trip would lose seven of them (the eighth, a member
 promoted to user, survives — refused anyway, the sweep's own user-frame rule);
 holds (a real sweep sees every frame while evictions attempted inside it are
-refused, and releases on throw); derived caches; and a simulated playback whose
-resident count stays within budget while an edit made mid-run survives. Confirmed
-to fail 13 checks with the predicate forced to `true`.
+refused, and releases on throw); derived caches; a simulated playback whose
+resident count stays within budget while an edit made mid-run survives; and
+paused navigation through the real `ensureLazyFrameData` (200 scattered jumps
+and 400 single steps stay bounded, the frame navigated to is always resident,
+nothing trims while playing or held). Confirmed to fail 13 checks with the
+predicate forced to `true`, and 3 with the paused trim removed.
+`tests/e2e/sequence-lazy-workflow.mjs` drives both trims in the real app (a
+3,000-frame playback and 200 `navigateToFrame` jumps), each with an edited frame
+that must survive.
 
 ---
 

@@ -24,7 +24,7 @@ import { isCameraTracked, getTrackingThreshold, getDefaultTriangulationMethod } 
 import { markDirty, setStatus, showLoading, hideLoading } from '../import-export/save-load.js';
 import { showLoadingProgress, createProgressPacer, yieldToPaint } from '../ui/loading-overlay.js';
 import { createGroupSolver } from './triangulation-pool.js';
-import { holdLazyResidency, lazyInstanceTrackIdx } from './lazy-residency.js';
+import { holdLazyResidency, lazyInstanceTrackIdx, trimLazyResidency, LAZY_NAV_WINDOW } from './lazy-residency.js';
 import { unionTrackNames, remapTrackIdx, isIdentityRemap } from '../loading/track-union.js';
 // Pass 3i-3: update3DViewport moved to pose/initialization.js.
 import { update3DViewport } from './initialization.js';
@@ -2068,6 +2068,20 @@ export async function ensureLazyFrameData(frameIdx) {
         if (pfIdx < 0 || pfIdx >= session.lazyLoader.nFrames) break;
         if (session.frameGroups.has(pfIdx)) continue;
         buildLazyFrameGroupSync(pfIdx);
+    }
+
+    // Paused navigation (stepping, scrubbing, seeking, jumping to a switch)
+    // adds this frame and 30 prefetched ones at a time, and nothing gave them
+    // back; bound it the way playback does (pose/lazy-residency.js). Playback
+    // owns its own trim — its window runs ahead of the playhead — so a frame
+    // that misses during playback must not trim here.
+    if (!state.isPlaying) {
+        trimLazyResidency(session, frameIdx, {
+            ahead: LAZY_NAV_WINDOW,
+            behind: Math.max(LAZY_NAV_WINDOW, (state.trailLength | 0) + 1),
+            keep: state.currentFrame,
+            triangulationResults: state.triangulationResults,
+        });
     }
 }
 
