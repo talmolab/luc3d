@@ -88,6 +88,28 @@
  *     SEEKS_FIRST=1          run the SEEKS test before the scenarios instead of
  *                            after (a fresh page rather than one that has
  *                            played every scenario)
+ *     SCENARIOS=none         no playback scenarios (e.g. with EXPORT_FRAMES)
+ *     EXPORT_FRAMES=0        after the scenarios, run File ▸ Export Video
+ *                            Overlays (the real modal, default layout: every
+ *                            view + 3D, stitched) over this many frames and
+ *                            sample memory while it encodes: JS heap, resident
+ *                            frame groups, groups carrying cached reprojections,
+ *                            long tasks, and frames/s per quarter. Output goes
+ *                            to a byte-counting stand-in for the save picker,
+ *                            so the file itself never sits in memory.
+ *     EXPORT_START=20000     first frame of the export (0-based)
+ *     HEAPPROBE=1            after prep (and before any scenario), census the
+ *                            live object graph — the session's structures
+ *                            (members, their buffers, maps, sets,
+ *                            frameIdentityMap keys) — and the time of a forced
+ *                            full GC (`gc()`; launches with --expose-gc).
+ *                            (Not `Runtime.queryObjects`: on Object.prototype
+ *                            it materializes every object in the heap, which
+ *                            crashed the renderer on the real project.)
+ *     GC_REPS=3              forced full GCs per measurement (median and min reported)
+ *     STRIP=1                with HEAPPROBE: then DESTROY the graph one
+ *                            structure at a time, timing a full GC after each,
+ *                            to attribute GC cost per structure. Ends the run.
  * Every scenario also samples the JS heap (performance.memory, 1 Hz) and the
  * number of RESIDENT frame groups (lazy projects hydrate as they play).
  *     WARMUP=2               seconds of playback discarded before measuring
@@ -125,7 +147,12 @@ const repoRoot = path.resolve(__dirname, '..', '..');
 const DATASET = process.env.DATASET ||
     '/Users/soline/Documents/luc3d/LabMeetingPrep/Oline/20260605_133431-HardFight_1kModels';
 const LABEL = process.env.LABEL || 'baseline';
-const SCENARIOS = (process.env.SCENARIOS || 'full,noReproj,noOverlay,overlayOnly,noInfo,no3d,lean,rvfc').split(',').map(s => s.trim()).filter(Boolean);
+const SCENARIOS = process.env.SCENARIOS === 'none' ? [] :
+    (process.env.SCENARIOS || 'full,noReproj,noOverlay,overlayOnly,noInfo,no3d,lean,rvfc').split(',').map(s => s.trim()).filter(Boolean);
+const EXPORT_FRAMES = Number(process.env.EXPORT_FRAMES || 0);
+const EXPORT_START = Number(process.env.EXPORT_START || 20000);
+const HEAPPROBE = process.env.HEAPPROBE === '1';
+const STRIP = process.env.STRIP === '1';
 const START = Number(process.env.START || 3000);
 // `name@frame` — a per-scenario start frame.
 const startOf = (name) => { const m = /@(\d+)$/.exec(name); return m ? Number(m[1]) : START; };
@@ -162,8 +189,6 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
 if (!fs.existsSync(DATASET)) { console.error('DATASET not found: ' + DATASET); process.exit(2); }
 
-const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
-await sleep(1200);
 
 // ---------------------------------------------------------------------------
 // stats helpers (node side)
@@ -188,6 +213,11 @@ const summary = {
 
 // a visible browser window: one such run at a time across sessions (scripts/browser-lock.mjs)
 const releaseBrowserLock = await acquireBrowserLock({ label: '_bench-playback' });
+// The static server starts only once the lock is held: two queued runs on the
+// default PORT used to collide — the waiting run's server failed to bind while
+// the running one held the port, and found it gone when its turn came.
+const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
+await sleep(1200);
 try {
     browser = await chromium.launch({
         // real Chrome (HEVC + hardware decode); EXECUTABLE=<path> drives another
@@ -195,7 +225,8 @@ try {
         ...(process.env.EXECUTABLE ? { executablePath: process.env.EXECUTABLE } : { channel: 'chrome' }),
         headless: false,
         args: ['--window-size=1800,1120', '--window-position=0,0',
-               '--enable-precise-memory-info'],
+               '--enable-precise-memory-info',
+               ...(HEAPPROBE ? ['--js-flags=--expose-gc'] : [])],
     });
     const context = await browser.newContext({ viewport: null });
     const page = await context.newPage();
@@ -663,9 +694,11 @@ try {
             R.q0 = B.quality(); R.t0 = performance.now(); R.measuring = true;
         };
         B.memNow = () => {
-            const m = performance.memory || {}, s = window.__lucid.state.session;
+            const m = performance.memory || {}, st = window.__lucid.state, s = st.session;
             return { used: m.usedJSHeapSize, total: m.totalJSHeapSize, limit: m.jsHeapSizeLimit,
-                     resident: s && s.frameGroups ? s.frameGroups.size : null };
+                     resident: s && s.frameGroups ? s.frameGroups.size : null,
+                     // frames holding cached per-frame reprojection results
+                     reprojFrames: st.triangulationResults ? st.triangulationResults.size : null };
         };
         B.endMeasure = () => {
             const R = B.rec;
@@ -696,6 +729,121 @@ try {
             return R;
         };
     }, { RVFC_ALL, VFPROBE });
+
+    // ---------------------------------------------------------------------
+    // HEAPPROBE: what is the live graph made of, and what does a full GC cost?
+    // ---------------------------------------------------------------------
+    if (HEAPPROBE) {
+        log(`\n[${el()}] === heap probe ===`);
+        const cdp = await page.context().newCDPSession(page);
+        const GC_REPS = Number(process.env.GC_REPS || 3);
+        const timedGc = () => page.evaluate((reps) => {
+            const t = []; for (let i = 0; i < reps; i++) { const a = performance.now(); gc(); t.push(performance.now() - a); }
+            const m = performance.memory || {};
+            return { gcMs: t.map(x => Math.round(x)), usedMB: Math.round((m.usedJSHeapSize || 0) / 1048576) };
+        }, GC_REPS);
+        const heapUsage = async () => { const h = await cdp.send('Runtime.getHeapUsage'); return { v8UsedMB: Math.round(h.usedSize / 1048576), v8TotalMB: Math.round(h.totalSize / 1048576), embedderMB: h.embedderHeapUsedSize != null ? Math.round(h.embedderHeapUsedSize / 1048576) : null, backingStoreMB: h.backingStorageSize != null ? Math.round(h.backingStorageSize / 1048576) : null }; };
+        await timedGc();
+        const census = await page.evaluate(async () => {
+            const pd = await import('/pose/pose-data.js');
+            // A member on the shared all-NaN placeholder buffer (`_lazy2d`) owns no buffer.
+            const isPlaceholder = (xy) => typeof pd.isLazyPlaceholderXY === 'function' && pd.isLazyPlaceholderXY(xy);
+            const s = window.__lucid.state.session;
+            const C = { nodes: s.skeleton ? s.skeleton.nodes.length : null, cams: s.cameras.length,
+                groupFrames: s.instanceGroups.size, groups: 0, members: 0, membersLazy2d: 0,
+                xyBytes: {}, xyOnHeap: 0, xyViews: 0, xyOwnBuffer: 0, xySharedPlaceholder: 0, occTypes: {}, originalXY: 0, nulledSets: 0,
+                memberOwnKeys: {}, reprojMaps: 0, reprojEntries: 0, reprojObjs: 0, usedCameras: 0, usedCamerasPrevSame: 0,
+                points3d: 0, points3dBytes: {}, p3dOwnBuffer: 0, groupOwnKeys: {},
+                fimSize: s.frameIdentityMap.size, fimHeapNumberKeys: 0, fimStringKeys: 0, resident: s.frameGroups.size };
+            let prevUc = null;
+            for (const [, gs] of s.instanceGroups) {
+                for (const g of gs) {
+                    C.groups++;
+                    const gk = Object.keys(g).length; C.groupOwnKeys[gk] = (C.groupOwnKeys[gk] || 0) + 1;
+                    if (g.reprojectedInstances) { C.reprojMaps++; C.reprojEntries += g.reprojectedInstances.size; }
+                    if (g.reprojections) C.reprojObjs++;
+                    if (g.usedCameras) { C.usedCameras++; if (g.usedCameras === prevUc) C.usedCamerasPrevSame++; prevUc = g.usedCameras; }
+                    if (g.points3d) { C.points3d++; const b = g.points3d.byteLength; C.points3dBytes[b] = (C.points3dBytes[b] || 0) + 1; if (g.points3d.buffer.byteLength === b) C.p3dOwnBuffer++; }
+                    for (const [, m] of g.instances) {
+                        C.members++;
+                        if (m._lazy2d) C.membersLazy2d++;
+                        const xy = m._xy;
+                        if (xy) {
+                            C.xyBytes[xy.byteLength] = (C.xyBytes[xy.byteLength] || 0) + 1;
+                            if (xy.byteLength <= 64) C.xyOnHeap++;
+                            if (isPlaceholder(xy)) C.xySharedPlaceholder++;
+                            else if (xy.byteOffset !== 0 || xy.buffer.byteLength !== xy.byteLength) C.xyViews++;
+                            else C.xyOwnBuffer++;
+                        }
+                        const ot = typeof m._occ; C.occTypes[ot] = (C.occTypes[ot] || 0) + 1;
+                        if (m._originalXY) C.originalXY++;
+                        if (m.nulledNodes) C.nulledSets++;
+                        const mk = Object.keys(m).length; C.memberOwnKeys[mk] = (C.memberOwnKeys[mk] || 0) + 1;
+                    }
+                }
+            }
+            // A plain Map stores a non-Smi number key — every packed key past
+            // frame 127 — as a heap Number; `fimStorage` names the map's class
+            // so the count is only reported where that is how keys are kept.
+            C.fimStorage = s.frameIdentityMap.constructor && s.frameIdentityMap.constructor.name;
+            const plainMap = Object.getPrototypeOf(s.frameIdentityMap) === Map.prototype;
+            for (const k of s.frameIdentityMap.keys()) {
+                if (typeof k === 'string') C.fimStringKeys++;
+                else if (plainMap && !(k <= 1073741823 && k >= -1073741824 && (k | 0) === k)) C.fimHeapNumberKeys++;
+            }
+            return C;
+        });
+        log(`  census: ${JSON.stringify(census)}`);
+        const base = await timedGc();
+        const hu = await heapUsage();
+        { const so = base.gcMs.slice().sort((a, b) => a - b);
+          log(`  forced full GC (x${so.length}): ${JSON.stringify(base.gcMs)} ms — median ${so[so.length >> 1]}, min ${so[0]} | usedJSHeapSize ${base.usedMB} MB | ${JSON.stringify(hu)}`); }
+        summary.heapProbe = { census, gc: base, heapUsage: hu };
+        if (STRIP) {
+            const steps = [
+                ['frameIdentityMap', () => { window.__lucid.state.session.frameIdentityMap.clear(); }],
+                ['member _xy -> one shared buffer', () => {
+                    const s = window.__lucid.state.session; const shared = new Float64Array(64);
+                    for (const [, gs] of s.instanceGroups) for (const g of gs) for (const [, m] of g.instances) { m._xy = shared.subarray(0, m._xy ? m._xy.length : 0); m._originalXY = null; }
+                }],
+                ['member _xy views -> one shared view', () => {
+                    const s = window.__lucid.state.session; const shared = new Float64Array(64);
+                    for (const [, gs] of s.instanceGroups) for (const g of gs) for (const [, m] of g.instances) m._xy = shared;
+                }],
+                ['members (instances Maps emptied)', () => {
+                    const s = window.__lucid.state.session;
+                    for (const [, gs] of s.instanceGroups) for (const g of gs) g.instances = null;
+                }],
+                ['reprojectedInstances Maps', () => {
+                    const s = window.__lucid.state.session;
+                    for (const [, gs] of s.instanceGroups) for (const g of gs) g.reprojectedInstances = null;
+                }],
+                ['usedCameras Sets', () => {
+                    const s = window.__lucid.state.session;
+                    for (const [, gs] of s.instanceGroups) for (const g of gs) g.usedCameras = null;
+                }],
+                ['points3d', () => {
+                    const s = window.__lucid.state.session;
+                    for (const [, gs] of s.instanceGroups) for (const g of gs) g.points3d = null;
+                }],
+                ['instanceGroups', () => { window.__lucid.state.session.instanceGroups.clear(); }],
+                ['frameGroups', () => { window.__lucid.state.session.frameGroups.clear(); }],
+            ];
+            summary.heapProbe.strip = [];
+            let prev = base;
+            for (const [label, fn] of steps) {
+                await page.evaluate(`(${fn.toString()})()`);
+                const r = await timedGc();
+                const med = (a) => a.slice().sort((x, y) => x - y)[1];
+                log(`  strip ${label.padEnd(36)} -> full GC ${JSON.stringify(r.gcMs)} ms (median ${med(r.gcMs)}, was ${med(prev.gcMs)}) | used ${r.usedMB} MB (was ${prev.usedMB})`);
+                summary.heapProbe.strip.push({ label, gcMs: r.gcMs, usedMB: r.usedMB });
+                prev = r;
+            }
+            fs.writeFileSync(path.join(OUT_DIR, 'summary.json'), JSON.stringify(summary, null, 2));
+            throw new Error('STRIP=1 destroyed the session (by design) — run over');
+        }
+        fs.writeFileSync(path.join(OUT_DIR, 'summary.json'), JSON.stringify(summary, null, 2));
+    }
 
     // Baseline display cadence while idle (no playback).
     const idle = await page.evaluate(() => window.__bench.idleRaf(3000));
@@ -813,6 +961,10 @@ try {
                     'disabled-by-default-devtools.timeline.frame', 'disabled-by-default-devtools.timeline.stack',
                     'v8.execute', 'blink.user_timing', 'toplevel', 'benchmark', 'cc', 'gpu', 'viz', 'media',
                     'disabled-by-default-v8.cpu_profiler', 'latencyInfo', 'loading', 'rail',
+                    // GC: MajorGC/MinorGC (+ heap before/after) and V8's per-phase
+                    // GC events, so `gc` in the trace summary can say how much of
+                    // the main thread garbage collection takes.
+                    'v8', 'disabled-by-default-v8.gc',
                 ],
             });
         }
@@ -1041,7 +1193,8 @@ try {
                 return { usedStartMB: MB(used[0]), usedEndMB: MB(used[used.length - 1]),
                          usedMaxMB: MB(Math.max(...used)), usedMinMB: MB(Math.min(...used)),
                          totalMaxMB: MB(Math.max(...m.map(x => x.total))), limitMB: MB(m[0].limit),
-                         residentStart: m[0].resident, residentEnd: m[m.length - 1].resident };
+                         residentStart: m[0].resident, residentEnd: m[m.length - 1].resident,
+                         reprojFramesStart: m[0].reprojFrames, reprojFramesEnd: m[m.length - 1].reprojFrames };
             })(),
             media: {   // per view: <video> 'waiting' (ran out of data) / 'stalled' events
                 waiting: R.waiting, stalled: R.stalled, warmupWaiting: R.warmWaiting,
@@ -1117,7 +1270,7 @@ try {
         log(`  advance    : ${a.appDraws.framesAdvanced}/${a.appDraws.expectedFrames} frames (speed ${a.appDraws.effectiveSpeed}x), unique frames shown ${a.appDraws.uniqueFramesShownPerSec}/s`);
         log(`  cost/draw  : overlay median ${a.cost.overlayMs.median} p95 ${a.cost.overlayMs.p95} max ${a.cost.overlayMs.max} ms | video copies median ${a.cost.videoCopyMs.median} p95 ${a.cost.videoCopyMs.p95} ms | lazy re-tri draws ${a.cost.drawsWithLazyRetriangulation}`);
         log(`  aux split  : ${a.cost.auxDraws} aux draws — overlay(aux) median ${a.cost.overlayMsAux.median} p95 ${a.cost.overlayMsAux.p95} max ${a.cost.overlayMsAux.max} [timeline ${a.cost.timelineMsAux.median}] | overlay(plain) median ${a.cost.overlayMsPlain.median} p95 ${a.cost.overlayMsPlain.p95} max ${a.cost.overlayMsPlain.max} | seekbar+3D p95 ${a.cost.seekbarMs.p95} max ${a.cost.seekbarMs.max} | whole callback median ${a.cost.totalCallbackMs.median} p95 ${a.cost.totalCallbackMs.p95}`);
-        if (a.memory) log(`  JS heap    : used ${a.memory.usedStartMB} -> ${a.memory.usedEndMB} MB (min ${a.memory.usedMinMB}, max ${a.memory.usedMaxMB}; allocated max ${a.memory.totalMaxMB} of limit ${a.memory.limitMB} MB) | resident frame groups ${a.memory.residentStart} -> ${a.memory.residentEnd}`);
+        if (a.memory) log(`  JS heap    : used ${a.memory.usedStartMB} -> ${a.memory.usedEndMB} MB (min ${a.memory.usedMinMB}, max ${a.memory.usedMaxMB}; allocated max ${a.memory.totalMaxMB} of limit ${a.memory.limitMB} MB) | resident frame groups ${a.memory.residentStart} -> ${a.memory.residentEnd} | frames with cached reprojection results ${a.memory.reprojFramesStart} -> ${a.memory.reprojFramesEnd}`);
         if (a.startup) log(`  startup    : seek to start ${a.seekToStartMs != null ? Math.round(a.seekToStartMs) + ' ms' : '?'} | play -> first new frame ${a.startup.firstAdvanceMs} ms | warm-up advanced ${a.startup.warmupFrames}/${a.startup.warmupExpected} frames`);
         log(`  <video> wait: measured ${a.media.waitingTotal} 'waiting' (${a.media.waiting.join(' ')}), ${a.media.stalled.reduce((x, y) => x + y, 0)} 'stalled' | warm-up ${a.media.warmupWaitingTotal} 'waiting'`);
         log(`  dropped    : total ${a.droppedTotal} — ` + a.videoQuality.map(q => `${q.name.replace(/^Camera/, 'C')}:${q.dropped}/${q.presented}`).join(' '));
@@ -1247,6 +1400,115 @@ try {
     if (SEEKS > 0 && !SEEKS_FIRST) await runSeeks();
 
     // ---------------------------------------------------------------------
+    // EXPORT_FRAMES: the overlay-video export over a long range, with memory
+    // sampled while it runs. The export hydrates frames one at a time through
+    // `ensureLazyFrameData` (playback stopped) and derives reprojections for
+    // every exported frame (`ensureReprojections`), so this is where an
+    // unbounded resident window shows up outside playback.
+    // ---------------------------------------------------------------------
+    if (EXPORT_FRAMES > 0) {
+        log(`\n[${el()}] === overlay export: frames ${EXPORT_START}..${EXPORT_START + EXPORT_FRAMES - 1} (${EXPORT_FRAMES}) ===`);
+        await page.evaluate(async ({ S, N }) => {
+            const st = window.__lucid.state;
+            if (st.isPlaying) window.__lucid.videoController.stopPlayback();
+            // A destination that counts bytes and keeps none: the export streams
+            // (it is far past `shouldStreamToDisk`), and no native picker opens.
+            const X = window.__benchExport = { bytes: 0, closed: 0, longTasks: 0, longMs: 0 };
+            const sink = () => ({
+                kind: 'file', name: 'bench-null.mp4',
+                async createWritable() {
+                    return new WritableStream({
+                        write(chunk) {
+                            const d = (chunk && chunk.type === 'write') ? chunk.data : (chunk && chunk.type ? null : chunk);
+                            if (d) X.bytes += (d.byteLength != null ? d.byteLength : (d.size || 0));
+                        },
+                        close() { X.closed++; }, abort() { X.closed++; },
+                    });
+                },
+            });
+            window.showSaveFilePicker = async () => sink();
+            window.showDirectoryPicker = async () => ({ async getFileHandle() { return sink(); } });
+            try {
+                X.obs = new PerformanceObserver((l) => { for (const e of l.getEntries()) { X.longTasks++; X.longMs += e.duration; } });
+                X.obs.observe({ type: 'longtask', buffered: false });
+            } catch (e) { /* no longtask support */ }
+            const m = await import('/ui/overlay-export-modal.js');
+            m.showOverlayExportModal();
+            for (let i = 0; i < 100 && !document.getElementById('ovStartField'); i++) await new Promise(r => setTimeout(r, 100));
+            const sf = document.getElementById('ovStartField'), ef = document.getElementById('ovEndField');
+            ef.value = String(S + N); ef.dispatchEvent(new Event('change', { bubbles: true }));
+            sf.value = String(S + 1); sf.dispatchEvent(new Event('change', { bubbles: true }));
+            ef.value = String(S + N); ef.dispatchEvent(new Event('change', { bubbles: true }));
+            return { start: sf.value, end: ef.value };
+        }, { S: EXPORT_START, N: EXPORT_FRAMES });
+        const sample = () => page.evaluate(({ S, N }) => {
+            const st = window.__lucid.state, s = st.session, mem = performance.memory || {};
+            let cachedGroups = 0;
+            for (let f = S; f < S + N; f++) {
+                const gs = s.instanceGroups.get(f); if (!gs) continue;
+                for (const g of gs) if (g.reprojections || (g.reprojectedInstances && g.reprojectedInstances.size)) cachedGroups++;
+            }
+            const lab = document.getElementById('ovProgressLabel');
+            const mt = lab && /Encoding (\d+)/.exec(lab.textContent || '');
+            const X = window.__benchExport;
+            return {
+                t: performance.now(), done: mt ? Number(mt[1]) : null, label: lab ? lab.textContent : null,
+                open: !!document.getElementById('ovExportOverlay'),
+                status: (document.getElementById('statusMessage') || document.getElementById('statusText') || {}).textContent || null,
+                usedMB: Math.round((mem.usedJSHeapSize || 0) / 1048576), totalMB: Math.round((mem.totalJSHeapSize || 0) / 1048576),
+                resident: s.frameGroups.size, cachedGroups, triResults: st.triangulationResults.size,
+                bytes: X.bytes, longTasks: X.longTasks, longMs: Math.round(X.longMs),
+            };
+        }, { S: EXPORT_START, N: EXPORT_FRAMES });
+        const before = await sample();
+        await page.click('#ovExport');
+        const series = [before];
+        const t0 = Date.now();
+        let last = before;
+        for (;;) {
+            await sleep(2000);
+            const smp = await sample();
+            series.push(smp);
+            if (series.length % 15 === 0 || !smp.open) {
+                log(`  [${el()}] encoded ${smp.done}/${EXPORT_FRAMES} | heap used ${smp.usedMB} MB (alloc ${smp.totalMB}) | resident ${smp.resident} | groups w/ cached reproj in range ${smp.cachedGroups} | long tasks ${smp.longTasks} (${smp.longMs} ms)`);
+            }
+            last = smp;
+            if (!smp.open) break;
+            if (Date.now() - t0 > 4 * 3600 * 1000) { log('  !! export timed out'); break; }
+        }
+        // frames/s per quarter of the range, from the samples' (time, encoded) pairs
+        const pts = series.filter(x => x.done != null);
+        const quarters = [];
+        for (let q = 0; q < 4; q++) {
+            const lo = EXPORT_FRAMES * q / 4, hi = EXPORT_FRAMES * (q + 1) / 4;
+            const inQ = pts.filter(x => x.done >= lo && x.done <= hi);
+            if (inQ.length >= 2) {
+                const a = inQ[0], b = inQ[inQ.length - 1];
+                quarters.push(+((b.done - a.done) / ((b.t - a.t) / 1000)).toFixed(1));
+            } else quarters.push(null);
+        }
+        const maxOf = (k) => Math.max(...series.map(x => x[k] || 0));
+        summary.export = {
+            start: EXPORT_START, frames: EXPORT_FRAMES, wallS: Math.round((Date.now() - t0) / 1000),
+            status: last.status, mbWritten: +(last.bytes / 1048576).toFixed(1),
+            fpsByQuarter: quarters, heapUsedMB: { before: before.usedMB, max: maxOf('usedMB'), end: last.usedMB },
+            heapAllocMaxMB: maxOf('totalMB'),
+            resident: { before: before.resident, max: maxOf('resident'), end: last.resident },
+            cachedGroupsInRange: { max: maxOf('cachedGroups'), end: last.cachedGroups },
+            longTasks: last.longTasks, longTaskMs: last.longMs,
+            series: series.map(x => ({ s: +((x.t - before.t) / 1000).toFixed(1), done: x.done, usedMB: x.usedMB, resident: x.resident, cachedGroups: x.cachedGroups })),
+        };
+        const E = summary.export;
+        log(`  export     : ${E.status || '(no status)'} | ${E.wallS} s, ${E.mbWritten} MB written`);
+        log(`  frames/s   : by quarter ${JSON.stringify(E.fpsByQuarter)}`);
+        log(`  JS heap    : used ${E.heapUsedMB.before} -> max ${E.heapUsedMB.max} -> end ${E.heapUsedMB.end} MB (allocated max ${E.heapAllocMaxMB})`);
+        log(`  resident   : frame groups ${E.resident.before} -> max ${E.resident.max} -> end ${E.resident.end}`);
+        log(`  reproj     : groups in the range carrying cached reprojections: max ${E.cachedGroupsInRange.max}, end ${E.cachedGroupsInRange.end}`);
+        log(`  long tasks : ${E.longTasks} (${E.longTaskMs} ms)`);
+        fs.writeFileSync(path.join(OUT_DIR, 'summary.json'), JSON.stringify(summary, null, 2));
+    }
+
+    // ---------------------------------------------------------------------
     // Traced pass (separate, so tracing overhead never pollutes the metrics).
     // ---------------------------------------------------------------------
     if (TRACE_SECS > 0) {
@@ -1256,7 +1518,10 @@ try {
         printScenario('full-traced', a);
         summary.trace = { path: tracePath, ...analyzeTrace(tracePath) };
         log(`\n[${el()}] trace: ${tracePath} (${(fs.statSync(tracePath).size / 1e6).toFixed(1)} MB)`);
-        log(JSON.stringify(summary.trace, null, 1).slice(0, 6000));
+        log(JSON.stringify({ ...summary.trace, gc: undefined, cpuProfileSelfTop: undefined }, null, 1).slice(0, 6000));
+        log(`  GC (main thread, inclusive): ${JSON.stringify(summary.trace.gc.main)}`);
+        log(`  MajorGCs: ${JSON.stringify(summary.trace.gc.majorGCs)}`);
+        log(`  CPU profile self time: ${JSON.stringify(summary.trace.cpuProfileSelfTop.slice(0, 20))}`);
     }
 } catch (err) {
     console.error(`[${el()}] FATAL`, String(err && err.stack || err).slice(0, 1200));
@@ -1365,5 +1630,65 @@ function analyzeTrace(p) {
         pipelineReporterStates: states,
         pipelineReporterNonPresentedReasons: reasons,
         frameEventCounts: named,
+        gc: gcSummary(ev, mainKey, threadName),
+        cpuProfileSelfTop: cpuProfileSelf(ev, mainKey),
     };
+}
+
+// Garbage collection on the renderer main thread (and, separately, on V8's
+// background threads, where concurrent marking runs). Every GC-named event is
+// listed by name with its INCLUSIVE time — MajorGC contains V8.GC_* phases, so
+// the rows overlap; read `MajorGC` + `MinorGC` for the total pause.
+function gcSummary(ev, mainKey, threadName) {
+    const isGc = (n) => /GC|Scavenge|MarkCompact|Mark-Compact|Sweep|Compactor/.test(n);
+    const main = new Map(), bg = new Map();
+    const majors = [];
+    const open = new Map();   // B/E pairs
+    const add = (m, name, us) => { const o = m.get(name) || { n: 0, ms: 0 }; o.n++; o.ms += us / 1000; m.set(name, o); };
+    for (const e of ev) {
+        if (!e.name || !isGc(e.name)) continue;
+        const k = `${e.pid}:${e.tid}`;
+        let dur = null;
+        if (e.ph === 'X' && typeof e.dur === 'number') dur = e.dur;
+        else if (e.ph === 'B') { open.set(k + e.name, e.ts); continue; }
+        else if (e.ph === 'E') { const t = open.get(k + e.name); if (t == null) continue; open.delete(k + e.name); dur = e.ts - t; }
+        if (dur == null) continue;
+        if (k === mainKey) {
+            add(main, e.name, dur);
+            if (e.name === 'MajorGC' && e.args) majors.push({ ms: +(dur / 1000).toFixed(1), beforeMB: Math.round((e.args.usedHeapSizeBefore || 0) / 1048576), afterMB: Math.round((e.args.usedHeapSizeAfter || 0) / 1048576), type: e.args.type || null });
+        } else add(bg, (threadName.get(k) || '?') + ' ' + e.name, dur);
+    }
+    const top = (m) => [...m.entries()].sort((a, b) => b[1].ms - a[1].ms).slice(0, 18).map(([name, o]) => ({ name, n: o.n, ms: +o.ms.toFixed(1) }));
+    return { main: top(main), background: top(bg), majorGCs: majors.slice(0, 40) };
+}
+
+// Self time per JS function from the sampling CPU profiler's ProfileChunks
+// (the main thread's profile = the one with the most samples). Includes V8's
+// synthetic nodes — `(garbage collector)` is GC time as the profiler saw it.
+function cpuProfileSelf(ev) {
+    const profiles = new Map();   // id -> { nodes: Map, self: Map, samples }
+    for (const e of ev) {
+        if (e.name !== 'ProfileChunk' || !e.args || !e.args.data) continue;
+        const id = `${e.pid}:${e.id}`;
+        let p = profiles.get(id); if (!p) profiles.set(id, p = { nodes: new Map(), self: new Map(), samples: 0 });
+        const cp = e.args.data.cpuProfile || {};
+        for (const n of (cp.nodes || [])) p.nodes.set(n.id, n);
+        const samples = cp.samples || [], deltas = e.args.data.timeDeltas || [];
+        for (let i = 0; i < samples.length; i++) {
+            const d = deltas[i] || 0;
+            p.self.set(samples[i], (p.self.get(samples[i]) || 0) + d);
+            p.samples++;
+        }
+    }
+    let best = null; for (const p of profiles.values()) if (!best || p.samples > best.samples) best = p;
+    if (!best) return [];
+    const byFn = new Map();
+    for (const [nid, us] of best.self) {
+        const n = best.nodes.get(nid); const cf = (n && n.callFrame) || {};
+        const k = `${cf.functionName || '(anon)'} ${(cf.url || '').replace(/^.*\/\/[^/]+/, '').replace(/\?.*$/, '')}:${cf.lineNumber ?? ''}`;
+        byFn.set(k, (byFn.get(k) || 0) + us);
+    }
+    let total = 0; for (const v of byFn.values()) total += v;
+    return [...byFn.entries()].sort((a, b) => b[1] - a[1]).slice(0, 30)
+        .map(([fn, us]) => ({ fn: fn.slice(0, 140), selfMs: +(us / 1000).toFixed(1), pct: +(100 * us / Math.max(1, total)).toFixed(1) }));
 }
