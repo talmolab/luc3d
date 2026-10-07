@@ -8281,6 +8281,18 @@ multi-video docking layout.
   session's ID-switch results and markers (try/catch, like `populateTimelineVisibility`).
 - `./app-state.js` — `state`, controllers + setters.
 - `../pose/pose-data.js` — `FrameGroup`, `UnlinkedInstance`, `Camera`.
+- `../pose/lazy-residency.js` — `hydrateFrameMembers2d`, `releaseFrameMembers2d`.
+  `moveVideosToSession` re-solves every origin-session group that loses the
+  moved view, and on a lazy project a member of a non-resident frame is a
+  `_lazy2d` placeholder (after a reopen, and since #280 after Track All /
+  Triangulate All). Triangulating placeholders found no 3D, so each such group
+  silently KEPT its old points3d — solved WITH the moved view — and was marked
+  clean. Each affected frame's members are now hydrated from the store for the
+  re-solve and given back after, as the image ID-switch check does. Covered by
+  `tests/e2e/move-video-lazy-members.mjs` (fails 0/10 non-resident groups
+  re-solved without the hydration). Unchanged and still resident-only: step 1
+  moves the moved camera's 2D for RESIDENT frames only — its rows for every other
+  frame stay in the origin session's lazy store.
 - `../pose/triangulation.js` — `triangulateAndReproject`,
   `storeReprojectedInstances`, `getInstanceGroupsForFrame`,
   `sessionHasCalibration`, `resolveTriangulationMethod`. Moving a view between
