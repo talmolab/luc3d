@@ -975,6 +975,40 @@ try {
     } else {
         check('playback step ran', false, play.r);
     }
+    // Paused navigation is bounded too: `ensureLazyFrameData`, where a frame
+    // enters while paused, trims around the frame it hydrated. 200 scattered
+    // jumps through the app's own navigation entry point, each hydrating the
+    // frame plus 30 prefetched — about 6,000 frames without the trim.
+    const scrub = await runOp('SCRUB 200 scattered jumps (paused)', async () => {
+        const st = window.__lucid.state, s = st.session;
+        const [init, LR] = await Promise.all([import('/pose/initialization.js'), import('/pose/lazy-residency.js')]);
+        const wait = (ms) => new Promise(r => setTimeout(r, ms));
+        const n = s.lazyLoader.nFrames;
+        const unlinked5 = () => { const fg = s.frameGroups.get(5); return fg ? [...fg.unlinkedInstances.values()].reduce((a, l) => a + l.length, 0) : null; };
+        const before5 = unlinked5();
+        let maxResident = 0, notShown = 0;
+        for (let k = 0; k < 200; k++) {
+            const f = (k * 2671 + 113) % n;
+            init.navigateToFrame(f);
+            await wait(5);
+            if (!s.frameGroups.has(f)) notShown++;
+            maxResident = Math.max(maxResident, s.frameGroups.size);
+        }
+        return { maxResident, resident: s.frameGroups.size, win: LR.LAZY_NAV_WINDOW, slack: LR.LAZY_TRIM_SLACK,
+                 notShown, edited5: s.frameGroups.has(5), before5, after5: unlinked5() };
+    });
+    if (scrub.r && !scrub.r.err) {
+        const c = scrub.r;
+        // Both sides of the frame, its 30-frame prefetch, slack, and the frames
+        // kept for edits (frame 0's member edit, frame 5's deletion).
+        const bound = 2 * c.win + 1 + c.slack + 31 + 2;
+        check(`scrubbing kept the resident window bounded (max ${c.maxResident} <= ${bound})`, c.maxResident <= bound, c);
+        check('every frame navigated to was resident when drawn', c.notShown === 0, c);
+        check('the edited frame survived the scrubbing, its deletion intact',
+            c.edited5 && c.after5 === c.before5, c);
+    } else {
+        check('scrub step ran', false, scrub.r);
+    }
     // Playback evicted thousands of frames: the project must still save and
     // reopen whole (one group fewer — the ungroup above).
     const save7 = await save('c7');

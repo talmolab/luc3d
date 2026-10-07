@@ -21,7 +21,10 @@
  * So the playback loop now trims the window as it goes
  * (`trimLazyResidency`, called from `ui/ui-wiring.js`'s lazy playback loader),
  * and a sync loader's lookahead is 600 frames instead of 5,000
- * (`lazyPlaybackLookahead`). Same project, back to back: 59.5 / 59.7 / 10.7 /
+ * (`lazyPlaybackLookahead`). Paused navigation — stepping, scrubbing, seeking —
+ * is bounded the same way, by `ensureLazyFrameData` (pose/triangulation.js),
+ * the one place a frame enters while paused: it trims `LAZY_NAV_WINDOW` frames
+ * either side of the frame it just hydrated, except while playing. Same project, back to back: 59.5 / 59.7 / 10.7 /
  * 16.9 draws/s before, 59.4 / 59.4 / 58.5 / 58.0 after, with ~900 resident
  * frames instead of 19k and GC at 17% of the main thread instead of 77%.
  *
@@ -68,6 +71,12 @@
 
 /** Frames kept behind the playhead while playing (5 s at 60 fps). */
 export var LAZY_PLAYBACK_BEHIND = 300;
+/**
+ * Frames kept on EACH side of the frame being viewed while paused
+ * (`ensureLazyFrameData`'s trim, pose/triangulation.js) — covers its 30-frame
+ * prefetch in either direction with room to step back and forth.
+ */
+export var LAZY_NAV_WINDOW = 300;
 /** Lookahead while playing, for a loader that materializes synchronously. */
 export var LAZY_PLAYBACK_AHEAD_SYNC = 600;
 /** Lookahead for a worker-backed loader — unchanged, it is not trimmed. */
