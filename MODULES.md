@@ -2339,7 +2339,10 @@ tracker exactly):
 fix (`ui/settings.js`); `scripts/bench/hooks.mjs`'s `THRESHOLD_DEFAULTS` was
 updated to match (its own comment requires staying in sync).
 
-**Match gate (2026-10-03, `matchGate` hp, default 1; 0 = off).** The reference
+**Match gate (2026-10-03, `matchGate` hp; default OFF since 2026-10-07, #285; 1 = on).**
+Off by default because on Eric's proofread benchmarks it helped SLAP-2M but gave
+about 6x the ID switches on Mouse-Dyad-10M and about 10x on s-DANNCE (#285); 0 is
+the pre-gate tracker exactly, so the default is the tracker from before #248. The reference
 Hungarian is forced: whenever a view has at least as many detections as
 targets, every target takes one, however negative its adjacency. One spare
 target (left by an earlier false birth — common when the animal count is
