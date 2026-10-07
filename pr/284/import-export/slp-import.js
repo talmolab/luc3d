@@ -7,56 +7,56 @@
 import {
     Skeleton, Camera, Instance, UnlinkedInstance, FrameGroup, Identity,
     InstanceGroup, Session,
-    asPoints3d, points3dNodeCount, someValidPoint3d, lazyPlaceholderXY,
-} from '../pose/pose-data.js?v=a307734c73fb';
+    asPoints3d, points3dNodeCount, someValidPoint3d, lazyPlaceholderXY, pooledPoints3d,
+} from '../pose/pose-data.js?v=f1d241615fc7';
 import {
     reprojectPointsCamera, reprojectPoints, computeReprojectionErrors,
     storeReprojectedInstances, getInstanceGroupsForFrame,
-} from '../pose/triangulation.js?v=a307734c73fb';
+} from '../pose/triangulation.js?v=f1d241615fc7';
 import {
     parseSlpH5, parseSlpViaSleapIO, instanceMatchesPoints, parsePoints3dH5, pickFiles,
-} from './file-io.js?v=a307734c73fb';
+} from './file-io.js?v=f1d241615fc7';
 import {
     validateSkeletonCompatibility, mergeTracksIntoSession,
     mergeSlpFramesIntoSession, rebuildInstanceGroupsForFrames,
-} from './slp-merge.js?v=a307734c73fb';
-import { OnDemandVideoDecoder, EmbeddedVideoDecoder } from '../loading/video.js?v=a307734c73fb';
+} from './slp-merge.js?v=f1d241615fc7';
+import { OnDemandVideoDecoder, EmbeddedVideoDecoder } from '../loading/video.js?v=f1d241615fc7';
 import {
     state,
     videoController, interactionManager, viewport3d, timeline, paneManager,
     setVideoController,
-} from '../ui/app-state.js?v=a307734c73fb';
+} from '../ui/app-state.js?v=f1d241615fc7';
 import {
     autoAssignVideosToCameras, forceVideoSelection, forceVideoSelectionWithFolder,
     showParentDirMatchSummary, createViewForVideoFile, updateTotalFrames,
     updateGridLayout, createVideoPromptCell, fitCanvasesToCells,
     rebuildVideoController, resolveImportTrackIdx, isCalibrationVideoFile,
-} from '../loading/session-loader.js?v=a307734c73fb';
-import { preferNonCalibrationVideos } from '../loading/video-file-pick.js?v=a307734c73fb';
-import { remapGlobalTrackToSession, nulledNodesFromOcclusion } from './import-track-resolve.js?v=a307734c73fb';
+} from '../loading/session-loader.js?v=f1d241615fc7';
+import { preferNonCalibrationVideos } from '../loading/video-file-pick.js?v=f1d241615fc7';
+import { remapGlobalTrackToSession, nulledNodesFromOcclusion } from './import-track-resolve.js?v=f1d241615fc7';
 import {
     showLoading, hideLoading, setStatus, clearDirty, ensureNo3dImportBlockingLoad,
-} from './save-load.js?v=a307734c73fb';
+} from './save-load.js?v=f1d241615fc7';
 
 // Circular import — these are still defined in app.js for now. They are only
 // invoked inside function bodies, never at module-init time, so live-binding
 // lookup keeps them functional.
-import { drawAllOverlays, setReprojErrorVisible } from '../ui/rendering.js?v=a307734c73fb';
-import { updateInfoPanel, promptImportSkeletonForAllSessions } from '../ui/info-panel.js?v=a307734c73fb';
-import { noteSessionCalibrationDivergence } from '../ui/calibration-notice.js?v=a307734c73fb';
+import { drawAllOverlays, setReprojErrorVisible } from '../ui/rendering.js?v=f1d241615fc7';
+import { updateInfoPanel, promptImportSkeletonForAllSessions } from '../ui/info-panel.js?v=f1d241615fc7';
+import { noteSessionCalibrationDivergence } from '../ui/calibration-notice.js?v=f1d241615fc7';
 // Pass 3i-3: setup3DViewport moved to pose/initialization.js.
-import { setup3DViewport } from '../pose/initialization.js?v=a307734c73fb';
+import { setup3DViewport } from '../pose/initialization.js?v=f1d241615fc7';
 // Pass 3e-1: fitTimelineToData moved to ui-wiring.js.
-import { fitTimelineToData, updateSeekbar } from '../ui/ui-wiring.js?v=a307734c73fb';
+import { fitTimelineToData, updateSeekbar } from '../ui/ui-wiring.js?v=f1d241615fc7';
 // Block 1 (Prompt 4): keep timeline._uploadedCameras in sync after SLP
 // load so the gutter filters to the cameras that actually have video
 // assignments rather than every calibration camera.
-import { recomputeUploadedCameras } from '../loading/session-loader.js?v=a307734c73fb';
+import { recomputeUploadedCameras } from '../loading/session-loader.js?v=f1d241615fc7';
 // Pass 3h: populateViewStrip / populateSessionStrip moved to sessions-panes.js.
-import { populateViewStrip, populateSessionStrip } from '../ui/sessions-panes.js?v=a307734c73fb';
-import { getLoadingProgressModal } from '../ui/loading-progress-modal.js?v=a307734c73fb';
-import { readVisibilityMetadata } from './visibility-metadata.js?v=a307734c73fb';
-import { readPlaneMetadata, resetPlaneState } from './plane-metadata.js?v=a307734c73fb';
+import { populateViewStrip, populateSessionStrip } from '../ui/sessions-panes.js?v=f1d241615fc7';
+import { getLoadingProgressModal } from '../ui/loading-progress-modal.js?v=f1d241615fc7';
+import { readVisibilityMetadata } from './visibility-metadata.js?v=f1d241615fc7';
+import { readPlaneMetadata, resetPlaneState } from './plane-metadata.js?v=f1d241615fc7';
 
 /**
  * SLP import parse dispatcher (PR 5.1). Routes real `.slp` files through
@@ -236,7 +236,7 @@ export async function reconstructInstanceGroupsFromDicts(session, fgDicts, camKe
             // Restore 3D points
             var _igPts = asPoints3d(igDict.points);
             if (points3dNodeCount(_igPts) > 0) {
-                group.points3d = _igPts;
+                group.points3d = pooledPoints3d(_igPts);
                 restoredWith3d++;
                 // Which solver produced this 3D (persisted in metadata.lucid;
                 // absent = DLT). Without it a reopened project has BA 3D with an
@@ -432,7 +432,7 @@ export async function reconstructInstanceGroupsFromSession(session, typedSession
             var i3d = typedIG.instance3d;
             var _i3dPts = asPoints3d(i3d && i3d.points);
             if (points3dNodeCount(_i3dPts) > 0) {
-                group.points3d = _i3dPts;
+                group.points3d = pooledPoints3d(_i3dPts);
                 restoredWith3d++;
                 // Which solver produced this 3D (persisted in metadata.lucid;
                 // absent = DLT). Without it a reopened project has BA 3D with an
@@ -578,7 +578,13 @@ export async function reconstructInstanceGroupsFromSessionLazy(session, typedSes
             var i3d = typedIG.instance3d;
             var _i3dPts = asPoints3d(i3d && i3d.points);
             if (points3dNodeCount(_i3dPts) > 0) {
-                group.points3d = _i3dPts; // REUSE — asPoints3d passes a flat array through uncopied
+                // Copied into the slab pool (pose-data.js `pooledPoints3d`): the
+                // reader hands one compacted Float64Array per group (#189), i.e.
+                // one ArrayBuffer per group — 539,545 on an 8-camera, 108,000-frame
+                // project, each swept by every full GC. The copy is ~360 B per
+                // group of backing store (outside V8's pointer cage), and the
+                // reader's array is released with its typed group.
+                group.points3d = pooledPoints3d(_i3dPts);
                 restoredWith3d++;
                 // Which solver produced this 3D (persisted in metadata.lucid;
                 // absent = DLT). Without it a reopened project has BA 3D with an
@@ -1223,7 +1229,7 @@ export async function handleLoadSlpFile(slpFile) {
             // --- Embedded videos: use frame-worker for on-demand extraction ---
             showLoading('Loading embedded video frames...');
 
-            var frameWorker = new Worker(new URL('../loading/frame-worker.js?v=a307734c73fb', import.meta.url), { type: 'module' });
+            var frameWorker = new Worker(new URL('../loading/frame-worker.js?v=f1d241615fc7', import.meta.url), { type: 'module' });
             var embeddedVideoInfos = await new Promise(function (resolve, reject) {
                 frameWorker.onmessage = function (e) {
                     var msg = e.data;
@@ -1834,7 +1840,7 @@ export async function handleAddSlp() {
         if (hasEmbedded) {
             showLoading('Loading embedded video frames...');
 
-            var frameWorker = new Worker(new URL('../loading/frame-worker.js?v=a307734c73fb', import.meta.url), { type: 'module' });
+            var frameWorker = new Worker(new URL('../loading/frame-worker.js?v=f1d241615fc7', import.meta.url), { type: 'module' });
             var embeddedVideoInfos = await new Promise(function (resolve, reject) {
                 frameWorker.onmessage = function (e) {
                     var msg = e.data;
@@ -2142,12 +2148,12 @@ export async function handleLoadPoints3dH5() {
                 }
                 if (existingGroup) {
                     // Assign 3D points to existing group
-                    existingGroup.points3d = asPoints3d(pts3d);
+                    existingGroup.points3d = pooledPoints3d(pts3d);
                     existingGroup.markClean();
                 } else {
                     // Create a new InstanceGroup with just 3D data
                     var newGroup = new InstanceGroup(Date.now() + frameIdx * 100 + trackIdx, trackIdx); // identityId = trackIdx
-                    newGroup.points3d = asPoints3d(pts3d);
+                    newGroup.points3d = pooledPoints3d(pts3d);
                     newGroup.markClean();
                     frameGroupsList.push(newGroup);
                 }

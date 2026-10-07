@@ -8,8 +8,8 @@
 //
 // Extracted from app.js per the consolidated Pass 3 plan, Module 13.
 
-import { state, viewport3d, timeline, getActiveSession } from './app-state.js?v=a307734c73fb';
-import { InstanceGroup, UnlinkedInstance } from '../pose/pose-data.js?v=a307734c73fb';
+import { state, viewport3d, timeline, getActiveSession } from './app-state.js?v=f1d241615fc7';
+import { InstanceGroup, UnlinkedInstance, pooledPoints3d } from '../pose/pose-data.js?v=f1d241615fc7';
 import {
     triangulateAndReproject,
     frameHasGroupedUserInstances,
@@ -23,33 +23,33 @@ import {
     findEquivalentPriorGroup,
     adoptPrior3d,
     triangulationMethodLabel,
-} from '../pose/triangulation.js?v=a307734c73fb';
-import { Viewport3D } from './viewport3d.js?v=a307734c73fb';
-import { getTrackColor, getGroupColor } from './overlays.js?v=a307734c73fb';
-import { drawAllOverlays, setReprojErrorVisible, showReprojectionsOnly, REPROJ_ONLY_NOTE } from './rendering.js?v=a307734c73fb';
-import { updateInfoPanel } from './info-panel.js?v=a307734c73fb';
-import { showLoading, hideLoading, setStatus } from '../import-export/save-load.js?v=a307734c73fb';
-import { showLoadingProgress, yieldToPaint } from './loading-overlay.js?v=a307734c73fb';
-import { createGroupSolver } from '../pose/triangulation-pool.js?v=a307734c73fb';
+} from '../pose/triangulation.js?v=f1d241615fc7';
+import { Viewport3D } from './viewport3d.js?v=f1d241615fc7';
+import { getTrackColor, getGroupColor } from './overlays.js?v=f1d241615fc7';
+import { drawAllOverlays, setReprojErrorVisible, showReprojectionsOnly, REPROJ_ONLY_NOTE } from './rendering.js?v=f1d241615fc7';
+import { updateInfoPanel } from './info-panel.js?v=f1d241615fc7';
+import { showLoading, hideLoading, setStatus } from '../import-export/save-load.js?v=f1d241615fc7';
+import { showLoadingProgress, yieldToPaint } from './loading-overlay.js?v=f1d241615fc7';
+import { createGroupSolver } from '../pose/triangulation-pool.js?v=f1d241615fc7';
 import {
     exportSlpClientSide,
     exportSlpMultiSession,
     findSkeletonMismatch,
     buildPoints3dH5,
     buildReprojH5,
-} from '../import-export/file-io.js?v=a307734c73fb';
+} from '../import-export/file-io.js?v=f1d241615fc7';
 
 // Pass 3i-3: update3DViewport moved to pose/initialization.js.
-import { update3DViewport } from '../pose/initialization.js?v=a307734c73fb';
-import { createMp4Writer, videoEncodingAvailable } from './video-encode.js?v=a307734c73fb';
-import { fileSystemAccessHint } from './browser-hints.js?v=a307734c73fb';
+import { update3DViewport } from '../pose/initialization.js?v=f1d241615fc7';
+import { createMp4Writer, videoEncodingAvailable } from './video-encode.js?v=f1d241615fc7';
+import { fileSystemAccessHint } from './browser-hints.js?v=f1d241615fc7';
 // The two video-export modals share ONE set of quality tiers, one bitrate
 // formula, one H.264 level table and one streaming threshold. They used to keep
 // private copies of all four and had silently drifted apart (a 2x bitrate floor
 // gap at the smallest tier, and two disagreeing level tables).
 import {
     RES_PRESETS, bitrateFor, estimatedBytes, h264CodecFor, shouldStreamToDisk,
-} from './overlay-export-layout.js?v=a307734c73fb';
+} from './overlay-export-layout.js?v=f1d241615fc7';
 
 // ============================================
 // Group by Track & Triangulate All
@@ -346,7 +346,7 @@ export async function groupByIdentityAndTriangulateAll(explicitMethod) {
     var gSolver = createGroupSolver(cameras,
         { method: prefMethod, triangulateOnly: true, expectedGroups: totalFrames });
     function applyIdentitySolve(group, triResult) {
-        group.points3d = triResult.points3d;
+        group.points3d = pooledPoints3d(triResult.points3d);   // slab-pooled (pose-data.js)
         group.triangulationMethod = triResult.method;
         if (triResult.method === 'ba') solvedBa++; else solvedDlt++;
     }
@@ -741,7 +741,7 @@ async function groupByTrackAndTriangulateAll(selectedTrackIndices, selectedCamer
             if (result.method === 'ba') solvedBaT++; else solvedDltT++;
 
             group.reprojections = result.reprojections;
-            group.points3d = result.points3d;
+            group.points3d = pooledPoints3d(result.points3d);   // slab-pooled (pose-data.js)
             // NOT storeReprojectedInstances here — "Group by Track" sweeps the
             // WHOLE project; eagerly building a full Instance (+ its own
             // `occluded` array) per camera per group here was a major memory

@@ -28,21 +28,22 @@ import {
     state,
     videoController, interactionManager, viewport3d, timeline, paneManager,
     setVideoController, setPaneManager,
-} from './app-state.js?v=a307734c73fb';
-import { FrameGroup, UnlinkedInstance, Camera, someValidPoint3d } from '../pose/pose-data.js?v=a307734c73fb';
+} from './app-state.js?v=f1d241615fc7';
+import { FrameGroup, UnlinkedInstance, Camera, someValidPoint3d, pooledPoints3d } from '../pose/pose-data.js?v=f1d241615fc7';
+import { hydrateFrameMembers2d, releaseFrameMembers2d } from '../pose/lazy-residency.js?v=f1d241615fc7';
 import {
     triangulateAndReproject, storeReprojectedInstances, getInstanceGroupsForFrame,
     sessionHasCalibration, resolveTriangulationMethod,
-} from '../pose/triangulation.js?v=a307734c73fb';
+} from '../pose/triangulation.js?v=f1d241615fc7';
 import {
     cellResizeObserver,
     createViewForVideoFile,
     rebuildVideoController,
     fitCanvasesToCells,
     updateTotalFrames,
-} from '../loading/session-loader.js?v=a307734c73fb';
-import { OnDemandVideoDecoder } from '../loading/video.js?v=a307734c73fb';
-import { setStatus, showLoading, hideLoading, quickSave, markDirty } from '../import-export/save-load.js?v=a307734c73fb';
+} from '../loading/session-loader.js?v=f1d241615fc7';
+import { OnDemandVideoDecoder } from '../loading/video.js?v=f1d241615fc7';
+import { setStatus, showLoading, hideLoading, quickSave, markDirty } from '../import-export/save-load.js?v=f1d241615fc7';
 import {
     CONTRAST_MIN, CONTRAST_MAX, clampContrast,
     BRIGHTNESS_MIN, BRIGHTNESS_MAX, clampBrightness,
@@ -50,26 +51,26 @@ import {
     buildVideoFilter, getSessionContrast, setSessionContrast,
     getSessionBrightness, setSessionBrightness,
     getSessionRotation, setSessionRotation,
-} from './video-filters.js?v=a307734c73fb';
+} from './video-filters.js?v=f1d241615fc7';
 // `clampRotation` moved to the dependency-free `video-filters.js` so the test
 // runners can bridge it; re-exported here because `ui/ui-wiring.js` (and the
 // module map) have always imported it from this module.
 export { clampRotation };
-import { drawAllOverlays, setReprojErrorVisible } from './rendering.js?v=a307734c73fb';
+import { drawAllOverlays, setReprojErrorVisible } from './rendering.js?v=f1d241615fc7';
 // `ui/ui-wiring.js` imports this module, so this is a cycle — hoist-safe
 // because the only read is inside the view strip's click handler, which cannot
 // run during module evaluation.
-import { setSoloView } from './ui-wiring.js?v=a307734c73fb';
-import { updateInfoPanel, populateTimelineVisibility } from './info-panel.js?v=a307734c73fb';
-import { refreshIdSwitchPanel } from './id-switch-modal.js?v=a307734c73fb';
+import { setSoloView } from './ui-wiring.js?v=f1d241615fc7';
+import { updateInfoPanel, populateTimelineVisibility } from './info-panel.js?v=f1d241615fc7';
+import { refreshIdSwitchPanel } from './id-switch-modal.js?v=f1d241615fc7';
 // `autoAssignState` is a mutable binding tracked via ESM live binding.
 // The cycle (identity-assignment imports panelRenderers from here) is
 // hoist-safe because both reads are inside function bodies.
-import { autoAssignState } from './identity-assignment.js?v=a307734c73fb';
+import { autoAssignState } from './identity-assignment.js?v=f1d241615fc7';
 
 // Pass 3i-3: setup3DViewport moved to pose/initialization.js.
-import { setup3DViewport } from '../pose/initialization.js?v=a307734c73fb';
-import { getLoadingProgressModal } from './loading-progress-modal.js?v=a307734c73fb';
+import { setup3DViewport } from '../pose/initialization.js?v=f1d241615fc7';
+import { getLoadingProgressModal } from './loading-progress-modal.js?v=f1d241615fc7';
 
 // ============================================
 // Dockview Pane Manager
@@ -1451,6 +1452,22 @@ function moveVideosToSession(viewNames, fromIdx, toIdx) {
 
         // 2. Remove view from InstanceGroups and re-triangulate
         for (var [frameIdx2, groups] of fromSession.instanceGroups) {
+            // The re-solve below reads the REMAINING members' 2D. On a lazy
+            // project a member of a frame that is not resident is a `_lazy2d`
+            // placeholder whose 2D is all-NaN — after a reopen, and since #280
+            // after Track All / Triangulate All too (`releaseFrameMembers2d`).
+            // Triangulating placeholders finds no 3D, so the group silently KEPT
+            // its old points3d — solved WITH the view that just moved — and was
+            // still marked clean. Hydrate this frame's members from the store for
+            // the re-solve (only when one of its groups loses the view), and give
+            // the 2D back after, exactly as the image ID-switch check does.
+            var hydrated2d = false;
+            for (var hgi = 0; hgi < groups.length; hgi++) {
+                if (groups[hgi].instances.has(viewName) || groups[hgi].reprojectedInstances.has(viewName)) {
+                    hydrated2d = hydrateFrameMembers2d(fromSession, frameIdx2) > 0;
+                    break;
+                }
+            }
             for (var gi = 0; gi < groups.length; gi++) {
                 var group = groups[gi];
                 if (group.instances.has(viewName) || group.reprojectedInstances.has(viewName)) {
@@ -1473,7 +1490,7 @@ function moveVideosToSession(viewNames, fromIdx, toIdx) {
                                 { method: resolveTriangulationMethod(group) });
                             var valid = someValidPoint3d(result.points3d);
                             if (valid) {
-                                group.points3d = result.points3d;
+                                group.points3d = pooledPoints3d(result.points3d);
                                 group.triangulationMethod = result.method;
                                 group.reprojections = result.reprojections;
                                 storeReprojectedInstances(group, result, fromSession.cameras);
@@ -1488,6 +1505,7 @@ function moveVideosToSession(viewNames, fromIdx, toIdx) {
                     }
                 }
             }
+            if (hydrated2d) releaseFrameMembers2d(fromSession, frameIdx2);
         }
 
         // 3. Move video file reference (only search within origin session's indices)

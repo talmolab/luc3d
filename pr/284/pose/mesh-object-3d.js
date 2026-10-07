@@ -125,7 +125,7 @@ export class MeshObject3D {
      * counts, draws or exports faces goes through here, so a deleted plane
      * cannot reach the geometry builder.
      *
-     * @param {import('./plane-data.js?v=a307734c73fb').PlaneModel} model
+     * @param {import('./plane-data.js?v=f1d241615fc7').PlaneModel} model
      * @returns {number[]}
      */
     resolvePlaneIds(model) {
@@ -139,8 +139,8 @@ export class MeshObject3D {
 
     /**
      * The member planes that still exist, in membership order.
-     * @param {import('./plane-data.js?v=a307734c73fb').PlaneModel} model
-     * @returns {import('./plane-data.js?v=a307734c73fb').PlaneSkeleton[]}
+     * @param {import('./plane-data.js?v=f1d241615fc7').PlaneModel} model
+     * @returns {import('./plane-data.js?v=f1d241615fc7').PlaneSkeleton[]}
      */
     resolvePlanes(model) {
         if (!model) return [];
@@ -154,7 +154,7 @@ export class MeshObject3D {
 
     /**
      * How many members still exist. NOT `planeIds.length` — see the module note.
-     * @param {import('./plane-data.js?v=a307734c73fb').PlaneModel} model
+     * @param {import('./plane-data.js?v=f1d241615fc7').PlaneModel} model
      * @returns {number}
      */
     planeCount(model) {
@@ -168,7 +168,7 @@ export class MeshObject3D {
      * was part of an object. Surfaced in the panel rather than silently swept,
      * because "my cage lost a wall" should have a visible cause.
      *
-     * @param {import('./plane-data.js?v=a307734c73fb').PlaneModel} model
+     * @param {import('./plane-data.js?v=f1d241615fc7').PlaneModel} model
      * @returns {number}
      */
     danglingCount(model) {
