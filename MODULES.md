@@ -39,7 +39,14 @@ the old `app.js` entry point.
   labeled pose without first nudging a node) → nearest predicted instance →
   default BFS spread layout at the cursor.
 - `setupInteraction()` — instantiates `InteractionManager` with all callback
-  wiring (selection, drag, double-click, edit-group, etc.).
+  wiring (selection, drag, double-click, edit-group, etc.). Its
+  `onInstanceDeleted` — the tail of the Delete key, Edit ▸ Delete Instance and
+  the toolbar's "- Instance" — calls `markDirty()`. It used not to, so a plain
+  Delete left the project clean: no prompt on closing the tab, and none on a
+  session switch, which evicts the session's lazy store and the delete with it.
+  Pinned by `tests/e2e/sequence-lazy-workflow.mjs` cycle 5c ("every delete marked
+  the project (and its session) dirty"), which failed for every path but the
+  context menu before.
 - `setup3DViewport()` — instantiates `Viewport3D` and wires the
   "Show Camera View"/"Show Initial View" buttons. **Respects the `\` toggle**
   (`isViewport3DVisible()`, `ui/panel-visibility.js`): it no longer clears the
@@ -3589,7 +3596,31 @@ into `tests/test-runner.html` for isolated unit testing — same contract as
 **Exports.** `collectDeletionTargets(session, filters, ctx)` (pure — returns
 `{targets, count, byCamera, groupsDissolved, groupsUngrouped, instancesPromoted,
 groupsLosing3d}`), `previewCascade(targets)`, `executeDeletion(session, targets)`,
-`pruneOrphanIdentities(session, frameIndices)`.
+`pruneOrphanIdentities(session, frameIndices)`, and the durable half shared with
+the interactive deletes: `deleteTargetsFromStore(session, targets)` (→ `{durable,
+errorRows, firstError, touchedFrames}`) plus the two target builders it is fed by
+`ui/interaction.js` and `ui/ui-wiring.js`, `unlinkedTarget(frameIdx, ul)` and
+`groupMemberTargets(frameIdx, group, camNames?)`.
+
+**Every delete of a store-backed instance goes through `deleteTargetsFromStore`,
+not only this dialog.** The Delete key / Edit ▸ Delete Instance / the toolbar's
+"- Instance" (`InteractionManager._deleteSelected`) and the group context menu's
+"Delete group" used to edit the RESIDENT frame alone, and on a lazy project that
+is undone twice over: a windowed sweep (Track All, Triangulate All) or playback
+eviction releases the predicted-only frame and re-hydrates the row, and the
+streaming save writes the store rows of any camera-frame with no user instance
+(`buildSessionRefGraph`'s overlay covers only camera-frames with one). So a
+deleted prediction came straight back — confirmed on the real app by
+`tests/e2e/sequence-lazy-workflow.mjs` cycle 5c, which drives all five shapes
+(ungrouped, one view, Shift+Delete, the context menu, down-to-one-survivor) and
+failed on every one before. The helper must run BEFORE the caller's memory edit:
+it recognises the victims by their `_rawInstIndex` while they are still in the
+group/frame, and renumbers the survivors around them. A target with no `rawIdx`
+(an instance added this session) has no row and never reaches the store; an
+eager session has no store and the call is a no-op apart from that renumbering.
+It passes `deleteInstanceRows` an `only` map, so one keypress walks one
+camera-frame instead of offering all ~2.7M rows of a real project to the
+predicate.
 
 **Vocabulary.** SLEAP's *video* scope is LUCID's **session** — every camera in a
 session shares one frame index space, so a camera is a VIEW FILTER, not a frame
@@ -3658,7 +3689,8 @@ irreversible side effects.
 §5.2): (1) `lazyLoader.deleteInstanceRows` — the persistence, and it must run BEFORE
 `_rawInstIndex` is touched since the row identity *is* `_rawInstIndex`;
 (2) renumber `_rawInstIndex` on survivors, else `refFor` writes grouping refs at the
-wrong instances and `finalizeLazyFrameGroup` hydrates the wrong 2D;
+wrong instances and `finalizeLazyFrameGroup` hydrates the wrong 2D — (1) and (2)
+are `deleteTargetsFromStore`;
 (3) `instanceGroups` cascade; (4) `frameGroups` cascade under the same `seen` Set
 (hydrated frames share instance objects between the maps — the #195 lesson);
 (5) prune `frameIdentityMap`. Never assigns `group.observedPoints` (read-only getter
@@ -3677,8 +3709,12 @@ PR #153 implementation silently matched nothing, making its prune dead code.
 
 **Imports from project modules.** None (deliberately).
 
-**Tests.** `tests/test-custom-delete-ops.js` (19 cases), plus
-`tests/test-custom-delete-store.js` for the store primitive it drives.
+**Tests.** `tests/test-custom-delete-ops.js` (31 cases — its "interactive
+deletes reach the store" suite drives `InteractionManager._deleteSelected` against
+a recording stub store, and was confirmed to fail against the pre-fix
+`ui/interaction.js`), plus `tests/test-custom-delete-store.js` for the store
+primitive it drives, and `tests/e2e/sequence-lazy-workflow.mjs` cycle 5c for the
+real app (sweep + save + reopen).
 
 ---
 
@@ -4656,8 +4692,31 @@ deadzone (`_onDragMove`, ~3 CSS px) multiply by it so they stay constant on scre
 — previously the deadzone was a fixed 3 video px, which forced a large on-screen
 drag at high zoom and blocked fine node adjustments.
 
+**A delete is a STORE delete first (`_deleteSelected`).** The Delete key, Edit ▸
+Delete Instance and the toolbar's "- Instance" all land in `_deleteSelected`,
+which now calls `deleteTargetsFromStore` (`ui/custom-delete-ops.js`) with the
+selected ungrouped instance (`unlinkedTarget`) or the deleted group members
+(`groupMemberTargets` — the one view, or every view for Shift+Delete) BEFORE it
+edits the frame. On a lazy project the columnar store is the source of truth, and
+the resident-only edit it used to make did not survive: a windowed sweep or
+playback eviction releases a predicted-only frame and re-hydrates the row, and the
+streaming save writes the store rows of any camera-frame with no user instance —
+so the deleted prediction came back, before or after a save. The store call goes
+first because it identifies the victims by `_rawInstIndex` while they are still in
+the group/frame and renumbers the survivors around them. The camera of an
+ungrouped delete is the instance's own (`ul.cameraName`), not
+`lastInteractedView`. The in-memory semantics (auto-ungroup to a lone survivor,
+mixed→user promotion, partial deletes keeping their 3D) are unchanged; an eager
+session has no store, so it deletes exactly as before. Covered by
+`tests/test-custom-delete-ops.js` ("interactive deletes reach the store") and
+`tests/e2e/sequence-lazy-workflow.mjs` cycle 5c.
+
 **Imports from project modules.**
 - `../pose/pose-data.js` — `Instance`.
+- `../pose/triangulation.js` — `getOrComputeReprojectedInstance`.
+- `./keyboard-target.js` — `shouldIgnoreShortcut`.
+- `./custom-delete-ops.js` — `deleteTargetsFromStore`, `groupMemberTargets`,
+  `unlinkedTarget` (import-free itself, so this adds no cycle).
 
 **Imported by.** `pose/initialization.js`, `ui/info-panel.js`.
 
@@ -9844,7 +9903,14 @@ stopping at the last frame; the step transport buttons/keys stop it first.
   `loadSingleSessionFromCache`, `menuLoadMultiSessionFolder`).
 - Group ops: `unlinkGroup`, `performGroupButtonAction` (shared by the toolbar
   Group button and the `Shift+G` shortcut — context-sensitive group/ungroup),
-  `showGroupContextMenu`, `hideGroupContextMenu`.
+  `showGroupContextMenu`, `hideGroupContextMenu`. The context menu's **Delete
+  group** (`#ctxDeleteGroup`) removes the members' store rows first —
+  `deleteTargetsFromStore(session, groupMemberTargets(frame, group))` from
+  `ui/custom-delete-ops.js`, exactly as the Delete key does — then
+  `removeInstanceGroup`. Removing the group from memory alone is undone on a lazy
+  project by the next re-hydration or save (see `ui/interaction.js`'s
+  `_deleteSelected` note); covered by `tests/e2e/sequence-lazy-workflow.mjs`
+  cycle 5c (`D_CTX`).
 - Instance copy/paste (`copySelectedInstance` / `pasteInstance`, wired via
   `setHandler` to catalog ids `copyInstance` (Mod+C) / `pasteInstance` (Mod+V)).
   Copy snapshots the selected UserInstance in the focused view (a grouped
@@ -11544,9 +11610,11 @@ correctness for speed — same result either way). Verified on a real
 for real ordered data, confirms the fallback sort still engages and
 produces the IDENTICAL correct segments for a deliberately shuffled rowMap).
 
-**`deleteInstanceRows(shouldDeleteFn)` — the durable-delete primitive (Custom
-Instance Delete).** Permanently removes instance rows from the columnar store so a
-bulk delete survives eviction, re-hydration, save and reload. Companion to
+**`deleteInstanceRows(shouldDeleteFn, opts)` — the durable-delete primitive
+(Custom Instance Delete, and since the interactive-delete fix every Delete key /
+"Delete group" too, via `deleteTargetsFromStore` in `ui/custom-delete-ops.js`).**
+Permanently removes instance rows from the columnar store so a delete survives
+eviction, re-hydration, save and reload. Companion to
 `remapTracksFromIdentity`; same diagnostics contract
 (`{deleted, errorRows, firstError, byCamera}`, per-row `try/catch`, `console.error`
 on `errorRows`). Exists because a resident-only delete fails **twice**: (1) without
@@ -11557,8 +11625,24 @@ columns verbatim with no per-instance filter, and the user-correction overlay sk
 any camera-frame with no resident *user* instance and bails on
 `lucidInsts.length === 0`, so an emptied camera-frame streams back unchanged.
 Mutating the store is the only thing that fixes both.
+- **One keypress must not cost a bulk pass.** Measured on a real-size shared store
+  (180,210 frames x 5 cameras, 2.7M rows, 10 f64 columns) a single-row delete was
+  130-200 ms and ~216 MB of fresh column buffers; it is now ~25-30 ms with no new
+  buffer. Three changes, each pinned by `tests/test-custom-delete-store.js`'s
+  "one keypress, not one bulk pass" suite against the old whole-store answers:
+  `opts.only` (camName → frame indices, a Map's keys or a Set) offers the predicate
+  just those camera-frames' rows; compaction runs **in place from the first deleted
+  row** — one `copyWithin` per surviving run when at most `DELETE_RUN_COPY_MAX`
+  (4096) rows go (~5 ms vs ~70 ms element by element), the plain loop beyond that,
+  where runs are short and many — and a typed column is re-exposed as a shorter
+  `subarray` view, or `slice`d to a right-sized copy when more than half the rows
+  went so a bulk delete still gives its memory back; and `trackOccupancy` is rebuilt
+  only for a camera that LOST a row. In place is safe because every reader indexes
+  `store.instancesData.<col>` element-wise and fresh (`appendStore`, the store's own
+  `materializeFrame`, `forEachInstanceRow`); an array under two column names is
+  compacted once.
 - Compacts every `instancesData` column of length `nInst` (iterates `Object.keys`,
-  so a schema addition is carried through; `col.constructor` preserves typed-vs-plain
+  so a schema addition is carried through; the view/`slice` keeps typed-vs-plain
   and int-vs-float). **Leaves `pointsData`/`predPointsData` alone on purpose** —
   `appendStore` walks points PER SURVIVING INSTANCE via `point_id_start/end`, so
   orphaned point rows are never visited and never written.
@@ -11576,17 +11660,19 @@ Mutating the store is the only thing that fixes both.
   `remapTracksFromIdentity`'s `rebuiltLabels` guard (which only covers a one-time
   tracks rebuild) this guard has to cover the whole mutation, because compaction is
   global to a store.
-- Then rebuilds each affected camera's `trackOccupancy` and clears both cache layers
+- Then rebuilds the `trackOccupancy` of each camera that lost a row and clears both cache layers
   (`this.cache` + `labels._lazyFrameList.clearCache()`), same as
   `remapTracksFromIdentity`.
 - **Caller contract:** store-only. The caller must also renumber `_rawInstIndex` on
   surviving instances in each touched (camera, frame) — else `refFor` writes grouping
   refs at the wrong instances and hydration loads the wrong 2D — and mirror the
   removal into `frameGroups`/`instanceGroups` under one shared `seen` Set.
-- Unit tests: `tests/test-custom-delete-store.js` (11 cases — compaction, column-length
+- Unit tests: `tests/test-custom-delete-store.js` (19 cases — compaction, column-length
   coherence, typed-array kind, order-independence, emptied-frame collapse,
   `from_predicted` remap + degrade-to-`-1`, shared-store apply-once, per-row error
-  isolation, no-op).
+  isolation, no-op; plus `opts.only`, both compaction strategies against an
+  independent filter, in-place view vs right-sized shrink, aliased columns, and the
+  per-camera occupancy rebuild).
 
 Memory-bounding primitives (phase-5 full pipeline): `open()` sets each camera's
 `labels.frameCacheLimit` (default 512) so sleap-io.js's lazy `Labels` FIFO-bounds
