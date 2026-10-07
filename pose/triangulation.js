@@ -24,7 +24,8 @@ import { isCameraTracked, getTrackingThreshold, getDefaultTriangulationMethod } 
 import { markDirty, setStatus, showLoading, hideLoading } from '../import-export/save-load.js';
 import { showLoadingProgress, createProgressPacer, yieldToPaint } from '../ui/loading-overlay.js';
 import { createGroupSolver } from './triangulation-pool.js';
-import { holdLazyResidency, lazyInstanceTrackIdx, trimLazyResidency, LAZY_NAV_WINDOW } from './lazy-residency.js';
+import { holdLazyResidency, lazyInstanceTrackIdx, trimLazyResidency, LAZY_NAV_WINDOW,
+         releaseFrameMembers2D } from './lazy-residency.js';
 import { unionTrackNames, remapTrackIdx, isIdentityRemap } from '../loading/track-union.js';
 // Pass 3i-3: update3DViewport moved to pose/initialization.js.
 import { update3DViewport } from './initialization.js';
@@ -3021,11 +3022,27 @@ export async function sweepLazyFrameWindows(session, onFrame, opts) {
     // trim evicting part of it in between would make the sweep skip those
     // frames silently (the #194/#195 class). Hold residency for the whole run.
     var release = holdLazyResidency();
+    var processed;
     try {
-        return await _sweepLazyFrameWindowsHeld(session, onFrame, opts);
+        processed = await _sweepLazyFrameWindowsHeld(session, onFrame, opts);
     } finally {
         release();
     }
+    // Releasing a window drops its FrameGroups, but every group member it
+    // hydrated kept its 2D — after Track All, 4,152,565 Float64Arrays with an
+    // ArrayBuffer each on the 8-camera, 108,000-frame project, about half the
+    // cost of every later full GC. Give back what is plain store data now that
+    // nothing in the sweep can still read it (the tracker carries detections
+    // across window boundaries, so not per window), leaving the project in the
+    // state a lazy reopen leaves it in (pose/lazy-residency.js).
+    var loader = session && session.lazyLoader;
+    if (loader && loader.isSync) {
+        var o = opts || {};
+        var from = o.start != null ? Math.max(0, o.start) : 0;
+        var to = o.end != null ? Math.min(loader.nFrames - 1, o.end) : loader.nFrames - 1;
+        for (var rf = from; rf <= to; rf++) releaseFrameMembers2D(session, rf);
+    }
+    return processed;
 }
 
 async function _sweepLazyFrameWindowsHeld(session, onFrame, opts) {

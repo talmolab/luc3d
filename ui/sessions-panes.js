@@ -30,6 +30,7 @@ import {
     setVideoController, setPaneManager,
 } from './app-state.js';
 import { FrameGroup, UnlinkedInstance, Camera, someValidPoint3d } from '../pose/pose-data.js';
+import { hydrateGroupMembers2D, releaseFrameMembers2D } from '../pose/lazy-residency.js';
 import {
     triangulateAndReproject, storeReprojectedInstances, getInstanceGroupsForFrame,
     sessionHasCalibration, resolveTriangulationMethod,
@@ -1451,6 +1452,13 @@ function moveVideosToSession(viewNames, fromIdx, toIdx) {
 
         // 2. Remove view from InstanceGroups and re-triangulate
         for (var [frameIdx2, groups] of fromSession.instanceGroups) {
+            // The re-solve reads the remaining members' 2D. On a lazy project a
+            // member of a frame that is not resident is a `_lazy2d` placeholder
+            // (after a reopen, and after Track All / Triangulate All), all-NaN
+            // until hydrated — triangulating it found no 3D and silently kept the
+            // OLD points3d, solved with the view that just moved. Hydrate this
+            // frame's members from the store first, and give them back after.
+            var hydrated2d = hydrateGroupMembers2D(fromSession, frameIdx2);
             for (var gi = 0; gi < groups.length; gi++) {
                 var group = groups[gi];
                 if (group.instances.has(viewName) || group.reprojectedInstances.has(viewName)) {
@@ -1488,6 +1496,7 @@ function moveVideosToSession(viewNames, fromIdx, toIdx) {
                     }
                 }
             }
+            if (hydrated2d) releaseFrameMembers2D(fromSession, frameIdx2);
         }
 
         // 3. Move video file reference (only search within origin session's indices)
