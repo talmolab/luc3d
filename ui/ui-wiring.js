@@ -24,9 +24,10 @@ import {
 } from './timeline-controller.js';
 import { Skeleton, Camera, Instance, InstanceGroup, FrameGroup, UnlinkedInstance, Identity, Session,
          someValidPoint3d } from '../pose/pose-data.js';
-import { ensureLazyFrameData, batchLoadLazyFrames, getInstanceGroupsForFrame, evictLazyFrames,
+import { ensureLazyFrameData, batchLoadLazyFrames, getInstanceGroupsForFrame,
          loadAllLazyFrames, updateTimelineForFrame, triangulateAndReproject,
          resolveTriangulationMethod } from '../pose/triangulation.js';
+import { trimLazyResidency, lazyPlaybackLookahead, LAZY_PLAYBACK_BEHIND } from '../pose/lazy-residency.js';
 import { drawAllOverlays, getVisibilitySettings, updateFrameCounters, setReprojErrorVisible } from './rendering.js';
 import { updateInfoPanel, updateFrameInfo, updateTriangulationBadge,
          populateVideosTable, populateCamerasTable, populateSkeletonTable,
@@ -1673,7 +1674,7 @@ export function setupUI() {
         // Pre-load frames before starting playback for lazy sessions
         if (state.session && state.session.lazyLoader) {
             showLoading('Loading frames...');
-            batchLoadLazyFrames(state.currentFrame, 5000).then(function () {
+            batchLoadLazyFrames(state.currentFrame, lazyPlaybackLookahead(state.session.lazyLoader)).then(function () {
                 hideLoading();
                 if (videoController) videoController.startPlayback();
             }).catch(function(e) { hideLoading(); });
@@ -1938,7 +1939,7 @@ export function setupUI() {
                 e.preventDefault();
                 if (state.isPlaying) { videoController.pausePlayback(); }
                 else if (state.session && state.session.lazyLoader) {
-                    batchLoadLazyFrames(state.currentFrame, 5000).then(function () {
+                    batchLoadLazyFrames(state.currentFrame, lazyPlaybackLookahead(state.session.lazyLoader)).then(function () {
                         if (videoController) videoController.startPlayback();
                     });
                 } else { videoController.togglePlayback(); }
@@ -2757,16 +2758,30 @@ export function onPlaybackStateChange(isPlaying) {
     btn.textContent = isPlaying ? '\u275A\u275A' : '\u25B6';
     btn.classList.toggle('active', isPlaying);
 
-    // Lazy H5: batch-load frames during playback
+    // Lazy project: keep a window of frames hydrated around the playhead
     if (state.session && state.session.lazyLoader) {
         if (isPlaying) {
-            // Background batch loader — loads 500 frames at a time ahead of playback
+            // Background loader: tops up the lookahead (`lazyPlaybackLookahead`)
+            // and gives back what playback left behind (`trimLazyResidency`).
+            // Without the trim every played frame stayed resident for the rest of
+            // the session, with its re-derived reprojections, and playback
+            // degraded run by run as each major GC got more expensive
+            // (pose/lazy-residency.js has the measurements). Node trails read
+            // the frames behind the playhead, so those are kept for at least the
+            // trail length.
             (async function lazyPlaybackLoader() {
                 var session = state.session;
                 if (!session || !session.lazyLoader) return;
+                var ahead = lazyPlaybackLookahead(session.lazyLoader);
                 while (state.isPlaying && state.session === session) {
                     var cur = state.currentFrame;
-                    var loaded = await batchLoadLazyFrames(cur, 5000);
+                    var loaded = await batchLoadLazyFrames(cur, ahead);
+                    trimLazyResidency(session, cur, {
+                        ahead: ahead,
+                        behind: Math.max(LAZY_PLAYBACK_BEHIND, (state.trailLength | 0) + 1),
+                        keep: state.currentFrame,
+                        triangulationResults: state.triangulationResults,
+                    });
                     if (loaded === 0) {
                         // All nearby frames loaded, wait before checking again
                         await new Promise(function(r) { setTimeout(r, 100); });

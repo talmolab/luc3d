@@ -2839,10 +2839,13 @@ subtitle is populated for loaded projects, not just freshly triangulated ones.
   large prediction `.slp` to the main-thread `SioLazyLoader`
   (`loading/sio-lazy-loader.js`). Shared consumers: `ensureLazyFrameData`,
   `buildLazyFrameGroupSync`, `batchLoadLazyFrames` (branches on `loader.isSync`
-  for worker-free loaders), `loadAllLazyFrames`, `evictLazyFrames` (prunes
-  `session.frameGroups`, and on its throttled tick also calls
-  `SioLazyLoader.capInternalCaches` to bound the loader's internal typed-frame
-  caches — which `frameGroups` eviction alone leaks).
+  for worker-free loaders), `loadAllLazyFrames`. Bounding the resident window
+  is `pose/lazy-residency.js`'s job: the never-called `evictLazyFrames` (whose
+  predicate refused every frame with an `instanceGroups` entry) is gone.
+  `loadAllLazyFrames` and `sweepLazyFrameWindows` (a thin wrapper around
+  `_sweepLazyFrameWindowsHeld`) each take `holdLazyResidency()` for their whole
+  run, so no playback trim can evict a frame they hydrated and will read back
+  after an `await`.
   `LazyFrameLoader` spawns `loading/slp-import-worker.js` (resolved against
   `document.baseURI` so sub-path deployments work — see ISSUES.md I-8) for HDF5
   reads.
@@ -2872,7 +2875,9 @@ subtitle is populated for loaded projects, not just freshly triangulated ones.
   (`getTrackColor(-1)` wraps) instead of `UNGROUPED_USER_COLOR`, got a
   "Track -1" pill from `getInstanceLabelName`, and lost the identity an
   ungrouped trackless instance retains (luc3d #201). All four now go through
-  `lazyInstanceTrackIdx` (`>= 0` kept, anything else `null`). The STORE keeps
+  `lazyInstanceTrackIdx` (`>= 0` kept, anything else `null`; it lives in
+  `pose/lazy-residency.js` now, whose eviction check applies the same mapping to
+  the store's track column). The STORE keeps
   `-1` — `appendStore`, `forEachInstanceRow` and `remapTracksFromIdentity`
   speak it — so the mapping happens exactly where a store row becomes an
   `Instance`. `frameIdentityMap` keys `null` and `-1` alike (`Session._fimKey`),
@@ -3024,6 +3029,8 @@ subtitle is populated for loaded projects, not just freshly triangulated ones.
 - `./triangulation-core.js` — the pure math (re-exported) and
   `setTriangulationSettingsHooks`.
 - `./triangulation-pool.js` — `createGroupSolver` (Triangulate All's parallel solve).
+- `./lazy-residency.js` — `holdLazyResidency` (the bulk loaders' hold),
+  `lazyInstanceTrackIdx` (the hydration paths).
 - `../loading/track-union.js` — `unionTrackNames`, `remapTrackIdx`,
   `isIdentityRemap` (`LazyFrameLoader`'s track union).
 - `./initialization.js` — `update3DViewport` (circular).
@@ -3037,6 +3044,93 @@ subtitle is populated for loaded projects, not just freshly triangulated ones.
 **User-facing features.** "Triangulate" key (`T`), Edit menu Triangulate
 Frame / All / Multi-Frame, reprojection-error visualization, lazy SLP
 loading, "Triangulation needed" badge.
+
+---
+
+### pose/lazy-residency.js
+
+**Purpose.** Keep a LAZY project's resident window bounded: give back the frames
+playback left behind (`session.frameGroups`) together with what was derived for
+them (`group.reprojections`, `group.reprojectedInstances`,
+`state.triangulationResults`). Before it, nothing ever did — `evictLazyFrames`
+existed in `pose/triangulation.js` but had no caller, and its predicate refused
+every frame with an `instanceGroups` entry, i.e. every frame after Track All.
+
+**Why it matters (measured, `tests/e2e/_bench-playback.mjs` with the GC trace
+categories).** 8 cameras x 108,000 frames, HEVC 1280x1024 @ 60 fps, after Track
+All + Triangulate All, four consecutive 20 s playbacks: 58 -> 59 -> 15 -> 19 app
+draws/s, resident frame groups 5k -> 19k (the old 5,000-frame lookahead plus
+everything played). A trace of the degraded state: **71% of the main thread in
+the garbage collector** — 20 MajorGCs in 11.8 s, 125–835 ms each, reasons
+`external memory pressure` / `external finalize`, each a full marking of the
+object graph (`V8.GCReachTransitiveClosureWithEmbedder`, 5.2 s) plus a sweep of
+every ArrayBuffer (`V8.GC_FULL_ARRAY_BUFFER_SWEEP`, 3.0 s). The V8 heap itself
+was ~1.33 GB at every GC — `performance.memory.usedJSHeapSize` (~5.3 GB) is mostly
+ArrayBuffer backing stores, so the heap was NOT near `jsHeapSizeLimit`. The GC
+rate is set by external-memory pressure and did not change; what grew with
+residency was the cost of each GC, until concurrent marking stopped keeping up
+(run 2, 12.6k resident: 0 long tasks; run 3, 17.7k: 42). Heap used grew only
+~100 MB, which is why this looked harmless. With this module, back to back
+against the same base on the same machine: 59.5 / 59.7 / 10.7 / 16.9 draws/s
+before, 59.4 / 59.4 / 58.5 / 58.0 after (long tasks 0/0/39/27 -> 0/3/0/0), ~900
+resident frames instead of 19k, and GC 17% of the traced main thread instead of
+77% (MajorGCs mostly ~19 ms `finalize incremental marking via task`). Play ->
+first new frame 170–340 ms instead of 840–1,550 ms (the 600-frame lookahead).
+
+**Key exports.**
+- `lazyFrameIsRebuildable(session, frameIdx, fg)` — true only when evicting `fg`
+  and hydrating the frame again (`ensureLazyFrameData` ->
+  `finalizeLazyFrameGroup`) gives back exactly this frame: every store row of
+  every lazy camera present once (`SioLazyLoader.instanceRowSpan`), each linked
+  instance the group member claiming that `(camera, _rawInstIndex)`, each
+  unlinked one a predicted, unmodified, identity-free, un-nulled row nobody
+  claims whose `trackIdx` equals the store's (`storeTrackAt`), no user or
+  modified member, no data under a camera the loader does not back. It CHECKS
+  the frame against the store because no edit flag is set by every edit path
+  (`onInstanceDeleted` and `onNodeSetNull` never call `markDirty`). A loader
+  without `instanceRowSpan` (worker-backed `LazyFrameLoader`) is never evicted.
+- `evictLazyFramesOutside(session, lo, hi, {keep, triangulationResults})` — evict
+  every rebuildable frame outside `[lo, hi]` except `keep`, dropping the derived
+  caches of its CLEAN groups (a dirty group's describe the 3D from before an
+  edit; re-deriving them would change what is shown) and the matching
+  `triangulationResults` entries (entries with no group are kept). Returns
+  `{evicted, keptOutside, held}`.
+- `trimLazyResidency(session, center, {ahead, behind, keep, slack,
+  triangulationResults})` — the playback trim: scans only once
+  `frameGroups.size` exceeds the window + the frames the last scan had to keep +
+  `LAZY_TRIM_SLACK` (120), so a tick is one comparison in the steady state.
+- `holdLazyResidency()` -> `release()` / `lazyResidencyHeld()` — eviction is a
+  no-op while held. `sweepLazyFrameWindows` and `loadAllLazyFrames` hold for
+  their whole run: they hydrate a window, `await`, and read it back, and an
+  eviction in between would make them skip frames silently (the #194/#195
+  resident-only class). **A new operation of that shape must hold too.**
+- `lazyPlaybackLookahead(loader)` — 600 frames for a sync loader
+  (`LAZY_PLAYBACK_AHEAD_SYNC`; it builds a frame on demand), 5,000 for a
+  worker-backed one (`LAZY_PLAYBACK_AHEAD_ASYNC`, unchanged). The old 5,000 also
+  meant a 5,000-frame synchronous build every time playback started.
+  `LAZY_PLAYBACK_BEHIND` (300) is the window kept behind the playhead — raised to
+  the node-trail length by the caller, since trails read resident frames.
+- `lazyInstanceTrackIdx(trackIdx)` — moved here from `pose/triangulation.js`
+  (which re-imports it for its four hydration paths) because the eviction check
+  applies the same `-1 -> null` mapping to the store's track column.
+
+**Imports from project modules.** None (DOM-free; takes the session and the
+results map as arguments).
+
+**Imported by.** `pose/triangulation.js` (`holdLazyResidency`,
+`lazyInstanceTrackIdx`), `ui/ui-wiring.js` (`trimLazyResidency`,
+`lazyPlaybackLookahead`, `LAZY_PLAYBACK_BEHIND`).
+
+**Coverage.** `tests/test-lazy-residency.mjs` — against the REAL hydration path
+(`batchLoadLazyFrames` over a real `SioLazyLoader` with a hand-built store): every
+untouched frame (tracked the way `commitTrackedFrame` links instances) round-trips
+identically; eight in-memory edits are each refused, with a negative control
+showing a forced round trip would lose seven of them (the eighth, a member
+promoted to user, survives — refused anyway, the sweep's own user-frame rule);
+holds (a real sweep sees every frame while evictions attempted inside it are
+refused, and releases on throw); derived caches; and a simulated playback whose
+resident count stays within budget while an edit made mid-run survives. Confirmed
+to fail 13 checks with the predicate forced to `true`.
 
 ---
 
@@ -9978,9 +10072,24 @@ pane's Display Legend key wants to sit; the class is what makes the legend step
 down a slot instead of hiding under it (styles.css). Removed on every path that
 hides the chip, or the legend would sit low in grid mode forever.
 
+**Lazy playback keeps a bounded window resident.** `onPlaybackStateChange(true)`
+starts `lazyPlaybackLoader` on a lazy project: each tick tops up
+`lazyPlaybackLookahead(loader)` frames ahead of the playhead (600 for a sync
+`SioLazyLoader`, 5,000 for a worker-backed loader) and calls
+`trimLazyResidency` (`pose/lazy-residency.js`) to give back what playback left
+behind — keeping `max(LAZY_PLAYBACK_BEHIND, trailLength + 1)` frames behind it,
+since node trails read resident frames, and the current frame always. The Play
+button and Space preloads use the same lookahead. Without the trim every played
+frame stayed resident, with its re-derived reprojections, and each major GC got
+more expensive until playback fell from ~59 to ~15 draws/s on a 108,000-frame,
+8-camera project (measurements in the `pose/lazy-residency.js` entry). Edited
+frames are never evicted (`lazyFrameIsRebuildable`).
+
 **Imports from project modules.** Nearly every other module — see file
 header for the full list. Notable ones: `app-state.js`,
 `timeline-controller.js`, `pose-data.js`, `triangulation.js`,
+`lazy-residency.js` (`trimLazyResidency`, `lazyPlaybackLookahead`,
+`LAZY_PLAYBACK_BEHIND`),
 `rendering.js`, `info-panel.js`, `save-load.js`, `slp-import.js`,
 `file-io.js`, `session-loader.js`, `video.js`, `tracker.js`,
 `initialization.js`, `identity-assignment.js`, `export-modals.js`,
@@ -11510,8 +11619,14 @@ prompt release used by the windowed triangulate-all / streaming-export sweeps
 (`sweepTriangulationFrames`, `ui/export-modals.js`). `store.materializeFrame`
 rebuilds a dropped frame on next access, so release is safe. These use the public
 frame-release API from sleap-io.js PR #208 — replacing the earlier private
-`_lazyFrameList.cache` reach-in and manual `capInternalCaches` (now redundant, so
-`evictLazyFrames` no longer calls it).
+`_lazyFrameList.cache` reach-in and manual `capInternalCaches` (now redundant).
+
+`instanceRowSpan(camName, frameIdx, out)` -> `[start, end)` into the camera's
+instance columns (or `null`: no row, no instances) and `storeTrackAt(camName,
+row)` -> the row's session track index (`-1` for none): two plain column reads,
+no materialization. Offset `j - start` is a hydrated `Instance`'s
+`_rawInstIndex`. `pose/lazy-residency.js` uses them to check a resident frame
+against the store before evicting it.
 
 **Project-wide identity/track propagation primitives** (fix for "Propagate
 IDs → Tracks only affects a handful of frames near the cursor" on a large

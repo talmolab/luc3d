@@ -24,6 +24,7 @@ import { isCameraTracked, getTrackingThreshold, getDefaultTriangulationMethod } 
 import { markDirty, setStatus, showLoading, hideLoading } from '../import-export/save-load.js';
 import { showLoadingProgress, createProgressPacer, yieldToPaint } from '../ui/loading-overlay.js';
 import { createGroupSolver } from './triangulation-pool.js';
+import { holdLazyResidency, lazyInstanceTrackIdx } from './lazy-residency.js';
 import { unionTrackNames, remapTrackIdx, isIdentityRemap } from '../loading/track-union.js';
 // Pass 3i-3: update3DViewport moved to pose/initialization.js.
 import { update3DViewport } from './initialization.js';
@@ -1960,27 +1961,8 @@ export function lazyCamerasMissingFrom(session, fg) {
     return missing;
 }
 
-/**
- * The trackIdx an `Instance` hydrated from a lazy loader carries: the loader's
- * own index, or `null` for no track. Both lazy loaders hand over the COLUMNAR
- * store's trackless value, `-1` (`SioLazyLoader`'s `adaptTypedInstance`; a
- * `LazyFrameLoader` frame re-indexed out of range), and the four hydration
- * paths below — `ensureLazyFrameData`, `hydrateLazyCameras`,
- * `buildLazyFrameGroupSync`, `batchLoadLazyFrames` — used to pass it straight
- * into `new Instance`. The in-memory sentinel is `null`
- * (`resolveImportTrackIdx`, which every eager path applies), and the code that
- * reads it tests `trackIdx == null`: with `-1`, `getInstanceColor` drew a
- * trackless instance in the palette's last track colour instead of the
- * ungrouped one, `getInstanceLabelName` gave it a "Track -1" pill, and both
- * ignored the identity an ungrouped trackless instance retains (luc3d #201).
- * The store itself keeps `-1` — `appendStore`, `forEachInstanceRow` and
- * `remapTracksFromIdentity` all speak it — so this is applied here, where a
- * store row becomes an `Instance`, and nowhere earlier. `frameIdentityMap`
- * keys both the same (`Session._fimKey`), so no saved identity moves.
- */
-function lazyInstanceTrackIdx(trackIdx) {
-    return (typeof trackIdx === 'number' && trackIdx >= 0) ? trackIdx : null;
-}
+// `lazyInstanceTrackIdx` (store trackless -1 -> null, luc3d #201) lives in
+// ./lazy-residency.js, whose eviction check applies the same mapping.
 
 /**
  * Hydrate ONLY `camNames` into the frame's existing FrameGroup.
@@ -2208,68 +2190,21 @@ export async function loadAllLazyFrames(onStatus) {
     var loader = session.lazyLoader;
     var BATCH = 5000;
     var totalLoaded = 0;
-    for (var start = 0; start < loader.nFrames; start += BATCH) {
-        // (msg, done, total): the counts let a caller drive a progress bar.
-        if (onStatus) onStatus('Loading frames ' + start + '/' + loader.nFrames + '...', start, loader.nFrames);
-        var loaded = await batchLoadLazyFrames(start, BATCH);
-        totalLoaded += loaded;
+    // Callers read every frame back after this returns, across awaits: no
+    // playback trim may give one back meanwhile (pose/lazy-residency.js).
+    var release = holdLazyResidency();
+    try {
+        for (var start = 0; start < loader.nFrames; start += BATCH) {
+            // (msg, done, total): the counts let a caller drive a progress bar.
+            if (onStatus) onStatus('Loading frames ' + start + '/' + loader.nFrames + '...', start, loader.nFrames);
+            var loaded = await batchLoadLazyFrames(start, BATCH);
+            totalLoaded += loaded;
+        }
+    } finally {
+        release();
     }
     if (onStatus) onStatus('Loading frames ' + loader.nFrames + '/' + loader.nFrames + '...', loader.nFrames, loader.nFrames);
     return totalLoaded;
-}
-
-/**
- * Evict old lazy-loaded frames to keep memory bounded.
- */
-export function evictLazyFrames(currentFrame) {
-    var session = state.session;
-    if (!session || !session.lazyLoader) return;
-
-    // (The loader's internal per-camera typed-frame cache is bounded automatically
-    // by `frameCacheLimit`, set in SioLazyLoader.open — no manual cap needed here.)
-    var maxKeep = 500;
-    var keys = Array.from(session.frameGroups.keys());
-    if (keys.length <= maxKeep) return;
-
-    if (!evictLazyFrames._counter) evictLazyFrames._counter = 0;
-    if (++evictLazyFrames._counter % 50 !== 0) return;
-
-    keys.sort(function (a, b) {
-        return Math.abs(a - currentFrame) - Math.abs(b - currentFrame);
-    });
-
-    var evicted = 0;
-    for (var i = maxKeep; i < keys.length; i++) {
-        var fIdx = keys[i];
-        if (fIdx === currentFrame) continue;
-
-        var fgEvict = session.frameGroups.get(fIdx);
-        if (!fgEvict) continue;
-
-        var hasUserData = false;
-        for (var [, insts] of fgEvict.instances) {
-            for (var instCheck of insts) {
-                if (instCheck.type === 'user') { hasUserData = true; break; }
-            }
-            if (hasUserData) break;
-        }
-        if (!hasUserData) {
-            for (var [, uInsts] of fgEvict.unlinkedInstances) {
-                for (var uInst of uInsts) {
-                    if (uInst.instance && uInst.instance.type === 'user') { hasUserData = true; break; }
-                }
-                if (hasUserData) break;
-            }
-        }
-        if (!hasUserData && session.instanceGroups.has(fIdx)) {
-            hasUserData = true;
-        }
-
-        if (!hasUserData) {
-            session.frameGroups.delete(fIdx);
-            evicted++;
-        }
-    }
 }
 
 /**
@@ -3068,6 +3003,18 @@ function _hasFrameData(session, frameIdx) {
 }
 
 export async function sweepLazyFrameWindows(session, onFrame, opts) {
+    // The sweep hydrates a window and reads it back across awaits; a playback
+    // trim evicting part of it in between would make the sweep skip those
+    // frames silently (the #194/#195 class). Hold residency for the whole run.
+    var release = holdLazyResidency();
+    try {
+        return await _sweepLazyFrameWindowsHeld(session, onFrame, opts);
+    } finally {
+        release();
+    }
+}
+
+async function _sweepLazyFrameWindowsHeld(session, onFrame, opts) {
     opts = opts || {};
     var loader = session.lazyLoader;
     var windowed = loader && loader.isSync && typeof loader.releaseWindow === 'function';

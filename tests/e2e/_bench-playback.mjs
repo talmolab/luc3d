@@ -162,8 +162,6 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
 if (!fs.existsSync(DATASET)) { console.error('DATASET not found: ' + DATASET); process.exit(2); }
 
-const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
-await sleep(1200);
 
 // ---------------------------------------------------------------------------
 // stats helpers (node side)
@@ -188,6 +186,11 @@ const summary = {
 
 // a visible browser window: one such run at a time across sessions (scripts/browser-lock.mjs)
 const releaseBrowserLock = await acquireBrowserLock({ label: '_bench-playback' });
+// The static server starts only once the lock is held: two queued runs on the
+// default PORT used to collide — the waiting run's server failed to bind while
+// the running one held the port, and found it gone when its turn came.
+const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
+await sleep(1200);
 try {
     browser = await chromium.launch({
         // real Chrome (HEVC + hardware decode); EXECUTABLE=<path> drives another
@@ -663,9 +666,11 @@ try {
             R.q0 = B.quality(); R.t0 = performance.now(); R.measuring = true;
         };
         B.memNow = () => {
-            const m = performance.memory || {}, s = window.__lucid.state.session;
+            const m = performance.memory || {}, st = window.__lucid.state, s = st.session;
             return { used: m.usedJSHeapSize, total: m.totalJSHeapSize, limit: m.jsHeapSizeLimit,
-                     resident: s && s.frameGroups ? s.frameGroups.size : null };
+                     resident: s && s.frameGroups ? s.frameGroups.size : null,
+                     // frames holding cached per-frame reprojection results
+                     reprojFrames: st.triangulationResults ? st.triangulationResults.size : null };
         };
         B.endMeasure = () => {
             const R = B.rec;
@@ -813,6 +818,10 @@ try {
                     'disabled-by-default-devtools.timeline.frame', 'disabled-by-default-devtools.timeline.stack',
                     'v8.execute', 'blink.user_timing', 'toplevel', 'benchmark', 'cc', 'gpu', 'viz', 'media',
                     'disabled-by-default-v8.cpu_profiler', 'latencyInfo', 'loading', 'rail',
+                    // GC: MajorGC/MinorGC (+ heap before/after) and V8's per-phase
+                    // GC events, so `gc` in the trace summary can say how much of
+                    // the main thread garbage collection takes.
+                    'v8', 'disabled-by-default-v8.gc',
                 ],
             });
         }
@@ -1041,7 +1050,8 @@ try {
                 return { usedStartMB: MB(used[0]), usedEndMB: MB(used[used.length - 1]),
                          usedMaxMB: MB(Math.max(...used)), usedMinMB: MB(Math.min(...used)),
                          totalMaxMB: MB(Math.max(...m.map(x => x.total))), limitMB: MB(m[0].limit),
-                         residentStart: m[0].resident, residentEnd: m[m.length - 1].resident };
+                         residentStart: m[0].resident, residentEnd: m[m.length - 1].resident,
+                         reprojFramesStart: m[0].reprojFrames, reprojFramesEnd: m[m.length - 1].reprojFrames };
             })(),
             media: {   // per view: <video> 'waiting' (ran out of data) / 'stalled' events
                 waiting: R.waiting, stalled: R.stalled, warmupWaiting: R.warmWaiting,
@@ -1117,7 +1127,7 @@ try {
         log(`  advance    : ${a.appDraws.framesAdvanced}/${a.appDraws.expectedFrames} frames (speed ${a.appDraws.effectiveSpeed}x), unique frames shown ${a.appDraws.uniqueFramesShownPerSec}/s`);
         log(`  cost/draw  : overlay median ${a.cost.overlayMs.median} p95 ${a.cost.overlayMs.p95} max ${a.cost.overlayMs.max} ms | video copies median ${a.cost.videoCopyMs.median} p95 ${a.cost.videoCopyMs.p95} ms | lazy re-tri draws ${a.cost.drawsWithLazyRetriangulation}`);
         log(`  aux split  : ${a.cost.auxDraws} aux draws — overlay(aux) median ${a.cost.overlayMsAux.median} p95 ${a.cost.overlayMsAux.p95} max ${a.cost.overlayMsAux.max} [timeline ${a.cost.timelineMsAux.median}] | overlay(plain) median ${a.cost.overlayMsPlain.median} p95 ${a.cost.overlayMsPlain.p95} max ${a.cost.overlayMsPlain.max} | seekbar+3D p95 ${a.cost.seekbarMs.p95} max ${a.cost.seekbarMs.max} | whole callback median ${a.cost.totalCallbackMs.median} p95 ${a.cost.totalCallbackMs.p95}`);
-        if (a.memory) log(`  JS heap    : used ${a.memory.usedStartMB} -> ${a.memory.usedEndMB} MB (min ${a.memory.usedMinMB}, max ${a.memory.usedMaxMB}; allocated max ${a.memory.totalMaxMB} of limit ${a.memory.limitMB} MB) | resident frame groups ${a.memory.residentStart} -> ${a.memory.residentEnd}`);
+        if (a.memory) log(`  JS heap    : used ${a.memory.usedStartMB} -> ${a.memory.usedEndMB} MB (min ${a.memory.usedMinMB}, max ${a.memory.usedMaxMB}; allocated max ${a.memory.totalMaxMB} of limit ${a.memory.limitMB} MB) | resident frame groups ${a.memory.residentStart} -> ${a.memory.residentEnd} | frames with cached reprojection results ${a.memory.reprojFramesStart} -> ${a.memory.reprojFramesEnd}`);
         if (a.startup) log(`  startup    : seek to start ${a.seekToStartMs != null ? Math.round(a.seekToStartMs) + ' ms' : '?'} | play -> first new frame ${a.startup.firstAdvanceMs} ms | warm-up advanced ${a.startup.warmupFrames}/${a.startup.warmupExpected} frames`);
         log(`  <video> wait: measured ${a.media.waitingTotal} 'waiting' (${a.media.waiting.join(' ')}), ${a.media.stalled.reduce((x, y) => x + y, 0)} 'stalled' | warm-up ${a.media.warmupWaitingTotal} 'waiting'`);
         log(`  dropped    : total ${a.droppedTotal} — ` + a.videoQuality.map(q => `${q.name.replace(/^Camera/, 'C')}:${q.dropped}/${q.presented}`).join(' '));
@@ -1256,7 +1266,10 @@ try {
         printScenario('full-traced', a);
         summary.trace = { path: tracePath, ...analyzeTrace(tracePath) };
         log(`\n[${el()}] trace: ${tracePath} (${(fs.statSync(tracePath).size / 1e6).toFixed(1)} MB)`);
-        log(JSON.stringify(summary.trace, null, 1).slice(0, 6000));
+        log(JSON.stringify({ ...summary.trace, gc: undefined, cpuProfileSelfTop: undefined }, null, 1).slice(0, 6000));
+        log(`  GC (main thread, inclusive): ${JSON.stringify(summary.trace.gc.main)}`);
+        log(`  MajorGCs: ${JSON.stringify(summary.trace.gc.majorGCs)}`);
+        log(`  CPU profile self time: ${JSON.stringify(summary.trace.cpuProfileSelfTop.slice(0, 20))}`);
     }
 } catch (err) {
     console.error(`[${el()}] FATAL`, String(err && err.stack || err).slice(0, 1200));
@@ -1365,5 +1378,65 @@ function analyzeTrace(p) {
         pipelineReporterStates: states,
         pipelineReporterNonPresentedReasons: reasons,
         frameEventCounts: named,
+        gc: gcSummary(ev, mainKey, threadName),
+        cpuProfileSelfTop: cpuProfileSelf(ev, mainKey),
     };
+}
+
+// Garbage collection on the renderer main thread (and, separately, on V8's
+// background threads, where concurrent marking runs). Every GC-named event is
+// listed by name with its INCLUSIVE time — MajorGC contains V8.GC_* phases, so
+// the rows overlap; read `MajorGC` + `MinorGC` for the total pause.
+function gcSummary(ev, mainKey, threadName) {
+    const isGc = (n) => /GC|Scavenge|MarkCompact|Mark-Compact|Sweep|Compactor/.test(n);
+    const main = new Map(), bg = new Map();
+    const majors = [];
+    const open = new Map();   // B/E pairs
+    const add = (m, name, us) => { const o = m.get(name) || { n: 0, ms: 0 }; o.n++; o.ms += us / 1000; m.set(name, o); };
+    for (const e of ev) {
+        if (!e.name || !isGc(e.name)) continue;
+        const k = `${e.pid}:${e.tid}`;
+        let dur = null;
+        if (e.ph === 'X' && typeof e.dur === 'number') dur = e.dur;
+        else if (e.ph === 'B') { open.set(k + e.name, e.ts); continue; }
+        else if (e.ph === 'E') { const t = open.get(k + e.name); if (t == null) continue; open.delete(k + e.name); dur = e.ts - t; }
+        if (dur == null) continue;
+        if (k === mainKey) {
+            add(main, e.name, dur);
+            if (e.name === 'MajorGC' && e.args) majors.push({ ms: +(dur / 1000).toFixed(1), beforeMB: Math.round((e.args.usedHeapSizeBefore || 0) / 1048576), afterMB: Math.round((e.args.usedHeapSizeAfter || 0) / 1048576), type: e.args.type || null });
+        } else add(bg, (threadName.get(k) || '?') + ' ' + e.name, dur);
+    }
+    const top = (m) => [...m.entries()].sort((a, b) => b[1].ms - a[1].ms).slice(0, 18).map(([name, o]) => ({ name, n: o.n, ms: +o.ms.toFixed(1) }));
+    return { main: top(main), background: top(bg), majorGCs: majors.slice(0, 40) };
+}
+
+// Self time per JS function from the sampling CPU profiler's ProfileChunks
+// (the main thread's profile = the one with the most samples). Includes V8's
+// synthetic nodes — `(garbage collector)` is GC time as the profiler saw it.
+function cpuProfileSelf(ev) {
+    const profiles = new Map();   // id -> { nodes: Map, self: Map, samples }
+    for (const e of ev) {
+        if (e.name !== 'ProfileChunk' || !e.args || !e.args.data) continue;
+        const id = `${e.pid}:${e.id}`;
+        let p = profiles.get(id); if (!p) profiles.set(id, p = { nodes: new Map(), self: new Map(), samples: 0 });
+        const cp = e.args.data.cpuProfile || {};
+        for (const n of (cp.nodes || [])) p.nodes.set(n.id, n);
+        const samples = cp.samples || [], deltas = e.args.data.timeDeltas || [];
+        for (let i = 0; i < samples.length; i++) {
+            const d = deltas[i] || 0;
+            p.self.set(samples[i], (p.self.get(samples[i]) || 0) + d);
+            p.samples++;
+        }
+    }
+    let best = null; for (const p of profiles.values()) if (!best || p.samples > best.samples) best = p;
+    if (!best) return [];
+    const byFn = new Map();
+    for (const [nid, us] of best.self) {
+        const n = best.nodes.get(nid); const cf = (n && n.callFrame) || {};
+        const k = `${cf.functionName || '(anon)'} ${(cf.url || '').replace(/^.*\/\/[^/]+/, '').replace(/\?.*$/, '')}:${cf.lineNumber ?? ''}`;
+        byFn.set(k, (byFn.get(k) || 0) + us);
+    }
+    let total = 0; for (const v of byFn.values()) total += v;
+    return [...byFn.entries()].sort((a, b) => b[1] - a[1]).slice(0, 30)
+        .map(([fn, us]) => ({ fn: fn.slice(0, 140), selfMs: +(us / 1000).toFixed(1), pct: +(100 * us / Math.max(1, total)).toFixed(1) }));
 }

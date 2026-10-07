@@ -898,6 +898,94 @@ try {
         s7.fim >= FRAMES * CAMS * 0.95, { fim: s7.fim });
 
     // =========================================================
+    // CYCLE 7 — PLAYBACK gives back what it played (pose/lazy-residency.js)
+    // =========================================================
+    // The app's real lazy playback loader (`onPlaybackStateChange(true)`), driven
+    // without video: the playhead advances ~60 fps in 100 ms ticks and every
+    // frame is drawn, so `fillLazyReprojections` derives each frame's
+    // reprojections as real playback does. Before the trim every played frame
+    // stayed resident with those caches, and playback degraded run by run. Two
+    // edits sit on frames the run leaves far behind and must survive it: an
+    // ungrouped frame with one of its predictions DELETED (evicting it would
+    // resurrect the prediction), and the frame the ungroup itself touched.
+    const PLAY_FROM = 20, PLAY_FRAMES = Math.min(3000, FRAMES - 40);
+    const play = await runOp(`PLAY ${PLAY_FRAMES} frames (lazy playback loader, no video)`, async ({ PLAY_FROM, PLAY_FRAMES }) => {
+        const st = window.__lucid.state, s = st.session;
+        const [tri, uw, rendering, LR] = await Promise.all([
+            import('/pose/triangulation.js'), import('/ui/ui-wiring.js'),
+            import('/ui/rendering.js'), import('/pose/lazy-residency.js')]);
+        const wait = (ms) => new Promise(r => setTimeout(r, ms));
+        // The edit: ungroup an animal on frame 5, then delete one of the
+        // predictions that became unlinked.
+        const EF = 5;
+        await tri.ensureLazyFrameData(EF);
+        const g = (s.instanceGroups.get(EF) || [])[0];
+        if (!g) return { err: 'no group on frame ' + EF };
+        s.unlinkGroup(EF, g, false);
+        const fg = s.frameGroups.get(EF);
+        const camWith = [...fg.unlinkedInstances.keys()].find(c => fg.unlinkedInstances.get(c).length > 0);
+        const victim = fg.unlinkedInstances.get(camWith)[0];
+        fg.removeUnlinkedById(victim.id);
+        const unlinkedBefore = [...fg.unlinkedInstances.values()].reduce((a, l) => a + l.length, 0);
+        const victimRow = victim.instance._rawInstIndex;
+
+        st.trailLength = 0;
+        st.currentFrame = PLAY_FROM;
+        st.isPlaying = true;
+        uw.onPlaybackStateChange(true);
+        let maxResident = 0;
+        try {
+            for (let f = PLAY_FROM; f < PLAY_FROM + PLAY_FRAMES; f += 6) {
+                st.currentFrame = f;
+                rendering.drawAllOverlays(f);
+                await wait(20);
+                maxResident = Math.max(maxResident, s.frameGroups.size);
+            }
+        } finally {
+            st.isPlaying = false;
+            uw.onPlaybackStateChange(false);
+        }
+        await wait(300);
+        const fgAfter = s.frameGroups.get(EF);
+        const ahead = LR.lazyPlaybackLookahead(s.lazyLoader);
+        const early = PLAY_FROM + 200;   // played, then left > behind + slack frames behind
+        return {
+            maxResident, resident: s.frameGroups.size, ahead, behind: LR.LAZY_PLAYBACK_BEHIND,
+            slack: LR.LAZY_TRIM_SLACK, triResults: st.triangulationResults.size,
+            editedResident: !!fgAfter,
+            unlinkedAfter: fgAfter ? [...fgAfter.unlinkedInstances.values()].reduce((a, l) => a + l.length, 0) : null,
+            unlinkedBefore,
+            victimBack: fgAfter ? (fgAfter.unlinkedInstances.get(camWith) || []).some(u => u.instance._rawInstIndex === victimRow) : null,
+            earlyResident: s.frameGroups.has(early),
+            earlyReproj: (s.instanceGroups.get(early) || []).some(gg => gg.reprojections || (gg.reprojectedInstances && gg.reprojectedInstances.size)),
+        };
+    }, { PLAY_FROM, PLAY_FRAMES });
+    if (play.r && !play.r.err) {
+        const p = play.r;
+        // Window + slack + the frames kept for edits, plus one tick of growth
+        // before the trim that follows it.
+        const bound = p.ahead + p.behind + 1 + p.slack + 2 + 64;
+        check(`playback kept the resident window bounded (max ${p.maxResident} <= ${bound}, ${PLAY_FRAMES} frames played)`,
+            p.maxResident <= bound, p);
+        check('played frames far behind the playhead were given back, with their derived reprojections',
+            !p.earlyResident && !p.earlyReproj, p);
+        check('derived triangulation results stay bounded too', p.triResults <= bound, { triResults: p.triResults });
+        check('the edited frame stayed resident', p.editedResident, p);
+        check('the deleted prediction did NOT come back', p.victimBack === false && p.unlinkedAfter === p.unlinkedBefore, p);
+    } else {
+        check('playback step ran', false, play.r);
+    }
+    // Playback evicted thousands of frames: the project must still save and
+    // reopen whole (one group fewer — the ungroup above).
+    const save7 = await save('c7');
+    const s8 = await reopen(save7.target, 'after playback');
+    check('grouping survived playback + save + reload (minus the one ungroup)',
+        s8.groups === s7.groups - 1, { got: s8.groups, want: s7.groups - 1 });
+    check('3D still all-finite after playback', s8.nan3d === 0, { nan3d: s8.nan3d });
+    // (>=: the ungroup may add retained per-frame identities — luc3d #201.)
+    check('frameIdentityMap survived playback + save + reload', s8.fim >= s7.fim, { got: s8.fim, want: s7.fim });
+
+    // =========================================================
     // Memory: the whole point is that N cycles do not grow without bound
     // =========================================================
     log('');

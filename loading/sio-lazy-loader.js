@@ -718,6 +718,50 @@ export class SioLazyLoader {
     }
 
     /**
+     * The store rows `(cameraName, frameIdx)` occupies: `[start, end)` into the
+     * camera's instance columns, written into `out` (a 2-element array, reused
+     * by the caller). Offset `j - start` is what a hydrated `Instance` carries
+     * as `_rawInstIndex`, the same correspondence `forEachInstanceRow` reports
+     * as `offsetInFrame`. `null` when the camera has no row for the frame — it
+     * hydrates to no instances. Reads two numbers; materializes nothing. Used by
+     * `pose/lazy-residency.js` to check a resident frame against the store
+     * before evicting it.
+     * @param {string} cameraName
+     * @param {number} frameIdx
+     * @param {number[]} [out]
+     * @returns {number[]|null}
+     */
+    instanceRowSpan(cameraName, frameIdx, out) {
+        var labels = this.labelsByCam.get(cameraName);
+        var store = labels && labels._lazyDataStore;
+        var rowMap = this.frameRowByCam.get(cameraName);
+        if (!store || !rowMap) return null;
+        var row = rowMap.get(frameIdx);
+        if (row === undefined) return null;
+        var fd = store.framesData || {};
+        out = out || [0, 0];
+        out[0] = Number(fd.instance_id_start ? fd.instance_id_start[row] : 0) || 0;
+        out[1] = Number(fd.instance_id_end ? fd.instance_id_end[row] : 0) || 0;
+        return out;
+    }
+
+    /**
+     * The track column of one instance row (see `instanceRowSpan`): a session
+     * track index — `_unifyTracks` keeps the column in that space, which is the
+     * index hydration gives the row's `Instance` — or `-1` for none.
+     * @param {string} cameraName
+     * @param {number} instanceRow
+     * @returns {number}
+     */
+    storeTrackAt(cameraName, instanceRow) {
+        var labels = this.labelsByCam.get(cameraName);
+        var idn = labels && labels._lazyDataStore && labels._lazyDataStore.instancesData;
+        if (!idn || !idn.track) return -1;
+        var t = Number(idn.track[instanceRow]);
+        return t >= 0 ? t : -1;
+    }
+
+    /**
      * Read-only sweep over every (camera, frameIdx, trackIdx) instance triple
      * in the WHOLE project, straight from each camera's columnar store
      * (`labels._lazyDataStore.framesData`/`.instancesData`) — no frame or
