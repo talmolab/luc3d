@@ -448,6 +448,26 @@ try {
         return { target, bytes };
     };
 
+    // Groups whose points3d live in the slab pool (pose-data.js
+    // `pooledPoints3d`), and how many ArrayBuffers they share between them —
+    // one per group was the GC cost the pool removes.
+    const pooled3d = () => page.evaluate(async () => {
+        const pd = await import('/pose/pose-data.js');
+        const s = window.__lucid.state.session;
+        let with3d = 0, pooled = 0; const bufs = new Set();
+        for (const [, gs] of s.instanceGroups) for (const g of gs) {
+            if (!g.points3d) continue;
+            with3d++; if (pd.isPooledPoints3d(g.points3d)) pooled++;
+            bufs.add(g.points3d.buffer);
+        }
+        return { with3d, pooled, buffers: bufs.size };
+    });
+    const checkPooled = async (label) => {
+        const p = await pooled3d();
+        check(`${label}: every group's 3D is in the slab pool, sharing few buffers (${p.buffers} for ${p.with3d} groups)`,
+            p.with3d > 0 && p.pooled === p.with3d && p.buffers * 50 < p.with3d, p);
+    };
+
     // =========================================================
     // CYCLE 1 — reopen the fixture, verify the lazy precondition
     // =========================================================
@@ -499,6 +519,7 @@ try {
     check('Triangulate All gave its members\' 2D back to the store (members stay lightweight)',
         triA.s.realMembers < triA.s.members / 10 && triA.s.lazy2d > triA.s.members * 0.9,
         { realMembers: triA.s.realMembers, lazy2d: triA.s.lazy2d, members: triA.s.members });
+    await checkPooled('after Triangulate All');
     // The reported bug: "Triangulated: <resident count>" after triangulating
     // every frame of a lazy project.
     const cTri = await checkCounters('after Triangulate All', { triangulated: FRAMES });
@@ -1079,6 +1100,7 @@ try {
     const s7 = await reopen(save6.target, 'after Track All');
     check('grouping from Track All survived save+reload',
         s7.igFrames >= FRAMES * 0.95, { igFrames: s7.igFrames, frames: FRAMES });
+    await checkPooled('after Track All + save + reopen');
     check('frameIdentityMap from Track All survived save+reload',
         s7.fim >= FRAMES * CAMS * 0.95, { fim: s7.fim });
 
