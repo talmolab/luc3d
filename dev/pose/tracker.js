@@ -16,22 +16,22 @@ import {
     reprojectPoints,
     computeInstanceDistanceTo,
     hungarianAlgorithm
-} from './triangulation.js?v=3aa6495aca52';
-import { CrossViewTracker, Detection } from './cross-view-tracker.js?v=3aa6495aca52';
-import { InstanceGroup, points3dNodeCount, hasPoint3d, readPoint3d } from './pose-data.js?v=3aa6495aca52';
+} from './triangulation.js?v=84e22203506e';
+import { CrossViewTracker, Detection } from './cross-view-tracker.js?v=84e22203506e';
+import { InstanceGroup, points3dNodeCount, hasPoint3d, readPoint3d, pooledPoints3d } from './pose-data.js?v=84e22203506e';
 
 // Pass 3i-1: tracker UI/integration (was in app.js)
-import { state, interactionManager, timeline, viewport3d, getActiveSession } from '../ui/app-state.js?v=3aa6495aca52';
-import { getNodeWeightArray, getTrackingThresholds, getTrackingThreshold, isCameraTracked } from '../ui/settings.js?v=3aa6495aca52';
-import { markDirty, setStatus, hideLoading } from '../import-export/save-load.js?v=3aa6495aca52';
-import { showLoadingProgress, createProgressPacer, yieldToPaint } from '../ui/loading-overlay.js?v=3aa6495aca52';
-import { loadAllLazyFrames, sweepLazyFrameWindows } from './triangulation.js?v=3aa6495aca52';
-import { drawAllOverlays, showPredictedOnly, PREDICTED_ONLY_NOTE } from '../ui/rendering.js?v=3aa6495aca52';
-import { updateInfoPanel } from '../ui/info-panel.js?v=3aa6495aca52';
-import { setColorByIdentity } from '../ui/color-by.js?v=3aa6495aca52';
-import { runIdSwitchChecks, clearIdSwitchResults } from '../ui/id-switch-modal.js?v=3aa6495aca52';
-import { collapseTimeline } from '../ui/timeline-controller.js?v=3aa6495aca52';
-import { collapseViewport3D } from '../ui/panel-visibility.js?v=3aa6495aca52';
+import { state, interactionManager, timeline, viewport3d, getActiveSession } from '../ui/app-state.js?v=84e22203506e';
+import { getNodeWeightArray, getTrackingThresholds, getTrackingThreshold, isCameraTracked } from '../ui/settings.js?v=84e22203506e';
+import { markDirty, setStatus, hideLoading } from '../import-export/save-load.js?v=84e22203506e';
+import { showLoadingProgress, createProgressPacer, yieldToPaint } from '../ui/loading-overlay.js?v=84e22203506e';
+import { loadAllLazyFrames, sweepLazyFrameWindows } from './triangulation.js?v=84e22203506e';
+import { drawAllOverlays, showPredictedOnly, PREDICTED_ONLY_NOTE } from '../ui/rendering.js?v=84e22203506e';
+import { updateInfoPanel } from '../ui/info-panel.js?v=84e22203506e';
+import { setColorByIdentity } from '../ui/color-by.js?v=84e22203506e';
+import { runIdSwitchChecks, clearIdSwitchResults } from '../ui/id-switch-modal.js?v=84e22203506e';
+import { collapseTimeline } from '../ui/timeline-controller.js?v=84e22203506e';
+import { collapseViewport3D } from '../ui/panel-visibility.js?v=84e22203506e';
 
 /**
  * A frame index as the USER sees it: 1-based.
@@ -976,7 +976,10 @@ export function commitTrackedFrame(session, trk, frameIdx, trackToIdentity, iden
         }
 
         var group = new InstanceGroup(nextGroupId(), identityId);
-        group.points3d = target.points3d;
+        // A COPY in the slab pool (pose-data.js `pooledPoints3d`): one
+        // ArrayBuffer per group was 539,545 of them for a full Track All, and it
+        // also stops the group sharing the tracker target's live array.
+        group.points3d = pooledPoints3d(target.points3d);
         for (var m = 0; m < members.length; m++) {
             var camName = members[m].camName;
             var det = members[m].det;

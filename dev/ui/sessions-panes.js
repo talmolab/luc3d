@@ -28,22 +28,22 @@ import {
     state,
     videoController, interactionManager, viewport3d, timeline, paneManager,
     setVideoController, setPaneManager,
-} from './app-state.js?v=3aa6495aca52';
-import { FrameGroup, UnlinkedInstance, Camera, someValidPoint3d } from '../pose/pose-data.js?v=3aa6495aca52';
-import { hydrateFrameMembers2d, releaseFrameMembers2d } from '../pose/lazy-residency.js?v=3aa6495aca52';
+} from './app-state.js?v=84e22203506e';
+import { FrameGroup, UnlinkedInstance, Camera, someValidPoint3d, pooledPoints3d } from '../pose/pose-data.js?v=84e22203506e';
+import { hydrateFrameMembers2d, releaseFrameMembers2d } from '../pose/lazy-residency.js?v=84e22203506e';
 import {
     triangulateAndReproject, storeReprojectedInstances, getInstanceGroupsForFrame,
     sessionHasCalibration, resolveTriangulationMethod,
-} from '../pose/triangulation.js?v=3aa6495aca52';
+} from '../pose/triangulation.js?v=84e22203506e';
 import {
     cellResizeObserver,
     createViewForVideoFile,
     rebuildVideoController,
     fitCanvasesToCells,
     updateTotalFrames,
-} from '../loading/session-loader.js?v=3aa6495aca52';
-import { OnDemandVideoDecoder } from '../loading/video.js?v=3aa6495aca52';
-import { setStatus, showLoading, hideLoading, quickSave, markDirty } from '../import-export/save-load.js?v=3aa6495aca52';
+} from '../loading/session-loader.js?v=84e22203506e';
+import { OnDemandVideoDecoder } from '../loading/video.js?v=84e22203506e';
+import { setStatus, showLoading, hideLoading, quickSave, markDirty } from '../import-export/save-load.js?v=84e22203506e';
 import {
     CONTRAST_MIN, CONTRAST_MAX, clampContrast,
     BRIGHTNESS_MIN, BRIGHTNESS_MAX, clampBrightness,
@@ -51,26 +51,26 @@ import {
     buildVideoFilter, getSessionContrast, setSessionContrast,
     getSessionBrightness, setSessionBrightness,
     getSessionRotation, setSessionRotation,
-} from './video-filters.js?v=3aa6495aca52';
+} from './video-filters.js?v=84e22203506e';
 // `clampRotation` moved to the dependency-free `video-filters.js` so the test
 // runners can bridge it; re-exported here because `ui/ui-wiring.js` (and the
 // module map) have always imported it from this module.
 export { clampRotation };
-import { drawAllOverlays, setReprojErrorVisible } from './rendering.js?v=3aa6495aca52';
+import { drawAllOverlays, setReprojErrorVisible } from './rendering.js?v=84e22203506e';
 // `ui/ui-wiring.js` imports this module, so this is a cycle — hoist-safe
 // because the only read is inside the view strip's click handler, which cannot
 // run during module evaluation.
-import { setSoloView } from './ui-wiring.js?v=3aa6495aca52';
-import { updateInfoPanel, populateTimelineVisibility } from './info-panel.js?v=3aa6495aca52';
-import { refreshIdSwitchPanel } from './id-switch-modal.js?v=3aa6495aca52';
+import { setSoloView } from './ui-wiring.js?v=84e22203506e';
+import { updateInfoPanel, populateTimelineVisibility } from './info-panel.js?v=84e22203506e';
+import { refreshIdSwitchPanel } from './id-switch-modal.js?v=84e22203506e';
 // `autoAssignState` is a mutable binding tracked via ESM live binding.
 // The cycle (identity-assignment imports panelRenderers from here) is
 // hoist-safe because both reads are inside function bodies.
-import { autoAssignState } from './identity-assignment.js?v=3aa6495aca52';
+import { autoAssignState } from './identity-assignment.js?v=84e22203506e';
 
 // Pass 3i-3: setup3DViewport moved to pose/initialization.js.
-import { setup3DViewport } from '../pose/initialization.js?v=3aa6495aca52';
-import { getLoadingProgressModal } from './loading-progress-modal.js?v=3aa6495aca52';
+import { setup3DViewport } from '../pose/initialization.js?v=84e22203506e';
+import { getLoadingProgressModal } from './loading-progress-modal.js?v=84e22203506e';
 
 // ============================================
 // Dockview Pane Manager
@@ -1490,7 +1490,7 @@ function moveVideosToSession(viewNames, fromIdx, toIdx) {
                                 { method: resolveTriangulationMethod(group) });
                             var valid = someValidPoint3d(result.points3d);
                             if (valid) {
-                                group.points3d = result.points3d;
+                                group.points3d = pooledPoints3d(result.points3d);
                                 group.triangulationMethod = result.method;
                                 group.reprojections = result.reprojections;
                                 storeReprojectedInstances(group, result, fromSession.cameras);
