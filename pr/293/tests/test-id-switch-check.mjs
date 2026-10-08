@@ -337,6 +337,21 @@ group('Image check — which device runs the model, and its load (ui/image-embed
         ok(mono && rgba[4 * row] <= 1 && rgba[4 * (row + E.INPUT - 1)] >= 254, `a ramp stays a ramp, 0..255 (${rgba[4 * row]}..${rgba[4 * (row + E.INPUT - 1)]})`);
     }
 
+    // the skeleton over the sample crop: keypoints into model-input pixels (cutCrop's transform, then x 224/160)
+    {
+        const near = (a, b) => Math.abs(a - b) < 1e-4;
+        let q = E.cropPointsToInput({ cx: 100, cy: 50, angle: 0, scale: 2, pts: [100, 50, 110, 50, 100, 60, NaN, NaN] });
+        ok(near(q[0], 112) && near(q[1], 112) && near(q[2], 112 + 2 * 1.4 * 10) && near(q[3], 112) && near(q[4], 112) && near(q[5], 140) && isNaN(q[6]) && isNaN(q[7]),
+            `nose right: the body centre is the crop centre, x and y scale by scale x 224/160, missing stays missing (${Array.from(q).map(v => v.toFixed(1))})`);
+        q = E.cropPointsToInput({ cx: 0, cy: 0, angle: Math.PI / 2, scale: 1, pts: [0, 10, 10, 0] });
+        ok(near(q[0], 126) && near(q[1], 112) && near(q[2], 112) && near(q[3], 98),
+            `nose pointing down the image: rotated to point right; the animal's left (+x) ends up above (${Array.from(q).map(v => v.toFixed(1))})`);
+        const skn = E.skeletonIndex(NODES), pts2 = NODES.map(n => { const [x, y] = TEMPLATE[n]; return [400 + x, 300 - y]; });
+        const g2 = E.cropGeometry({ getPoint: i => i === 4 ? null : pts2[i] }, skn);
+        ok(skn.n === NODES.length && g2.pts.length === 2 * NODES.length && g2.pts[0] === pts2[0][0] && isNaN(g2.pts[8]) && isNaN(g2.pts[9]),
+            'cropGeometry keeps every keypoint (missing = NaN) for the overlay');
+    }
+
     // where the model runs: a HARDWARE adapter, else the CPU (a software adapter included)
     const realNav = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
     const withNav = async (nav) => { Object.defineProperty(globalThis, 'navigator', { value: nav, configurable: true, writable: true });
