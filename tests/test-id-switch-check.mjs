@@ -322,6 +322,21 @@ group('Image check — which device runs the model, and its load (ui/image-embed
     eq(E.cpuModelWorkerCount(32, undefined), 4, 'memory unknown (not Chrome) → cores and the cap decide');
     eq(E.cpuModelWorkerCount(undefined, undefined), 1, 'cores unknown → as if 4');
 
+    // the dialog's sample crop: a model input back to the grey pixels the model sees
+    const SZ = 3 * E.INPUT * E.INPUT, rgba = new Uint8ClampedArray(E.INPUT * E.INPUT * 4), tns = new Float32Array(SZ);
+    for (const g of [0, 37, 128, 255]) {
+        E.writeInputTensor(new Uint8ClampedArray(E.CROP * E.CROP).fill(g), tns, 0);
+        E.inputTensorToPixels(tns, rgba);
+        let bad = 0; for (let i = 0; i < rgba.length; i += 4) if (rgba[i] !== g || rgba[i + 1] !== g || rgba[i + 2] !== g || rgba[i + 3] !== 255) bad++;
+        eq(bad, 0, `a uniform crop of ${g} comes back as ${g} on every pixel, opaque`);
+    }
+    {   // a left-to-right ramp stays a ramp (the 160 -> 224 resize in between), in range
+        const ramp = new Uint8ClampedArray(E.CROP * E.CROP); for (let y = 0; y < E.CROP; y++) for (let x = 0; x < E.CROP; x++) ramp[y * E.CROP + x] = Math.round(255 * x / (E.CROP - 1));
+        E.writeInputTensor(ramp, tns, 0); E.inputTensorToPixels(tns, rgba);
+        const row = 100 * E.INPUT; let mono = true; for (let x = 1; x < E.INPUT; x++) if (rgba[4 * (row + x)] < rgba[4 * (row + x - 1)]) mono = false;
+        ok(mono && rgba[4 * row] <= 1 && rgba[4 * (row + E.INPUT - 1)] >= 254, `a ramp stays a ramp, 0..255 (${rgba[4 * row]}..${rgba[4 * (row + E.INPUT - 1)]})`);
+    }
+
     // where the model runs: a HARDWARE adapter, else the CPU (a software adapter included)
     const realNav = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
     const withNav = async (nav) => { Object.defineProperty(globalThis, 'navigator', { value: nav, configurable: true, writable: true });

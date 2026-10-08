@@ -8663,7 +8663,16 @@ Under the percentage, the device line (`formatEmbedDevice`, ui/image-embedder.js
 from the first embedded frame (`createLoadMeter` over `busyMs()`), so it falls to
 0% while fitting, which runs on the CPU; with no GPU, "No GPU: running on the CPU
 (4 workers) — slow" in the warning colour, why in its tooltip. An injected
-embedder without `device()` shows no line. The dialog's `finally` also calls the
+embedder without `device()` shows no line. **Beside them, above Cancel, a sample
+crop** (128 px, captioned "id_2 · cam5" with the animal's current label): exactly
+the model input — greyscale, nose right, masked — turned back into pixels by
+`inputTensorToPixels`, so bad keypoints show up as bad crops while the check runs.
+It changes every `CROP_PREVIEW_MS` (400 ms), cycling through the embedder's
+`sampleCrops()`, by TIME rather than every nth crop, since crops/s differs ~15x
+between a GPU and the CPU. A draw costs ~0.1 ms of main thread (measured: frame
+times 8.3 ms median with and without it at 4 Hz) and no GPU time — the tensor is
+already on the main thread before its batch is uploaded. An embedder without
+`sampleCrops` (the test fakes) shows no square. The dialog's `finally` also calls the
 embedder's `releaseFrames` (idempotent): `checkImageSwitches` does too, but not
 when it fails before its first frame, and the CPU workers hold ~600 MB each. On a
 CPU run "About these flags" says the model ran on the CPU, instead of the GPU-busy
@@ -9089,7 +9098,11 @@ Numbers in `ui/id-switch-modal.js`.
 `checkImageSwitches` needs; `releaseFrames` also terminates the crop pool and the
 CPU model workers and disposes a WebNN model; `device()` -> `{backend: 'webgpu'|'webnn'|'cpu',
 comparing, dtype, adapter, fallback, workers, why}` and `busyMs()` feed the progress
-dialog's device line); `opts.device` ('auto' | 'webgpu' | 'cpu') and `opts.cpuWorkers`
+dialog's device line, `sampleCrops()` its sample crop: `[{tensor, frame, camera,
+identityId}]`, one per frame rotating through its animals and cameras, the last
+`SAMPLE_CROPS` kept as REFERENCES (nothing is converted unless the dialog asks).
+Several rather than the latest because on the CPU frames arrive in bursts — 8 cut
+at once, then ~6 s of model time — and one latest crop sat still between them); `opts.device` ('auto' | 'webgpu' | 'cpu') and `opts.cpuWorkers`
 force a device / worker count (tests, benchmarking);
 `pickImageDevice()` -> `{kind: 'webgpu'|'cpu', adapter, why}`; `cpuModelWorkerCount(cores, memoryGB)`,
 `CPU_MODEL_MAX_WORKERS`; `createCpuModelPool(count, onStatus)` -> `{size, run(data, n) ->
@@ -9099,7 +9112,9 @@ Promise<Float32Array[]>, terminate()}`;
 `summarizeEmbedTiming(tm, backend, dtype)`, `formatEmbedTiming(t)`;
 `describeAdapter(info)`, `gpuAdapterInfo(device, adapter)` -> `{name, fallback}`,
 `createLoadMeter(windowMs)` -> `(now, busyMs) -> pct|null`, `GPU_LOAD_WINDOW_MS`,
-`formatEmbedDevice(device, load)` -> `{text, warn, title}`;
+`formatEmbedDevice(device, load)` -> `{text, warn, title}`; `inputTensorToPixels(tensor, rgba)`
+(a model input back to grey RGBA, the inverse of `writeInputTensor`'s normalisation),
+`SAMPLE_CROPS` (12);
 `keyframeIndices(decoder)` -> `Promise<Int32Array|null>` (cached per video);
 `summarizeKeyframePlans(plans)`; WebNN: `hasWebNN()`, `loadWebNNModel(onStatus)`,
 `chooseBackend(trial)`, `WEBNN_BATCH`, `WEBNN_TRIAL_FRAMES`; `createCropPool()` -> `{run(image, crops) ->

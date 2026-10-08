@@ -16,7 +16,8 @@
  *  4. `releaseFrames` terminates the workers (~600 MB each).
  *  5. The real dialog, with nothing injected — the path the Tracking Wizard's
  *     after-tracking check takes — runs instead of refusing, says it is on the CPU,
- *     embeds frames, and cancels.
+ *     embeds frames, shows a real sample crop, and cancels. (The sample crops are
+ *     also checked bit for bit against the inputs embedded, under 2-4.)
  *
  * Run: node tests/e2e/image-check-cpu.mjs   (downloads the ~88 MB fp32 model)
  */
@@ -123,6 +124,15 @@ try {
         const seconds = (performance.now() - t0) / 1000;
         clearInterval(tick);
         const busy = e.busyMs(), stats = e.stats();
+        // the dialog's sample crops are the very inputs embedded: re-cut each one and compare bit for bit
+        const sk0 = E.skeletonIndex(session.skeleton.nodes), cv0 = new OffscreenCanvas(E.CROP, E.CROP);
+        const recut = (f, id, cam) => { const its = itemsAt(f), ii = its.findIndex(it => it.group.identityId === id), vi = cams.indexOf(cam);
+            const geo = E.frameCropGeometry(session, f, its, cams, cams.map(() => f), sk0), g = geo[vi][ii];
+            const t = new Float32Array(3 * E.INPUT * E.INPUT);
+            E.writeInputTensor(E.cutCrop(window.__bmp, g, geo[vi].filter((g2, j) => j !== ii && g2).map(g2 => g2.hull), cv0), t, 0); return t; };
+        const samples = e.sampleCrops().map(c => { const r = recut(c.frame, c.identityId, c.camera);
+            let same = r.length === c.tensor.length; for (let i = 0; same && i < r.length; i++) same = r[i] === c.tensor[i];
+            return { frame: c.frame, id: c.identityId, camera: c.camera, same }; });
         // the reference: frame 0's crops, cut the way the embedder cuts them, through the model on the main thread
         const sk = E.skeletonIndex(session.skeleton.nodes), items = itemsAt(0);
         const geo = E.frameCropGeometry(session, 0, items, cams, cams.map(() => 0), sk);
@@ -147,7 +157,7 @@ try {
         let diff = 0; for (let d = 0; d < dim; d++) diff = Math.max(diff, Math.abs(a0[d] - a1[d]));
         e.releaseFrames();
         let after = null; try { await e.getEmbeddings(16, itemsAt(16)); after = 'ran'; } catch (err) { after = err.message; }
-        return { device, line, statuses, crops: out.reduce((n, o) => n + o.reduce((m, l) => m + l.length, 0), 0), seconds, worst, busy,
+        return { device, line, statuses, samples, crops: out.reduce((n, o) => n + o.reduce((m, l) => m + l.length, 0), 0), seconds, worst, busy,
                  timing: E.formatEmbedTiming(stats), keys: keys.length, matched, minCos, maxAbs, diff, after };
     });
     check(emb.device.backend === 'cpu' && emb.device.workers === 2 && emb.device.dtype === 'fp32', `the embedder runs on the CPU: ${JSON.stringify(emb.device)}`);
@@ -160,6 +170,8 @@ try {
     check(emb.worst < 300, `the page stays responsive while the workers compute (longest main-thread gap ${Math.round(emb.worst)} ms)`);
     check(emb.busy > 0 && / · CPU \(2 workers\) fp32/.test(emb.timing) && /model busy/.test(emb.timing), `run summary: "${emb.timing}"`);
     check(/no CPU model worker is running/.test(emb.after), `releaseFrames terminates the workers ("${emb.after}")`);
+    check(emb.samples.length === 4 && emb.samples.every(c => c.same) && new Set(emb.samples.map(c => c.id + c.camera)).size === 4,
+          `one sample crop per frame, each bit-identical to the input embedded, rotating animal/camera (${emb.samples.map(c => 'f' + c.frame + ' id' + c.id + ' ' + c.camera).join(', ')})`);
 
     // ---- 5. the real dialog, nothing injected: runs on the CPU instead of refusing
     await page.evaluate(async () => {
@@ -168,11 +180,17 @@ try {
     });
     await page.waitForSelector('.id-switch-progress', { timeout: 10000 });
     await page.waitForFunction(() => /frame \d/.test(document.querySelector('.id-switch-progress-text')?.textContent || ''), null, { timeout: 120000 });
+    await page.waitForFunction(() => document.querySelector('.id-switch-progress-crop.has-crop'), null, { timeout: 10000 });
     await page.waitForTimeout(1500);
-    const dlg = await page.evaluate(() => ({ text: document.querySelector('.id-switch-progress-text').textContent,
-        gpu: document.querySelector('.id-switch-progress-gpu').textContent, warn: document.querySelector('.id-switch-progress-gpu').classList.contains('is-warn') }));
+    const dlg = await page.evaluate(() => { const c = document.querySelector('.id-switch-progress-crop canvas'), px = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+        const greys = new Set(); let lit = 0; for (let i = 0; i < px.length; i += 4) { greys.add(px[i]); if (px[i] > 0) lit++; }
+        return { text: document.querySelector('.id-switch-progress-text').textContent, caption: document.querySelector('.id-switch-progress-crop figcaption').textContent,
+            gpu: document.querySelector('.id-switch-progress-gpu').textContent, warn: document.querySelector('.id-switch-progress-gpu').classList.contains('is-warn'),
+            greys: greys.size, litPct: 100 * lit / (px.length / 4) }; });
     check(/^No GPU: running on the CPU \(\d workers?\) — slow$/.test(dlg.gpu) && dlg.warn && /frame \d/.test(dlg.text),
           `the after-tracking check runs on the CPU: "${dlg.text}" / "${dlg.gpu}"`);
+    check(/^id_\d · cam[ABC]$/.test(dlg.caption) && dlg.greys > 20 && dlg.litPct > 5 && dlg.litPct < 95,
+          `…showing a real sample crop, "${dlg.caption}" (${dlg.greys} grey levels, ${dlg.litPct.toFixed(0)}% inside the mask)`);
     await page.keyboard.press('Escape');
     const done = await page.evaluate(async () => { const r = await window.__done;
         return { reason: r && r.image && r.image.reason, status: document.getElementById('statusText').textContent, dialog: !!document.querySelector('.id-switch-progress') }; });

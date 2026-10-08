@@ -33,7 +33,8 @@ import { setStatus, markDirty } from '../import-export/save-load.js';
 import { showLoadingProgress, hideLoading, yieldToPaint } from './loading-overlay.js';
 import { getTrackingThreshold } from './settings.js';
 import { checkSizeSwitches, checkImageSwitches } from '../pose/id-switch-check.js';
-import { createImageEmbedder, IMAGE_MODEL_MB, formatEmbedTiming, createLoadMeter, formatEmbedDevice } from './image-embedder.js';
+import { createImageEmbedder, IMAGE_MODEL_MB, formatEmbedTiming, createLoadMeter, formatEmbedDevice,
+         inputTensorToPixels, INPUT } from './image-embedder.js';
 import { idSwitchRowKey as rowKey, idSwitchPrimary as primaryOf, idSwitchMarkers as markersOf, idSwitchOnsets as countOnsets,
          idSwitchEncounterCount as encounterCount, linkIdSwitchResults as tagAndLink,
          idSwitchFixPlan, idSwitchFixFor, idSwitchRenameForFix } from './id-switch-review.js';
@@ -124,6 +125,15 @@ function recordingFps(session) {
 // A small cancellable progress dialog for the (long) image check
 // ---------------------------------------------------------------------------
 
+/** How often the progress dialog's sample crop changes (ms). */
+const CROP_PREVIEW_MS = 400;
+
+function identityName(session, id) {
+    var ids = (session && session.identities) || [];
+    for (var i = 0; i < ids.length; i++) if (ids[i] && ids[i].id === id) return ids[i].name;
+    return 'no ID';
+}
+
 function openProgressDialog(title) {
     var ctl = new AbortController();
     var overlay = document.createElement('div');
@@ -133,13 +143,18 @@ function openProgressDialog(title) {
         // the same playhead line as the ID Switches rows' bars, standing proud of an inner track that clips the fill
         '<div class="id-switch-progress-bar"><div class="id-switch-progress-track"><div class="id-switch-progress-fill"></div></div>' +
         '<div class="id-switch-phead"></div></div>' +
+        // the percentage and the device line, beside a sample of the crops being embedded (above Cancel)
+        '<div class="id-switch-progress-row"><div class="id-switch-progress-info">' +
         '<div class="id-switch-progress-pct">0%</div>' +
-        '<div class="id-switch-progress-gpu"></div>' +
+        '<div class="id-switch-progress-gpu"></div></div>' +
+        '<figure class="id-switch-progress-crop"><canvas width="' + INPUT + '" height="' + INPUT + '" role="img" aria-label="Sample crop"></canvas>' +
+        '<figcaption>First crop…</figcaption></figure></div>' +
         '<div class="modal-actions"><button id="idSwitchCancel">Cancel</button></div></div>';
     document.body.appendChild(overlay);
     var textEl = overlay.querySelector('.id-switch-progress-text'), fill = overlay.querySelector('.id-switch-progress-fill'),
         head = overlay.querySelector('.id-switch-phead'), pctEl = overlay.querySelector('.id-switch-progress-pct'),
-        gpuEl = overlay.querySelector('.id-switch-progress-gpu');
+        gpuEl = overlay.querySelector('.id-switch-progress-gpu'), cropEl = overlay.querySelector('.id-switch-progress-crop'),
+        cropCanvas = cropEl.querySelector('canvas'), cropCaption = cropEl.querySelector('figcaption'), cropPixels = null;
     var cancel = function () { if (!ctl.signal.aborted) { ctl.abort(); textEl.textContent = 'Cancelling…'; } };
     var onKey = function (e) { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); cancel(); } };
     overlay.querySelector('#idSwitchCancel').addEventListener('click', cancel);
@@ -161,6 +176,19 @@ function openProgressDialog(title) {
             gpuEl.textContent = d.text;
             gpuEl.classList.toggle('is-warn', !!d.warn);
             if (d.title) gpuEl.title = d.title; else gpuEl.removeAttribute('title');
+        },
+        /** Show a model input (`inputTensorToPixels`) captioned `label`; null hides the square. */
+        crop: function (tensor, label) {
+            if (ctl.signal.aborted) return;
+            cropEl.hidden = !tensor;
+            if (!tensor) return;
+            var ctx = cropCanvas.getContext('2d');
+            cropPixels = cropPixels || ctx.createImageData(INPUT, INPUT);
+            inputTensorToPixels(tensor, cropPixels.data);
+            ctx.putImageData(cropPixels, 0, 0);
+            cropEl.classList.add('has-crop');
+            cropCaption.textContent = label;
+            cropCanvas.setAttribute('aria-label', 'Sample crop: ' + label);
         },
         close: function () { document.removeEventListener('keydown', onKey); overlay.remove(); },
     };
@@ -188,7 +216,7 @@ async function runImage(session, rate, inject) {
     if (!views.length && !inject.createEmbedder) return { ok: false, reason: 'needs the session\'s videos to be loaded' };
     // No GPU is not a reason to skip: the embedder then runs on the CPU, slowly, and the dialog says so
     var prog = openProgressDialog('Checking ID switches (images)');
-    var t0 = 0, ticker = null, embedder = null;
+    var t0 = 0, ticker = null, cropTicker = null, embedder = null;
     try {
         embedder = await (inject.createEmbedder || createImageEmbedder)(session, { onStatus: function (t) { prog.update(t, 0); },
             maxViewsPerAnimal: getTrackingThreshold('imageCheckMaxViews'),
@@ -201,6 +229,20 @@ async function runImage(session, rate, inject) {
             prog.device(formatEmbedDevice(embedder.device(), load));
         };
         showDevice();
+        // A sample of what the model is given, every CROP_PREVIEW_MS, cycling through the embedder's recent
+        // crops — by time, not every nth crop, since crops/s differs ~15x between a GPU and the CPU. ~0.1 ms
+        // a draw; the embedder only keeps references.
+        if (typeof embedder.sampleCrops === 'function') {
+            var shown = null, nextCrop = 0;
+            cropTicker = setInterval(function () {
+                var list = embedder.sampleCrops();
+                if (!list || !list.length) return;
+                var c = list[nextCrop++ % list.length];
+                if (c === shown) return;
+                shown = c;
+                prog.crop(c.tensor, identityName(session, c.identityId) + ' · ' + c.camera);
+            }, CROP_PREVIEW_MS);
+        } else prog.crop(null);
         t0 = performance.now();
         var res = await checkImageSwitches(session, {
             fps: rate.fps,
@@ -233,7 +275,7 @@ async function runImage(session, rate, inject) {
         if (e && e.name === 'AbortError') return { ok: false, reason: 'cancelled', cancelled: true };
         throw e;
     } finally {
-        clearInterval(ticker);
+        clearInterval(ticker); clearInterval(cropTicker);
         // checkImageSwitches releases it too, but not when it fails before its first frame — and the CPU
         // workers hold ~600 MB each. Releasing twice is harmless.
         if (embedder && typeof embedder.releaseFrames === 'function') { try { embedder.releaseFrames(); } catch (e) { /* ignore */ } }
