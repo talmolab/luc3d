@@ -258,6 +258,87 @@ group('Image check — timing summary (ui/image-embedder.js)');
         'line says every frame was decoded, and what keyframe spacing would avoid it');
 }
 
+group('Image check — which device runs the model, and its load (ui/image-embedder.js)');
+{
+    const E = await import(pathToFileURL(path.join(ROOT, 'ui', 'image-embedder.js')).href);
+    eq(E.describeAdapter({ vendor: 'apple', architecture: 'metal-3', device: '', description: '' }), 'Apple metal-3', 'vendor + architecture, vendor capitalised');
+    eq(E.describeAdapter({ vendor: 'nvidia', architecture: 'lovelace', description: 'NVIDIA RTX 2000 Ada Generation Laptop GPU' }),
+        'NVIDIA RTX 2000 Ada Generation Laptop GPU', 'the description when the browser exposes one');
+    eq(E.describeAdapter({ vendor: 'someco', architecture: '' }), 'someco', 'an unknown vendor as given');
+    eq(E.describeAdapter({}), '', 'nothing known → empty');
+    eq(E.describeAdapter(null), '', 'no info → empty');
+    // where the adapter's info comes from: the model's device, else onnxruntime's adapter
+    const sw = { vendor: 'google', architecture: 'swiftshader', isFallbackAdapter: true };
+    let a = await E.gpuAdapterInfo({ adapterInfo: sw });
+    ok(a.name === 'Google swiftshader' && a.fallback === true, 'device.adapterInfo: a software adapter is flagged (' + JSON.stringify(a) + ')');
+    a = await E.gpuAdapterInfo({ adapterInfo: { vendor: 'apple', architecture: 'metal-3', isFallbackAdapter: false } });
+    ok(a.name === 'Apple metal-3' && a.fallback === false, 'device.adapterInfo: a hardware adapter is not');
+    a = await E.gpuAdapterInfo(null, { info: { vendor: 'intel', architecture: 'gen-12lp' }, isFallbackAdapter: true });
+    ok(a.name === 'Intel gen-12lp' && a.fallback === true, 'no device info: onnxruntime\'s adapter, with the flag older Chrome kept on the adapter');
+    a = await E.gpuAdapterInfo({ adapterInfo: { vendor: 'amd', architecture: 'rdna-3' } }, { info: {}, isFallbackAdapter: false });
+    ok(a.name === 'AMD rdna-3' && a.fallback === false, 'device info without the flag: the name from the device, the flag from the adapter');
+    a = await E.gpuAdapterInfo({ get adapterInfo() { throw new Error('boom'); } });
+    ok(a.name === '' && a.fallback === false, 'a throwing browser → nothing claimed');
+
+    // the rolling load: share of the window spent in model runs
+    let m = E.createLoadMeter(5000);
+    eq(m(0, 0), null, 'first sample → not measured yet');
+    eq(m(400, 300), null, 'under 0.5 s of history → not measured yet');
+    ok(Math.abs(m(1000, 800) - 80) < 1e-9, '800 ms busy in 1 s → 80%');
+    for (let t = 2000; t <= 10000; t += 1000) m(t, 800 + (t - 1000) * 0.5);   // then half busy
+    ok(Math.abs(m(11000, 800 + 10000 * 0.5) - 50) < 1e-9, 'after the window has passed, only the last 5 s count → 50%');
+    ok(m(16000, 800 + 10000 * 0.5) === 0, 'idle for a whole window → 0% (fitting runs on the CPU)');
+    m = E.createLoadMeter(5000); m(0, 0);
+    eq(m(1000, 5000), 100, 'never above 100%');
+
+    // the dialog's line
+    const gpu = { backend: 'webgpu', comparing: false, dtype: 'fp16', adapter: 'Apple metal-3', fallback: false };
+    eq(E.formatEmbedDevice(gpu, null).text, 'GPU: Apple metal-3 (WebGPU, fp16)', 'before the load is measured');
+    let l = E.formatEmbedDevice(gpu, 86.6);
+    ok(l.text === 'GPU: Apple metal-3 (WebGPU, fp16) · load 87%' && !l.warn && /last 5 s/.test(l.title) && /other apps/.test(l.title),
+        'with the load, and a tooltip saying what it measures ("' + l.text + '")');
+    eq(E.formatEmbedDevice(Object.assign({}, gpu, { adapter: '' }), 40).text, 'GPU: WebGPU, fp16 · load 40%', 'no adapter name → just the API');
+    eq(E.formatEmbedDevice(Object.assign({}, gpu, { comparing: true }), null).text, 'GPU: Apple metal-3 (WebGPU, fp16; comparing with WebNN)', 'during the WebNN trial');
+    l = E.formatEmbedDevice(Object.assign({}, gpu, { fallback: true, adapter: 'Google swiftshader' }), 95);
+    ok(l.warn && /^No GPU: WebGPU is running on the CPU/.test(l.text) && !/load/.test(l.text), 'a software adapter is the CPU: warned, no GPU load ("' + l.text + '")');
+    l = E.formatEmbedDevice({ backend: 'webnn', dtype: 'fp16', adapter: 'Apple metal-3' }, 70);
+    ok(/^WebNN, fp16 \(the browser picks the GPU or the CPU\) · model busy 70%$/.test(l.text) && !/^GPU/.test(l.text), 'WebNN is not claimed to be the GPU ("' + l.text + '")');
+    eq(E.formatEmbedDevice(null, 50).text, '', 'no embedder device → no line');
+
+    // no GPU: the CPU workers, said in the warning colour, with why in the tooltip
+    l = E.formatEmbedDevice({ backend: 'cpu', dtype: 'fp32', workers: 4, why: 'this browser has no WebGPU', adapter: '', fallback: false }, 90);
+    ok(l.text === 'No GPU: running on the CPU (4 workers) — slow' && l.warn && l.title === 'This browser has no WebGPU, so the image model runs on the CPU instead — the same model, much slower.',
+        'CPU: warned, the worker count, no load, and why in the tooltip ("' + l.text + '" / "' + l.title + '")');
+    eq(E.formatEmbedDevice({ backend: 'cpu', workers: 1, why: '' }, null).text, 'No GPU: running on the CPU (1 worker) — slow', 'one worker, singular');
+    const tc = E.formatEmbedTiming(Object.assign(E.summarizeEmbedTiming({ frames: 10, crops: 100, batches: 5, t0: 0, t1: 10000, decodeMs: 0, cropMs: 0, queueMs: 0, runMs: 9000, readMs: 0, maxBatch: 20 }, 'cpu', 'fp32'), { workers: 4 }));
+    ok(/^10 crops\/s over 10 s · model busy 90% /.test(tc) && / · CPU \(4 workers\) fp32$/.test(tc), 'CPU run summary: "model busy", not "GPU busy", and the workers ("' + tc + '")');
+
+    // how many CPU workers: half the cores beyond two, one per 2 GB, 1..4
+    eq(E.cpuModelWorkerCount(12, 8), 4, '12 cores, 8 GB → 4 (the cap)');
+    eq(E.cpuModelWorkerCount(8, 8), 3, '8 cores → 3');
+    eq(E.cpuModelWorkerCount(16, 4), 2, '4 GB → 2');
+    eq(E.cpuModelWorkerCount(4, 8), 1, '4 cores → 1');
+    eq(E.cpuModelWorkerCount(2, 0.5), 1, 'never fewer than 1');
+    eq(E.cpuModelWorkerCount(32, undefined), 4, 'memory unknown (not Chrome) → cores and the cap decide');
+    eq(E.cpuModelWorkerCount(undefined, undefined), 1, 'cores unknown → as if 4');
+
+    // where the model runs: a HARDWARE adapter, else the CPU (a software adapter included)
+    const realNav = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+    const withNav = async (nav) => { Object.defineProperty(globalThis, 'navigator', { value: nav, configurable: true, writable: true });
+        try { return await E.pickImageDevice(); } finally { if (realNav) Object.defineProperty(globalThis, 'navigator', realNav); else delete globalThis.navigator; } };
+    const adapterOf = (info) => ({ info, requestAdapterInfo: undefined });
+    let d = await withNav({});
+    ok(d.kind === 'cpu' && d.why === 'this browser has no WebGPU', 'no navigator.gpu → CPU (' + JSON.stringify(d) + ')');
+    d = await withNav({ gpu: { requestAdapter: async () => null } });
+    ok(d.kind === 'cpu' && d.why === 'WebGPU found no GPU', 'no adapter → CPU');
+    d = await withNav({ gpu: { requestAdapter: async () => { throw new Error('blocked'); } } });
+    ok(d.kind === 'cpu' && d.why === 'WebGPU found no GPU', 'requestAdapter throws → CPU');
+    d = await withNav({ gpu: { requestAdapter: async () => adapterOf({ vendor: 'google', architecture: 'swiftshader', isFallbackAdapter: true }) } });
+    ok(d.kind === 'cpu' && d.why === 'WebGPU offers only a software adapter' && d.adapter.name === 'Google swiftshader', 'a software adapter → CPU (it ran the model 10x slower than one CPU worker)');
+    d = await withNav({ gpu: { requestAdapter: async () => adapterOf({ vendor: 'apple', architecture: 'metal-3', isFallbackAdapter: false }) } });
+    ok(d.kind === 'webgpu' && d.adapter.name === 'Apple metal-3' && !d.why, 'a hardware adapter → WebGPU');
+}
+
 group('Image check — cancellation and failure reasons');
 {
     const ctl = new AbortController();

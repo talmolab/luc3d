@@ -13,9 +13,10 @@
  * still swapped) are counted and can be shown.
  *
  * The size check only reads the tracker's 3D skeletons (seconds, no video). The
- * image check decodes video and embeds crops on the GPU (ui/image-embedder.js):
- * minutes, needs the session's videos and WebGPU, and runs under its own
- * cancellable progress dialog (Cancel / Esc).
+ * image check decodes video and embeds crops on the GPU (ui/image-embedder.js) —
+ * or, with no GPU, on the CPU, ~15x slower but still run: minutes to hours. It
+ * needs the session's videos, and runs under its own cancellable progress dialog
+ * (Cancel / Esc) that says which device is doing the work.
  *
  * Kept a leaf: `navigateToFrame` is registered by ui-wiring
  * (setIdSwitchNavigator), so this module never imports pose/initialization.js.
@@ -32,7 +33,7 @@ import { setStatus, markDirty } from '../import-export/save-load.js';
 import { showLoadingProgress, hideLoading, yieldToPaint } from './loading-overlay.js';
 import { getTrackingThreshold } from './settings.js';
 import { checkSizeSwitches, checkImageSwitches } from '../pose/id-switch-check.js';
-import { hasWebGPU, createImageEmbedder, IMAGE_MODEL_MB, formatEmbedTiming } from './image-embedder.js';
+import { createImageEmbedder, IMAGE_MODEL_MB, formatEmbedTiming, createLoadMeter, formatEmbedDevice } from './image-embedder.js';
 import { idSwitchRowKey as rowKey, idSwitchPrimary as primaryOf, idSwitchMarkers as markersOf, idSwitchOnsets as countOnsets,
          idSwitchEncounterCount as encounterCount, linkIdSwitchResults as tagAndLink,
          idSwitchFixPlan, idSwitchFixFor, idSwitchRenameForFix } from './id-switch-review.js';
@@ -73,10 +74,12 @@ function fmtTime(frame) {
     return m + ':' + (s < 10 ? '0' : '') + s;
 }
 
+/** "45 s", "12 min", "2 h 5 min" (hours: the image check on the CPU). */
 function fmtDuration(sec) {
     if (!isFinite(sec)) return '';
     if (sec < 90) return Math.max(1, Math.round(sec)) + ' s';
-    return Math.round(sec / 60) + ' min';
+    var min = Math.round(sec / 60);
+    return min < 90 ? min + ' min' : Math.floor(min / 60) + ' h ' + (min % 60) + ' min';
 }
 
 /** True when at least one tracked frame has a 3D skeleton with an identity. */
@@ -127,10 +130,16 @@ function openProgressDialog(title) {
     overlay.className = 'multi-frame-modal-overlay';
     overlay.innerHTML = '<div class="multi-frame-modal id-switch-progress"><h3>' + escapeHtml(title) + '</h3>' +
         '<div class="id-switch-progress-text">Starting…</div>' +
-        '<div class="id-switch-progress-bar"><div class="id-switch-progress-fill"></div></div>' +
+        // the same playhead line as the ID Switches rows' bars, standing proud of an inner track that clips the fill
+        '<div class="id-switch-progress-bar"><div class="id-switch-progress-track"><div class="id-switch-progress-fill"></div></div>' +
+        '<div class="id-switch-phead"></div></div>' +
+        '<div class="id-switch-progress-pct">0%</div>' +
+        '<div class="id-switch-progress-gpu"></div>' +
         '<div class="modal-actions"><button id="idSwitchCancel">Cancel</button></div></div>';
     document.body.appendChild(overlay);
-    var textEl = overlay.querySelector('.id-switch-progress-text'), fill = overlay.querySelector('.id-switch-progress-fill');
+    var textEl = overlay.querySelector('.id-switch-progress-text'), fill = overlay.querySelector('.id-switch-progress-fill'),
+        head = overlay.querySelector('.id-switch-phead'), pctEl = overlay.querySelector('.id-switch-progress-pct'),
+        gpuEl = overlay.querySelector('.id-switch-progress-gpu');
     var cancel = function () { if (!ctl.signal.aborted) { ctl.abort(); textEl.textContent = 'Cancelling…'; } };
     var onKey = function (e) { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); cancel(); } };
     overlay.querySelector('#idSwitchCancel').addEventListener('click', cancel);
@@ -140,7 +149,18 @@ function openProgressDialog(title) {
         update: function (text, frac) {
             if (ctl.signal.aborted) return;
             if (text != null) textEl.textContent = text;
-            if (frac != null) fill.style.width = Math.round(100 * Math.min(1, Math.max(0, frac))) + '%';
+            if (frac != null) {
+                var pct = Math.round(100 * Math.min(1, Math.max(0, frac))) + '%';
+                fill.style.width = head.style.left = pct;
+                pctEl.textContent = pct;
+            }
+        },
+        /** The device line: `{text, warn, title}` from formatEmbedDevice (ui/image-embedder.js). */
+        device: function (d) {
+            if (ctl.signal.aborted) return;
+            gpuEl.textContent = d.text;
+            gpuEl.classList.toggle('is-warn', !!d.warn);
+            if (d.title) gpuEl.title = d.title; else gpuEl.removeAttribute('title');
         },
         close: function () { document.removeEventListener('keydown', onKey); overlay.remove(); },
     };
@@ -166,13 +186,21 @@ async function runImage(session, rate, inject) {
     inject = inject || {};
     var views = (state.views || []).filter(function (v) { return v && v.decoder; });
     if (!views.length && !inject.createEmbedder) return { ok: false, reason: 'needs the session\'s videos to be loaded' };
-    if (!(await (inject.hasWebGPU || hasWebGPU)())) return { ok: false, reason: 'needs WebGPU (current Chrome or Edge) — on the CPU it would take hours' };
+    // No GPU is not a reason to skip: the embedder then runs on the CPU, slowly, and the dialog says so
     var prog = openProgressDialog('Checking ID switches (images)');
-    var t0 = 0;
+    var t0 = 0, ticker = null, embedder = null;
     try {
-        var embedder = await (inject.createEmbedder || createImageEmbedder)(session, { onStatus: function (t) { prog.update(t, 0); },
+        embedder = await (inject.createEmbedder || createImageEmbedder)(session, { onStatus: function (t) { prog.update(t, 0); },
             maxViewsPerAnimal: getTrackingThreshold('imageCheckMaxViews'),
             webnn: getTrackingThreshold('imageCheckWebNN') > 0 });
+        // What runs the model, and — once embedding starts, every second — how busy it keeps the GPU
+        var meter = createLoadMeter();
+        var showDevice = function () {
+            if (typeof embedder.device !== 'function') return;
+            var load = ticker && typeof embedder.busyMs === 'function' ? meter(performance.now(), embedder.busyMs()) : null;
+            prog.device(formatEmbedDevice(embedder.device(), load));
+        };
+        showDevice();
         t0 = performance.now();
         var res = await checkImageSwitches(session, {
             fps: rate.fps,
@@ -185,6 +213,7 @@ async function runImage(session, rate, inject) {
             signal: prog.signal,
             onProgress: async function (stage, done, total) {
                 if (stage === 'embed') {
+                    if (!ticker) { ticker = setInterval(showDevice, 1000); showDevice(); }
                     var el = (performance.now() - t0) / 1000, left = done ? el * (total - done) / done : NaN;
                     prog.update('Cropping and embedding ' + embedder.views.length + ' views: frame ' + done.toLocaleString() +
                         ' of ' + total.toLocaleString() + (done > 3 ? ' — about ' + fmtDuration(left) + ' left' : ''), 0.9 * done / total);
@@ -203,7 +232,13 @@ async function runImage(session, rate, inject) {
     } catch (e) {
         if (e && e.name === 'AbortError') return { ok: false, reason: 'cancelled', cancelled: true };
         throw e;
-    } finally { prog.close(); }
+    } finally {
+        clearInterval(ticker);
+        // checkImageSwitches releases it too, but not when it fails before its first frame — and the CPU
+        // workers hold ~600 MB each. Releasing twice is harmless.
+        if (embedder && typeof embedder.releaseFrames === 'function') { try { embedder.releaseFrames(); } catch (e) { /* ignore */ } }
+        prog.close();
+    }
 }
 
 /**
@@ -216,8 +251,8 @@ async function runImage(session, rate, inject) {
  * never as an error of the tracking pass.
  *
  * @param {{size?: boolean, image?: boolean, auto?: boolean, statusPrefix?: string,
- *          navigateToFrame?: function(number), inject?: {createEmbedder?, hasWebGPU?}}} opts
- *   `inject` replaces the image model and the WebGPU probe — for tests only
+ *          navigateToFrame?: function(number), inject?: {createEmbedder?}}} opts
+ *   `inject.createEmbedder` replaces the image model — for tests only
  *   (tests/e2e/id-switch-image-check.mjs), so they need no GPU or model download.
  * @returns {Promise<{size?: object, image?: object}|null>}
  */
@@ -339,8 +374,10 @@ function aboutHtml(st, ran) {
             : ') — <b>no video is loaded, so this frame rate was not measured</b>. If the recording ran at a ' +
               'different rate, set it in the fps box and run the check again: scores are evidence per second.') + '</p>' +
         (im && im.ok && im.timing && im.timing.crops ? '<p class="id-switch-rate">Image check speed on this machine: ' +
-            escapeHtml(formatEmbedTiming(im.timing)) + '. GPU busy well under 100% means it waited on video decoding, ' +
-            'cropping or the browser\'s main thread rather than computing.</p>' : '');
+            escapeHtml(formatEmbedTiming(im.timing)) + (im.timing.backend === 'cpu'
+                ? '. There was no GPU, so the image model ran on the CPU — the same model, much slower.</p>'
+                : '. GPU busy well under 100% means it waited on video decoding, ' +
+                  'cropping or the browser\'s main thread rather than computing.</p>') : '');
 }
 
 // ---- The selected row's progress bar ------------------------------------------------

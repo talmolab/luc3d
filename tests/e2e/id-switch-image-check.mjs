@@ -11,9 +11,12 @@
  *  1. Animals of different size: both checks find the swap; the ID Switches tab
  *     lists it ONCE, as "Both", and the timeline carries size (amber) and image (cyan) markers.
  *  2. Animals of IDENTICAL size: only the image check finds it ("Images" row).
- *  3. A cancellable progress dialog: Esc mid-run stops it, reports "cancelled"
- *     and adds no image markers.
- *  4. Without WebGPU the image check explains why it cannot run.
+ *  3. A cancellable progress dialog, with a playhead line, a percentage, and the
+ *     GPU running the model with its live load: Esc mid-run stops it, reports
+ *     "cancelled" and adds no image markers.
+ *  4. Without a GPU the after-tracking image check (Tracking Wizard) still RUNS,
+ *     on the CPU, says so in the dialog, and finds the switch — it used to be
+ *     "skipped — needs WebGPU". (The real CPU embedder: tests/e2e/image-check-cpu.mjs.)
  *  5. The menu item exists, and the after-tracking image check defaults to OFF.
  *
  * Run: node tests/e2e/id-switch-image-check.mjs
@@ -78,16 +81,22 @@ try {
             if (AS.timeline) { AS.timeline.setTotalFrames(T * STEP); AS.timeline.setData(session); } (await import('/ui/seekbar-markers.js')).setSeekbarSwitchMarkers([]);
             return { swapFrame, pair: events[SWAP].pair.map(k => 'id_' + k) };
         };
-        // Synthetic embedder: per-animal appearance vector + noise, 4 cameras; optional per-frame delay.
-        window.__fakeEmbedder = (delayMs) => async () => {
+        // Synthetic embedder: per-animal appearance vector + noise, 4 cameras; optional per-frame delay, and
+        // optionally a `device` to report (with busyMs = the time any request was in its delay).
+        window.__fakeEmbedder = (delayMs, device) => async () => {
             let seed = 11; const r = () => ((seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967296);
             const g = () => Math.sqrt(-2 * Math.log(r() + 1e-12)) * Math.cos(2 * Math.PI * r());
             const proto = [0, 1, 2].map(() => Float32Array.from({ length: 64 }, g));
             const cams = ['c0', 'c1', 'c2', 'c3'];
-            return { views: cams, getEmbeddings: async (frame, items) => {
+            let busy = 0, since = 0, active = 0;
+            const e = { views: cams, getEmbeddings: async (frame, items) => {
+                if (active++ === 0) since = performance.now();
                 if (delayMs) await new Promise(res => setTimeout(res, delayMs));
+                if (--active === 0) busy += performance.now() - since;
                 return items.map(it => cams.map(cam => ({ camera: cam, vector: Float32Array.from(proto[it.group._animal], v => v + 1.2 * g()) })));
             } };
+            if (device) { e.device = () => device; e.busyMs = () => busy + (active ? performance.now() - since : 0); }
+            return e;
         };
     });
     const rows = () => page.evaluate(() => Array.from(document.querySelectorAll('#idSwitchPanel .id-switch-row')).map(r => ({ frame: +r.dataset.frame, text: r.textContent, cls: r.className })));
@@ -96,7 +105,7 @@ try {
     let fx = await page.evaluate(async () => {
         const fx = await window.__buildSwap([1.0, 1.15, 0.85]);
         const M = await import('/ui/id-switch-modal.js');
-        window.__res = await M.runIdSwitchChecks({ size: true, image: true, inject: { createEmbedder: window.__fakeEmbedder(0), hasWebGPU: async () => true } });
+        window.__res = await M.runIdSwitchChecks({ size: true, image: true, inject: { createEmbedder: window.__fakeEmbedder(0) } });
         return fx;
     });
     let R = await rows();
@@ -111,7 +120,7 @@ try {
     fx = await page.evaluate(async () => {
         const fx = await window.__buildSwap([1, 1, 1]);
         const M = await import('/ui/id-switch-modal.js');
-        window.__res = await M.runIdSwitchChecks({ size: true, image: true, inject: { createEmbedder: window.__fakeEmbedder(0), hasWebGPU: async () => true } });
+        window.__res = await M.runIdSwitchChecks({ size: true, image: true, inject: { createEmbedder: window.__fakeEmbedder(0) } });
         return fx;
     });
     R = await rows();
@@ -124,10 +133,30 @@ try {
     await page.evaluate(async () => {
         await window.__buildSwap([1, 1, 1]);
         const M = await import('/ui/id-switch-modal.js');
-        window.__done = M.runIdSwitchChecks({ image: true, inject: { createEmbedder: window.__fakeEmbedder(40), hasWebGPU: async () => true } });
+        window.__done = M.runIdSwitchChecks({ image: true, inject: { createEmbedder: window.__fakeEmbedder(40,
+            { backend: 'webgpu', comparing: false, dtype: 'fp16', adapter: 'Test GPU', fallback: false }) } });
     });
     await page.waitForSelector('.id-switch-progress', { timeout: 10000 });
+    const gpuLine = () => page.evaluate(() => { const el = document.querySelector('.id-switch-progress-gpu');
+        return { text: el.textContent, warn: el.classList.contains('is-warn'), title: el.title }; });
+    const g0 = await gpuLine();
+    check(g0.text.startsWith('GPU: Test GPU (WebGPU, fp16)') && !g0.warn, `the dialog names the GPU running the model ("${g0.text}")`);
+    // the load appears once embedding has run for a moment, and refreshes every second
+    await page.waitForFunction(() => /· load \d+%$/.test(document.querySelector('.id-switch-progress-gpu').textContent), null, { timeout: 10000 });
+    const g1 = await gpuLine(), load = +g1.text.match(/load (\d+)%/)[1];
+    check(load > 0 && load <= 100 && /other apps/.test(g1.title), `…and its load while embedding, with a tooltip saying what that measures ("${g1.text}")`);
     await page.waitForFunction(() => /frame \d/.test(document.querySelector('.id-switch-progress-text').textContent), null, { timeout: 10000 });
+    // Embedding is the first 90% of the bar, so frame i of n reads round(90 i / n)%.
+    await page.waitForFunction(() => parseInt(document.querySelector('.id-switch-progress-pct').textContent, 10) > 0, null, { timeout: 10000 });
+    const pct = await page.evaluate(() => {
+        const q = (c) => document.querySelector('.id-switch-progress ' + c);
+        const t = q('.id-switch-progress-pct').textContent, w = q('.id-switch-progress-fill').style.width, h = q('.id-switch-phead').style.left;
+        const m = document.querySelector('.id-switch-progress-text').textContent.replace(/,/g, '').match(/frame (\d+) of (\d+)/);
+        return { t, n: parseInt(t, 10), w: parseFloat(w), h: parseFloat(h), want: m ? Math.round(90 * m[1] / m[2]) : NaN };
+    });
+    check(/^\d+%$/.test(pct.t) && pct.n === pct.want && pct.n === pct.w,
+          `a percentage under the bar matches the frame count and the fill ("${pct.t}", expected ${pct.want}%, width ${pct.w}%)`);
+    check(pct.h === pct.w, `the playhead line sits at the fill's leading edge (${pct.h}% vs ${pct.w}%)`);
     await page.keyboard.press('Escape');
     const cancelled = await page.evaluate(async () => { const r = await window.__done;
         return { reason: r && r.image && r.image.reason, status: document.getElementById('statusText').textContent,
@@ -136,13 +165,26 @@ try {
     check(cancelled.reason === 'cancelled' && /cancelled/.test(cancelled.status), `Esc cancels the image check ("${cancelled.status}")`);
     check(!cancelled.progress && !cancelled.rows && cancelled.markers === 0, 'nothing left behind: no progress dialog, no listed results, no image markers');
 
-    // ---- 4. no WebGPU
-    const noGpu = await page.evaluate(async () => {
+    // ---- 4. no GPU: the check still runs, on the CPU, to the end — as the Tracking Wizard's after-tracking
+    //         image check (`auto`, the way pose/tracker.js calls it), which used to report "skipped — needs WebGPU"
+    fx = await page.evaluate(async () => {
+        const fx = await window.__buildSwap([1, 1, 1]);
         const M = await import('/ui/id-switch-modal.js');
-        await M.runIdSwitchChecks({ image: true, inject: { createEmbedder: window.__fakeEmbedder(0), hasWebGPU: async () => false } });
-        return { status: document.getElementById('statusText').textContent, rows: document.querySelectorAll('#idSwitchPanel .id-switch-row').length };
+        window.__done = M.runIdSwitchChecks({ image: true, auto: true, statusPrefix: 'Assigned 3 identities', inject: { createEmbedder: window.__fakeEmbedder(10,
+            { backend: 'cpu', dtype: 'fp32', workers: 4, why: 'this browser has no WebGPU', adapter: '', fallback: false }) } });
+        return fx;
     });
-    check(/needs WebGPU/.test(noGpu.status) && !noGpu.rows, `without WebGPU it explains why ("${noGpu.status}")`);
+    await page.waitForFunction(() => /frame \d/.test(document.querySelector('.id-switch-progress-text')?.textContent || ''), null, { timeout: 10000 });
+    await page.waitForTimeout(1500);   // past the first load refresh: the CPU never shows a GPU load
+    const cpuLine = await gpuLine();
+    check(cpuLine.warn && cpuLine.text === 'No GPU: running on the CPU (4 workers) — slow' && /no WebGPU/.test(cpuLine.title),
+          `without a GPU the dialog says it runs on the CPU, in the warning colour ("${cpuLine.text}")`);
+    const noGpu = await page.evaluate(async () => { const r = await window.__done;
+        return { ok: r && r.image && r.image.ok, status: document.getElementById('statusText').textContent }; });
+    R = await rows();
+    const cpuRow = R.find(r => Math.abs(r.frame - fx.swapFrame) <= 60);
+    check(noGpu.ok && /^Assigned 3 identities · ID-switch check \(images\): 1 possible switch/.test(noGpu.status) && !!cpuRow,
+          `…and runs to the end and finds the switch at ${cpuRow && cpuRow.frame} (switch ${fx.swapFrame}) — "${noGpu.status}"`);
 
     // ---- 5. menu + default
     const ui = await page.evaluate(async () => ({ menu: !!document.getElementById('menuCheckImageSwitches'),

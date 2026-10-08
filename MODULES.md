@@ -8635,23 +8635,39 @@ markers on the seekbar — called after a check, from `updateInfoPanel` and from
 `clearIdSwitchResults(session?)` (called by `runTrackingPass` before it relabels);
 `ID_SWITCH_LEAD_IN_SECONDS`, `idSwitchLeadInFrame(marker, fps)`,
 `updateIdSwitchProgress(frame)`; back-compat
-`runSizeSwitchCheck`. `inject: {createEmbedder, hasWebGPU}` replaces the image
-model and the WebGPU probe — test-only (`tests/e2e/id-switch-image-check.mjs`).
+`runSizeSwitchCheck`. `inject: {createEmbedder}` replaces the image model —
+test-only (`tests/e2e/id-switch-image-check.mjs`).
 
 **Runs automatically after tracking.** `pose/tracker.js`'s `runTrackingPass` calls
 `runIdSwitchChecks({auto: true, statusPrefix, size, image})` after BOTH Track All
 and Track Frame Range: size when the Tracking Wizard's `autoSwitchCheck` is on
 (default), images when `autoImageSwitchCheck` is on (default OFF — minutes, needs
-the videos + WebGPU). Auto mode appends each check's result to the pass's status
+the videos; with no GPU it runs on the CPU, slower, rather than being skipped). Auto mode appends each check's result to the pass's status
 line ("Assigned N identities … · ID-switch check (body size): …; ID-switch check
 (images): …"), opens the ID Switches tab only when a possible switch is found, and reports
 a check that cannot run as "skipped — reason", never as a failure of the pass. It
 always analyses the WHOLE session's identities.
 
-**The image check.** Needs the session's videos and WebGPU (else it says why).
-Runs under its own cancellable progress dialog (Cancel / Esc -> "cancelled", no
+**The image check.** Needs the session's videos (else it says why). Not a GPU:
+without one the embedder runs the model on the CPU (`pickImageDevice` /
+`createCpuModelPool`, ui/image-embedder.js), ~15x slower, and the check runs as
+usual — from the menu and after tracking alike. It used to refuse ("needs WebGPU —
+on the CPU it would take hours"), which was the wrong call for a user who had
+opted in. `fmtDuration` therefore reaches hours ("about 2 h 5 min left"). Runs under its own cancellable progress dialog (Cancel / Esc -> "cancelled", no
 markers added): model download (first use), "Cropping and embedding N views:
-frame i of n — about X min left", then fitting. Reads `imageCheckHz` (default 2)
+frame i of n — about X min left", then fitting, with the overall percentage under
+the bar (the same rounded value as the bar's width; embedding is its first 90%) and
+the ID Switches rows' playhead line (`.id-switch-phead`) at the fill's leading edge.
+Under the percentage, the device line (`formatEmbedDevice`, ui/image-embedder.js):
+"GPU: Apple metal-3 (WebGPU, fp16) · load 87%", the load refreshed every second
+from the first embedded frame (`createLoadMeter` over `busyMs()`), so it falls to
+0% while fitting, which runs on the CPU; with no GPU, "No GPU: running on the CPU
+(4 workers) — slow" in the warning colour, why in its tooltip. An injected
+embedder without `device()` shows no line. The dialog's `finally` also calls the
+embedder's `releaseFrames` (idempotent): `checkImageSwitches` does too, but not
+when it fails before its first frame, and the CPU workers hold ~600 MB each. On a
+CPU run "About these flags" says the model ran on the CPU, instead of the GPU-busy
+hint. Reads `imageCheckHz` (default 2)
 and `imageCheckThreshold` (default -25). Measured on a real 5-min, 3-animal,
 8-camera session in Chrome (HEVC from Google Drive), before streaming decode and
 view selection: 370 s, ~20 crops/s end to end. Its encounter scores matched the
@@ -8746,7 +8762,8 @@ rename them wrongly.
 `getActiveSession`), `import-export/save-load.js` (`setStatus`),
 `ui/loading-overlay.js` (`showLoadingProgress`, `hideLoading`, `yieldToPaint`),
 `ui/settings.js` (`getTrackingThreshold`), `pose/id-switch-check.js`,
-`ui/image-embedder.js` (`hasWebGPU`, `createImageEmbedder`),
+`ui/image-embedder.js` (`createImageEmbedder`, `IMAGE_MODEL_MB`, `formatEmbedTiming`,
+`createLoadMeter`, `formatEmbedDevice`),
 `ui/id-switch-review.js` (row keys, change-point helpers, `linkIdSwitchResults`,
 `idSwitchFixPlan`, `idSwitchFixFor`, `idSwitchRenameForFix`),
 `ui/id-switch-highlight.js` (`setIdSwitchHighlight`, `updateIdSwitchHighlight`,
@@ -8889,7 +8906,38 @@ project with a row selected over the whole run).
 frame and the identities present, decode that frame in every camera
 (streamed, and moved to the nearest keyframe when keyframes are dense: see
 below), cut a masked, pose-aligned crop of each identity from
-its own 2D keypoints, and embed the crops with DINOv2-small on the GPU.
+its own 2D keypoints, and embed the crops with DINOv2-small — on the GPU, or
+without one on the CPU.
+
+**Where the model runs** (`pickImageDevice`, at `createImageEmbedder`): a HARDWARE
+WebGPU adapter, else the CPU — no WebGPU, no adapter, or only a software one.
+SwiftShader (headless Chromium with WebGPU on; what a VM with no GPU gets) ran
+the model at 0.27 crops/s, 10x slower than ONE CPU worker, so it is never used.
+**The CPU path** runs the fp32 model on WebAssembly in module workers
+(`createCpuModelPool`, `ui/image-model-worker.js`), each with its own model.
+Measured on a 12-core M2 Pro, in the browser:
+- **Same embeddings.** CPU fp32 vs WebGPU fp32: cosine 1.00000 on every crop
+  (vs WebGPU fp16: 0.9997–0.9999). The CPU runtime's DEFAULT model is int8, and
+  that is what "drifts from the calibrated embeddings" referred to — the dtype,
+  not the device.
+- **Off the main thread, or the page freezes.** On it, one run blocks the page for
+  its whole duration: 0.33 s for 1 crop, 2.6 s for 8 — the dialog and its Cancel
+  stall. onnxruntime's own `wasm.proxy` worker cannot start from the CDN bundle
+  ("worker not ready"), so LUCID runs its own. In workers the longest main-thread
+  gap was 51 ms.
+- **Several workers, because one thread each.** Without cross-origin isolation
+  (which GitHub Pages cannot turn on) WebAssembly gets ONE thread. Workers scale:
+  1 -> 2.8, 2 -> 5.1, 4 -> 9.7, 6 -> 13.8, 8 -> 14.6 crops/s (GPU: ~150). Each
+  costs ~600 MB of process memory (its own model + runtime), so
+  `cpuModelWorkerCount` takes half the cores beyond two, at most one per 2 GB of
+  `navigator.deviceMemory`, at most `CPU_MODEL_MAX_WORKERS` (4), at least 1.
+- The first worker downloads the model (88 MB, reported) and the rest load it from
+  the browser cache; a worker that fails to start is dropped. `run(data, n)`
+  splits a batch evenly over the workers, in order. `releaseFrames` terminates
+  them — they are not kept between runs (reloading is ~1 s from cache).
+WebNN is not tried on the CPU path (it is judged against WebGPU). The run
+summary says "model busy" and "CPU (N workers) fp32" instead of "GPU busy" /
+"WebGPU".
 
 **Speed.** `prepareFrames(frames)` opens one `streamingReader` per camera over the
 whole sorted frame list (mediabunny `samplesAtTimestamps`: decode forward once,
@@ -8931,6 +8979,21 @@ frames, 8 cameras, 8 in flight): RTX 2000 Ada PC 131 crops/s, GPU busy 92% at
 supply-bound. 16 in flight was tried and reverted: no change (PC 124, VM 160
 crops/s; decode is throughput-bound, so each frame just waited twice as long)
 while the PC's dedicated GPU memory climbed to 10.6 GB.
+**Live, in the progress dialog** (`device()` / `busyMs()` -> `formatEmbedDevice`
++ `createLoadMeter`): which GPU runs the model and how busy the check keeps it.
+`gpuAdapterInfo(device, adapter)` names it from the model's own
+`GPUDevice.adapterInfo` (onnxruntime's `env.webgpu.adapter` is undefined in this
+build; a fresh default adapter is the last resort) — "Apple metal-3" from vendor
++ architecture, since browsers usually withhold `description` — and reads
+`isFallbackAdapter`. That flag matters: a SOFTWARE adapter (SwiftShader) is
+WebGPU on the CPU, so `pickImageDevice` sends it to the CPU workers, and the line
+says "No GPU" in the warning colour instead of a load. The load is the share of the last `GPU_LOAD_WINDOW_MS`
+(5 s) spent in model runs, the one in flight included — `gpuBusyPct`, but recent.
+No browser API reports a GPU's total utilisation, so other apps' use is not in
+it, and its tooltip says so. Real model, M2 Pro, 8 views: 92 -> 99% while
+embedding (148 crops/s; whole-run `gpuBusyPct` 98%), then 86 / 63 / 43 / 24 / 4 /
+0% at 1 s steps once idle. WebNN is not called a GPU (the browser picks its
+device; it measured CPU-only on macOS).
 **Decode workers were tried and removed** (2026-10-04). The recordings are HEVC,
 P-frames only, a keyframe every 250 frames, so the check decodes essentially
 every frame of every camera (~2,000–2,700 decoded frames/s on the field
@@ -9022,12 +9085,21 @@ decode + crop ceiling rose from 145 to ~270 crops/s at 3 views (decoding alone:
 Numbers in `ui/id-switch-modal.js`.
 
 **Key exports.** `createImageEmbedder(session, {onStatus, maxViewsPerAnimal, webnn, keyframes})` ->
-`{getEmbeddings, prepareFrames, releaseFrames, backend, stats, inFlight, views}` (the provider
-`checkImageSwitches` needs; `releaseFrames` also terminates the crop pool and
-disposes a WebNN model);
-`loadImageModel(onStatus)` (once, cached promise); `hasWebGPU()`;
+`{getEmbeddings, prepareFrames, releaseFrames, backend, device, busyMs, stats, inFlight, views}` (the provider
+`checkImageSwitches` needs; `releaseFrames` also terminates the crop pool and the
+CPU model workers and disposes a WebNN model; `device()` -> `{backend: 'webgpu'|'webnn'|'cpu',
+comparing, dtype, adapter, fallback, workers, why}` and `busyMs()` feed the progress
+dialog's device line); `opts.device` ('auto' | 'webgpu' | 'cpu') and `opts.cpuWorkers`
+force a device / worker count (tests, benchmarking);
+`pickImageDevice()` -> `{kind: 'webgpu'|'cpu', adapter, why}`; `cpuModelWorkerCount(cores, memoryGB)`,
+`CPU_MODEL_MAX_WORKERS`; `createCpuModelPool(count, onStatus)` -> `{size, run(data, n) ->
+Promise<Float32Array[]>, terminate()}`;
+`loadImageModel(onStatus)` (WebGPU; once, cached promise);
 `selectViews(geos, maxViews)`; `EMBED_MAX_BATCH`, `EMBED_IN_FLIGHT`,
 `summarizeEmbedTiming(tm, backend, dtype)`, `formatEmbedTiming(t)`;
+`describeAdapter(info)`, `gpuAdapterInfo(device, adapter)` -> `{name, fallback}`,
+`createLoadMeter(windowMs)` -> `(now, busyMs) -> pct|null`, `GPU_LOAD_WINDOW_MS`,
+`formatEmbedDevice(device, load)` -> `{text, warn, title}`;
 `keyframeIndices(decoder)` -> `Promise<Int32Array|null>` (cached per video);
 `summarizeKeyframePlans(plans)`; WebNN: `hasWebNN()`, `loadWebNNModel(onStatus)`,
 `chooseBackend(trial)`, `WEBNN_BATCH`, `WEBNN_TRIAL_FRAMES`; `createCropPool()` -> `{run(image, crops) ->
@@ -9106,6 +9178,37 @@ is worker-safe).
 **Spawned by.** `ui/image-embedder.js` (`createCropPool`).
 
 **Coverage.** `tests/e2e/image-crop-worker.mjs`.
+
+---
+
+### ui/image-model-worker.js
+
+**Purpose.** Module worker that runs the image ID-switch check's model on the CPU
+when there is no hardware GPU: DINOv2-small at **fp32** on WebAssembly (the
+default int8 is what drifts from the calibration; fp32 equals the WebGPU fp32
+model, cosine 1.00000). Off the main thread because there a run blocks the page
+for its whole duration (2.6 s for 8 crops); several run side by side because
+WebAssembly gets one thread without cross-origin isolation. See
+`ui/image-embedder.js` ("The CPU path") for the measurements.
+
+**Messages.** IN `{type: 'load'}` -> `{type: 'loaded'}` (while downloading:
+`{type: 'progress', loaded, total}`) or `{type: 'error', message}`; IN `{type:
+'run', id, data: Float32Array(n x 3 x 224 x 224) (transferred), n}` -> `{type:
+'result', id, cls: Float32Array(n x 384) (transferred), dim}` — each crop's CLS
+token, read exactly as the main thread's `clsVectors` does — or `{type: 'error',
+id, message}`.
+
+**Imports from project modules.** `ui/image-embedder.js` (`TRANSFORMERS_URL`,
+`IMAGE_MODEL_ID`, `INPUT` — so the pin stays in one place), then the runtime from
+`TRANSFORMERS_URL` (a dynamic cross-origin import, which a module worker may do).
+
+**Spawned by.** `ui/image-embedder.js` (`createCpuModelPool`).
+
+**Coverage.** `tests/e2e/image-check-cpu.mjs` (the real model in headless Chromium,
+which has no GPU: vectors bit-identical to the main thread's per animal and camera,
+a responsive page, worker teardown, and the real dialog — the after-tracking path —
+running instead of refusing); `tests/e2e/id-switch-image-check.mjs` §4 (the dialog
+with no GPU runs to the end and finds the switch).
 
 ---
 
