@@ -32,7 +32,7 @@ import { planeState } from './plane-definition.js';
  *
  * The VISIBILITY controls are deliberately absent from this list, and so are
  * Sessions, Tracks / Identity and the Panel toggle. Those change what is DRAWN, not what is
- * annotated — turning Predicted off to see the plane you are placing is
+ * annotated — turning Predictions off to see the plane you are placing is
  * exactly the kind of thing this mode is for.
  *
  * @type {string[]}

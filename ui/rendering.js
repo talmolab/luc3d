@@ -74,12 +74,12 @@ export function showReprojectionsOnly() {
 }
 
 // Suffix for a Triangulate All status line when `showReprojectionsOnly` hid
-// anything, so the user knows where User / Predicted went.
+// anything, so the user knows where User / Predictions went.
 export var REPROJ_ONLY_NOTE = ' · showing Reprojections only (toolbar)';
 
 /**
  * After Track Frame / Track Frame Range / Track All: the run's product is the
- * tracked PREDICTIONS (now colored by identity), so show only those — Predicted
+ * tracked PREDICTIONS (now colored by identity), so show only those — Predictions
  * on; User, Reprojections and Errors off. Same mechanics as `showReprojectionsOnly`
  * (each box fires its own `change` event). Returns whether anything changed.
  */
@@ -88,7 +88,7 @@ export function showPredictedOnly() {
 }
 
 // Suffix for a tracking status line when `showPredictedOnly` changed anything.
-export var PREDICTED_ONLY_NOTE = ' · showing Predicted only (toolbar)';
+export var PREDICTED_ONLY_NOTE = ' · showing Predictions only (toolbar)';
 
 /** Set toolbar layer checkboxes `[[id, checked], …]` as clicks would; true if any changed. */
 function setToolbarLayers(want) {

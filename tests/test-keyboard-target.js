@@ -6,7 +6,7 @@
  *
  *     if (e.target.tagName === 'INPUT' || ... ) return;
  *
- * `tagName` is `INPUT` for a CHECKBOX, so clicking User / Predicted /
+ * `tagName` is `INPUT` for a CHECKBOX, so clicking User / Predictions /
  * Reprojections / Errors made the app deaf to EVERY key, not just the one the checkbox wanted.
  * The assertions below are therefore about the distinction that line could not
  * draw: a text field consumes the whole alphabet, a checkbox consumes exactly

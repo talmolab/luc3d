@@ -4719,7 +4719,7 @@ reflect the freshly-active session's hidden sets.
 
 **Visibility tab — section order + Display Legend (Phase-7 refinement).**
 `index.html` reorders the tab so the **Timeline** subsection is at the
-top of the Visibility panel (above User / Predicted / Reprojections).
+top of the Visibility panel (above User / Predictions / Reprojections).
 The **Display Legend** control is its own `<h3>` section sitting between
 Reprojections and Video Brightness, mirroring how Video Brightness and
 Video Rotation are presented. All static checkboxes in the panel
@@ -5726,7 +5726,7 @@ whether any of this is applied.
 **Unlinked instances ARE drawn**, in the preview and in the encoded frames, by
 `collectUnlinked(frameGroup, viewName)` — which reads the RAW `FrameGroup` via
 `getUnlinkedInstances()` (NOT the `toOverlayFrameGroup` copy, which carries only
-`frameGroup.instances`) and filters by the User/Predicted layer checkboxes, so
+`frameGroup.instances`) and filters by the User/Predictions layer checkboxes, so
 unticking a layer drops its unlinked instances too. It is assigned onto the
 options as `opts.unlinkedInstances = …` rather than passed in the
 `overlayOptionsFrom` literal — worth knowing, because a grep for
@@ -6226,7 +6226,7 @@ data sources. Plus visibility-toggle helpers and frame counter updates.
   column. Showing it ticks the Reprojections and Errors boxes unless
   `opts.checkBoxes === false`.
 - `showReprojectionsOnly()` -> `boolean` — after Triangulate All (#243): User,
-  Predicted, Errors off, Reprojections on, each changed box firing its own `change`
+  Predictions, Errors off, Reprojections on, each changed box firing its own `change`
   event (so the deselect-hidden-instance handler and redraw run as for a
   click); returns whether anything changed. `REPROJ_ONLY_NOTE` is the status
   suffix the callers append when it did. The four Triangulate All endings
@@ -6235,7 +6235,7 @@ data sources. Plus visibility-toggle helpers and frame counter updates.
   false})` then this, so a run is compared with the USER's boxes, not with
   Errors just re-ticked.
 - `showPredictedOnly()` -> `boolean` — the tracking counterpart: after Track
-  Frame / Track Frame Range / Track All (`pose/tracker.js`) Predicted on; User,
+  Frame / Track Frame Range / Track All (`pose/tracker.js`) Predictions on; User,
   Reprojections, Errors off, by the same change-event mechanics (shared private
   `setToolbarLayers`). `PREDICTED_ONLY_NOTE` is its status suffix.
 - `getVisibilitySettings()` — reads per-view checkbox state from the DOM.
@@ -7226,9 +7226,9 @@ object than the plane geometry the mode is for: in the mode a click lands on a
 plane node, the info panel is the plane panel, and `interactionManager`'s
 selection is a plane — so pressing Group or Triangulate would operate on a pose
 selection the user can no longer see or change, producing an edit they did not
-mean and cannot observe. The VISIBILITY controls (User / Predicted /
+mean and cannot observe. The VISIBILITY controls (User / Predictions /
 Reprojections / Errors), Sessions, Tracks / Identity and the Panel toggle are deliberately NOT blocked: they
-change what is DRAWN, not what is annotated, and turning Predicted off to see
+change what is DRAWN, not what is annotated, and turning Predictions off to see
 the plane you are placing is exactly what the mode is for.
 
 Three details it has to get right:
@@ -10232,7 +10232,7 @@ stopping at the last frame; the step transport buttons/keys stop it first.
   via `setHandler`), which calls the SAME `togglePlaneMode()` — exiting has real
   unwinding to do (Set Origin Mode, the angle dialog, the toolbar lock), so a
   second entry point would be a second place to forget it. `p` alone is Toggle
-  Predicted, and the two are separated only by `matchChord`'s rule that a bare
+  Predictions, and the two are separated only by `matchChord`'s rule that a bare
   letter requires shift to be UP. Covered by
   `tests/e2e/define-planes-shortcut.mjs`.
 - Help ▸ **Hot Keys** (`menuHotkeys`) and **`?`** (`showHotkeys` in
@@ -10366,7 +10366,7 @@ the solo'd view itself);
 
 **Visibility panel — the global/session split.** `saveVisSettings` /
 `restoreVisSettings` cache the panel's **global appearance preferences** (the
-`visSliderIds` / `visCheckIds` / `visStyleIds` lists — User, Predicted,
+`visSliderIds` / `visCheckIds` / `visStyleIds` lists — User, Predictions,
 Reprojections, Planes, Display Legend and 3D Viewer) in
 `localStorage.visibilitySettings`. Those are browser-local display taste, shared
 across every session, and are deliberately **not** written into the `.slp`:
@@ -12772,7 +12772,7 @@ holds two kinds of state:
   timeline's hidden camera / track / identity sets. These describe *this
   project's* videos and entities, so they belong in the project file. That is
   everything this module handles.
-- **Global appearance preferences** — the User / Predicted / Reprojections /
+- **Global appearance preferences** — the User / Predictions / Reprojections /
   Planes / Display Legend / 3D Viewer sliders, styles and toggles. Those are
   browser-local display taste, shared across every session, and stay in
   `localStorage.visibilitySettings` (see `ui/ui-wiring.js`). They are **not**

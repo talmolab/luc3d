@@ -518,7 +518,7 @@ Three rules hold, and there are tests pinning each:
   and sleap-io.js round-trip as opaque JSON, so files stay SLEAP-GUI readable and
   no other `.slp` import/export path changes.
 
-The panel's **global appearance preferences** (User / Predicted / Reprojections /
+The panel's **global appearance preferences** (User / Predictions / Reprojections /
 Planes / Display Legend / 3D Viewer) deliberately stay in
 `localStorage.visibilitySettings` — they are browser-local display taste, not
 project state. Do not move them into the `.slp`.
@@ -1381,7 +1381,7 @@ do) or the container resizable — not scrollable twice.
 `Track Frame` and `Track All` are disabled while the mode is on
 (`applyPlaneModeToolbarLock` in `ui/plane-definition.js`) — they act on POSE
 annotation, which in the mode is a selection the user can no longer see or
-change. The **visibility** controls (User / Predicted / Reprojections / Errors),
+change. The **visibility** controls (User / Predictions / Reprojections / Errors),
 Sessions, Tracks / Identity and the Panel toggle stay live: they change what is DRAWN, not what
 is annotated. Adding a button to that lock means adding its id to
 `PLANE_LOCKED_TOOLBAR_IDS`; if it opens a menu, its wrapper also needs
@@ -1395,7 +1395,7 @@ The mode itself is entered from **View ▸ Define Planes** or **`Mod+Shift+P`**
 (`definePlanes` in `ACTION_CATALOG`, dispatched to `togglePlaneMode`). Both go
 through that one function, because leaving the mode has unwinding to do — Set
 Origin Mode, the angle dialog, the toolbar lock — and a second entry point would
-be a second place to forget it. `p` alone is Toggle Predicted; the two are kept
+be a second place to forget it. `p` alone is Toggle Predictions; the two are kept
 apart only by `matchChord`'s rule that a bare letter requires shift to be UP, so
 that pairing is pinned by `tests/e2e/define-planes-shortcut.mjs` along with the
 binding being suppressed while a plane-name field has focus.
