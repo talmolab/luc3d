@@ -2587,6 +2587,21 @@ output, never from the observer.
 Frame and Track Frame Range are refused on one camera (the tracker is temporal,
 and a range would need its new tracks mapped onto the old ones).
 
+**Where the image check's swapped stretch ends.** On one camera the image check
+ends a run of flagged encounters only at an encounter scoring above
++|threshold| (`singleCameraImageContinueBelow`, passed as `continueBelow` by
+`ui/id-switch-modal.js`), not at any score above 0 as elsewhere. Crowded contacts
+leave each animal alone for a few seconds, so an encounter in a huddle scores
+near 0 either way, and ending the run there split one swap into two rows with
+the stretch between them unfixed: on the 5-mouse topC video a +24 (median
+|score| 331) ended the id_3 / id_4 swap at 25:23.9, and Fixing both rows left the
+tracks 93.8% correct instead of 99.9%. On the 35 proofread SLAP videos (image
+check at -25): rows 96 -> 78 (false 71 -> 51), 18 of 59 swaps caught instead of
+17, and the real rows' Fixes add 66 accuracy points instead of 54. +50 or +100
+merge runs across real switch-backs (15 caught). The brightness check keeps 0:
+its encounter scores are mostly noise, and +800 cost it a swap. The size check
+and multi-camera image check are unchanged (not measured).
+
 **Key exports.** `singleCameraName(session)` (the camera, or null);
 `singleCameraTrackerConfig(numAnimals, {windowSize, oksStddev, connectBreaks})`;
 `trackSingleCamera(session, cfg, {onProgress, signal, fps, look})` ->
@@ -2594,7 +2609,8 @@ and a range would need its new tracks mapped onto the old ones).
 out, inputTracks, ambiguous, look, fps)`; `CANDIDATE_DEFAULTS` (`ambiguityMargin`
 0.1, `trackletGapFrames` 5, `clusterSeconds` 3); `singleCameraCheckSession(session)`
 -> stand-in | null | `{fail}`; `swapSingleCameraIdentities(session, from, to, idA, idB)`
--> `{frames, tracks: boolean}` | null; `SINGLE_CAMERA_LAZY_REASON`.
+-> `{frames, tracks: boolean}` | null; `singleCameraImageContinueBelow(threshold)`
+-> |threshold| (above); `SINGLE_CAMERA_LAZY_REASON`.
 
 **Imports from project modules.** `pose/sleap-tracker.js`.
 
@@ -2604,9 +2620,11 @@ checks and the fix).
 **Coverage.** `tests/test-single-camera-tracking.mjs` (one track per animal
 across 18 input tracklet breaks, the spurious detection and the user frame, the
 stand-in and a planted swap found by the real size check, the track swap and
-its fallback, the refusals) and `tests/e2e/single-camera-track-all.mjs` (the
-real buttons, the refusals, and a planted swap found, fixed and undone through
-the ID Switches tab). `tests/e2e/_real-single-camera.mjs` runs the whole thing
+its fallback, the refusals, and §5 the image check's run-ending rule on topC's
+own scores) and `tests/e2e/single-camera-track-all.mjs` (the real buttons, the
+refusals, a planted swap found, fixed and undone through the ID Switches tab,
+and §6 the rule applied by the app; `tests/e2e/id-switch-image-check.mjs` pins
+that several cameras keep 0). `tests/e2e/_real-single-camera.mjs` runs the whole thing
 on a real SLEAP file through File ▸ Load SLP.
 
 ---
@@ -3612,7 +3630,7 @@ headlessly (the image and brightness checks with any vector provider).
 
 **Key exports.** `checkSizeSwitches(session, opts)` and
 `checkImageSwitches(session, opts)` and `checkBrightnessSwitches(session, opts)` (async) -> `{ok, flags, changes, encounters, moments,
-identities, sampledFrames, closeDistance, threshold, fps, step, sampleHz, cue}`
+identities, sampledFrames, closeDistance, threshold, continueBelow, fps, step, sampleHz, cue}`
 (+ `bones` for size; + `imageHz`, `crops`, `cameras` for images) or
 `{ok:false, reason}`; `markChangePoints(scored, o)` (the change-point step,
 exported so calibration can re-apply thresholds to the same scores);
@@ -8941,8 +8959,11 @@ detection rather than no 3D skeleton, and "About these flags" calls the size cue
 2D. A fix swaps the two TRACKS there (`swapSingleCameraIdentities`, which is
 also the undo), so the saved `.slp` carries it; its dialog says "(their tracks)"
 instead of "in every camera view". Results are kept on the real session as
-usual. Single-camera Track All runs only the image check automatically (body
-size from one view is not a usable cue — see `pose/single-camera-tracking.js`).
+usual. Single-camera Track All runs the coat-brightness check automatically, and
+the image check when `autoImageSwitchCheck` is on — never body size, which from
+one view is not a usable cue (see `pose/single-camera-tracking.js`). The image
+check there ends a run of flagged encounters only above +|imageCheckThreshold|
+(`continueBelow`, from `singleCameraImageContinueBelow`; the result carries it).
 On a real 10-min single-camera SLAP video in headless Chrome the image check
 took 32 s (one view, 3 mice, 2 crops/s).
 
@@ -9046,7 +9067,7 @@ rename them wrongly.
 `ui/loading-overlay.js` (`showLoadingProgress`, `hideLoading`, `yieldToPaint`),
 `ui/settings.js` (`getTrackingThreshold`), `pose/id-switch-check.js`,
 `pose/single-camera-tracking.js` (`singleCameraName`, `singleCameraCheckSession`,
-`swapSingleCameraIdentities`),
+`swapSingleCameraIdentities`, `singleCameraImageContinueBelow`),
 `ui/image-embedder.js` (`hasWebGPU`, `createImageEmbedder`),
 `ui/id-switch-review.js` (row keys, change-point helpers, `linkIdSwitchResults`,
 `idSwitchFixPlan`, `idSwitchFixFor`, `idSwitchRenameForFix`),

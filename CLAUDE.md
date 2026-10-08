@@ -696,6 +696,13 @@ the animal count, connect single breaks). Rules:
   false rows (the image check's: 13, 12 shared); its encounter rows were noise,
   hence its strict -800 encounter threshold. Uncalibrated on multi-camera data,
   so it is not run automatically there.
+- **On one camera the image check ends a swapped stretch only at a clearly
+  positive encounter** (`continueBelow` = +|threshold|,
+  `singleCameraImageContinueBelow`), not at any score above 0. A near-zero
+  encounter in a huddle split one swap into two rows and left the stretch
+  between them unfixed (topC: 93.8% -> 99.9% correct after both Fixes; SLAP:
+  false rows 71 -> 51, 18 of 59 caught instead of 17). Brightness keeps 0 (its
+  encounter scores are noise); size and multi-camera are unchanged.
 - **Eager only.** A lazy (> 150 MB) single-camera project is refused with a
   reason, never tracked from its resident window — the resident-only bug class.
 

@@ -34,7 +34,7 @@ import { setStatus, markDirty } from '../import-export/save-load.js';
 import { showLoadingProgress, hideLoading, yieldToPaint } from './loading-overlay.js';
 import { getTrackingThreshold } from './settings.js';
 import { checkSizeSwitches, checkImageSwitches, checkBrightnessSwitches } from '../pose/id-switch-check.js';
-import { singleCameraName, singleCameraCheckSession, swapSingleCameraIdentities } from '../pose/single-camera-tracking.js';
+import { singleCameraName, singleCameraCheckSession, swapSingleCameraIdentities, singleCameraImageContinueBelow } from '../pose/single-camera-tracking.js';
 import { hasWebGPU, createImageEmbedder, IMAGE_MODEL_MB, formatEmbedTiming } from './image-embedder.js';
 import { createBrightnessSampler } from './brightness-sampler.js';
 import { idSwitchRowKey as rowKey, idSwitchPrimary as primaryOf, idSwitchMarkers as markersOf, idSwitchOnsets as countOnsets,
@@ -171,8 +171,9 @@ async function runSize(session, rate, moments) {
     } finally { hideLoading(); }
 }
 
-async function runImage(session, rate, inject, moments) {
+async function runImage(session, rate, inject, moments, single) {
     inject = inject || {};
+    var threshold = getTrackingThreshold('imageCheckThreshold');
     var views = (state.views || []).filter(function (v) { return v && v.decoder; });
     if (!views.length && !inject.createEmbedder) return { ok: false, reason: 'needs the session\'s videos to be loaded' };
     if (!(await (inject.hasWebGPU || hasWebGPU)())) return { ok: false, reason: 'needs WebGPU (current Chrome or Edge) — on the CPU it would take hours' };
@@ -183,10 +184,10 @@ async function runImage(session, rate, inject, moments) {
             maxViewsPerAnimal: getTrackingThreshold('imageCheckMaxViews'),
             webnn: getTrackingThreshold('imageCheckWebNN') > 0 });
         t0 = performance.now();
-        var res = await checkImageSwitches(session, {
+        var opts = {
             fps: rate.fps,
             imageHz: getTrackingThreshold('imageCheckHz') || 2,
-            threshold: getTrackingThreshold('imageCheckThreshold'),
+            threshold: threshold,
             moments: moments,
             getEmbeddings: embedder.getEmbeddings,
             prepareFrames: embedder.prepareFrames,
@@ -203,7 +204,10 @@ async function runImage(session, rate, inject, moments) {
                 }
                 await yieldToPaint();
             },
-        });
+        };
+        // On one camera a run of flagged encounters ends only at a clearly positive one (see the helper).
+        if (single) opts.continueBelow = singleCameraImageContinueBelow(threshold);
+        var res = await checkImageSwitches(session, opts);
         if (res && embedder.backend) res.model = embedder.backend();   // after releaseFrames: the final word
         if (res && embedder.stats) {
             res.timing = embedder.stats();                 // where the time went, on THIS machine
@@ -304,7 +308,7 @@ export async function runIdSwitchChecks(opts) {
         var res;
         try {
             res = cue === 'size' ? await runSize(target, rate, moments)
-                : cue === 'image' ? await runImage(target, rate, opts.inject, moments)
+                : cue === 'image' ? await runImage(target, rate, opts.inject, moments, single)
                 : await runBrightness(target, rate, opts.inject, moments);
         }
         catch (e) {
