@@ -22,6 +22,10 @@
  *     with a candidate moment there, gets a row AT the moment, saying why it was
  *     looked at — which survives the saved checklist (metadata.lucid.idSwitchReview)
  *     — on top of the encounter rows, which are what they were without it.
+ *  5. The coat-brightness check (what Tracks ▸ Check ID Switches (Coat
+ *     Brightness) runs), with a stand-in sampler (the coats differ): a change point both it and
+ *     the size check find is ONE "Both" row on the size result (violet + amber),
+ *     and its ticks are on the seekbar.
  *
  * Run: node tests/e2e/single-camera-track-all.mjs
  */
@@ -93,6 +97,8 @@ try {
         'status names SLEAP\'s tracker and the switch to Color: ID: ' + st1.slice(0, 90));
     check(/ID-switch check \(body size\): not run on one camera/.test(st1) && !/possible switch/.test(st1),
         'the automatic body-size check is not run on one camera, and the status says so');
+    check(/ID-switch check \(coat brightness\): skipped — needs the session's videos to be loaded/.test(st1),
+        'the automatic coat-brightness check runs instead (here skipped: no video in this fixture)');
     const tr = await page.evaluate(() => window.__tracks());
     const perAnimal = [0, 1, 2].map(a => new Set(tr.map(r => r[a])));
     check(perAnimal.every(x => x.size === 1) && new Set(perAnimal.map(x => [...x][0])).size === 3,
@@ -173,6 +179,35 @@ try {
     check(mrow && /input tracklet changes animal/.test(mrow.text) && !/close/.test(mrow.text),
         'the row says why it was looked at, and does not call it a close encounter: ' + (mrow || {}).text);
     check(row4.back.length === 1 && JSON.stringify(row4.back[0][1]) === '["tracklet"]', 'the cue survives the saved checklist: ' + JSON.stringify(row4.back));
+
+    console.log('\n5. Coat brightness, and "Both" with the size check');
+    const br = await page.evaluate(async () => {
+        const S = window.__lucid.state.session, M = await import('/ui/id-switch-modal.js'), B = await import('/ui/brightness-sampler.js');
+        // a stand-in for the video: each animal's coat is the brightness of its size (animals 0 / 1 / 2 by how they were added)
+        const coatOf = new Map();
+        for (const fg of S.frameGroups.values()) fg.getUnlinkedInstances('mouse_video').forEach((u, a) => coatOf.set(u.instance, [40, 120, 210][a]));
+        let seed = 9; const r = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+        const fake = (session) => ({
+            views: ['mouse_video'], inFlight: 2,
+            prepareFrames: async () => {}, releaseFrames: () => {},
+            getEmbeddings: async (frame, items) => items.map(it => {
+                const inst = it.group.instances.get('mouse_video');
+                return [{ camera: 'mouse_video', vector: B.brightnessFeatures(Array.from({ length: 11 }, () => coatOf.get(inst) * (0.85 + 0.3 * r()))) }];
+            }),
+        });
+        await M.runIdSwitchChecks({ size: true, brightness: true, inject: { createBrightnessSampler: fake } });
+        const rows = Array.from(document.querySelectorAll('#idSwitchPanel .id-switch-row')).map(r => ({ frame: Number(r.dataset.frame), cls: r.className, text: r.textContent }));
+        const st = S._idSwitch;
+        return { status: document.getElementById('statusText').textContent, rows,
+                 brOk: !!(st.results.brightness && st.results.brightness.ok),
+                 marks: Array.from(document.querySelectorAll('#seekbarMarks .seekbar-mark')).map(m => m.className) };
+    });
+    check(br.brOk && /Check ID Switches \(coat brightness\): \d+ possible switch/.test(br.status), 'the brightness check ran: ' + br.status.slice(0, 120));
+    const bothRow = br.rows.find(r => Math.abs(r.frame - 1800) <= 30 && /cue-both/.test(r.cls));
+    check(bothRow && /cue-both-size-brightness/.test(bothRow.cls) && /Both/.test(bothRow.text),
+        'the switch both checks find is one "Both" row (size + brightness): ' + JSON.stringify(br.rows.map(r => [r.frame, r.cls.replace('id-switch-row ', '')])));
+    check(br.rows.filter(r => Math.abs(r.frame - 1800) <= 30).length === 1, '…listed once');
+    check(br.marks.some(c => /cue-both-size-brightness/.test(c)), 'and its seekbar tick wears both colours');
 
     check(errs.length === 0, 'no page errors' + (errs.length ? ': ' + errs.join(' | ') : ''));
 } finally {

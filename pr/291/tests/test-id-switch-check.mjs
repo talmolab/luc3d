@@ -262,6 +262,67 @@ group('Image check — catches a swap between animals of IDENTICAL size (the siz
     eq(clean.flags.length, 0, 'image check: clean labels → no flags');
 }
 
+group('Coat brightness check — the image machinery on brightness vectors (ui/brightness-sampler.js)');
+{
+    const B = await import(pathToFileURL(path.join(ROOT, 'ui', 'brightness-sampler.js')).href);
+    // pure pieces: radius, disc mean, features, keypoint selection
+    eq(B.discRadius(140), 4, 'disc radius: 4 px for a 140 px animal (what it was calibrated on)');
+    ok(B.discRadius(5) === 1 && B.discRadius(2000) === 8, 'disc radius clamped to 1–8 px');
+    const w = 20, h = 10, px = new Uint8ClampedArray(w * h * 4);
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) { const o = (y * w + x) * 4; const v = x < 10 ? 40 : 200; px[o] = px[o + 1] = px[o + 2] = v; px[o + 3] = 255; }
+    eq(Math.round(B.discMean(px, w, h, 100, 50, 104, 55, 2)), 40, 'disc mean reads the dark half (region origin offset)');
+    eq(Math.round(B.discMean(px, w, h, 100, 50, 115, 55, 2)), 200, '…and the bright half');
+    ok(Number.isNaN(B.discMean(px, w, h, 100, 50, 300, 300, 2)), 'a disc wholly outside the region: NaN');
+    ok(B.brightnessFeatures([10, 20, 30]) === null, 'fewer than 4 keypoints: no vector');
+    const f = B.brightnessFeatures([200, 10, 30, 20, NaN, 40]);
+    ok(f && f.length === 4 && Math.abs(f[1] - Math.log(1 + 30)) < 1e-12 && Math.abs(f[3] - Math.log(1 + 60)) < 1e-12,
+        'features: log(1+x) of the 10th / 50th / 90th percentile and the mean, NaN skipped');
+    const inst = new PD.Instance([[0, 0], [10, 0], [0, 10], null, [140, 0]], 0, 'predicted', 1);
+    inst.setOccluded(2, true);
+    const bp = B.bodyPoints(inst, [0, 1, 2, 3, 4]);
+    ok(bp === null, 'occluded and missing keypoints are skipped (3 left: no vector)');
+    const bp2 = B.bodyPoints(new PD.Instance([[0, 0], [10, 0], [0, 10], [70, 0], [140, 0]], 0, 'predicted', 1), [0, 1, 2, 3, 4]);
+    ok(bp2 && bp2.pts.length === 5 && bp2.r === 4, `body points and their radius (${bp2 && bp2.r} px)`);
+
+    // the check: animals of IDENTICAL size whose coats differ — size misses the swap, brightness finds it
+    const SWAP = 16, coat = [30, 90, 200];
+    const { session, events, encounterEnds } = buildSession(SWAP, 60, [1, 1, 1]);
+    let seed = 3; const r = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+    const provider = async (frame, items) => items.map(it => ['cA', 'cB'].map(cam => {
+        const g = coat[it.group._animal], vals = Array.from({ length: 11 }, () => g * (0.8 + 0.4 * r()));
+        return { camera: cam, vector: B.brightnessFeatures(vals) };
+    }));
+    const size = await SC.checkSizeSwitches(session, { fps: 60 });
+    const br = await SC.checkBrightnessSwitches(session, { fps: 60, threshold: -200, getEmbeddings: provider });
+    const pairKey = events[SWAP].pair.map(k => 'id_' + k).sort().join(), isPair = e => [e.nameA, e.nameB].sort().join() === pairKey;
+    ok(!size.flags.concat(size.changes).some(f => isPair(f) && Math.abs(f.frame - encounterEnds[SWAP].frame) <= 60), 'size misses it (equal sizes)');
+    const onset = br.flags.find(f => !f.continues && isPair(f));
+    ok(br.ok && br.cue === 'brightness' && onset && Math.abs(onset.frame - encounterEnds[SWAP].frame) <= 60,
+        `brightness check: onset at the switch (frame ${onset && onset.frame}, switch ${encounterEnds[SWAP].frame})`);
+    ok(Math.abs(br.imageHz - 15 / 4) < 1e-9 && br.cameras.length === 2, `samples at ~4/s by default (${br.imageHz.toFixed(2)} Hz) from both views`);
+    eq(SC.BRIGHTNESS_CHECK_DEFAULTS.threshold, -800, 'its encounter threshold defaults to the strict -800');
+    const none = await SC.checkBrightnessSwitches(session, { fps: 60, getEmbeddings: async (f, items) => items.map(() => []) });
+    ok(!none.ok && /coat brightness/.test(none.reason), 'nothing sampled: says so (' + none.reason + ')');
+
+    // three checks: "Both" goes to the earlier one, and a later check links to the first free match
+    const R = await import(pathToFileURL(path.join(ROOT, 'ui', 'id-switch-review.js')).href);
+    const res3 = {
+        size: { ok: true, fps: 30, flags: [{ frame: 100, nameA: 'id_0', nameB: 'id_1', score: -90 }], changes: [] },
+        image: { ok: true, fps: 30, flags: [{ frame: 110, nameA: 'id_1', nameB: 'id_0', score: -300 }, { frame: 500, nameA: 'id_0', nameB: 'id_2', score: -300 }], changes: [] },
+        brightness: { ok: true, fps: 30, flags: [{ frame: 105, nameA: 'id_0', nameB: 'id_1', score: -900 }, { frame: 505, nameA: 'id_0', nameB: 'id_2', score: -900 }, { frame: 900, nameA: 'id_1', nameB: 'id_2', score: -900 }], changes: [] },
+    };
+    R.linkIdSwitchResults(res3);
+    const [s0] = res3.size.flags, [i0, i1] = res3.image.flags, [b0, b1, b2] = res3.brightness.flags;
+    ok(s0.agree === i0 && i0.agree === s0, 'size and images agree at 100: linked');
+    ok(!b0.agree, 'brightness at 105: its match is already taken, so it stands alone');
+    ok(b1.agree === i1 && R.idSwitchIsSecondary(b1) && !R.idSwitchIsSecondary(i1), 'brightness at 505 joins the image row, which shows it ("Both")');
+    ok(!b2.agree && !R.idSwitchIsSecondary(b2), 'a change point only brightness found is its own row');
+    eq(b2.cue, 'brightness', 'every marker is tagged with its check');
+    const saved = JSON.parse(JSON.stringify(R.serializeIdSwitchReview({ _idSwitch: { results: { brightness: Object.assign({ encounters: [1], sampleHz: 15, step: 2, imageHz: 3.75, crops: 99, cameras: ['v'] }, res3.brightness) }, reviewed: new Set() } })));
+    const back = R.ingestIdSwitchReview({}, saved)._idSwitch.results.brightness;
+    ok(back && back.flags.length === 3 && back.imageHz === 3.75 && back.crops === 99, 'a brightness result is saved and reopened with its sampling');
+}
+
 group('Image check — several frames in flight (so a provider can batch them)');
 {
     const SWAP = 16, { session } = buildSession(SWAP, 60, [1, 1, 1]);

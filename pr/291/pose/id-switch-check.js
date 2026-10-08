@@ -43,7 +43,7 @@
  * Depends on: pose-data.js (readPoint3d). Pure — no DOM, no app state.
  */
 
-import { readPoint3d } from './pose-data.js?v=5a03e15d4836';
+import { readPoint3d } from './pose-data.js?v=69dc879780bd';
 
 /** Bone (node-pair) lengths used as the size signature. Pairs whose nodes the
  *  session skeleton lacks are skipped. */
@@ -713,8 +713,41 @@ export function planKeyframeSamples(frames, keyframes, hasFrame) {
  * @returns {Promise<object>} as checkSizeSwitches, plus {imageHz, crops, cameras}.
  */
 export async function checkImageSwitches(session, opts) {
-    var o = Object.assign({}, IMAGE_CHECK_DEFAULTS, opts || {});
-    if (typeof o.getEmbeddings !== 'function') return failure('No image embedder available');
+    return checkVectorSwitches(session, Object.assign({}, IMAGE_CHECK_DEFAULTS, opts || {}), 'image');
+}
+
+/**
+ * Coat-brightness check: the image check's machinery on a much cheaper vector —
+ * the brightness of the coat at each animal's body keypoints
+ * (ui/brightness-sampler.js: 10th / 50th / 90th percentile and mean of the grey
+ * level in a small disc at each body keypoint, log-scaled). No model and no GPU,
+ * only the decoded video. Same options as the image check (`getEmbeddings`
+ * returns these vectors), with BRIGHTNESS_CHECK_DEFAULTS. Result `cue:
+ * 'brightness'`; `imageHz` / `crops` / `cameras` are its sample rate, samples
+ * and views.
+ */
+export async function checkBrightnessSwitches(session, opts) {
+    return checkVectorSwitches(session, Object.assign({}, BRIGHTNESS_CHECK_DEFAULTS, opts || {}), 'brightness');
+}
+
+/**
+ * Brightness-check options on top of the image check's. Calibrated 2026-10-08 on
+ * 35 proofread single-camera SLAP videos (3–4 mice of different coat colours, 59
+ * real switches after single-camera Track All): its candidate-moment rows caught
+ * 14 with no false rows — 12 of them the same switches the image check's moment
+ * rows catch (13) — while its ENCOUNTER rows were noise at every threshold (-200:
+ * 3 real, 34 false; -800: 0 and 9), hence the strict encounter threshold. Not
+ * calibrated on multi-camera data.
+ */
+export const BRIGHTNESS_CHECK_DEFAULTS = Object.assign({}, IMAGE_CHECK_DEFAULTS, {
+    imageHz: 4,         // samples per second per animal and view: no model, so it can sample densely
+    threshold: -800,    // encounter rows: see above
+    pcaDims: 8,         // the vectors are 4-dimensional; PCA keeps them whole
+});
+
+/** The image / brightness checks: a vector per (sample, animal, view), one classifier per view. */
+async function checkVectorSwitches(session, o, cue) {
+    if (typeof o.getEmbeddings !== 'function') return failure(cue === 'image' ? 'No image embedder available' : 'No brightness sampler available');
     var grid = buildGrid(session, o, false);
     if (grid.fail) return failure(grid.fail);
     var T = grid.T, K = grid.K;
@@ -759,7 +792,7 @@ export async function checkImageSwitches(session, opts) {
     } finally {
         if (typeof o.releaseFrames === 'function') o.releaseFrames();
     }
-    if (!crops) return failure('No crops could be embedded');
+    if (!crops) return failure(cue === 'image' ? 'No crops could be embedded' : 'No coat brightness could be sampled');
 
     // ---- per-camera blocked-CV classifiers -> mean log-probabilities per (sample, identity)
     var LP = new Float64Array(T * K * K), n = new Float64Array(T * K);
@@ -790,7 +823,7 @@ export async function checkImageSwitches(session, opts) {
     }
     for (var row3 = 0; row3 < T * K; row3++) if (n[row3] > 1) for (var c4 = 0; c4 < K; c4++) LP[row3 * K + c4] /= n[row3];
     var res = finish(grid, LP, function (i2, k2) { return n[i2 * K + k2] > 0; }, REFERENCE_HZ / imgHz, o,
-        { cue: 'image', imageHz: imgHz, crops: crops, cameras: cams });
+        { cue: cue, imageHz: imgHz, crops: crops, cameras: cams });
     if (progress) await progress('fit', cams.length * o.folds, cams.length * o.folds);
     return res;
 }

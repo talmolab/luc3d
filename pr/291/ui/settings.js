@@ -17,7 +17,7 @@
 // add/update its entry here so the Settings panel stays complete and truthful.
 // (See CLAUDE.md.)
 
-import { shouldIgnoreShortcut } from './keyboard-target.js?v=5a03e15d4836';
+import { shouldIgnoreShortcut } from './keyboard-target.js?v=69dc879780bd';
 
 const STORAGE_KEY = 'lucid.settings.v1';
 
@@ -404,6 +404,21 @@ const TRACKING_THRESHOLDS = [
         desc: 'Also try the browser\'s WebNN API, which on Windows can use NVIDIA tensor cores (Chrome: enable chrome://flags/#web-machine-learning-neural-network). The first frames are embedded both ways; WebNN is kept only if it is faster and its embeddings match the calibrated WebGPU model. "About these flags" in the ID Switches tab says which was used. On macOS (Chrome 154) it measured ~10x slower, CPU only, so the trial keeps WebGPU there.',
     },
     {
+        id: 'autoBrightnessSwitchCheck', label: 'Check ID switches after single-camera tracking (coat brightness)', default: 1,
+        min: 0, max: 1, step: 1, kind: 'toggle',     // an on/off switch in the wizard (stored as 1 / 0)
+        desc: 'After Track All on a single-camera session, check for switches by how bright each animal\'s coat is (Tracks ▸ Check ID Switches (Coat Brightness)). Reads the video, but needs no model or GPU. On 35 proofread single-camera videos of mice with different coat colours, every switch it flagged was real. Not run automatically on multi-camera sessions, where it is not calibrated.',
+    },
+    {
+        id: 'brightnessCheckThreshold', label: 'Coat brightness check: flag threshold', default: -800,
+        min: -5000, max: 0, step: 50,
+        desc: 'An encounter starts a possible coat-brightness switch when its score falls below this. Strict on purpose: on one camera the encounters scored by brightness were mostly false alarms (-200 flagged 37, 3 real), while the moments where the tracker nearly chose the swap (tested separately, at -200) caught 14 real switches and nothing else.',
+    },
+    {
+        id: 'brightnessCheckHz', label: 'Coat brightness check: samples per second', default: 4,
+        min: 0.5, max: 15, step: 0.5,
+        desc: 'How many frames per second the coat brightness check reads, per animal and camera. With no model, decoding the video is its only cost.',
+    },
+    {
         id: 'reprojErrorThreshold', label: 'Reprojection error threshold (px)', default: 0,
         min: 0, max: 500, step: 1,
         desc: 'Robust triangulation: after an initial 3D solve, drop any 2D node whose reprojection error in a view exceeds this many pixels, then re-triangulate that node from the remaining reliable views. A node left with fewer than 2 reliable views is dropped from 3D. 0 = disabled (use all views). Views excluded in the Camera Views panel never contribute to triangulation regardless.',
@@ -424,6 +439,7 @@ const WIZARD_THRESHOLD_IDS = new Set([
     'stale', 'matchGate',
     'scWindowSize', 'scOksStddev', 'scConnectBreaks',
     'autoSwitchCheck', 'autoImageSwitchCheck', 'imageCheckThreshold', 'imageCheckHz', 'imageCheckMaxViews', 'imageCheckWebNN',
+    'autoBrightnessSwitchCheck', 'brightnessCheckThreshold', 'brightnessCheckHz',
     'reprojErrorThreshold',
 ]);
 

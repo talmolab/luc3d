@@ -16,23 +16,23 @@ import {
     reprojectPoints,
     computeInstanceDistanceTo,
     hungarianAlgorithm
-} from './triangulation.js?v=5a03e15d4836';
-import { CrossViewTracker, Detection } from './cross-view-tracker.js?v=5a03e15d4836';
-import { singleCameraName, singleCameraTrackerConfig, trackSingleCamera, SINGLE_CAMERA_LAZY_REASON } from './single-camera-tracking.js?v=5a03e15d4836';
-import { InstanceGroup, points3dNodeCount, hasPoint3d, readPoint3d, pooledPoints3d } from './pose-data.js?v=5a03e15d4836';
+} from './triangulation.js?v=69dc879780bd';
+import { CrossViewTracker, Detection } from './cross-view-tracker.js?v=69dc879780bd';
+import { singleCameraName, singleCameraTrackerConfig, trackSingleCamera, SINGLE_CAMERA_LAZY_REASON } from './single-camera-tracking.js?v=69dc879780bd';
+import { InstanceGroup, points3dNodeCount, hasPoint3d, readPoint3d, pooledPoints3d } from './pose-data.js?v=69dc879780bd';
 
 // Pass 3i-1: tracker UI/integration (was in app.js)
-import { state, interactionManager, timeline, viewport3d, getActiveSession } from '../ui/app-state.js?v=5a03e15d4836';
-import { getNodeWeightArray, getTrackingThresholds, getTrackingThreshold, isCameraTracked } from '../ui/settings.js?v=5a03e15d4836';
-import { markDirty, setStatus, hideLoading } from '../import-export/save-load.js?v=5a03e15d4836';
-import { showLoadingProgress, createProgressPacer, yieldToPaint } from '../ui/loading-overlay.js?v=5a03e15d4836';
-import { loadAllLazyFrames, sweepLazyFrameWindows } from './triangulation.js?v=5a03e15d4836';
-import { drawAllOverlays, showPredictedOnly, PREDICTED_ONLY_NOTE } from '../ui/rendering.js?v=5a03e15d4836';
-import { updateInfoPanel } from '../ui/info-panel.js?v=5a03e15d4836';
-import { setColorByIdentity } from '../ui/color-by.js?v=5a03e15d4836';
-import { runIdSwitchChecks, clearIdSwitchResults } from '../ui/id-switch-modal.js?v=5a03e15d4836';
-import { collapseTimeline } from '../ui/timeline-controller.js?v=5a03e15d4836';
-import { collapseViewport3D } from '../ui/panel-visibility.js?v=5a03e15d4836';
+import { state, interactionManager, timeline, viewport3d, getActiveSession } from '../ui/app-state.js?v=69dc879780bd';
+import { getNodeWeightArray, getTrackingThresholds, getTrackingThreshold, isCameraTracked } from '../ui/settings.js?v=69dc879780bd';
+import { markDirty, setStatus, hideLoading } from '../import-export/save-load.js?v=69dc879780bd';
+import { showLoadingProgress, createProgressPacer, yieldToPaint } from '../ui/loading-overlay.js?v=69dc879780bd';
+import { loadAllLazyFrames, sweepLazyFrameWindows } from './triangulation.js?v=69dc879780bd';
+import { drawAllOverlays, showPredictedOnly, PREDICTED_ONLY_NOTE } from '../ui/rendering.js?v=69dc879780bd';
+import { updateInfoPanel } from '../ui/info-panel.js?v=69dc879780bd';
+import { setColorByIdentity } from '../ui/color-by.js?v=69dc879780bd';
+import { runIdSwitchChecks, clearIdSwitchResults } from '../ui/id-switch-modal.js?v=69dc879780bd';
+import { collapseTimeline } from '../ui/timeline-controller.js?v=69dc879780bd';
+import { collapseViewport3D } from '../ui/panel-visibility.js?v=69dc879780bd';
 
 /**
  * A frame index as the USER sees it: 1-based.
@@ -1572,11 +1572,13 @@ async function runSingleCameraTrackAll(session, bail) {
         // The automatic body-size check is NOT run on one camera: a 2D bone length changes with posture
         // and distance from the camera, and on 35 proofread SLAP videos it caught 2 of 59 real swaps at its
         // threshold (encounter AUC 0.55) for 6 false rows. The menu still runs it; images run as usual.
+        // ...and runs the coat-brightness check instead (`autoBrightnessSwitchCheck`, default on): no model, no GPU.
         var autoSize = getTrackingThreshold('autoSwitchCheck') > 0, autoImage = getTrackingThreshold('autoImageSwitchCheck') > 0;
+        var autoBrightness = getTrackingThreshold('autoBrightnessSwitchCheck') > 0;
         if (autoSize && res.numIdentities > 1) doneMsg += ' · ' + SINGLE_CAMERA_SIZE_SKIP_NOTE;
         setStatus(doneMsg, 'success');
-        if (res.numIdentities > 1 && autoImage) {
-            await runIdSwitchChecks({ auto: true, statusPrefix: doneMsg, size: false, image: true });
+        if (res.numIdentities > 1 && (autoImage || autoBrightness)) {
+            await runIdSwitchChecks({ auto: true, statusPrefix: doneMsg, size: false, image: autoImage, brightness: autoBrightness });
         }
         var lo = Infinity, hi = -Infinity;
         for (var f of session.frameGroups.keys()) { if (f < lo) lo = f; if (f > hi) hi = f; }

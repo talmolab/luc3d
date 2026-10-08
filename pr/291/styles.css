@@ -2680,6 +2680,9 @@ body {
 }
 .seekbar-mark.cue-image { background: #4cc9f0; }
 .seekbar-mark.cue-both { background: linear-gradient(to bottom, #ffb020 50%, #4cc9f0 50%); }
+.seekbar-mark.cue-brightness { background: #c77dff; }
+.seekbar-mark.cue-both-size-brightness { background: linear-gradient(to bottom, #ffb020 50%, #c77dff 50%); }
+.seekbar-mark.cue-both-image-brightness { background: linear-gradient(to bottom, #4cc9f0 50%, #c77dff 50%); }
 .seekbar-mark.is-follow { opacity: 0.7; height: 12px; }
 .seekbar-mark.is-repeat { opacity: 0.4; width: 2px; height: 10px; box-shadow: none; }
 .seekbar-mark.is-reviewed { opacity: 0.3; }
@@ -6718,6 +6721,9 @@ details[open] > summary.origin-rebase-block-title::before {
 .id-switch-row.cue-size { border-left-color: #ffb020; }
 .id-switch-row.cue-image { border-left-color: #4cc9f0; }
 .id-switch-row.cue-both { border-image: linear-gradient(to right, #ffb020 50%, #4cc9f0 50%) 1; }
+.id-switch-row.cue-brightness { border-left-color: #c77dff; }
+.id-switch-row.cue-both-size-brightness { border-image: linear-gradient(to right, #ffb020 50%, #c77dff 50%) 1; }
+.id-switch-row.cue-both-image-brightness { border-image: linear-gradient(to right, #4cc9f0 50%, #c77dff 50%) 1; }
 .id-switch-row.is-repeat .id-switch-main { opacity: 0.65; }
 .id-switch-row.is-reviewed .id-switch-main { opacity: 0.45; }
 .id-switch-row.is-reviewed .id-switch-pair { text-decoration: line-through; }
