@@ -9,7 +9,7 @@
 
 import { state, videoController, interactionManager, viewport3d, timeline, paneManager,
          setVideoController, setInteractionManager, setViewport3D, setTimeline, VIEW_NAMES,
-         getActiveSession, hasRealVideo, setInstanceClipboard, getInstanceClipboard } from './app-state.js?v=7b720af7fab0';
+         getActiveSession, hasRealVideo, setInstanceClipboard, getInstanceClipboard } from './app-state.js?v=ac2e14592ddb';
 // Block 1 (Prompt 4): the timeline collapse/fit/sync helpers and the
 // Ctrl/Cmd+J keyboard shortcut installer live in `timeline-controller.js`.
 // Import them explicitly so the local call sites in this file (menu
@@ -21,54 +21,54 @@ import {
     installTimelineShortcuts,
     getCachedTimelineHeight,
     setCachedTimelineHeight,
-} from './timeline-controller.js?v=7b720af7fab0';
+} from './timeline-controller.js?v=ac2e14592ddb';
 import { Skeleton, Camera, Instance, InstanceGroup, FrameGroup, UnlinkedInstance, Identity, Session,
-         someValidPoint3d } from '../pose/pose-data.js?v=7b720af7fab0';
+         someValidPoint3d } from '../pose/pose-data.js?v=ac2e14592ddb';
 import { ensureLazyFrameData, batchLoadLazyFrames, getInstanceGroupsForFrame, evictLazyFrames,
          loadAllLazyFrames, updateTimelineForFrame, triangulateAndReproject,
-         resolveTriangulationMethod } from '../pose/triangulation.js?v=7b720af7fab0';
-import { LAZY_PLAYBACK_AHEAD } from '../pose/lazy-residency.js?v=7b720af7fab0';
-import { drawAllOverlays, getVisibilitySettings, updateFrameCounters, setReprojErrorVisible } from './rendering.js?v=7b720af7fab0';
+         resolveTriangulationMethod } from '../pose/triangulation.js?v=ac2e14592ddb';
+import { LAZY_PLAYBACK_AHEAD } from '../pose/lazy-residency.js?v=ac2e14592ddb';
+import { drawAllOverlays, getVisibilitySettings, updateFrameCounters, setReprojErrorVisible } from './rendering.js?v=ac2e14592ddb';
 import { updateInfoPanel, updateFrameInfo, updateTriangulationBadge,
          populateVideosTable, populateCamerasTable, populateSkeletonTable,
          setupPanelTabs, setupSkeletonEditing, exportSkeletonJSON,
          ensureSession, populateSessionAssignTable, populateUnassignedVideos,
-         populateTimelineVisibility } from './info-panel.js?v=7b720af7fab0';
-import { consumeInfoPanelStale, collapseViewport3D } from './panel-visibility.js?v=7b720af7fab0';
+         populateTimelineVisibility } from './info-panel.js?v=ac2e14592ddb';
+import { consumeInfoPanelStale, collapseViewport3D } from './panel-visibility.js?v=ac2e14592ddb';
 // Block 2 (Prompt 4): rename migration for the per-session hidden-track
 // / hidden-identity Sets when the user renames an entity.
-import { renameHiddenTrack, renameHiddenIdentity } from './timeline-visibility.js?v=7b720af7fab0';
+import { renameHiddenTrack, renameHiddenIdentity } from './timeline-visibility.js?v=ac2e14592ddb';
 // View ▸ Define Planes — "Defining Plane Mode".
-import { togglePlaneMode, syncPlanes3D } from './plane-definition.js?v=7b720af7fab0';
+import { togglePlaneMode, syncPlanes3D } from './plane-definition.js?v=ac2e14592ddb';
 // The Visibility panel's `Planes` section — the four ids, named from the one
 // module that reads them so this file cannot drift from it.
-import { PLANE_VIS_IDS } from './plane-visibility.js?v=7b720af7fab0';
+import { PLANE_VIS_IDS } from './plane-visibility.js?v=ac2e14592ddb';
 import { newProject, markDirty, clearDirty, quickSave, saveAs, saveProjectSlp, saveProject,
-         handleLoadProject, showLoading, hideLoading, setStatus } from '../import-export/save-load.js?v=7b720af7fab0';
-import { handleLoadSlpFile, handleAddSlp, handleLoadPoints3dH5 } from '../import-export/slp-import.js?v=7b720af7fab0';
-import { pickFiles, parseCalibrationJSON, exportCalibrationTOML, downloadTOML, parseSlpH5 } from '../import-export/file-io.js?v=7b720af7fab0';
+         handleLoadProject, showLoading, hideLoading, setStatus } from '../import-export/save-load.js?v=ac2e14592ddb';
+import { handleLoadSlpFile, handleAddSlp, handleLoadPoints3dH5 } from '../import-export/slp-import.js?v=ac2e14592ddb';
+import { pickFiles, parseCalibrationJSON, exportCalibrationTOML, downloadTOML, parseSlpH5 } from '../import-export/file-io.js?v=ac2e14592ddb';
 import { handleLoadCalibration, handleLoadVideos, handleLoadMultiSession,
-         loadSingleSessionFromCache, handleEmptySession, showSessionModeModal, autoAssignVideosToCameras } from '../loading/session-loader.js?v=7b720af7fab0';
-import { OnDemandVideoDecoder, VideoController } from '../loading/video.js?v=7b720af7fab0';
+         loadSingleSessionFromCache, handleEmptySession, showSessionModeModal, autoAssignVideosToCameras } from '../loading/session-loader.js?v=ac2e14592ddb';
+import { OnDemandVideoDecoder, VideoController } from '../loading/video.js?v=ac2e14592ddb';
 
 // Pass 3i-1: tracker functions moved out of app.js.
-import { trackCurrentFrame, trackAll, findMatchForSelected } from '../pose/tracker.js?v=7b720af7fab0';
+import { trackCurrentFrame, trackAll, findMatchForSelected } from '../pose/tracker.js?v=ac2e14592ddb';
 // Track Frame Range (#212): the Track Frame split button's dropdown entry.
-import { showTrackRangeModal } from './track-range-modal.js?v=7b720af7fab0';
-import { showAlignViewsModal } from './view-align-modal.js?v=7b720af7fab0';
-import { onColorByChange, setColorByIdentity } from './color-by.js?v=7b720af7fab0';
-import { installSeekbarTooltip } from './seekbar-tooltip.js?v=7b720af7fab0';
-import { showReadoutFrame, refreshReadoutTotals } from './frame-readout.js?v=7b720af7fab0';
-import { installSeekbarMarkers, seekbarMarkerAt, describeSwitchMarker, setSeekbarMarkerFrames } from './seekbar-markers.js?v=7b720af7fab0';
+import { showTrackRangeModal } from './track-range-modal.js?v=ac2e14592ddb';
+import { showAlignViewsModal } from './view-align-modal.js?v=ac2e14592ddb';
+import { onColorByChange, setColorByIdentity } from './color-by.js?v=ac2e14592ddb';
+import { installSeekbarTooltip } from './seekbar-tooltip.js?v=ac2e14592ddb';
+import { showReadoutFrame, refreshReadoutTotals } from './frame-readout.js?v=ac2e14592ddb';
+import { installSeekbarMarkers, seekbarMarkerAt, describeSwitchMarker, setSeekbarMarkerFrames } from './seekbar-markers.js?v=ac2e14592ddb';
 // Pass 3i-2: triangulation orchestration moved out of app.js.
-import { triangulateCurrentFrame, triangulateAllFrames } from '../pose/triangulation.js?v=7b720af7fab0';
+import { triangulateCurrentFrame, triangulateAllFrames } from '../pose/triangulation.js?v=ac2e14592ddb';
 // User settings: default triangulation method + editable keyboard bindings.
-import { getDefaultTriangulationMethod, onDefaultTriangulationMethodChange, setHandler, dispatchEvent, getActions, formatBinding } from './settings.js?v=7b720af7fab0';
-import { shouldIgnoreShortcut, installFocusRelease } from './keyboard-target.js?v=7b720af7fab0';
-import { showSettingsModal } from './settings-modal.js?v=7b720af7fab0';
+import { getDefaultTriangulationMethod, onDefaultTriangulationMethodChange, setHandler, dispatchEvent, getActions, formatBinding } from './settings.js?v=ac2e14592ddb';
+import { shouldIgnoreShortcut, installFocusRelease } from './keyboard-target.js?v=ac2e14592ddb';
+import { showSettingsModal } from './settings-modal.js?v=ac2e14592ddb';
 // Pass 3i-3: addNewInstanceSmart and update3DViewport moved to pose/initialization.js.
-import { addNewInstanceSmart, update3DViewport, navigateToFrame } from '../pose/initialization.js?v=7b720af7fab0';
-import { runIdSwitchChecks, setIdSwitchNavigator, setIdSwitchRefresher, updateIdSwitchProgress } from './id-switch-modal.js?v=7b720af7fab0';
+import { addNewInstanceSmart, update3DViewport, navigateToFrame } from '../pose/initialization.js?v=ac2e14592ddb';
+import { runIdSwitchChecks, setIdSwitchNavigator, setIdSwitchRefresher, updateIdSwitchProgress } from './id-switch-modal.js?v=ac2e14592ddb';
 // Pass 3f / 3i-4: identity-assignment workflow symbols moved out of app.js.
 // (`swapTracks` joined this module in 3i-4; `seekToLabeledFrame` is now in-module.)
 import {
@@ -77,10 +77,10 @@ import {
     startManualAssignment, runSingleFrameTriangulation, showMultiFrameModal,
     purgeTriangulationDataForGroup,
     swapTracks,
-} from './identity-assignment.js?v=7b720af7fab0';
+} from './identity-assignment.js?v=ac2e14592ddb';
 // Custom Instance Delete: DOM-free matching/cascade/durability logic. Imports no
 // project modules itself, which is why it can also be unit tested in isolation.
-import { collectDeletionTargets, executeDeletion, deleteTargetsFromStore, groupMemberTargets } from './custom-delete-ops.js?v=7b720af7fab0';
+import { collectDeletionTargets, executeDeletion, deleteTargetsFromStore, groupMemberTargets } from './custom-delete-ops.js?v=ac2e14592ddb';
 // Pass 3g: export-modals workflow symbols moved out of app.js.
 import {
     exportLabels, exportPoints3dH5, exportReprojH5,
@@ -88,19 +88,19 @@ import {
     showSlpExportPerSessionModal,
     showTriangulateMultiFrameModal,
     showGroupByTrackModal, groupByIdentityAndTriangulateAll, showExport3DVideoModal,
-} from './export-modals.js?v=7b720af7fab0';
-import { showOverlayExportModal } from './overlay-export-modal.js?v=7b720af7fab0';
+} from './export-modals.js?v=ac2e14592ddb';
+import { showOverlayExportModal } from './overlay-export-modal.js?v=ac2e14592ddb';
 // Pass 3h: sessions-panes workflow symbols moved out of app.js.
 import {
     panelRenderers, multiSelectViews, activatePanelForView, scrollViewStripTo,
     refreshPaneInteractions, clearMultiSelect, clampRotation, syncRotationUI,
     populateViewStrip, populateSessionsPanel, populateSessionStrip,
     showMoveVideoModal, removeSession, switchSession,
-} from './sessions-panes.js?v=7b720af7fab0';
+} from './sessions-panes.js?v=ac2e14592ddb';
 import {
     nameExists, countNulledByCamera, deleteTrackAt, deleteIdentityAt,
-} from './track-identity-ops.js?v=7b720af7fab0';
-import { setSessionRotation } from './video-filters.js?v=7b720af7fab0';
+} from './track-identity-ops.js?v=ac2e14592ddb';
+import { setSessionRotation } from './video-filters.js?v=ac2e14592ddb';
 
 // ============================================
 // Rename Track / Identity modal
@@ -2883,84 +2883,40 @@ export function refreshInfoPanelAfterShow() {
     updateInfoPanel();
 }
 
-// The two toolbar panel toggles, each with the label for both of its states.
-// Single source of truth: the updaters below read these, and
-// `lockPanelToggleWidths` sizes each button to whichever of its own two labels
-// is wider so the pair doesn't shimmy when a label swaps.
-const PANEL_TOGGLE_BUTTONS = [
-    { btnId: 'infoPanelToggleBtn', shown: 'Hide Panel', hidden: 'Show Panel' },
-    { btnId: 'viewport3dToggleBtn', shown: 'Hide 3D View', hidden: 'Show 3D View' },
-];
-
-function panelToggleLabels(btnId) {
-    for (var i = 0; i < PANEL_TOGGLE_BUTTONS.length; i++) {
-        if (PANEL_TOGGLE_BUTTONS[i].btnId === btnId) return PANEL_TOGGLE_BUTTONS[i];
-    }
-    return null;
-}
-
-/**
- * Pin each panel-toggle button to the width of its widest label.
- *
- * "Hide"/"Show" don't render to the same width in the toolbar's
- * proportional system font, so without this the buttons resize on every
- * toggle — and because they're right-aligned in a flex group, the one to the
- * left visibly jumps sideways when its neighbour changes width.
- *
- * Measured rather than hardcoded so it stays correct if a label, the font
- * size, or the button padding changes. `getBoundingClientRect()` is a
- * border-box width (`box-sizing: border-box` is global), which is what
- * `min-width` wants. Called once from `ui/layout-controls.js` at startup;
- * the app uses only system fonts, so there's no late web-font reflow to
- * re-measure for.
- */
-export function lockPanelToggleWidths() {
-    for (var i = 0; i < PANEL_TOGGLE_BUTTONS.length; i++) {
-        var spec = PANEL_TOGGLE_BUTTONS[i];
-        var btn = document.getElementById(spec.btnId);
-        if (!btn) continue;
-        var restore = btn.textContent;
-        // Clear any previous lock so a re-measure can shrink as well as grow.
-        btn.style.minWidth = '';
-        var widest = 0;
-        var labels = [spec.shown, spec.hidden];
-        for (var j = 0; j < labels.length; j++) {
-            btn.textContent = labels[j];
-            var w = btn.getBoundingClientRect().width;
-            if (w > widest) widest = w;
-        }
-        btn.textContent = restore;
-        if (widest > 0) btn.style.minWidth = Math.ceil(widest) + 'px';
-    }
+// The two toolbar panel toggles (issue #151) carry short FIXED labels, "3D"
+// and "Panel", and are highlighted (`.active`) while their panel is shown —
+// the same kind of toggle as the Sessions button at the toolbar's left edge.
+// The tooltip says what a click will do. They used to swap "Hide 3D View" /
+// "Show 3D View" and "Hide Panel" / "Show Panel", which cost ~95px of toolbar
+// width and needed each button pinned to its wider label so the swap did not
+// shove its neighbour sideways; a fixed label cannot resize.
+function syncPanelToggleBtn(btn, collapsed, what, key) {
+    btn.classList.toggle('active', !collapsed);
+    btn.setAttribute('aria-pressed', collapsed ? 'false' : 'true');
+    btn.title = (collapsed ? 'Show ' : 'Hide ') + what + ' (' + key + ')';
 }
 
 export function updateInfoPanelToggleBtn() {
     var wrapper = document.getElementById('infoPanelWrapper');
     var btn = document.getElementById('infoPanelToggleBtn');
-    if (btn) {
-        var l = panelToggleLabels('infoPanelToggleBtn');
-        btn.textContent = wrapper.classList.contains('collapsed') ? l.hidden : l.shown;
-    }
+    if (wrapper && btn) syncPanelToggleBtn(btn, wrapper.classList.contains('collapsed'), 'info panel', 'I');
 }
 
 /**
- * Keep the toolbar's 3D-viewer toggle label in sync with the panel's actual
+ * Keep the toolbar's 3D-viewer toggle in sync with the panel's actual
  * collapse state (issue #151).
  *
  * The button is only one of three ways to toggle the viewport — the `\`
- * shortcut and View ▸ Toggle 3D Viewport are the others — so the label is
+ * shortcut and View ▸ Toggle 3D Viewport are the others — so its state is
  * driven off the DOM rather than off whoever did the toggling.
  * `ui/layout-controls.js` also calls this from the `MutationObserver` that
- * already watches the container's class, which covers the initial label and
+ * already watches the container's class, which covers the initial state and
  * any collapse that happens without going through `toggle3DViewport`.
  */
 export function update3DViewportToggleBtn() {
     var container = document.getElementById('viewport3dContainer');
     var btn = document.getElementById('viewport3dToggleBtn');
-    if (container && btn) {
-        var l = panelToggleLabels('viewport3dToggleBtn');
-        btn.textContent = container.classList.contains('collapsed') ? l.hidden : l.shown;
-    }
+    if (container && btn) syncPanelToggleBtn(btn, container.classList.contains('collapsed'), '3D viewer', '\\');
 }
 
 /**
