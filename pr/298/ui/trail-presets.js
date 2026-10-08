@@ -1,7 +1,7 @@
 /**
  * trail-presets.js — the node-trail presets, in SECONDS.
  *
- * A trail is chosen as a span of time (¼ s, ½ s, 1 s) and drawn as a number of
+ * A trail is chosen as a span of time (¼ s, ½ s, 1 s, 2 s) and drawn as a number of
  * frames, `seconds × fps`. A fixed frame list meant something different on every
  * camera: 50 frames was ½ s of a 100 fps recording and nearly 2 s of a 30 fps
  * one. DOM-free, so the conversion is unit-tested in Node
@@ -11,18 +11,20 @@
  * Import-free: `ui/app-state.js` imports it.
  */
 
-/** Off, then ¼ s, ½ s and 1 s. `key` names the Tracks ▸ Node Trails item ids. */
+/** Off, then ¼ s, ½ s, 1 s and 2 s. `key` names the Tracks ▸ Node Trails item ids. */
 export const TRAIL_PRESETS = [
     { key: 'Off', seconds: 0, name: 'Off' },
     { key: 'Quarter', seconds: 0.25, name: '¼ second' },
     { key: 'Half', seconds: 0.5, name: '½ second' },
     { key: 'Second', seconds: 1, name: '1 second' },
+    { key: 'TwoSeconds', seconds: 2, name: '2 seconds' },
 ];
 
 /**
  * The longest trail drawn, in frames. `LAZY_KEEP_BEHIND` (512,
  * `pose/lazy-residency.js`) must stay above it — trails draw resident frames
- * only — and a 1 s trail on a 1,000 fps recording would otherwise be 1,000.
+ * only — and a 2 s trail on a 300 fps recording would otherwise be 600. From
+ * 250 fps up, 2 s therefore draws 500 frames, and its label says so.
  */
 export const MAX_TRAIL_FRAMES = 500;
 

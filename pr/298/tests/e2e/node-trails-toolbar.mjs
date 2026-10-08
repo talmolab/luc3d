@@ -8,14 +8,14 @@
  *  2. It opens on HOVER, like the Triangulate split buttons, and closes once
  *     the pointer leaves. A click on the button does not latch it open.
  *  3. Its items are the Tracks ▸ Node Trails presets, in the same order:
- *     Off, ¼ s, ½ s, 1 s, each naming its frame count at the current fps.
+ *     Off, ¼ s, ½ s, 1 s, 2 s, each naming its frame count at the current fps.
  *  4. Picking one sets `state.trailSeconds` (and so `state.trailLength`),
  *     updates the button's tooltip, and moves the checkmark in BOTH menus. And
  *     the other way round: a pick from the Tracks menu updates the tooltip and
  *     moves the button menu's checkmark. The label never changes.
  *  5. The presets are TIME: editing the FPS pill changes the frame count drawn
  *     (`state.trailLength`), and both menus and the tooltip say so the next
- *     time they open — 25/50/100 frames at 100 fps, 15/30/60 at 60.
+ *     time they open — 25/50/100/200 frames at 100 fps, 15/30/60/120 at 60.
  *
  * Run: node tests/e2e/node-trails-toolbar.mjs     (SHOT_DIR=… to save a screenshot)
  */
@@ -99,9 +99,9 @@ try {
         menubar: [...document.querySelectorAll('#menuTrailsSubmenu .menu-dropdown-item')].map(e => e.textContent.replace('✓', '').trim()),
     }));
     let items = await labels();
-    const at30 = ['Off', '¼ second (8 frames)', '½ second (15 frames)', '1 second (30 frames)'];
+    const at30 = ['Off', '¼ second (8 frames)', '½ second (15 frames)', '1 second (30 frames)', '2 seconds (60 frames)'];
     check(JSON.stringify(items.toolbar) === JSON.stringify(at30),
-        `the items are Off / ¼ s / ½ s / 1 s with their frames at 30 fps (${items.toolbar.join(', ')})`);
+        `the items are Off / ¼ s / ½ s / 1 s / 2 s with their frames at 30 fps (${items.toolbar.join(', ')})`);
     check(JSON.stringify(items.menubar) === JSON.stringify(items.toolbar),
         `and match Tracks ▸ Node Trails (${items.menubar.join(', ')})`);
     s = await read();
@@ -151,8 +151,8 @@ try {
     await page.hover('#tbTrails');
     await settleOpen();
     items = await labels();
-    check(JSON.stringify(items.toolbar) === JSON.stringify(['Off', '¼ second (25 frames)', '½ second (50 frames)', '1 second (100 frames)']),
-        `reopening the menu shows 25 / 50 / 100 frames (${items.toolbar.join(', ')})`);
+    check(JSON.stringify(items.toolbar) === JSON.stringify(['Off', '¼ second (25 frames)', '½ second (50 frames)', '1 second (100 frames)', '2 seconds (200 frames)']),
+        `reopening the menu shows 25 / 50 / 100 / 200 frames (${items.toolbar.join(', ')})`);
     s = await read();
     check(s.tip === 'Node trails: 1 second (100 frames)', `and the tooltip says 100 frames (got "${s.tip}")`);
     await awayFromMenu();
@@ -161,11 +161,17 @@ try {
     await page.click('.menu-item[data-menu="tracks"]');
     await page.hover('#menuTrailsParent');
     items = await labels();
-    check(JSON.stringify(items.menubar) === JSON.stringify(['Off', '¼ second (15 frames)', '½ second (30 frames)', '1 second (60 frames)']),
-        `at 60 fps Tracks ▸ Node Trails shows 15 / 30 / 60 frames (${items.menubar.join(', ')})`);
+    check(JSON.stringify(items.menubar) === JSON.stringify(['Off', '¼ second (15 frames)', '½ second (30 frames)', '1 second (60 frames)', '2 seconds (120 frames)']),
+        `at 60 fps Tracks ▸ Node Trails shows 15 / 30 / 60 / 120 frames (${items.menubar.join(', ')})`);
     await page.click('#menuTrailsQuarter');
     s = await read();
     check(s.sec === 0.25 && s.len === 15, `picking ¼ second at 60 fps draws 15 frames (got ${s.sec} s, ${s.len})`);
+    await page.hover('#tbTrails');
+    await settleOpen();
+    await page.click('#trailsMenu .tri-dropdown-item[data-trail-sec="2"]');
+    s = await read();
+    check(s.sec === 2 && s.len === 120 && s.tip === 'Node trails: 2 seconds (120 frames)',
+        `picking 2 seconds at 60 fps draws 120 frames (got ${s.sec} s, ${s.len}, "${s.tip}")`);
 
     await page.hover('#tbTrails');
     await settleOpen();

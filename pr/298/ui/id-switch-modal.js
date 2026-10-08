@@ -26,18 +26,18 @@
  * import-export/save-load.js (setStatus).
  */
 
-import { state, getActiveSession } from './app-state.js?v=e96a56c06a59';
-import { setSeekbarSwitchMarkers } from './seekbar-markers.js?v=e96a56c06a59';
-import { setIdSwitchHighlight, updateIdSwitchHighlight, refreshIdSwitchHighlight, ID_SWITCH_SECTION_RGB } from './id-switch-highlight.js?v=e96a56c06a59';
-import { setStatus, markDirty } from '../import-export/save-load.js?v=e96a56c06a59';
-import { showLoadingProgress, hideLoading, yieldToPaint } from './loading-overlay.js?v=e96a56c06a59';
-import { getTrackingThreshold } from './settings.js?v=e96a56c06a59';
-import { checkSizeSwitches, checkImageSwitches } from '../pose/id-switch-check.js?v=e96a56c06a59';
+import { state, getActiveSession } from './app-state.js?v=90cd4d634fc2';
+import { setSeekbarSwitchMarkers } from './seekbar-markers.js?v=90cd4d634fc2';
+import { setIdSwitchHighlight, updateIdSwitchHighlight, refreshIdSwitchHighlight, ID_SWITCH_SECTION_RGB } from './id-switch-highlight.js?v=90cd4d634fc2';
+import { setStatus, markDirty } from '../import-export/save-load.js?v=90cd4d634fc2';
+import { showLoadingProgress, hideLoading, yieldToPaint } from './loading-overlay.js?v=90cd4d634fc2';
+import { getTrackingThreshold } from './settings.js?v=90cd4d634fc2';
+import { checkSizeSwitches, checkImageSwitches } from '../pose/id-switch-check.js?v=90cd4d634fc2';
 import { createImageEmbedder, IMAGE_MODEL_MB, formatEmbedTiming, createLoadMeter, formatEmbedDevice,
-         inputTensorToPixels, INPUT } from './image-embedder.js?v=e96a56c06a59';
+         inputTensorToPixels, INPUT } from './image-embedder.js?v=90cd4d634fc2';
 import { idSwitchRowKey as rowKey, idSwitchPrimary as primaryOf, idSwitchMarkers as markersOf, idSwitchOnsets as countOnsets,
          idSwitchEncounterCount as encounterCount, linkIdSwitchResults as tagAndLink,
-         idSwitchFixPlan, idSwitchFixFor, idSwitchRenameForFix } from './id-switch-review.js?v=e96a56c06a59';
+         idSwitchFixPlan, idSwitchFixFor, idSwitchRenameForFix } from './id-switch-review.js?v=90cd4d634fc2';
 
 const CUE_LABEL = { size: 'body size', image: 'images' };
 
