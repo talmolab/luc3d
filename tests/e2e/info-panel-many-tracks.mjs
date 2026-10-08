@@ -139,7 +139,9 @@ try {
         'and each select\'s value is its track index (-1 when trackless)');
 
     // ---- 3. a real click fills the list before it opens --------------------
-    const ulTrackSel = (i) => page.locator('#unlinkedTable tbody tr:not(.unlinked-camera-header) td:first-child select').nth(i);
+    // The first select in the Track / Identity cell is the track dropdown; the
+    // identity dropdown is stacked under it.
+    const ulTrackSel = (i) => page.locator('#unlinkedTable tbody tr:not(.unlinked-camera-header) td:first-child select:first-of-type').nth(i);
     const widthBefore = await ulTrackSel(0).evaluate(el => el.offsetWidth);
     await ulTrackSel(0).click();
     await page.keyboard.press('Escape');
@@ -171,7 +173,7 @@ try {
     const picked = await page.evaluate(() => {
         const s = window.__lucid.state.session;
         const ul = s.getFrameGroup(0).getUnlinkedInstances('cam0').map(u => u.instance.trackIdx);
-        const sels = Array.from(document.querySelectorAll('#unlinkedTable tbody tr:not(.unlinked-camera-header) td:first-child select'));
+        const sels = Array.from(document.querySelectorAll('#unlinkedTable tbody tr:not(.unlinked-camera-header) td:first-child select:first-of-type'));
         return { ul, shown: sels.slice(0, 5).map(el => el.options[el.selectedIndex].textContent) };
     });
     check(picked.ul[0] === 500 && picked.ul[2] === 0,
