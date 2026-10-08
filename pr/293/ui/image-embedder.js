@@ -36,9 +36,9 @@
  * spawns ui/image-crop-worker.js and ui/image-model-worker.js.
  */
 
-import { state } from './app-state.js?v=5497008baf35';
-import { planKeyframeSamples, KEYFRAME_GAP_TOLERANCE } from '../pose/id-switch-check.js?v=5497008baf35';
-import { hydrateFrameMembers2d, releaseFrameMembers2d } from '../pose/lazy-residency.js?v=5497008baf35';
+import { state } from './app-state.js?v=53a379731b7a';
+import { planKeyframeSamples, KEYFRAME_GAP_TOLERANCE } from '../pose/id-switch-check.js?v=53a379731b7a';
+import { hydrateFrameMembers2d, releaseFrameMembers2d } from '../pose/lazy-residency.js?v=53a379731b7a';
 
 export const TRANSFORMERS_URL = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.0/+esm';
 export const IMAGE_MODEL_ID = 'onnx-community/dinov2-small';
@@ -184,7 +184,7 @@ export async function createCpuModelPool(count, onStatus) {
                 try { slot.w.terminate(); } catch (e) { /* ignore */ }
                 reject(err);                                     // no-op once started
             };
-            try { slot.w = new Worker(new URL('./image-model-worker.js?v=5497008baf35', import.meta.url), { type: 'module' }); }
+            try { slot.w = new Worker(new URL('./image-model-worker.js?v=53a379731b7a', import.meta.url), { type: 'module' }); }
             catch (e) { reject(e); return; }
             slot.w.onerror = function (e) {
                 if (e && e.preventDefault) e.preventDefault();
@@ -478,6 +478,22 @@ function resizeLUT() {
 }
 
 /** Bilinear 160 -> 224 resize (align_corners=false, like torch interpolate) + ImageNet normalisation, into `data` at `offset`. */
+/**
+ * A model input back to grey pixels, for showing the crop: channel 0 of the
+ * normalised tensor (the crop is greyscale, so all three are the same image)
+ * into `rgba`, INPUT x INPUT x 4. The inverse of writeInputTensor's
+ * normalisation — what the model sees, after the 160 -> 224 resize.
+ */
+export function inputTensorToPixels(tensor, rgba) {
+    const n = INPUT * INPUT, m = MEAN[0], sd = STD[0];
+    for (let i = 0; i < n; i++) {
+        const v = Math.round((tensor[i] * sd + m) * 255);
+        rgba[4 * i] = rgba[4 * i + 1] = rgba[4 * i + 2] = v < 0 ? 0 : v > 255 ? 255 : v;
+        rgba[4 * i + 3] = 255;
+    }
+    return rgba;
+}
+
 export function writeInputTensor(crop, data, offset) {
     const S = CROP, D = INPUT, plane = D * D, L = resizeLUT();
     const m0 = MEAN[0], m1 = MEAN[1], m2 = MEAN[2], s0 = STD[0], s1 = STD[1], s2 = STD[2];
@@ -586,6 +602,9 @@ export function selectViews(geos, maxViews) {
     }
     return new Set(vis);
 }
+
+/** Sample crops an embedder keeps for the progress dialog (~0.6 MB each). */
+export const SAMPLE_CROPS = 12;
 
 /** Most crops one model run takes (memory: ~38 MB of input at 64). */
 export const EMBED_MAX_BATCH = 64;
@@ -731,7 +750,7 @@ export function createCropPool() {
     };
     try {
         for (let i = 0; i < n; i++) {
-            const w = { worker: new Worker(new URL('./image-crop-worker.js?v=5497008baf35', import.meta.url), { type: 'module' }), load: 0 };
+            const w = { worker: new Worker(new URL('./image-crop-worker.js?v=53a379731b7a', import.meta.url), { type: 'module' }), load: 0 };
             w.worker.onmessage = function (e) {
                 const p = pending.get(e.data.id); if (!p) return;
                 pending.delete(e.data.id); w.load--;
@@ -766,7 +785,7 @@ export function createCropPool() {
  * @param {{onStatus?: function(string), maxViewsPerAnimal?: number, webnn?: boolean|'force',
  *          device?: 'auto'|'webgpu'|'cpu', cpuWorkers?: number}} [opts]
  * @returns {Promise<{getEmbeddings: function, prepareFrames: function, releaseFrames: function, backend: function,
- *          device: function, busyMs: function, views: string[]}>}
+ *          device: function, busyMs: function, sampleCrops: function, views: string[]}>}
  */
 export async function createImageEmbedder(session, opts) {
     opts = opts || {};
@@ -957,10 +976,17 @@ export async function createImageEmbedder(session, opts) {
             images.forEach(function (im) { if (im && im.owned && im.img && im.img.close) im.img.close(); });
         }
         tm.cropMs += performance.now() - tFrames;
-        return finishFrame(items, { jobs: jobs, tensors: tensors });
+        return finishFrame(frame, items, { jobs: jobs, tensors: tensors });
     };
+    // The crops the progress dialog cycles through (sampleCrops): one per frame, rotating through the
+    // frame's animals and cameras, the last SAMPLE_CROPS kept. Only references — the tensors are on the
+    // main thread anyway, before their batch goes to the model — and nothing is converted unless the
+    // dialog asks. Several, not just the latest: on the CPU frames arrive in bursts (8 cut at once,
+    // then ~6 s of model time), so a single latest crop would sit still between them.
+    const samples = [];
+    let sampleSeq = 0;
     // Queue the frame's crops for the model and hand back {camera, vector} per item.
-    const finishFrame = async function (items, cut) {
+    const finishFrame = async function (frame, items, cut) {
         const out = items.map(function () { return []; });
         const owner = [];   // owner[i] = [item index, camera]
         cut.jobs.forEach(function (job, j) { if (cut.tensors[j].length) job.who.forEach(function (w) { owner.push(w); }); });
@@ -968,6 +994,9 @@ export async function createImageEmbedder(session, opts) {
         if (!owner.length) return out;
         const flat = [];
         cut.tensors.forEach(function (ts) { ts.forEach(function (t) { flat.push(t); }); });
+        const pick = sampleSeq++ % flat.length, who = items[owner[pick][0]];
+        samples.push({ tensor: flat[pick], frame: frame, camera: owner[pick][1], identityId: who && who.group ? who.group.identityId : null });
+        if (samples.length > SAMPLE_CROPS) samples.shift();
         const vecs = await enqueue(flat);
         tm.crops += vecs.length; tm.t1 = performance.now();
         vecs.forEach(function (v, i) { out[owner[i][0]].push({ camera: owner[i][1], vector: v }); });
@@ -1014,6 +1043,8 @@ export async function createImageEmbedder(session, opts) {
                      adapter: adapter ? adapter.name : '', fallback: !!(adapter && adapter.fallback),
                      workers: cpuWorkers, why: where.why || '' };
         },
+        /** The latest sample crops, oldest first: `[{tensor, frame, camera, identityId}]`, at most SAMPLE_CROPS — see inputTensorToPixels. */
+        sampleCrops: function () { return samples; },
         /** Milliseconds spent running the model so far, the run in flight included (feeds createLoadMeter). */
         busyMs: function () { return tm.runMs + tm.readMs + (tm.busySince ? performance.now() - tm.busySince : 0); },
         views: views.map(function (v) { return v.cameraName || v.name; }),

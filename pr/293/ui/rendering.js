@@ -6,27 +6,27 @@
 // - updateFrameCounters: status-bar frame counters (labeled / triangulated / instances),
 //   whole-project on a lazy project too (counting logic in ui/frame-counters.js).
 
-import { state, interactionManager, timeline } from './app-state.js?v=5497008baf35';
-import { points3dNodeCount } from '../pose/pose-data.js?v=5497008baf35';
+import { state, interactionManager, timeline } from './app-state.js?v=53a379731b7a';
+import { points3dNodeCount } from '../pose/pose-data.js?v=53a379731b7a';
 import {
-    ensureLazyFrameData, getInstanceGroupsForFrame,
+    ensureLazyFrameData, ensureLazyTrailWindow, getInstanceGroupsForFrame,
     triangulateAndReproject, storeReprojectedInstances,
-} from '../pose/triangulation.js?v=5497008baf35';
-import { drawFrameOverlays } from './overlays.js?v=5497008baf35';
-import { syncViewLegends } from './view-legend.js?v=5497008baf35';
-import { isCameraTracked } from './settings.js?v=5497008baf35';
+} from '../pose/triangulation.js?v=53a379731b7a';
+import { drawFrameOverlays } from './overlays.js?v=53a379731b7a';
+import { syncViewLegends } from './view-legend.js?v=53a379731b7a';
+import { isCameraTracked } from './settings.js?v=53a379731b7a';
 // Plane placements draw on the same overlay canvas, so they must run AFTER
 // drawFrameOverlays (which opens with a clearRect). Circular import — safe
 // because the call site is inside drawAllOverlays' body.
-import { drawPlaneOverlays, applyPlaneModeToolbarLock } from './plane-definition.js?v=5497008baf35';
+import { drawPlaneOverlays, applyPlaneModeToolbarLock } from './plane-definition.js?v=53a379731b7a';
 
 // Pass 3f: editGroupState + finishEditGroup moved to ui/identity-assignment.js.
-import { editGroupState, finishEditGroup } from './identity-assignment.js?v=5497008baf35';
-import { updateFrameInfo } from './info-panel.js?v=5497008baf35';
+import { editGroupState, finishEditGroup } from './identity-assignment.js?v=53a379731b7a';
+import { updateFrameInfo } from './info-panel.js?v=53a379731b7a';
 import {
     computeFrameCounterBaseline, computeLazyCameraBaseline, createFrameCounterBaselineBuilder,
     countFrameCounters, nonResidentCameraCounts,
-} from './frame-counters.js?v=5497008baf35';
+} from './frame-counters.js?v=53a379731b7a';
 
 // ============================================
 // Reproj/Error visibility
@@ -245,6 +245,19 @@ export function drawAllOverlays(frameIdx, viewFrames) {
             }
         });
         return;
+    }
+
+    // Node trails draw resident frames only, and a seek hydrates the frames
+    // ahead of its target, not behind it — so hydrate the trail's window first.
+    // A no-op on every playback frame (those frames were just played).
+    if (state.trailLength > 0 && state.session.lazyLoader) {
+        // Worker-backed loader: one request at a time, so on landing redraw
+        // whatever frame is on screen NOW — after another jump that redraw is
+        // what requests the new frame's window.
+        var trailLoad = ensureLazyTrailWindow(frameIdx, state.trailLength);
+        if (trailLoad) trailLoad.then(function (n) {
+            if (n > 0) drawAllOverlays(state.currentFrame);
+        });
     }
 
     // Auto-finish edit group mode on frame change
