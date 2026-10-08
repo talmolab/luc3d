@@ -1900,6 +1900,19 @@ the new IDs get the space back — there is no 3D pose to look at until Triangul
 All runs. A closed panel stays closed. Track Frame Range and Track Frame leave
 both as they were. Covered by `tests/e2e/track-all-closes-timeline-and-3d.mjs`.
 
+**Track All ends on a summary box.** After the automatic ID-switch checks,
+`runTrackingPass` (Track All only — a range is a targeted re-run inspected on the
+timeline) opens `showTrackSummaryModal` (`ui/track-summary-modal.js`) with
+`summarizeTrackedIdentities` and one `describeSwitchCheck` per cue
+(`ui/track-summary.js`). It reports how long tracking took — `trackStart` is taken
+AFTER the animal-count prompt, so the user's typing is not counted, and stops when
+the identity pass returns — with its speed (fps, and × real time from the
+recording rate `state.fps`, falling back to `session.fps`, as the ID-switch checks
+read it), and each check's own `elapsedMs` (stamped by `runIdSwitchChecks`). It exists because a check that found nothing used to end the
+run with no visible next step. The summary is wrapped in its own `try`: tracking
+has already succeeded, so a summary failure only logs. Covered by
+`tests/e2e/track-all-summary.mjs`.
+
 **Every tracking pass marks the project dirty.** Track Frame, Track Frame Range
 and Track All rewrite `session.instanceGroups`, `session.frameIdentityMap` and
 `session.identities`, so each calls `markDirty()` — `trackCurrentFrame` before it
@@ -2103,6 +2116,11 @@ drifts upward (e.g., 4 → 11 on the test fixture).
   per `autoImageSwitchCheck` (default off)) and awaits them, so the pass resolves
   after the checks. It also drops the session's earlier results and their
   markers (`clearIdSwitchResults(session)`) before clearing identities, for both paths.
+  Its return value (each result carries `elapsedMs`) feeds the Track All summary.
+- `../ui/track-summary.js` — `summarizeTrackedIdentities`, `describeSwitchCheck`
+  (the Track All summary's data).
+- `../ui/track-summary-modal.js` — `showTrackSummaryModal`: opened at the end of a
+  successful Track All (see above).
 - `../ui/timeline-controller.js` — `collapseTimeline`: a successful Track All
   (not a range) closes the Timeline if it is open.
 - `../ui/panel-visibility.js` — `collapseViewport3D`: the same, for the 3D viewer
@@ -8646,7 +8664,10 @@ the videos + WebGPU). Auto mode appends each check's result to the pass's status
 line ("Assigned N identities … · ID-switch check (body size): …; ID-switch check
 (images): …"), opens the ID Switches tab only when a possible switch is found, and reports
 a check that cannot run as "skipped — reason", never as a failure of the pass. It
-always analyses the WHOLE session's identities.
+always analyses the WHOLE session's identities. Each result it returns carries
+`elapsedMs`, the check's wall-clock time (model download and video decoding
+included), which the Track All summary box shows (`ui/track-summary.js`); it is
+not saved — `serializeIdSwitchReview` (`ui/id-switch-review.js`) picks its fields explicitly.
 
 **The image check.** Needs the session's videos and WebGPU (else it says why).
 Runs under its own cancellable progress dialog (Cancel / Esc -> "cancelled", no
@@ -9840,6 +9861,92 @@ the app-wide modal convention. On a successful run the viewer is parked on the
   behaviour).
 
 ---
+
+### ui/track-summary.js
+
+**Purpose.** What the Track All summary box says, DOM-free so the decision tree is
+unit-tested in Node (`tests/test-track-summary.mjs`). Track All used to end on a
+status line, plus the ID Switches tab when the automatic check found something;
+when it found nothing — or never ran — there was no visible next step, and the
+three cases read alike.
+
+**Key exports.**
+- `summarizeTrackedIdentities(session, {frames, animals, animalsAuto, elapsedMs, fps})`
+  — frames per identity, frames with any identity, frames with every animal, from
+  `session.instanceGroups` (never evicted on a lazy project, so the whole project).
+  An identity listed twice in one frame counts once.
+- `describeSwitchCheck(enabled, res, identities, whyNotRun)` — one check's outcome
+  as `{state, switches, encounters, reason, elapsedMs}`, state one of `found` /
+  `clear` / `skipped` / `failed` / `cancelled` / `off` / `na` (one identity).
+  Switches are `idSwitchOnsets` — the "possible switches" count the tab uses.
+- `planTrackSummary(summary, checks)` — the rows, the notes, the next step and the
+  buttons. Recommends **Review switches** when any check found one; **Triangulate
+  All** otherwise (with "Check by images…" / "Check by body size" offered when that
+  check did not run, and a caveat that body size cannot separate similar-sized
+  animals when only size came back clear); **Tracking Wizard…** when nothing was
+  matched. A skipped check never gets a "nothing found" headline. Notes flag more
+  (or fewer) identities than animals.
+- `formatShare(count, total)` — floored to one decimal, so only a full count reads
+  "100%". `formatDuration(ms)` — "0.4 s", "42 s", "3 min 5 s", "1 h 12 min".
+- `formatTrackingSpeed(frames, ms, recordingFps)` — the Tracking time row's detail:
+  frames tracked per wall-clock second ("300 fps") and, when the recording's rate
+  is known, how many times faster than real time ("10×" for 30 min of video
+  tracked in 3). The multiplier is the throughput over the recording fps, so the
+  two cannot disagree; with no rate only the fps is shown.
+- `MAX_IDENTITY_ROWS` (12) — identity rows listed before "and N more" (the modal
+  gets no inner scroller).
+
+**Notes / caveats.**
+- **A time is shown only for a check that spent real time** (found / clear /
+  failed / cancelled); a skip returns at its preflight.
+- **Long reasons are cut at their first parenthesis** (the skeleton skip lists 16
+  bone pairs); the row carries the whole reason as `full`, which the modal puts in
+  the row's tooltip.
+
+**Imports from project modules.** `ui/id-switch-review.js` (`idSwitchOnsets`,
+`idSwitchEncounterCount`), itself import-free.
+
+**Imported by.** `pose/tracker.js`, `ui/track-summary-modal.js`.
+
+### ui/track-summary-modal.js
+
+**Purpose.** The box that opens when Track All finishes: identities, frames
+tracked, frames with every animal, tracking time with its speed (fps, × real
+time), a bar per identity, each
+ID-switch check's result and time, and the **Next step** with its button focused.
+Renders `planTrackSummary` (`ui/track-summary.js`) and nothing else.
+
+**Key exports.** `showTrackSummaryModal(summary, checks)` — returns
+`{close, overlay}`, or null without a DOM (Node harnesses run Track All).
+
+**Notes / caveats.**
+- **A note, not a prompt.** Nothing changes until a button is pressed; Close,
+  `Esc` and a backdrop click dismiss it. Each action button clicks the existing
+  control — `#tbTriangulateAll`, `#menuCheckImageSwitches`,
+  `#menuCheckSizeSwitches`, `#menuTrackingWizard` — so it runs exactly what the
+  user would have run by hand (a disabled button, e.g. under Defining Plane Mode,
+  ignores it the same way). **Review switches** opens the ID Switches tab and
+  presses `#idSwitchNext`, landing on the first flagged switch.
+- **Keys stop at it** (capture-phase listener, as `openFixDialog` does), so the
+  app's shortcuts do not act under it; `Enter` / `Space` still press the focused
+  primary button.
+- **One at a time.** A second Track All closes the first box before opening its
+  own.
+- **No inner scroller.** The identity list is capped instead; the modal itself
+  caps its height at the viewport. It drops `.multi-frame-modal`'s 420px
+  `min-width` so it fits a narrow window.
+
+**Imports from project modules.** `ui/track-summary.js` (`planTrackSummary`),
+`ui/id-switch-modal.js` (`openIdSwitchPanel`).
+
+**Imported by.** `pose/tracker.js`. No cycle: neither import reaches back to the
+tracker.
+
+**Coverage.** `tests/e2e/track-all-summary.mjs` — the real Track All button, the
+rows and times, the key swallowing and `Esc`, `Enter` running Triangulate All,
+replacement on a second run, no box after Track Frame Range, the nothing-tracked
+case, and Review switches landing on the first switch. Tests that click the app
+after a Track All close the box first (`#trackSummaryClose`).
 
 ### ui/view-align-modal.js
 

@@ -95,6 +95,8 @@ try {
             const t = document.getElementById('statusText').textContent;
             return t !== b && /Assigned \d+ identities|error/i.test(t);
         }, before, { timeout: 30000 });
+        // Track All ends on its summary box (tests/e2e/track-all-summary.mjs); close it as a user would.
+        await page.click('#trackSummaryClose', { timeout: 30000 });
     };
 
     // ---- 1 + 2. Tracks -> Track All -> ID -----------------------------------------
