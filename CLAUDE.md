@@ -1381,7 +1381,7 @@ do) or the container resizable — not scrollable twice.
 `Track Frame` and `Track All` are disabled while the mode is on
 (`applyPlaneModeToolbarLock` in `ui/plane-definition.js`) — they act on POSE
 annotation, which in the mode is a selection the user can no longer see or
-change. The **visibility** controls (User / Predicted / Reproj / Errors),
+change. The **visibility** controls (User / Predicted / Reprojections / Errors),
 Sessions, Tracks / Identity and the Panel toggle stay live: they change what is DRAWN, not what
 is annotated. Adding a button to that lock means adding its id to
 `PLANE_LOCKED_TOOLBAR_IDS`; if it opens a menu, its wrapper also needs

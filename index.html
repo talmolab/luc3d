@@ -195,7 +195,6 @@
                 <button class="toolbar-btn" id="tbDeleteInstance" title="Delete selected instance (Del)">-
                     Instance</button>
             </div>
-            <div class="toolbar-separator"></div>
             <div class="toolbar-group">
                 <button class="toolbar-btn" id="tbGroup" title="Group selected instances (⇧G or C)">Group</button>
                 <button class="toolbar-btn" id="tbEditGroup" title="Edit selected group membership">Edit Group</button>
@@ -213,9 +212,10 @@
                         <div class="tri-dropdown-item" data-method="ba">Ref <span class="tri-dropdown-hint">Slow &amp; Accurate</span></div>
                     </div>
                 </div>
+                <!-- Inside the Triangulate group so it stays on this side of the
+                     group's divider (ui/info-panel.js updateTriangulationBadge). -->
+                <span class="triangulation-badge" id="triangulationBadge" style="display:none"></span>
             </div>
-            <span class="triangulation-badge" id="triangulationBadge" style="display:none"></span>
-            <div class="toolbar-separator"></div>
             <div class="toolbar-group">
                 <div class="tri-dropdown" id="trackFrameDropdown">
                     <button class="toolbar-btn" id="tbTrackFrame" title="Track current frame (Shift+T)">Track Frame <span class="tri-caret">▾</span></button>
@@ -225,19 +225,16 @@
                 </div>
                 <button class="toolbar-btn" id="tbTrackAll" title="Track all frames (Ctrl+Shift+T)">Track All</button>
             </div>
-            <div class="toolbar-separator"></div>
             <div class="toolbar-group toolbar-checkboxes">
                 <label><input type="checkbox" id="visUser" checked> User</label>
                 <label><input type="checkbox" id="visPredicted" checked> Predicted</label>
-                <label><input type="checkbox" id="visReprojections" checked> Reproj</label>
+                <label><input type="checkbox" id="visReprojections" checked> Reprojections</label>
                 <label><input type="checkbox" id="visErrors" checked> Errors</label>
             </div>
-            <div class="toolbar-separator"></div>
             <div class="toolbar-group" role="group" aria-label="Color by">
                 <button class="toolbar-btn active" id="colorByTracks" title="Color instances by track">Tracks</button>
                 <button class="toolbar-btn" id="colorById" title="Color instances by identity">Identity</button>
             </div>
-            <div class="toolbar-separator"></div>
             <!-- Node Trails (issue #102). Same presets and state as Tracks ▸ Node
                  Trails; the items are built from that one list in ui/ui-wiring.js.
                  Opens on hover, like the Triangulate menus. The label stays a bare

@@ -213,7 +213,7 @@ try {
 
     console.log('\n-- 2b. …but visibility and display controls stay live --');
     check(allFalse(out.inFreeCheckboxes),
-        `User / Predicted / Reproj / Errors stay enabled (got ${JSON.stringify(out.inFreeCheckboxes)})`);
+        `User / Predicted / Reprojections / Errors stay enabled (got ${JSON.stringify(out.inFreeCheckboxes)})`);
     check(out.visToggled, 'and toggling one actually works');
     check(allFalse(out.inFreeButtons),
         `Sessions, Tracks / Identity and the Panel toggle stay enabled (got ${JSON.stringify(out.inFreeButtons)})`);

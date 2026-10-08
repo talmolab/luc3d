@@ -2092,7 +2092,7 @@ drifts upward (e.g., 4 → 11 on the test fixture).
 - `../ui/rendering.js` — `drawAllOverlays`, `showPredictedOnly`,
   `PREDICTED_ONLY_NOTE`: Track Frame (when it found targets), Track Frame Range
   and Track All (when they assigned identities) end showing ONLY the Predicted
-  layer — User, Reproj, Errors unticked — and append the note to the status line
+  layer — User, Reprojections, Errors unticked — and append the note to the status line
   when that changed anything (the tracking counterpart of Triangulate All's
   Reproj-only switch, #243).
 - `../ui/info-panel.js` — `updateInfoPanel`.
@@ -4956,7 +4956,7 @@ if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' ||
 
 meaning "don't steal keys from someone who is typing". But `tagName` is `INPUT`
 for a **checkbox** too — and for a radio, a range slider and a file picker. So
-the moment the user clicked the User / Predicted / Reproj / Errors toolbar
+the moment the user clicked the User / Predicted / Reprojections / Errors toolbar
 checkbox, that test went true for every keystroke and **every shortcut in the
 app went dead**, not just the one the checkbox wanted. Spacebar toggled the
 checkbox instead of playing the video, and the only cure was to click back onto
@@ -6213,10 +6213,10 @@ data sources. Plus visibility-toggle helpers and frame counter updates.
 
 **Key exports.**
 - `setReprojErrorVisible(visible, opts?)` — show/hide the reproj-error info
-  column. Showing it ticks the Reproj and Errors boxes unless
+  column. Showing it ticks the Reprojections and Errors boxes unless
   `opts.checkBoxes === false`.
 - `showReprojectionsOnly()` -> `boolean` — after Triangulate All (#243): User,
-  Predicted, Errors off, Reproj on, each changed box firing its own `change`
+  Predicted, Errors off, Reprojections on, each changed box firing its own `change`
   event (so the deselect-hidden-instance handler and redraw run as for a
   click); returns whether anything changed. `REPROJ_ONLY_NOTE` is the status
   suffix the callers append when it did. The four Triangulate All endings
@@ -6226,7 +6226,7 @@ data sources. Plus visibility-toggle helpers and frame counter updates.
   Errors just re-ticked.
 - `showPredictedOnly()` -> `boolean` — the tracking counterpart: after Track
   Frame / Track Frame Range / Track All (`pose/tracker.js`) Predicted on; User,
-  Reproj, Errors off, by the same change-event mechanics (shared private
+  Reprojections, Errors off, by the same change-event mechanics (shared private
   `setToolbarLayers`). `PREDICTED_ONLY_NOTE` is its status suffix.
 - `getVisibilitySettings()` — reads per-view checkbox state from the DOM.
   Includes **`showUnlinkedBadge`** (the Visibility panel's *Unlinked Instances ▸
@@ -7216,8 +7216,8 @@ object than the plane geometry the mode is for: in the mode a click lands on a
 plane node, the info panel is the plane panel, and `interactionManager`'s
 selection is a plane — so pressing Group or Triangulate would operate on a pose
 selection the user can no longer see or change, producing an edit they did not
-mean and cannot observe. The VISIBILITY controls (User / Predicted / Reproj /
-Errors), Sessions, Tracks / Identity and the Panel toggle are deliberately NOT blocked: they
+mean and cannot observe. The VISIBILITY controls (User / Predicted /
+Reprojections / Errors), Sessions, Tracks / Identity and the Panel toggle are deliberately NOT blocked: they
 change what is DRAWN, not what is annotated, and turning Predicted off to see
 the plane you are placing is exactly what the mode is for.
 
@@ -10132,7 +10132,7 @@ stopping at the last frame; the step transport buttons/keys stop it first.
   `data-trail-len`), and both pickers go through `setTrailLength`, whose
   `updateTrailChecks` moves the checkmark in BOTH menus and rewrites the
   button's tooltip ("Node trails: 50 frames"). The label stays a bare
-  "Trails ▾" on purpose, to save toolbar width: the toolbar needs ~1,410 px
+  "Trails ▾" on purpose, to save toolbar width: the toolbar needs ~1,380 px
   with it (see the panel toggles below), and "Trails: 500" in the label would
   add ~25 px more. The button is a `.tri-dropdown`, so its menu opens on hover in
   pure CSS exactly like the Triangulate split buttons', and like theirs stays
@@ -10289,7 +10289,10 @@ will do ("Hide 3D viewer (\)" / "Show 3D viewer (\)"), via the private
 `lockPanelToggleWidths` to pin each button to its wider label so a swap did not
 shove its neighbour sideways ("Hide" and "Show" are different widths in a
 proportional font). A fixed label cannot resize, so that function is gone. With
-the short labels the whole toolbar fits a 1440 px window (it needs ~1,410 px).
+the short labels, and ONE divider line between toolbar groups (each
+`.toolbar-group`'s right border; the extra `.toolbar-separator` beside it is
+gone), the whole toolbar fits a 1440 px window (it needs ~1,380 px), which
+`tests/e2e/toolbar-3d-toggle-button.mjs` asserts.
 
 **Single-view ("solo") mode.** `v` (`singleViewMode`) calls
 `enterSingleViewMode`, which caches the dockview grid layout
