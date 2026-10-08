@@ -967,8 +967,10 @@ export function setupMenus() {
         setStatus('Coloring by Identity', 'success');
     });
 
-    // Node Trails presets (Tracks menu) — issue #102. A single active length;
-    // the checkmark tracks state.trailLength, and picking one repaints.
+    // Node Trails presets — issue #102. A single active length, picked from
+    // the Tracks ▸ Node Trails submenu or the toolbar's Trails button; both go
+    // through setTrailLength, so their checkmarks and the button's tooltip
+    // always show state.trailLength.
     var trailPresets = [
         { id: 'menuTrailsOff', len: 0 },
         { id: 'menuTrails10', len: 10 },
@@ -977,23 +979,86 @@ export function setupMenus() {
         { id: 'menuTrails250', len: 250 },
         { id: 'menuTrails500', len: 500 },
     ];
+    var trailsDropdown = document.getElementById('trailsDropdown');
+    var trailsBtn = document.getElementById('tbTrails');
+    var trailsMenu = document.getElementById('trailsMenu');
     function updateTrailChecks() {
         trailPresets.forEach(function (p) {
+            var on = state.trailLength === p.len;
             var el = document.getElementById(p.id);
             var chk = el && el.querySelector('.trail-check');
-            if (chk) chk.textContent = (state.trailLength === p.len) ? '✓' : '';
+            if (chk) chk.textContent = on ? '✓' : '';
+            var item = trailsMenu && trailsMenu.querySelector('[data-trail-len="' + p.len + '"]');
+            if (item) {
+                item.querySelector('.trail-check').textContent = on ? '✓' : '';
+                item.setAttribute('aria-checked', on ? 'true' : 'false');
+            }
         });
+        // The label is a bare "Trails ▾" to save toolbar width; the current
+        // length rides in the tooltip instead.
+        if (trailsBtn) trailsBtn.title = 'Node trails: ' +
+            (state.trailLength > 0 ? state.trailLength + ' frames' : 'off') +
+            '. Click to choose how many past frames to draw behind each node.';
     }
+    function setTrailLength(len) {
+        state.trailLength = len;
+        updateTrailChecks();
+        drawAllOverlays(state.currentFrame);
+        setStatus(len > 0 ? ('Node trails: ' + len + ' frames') : 'Node trails off', 'success');
+    }
+
+    // The toolbar button opens its menu on CLICK (not hover, unlike the
+    // Triangulate split buttons). The global document click handler already
+    // drops `.open` from every .tri-dropdown; Esc closes it too.
+    function onTrailsMenuKey(e) {
+        if (e.key !== 'Escape') return;
+        e.preventDefault();
+        e.stopPropagation();
+        setTrailsMenuOpen(false);
+    }
+    function setTrailsMenuOpen(open) {
+        if (!trailsDropdown) return;
+        trailsDropdown.classList.toggle('open', open);
+        trailsBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
+        if (open) document.addEventListener('keydown', onTrailsMenuKey, true);
+        else document.removeEventListener('keydown', onTrailsMenuKey, true);
+    }
+    if (trailsDropdown && trailsBtn && trailsMenu) {
+        trailPresets.forEach(function (p) {
+            var item = document.createElement('div');
+            item.className = 'tri-dropdown-item';
+            item.setAttribute('role', 'menuitemradio');
+            item.setAttribute('data-trail-len', String(p.len));
+            item.innerHTML = '<span><span class="trail-check"></span>' +
+                (p.len > 0 ? p.len + ' frames' : 'Off') + '</span>';
+            item.addEventListener('click', function (e) {
+                e.stopPropagation();
+                setTrailsMenuOpen(false);
+                setTrailLength(p.len);
+            });
+            trailsMenu.appendChild(item);
+        });
+        trailsBtn.addEventListener('click', function (e) {
+            // Stop the document handler from closing what this opens, and close
+            // the menu bar's dropdowns ourselves since it no longer will.
+            e.stopPropagation();
+            var open = !trailsDropdown.classList.contains('open');
+            closeMenus();
+            document.querySelectorAll('.tri-dropdown.open').forEach(function (d) {
+                d.classList.remove('open');
+            });
+            setTrailsMenuOpen(open);
+        });
+        document.addEventListener('click', function () { setTrailsMenuOpen(false); });
+    }
+
     updateTrailChecks();
     trailPresets.forEach(function (p) {
         var el = document.getElementById(p.id);
         if (!el) return;
         el.addEventListener('click', function () {
-            state.trailLength = p.len;
-            updateTrailChecks();
             closeMenus();
-            drawAllOverlays(state.currentFrame);
-            setStatus(p.len > 0 ? ('Node trails: ' + p.len + ' frames') : 'Node trails off', 'success');
+            setTrailLength(p.len);
         });
     });
 

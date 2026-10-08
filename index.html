@@ -238,6 +238,19 @@
                 <button class="toolbar-btn active" id="colorByTracks" title="Color instances by track">Tracks</button>
                 <button class="toolbar-btn" id="colorById" title="Color instances by identity">ID</button>
             </div>
+            <div class="toolbar-separator"></div>
+            <!-- Node Trails (issue #102). Same presets and state as Tracks ▸ Node
+                 Trails; the items are built from that one list in ui/ui-wiring.js.
+                 Opens on CLICK, not hover (`click-open`). The label stays a bare
+                 "Trails" (the value is the menu's checkmark and the tooltip) to
+                 save toolbar width. -->
+            <div class="toolbar-group">
+                <div class="tri-dropdown click-open" id="trailsDropdown">
+                    <button class="toolbar-btn" id="tbTrails" aria-haspopup="menu" aria-expanded="false"
+                        title="Node trails: how many past frames to draw behind each node">Trails <span class="tri-caret">▾</span></button>
+                    <div class="tri-dropdown-menu" id="trailsMenu" role="menu"></div>
+                </div>
+            </div>
             <div class="toolbar-group panel-toggles">
                 <button class="toolbar-btn panel-toggle-btn" id="viewport3dToggleBtn" title="Toggle 3D viewer (\)">Hide 3D View</button>
                 <button class="toolbar-btn panel-toggle-btn" id="infoPanelToggleBtn" title="Toggle info panel (I)">Hide Panel</button>

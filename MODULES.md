@@ -6101,7 +6101,8 @@ palettes, and per-frame draw routines. Receives `frameGroup` and
   lookup), so an identity/color **switch shows as a color change along the trail**.
   `drawFrameOverlays` calls it right after the canvas clear (behind the live
   skeletons) when `options.trailLength > 0`. Length is chosen from the **Tracks ▸
-  Node Trails** submenu (Off/10/50/100/250/500 → `state.trailLength`).
+  Node Trails** submenu or the toolbar's **Trails** button (Off/10/50/100/250/500
+  → `state.trailLength`; see `ui/ui-wiring.js`).
   **Performance (it runs per view, per playback redraw):**
   - `trailWindowFrames(frameGroups, frameIdx, trailLength)` (exported) finds the
     window by **walking back** from `frameIdx` — ~`trailLength` lookups — instead
@@ -10080,6 +10081,22 @@ stopping at the last frame; the step transport buttons/keys stop it first.
   `update3DViewport` (whose `getGroupColor` closure reads
   `state.colorByIdentity` live, so instances recolor instantly). The buttons
   use it, and so does the tracker after Track All (#242).
+- Node Trails (issue #102): two pickers for `state.trailLength` — the Tracks ▸
+  Node Trails submenu (`menuTrails*`) and the toolbar's **Trails** button
+  (`#tbTrails`, right of Color: Tracks / ID). One `trailPresets` list
+  (Off/10/50/100/250/500) builds the toolbar menu's items (`#trailsMenu`,
+  `data-trail-len`), and both pickers go through `setTrailLength`, whose
+  `updateTrailChecks` moves the checkmark in BOTH menus and rewrites the
+  button's tooltip ("Node trails: 50 frames. …"). The label stays a bare
+  "Trails ▾" on purpose, to save toolbar width: with this group the toolbar
+  needs ~1,516 px (~1,428 before it), and "Trails: 500" in the label would add
+  ~25 px more. The button reuses the `.tri-dropdown` markup
+  but with `click-open`: it opens on CLICK, not hover (a CSS `:not(.open)` rule
+  out-specifies `.tri-dropdown:hover`), and closes on a second click, an outside
+  click, picking an item, or Esc (a capture-phase keydown listener installed
+  only while open). Display state, never saved; not in the Defining Plane Mode
+  toolbar lock (it changes what is drawn, not what is annotated). Covered by
+  `tests/e2e/node-trails-toolbar.mjs`.
 - Node Style: the four per-section Node Style button groups
   (`visUserNodeStyle` / `visPredNodeStyle` / `visReprojNodeStyle` /
   `vis3dNodeStyle`) reuse the `.line-style-btn` click handler (active toggle +
