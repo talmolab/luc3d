@@ -30,6 +30,8 @@ import { drawAllOverlays, showPredictedOnly, PREDICTED_ONLY_NOTE } from '../ui/r
 import { updateInfoPanel } from '../ui/info-panel.js';
 import { setColorByIdentity } from '../ui/color-by.js';
 import { runIdSwitchChecks, clearIdSwitchResults } from '../ui/id-switch-modal.js';
+import { summarizeTrackedIdentities, describeSwitchCheck } from '../ui/track-summary.js';
+import { showTrackSummaryModal } from '../ui/track-summary-modal.js';
 import { collapseTimeline } from '../ui/timeline-controller.js';
 import { collapseViewport3D } from '../ui/panel-visibility.js';
 
@@ -1325,6 +1327,10 @@ async function runTrackingPass(range) {
         if (!promptNumAnimals()) return bail;
     }
 
+    // How long tracking took, for the summary box: from here (after the animal-count
+    // prompt, so the user's typing is not counted) to the end of the identity pass.
+    var trackStart = performance.now();
+
     // A non-windowed lazy session materializes every frame first, so the run
     // has two labelled stages; everything else is the identity pass alone.
     var STEPS = (loader && !windowed) ? 2 : 1;
@@ -1433,6 +1439,7 @@ async function runTrackingPass(range) {
                 { start: lo, end: hi, identityPool: identityPool })
             : await runCrossViewTrackerProgress(session, cameras, frameIndices, false,
                 effectiveNumAnimals, onProgress, identityPool);
+        var trackMs = performance.now() - trackStart;
         hideLoading();
         // The run's product is identities, so show them (#242): switch Color
         // from Tracks to ID. Only when it assigned any — otherwise there is
@@ -1467,8 +1474,34 @@ async function runTrackingPass(range) {
         // window is checked against the frames around it; with too little tracked
         // data a check reports itself skipped. It never fails the tracking pass.
         var autoSize = getTrackingThreshold('autoSwitchCheck') > 0, autoImage = getTrackingThreshold('autoImageSwitchCheck') > 0;
+        var checkRes = null;
         if (lres.numIdentities > 1 && (autoSize || autoImage)) {
-            await runIdSwitchChecks({ auto: true, statusPrefix: doneMsg, size: autoSize, image: autoImage });
+            checkRes = await runIdSwitchChecks({ auto: true, statusPrefix: doneMsg, size: autoSize, image: autoImage });
+        }
+        // Track All ends on a summary box (ui/track-summary-modal.js): how tracking
+        // went and how long it and each check took, what the checks concluded — "not run" and "skipped" included, which
+        // the status line alone made look like "found nothing" — and the next step.
+        // A range does not: it is a targeted re-run, inspected on the timeline. The
+        // tracking already succeeded, so a summary that fails only logs.
+        if (!isRange) {
+            try {
+                // `runIdSwitchChecks` returns null only when there were no tracked 3D skeletons to check.
+                var noSkeletons = 'no tracked 3D skeletons';
+                showTrackSummaryModal(
+                    summarizeTrackedIdentities(session, {
+                        frames: totalFrameCount, animals: effectiveNumAnimals, animalsAuto: trackerNumAnimals == null,
+                        elapsedMs: trackMs,
+                        // The recording's rate, as the ID-switch checks read it (measured
+                        // from the video when one is loaded), for the real-time multiplier.
+                        fps: state.fps > 0 ? state.fps : (session.fps > 0 ? session.fps : 0),
+                    }),
+                    {
+                        size: describeSwitchCheck(autoSize, checkRes && checkRes.size, lres.numIdentities, noSkeletons),
+                        image: describeSwitchCheck(autoImage, checkRes && checkRes.image, lres.numIdentities, noSkeletons),
+                    });
+            } catch (e) {
+                console.error('[' + label + '] summary failed:', e);
+            }
         }
         // Report the span actually swept. For Track All that is whatever the
         // project turned out to hold; for a range it is the clamped, normalized
