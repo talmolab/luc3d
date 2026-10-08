@@ -19,6 +19,9 @@
  * SAVE=<file.slp> then saves the project (File ▸ Save, downloaded since the
  * File System Access pickers are gone) to that path, to check what SLEAP reads.
  *
+ * THRESHOLDS=id=v,... sets Tracking Wizard values before Track All (e.g.
+ * imageCheckThreshold=-200).
+ *
  * ROUTE_CHECK=<file> serves that file in place of pose/id-switch-check.js (to
  * measure an unmerged version of the checks on the same tracking).
  *
@@ -65,6 +68,11 @@ try {
 
     await page.goto(`http://localhost:${PORT}/index.html`);
     await page.waitForFunction(() => window.__lucid && window.__lucid.state, { timeout: 30000 });
+    if (process.env.THRESHOLDS) {
+        const thr = Object.fromEntries(process.env.THRESHOLDS.split(',').map(kv => { const [k, v] = kv.split('='); return [k.trim(), Number(v)]; }));
+        await page.evaluate(async (t) => { const S = await import('/ui/settings.js'); S.setTrackingThresholds(t); }, thr);
+        log('thresholds: ' + JSON.stringify(thr));
+    }
     await page.evaluate(() => document.getElementById('menuLoadSlp').click());
     await page.getByText('Select Video Files').click({ timeout: 60000 });
     await page.waitForFunction(() => {
