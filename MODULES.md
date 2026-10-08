@@ -3307,20 +3307,58 @@ reads (unset = every camera included, no threshold; the main thread installs
 them, a worker gets resolved values via `options.includedCameras` /
 `options.reprojErrorThreshold`) — and `__triangulationKernelsForTest`.
 
-**Allocation-free hot paths, bit-identical by construction.**
-- DLT: `dltHomogeneousFlat` + `smallestEigvec4Flat` perform the exact
-  operations of row arrays -> `matTranspose` -> `matMul` -> `jacobiEigen` ->
-  smallest-|λ| pick (same k-ordered sums from 0, same Givens sequence, angles,
-  row-then-column updates, skip/convergence tests) on preallocated typed arrays.
-  The generic path allocated four arrays per rotation.
+**Allocation-free hot paths, bit-identical by construction — except the DLT's
+null-vector solve.**
+- DLT matrix: `dltNormalMatrixFlat` builds M = AᵀA with the exact operations of
+  row arrays -> `matTranspose` -> `matMul` (same A entries, same k-ordered sums
+  from 0) on preallocated typed arrays. It sums only the upper triangle and
+  mirrors it, which is exact: each product has the same two factors, and IEEE
+  754 multiplication commutes.
+- DLT solve: `dltHomogeneousFlat` finds M's null vector with
+  `smallestEigvec4Inverse` — **inverse iteration**: Cholesky of `M + δI`
+  (`δ = 1e-15·trace`, so an exactly singular M factors; the shift changes no
+  eigenvector), then solve-and-normalize from a fixed start until no entry
+  moves by more than `INVERSE_TOL` (1e-15). This is the one deliberate break
+  from bit-identity. The Jacobi kernel it replaced, `smallestEigvec4Flat`
+  (still bit-identical to `jacobiEigen` -> smallest-|λ| pick), cost ~1.7 µs per
+  solve — atan2/cos/sin for each of ~30 rotations — and Track All runs ~9M of
+  them: **15.1 s of a 65 s Track All** on the 5-mouse, 8-camera, 108,000-frame
+  recording (23%, the largest single function in the profile). Inverse
+  iteration is ~0.35 µs (4–5 steps on clean systems; one view ~50 px off, 5–9).
+  Systems whose two smallest eigenvalues are close (a 300 px outlier, all views
+  wild) can take INVERSE_MAX_ITER (50) steps and then fall back to
+  `smallestEigvec4Flat`, as do a non-finite M and one that does not factor —
+  which is exactly today's answer for those. It must CONVERGE rather than run a
+  fixed number of steps: the start vector does not rotate with the world, so an
+  unconverged answer depends on the frame, and the frame-invariance tests catch
+  that (a 1e-5 tolerance fails two of them).
+  Agreement, measured with `tests/e2e/_diag-trackall-ab.mjs` (Track All, then
+  DLT Triangulate All, with `main` and with this solver, compared frame by
+  frame) on seven real recordings — the 5-mouse one (108,000 frames, lazy) and
+  the six proofread SLAP ground-truth sessions (18–19k frames each, 3 and 4
+  mice): **identical identity groups on all 228,956 frames** (every group's
+  identity and its exact 2D detection in every camera), and 3D within 8.6e-10 mm
+  after Track All and after Triangulate All. Track All 65.5 -> 50.4 s on the
+  5-mouse recording, 3.4–5.4 -> 2.4–3.9 s on the others (~30%). Triangulate All
+  is unchanged (27.3 vs 27.7 s): it solves in the worker pool, where the DLT was
+  not the bottleneck. The harness's negative control — the match gate switched
+  on in one build only — differs on 4,389 of 18,058 frames, so a "0 differ" is
+  a real result; a deliberately sloppy solver (tolerance 1e-4, 3D off by up to
+  53 mm) still grouped every frame identically, so the tracker is robust to
+  this kind of change by a wide margin.
 - Refinement: `triangulatePointBA` projects through
   `_projectAndJacobian(Camera)Into`, which write into one scratch object with
   the same expressions as `projectAndJacobian`, `distortJacobian` and
   `Camera.distortPoint` (including their different r²·r² vs r⁴ association). It
   was ~11.6 s of GC in an 80 s Refined run.
 Pinned by `tests/test-triangulation-kernels.mjs` (thousands of random systems,
-`Object.is` per value). **Any edit to these kernels must keep operation order,**
-or results drift in the last bits and tracker decisions can flip.
+`Object.is` per value for the bit-identical parts; for the inverse iteration:
+agreement with Jacobi, a null vector no worse than Jacobi's by Rayleigh
+quotient, rotation invariance, and the fallbacks). **Any edit to these kernels
+must keep operation order,** or results drift in the last bits and tracker
+decisions can flip — and a change to the solve itself needs a before/after
+Track All on real recordings (`tests/e2e/_diag-trackall-ab.mjs`), since a tiny
+3D difference is no proof that no association flips.
 
 **`triangulatePointDLT` SOLVES IN A CAMERA-DERIVED FRAME, and that is
 load-bearing.** DLT minimizes an ALGEBRAIC error, and `‖x‖ = 1` on a
