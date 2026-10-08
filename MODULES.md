@@ -4483,7 +4483,7 @@ repaints at the user's current height instead of growing to fit all rows.
 
 **The Track `<select>` is built LAZILY** (`buildTrackSelect`, via
 `ui/lazy-select.js`). Until the user presses or focuses it, it holds three
-options — the head (`(none)` / `—`), the current track and `(+) New Track` —
+options — the head (`(none)`), the current track and `(+) New Track` —
 and the full list is filled in on that first `mousedown` / `focus`, both of
 which fire before the browser opens the list or acts on a key. An eager select
 held an `<option>` per session track, and `updateFrameInfo` builds one per row
@@ -4687,13 +4687,14 @@ on reload); see `ui/app-state.js`.
   correction touches that view only (luc3d #201) — the ungroup → fix one view →
   regroup workflow — and passes its instance so a TRACKLESS row takes the
   per-frame instance-level path (`applyIdentitySwitch` mode **frame**; picking
-  "—" on a trackless row clears `Instance.identityId` directly, there being no
+  "(none)" on a trackless row clears `Instance.identityId` directly, there being no
   map entry to clear). The unlinked row's ID `<select>` pre-selects from
   `getIdentityIdForUnlinkedInstance` (per-frame map entry for a tracked row,
   instance-level retained identity for a trackless one), which is why
   `Session.unlinkGroup` has to retain the
   disbanded group's identity in the map / on the instance for the row to read as anything
-  but "—".
+  but "(none)". (Both tables' "no track" / "no identity" option reads "(none)"; the
+  Ungrouped table's used to read "—".)
 - `./sessions-panes.js` — `populateSessionsPanel`, `populateViewStrip`,
   `populateSessionStrip`.
 

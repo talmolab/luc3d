@@ -2118,14 +2118,14 @@ export function updateFrameInfo(frameIdx, instanceGroups) {
                     }
                 }
 
-                // Track column with dropdown. Includes a "—" (None)
-                // option so trackless user instances (trackIdx == null,
+                // Track dropdown. Includes a "(none)" option — the same label
+                // the Grouped table uses — so trackless user instances (trackIdx == null,
                 // e.g., reprojections imported from a 2D SLP with
                 // track=null) are displayed distinctly from a real
                 // track-0 instance instead of silently falling back
                 // to the first track.
                 const tdTrackUl = document.createElement('td');
-                var trackSelect = buildTrackSelect(ul.instance.trackIdx != null ? ul.instance.trackIdx : -1, '—', STACKED_SELECT_PX);
+                var trackSelect = buildTrackSelect(ul.instance.trackIdx != null ? ul.instance.trackIdx : -1, '(none)', STACKED_SELECT_PX);
                 trackSelect.style.width = STACKED_SELECT_PX + 'px';
                 (function (ulObj, inst, sel, camNameForUl) {
                     function applyTrack(newTrack) {
@@ -2155,7 +2155,7 @@ export function updateFrameInfo(frameIdx, instanceGroups) {
                             // User explicitly chose "None" — leave trackless.
                             if (inst.trackIdx == null) return;
                             inst.trackIdx = null;
-                            setStatus('Track → — on ' + camNameForUl, 'success');
+                            setStatus('Track → (none) on ' + camNameForUl, 'success');
                             drawAllOverlays(state.currentFrame);
                             updateInfoPanel();
                             if (timeline) timeline.refreshTracks(state.session, { keepSize: true });
@@ -2177,7 +2177,7 @@ export function updateFrameInfo(frameIdx, instanceGroups) {
                     'display:block;margin-top:3px;width:' + STACKED_SELECT_PX + 'px;max-width:' + STACKED_SELECT_PX + 'px;';
                 var optNoneUl = document.createElement('option');
                 optNoneUl.value = '-1';
-                optNoneUl.textContent = '—';
+                optNoneUl.textContent = '(none)';
                 idSelectUl.appendChild(optNoneUl);
                 for (var idi = 0; idi < (state.session.identities || []).length; idi++) {
                     var idOpt = document.createElement('option');
@@ -2212,7 +2212,7 @@ export function updateFrameInfo(frameIdx, instanceGroups) {
                             setStatus(describeIdentitySwitch(state.session, resUl,
                                 idObjUl ? idObjUl.name : String(newIdVal)), 'success');
                         } else {
-                            // "—": a trackless row's identity lives on the
+                            // "(none)": a trackless row's identity lives on the
                             // instance (luc3d #201); a tracked row's in the map.
                             if (inst.trackIdx == null) inst.identityId = null;
                             else state.session.clearTrackIdentity(inst.trackIdx, camNameForId);

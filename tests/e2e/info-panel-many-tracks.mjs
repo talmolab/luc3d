@@ -14,7 +14,7 @@
  *   1. the two track counts produce the SAME number of <option>s per update —
  *      at most 3 per Track select;
  *   2. every closed Track select shows what the eager build showed (its
- *      track's name, "(none)" / "—" for a trackless row);
+ *      track's name, "(none)" for a trackless row);
  *   3. a real click fills the full list (head, every track in order, tail)
  *      before the list opens, without changing the select's width; focus does
  *      too (the keyboard path);
@@ -129,7 +129,7 @@ try {
     const gShown = big.groupRows.map(r => r.shown).sort();
     check(JSON.stringify(gShown) === JSON.stringify(big.expectGroups.slice().sort()),
         'group rows show track_3, track_999 and (none)', gShown);
-    const ulExpect = UNLINKED_TRACKS(1000).map(tr => tr == null ? '—' : 'track_' + tr);
+    const ulExpect = UNLINKED_TRACKS(1000).map(tr => tr == null ? '(none)' : 'track_' + tr);
     const ulShown = big.ulRows.map(r => r.shown);
     const perCam = [];
     for (let c = 0; c < CAMS; c++) perCam.push(ulShown.slice(c * 5, c * 5 + 5).join(','));
@@ -156,8 +156,8 @@ try {
     }));
     check(clicked.n === 1002, `a click fills head + 1,000 tracks + tail (${clicked.n})`);
     check(clicked.inOrder, 'every track, in track order, value = index');
-    check(clicked.first.join('|') === '-1|—' && clicked.last.join('|') === '__new__|(+) New Track',
-        'head "—" and tail "(+) New Track" are kept', [clicked.first, clicked.last]);
+    check(clicked.first.join('|') === '-1|(none)' && clicked.last.join('|') === '__new__|(+) New Track',
+        'head "(none)" and tail "(+) New Track" are kept', [clicked.first, clicked.last]);
     check(clicked.value === '0', 'the selection is unchanged by filling', clicked.value);
     check(clicked.width === widthBefore, `the select keeps its closed width (${widthBefore}px)`, clicked.width);
 
