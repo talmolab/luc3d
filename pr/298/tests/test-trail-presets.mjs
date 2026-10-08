@@ -12,8 +12,8 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ui = (f) => pathToFileURL(path.join(HERE, '..', 'ui', f)).href;
-const { TRAIL_PRESETS, MAX_TRAIL_FRAMES, trailFrames, trailLabel, trailSecondsName, trailPresetFor, parseTrailSeconds } =
-    await import(ui('trail-presets.js'));
+const { TRAIL_PRESETS, MAX_TRAIL_FRAMES, trailFrames, trailLabel, trailSecondsName, trailPresetFor, parseTrailSeconds,
+        parseTrailFrames, formatTrailSeconds, trailSecondsForFrames } = await import(ui('trail-presets.js'));
 const { state } = await import(ui('app-state.js'));
 const { LAZY_KEEP_BEHIND } = await import(pathToFileURL(path.join(HERE, '..', 'pose', 'lazy-residency.js')).href);
 
@@ -66,6 +66,25 @@ eq(parseTrailSeconds('2.'), 2, 'a trailing point');
 for (const bad of ['', '0', '0.0', '-1', 'abc', '1.5s', '1e3', 'Infinity', '1.2.3', null]) {
     eq(parseTrailSeconds(bad), null, `rejects ${JSON.stringify(bad)}`);
 }
+
+// ---- a custom length typed in FRAMES -----------------------------------------------
+eq(parseTrailFrames('45'), 45, 'parses whole frames');
+eq(parseTrailFrames(' 7 '), 7, 'trims');
+for (const bad of ['', '0', '12.5', '-3', '1,5', 'abc', '45f', null]) {
+    eq(parseTrailFrames(bad), null, `frames rejects ${JSON.stringify(bad)}`);
+}
+eq(formatTrailSeconds(0.75), '0.75', 'seconds field: 0.75');
+eq(formatTrailSeconds(10 / 60), '0.167', 'seconds field: 3 decimals');
+eq(formatTrailSeconds(2), '2', 'seconds field: no trailing zeros');
+eq(trailSecondsForFrames(45, 60), 0.75, '45 frames at 60 fps is 0.75 s');
+eq(trailSecondsForFrames(50, 0), 50 / 30, 'no known rate: 30 fps');
+// Stored exactly (frames / fps, not the 3-decimal value the Seconds field
+// shows), a length typed in frames draws exactly the frames typed.
+let exact = true;
+for (const f of [1, 7, 10, 45, 99, 333, 500]) for (const fps of [24, 29.97, 30, 59.94, 60, 100, 250]) {
+    if (trailFrames(trailSecondsForFrames(f, fps), fps) !== f) { exact = false; eq(f, -1, `frames ${f} at ${fps} fps round-trips`); }
+}
+ok(exact, 'a frames entry draws exactly the frames typed, at every rate tested');
 
 // ---- state.trailLength is derived, and follows fps ------------------------------
 const fps0 = state.fps;

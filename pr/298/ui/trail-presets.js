@@ -1,6 +1,7 @@
 /**
  * trail-presets.js — node-trail lengths, in SECONDS: the presets, and the
- * parsing and naming of a custom length (Tracks ▸ Node Trails ▸ Custom…).
+ * parsing, conversion and naming of a custom length (Tracks ▸ Node Trails ▸
+ * Custom…, typed in seconds or in frames).
  *
  * A trail is chosen as a span of time (¼ s, ½ s, 1 s, 2 s) and drawn as a number of
  * frames, `seconds × fps`. A fixed frame list meant something different on every
@@ -68,8 +69,30 @@ export function trailPresetFor(seconds) {
 export function trailSecondsName(seconds) {
     var p = trailPresetFor(seconds);
     if (p) return p.name;
-    var v = Math.round(seconds * 1000) / 1000;
-    return v + (v === 1 ? ' second' : ' seconds');
+    var v = formatTrailSeconds(seconds);
+    return v + (v === '1' ? ' second' : ' seconds');
+}
+
+/**
+ * Seconds as the Custom… dialog's field shows them: at most 3 decimals, no
+ * trailing zeros ("1.5", "0.167", "2").
+ * @param {number} seconds
+ * @returns {string}
+ */
+export function formatTrailSeconds(seconds) {
+    return String(Math.round(seconds * 1000) / 1000);
+}
+
+/**
+ * The trail length in seconds that draws exactly `frames` frames at `fps` —
+ * how a length typed in frames is stored. Kept exact (10 frames at 60 fps is
+ * 1/6 s, not 0.167), so `trailFrames` gives back the frames that were typed.
+ * @param {number} frames
+ * @param {number} fps
+ * @returns {number}
+ */
+export function trailSecondsForFrames(frames, fps) {
+    return frames / trailRate(fps);
 }
 
 /**
@@ -96,4 +119,17 @@ export function parseTrailSeconds(text) {
     if (!/^(\d+\.?\d*|\.\d+)$/.test(t)) return null;
     var v = Number(t);
     return v > 0 && isFinite(v) ? v : null;
+}
+
+/**
+ * A typed custom length in frames, or null when it is not a whole number of
+ * at least 1.
+ * @param {string} text
+ * @returns {number|null}
+ */
+export function parseTrailFrames(text) {
+    var t = String(text == null ? '' : text).trim();
+    if (!/^\d+$/.test(t)) return null;
+    var v = Number(t);
+    return v >= 1 && isFinite(v) ? v : null;
 }
