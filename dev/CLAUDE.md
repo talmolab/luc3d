@@ -616,7 +616,11 @@ while the heap climbed toward the renderer's ~4.2 GB limit.
   `LAZY_PLAYBACK_AHEAD`, used by the loader and the eviction. Grow one without
   the other and playback evicts what it just loaded, then reloads it.
   `LAZY_KEEP_BEHIND` must stay above the longest node trail (500): trails draw
-  resident frames only.
+  resident frames only. A seek hydrates its target and the frames AHEAD, so
+  the draw path fills the trail's window behind it (`ensureLazyTrailWindow`),
+  and on a lazy project a non-resident frame ENDS the trail
+  (`trailWindowFrames`' `residentOnly`). Skipping it instead joined every trail
+  to frames still resident from before the jump.
 - **Dropping a frame drops its derived reprojection caches too** — exactly the
   state Triangulate All leaves every frame in; the draw path re-derives them.
 

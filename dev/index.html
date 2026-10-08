@@ -6,7 +6,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Multi-View Pose Proofreader</title>
-    <link rel="stylesheet" href="styles.css?v=173b1dfa905b">
+    <link rel="stylesheet" href="styles.css?v=e543670bf279">
     <!-- Pinned: dockview-core 7.x renamed api.onUnhandledDragOverEvent →
          onUnhandledDragOver, so the unpinned /+esm import broke pane docking
          whenever the CDN cache refreshed. Keep this pin in sync with the
@@ -18,17 +18,17 @@
     <script src="https://cdn.jsdelivr.net/npm/three@0.147.0/build/three.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/three@0.147.0/examples/js/controls/OrbitControls.js"></script>
     <!-- h5wasm for in-browser HDF5 read/write — local vendored 0.10.3 IIFE (global `h5wasm`); see lib/h5wasm/PROVENANCE.txt -->
-    <script src="./lib/h5wasm/h5wasm.iife.js?v=173b1dfa905b"></script>
+    <script src="./lib/h5wasm/h5wasm.iife.js?v=e543670bf279"></script>
     <!-- Video encode AND decode both go through mediabunny (importmap below):
          export via ui/video-encode.js, decode via sleap-io.js's backend. -->
     <!-- Import map for sleap-io.js ESM dependencies -->
     <script type="importmap">
     {
         "imports": {
-            "h5wasm": "./lib/h5wasm/hdf5_hl.js?v=173b1dfa905b",
+            "h5wasm": "./lib/h5wasm/hdf5_hl.js?v=e543670bf279",
             "yaml": "https://cdn.jsdelivr.net/npm/yaml@2.8.0/browser/index.js",
-            "mediabunny": "./lib/mediabunny/mediabunny.min.mjs?v=173b1dfa905b",
-            "pako": "./lib/pako/pako.esm.mjs?v=173b1dfa905b"
+            "mediabunny": "./lib/mediabunny/mediabunny.min.mjs?v=e543670bf279",
+            "pako": "./lib/pako/pako.esm.mjs?v=e543670bf279"
         }
     }
     </script>
@@ -1378,7 +1378,7 @@
             InstanceGroup as SioInstanceGroup, FrameGroup as SioFrameGroup,
             Identity as SioIdentity, Instance3D, PredictedInstance3D,
             MediaBunnyVideoBackend
-        } from './lib/sleap-io/index.browser.js?v=173b1dfa905b';
+        } from './lib/sleap-io/index.browser.js?v=e543670bf279';
         window.SleapIO = {
             Labels, LabeledFrame, Instance, PredictedInstance,
             Skeleton, Node, Edge, Video, Track, saveSlpToBytes,
@@ -1392,7 +1392,7 @@
         window.dispatchEvent(new Event('sleapio-ready'));
     </script>
 
-    <script type="module" src="app.js?v=173b1dfa905b"></script>
+    <script type="module" src="app.js?v=e543670bf279"></script>
 </body>
 
 </html>
