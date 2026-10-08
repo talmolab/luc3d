@@ -498,7 +498,9 @@ function testMoments(grid, LP, present, weight, o) {
  *    row, whose `switchBackAt` becomes the moment, and the run's own 'end' row
  *    is dropped. With no run before it, `switchedAt` = the pair's previous
  *    encounter (labels read right after it), else its previous moment, else
- *    null (from the session's start).
+ *    null (from the session's start). "Before it" means ended before the
+ *    moment's own contact began: an encounter ending inside that contact is
+ *    the moment itself, and its score describes the labels AFTER it.
  * Encounters scoring exactly 0 (no samples on either side) are skipped: they
  * neither continue nor end a stretch, and an 'end' row on one inside the
  * stretch is dropped.
@@ -527,10 +529,14 @@ export function momentChangePoints(moments, scored, changes, o) {
         for (var c = changes.length - 1; c >= 0; c--) if (samePair(changes[c], m) && changes[c].frame > lo && changes[c].frame <= hi) changes.splice(c, 1);
     };
     var after = function (L, f) { var i = 0; while (i < L.length && L[i].frame <= f) i++; return i; };
+    // An 'end' reads the stretch BEFORE it from encounters that ended before its own contact began: one
+    // ending inside the contact is the moment itself, and its score is about the labels AFTER it.
+    var beforeContact = function (L, m) { return after(L, (m.startFrame != null && m.startFrame <= m.frame ? m.startFrame : m.frame) - 1); };
     moments.forEach(function (m) {
         if (!(m.score < o.momentThreshold)) return;
         if (rows.some(function (x) { return samePair(x, m) && Math.abs(x.frame - m.frame) < near; })) return;
-        var L = encounters(m), i = after(L, m.frame), prev = L[i - 1], next = L[i];
+        var L = encounters(m), i = after(L, m.frame), next = L[i];
+        var prev = L[(m.side === 'after' ? i : beforeContact(L, m)) - 1];
         if (m.side === 'after' ? prev && prev.flagged && i >= 2 && L[i - 2].flagged
             : next && next.flagged && (prev ? prev.flagged : next.continues)) return;
         out.push(Object.assign({}, m, { flagged: m.side === 'after', continues: false, kind: m.side === 'after' ? 'onset' : 'end' }));
@@ -554,13 +560,13 @@ export function momentChangePoints(moments, scored, changes, o) {
             dropEnds(m, m.frame, (stop ? stop.frame : lim ? lim.frame : Infinity) - 1);
             if (stop) changes.forEach(function (c) { if (samePair(c, m) && c.frame === stop.frame) c.switchedAt = m.frame; });
         } else {
-            var lo = mine.filter(function (x) { return x.frame < m.frame; }).pop(), first = null, k = i - 1;
+            var ib = beforeContact(L, m), lo = mine.filter(function (x) { return x.frame < m.frame; }).pop(), first = null, k = ib - 1;
             for (; k >= 0 && !(lo && L[k].frame <= lo.frame) && L[k].flagged; k--) first = L[k];
             var before = k >= 0 && !(lo && L[k].frame <= lo.frame) ? L[k] : null;
             if (first && first.kind === 'onset' && !first.continues) { m.switchedAt = first.frame; first.switchBackAt = m.frame; }
             else m.switchedAt = before ? before.frame : lo ? lo.frame : null;
             if (first) {
-                for (var r = k + 1; r < i; r++) if (L[r] !== first) demote(L[r]);   // later runs inside the stretch
+                for (var r = k + 1; r < ib; r++) if (L[r] !== first) demote(L[r]);   // later runs inside the stretch
                 dropEnds(m, first.frame, L[i] ? L[i].frame : Infinity);
             }
         }

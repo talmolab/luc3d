@@ -3711,7 +3711,11 @@ it, else the pair's next moment, else null. An 'end' closes the run before it:
 `switchedAt` = the run's onset row (whose `switchBackAt` becomes the moment),
 the run's own 'end' row after it is dropped; with no run before it,
 `switchedAt` = the pair's previous encounter, else its previous moment, else
-null. An encounter scoring exactly 0 had no samples on either side, so it
+null — "previous" meaning ended before the moment's own contact began, since an
+encounter ending inside it is the moment itself and its score describes the
+labels after it (reading it made a one-frame Fix for a 12-s swap on a SLAP
+video; fixing that took the Fixes that fully undo their swap from 5 to 6 of 24
+for images and 4 to 6 of 14 for brightness). An encounter scoring exactly 0 had no samples on either side, so it
 neither ends nor continues a stretch (an 'end' row on one inside the stretch is
 dropped). A moment that contradicts a run is skipped (an onset after two of the
 run's encounters; an 'end' with the run still flagged after it), so no two
