@@ -23,6 +23,9 @@
  *     last. A length typed in frames draws exactly those frames. A custom
  *     length is checked and named in both menus, follows the FPS pill like a
  *     preset, and picking a preset clears it.
+ *  7. While any trail is on (preset or custom) the button wears the toolbar's
+ *     `.active` blue — the same computed colours as the 3D button — so it reads
+ *     as on without hovering it; Off takes it away.
  *
  * Run: node tests/e2e/node-trails-toolbar.mjs     (SHOT_DIR=… to save a screenshot)
  */
@@ -65,6 +68,7 @@ try {
             sec: window.__lucid.state.trailSeconds,
             len: window.__lucid.state.trailLength,
             label: document.getElementById('tbTrails').textContent.trim(),
+            active: document.getElementById('tbTrails').classList.contains('active'),
             tip: document.getElementById('tbTrails').title,
             toolbarChecked: checked('#trailsMenu .tri-dropdown-item'),
             menubarChecked: checked('#menuTrailsSubmenu .menu-dropdown-item'),
@@ -83,6 +87,7 @@ try {
     let s = await read();
     check(s.label === 'Trails ▾', `it reads "Trails ▾" at startup (got "${s.label}")`);
     check(s.tip === 'Node trails: off', `its tooltip says trails are off (got "${s.tip}")`);
+    check(!s.active, 'it is not blue while trails are off');
 
     // ---- 2. hover opens, leaving closes, a click does not latch it -----------------
     check(!(await menuOpen()), 'the menu is closed at startup');
@@ -131,10 +136,27 @@ try {
     check(s.tip === 'Node trails: ½ second (15 frames)' && s.label === 'Trails ▾',
         `the tooltip names it and the label is unchanged (got "${s.tip}", "${s.label}")`);
     check(JSON.stringify(s.toolbarChecked) === '["½ second (15 frames)"]', 'its checkmark moves to ½ second');
+    check(s.active, 'the button turns blue (.active) once a trail is on');
     check(JSON.stringify(s.menubarChecked) === '["½ second (15 frames)"]', 'and so does the Tracks menu\'s');
     await awayFromMenu();
     await settleClose();
     check(!(await menuOpen()), 'after a pick, the menu closes once the pointer leaves');
+    // Away from the button, so no :hover: the same blue as the 3D button.
+    const looks = await page.evaluate(() => {
+        const cs = (id) => { const c = getComputedStyle(document.getElementById(id)); return { bg: c.backgroundColor, fg: c.color }; };
+        return { trails: cs('tbTrails'), threeD: cs('viewport3dToggleBtn'),
+                 threeDOn: document.getElementById('viewport3dToggleBtn').classList.contains('active') };
+    });
+    check(looks.threeDOn && JSON.stringify(looks.trails) === JSON.stringify(looks.threeD),
+        `not hovered, it is the same blue as 3D (${JSON.stringify(looks.trails)} vs ${JSON.stringify(looks.threeD)})`);
+    if (SHOT_DIR) {
+        const box = await page.evaluate(() => {
+            const a = document.getElementById('colorByTracks').getBoundingClientRect();
+            const b = document.getElementById('infoPanelToggleBtn').getBoundingClientRect();
+            return { x: a.left - 20, y: 0, width: b.right - a.left + 28, height: b.bottom + 8 };
+        });
+        await page.screenshot({ path: path.join(SHOT_DIR, 'node-trails-active.png'), clip: box });
+    }
 
     await page.click('.menu-item[data-menu="tracks"]');
     await page.hover('#menuTrailsParent');
@@ -241,6 +263,7 @@ try {
     check(JSON.stringify(s.toolbarChecked) === '["Custom: 1.5 seconds (90 frames)…"]' &&
           JSON.stringify(s.menubarChecked) === JSON.stringify(s.toolbarChecked),
         `"Custom" is checked and shows the length in both menus (${s.toolbarChecked}; ${s.menubarChecked})`);
+    check(s.active, 'a custom length turns the button blue too');
 
     // Typed in frames: 10 frames at 60 fps is 1/6 s, which the Seconds field
     // shows as 0.167 — but it is stored exactly, so it draws exactly 10.
@@ -296,6 +319,7 @@ try {
     await page.click('#trailsMenu .tri-dropdown-item[data-trail-sec="0"]');
     s = await read();
     check(s.len === 0 && s.tip === 'Node trails: off', `"Off" turns trails off (got ${s.len}, "${s.tip}")`);
+    check(!s.active, '…and the button is no longer blue');
 } catch (e) {
     console.log('  ✗ threw: ' + (e && e.stack || e));
     fails++;
