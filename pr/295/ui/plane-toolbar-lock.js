@@ -16,7 +16,7 @@
 // because the binding is read INSIDE the function body, never at module top
 // level, where a circular import is still `undefined`.
 
-import { planeState } from './plane-definition.js?v=ac2e14592ddb';
+import { planeState } from './plane-definition.js?v=e21ff75a508e';
 
 /**
  * The toolbar buttons Defining Plane Mode blocks.
@@ -31,7 +31,7 @@ import { planeState } from './plane-definition.js?v=ac2e14592ddb';
  * does nothing is indistinguishable from one that is broken.
  *
  * The VISIBILITY controls are deliberately absent from this list, and so are
- * Sessions, Color and the Panel toggle. Those change what is DRAWN, not what is
+ * Sessions, Tracks / Identity and the Panel toggle. Those change what is DRAWN, not what is
  * annotated — turning Predicted off to see the plane you are placing is
  * exactly the kind of thing this mode is for.
  *
