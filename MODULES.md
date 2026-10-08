@@ -4466,7 +4466,7 @@ old layouts.
 
 **Instance-panel track/identity dropdowns.** Each grouped/unlinked instance
 row has a track `<select>` and an identity `<select>`. Both selects include a
-`(none)` option (value `-1`) and a `(+) New Track` / `(+) New ID` option (value
+`(none)` option (value `-1`) and a `(+) New Track` / `(+) New Identity` option (value
 `__new__`). The track select defaults to `(none)` for a trackless instance/group
 (trackIdx == null) — it does NOT snap to the first track (index 0); selecting
 `(none)` sets the instance(s) trackless (the group path also unassigns its

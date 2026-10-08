@@ -51,7 +51,7 @@ import {
 } from './timeline-visibility.js';
 
 // ============================================
-// Inline name entry for "+ New Track" / "+ New ID"
+// Inline name entry for "+ New Track" / "+ New Identity"
 // ============================================
 
 // Replace a track/identity <select> with an inline text box so the user can
@@ -1830,7 +1830,7 @@ export function updateFrameInfo(frameIdx, instanceGroups) {
             }
             var newIdOpt = document.createElement('option');
             newIdOpt.value = '__new__';
-            newIdOpt.textContent = '(+) New ID';
+            newIdOpt.textContent = '(+) New Identity';
             idSelect.appendChild(newIdOpt);
             // Show the per-frame identity for the group's LIVE trackIdx, not the
             // stale per-group field: group.identityId is only refreshed on the
@@ -1870,7 +1870,7 @@ export function updateFrameInfo(frameIdx, instanceGroups) {
                     drawAllOverlays(state.currentFrame);
                     updateInfoPanel();
                     // `cap: true` (not `keepSize`): assigning an identity — a new
-                    // one from "(+) New ID" in particular — can add an occupied
+                    // one from "(+) New Identity" in particular — can add an occupied
                     // row in the ID/Both timeline modes; `keepSize` would collapse
                     // the row area (the identity mirror of issue #137).
                     if (timeline) timeline.refreshTracks(state.session, { cap: true });
@@ -2187,7 +2187,7 @@ export function updateFrameInfo(frameIdx, instanceGroups) {
                 }
                 var newIdOptUl = document.createElement('option');
                 newIdOptUl.value = '__new__';
-                newIdOptUl.textContent = '(+) New ID';
+                newIdOptUl.textContent = '(+) New Identity';
                 idSelectUl.appendChild(newIdOptUl);
                 // Pre-select from the canonical unlinked-identity resolver:
                 // the per-frame entry for a tracked instance, the retained
