@@ -1990,6 +1990,11 @@ export function updateFrameInfo(frameIdx, instanceGroups) {
                 var reprojTrackName = (group.identityId >= 0 && state.session.tracks[group.identityId]) || ('Group ' + i);
                 rtdTrack.appendChild(document.createTextNode(reprojTrackName));
 
+                // Holds the Identity column's place. Without it every later cell
+                // sat one column left: the view count under Identity, the badge
+                // under Views, the error under Type.
+                const rtdIdentity = document.createElement('td');
+
                 const rtdViews = document.createElement('td');
                 rtdViews.className = 'mono';
                 rtdViews.textContent = group.reprojectedInstances.size + '/' + state.session.cameras.length;
@@ -1998,7 +2003,7 @@ export function updateFrameInfo(frameIdx, instanceGroups) {
                 const rtdType = document.createElement('td');
                 const rbadge = document.createElement('span');
                 rbadge.className = 'badge badge-reproj';
-                rbadge.textContent = 'Reproj';
+                rbadge.textContent = 'Reprojection';
                 rtdType.appendChild(rbadge);
 
                 const rtdError = document.createElement('td');
@@ -2012,6 +2017,7 @@ export function updateFrameInfo(frameIdx, instanceGroups) {
                 rtdEmpty.style.padding = '0';
 
                 rtr.appendChild(rtdTrack);
+                rtr.appendChild(rtdIdentity);
                 rtr.appendChild(rtdViews);
                 rtr.appendChild(rtdType);
                 rtr.appendChild(rtdError);

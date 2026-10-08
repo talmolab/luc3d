@@ -4436,6 +4436,16 @@ for freshly-triangulated AND reopened projects alike.
   over a stale `group.identityId`, and dot/`getGroupColor` agreement in both
   color modes.
 
+**Grouped Instances reprojection rows.** Under each group that has
+reprojections, `updateFrameInfo` adds a row for them: a REPROJECTION_COLOR dot +
+the group's name, an EMPTY Identity cell, the reprojected view count
+(`n/cameras`), a "Reprojection" badge (`.badge-reproj`; it read "Reproj"), the
+Error dash, and the trailing empty cell — one cell per header column. The empty
+Identity cell is load-bearing: the row was built without one when the Identity
+column was added, so every later cell sat one column left (view count under
+Identity, badge under Views, error under Type). Covered by
+`tests/e2e/info-panel-reprojection-row.mjs`, which fails on that old row.
+
 **Instance-panel track/identity dropdowns.** Each grouped/unlinked instance
 row has a track `<select>` and an identity `<select>`. Both selects include a
 `(none)` option (value `-1`) and a `(+) New Track` / `(+) New ID` option (value
