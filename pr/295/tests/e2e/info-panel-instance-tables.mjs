@@ -25,6 +25,9 @@
  *     the whole table.
  *  5. In both tables the identity dropdown ends in "(+) New Identity" (it read
  *     "(+) New ID"), beside the track dropdown's "(+) New Track".
+ *  6. In both tables, every track and identity dropdown's "nothing" option
+ *     reads "(none)" (the Ungrouped table's read "—"), and the trackless row
+ *     shows it.
  *
  * Run: node tests/e2e/info-panel-instance-tables.mjs
  */
@@ -106,7 +109,9 @@ try {
                     reproj: !!tr.querySelector('.badge-reproj'),
                     span: [...tr.children].reduce((n, td) => n + td.colSpan, 0),
                     selects: [...tr.querySelectorAll('select')].map(s => ({ cell: [...tr.children].indexOf(s.closest('td')), value: s.value,
-                        lastOption: s.options.length ? s.options[s.options.length - 1].textContent : null, ...box(s) })),
+                        lastOption: s.options.length ? s.options[s.options.length - 1].textContent : null,
+                        noneOption: [...s.options].filter(o => o.value === '-1').map(o => o.textContent).join('|'),
+                        shownText: s.selectedIndex >= 0 ? s.options[s.selectedIndex].textContent : null, ...box(s) })),
                     cells: [...tr.children].map(td => ({
                         text: td.textContent.trim(),
                         title: td.title,
@@ -185,13 +190,21 @@ try {
     const typesPtsScores = dataRows.map(r => [r.cells[ucol('Type')].text, r.cells[ucol('Points')].text, r.cells[ucol('Score')].text].join(' '));
     check(JSON.stringify(typesPtsScores) === JSON.stringify(['User 2/2 1.00', 'Pred 2/2 0.87', 'Pred 2/2 0.42']),
         `Type, Points and Score are under their headers (${typesPtsScores.join(' | ')})`);
-    check(dataRows[2].selects[0].value === '-1', 'the trackless row shows its "—" track');
+    check(dataRows[2].selects[0].value === '-1' && dataRows[2].selects[0].shownText === '(none)',
+        `the trackless row shows "(none)" for its track (got "${dataRows[2].selects[0].shownText}")`);
 
     // ---- 5. "(+) New Identity" -----------------------------------------------------
     for (const [name, rows] of [['Grouped', G.rows.filter(r => !r.reproj)], ['Ungrouped', dataRows]]) {
         const last = rows.map(r => r.selects[1] && r.selects[1].lastOption);
         check(last.length > 0 && last.every(x => x === '(+) New Identity'),
             `${name}: every identity dropdown ends in "(+) New Identity" (got ${JSON.stringify([...new Set(last)])})`);
+    }
+
+    // ---- 6. "(none)" in every dropdown ----------------------------------------------
+    for (const [name, rows] of [['Grouped', G.rows.filter(r => !r.reproj)], ['Ungrouped', dataRows]]) {
+        const nones = rows.flatMap(r => r.selects.map(x => x.noneOption));
+        check(nones.length === rows.length * 2 && nones.every(x => x === '(none)'),
+            `${name}: every track and identity dropdown's "nothing" option reads "(none)" (got ${JSON.stringify([...new Set(nones)])})`);
     }
 } catch (e) {
     console.log('  ✗ threw: ' + (e && e.stack || e));

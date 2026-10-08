@@ -5,41 +5,41 @@
 
 import {
     Skeleton, Camera, Session,
-} from '../pose/pose-data.js?v=113869e37020';
-import { getInstanceGroupsForFrame } from '../pose/triangulation.js?v=113869e37020';
-import { REPROJECTION_COLOR, getTrackColor, getGroupColor } from './overlays.js?v=113869e37020';
-import { drawAllOverlays, updateFrameCounters } from './rendering.js?v=113869e37020';
-import { isInteractiveClickTarget } from './interaction.js?v=113869e37020';
-import { persistSectionState } from './section-state.js?v=113869e37020';
-import { buildLazySelect } from './lazy-select.js?v=113869e37020';
-import { refreshIdSwitchPanel } from './id-switch-modal.js?v=113869e37020';
-import { isInfoPanelVisible, markInfoPanelStale } from './panel-visibility.js?v=113869e37020';
+} from '../pose/pose-data.js?v=e07faeb5c738';
+import { getInstanceGroupsForFrame } from '../pose/triangulation.js?v=e07faeb5c738';
+import { REPROJECTION_COLOR, getTrackColor, getGroupColor } from './overlays.js?v=e07faeb5c738';
+import { drawAllOverlays, updateFrameCounters } from './rendering.js?v=e07faeb5c738';
+import { isInteractiveClickTarget } from './interaction.js?v=e07faeb5c738';
+import { persistSectionState } from './section-state.js?v=e07faeb5c738';
+import { buildLazySelect } from './lazy-select.js?v=e07faeb5c738';
+import { refreshIdSwitchPanel } from './id-switch-modal.js?v=e07faeb5c738';
+import { isInfoPanelVisible, markInfoPanelStale } from './panel-visibility.js?v=e07faeb5c738';
 import { state, timeline, interactionManager, rememberSkeleton, buildRememberedSkeleton,
-         setProjectSkeleton, getProjectSkeleton } from './app-state.js?v=113869e37020';
-import { setStatus, markDirty } from '../import-export/save-load.js?v=113869e37020';
-import { buildSkeletonJSON, parseSkeletonJSON } from '../import-export/skeleton-json.js?v=113869e37020';
+         setProjectSkeleton, getProjectSkeleton } from './app-state.js?v=e07faeb5c738';
+import { setStatus, markDirty } from '../import-export/save-load.js?v=e07faeb5c738';
+import { buildSkeletonJSON, parseSkeletonJSON } from '../import-export/skeleton-json.js?v=e07faeb5c738';
 import {
     handleLoadVideos, handleLoadCalibration, autoAssignVideosToCameras,
     createViewForVideoFile, rebuildVideoController, fitCanvasesToCells,
     loadSingleSessionFromCache, removeVideoFile,
-} from '../loading/session-loader.js?v=113869e37020';
+} from '../loading/session-loader.js?v=e07faeb5c738';
 
 // Circular import — these are still defined in app.js for now. They will be
 // retargeted as later passes land:
 // - swapAssignTrack, propagateIdentityForward, unlinkGroup, showGroupContextMenu
 //   → ui/identity-assignment.js (Pass 3f)
 // Pass 3e-1: unlinkGroup + showGroupContextMenu moved to ui-wiring.js.
-import { unlinkGroup, showGroupContextMenu } from './ui-wiring.js?v=113869e37020';
+import { unlinkGroup, showGroupContextMenu } from './ui-wiring.js?v=e07faeb5c738';
 // Pass 3f: swapAssignTrack + propagateIdentityForward moved to identity-assignment.js.
 // luc3d #172: every manual identity switch routes through applyIdentitySwitch,
 // which subsumes this file's former direct propagateIdentityForward calls.
 import {
     swapAssignTrack, applyIdentitySwitch, describeIdentitySwitch,
-} from './identity-assignment.js?v=113869e37020';
+} from './identity-assignment.js?v=e07faeb5c738';
 // Pass 3h: populateSessionsPanel / populateViewStrip / populateSessionStrip moved to sessions-panes.js.
 import {
     populateSessionsPanel, populateViewStrip, populateSessionStrip,
-} from './sessions-panes.js?v=113869e37020';
+} from './sessions-panes.js?v=e07faeb5c738';
 // Block 2 (Prompt 4): per-session timeline visibility toggles.
 import {
     toggleCameraVisibility,
@@ -48,7 +48,7 @@ import {
     getCameraVisibilityList,
     getTrackVisibilityList,
     getIdentityVisibilityList,
-} from './timeline-visibility.js?v=113869e37020';
+} from './timeline-visibility.js?v=e07faeb5c738';
 
 // ============================================
 // Inline name entry for "+ New Track" / "+ New Identity"
@@ -2118,14 +2118,14 @@ export function updateFrameInfo(frameIdx, instanceGroups) {
                     }
                 }
 
-                // Track column with dropdown. Includes a "—" (None)
-                // option so trackless user instances (trackIdx == null,
+                // Track dropdown. Includes a "(none)" option — the same label
+                // the Grouped table uses — so trackless user instances (trackIdx == null,
                 // e.g., reprojections imported from a 2D SLP with
                 // track=null) are displayed distinctly from a real
                 // track-0 instance instead of silently falling back
                 // to the first track.
                 const tdTrackUl = document.createElement('td');
-                var trackSelect = buildTrackSelect(ul.instance.trackIdx != null ? ul.instance.trackIdx : -1, '—', STACKED_SELECT_PX);
+                var trackSelect = buildTrackSelect(ul.instance.trackIdx != null ? ul.instance.trackIdx : -1, '(none)', STACKED_SELECT_PX);
                 trackSelect.style.width = STACKED_SELECT_PX + 'px';
                 (function (ulObj, inst, sel, camNameForUl) {
                     function applyTrack(newTrack) {
@@ -2155,7 +2155,7 @@ export function updateFrameInfo(frameIdx, instanceGroups) {
                             // User explicitly chose "None" — leave trackless.
                             if (inst.trackIdx == null) return;
                             inst.trackIdx = null;
-                            setStatus('Track → — on ' + camNameForUl, 'success');
+                            setStatus('Track → (none) on ' + camNameForUl, 'success');
                             drawAllOverlays(state.currentFrame);
                             updateInfoPanel();
                             if (timeline) timeline.refreshTracks(state.session, { keepSize: true });
@@ -2177,7 +2177,7 @@ export function updateFrameInfo(frameIdx, instanceGroups) {
                     'display:block;margin-top:3px;width:' + STACKED_SELECT_PX + 'px;max-width:' + STACKED_SELECT_PX + 'px;';
                 var optNoneUl = document.createElement('option');
                 optNoneUl.value = '-1';
-                optNoneUl.textContent = '—';
+                optNoneUl.textContent = '(none)';
                 idSelectUl.appendChild(optNoneUl);
                 for (var idi = 0; idi < (state.session.identities || []).length; idi++) {
                     var idOpt = document.createElement('option');
@@ -2212,7 +2212,7 @@ export function updateFrameInfo(frameIdx, instanceGroups) {
                             setStatus(describeIdentitySwitch(state.session, resUl,
                                 idObjUl ? idObjUl.name : String(newIdVal)), 'success');
                         } else {
-                            // "—": a trackless row's identity lives on the
+                            // "(none)": a trackless row's identity lives on the
                             // instance (luc3d #201); a tracked row's in the map.
                             if (inst.trackIdx == null) inst.identityId = null;
                             else state.session.clearTrackIdentity(inst.trackIdx, camNameForId);
