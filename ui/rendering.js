@@ -34,7 +34,7 @@ import {
 
 /**
  * Show / hide the reprojection-error UI (Info Panel section + error columns).
- * Showing it also ticks the toolbar's Reproj and Errors boxes — unless
+ * Showing it also ticks the toolbar's Reprojections and Errors boxes — unless
  * `opts.checkBoxes === false`, which the Triangulate All paths pass because
  * they set the boxes themselves via `showReprojectionsOnly` (#243). Ticking
  * Errors here first would make every run look like a change (and flicker it).
@@ -60,7 +60,7 @@ export function setReprojErrorVisible(visible, opts) {
 /**
  * After Triangulate All (#243): the next job is proofreading the 3D, so show
  * the reprojections and hide what competes with them — User, Predicted and
- * Errors off, Reproj on (the toolbar checkboxes). Each change fires the
+ * Errors off, Reprojections on (the toolbar checkboxes). Each change fires the
  * checkbox's own `change` event, exactly as a click would, so the existing
  * handler deselects an instance whose type just got hidden and redraws.
  *
@@ -74,13 +74,13 @@ export function showReprojectionsOnly() {
 }
 
 // Suffix for a Triangulate All status line when `showReprojectionsOnly` hid
-// anything, so the user knows where User / Predicted went.
-export var REPROJ_ONLY_NOTE = ' · showing Reproj only (toolbar)';
+// anything, so the user knows where User / Predictions went.
+export var REPROJ_ONLY_NOTE = ' · showing Reprojections only (toolbar)';
 
 /**
  * After Track Frame / Track Frame Range / Track All: the run's product is the
- * tracked PREDICTIONS (now colored by identity), so show only those — Predicted
- * on; User, Reproj and Errors off. Same mechanics as `showReprojectionsOnly`
+ * tracked PREDICTIONS (now colored by identity), so show only those — Predictions
+ * on; User, Reprojections and Errors off. Same mechanics as `showReprojectionsOnly`
  * (each box fires its own `change` event). Returns whether anything changed.
  */
 export function showPredictedOnly() {
@@ -88,7 +88,7 @@ export function showPredictedOnly() {
 }
 
 // Suffix for a tracking status line when `showPredictedOnly` changed anything.
-export var PREDICTED_ONLY_NOTE = ' · showing Predicted only (toolbar)';
+export var PREDICTED_ONLY_NOTE = ' · showing Predictions only (toolbar)';
 
 /** Set toolbar layer checkboxes `[[id, checked], …]` as clicks would; true if any changed. */
 function setToolbarLayers(want) {

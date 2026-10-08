@@ -195,7 +195,6 @@
                 <button class="toolbar-btn" id="tbDeleteInstance" title="Delete selected instance (Del)">-
                     Instance</button>
             </div>
-            <div class="toolbar-separator"></div>
             <div class="toolbar-group">
                 <button class="toolbar-btn" id="tbGroup" title="Group selected instances (⇧G or C)">Group</button>
                 <button class="toolbar-btn" id="tbEditGroup" title="Edit selected group membership">Edit Group</button>
@@ -213,9 +212,10 @@
                         <div class="tri-dropdown-item" data-method="ba">Ref <span class="tri-dropdown-hint">Slow &amp; Accurate</span></div>
                     </div>
                 </div>
+                <!-- Inside the Triangulate group so it stays on this side of the
+                     group's divider (ui/info-panel.js updateTriangulationBadge). -->
+                <span class="triangulation-badge" id="triangulationBadge" style="display:none"></span>
             </div>
-            <span class="triangulation-badge" id="triangulationBadge" style="display:none"></span>
-            <div class="toolbar-separator"></div>
             <div class="toolbar-group">
                 <div class="tri-dropdown" id="trackFrameDropdown">
                     <button class="toolbar-btn" id="tbTrackFrame" title="Track current frame (Shift+T)">Track Frame <span class="tri-caret">▾</span></button>
@@ -225,22 +225,31 @@
                 </div>
                 <button class="toolbar-btn" id="tbTrackAll" title="Track all frames (Ctrl+Shift+T)">Track All</button>
             </div>
-            <div class="toolbar-separator"></div>
             <div class="toolbar-group toolbar-checkboxes">
                 <label><input type="checkbox" id="visUser" checked> User</label>
-                <label><input type="checkbox" id="visPredicted" checked> Predicted</label>
-                <label><input type="checkbox" id="visReprojections" checked> Reproj</label>
+                <label><input type="checkbox" id="visPredicted" checked> Predictions</label>
+                <label><input type="checkbox" id="visReprojections" checked> Reprojections</label>
                 <label><input type="checkbox" id="visErrors" checked> Errors</label>
             </div>
-            <div class="toolbar-separator"></div>
-            <div class="toolbar-group">
-                <span class="toolbar-checkboxes" style="margin-right:6px;font-weight:bold;">Color</span>
+            <div class="toolbar-group" role="group" aria-label="Color by">
                 <button class="toolbar-btn active" id="colorByTracks" title="Color instances by track">Tracks</button>
-                <button class="toolbar-btn" id="colorById" title="Color instances by identity">ID</button>
+                <button class="toolbar-btn" id="colorById" title="Color instances by identity">Identity</button>
+            </div>
+            <!-- Node Trails (issue #102). Same presets and state as Tracks ▸ Node
+                 Trails; the items are built from that one list in ui/ui-wiring.js.
+                 Opens on hover, like the Triangulate menus. The label stays a bare
+                 "Trails" (the value is the menu's checkmark and the tooltip) to
+                 save toolbar width. -->
+            <div class="toolbar-group">
+                <div class="tri-dropdown" id="trailsDropdown">
+                    <button class="toolbar-btn" id="tbTrails" aria-haspopup="menu"
+                        title="Node trails: off">Trails <span class="tri-caret">▾</span></button>
+                    <div class="tri-dropdown-menu" id="trailsMenu" role="menu"></div>
+                </div>
             </div>
             <div class="toolbar-group panel-toggles">
-                <button class="toolbar-btn panel-toggle-btn" id="viewport3dToggleBtn" title="Toggle 3D viewer (\)">Hide 3D View</button>
-                <button class="toolbar-btn panel-toggle-btn" id="infoPanelToggleBtn" title="Toggle info panel (I)">Hide Panel</button>
+                <button class="toolbar-btn panel-toggle-btn active" id="viewport3dToggleBtn" aria-pressed="true" title="Hide 3D viewer (\)">3D</button>
+                <button class="toolbar-btn panel-toggle-btn active" id="infoPanelToggleBtn" aria-pressed="true" title="Hide info panel (I)">Panel</button>
             </div>
         </div>
 
@@ -367,8 +376,7 @@
                         <table class="data-table" id="instanceGroupsTable">
                             <thead>
                                 <tr>
-                                    <th>Track</th>
-                                    <th>Identity</th>
+                                    <th>Track / Identity</th>
                                     <th>Views</th>
                                     <th>Type</th>
                                     <th class="reproj-error-col" style="display:none">Error</th>
@@ -386,8 +394,7 @@
                         <table class="data-table" id="unlinkedTable">
                             <thead>
                                 <tr>
-                                    <th>Track</th>
-                                    <th>ID</th>
+                                    <th>Track / Identity</th>
                                     <th>Type</th>
                                     <th>Points</th>
                                     <th>Score</th>
@@ -462,7 +469,7 @@
                             <button class="line-style-btn" data-style="dashed" title="Dashed"><svg width="40" height="12"><line x1="2" y1="6" x2="38" y2="6" stroke="currentColor" stroke-width="2" stroke-dasharray="6,4"/></svg></button>
                         </div>
                     </div>
-                    <h3>Predicted</h3>
+                    <h3>Predictions</h3>
                     <div class="vis-slider-row">
                         <span>Node Size</span>
                         <input type="range" id="visPredNodeSize" min="1" max="50" value="6" step="1">
