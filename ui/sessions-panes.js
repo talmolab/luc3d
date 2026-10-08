@@ -61,6 +61,7 @@ import { drawAllOverlays, setReprojErrorVisible } from './rendering.js';
 // because the only read is inside the view strip's click handler, which cannot
 // run during module evaluation.
 import { setSoloView } from './ui-wiring.js';
+import { clearReadout, refreshReadoutTotals } from './frame-readout.js';
 import { updateInfoPanel, populateTimelineVisibility } from './info-panel.js';
 import { refreshIdSwitchPanel } from './id-switch-modal.js';
 // `autoAssignState` is a mutable binding tracked via ESM live binding.
@@ -1655,8 +1656,7 @@ export function removeSession(idx) {
         }
 
         // Reset frame counter display
-        document.getElementById('currentFrame').textContent = '0';
-        document.getElementById('totalFrames').textContent = '0';
+        clearReadout();
 
         // Show dock empty message
         var emptyMsg = document.getElementById('videoDockEmpty');
@@ -2148,7 +2148,7 @@ export async function switchSession(newIdx) {
     } else if (newSession.totalFrames > 0) {
         state.totalFrames = newSession.totalFrames;
         state.fps = newSession.fps || 30;
-        document.getElementById('totalFrames').textContent = state.totalFrames;
+        refreshReadoutTotals();
         document.getElementById('fpsDisplay').textContent = state.fps.toFixed(1) + ' fps';
     }
 

@@ -33,7 +33,7 @@ const THRESHOLD_DEFAULTS = {
     distanceThreshold: 25,
     timePenalty: 0.1,
     stale: 20,
-    matchGate: 1,
+    matchGate: 0,
     scWindowSize: 5,
     scOksStddev: 0.1,
     scConnectBreaks: 1,

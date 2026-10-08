@@ -1299,9 +1299,15 @@
 
         <!-- Playback Controls -->
         <div class="controls-bar">
+            <!-- Frame readout (ui/frame-readout.js): a 3-column grid, so both
+                 slashes line up — time / duration above, frame / total below. -->
             <div class="frame-display">
+                <span class="frame-time" id="currentTime" title="Time of the current frame, at the playback FPS">00:00.000</span>
+                <span class="frame-time frame-sep">/</span>
+                <span class="frame-time" id="totalTime" title="Duration, at the playback FPS">00:00.000</span>
                 <span class="current-frame" id="currentFrame">1</span>
-                <span>/ <span id="totalFrames">0</span></span>
+                <span class="frame-sep">/</span>
+                <span id="totalFrames">0</span>
             </div>
 
             <div class="transport-controls">

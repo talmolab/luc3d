@@ -44,6 +44,7 @@ import {
 import { SioLazyLoader } from '../loading/sio-lazy-loader.js';
 import { getLoadingProgressModal } from '../ui/loading-progress-modal.js';
 import { showLoading, hideLoading } from '../ui/loading-overlay.js';
+import { clearReadout } from '../ui/frame-readout.js';
 import { writeVisibilityMetadata, readVisibilityMetadata } from './visibility-metadata.js';
 import { writePlaneMetadata, readPlaneMetadata, resetPlaneState } from './plane-metadata.js';
 import { fileSystemAccessHint } from '../ui/browser-hints.js';
@@ -175,10 +176,7 @@ export function newProject(force) {
     if (stripList) stripList.innerHTML = '';
 
     // Reset frame counter display
-    var curFrameEl = document.getElementById('currentFrame');
-    if (curFrameEl) curFrameEl.textContent = '0';
-    var totalFramesEl = document.getElementById('totalFrames');
-    if (totalFramesEl) totalFramesEl.textContent = '0';
+    clearReadout();
     var fpsEl = document.getElementById('fpsDisplay');
     if (fpsEl) fpsEl.textContent = '30.0 fps';
 

@@ -72,7 +72,8 @@ the old `app.js` entry point.
 - `setupTimeline()` — instantiates `Timeline` and wires its frame-change /
   range-select callbacks plus the display-mode button group. The frame-change /
   drag-end callbacks fall back to `navigateToFrame` when there's no video.
-- `updateFpsDisplay()` — refreshes the FPS readout.
+- `updateFpsDisplay()` — refreshes the FPS readout, and the frame readout's
+  times (`refreshReadoutTotals`), which are frame / fps.
 
 **Imports from project modules.**
 - `../ui/app-state.js` — `state`, controller singletons + setters, `VIEW_NAMES`.
@@ -91,6 +92,7 @@ the old `app.js` entry point.
 - `../demo-data.js` — `createDemoSession`.
 - `../ui/ui-wiring.js` — `setupUI`, `setupMenus`, `updateSeekbar`,
   `onPlaybackStateChange`, `fitTimelineToData`.
+- `../ui/frame-readout.js` — `refreshReadoutTotals`, from `updateFpsDisplay`.
 - `../ui/info-tip.js` — `installInfoTips`, called FIRST in `init()`, before any
   panel renders: the listeners are delegated, so they must be in place before
   the first `[data-infotip]` element exists.
@@ -2362,7 +2364,10 @@ tracker exactly):
 fix (`ui/settings.js`); `scripts/bench/hooks.mjs`'s `THRESHOLD_DEFAULTS` was
 updated to match (its own comment requires staying in sync).
 
-**Match gate (2026-10-03, `matchGate` hp, default 1; 0 = off).** The reference
+**Match gate (2026-10-03, `matchGate` hp; default OFF since 2026-10-07, #285; 1 = on).**
+Off by default because on Eric's proofread benchmarks it helped SLAP-2M but gave
+about 6x the ID switches on Mouse-Dyad-10M and about 10x on s-DANNCE (#285); 0 is
+the pre-gate tracker exactly, so the default is the tracker from before #248. The reference
 Hungarian is forced: whenever a view has at least as many detections as
 targets, every target takes one, however negative its adjacency. One spare
 target (left by an earlier false birth — common when the animal count is
@@ -4161,6 +4166,63 @@ rather than a copy), and `tests/e2e/sequence-lazy-workflow.mjs`'s
 `checkCounters` (the real status bar on a lazily reopened project: at reopen,
 around Triangulate All and after Track All; confirmed to fail on the pre-fix
 build, which showed "Triangulated: 3" with 3 frames resident).
+
+---
+
+### ui/frame-readout.js
+
+**Purpose.** The controls bar's frame readout, left of the transport buttons:
+the current time / duration on top, the current frame / total frames below,
+every count with thousands separators.
+
+    00:41.100 / 20:00.000
+        1,234 / 36,000
+
+**Key exports.** `formatFrameNumber(n)` (`36000` -> `"36,000"`, one cached
+`Intl.NumberFormat('en-US')`, since it runs on every frame of playback),
+`frameReadoutText(frameIdx, totalFrames, fps)` -> `{frame, total, time,
+duration}` (pure; `frameIdx` null = the empty "0 / 0" state), `NO_TIME`
+(`--:--.---`), and the DOM half: `showReadoutFrame(frameIdx)` (the per-frame
+path — writes `#currentFrame` / `#currentTime`), `refreshReadoutTotals()`
+(re-reads `state.totalFrames` / `state.fps`, writes `#totalFrames` /
+`#totalTime` and re-times the frame on screen) and `clearReadout()`.
+
+**Behaviour.**
+- **It speaks the seekbar tooltip's language**, on purpose: the same separator
+  and the same `formatTimestamp`, and the same time — a frame's START time,
+  `frameIdx / state.fps`, at the playback FPS the FPS pill shows. So a click on
+  the seekbar puts the tooltip's exact text into this readout. The duration is
+  `totalFrames / fps`, so the last frame reads one frame short of it
+  (`19:59.967 / 20:00.000` at 30 fps). An unknown frame rate (`state.fps` is 0
+  while a multi-session load has no video yet) shows `NO_TIME` rather than a
+  made-up clock.
+- **Every writer of the readout goes through here** — `updateSeekbarVisual`,
+  the inline frame editor and FPS pill (`ui/ui-wiring.js`), `updateFpsDisplay`
+  (`pose/initialization.js`), the loaders (`loading/session-loader.js`,
+  `import-export/slp-import.js`), session switch / removal
+  (`ui/sessions-panes.js`) and New Project (`import-export/save-load.js`) — so
+  the time row cannot fall out of step with the frame row. A new path that
+  changes `state.totalFrames` or `state.fps` must call `refreshReadoutTotals`.
+- The inline frame editor accepts the number the way the readout shows it:
+  `"12,345"` seeks to frame 12,345 (commas and spaces are stripped).
+- Layout (`.frame-display` in `styles.css`) is a three-column grid — current
+  values right-aligned, totals left-aligned — so the two slashes stay in one
+  vertical line whatever the digit counts. The time row is 0.85em of the frame
+  row, both rows fit the 56 px controls bar at every width.
+
+**Imports from project modules.** `./app-state.js` (`state`),
+`./seekbar-tooltip.js` (`formatTimestamp`) — both import-free, so the text half
+runs in Node.
+
+**Imported by.** `ui/ui-wiring.js`, `ui/sessions-panes.js`,
+`pose/initialization.js`, `loading/session-loader.js`,
+`import-export/slp-import.js`, `import-export/save-load.js`.
+
+**Coverage.** `tests/test-frame-readout.mjs` (the text: separators, start time
+vs duration, hours, unknown fps, the empty state, and agreement with
+`seekbarTooltipText`) and `tests/e2e/frame-readout.mjs` (real app: seekbar
+clicks show the tooltip's text, the slashes line up and the readout fits the bar
+at 1400 and 640 px, the frame editor takes `"12,345"`, an FPS edit re-times it).
 
 ---
 
@@ -8543,7 +8605,8 @@ snap to it, and its text is appended)
 in Node).
 
 **Imported by.** `ui/ui-wiring.js` (installed inside the seekbar-scrubbing
-IIFE in `setupUI`).
+IIFE in `setupUI`), `ui/frame-readout.js` (`formatTimestamp`, so the frame
+readout's time row reads exactly as this tooltip does).
 
 **Coverage.** `tests/test-seekbar-tooltip.mjs` (formatting) and
 `tests/e2e/seekbar-tooltip.mjs` (real mouse events: follows the pointer,
@@ -8628,6 +8691,8 @@ multi-video docking layout.
   module), hoist-safe because the only read is inside the view strip's click
   handler, which cannot run during module evaluation.
 - `./info-panel.js` — `updateInfoPanel`.
+- `./frame-readout.js` — `clearReadout` (session removed),
+  `refreshReadoutTotals` (`switchSession` restoring a cached frame count / fps).
 - `./identity-assignment.js` — `autoAssignState`.
 - `../pose/initialization.js` — `setup3DViewport`.
 
@@ -10628,6 +10693,9 @@ button's `#tbTrackFrameRange` dropdown item — #212),
 References…" — #226),
 `seekbar-tooltip.js` (`installSeekbarTooltip`, the seekbar's hover tooltip —
 #142),
+`frame-readout.js` (`showReadoutFrame`, `refreshReadoutTotals` — the
+time / frame readout, written by `updateSeekbarVisual`, the inline frame editor
+and the FPS pill),
 `seekbar-markers.js` (`installSeekbarMarkers`, `seekbarMarkerAt`,
 `describeSwitchMarker`, `setSeekbarMarkerFrames` — the possible-ID-switch ticks:
 the scrub handlers and the tooltip snap to a tick within 5 px),
@@ -11920,6 +11988,8 @@ blank until the user manually re-ran Triangulate All. Covered by
   `../ui/rendering.js` (`drawAllOverlays`, `setReprojErrorVisible`),
   `../ui/info-panel.js` (`updateInfoPanel`, `promptImportSkeletonForAllSessions`),
   `../ui/calibration-notice.js` (`noteSessionCalibrationDivergence`),
+  `../ui/frame-readout.js` (`refreshReadoutTotals`, wherever the loaders set
+  `state.totalFrames` / `state.fps`),
   `../import-export/skeleton-json.js` (`parseSkeletonJSON`),
   `../import-export/slp-import.js`, `../ui/loading-progress-modal.js`,
   `../ui/loading-overlay.js` (`showLoadingProgress`, `createProgressPacer`,
@@ -13737,6 +13807,7 @@ project save/reload — matching the SLP import path in `slp-import.js`.
   `../loading/sio-lazy-loader.js` (`SioLazyLoader`, for
   `reopenSessionLazyLoader`), `./slp-streaming-write.js`,
   `../ui/rendering.js`, `../ui/info-panel.js`,
+  `../ui/frame-readout.js` (`clearReadout`, New Project),
   `../pose/initialization.js`, `../ui/sessions-panes.js`,
   `./slp-import.js`, `./visibility-metadata.js`
   (`writeVisibilityMetadata`/`readVisibilityMetadata` for the session-scoped
@@ -13909,7 +13980,8 @@ typed group.
   multi-session skeleton prompt — a `.slp` carries one calibration per session,
   so merging two separately-calibrated recordings lands here too),
   `../pose/initialization.js`, `../ui/ui-wiring.js`,
-  `../ui/sessions-panes.js`, `./visibility-metadata.js`
+  `../ui/frame-readout.js` (`refreshReadoutTotals`, when a video-less import
+  sets the frame count), `../ui/sessions-panes.js`, `./visibility-metadata.js`
   (`readVisibilityMetadata`). Also spawns
   `../loading/frame-worker.js` (twice) via `new Worker(new URL(...))`.
 
