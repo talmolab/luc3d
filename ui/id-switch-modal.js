@@ -293,7 +293,7 @@ async function runBrightness(session, rate, inject, moments, single) {
  *          navigateToFrame?: function(number), inject?: {createEmbedder?, hasWebGPU?}}} opts
  *   `inject` replaces the image model and the WebGPU probe — for tests only
  *   (tests/e2e/id-switch-image-check.mjs), so they need no GPU or model download.
- * @returns {Promise<{size?: object, image?: object}|null>}
+ * @returns {Promise<{size?: object, image?: object}|null>}  each result carries `elapsedMs`
  */
 export async function runIdSwitchChecks(opts) {
     opts = opts || {};
@@ -324,7 +324,7 @@ export async function runIdSwitchChecks(opts) {
     var moments = single && session._idSwitchCandidates ? session._idSwitchCandidates : null;
     var rate = recordingFps(session), results = {}, parts = [], level = 'success';
     for (var cue of cues) {
-        var res;
+        var res, t0 = performance.now();
         try {
             res = cue === 'size' ? await runSize(target, rate, moments, single)
                 : cue === 'image' ? await runImage(target, rate, opts.inject, moments, single)
@@ -334,6 +334,9 @@ export async function runIdSwitchChecks(opts) {
             console.error('[id-switch-check:' + cue + ']', e);
             res = { ok: false, reason: 'failed — ' + e.message, failed: true };
         }
+        // Wall-clock time of this check, model download and video decoding included (the
+        // Track All summary reports it). Not saved: the .slp checklist picks its fields.
+        res.elapsedMs = performance.now() - t0;
         results[cue] = res;
         if (!res.ok) {
             parts.push(head(cue) + ': ' + (auto && !res.failed && !res.cancelled ? 'skipped — ' : '') + res.reason);
