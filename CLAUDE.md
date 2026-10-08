@@ -5,7 +5,7 @@ Multi-view pose annotation GUI. No build system — pure vanilla JS served as st
 ## Architecture
 ES modules, vanilla JS (no build step). `index.html` loads `app.js` as `<script type="module">`; `app.js` is a 2-line entry point that imports from `pose/`. The 101 modules are grouped into four directories:
 - `pose/` — data model, cross-view tracking, DLT triangulation (the pure math in `triangulation-core.js`, solved in parallel by `triangulation-pool.js` + `triangulation-worker.js`), plane annotation model (planes + the global plane-node pool), 3D mesh objects (groups of planes) and their derived geometry, plane/origin serialization, origin transform, whole-project origin re-base, cross-session calibration comparison, plane-to-plane angle, the least-squares plane fit, multi-view display alignment (`view-align.js`), the ID-switch checks by body size and images (`id-switch-check.js`), the lazy project's playback eviction (`lazy-residency.js`), app initialization (22 files)
-- `ui/` — UI state, canvas rendering, mouse/keyboard interaction, info panel (and its lazily-filled Track dropdown), modals, timeline, 3D viewport, panel visibility, video encoding, video display settings, keyboard-target arbitration, modal geometry, view legend, plane definition, 3D mesh objects, origin definition, origin re-base, cross-session calibration notice, plane angle, frame-range tracking, collapsible section state, info tooltips, plane visibility, browser-specific hints, the loading overlay + its progress bar, the Align Views to References dialog, the seekbar hover tooltip, the status bar's whole-project frame counters, the controls bar's time / frame readout, the Color: Tracks/ID setting, the Check ID Switches runner + ID Switches panel tab (and its saved review checklist), its seekbar ticks and in-view highlight, its image embedder and its crop and CPU-model workers, settings — the Define Planes panel is split across `plane-definition.js` (the hub) plus its three section modules and three helpers (58 files)
+- `ui/` — UI state, canvas rendering, mouse/keyboard interaction, info panel (and its lazily-filled Track dropdown), modals, timeline, 3D viewport, panel visibility, video encoding, video display settings, keyboard-target arbitration, modal geometry, view legend, plane definition, 3D mesh objects, origin definition, origin re-base, cross-session calibration notice, plane angle, frame-range tracking, collapsible section state, info tooltips, plane visibility, browser-specific hints, the loading overlay + its progress bar, the Align Views to References dialog, the seekbar hover tooltip, the status bar's whole-project frame counters, the controls bar's time / frame readout, the Tracks / Identity coloring setting, the Check ID Switches runner + ID Switches panel tab (and its saved review checklist), its seekbar ticks and in-view highlight, its image embedder and its crop and CPU-model workers, settings — the Define Planes panel is split across `plane-definition.js` (the hub) plus its three section modules and three helpers (58 files)
 - `loading/` — video decoding, unplayable-codec diagnosis, session loading, SLP/package readers, per-camera SLP choice, calibration-file selection, video-file selection, the per-camera track-list union (`session.tracks` for a per-camera folder), web workers (11 files)
 - `import-export/` — file I/O, save/load, SLP import/merge, visibility metadata, plane metadata, 3D mesh export (10 files)
 - `demo-data.js` — synthetic skeleton and camera data
@@ -525,7 +525,7 @@ Three rules hold, and there are tests pinning each:
   and sleap-io.js round-trip as opaque JSON, so files stay SLEAP-GUI readable and
   no other `.slp` import/export path changes.
 
-The panel's **global appearance preferences** (User / Predicted / Reprojections /
+The panel's **global appearance preferences** (User / Predictions / Reprojections /
 Planes / Display Legend / 3D Viewer) deliberately stay in
 `localStorage.visibilitySettings` — they are browser-local display taste, not
 project state. Do not move them into the `.slp`.
@@ -623,7 +623,11 @@ while the heap climbed toward the renderer's ~4.2 GB limit.
   `LAZY_PLAYBACK_AHEAD`, used by the loader and the eviction. Grow one without
   the other and playback evicts what it just loaded, then reloads it.
   `LAZY_KEEP_BEHIND` must stay above the longest node trail (500): trails draw
-  resident frames only.
+  resident frames only. A seek hydrates its target and the frames AHEAD, so
+  the draw path fills the trail's window behind it (`ensureLazyTrailWindow`),
+  and on a lazy project a non-resident frame ENDS the trail
+  (`trailWindowFrames`' `residentOnly`). Skipping it instead joined every trail
+  to frames still resident from before the jump.
 - **Dropping a frame drops its derived reprojection caches too** — exactly the
   state Triangulate All leaves every frame in; the draw path re-derives them.
 
@@ -1384,8 +1388,8 @@ do) or the container resizable — not scrollable twice.
 `Track Frame` and `Track All` are disabled while the mode is on
 (`applyPlaneModeToolbarLock` in `ui/plane-definition.js`) — they act on POSE
 annotation, which in the mode is a selection the user can no longer see or
-change. The **visibility** controls (User / Predicted / Reproj / Errors),
-Sessions, Color and Hide Panel stay live: they change what is DRAWN, not what
+change. The **visibility** controls (User / Predictions / Reprojections / Errors),
+Sessions, Tracks / Identity and the Panel toggle stay live: they change what is DRAWN, not what
 is annotated. Adding a button to that lock means adding its id to
 `PLANE_LOCKED_TOOLBAR_IDS`; if it opens a menu, its wrapper also needs
 `PLANE_LOCKED_DROPDOWN_IDS` (a `.tri-dropdown` menu opens on hover and its
@@ -1398,7 +1402,7 @@ The mode itself is entered from **View ▸ Define Planes** or **`Mod+Shift+P`**
 (`definePlanes` in `ACTION_CATALOG`, dispatched to `togglePlaneMode`). Both go
 through that one function, because leaving the mode has unwinding to do — Set
 Origin Mode, the angle dialog, the toolbar lock — and a second entry point would
-be a second place to forget it. `p` alone is Toggle Predicted; the two are kept
+be a second place to forget it. `p` alone is Toggle Predictions; the two are kept
 apart only by `matchChord`'s rule that a bare letter requires shift to be UP, so
 that pairing is pinned by `tests/e2e/define-planes-shortcut.mjs` along with the
 binding being suppressed while a plane-name field has focus.
