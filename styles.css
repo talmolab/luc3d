@@ -212,7 +212,7 @@ body {
   font-weight: bold;
 }
 
-/* Nested submenu (e.g. Tracks ▸ Node Trails ▸ Off/¼ s/½ s/1 s). The submenu is a
+/* Nested submenu (e.g. Tracks ▸ Node Trails ▸ Off/¼ s/½ s/1 s/2 s). The submenu is a
    .menu-dropdown, so the global menu-close handler stamps it with an inline
    display:none — the :hover rule needs !important to win over that. */
 .menu-dropdown-item.has-submenu {

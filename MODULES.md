@@ -6175,7 +6175,7 @@ palettes, and per-frame draw routines. Receives `frameGroup` and
   lookup), so an identity/color **switch shows as a color change along the trail**.
   `drawFrameOverlays` calls it right after the canvas clear (behind the live
   skeletons) when `options.trailLength > 0`. Length is chosen from the **Tracks ▸
-  Node Trails** submenu or the toolbar's **Trails** button (Off / ¼ s / ½ s / 1 s
+  Node Trails** submenu or the toolbar's **Trails** button (Off / ¼ s / ½ s / 1 s / 2 s
   → `state.trailSeconds`, drawn as `state.trailLength` = seconds × fps frames;
   see `ui/trail-presets.js` and `ui/ui-wiring.js`).
   **Performance (it runs per view, per playback redraw):**
@@ -10069,7 +10069,7 @@ the app-wide modal convention. On a successful run the viewer is parked on the
 
 ### ui/trail-presets.js
 
-**Purpose.** The node-trail presets, in SECONDS — Off, ¼ s, ½ s, 1 s — and their
+**Purpose.** The node-trail presets, in SECONDS — Off, ¼ s, ½ s, 1 s, 2 s — and their
 conversion to the frames a trail draws. A fixed frame list (it was
 10/50/100/250/500) meant something different on every camera: 50 frames is ½ s of
 a 100 fps recording and nearly 2 s of a 30 fps one. DOM-free and import-free, so
@@ -10079,14 +10079,14 @@ a 100 fps recording and nearly 2 s of a 30 fps one. DOM-free and import-free, so
 - `TRAIL_PRESETS` — `{key, seconds, name}` per preset; `key` names the Tracks ▸
   Node Trails item ids (`menuTrails<key>`).
 - `trailFrames(seconds, fps)` — `round(seconds × fps)`, at least 1 for a trail
-  that is on, at most `MAX_TRAIL_FRAMES`; 0 when off. 15/30/60 at 60 fps,
-  25/50/100 at 100 fps.
+  that is on, at most `MAX_TRAIL_FRAMES`; 0 when off. 15/30/60/120 at 60 fps,
+  25/50/100/200 at 100 fps.
 - `trailRate(fps)` — `fps`, or 30 while none is known (`state.fps` is 0 before a
   video loads), so a trail is never silently 0 frames.
 - `trailPresetLabel(preset, fps)` — "½ second (30 frames)", or "Off".
 - `MAX_TRAIL_FRAMES` (500) — `LAZY_KEEP_BEHIND` (512) must stay above the longest
-  trail, since trails draw resident frames only; without the cap a 1 s trail on a
-  1,000 fps recording would be 1,000 frames. The test asserts the inequality.
+  trail, since trails draw resident frames only; without the cap a 2 s trail on a
+  300 fps recording would be 600 frames, so from 250 fps up 2 s draws 500. The test asserts the inequality.
 
 **Imports from project modules.** None.
 
@@ -10422,9 +10422,9 @@ stopping at the last frame; the step transport buttons/keys stop it first.
   use it, and so does the tracker after Track All (#242).
 - Node Trails (issue #102): two pickers for `state.trailSeconds` — the Tracks ▸
   Node Trails submenu (`#menuTrailsSubmenu`, items `menuTrailsOff` /
-  `menuTrailsQuarter` / `menuTrailsHalf` / `menuTrailsSecond`) and the toolbar's
+  `menuTrailsQuarter` / `menuTrailsHalf` / `menuTrailsSecond` / `menuTrailsTwoSeconds`) and the toolbar's
   **Trails** button (`#tbTrails`, right of Tracks / Identity). Both menus' items
-  are built from `TRAIL_PRESETS` (`ui/trail-presets.js`: Off, ¼ s, ½ s, 1 s;
+  are built from `TRAIL_PRESETS` (`ui/trail-presets.js`: Off, ¼ s, ½ s, 1 s, 2 s;
   `data-trail-sec`), and both go through `setTrailSeconds`. A preset is a span of
   TIME, so each item names its frame count at the current rate — "½ second (30
   frames)" at 60 fps, "(50 frames)" at 100 — and `updateTrailChecks` re-reads

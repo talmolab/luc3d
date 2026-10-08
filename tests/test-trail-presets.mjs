@@ -1,7 +1,7 @@
 /**
  * test-trail-presets.mjs — node-trail presets are TIME, drawn as frames
- * (ui/trail-presets.js): ¼ s / ½ s / 1 s is 15/30/60 frames at 60 fps and
- * 25/50/100 at 100 fps, and `state.trailLength` follows `state.fps` without
+ * (ui/trail-presets.js): ¼ s / ½ s / 1 s / 2 s is 15/30/60/120 frames at 60 fps
+ * and 25/50/100/200 at 100 fps, and `state.trailLength` follows `state.fps` without
  * being told (ui/app-state.js). The menus are covered by
  * tests/e2e/node-trails-toolbar.mjs.
  *
@@ -24,12 +24,12 @@ function eq(a, e, m) {
 function ok(c, m) { eq(!!c, true, m); }
 
 // ---- the presets ------------------------------------------------------------
-eq(TRAIL_PRESETS.map(p => p.seconds).join(','), '0,0.25,0.5,1', 'Off, ¼ s, ½ s, 1 s');
+eq(TRAIL_PRESETS.map(p => p.seconds).join(','), '0,0.25,0.5,1,2', 'Off, ¼ s, ½ s, 1 s, 2 s');
 const framesAt = (fps) => TRAIL_PRESETS.map(p => trailFrames(p.seconds, fps)).join('/');
-eq(framesAt(60), '0/15/30/60', '60 fps → 15/30/60 frames');
-eq(framesAt(100), '0/25/50/100', '100 fps → 25/50/100 frames');
-eq(framesAt(30), '0/8/15/30', '30 fps → 8/15/30 (7.5 rounds up)');
-eq(framesAt(29.97), '0/7/15/30', '29.97 fps rounds each preset (7.49 → 7)');
+eq(framesAt(60), '0/15/30/60/120', '60 fps → 15/30/60/120 frames');
+eq(framesAt(100), '0/25/50/100/200', '100 fps → 25/50/100/200 frames');
+eq(framesAt(30), '0/8/15/30/60', '30 fps → 8/15/30/60 (7.5 rounds up)');
+eq(framesAt(29.97), '0/7/15/30/60', '29.97 fps rounds each preset (7.49 → 7)');
 
 // ---- edges --------------------------------------------------------------------
 eq(trailFrames(0, 60), 0, 'off is 0 frames at any rate');
@@ -37,6 +37,8 @@ eq(trailFrames(0.25, 0), 8, 'no known rate (fps 0, before a video) falls back to
 eq(trailFrames(0.25, NaN), 8, 'a non-numeric rate falls back too');
 eq(trailFrames(0.25, 2), 1, 'a trail that is on is at least 1 frame (0.5 → 1)');
 eq(trailFrames(1, 1000), MAX_TRAIL_FRAMES, '1 s at 1,000 fps is capped');
+eq(framesAt(250), '0/63/125/250/500', '2 s at 250 fps is exactly the cap');
+eq(framesAt(300), '0/75/150/300/500', '2 s at 300 fps is capped at 500');
 ok(LAZY_KEEP_BEHIND > MAX_TRAIL_FRAMES,
     `the cap stays under LAZY_KEEP_BEHIND (${MAX_TRAIL_FRAMES} < ${LAZY_KEEP_BEHIND}) — trails draw resident frames only`);
 
@@ -44,6 +46,7 @@ ok(LAZY_KEEP_BEHIND > MAX_TRAIL_FRAMES,
 eq(trailPresetLabel(TRAIL_PRESETS[0], 60), 'Off', 'Off has no frame count');
 eq(trailPresetLabel(TRAIL_PRESETS[1], 60), '¼ second (15 frames)', '¼ s at 60 fps');
 eq(trailPresetLabel(TRAIL_PRESETS[3], 100), '1 second (100 frames)', '1 s at 100 fps');
+eq(trailPresetLabel(TRAIL_PRESETS[4], 60), '2 seconds (120 frames)', '2 s at 60 fps');
 eq(trailPresetLabel(TRAIL_PRESETS[1], 2), '¼ second (1 frame)', 'singular');
 
 // ---- state.trailLength is derived, and follows fps ------------------------------
