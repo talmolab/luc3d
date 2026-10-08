@@ -57,6 +57,7 @@ import { trackCurrentFrame, trackAll, findMatchForSelected } from '../pose/track
 import { showTrackRangeModal } from './track-range-modal.js';
 import { showAlignViewsModal } from './view-align-modal.js';
 import { onColorByChange, setColorByIdentity } from './color-by.js';
+import { TRAIL_PRESETS, trailPresetLabel } from './trail-presets.js';
 import { installSeekbarTooltip } from './seekbar-tooltip.js';
 import { showReadoutFrame, refreshReadoutTotals } from './frame-readout.js';
 import { installSeekbarMarkers, seekbarMarkerAt, describeSwitchMarker, setSeekbarMarkerFrames } from './seekbar-markers.js';
@@ -968,66 +969,71 @@ export function setupMenus() {
     });
 
     // Node Trails presets — issue #102. A single active length, picked from
-    // the Tracks ▸ Node Trails submenu or the toolbar's Trails button; both go
-    // through setTrailLength, so their checkmarks and the button's tooltip
-    // always show state.trailLength.
-    var trailPresets = [
-        { id: 'menuTrailsOff', len: 0 },
-        { id: 'menuTrails10', len: 10 },
-        { id: 'menuTrails50', len: 50 },
-        { id: 'menuTrails100', len: 100 },
-        { id: 'menuTrails250', len: 250 },
-        { id: 'menuTrails500', len: 500 },
-    ];
+    // the Tracks ▸ Node Trails submenu or the toolbar's Trails button; both are
+    // built from TRAIL_PRESETS (ui/trail-presets.js) and go through
+    // setTrailSeconds, so their checkmarks and the button's tooltip always show
+    // state.trailSeconds. A preset is a span of TIME: its frame count,
+    // state.trailLength, is derived from state.fps, and the labels re-read it
+    // each time a menu opens — the rate changes when a video loads or the FPS
+    // pill is edited, and nothing here is told.
     // The toolbar's menu opens on HOVER (pure CSS, like the Triangulate split
     // buttons), so the only wiring it needs is its items.
     var trailsBtn = document.getElementById('tbTrails');
+    var trailsDropdown = document.getElementById('trailsDropdown');
     var trailsMenu = document.getElementById('trailsMenu');
+    var trailsParent = document.getElementById('menuTrailsParent');
+    var trailsSubmenu = document.getElementById('menuTrailsSubmenu');
+    var trailItems = [];    // { preset, el } for both menus
+    function trailPresetFor(seconds) {
+        return TRAIL_PRESETS.find(function (p) { return p.seconds === seconds; }) || null;
+    }
+    function trailDescription() {
+        if (!(state.trailLength > 0)) return 'off';
+        var p = trailPresetFor(state.trailSeconds);
+        // A length set in frames (state.trailLength = n) matches no preset.
+        return p ? trailPresetLabel(p, state.fps) : state.trailLength + ' frames';
+    }
     function updateTrailChecks() {
-        trailPresets.forEach(function (p) {
-            var on = state.trailLength === p.len;
-            var el = document.getElementById(p.id);
-            var chk = el && el.querySelector('.trail-check');
-            if (chk) chk.textContent = on ? '✓' : '';
-            var item = trailsMenu && trailsMenu.querySelector('[data-trail-len="' + p.len + '"]');
-            if (item) {
-                item.querySelector('.trail-check').textContent = on ? '✓' : '';
-                item.setAttribute('aria-checked', on ? 'true' : 'false');
-            }
+        trailItems.forEach(function (it) {
+            var on = state.trailSeconds === it.preset.seconds;
+            it.el.querySelector('.trail-check').textContent = on ? '✓' : '';
+            it.el.querySelector('.trail-label').textContent = trailPresetLabel(it.preset, state.fps);
+            it.el.setAttribute('aria-checked', on ? 'true' : 'false');
         });
         // The label is a bare "Trails ▾" to save toolbar width; the current
         // length rides in the tooltip instead.
-        if (trailsBtn) trailsBtn.title = 'Node trails: ' +
-            (state.trailLength > 0 ? state.trailLength + ' frames' : 'off');
+        if (trailsBtn) trailsBtn.title = 'Node trails: ' + trailDescription();
     }
-    function setTrailLength(len) {
-        state.trailLength = len;
+    function setTrailSeconds(seconds) {
+        state.trailSeconds = seconds;
         updateTrailChecks();
         drawAllOverlays(state.currentFrame);
-        setStatus(len > 0 ? ('Node trails: ' + len + ' frames') : 'Node trails off', 'success');
+        setStatus(seconds > 0 ? ('Node trails: ' + trailDescription()) : 'Node trails off', 'success');
     }
-    if (trailsMenu) {
-        trailPresets.forEach(function (p) {
+    function addTrailItems(menu, className, idPrefix, onPick) {
+        if (!menu) return;
+        TRAIL_PRESETS.forEach(function (p) {
             var item = document.createElement('div');
-            item.className = 'tri-dropdown-item';
+            item.className = className;
+            if (idPrefix) item.id = idPrefix + p.key;
             item.setAttribute('role', 'menuitemradio');
-            item.setAttribute('data-trail-len', String(p.len));
-            item.innerHTML = '<span><span class="trail-check"></span>' +
-                (p.len > 0 ? p.len + ' frames' : 'Off') + '</span>';
-            item.addEventListener('click', function () { setTrailLength(p.len); });
-            trailsMenu.appendChild(item);
+            item.setAttribute('data-trail-sec', String(p.seconds));
+            item.innerHTML = '<span><span class="trail-check"></span><span class="trail-label"></span></span>';
+            item.addEventListener('click', function () { onPick(); setTrailSeconds(p.seconds); });
+            menu.appendChild(item);
+            trailItems.push({ preset: p, el: item });
         });
     }
-
-    updateTrailChecks();
-    trailPresets.forEach(function (p) {
-        var el = document.getElementById(p.id);
+    addTrailItems(trailsMenu, 'tri-dropdown-item', '', function () {});
+    addTrailItems(trailsSubmenu, 'menu-dropdown-item', 'menuTrails', closeMenus);
+    // Opening either menu (or hovering the button, whose tooltip names the
+    // frame count) re-reads state.fps.
+    [trailsDropdown, trailsParent].forEach(function (el) {
         if (!el) return;
-        el.addEventListener('click', function () {
-            closeMenus();
-            setTrailLength(p.len);
-        });
+        el.addEventListener('mouseenter', updateTrailChecks);
+        el.addEventListener('focusin', updateTrailChecks);
     });
+    updateTrailChecks();
 
     // ============================================
     // Tracks Menu Handlers
@@ -3347,6 +3353,7 @@ export function seekToLabeledFrame(direction) {
             }
             fpsEl.textContent = (state.fps || 30).toFixed(1) + ' fps';
             refreshReadoutTotals();   // the times are frame / fps
+            if (state.trailSeconds > 0) drawAllOverlays(state.currentFrame);   // trail frames are seconds × fps
         }
 
         function cancel() {
