@@ -2,7 +2,7 @@
  * test-tracker-gui.mjs — Node test that the tracker drives the GUI "in all the
  * right ways", exactly like the current luc3d tracker: trackCurrentFrame()
  * assigns tracks + identities on the session AND refreshes the overlays, info
- * panel and timeline tracks; trackAll() also switches Color: Tracks -> ID
+ * panel and timeline tracks; trackAll() also switches coloring: Tracks -> Identity
  * (#242). Every pass that rewrites tracking state also calls markDirty(), and a
  * refused one does not. Uses tracker-gui-hooks.mjs (spy UI stubs).
  *
@@ -79,8 +79,8 @@ ok(!appState.state.colorByIdentity, 'Track Frame does not switch Color to ID');
 // The tracking result is unsaved project state (save dot, unload prompt).
 ok(globalThis.__GUI.markDirty > dirtyBefore, 'Track Frame marks the project dirty (markDirty called)');
 
-// --- Track All switches Color: Tracks -> ID (#242) ---------------------------
-console.log('• trackAll() switches Color from Tracks to ID');
+// --- Track All switches coloring: Tracks -> Identity (#242) ------------------
+console.log('• trackAll() switches coloring from Tracks to Identity');
 let colorChanges = [];
 colorBy.onColorByChange(on => colorChanges.push(on));   // stands in for ui-wiring's handler
 appState.state.colorByIdentity = false;
@@ -88,17 +88,17 @@ dirtyBefore = globalThis.__GUI.markDirty;
 let res = await trackAll();
 ok(res && res.ok, 'Track All succeeded');
 ok(globalThis.__GUI.markDirty > dirtyBefore, 'Track All marks the project dirty (markDirty called)');
-eq(appState.state.colorByIdentity, true, 'Color is now ID');
+eq(appState.state.colorByIdentity, true, 'coloring is now by Identity');
 eq(JSON.stringify(colorChanges), '[true]', 'the change handler ran once (buttons + 2D/3D recolor in the app)');
-ok(/now coloring by ID/.test(globalThis.__GUI.lastStatus.msg), 'the status line says so: "' + globalThis.__GUI.lastStatus.msg + '"');
+ok(/now coloring by Identity/.test(globalThis.__GUI.lastStatus.msg), 'the status line says so: "' + globalThis.__GUI.lastStatus.msg + '"');
 
-console.log('• trackAll() with Color already ID changes nothing');
+console.log('• trackAll() with coloring already by Identity changes nothing');
 colorChanges = [];
 res = await trackAll();
 ok(res && res.ok, 'second Track All succeeded');
-eq(appState.state.colorByIdentity, true, 'Color stays ID');
+eq(appState.state.colorByIdentity, true, 'coloring stays by Identity');
 eq(colorChanges.length, 0, 'no redundant recolor');
-ok(!/now coloring by ID/.test(globalThis.__GUI.lastStatus.msg), 'and the status line does not claim a switch');
+ok(!/now coloring by Identity/.test(globalThis.__GUI.lastStatus.msg), 'and the status line does not claim a switch');
 colorBy.onColorByChange(null);
 
 // --- Track Frame Range: marks dirty when it runs, not when it is refused -----

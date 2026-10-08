@@ -5,11 +5,11 @@
 // mousedown drag interaction (via setupDragHandle) and updates layout
 // CSS based on cursor delta.
 
-import { viewport3d, timeline } from './app-state.js?v=e543670bf279';
+import { viewport3d, timeline } from './app-state.js?v=702eef168b59';
 import {
     syncTimelineToggleButton, updateInfoPanelToggleBtn, toggleInfoPanel,
-    update3DViewportToggleBtn, toggle3DViewport, lockPanelToggleWidths,
-} from './ui-wiring.js?v=e543670bf279';
+    update3DViewportToggleBtn, toggle3DViewport,
+} from './ui-wiring.js?v=702eef168b59';
 
 
 // ============================================
@@ -137,9 +137,4 @@ export function setupSplitHandles() {
     // Wire up the toggle buttons
     document.getElementById('infoPanelToggleBtn').addEventListener('click', toggleInfoPanel);
     document.getElementById('viewport3dToggleBtn').addEventListener('click', toggle3DViewport);
-
-    // Size each toggle to its widest label, so swapping Hide/Show doesn't
-    // resize the button and shove its neighbour sideways. After the labels
-    // above are set, so the measurement restores the correct current one.
-    lockPanelToggleWidths();
 }
