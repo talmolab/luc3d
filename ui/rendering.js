@@ -9,7 +9,7 @@
 import { state, interactionManager, timeline } from './app-state.js';
 import { points3dNodeCount } from '../pose/pose-data.js';
 import {
-    ensureLazyFrameData, getInstanceGroupsForFrame,
+    ensureLazyFrameData, ensureLazyTrailWindow, getInstanceGroupsForFrame,
     triangulateAndReproject, storeReprojectedInstances,
 } from '../pose/triangulation.js';
 import { drawFrameOverlays } from './overlays.js';
@@ -245,6 +245,19 @@ export function drawAllOverlays(frameIdx, viewFrames) {
             }
         });
         return;
+    }
+
+    // Node trails draw resident frames only, and a seek hydrates the frames
+    // ahead of its target, not behind it — so hydrate the trail's window first.
+    // A no-op on every playback frame (those frames were just played).
+    if (state.trailLength > 0 && state.session.lazyLoader) {
+        // Worker-backed loader: one request at a time, so on landing redraw
+        // whatever frame is on screen NOW — after another jump that redraw is
+        // what requests the new frame's window.
+        var trailLoad = ensureLazyTrailWindow(frameIdx, state.trailLength);
+        if (trailLoad) trailLoad.then(function (n) {
+            if (n > 0) drawAllOverlays(state.currentFrame);
+        });
     }
 
     // Auto-finish edit group mode on frame change

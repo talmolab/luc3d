@@ -9,7 +9,8 @@
  * (identities are inspected before cross-view linking); history is the last N
  * PRESENT frames (sparse-aware, not contiguous frameIdx-1..N); past instances are
  * matched by trackIdx; one polyline segment per node per available past frame;
- * missing history / null trackIdx draw nothing without crashing.
+ * missing history / null trackIdx draw nothing without crashing; on a LAZY
+ * project a non-resident frame ends the window instead of being skipped.
  *
  * Segments are counted as moveTo/lineTo pairs, NOT stroke() calls: segments of
  * the same age share one path and one stroke (one per track per age step), so
@@ -173,6 +174,29 @@ ok(JSON.stringify(ov.trailWindowFrames(sparse, 30000, 100)) === '[20000,5000,0]'
    'sparse: falls back to the scan and returns the present frames <= current');
 ok(JSON.stringify(ov.trailWindowFrames(new Map([[3, 1], [4, 1]]), 10, 5)) === '[4,3]',
    'reaches frame 0 with frames left over: returns what exists');
+
+// 11. LAZY project: `frameGroups` is a residency window, so a missing frame is
+// one not hydrated yet — the window ends there instead of skipping to frames
+// still resident from before a seek. After a jump from ~1000 to 3000 the old
+// window is resident and the frames just behind 3000 are not.
+const afterJump = new CountingMap();
+for (let f = 990; f <= 1010; f++) afterJump.set(f, 1);
+for (let f = 3000; f <= 3030; f++) afterJump.set(f, 1);
+ok(JSON.stringify(ov.trailWindowFrames(afterJump, 3000, 10, true)) === '[3000]',
+   'lazy: the window ends at the first non-resident frame');
+ok(afterJump.forEachCalls === 0, 'lazy: never falls back to the scan');
+ok(JSON.stringify(ov.trailWindowFrames(afterJump, 3003, 2, true)) === '[3003,3002,3001]',
+   'lazy: a fully resident window is the contiguous frames, nearest first');
+ok(ov.trailWindowFrames(afterJump, 3000, 10)[1] === 1010,
+   'eager rule on the same map does bridge to 1010 (why lazy needs its own rule)');
+const jumpFG = new Map([[1009, fgLinked(100)], [1010, fgLinked(101)], [3000, fgLinked(700)]]);
+const lazySession = Object.assign(sessionOf(jumpFG), { lazyLoader: {} });
+ctx = mockCtx();
+ov.drawNodeTrails(ctx, 'camA', lazySession, 3000, Object.assign({ trailLength: 10 }, GEO));
+ok(ctx.segments === 0, 'lazy: no trail segment joins the frame to the pre-jump window, got ' + ctx.segments);
+ctx = mockCtx();
+ov.drawNodeTrails(ctx, 'camA', sessionOf(jumpFG), 3000, Object.assign({ trailLength: 10 }, GEO));
+ok(ctx.segments === 4, 'eager (sparse) project still joins the last present frames, got ' + ctx.segments);
 
 console.log(`\n${failed === 0 ? '✓ PASS' : '✗ FAIL'} — ${passed} passed, ${failed} failed`);
 if (failed > 0) { console.error('\nFailures:\n - ' + failures.join('\n - ')); process.exit(1); }

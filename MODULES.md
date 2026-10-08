@@ -2937,19 +2937,38 @@ subtitle is populated for loaded projects, not just freshly triangulated ones.
   large prediction `.slp` to the main-thread `SioLazyLoader`
   (`loading/sio-lazy-loader.js`). Shared consumers: `ensureLazyFrameData`,
   `buildLazyFrameGroupSync`, `batchLoadLazyFrames` (branches on `loader.isSync`
-  for worker-free loaders), `loadAllLazyFrames`, and `evictLazyFrames(anchorFrame)`
+  for worker-free loaders), `loadAllLazyFrames`, `ensureLazyTrailWindow(frameIdx,
+  trailLength)`, and `evictLazyFrames(anchorFrame)`
   — the app-state wrapper around `pose/lazy-residency.js`'s
   `evictLazyFrameGroups`. A no-op until `session.frameGroups` exceeds
   `LAZY_RESIDENT_CAP`; then it protects windows around the on-screen frame and
   `anchorFrame`, keeps at least the node-trail length behind them, passes every
   object the InteractionManager holds (`_uiHeldObjects`: selection, Group-mode
   picks, an unlinked drag, the Edit Group target) and `state.triangulationResults`.
-  Called after a NEW frame is hydrated by `ensureLazyFrameData` and by the playback
+  Called after a NEW frame is hydrated by `ensureLazyFrameData`,
+  `ensureLazyTrailWindow` and the playback
   loader (`ui/ui-wiring.js`), never from `batchLoadLazyFrames`. It had existed
   since before the module split with no caller at all, which is why playback
   kept every frame it ever hydrated (see `pose/lazy-residency.js`). The loader's
   own caches are bounded separately (its 100-frame adapted-dict LRU and
   sleap-io.js's `frameCacheLimit`).
+  `ensureLazyTrailWindow(frameIdx, trailLength)` hydrates the `trailLength`
+  frames BEHIND `frameIdx` — the node-trail window, which a seek's own
+  hydration (target + 30 ahead) does not reach. Called by `drawAllOverlays` and
+  by the overlay-video export (preview and each exported frame, with the
+  export's own trail length). Synchronous for `SioLazyLoader` (built before it
+  returns, then one `evictLazyFrames`); for the worker loader it returns a
+  Promise of the frames loaded and keeps at most one request in flight.
+  Measured on a synthetic 8-camera, 5-animal, 15-node project
+  (`tests/e2e/_bench-trail-window.mjs`): when the window is already resident,
+  which is every playback frame, it costs ~1.7 µs at a 500-frame trail, and
+  2,500 simulated playback steps (with the playback loader's load + eviction)
+  built 0 frames; filling it after a jump costs ~1 / 11 / 50–60 ms at
+  10 / 100 / 500 frames. On the real 8-camera, 108,000-frame project
+  (`_bench-playback.mjs`, A/B against the parent commit) playback draws/s and
+  overlay cost were within run-to-run noise at both 10 and 500 frames, jump
+  times were unchanged, and the window fill (~80 ms per jump at 500 frames)
+  showed up in the first step after each jump.
   `LazyFrameLoader` spawns `loading/slp-import-worker.js` (resolved against
   `document.baseURI` so sub-path deployments work — see ISSUES.md I-8) for HDF5
   reads.
@@ -5719,7 +5738,9 @@ exported but the amber `?` editing prompt is not.
   modules, so this adds no cycle, and sharing `buildVideoFilter` with
   `applyVideoFilters` is what keeps the export from drifting from the live view.
 - `../pose/triangulation.js` — `getInstanceGroupsForFrame`,
-  `ensureLazyFrameData`, `triangulateAndReproject`, `storeReprojectedInstances`,
+  `ensureLazyFrameData`, `ensureLazyTrailWindow` (the frames behind the first
+  exported frame and the preview frame that the node trails draw),
+  `triangulateAndReproject`, `storeReprojectedInstances`,
   `sessionHasCalibration`.
 - `../pose/pose-data.js` — `points3dNodeCount`.
 - `../import-export/save-load.js` — `setStatus`.
@@ -6111,6 +6132,21 @@ palettes, and per-frame draw routines. Receives `frameGroup` and
     on and grew further into the video. After `frameGroups.size` steps without
     filling the window (a sparse project) it falls back to the scan, so it is
     never worse than before.
+  - **On a LAZY project a missing frame is not an unlabelled one.**
+    `frameGroups` there is a residency window, so `drawNodeTrails` passes
+    `residentOnly` (`!!session.lazyLoader`) and the window ENDS at the first
+    non-resident frame instead of skipping it. Skipping it was the bug: a seek
+    hydrates its target and the frames ahead of it, not the ones behind, so the
+    walk (or its scan fallback) reached frames still resident from before the
+    jump and every trail ran straight from each animal's position now to where
+    it was thousands of frames earlier — seen on picking a row in the ID
+    Switches tab. The draw path fills the window first
+    (`ensureLazyTrailWindow`, `pose/triangulation.js`), so the rule only
+    shortens a trail while its frames are still arriving. An EAGER project
+    keeps SLEAP's sparse semantics. Covered by `tests/test-node-trails.mjs` §11
+    and `tests/e2e/lazy-trail-window.mjs` (real `navigateToFrame` →
+    `drawAllOverlays`, a forward and a backward jump; it fails on the old
+    build with a 350 px segment per node).
   - Segments are **batched per age step**: every node's newer→older segment at
     window index k has the same style (alpha / width / historical color of k),
     so they share one path and one `stroke()` — `numNodes` times fewer strokes.
@@ -6223,7 +6259,12 @@ data sources. Plus visibility-toggle helpers and frame counter updates.
   `fillLazyReprojections(fi, groups)`, run for `frameIdx` and once for each
   other per-view frame. Threads
   `state.colorByIdentity` and `state.trailLength` (node-trail length, issue #102)
-  into each `drawFrameOverlays` call. It also computes the per-view
+  into each `drawFrameOverlays` call. With trails on in a lazy project it first
+  calls `ensureLazyTrailWindow(frameIdx, state.trailLength)`
+  (`pose/triangulation.js`), so the trail drawn right after a seek has the
+  frames BEHIND the target, which the seek's own hydration does not load; a
+  worker-backed loader's frames arrive later and trigger one redraw. A no-op
+  during playback (those frames were just played). It also computes the per-view
   **`labelDisplayScale`** (backing-store px per on-screen CSS px) that
   `overlays.js` sizes node/track labels with: `overlayCanvas.offsetWidth` — the
   LAYOUT width, which no CSS transform touches — times `view.zoom.scale`, which

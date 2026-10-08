@@ -2200,6 +2200,52 @@ export async function batchLoadLazyFrames(startIdx, count, onProgress) {
     return loaded;
 }
 
+var _trailWindowLoad = null;
+
+/**
+ * Hydrate the node-trail window behind `frameIdx` on a lazy project — the
+ * `trailLength` frames before it — so a trail drawn right after a seek shows
+ * where each animal just was. A seek hydrates its target and the frames AHEAD
+ * of it (`ensureLazyFrameData`), never the ones behind, and trails draw
+ * resident frames only (`trailWindowFrames`), so without this a jump left the
+ * trail empty, and before that rule joined it to frames resident from before
+ * the jump.
+ *
+ * Cheap when there is nothing to do, which is every playback frame: the frames
+ * behind the playhead were just played and eviction protects them
+ * (`evictLazyFrames`' keep-behind covers the trail length), so the cost is one
+ * `frameGroups.has` per trail frame. A synchronous loader (`SioLazyLoader`)
+ * builds the missing frames before this returns; the worker-backed loader
+ * fetches them, one request at a time.
+ *
+ * @param {number} frameIdx
+ * @param {number} trailLength
+ * @returns {Promise<number>|null} for the worker-backed loader, a Promise of
+ *   the number of frames loaded; null when nothing was missing or the frames
+ *   are already built
+ */
+export function ensureLazyTrailWindow(frameIdx, trailLength) {
+    var session = state.session;
+    if (!session || !session.lazyLoader || !(trailLength > 0) || frameIdx == null) return null;
+    var lo = Math.max(0, frameIdx - trailLength);
+    var f = frameIdx - 1;
+    while (f >= lo && session.frameGroups.has(f)) f--;
+    if (f < lo) return null;                          // the whole window is resident
+    var loader = session.lazyLoader;
+    if (loader.isSync) {
+        for (; f >= lo; f--) buildLazyFrameGroupSync(f);
+        evictLazyFrames(frameIdx);
+        return null;
+    }
+    if (_trailWindowLoad) return null;
+    _trailWindowLoad = batchLoadLazyFrames(lo, frameIdx - lo).then(function (n) {
+        _trailWindowLoad = null;
+        evictLazyFrames(frameIdx);
+        return n;
+    }, function () { _trailWindowLoad = null; return 0; });
+    return _trailWindowLoad;
+}
+
 /**
  * Load ALL lazy frames in batches with progress UI.
  * Used before bulk operations (triangulate all, etc.) that need every frame.
