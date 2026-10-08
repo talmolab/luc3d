@@ -247,12 +247,14 @@ try {
         await M.runIdSwitchChecks({ image: true, inject: { createEmbedder: fake, hasWebGPU: async () => true } });
         const res = S._idSwitch.results.image;
         return { ok: !!(res && res.ok), threshold: res && res.threshold, continueBelow: res && res.continueBelow, skipEmpty: res && res.skipEmpty,
+                 lead: ['size', 'image', 'brightness'].map(c => S._idSwitch.results[c] && S._idSwitch.results[c].clearestEndLeads),
                  sizeSkip: S._idSwitch.results.size && S._idSwitch.results.size.skipEmpty, brSkip: S._idSwitch.results.brightness && S._idSwitch.results.brightness.skipEmpty };
     });
     check(img.ok && img.threshold === -25 && img.continueBelow === 25,
         `the image check ran at threshold ${img.threshold} with runs ending only above ${img.continueBelow} (want -25 / +25)`);
     check(img.skipEmpty === true && img.sizeSkip === true && img.brSkip === true,
         `every check on one camera skips encounters with no samples (image ${img.skipEmpty}, size ${img.sizeSkip}, brightness ${img.brSkip})`);
+    check(img.lead.every(x => x === true), `…and lets the clearest of nearby 'end' rows lead (size / image / brightness: ${img.lead})`);
 
     check(errs.length === 0, 'no page errors' + (errs.length ? ': ' + errs.join(' | ') : ''));
 } finally {

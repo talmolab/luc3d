@@ -105,9 +105,11 @@ try {
     check(!R.some(r => r !== both && Math.abs(r.frame - fx.swapFrame) <= 60 && /· images/.test(r.text)), '…and not a second "Images" row for the same change point');
     const cues = await page.evaluate(async () => { return [...new Set((await import('/ui/seekbar-markers.js')).getSeekbarSwitchMarkers().map(m => m.cue))].sort(); });
     check(cues.join() === 'image,size', `the seekbar carries both checks' markers (${cues})`);
-    const cb = await page.evaluate(() => [window.__res.image.continueBelow, window.__res.image.skipEmpty, window.__res.size.skipEmpty]);
+    const cb = await page.evaluate(() => [window.__res.image.continueBelow, window.__res.image.skipEmpty, window.__res.size.skipEmpty,
+        window.__res.image.clearestEndLeads, window.__res.size.clearestEndLeads]);
     check(cb[0] === 0, `on several cameras a run still ends at any encounter scoring above 0 (continueBelow ${cb[0]}; the +|threshold| rule is single-camera only)`);
     check(cb[1] === false && cb[2] === false, `…and an encounter with no samples still counts (skipEmpty: image ${cb[1]}, size ${cb[2]}; single-camera only)`);
+    check(cb[3] === false && cb[4] === false, `…and 'end' rows keep time order (clearestEndLeads: image ${cb[3]}, size ${cb[4]}; single-camera only)`);
     check(!(await page.$('.id-switch-progress')), 'the progress dialog is gone when done');
 
     // ---- 2. identical sizes: only the image check finds it

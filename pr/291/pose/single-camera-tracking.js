@@ -31,7 +31,7 @@
  * DOM-free. Depends on: pose/sleap-tracker.js.
  */
 
-import { runSleapTrackerAsync } from './sleap-tracker.js?v=3b23de5d012e';
+import { runSleapTrackerAsync } from './sleap-tracker.js?v=d7846510d1cf';
 
 /** Why a lazy single-camera project is not tracked (shown in the status bar). */
 export const SINGLE_CAMERA_LAZY_REASON = 'single-camera tracking does not support a lazily loaded (> 150 MB) project yet';
@@ -268,14 +268,21 @@ export function singleCameraImageContinueBelow(threshold) {
  *    edge 4 -> 2, and swaps fully undone 9 -> 11 rows (with the boundary set by
  *    the user); brightness rows 21 -> 18 (false 7 -> 4), 14 caught either way.
  *    Not measured for body size on one camera (sampled at 15 Hz, so rarely empty).
+ *  - `clearestEndLeads`: among encounter 'end' rows within 5 s of each other that
+ *    share an animal, the one reading right again most clearly leads its
+ *    follow-ons (pose/id-switch-check.js `linkFollowOns`). After an early swap the
+ *    swapped animals' other pairs end a second or two BEFORE the swapped pair; on
+ *    the SLAP videos one swap's row was a follow-on of such an echo (+69 leading
+ *    the real +444). With it the swapped pair's row is the primary in 18 of 23
+ *    swaps instead of 17; brightness and topC unchanged (3, 5 and 10 s alike).
  *  - image check only: `continueBelow` = `singleCameraImageContinueBelow(threshold)`.
- * Multi-camera checks run without either (not measured there).
+ * Multi-camera checks run without any of them (not measured there).
  * @param {'size'|'image'|'brightness'} cue
  * @param {number} threshold  that check's threshold
- * @returns {{skipEmpty: boolean, continueBelow?: number}}
+ * @returns {{skipEmpty: boolean, clearestEndLeads: boolean, continueBelow?: number}}
  */
 export function singleCameraCheckOptions(cue, threshold) {
-    var o = { skipEmpty: true };
+    var o = { skipEmpty: true, clearestEndLeads: true };
     if (cue === 'image') o.continueBelow = singleCameraImageContinueBelow(threshold);
     return o;
 }

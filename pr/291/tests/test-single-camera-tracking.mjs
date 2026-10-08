@@ -27,6 +27,9 @@
  *     scoring exactly 0 (no samples) when finding runs — on a real video's own
  *     scores, a swap running from the session start is fixed from frame 0, not
  *     from the pair's first encounter that had evidence.
+ *  7. `clearestEndLeads`: after an early swap, other pairs of a swapped animal
+ *     "read right again" a second or two BEFORE the swapped pair; the clearest
+ *     'end' row of such a group leads it (a real video's four 'end' rows).
  *
  * Run:  node tests/test-single-camera-tracking.mjs
  */
@@ -250,9 +253,9 @@ group('5. The image check on one camera: a run ends only at a clearly positive e
 
 group('6. On one camera, an encounter with no samples is no evidence');
 {
-    eq(JSON.stringify(SCT.singleCameraCheckOptions('image', -25)), '{"skipEmpty":true,"continueBelow":25}', 'image: empty encounters skipped, runs end above +25');
-    eq(JSON.stringify(SCT.singleCameraCheckOptions('brightness', -800)), '{"skipEmpty":true}', 'brightness: empty encounters skipped');
-    eq(JSON.stringify(SCT.singleCameraCheckOptions('size')), '{"skipEmpty":true}', 'size: empty encounters skipped');
+    eq(JSON.stringify(SCT.singleCameraCheckOptions('image', -25)), '{"skipEmpty":true,"clearestEndLeads":true,"continueBelow":25}', 'image: empty encounters skipped, the clearest end leads, runs end above +25');
+    eq(JSON.stringify(SCT.singleCameraCheckOptions('brightness', -800)), '{"skipEmpty":true,"clearestEndLeads":true}', 'brightness: empty encounters skipped, the clearest end leads');
+    eq(JSON.stringify(SCT.singleCameraCheckOptions('size')), '{"skipEmpty":true,"clearestEndLeads":true}', 'size: empty encounters skipped, the clearest end leads');
     // 10072022143153-mid, id_0 / id_2: swapped from 0:00 to 2:16.7, but the pair's first encounter (0:03.9) had no samples
     const scores = [0, -46, -64, 0, -1, -11, 12, 41];
     const enc = () => scores.map((score, i) => ({ frame: 100 * (i + 1), startFrame: 100 * (i + 1) - 10, identityA: 0, identityB: 2,
@@ -268,6 +271,24 @@ group('6. On one camera, an encounter with no samples is no evidence');
     ok(sc[0].flagged && sc[0].continues && sc[3].flagged && sc[3].continues, '…and the empty encounters inside the stretch are its repeats');
     sc = enc(); CHK.markChangePoints(sc, Object.assign({}, O, { skipEmpty: false }));
     ok(sc[1].kind === 'onset', 'the default (several cameras) is unchanged: the empty encounter still counts');
+}
+
+group('7. On one camera, the clearest of a group of nearby \'end\' rows leads it');
+{
+    // 10072022145420-back: tracks 2 and 3 swapped at 0:14.8, early, so the swapped labelling is the majority and
+    // every pair of a swapped animal reads right again after it — the real pair (2,3) with +444 at 0:16.9, its
+    // echoes (1,3) +69 at 0:13.5, (0,3) +37 at 0:14.6 and (1,2) +36 at 0:18.5 (windows running past the swap)
+    const ENDS = [[1, 3, 405, 69], [0, 3, 438, 37], [2, 3, 507, 444], [1, 2, 555, 36]];
+    const enc = () => ENDS.flatMap(([a, b, f, sc]) => [
+        { frame: 100, startFrame: 90, identityA: a, identityB: b, nameA: 'id_' + a, nameB: 'id_' + b, score: -80 },
+        { frame: f, startFrame: f - 10, identityA: a, identityB: b, nameA: 'id_' + a, nameB: 'id_' + b, score: sc }]).sort((x, y) => x.frame - y.frame);
+    const O = { threshold: -25, continueBelow: 25, followSeconds: 60, fps: 30 };
+    const lead = ch => ch.filter(x => x.followOf == null).map(x => x.nameA + '/' + x.nameB + '@' + x.frame).join(', ');
+    let ch = CHK.markChangePoints(enc(), O);
+    ok(ch.length === 4 && lead(ch) === 'id_1/id_3@405', `in time order the first echo leads (${lead(ch)})`);
+    ch = CHK.markChangePoints(enc(), Object.assign({}, O, SCT.singleCameraCheckOptions('image', -25)));
+    ok(lead(ch) === 'id_2/id_3@507' && ch.filter(x => x.followOf === 507).length === 3,
+        `with clearestEndLeads the swapped pair's row (+444) leads and the three echoes follow it (${lead(ch)})`);
 }
 
 console.log(`\n${failed === 0 ? '✓ PASS' : '✗ FAIL'} — ${passed} passed, ${failed} failed`);

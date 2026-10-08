@@ -43,7 +43,7 @@
  * Depends on: pose-data.js (readPoint3d). Pure — no DOM, no app state.
  */
 
-import { readPoint3d } from './pose-data.js?v=3b23de5d012e';
+import { readPoint3d } from './pose-data.js?v=d7846510d1cf';
 
 /** Bone (node-pair) lengths used as the size signature. Pairs whose nodes the
  *  session skeleton lacks are skipped. */
@@ -70,6 +70,8 @@ export const SIZE_CHECK_DEFAULTS = {
     followSeconds: 60,  // a change point this soon after one sharing an identity is its follow-on
     skipEmpty: false,   // runs ignore encounters scoring exactly 0 (no samples on either side, so no evidence);
                         // on for single-camera sessions (pose/single-camera-tracking.js `singleCameraCheckOptions`)
+    clearestEndLeads: false, // among encounter 'end' rows within 5 s sharing an animal, the clearest leads (see
+                        // linkFollowOns); on for single-camera sessions
     minTrackedSeconds: 60, // refuse with less tracked data than this: the model can't be learned reliably
     sepFactor: 0.65,    // "close" = centroids nearer than sepFactor x median body extent
     sepDistance: null,  // override the close distance directly (world units)
@@ -420,7 +422,7 @@ function finish(grid, LP, present, weight, o, extra) {
     return Object.assign({
         ok: true, flags: flags, changes: changes, encounters: scored, moments: moments,
         identities: idents.map(function (id) { return id.name; }),
-        sampledFrames: T, closeDistance: grid.sep, threshold: o.threshold, continueBelow: o.continueBelow, skipEmpty: !!o.skipEmpty,
+        sampledFrames: T, closeDistance: grid.sep, threshold: o.threshold, continueBelow: o.continueBelow, skipEmpty: !!o.skipEmpty, clearestEndLeads: !!o.clearestEndLeads,
         fps: o.fps, step: grid.step, sampleHz: grid.hz,
     }, extra || {});
 }
@@ -587,30 +589,58 @@ export function momentChangePoints(moments, scored, changes, o) {
  * their own. Link a change point to an earlier one (of a different pair) that
  * shares an identity and lies within `followSeconds` (`followOf`).
  *
- * A candidate moment's change point outranks encounter change points up to 3 s
- * BEFORE it: it is taken as if it came 3 s earlier, so they follow it rather
- * than it following them. Both say the same contact changed something; the
- * moment was tested on both sides of the exact place (13 of 13 real on the SLAP
- * videos), while an encounter row of another pair a second or two away is
- * usually the swapped animal's wrong label showing up in that pair. On those
- * videos this made the swapped pair's row the primary in 13 of 23 swaps instead
- * of 11, and Fixing the primaries fully undid 7 instead of 6. Without moments
- * (every multi-camera check) the order is plain time.
+ * Candidate moments (single camera only) change this twice:
+ *  - A moment's change point is NEVER a follow-on. It was tested on both sides
+ *    of its own place (13 of 13 real on the 35 proofread SLAP videos), so it is
+ *    not another row's echo — while following any earlier row within 60 s that
+ *    shares an animal hid 4 real swaps there behind false primaries up to 25 s
+ *    before them. Making them primaries: the swapped pair's row the primary in 17
+ *    of 23 swaps instead of 13, 9 fully undone by Fixing the primaries instead of
+ *    8, false primaries 29 -> 28 (brightness: 12 of 15 instead of 10).
+ *  - It also outranks encounter change points up to 3 s BEFORE it: it is taken
+ *    as if it came 3 s earlier, so they follow it (an encounter row of another
+ *    pair a second or two away is usually the swapped animal's wrong label).
+ * With `o.clearestEndLeads` (single camera, `singleCameraCheckOptions`), among
+ * encounter 'end' change points within 5 s of each other that share an animal,
+ * the one whose labels read right again most clearly (highest score) leads, as
+ * if it came first. After an early swap (the swapped labelling is the majority)
+ * the other pairs of a swapped animal read right again too, and their encounter
+ * windows can run past the swap, so their 'end' rows come a second or two BEFORE
+ * the swapped pair's: on one SLAP video +69, +37 and +36 led the real +444.
+ * Without moments or the option (every multi-camera check) the order is plain time.
  * @param {Array} primary  change points sorted by frame
  */
 function linkFollowOns(primary, o) {
-    var lead = 3 * o.fps, at = function (x) { return x.look ? x.frame - lead : x.frame; };
-    if (primary.some(function (x) { return x.look; })) {
+    var lead = 3 * o.fps, eff = new Map();
+    var at = function (x) { return eff.has(x) ? eff.get(x) : x.look ? x.frame - lead : x.frame; };
+    var shareOne = function (a, b) {
+        return [a.identityA, a.identityB].filter(function (id) { return id === b.identityA || id === b.identityB; }).length === 1;
+    };
+    if (o.clearestEndLeads) {
+        var ends = primary.filter(function (x) { return !x.look && x.kind === 'end'; }), seen = new Set();
+        ends.forEach(function (x) {
+            if (seen.has(x)) return;
+            var g = [x];                                 // x's group: 'end' rows linked by <= 5 s and one shared animal
+            for (var gi = 0; gi < g.length; gi++) ends.forEach(function (y) {
+                if (g.indexOf(y) < 0 && Math.abs(y.frame - g[gi].frame) <= 5 * o.fps && shareOne(y, g[gi])) g.push(y);
+            });
+            g.forEach(function (y) { seen.add(y); });
+            var best = g.reduce(function (b, y) { return y.score > b.score ? y : b; }, g[0]);
+            var first = g.reduce(function (f, y) { return Math.min(f, y.frame); }, Infinity);
+            if (best.frame !== first) eff.set(best, first - 1);
+        });
+    }
+    if (eff.size || primary.some(function (x) { return x.look; })) {
         primary = primary.slice().sort(function (x, y) { return at(x) - at(y) || x.frame - y.frame; });
     }
     for (var pi = 0; pi < primary.length; pi++) {
         var cur = primary[pi];
+        if (cur.look) continue;                        // a moment is never a follow-on
         for (var pj = pi - 1; pj >= 0; pj--) {
             var prev = primary[pj];
             if (at(cur) - at(prev) > o.followSeconds * o.fps) break;
             if (prev.followOf != null) continue;
-            var sameIds = [prev.identityA, prev.identityB].filter(function (id) { return id === cur.identityA || id === cur.identityB; });
-            if (sameIds.length === 1) { cur.followOf = prev.frame; break; }
+            if (shareOne(prev, cur)) { cur.followOf = prev.frame; break; }
         }
     }
 }
