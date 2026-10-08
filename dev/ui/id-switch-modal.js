@@ -25,17 +25,17 @@
  * import-export/save-load.js (setStatus).
  */
 
-import { state, getActiveSession } from './app-state.js?v=702eef168b59';
-import { setSeekbarSwitchMarkers } from './seekbar-markers.js?v=702eef168b59';
-import { setIdSwitchHighlight, updateIdSwitchHighlight, refreshIdSwitchHighlight, ID_SWITCH_SECTION_RGB } from './id-switch-highlight.js?v=702eef168b59';
-import { setStatus, markDirty } from '../import-export/save-load.js?v=702eef168b59';
-import { showLoadingProgress, hideLoading, yieldToPaint } from './loading-overlay.js?v=702eef168b59';
-import { getTrackingThreshold } from './settings.js?v=702eef168b59';
-import { checkSizeSwitches, checkImageSwitches } from '../pose/id-switch-check.js?v=702eef168b59';
-import { hasWebGPU, createImageEmbedder, IMAGE_MODEL_MB, formatEmbedTiming } from './image-embedder.js?v=702eef168b59';
+import { state, getActiveSession } from './app-state.js?v=8e34eb6bc865';
+import { setSeekbarSwitchMarkers } from './seekbar-markers.js?v=8e34eb6bc865';
+import { setIdSwitchHighlight, updateIdSwitchHighlight, refreshIdSwitchHighlight, ID_SWITCH_SECTION_RGB } from './id-switch-highlight.js?v=8e34eb6bc865';
+import { setStatus, markDirty } from '../import-export/save-load.js?v=8e34eb6bc865';
+import { showLoadingProgress, hideLoading, yieldToPaint } from './loading-overlay.js?v=8e34eb6bc865';
+import { getTrackingThreshold } from './settings.js?v=8e34eb6bc865';
+import { checkSizeSwitches, checkImageSwitches } from '../pose/id-switch-check.js?v=8e34eb6bc865';
+import { hasWebGPU, createImageEmbedder, IMAGE_MODEL_MB, formatEmbedTiming } from './image-embedder.js?v=8e34eb6bc865';
 import { idSwitchRowKey as rowKey, idSwitchPrimary as primaryOf, idSwitchMarkers as markersOf, idSwitchOnsets as countOnsets,
          idSwitchEncounterCount as encounterCount, linkIdSwitchResults as tagAndLink,
-         idSwitchFixPlan, idSwitchFixFor, idSwitchRenameForFix } from './id-switch-review.js?v=702eef168b59';
+         idSwitchFixPlan, idSwitchFixFor, idSwitchRenameForFix } from './id-switch-review.js?v=8e34eb6bc865';
 
 const CUE_LABEL = { size: 'body size', image: 'images' };
 
@@ -219,7 +219,7 @@ async function runImage(session, rate, inject) {
  *          navigateToFrame?: function(number), inject?: {createEmbedder?, hasWebGPU?}}} opts
  *   `inject` replaces the image model and the WebGPU probe — for tests only
  *   (tests/e2e/id-switch-image-check.mjs), so they need no GPU or model download.
- * @returns {Promise<{size?: object, image?: object}|null>}
+ * @returns {Promise<{size?: object, image?: object}|null>}  each result carries `elapsedMs`
  */
 export async function runIdSwitchChecks(opts) {
     opts = opts || {};
@@ -235,12 +235,15 @@ export async function runIdSwitchChecks(opts) {
     }
     var rate = recordingFps(session), results = {}, parts = [], level = 'success';
     for (var cue of cues) {
-        var res;
+        var res, t0 = performance.now();
         try { res = cue === 'size' ? await runSize(session, rate) : await runImage(session, rate, opts.inject); }
         catch (e) {
             console.error('[id-switch-check:' + cue + ']', e);
             res = { ok: false, reason: 'failed — ' + e.message, failed: true };
         }
+        // Wall-clock time of this check, model download and video decoding included (the
+        // Track All summary reports it). Not saved: the .slp checklist picks its fields.
+        res.elapsedMs = performance.now() - t0;
         results[cue] = res;
         if (!res.ok) {
             parts.push(head(cue) + ': ' + (auto && !res.failed && !res.cancelled ? 'skipped — ' : '') + res.reason);

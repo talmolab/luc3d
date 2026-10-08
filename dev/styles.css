@@ -6822,3 +6822,38 @@ details[open] > summary.origin-rebase-block-title::before {
 .id-switch-progress-text { margin: 8px 0; font-size: 13px; min-height: 2.6em; }
 .id-switch-progress-bar { height: 6px; border-radius: 3px; background: rgba(255,255,255,0.12); overflow: hidden; }
 .id-switch-progress-fill { height: 100%; width: 0; background: #4cc9f0; transition: width 0.2s; }
+
+/* Track All summary (ui/track-summary-modal.js). One column of label / value
+   rows; no inner scroller — the identity list is capped instead
+   (MAX_IDENTITY_ROWS, ui/track-summary.js). */
+.track-summary-modal { width: 460px; min-width: 0; max-width: calc(100vw - 32px); box-sizing: border-box; max-height: calc(100vh - 48px); overflow-y: auto; }
+.track-summary-modal h3 { margin-bottom: 12px; }
+.track-summary-stat,
+.track-summary-check { display: grid; grid-template-columns: 112px 1fr auto; gap: 8px; align-items: baseline; font-size: 13px; padding: 3px 0; }
+.track-summary-label { color: var(--text-secondary); }
+.track-summary-value { font-variant-numeric: tabular-nums; }
+.track-summary-detail { color: var(--text-muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.track-summary-ids { margin: 8px 0 4px; padding: 8px 0 0; border-top: 1px solid var(--border-color); }
+.track-summary-id { display: grid; grid-template-columns: 112px 1fr 48px; gap: 8px; align-items: center; font-size: 12px; padding: 2px 0; }
+.track-summary-id-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.track-summary-id-bar { height: 6px; border-radius: 3px; background: rgba(255, 255, 255, 0.1); overflow: hidden; }
+.track-summary-id-fill { display: block; height: 100%; background: var(--accent); }
+.track-summary-id-fill.is-sliver { min-width: 2px; }   /* a 0.4% identity must still show a mark */
+.track-summary-id-share { text-align: right; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+.track-summary-id-more { font-size: 12px; color: var(--text-muted); padding: 2px 0; }
+.multi-frame-modal p.track-summary-note { margin: 8px 0 0; font-size: 12px; color: var(--warning-color); }
+.track-summary-section-title { font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-secondary); margin: 14px 0 4px; }
+.track-summary-check.is-found .track-summary-check-text { color: var(--warning-color); }
+.track-summary-check.is-clear .track-summary-check-text { color: var(--success-color); }
+.track-summary-check.is-failed .track-summary-check-text { color: var(--error-color); }
+.track-summary-check.is-off .track-summary-check-text,
+.track-summary-check.is-cancelled .track-summary-check-text,
+.track-summary-check.is-skipped .track-summary-check-text { color: var(--text-muted); }
+.track-summary-next { margin-top: 14px; padding: 2px 12px 10px; border: 1px solid var(--accent); border-radius: 6px; background: var(--accent-dim); }
+.track-summary-next .track-summary-section-title { margin-top: 8px; color: var(--text-primary); }
+.multi-frame-modal p.track-summary-headline { margin: 0 0 4px; font-size: 13px; font-weight: 600; color: var(--text-primary); }
+.multi-frame-modal p.track-summary-caveat { margin: 0 0 4px; font-size: 12px; color: var(--text-secondary); }
+.track-summary-steps { margin: 4px 0 0; padding-left: 18px; font-size: 12px; line-height: 1.5; color: var(--text-secondary); }
+div.track-summary-steps { padding-left: 0; }
+.multi-frame-modal .track-summary-steps p { margin: 0; font-size: 12px; }
+.track-summary-modal .modal-actions { margin-top: 16px; flex-wrap: wrap; }
