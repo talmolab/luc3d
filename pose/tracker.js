@@ -1469,7 +1469,7 @@ async function runTrackingPass(range) {
         setStatus(doneMsg, 'success');
         // Then check the result for identity switches (ui/id-switch-modal.js): by body
         // size (Tracking Wizard `autoSwitchCheck`, default on) and/or by images
-        // (`autoImageSwitchCheck`, default off — minutes, needs the videos + WebGPU).
+        // (`autoImageSwitchCheck`, default off — minutes, needs the videos; with no GPU it runs on the CPU, slower).
         // After a range this covers the WHOLE session's identities, so a re-tracked
         // window is checked against the frames around it; with too little tracked
         // data a check reports itself skipped. It never fails the tracking pass.

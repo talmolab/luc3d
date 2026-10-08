@@ -876,7 +876,7 @@ export function setupMenus() {
         closeMenus();
         runIdSwitchChecks({ size: true, navigateToFrame: navigateToFrame });
     });
-    // Tracks ▸ Check ID Switches (Images): the same, by appearance — minutes, needs the videos + WebGPU.
+    // Tracks ▸ Check ID Switches (Images): the same, by appearance — minutes, needs the videos (GPU, else CPU).
     document.getElementById('menuCheckImageSwitches').addEventListener('click', function () {
         closeMenus();
         runIdSwitchChecks({ image: true, navigateToFrame: navigateToFrame });
