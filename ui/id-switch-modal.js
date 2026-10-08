@@ -128,10 +128,39 @@ function recordingFps(session) {
 /** How often the progress dialog's sample crop changes (ms). */
 const CROP_PREVIEW_MS = 400;
 
-function identityName(session, id) {
+function identityOf(session, id) {
     var ids = (session && session.identities) || [];
-    for (var i = 0; i < ids.length; i++) if (ids[i] && ids[i].id === id) return ids[i].name;
-    return 'no ID';
+    for (var i = 0; i < ids.length; i++) if (ids[i] && ids[i].id === id) return ids[i];
+    return null;
+}
+
+/**
+ * The skeleton over the sample crop (224 px canvas, shown at 128 px): edges then
+ * nodes in the identity's colour over a dark outline, so it reads on light and
+ * dark fur alike. Missing keypoints (NaN) and their edges are skipped; the tail
+ * runs off the crop, which is cut around the body.
+ */
+function drawCropSkeleton(ctx, pts, edges, color) {
+    var ok = function (i) { return i >= 0 && 2 * i + 1 < pts.length && isFinite(pts[2 * i]) && isFinite(pts[2 * i + 1]); };
+    ctx.save();
+    ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    for (var pass = 0; pass < 2; pass++) {
+        ctx.strokeStyle = pass ? (color || '#9e9e9e') : 'rgba(0, 0, 0, 0.7)';
+        ctx.lineWidth = pass ? 2.5 : 5;
+        ctx.beginPath();
+        edges.forEach(function (e) {
+            if (!ok(e[0]) || !ok(e[1])) return;
+            ctx.moveTo(pts[2 * e[0]], pts[2 * e[0] + 1]); ctx.lineTo(pts[2 * e[1]], pts[2 * e[1] + 1]);
+        });
+        ctx.stroke();
+    }
+    for (var i = 0; 2 * i + 1 < pts.length; i++) {
+        if (!ok(i)) continue;
+        ctx.beginPath(); ctx.arc(pts[2 * i], pts[2 * i + 1], 3.5, 0, 2 * Math.PI);
+        ctx.fillStyle = color || '#9e9e9e'; ctx.fill();
+        ctx.lineWidth = 1.5; ctx.strokeStyle = 'rgba(0, 0, 0, 0.7)'; ctx.stroke();
+    }
+    ctx.restore();
 }
 
 function openProgressDialog(title) {
@@ -177,8 +206,12 @@ function openProgressDialog(title) {
             gpuEl.classList.toggle('is-warn', !!d.warn);
             if (d.title) gpuEl.title = d.title; else gpuEl.removeAttribute('title');
         },
-        /** Show a model input (`inputTensorToPixels`) captioned `label`; null hides the square. */
-        crop: function (tensor, label) {
+        /**
+         * Show a model input (`inputTensorToPixels`) captioned `label`, with `skeleton` — `{points, edges,
+         * color}`, points in input pixels (cropPointsToInput) — drawn over it; null hides the square.
+         * The skeleton is on this canvas only: the model's input is untouched.
+         */
+        crop: function (tensor, label, skeleton) {
             if (ctl.signal.aborted) return;
             cropEl.hidden = !tensor;
             if (!tensor) return;
@@ -186,6 +219,7 @@ function openProgressDialog(title) {
             cropPixels = cropPixels || ctx.createImageData(INPUT, INPUT);
             inputTensorToPixels(tensor, cropPixels.data);
             ctx.putImageData(cropPixels, 0, 0);
+            if (skeleton && skeleton.points) drawCropSkeleton(ctx, skeleton.points, skeleton.edges || [], skeleton.color);
             cropEl.classList.add('has-crop');
             cropCaption.textContent = label;
             cropCanvas.setAttribute('aria-label', 'Sample crop: ' + label);
@@ -240,7 +274,9 @@ async function runImage(session, rate, inject) {
                 var c = list[nextCrop++ % list.length];
                 if (c === shown) return;
                 shown = c;
-                prog.crop(c.tensor, identityName(session, c.identityId) + ' · ' + c.camera);
+                var who = identityOf(session, c.identityId);
+                prog.crop(c.tensor, (who ? who.name : 'no ID') + ' · ' + c.camera,
+                    { points: c.points, edges: session.skeleton && session.skeleton.edges, color: who && who.color });
             }, CROP_PREVIEW_MS);
         } else prog.crop(null);
         t0 = performance.now();

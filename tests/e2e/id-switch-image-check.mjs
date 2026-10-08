@@ -95,7 +95,9 @@ try {
             let busy = 0, since = 0, active = 0, n = 0; const samples = [];
             const e = { views: cams, getEmbeddings: async (frame, items) => {
                 const it = items[n++ % items.length];
-                samples.push({ tensor: CROPS[it.group._animal], frame, camera: cams[frame % 4], identityId: it.group.identityId });
+                // a cross of keypoints around the centre, so the overlay has something to draw (the fixture skeleton has no edges)
+                samples.push({ tensor: CROPS[it.group._animal], frame, camera: cams[frame % 4], identityId: it.group.identityId,
+                               points: Float32Array.from([112, 112, 150, 112, 74, 112, 112, 150, 112, 74]) });
                 if (samples.length > 12) samples.shift();
                 if (active++ === 0) since = performance.now();
                 if (delayMs) await new Promise(res => setTimeout(res, delayMs));
@@ -122,6 +124,25 @@ try {
     const cues = await page.evaluate(async () => { return [...new Set((await import('/ui/seekbar-markers.js')).getSeekbarSwitchMarkers().map(m => m.cue))].sort(); });
     check(cues.join() === 'image,size', `the seekbar carries both checks' markers (${cues})`);
     check(!(await page.$('.id-switch-progress')), 'the progress dialog is gone when done');
+    {   // the overlay's keypoints land where cutCrop puts them: a dot in the image, cropped, vs cropPointsToInput
+        const off = await page.evaluate(async () => {
+            const E = await import('/ui/image-embedder.js'), out = [];
+            for (const [px, py, angle] of [[300, 200, 0], [330, 180, 0.7], [280, 230, -2.4], [310, 205, Math.PI / 2]]) {
+                const cv = new OffscreenCanvas(640, 480), cx = cv.getContext('2d');
+                cx.fillStyle = '#000'; cx.fillRect(0, 0, 640, 480); cx.fillStyle = '#fff'; cx.beginPath(); cx.arc(px, py, 2, 0, 7); cx.fill();
+                const g = { cx: 300, cy: 200, angle, scale: E.CROP / (1.3 * 80), L: 80, hull: [[200, 100], [400, 100], [400, 300], [200, 300]], pts: [px, py] };
+                const crop = E.cutCrop(await createImageBitmap(cv), g, []), t = new Float32Array(3 * E.INPUT * E.INPUT);
+                E.writeInputTensor(crop, t, 0);
+                const rgba = E.inputTensorToPixels(t, new Uint8ClampedArray(E.INPUT * E.INPUT * 4));
+                let sw = 0, sx = 0, sy = 0;   // brightness-weighted centre of the dot, at pixel centres
+                for (let y = 0; y < E.INPUT; y++) for (let x = 0; x < E.INPUT; x++) { const v = rgba[4 * (y * E.INPUT + x)]; if (v > 40) { sw += v; sx += v * (x + 0.5); sy += v * (y + 0.5); } }
+                const q = E.cropPointsToInput(g);
+                out.push(Math.hypot(sx / sw - q[0], sy / sw - q[1]));
+            }
+            return out;
+        });
+        check(off.every(d => d < 1), `the skeleton's keypoints land on the crop's pixels, at any rotation (off by ${off.map(d => d.toFixed(2)).join(', ')} px of 224)`);
+    }
     {   // an embedder without sampleCrops (as injected here): no empty square
         await page.evaluate(async () => { await window.__buildSwap([1, 1, 1]); const M = await import('/ui/id-switch-modal.js');
             window.__done = M.runIdSwitchChecks({ image: true, inject: { createEmbedder: window.__fakeEmbedder(20) } }); });
@@ -166,14 +187,20 @@ try {
         const seen = new Set(), ok = [];
         for (let i = 0; i < 6; i++) {
             await new Promise(r => setTimeout(r, 420));
-            const cap = el.querySelector('figcaption').textContent, px = el.querySelector('canvas').getContext('2d').getImageData(112, 112, 1, 1).data;
+            const cap = el.querySelector('figcaption').textContent, px = el.querySelector('canvas').getContext('2d').getImageData(40, 40, 1, 1).data;
             const [name, cam] = cap.split(' · '), id = (AS.state.session.identities.find(x => x.name === name) || {}).id;
             // which animal carries that label at this point is not fixed (one pair swaps), so check the grey is one of the three
             ok.push(!!id || id === 0 ? [60, 120, 180].includes(px[0]) && px[0] === px[1] && px[1] === px[2] && /^c[0-3]$/.test(cam) : false);
             seen.add(cap);
         }
-        return { hidden: el.hidden, has: el.classList.contains('has-crop'), ok, seen: [...seen], aria: el.querySelector('canvas').getAttribute('aria-label') };
+        // the skeleton is drawn in the animal's identity colour: the node at (150, 112) is coloured, not grey
+        const [name] = el.querySelector('figcaption').textContent.split(' · ');
+        const colour = (AS.state.session.identities.find(x => x.name === name) || {}).color;
+        const node = el.querySelector('canvas').getContext('2d').getImageData(150, 112, 1, 1).data;
+        const hex = '#' + [0, 1, 2].map(i => node[i].toString(16).padStart(2, '0')).join('');
+        return { hidden: el.hidden, has: el.classList.contains('has-crop'), ok, seen: [...seen], aria: el.querySelector('canvas').getAttribute('aria-label'), colour, hex };
     });
+    check(crop.hex === crop.colour, `the skeleton is drawn over the crop in the animal's identity colour (${crop.hex} vs ${crop.colour})`);
     check(!crop.hidden && crop.has && crop.ok.every(Boolean) && crop.seen.length >= 3 && /^Sample crop: id_\d · c\d$/.test(crop.aria),
           `a sample crop above Cancel, changing every 0.4 s, drawn as given (${crop.seen.join(' | ')})`);
     await page.waitForFunction(() => /frame \d/.test(document.querySelector('.id-switch-progress-text').textContent), null, { timeout: 10000 });

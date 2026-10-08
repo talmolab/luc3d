@@ -343,6 +343,7 @@ export function skeletonIndex(nodes) {
     return {
         nose: names.indexOf(NOSE), tti: names.indexOf(TTI),
         body: names.map(function (n, i) { return i; }).filter(function (i) { return names[i] && !/^tail/i.test(names[i]); }),
+        n: names.length,
     };
 }
 
@@ -376,7 +377,13 @@ export function cropGeometry(inst, sk) {
     if (!(L >= 15)) return null;
     let cx = 0, cy = 0; for (const q of body) { cx += q[0]; cy += q[1]; }
     cx /= body.length; cy /= body.length;
-    return { cx: cx, cy: cy, angle: Math.atan2(vy, vx), scale: CROP / (1.3 * L), L: L, hull: convexHull(body) };
+    // every keypoint (NaN when missing), for the dialog's skeleton overlay (cropPointsToInput); not used by the crop
+    const pts = new Float64Array(2 * (sk.n || 0));
+    for (let i = 0; i < (sk.n || 0); i++) {
+        const p = inst.getPoint(i), ok = p && isFinite(p[0]) && isFinite(p[1]);
+        pts[2 * i] = ok ? p[0] : NaN; pts[2 * i + 1] = ok ? p[1] : NaN;
+    }
+    return { cx: cx, cy: cy, angle: Math.atan2(vy, vx), scale: CROP / (1.3 * L), L: L, hull: convexHull(body), pts: pts };
 }
 
 /** identity -> its InstanceGroup at `frame` (an identity seen twice there is ambiguous: left out). */
@@ -477,7 +484,6 @@ function resizeLUT() {
     return (_resizeLUT = { i0: i0, i1: i1, f: f });
 }
 
-/** Bilinear 160 -> 224 resize (align_corners=false, like torch interpolate) + ImageNet normalisation, into `data` at `offset`. */
 /**
  * A model input back to grey pixels, for showing the crop: channel 0 of the
  * normalised tensor (the crop is greyscale, so all three are the same image)
@@ -494,6 +500,26 @@ export function inputTensorToPixels(tensor, rgba) {
     return rgba;
 }
 
+/**
+ * Keypoints (`g.pts`, source pixels) where they land in the model input, for
+ * drawing the skeleton over the progress dialog's sample crop: cutCrop's
+ * transform — about the body centre, rotated by -angle so the nose points
+ * right, scaled — then the 160 -> 224 resize, which with align_corners=false
+ * scales continuous coordinates by exactly INPUT / CROP. Float32Array(2N) of
+ * INPUT-pixel x, y; NaN where a keypoint is missing.
+ */
+export function cropPointsToInput(g) {
+    const pts = g.pts || [], out = new Float32Array(pts.length), k = g.scale * INPUT / CROP;
+    const c = Math.cos(g.angle), s = Math.sin(g.angle);
+    for (let i = 0; i < pts.length; i += 2) {
+        const dx = pts[i] - g.cx, dy = pts[i + 1] - g.cy;
+        out[i] = INPUT / 2 + k * (c * dx + s * dy);
+        out[i + 1] = INPUT / 2 + k * (-s * dx + c * dy);
+    }
+    return out;
+}
+
+/** Bilinear 160 -> 224 resize (align_corners=false, like torch interpolate) + ImageNet normalisation, into `data` at `offset`. */
 export function writeInputTensor(crop, data, offset) {
     const S = CROP, D = INPUT, plane = D * D, L = resizeLUT();
     const m0 = MEAN[0], m1 = MEAN[1], m2 = MEAN[2], s0 = STD[0], s1 = STD[1], s2 = STD[2];
@@ -988,14 +1014,17 @@ export async function createImageEmbedder(session, opts) {
     // Queue the frame's crops for the model and hand back {camera, vector} per item.
     const finishFrame = async function (frame, items, cut) {
         const out = items.map(function () { return []; });
-        const owner = [];   // owner[i] = [item index, camera]
-        cut.jobs.forEach(function (job, j) { if (cut.tensors[j].length) job.who.forEach(function (w) { owner.push(w); }); });
+        const owner = [], geos = [];   // owner[i] = [item index, camera]; geos[i] = its crop geometry
+        cut.jobs.forEach(function (job, j) {
+            if (cut.tensors[j].length) { job.who.forEach(function (w) { owner.push(w); }); job.crops.forEach(function (c) { geos.push(c.g); }); }
+        });
         tm.frames++;
         if (!owner.length) return out;
         const flat = [];
         cut.tensors.forEach(function (ts) { ts.forEach(function (t) { flat.push(t); }); });
         const pick = sampleSeq++ % flat.length, who = items[owner[pick][0]];
-        samples.push({ tensor: flat[pick], frame: frame, camera: owner[pick][1], identityId: who && who.group ? who.group.identityId : null });
+        samples.push({ tensor: flat[pick], frame: frame, camera: owner[pick][1], identityId: who && who.group ? who.group.identityId : null,
+                       points: cropPointsToInput(geos[pick]) });
         if (samples.length > SAMPLE_CROPS) samples.shift();
         const vecs = await enqueue(flat);
         tm.crops += vecs.length; tm.t1 = performance.now();
@@ -1043,7 +1072,8 @@ export async function createImageEmbedder(session, opts) {
                      adapter: adapter ? adapter.name : '', fallback: !!(adapter && adapter.fallback),
                      workers: cpuWorkers, why: where.why || '' };
         },
-        /** The latest sample crops, oldest first: `[{tensor, frame, camera, identityId}]`, at most SAMPLE_CROPS — see inputTensorToPixels. */
+        /** The latest sample crops, oldest first: `[{tensor, frame, camera, identityId, points}]`, at most SAMPLE_CROPS —
+         *  see inputTensorToPixels; `points` are the keypoints in the crop (cropPointsToInput). */
         sampleCrops: function () { return samples; },
         /** Milliseconds spent running the model so far, the run in flight included (feeds createLoadMeter). */
         busyMs: function () { return tm.runMs + tm.readMs + (tm.busySince ? performance.now() - tm.busySince : 0); },

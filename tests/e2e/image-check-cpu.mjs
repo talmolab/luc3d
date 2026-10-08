@@ -130,9 +130,13 @@ try {
             const geo = E.frameCropGeometry(session, f, its, cams, cams.map(() => f), sk0), g = geo[vi][ii];
             const t = new Float32Array(3 * E.INPUT * E.INPUT);
             E.writeInputTensor(E.cutCrop(window.__bmp, g, geo[vi].filter((g2, j) => j !== ii && g2).map(g2 => g2.hull), cv0), t, 0); return t; };
-        const samples = e.sampleCrops().map(c => { const r = recut(c.frame, c.identityId, c.camera);
+        const pointsOf = (f, id, cam) => { const its = itemsAt(f), ii = its.findIndex(it => it.group.identityId === id);
+            return E.cropPointsToInput(E.frameCropGeometry(session, f, its, cams, cams.map(() => f), sk0)[cams.indexOf(cam)][ii]); };
+        const samples = e.sampleCrops().map(c => { const r = recut(c.frame, c.identityId, c.camera), q = pointsOf(c.frame, c.identityId, c.camera);
             let same = r.length === c.tensor.length; for (let i = 0; same && i < r.length; i++) same = r[i] === c.tensor[i];
-            return { frame: c.frame, id: c.identityId, camera: c.camera, same }; });
+            let pts = !!c.points && q.length === c.points.length && q.length === 2 * session.skeleton.nodes.length;
+            for (let i = 0; pts && i < q.length; i++) pts = Object.is(q[i], c.points[i]);
+            return { frame: c.frame, id: c.identityId, camera: c.camera, same, pts }; });
         // the reference: frame 0's crops, cut the way the embedder cuts them, through the model on the main thread
         const sk = E.skeletonIndex(session.skeleton.nodes), items = itemsAt(0);
         const geo = E.frameCropGeometry(session, 0, items, cams, cams.map(() => 0), sk);
@@ -170,6 +174,7 @@ try {
     check(emb.worst < 300, `the page stays responsive while the workers compute (longest main-thread gap ${Math.round(emb.worst)} ms)`);
     check(emb.busy > 0 && / · CPU \(2 workers\) fp32/.test(emb.timing) && /model busy/.test(emb.timing), `run summary: "${emb.timing}"`);
     check(/no CPU model worker is running/.test(emb.after), `releaseFrames terminates the workers ("${emb.after}")`);
+    check(emb.samples.every(c => c.pts), 'each sample crop carries its animal\'s keypoints in crop pixels, for the skeleton overlay');
     check(emb.samples.length === 4 && emb.samples.every(c => c.same) && new Set(emb.samples.map(c => c.id + c.camera)).size === 4,
           `one sample crop per frame, each bit-identical to the input embedded, rotating animal/camera (${emb.samples.map(c => 'f' + c.frame + ' id' + c.id + ' ' + c.camera).join(', ')})`);
 
@@ -183,14 +188,16 @@ try {
     await page.waitForFunction(() => document.querySelector('.id-switch-progress-crop.has-crop'), null, { timeout: 10000 });
     await page.waitForTimeout(1500);
     const dlg = await page.evaluate(() => { const c = document.querySelector('.id-switch-progress-crop canvas'), px = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
-        const greys = new Set(); let lit = 0; for (let i = 0; i < px.length; i += 4) { greys.add(px[i]); if (px[i] > 0) lit++; }
+        const greys = new Set(); let lit = 0, coloured = 0;
+        for (let i = 0; i < px.length; i += 4) { greys.add(px[i]); if (px[i] > 0) lit++; if (px[i] !== px[i + 1] || px[i + 1] !== px[i + 2]) coloured++; }
         return { text: document.querySelector('.id-switch-progress-text').textContent, caption: document.querySelector('.id-switch-progress-crop figcaption').textContent,
             gpu: document.querySelector('.id-switch-progress-gpu').textContent, warn: document.querySelector('.id-switch-progress-gpu').classList.contains('is-warn'),
-            greys: greys.size, litPct: 100 * lit / (px.length / 4) }; });
+            greys: greys.size, litPct: 100 * lit / (px.length / 4), coloured }; });
     check(/^No GPU: running on the CPU \(\d workers?\) — slow$/.test(dlg.gpu) && dlg.warn && /frame \d/.test(dlg.text),
           `the after-tracking check runs on the CPU: "${dlg.text}" / "${dlg.gpu}"`);
     check(/^id_\d · cam[ABC]$/.test(dlg.caption) && dlg.greys > 20 && dlg.litPct > 5 && dlg.litPct < 95,
           `…showing a real sample crop, "${dlg.caption}" (${dlg.greys} grey levels, ${dlg.litPct.toFixed(0)}% inside the mask)`);
+    check(dlg.coloured > 50, `…with the skeleton drawn over it (${dlg.coloured} coloured pixels on the grey crop)`);
     await page.keyboard.press('Escape');
     const done = await page.evaluate(async () => { const r = await window.__done;
         return { reason: r && r.image && r.image.reason, status: document.getElementById('statusText').textContent, dialog: !!document.querySelector('.id-switch-progress') }; });

@@ -8666,7 +8666,11 @@ from the first embedded frame (`createLoadMeter` over `busyMs()`), so it falls t
 embedder without `device()` shows no line. **Beside them, above Cancel, a sample
 crop** (128 px, captioned "id_2 · cam5" with the animal's current label): exactly
 the model input — greyscale, nose right, masked — turned back into pixels by
-`inputTensorToPixels`, so bad keypoints show up as bad crops while the check runs.
+`inputTensorToPixels`, so bad keypoints show up as bad crops while the check runs —
+with **the skeleton drawn over it** (`drawCropSkeleton`) in the animal's identity
+colour over a dark outline, at the keypoints `cropPointsToInput` maps into the
+crop, because a masked, rotated greyscale crop on its own reads as abstract. The
+skeleton is on the dialog's canvas only; the model input is untouched.
 It changes every `CROP_PREVIEW_MS` (400 ms), cycling through the embedder's
 `sampleCrops()`, by TIME rather than every nth crop, since crops/s differs ~15x
 between a GPU and the CPU. A draw costs ~0.1 ms of main thread (measured: frame
@@ -9099,7 +9103,7 @@ Numbers in `ui/id-switch-modal.js`.
 CPU model workers and disposes a WebNN model; `device()` -> `{backend: 'webgpu'|'webnn'|'cpu',
 comparing, dtype, adapter, fallback, workers, why}` and `busyMs()` feed the progress
 dialog's device line, `sampleCrops()` its sample crop: `[{tensor, frame, camera,
-identityId}]`, one per frame rotating through its animals and cameras, the last
+identityId, points}]` (`points` from `cropPointsToInput`), one per frame rotating through its animals and cameras, the last
 `SAMPLE_CROPS` kept as REFERENCES (nothing is converted unless the dialog asks).
 Several rather than the latest because on the CPU frames arrive in bursts — 8 cut
 at once, then ~6 s of model time — and one latest crop sat still between them); `opts.device` ('auto' | 'webgpu' | 'cpu') and `opts.cpuWorkers`
@@ -9114,12 +9118,16 @@ Promise<Float32Array[]>, terminate()}`;
 `createLoadMeter(windowMs)` -> `(now, busyMs) -> pct|null`, `GPU_LOAD_WINDOW_MS`,
 `formatEmbedDevice(device, load)` -> `{text, warn, title}`; `inputTensorToPixels(tensor, rgba)`
 (a model input back to grey RGBA, the inverse of `writeInputTensor`'s normalisation),
-`SAMPLE_CROPS` (12);
+`SAMPLE_CROPS` (12); `cropPointsToInput(g)` (`g.pts`, the keypoints `cropGeometry` now also
+records, NaN when missing, into model-input pixels: cutCrop's rotate-about-the-body-centre
+and scale, then x 224/160 — which is exact for an align_corners=false resize; pinned
+against `cutCrop` itself within 0.04 px, at any rotation);
 `keyframeIndices(decoder)` -> `Promise<Int32Array|null>` (cached per video);
 `summarizeKeyframePlans(plans)`; WebNN: `hasWebNN()`, `loadWebNNModel(onStatus)`,
 `chooseBackend(trial)`, `WEBNN_BATCH`, `WEBNN_TRIAL_FRAMES`; `createCropPool()` -> `{run(image, crops) ->
 Promise<Float32Array[]>, broken, terminate()}` or null; crop helpers
-`cropGeometry`, `cutCrop`, `convexHull`, `writeInputTensor`, `skeletonIndex(nodes)`,
+`cropGeometry` (now also `pts`: every keypoint, for the overlay — cutCrop ignores it), `cutCrop`,
+`convexHull`, `writeInputTensor`, `skeletonIndex(nodes)` (now also `n`, the node count),
 `frameCropGeometry(session, frame, items, cams, atFrames, sk)` -> `geo[view][item]`; constants
 `TRANSFORMERS_URL`, `IMAGE_MODEL_ID`, `IMAGE_MODEL_MB`, `CROP` (160), `INPUT` (224).
 
