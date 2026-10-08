@@ -9,26 +9,26 @@
 
 import { mat3x3Multiply, Camera, FrameGroup, Instance, UnlinkedInstance, InstanceGroup,
          makePoints3d, points3dNodeCount, hasPoint3d, getPoint3d, readPoint3d,
-         setPoint3d, clearPoint3d, someValidPoint3d, countPoints3d, pooledPoints3d } from './pose-data.js?v=d7846510d1cf';
+         setPoint3d, clearPoint3d, someValidPoint3d, countPoints3d, pooledPoints3d } from './pose-data.js?v=4862ac8dad98';
 // The Jacobi eigensolver and the least-squares plane fit live in
 // `pose/plane-fit.js`, so `pose/plane-data.js` can reach the fit without
 // importing this module — and the whole UI with it. `fitPlaneToPoints3d` is
 // re-exported unchanged, because every existing caller and test reads it here.
-import { jacobiEigen, fitPlaneToPoints3d } from './plane-fit.js?v=d7846510d1cf';
+import { jacobiEigen, fitPlaneToPoints3d } from './plane-fit.js?v=4862ac8dad98';
 export { fitPlaneToPoints3d };
-import { state, timeline, viewport3d, interactionManager } from '../ui/app-state.js?v=d7846510d1cf';
+import { state, timeline, viewport3d, interactionManager } from '../ui/app-state.js?v=4862ac8dad98';
 // Pass 3i-2: triangulation orchestration moved out of app.js
-import { setReprojErrorVisible, showReprojectionsOnly, REPROJ_ONLY_NOTE, drawAllOverlays } from '../ui/rendering.js?v=d7846510d1cf';
-import { updateTriangulationBadge } from '../ui/info-panel.js?v=d7846510d1cf';
-import { isCameraTracked, getTrackingThreshold, getDefaultTriangulationMethod } from '../ui/settings.js?v=d7846510d1cf';
-import { markDirty, setStatus, showLoading, hideLoading } from '../import-export/save-load.js?v=d7846510d1cf';
-import { showLoadingProgress, createProgressPacer, yieldToPaint } from '../ui/loading-overlay.js?v=d7846510d1cf';
-import { createGroupSolver } from './triangulation-pool.js?v=d7846510d1cf';
-import { unionTrackNames, remapTrackIdx, isIdentityRemap } from '../loading/track-union.js?v=d7846510d1cf';
+import { setReprojErrorVisible, showReprojectionsOnly, REPROJ_ONLY_NOTE, drawAllOverlays } from '../ui/rendering.js?v=4862ac8dad98';
+import { updateTriangulationBadge } from '../ui/info-panel.js?v=4862ac8dad98';
+import { isCameraTracked, getTrackingThreshold, getDefaultTriangulationMethod } from '../ui/settings.js?v=4862ac8dad98';
+import { markDirty, setStatus, showLoading, hideLoading } from '../import-export/save-load.js?v=4862ac8dad98';
+import { showLoadingProgress, createProgressPacer, yieldToPaint } from '../ui/loading-overlay.js?v=4862ac8dad98';
+import { createGroupSolver } from './triangulation-pool.js?v=4862ac8dad98';
+import { unionTrackNames, remapTrackIdx, isIdentityRemap } from '../loading/track-union.js?v=4862ac8dad98';
 import { evictLazyFrameGroups, holdLazyResidency, releaseLazyResidency, releaseFrameMembers2d,
-         LAZY_RESIDENT_CAP, LAZY_KEEP_BEHIND } from './lazy-residency.js?v=d7846510d1cf';
+         LAZY_RESIDENT_CAP, LAZY_KEEP_BEHIND } from './lazy-residency.js?v=4862ac8dad98';
 // Pass 3i-3: update3DViewport moved to pose/initialization.js.
-import { update3DViewport } from './initialization.js?v=d7846510d1cf';
+import { update3DViewport } from './initialization.js?v=4862ac8dad98';
 // The pure math (DLT, refinement, reprojection, triangulateAndReproject) lives
 // in ./triangulation-core.js so a worker can load it; re-exported below so every
 // existing import of these names from this module keeps working.
@@ -45,7 +45,7 @@ import {
     computeReprojectionError, computeReprojectionErrors, computeMeanReprojectionError,
     invert3x3, triangulateAndReproject, __triangulationKernelsForTest,
     setTriangulationSettingsHooks,
-} from './triangulation-core.js?v=d7846510d1cf';
+} from './triangulation-core.js?v=4862ac8dad98';
 export {
     triangulatePointDLT, triangulatePoints, BA_ROBUST_SCALE_PX,
     triangulatePointBA, triangulatePointsBA,
@@ -2198,6 +2198,52 @@ export async function batchLoadLazyFrames(startIdx, count, onProgress) {
         if (onProgress && loaded % 100 === 0) onProgress(loaded, needEnd - needStart);
     }
     return loaded;
+}
+
+var _trailWindowLoad = null;
+
+/**
+ * Hydrate the node-trail window behind `frameIdx` on a lazy project — the
+ * `trailLength` frames before it — so a trail drawn right after a seek shows
+ * where each animal just was. A seek hydrates its target and the frames AHEAD
+ * of it (`ensureLazyFrameData`), never the ones behind, and trails draw
+ * resident frames only (`trailWindowFrames`), so without this a jump left the
+ * trail empty, and before that rule joined it to frames resident from before
+ * the jump.
+ *
+ * Cheap when there is nothing to do, which is every playback frame: the frames
+ * behind the playhead were just played and eviction protects them
+ * (`evictLazyFrames`' keep-behind covers the trail length), so the cost is one
+ * `frameGroups.has` per trail frame. A synchronous loader (`SioLazyLoader`)
+ * builds the missing frames before this returns; the worker-backed loader
+ * fetches them, one request at a time.
+ *
+ * @param {number} frameIdx
+ * @param {number} trailLength
+ * @returns {Promise<number>|null} for the worker-backed loader, a Promise of
+ *   the number of frames loaded; null when nothing was missing or the frames
+ *   are already built
+ */
+export function ensureLazyTrailWindow(frameIdx, trailLength) {
+    var session = state.session;
+    if (!session || !session.lazyLoader || !(trailLength > 0) || frameIdx == null) return null;
+    var lo = Math.max(0, frameIdx - trailLength);
+    var f = frameIdx - 1;
+    while (f >= lo && session.frameGroups.has(f)) f--;
+    if (f < lo) return null;                          // the whole window is resident
+    var loader = session.lazyLoader;
+    if (loader.isSync) {
+        for (; f >= lo; f--) buildLazyFrameGroupSync(f);
+        evictLazyFrames(frameIdx);
+        return null;
+    }
+    if (_trailWindowLoad) return null;
+    _trailWindowLoad = batchLoadLazyFrames(lo, frameIdx - lo).then(function (n) {
+        _trailWindowLoad = null;
+        evictLazyFrames(frameIdx);
+        return n;
+    }, function () { _trailWindowLoad = null; return 0; });
+    return _trailWindowLoad;
 }
 
 /**
