@@ -1000,9 +1000,14 @@ export function setupMenus() {
             it.el.setAttribute('aria-checked', on ? 'true' : 'false');
         });
         // The label is a bare "Trails ▾" to save toolbar width; the current
-        // length rides in the tooltip instead.
-        if (trailsBtn) trailsBtn.title = 'Node trails: ' +
-            (state.trailSeconds > 0 ? trailLabel(state.trailSeconds, state.fps) : 'off');
+        // length rides in the tooltip instead. While a trail is on the button
+        // wears the toolbar's `.active` blue (like 3D / Panel / Identity), so
+        // "trails are on" reads without hovering it.
+        if (trailsBtn) {
+            trailsBtn.title = 'Node trails: ' +
+                (state.trailSeconds > 0 ? trailLabel(state.trailSeconds, state.fps) : 'off');
+            trailsBtn.classList.toggle('active', state.trailSeconds > 0);
+        }
     }
     function setTrailSeconds(seconds) {
         state.trailSeconds = seconds;

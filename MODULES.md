@@ -10463,7 +10463,10 @@ stopping at the last frame; the step transport buttons/keys stop it first.
   `#trailsDropdown` and `#menuTrailsParent`), because the rate changes in many
   places (video load, session switch, the FPS pill) and none of them is told
   about trails. It also moves the checkmark in BOTH menus and rewrites the
-  button's tooltip ("Node trails: ½ second (30 frames)"). The FPS pill's commit
+  button's tooltip ("Node trails: ½ second (30 frames)"), and gives the button
+  the toolbar's `.active` blue while any trail is on (preset or custom) — the
+  same look as 3D / Panel / Identity — so a trail being on reads at a glance
+  without hovering the button. Off removes it. The FPS pill's commit
   redraws the overlays when trails are on, since the frame count just changed.
   The label stays a bare
   "Trails ▾" on purpose, to save toolbar width: the toolbar needs ~1,380 px
