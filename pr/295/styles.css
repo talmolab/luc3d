@@ -3059,12 +3059,15 @@ body {
   max-width: 120px;
 }
 
-/* The Grouped Instances table runs 4px side padding instead of 6px: with its
+/* The two instance tables run 4px side padding instead of 6px: with their
    track and identity dropdowns stacked in one column (ui/info-panel.js
-   GROUP_SELECT_PX), that is the last ~20px it needs to fit a 300px panel. The
-   unlink cell's inline `padding:0` still wins. */
+   STACKED_SELECT_PX), that is the last ~20px the Grouped table needs to fit a
+   300px panel, and the Ungrouped table matches it. The unlink cell's inline
+   `padding:0` and the camera header row's inline padding still win. */
 #instanceGroupsTable thead th,
-#instanceGroupsTable tbody td {
+#instanceGroupsTable tbody td,
+#unlinkedTable thead th,
+#unlinkedTable tbody td {
   padding-left: 4px;
   padding-right: 4px;
 }

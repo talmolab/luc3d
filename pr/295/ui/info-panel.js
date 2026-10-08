@@ -5,41 +5,41 @@
 
 import {
     Skeleton, Camera, Session,
-} from '../pose/pose-data.js?v=f4e6975a9ab8';
-import { getInstanceGroupsForFrame } from '../pose/triangulation.js?v=f4e6975a9ab8';
-import { REPROJECTION_COLOR, getTrackColor, getGroupColor } from './overlays.js?v=f4e6975a9ab8';
-import { drawAllOverlays, updateFrameCounters } from './rendering.js?v=f4e6975a9ab8';
-import { isInteractiveClickTarget } from './interaction.js?v=f4e6975a9ab8';
-import { persistSectionState } from './section-state.js?v=f4e6975a9ab8';
-import { buildLazySelect } from './lazy-select.js?v=f4e6975a9ab8';
-import { refreshIdSwitchPanel } from './id-switch-modal.js?v=f4e6975a9ab8';
-import { isInfoPanelVisible, markInfoPanelStale } from './panel-visibility.js?v=f4e6975a9ab8';
+} from '../pose/pose-data.js?v=e6a46bb234ad';
+import { getInstanceGroupsForFrame } from '../pose/triangulation.js?v=e6a46bb234ad';
+import { REPROJECTION_COLOR, getTrackColor, getGroupColor } from './overlays.js?v=e6a46bb234ad';
+import { drawAllOverlays, updateFrameCounters } from './rendering.js?v=e6a46bb234ad';
+import { isInteractiveClickTarget } from './interaction.js?v=e6a46bb234ad';
+import { persistSectionState } from './section-state.js?v=e6a46bb234ad';
+import { buildLazySelect } from './lazy-select.js?v=e6a46bb234ad';
+import { refreshIdSwitchPanel } from './id-switch-modal.js?v=e6a46bb234ad';
+import { isInfoPanelVisible, markInfoPanelStale } from './panel-visibility.js?v=e6a46bb234ad';
 import { state, timeline, interactionManager, rememberSkeleton, buildRememberedSkeleton,
-         setProjectSkeleton, getProjectSkeleton } from './app-state.js?v=f4e6975a9ab8';
-import { setStatus, markDirty } from '../import-export/save-load.js?v=f4e6975a9ab8';
-import { buildSkeletonJSON, parseSkeletonJSON } from '../import-export/skeleton-json.js?v=f4e6975a9ab8';
+         setProjectSkeleton, getProjectSkeleton } from './app-state.js?v=e6a46bb234ad';
+import { setStatus, markDirty } from '../import-export/save-load.js?v=e6a46bb234ad';
+import { buildSkeletonJSON, parseSkeletonJSON } from '../import-export/skeleton-json.js?v=e6a46bb234ad';
 import {
     handleLoadVideos, handleLoadCalibration, autoAssignVideosToCameras,
     createViewForVideoFile, rebuildVideoController, fitCanvasesToCells,
     loadSingleSessionFromCache, removeVideoFile,
-} from '../loading/session-loader.js?v=f4e6975a9ab8';
+} from '../loading/session-loader.js?v=e6a46bb234ad';
 
 // Circular import — these are still defined in app.js for now. They will be
 // retargeted as later passes land:
 // - swapAssignTrack, propagateIdentityForward, unlinkGroup, showGroupContextMenu
 //   → ui/identity-assignment.js (Pass 3f)
 // Pass 3e-1: unlinkGroup + showGroupContextMenu moved to ui-wiring.js.
-import { unlinkGroup, showGroupContextMenu } from './ui-wiring.js?v=f4e6975a9ab8';
+import { unlinkGroup, showGroupContextMenu } from './ui-wiring.js?v=e6a46bb234ad';
 // Pass 3f: swapAssignTrack + propagateIdentityForward moved to identity-assignment.js.
 // luc3d #172: every manual identity switch routes through applyIdentitySwitch,
 // which subsumes this file's former direct propagateIdentityForward calls.
 import {
     swapAssignTrack, applyIdentitySwitch, describeIdentitySwitch,
-} from './identity-assignment.js?v=f4e6975a9ab8';
+} from './identity-assignment.js?v=e6a46bb234ad';
 // Pass 3h: populateSessionsPanel / populateViewStrip / populateSessionStrip moved to sessions-panes.js.
 import {
     populateSessionsPanel, populateViewStrip, populateSessionStrip,
-} from './sessions-panes.js?v=f4e6975a9ab8';
+} from './sessions-panes.js?v=e6a46bb234ad';
 // Block 2 (Prompt 4): per-session timeline visibility toggles.
 import {
     toggleCameraVisibility,
@@ -48,7 +48,7 @@ import {
     getCameraVisibilityList,
     getTrackVisibilityList,
     getIdentityVisibilityList,
-} from './timeline-visibility.js?v=f4e6975a9ab8';
+} from './timeline-visibility.js?v=e6a46bb234ad';
 
 // ============================================
 // Inline name entry for "+ New Track" / "+ New ID"
@@ -1349,12 +1349,13 @@ function updateStatusBarForFrame(meanError) {
  * @param {number} maxWidth - px.
  * @returns {HTMLSelectElement}
  */
-// Width of the Grouped Instances table's track and identity dropdowns. They
-// are STACKED in one "Track / Identity" column, so a row is two lines tall but
-// the table fits a 300 px info panel (the panel's default width) — side by
-// side at 90 px each, the table was 389 px and scrolled sideways. Both share
-// this width so they line up. Covered by tests/e2e/info-panel-grouped-table.mjs.
-const GROUP_SELECT_PX = 80;
+// Width of the track and identity dropdowns in BOTH instance tables (Grouped
+// and Ungrouped). They are STACKED in one "Track / Identity" column, so a row
+// is two lines tall but each table fits a 300 px info panel (the panel's
+// default width) — side by side, Grouped was ~390 px and Ungrouped ~324 px,
+// and the Instances tab scrolled sideways. One width for all four dropdowns so
+// they line up. Covered by tests/e2e/info-panel-instance-tables.mjs.
+const STACKED_SELECT_PX = 80;
 
 function buildTrackSelect(trackIdx, noneLabel, maxWidth) {
     const session = state.session;
@@ -1746,8 +1747,8 @@ export function updateFrameInfo(frameIdx, instanceGroups) {
             var groupDisplayTrackIdx = (firstGroupInst && firstGroupInst.trackIdx != null && firstGroupInst.trackIdx >= 0)
                 ? firstGroupInst.trackIdx
                 : -1;
-            var trackSelect = buildTrackSelect(groupDisplayTrackIdx, '(none)', GROUP_SELECT_PX);
-            trackSelect.style.width = GROUP_SELECT_PX + 'px';
+            var trackSelect = buildTrackSelect(groupDisplayTrackIdx, '(none)', STACKED_SELECT_PX);
+            trackSelect.style.width = STACKED_SELECT_PX + 'px';
             (function (g, sel, curTrack) {
                 function applyTrack(newTrack) {
                     if (newTrack < 0) {
@@ -1810,10 +1811,10 @@ export function updateFrameInfo(frameIdx, instanceGroups) {
             }
 
             // Identity dropdown: stacked UNDER the track dropdown in the same
-            // "Track / Identity" cell (see GROUP_SELECT_PX).
+            // "Track / Identity" cell (see STACKED_SELECT_PX).
             const idSelect = document.createElement('select');
             idSelect.style.cssText = 'font-size:10px;background:var(--bg-tertiary);color:var(--text-primary);border:1px solid var(--border-color);border-radius:3px;padding:0 2px;' +
-                'display:block;margin-top:3px;width:' + GROUP_SELECT_PX + 'px;max-width:' + GROUP_SELECT_PX + 'px;';
+                'display:block;margin-top:3px;width:' + STACKED_SELECT_PX + 'px;max-width:' + STACKED_SELECT_PX + 'px;';
             const optNone = document.createElement('option');
             optNone.value = '-1';
             optNone.textContent = '(none)';
@@ -2097,7 +2098,7 @@ export function updateFrameInfo(frameIdx, instanceGroups) {
             var headerTr = document.createElement('tr');
             headerTr.className = 'unlinked-camera-header';
             var headerTd = document.createElement('td');
-            headerTd.colSpan = 3;
+            headerTd.colSpan = 4;   // the whole row
             headerTd.textContent = cam.name;
             headerTd.style.cssText = 'font-weight:bold;color:var(--text-primary);font-size:11px;padding:4px 6px 2px;';
             headerTr.appendChild(headerTd);
@@ -2124,7 +2125,8 @@ export function updateFrameInfo(frameIdx, instanceGroups) {
                 // track-0 instance instead of silently falling back
                 // to the first track.
                 const tdTrackUl = document.createElement('td');
-                var trackSelect = buildTrackSelect(ul.instance.trackIdx != null ? ul.instance.trackIdx : -1, '—', 80);
+                var trackSelect = buildTrackSelect(ul.instance.trackIdx != null ? ul.instance.trackIdx : -1, '—', STACKED_SELECT_PX);
+                trackSelect.style.width = STACKED_SELECT_PX + 'px';
                 (function (ulObj, inst, sel, camNameForUl) {
                     function applyTrack(newTrack) {
                         var propagated = swapAssignTrack(state.currentFrame, camNameForUl, inst, newTrack, state.session);
@@ -2168,10 +2170,11 @@ export function updateFrameInfo(frameIdx, instanceGroups) {
                 })(ul, ul.instance, trackSelect, cam.name);
                 tdTrackUl.appendChild(trackSelect);
 
-                // Identity column for unlinked instances
-                const tdIdUl = document.createElement('td');
+                // Identity dropdown, stacked under the track dropdown in the same
+                // "Track / Identity" cell (see STACKED_SELECT_PX).
                 var idSelectUl = document.createElement('select');
-                idSelectUl.style.cssText = 'font-size:10px;background:var(--bg-tertiary);color:var(--text-primary);border:1px solid var(--border-color);border-radius:3px;padding:0 2px;max-width:70px;';
+                idSelectUl.style.cssText = 'font-size:10px;background:var(--bg-tertiary);color:var(--text-primary);border:1px solid var(--border-color);border-radius:3px;padding:0 2px;' +
+                    'display:block;margin-top:3px;width:' + STACKED_SELECT_PX + 'px;max-width:' + STACKED_SELECT_PX + 'px;';
                 var optNoneUl = document.createElement('option');
                 optNoneUl.value = '-1';
                 optNoneUl.textContent = '—';
@@ -2239,7 +2242,7 @@ export function updateFrameInfo(frameIdx, instanceGroups) {
                     sel.addEventListener('mousedown', function (ev) { ev.stopPropagation(); });
                     sel.addEventListener('mouseup', function (ev) { ev.stopPropagation(); });
                 })(ul.instance, idSelectUl, cam.name);
-                tdIdUl.appendChild(idSelectUl);
+                tdTrackUl.appendChild(idSelectUl);
 
                 const tdType = document.createElement('td');
                 var instType = ul.instance.type || 'user';
@@ -2258,7 +2261,6 @@ export function updateFrameInfo(frameIdx, instanceGroups) {
                 tdScore.textContent = ul.instance.score != null ? ul.instance.score.toFixed(2) : '-';
 
                 tr.appendChild(tdTrackUl);
-                tr.appendChild(tdIdUl);
                 tr.appendChild(tdType);
                 tr.appendChild(tdPoints);
                 tr.appendChild(tdScore);

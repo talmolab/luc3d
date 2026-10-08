@@ -110,8 +110,9 @@ try {
         ip.updateInfoPanel();
 
         // Read the Ungrouped Instances table exactly as the tester sees it.
-        // Row layout (ui/info-panel.js): [Track <select>, ID <select>, Type,
-        // Points, Score]; camera header rows have a single colSpan cell.
+        // Row layout (ui/info-panel.js): [Track / Identity (the track <select>
+        // with the identity <select> stacked under it), Type, Points, Score];
+        // camera header rows have a single colSpan cell.
         const rows = [];
         let camera = null;
         for (const tr of document.querySelectorAll('#unlinkedTable tbody tr')) {
