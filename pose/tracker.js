@@ -17,7 +17,7 @@ import {
     computeInstanceDistanceTo,
     hungarianAlgorithm
 } from './triangulation.js';
-import { CrossViewTracker, Detection } from './cross-view-tracker.js';
+import { CrossViewTracker, Detection, membersPoints3d } from './cross-view-tracker.js';
 import { InstanceGroup, points3dNodeCount, hasPoint3d, readPoint3d, pooledPoints3d } from './pose-data.js';
 
 // Pass 3i-1: tracker UI/integration (was in app.js)
@@ -919,8 +919,10 @@ function buildTrackerDetections(frameGroup, cameras, frameIdx) {
 }
 
 // Persist a tracked frame: for each live target with a cross-view bundle THIS
-// frame, create an InstanceGroup, map the target's stable trackId to a session
-// Identity, write the per-frame identity entries, and promote unlinked members.
+// frame, create an InstanceGroup of those members — with 3D solved from them
+// alone, not from the stale views the target also holds (`membersPoints3d`) —
+// map the target's stable trackId to a session Identity, write the per-frame
+// identity entries, and promote unlinked members.
 //
 // Raw-trackIdx collision guard (2D-viewer color bug, most visible on the
 // first frame or two of a video): `session.setFrameIdentity` keys
@@ -978,10 +980,17 @@ export function commitTrackedFrame(session, trk, frameIdx, trackToIdentity, iden
         }
 
         var group = new InstanceGroup(nextGroupId(), identityId);
+        // The 3D of THESE members only. `target.points3d` also fuses any stale
+        // view the target still holds for association (a camera that missed it
+        // this frame), which is not a member — see `membersPoints3d`.
+        // `triangulationMethod` is deliberately left unset: this is the
+        // tracker's normalized-coordinate DLT, not the app's pixel-space 'dlt',
+        // and tagging it 'dlt' would let Triangulate All ▸ DLT ADOPT it
+        // (`adoptPrior3d`) instead of re-solving.
         // A COPY in the slab pool (pose-data.js `pooledPoints3d`): one
         // ArrayBuffer per group was 539,545 of them for a full Track All, and it
         // also stops the group sharing the tracker target's live array.
-        group.points3d = pooledPoints3d(target.points3d);
+        group.points3d = pooledPoints3d(membersPoints3d(target, frameIdx));
         for (var m = 0; m < members.length; m++) {
             var camName = members[m].camName;
             var det = members[m].det;

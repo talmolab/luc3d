@@ -2085,9 +2085,12 @@ drifts upward (e.g., 4 → 11 on the test fixture).
   across every frame with temporal continuity signals.
 
 **Imports from project modules.**
+- `./cross-view-tracker.js` — `CrossViewTracker`, `Detection`,
+  `membersPoints3d` (`commitTrackedFrame` stores the 3D of the group's MEMBERS,
+  not the target's stale-view-fused `points3d` — see the tracker engine notes).
 - `./pose-data.js` — `InstanceGroup`, `points3dNodeCount`, `hasPoint3d`,
   `readPoint3d`, `pooledPoints3d` (`commitTrackedFrame` stores a COPY of the
-  target's 3D in the slab pool — one ArrayBuffer per group was 539,545 for a
+  members' 3D in the slab pool — one ArrayBuffer per group was 539,545 for a
   full Track All, and the group no longer shares the target's live array).
 - `./triangulation.js` — `computeFundamentalMatrix`, `triangulatePointDLT`,
   `triangulatePoints`, `reprojectPoint`, `reprojectPoints`,
@@ -2158,7 +2161,26 @@ the pacing. `buildTrackerDetections` wraps each linked/unlinked instance as a `D
 `commitTrackedFrame` persists, per frame, one `InstanceGroup` per live target
 (with `identityId` + `points3d`), maps each target's stable trackId to a session
 `Identity`, writes `setFrameIdentity`, and promotes unlinked members into the
-linked pool. **Raw-trackIdx collision guard** (regression: 2D-viewer identity
+linked pool. **The group's 3D comes from its members only**
+(`membersPoints3d`, `pose/cross-view-tracker.js`): the members are the target's
+detections from THIS frame, while `target.points3d` also fuses any stale view a
+camera that missed the animal left behind (kept up to `stale` frames, for
+association). Storing the target's 3D put a pose up to 20 frames old into 30% of
+committed groups on the six proofread SLAP sessions (node shift median 1.0 mm,
+p99 135 mm), which the draw path's members-only reprojection error did not
+describe. A target with no stale view still commits its `points3d` bit for bit.
+Identities are untouched — measured bit-identical before/after on all six
+sessions — since the tracker never reads a group's 3D back. The automatic size
+ID-switch check that follows Track All does read it: its rows now match those it
+gives after Triangulate All far more closely (21 of 24 rows, was 17 of 32).
+**`triangulationMethod` is deliberately left unset.** This is the tracker's
+normalized-coordinate DLT, not the app's pixel-space `'dlt'` (they differ by a
+median 0.39 mm, p99 8.7 mm per node, because K re-weights each camera's rows),
+and Triangulate All ▸ DLT routes through `groupByIdentityAndTriangulateAll`,
+whose `adoptPrior3d` keeps any identical-membership group already tagged
+`'dlt'` — tagging these would make Triangulate All after Track All solve
+nothing. Covered by `tests/test-tracker-members-3d.mjs` (a moving animal one
+camera misses; fails on the pre-fix build). **Raw-trackIdx collision guard** (regression: 2D-viewer identity
 color diverges from the info panel/3D viewport, usually only on the first
 frame or two, self-correcting after): per-camera prediction files number
 tracks independently PER CAMERA, and a camera's own raw tracker is commonly
@@ -2224,9 +2246,10 @@ stale-anchor-fix values — see `pose/cross-view-tracker.js`). Track Frame/Track
 `maxTargets` so the tracker caps live targets at that number (a LUCID divergence
 from the reference — see `pose/cross-view-tracker.js`; `null`/omitted =
 uncapped/faithful). Covered by `tests/test-crossview-populate.mjs` (data-structure
-population), `tests/test-cross-view-tracker.mjs` (algorithm), and
+population), `tests/test-cross-view-tracker.mjs` (algorithm),
 `tests/test-tracker-collision-guard.mjs` (`commitTrackedFrame`'s raw-trackIdx
-collision guard).
+collision guard), and `tests/test-tracker-members-3d.mjs` (a committed group's
+3D is its members' only).
 
 **Track Frame Range (#212).** `trackFrameRange(startFrame, endFrame)` tracks a
 contiguous span — the middle ground between Track Frame (one frame) and Track
@@ -2398,16 +2421,33 @@ ingest (`normalizePoint` == `cv2.undistortPoints` with no `P`), and the
 `velocityThreshold` is in normalized image units (so the 2D term saturates and
 the 3D term dominates — hence `corr3dWeight` is the meaningful knob).
 
+**What a committed group carries: `membersPoints3d(target, frameIdx)`.** A
+target's `points3d` is fused from every view in `detsByCam`, including a camera's
+detection from up to `stale` frames ago — right for association (the reference
+behavior plus the stale-anchor fix; the cost weights were tuned against it), but
+not the 3D of the group `commitTrackedFrame` makes, whose members are only the
+detections from the frame being committed. `membersPoints3d` returns
+`target.points3d` itself when the target holds no stale view (so the common case
+is bit-identical) and otherwise re-solves the members alone with the same DLT,
+in the same convention (`pointsNorm` + `extrinsicMatrix`, so the frame rule
+holds); fewer than two members ⇒ null. It shares `triangulateDetections` with
+`_retriangulate`, and takes the target as an argument rather than being a
+`Target` method so plain-object targets in tests work. On the six proofread SLAP
+sessions 30.0% of committed groups held a stale view (median 1, age median 5
+frames); the stored 3D moved per node by a median 1.0 mm, p90 27 mm, p99 135 mm,
+and 2.8% of those nodes had 3D only thanks to the stale view (NaN now, as
+Triangulate All gives). See `pose/tracker.js`.
+
 **Exports.** `CrossViewTracker` (class: `trackFrame(detsByCam, camsOrder)`,
 maintains `.targets`), `Detection` (2D observation: `pointsNorm`/`pointsPixel` +
-`cam`/`frameIdx`/`slot`), `normalizePoint`.
+`cam`/`frameIdx`/`slot`), `normalizePoint`, `membersPoints3d` (above).
 
 **Faithful-port quirks still preserved (do NOT "fix" without new measurement —
 not implicated by the fig8-bench search).** `velocity`/`distance` thresholds are
 SOFT (drive the cost negative, not hard gates) and negative matches are not
 filtered; the 3D term ignores the time gap; 3D velocity is zero;
 re-triangulation is plain DLT over all (now freshness-filtered) stored per-view
-detections. Adds a defensive `nansum`-style skip of non-finite cost terms
+detections — for matching only; a committed group's 3D is its members' (above). Adds a defensive `nansum`-style skip of non-finite cost terms
 (robust to a degenerate `[I|0]` camera).
 
 **LUCID divergence — `maxTargets` (opt-in target cap).** The reference has NO
