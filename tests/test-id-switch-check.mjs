@@ -14,7 +14,10 @@
  * The image check is tested with SYNTHETIC embeddings (a fixed random
  * "appearance" vector per animal + noise, from 4 cameras) — no model, no GPU —
  * on animals of IDENTICAL size: the size check's blind spot, which the image check
- * exists for. Crop geometry helpers (ui/image-embedder.js) are checked too.
+ * exists for. Its 'episode' scoring is tested on two scenarios the 'tracklet'
+ * scoring cannot see — animals that huddle, and a swap made only through a third
+ * animal — with 'tracklet' as the negative control. Crop geometry helpers
+ * (ui/image-embedder.js) are checked too.
  *
  * Run:  node tests/test-id-switch-check.mjs
  */
@@ -216,6 +219,89 @@ group('Image check — catches a swap between animals of IDENTICAL size (the siz
     ok(stages.has('embed') && stages.has('fit'), 'progress reports both stages');
     const clean = await SC.checkImageSwitches(buildSession(null, 60, [1, 1, 1]).session, { fps: 60, getEmbeddings: syntheticEmbedder() });
     eq(clean.flags.length, 0, 'image check: clean labels → no flags');
+}
+
+/**
+ * Two scenarios the 'tracklet' scoring cannot see, from the 2026-10-07 ground-truth
+ * runs. Ten 60-s cycles at 30 fps, three equal-size animals (A=0, B=1, C=2), all
+ * facing the same way so centroid distances are exactly as laid out (close < ~56 mm):
+ *   'huddle' — A and B sit 24 mm apart for 26 s, separating for ONE grid sample at a
+ *     time (a sample between image samples, so it never carries a crop); C joins them
+ *     for 4 s, B walks off, then A and C part. A and B only spend time apart after a
+ *     contact with C, whose tracklets do not start together with the other's.
+ *   'triad'  — A and B both touch C (40 mm each) but never each other (80 mm): their
+ *     only contact is THROUGH C, so there is no A–B encounter at all.
+ * The A/B labels swap during cycle `swapCycle` (null = clean) and stay swapped.
+ */
+function buildContactSession(mode, swapCycle, fps = 30) {
+    const r = rng(11), CYCLE = 60, N = 10, step = Math.max(1, Math.round(fps / 15));
+    const lerp = (pts, t) => {             // piecewise-linear waypoints [t, x, y]
+        if (t <= pts[0][0]) return [pts[0][1], pts[0][2]];
+        for (let i = 1; i < pts.length; i++) if (t <= pts[i][0]) {
+            const [t0, x0, y0] = pts[i - 1], [t1, x1, y1] = pts[i], w = (t - t0) / (t1 - t0);
+            return [x0 + w * (x1 - x0), y0 + w * (y1 - y0)];
+        }
+        const L = pts[pts.length - 1]; return [L[1], L[2]];
+    };
+    const WP = mode === 'huddle' ? [
+        [[0, -12, 0], [32, -12, 0], [34, -300, 0], [57, -300, 0], [59.5, -12, 0], [60, -12, 0]],   // A
+        [[0, 12, 0], [26, 12, 0], [27.5, 300, 0], [57, 300, 0], [59.5, 12, 0], [60, 12, 0]],       // B
+        [[0, 0, 350], [20, 0, 350], [22, 0, 25], [32, 0, 25], [34, 0, 350], [60, 0, 350]],          // C
+    ] : [
+        [[0, -300, 0], [20, -300, 0], [22, -40, 0], [28, -40, 0], [30, -300, 0], [60, -300, 0]],
+        [[0, 300, 0], [20, 300, 0], [22, 40, 0], [28, 40, 0], [30, 300, 0], [60, 300, 0]],
+        [[0, 0, 350], [20, 0, 350], [22, 0, 0], [28, 0, 0], [30, 0, 350], [60, 0, 350]],
+    ];
+    const swapAt = swapCycle == null ? Infinity : swapCycle * CYCLE + (mode === 'huddle' ? 8 : 25);
+    // huddle: one-sample separations, on grid samples between image samples (i % 8 === 4)
+    const apart = new Set();
+    if (mode === 'huddle') for (let c = 0; c < N; c++) for (const t of [2, 6, 10, 14, 18]) {
+        let i = Math.floor(Math.round((c * CYCLE + t) * fps) / step); i += (12 - i % 8) % 8;
+        for (let f = i * step; f < (i + 1) * step; f++) apart.add(f);
+    }
+    const session = new PD.Session([], new PD.Skeleton('m', NODES, []), [], 'contacts');
+    for (let i = 0; i < 3; i++) session.addIdentity('id_' + i);
+    let gid = 1;
+    for (let f = 0; f < N * CYCLE * fps; f++) {
+        const sec = f / fps, t = sec % CYCLE;
+        const pos = WP.map(w => lerp(w, t));
+        if (apart.has(f)) { pos[0] = [-45, 0]; pos[1] = [45, 0]; }
+        const label = sec >= swapAt ? [1, 0, 2] : [0, 1, 2];
+        session.instanceGroups.set(f, [0, 1, 2].map(k => {
+            const g = new PD.InstanceGroup(gid++, session.identities[label[k]].id);
+            g.points3d = pose(1, pos[k][0], pos[k][1], 0, r);
+            g._animal = k;
+            return g;
+        }));
+    }
+    return { session, swapSec: swapAt };
+}
+
+for (const mode of ['huddle', 'triad']) {
+    group(`Image check — 'episode' scoring catches a swap the 'tracklet' scoring cannot see (${mode})`);
+    const SWAP = 7, fps = 30;
+    const { session, swapSec } = buildContactSession(mode, SWAP, fps);
+    const isAB = e => [e.nameA, e.nameB].sort().join() === 'id_0,id_1';
+    const old = await SC.checkImageSwitches(session, { fps, getEmbeddings: syntheticEmbedder(), scoring: 'tracklet', threshold: -25 });
+    const neu = await SC.checkImageSwitches(session, { fps, getEmbeddings: syntheticEmbedder() });
+    ok(old.ok && neu.ok, 'both scorings ran (' + (old.reason || neu.reason || 'ok') + ')');
+    const oldAB = old.encounters.filter(isAB);
+    if (mode === 'huddle') {
+        ok(oldAB.length >= 40 && oldAB.every(e => e.score === 0),
+            `negative control: the ${oldAB.length} A–B encounters all score exactly 0 under 'tracklet' (no crop in the time apart after them)`);
+    } else {
+        eq(oldAB.length, 0, 'negative control: no A–B encounter at all under \'tracklet\' (they only touch through C)');
+    }
+    ok(!old.flags.concat(old.changes).some(isAB), 'negative control: \'tracklet\' flags no A–B change point');
+    const onset = neu.flags.find(f => !f.continues && isAB(f));
+    const swapFrame = Math.round(swapSec * fps), cycleEnd = Math.round((SWAP + 1) * 60 * fps);
+    ok(onset && onset.frame >= swapFrame && onset.frame < cycleEnd,
+        `'episode': A–B onset in the swap's cycle (frame ${onset && onset.frame}, swap at ${swapFrame}, score ${onset && onset.score.toFixed(0)})`);
+    ok(onset && onset.switchBackAt == null, '\'episode\': the swapped stretch runs to the end of the session');
+    eq(neu.flags.filter(f => !f.continues && isAB(f)).length + neu.changes.filter(isAB).length, 1, '\'episode\': one A–B change point');
+    ok(neu.flags.every(f => f.frame >= swapFrame), `'episode': no flag before the swap (${neu.flags.length} flags)`);
+    const clean = await SC.checkImageSwitches(buildContactSession(mode, null, fps).session, { fps, getEmbeddings: syntheticEmbedder() });
+    eq(clean.flags.length + clean.changes.length, 0, '\'episode\': clean labels → no change points');
 }
 
 group('Image check — several frames in flight (so a provider can batch them)');

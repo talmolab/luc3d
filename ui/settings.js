@@ -368,9 +368,9 @@ const TRACKING_THRESHOLDS = [
         desc: 'After Track All or Track Frame Range, also check close encounters by APPEARANCE: crops of each animal in every camera are embedded with an image model on the GPU (Tracks ▸ Check ID Switches (Images)). Catches animals of similar size that look different (e.g. coat colour), which the size check cannot. Slow — minutes for a long recording — and needs the videos loaded and WebGPU (current Chrome/Edge); the model (~44 MB) downloads on first use.',
     },
     {
-        id: 'imageCheckThreshold', label: 'Image check: flag threshold', default: -25,
-        min: -500, max: 0, step: 5,
-        desc: 'An encounter starts a possible image switch when its score falls below this. Closer to 0 catches more swaps between similar-sized animals but flags more clean encounters: on a 30-min, 5-mouse recording, -25 gave 18 false marks and caught the real switch; 0 gave 42; -50 gave 15 and missed it. Marks that the size check also finds ("Both") were almost always real.',
+        id: 'imageCheckThreshold', label: 'Image check: flag threshold', default: -200,
+        min: -2000, max: 0, step: 25,
+        desc: 'A contact between two animals starts a possible image switch when its score falls below this. The score adds up the appearance evidence from all the time the two spend apart until they next meet, so it runs far larger than the size check\'s. On 8 recordings with known identities (2 h of video), -200 caught every lasting swap as one stretch with 1 false mark; closer to 0 flags more clean contacts.',
     },
     {
         id: 'imageCheckHz', label: 'Image check: crops per second', default: 2,
