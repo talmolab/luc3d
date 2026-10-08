@@ -16,25 +16,25 @@ import {
     reprojectPoints,
     computeInstanceDistanceTo,
     hungarianAlgorithm
-} from './triangulation.js?v=37dadb6545b9';
-import { CrossViewTracker, Detection } from './cross-view-tracker.js?v=37dadb6545b9';
-import { singleCameraName, singleCameraTrackerConfig, trackSingleCamera, SINGLE_CAMERA_LAZY_REASON } from './single-camera-tracking.js?v=37dadb6545b9';
-import { InstanceGroup, points3dNodeCount, hasPoint3d, readPoint3d, pooledPoints3d } from './pose-data.js?v=37dadb6545b9';
+} from './triangulation.js?v=85e030a56c25';
+import { CrossViewTracker, Detection } from './cross-view-tracker.js?v=85e030a56c25';
+import { singleCameraName, singleCameraTrackerConfig, trackSingleCamera, SINGLE_CAMERA_LAZY_REASON } from './single-camera-tracking.js?v=85e030a56c25';
+import { InstanceGroup, points3dNodeCount, hasPoint3d, readPoint3d, pooledPoints3d } from './pose-data.js?v=85e030a56c25';
 
 // Pass 3i-1: tracker UI/integration (was in app.js)
-import { state, interactionManager, timeline, viewport3d, getActiveSession } from '../ui/app-state.js?v=37dadb6545b9';
-import { getNodeWeightArray, getTrackingThresholds, getTrackingThreshold, isCameraTracked } from '../ui/settings.js?v=37dadb6545b9';
-import { markDirty, setStatus, hideLoading } from '../import-export/save-load.js?v=37dadb6545b9';
-import { showLoadingProgress, createProgressPacer, yieldToPaint } from '../ui/loading-overlay.js?v=37dadb6545b9';
-import { loadAllLazyFrames, sweepLazyFrameWindows } from './triangulation.js?v=37dadb6545b9';
-import { drawAllOverlays, showPredictedOnly, PREDICTED_ONLY_NOTE } from '../ui/rendering.js?v=37dadb6545b9';
-import { updateInfoPanel } from '../ui/info-panel.js?v=37dadb6545b9';
-import { setColorByIdentity } from '../ui/color-by.js?v=37dadb6545b9';
-import { runIdSwitchChecks, clearIdSwitchResults } from '../ui/id-switch-modal.js?v=37dadb6545b9';
-import { summarizeTrackedIdentities, describeSwitchCheck } from '../ui/track-summary.js?v=37dadb6545b9';
-import { showTrackSummaryModal } from '../ui/track-summary-modal.js?v=37dadb6545b9';
-import { collapseTimeline } from '../ui/timeline-controller.js?v=37dadb6545b9';
-import { collapseViewport3D } from '../ui/panel-visibility.js?v=37dadb6545b9';
+import { state, interactionManager, timeline, viewport3d, getActiveSession } from '../ui/app-state.js?v=85e030a56c25';
+import { getNodeWeightArray, getTrackingThresholds, getTrackingThreshold, isCameraTracked } from '../ui/settings.js?v=85e030a56c25';
+import { markDirty, setStatus, hideLoading } from '../import-export/save-load.js?v=85e030a56c25';
+import { showLoadingProgress, createProgressPacer, yieldToPaint } from '../ui/loading-overlay.js?v=85e030a56c25';
+import { loadAllLazyFrames, sweepLazyFrameWindows } from './triangulation.js?v=85e030a56c25';
+import { drawAllOverlays, showPredictedOnly, PREDICTED_ONLY_NOTE } from '../ui/rendering.js?v=85e030a56c25';
+import { updateInfoPanel } from '../ui/info-panel.js?v=85e030a56c25';
+import { setColorByIdentity } from '../ui/color-by.js?v=85e030a56c25';
+import { runIdSwitchChecks, clearIdSwitchResults } from '../ui/id-switch-modal.js?v=85e030a56c25';
+import { summarizeTrackedIdentities, describeSwitchCheck } from '../ui/track-summary.js?v=85e030a56c25';
+import { showTrackSummaryModal } from '../ui/track-summary-modal.js?v=85e030a56c25';
+import { collapseTimeline } from '../ui/timeline-controller.js?v=85e030a56c25';
+import { collapseViewport3D } from '../ui/panel-visibility.js?v=85e030a56c25';
 
 /**
  * A frame index as the USER sees it: 1-based.
@@ -1484,7 +1484,7 @@ async function runTrackingPass(range) {
         setStatus(doneMsg, 'success');
         // Then check the result for identity switches (ui/id-switch-modal.js): by body
         // size (Tracking Wizard `autoSwitchCheck`, default on) and/or by images
-        // (`autoImageSwitchCheck`, default off — minutes, needs the videos + WebGPU).
+        // (`autoImageSwitchCheck`, default off — minutes, needs the videos; with no GPU it runs on the CPU, slower).
         // After a range this covers the WHOLE session's identities, so a re-tracked
         // window is checked against the frames around it; with too little tracked
         // data a check reports itself skipped. It never fails the tracking pass.

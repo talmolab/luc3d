@@ -17,7 +17,7 @@
 // add/update its entry here so the Settings panel stays complete and truthful.
 // (See CLAUDE.md.)
 
-import { shouldIgnoreShortcut } from './keyboard-target.js?v=37dadb6545b9';
+import { shouldIgnoreShortcut } from './keyboard-target.js?v=85e030a56c25';
 
 const STORAGE_KEY = 'lucid.settings.v1';
 
@@ -381,7 +381,7 @@ const TRACKING_THRESHOLDS = [
     {
         id: 'autoImageSwitchCheck', label: 'Check ID switches after tracking (image detection)', default: 0,
         min: 0, max: 1, step: 1, kind: 'toggle',     // an on/off switch in the wizard (stored as 1 / 0)
-        desc: 'After Track All or Track Frame Range, also check close encounters by APPEARANCE: crops of each animal in every camera are embedded with an image model on the GPU (Tracks ▸ Check ID Switches (Images)). Catches animals of similar size that look different (e.g. coat colour), which the size check cannot. Slow — minutes for a long recording — and needs the videos loaded and WebGPU (current Chrome/Edge); the model (~44 MB) downloads on first use.',
+        desc: 'After Track All or Track Frame Range, also check close encounters by APPEARANCE: crops of each animal in every camera are embedded with an image model on the GPU (Tracks ▸ Check ID Switches (Images)). Catches animals of similar size that look different (e.g. coat colour), which the size check cannot. Slow — minutes for a long recording — and needs the videos loaded; the model (~44 MB) downloads on first use. Without a GPU (WebGPU) it still runs, on the CPU: about 15x slower, so a long recording can take hours.',
     },
     {
         id: 'imageCheckThreshold', label: 'Image check: flag threshold', default: -25,

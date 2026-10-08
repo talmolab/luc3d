@@ -1,6 +1,6 @@
 // demo-data.js - Generates synthetic demo data for the multi-view GUI.
 
-import { Skeleton, Camera, Instance, FrameGroup, Session, UnlinkedInstance } from './pose/pose-data.js?v=37dadb6545b9';
+import { Skeleton, Camera, Instance, FrameGroup, Session, UnlinkedInstance } from './pose/pose-data.js?v=85e030a56c25';
 
 /**
  * Create 4 calibrated cameras positioned around a central point.
