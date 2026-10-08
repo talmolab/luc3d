@@ -1,9 +1,9 @@
 /**
  * node-trails-toolbar.mjs — the toolbar's Trails button (issue #102), to the
- * right of Color: Tracks / ID.
+ * right of the Tracks / Identity coloring toggle.
  *
  * Asserted:
- *  1. It sits right of the Color group and reads a bare "Trails ▾" — the value
+ *  1. It sits right of the coloring toggle and reads a bare "Trails ▾" — the value
  *     is NOT in the label, which would cost toolbar width.
  *  2. It opens on HOVER, like the Triangulate split buttons, and closes once
  *     the pointer leaves. A click on the button does not latch it open.
@@ -67,7 +67,7 @@ try {
             trailsMid: (r('tbTrails').top + r('tbTrails').bottom) / 2 };
     });
     check(pos.trailsLeft > pos.colorRight && Math.abs(pos.trailsMid - pos.colorMid) < 1,
-        `the button sits right of Color: Tracks / ID, on the same row (${pos.colorRight.toFixed(0)} → ${pos.trailsLeft.toFixed(0)})`);
+        `the button sits right of Tracks / Identity, on the same row (${pos.colorRight.toFixed(0)} → ${pos.trailsLeft.toFixed(0)})`);
     let s = await read();
     check(s.label === 'Trails ▾', `it reads "Trails ▾" at startup (got "${s.label}")`);
     check(s.tip === 'Node trails: off', `its tooltip says trails are off (got "${s.tip}")`);

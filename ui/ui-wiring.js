@@ -939,7 +939,7 @@ export function setupMenus() {
         }
     });
 
-    // Color by Tracks / ID toolbar toggle
+    // Color by Tracks / Identity toolbar toggle
     var colorByTracksBtn = document.getElementById('colorByTracks');
     var colorByIdBtn = document.getElementById('colorById');
 

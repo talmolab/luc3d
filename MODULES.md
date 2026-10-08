@@ -3674,7 +3674,7 @@ playback state, dirty tracking, multi-session UI.
 
 ### ui/color-by.js
 
-**Purpose.** The toolbar's **Color: Tracks / ID** setting
+**Purpose.** The toolbar's **Tracks / Identity** coloring setting
 (`state.colorByIdentity`), settable from anywhere. The toggle's DOM and
 redraws live in `ui/ui-wiring.js`, but `pose/tracker.js` also flips it — after
 Track All the user wants to see IDs (#242) — and the tracker cannot import
@@ -3688,7 +3688,7 @@ sets the state.
 
 **Imports from project modules.** None.
 
-**Imported by.** `ui/ui-wiring.js` (registers the handler; the Tracks / ID
+**Imported by.** `ui/ui-wiring.js` (registers the handler; the Tracks / Identity
 buttons route through `setColorByIdentity`), `pose/tracker.js`.
 
 **Coverage.** `tests/test-tracker-gui.mjs` (Track All flips it once, a second
@@ -7217,7 +7217,7 @@ plane node, the info panel is the plane panel, and `interactionManager`'s
 selection is a plane — so pressing Group or Triangulate would operate on a pose
 selection the user can no longer see or change, producing an edit they did not
 mean and cannot observe. The VISIBILITY controls (User / Predicted / Reproj /
-Errors), Sessions, Color and the Panel toggle are deliberately NOT blocked: they
+Errors), Sessions, Tracks / Identity and the Panel toggle are deliberately NOT blocked: they
 change what is DRAWN, not what is annotated, and turning Predicted off to see
 the plane you are placing is exactly what the mode is for.
 
@@ -10112,9 +10112,12 @@ stopping at the last frame; the step transport buttons/keys stop it first.
   navigateToFrame})`, from `ui/id-switch-modal.js`; `setIdSwitchNavigator` and
   `setIdSwitchRefresher` (the repaint after the tab fixes a switch) are called
   once at setup.
-- Color-by toggle: the "Color by" Tracks/ID control lives in the top
+- Color-by toggle: the Tracks / Identity control lives in the top
   toolbar (buttons `colorByTracks` / `colorById`, next to the Errors
-  checkbox), not the Tracks menu. `updateColorByToggle()` reflects
+  checkbox), not the Tracks menu. It has no visible "Color" label (the group
+  carries `aria-label="Color by"`, each button a "Color instances by …"
+  tooltip), and the second button is spelled out, "Identity" rather than
+  "ID". `updateColorByToggle()` reflects
   `state.colorByIdentity` on the buttons. Every change of the setting goes
   through `setColorByIdentity` (`ui/color-by.js`) and lands in the one
   handler registered here via `onColorByChange`: update the active class,
@@ -10124,12 +10127,12 @@ stopping at the last frame; the step transport buttons/keys stop it first.
   use it, and so does the tracker after Track All (#242).
 - Node Trails (issue #102): two pickers for `state.trailLength` — the Tracks ▸
   Node Trails submenu (`menuTrails*`) and the toolbar's **Trails** button
-  (`#tbTrails`, right of Color: Tracks / ID). One `trailPresets` list
+  (`#tbTrails`, right of Tracks / Identity). One `trailPresets` list
   (Off/10/50/100/250/500) builds the toolbar menu's items (`#trailsMenu`,
   `data-trail-len`), and both pickers go through `setTrailLength`, whose
   `updateTrailChecks` moves the checkmark in BOTH menus and rewrites the
   button's tooltip ("Node trails: 50 frames"). The label stays a bare
-  "Trails ▾" on purpose, to save toolbar width: the toolbar needs ~1,416 px
+  "Trails ▾" on purpose, to save toolbar width: the toolbar needs ~1,410 px
   with it (see the panel toggles below), and "Trails: 500" in the label would
   add ~25 px more. The button is a `.tri-dropdown`, so its menu opens on hover in
   pure CSS exactly like the Triangulate split buttons', and like theirs stays
@@ -10286,7 +10289,7 @@ will do ("Hide 3D viewer (\)" / "Show 3D viewer (\)"), via the private
 `lockPanelToggleWidths` to pin each button to its wider label so a swap did not
 shove its neighbour sideways ("Hide" and "Show" are different widths in a
 proportional font). A fixed label cannot resize, so that function is gone. With
-the short labels the whole toolbar fits a 1440 px window (it needs ~1,416 px).
+the short labels the whole toolbar fits a 1440 px window (it needs ~1,410 px).
 
 **Single-view ("solo") mode.** `v` (`singleViewMode`) calls
 `enterSingleViewMode`, which caches the dockview grid layout
@@ -10420,8 +10423,8 @@ and the FPS pill),
 `seekbar-markers.js` (`installSeekbarMarkers`, `seekbarMarkerAt`,
 `describeSwitchMarker`, `setSeekbarMarkerFrames` — the possible-ID-switch ticks:
 the scrub handlers and the tooltip snap to a tick within 5 px),
-`color-by.js` (`onColorByChange`, `setColorByIdentity` — the Color: Tracks /
-ID toggle, also flipped by the tracker after Track All — #242),
+`color-by.js` (`onColorByChange`, `setColorByIdentity` — the Tracks /
+Identity toggle, also flipped by the tracker after Track All — #242),
 `video-filters.js` (`setSessionRotation`; `clampRotation` still comes in via
 `sessions-panes.js`, which re-exports it), `plane-definition.js`
 (`togglePlaneMode`).
