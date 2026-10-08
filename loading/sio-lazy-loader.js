@@ -33,7 +33,11 @@
  * Node order: every camera's store is re-ordered into the session skeleton's
  * node order when its file lists the same nodes in another order, and a camera
  * with different nodes is reported in `nodeOrderMismatches` — see
- * `_unifyNodeOrder` (`loading/slp-skeleton.js`).
+ * `_unifyNodeOrder` (`loading/slp-skeleton.js`). That order is the first
+ * camera's unless a `targetNodeOrder` was set — the multi-session loader's
+ * project skeleton, or a skeleton adopted later (`permuteNodes`,
+ * `pose/session-node-order.js`) — and the multi-session save re-applies it to
+ * the loader it re-opens.
  */
 
 import { unionTrackNames } from './track-union.js';
@@ -145,6 +149,18 @@ export class SioLazyLoader {
          * Rebuilt after each open; the folder loader reports it.
          */
         this.nodeOrderMismatches = new Map();
+        /**
+         * The node order every store is re-ordered into when it is NOT simply
+         * the first camera's (`nodeOrder`): set by `setTargetNodeOrder` — the
+         * multi-session loader's project skeleton, or a skeleton adopted later
+         * (`permuteNodes`). Node NAMES as the files spell them. Not an
+         * in-memory edit: the multi-session save's pass 2 sets it on the
+         * loader it re-opens, and the re-open repeats the re-order.
+         * @type {string[]|null}
+         */
+        this.targetNodeOrder = null;
+        /** `openProjectSlp`'s ONE shared store: the node names its point rows are CURRENTLY in. */
+        this._sharedNodeOrder = null;
         /**
          * True once a store has been edited IN MEMORY (`remapTracksFromIdentity`,
          * `deleteInstanceRows`) — i.e. the columns no longer match the source
@@ -393,9 +409,10 @@ export class SioLazyLoader {
     }
 
     /**
-     * Re-order every `open()`ed camera's store into the session skeleton's
-     * node order (`this.skeleton`, the first camera BY NAME), so each camera's
-     * column `i` is the node `this.skeleton.nodes[i]` names. The session has
+     * Re-order every `open()`ed camera's store into the session's node order
+     * (`nodeOrder`: `targetNodeOrder` when set, else `this.skeleton`, the
+     * first camera BY NAME), so each camera's column `i` is the node
+     * `nodeOrder[i]` names. The session has
      * ONE skeleton and every consumer of a lazy store — the materializer, the
      * streaming writer's `appendStore`, `describeStoreFrame` — reads its point
      * rows by POSITION, so a camera whose file lists the same nodes in another
@@ -417,9 +434,28 @@ export class SioLazyLoader {
      */
     _unifyNodeOrder() {
         this.nodeOrderMismatches = new Map();
-        var target = this.skeleton && this.skeleton.nodes;
+        var target = this.nodeOrder;
         if (!target || target.length === 0) return;
         var cacheStale = false;
+        // `openProjectSlp`: every camera maps to ONE store, re-ordered once.
+        if (this._sharedStore && this._sharedNodeOrder && this._projectLabels) {
+            var sr = nodeOrderRemap(target, this._sharedNodeOrder);
+            if (sr.kind === 'mismatch') {
+                for (var mcam of this.labelsByCam.keys()) {
+                    this.nodeOrderMismatches.set(mcam, { missing: sr.missing, extra: sr.extra });
+                }
+            } else if (sr.kind === 'reordered' && this._projectLabels._lazyDataStore) {
+                var smoved = permuteStoreNodeRows(this._projectLabels._lazyDataStore, sr.perm);
+                this._sharedNodeOrder = target.slice();
+                if (this._projectLabels._lazyFrameList && typeof this._projectLabels._lazyFrameList.clearCache === 'function') {
+                    this._projectLabels._lazyFrameList.clearCache();
+                }
+                this.cache.clear(); this.cacheOrder = [];
+                console.log('[SioLazyLoader] project store: ' + smoved +
+                    ' instances re-ordered into the session skeleton\'s node order');
+            }
+            return;
+        }
         for (var [cam, current] of this._nodeOrderByCam) {
             var r = nodeOrderRemap(target, current);
             if (r.kind === 'same') continue;
@@ -440,6 +476,57 @@ export class SioLazyLoader {
                 ' instances re-ordered into the session skeleton\'s node order');
         }
         if (cacheStale) { this.cache.clear(); this.cacheOrder = []; }
+    }
+
+    /**
+     * The node names every store's point rows are in: `targetNodeOrder` when
+     * set, else the session skeleton's (the first camera by name).
+     * @returns {string[]|null}
+     */
+    get nodeOrder() {
+        return this.targetNodeOrder || (this.skeleton && this.skeleton.nodes) || null;
+    }
+
+    /**
+     * Re-order every store — opened already or opened later — into `names`
+     * (node names as the files spell them; null goes back to the first
+     * camera's order). A camera whose nodes are not those names is left by
+     * column and reported in `nodeOrderMismatches`, exactly as `open()` does.
+     * @param {string[]|null} names
+     */
+    setTargetNodeOrder(names) {
+        this.targetNodeOrder = names ? names.slice() : null;
+        this._unifyNodeOrder();
+    }
+
+    /**
+     * Re-order the session's node axis — `pose/session-node-order.js`'s lazy
+     * half: new node `s` takes current node `perm[s]`, in every store, and
+     * the new order is RECORDED (`targetNodeOrder`) so a re-open from the
+     * source files repeats it.
+     *
+     * Refuses while any camera is loaded by column under names that are not
+     * its own (`nodeOrderMismatches`): its rows are not in `nodeOrder`, so
+     * re-ordering the others by name would leave it in a third order on the
+     * next re-open. The caller reports that session instead.
+     *
+     * @param {Int32Array|number[]} perm
+     * @returns {{ok: boolean, reason?: string}}
+     */
+    permuteNodes(perm) {
+        var current = this.nodeOrder;
+        if (!current || current.length !== perm.length) {
+            return { ok: false, reason: 'its lazy store has ' + (current ? current.length : 0) + ' nodes, not ' + perm.length };
+        }
+        if (this.nodeOrderMismatches.size > 0) {
+            return { ok: false, reason: Array.from(this.nodeOrderMismatches.keys()).join(', ') +
+                ' loaded by column under other node names' };
+        }
+        this.setTargetNodeOrder(Array.from(perm, function (p) { return current[p]; }));
+        if (this.nodeOrderMismatches.size > 0) {
+            return { ok: false, reason: 'the store did not take the new order' };
+        }
+        return { ok: true };
     }
 
     /**
@@ -491,6 +578,7 @@ export class SioLazyLoader {
         if (skel) {
             this.skeleton = { name: skel.name || 'skeleton', nodes: skel.nodeNames, edges: skel.edgeIndices };
             this.trackNames = (labels.tracks || []).map(function (t) { return t.name; });
+            this._sharedNodeOrder = skel.nodeNames.slice();
         }
         var numNodes = skel ? skel.nodeNames.length : 0;
 
@@ -579,6 +667,10 @@ export class SioLazyLoader {
                 if (occ) this.trackOccupancy.set(occCamName, occ);
             } catch (e) { /* occupancy is optional; ignore */ }
         }
+
+        // A re-open (the multi-session save's pass 2) may carry a node order
+        // the session was re-ordered into after it was first opened.
+        this._unifyNodeOrder();
 
         return {
             labels: labels,
@@ -1424,6 +1516,8 @@ export class SioLazyLoader {
         this._skeletonByCam.clear();
         this._nodeOrderByCam.clear();
         this.nodeOrderMismatches = new Map();
+        this.targetNodeOrder = null;
+        this._sharedNodeOrder = null;
         this._storeEditedInMemory = false;
         this.cache.clear();
         this.cacheOrder = [];

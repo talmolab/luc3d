@@ -1032,6 +1032,51 @@ export class Instance {
             this._originalXY = spliceXY(this._originalXY, idx, 1);
         }
     }
+
+    /**
+     * Re-order the node axis IN PLACE: new node `s` takes old node `perm[s]` —
+     * coordinates, occlusion, any backup, and `nulledNodes` (re-keyed). The
+     * skeleton's node order changed, not the pose (see
+     * `pose/session-node-order.js`).
+     *
+     * In place, because the lazy-2D hydration path deliberately shares one
+     * `_xy` (and a `Uint32Array` `_occ`) between a group member and its
+     * resident instance (`adoptPointsFrom`): replacing the buffer would split
+     * them. `seen` is what keeps a shared buffer from being permuted twice —
+     * it collects this Instance and every buffer it moved, and a caller walking
+     * a whole session passes ONE set. The shared lazy placeholder is never
+     * written (it is all-NaN, so it needs no move).
+     *
+     * @param {Int32Array|number[]} perm - length `numNodes`
+     * @param {Set<Object>} [seen]
+     * @returns {boolean} false when skipped: already done, or the node count differs
+     */
+    permuteNodes(perm, seen) {
+        const n = perm.length;
+        if (this.numNodes !== n) return false;
+        if (seen) { if (seen.has(this)) return false; seen.add(this); }
+        const fresh = function (buf) {
+            if (!buf || (seen && seen.has(buf))) return false;
+            if (seen) seen.add(buf);
+            return true;
+        };
+        if (!isLazyPlaceholderXY(this._xy) && fresh(this._xy)) permuteXY(this._xy, perm);
+        if (typeof this._occ === 'number' || fresh(this._occ)) this._occ = permuteOcc(this._occ, perm);
+        if (this._originalXY && this._originalXY.length === 2 * n && fresh(this._originalXY)) {
+            permuteXY(this._originalXY, perm);
+        }
+        if (this._originalOcc != null && (typeof this._originalOcc === 'number' || fresh(this._originalOcc))) {
+            this._originalOcc = permuteOcc(this._originalOcc, perm);
+        }
+        if (this.nulledNodes instanceof Set && this.nulledNodes.size > 0 && fresh(this.nulledNodes)) {
+            const inv = new Int32Array(n);
+            for (let s = 0; s < n; s++) inv[perm[s]] = s;
+            const old = Array.from(this.nulledNodes);
+            this.nulledNodes.clear();
+            for (const k of old) if (k >= 0 && k < n) this.nulledNodes.add(inv[k]);
+        }
+        return true;
+    }
 }
 
 
@@ -1127,6 +1172,30 @@ function spliceXY(xy, idx, del) {
         out[w << 1] = xy[k << 1];
         out[(w << 1) + 1] = xy[(k << 1) + 1];
         w++;
+    }
+    return out;
+}
+
+/** Node `s` <- old node `perm[s]` in a flat xy buffer, in place. */
+function permuteXY(xy, perm) {
+    const old = new Float64Array(xy);
+    for (let s = 0; s < perm.length; s++) {
+        xy[s << 1] = old[perm[s] << 1];
+        xy[(s << 1) + 1] = old[(perm[s] << 1) + 1];
+    }
+}
+
+/**
+ * Node `s` <- old node `perm[s]` in an occlusion set. A Number comes back as a
+ * new value; a `Uint32Array` is rewritten in place (and returned).
+ */
+function permuteOcc(occ, perm) {
+    const n = perm.length;
+    const old = (typeof occ === 'number') ? occ : new Uint32Array(occ);
+    let out = (typeof occ === 'number') ? 0 : occ;
+    if (typeof out !== 'number') out.fill(0);
+    for (let s = 0; s < n; s++) {
+        if (occGet(old, perm[s])) out = occSet(out, s, true);
     }
     return out;
 }

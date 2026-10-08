@@ -1448,6 +1448,11 @@ Accessors: `numNodes`, `hasPoint`, `getX`/`getY`, `getPoint` (allocates),
 `setPointsFrom`/`setOccludedFrom`, `adoptPointsFrom` (deliberate buffer sharing,
 for lazy-2D hydration), `insertNodeAt`/`removeNodeAt` (skeleton edits — these
 resize any backup alongside, so `restorePoints()` stays node-aligned),
+`permuteNodes(perm, seen)` (the skeleton's node ORDER changed — new node `s`
+takes old node `perm[s]`: coordinates, occlusion, backup, `nulledNodes`
+re-keyed; IN PLACE so an `adoptPointsFrom` alias stays shared, with one `seen`
+set across a whole-session walk so a shared buffer moves once; the placeholder
+is skipped; see `pose/session-node-order.js`),
 `backupPoints`/`restorePoints`/`hasBackup`.
 
 **The constructor is unchanged** — it still takes boxed `[[x,y]|null, ...]` (or a
@@ -1467,6 +1472,8 @@ buffer each was 1.39 GB and ~4.2M ArrayBuffers after a Track All on the 8-camera
 that assign a new array (`setPointsFrom`, `adoptPointsFrom`, `restorePoints`,
 `insertNodeAt`/`removeNodeAt`) need no guard. A NEW in-place writer must call
 `_ownXY()`, or one edit moves every lightweight member in the project.
+(`permuteNodes` writes in place without copying: it skips the placeholder
+outright, which is all-NaN and so has nothing to move.)
 
 f64 rather than f32 is deliberate: identical cage cost, and bit-exact values keep
 `tests/e2e/save-golden-digest.mjs` byte-for-byte unchanged across the conversion.
@@ -3270,6 +3277,69 @@ fails with the `user`/`modified` blockers removed: a member's edit is lost on sa
 
 ---
 
+### pose/session-node-order.js
+
+**Purpose.** Re-order a whole session's keypoint data into another skeleton's
+node order BY NAME, and adopt one skeleton across every session of a project.
+DOM-free; imports only `loading/slp-skeleton.js`, so it loads in Node.
+
+**Why it exists.** A project has ONE skeleton shared by every session
+(`setProjectSkeleton`), and every keypoint is stored by COLUMN — of an
+Instance, of a group's `points3d`, of a reprojection, of a lazy store's point
+rows. Every path that replaced that skeleton with one from elsewhere swapped the
+NAMES and left each session's COLUMNS alone: Load Multiple Sessions (on the
+eager path each session's load ended in `setProjectSkeleton(<its first
+camera's>)`, so the LAST session named every session's columns; on the lazy
+path each session kept a skeleton of its own), the "Import skeleton for all
+sessions" prompt, a parent-folder or session-folder `skeleton.json`, Load
+Skeleton, and the single-`.slp` folder load's `skeleton.json`. A session stored
+in another node order came out silently mis-named: geometry by column fine, so
+tracking and triangulation looked right; everything by name — labels, Tracking
+Wizard node weights, the size/image ID-switch checks — wrong. The per-camera
+half (cameras of ONE session) is `loading/slp-skeleton.js`'s `nodeOrderRemap`;
+this module reuses it so the two agree about what "the same nodes" means.
+
+**Key exports.**
+- `adoptSkeletonNodeOrder(sessions, skeleton, { triangulationResultsFor })` →
+  `{ reordered, mismatched, refused }`, each an array of `{ session, name, … }`.
+  Compares each session's OWN current order (`session.skeleton.nodes`, which
+  describes its data) with `skeleton.nodes`: same → nothing; the same names in
+  another order → `permuteSessionNodes` (lossless); different names →
+  `mismatched` (`missing`/`extra`), left as is — the caller still applies the
+  skeleton by column and says so. A session with no nodes is skipped. Does NOT
+  set the skeleton; `ui/info-panel.js`'s `adoptProjectSkeleton` does, after.
+- `permuteSessionNodes(session, perm, { triangulationResults })` → `{ ok,
+  instances, groups }` or `{ ok: false, reason }`. In place: every Instance in
+  `frameGroups` (linked and unlinked) and `instanceGroups` (members and
+  `reprojectedInstances`) via `Instance.permuteNodes`; each group's
+  `points3d` (width 3, pooled views included) and raw `reprojections`; and the
+  `triangulationResults` entries' `points3d` / `reprojections` / `errors` /
+  `errorsUndistorted` (the ACTIVE session's results are on
+  `state.triangulationResults`, passed in). ONE `seen` set spans the walk: the
+  lazy hydration path shares `_xy` between a member and its resident instance,
+  and a result entry shares its group's arrays — a buffer moved twice is a
+  plausible wrong answer. A lazy session's loader goes FIRST
+  (`SioLazyLoader.permuteNodes`); if it refuses (a camera loaded by column
+  under other names, another node count, a loader that cannot re-order) nothing
+  at all is changed.
+- `describeSkeletonAdoption(report)` → `{ text, warn }`: the status-bar clause
+  (`re-ordered s1, s2 into its node order by name; node names differ in s3 —
+  applied by column there, so node names may be wrong`), '' when nothing moved.
+
+**Imports from project modules.** `../loading/slp-skeleton.js`
+(`nodeOrderRemap`, `permuteNodeAxis`).
+
+**Imported by.** `ui/info-panel.js` (`adoptProjectSkeleton`).
+
+**Tests.** `tests/test-session-node-order.mjs` (one Instance — Number and
+Uint32Array occlusion, backup, `nulledNodes`, the placeholder; a whole eager
+session with a hydration alias, pooled 3D, reprojections and shared result
+arrays, plus a negative control that renaming without re-ordering fails the
+checker; adoption across same / reordered / renamed / empty / refusing-lazy
+sessions; `SioLazyLoader` target order, composition, refusal and the shared
+project store with stub stores) and `tests/e2e/multi-session-skeleton-order.mjs`
+(every real path, eager and lazy, and the multi-session save's re-open).
+
 ### pose/triangulation-core.js
 
 **Purpose.** The pure triangulation math, split out of `pose/triangulation.js`
@@ -3628,6 +3698,9 @@ independent clone). The editor mutates the shared object in place so edits
 propagate for free; node add/remove additionally fan out via
 `propagateNode{Added,Removed}` across each session's instances (see
 `ui/info-panel.js` → `applyProjectSkeleton` / warn-on-overwrite modal).
+`setProjectSkeleton` only swaps NAMES; a skeleton from outside the project goes
+through `ui/info-panel.js`'s `adoptProjectSkeleton`, which first re-orders each
+session's data into its node order (`pose/session-node-order.js`).
 Calibration and `envSkeleton` remain per-session.
 
 **Key exports.**
@@ -4563,6 +4636,24 @@ Covered by `tests/e2e/videos-panel-buttons.mjs`.
 - Per-frame data: `updateInfoPanel`, `updateFrameInfo`,
   `updateTriangulationBadge`.
 - Session: `ensureSession` (seeds new sessions from `buildRememberedSkeleton`).
+- One skeleton per project: `adoptProjectSkeleton(sk)` → `{ text, warn,
+  report }`, `applyProjectSkeleton(sk, onDone)` (warn-on-overwrite, then adopt;
+  `onDone(adopted)`), `promptImportSkeletonForAllSessions(onDone)`.
+
+**Replacing the project skeleton re-orders by NAME (`adoptProjectSkeleton`).**
+Every path that makes a skeleton from OUTSIDE the project the project's goes
+through it: Load Skeleton (`applyProjectSkeleton`), the multi-session "Import
+skeleton for all sessions" prompt, and in `loading/session-loader.js` the
+parent-folder and session-folder `skeleton.json` and the single-`.slp` folder
+load's. It runs `adoptSkeletonNodeOrder` (`pose/session-node-order.js`) over
+`state.sessions` (plus `state.session`, with `state.triangulationResults` as the
+active session's results) and only THEN `setProjectSkeleton`, so a session with
+the same names in another order is re-ordered instead of mis-named; one with
+different names keeps its columns (as before) and is named in the returned
+status clause, which every caller appends to its status line (warning kind
+when anything was applied by column). The skeleton editor's own edits —
+rename, add/remove node or edge — keep calling `setProjectSkeleton` directly:
+they change what a column is CALLED, not which column holds which node.
 
 **Collapsed panel does nothing.** `updateInfoPanel` and `updateFrameInfo` both
 stop early when `isInfoPanelVisible()` (`ui/panel-visibility.js`) is false,
@@ -4640,9 +4731,12 @@ on reload); see `ui/app-state.js`.
 - `./id-switch-modal.js` — `refreshIdSwitchPanel`: `updateInfoPanel` re-renders
   the ID Switches tab (and its seekbar markers) for the active session.
 - `./app-state.js` — `state`, `timeline`, `interactionManager`,
-  `rememberSkeleton`, `buildRememberedSkeleton`.
+  `rememberSkeleton`, `buildRememberedSkeleton`, `setProjectSkeleton`,
+  `getProjectSkeleton`.
 - `../import-export/save-load.js` — `setStatus`, `markDirty`.
 - `../import-export/skeleton-json.js` — `buildSkeletonJSON`, `parseSkeletonJSON`.
+- `../pose/session-node-order.js` — `adoptSkeletonNodeOrder`,
+  `describeSkeletonAdoption` (behind `adoptProjectSkeleton`).
 - `../loading/session-loader.js` — `handleLoadVideos`,
   `handleLoadCalibration`, `autoAssignVideosToCameras`,
   `createViewForVideoFile`, `rebuildVideoController`,
@@ -11447,14 +11541,18 @@ lists the same nodes in another order is re-ordered onto it BY NAME (eager:
 different names is loaded by column as before but NAMED in the status bar
 (`… — skeleton nodes differ from back's in top (node names there may be
 wrong)`) and the console. On the real sessions every camera agrees once the
-nested file is read correctly, so nothing is remapped there.
+nested file is read correctly, so nothing is remapped there. The ACROSS-session
+half — a later session of a multi-session load, or a skeleton applied to every
+session afterwards — is `pose/session-node-order.js`, built on the same
+`nodeOrderRemap`.
 
 **Imports from project modules.** None (deliberately).
 
 **Imported by.** `loading/slp-import-worker.js` (`parseSlpSkeleton`),
 `loading/session-loader.js` (`nodeOrderRemap`, `permuteColumnarNodes`,
 `permuteInstanceNodes`), `loading/sio-lazy-loader.js` (`nodeOrderRemap`,
-`permuteStoreNodeRows`).
+`permuteStoreNodeRows`), `pose/session-node-order.js` (`nodeOrderRemap`,
+`permuteNodeAxis`).
 
 **Tests.** `tests/test-slp-skeleton.mjs` (the real file's metadata in both
 layouts, through this module AND the vendored `parseSkeletons`; symmetries by
@@ -11694,6 +11792,44 @@ which is also where the nested-`nx_graph` skeleton fix lives (the reason this
 mattered: a nested first camera used to give the whole session the GLOBAL node
 order). Covered by `tests/e2e/slp-nested-skeleton.mjs`.
 
+**One skeleton for the PROJECT: the first session's.** `handleLoadMultiSession`
+loads the session folders in name order and, from the first one with a
+skeleton on, passes the project skeleton as it stands as
+`handleLoadSessionFolderPerCamera(files, defer, { projectSkeleton,
+projectSkeletonFrom })` — re-read after EVERY session, since a session folder's
+own `skeleton.json` (step 5b) replaces it mid-load and the sessions after must
+load into that one (handing them the old object let step 4 put the old names
+back over the sessions already re-ordered). That session's cameras are then
+compared with and re-ordered into the PROJECT's order instead of its own first
+camera's (eager: `skeletonFromSlp` starts as the project skeleton, so the
+per-camera remap above does it; lazy: `SioLazyLoader.setTargetNodeOrder`
+before the opens), it shares the project skeleton object, and step 4 keeps it
+rather than replacing it. Before, step 4 replaced the project skeleton on every
+session, so on the eager path the LAST session's first camera named every
+session's columns, and on the lazy path each session kept its own skeleton. The
+first session is the deterministic choice — the one displayed after the load,
+and the same rule as cameras within a session. The per-camera loader RETURNS
+`{ session, skeletonRef, skeletonMismatches }` (undefined when nothing
+loaded), because each session's closing status is overwritten by the next;
+`handleLoadMultiSession` gathers the mismatches into its own closing line
+(`Loaded 3 sessions — skeleton nodes differ from session s1's in s2/top (node
+names there may be wrong)`), written after `switchSession(0)` (which writes its
+own) and carried into the parent `skeleton.json` line when there is one. The
+worker-backed `.h5` reader (`LazyFrameLoader`) cannot re-order, so a later
+`.h5`-lazy session in another order is reported instead.
+
+**A `skeleton.json` is ADOPTED, not just applied.** The parent-folder one
+(`handleLoadMultiSession`), a session folder's own (step 5b) and the
+single-`.slp` folder load's all go through `adoptProjectSkeleton`
+(`ui/info-panel.js`): each session's data is re-ordered into the file's node
+order by name, and a session with different names is named in the status. Step
+5b's outcome is folded into the closing status (it used to write its own line,
+which the closing one overwrote). The single-`.slp` loader now builds the
+session under the `.slp`'s OWN skeleton and adopts the override after
+`restoreGroupingAndUnlink`; it used to name the `.slp`'s columns with the
+override's before building them. Covered by
+`tests/e2e/multi-session-skeleton-order.mjs`.
+
 **The routing decision is per FOLDER, not per file.** Deciding per file let one
 folder come back part eager and part lazy, and that combination is silently
 lossy: the eager cameras populate `session.frameGroups` during load, and
@@ -11780,7 +11916,8 @@ blank until the user manually re-ran Triangulate All. Covered by
   `permuteInstanceNodes` — the per-camera node-order guard),
   `../import-export/save-load.js`,
   `../ui/rendering.js` (`drawAllOverlays`, `setReprojErrorVisible`),
-  `../ui/info-panel.js` (`updateInfoPanel`, `promptImportSkeletonForAllSessions`),
+  `../ui/info-panel.js` (`updateInfoPanel`, `promptImportSkeletonForAllSessions`,
+  `adoptProjectSkeleton`),
   `../ui/calibration-notice.js` (`noteSessionCalibrationDivergence`),
   `../ui/frame-readout.js` (`refreshReadoutTotals`, wherever the loaders set
   `state.totalFrames` / `state.fps`),
@@ -11920,6 +12057,22 @@ is left as read and listed in `nodeOrderMismatches` (camName →
 materialized typed instances still carry its file's `Skeleton`; nothing in
 LUCID reads it. Covered by `tests/e2e/slp-nested-skeleton.mjs` (four open
 orders).
+
+**A target order other than the first camera's (`targetNodeOrder`).** The
+target is `nodeOrder` — `targetNodeOrder` when set, else `skeleton.nodes`.
+`setTargetNodeOrder(names)` sets it (file node names) and re-unifies; the
+per-camera folder loader sets it BEFORE the opens for a later session of a
+multi-session load (the project skeleton's order). `permuteNodes(perm)` is
+`pose/session-node-order.js`'s lazy half — new node `s` takes current node
+`perm[s]` — and records the result as the target; it refuses (`{ok: false,
+reason}`, changing nothing) while `nodeOrderMismatches` is non-empty or for a
+permutation of another length. The target is NOT an in-memory edit: the
+multi-session save's pass 1 keeps it (`handle.pending[].nodeOrder`) and
+`reopenSessionLazyLoader` sets it on the loader it re-opens, so pass 2 appends
+the rows in the order pass 1's skeleton names. `openProjectSlp`'s ONE shared
+store has no `_nodeOrderByCam`; `_sharedNodeOrder` tracks it and
+`_unifyNodeOrder` permutes it ONCE (per camera would move it N times).
+`close()` forgets both.
 
 `trackOccupancy` (phase-5) is populated per camera by `_computeSparseOccupancy(labels,
 nFrames, rowMap?)` — one O(nInstances) pass over the columnar store (`framesData.frame_idx` +
@@ -13526,7 +13679,7 @@ loading-overlay/status-text UI helpers.
   simultaneously computed). **No UI currently drives that interactive
   per-session flow** (open → Track All → Triangulate All → commit → evict →
   next session) — `reopenSessionLazyLoader(session, sourceFileEntries,
-  wasSharedStore)` (internal) supports it via
+  wasSharedStore, nodeOrder)` (internal) supports it via
   `SioLazyLoader.sourceFiles` (cheap retained `File` handles, so pass 2's
   restream doesn't need Track All/Triangulate All redone). For a shared-store
   project session (lazily reopened single-file project, where every camera's
@@ -13542,6 +13695,16 @@ loading-overlay/status-text UI helpers.
   `SioLazyLoader._unifyTracks` re-indexes every store into the union of the
   cameras' track names in camera-NAME order — so pass 2 re-derives the track
   columns the original load had.
+  **A store re-ordered since loading is re-opened in that order.** A later
+  session of a multi-session load, or any lazy session a skeleton was adopted
+  into (`pose/session-node-order.js`), holds its point rows in an order the
+  files do not — recorded as `SioLazyLoader.targetNodeOrder`. Pass 1 names
+  them with the session's skeleton, so `commitSessionForMultiSessionSave` keeps
+  that order as `nodeOrder` on `handle.pending` and `reopenSessionLazyLoader`
+  sets it on the loader it re-opens (both reopen kinds); without it pass 2
+  appended the file's order under the project's names. Covered by
+  `tests/e2e/multi-session-skeleton-order.mjs` §6, whose negative control drops
+  the recorded order and gets the session back mis-named.
   **A store edited in memory is written AS EDITED.** Propagate IDs → Tracks
   (and every other `remapTracksFromIdentity` caller) and Custom Instance
   Delete (`deleteInstanceRows`) change the live store's columns, which are not

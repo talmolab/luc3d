@@ -18,6 +18,7 @@ import { state, timeline, interactionManager, rememberSkeleton, buildRememberedS
          setProjectSkeleton, getProjectSkeleton } from './app-state.js';
 import { setStatus, markDirty } from '../import-export/save-load.js';
 import { buildSkeletonJSON, parseSkeletonJSON } from '../import-export/skeleton-json.js';
+import { adoptSkeletonNodeOrder, describeSkeletonAdoption } from '../pose/session-node-order.js';
 import {
     handleLoadVideos, handleLoadCalibration, autoAssignVideosToCameras,
     createViewForVideoFile, rebuildVideoController, fitCanvasesToCells,
@@ -803,17 +804,60 @@ export function ensureSession() {
 
 // --- One-skeleton-per-project helpers ---------------------------------------
 
+/**
+ * Make `sk` THE project skeleton — every session then shares it — after first
+ * bringing each session's keypoint data into its node order BY NAME
+ * (`adoptSkeletonNodeOrder`, pose/session-node-order.js). A skeleton file, the
+ * "Import skeleton for all sessions" prompt and a multi-session load all
+ * replace the names of sessions whose data may be stored in another node
+ * order; swapping the names alone silently mis-names every keypoint there.
+ * A session with the same names in another order is re-ordered (losslessly);
+ * one with different names is applied by column, as before, and NAMED in the
+ * returned status clause rather than mis-named in silence.
+ *
+ * Every caller that replaces the project skeleton with one from OUTSIDE the
+ * project goes through here. The skeleton editor's own edits (rename, add or
+ * remove a node) do not: they change what a column is called, not which
+ * column holds which node.
+ *
+ * @param {Skeleton} sk
+ * @returns {{text: string, warn: boolean, report: Object}} `text` is '' when
+ *   every session already had `sk`'s order
+ */
+export function adoptProjectSkeleton(sk) {
+    var sessions = (state.sessions || []).slice();
+    if (state.session && sessions.indexOf(state.session) < 0) sessions.push(state.session);
+    var report = adoptSkeletonNodeOrder(sessions, sk, {
+        // The active session's results live on `state`, not on the session.
+        triangulationResultsFor: function (s) { return s === state.session ? state.triangulationResults : null; },
+    });
+    setProjectSkeleton(sk);
+    report.reordered.forEach(function (e) {
+        console.log('[skeleton] ' + e.name + ': keypoints re-ordered into the new skeleton\'s node order');
+    });
+    report.mismatched.forEach(function (e) {
+        console.warn('[skeleton] ' + e.name + ': node names differ from the new skeleton\'s (missing '
+            + JSON.stringify(e.missing) + ', extra ' + JSON.stringify(e.extra) + ') — applied by column');
+    });
+    report.refused.forEach(function (e) {
+        console.warn('[skeleton] ' + e.name + ': not re-ordered (' + e.reason + ') — applied by column');
+    });
+    var d = describeSkeletonAdoption(report);
+    return { text: d.text, warn: d.warn, report: report };
+}
+
 // Apply `sk` as the single project skeleton (shared by every session). If a
 // non-empty skeleton already exists, warn first — it overwrites all sessions.
+// `onDone(adopted)` gets `adoptProjectSkeleton`'s result.
 export function applyProjectSkeleton(sk, onDone) {
     var existing = getProjectSkeleton();
     var hasExisting = existing && existing.nodes && existing.nodes.length > 0;
     var apply = function () {
-        setProjectSkeleton(sk);
+        var adopted = adoptProjectSkeleton(sk);
         populateSkeletonTable();
         drawAllOverlays(state.currentFrame);
         updateInfoPanel();
-        if (onDone) onDone();
+        if (onDone) onDone(adopted);
     };
     if (hasExisting && existing !== sk) showOneSkeletonWarning(apply);
     else apply();
@@ -901,12 +945,16 @@ export function promptImportSkeletonForAllSessions(onDone) {
                 try {
                     var sk = parseSkeletonJSON(ev.target.result);
                     if (!sk) { setStatus('Could not parse skeleton file', 'error'); return; }
-                    setProjectSkeleton(sk); // one skeleton for every session
+                    // One skeleton for every session — each one's keypoints
+                    // re-ordered into it by name where they were stored in
+                    // another order.
+                    var adopted = adoptProjectSkeleton(sk);
                     populateSkeletonTable();
                     drawAllOverlays(state.currentFrame);
                     updateInfoPanel();
                     setStatus('Applied skeleton to all ' + nSessions + ' sessions: ' +
-                        sk.nodes.length + ' nodes, ' + sk.edges.length + ' edges', 'success');
+                        sk.nodes.length + ' nodes, ' + sk.edges.length + ' edges' +
+                        (adopted.text ? ' — ' + adopted.text : ''), adopted.warn ? 'warning' : 'success');
                 } catch (err) {
                     console.error('Failed to load skeleton:', err);
                     setStatus('Skeleton load error: ' + err.message, 'error');
@@ -1001,8 +1049,9 @@ export function setupSkeletonEditing() {
                     ensureSession();
                     // One skeleton per project: applies to ALL sessions (warns
                     // first if a skeleton already exists — it overwrites all).
-                    applyProjectSkeleton(sk, function () {
-                        setStatus('Loaded skeleton for all sessions: ' + sk.nodes.length + ' nodes, ' + sk.edges.length + ' edges', 'success');
+                    applyProjectSkeleton(sk, function (adopted) {
+                        setStatus('Loaded skeleton for all sessions: ' + sk.nodes.length + ' nodes, ' + sk.edges.length + ' edges' +
+                            (adopted.text ? ' — ' + adopted.text : ''), adopted.warn ? 'warning' : 'success');
                     });
                 } catch (err) {
                     console.error('Failed to load skeleton:', err);
