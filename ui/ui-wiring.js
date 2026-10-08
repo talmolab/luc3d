@@ -58,6 +58,7 @@ import { showTrackRangeModal } from './track-range-modal.js';
 import { showAlignViewsModal } from './view-align-modal.js';
 import { onColorByChange, setColorByIdentity } from './color-by.js';
 import { installSeekbarTooltip } from './seekbar-tooltip.js';
+import { showReadoutFrame, refreshReadoutTotals } from './frame-readout.js';
 import { installSeekbarMarkers, seekbarMarkerAt, describeSwitchMarker, setSeekbarMarkerFrames } from './seekbar-markers.js';
 // Pass 3i-2: triangulation orchestration moved out of app.js.
 import { triangulateCurrentFrame, triangulateAllFrames } from '../pose/triangulation.js';
@@ -2718,7 +2719,7 @@ export function setupUI() {
     });
 
     // Frame counter and FPS
-    document.getElementById('totalFrames').textContent = state.totalFrames;
+    refreshReadoutTotals();
     document.getElementById('fpsDisplay').textContent = state.fps.toFixed(1) + ' fps';
 
     window.addEventListener('beforeunload', function(e) {
@@ -2736,8 +2737,7 @@ export function setupUI() {
 
 export function updateSeekbar(frameIdx) {
     if (frameIdx === undefined) frameIdx = state.currentFrame;
-    updateSeekbarVisual(frameIdx);
-    document.getElementById('currentFrame').textContent = frameIdx + 1;
+    updateSeekbarVisual(frameIdx);   // also writes the frame/time readout
 
     // Update the 3D viewport on EVERY frame, playback included, so the 3D
     // skeleton moves as smoothly as the video and its 2D overlays. This used to
@@ -2752,7 +2752,7 @@ export function updateSeekbarVisual(frameIdx) {
     const pct = state.totalFrames > 1 ? (frameIdx / (state.totalFrames - 1)) * 100 : 0;
     document.getElementById('seekbarProgress').style.width = pct + '%';
     document.getElementById('seekbarThumb').style.left = pct + '%';
-    document.getElementById('currentFrame').textContent = frameIdx + 1;
+    showReadoutFrame(frameIdx);
     setSeekbarMarkerFrames(state.totalFrames);       // no-op unless the frame count changed
     updateIdSwitchProgress(frameIdx);                // the ID Switches tab's selected-row bar (no-op without one)
 }
@@ -3302,16 +3302,17 @@ export function seekToLabeledFrame(direction) {
         input.select();
 
         function commit() {
-            var raw = input.value.trim();
+            // The readout shows "1,234", so accept it typed back that way.
+            var raw = input.value.trim().replace(/[,\s]/g, '');
             var num = parseInt(raw, 10);
             if (!isNaN(num) && num >= 1 && num <= state.totalFrames) {
                 if (videoController) videoController.seekToFrame(num - 1);
             }
-            frameEl.textContent = state.currentFrame + 1;
+            showReadoutFrame(state.currentFrame);
         }
 
         function cancel() {
-            frameEl.textContent = state.currentFrame + 1;
+            showReadoutFrame(state.currentFrame);
         }
 
         input.addEventListener('keydown', function (ev) {
@@ -3357,6 +3358,7 @@ export function seekToLabeledFrame(direction) {
                 }
             }
             fpsEl.textContent = (state.fps || 30).toFixed(1) + ' fps';
+            refreshReadoutTotals();   // the times are frame / fps
         }
 
         function cancel() {

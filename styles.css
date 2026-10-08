@@ -2550,13 +2550,29 @@ body {
   user-select: none;
 }
 
-/* Frame counter display */
+/* Frame counter display: time / duration above frame / total. Three grid
+   columns — current values right-aligned, totals left-aligned — so the two
+   slashes stay in one vertical line whatever the digit counts. */
 .frame-display {
+  display: grid;
+  grid-template-columns: auto auto auto;
+  column-gap: 0.5ch;
+  align-items: baseline;
+  line-height: 1.25;
   font-family: "SF Mono", "Fira Code", "Cascadia Code", monospace;
   font-size: 13px;
+  font-variant-numeric: tabular-nums;
   color: var(--text-secondary);
   white-space: nowrap;
   min-width: 90px;
+}
+
+.frame-display > :nth-child(3n + 1) {
+  justify-self: end;
+}
+
+.frame-display .frame-time {
+  font-size: 0.85em;
 }
 
 .frame-display .current-frame {

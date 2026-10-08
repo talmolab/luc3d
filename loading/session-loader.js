@@ -70,6 +70,7 @@ import { showLoadingProgress, createProgressPacer, yieldToPaint } from '../ui/lo
 import { drawAllOverlays, setReprojErrorVisible } from '../ui/rendering.js';
 import { updateInfoPanel, promptImportSkeletonForAllSessions } from '../ui/info-panel.js';
 import { noteSessionCalibrationDivergence } from '../ui/calibration-notice.js';
+import { refreshReadoutTotals } from '../ui/frame-readout.js';
 import { parseSkeletonJSON } from '../import-export/skeleton-json.js';
 // Pass 3i-3: setupInteraction / setup3DViewport / setupTimeline / updateFpsDisplay /
 // hideWelcomeOverlay moved to pose/initialization.js.
@@ -1215,7 +1216,7 @@ export function rebuildVideoController() {
         timeline.setData(state.session);
     }
 
-    document.getElementById('totalFrames').textContent = state.totalFrames;
+    refreshReadoutTotals();
     document.getElementById('fpsDisplay').textContent = state.fps.toFixed(1) + ' fps';
 
     // Surface frame-accurate mediabunny backend failures in the status bar
@@ -1268,7 +1269,7 @@ export function updateTotalFrames() {
     if (maxFrames > 0) {
         state.totalFrames = maxFrames;
         state.fps = bestFps;
-        document.getElementById('totalFrames').textContent = state.totalFrames;
+        refreshReadoutTotals();
         document.getElementById('fpsDisplay').textContent = state.fps.toFixed(1) + ' fps';
         if (timeline) {
             timeline.setTotalFrames(maxFrames);
@@ -1278,7 +1279,7 @@ export function updateTotalFrames() {
         // frame count cannot leak into this one.
         state.totalFrames = 0;
         state.fps = 30;
-        document.getElementById('totalFrames').textContent = '0';
+        refreshReadoutTotals();
         document.getElementById('fpsDisplay').textContent = '30.0 fps';
         if (timeline) {
             timeline.setTotalFrames(1);
@@ -2520,8 +2521,7 @@ export async function handleLoadProjectSlpLazy(slpFile) {
         // write the frame counter + timeline span from the labeled-frame count
         // directly. attachVideosForLazyReopen refines both from the real
         // decoders once videos are attached.
-        var tfEl = document.getElementById('totalFrames');
-        if (tfEl) tfEl.textContent = state.totalFrames;
+        refreshReadoutTotals();
 
         // 3D viewport (needs a live session).
         if (hasCalibration) {
