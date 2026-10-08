@@ -12,7 +12,8 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ui = (f) => pathToFileURL(path.join(HERE, '..', 'ui', f)).href;
-const { TRAIL_PRESETS, MAX_TRAIL_FRAMES, trailFrames, trailPresetLabel } = await import(ui('trail-presets.js'));
+const { TRAIL_PRESETS, MAX_TRAIL_FRAMES, trailFrames, trailLabel, trailSecondsName, trailPresetFor, parseTrailSeconds } =
+    await import(ui('trail-presets.js'));
 const { state } = await import(ui('app-state.js'));
 const { LAZY_KEEP_BEHIND } = await import(pathToFileURL(path.join(HERE, '..', 'pose', 'lazy-residency.js')).href);
 
@@ -43,11 +44,28 @@ ok(LAZY_KEEP_BEHIND > MAX_TRAIL_FRAMES,
     `the cap stays under LAZY_KEEP_BEHIND (${MAX_TRAIL_FRAMES} < ${LAZY_KEEP_BEHIND}) — trails draw resident frames only`);
 
 // ---- labels -------------------------------------------------------------------
-eq(trailPresetLabel(TRAIL_PRESETS[0], 60), 'Off', 'Off has no frame count');
-eq(trailPresetLabel(TRAIL_PRESETS[1], 60), '¼ second (15 frames)', '¼ s at 60 fps');
-eq(trailPresetLabel(TRAIL_PRESETS[3], 100), '1 second (100 frames)', '1 s at 100 fps');
-eq(trailPresetLabel(TRAIL_PRESETS[4], 60), '2 seconds (120 frames)', '2 s at 60 fps');
-eq(trailPresetLabel(TRAIL_PRESETS[1], 2), '¼ second (1 frame)', 'singular');
+eq(trailLabel(0, 60), 'Off', 'Off has no frame count');
+eq(trailLabel(0.25, 60), '¼ second (15 frames)', '¼ s at 60 fps');
+eq(trailLabel(1, 100), '1 second (100 frames)', '1 s at 100 fps');
+eq(trailLabel(2, 60), '2 seconds (120 frames)', '2 s at 60 fps');
+eq(trailLabel(0.25, 2), '¼ second (1 frame)', 'singular');
+
+// ---- custom lengths -------------------------------------------------------------
+eq(trailPresetFor(0.5) && trailPresetFor(0.5).key, 'Half', 'a preset length finds its preset');
+eq(trailPresetFor(1.5), null, 'a custom length finds none');
+eq(trailSecondsName(1.5), '1.5 seconds', 'a custom length is named in seconds');
+eq(trailSecondsName(10 / 60), '0.167 seconds', '…to at most 3 decimals');
+eq(trailSecondsName(3), '3 seconds', 'a whole custom length');
+eq(trailLabel(1.5, 60), '1.5 seconds (90 frames)', 'custom 1.5 s at 60 fps');
+eq(trailLabel(0.75, 100), '0.75 seconds (75 frames)', 'custom 0.75 s at 100 fps');
+eq(parseTrailSeconds('1.5'), 1.5, 'parses a decimal');
+eq(parseTrailSeconds(' 3 '), 3, 'trims');
+eq(parseTrailSeconds('1,5'), 1.5, 'accepts a decimal comma');
+eq(parseTrailSeconds('.5'), 0.5, 'a leading point');
+eq(parseTrailSeconds('2.'), 2, 'a trailing point');
+for (const bad of ['', '0', '0.0', '-1', 'abc', '1.5s', '1e3', 'Infinity', '1.2.3', null]) {
+    eq(parseTrailSeconds(bad), null, `rejects ${JSON.stringify(bad)}`);
+}
 
 // ---- state.trailLength is derived, and follows fps ------------------------------
 const fps0 = state.fps;

@@ -9,7 +9,7 @@
 
 import { state, videoController, interactionManager, viewport3d, timeline, paneManager,
          setVideoController, setInteractionManager, setViewport3D, setTimeline, VIEW_NAMES,
-         getActiveSession, hasRealVideo, setInstanceClipboard, getInstanceClipboard } from './app-state.js?v=90cd4d634fc2';
+         getActiveSession, hasRealVideo, setInstanceClipboard, getInstanceClipboard } from './app-state.js?v=52890dc262e0';
 // Block 1 (Prompt 4): the timeline collapse/fit/sync helpers and the
 // Ctrl/Cmd+J keyboard shortcut installer live in `timeline-controller.js`.
 // Import them explicitly so the local call sites in this file (menu
@@ -21,55 +21,56 @@ import {
     installTimelineShortcuts,
     getCachedTimelineHeight,
     setCachedTimelineHeight,
-} from './timeline-controller.js?v=90cd4d634fc2';
+} from './timeline-controller.js?v=52890dc262e0';
 import { Skeleton, Camera, Instance, InstanceGroup, FrameGroup, UnlinkedInstance, Identity, Session,
-         someValidPoint3d } from '../pose/pose-data.js?v=90cd4d634fc2';
+         someValidPoint3d } from '../pose/pose-data.js?v=52890dc262e0';
 import { ensureLazyFrameData, batchLoadLazyFrames, getInstanceGroupsForFrame, evictLazyFrames,
          loadAllLazyFrames, updateTimelineForFrame, triangulateAndReproject,
-         resolveTriangulationMethod } from '../pose/triangulation.js?v=90cd4d634fc2';
-import { LAZY_PLAYBACK_AHEAD } from '../pose/lazy-residency.js?v=90cd4d634fc2';
-import { drawAllOverlays, getVisibilitySettings, updateFrameCounters, setReprojErrorVisible } from './rendering.js?v=90cd4d634fc2';
+         resolveTriangulationMethod } from '../pose/triangulation.js?v=52890dc262e0';
+import { LAZY_PLAYBACK_AHEAD } from '../pose/lazy-residency.js?v=52890dc262e0';
+import { drawAllOverlays, getVisibilitySettings, updateFrameCounters, setReprojErrorVisible } from './rendering.js?v=52890dc262e0';
 import { updateInfoPanel, updateFrameInfo, updateTriangulationBadge,
          populateVideosTable, populateCamerasTable, populateSkeletonTable,
          setupPanelTabs, setupSkeletonEditing, exportSkeletonJSON,
          ensureSession, populateSessionAssignTable, populateUnassignedVideos,
-         populateTimelineVisibility } from './info-panel.js?v=90cd4d634fc2';
-import { consumeInfoPanelStale, collapseViewport3D } from './panel-visibility.js?v=90cd4d634fc2';
+         populateTimelineVisibility } from './info-panel.js?v=52890dc262e0';
+import { consumeInfoPanelStale, collapseViewport3D } from './panel-visibility.js?v=52890dc262e0';
 // Block 2 (Prompt 4): rename migration for the per-session hidden-track
 // / hidden-identity Sets when the user renames an entity.
-import { renameHiddenTrack, renameHiddenIdentity } from './timeline-visibility.js?v=90cd4d634fc2';
+import { renameHiddenTrack, renameHiddenIdentity } from './timeline-visibility.js?v=52890dc262e0';
 // View ▸ Define Planes — "Defining Plane Mode".
-import { togglePlaneMode, syncPlanes3D } from './plane-definition.js?v=90cd4d634fc2';
+import { togglePlaneMode, syncPlanes3D } from './plane-definition.js?v=52890dc262e0';
 // The Visibility panel's `Planes` section — the four ids, named from the one
 // module that reads them so this file cannot drift from it.
-import { PLANE_VIS_IDS } from './plane-visibility.js?v=90cd4d634fc2';
+import { PLANE_VIS_IDS } from './plane-visibility.js?v=52890dc262e0';
 import { newProject, markDirty, clearDirty, quickSave, saveAs, saveProjectSlp, saveProject,
-         handleLoadProject, showLoading, hideLoading, setStatus } from '../import-export/save-load.js?v=90cd4d634fc2';
-import { handleLoadSlpFile, handleAddSlp, handleLoadPoints3dH5 } from '../import-export/slp-import.js?v=90cd4d634fc2';
-import { pickFiles, parseCalibrationJSON, exportCalibrationTOML, downloadTOML, parseSlpH5 } from '../import-export/file-io.js?v=90cd4d634fc2';
+         handleLoadProject, showLoading, hideLoading, setStatus } from '../import-export/save-load.js?v=52890dc262e0';
+import { handleLoadSlpFile, handleAddSlp, handleLoadPoints3dH5 } from '../import-export/slp-import.js?v=52890dc262e0';
+import { pickFiles, parseCalibrationJSON, exportCalibrationTOML, downloadTOML, parseSlpH5 } from '../import-export/file-io.js?v=52890dc262e0';
 import { handleLoadCalibration, handleLoadVideos, handleLoadMultiSession,
-         loadSingleSessionFromCache, handleEmptySession, showSessionModeModal, autoAssignVideosToCameras } from '../loading/session-loader.js?v=90cd4d634fc2';
-import { OnDemandVideoDecoder, VideoController } from '../loading/video.js?v=90cd4d634fc2';
+         loadSingleSessionFromCache, handleEmptySession, showSessionModeModal, autoAssignVideosToCameras } from '../loading/session-loader.js?v=52890dc262e0';
+import { OnDemandVideoDecoder, VideoController } from '../loading/video.js?v=52890dc262e0';
 
 // Pass 3i-1: tracker functions moved out of app.js.
-import { trackCurrentFrame, trackAll, findMatchForSelected } from '../pose/tracker.js?v=90cd4d634fc2';
+import { trackCurrentFrame, trackAll, findMatchForSelected } from '../pose/tracker.js?v=52890dc262e0';
 // Track Frame Range (#212): the Track Frame split button's dropdown entry.
-import { showTrackRangeModal } from './track-range-modal.js?v=90cd4d634fc2';
-import { showAlignViewsModal } from './view-align-modal.js?v=90cd4d634fc2';
-import { onColorByChange, setColorByIdentity } from './color-by.js?v=90cd4d634fc2';
-import { TRAIL_PRESETS, trailPresetLabel } from './trail-presets.js?v=90cd4d634fc2';
-import { installSeekbarTooltip } from './seekbar-tooltip.js?v=90cd4d634fc2';
-import { showReadoutFrame, refreshReadoutTotals } from './frame-readout.js?v=90cd4d634fc2';
-import { installSeekbarMarkers, seekbarMarkerAt, describeSwitchMarker, setSeekbarMarkerFrames } from './seekbar-markers.js?v=90cd4d634fc2';
+import { showTrackRangeModal } from './track-range-modal.js?v=52890dc262e0';
+import { showAlignViewsModal } from './view-align-modal.js?v=52890dc262e0';
+import { onColorByChange, setColorByIdentity } from './color-by.js?v=52890dc262e0';
+import { TRAIL_PRESETS, MAX_TRAIL_FRAMES, trailPresetFor, trailLabel, trailFrames, trailRate,
+         parseTrailSeconds } from './trail-presets.js?v=52890dc262e0';
+import { installSeekbarTooltip } from './seekbar-tooltip.js?v=52890dc262e0';
+import { showReadoutFrame, refreshReadoutTotals } from './frame-readout.js?v=52890dc262e0';
+import { installSeekbarMarkers, seekbarMarkerAt, describeSwitchMarker, setSeekbarMarkerFrames } from './seekbar-markers.js?v=52890dc262e0';
 // Pass 3i-2: triangulation orchestration moved out of app.js.
-import { triangulateCurrentFrame, triangulateAllFrames } from '../pose/triangulation.js?v=90cd4d634fc2';
+import { triangulateCurrentFrame, triangulateAllFrames } from '../pose/triangulation.js?v=52890dc262e0';
 // User settings: default triangulation method + editable keyboard bindings.
-import { getDefaultTriangulationMethod, onDefaultTriangulationMethodChange, setHandler, dispatchEvent, getActions, formatBinding } from './settings.js?v=90cd4d634fc2';
-import { shouldIgnoreShortcut, installFocusRelease } from './keyboard-target.js?v=90cd4d634fc2';
-import { showSettingsModal } from './settings-modal.js?v=90cd4d634fc2';
+import { getDefaultTriangulationMethod, onDefaultTriangulationMethodChange, setHandler, dispatchEvent, getActions, formatBinding } from './settings.js?v=52890dc262e0';
+import { shouldIgnoreShortcut, installFocusRelease } from './keyboard-target.js?v=52890dc262e0';
+import { showSettingsModal } from './settings-modal.js?v=52890dc262e0';
 // Pass 3i-3: addNewInstanceSmart and update3DViewport moved to pose/initialization.js.
-import { addNewInstanceSmart, update3DViewport, navigateToFrame } from '../pose/initialization.js?v=90cd4d634fc2';
-import { runIdSwitchChecks, setIdSwitchNavigator, setIdSwitchRefresher, updateIdSwitchProgress } from './id-switch-modal.js?v=90cd4d634fc2';
+import { addNewInstanceSmart, update3DViewport, navigateToFrame } from '../pose/initialization.js?v=52890dc262e0';
+import { runIdSwitchChecks, setIdSwitchNavigator, setIdSwitchRefresher, updateIdSwitchProgress } from './id-switch-modal.js?v=52890dc262e0';
 // Pass 3f / 3i-4: identity-assignment workflow symbols moved out of app.js.
 // (`swapTracks` joined this module in 3i-4; `seekToLabeledFrame` is now in-module.)
 import {
@@ -78,10 +79,10 @@ import {
     startManualAssignment, runSingleFrameTriangulation, showMultiFrameModal,
     purgeTriangulationDataForGroup,
     swapTracks,
-} from './identity-assignment.js?v=90cd4d634fc2';
+} from './identity-assignment.js?v=52890dc262e0';
 // Custom Instance Delete: DOM-free matching/cascade/durability logic. Imports no
 // project modules itself, which is why it can also be unit tested in isolation.
-import { collectDeletionTargets, executeDeletion, deleteTargetsFromStore, groupMemberTargets } from './custom-delete-ops.js?v=90cd4d634fc2';
+import { collectDeletionTargets, executeDeletion, deleteTargetsFromStore, groupMemberTargets } from './custom-delete-ops.js?v=52890dc262e0';
 // Pass 3g: export-modals workflow symbols moved out of app.js.
 import {
     exportLabels, exportPoints3dH5, exportReprojH5,
@@ -89,19 +90,19 @@ import {
     showSlpExportPerSessionModal,
     showTriangulateMultiFrameModal,
     showGroupByTrackModal, groupByIdentityAndTriangulateAll, showExport3DVideoModal,
-} from './export-modals.js?v=90cd4d634fc2';
-import { showOverlayExportModal } from './overlay-export-modal.js?v=90cd4d634fc2';
+} from './export-modals.js?v=52890dc262e0';
+import { showOverlayExportModal } from './overlay-export-modal.js?v=52890dc262e0';
 // Pass 3h: sessions-panes workflow symbols moved out of app.js.
 import {
     panelRenderers, multiSelectViews, activatePanelForView, scrollViewStripTo,
     refreshPaneInteractions, clearMultiSelect, clampRotation, syncRotationUI,
     populateViewStrip, populateSessionsPanel, populateSessionStrip,
     showMoveVideoModal, removeSession, switchSession,
-} from './sessions-panes.js?v=90cd4d634fc2';
+} from './sessions-panes.js?v=52890dc262e0';
 import {
     nameExists, countNulledByCamera, deleteTrackAt, deleteIdentityAt,
-} from './track-identity-ops.js?v=90cd4d634fc2';
-import { setSessionRotation } from './video-filters.js?v=90cd4d634fc2';
+} from './track-identity-ops.js?v=52890dc262e0';
+import { setSessionRotation } from './video-filters.js?v=52890dc262e0';
 
 // ============================================
 // Rename Track / Identity modal
@@ -970,56 +971,60 @@ export function setupMenus() {
 
     // Node Trails presets — issue #102. A single active length, picked from
     // the Tracks ▸ Node Trails submenu or the toolbar's Trails button; both are
-    // built from TRAIL_PRESETS (ui/trail-presets.js) and go through
-    // setTrailSeconds, so their checkmarks and the button's tooltip always show
-    // state.trailSeconds. A preset is a span of TIME: its frame count,
-    // state.trailLength, is derived from state.fps, and the labels re-read it
-    // each time a menu opens — the rate changes when a video loads or the FPS
-    // pill is edited, and nothing here is told.
+    // built from TRAIL_PRESETS (ui/trail-presets.js) plus a "Custom…" item, and
+    // go through setTrailSeconds, so their checkmarks and the button's tooltip
+    // always show state.trailSeconds. A length is a span of TIME: its frame
+    // count, state.trailLength, is derived from state.fps, and the labels
+    // re-read it each time a menu opens — the rate changes when a video loads
+    // or the FPS pill is edited, and nothing here is told.
     // The toolbar's menu opens on HOVER (pure CSS, like the Triangulate split
-    // buttons), so the only wiring it needs is its items.
+    // buttons), so the only wiring it needs is its items. That is also why a
+    // custom length is typed into a dialog rather than into the menu: a field
+    // in a hover menu closes under the user the moment the pointer drifts.
     var trailsBtn = document.getElementById('tbTrails');
     var trailsDropdown = document.getElementById('trailsDropdown');
     var trailsMenu = document.getElementById('trailsMenu');
     var trailsParent = document.getElementById('menuTrailsParent');
     var trailsSubmenu = document.getElementById('menuTrailsSubmenu');
-    var trailItems = [];    // { preset, el } for both menus
-    function trailPresetFor(seconds) {
-        return TRAIL_PRESETS.find(function (p) { return p.seconds === seconds; }) || null;
-    }
-    function trailDescription() {
-        if (!(state.trailLength > 0)) return 'off';
-        var p = trailPresetFor(state.trailSeconds);
-        // A length set in frames (state.trailLength = n) matches no preset.
-        return p ? trailPresetLabel(p, state.fps) : state.trailLength + ' frames';
-    }
+    var trailItems = [];    // { preset, el } for both menus; preset null = Custom…
     function updateTrailChecks() {
+        // A length no preset matches is custom — typed, or set in frames
+        // (state.trailLength = n).
+        var custom = state.trailSeconds > 0 && !trailPresetFor(state.trailSeconds);
         trailItems.forEach(function (it) {
-            var on = state.trailSeconds === it.preset.seconds;
+            var on = it.preset ? state.trailSeconds === it.preset.seconds : custom;
             it.el.querySelector('.trail-check').textContent = on ? '✓' : '';
-            it.el.querySelector('.trail-label').textContent = trailPresetLabel(it.preset, state.fps);
+            it.el.querySelector('.trail-label').textContent = it.preset
+                ? trailLabel(it.preset.seconds, state.fps)
+                : (custom ? 'Custom: ' + trailLabel(state.trailSeconds, state.fps) + '…' : 'Custom…');
             it.el.setAttribute('aria-checked', on ? 'true' : 'false');
         });
         // The label is a bare "Trails ▾" to save toolbar width; the current
         // length rides in the tooltip instead.
-        if (trailsBtn) trailsBtn.title = 'Node trails: ' + trailDescription();
+        if (trailsBtn) trailsBtn.title = 'Node trails: ' +
+            (state.trailSeconds > 0 ? trailLabel(state.trailSeconds, state.fps) : 'off');
     }
     function setTrailSeconds(seconds) {
         state.trailSeconds = seconds;
         updateTrailChecks();
         drawAllOverlays(state.currentFrame);
-        setStatus(seconds > 0 ? ('Node trails: ' + trailDescription()) : 'Node trails off', 'success');
+        setStatus(seconds > 0 ? ('Node trails: ' + trailLabel(seconds, state.fps)) : 'Node trails off', 'success');
     }
     function addTrailItems(menu, className, idPrefix, onPick) {
         if (!menu) return;
-        TRAIL_PRESETS.forEach(function (p) {
+        TRAIL_PRESETS.concat([null]).forEach(function (p) {
             var item = document.createElement('div');
             item.className = className;
-            if (idPrefix) item.id = idPrefix + p.key;
+            if (idPrefix) item.id = idPrefix + (p ? p.key : 'Custom');
             item.setAttribute('role', 'menuitemradio');
-            item.setAttribute('data-trail-sec', String(p.seconds));
+            if (p) item.setAttribute('data-trail-sec', String(p.seconds));
+            else item.setAttribute('data-trail-custom', '');
             item.innerHTML = '<span><span class="trail-check"></span><span class="trail-label"></span></span>';
-            item.addEventListener('click', function () { onPick(); setTrailSeconds(p.seconds); });
+            item.addEventListener('click', function () {
+                onPick();
+                if (p) setTrailSeconds(p.seconds);
+                else showCustomTrailModal();
+            });
             menu.appendChild(item);
             trailItems.push({ preset: p, el: item });
         });
@@ -1034,6 +1039,68 @@ export function setupMenus() {
         el.addEventListener('focusin', updateTrailChecks);
     });
     updateTrailChecks();
+
+    // Custom… — a length in SECONDS, like the presets, so it follows the frame
+    // rate too; the dialog shows what it comes to in frames as it is typed.
+    // Enter applies, Esc cancels.
+    function showCustomTrailModal() {
+        if (document.getElementById('trailCustomModal')) return;
+        var overlay = document.createElement('div');
+        overlay.className = 'multi-frame-modal-overlay';
+        overlay.id = 'trailCustomModal';
+        var modal = document.createElement('div');
+        modal.className = 'multi-frame-modal trail-custom-modal';
+        modal.innerHTML =
+            '<h3>Custom Node Trail</h3>' +
+            '<label class="rename-name-label" for="trailCustomInput">Trail length in seconds</label>' +
+            '<input type="text" inputmode="decimal" autocomplete="off" class="rename-name-input" id="trailCustomInput">' +
+            '<p class="trail-custom-frames" id="trailCustomFrames"></p>' +
+            '<div class="modal-error" id="trailCustomError"></div>' +
+            '<div class="modal-actions">' +
+            '<button id="trailCustomCancel">Cancel</button>' +
+            '<button class="primary" id="trailCustomApply">Apply</button>' +
+            '</div>';
+        overlay.appendChild(modal);
+        document.body.appendChild(overlay);
+
+        var input = modal.querySelector('#trailCustomInput');
+        var framesEl = modal.querySelector('#trailCustomFrames');
+        var errorEl = modal.querySelector('#trailCustomError');
+        var applyBtn = modal.querySelector('#trailCustomApply');
+        input.value = state.trailSeconds > 0 ? String(Math.round(state.trailSeconds * 1000) / 1000) : '1';
+
+        function refresh() {
+            var sec = parseTrailSeconds(input.value);
+            applyBtn.disabled = sec == null;
+            errorEl.textContent = sec == null && input.value.trim() !== '' ? 'Enter a number of seconds above 0.' : '';
+            if (sec == null) { framesEl.textContent = ''; return; }
+            var rate = trailRate(state.fps), n = trailFrames(sec, state.fps);
+            framesEl.textContent = '= ' + n + (n === 1 ? ' frame' : ' frames') + ' at ' +
+                (Math.round(rate * 100) / 100) + ' fps' +
+                (sec * rate > MAX_TRAIL_FRAMES + 0.5 ? ', the most a trail draws' : '');
+        }
+        function close() {
+            document.removeEventListener('keydown', onKey, true);
+            overlay.remove();
+        }
+        function apply() {
+            var sec = parseTrailSeconds(input.value);
+            if (sec == null) return;
+            close();
+            setTrailSeconds(sec);
+        }
+        function onKey(e) {
+            if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(); }
+            else if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); apply(); }
+        }
+        input.addEventListener('input', refresh);
+        document.addEventListener('keydown', onKey, true);
+        modal.querySelector('#trailCustomCancel').addEventListener('click', close);
+        applyBtn.addEventListener('click', apply);
+        refresh();
+        input.focus();
+        input.select();
+    }
 
     // ============================================
     // Tracks Menu Handlers
