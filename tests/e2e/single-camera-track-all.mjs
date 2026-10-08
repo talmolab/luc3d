@@ -16,7 +16,9 @@
  *  3. A swap planted in the tracks (animals 0 and 1 exchanged for the last 26%)
  *     is found by Tracks ▸ Check ID Switches (Body Size) as a row; Fix switch
  *     names the TRACKS in its dialog and puts every detection back on its
- *     animal's track; Undo plants the swap back exactly.
+ *     animal's track; Undo plants the swap back exactly. The row's window (its
+ *     landing frame, progress bar and where Fix takes the current frame as the
+ *     boundary) reaches 2 s either side of the close spell on one camera.
  *  4. Where to look: Track All leaves candidate moments on the session, and the
  *     checks test them. A swap planted while the two animals are far apart,
  *     with a candidate moment there, gets a row AT the moment, saying why it was
@@ -137,14 +139,25 @@ try {
     check(rowFrames.length === 1 && rowFrame != null, `its one row is at the planted encounter (rows at ${rowFrames.join(', ')})`);
     const rowSel = `#idSwitchPanel .id-switch-row[data-frame="${rowFrame}"]`;
     await page.click(rowSel + ' .id-switch-line1');
-    await page.evaluate(async () => { const I = await import('/pose/initialization.js'); I.navigateToFrame(1700); });
+    const win = await page.evaluate((rf) => {
+        const S = window.__lucid.state.session, m = S._idSwitch.results.size.flags.find(x => x.frame === rf);
+        const row = document.querySelector(`#idSwitchPanel .id-switch-row[data-frame="${rf}"]`), bar = document.querySelector('#idSwitchPanel .id-switch-pbar');
+        return { start: m.startFrame, go: Number(row.dataset.go), now: window.__lucid.state.currentFrame, fps: window.__lucid.state.fps || 30,
+                 p0: bar && Number(bar.dataset.p0), p1: bar && Number(bar.dataset.p1), title: bar ? bar.getAttribute('title') : '' };
+    }, rowFrame);
+    check(win.go === Math.max(0, win.start - 2 * win.fps) && win.now === win.go && win.p0 === win.go && win.p1 === rowFrame + 2 * win.fps && /^2 s before/.test(win.title),
+        `on one camera the row's window reaches 2 s either side: lands at ${win.go} (close ${win.start}–${rowFrame}), bar ${win.p0}–${win.p1}, "${win.title.slice(0, 40)}"`);
+    const cur = rowFrame + Math.round(1.5 * win.fps);                   // 1.5 s after the close spell: outside a ±1 s window
+    await page.evaluate(async (f) => { const I = await import('/pose/initialization.js'); I.navigateToFrame(f); }, cur);
     await page.click(rowSel + ' .id-switch-fix');
     const dlg = await page.evaluate(() => { const d = document.querySelector('.id-switch-fix-modal'); return d ? d.textContent : ''; });
     check(/\(their tracks\)/.test(dlg) && !/in every camera view/.test(dlg), 'the dialog says it swaps their tracks');
+    check(new RegExp('Starts at frame ' + (cur + 1).toLocaleString('en-US') + ': the frame you are on').test(dlg),   // frames shown 1-based
+        `the boundary is the current frame, 1.5 s after the close spell (inside the 2-s window): "${(dlg.match(/Starts at[^.]*\./) || [''])[0]}"`);
     await page.click('#idSwitchFixOk');
     const fixed = await page.evaluate(() => window.__tracks());
     let wrong = 0;
-    for (let f = 1700; f < 2250; f++) for (let a = 0; a < 3; a++) if (fixed[f][a] !== tr[f][a]) wrong++;
+    for (let f = cur; f < 2250; f++) for (let a = 0; a < 3; a++) if (fixed[f][a] !== tr[f][a]) wrong++;
     check(wrong === 0, `after Fix every detection from the fix on is back on its animal's track (${wrong} wrong)`);
     check(JSON.stringify(fixed.slice(0, 1655)) === JSON.stringify(tr.slice(0, 1655)), '…and nothing before the swap moved');
     await page.click(rowSel + ' .id-switch-line1');

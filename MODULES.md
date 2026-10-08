@@ -3681,7 +3681,16 @@ encounter after the run — for a lone middle flag that encounter is no change
 point of its own — or null when the run reaches the end) and an 'end''s
 `switchedAt` (the run's first encounter, or null when the run starts the
 session). A change point within `followSeconds` after another of a different
-pair sharing an identity is its follow-on (`followOf`).
+pair sharing an identity is its follow-on (`followOf`). A candidate moment's
+change point is taken as if it came 3 s earlier, so other pairs' encounter rows
+up to 3 s before it follow IT (`linkFollowOns`): the moment was tested on both
+sides of the exact place, while a nearby encounter row of another pair is
+usually the swapped animal's wrong label showing up there. On the 35 SLAP videos
+this made the swapped pair's row the primary in 13 of 23 swaps instead of 11,
+and Fixing the primaries fully undid 7 instead of 6 (brightness and topC
+unchanged). Ranking every row of a 60-s cluster by score instead was worse
+(4 undone): a strong false row a minute away then claims the real one. Without
+moments the order is plain time.
 
 **Candidate moments (`opts.moments`, single camera).** Places a switch may have
 happened OUTSIDE a close encounter — `[{frame, startFrame, identityA, identityB,
@@ -8925,7 +8934,9 @@ fix / undo — overlays, 3D, info panel, timeline — keeping this module a leaf
 markers on the seekbar — called after a check, from `updateInfoPanel` and from
 `switchSession`); `openIdSwitchPanel()` (show the panel, if hidden, on the tab);
 `clearIdSwitchResults(session?)` (called by `runTrackingPass` before it relabels);
-`ID_SWITCH_LEAD_IN_SECONDS`, `idSwitchLeadInFrame(marker, fps)`,
+`ID_SWITCH_LEAD_IN_SECONDS` (1), `ID_SWITCH_SINGLE_CAMERA_LEAD_SECONDS` (2),
+`idSwitchLeadSeconds(session)` (2 on a single-camera session, else 1),
+`idSwitchLeadInFrame(marker, fps, seconds?)`,
 `updateIdSwitchProgress(frame)`; back-compat
 `runSizeSwitchCheck`. `inject: {createEmbedder, hasWebGPU, createBrightnessSampler}`
 replaces the image model, the WebGPU probe and the coat-brightness sampler —
@@ -9016,7 +9027,13 @@ second", the two checks named in its tooltip). Clicking a row navigates there; t
 seekbar tick (`reviewed`). **Where a row lands:** an encounter's frame is the
 LAST close sample (the labels are read from the tracklets AFTER it), so a swap
 happens before it, while the animals are close; clicking a row therefore lands
-`ID_SWITCH_LEAD_IN_SECONDS` (1 s) before the close spell STARTS
+`ID_SWITCH_LEAD_IN_SECONDS` (1 s) before the close spell STARTS — 2 s on a
+single-camera session (`idSwitchLeadSeconds`), where the whole row window (landing
+frame, progress bar, highlight, and where a Fix takes the current frame as its
+boundary) reaches 2 s either side: one view places the close spell less exactly,
+and on the 35 SLAP videos the labels flipped 1.5–2.5 s outside a ±1 s window on 2
+rows naming the swapped pair; with ±2 s both Fixes undo their swap (7 -> 9 of 24
+rows for images, 8 -> 10 of 30 for brightness; ±3 s adds none)
 (`idSwitchLeadInFrame`, from the flag's `startFrame`; its end frame when the start
 is unknown, e.g. a file saved before start frames were kept), so pressing play
 shows the whole interaction; **end ⇥** jumps to the end frame, and Next

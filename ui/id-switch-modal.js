@@ -57,10 +57,25 @@ function ordinal(n) {
 /** Seconds of lead-in before an encounter starts: a row lands here so pressing play shows the whole interaction. */
 export const ID_SWITCH_LEAD_IN_SECONDS = 1;
 
-/** Where a row lands: `ID_SWITCH_LEAD_IN_SECONDS` before its close spell starts (its end frame if the start is unknown). */
-export function idSwitchLeadInFrame(m, fps) {
+/**
+ * The same on a single-camera session, where a row's window (its progress bar, the in-view highlight, and
+ * where a Fix takes the current frame as its boundary) reaches 2 s either side of the close spell. One view
+ * places the spell less exactly than 3D does: on the 35 proofread SLAP videos the labels flipped 1.5–2.5 s
+ * outside a ±1 s window on 2 rows that do name the swapped pair, so the boundary could not be put there —
+ * with ±2 s both Fixes undo their swap (rows that do: 7 -> 9 of 24 for images, 8 -> 10 of 30 for coat
+ * brightness); ±3 s adds none.
+ */
+export const ID_SWITCH_SINGLE_CAMERA_LEAD_SECONDS = 2;
+
+/** A session's row window, in seconds either side of the close spell. */
+export function idSwitchLeadSeconds(session) {
+    return singleCameraName(session) ? ID_SWITCH_SINGLE_CAMERA_LEAD_SECONDS : ID_SWITCH_LEAD_IN_SECONDS;
+}
+
+/** Where a row lands: `seconds` (default `ID_SWITCH_LEAD_IN_SECONDS`) before its close spell starts (its end frame if the start is unknown). */
+export function idSwitchLeadInFrame(m, fps, seconds) {
     var start = m.startFrame != null && m.startFrame <= m.frame ? m.startFrame : m.frame;
-    return Math.max(0, start - Math.round(ID_SWITCH_LEAD_IN_SECONDS * (fps > 0 ? fps : 30)));
+    return Math.max(0, start - Math.round((seconds != null ? seconds : ID_SWITCH_LEAD_IN_SECONDS) * (fps > 0 ? fps : 30)));
 }
 
 /** "2:00.3" from a 0-based frame index at the app's frame rate (tenths of a second). */
@@ -438,11 +453,14 @@ function aboutHtml(st, ran) {
 var _prog = null, _progStale = true;        // {fill, head, p0, p1} of the selected row's bar
 var _scrubbing = false, _scrubTo = null;    // a press on the bar is in progress / the frame it last sent
 
-/** A row's interval: p0 (landing, 1 s before the close spell) .. s (close starts) .. f.frame (close ends) .. p1 (1 s after). */
+/**
+ * A row's interval: p0 (landing, `sec` before the close spell) .. s (close starts) .. f.frame (close ends) ..
+ * p1 (`sec` after); `sec` = 1, or 2 on a single-camera session (`idSwitchLeadSeconds`).
+ */
 function rowRange(f) {
-    var fps = state.fps > 0 ? state.fps : 30, lead = Math.round(ID_SWITCH_LEAD_IN_SECONDS * fps);
+    var fps = state.fps > 0 ? state.fps : 30, sec = idSwitchLeadSeconds(getActiveSession()), lead = Math.round(sec * fps);
     var s = f.startFrame != null && f.startFrame <= f.frame ? f.startFrame : f.frame;
-    return { p0: idSwitchLeadInFrame(f, fps), s: s, p1: f.frame + lead };
+    return { p0: idSwitchLeadInFrame(f, fps, sec), s: s, p1: f.frame + lead, sec: sec };
 }
 
 /** Highlight a row's two animals in the views over its interval (ui/id-switch-highlight.js), or stop. */
@@ -462,7 +480,7 @@ function progressHtml(f) {
     var track = 'linear-gradient(to right, ' + lead + ' 0 ' + pct(s) + ', transparent ' + pct(s) + ' ' + pct(f.frame) +
         ', ' + lead + ' ' + pct(f.frame) + ' 100%)';
     return '<div class="id-switch-pbar" data-p0="' + p0 + '" data-p1="' + p1 + '" title="' +
-        ID_SWITCH_LEAD_IN_SECONDS + ' s before (orange) → close ' + fmtTenths(s) + '–' + fmtTenths(f.frame) + ' (red) → ' + ID_SWITCH_LEAD_IN_SECONDS + ' s after (orange) — click or drag to go to a frame">' +
+        r.sec + ' s before (orange) → close ' + fmtTenths(s) + '–' + fmtTenths(f.frame) + ' (red) → ' + r.sec + ' s after (orange) — click or drag to go to a frame">' +
         '<div class="id-switch-ptrack" style="background-image:' + track + '">' +
         // fill first, band over it: the red close spell stays visible as the fill passes it
         '<div class="id-switch-pfill" style="width:' + pct(cur) + '"></div>' +
@@ -508,7 +526,7 @@ function afterIdentityChange(session) {
 /** The confirmation dialog for fixing row `f`. Cancel / Esc change nothing. */
 function openFixDialog(session, st, f) {
     var res = st.results[f.cue] || st.results.size;
-    var rr = rowRange(f);                          // the row's window: its progress bar, lead-in .. 1 s after
+    var rr = rowRange(f);                          // the row's window: its progress bar, lead-in .. lead-out
     var plan = idSwitchFixPlan(f, res, { currentFrame: state.currentFrame, totalFrames: state.totalFrames, window: [rr.p0, rr.p1] });
     if (!plan) { setStatus('Nothing to fix here: the stretch this switch covers is empty', 'warning'); return; }
     var idA = identityIdByName(session, plan.nameA), idB = identityIdByName(session, plan.nameB);
@@ -586,7 +604,7 @@ function applyFix(session, st, f, plan, idA, idB) {
     st.current = fix.key;
     markDirty();
     var nav = st.navigate || _navigate;
-    if (nav) nav(idSwitchLeadInFrame(f, state.fps));          // back to the lead-in: play to see the fixed labels
+    if (nav) nav(idSwitchLeadInFrame(f, state.fps, idSwitchLeadSeconds(session)));   // back to the lead-in: play to see the fixed labels
     afterIdentityChange(session);
     updateIdSwitchProgress(state.currentFrame);
     setStatus('Fixed: swapped ' + plan.nameA + ' ↔ ' + plan.nameB + ' on frames ' + (plan.from + 1).toLocaleString() + '–' +
@@ -632,7 +650,7 @@ function rowHtml(session, st, f, both) {
     return '<div class="id-switch-row cue-' + cue + (f.agree ? ' cue-both-' + f.cue + '-' + f.agree.cue : '') +
         (f.continues || f.followOf != null ? ' is-repeat' : '') + (rev ? ' is-reviewed' : '') +
         (fixed ? ' is-fixed' : '') +
-        (st.current === key ? ' is-current' : '') + '" data-frame="' + f.frame + '" data-go="' + idSwitchLeadInFrame(f, state.fps) +
+        (st.current === key ? ' is-current' : '') + '" data-frame="' + f.frame + '" data-go="' + idSwitchLeadInFrame(f, state.fps, idSwitchLeadSeconds(session)) +
         '" data-key="' + escapeHtml(key) + '">' +
         '<input type="checkbox" class="id-switch-tick" title="Reviewed"' + (rev ? ' checked' : '') + '>' +
         '<div class="id-switch-main"><div class="id-switch-line1"><span class="id-switch-time">' + fmtTime(f.frame) + '</span>' +
@@ -729,7 +747,7 @@ export function refreshIdSwitchPanel(session) {
     _progStale = true;                               // the list was rebuilt: re-find the selected row's bar
     highlightRow(rows.filter(function (f) { return rowKey(f) === st.current; })[0] || null);
     var nav = st.navigate || _navigate;
-    // A row lands ID_SWITCH_LEAD_IN_SECONDS before the animals come close (data-go), so pressing play
+    // A row lands its lead-in (1 s, 2 s on one camera) before the animals come close (data-go), so pressing play
     // shows the whole interaction — the swap happens WHILE they are close, and the encounter's own
     // frame (its end, data-frame) is after it. "end ⇥" jumps to that end instead.
     var byKey = new Map(rows.map(function (f) { return [rowKey(f), f]; }));

@@ -703,6 +703,13 @@ the animal count, connect single breaks). Rules:
   between them unfixed (topC: 93.8% -> 99.9% correct after both Fixes; SLAP:
   false rows 71 -> 51, 18 of 59 caught instead of 17). Brightness keeps 0 (its
   encounter scores are noise); size and multi-camera are unchanged.
+- **Two more single-camera choices in the ID Switches tab, both measured on the
+  35 SLAP videos.** A candidate moment's row outranks other pairs' encounter
+  rows up to 3 s before it (they become its follow-ons; the right pair is then
+  the primary in 13 of 23 swaps instead of 11). And a row's window — landing
+  frame, progress bar, the range where a Fix takes the current frame as its
+  boundary — is ±2 s, not ±1 s (`idSwitchLeadSeconds`), because one view places
+  the close spell less exactly. Multi-camera keeps 1 s.
 - **Eager only.** A lazy (> 150 MB) single-camera project is refused with a
   reason, never tracked from its resident window — the resident-only bug class.
 

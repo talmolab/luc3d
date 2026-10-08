@@ -312,6 +312,17 @@ console.log('6. momentChangePoints: one row (and one fix) per swapped stretch');
     ok(r.rows.length === 1 && r.rows[0].switchedAt === null && plan(r, r.rows[0]).from === 0,
         `with no earlier encounter it covers the session from frame 0 (from ${r.rows[0] && plan(r, r.rows[0]).from})`);
 
+    // a moment outranks another pair's encounter row up to 3 s before it: that row follows the moment
+    sc = encounters(6, [2], [0, 2], ['a', 'c']);                    // an a/c encounter onset at 300
+    r = run(sc, [moment(340, 'after')]);                            // an a/b moment 40 frames (1.3 s) later
+    let enc = r.rows.find(x => !x.look), mom = r.rows.find(x => x.look);
+    ok(mom.followOf == null && enc.followOf === 340,
+        `the moment is the primary, the a/c row 1.3 s before it follows it (moment followOf ${mom.followOf}, a/c row ${enc.followOf})`);
+    sc = encounters(6, [2], [0, 2], ['a', 'c']);
+    r = run(sc, [moment(400, 'after')]);                            // 100 frames (3.3 s) later: plain time order
+    enc = r.rows.find(x => !x.look); mom = r.rows.find(x => x.look);
+    ok(enc.followOf == null && mom.followOf === 300, `more than 3 s apart, the earlier row stays the primary (moment followOf ${mom.followOf})`);
+
     // two moments of the pair with only clean encounters around them pair with each other
     sc = encounters(6, []);
     r = run(sc, [moment(130, 'after'), moment(170, 'before')]);
