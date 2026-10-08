@@ -23,6 +23,8 @@
  *  4. Every Ungrouped data row has one cell per header column, with Type,
  *     Points and Score under their headers; each camera's header row spans
  *     the whole table.
+ *  5. In both tables the identity dropdown ends in "(+) New Identity" (it read
+ *     "(+) New ID"), beside the track dropdown's "(+) New Track".
  *
  * Run: node tests/e2e/info-panel-instance-tables.mjs
  */
@@ -103,7 +105,8 @@ try {
                     cameraHeader: tr.classList.contains('unlinked-camera-header'),
                     reproj: !!tr.querySelector('.badge-reproj'),
                     span: [...tr.children].reduce((n, td) => n + td.colSpan, 0),
-                    selects: [...tr.querySelectorAll('select')].map(s => ({ cell: [...tr.children].indexOf(s.closest('td')), value: s.value, ...box(s) })),
+                    selects: [...tr.querySelectorAll('select')].map(s => ({ cell: [...tr.children].indexOf(s.closest('td')), value: s.value,
+                        lastOption: s.options.length ? s.options[s.options.length - 1].textContent : null, ...box(s) })),
                     cells: [...tr.children].map(td => ({
                         text: td.textContent.trim(),
                         title: td.title,
@@ -183,6 +186,13 @@ try {
     check(JSON.stringify(typesPtsScores) === JSON.stringify(['User 2/2 1.00', 'Pred 2/2 0.87', 'Pred 2/2 0.42']),
         `Type, Points and Score are under their headers (${typesPtsScores.join(' | ')})`);
     check(dataRows[2].selects[0].value === '-1', 'the trackless row shows its "—" track');
+
+    // ---- 5. "(+) New Identity" -----------------------------------------------------
+    for (const [name, rows] of [['Grouped', G.rows.filter(r => !r.reproj)], ['Ungrouped', dataRows]]) {
+        const last = rows.map(r => r.selects[1] && r.selects[1].lastOption);
+        check(last.length > 0 && last.every(x => x === '(+) New Identity'),
+            `${name}: every identity dropdown ends in "(+) New Identity" (got ${JSON.stringify([...new Set(last)])})`);
+    }
 } catch (e) {
     console.log('  ✗ threw: ' + (e && e.stack || e));
     fails++;
