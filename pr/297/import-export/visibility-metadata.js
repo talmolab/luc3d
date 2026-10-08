@@ -12,7 +12,7 @@
 //     project's videos and entities, so they belong in the project file. That
 //     is everything this module handles.
 //
-//   * Global appearance preferences — the User / Predicted / Reprojections /
+//   * Global appearance preferences — the User / Predictions / Reprojections /
 //     Display Legend / 3D Viewer sliders, styles and toggles. Those are
 //     browser-local display taste, are shared across every session, and stay in
 //     `localStorage.visibilitySettings` (see `ui/ui-wiring.js`). They are NOT
@@ -49,9 +49,9 @@ import {
     serializeVideoContrast, ingestVideoContrast,
     serializeVideoBrightness, ingestVideoBrightness,
     serializeVideoRotation, ingestVideoRotation,
-} from '../ui/video-filters.js?v=6d16b4e09a1e';
-import { serializeHiddenSets, ingestHiddenSets } from '../ui/timeline-visibility.js?v=6d16b4e09a1e';
-import { serializeIdSwitchReview, ingestIdSwitchReview } from '../ui/id-switch-review.js?v=6d16b4e09a1e';
+} from '../ui/video-filters.js?v=872fe7377e0b';
+import { serializeHiddenSets, ingestHiddenSets } from '../ui/timeline-visibility.js?v=872fe7377e0b';
+import { serializeIdSwitchReview, ingestIdSwitchReview } from '../ui/id-switch-review.js?v=872fe7377e0b';
 
 /**
  * Every `metadata.lucid` key this module may write. Exported so tests (and the

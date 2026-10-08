@@ -51,7 +51,7 @@
  * loads in Node (`tests/test-session-node-order.mjs`).
  */
 
-import { nodeOrderRemap, permuteNodeAxis } from '../loading/slp-skeleton.js?v=6d16b4e09a1e';
+import { nodeOrderRemap, permuteNodeAxis } from '../loading/slp-skeleton.js?v=872fe7377e0b';
 
 /**
  * Re-order one per-node container in place, once: a typed array of
