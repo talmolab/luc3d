@@ -16,11 +16,13 @@
  *  5. The presets are TIME: editing the FPS pill changes the frame count drawn
  *     (`state.trailLength`), and both menus and the tooltip say so the next
  *     time they open — 25/50/100/200 frames at 100 fps, 15/30/60/120 at 60.
- *  6. "Custom…" (last in both menus) opens a dialog for a length in seconds:
- *     it shows the frames as you type, refuses anything that is not a number
- *     above 0, says when the 500-frame cap applies, Esc / Cancel change
- *     nothing, and Enter applies. A custom length is checked and named in both
- *     menus, follows the FPS pill like a preset, and picking a preset clears it.
+ *  6. "Custom…" (last in both menus) opens a dialog with a Seconds and a
+ *     Frames field: typing in either fills the other at the current fps, an
+ *     invalid entry blanks the other and disables Apply, the 500-frame cap is
+ *     noted, Esc / Cancel change nothing and Enter applies the field typed in
+ *     last. A length typed in frames draws exactly those frames. A custom
+ *     length is checked and named in both menus, follows the FPS pill like a
+ *     preset, and picking a preset clears it.
  *
  * Run: node tests/e2e/node-trails-toolbar.mjs     (SHOT_DIR=… to save a screenshot)
  */
@@ -181,34 +183,48 @@ try {
     // ---- 6. Custom… -------------------------------------------------------------------
     // At 60 fps, with the 2 s preset on.
     const dialog = () => page.evaluate(() => {
-        const m = document.getElementById('trailCustomModal');
-        if (!m) return null;
-        const input = document.getElementById('trailCustomInput');
+        if (!document.getElementById('trailCustomModal')) return null;
+        const sec = document.getElementById('trailCustomSeconds');
         return {
-            value: input.value,
-            focused: document.activeElement === input,
-            frames: document.getElementById('trailCustomFrames').textContent,
+            sec: sec.value,
+            frames: document.getElementById('trailCustomFrames').value,
+            focused: document.activeElement === sec,
+            note: document.getElementById('trailCustomNote').textContent,
             error: document.getElementById('trailCustomError').textContent,
             applyDisabled: document.getElementById('trailCustomApply').disabled,
         };
     });
-    await awayFromMenu();
-    await settleClose();
-    await page.hover('#tbTrails');
-    await settleOpen();
-    await page.click('#trailsMenu [data-trail-custom]');
+    const openCustomFromToolbar = async () => {
+        await awayFromMenu();
+        await settleClose();
+        await page.hover('#tbTrails');
+        await settleOpen();
+        await page.click('#trailsMenu [data-trail-custom]');
+    };
+    await openCustomFromToolbar();
     let d = await dialog();
-    check(d && d.focused && d.value === '2' && d.frames === '= 120 frames at 60 fps' && !d.applyDisabled,
-        `"Custom…" opens a dialog, focused on the current length with its frames (${JSON.stringify(d)})`);
+    check(d && d.focused && d.sec === '2' && d.frames === '120' && d.note === 'At 60 fps.' && !d.applyDisabled,
+        `"Custom…" opens on the current length in both fields, Seconds focused (${JSON.stringify(d)})`);
     if (SHOT_DIR) await page.screenshot({ path: path.join(SHOT_DIR, 'node-trails-custom.png') });
-    await page.fill('#trailCustomInput', 'abc');
+    await page.fill('#trailCustomSeconds', '1.5');
     d = await dialog();
-    check(d.applyDisabled && d.error !== '' && d.frames === '', `text that is not a number disables Apply and says why ("${d.error}")`);
-    await page.fill('#trailCustomInput', '0');
+    check(d.frames === '90', `typing 1.5 seconds fills Frames with 90 (got "${d.frames}")`);
+    await page.fill('#trailCustomFrames', '45');
     d = await dialog();
-    check(d.applyDisabled, '0 seconds disables Apply');
-    await page.press('#trailCustomInput', 'Enter');
+    check(d.sec === '0.75', `typing 45 frames fills Seconds with 0.75 (got "${d.sec}")`);
+    await page.fill('#trailCustomSeconds', 'abc');
+    d = await dialog();
+    check(d.applyDisabled && d.frames === '' && /seconds/.test(d.error),
+        `seconds that are not a number blank Frames, disable Apply and say why ("${d.error}")`);
+    await page.press('#trailCustomSeconds', 'Enter');
     check((await dialog()) !== null, 'Enter does nothing while the value is invalid');
+    await page.fill('#trailCustomFrames', '12.5');
+    d = await dialog();
+    check(d.applyDisabled && d.sec === '' && /whole number of frames/.test(d.error),
+        `a fractional frame count blanks Seconds and is refused ("${d.error}")`);
+    await page.fill('#trailCustomFrames', '0');
+    d = await dialog();
+    check(d.applyDisabled, '0 frames disables Apply');
     await page.keyboard.press('Escape');
     s = await read();
     check((await dialog()) === null && s.sec === 2 && s.len === 120, `Esc closes it and changes nothing (got ${s.sec} s, ${s.len})`);
@@ -216,31 +232,55 @@ try {
     await page.click('.menu-item[data-menu="tracks"]');
     await page.hover('#menuTrailsParent');
     await page.click('#menuTrailsCustom');
-    await page.fill('#trailCustomInput', '1.5');
-    d = await dialog();
-    check(d && d.frames === '= 90 frames at 60 fps', `Tracks ▸ Node Trails ▸ Custom… opens it too; 1.5 s shows 90 frames (got "${d && d.frames}")`);
-    await page.press('#trailCustomInput', 'Enter');
+    await page.fill('#trailCustomSeconds', '1.5');
+    await page.press('#trailCustomSeconds', 'Enter');
     s = await read();
-    check((await dialog()) === null && s.sec === 1.5 && s.len === 90, `Enter applies 1.5 s = 90 frames (got ${s.sec} s, ${s.len})`);
+    check((await dialog()) === null && s.sec === 1.5 && s.len === 90,
+        `Tracks ▸ Node Trails ▸ Custom… opens it too; Enter applies 1.5 s = 90 frames (got ${s.sec} s, ${s.len})`);
     check(s.tip === 'Node trails: 1.5 seconds (90 frames)', `the tooltip names it (got "${s.tip}")`);
     check(JSON.stringify(s.toolbarChecked) === '["Custom: 1.5 seconds (90 frames)…"]' &&
           JSON.stringify(s.menubarChecked) === JSON.stringify(s.toolbarChecked),
         `"Custom" is checked and shows the length in both menus (${s.toolbarChecked}; ${s.menubarChecked})`);
 
+    // Typed in frames: 10 frames at 60 fps is 1/6 s, which the Seconds field
+    // shows as 0.167 — but it is stored exactly, so it draws exactly 10.
+    await openCustomFromToolbar();
+    d = await dialog();
+    check(d.sec === '1.5' && d.frames === '90', `it reopens on the custom length (${d.sec} s, ${d.frames} frames)`);
+    await page.fill('#trailCustomFrames', '10');
+    d = await dialog();
+    check(d.sec === '0.167', `10 frames fills Seconds with 0.167 (got "${d.sec}")`);
+    await page.click('#trailCustomApply');
+    s = await read();
+    check(s.len === 10 && Math.abs(s.sec - 1 / 6) < 1e-12 && s.tip === 'Node trails: 0.167 seconds (10 frames)',
+        `a length typed in frames draws exactly those frames (got ${s.len}, ${s.sec} s, "${s.tip}")`);
+    await openCustomFromToolbar();
+    d = await dialog();
+    await page.keyboard.press('Enter');
+    s = await read();
+    check(d.sec === '0.167' && d.frames === '10' && Math.abs(s.sec - 1 / 6) < 1e-12 && s.len === 10,
+        `re-applying it untouched keeps it exact, not its 0.167 display (got ${s.sec} s, ${s.len})`);
+
     await setFps(100);
     s = await read();
-    check(s.sec === 1.5 && s.len === 150, `a custom length follows the FPS pill too: 150 frames at 100 fps (got ${s.len})`);
+    check(Math.abs(s.sec - 1 / 6) < 1e-12 && s.len === 17, `a custom length follows the FPS pill: 1/6 s is 17 frames at 100 fps (got ${s.len})`);
     await page.hover('#tbTrails');
     await settleOpen();
     s = await read();
-    check(JSON.stringify(s.toolbarChecked) === '["Custom: 1.5 seconds (150 frames)…"]', `and its menu item says so (${s.toolbarChecked})`);
+    check(JSON.stringify(s.toolbarChecked) === '["Custom: 0.167 seconds (17 frames)…"]', `and its menu item says so (${s.toolbarChecked})`);
     await page.click('#trailsMenu [data-trail-custom]');
-    await page.fill('#trailCustomInput', '10');
     d = await dialog();
-    check(d.frames === '= 500 frames at 100 fps, the most a trail draws', `past the cap the dialog says so (got "${d.frames}")`);
+    check(d.note === 'At 100 fps.' && d.frames === '17', `the dialog converts at the new rate (${d.note} ${d.frames} frames)`);
+    await page.fill('#trailCustomFrames', '600');
+    d = await dialog();
+    check(d.sec === '6' && d.note === 'At 100 fps. A trail draws at most 500 frames.',
+        `past the cap the dialog says so (got "${d.sec}", "${d.note}")`);
+    await page.fill('#trailCustomSeconds', '10');
+    d = await dialog();
+    check(d.frames === '500' && /at most 500/.test(d.note), `and the Frames field shows the 500 drawn (got "${d.frames}")`);
     await page.click('#trailCustomCancel');
     s = await read();
-    check((await dialog()) === null && s.sec === 1.5, `Cancel changes nothing (got ${s.sec} s)`);
+    check((await dialog()) === null && s.len === 17, `Cancel changes nothing (got ${s.len})`);
 
     await page.hover('#tbTrails');
     await settleOpen();

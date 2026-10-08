@@ -10070,7 +10070,8 @@ the app-wide modal convention. On a successful run the viewer is parked on the
 ### ui/trail-presets.js
 
 **Purpose.** Node-trail lengths, in SECONDS — the presets Off, ¼ s, ½ s, 1 s, 2 s, and
-any custom length typed into Tracks ▸ Node Trails ▸ Custom… — and their
+any custom length typed into Tracks ▸ Node Trails ▸ Custom…, in seconds or in
+frames — and their
 conversion to the frames a trail draws. A fixed frame list (it was
 10/50/100/250/500) meant something different on every camera: 50 frames is ½ s of
 a 100 fps recording and nearly 2 s of a 30 fps one. DOM-free and import-free, so
@@ -10090,8 +10091,15 @@ a 100 fps recording and nearly 2 s of a 30 fps one. DOM-free and import-free, so
 - `trailLabel(seconds, fps)` — "½ second (30 frames)", "1.5 seconds (90
   frames)", or "Off". The menus, the button's tooltip and the status line all
   use it.
-- `parseTrailSeconds(text)` — the Custom… field's value: a plain decimal above 0
+- `parseTrailSeconds(text)` — the Custom… Seconds field: a plain decimal above 0
   (a decimal comma is accepted, since the field is text), else null.
+- `parseTrailFrames(text)` — the Custom… Frames field: a whole number of at
+  least 1, else null.
+- `formatTrailSeconds(seconds)` — how the Seconds field shows a length: at most
+  3 decimals, no trailing zeros ("0.167").
+- `trailSecondsForFrames(frames, fps)` — how a length typed in frames is stored:
+  `frames / fps`, EXACTLY (10 frames at 60 fps is 1/6 s, not 0.167), so it draws
+  the frames typed. The unit test round-trips 1–500 frames at 24–250 fps.
 - `MAX_TRAIL_FRAMES` (500) — `LAZY_KEEP_BEHIND` (512) must stay above the longest
   trail, since trails draw resident frames only; without the cap a 2 s trail on a
   300 fps recording would be 600 frames, so from 250 fps up 2 s draws 500. The test asserts the inequality.
@@ -10435,12 +10443,17 @@ stopping at the last frame; the step transport buttons/keys stop it first.
   are built from `TRAIL_PRESETS` (`ui/trail-presets.js`: Off, ¼ s, ½ s, 1 s, 2 s;
   `data-trail-sec`) plus a last **Custom…** item (`data-trail-custom`,
   `menuTrailsCustom`), and both go through `setTrailSeconds`. Custom… opens
-  `showCustomTrailModal` (`#trailCustomModal`): one text field for a length in
-  SECONDS, so a custom length follows the frame rate exactly like a preset; a
-  line under it shows the frames as you type ("= 90 frames at 60 fps", plus
-  ", the most a trail draws" past the 500-frame cap); Apply is disabled, and
-  `.modal-error` says why, for anything `parseTrailSeconds` rejects. Enter
-  applies, Esc / Cancel change nothing. It is a dialog rather than a field in
+  `showCustomTrailModal` (`#trailCustomModal`): a **Seconds** and a **Frames**
+  field (`#trailCustomSeconds` / `#trailCustomFrames`), the same length at the
+  current rate. Typing in either rewrites the other; an invalid entry blanks the
+  other, disables Apply and says why in `.modal-error`. The field typed in LAST
+  is what Apply sets, and either way it is stored in seconds — so a custom
+  length follows the frame rate exactly like a preset, and a length typed in
+  frames is stored as `frames / fps` exactly and draws the frames typed. It
+  opens on the current length, kept exact (re-applying a 10-frame trail
+  untouched does not round it to its "0.167" display). A note under the fields
+  names the rate ("At 60 fps.") and adds "A trail draws at most 500 frames."
+  past the cap. Enter applies, Esc / Cancel change nothing. It is a dialog rather than a field in
   the menu because both menus open on hover and would close under the user the
   moment the pointer drifted. A length no preset matches checks Custom, whose
   label then names it ("Custom: 1.5 seconds (90 frames)…") in both menus. A preset is a span of
@@ -10751,8 +10764,9 @@ the scrub handlers and the tooltip snap to a tick within 5 px),
 `color-by.js` (`onColorByChange`, `setColorByIdentity` — the Tracks /
 Identity toggle, also flipped by the tracker after Track All — #242),
 `trail-presets.js` (`TRAIL_PRESETS`, `MAX_TRAIL_FRAMES`, `trailPresetFor`,
-`trailLabel`, `trailFrames`, `trailRate`, `parseTrailSeconds` — the Node Trails
-menus and their Custom… dialog),
+`trailLabel`, `trailFrames`, `trailRate`, `formatTrailSeconds`,
+`trailSecondsForFrames`, `parseTrailSeconds`, `parseTrailFrames` — the Node
+Trails menus and their Custom… dialog),
 `video-filters.js` (`setSessionRotation`; `clampRotation` still comes in via
 `sessions-panes.js`, which re-exports it), `plane-definition.js`
 (`togglePlaneMode`).

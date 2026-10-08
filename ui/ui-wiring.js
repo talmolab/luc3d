@@ -58,7 +58,7 @@ import { showTrackRangeModal } from './track-range-modal.js';
 import { showAlignViewsModal } from './view-align-modal.js';
 import { onColorByChange, setColorByIdentity } from './color-by.js';
 import { TRAIL_PRESETS, MAX_TRAIL_FRAMES, trailPresetFor, trailLabel, trailFrames, trailRate,
-         parseTrailSeconds } from './trail-presets.js';
+         formatTrailSeconds, trailSecondsForFrames, parseTrailSeconds, parseTrailFrames } from './trail-presets.js';
 import { installSeekbarTooltip } from './seekbar-tooltip.js';
 import { showReadoutFrame, refreshReadoutTotals } from './frame-readout.js';
 import { installSeekbarMarkers, seekbarMarkerAt, describeSwitchMarker, setSeekbarMarkerFrames } from './seekbar-markers.js';
@@ -1040,11 +1040,15 @@ export function setupMenus() {
     });
     updateTrailChecks();
 
-    // Custom… — a length in SECONDS, like the presets, so it follows the frame
-    // rate too; the dialog shows what it comes to in frames as it is typed.
-    // Enter applies, Esc cancels.
+    // Custom… — a length typed in SECONDS or in FRAMES. The two fields are the
+    // same length at the current rate: typing in either fills the other, and
+    // the field typed in last is the one applied. Either way it is stored in
+    // seconds, so a custom length follows the frame rate exactly like a preset
+    // (a length typed in frames is stored as frames / fps, exactly, so it draws
+    // the frames typed). Enter applies, Esc cancels.
     function showCustomTrailModal() {
         if (document.getElementById('trailCustomModal')) return;
+        var rate = trailRate(state.fps);
         var overlay = document.createElement('div');
         overlay.className = 'multi-frame-modal-overlay';
         overlay.id = 'trailCustomModal';
@@ -1052,9 +1056,13 @@ export function setupMenus() {
         modal.className = 'multi-frame-modal trail-custom-modal';
         modal.innerHTML =
             '<h3>Custom Node Trail</h3>' +
-            '<label class="rename-name-label" for="trailCustomInput">Trail length in seconds</label>' +
-            '<input type="text" inputmode="decimal" autocomplete="off" class="rename-name-input" id="trailCustomInput">' +
-            '<p class="trail-custom-frames" id="trailCustomFrames"></p>' +
+            '<div class="trail-custom-fields">' +
+            '<label class="trail-custom-field">Seconds' +
+            '<input type="text" inputmode="decimal" autocomplete="off" id="trailCustomSeconds"></label>' +
+            '<label class="trail-custom-field">Frames' +
+            '<input type="text" inputmode="numeric" autocomplete="off" id="trailCustomFrames"></label>' +
+            '</div>' +
+            '<p class="trail-custom-note" id="trailCustomNote"></p>' +
             '<div class="modal-error" id="trailCustomError"></div>' +
             '<div class="modal-actions">' +
             '<button id="trailCustomCancel">Cancel</button>' +
@@ -1063,29 +1071,49 @@ export function setupMenus() {
         overlay.appendChild(modal);
         document.body.appendChild(overlay);
 
-        var input = modal.querySelector('#trailCustomInput');
-        var framesEl = modal.querySelector('#trailCustomFrames');
+        var secInput = modal.querySelector('#trailCustomSeconds');
+        var frameInput = modal.querySelector('#trailCustomFrames');
+        var noteEl = modal.querySelector('#trailCustomNote');
         var errorEl = modal.querySelector('#trailCustomError');
         var applyBtn = modal.querySelector('#trailCustomApply');
-        input.value = state.trailSeconds > 0 ? String(Math.round(state.trailSeconds * 1000) / 1000) : '1';
+        var fpsText = (Math.round(rate * 100) / 100) + ' fps';
+        // The length Apply would set, or null. It opens on the CURRENT length,
+        // stored exactly: a length set from frames re-applies as itself, not as
+        // its 3-decimal display.
+        var seconds = state.trailSeconds > 0 ? state.trailSeconds : 1;
+        var error = '';
+        secInput.value = formatTrailSeconds(seconds);
+        frameInput.value = String(trailFrames(seconds, state.fps));
 
-        function refresh() {
-            var sec = parseTrailSeconds(input.value);
-            applyBtn.disabled = sec == null;
-            errorEl.textContent = sec == null && input.value.trim() !== '' ? 'Enter a number of seconds above 0.' : '';
-            if (sec == null) { framesEl.textContent = ''; return; }
-            var rate = trailRate(state.fps), n = trailFrames(sec, state.fps);
-            framesEl.textContent = '= ' + n + (n === 1 ? ' frame' : ' frames') + ' at ' +
-                (Math.round(rate * 100) / 100) + ' fps' +
-                (sec * rate > MAX_TRAIL_FRAMES + 0.5 ? ', the most a trail draws' : '');
+        // `from` is the field just typed in. The OTHER field is rewritten, and
+        // only from a valid entry — an invalid one blanks it rather than
+        // leaving a stale equivalent beside it.
+        function refresh(from) {
+            if (from === 'seconds') {
+                seconds = parseTrailSeconds(secInput.value);
+                error = seconds == null ? 'Enter a number of seconds above 0.' : '';
+                frameInput.value = seconds == null ? '' : String(trailFrames(seconds, state.fps));
+            } else if (from === 'frames') {
+                var frames = parseTrailFrames(frameInput.value);
+                seconds = frames == null ? null : trailSecondsForFrames(frames, state.fps);
+                error = frames == null ? 'Enter a whole number of frames, 1 or more.' : '';
+                secInput.value = seconds == null ? '' : formatTrailSeconds(seconds);
+            }
+            // An emptied field disables Apply without scolding.
+            var typed = from === 'frames' ? frameInput : secInput;
+            errorEl.textContent = typed.value.trim() === '' ? '' : error;
+            applyBtn.disabled = seconds == null;
+            noteEl.textContent = 'At ' + fpsText + '.' +
+                (seconds != null && seconds * rate > MAX_TRAIL_FRAMES + 0.5
+                    ? ' A trail draws at most ' + MAX_TRAIL_FRAMES + ' frames.' : '');
         }
         function close() {
             document.removeEventListener('keydown', onKey, true);
             overlay.remove();
         }
         function apply() {
-            var sec = parseTrailSeconds(input.value);
-            if (sec == null) return;
+            if (seconds == null) return;
+            var sec = seconds;
             close();
             setTrailSeconds(sec);
         }
@@ -1093,13 +1121,14 @@ export function setupMenus() {
             if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(); }
             else if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); apply(); }
         }
-        input.addEventListener('input', refresh);
+        secInput.addEventListener('input', function () { refresh('seconds'); });
+        frameInput.addEventListener('input', function () { refresh('frames'); });
         document.addEventListener('keydown', onKey, true);
         modal.querySelector('#trailCustomCancel').addEventListener('click', close);
         applyBtn.addEventListener('click', apply);
         refresh();
-        input.focus();
-        input.select();
+        secInput.focus();
+        secInput.select();
     }
 
     // ============================================

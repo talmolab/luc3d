@@ -1417,14 +1417,41 @@ body {
   filter: none;
 }
 
-/* Tracks ▸ Node Trails ▸ Custom… (ui/ui-wiring.js): one field, so narrower
-   than the shared modal; the frames line reserves its height like .modal-error. */
+/* Tracks ▸ Node Trails ▸ Custom… (ui/ui-wiring.js): Seconds and Frames side by
+   side, narrower than the shared modal; the note reserves its height like
+   .modal-error, so a cap warning appearing never moves the buttons. */
 .multi-frame-modal.trail-custom-modal {
   min-width: 320px;
   max-width: 360px;
 }
 
-.multi-frame-modal p.trail-custom-frames {
+.trail-custom-fields {
+  display: flex;
+  gap: 12px;
+}
+
+.trail-custom-field {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.trail-custom-field input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 6px 8px;
+  font-size: 13px;
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+}
+
+.multi-frame-modal p.trail-custom-note {
   margin: 8px 0 0;
   min-height: 18px;
   font-size: 12px;
