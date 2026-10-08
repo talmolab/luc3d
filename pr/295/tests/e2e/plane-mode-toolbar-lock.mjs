@@ -7,7 +7,7 @@
  * pose-annotation buttons (+/- Instance, Group, Edit Group, Triangulate,
  * Triangulate All, Track Frame, Track All) therefore act on a pose selection
  * the user can no longer see or change, so they are blocked. The VISIBILITY
- * controls are not — turning Predicted off to see the plane you are placing is
+ * controls are not — turning Predictions off to see the plane you are placing is
  * exactly what the mode is for.
  *
  * Three things here are easy to get wrong and are asserted directly:
@@ -213,7 +213,7 @@ try {
 
     console.log('\n-- 2b. …but visibility and display controls stay live --');
     check(allFalse(out.inFreeCheckboxes),
-        `User / Predicted / Reprojections / Errors stay enabled (got ${JSON.stringify(out.inFreeCheckboxes)})`);
+        `User / Predictions / Reprojections / Errors stay enabled (got ${JSON.stringify(out.inFreeCheckboxes)})`);
     check(out.visToggled, 'and toggling one actually works');
     check(allFalse(out.inFreeButtons),
         `Sessions, Tracks / Identity and the Panel toggle stay enabled (got ${JSON.stringify(out.inFreeButtons)})`);

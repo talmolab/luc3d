@@ -6,27 +6,27 @@
 // - updateFrameCounters: status-bar frame counters (labeled / triangulated / instances),
 //   whole-project on a lazy project too (counting logic in ui/frame-counters.js).
 
-import { state, interactionManager, timeline } from './app-state.js?v=ef4694d93c7a';
-import { points3dNodeCount } from '../pose/pose-data.js?v=ef4694d93c7a';
+import { state, interactionManager, timeline } from './app-state.js?v=8958b12c7bd3';
+import { points3dNodeCount } from '../pose/pose-data.js?v=8958b12c7bd3';
 import {
     ensureLazyFrameData, ensureLazyTrailWindow, getInstanceGroupsForFrame,
     triangulateAndReproject, storeReprojectedInstances,
-} from '../pose/triangulation.js?v=ef4694d93c7a';
-import { drawFrameOverlays } from './overlays.js?v=ef4694d93c7a';
-import { syncViewLegends } from './view-legend.js?v=ef4694d93c7a';
-import { isCameraTracked } from './settings.js?v=ef4694d93c7a';
+} from '../pose/triangulation.js?v=8958b12c7bd3';
+import { drawFrameOverlays } from './overlays.js?v=8958b12c7bd3';
+import { syncViewLegends } from './view-legend.js?v=8958b12c7bd3';
+import { isCameraTracked } from './settings.js?v=8958b12c7bd3';
 // Plane placements draw on the same overlay canvas, so they must run AFTER
 // drawFrameOverlays (which opens with a clearRect). Circular import — safe
 // because the call site is inside drawAllOverlays' body.
-import { drawPlaneOverlays, applyPlaneModeToolbarLock } from './plane-definition.js?v=ef4694d93c7a';
+import { drawPlaneOverlays, applyPlaneModeToolbarLock } from './plane-definition.js?v=8958b12c7bd3';
 
 // Pass 3f: editGroupState + finishEditGroup moved to ui/identity-assignment.js.
-import { editGroupState, finishEditGroup } from './identity-assignment.js?v=ef4694d93c7a';
-import { updateFrameInfo } from './info-panel.js?v=ef4694d93c7a';
+import { editGroupState, finishEditGroup } from './identity-assignment.js?v=8958b12c7bd3';
+import { updateFrameInfo } from './info-panel.js?v=8958b12c7bd3';
 import {
     computeFrameCounterBaseline, computeLazyCameraBaseline, createFrameCounterBaselineBuilder,
     countFrameCounters, nonResidentCameraCounts,
-} from './frame-counters.js?v=ef4694d93c7a';
+} from './frame-counters.js?v=8958b12c7bd3';
 
 // ============================================
 // Reproj/Error visibility
@@ -74,12 +74,12 @@ export function showReprojectionsOnly() {
 }
 
 // Suffix for a Triangulate All status line when `showReprojectionsOnly` hid
-// anything, so the user knows where User / Predicted went.
+// anything, so the user knows where User / Predictions went.
 export var REPROJ_ONLY_NOTE = ' · showing Reprojections only (toolbar)';
 
 /**
  * After Track Frame / Track Frame Range / Track All: the run's product is the
- * tracked PREDICTIONS (now colored by identity), so show only those — Predicted
+ * tracked PREDICTIONS (now colored by identity), so show only those — Predictions
  * on; User, Reprojections and Errors off. Same mechanics as `showReprojectionsOnly`
  * (each box fires its own `change` event). Returns whether anything changed.
  */
@@ -88,7 +88,7 @@ export function showPredictedOnly() {
 }
 
 // Suffix for a tracking status line when `showPredictedOnly` changed anything.
-export var PREDICTED_ONLY_NOTE = ' · showing Predicted only (toolbar)';
+export var PREDICTED_ONLY_NOTE = ' · showing Predictions only (toolbar)';
 
 /** Set toolbar layer checkboxes `[[id, checked], …]` as clicks would; true if any changed. */
 function setToolbarLayers(want) {

@@ -124,7 +124,7 @@ try {
     });
     await page.waitForTimeout(500);
     check(JSON.stringify(await readBoxes()) === '[true,true,true,true]',
-        'E. single-frame Triangulate leaves User / Predicted / Reprojections / Errors as they were');
+        'E. single-frame Triangulate leaves User / Predictions / Reprojections / Errors as they were');
 
     // ---- F. already Reproj-only: no change, no note --------------------------------------
     await useSession('reprojOnly_F', true);
