@@ -81,8 +81,9 @@
  * Summed, giving the mouse to the spare and its own target the reflection
  * won by ~21, and the mouse's identity moved to the reflection and stayed
  * there.
- * `matchGate` (default on, 0 = off and reproduces the pre-gate tracker
- * exactly) splits each view's assignment into two stages:
+ * `matchGate` (default OFF since 2026-10-07, #285: it helps SLAP but gave ~6x the
+ * ID switches on Mouse-Dyad-10M and ~10x on s-DANNCE; 1 = on, 0 = the pre-gate
+ * tracker exactly) splits each view's assignment into two stages:
  *   1. **Tracked targets** (still holding a detection after stale eviction)
  *      are matched with one "no match" option each at adjacency 0, so a
  *      tracked target only takes a detection it scores POSITIVELY on — i.e.
@@ -254,9 +255,9 @@ export class CrossViewTracker {
      *   that frame's association runs. 0 disables eviction (reproduces the
      *   pre-fix, unbounded-staleness reference behavior) for reproducibility/
      *   debugging; any positive number is floored to an integer.
-     *   matchGate (1) — THE MATCH GATE (see file header). A tracked target only
+     *   matchGate (0) — THE MATCH GATE (see file header). A tracked target only
      *   takes a detection it scores positively on; lost targets re-acquire
-     *   ungated. 0 disables it (reproduces the pre-gate forced assignment).
+     *   ungated. 0 (the default since #285) is the pre-gate forced assignment.
      */
     constructor(hp) {
         hp = hp || {};
@@ -273,8 +274,8 @@ export class CrossViewTracker {
         this.nodeWeights = Array.isArray(hp.nodeWeights) ? hp.nodeWeights : null;
         // Stale-anchor fix (see file header). Default 20; 0 = off (pre-fix behavior).
         this.stale = Math.max(0, Math.floor(num(hp.stale, 20)));
-        // Match gate (see file header). Default on; 0 = off (pre-gate behavior).
-        this.matchGate = num(hp.matchGate, 1) > 0;
+        // Match gate (see file header). Default off (#285); 1 = on.
+        this.matchGate = num(hp.matchGate, 0) > 0;
 
         this.targets = [];                 // list of live Target
         this.unmatchedByCam = new Map();   // camName -> Detection[] (births buffer)
