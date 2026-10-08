@@ -57,7 +57,8 @@ import { trackCurrentFrame, trackAll, findMatchForSelected } from '../pose/track
 import { showTrackRangeModal } from './track-range-modal.js';
 import { showAlignViewsModal } from './view-align-modal.js';
 import { onColorByChange, setColorByIdentity } from './color-by.js';
-import { TRAIL_PRESETS, trailPresetLabel } from './trail-presets.js';
+import { TRAIL_PRESETS, MAX_TRAIL_FRAMES, trailPresetFor, trailLabel, trailFrames, trailRate,
+         parseTrailSeconds } from './trail-presets.js';
 import { installSeekbarTooltip } from './seekbar-tooltip.js';
 import { showReadoutFrame, refreshReadoutTotals } from './frame-readout.js';
 import { installSeekbarMarkers, seekbarMarkerAt, describeSwitchMarker, setSeekbarMarkerFrames } from './seekbar-markers.js';
@@ -970,56 +971,60 @@ export function setupMenus() {
 
     // Node Trails presets — issue #102. A single active length, picked from
     // the Tracks ▸ Node Trails submenu or the toolbar's Trails button; both are
-    // built from TRAIL_PRESETS (ui/trail-presets.js) and go through
-    // setTrailSeconds, so their checkmarks and the button's tooltip always show
-    // state.trailSeconds. A preset is a span of TIME: its frame count,
-    // state.trailLength, is derived from state.fps, and the labels re-read it
-    // each time a menu opens — the rate changes when a video loads or the FPS
-    // pill is edited, and nothing here is told.
+    // built from TRAIL_PRESETS (ui/trail-presets.js) plus a "Custom…" item, and
+    // go through setTrailSeconds, so their checkmarks and the button's tooltip
+    // always show state.trailSeconds. A length is a span of TIME: its frame
+    // count, state.trailLength, is derived from state.fps, and the labels
+    // re-read it each time a menu opens — the rate changes when a video loads
+    // or the FPS pill is edited, and nothing here is told.
     // The toolbar's menu opens on HOVER (pure CSS, like the Triangulate split
-    // buttons), so the only wiring it needs is its items.
+    // buttons), so the only wiring it needs is its items. That is also why a
+    // custom length is typed into a dialog rather than into the menu: a field
+    // in a hover menu closes under the user the moment the pointer drifts.
     var trailsBtn = document.getElementById('tbTrails');
     var trailsDropdown = document.getElementById('trailsDropdown');
     var trailsMenu = document.getElementById('trailsMenu');
     var trailsParent = document.getElementById('menuTrailsParent');
     var trailsSubmenu = document.getElementById('menuTrailsSubmenu');
-    var trailItems = [];    // { preset, el } for both menus
-    function trailPresetFor(seconds) {
-        return TRAIL_PRESETS.find(function (p) { return p.seconds === seconds; }) || null;
-    }
-    function trailDescription() {
-        if (!(state.trailLength > 0)) return 'off';
-        var p = trailPresetFor(state.trailSeconds);
-        // A length set in frames (state.trailLength = n) matches no preset.
-        return p ? trailPresetLabel(p, state.fps) : state.trailLength + ' frames';
-    }
+    var trailItems = [];    // { preset, el } for both menus; preset null = Custom…
     function updateTrailChecks() {
+        // A length no preset matches is custom — typed, or set in frames
+        // (state.trailLength = n).
+        var custom = state.trailSeconds > 0 && !trailPresetFor(state.trailSeconds);
         trailItems.forEach(function (it) {
-            var on = state.trailSeconds === it.preset.seconds;
+            var on = it.preset ? state.trailSeconds === it.preset.seconds : custom;
             it.el.querySelector('.trail-check').textContent = on ? '✓' : '';
-            it.el.querySelector('.trail-label').textContent = trailPresetLabel(it.preset, state.fps);
+            it.el.querySelector('.trail-label').textContent = it.preset
+                ? trailLabel(it.preset.seconds, state.fps)
+                : (custom ? 'Custom: ' + trailLabel(state.trailSeconds, state.fps) + '…' : 'Custom…');
             it.el.setAttribute('aria-checked', on ? 'true' : 'false');
         });
         // The label is a bare "Trails ▾" to save toolbar width; the current
         // length rides in the tooltip instead.
-        if (trailsBtn) trailsBtn.title = 'Node trails: ' + trailDescription();
+        if (trailsBtn) trailsBtn.title = 'Node trails: ' +
+            (state.trailSeconds > 0 ? trailLabel(state.trailSeconds, state.fps) : 'off');
     }
     function setTrailSeconds(seconds) {
         state.trailSeconds = seconds;
         updateTrailChecks();
         drawAllOverlays(state.currentFrame);
-        setStatus(seconds > 0 ? ('Node trails: ' + trailDescription()) : 'Node trails off', 'success');
+        setStatus(seconds > 0 ? ('Node trails: ' + trailLabel(seconds, state.fps)) : 'Node trails off', 'success');
     }
     function addTrailItems(menu, className, idPrefix, onPick) {
         if (!menu) return;
-        TRAIL_PRESETS.forEach(function (p) {
+        TRAIL_PRESETS.concat([null]).forEach(function (p) {
             var item = document.createElement('div');
             item.className = className;
-            if (idPrefix) item.id = idPrefix + p.key;
+            if (idPrefix) item.id = idPrefix + (p ? p.key : 'Custom');
             item.setAttribute('role', 'menuitemradio');
-            item.setAttribute('data-trail-sec', String(p.seconds));
+            if (p) item.setAttribute('data-trail-sec', String(p.seconds));
+            else item.setAttribute('data-trail-custom', '');
             item.innerHTML = '<span><span class="trail-check"></span><span class="trail-label"></span></span>';
-            item.addEventListener('click', function () { onPick(); setTrailSeconds(p.seconds); });
+            item.addEventListener('click', function () {
+                onPick();
+                if (p) setTrailSeconds(p.seconds);
+                else showCustomTrailModal();
+            });
             menu.appendChild(item);
             trailItems.push({ preset: p, el: item });
         });
@@ -1034,6 +1039,68 @@ export function setupMenus() {
         el.addEventListener('focusin', updateTrailChecks);
     });
     updateTrailChecks();
+
+    // Custom… — a length in SECONDS, like the presets, so it follows the frame
+    // rate too; the dialog shows what it comes to in frames as it is typed.
+    // Enter applies, Esc cancels.
+    function showCustomTrailModal() {
+        if (document.getElementById('trailCustomModal')) return;
+        var overlay = document.createElement('div');
+        overlay.className = 'multi-frame-modal-overlay';
+        overlay.id = 'trailCustomModal';
+        var modal = document.createElement('div');
+        modal.className = 'multi-frame-modal trail-custom-modal';
+        modal.innerHTML =
+            '<h3>Custom Node Trail</h3>' +
+            '<label class="rename-name-label" for="trailCustomInput">Trail length in seconds</label>' +
+            '<input type="text" inputmode="decimal" autocomplete="off" class="rename-name-input" id="trailCustomInput">' +
+            '<p class="trail-custom-frames" id="trailCustomFrames"></p>' +
+            '<div class="modal-error" id="trailCustomError"></div>' +
+            '<div class="modal-actions">' +
+            '<button id="trailCustomCancel">Cancel</button>' +
+            '<button class="primary" id="trailCustomApply">Apply</button>' +
+            '</div>';
+        overlay.appendChild(modal);
+        document.body.appendChild(overlay);
+
+        var input = modal.querySelector('#trailCustomInput');
+        var framesEl = modal.querySelector('#trailCustomFrames');
+        var errorEl = modal.querySelector('#trailCustomError');
+        var applyBtn = modal.querySelector('#trailCustomApply');
+        input.value = state.trailSeconds > 0 ? String(Math.round(state.trailSeconds * 1000) / 1000) : '1';
+
+        function refresh() {
+            var sec = parseTrailSeconds(input.value);
+            applyBtn.disabled = sec == null;
+            errorEl.textContent = sec == null && input.value.trim() !== '' ? 'Enter a number of seconds above 0.' : '';
+            if (sec == null) { framesEl.textContent = ''; return; }
+            var rate = trailRate(state.fps), n = trailFrames(sec, state.fps);
+            framesEl.textContent = '= ' + n + (n === 1 ? ' frame' : ' frames') + ' at ' +
+                (Math.round(rate * 100) / 100) + ' fps' +
+                (sec * rate > MAX_TRAIL_FRAMES + 0.5 ? ', the most a trail draws' : '');
+        }
+        function close() {
+            document.removeEventListener('keydown', onKey, true);
+            overlay.remove();
+        }
+        function apply() {
+            var sec = parseTrailSeconds(input.value);
+            if (sec == null) return;
+            close();
+            setTrailSeconds(sec);
+        }
+        function onKey(e) {
+            if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(); }
+            else if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); apply(); }
+        }
+        input.addEventListener('input', refresh);
+        document.addEventListener('keydown', onKey, true);
+        modal.querySelector('#trailCustomCancel').addEventListener('click', close);
+        applyBtn.addEventListener('click', apply);
+        refresh();
+        input.focus();
+        input.select();
+    }
 
     // ============================================
     // Tracks Menu Handlers

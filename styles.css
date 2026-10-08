@@ -1417,6 +1417,19 @@ body {
   filter: none;
 }
 
+/* Tracks ▸ Node Trails ▸ Custom… (ui/ui-wiring.js): one field, so narrower
+   than the shared modal; the frames line reserves its height like .modal-error. */
+.multi-frame-modal.trail-custom-modal {
+  min-width: 320px;
+  max-width: 360px;
+}
+
+.multi-frame-modal p.trail-custom-frames {
+  margin: 8px 0 0;
+  min-height: 18px;
+  font-size: 12px;
+}
+
 /* Shared inline validation line for modals (red, reserves its own height so
    showing/hiding a message never shifts the buttons underneath). */
 .modal-error {

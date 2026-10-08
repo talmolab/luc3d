@@ -1,5 +1,6 @@
 /**
- * trail-presets.js — the node-trail presets, in SECONDS.
+ * trail-presets.js — node-trail lengths, in SECONDS: the presets, and the
+ * parsing and naming of a custom length (Tracks ▸ Node Trails ▸ Custom…).
  *
  * A trail is chosen as a span of time (¼ s, ½ s, 1 s, 2 s) and drawn as a number of
  * frames, `seconds × fps`. A fixed frame list meant something different on every
@@ -50,14 +51,49 @@ export function trailFrames(seconds, fps) {
     return Math.min(MAX_TRAIL_FRAMES, Math.max(1, Math.round(seconds * trailRate(fps))));
 }
 
+/** The preset whose length is exactly `seconds`, or null (a custom length). */
+export function trailPresetFor(seconds) {
+    for (var i = 0; i < TRAIL_PRESETS.length; i++) {
+        if (TRAIL_PRESETS[i].seconds === seconds) return TRAIL_PRESETS[i];
+    }
+    return null;
+}
+
 /**
- * A preset's menu text, e.g. "½ second (30 frames)" at 60 fps, or "Off".
- * @param {{seconds:number, name:string}} preset
+ * A length's name: the preset's ("½ second") or, for a custom length, its
+ * seconds to at most 3 decimals ("1.5 seconds", "1 second").
+ * @param {number} seconds
+ * @returns {string}
+ */
+export function trailSecondsName(seconds) {
+    var p = trailPresetFor(seconds);
+    if (p) return p.name;
+    var v = Math.round(seconds * 1000) / 1000;
+    return v + (v === 1 ? ' second' : ' seconds');
+}
+
+/**
+ * A length with its frames at `fps`, e.g. "½ second (30 frames)" at 60 fps or
+ * "1.5 seconds (90 frames)"; "Off" when `seconds` is 0.
+ * @param {number} seconds
  * @param {number} fps
  * @returns {string}
  */
-export function trailPresetLabel(preset, fps) {
-    if (!(preset.seconds > 0)) return preset.name;
-    var n = trailFrames(preset.seconds, fps);
-    return preset.name + ' (' + n + (n === 1 ? ' frame)' : ' frames)');
+export function trailLabel(seconds, fps) {
+    if (!(seconds > 0)) return 'Off';
+    var n = trailFrames(seconds, fps);
+    return trailSecondsName(seconds) + ' (' + n + (n === 1 ? ' frame)' : ' frames)');
+}
+
+/**
+ * A typed custom length in seconds, or null when it is not a number above 0.
+ * A decimal comma is accepted ("1,5"), since the field is plain text.
+ * @param {string} text
+ * @returns {number|null}
+ */
+export function parseTrailSeconds(text) {
+    var t = String(text == null ? '' : text).trim().replace(',', '.');
+    if (!/^(\d+\.?\d*|\.\d+)$/.test(t)) return null;
+    var v = Number(t);
+    return v > 0 && isFinite(v) ? v : null;
 }
