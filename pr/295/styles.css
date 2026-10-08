@@ -1227,22 +1227,8 @@ body {
   transition-delay: 0s;
 }
 
-/* A dropdown that opens on CLICK only (the toolbar's Trails button). The
-   `:not(.open)` rule out-specifies the `:hover` one above, so hovering does
-   nothing and the menu stays up only while `.open` is set. */
-.tri-dropdown.click-open:not(.open) .tri-dropdown-menu {
-  visibility: hidden;
-  opacity: 0;
-  pointer-events: none;
-  transform: translateY(-4px);
-  transition-delay: 0s;
-}
-
-.tri-dropdown.click-open.open > .toolbar-btn {
-  background: var(--bg-button-hover);
-  color: var(--text-primary);
-}
-
+/* The toolbar's Trails menu (ui/ui-wiring.js): narrower, with a checkmark
+   column like Tracks ▸ Node Trails. */
 #trailsMenu {
   min-width: 120px;
 }
