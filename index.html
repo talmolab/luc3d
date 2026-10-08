@@ -241,13 +241,13 @@
             <div class="toolbar-separator"></div>
             <!-- Node Trails (issue #102). Same presets and state as Tracks ▸ Node
                  Trails; the items are built from that one list in ui/ui-wiring.js.
-                 Opens on CLICK, not hover (`click-open`). The label stays a bare
+                 Opens on hover, like the Triangulate menus. The label stays a bare
                  "Trails" (the value is the menu's checkmark and the tooltip) to
                  save toolbar width. -->
             <div class="toolbar-group">
-                <div class="tri-dropdown click-open" id="trailsDropdown">
-                    <button class="toolbar-btn" id="tbTrails" aria-haspopup="menu" aria-expanded="false"
-                        title="Node trails: how many past frames to draw behind each node">Trails <span class="tri-caret">▾</span></button>
+                <div class="tri-dropdown" id="trailsDropdown">
+                    <button class="toolbar-btn" id="tbTrails" aria-haspopup="menu"
+                        title="Node trails: off">Trails <span class="tri-caret">▾</span></button>
                     <div class="tri-dropdown-menu" id="trailsMenu" role="menu"></div>
                 </div>
             </div>

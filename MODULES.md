@@ -10128,14 +10128,13 @@ stopping at the last frame; the step transport buttons/keys stop it first.
   (Off/10/50/100/250/500) builds the toolbar menu's items (`#trailsMenu`,
   `data-trail-len`), and both pickers go through `setTrailLength`, whose
   `updateTrailChecks` moves the checkmark in BOTH menus and rewrites the
-  button's tooltip ("Node trails: 50 frames. …"). The label stays a bare
+  button's tooltip ("Node trails: 50 frames"). The label stays a bare
   "Trails ▾" on purpose, to save toolbar width: with this group the toolbar
   needs ~1,516 px (~1,428 before it), and "Trails: 500" in the label would add
-  ~25 px more. The button reuses the `.tri-dropdown` markup
-  but with `click-open`: it opens on CLICK, not hover (a CSS `:not(.open)` rule
-  out-specifies `.tri-dropdown:hover`), and closes on a second click, an outside
-  click, picking an item, or Esc (a capture-phase keydown listener installed
-  only while open). Display state, never saved; not in the Defining Plane Mode
+  ~25 px more. The button is a `.tri-dropdown`, so its menu opens on hover in
+  pure CSS exactly like the Triangulate split buttons', and like theirs stays
+  up after a pick until the pointer leaves; clicking the button itself does
+  nothing. Display state, never saved; not in the Defining Plane Mode
   toolbar lock (it changes what is drawn, not what is annotated). Covered by
   `tests/e2e/node-trails-toolbar.mjs`.
 - Node Style: the four per-section Node Style button groups

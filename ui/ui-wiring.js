@@ -979,7 +979,8 @@ export function setupMenus() {
         { id: 'menuTrails250', len: 250 },
         { id: 'menuTrails500', len: 500 },
     ];
-    var trailsDropdown = document.getElementById('trailsDropdown');
+    // The toolbar's menu opens on HOVER (pure CSS, like the Triangulate split
+    // buttons), so the only wiring it needs is its items.
     var trailsBtn = document.getElementById('tbTrails');
     var trailsMenu = document.getElementById('trailsMenu');
     function updateTrailChecks() {
@@ -997,8 +998,7 @@ export function setupMenus() {
         // The label is a bare "Trails ▾" to save toolbar width; the current
         // length rides in the tooltip instead.
         if (trailsBtn) trailsBtn.title = 'Node trails: ' +
-            (state.trailLength > 0 ? state.trailLength + ' frames' : 'off') +
-            '. Click to choose how many past frames to draw behind each node.';
+            (state.trailLength > 0 ? state.trailLength + ' frames' : 'off');
     }
     function setTrailLength(len) {
         state.trailLength = len;
@@ -1006,24 +1006,7 @@ export function setupMenus() {
         drawAllOverlays(state.currentFrame);
         setStatus(len > 0 ? ('Node trails: ' + len + ' frames') : 'Node trails off', 'success');
     }
-
-    // The toolbar button opens its menu on CLICK (not hover, unlike the
-    // Triangulate split buttons). The global document click handler already
-    // drops `.open` from every .tri-dropdown; Esc closes it too.
-    function onTrailsMenuKey(e) {
-        if (e.key !== 'Escape') return;
-        e.preventDefault();
-        e.stopPropagation();
-        setTrailsMenuOpen(false);
-    }
-    function setTrailsMenuOpen(open) {
-        if (!trailsDropdown) return;
-        trailsDropdown.classList.toggle('open', open);
-        trailsBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
-        if (open) document.addEventListener('keydown', onTrailsMenuKey, true);
-        else document.removeEventListener('keydown', onTrailsMenuKey, true);
-    }
-    if (trailsDropdown && trailsBtn && trailsMenu) {
+    if (trailsMenu) {
         trailPresets.forEach(function (p) {
             var item = document.createElement('div');
             item.className = 'tri-dropdown-item';
@@ -1031,25 +1014,9 @@ export function setupMenus() {
             item.setAttribute('data-trail-len', String(p.len));
             item.innerHTML = '<span><span class="trail-check"></span>' +
                 (p.len > 0 ? p.len + ' frames' : 'Off') + '</span>';
-            item.addEventListener('click', function (e) {
-                e.stopPropagation();
-                setTrailsMenuOpen(false);
-                setTrailLength(p.len);
-            });
+            item.addEventListener('click', function () { setTrailLength(p.len); });
             trailsMenu.appendChild(item);
         });
-        trailsBtn.addEventListener('click', function (e) {
-            // Stop the document handler from closing what this opens, and close
-            // the menu bar's dropdowns ourselves since it no longer will.
-            e.stopPropagation();
-            var open = !trailsDropdown.classList.contains('open');
-            closeMenus();
-            document.querySelectorAll('.tri-dropdown.open').forEach(function (d) {
-                d.classList.remove('open');
-            });
-            setTrailsMenuOpen(open);
-        });
-        document.addEventListener('click', function () { setTrailsMenuOpen(false); });
     }
 
     updateTrailChecks();
