@@ -319,9 +319,10 @@ console.log('6. momentChangePoints: one row (and one fix) per swapped stretch');
     ok(mom.followOf == null && enc.followOf === 340,
         `the moment is the primary, the a/c row 1.3 s before it follows it (moment followOf ${mom.followOf}, a/c row ${enc.followOf})`);
     sc = encounters(6, [2], [0, 2], ['a', 'c']);
-    r = run(sc, [moment(400, 'after')]);                            // 100 frames (3.3 s) later: plain time order
+    r = run(sc, [moment(400, 'after')]);                            // 100 frames (3.3 s) later
     enc = r.rows.find(x => !x.look); mom = r.rows.find(x => x.look);
-    ok(enc.followOf == null && mom.followOf === 300, `more than 3 s apart, the earlier row stays the primary (moment followOf ${mom.followOf})`);
+    ok(enc.followOf == null && mom.followOf == null,
+        `more than 3 s apart, the a/c row does not follow the moment, and a moment never follows anything: both primaries (${enc.followOf}, ${mom.followOf})`);
 
     // two moments of the pair with only clean encounters around them pair with each other
     sc = encounters(6, []);

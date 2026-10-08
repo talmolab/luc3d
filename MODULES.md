@@ -2626,8 +2626,8 @@ out, inputTracks, ambiguous, look, fps)`; `CANDIDATE_DEFAULTS` (`ambiguityMargin
 -> stand-in | null | `{fail}`; `swapSingleCameraIdentities(session, from, to, idA, idB)`
 -> `{frames, tracks: boolean}` | null; `singleCameraImageContinueBelow(threshold)`
 -> |threshold| (above); `singleCameraCheckOptions(cue, threshold)` -> the options
-every check runs with on one camera (`{skipEmpty: true}`, plus `continueBelow`
-for the image check); `SINGLE_CAMERA_LAZY_REASON`.
+every check runs with on one camera (`{skipEmpty: true, clearestEndLeads: true}`,
+plus `continueBelow` for the image check); `SINGLE_CAMERA_LAZY_REASON`.
 
 **Imports from project modules.** `pose/sleap-tracker.js`.
 
@@ -3647,7 +3647,7 @@ headlessly (the image and brightness checks with any vector provider).
 
 **Key exports.** `checkSizeSwitches(session, opts)` and
 `checkImageSwitches(session, opts)` and `checkBrightnessSwitches(session, opts)` (async) -> `{ok, flags, changes, encounters, moments,
-identities, sampledFrames, closeDistance, threshold, continueBelow, skipEmpty, fps, step, sampleHz, cue}`
+identities, sampledFrames, closeDistance, threshold, continueBelow, skipEmpty, clearestEndLeads, fps, step, sampleHz, cue}`
 (+ `bones` for size; + `imageHz`, `crops`, `cameras` for images) or
 `{ok:false, reason}`; `markChangePoints(scored, o)` (the change-point step,
 exported so calibration can re-apply thresholds to the same scores);
@@ -3703,16 +3703,25 @@ among the encounters that had samples: one scoring exactly 0 had none on either
 side, says nothing about the labels, and is a repeat when inside a run's
 stretch, so a run with only empty encounters before it starts the session. A
 change point within `followSeconds` after another of a different
-pair sharing an identity is its follow-on (`followOf`). A candidate moment's
-change point is taken as if it came 3 s earlier, so other pairs' encounter rows
-up to 3 s before it follow IT (`linkFollowOns`): the moment was tested on both
-sides of the exact place, while a nearby encounter row of another pair is
-usually the swapped animal's wrong label showing up there. On the 35 SLAP videos
-this made the swapped pair's row the primary in 13 of 23 swaps instead of 11,
-and Fixing the primaries fully undid 7 instead of 6 (brightness and topC
-unchanged). Ranking every row of a 60-s cluster by score instead was worse
-(4 undone): a strong false row a minute away then claims the real one. Without
-moments the order is plain time.
+pair sharing an identity is its follow-on (`followOf`). Candidate moments
+(single camera only) change this twice (`linkFollowOns`): a moment's change
+point is NEVER a follow-on — it was tested on both sides of its own place, while
+following any earlier row within 60 s sharing an animal hid 4 real swaps on the
+35 SLAP videos behind false primaries up to 25 s before them — and it is taken
+as if it came 3 s earlier, so other pairs' encounter rows up to 3 s before it
+follow IT (a nearby encounter row of another pair is usually the swapped
+animal's wrong label showing up there). With `clearestEndLeads` (single camera),
+among encounter 'end' change points within 5 s of each other sharing an animal,
+the one reading right again most clearly (highest score) leads: after an early
+swap the swapped animals' other pairs also read right again, a second or two
+BEFORE the swapped pair (windows running past the swap). On the SLAP videos,
+image check: the swapped pair's row is the primary in 18 of 23 swaps (11 with
+plain time order, 13 with the 3-s rule alone), real swaps hidden as follow-ons
+5 -> 1, Fixing the primaries fully undoes 9 instead of 8, false primaries
+29 -> 28; brightness 12 of 15 instead of 10; topC unchanged. Ranking every row of
+a 60-s cluster by score instead was worse (4 undone): a strong false row a
+minute away then claims the real one. Without moments or the option (every
+multi-camera check) the order is plain time.
 
 **Candidate moments (`opts.moments`, single camera).** Places a switch may have
 happened OUTSIDE a close encounter — `[{frame, startFrame, identityA, identityB,
@@ -9001,7 +9010,8 @@ the image check when `autoImageSwitchCheck` is on — never body size, which fro
 one view is not a usable cue (see `pose/single-camera-tracking.js`). The image
 check there ends a run of flagged encounters only above +|imageCheckThreshold|
 (`continueBelow`), and every check there skips encounters with no samples
-(`skipEmpty`) — both from `singleCameraCheckOptions`; results carry both.
+(`skipEmpty`) and lets the clearest of nearby 'end' rows lead
+(`clearestEndLeads`) — all from `singleCameraCheckOptions`; results carry them.
 On a real 10-min single-camera SLAP video in headless Chrome the image check
 took 32 s (one view, 3 mice, 2 crops/s).
 

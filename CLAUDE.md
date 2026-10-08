@@ -704,9 +704,12 @@ the animal count, connect single breaks). Rules:
   false rows 71 -> 51, 18 of 59 caught instead of 17). Brightness keeps 0 (its
   encounter scores are noise); size and multi-camera are unchanged.
 - **Two more single-camera choices in the ID Switches tab, both measured on the
-  35 SLAP videos.** A candidate moment's row outranks other pairs' encounter
-  rows up to 3 s before it (they become its follow-ons; the right pair is then
-  the primary in 13 of 23 swaps instead of 11). And a row's window — landing
+  35 SLAP videos.** A candidate moment's row is never a follow-on, and it
+  outranks other pairs' encounter rows up to 3 s before it (they follow it);
+  with `clearestEndLeads` the clearest of nearby encounter 'end' rows leads
+  them. Following any earlier row within 60 s that shares an animal had hidden
+  real swaps behind false primaries; the right pair is now the primary in 18 of
+  23 swaps instead of 11 (`linkFollowOns`). And a row's window — landing
   frame, progress bar, the range where a Fix takes the current frame as its
   boundary — is ±2 s, not ±1 s (`idSwitchLeadSeconds`), because one view places
   the close spell less exactly. Multi-camera keeps 1 s.
