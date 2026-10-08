@@ -17,7 +17,7 @@
 // add/update its entry here so the Settings panel stays complete and truthful.
 // (See CLAUDE.md.)
 
-import { shouldIgnoreShortcut } from './keyboard-target.js?v=0249513dd31f';
+import { shouldIgnoreShortcut } from './keyboard-target.js?v=ac82994645eb';
 
 const STORAGE_KEY = 'lucid.settings.v1';
 
@@ -386,7 +386,7 @@ const TRACKING_THRESHOLDS = [
     {
         id: 'imageCheckThreshold', label: 'Image check: flag threshold', default: -25,
         min: -500, max: 0, step: 5,
-        desc: 'An encounter starts a possible image switch when its score falls below this. Closer to 0 catches more swaps between similar-sized animals but flags more clean encounters: on a 30-min, 5-mouse recording, -25 gave 18 false marks and caught the real switch; 0 gave 42; -50 gave 15 and missed it. Marks that the size check also finds ("Both") were almost always real.',
+        desc: 'An encounter starts a possible image switch when its score falls below this. Closer to 0 catches more swaps between similar-sized animals but flags more clean encounters: on a 30-min, 5-mouse recording, -25 gave 18 false marks and caught the real switch; 0 gave 42; -50 gave 15 and missed it. Marks that the size check also finds ("Both") were almost always real. On a single-camera session the possible switch ends only where an encounter scores above the same value with the sign flipped (+25 for -25), not at any score above 0.',
     },
     {
         id: 'imageCheckHz', label: 'Image check: crops per second', default: 2,

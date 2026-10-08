@@ -27,19 +27,19 @@
  * import-export/save-load.js (setStatus).
  */
 
-import { state, getActiveSession } from './app-state.js?v=0249513dd31f';
-import { setSeekbarSwitchMarkers } from './seekbar-markers.js?v=0249513dd31f';
-import { setIdSwitchHighlight, updateIdSwitchHighlight, refreshIdSwitchHighlight, ID_SWITCH_SECTION_RGB } from './id-switch-highlight.js?v=0249513dd31f';
-import { setStatus, markDirty } from '../import-export/save-load.js?v=0249513dd31f';
-import { showLoadingProgress, hideLoading, yieldToPaint } from './loading-overlay.js?v=0249513dd31f';
-import { getTrackingThreshold } from './settings.js?v=0249513dd31f';
-import { checkSizeSwitches, checkImageSwitches, checkBrightnessSwitches } from '../pose/id-switch-check.js?v=0249513dd31f';
-import { singleCameraName, singleCameraCheckSession, swapSingleCameraIdentities } from '../pose/single-camera-tracking.js?v=0249513dd31f';
-import { hasWebGPU, createImageEmbedder, IMAGE_MODEL_MB, formatEmbedTiming } from './image-embedder.js?v=0249513dd31f';
-import { createBrightnessSampler } from './brightness-sampler.js?v=0249513dd31f';
+import { state, getActiveSession } from './app-state.js?v=ac82994645eb';
+import { setSeekbarSwitchMarkers } from './seekbar-markers.js?v=ac82994645eb';
+import { setIdSwitchHighlight, updateIdSwitchHighlight, refreshIdSwitchHighlight, ID_SWITCH_SECTION_RGB } from './id-switch-highlight.js?v=ac82994645eb';
+import { setStatus, markDirty } from '../import-export/save-load.js?v=ac82994645eb';
+import { showLoadingProgress, hideLoading, yieldToPaint } from './loading-overlay.js?v=ac82994645eb';
+import { getTrackingThreshold } from './settings.js?v=ac82994645eb';
+import { checkSizeSwitches, checkImageSwitches, checkBrightnessSwitches } from '../pose/id-switch-check.js?v=ac82994645eb';
+import { singleCameraName, singleCameraCheckSession, swapSingleCameraIdentities, singleCameraImageContinueBelow } from '../pose/single-camera-tracking.js?v=ac82994645eb';
+import { hasWebGPU, createImageEmbedder, IMAGE_MODEL_MB, formatEmbedTiming } from './image-embedder.js?v=ac82994645eb';
+import { createBrightnessSampler } from './brightness-sampler.js?v=ac82994645eb';
 import { idSwitchRowKey as rowKey, idSwitchPrimary as primaryOf, idSwitchMarkers as markersOf, idSwitchOnsets as countOnsets,
          idSwitchEncounterCount as encounterCount, linkIdSwitchResults as tagAndLink,
-         idSwitchFixPlan, idSwitchFixFor, idSwitchRenameForFix, ID_SWITCH_CUES, idSwitchIsSecondary } from './id-switch-review.js?v=0249513dd31f';
+         idSwitchFixPlan, idSwitchFixFor, idSwitchRenameForFix, ID_SWITCH_CUES, idSwitchIsSecondary } from './id-switch-review.js?v=ac82994645eb';
 
 const CUE_LABEL = { size: 'body size', image: 'images', brightness: 'coat brightness' };
 
@@ -171,8 +171,9 @@ async function runSize(session, rate, moments) {
     } finally { hideLoading(); }
 }
 
-async function runImage(session, rate, inject, moments) {
+async function runImage(session, rate, inject, moments, single) {
     inject = inject || {};
+    var threshold = getTrackingThreshold('imageCheckThreshold');
     var views = (state.views || []).filter(function (v) { return v && v.decoder; });
     if (!views.length && !inject.createEmbedder) return { ok: false, reason: 'needs the session\'s videos to be loaded' };
     if (!(await (inject.hasWebGPU || hasWebGPU)())) return { ok: false, reason: 'needs WebGPU (current Chrome or Edge) — on the CPU it would take hours' };
@@ -183,10 +184,10 @@ async function runImage(session, rate, inject, moments) {
             maxViewsPerAnimal: getTrackingThreshold('imageCheckMaxViews'),
             webnn: getTrackingThreshold('imageCheckWebNN') > 0 });
         t0 = performance.now();
-        var res = await checkImageSwitches(session, {
+        var opts = {
             fps: rate.fps,
             imageHz: getTrackingThreshold('imageCheckHz') || 2,
-            threshold: getTrackingThreshold('imageCheckThreshold'),
+            threshold: threshold,
             moments: moments,
             getEmbeddings: embedder.getEmbeddings,
             prepareFrames: embedder.prepareFrames,
@@ -203,7 +204,10 @@ async function runImage(session, rate, inject, moments) {
                 }
                 await yieldToPaint();
             },
-        });
+        };
+        // On one camera a run of flagged encounters ends only at a clearly positive one (see the helper).
+        if (single) opts.continueBelow = singleCameraImageContinueBelow(threshold);
+        var res = await checkImageSwitches(session, opts);
         if (res && embedder.backend) res.model = embedder.backend();   // after releaseFrames: the final word
         if (res && embedder.stats) {
             res.timing = embedder.stats();                 // where the time went, on THIS machine
@@ -304,7 +308,7 @@ export async function runIdSwitchChecks(opts) {
         var res;
         try {
             res = cue === 'size' ? await runSize(target, rate, moments)
-                : cue === 'image' ? await runImage(target, rate, opts.inject, moments)
+                : cue === 'image' ? await runImage(target, rate, opts.inject, moments, single)
                 : await runBrightness(target, rate, opts.inject, moments);
         }
         catch (e) {

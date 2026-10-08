@@ -26,6 +26,9 @@
  *     Brightness) runs), with a stand-in sampler (the coats differ): a change point both it and
  *     the size check find is ONE "Both" row on the size result (violet + amber),
  *     and its ticks are on the seekbar.
+ *  6. The image check (stand-in embedder) on one camera ends a run of flagged
+ *     encounters only at a clearly positive one: `continueBelow` = +|threshold|
+ *     (pose/single-camera-tracking.js `singleCameraImageContinueBelow`).
  *
  * Run: node tests/e2e/single-camera-track-all.mjs
  */
@@ -217,6 +220,22 @@ try {
         'the switch both checks find is one "Both" row (size + brightness): ' + JSON.stringify(br.rows.map(r => [r.frame, r.cls.replace('id-switch-row ', '')])));
     check(br.rows.filter(r => Math.abs(r.frame - 1800) <= 30).length === 1, '…listed once');
     check(br.marks.some(c => /cue-both-size-brightness/.test(c)), 'and its seekbar tick wears both colours');
+
+    console.log('\n6. The image check on one camera ends a run only at a clearly positive encounter');
+    const img = await page.evaluate(async () => {
+        const S = window.__lucid.state.session, M = await import('/ui/id-switch-modal.js');
+        const animalOf = new Map();
+        for (const fg of S.frameGroups.values()) fg.getUnlinkedInstances('mouse_video').forEach((u, a) => animalOf.set(u.instance, a));
+        let seed = 5; const r = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+        const proto = [0, 1, 2].map(a => Float32Array.from({ length: 16 }, (_, i) => Math.sin(3 * a + i)));
+        const fake = async () => ({ views: ['mouse_video'], inFlight: 2, getEmbeddings: async (frame, items) => items.map(it =>
+            [{ camera: 'mouse_video', vector: Float32Array.from(proto[animalOf.get(it.group.instances.get('mouse_video'))], v => v + 0.3 * (r() - 0.5)) }]) });
+        await M.runIdSwitchChecks({ image: true, inject: { createEmbedder: fake, hasWebGPU: async () => true } });
+        const res = S._idSwitch.results.image;
+        return { ok: !!(res && res.ok), threshold: res && res.threshold, continueBelow: res && res.continueBelow };
+    });
+    check(img.ok && img.threshold === -25 && img.continueBelow === 25,
+        `the image check ran at threshold ${img.threshold} with runs ending only above ${img.continueBelow} (want -25 / +25)`);
 
     check(errs.length === 0, 'no page errors' + (errs.length ? ': ' + errs.join(' | ') : ''));
 } finally {

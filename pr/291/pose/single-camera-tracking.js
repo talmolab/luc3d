@@ -31,7 +31,7 @@
  * DOM-free. Depends on: pose/sleap-tracker.js.
  */
 
-import { runSleapTrackerAsync } from './sleap-tracker.js?v=0249513dd31f';
+import { runSleapTrackerAsync } from './sleap-tracker.js?v=ac82994645eb';
 
 /** Why a lazy single-camera project is not tracked (shown in the status bar). */
 export const SINGLE_CAMERA_LAZY_REASON = 'single-camera tracking does not support a lazily loaded (> 150 MB) project yet';
@@ -228,6 +228,29 @@ export function candidateMoments(frames, out, inputTracks, ambiguous, look, fps)
         }
     });
     return moments.sort(function (x, y) { return x.frame - y.frame || x.identityA - y.identityA || x.identityB - y.identityB; });
+}
+
+/**
+ * Where a run of flagged encounters ENDS in the image check on one camera
+ * (`continueBelow`, pose/id-switch-check.js `markChangePoints`): only at an
+ * encounter scoring above +|threshold| — the mirror of the score that starts a
+ * run — instead of at any score above 0. One camera has more crowded contacts
+ * than a multi-camera rig sees from any one view, and an encounter in a huddle,
+ * where each animal is alone for a few seconds at most, scores near 0 either
+ * way; ending the run there split one swap into two rows and left the stretch
+ * between them unfixed. On the 5-mouse topC video a +24 split the id_3 / id_4
+ * swap at 25:23.9 (median |score| 331), so its Fix stopped there; with this rule
+ * Fixing the two rows makes the tracks 99.9% correct instead of 93.8%. On the 35
+ * proofread SLAP videos (image check at -25): rows 96 -> 78 (false 71 -> 51),
+ * 18 of 59 swaps caught instead of 17, and the real rows' Fixes add 66 accuracy
+ * points instead of 54 — while +50 or +100 merges runs across real switch-backs
+ * (15 caught). The brightness check keeps 0: its encounter scores are mostly
+ * noise (hence its -800 threshold), and +800 cost it a caught swap.
+ * @param {number} threshold  the image check's threshold (Tracking Wizard `imageCheckThreshold`)
+ * @returns {number}
+ */
+export function singleCameraImageContinueBelow(threshold) {
+    return Math.abs(threshold);
 }
 
 /**

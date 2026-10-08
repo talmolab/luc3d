@@ -43,7 +43,7 @@
  * Depends on: pose-data.js (readPoint3d). Pure — no DOM, no app state.
  */
 
-import { readPoint3d } from './pose-data.js?v=0249513dd31f';
+import { readPoint3d } from './pose-data.js?v=ac82994645eb';
 
 /** Bone (node-pair) lengths used as the size signature. Pairs whose nodes the
  *  session skeleton lacks are skipped. */
@@ -418,7 +418,7 @@ function finish(grid, LP, present, weight, o, extra) {
     return Object.assign({
         ok: true, flags: flags, changes: changes, encounters: scored, moments: moments,
         identities: idents.map(function (id) { return id.name; }),
-        sampledFrames: T, closeDistance: grid.sep, threshold: o.threshold,
+        sampledFrames: T, closeDistance: grid.sep, threshold: o.threshold, continueBelow: o.continueBelow,
         fps: o.fps, step: grid.step, sampleHz: grid.hz,
     }, extra || {});
 }

@@ -105,6 +105,8 @@ try {
     check(!R.some(r => r !== both && Math.abs(r.frame - fx.swapFrame) <= 60 && /· images/.test(r.text)), '…and not a second "Images" row for the same change point');
     const cues = await page.evaluate(async () => { return [...new Set((await import('/ui/seekbar-markers.js')).getSeekbarSwitchMarkers().map(m => m.cue))].sort(); });
     check(cues.join() === 'image,size', `the seekbar carries both checks' markers (${cues})`);
+    const cb = await page.evaluate(() => window.__res.image.continueBelow);
+    check(cb === 0, `on several cameras a run still ends at any encounter scoring above 0 (continueBelow ${cb}; the +|threshold| rule is single-camera only)`);
     check(!(await page.$('.id-switch-progress')), 'the progress dialog is gone when done');
 
     // ---- 2. identical sizes: only the image check finds it
