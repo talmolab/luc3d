@@ -2099,7 +2099,7 @@ drifts upward (e.g., 4 → 11 on the test fixture).
 - `../ui/rendering.js` — `drawAllOverlays`, `showPredictedOnly`,
   `PREDICTED_ONLY_NOTE`: Track Frame (when it found targets), Track Frame Range
   and Track All (when they assigned identities) end showing ONLY the Predicted
-  layer — User, Reproj, Errors unticked — and append the note to the status line
+  layer — User, Reprojections, Errors unticked — and append the note to the status line
   when that changed anything (the tracking counterpart of Triangulate All's
   Reproj-only switch, #243).
 - `../ui/info-panel.js` — `updateInfoPanel`.
@@ -3747,7 +3747,7 @@ playback state, dirty tracking, multi-session UI.
 
 ### ui/color-by.js
 
-**Purpose.** The toolbar's **Color: Tracks / ID** setting
+**Purpose.** The toolbar's **Tracks / Identity** coloring setting
 (`state.colorByIdentity`), settable from anywhere. The toggle's DOM and
 redraws live in `ui/ui-wiring.js`, but `pose/tracker.js` also flips it — after
 Track All the user wants to see IDs (#242) — and the tracker cannot import
@@ -3761,7 +3761,7 @@ sets the state.
 
 **Imports from project modules.** None.
 
-**Imported by.** `ui/ui-wiring.js` (registers the handler; the Tracks / ID
+**Imported by.** `ui/ui-wiring.js` (registers the handler; the Tracks / Identity
 buttons route through `setColorByIdentity`), `pose/tracker.js`.
 
 **Coverage.** `tests/test-tracker-gui.mjs` (Track All flips it once, a second
@@ -4509,9 +4509,37 @@ for freshly-triangulated AND reopened projects alike.
   over a stale `group.identityId`, and dot/`getGroupColor` agreement in both
   color modes.
 
+**Instance tables layout: both fit a 300 px panel.** Grouped Instances is
+Track / Identity · Views · Type · Error · unlink; Ungrouped Instances is
+Track / Identity · Type · Points · Score, under one full-width header row per
+camera. In both, a row's track and identity `<select>`s are STACKED in the
+first cell, all `STACKED_SELECT_PX` (80) wide and left-aligned, track on top
+(the Grouped row's dirty marker sits beside its track dropdown) — so a row is
+two lines tall. Side by side, the dropdowns made Grouped ~390 px and Ungrouped
+~324 px wide, and the Instances tab scrolled sideways inside the default 300 px
+panel; stacked, plus 4 px cell padding scoped to the two tables in
+`styles.css`, they need ~250 px and ~226 px against ~257 px of room once the
+tab's 11 px scrollbar shows. The track dropdown is the FIRST select in that
+cell — tests and code that look for it must say so (`select:first-of-type`).
+
+Under each group that has reprojections, `updateFrameInfo` adds a row:
+a REPROJECTION_COLOR dot and a "Reprojection" badge (`.badge-reproj`; it read
+"Reproj") in the Track / Identity cell, titled "Reprojection of <name>"; the
+reprojected view count (`n/cameras`) under Views; an EMPTY Type cell; the Error
+dash; and the trailing empty cell — one cell per header column. The badge leads
+the row rather than sitting under Type because the Type column then only has
+to fit "Pred*", which is what makes the width above possible; the group's name
+is on the row just above. (Before the stacked layout, this row was also one
+cell short — built without an Identity cell when that column was added — so
+every later cell sat one column left.) Covered by
+`tests/e2e/info-panel-instance-tables.mjs`, which measures each table's fit as
+its MIN-CONTENT width (the tables are `width: 100%`, so their rendered width
+always equals their container and cannot show an overflow) and fails on the
+old layouts.
+
 **Instance-panel track/identity dropdowns.** Each grouped/unlinked instance
 row has a track `<select>` and an identity `<select>`. Both selects include a
-`(none)` option (value `-1`) and a `(+) New Track` / `(+) New ID` option (value
+`(none)` option (value `-1`) and a `(+) New Track` / `(+) New Identity` option (value
 `__new__`). The track select defaults to `(none)` for a trackless instance/group
 (trackIdx == null) — it does NOT snap to the first track (index 0); selecting
 `(none)` sets the instance(s) trackless (the group path also unassigns its
@@ -4528,7 +4556,7 @@ repaints at the user's current height instead of growing to fit all rows.
 
 **The Track `<select>` is built LAZILY** (`buildTrackSelect`, via
 `ui/lazy-select.js`). Until the user presses or focuses it, it holds three
-options — the head (`(none)` / `—`), the current track and `(+) New Track` —
+options — the head (`(none)`), the current track and `(+) New Track` —
 and the full list is filled in on that first `mousedown` / `focus`, both of
 which fire before the browser opens the list or acts on a key. An eager select
 held an `<option>` per session track, and `updateFrameInfo` builds one per row
@@ -4753,13 +4781,14 @@ on reload); see `ui/app-state.js`.
   correction touches that view only (luc3d #201) — the ungroup → fix one view →
   regroup workflow — and passes its instance so a TRACKLESS row takes the
   per-frame instance-level path (`applyIdentitySwitch` mode **frame**; picking
-  "—" on a trackless row clears `Instance.identityId` directly, there being no
+  "(none)" on a trackless row clears `Instance.identityId` directly, there being no
   map entry to clear). The unlinked row's ID `<select>` pre-selects from
   `getIdentityIdForUnlinkedInstance` (per-frame map entry for a tracked row,
   instance-level retained identity for a trackless one), which is why
   `Session.unlinkGroup` has to retain the
   disbanded group's identity in the map / on the instance for the row to read as anything
-  but "—".
+  but "(none)". (Both tables' "no track" / "no identity" option reads "(none)"; the
+  Ungrouped table's used to read "—".)
 - `./sessions-panes.js` — `populateSessionsPanel`, `populateViewStrip`,
   `populateSessionStrip`.
 
@@ -4803,7 +4832,7 @@ reflect the freshly-active session's hidden sets.
 
 **Visibility tab — section order + Display Legend (Phase-7 refinement).**
 `index.html` reorders the tab so the **Timeline** subsection is at the
-top of the Visibility panel (above User / Predicted / Reprojections).
+top of the Visibility panel (above User / Predictions / Reprojections).
 The **Display Legend** control is its own `<h3>` section sitting between
 Reprojections and Video Brightness, mirroring how Video Brightness and
 Video Rotation are presented. All static checkboxes in the panel
@@ -5050,7 +5079,7 @@ if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' ||
 
 meaning "don't steal keys from someone who is typing". But `tagName` is `INPUT`
 for a **checkbox** too — and for a radio, a range slider and a file picker. So
-the moment the user clicked the User / Predicted / Reproj / Errors toolbar
+the moment the user clicked the User / Predicted / Reprojections / Errors toolbar
 checkbox, that test went true for every keystroke and **every shortcut in the
 app went dead**, not just the one the checkbox wanted. Spacebar toggled the
 checkbox instead of playing the video, and the only cure was to click back onto
@@ -5280,10 +5309,10 @@ info panel, and timeline.
 
 **User-facing features.** Drag-to-resize panel boundaries between video
 grid / 3D / info-panel / timeline. Also wires the two toolbar panel-toggle
-buttons (`#infoPanelToggleBtn`, `#viewport3dToggleBtn`) and keeps their labels
+buttons (`#infoPanelToggleBtn`, `#viewport3dToggleBtn`) and keeps their state
 in sync from the `MutationObserver` that watches the 3D container's and info
 wrapper's `class` attributes — so a collapse from any entry point (button, `\`,
-View menu) relabels both buttons, and the initial labels are correct.
+View menu) updates both buttons, and the initial state is correct.
 
 ---
 
@@ -5810,7 +5839,7 @@ whether any of this is applied.
 **Unlinked instances ARE drawn**, in the preview and in the encoded frames, by
 `collectUnlinked(frameGroup, viewName)` — which reads the RAW `FrameGroup` via
 `getUnlinkedInstances()` (NOT the `toOverlayFrameGroup` copy, which carries only
-`frameGroup.instances`) and filters by the User/Predicted layer checkboxes, so
+`frameGroup.instances`) and filters by the User/Predictions layer checkboxes, so
 unticking a layer drops its unlinked instances too. It is assigned onto the
 options as `opts.unlinkedInstances = …` rather than passed in the
 `overlayOptionsFrom` literal — worth knowing, because a grep for
@@ -6216,7 +6245,8 @@ palettes, and per-frame draw routines. Receives `frameGroup` and
   lookup), so an identity/color **switch shows as a color change along the trail**.
   `drawFrameOverlays` calls it right after the canvas clear (behind the live
   skeletons) when `options.trailLength > 0`. Length is chosen from the **Tracks ▸
-  Node Trails** submenu (Off/10/50/100/250/500 → `state.trailLength`).
+  Node Trails** submenu or the toolbar's **Trails** button (Off/10/50/100/250/500
+  → `state.trailLength`; see `ui/ui-wiring.js`).
   **Performance (it runs per view, per playback redraw):**
   - `trailWindowFrames(frameGroups, frameIdx, trailLength)` (exported) finds the
     window by **walking back** from `frameIdx` — ~`trailLength` lookups — instead
@@ -6306,10 +6336,10 @@ data sources. Plus visibility-toggle helpers and frame counter updates.
 
 **Key exports.**
 - `setReprojErrorVisible(visible, opts?)` — show/hide the reproj-error info
-  column. Showing it ticks the Reproj and Errors boxes unless
+  column. Showing it ticks the Reprojections and Errors boxes unless
   `opts.checkBoxes === false`.
 - `showReprojectionsOnly()` -> `boolean` — after Triangulate All (#243): User,
-  Predicted, Errors off, Reproj on, each changed box firing its own `change`
+  Predictions, Errors off, Reprojections on, each changed box firing its own `change`
   event (so the deselect-hidden-instance handler and redraw run as for a
   click); returns whether anything changed. `REPROJ_ONLY_NOTE` is the status
   suffix the callers append when it did. The four Triangulate All endings
@@ -6318,8 +6348,8 @@ data sources. Plus visibility-toggle helpers and frame counter updates.
   false})` then this, so a run is compared with the USER's boxes, not with
   Errors just re-ticked.
 - `showPredictedOnly()` -> `boolean` — the tracking counterpart: after Track
-  Frame / Track Frame Range / Track All (`pose/tracker.js`) Predicted on; User,
-  Reproj, Errors off, by the same change-event mechanics (shared private
+  Frame / Track Frame Range / Track All (`pose/tracker.js`) Predictions on; User,
+  Reprojections, Errors off, by the same change-event mechanics (shared private
   `setToolbarLayers`). `PREDICTED_ONLY_NOTE` is its status suffix.
 - `getVisibilitySettings()` — reads per-view checkbox state from the DOM.
   Includes **`showUnlinkedBadge`** (the Visibility panel's *Unlinked Instances ▸
@@ -7309,9 +7339,9 @@ object than the plane geometry the mode is for: in the mode a click lands on a
 plane node, the info panel is the plane panel, and `interactionManager`'s
 selection is a plane — so pressing Group or Triangulate would operate on a pose
 selection the user can no longer see or change, producing an edit they did not
-mean and cannot observe. The VISIBILITY controls (User / Predicted / Reproj /
-Errors), Sessions, Color and Hide Panel are deliberately NOT blocked: they
-change what is DRAWN, not what is annotated, and turning Predicted off to see
+mean and cannot observe. The VISIBILITY controls (User / Predictions /
+Reprojections / Errors), Sessions, Tracks / Identity and the Panel toggle are deliberately NOT blocked: they
+change what is DRAWN, not what is annotated, and turning Predictions off to see
 the plane you are placing is exactly what the mode is for.
 
 Three details it has to get right:
@@ -10205,9 +10235,12 @@ stopping at the last frame; the step transport buttons/keys stop it first.
   navigateToFrame})`, from `ui/id-switch-modal.js`; `setIdSwitchNavigator` and
   `setIdSwitchRefresher` (the repaint after the tab fixes a switch) are called
   once at setup.
-- Color-by toggle: the "Color by" Tracks/ID control lives in the top
+- Color-by toggle: the Tracks / Identity control lives in the top
   toolbar (buttons `colorByTracks` / `colorById`, next to the Errors
-  checkbox), not the Tracks menu. `updateColorByToggle()` reflects
+  checkbox), not the Tracks menu. It has no visible "Color" label (the group
+  carries `aria-label="Color by"`, each button a "Color instances by …"
+  tooltip), and the second button is spelled out, "Identity" rather than
+  "ID". `updateColorByToggle()` reflects
   `state.colorByIdentity` on the buttons. Every change of the setting goes
   through `setColorByIdentity` (`ui/color-by.js`) and lands in the one
   handler registered here via `onColorByChange`: update the active class,
@@ -10215,6 +10248,21 @@ stopping at the last frame; the step transport buttons/keys stop it first.
   `update3DViewport` (whose `getGroupColor` closure reads
   `state.colorByIdentity` live, so instances recolor instantly). The buttons
   use it, and so does the tracker after Track All (#242).
+- Node Trails (issue #102): two pickers for `state.trailLength` — the Tracks ▸
+  Node Trails submenu (`menuTrails*`) and the toolbar's **Trails** button
+  (`#tbTrails`, right of Tracks / Identity). One `trailPresets` list
+  (Off/10/50/100/250/500) builds the toolbar menu's items (`#trailsMenu`,
+  `data-trail-len`), and both pickers go through `setTrailLength`, whose
+  `updateTrailChecks` moves the checkmark in BOTH menus and rewrites the
+  button's tooltip ("Node trails: 50 frames"). The label stays a bare
+  "Trails ▾" on purpose, to save toolbar width: the toolbar needs ~1,380 px
+  with it (see the panel toggles below), and "Trails: 500" in the label would
+  add ~25 px more. The button is a `.tri-dropdown`, so its menu opens on hover in
+  pure CSS exactly like the Triangulate split buttons', and like theirs stays
+  up after a pick until the pointer leaves; clicking the button itself does
+  nothing. Display state, never saved; not in the Defining Plane Mode
+  toolbar lock (it changes what is drawn, not what is annotated). Covered by
+  `tests/e2e/node-trails-toolbar.mjs`.
 - Node Style: the four per-section Node Style button groups
   (`visUserNodeStyle` / `visPredNodeStyle` / `visReprojNodeStyle` /
   `vis3dNodeStyle`) reuse the `.line-style-btn` click handler (active toggle +
@@ -10284,7 +10332,7 @@ stopping at the last frame; the step transport buttons/keys stop it first.
   cannot drift apart.
 - Toggles: `toggleInfoPanel`, `refreshInfoPanelAfterShow`,
   `updateInfoPanelToggleBtn`, `toggle3DViewport`,
-  `update3DViewportToggleBtn`, `lockPanelToggleWidths`, `toggleTimeline`,
+  `update3DViewportToggleBtn`, `toggleTimeline`,
   `syncTimelineToggleButton`, `fitTimelineToData`.
 - View modes: `enterSingleViewMode`, `cycleSingleView`, `setSoloView`,
   `setGridMode`, `updateVideoGridDisplay`, `showViewIndicator`. See
@@ -10297,7 +10345,7 @@ stopping at the last frame; the step transport buttons/keys stop it first.
   via `setHandler`), which calls the SAME `togglePlaneMode()` — exiting has real
   unwinding to do (Set Origin Mode, the angle dialog, the toolbar lock), so a
   second entry point would be a second place to forget it. `p` alone is Toggle
-  Predicted, and the two are separated only by `matchChord`'s rule that a bare
+  Predictions, and the two are separated only by `matchChord`'s rule that a bare
   letter requires shift to be UP. Covered by
   `tests/e2e/define-planes-shortcut.mjs`.
 - Help ▸ **Hot Keys** (`menuHotkeys`) and **`?`** (`showHotkeys` in
@@ -10343,29 +10391,31 @@ actually skipped (`consumeInfoPanelStale`). Covered by
 `tests/e2e/panel-toggle-independence.mjs`.
 
 **Toolbar toggle buttons (issue #151).** Both panels have a labelled button at
-the far right of the toolbar, `#viewport3dToggleBtn` ("Hide/Show 3D View") to
-the left of `#infoPanelToggleBtn` ("Hide/Show Panel"), grouped in
+the far right of the toolbar, `#viewport3dToggleBtn` ("3D") to the left of
+`#infoPanelToggleBtn` ("Panel"), grouped in
 `.toolbar-group.panel-toggles` and outlined (`.panel-toggle-btn`) so they read
 as layout controls rather than as more annotation actions. Previously the 3D
 viewport could only be collapsed from `\` or View ▸ Toggle 3D Viewport, neither
 of which is discoverable. `update3DViewportToggleBtn` /
-`updateInfoPanelToggleBtn` derive each label from the container's `collapsed`
-class rather than from whoever did the toggling, so all three entry points stay
-in sync; both are called from the toggle itself **and** from the
+`updateInfoPanelToggleBtn` derive each button's state from the container's
+`collapsed` class rather than from whoever did the toggling, so all three entry
+points stay in sync; both are called from the toggle itself **and** from the
 `MutationObserver` in `ui/layout-controls.js` that already watches those two
-containers' class attributes (which is also what sets the initial labels). Both
-labels for both buttons live in one `PANEL_TOGGLE_BUTTONS` table, which is also
-what `lockPanelToggleWidths` measures.
+containers' class attributes (which is also what sets the initial state).
 
-`lockPanelToggleWidths` (called once from `setupSplitHandles`) pins each button
-to the width of its own **wider** label, because "Hide" and "Show" are not the
-same width in the toolbar's proportional system font: unpinned, the 3D toggle
-measured 90.5px as "Hide 3D View" and 95.8px as "Show 3D View", and since the
-pair is right-aligned, the 5.3px growth on a label swap also shoved the button
-to its left sideways on every toggle. The width is measured from the real
-labels rather than hardcoded, so it stays correct if a label, the font size or
-the button padding changes; the app ships only system fonts, so there is no
-late web-font reflow to re-measure for.
+The labels are short and **fixed**: the button is highlighted (`.active`,
+`aria-pressed`) while its panel is shown — the same kind of toggle as
+`#tbSessions` at the toolbar's left edge — and the tooltip says what a click
+will do ("Hide 3D viewer (\)" / "Show 3D viewer (\)"), via the private
+`syncPanelToggleBtn`. They used to swap "Hide 3D View" / "Show 3D View" and
+"Hide Panel" / "Show Panel", which cost ~95px of toolbar width and needed
+`lockPanelToggleWidths` to pin each button to its wider label so a swap did not
+shove its neighbour sideways ("Hide" and "Show" are different widths in a
+proportional font). A fixed label cannot resize, so that function is gone. With
+the short labels, and ONE divider line between toolbar groups (each
+`.toolbar-group`'s right border; the extra `.toolbar-separator` beside it is
+gone), the whole toolbar fits a 1440 px window (it needs ~1,380 px), which
+`tests/e2e/toolbar-3d-toggle-button.mjs` asserts.
 
 **Single-view ("solo") mode.** `v` (`singleViewMode`) calls
 `enterSingleViewMode`, which caches the dockview grid layout
@@ -10429,7 +10479,7 @@ the solo'd view itself);
 
 **Visibility panel — the global/session split.** `saveVisSettings` /
 `restoreVisSettings` cache the panel's **global appearance preferences** (the
-`visSliderIds` / `visCheckIds` / `visStyleIds` lists — User, Predicted,
+`visSliderIds` / `visCheckIds` / `visStyleIds` lists — User, Predictions,
 Reprojections, Planes, Display Legend and 3D Viewer) in
 `localStorage.visibilitySettings`. Those are browser-local display taste, shared
 across every session, and are deliberately **not** written into the `.slp`:
@@ -10499,8 +10549,8 @@ and the FPS pill),
 `seekbar-markers.js` (`installSeekbarMarkers`, `seekbarMarkerAt`,
 `describeSwitchMarker`, `setSeekbarMarkerFrames` — the possible-ID-switch ticks:
 the scrub handlers and the tooltip snap to a tick within 5 px),
-`color-by.js` (`onColorByChange`, `setColorByIdentity` — the Color: Tracks /
-ID toggle, also flipped by the tracker after Track All — #242),
+`color-by.js` (`onColorByChange`, `setColorByIdentity` — the Tracks /
+Identity toggle, also flipped by the tracker after Track All — #242),
 `video-filters.js` (`setSessionRotation`; `clampRotation` still comes in via
 `sessions-panes.js`, which re-exports it), `plane-definition.js`
 (`togglePlaneMode`).
@@ -13013,7 +13063,7 @@ holds two kinds of state:
   timeline's hidden camera / track / identity sets. These describe *this
   project's* videos and entities, so they belong in the project file. That is
   everything this module handles.
-- **Global appearance preferences** — the User / Predicted / Reprojections /
+- **Global appearance preferences** — the User / Predictions / Reprojections /
   Planes / Display Legend / 3D Viewer sliders, styles and toggles. Those are
   browser-local display taste, shared across every session, and stay in
   `localStorage.visibilitySettings` (see `ui/ui-wiring.js`). They are **not**
