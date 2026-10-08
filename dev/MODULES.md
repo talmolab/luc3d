@@ -3651,6 +3651,11 @@ Calibration and `envSkeleton` remain per-session.
 **Key exports.**
 - `state` — mutable application state (current frame, sessions, dirty
   flag, view list, color mode, etc.).
+  `state.trailLength` (node-trail frames) is an **accessor**, not a field: it
+  reads `trailFrames(state.trailSeconds, state.fps)` (`ui/trail-presets.js`), so
+  it follows the frame rate when a video loads or the FPS pill is edited, with
+  no caller recomputing it. Setting it (tests and benches pin a frame count)
+  stores `frames / fps` in `trailSeconds`. The pickers set `trailSeconds`.
 - `videoController`, `interactionManager`, `viewport3d`, `timeline`,
   `paneManager` — live `let` bindings.
 - `setVideoController`, `setInteractionManager`, `setViewport3D`,
@@ -3676,7 +3681,8 @@ Calibration and `envSkeleton` remain per-session.
   matching skeleton. Same lifetime model as the remembered skeleton (app session
   only). Filled/read by `copySelectedInstance`/`pasteInstance` in `ui-wiring.js`.
 
-**Imports from project modules.** None.
+**Imports from project modules.** `./trail-presets.js` (`trailFrames`,
+`trailRate`), itself import-free.
 
 **Imported by.** `pose/initialization.js`, `pose/triangulation.js`,
 `pose/tracker.js`, `import-export/save-load.js`,
@@ -6169,8 +6175,9 @@ palettes, and per-frame draw routines. Receives `frameGroup` and
   lookup), so an identity/color **switch shows as a color change along the trail**.
   `drawFrameOverlays` calls it right after the canvas clear (behind the live
   skeletons) when `options.trailLength > 0`. Length is chosen from the **Tracks ▸
-  Node Trails** submenu or the toolbar's **Trails** button (Off/10/50/100/250/500
-  → `state.trailLength`; see `ui/ui-wiring.js`).
+  Node Trails** submenu or the toolbar's **Trails** button (Off / ¼ s / ½ s / 1 s / 2 s
+  → `state.trailSeconds`, drawn as `state.trailLength` = seconds × fps frames;
+  see `ui/trail-presets.js` and `ui/ui-wiring.js`).
   **Performance (it runs per view, per playback redraw):**
   - `trailWindowFrames(frameGroups, frameIdx, trailLength)` (exported) finds the
     window by **walking back** from `frameIdx` — ~`trailLength` lookups — instead
@@ -10060,6 +10067,47 @@ the app-wide modal convention. On a successful run the viewer is parked on the
 
 ---
 
+### ui/trail-presets.js
+
+**Purpose.** Node-trail lengths, in SECONDS — the presets Off, ¼ s, ½ s, 1 s, 2 s, and
+any custom length typed into Tracks ▸ Node Trails ▸ Custom…, in seconds or in
+frames — and their
+conversion to the frames a trail draws. A fixed frame list (it was
+10/50/100/250/500) meant something different on every camera: 50 frames is ½ s of
+a 100 fps recording and nearly 2 s of a 30 fps one. DOM-free and import-free, so
+`ui/app-state.js` can import it and `tests/test-trail-presets.mjs` runs it in Node.
+
+**Key exports.**
+- `TRAIL_PRESETS` — `{key, seconds, name}` per preset; `key` names the Tracks ▸
+  Node Trails item ids (`menuTrails<key>`).
+- `trailFrames(seconds, fps)` — `round(seconds × fps)`, at least 1 for a trail
+  that is on, at most `MAX_TRAIL_FRAMES`; 0 when off. 15/30/60/120 at 60 fps,
+  25/50/100/200 at 100 fps.
+- `trailRate(fps)` — `fps`, or 30 while none is known (`state.fps` is 0 before a
+  video loads), so a trail is never silently 0 frames.
+- `trailPresetFor(seconds)` — the preset of exactly that length, or null (custom).
+- `trailSecondsName(seconds)` — the preset's name, or a custom length in seconds
+  to at most 3 decimals ("1.5 seconds").
+- `trailLabel(seconds, fps)` — "½ second (30 frames)", "1.5 seconds (90
+  frames)", or "Off". The menus, the button's tooltip and the status line all
+  use it.
+- `parseTrailSeconds(text)` — the Custom… Seconds field: a plain decimal above 0
+  (a decimal comma is accepted, since the field is text), else null.
+- `parseTrailFrames(text)` — the Custom… Frames field: a whole number of at
+  least 1, else null.
+- `formatTrailSeconds(seconds)` — how the Seconds field shows a length: at most
+  3 decimals, no trailing zeros ("0.167").
+- `trailSecondsForFrames(frames, fps)` — how a length typed in frames is stored:
+  `frames / fps`, EXACTLY (10 frames at 60 fps is 1/6 s, not 0.167), so it draws
+  the frames typed. The unit test round-trips 1–500 frames at 24–250 fps.
+- `MAX_TRAIL_FRAMES` (500) — `LAZY_KEEP_BEHIND` (512) must stay above the longest
+  trail, since trails draw resident frames only; without the cap a 2 s trail on a
+  300 fps recording would be 600 frames, so from 250 fps up 2 s draws 500. The test asserts the inequality.
+
+**Imports from project modules.** None.
+
+**Imported by.** `ui/app-state.js`, `ui/ui-wiring.js`.
+
 ### ui/track-summary.js
 
 **Purpose.** What the Track All summary box says, DOM-free so the decision tree is
@@ -10388,21 +10436,48 @@ stopping at the last frame; the step transport buttons/keys stop it first.
   `update3DViewport` (whose `getGroupColor` closure reads
   `state.colorByIdentity` live, so instances recolor instantly). The buttons
   use it, and so does the tracker after Track All (#242).
-- Node Trails (issue #102): two pickers for `state.trailLength` — the Tracks ▸
-  Node Trails submenu (`menuTrails*`) and the toolbar's **Trails** button
-  (`#tbTrails`, right of Tracks / Identity). One `trailPresets` list
-  (Off/10/50/100/250/500) builds the toolbar menu's items (`#trailsMenu`,
-  `data-trail-len`), and both pickers go through `setTrailLength`, whose
-  `updateTrailChecks` moves the checkmark in BOTH menus and rewrites the
-  button's tooltip ("Node trails: 50 frames"). The label stays a bare
+- Node Trails (issue #102): two pickers for `state.trailSeconds` — the Tracks ▸
+  Node Trails submenu (`#menuTrailsSubmenu`, items `menuTrailsOff` /
+  `menuTrailsQuarter` / `menuTrailsHalf` / `menuTrailsSecond` / `menuTrailsTwoSeconds`) and the toolbar's
+  **Trails** button (`#tbTrails`, right of Tracks / Identity). Both menus' items
+  are built from `TRAIL_PRESETS` (`ui/trail-presets.js`: Off, ¼ s, ½ s, 1 s, 2 s;
+  `data-trail-sec`) plus a last **Custom…** item (`data-trail-custom`,
+  `menuTrailsCustom`), and both go through `setTrailSeconds`. Custom… opens
+  `showCustomTrailModal` (`#trailCustomModal`): a **Seconds** and a **Frames**
+  field (`#trailCustomSeconds` / `#trailCustomFrames`), the same length at the
+  current rate. Typing in either rewrites the other; an invalid entry blanks the
+  other, disables Apply and says why in `.modal-error`. The field typed in LAST
+  is what Apply sets, and either way it is stored in seconds — so a custom
+  length follows the frame rate exactly like a preset, and a length typed in
+  frames is stored as `frames / fps` exactly and draws the frames typed. It
+  opens on the current length, kept exact (re-applying a 10-frame trail
+  untouched does not round it to its "0.167" display). A note under the fields
+  names the rate ("At 60 fps.") and adds "A trail draws at most 500 frames."
+  past the cap. Enter applies, Esc / Cancel change nothing. It is a dialog rather than a field in
+  the menu because both menus open on hover and would close under the user the
+  moment the pointer drifted. A length no preset matches checks Custom, whose
+  label then names it ("Custom: 1.5 seconds (90 frames)…") in both menus. A preset is a span of
+  TIME, so each item names its frame count at the current rate — "½ second (30
+  frames)" at 60 fps, "(50 frames)" at 100 — and `updateTrailChecks` re-reads
+  `state.fps` whenever either menu is entered (`mouseenter`/`focusin` on
+  `#trailsDropdown` and `#menuTrailsParent`), because the rate changes in many
+  places (video load, session switch, the FPS pill) and none of them is told
+  about trails. It also moves the checkmark in BOTH menus and rewrites the
+  button's tooltip ("Node trails: ½ second (30 frames)"), and gives the button
+  the toolbar's `.active` blue while any trail is on (preset or custom) — the
+  same look as 3D / Panel / Identity — so a trail being on reads at a glance
+  without hovering the button. Off removes it. The FPS pill's commit
+  redraws the overlays when trails are on, since the frame count just changed.
+  The label stays a bare
   "Trails ▾" on purpose, to save toolbar width: the toolbar needs ~1,380 px
-  with it (see the panel toggles below), and "Trails: 500" in the label would
+  with it (see the panel toggles below), and the value in the label would
   add ~25 px more. The button is a `.tri-dropdown`, so its menu opens on hover in
   pure CSS exactly like the Triangulate split buttons', and like theirs stays
   up after a pick until the pointer leaves; clicking the button itself does
   nothing. Display state, never saved; not in the Defining Plane Mode
   toolbar lock (it changes what is drawn, not what is annotated). Covered by
-  `tests/e2e/node-trails-toolbar.mjs`.
+  `tests/e2e/node-trails-toolbar.mjs` (including the frame counts following the
+  FPS pill) and `tests/test-trail-presets.mjs`.
 - Node Style: the four per-section Node Style button groups
   (`visUserNodeStyle` / `visPredNodeStyle` / `visReprojNodeStyle` /
   `vis3dNodeStyle`) reuse the `.line-style-btn` click handler (active toggle +
@@ -10691,6 +10766,10 @@ and the FPS pill),
 the scrub handlers and the tooltip snap to a tick within 5 px),
 `color-by.js` (`onColorByChange`, `setColorByIdentity` — the Tracks /
 Identity toggle, also flipped by the tracker after Track All — #242),
+`trail-presets.js` (`TRAIL_PRESETS`, `MAX_TRAIL_FRAMES`, `trailPresetFor`,
+`trailLabel`, `trailFrames`, `trailRate`, `formatTrailSeconds`,
+`trailSecondsForFrames`, `parseTrailSeconds`, `parseTrailFrames` — the Node
+Trails menus and their Custom… dialog),
 `video-filters.js` (`setSessionRotation`; `clampRotation` still comes in via
 `sessions-panes.js`, which re-exports it), `plane-definition.js`
 (`togglePlaneMode`).

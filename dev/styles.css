@@ -212,7 +212,7 @@ body {
   font-weight: bold;
 }
 
-/* Nested submenu (e.g. Tracks ▸ Node Trails ▸ Off/10/50/100). The submenu is a
+/* Nested submenu (e.g. Tracks ▸ Node Trails ▸ Off/¼ s/½ s/1 s/2 s). The submenu is a
    .menu-dropdown, so the global menu-close handler stamps it with an inline
    display:none — the :hover rule needs !important to win over that. */
 .menu-dropdown-item.has-submenu {
@@ -1415,6 +1415,46 @@ body {
   opacity: 0.45;
   cursor: not-allowed;
   filter: none;
+}
+
+/* Tracks ▸ Node Trails ▸ Custom… (ui/ui-wiring.js): Seconds and Frames side by
+   side, narrower than the shared modal; the note reserves its height like
+   .modal-error, so a cap warning appearing never moves the buttons. */
+.multi-frame-modal.trail-custom-modal {
+  min-width: 320px;
+  max-width: 360px;
+}
+
+.trail-custom-fields {
+  display: flex;
+  gap: 12px;
+}
+
+.trail-custom-field {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.trail-custom-field input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 6px 8px;
+  font-size: 13px;
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+}
+
+.multi-frame-modal p.trail-custom-note {
+  margin: 8px 0 0;
+  min-height: 18px;
+  font-size: 12px;
 }
 
 /* Shared inline validation line for modals (red, reserves its own height so

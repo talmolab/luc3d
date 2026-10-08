@@ -6,7 +6,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Multi-View Pose Proofreader</title>
-    <link rel="stylesheet" href="styles.css?v=3408b82d1c5b">
+    <link rel="stylesheet" href="styles.css?v=5c50c3b8deb4">
     <!-- Pinned: dockview-core 7.x renamed api.onUnhandledDragOverEvent →
          onUnhandledDragOver, so the unpinned /+esm import broke pane docking
          whenever the CDN cache refreshed. Keep this pin in sync with the
@@ -18,17 +18,17 @@
     <script src="https://cdn.jsdelivr.net/npm/three@0.147.0/build/three.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/three@0.147.0/examples/js/controls/OrbitControls.js"></script>
     <!-- h5wasm for in-browser HDF5 read/write — local vendored 0.10.3 IIFE (global `h5wasm`); see lib/h5wasm/PROVENANCE.txt -->
-    <script src="./lib/h5wasm/h5wasm.iife.js?v=3408b82d1c5b"></script>
+    <script src="./lib/h5wasm/h5wasm.iife.js?v=5c50c3b8deb4"></script>
     <!-- Video encode AND decode both go through mediabunny (importmap below):
          export via ui/video-encode.js, decode via sleap-io.js's backend. -->
     <!-- Import map for sleap-io.js ESM dependencies -->
     <script type="importmap">
     {
         "imports": {
-            "h5wasm": "./lib/h5wasm/hdf5_hl.js?v=3408b82d1c5b",
+            "h5wasm": "./lib/h5wasm/hdf5_hl.js?v=5c50c3b8deb4",
             "yaml": "https://cdn.jsdelivr.net/npm/yaml@2.8.0/browser/index.js",
-            "mediabunny": "./lib/mediabunny/mediabunny.min.mjs?v=3408b82d1c5b",
-            "pako": "./lib/pako/pako.esm.mjs?v=3408b82d1c5b"
+            "mediabunny": "./lib/mediabunny/mediabunny.min.mjs?v=5c50c3b8deb4",
+            "pako": "./lib/pako/pako.esm.mjs?v=5c50c3b8deb4"
         }
     }
     </script>
@@ -140,14 +140,8 @@
                     <div class="menu-dropdown-item has-submenu" id="menuTrailsParent">
                         <span>Node Trails</span>
                         <span class="submenu-arrow">▶</span>
-                        <div class="menu-dropdown submenu" id="menuTrailsSubmenu">
-                            <div class="menu-dropdown-item" id="menuTrailsOff"><span><span class="trail-check">✓</span>Off</span></div>
-                            <div class="menu-dropdown-item" id="menuTrails10"><span><span class="trail-check"></span>10 frames</span></div>
-                            <div class="menu-dropdown-item" id="menuTrails50"><span><span class="trail-check"></span>50 frames</span></div>
-                            <div class="menu-dropdown-item" id="menuTrails100"><span><span class="trail-check"></span>100 frames</span></div>
-                            <div class="menu-dropdown-item" id="menuTrails250"><span><span class="trail-check"></span>250 frames</span></div>
-                            <div class="menu-dropdown-item" id="menuTrails500"><span><span class="trail-check"></span>500 frames</span></div>
-                        </div>
+                        <!-- Items built from TRAIL_PRESETS in ui/ui-wiring.js, like the toolbar's Trails menu. -->
+                        <div class="menu-dropdown submenu" id="menuTrailsSubmenu" role="menu"></div>
                     </div>
                     <div class="menu-separator"></div>
                     <div class="menu-dropdown-item" id="menuTrackingWizard">Tracking Wizard...</div>
@@ -239,7 +233,8 @@
                  Trails; the items are built from that one list in ui/ui-wiring.js.
                  Opens on hover, like the Triangulate menus. The label stays a bare
                  "Trails" (the value is the menu's checkmark and the tooltip) to
-                 save toolbar width. -->
+                 save toolbar width; the button turns blue (.active) while a
+                 trail is on. -->
             <div class="toolbar-group">
                 <div class="tri-dropdown" id="trailsDropdown">
                     <button class="toolbar-btn" id="tbTrails" aria-haspopup="menu"
@@ -1385,7 +1380,7 @@
             InstanceGroup as SioInstanceGroup, FrameGroup as SioFrameGroup,
             Identity as SioIdentity, Instance3D, PredictedInstance3D,
             MediaBunnyVideoBackend
-        } from './lib/sleap-io/index.browser.js?v=3408b82d1c5b';
+        } from './lib/sleap-io/index.browser.js?v=5c50c3b8deb4';
         window.SleapIO = {
             Labels, LabeledFrame, Instance, PredictedInstance,
             Skeleton, Node, Edge, Video, Track, saveSlpToBytes,
@@ -1399,7 +1394,7 @@
         window.dispatchEvent(new Event('sleapio-ready'));
     </script>
 
-    <script type="module" src="app.js?v=3408b82d1c5b"></script>
+    <script type="module" src="app.js?v=5c50c3b8deb4"></script>
 </body>
 
 </html>
