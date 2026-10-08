@@ -1026,6 +1026,10 @@ body {
   overflow: visible;
 }
 
+/* Each group's right border is the ONE divider between groups. There used to
+   be a `.toolbar-separator` line beside it as well, which drew every boundary
+   twice and cost ~13px apiece — enough to push the panel toggles off a 1440px
+   window once the labels were spelled out. */
 .toolbar-group {
   display: flex;
   align-items: center;
@@ -1225,6 +1229,19 @@ body {
   pointer-events: auto;
   transform: translateY(0);
   transition-delay: 0s;
+}
+
+/* The toolbar's Trails menu (ui/ui-wiring.js): narrower, with a checkmark
+   column like Tracks ▸ Node Trails. */
+#trailsMenu {
+  min-width: 120px;
+}
+
+.tri-dropdown-item .trail-check {
+  display: inline-block;
+  width: 14px;
+  color: var(--accent, #4ea1ff);
+  font-weight: bold;
 }
 
 .tri-dropdown-item {
@@ -2443,14 +2460,6 @@ body {
   line-height: 1.5;
 }
 
-.toolbar-separator {
-  width: 1px;
-  height: 20px;
-  background: var(--border-color);
-  margin: 0 4px;
-  flex-shrink: 0;
-}
-
 /* --------------------------------------------------------------------------
    Timeline
    -------------------------------------------------------------------------- */
@@ -3050,6 +3059,19 @@ body {
   max-width: 120px;
 }
 
+/* The two instance tables run 4px side padding instead of 6px: with their
+   track and identity dropdowns stacked in one column (ui/info-panel.js
+   STACKED_SELECT_PX), that is the last ~20px the Grouped table needs to fit a
+   300px panel, and the Ungrouped table matches it. The unlink cell's inline
+   `padding:0` and the camera header row's inline padding still win. */
+#instanceGroupsTable thead th,
+#instanceGroupsTable tbody td,
+#unlinkedTable thead th,
+#unlinkedTable tbody td {
+  padding-left: 4px;
+  padding-right: 4px;
+}
+
 .data-table .mono {
   font-family: "SF Mono", "Fira Code", "Cascadia Code", monospace;
   font-size: 11px;
@@ -3556,6 +3578,7 @@ input[type="range"]::-moz-range-track {
   display: inline-flex;
   align-items: center;
   gap: 4px;
+  margin-left: 4px;
   padding: 2px 8px;
   border-radius: 12px;
   font-size: 11px;

@@ -12,7 +12,7 @@
 //     project's videos and entities, so they belong in the project file. That
 //     is everything this module handles.
 //
-//   * Global appearance preferences — the User / Predicted / Reprojections /
+//   * Global appearance preferences — the User / Predictions / Reprojections /
 //     Display Legend / 3D Viewer sliders, styles and toggles. Those are
 //     browser-local display taste, are shared across every session, and stay in
 //     `localStorage.visibilitySettings` (see `ui/ui-wiring.js`). They are NOT

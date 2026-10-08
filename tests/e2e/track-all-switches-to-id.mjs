@@ -1,18 +1,18 @@
 /**
- * track-all-switches-to-id.mjs — after Track All, the toolbar's Color toggle
- * moves from "Tracks" to "ID" (#242), in the real app.
+ * track-all-switches-to-id.mjs — after Track All, the toolbar's coloring toggle
+ * moves from "Tracks" to "Identity" (#242), in the real app.
  *
  * Fixture: two synthetic animals seen by three calibrated cameras over a few
  * frames (the same rig as tests/test-tracker-gui.mjs). Asserted through the
  * real toolbar buttons:
- *  1. With Color on Tracks, clicking Track All assigns identities and leaves
- *     the toggle on ID (button highlight AND `state.colorByIdentity`), and the
+ *  1. With coloring on Tracks, clicking Track All assigns identities and leaves
+ *     the toggle on Identity (button highlight AND `state.colorByIdentity`), and the
  *     status line says it switched.
  *  2. The 3D viewer is recolored on the spot (`update3DViewport` runs for the
  *     switch), not only on the next frame change.
  *  3. The user can still switch back to Tracks with the button, and a Track
  *     Frame (single frame) does NOT flip it again.
- *  4. Running Track All with Color already on ID changes nothing and does not
+ *  4. Running Track All with coloring already on Identity changes nothing and does not
  *     claim a switch.
  *
  * Run: node tests/e2e/track-all-switches-to-id.mjs
@@ -99,7 +99,7 @@ try {
         await page.click('#trackSummaryClose', { timeout: 30000 });
     };
 
-    // ---- 1 + 2. Tracks -> Track All -> ID -----------------------------------------
+    // ---- 1 + 2. Tracks -> Track All -> Identity -----------------------------------
     await page.click('#colorByTracks');
     let t = await toggle();
     check(t.tracks && !t.id && !t.state, 'precondition: Color is on Tracks');
@@ -107,8 +107,8 @@ try {
     await runTrackAll();
     t = await toggle();
     check(t.identities === 2, `Track All assigned identities (${t.identities})`);
-    check(t.id && !t.tracks && t.state, 'after Track All the toggle is on ID (button and state)');
-    check(/now coloring by ID/.test(t.status), `status says so: "${t.status}"`);
+    check(t.id && !t.tracks && t.state, 'after Track All the toggle is on Identity (button and state)');
+    check(/now coloring by Identity/.test(t.status), `status says so: "${t.status}"`);
     const hasViewer = await page.evaluate(async () => !!(await import('/ui/app-state.js')).viewport3d);
     if (hasViewer) check(t.threeD > threeDBefore, `the 3D viewer was refreshed for the recolor (${threeDBefore} -> ${t.threeD})`);
     else console.log('  - no 3D viewer in this build; skipped the 3D recolor check');
@@ -122,12 +122,12 @@ try {
     t = await toggle();
     check(t.tracks && !t.state, 'Track Frame (one frame) leaves Color on Tracks');
 
-    // ---- 4. Track All with Color already on ID ------------------------------------------
+    // ---- 4. Track All with coloring already on Identity ----------------------------------
     await page.click('#colorById');
     await runTrackAll();
     t = await toggle();
-    check(t.id && t.state, 'Color stays on ID');
-    check(!/now coloring by ID/.test(t.status), `status does not claim a switch: "${t.status}"`);
+    check(t.id && t.state, 'coloring stays on Identity');
+    check(!/now coloring by Identity/.test(t.status), `status does not claim a switch: "${t.status}"`);
 
     check(errs.length === 0, 'no page errors' + (errs.length ? ': ' + errs.join(' | ') : ''));
 } finally {
