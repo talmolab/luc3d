@@ -253,7 +253,7 @@
         });
 
         it('issue #137 (identities): keepSize collapses the ID rows on a new ID; cap keeps them visible', function () {
-            // The identity mirror of #137: the Instances-panel "(+) New ID"
+            // The identity mirror of #137: the Instances-panel "(+) New Identity"
             // flow creates an identity AND assigns it, adding an occupied row
             // in the "IDs"/"Both" timeline modes. It must refresh with
             // { cap: true } (not { keepSize: true }) or _computeLayout
@@ -270,7 +270,7 @@
             assertTrue(tl._computeLayout(hFit3).showTracks,
                 'precondition: all 3 identity rows are visible at the fit height');
 
-            // Simulate "(+) New ID" + assign → a 4th occupied identity row.
+            // Simulate "(+) New Identity" + assign → a 4th occupied identity row.
             var session4 = buildSessionWithIdentities(4, ['cam1']);
 
             tl.refreshTracks(session4, { keepSize: true });
