@@ -16,11 +16,17 @@
  *     order while rendering the pair backwards).
  *   - Both toggles carry a visible border, so they read as a distinct pair of
  *     layout controls against the toolbar's otherwise borderless buttons.
- *   - The label tracks the panel's ACTUAL state, not the button's own idea of
+ *   - The labels are short and FIXED ("3D", "Panel"); the button is
+ *     highlighted (`.active`, `aria-pressed`) while its panel is shown, and
+ *     the tooltip says what a click will do. They used to swap Hide/Show
+ *     labels ("Hide 3D View" / "Show 3D View"), which cost ~95px of toolbar.
+ *   - That state tracks the panel's ACTUAL state, not the button's own idea of
  *     it. There are three ways to toggle the viewport (button, `\`, menu), so
- *     the test drives all three and asserts the label after each — a
+ *     the test drives all three and asserts the state after each — a
  *     button-local boolean would pass the click case and desync on the other
  *     two.
+ *   - The whole toolbar fits a 1440 px window, the width the short labels
+ *     were chosen for.
  *   - Toggling from the button leaves the info panel's width alone (the
  *     independence guarantee from the same PR), so the new entry point does
  *     not reintroduce the width handoff that caused the original bug.
@@ -104,6 +110,10 @@ try {
             missing: false,
             label3d: b3.textContent.trim(),
             labelInfo: bi.textContent.trim(),
+            active3d: b3.classList.contains('active') && b3.getAttribute('aria-pressed') === 'true',
+            activeInfo: bi.classList.contains('active') && bi.getAttribute('aria-pressed') === 'true',
+            title3d: b3.title,
+            titleInfo: bi.title,
             // Geometry, not DOM order.
             btn3dRight: r3.right,
             btnInfoLeft: ri.left,
@@ -119,7 +129,7 @@ try {
             vp3dCollapsed: vp.classList.contains('collapsed'),
             vp3dWidth: vp.getBoundingClientRect().width,
             infoWidth: wrap.getBoundingClientRect().width,
-            // Button widths, to catch the label swap resizing the button.
+            // Button widths, to catch the highlight resizing the button.
             btn3dWidth: r3.width,
             btnInfoWidth: ri.width,
             btn3dLeft: r3.left,
@@ -169,8 +179,11 @@ try {
     check(s0.btn3dHeight === s0.btnInfoHeight && s0.btn3dHeight === 28,
         `the border does not change the 28px toolbar button height (3D=${s0.btn3dHeight}, info=${s0.btnInfoHeight})`);
 
-    // ---------------- 3. Clicking toggles, and relabels -------------------
-    check(s0.label3d === 'Hide 3D View', `label starts as "Hide 3D View" while the viewer is shown (got "${s0.label3d}")`);
+    // ---------------- 3. Clicking toggles, and the highlight follows ------
+    check(s0.label3d === '3D' && s0.labelInfo === 'Panel',
+        `the labels are "3D" and "Panel" (got "${s0.label3d}", "${s0.labelInfo}")`);
+    check(s0.active3d && s0.title3d === 'Hide 3D viewer (\\)',
+        `3D starts highlighted while the viewer is shown, tooltip "${s0.title3d}"`);
     check(s0.vp3dCollapsed === false, 'viewport starts expanded');
 
     await page.click('#viewport3dToggleBtn');
@@ -178,7 +191,9 @@ try {
     const s1 = await snap();
     check(s1.vp3dCollapsed === true, 'clicking the button collapses the 3D viewport');
     check(s1.vp3dWidth === 0, `collapsed viewport has zero width (got ${s1.vp3dWidth}) — not merely hidden behind another panel`);
-    check(s1.label3d === 'Show 3D View', `label flips to "Show 3D View" (got "${s1.label3d}")`);
+    check(!s1.active3d && s1.title3d === 'Show 3D viewer (\\)',
+        `the highlight goes off and the tooltip offers to show it (tooltip "${s1.title3d}")`);
+    check(s1.label3d === '3D', `the label does not change (got "${s1.label3d}")`);
     check(Math.abs(s1.infoWidth - s0.infoWidth) < 1,
         `the info panel keeps its width when the 3D viewer is hidden from the button (${s0.infoWidth} -> ${s1.infoWidth})`);
 
@@ -186,18 +201,18 @@ try {
     await page.waitForTimeout(350);
     const s2 = await snap();
     check(s2.vp3dCollapsed === false, 'clicking again re-expands the 3D viewport');
-    check(s2.label3d === 'Hide 3D View', `label flips back to "Hide 3D View" (got "${s2.label3d}")`);
+    check(s2.active3d && s2.title3d === 'Hide 3D viewer (\\)', `and comes back on (tooltip "${s2.title3d}")`);
     check(Math.abs(s2.vp3dWidth - s0.vp3dWidth) < 2,
         `the viewport comes back at its original width (${s0.vp3dWidth} -> ${s2.vp3dWidth})`);
 
-    // ---------------- 4. The label follows the OTHER two entry points -----
+    // ---------------- 4. The state follows the OTHER two entry points -----
     // A button-local boolean would pass section 3 and desync here.
     await page.keyboard.press('Backslash');
     await page.waitForTimeout(350);
     const s3 = await snap();
     check(s3.vp3dCollapsed === true, 'the `\\` shortcut still collapses the viewport');
-    check(s3.label3d === 'Show 3D View',
-        `the button label follows a collapse done via \`\\\` (got "${s3.label3d}")`);
+    check(!s3.active3d,
+        'the button\'s highlight follows a collapse done via `\\`');
 
     // The dropdown only renders once its parent menu is open.
     await page.click('.menu-item[data-menu="view"]');
@@ -206,27 +221,27 @@ try {
     await page.waitForTimeout(350);
     const s4 = await snap();
     check(s4.vp3dCollapsed === false, 'View ▸ Toggle 3D Viewport still expands the viewport');
-    check(s4.label3d === 'Hide 3D View',
-        `the button label follows an expand done from the View menu (got "${s4.label3d}")`);
+    check(s4.active3d,
+        'the button\'s highlight follows an expand done from the View menu');
 
     // Toggle the INFO panel too, so its button is sampled in both of its own
-    // label states — otherwise its width check below never varies the label
-    // and passes for free.
+    // states — otherwise its width check below never varies the state and
+    // passes for free.
     await page.click('#infoPanelToggleBtn');
     await page.waitForTimeout(350);
     const s5 = await snap();
-    check(s5.labelInfo === 'Show Panel', `info-panel button relabels to "Show Panel" (got "${s5.labelInfo}")`);
+    check(!s5.activeInfo && s5.titleInfo === 'Show info panel (I)' && s5.labelInfo === 'Panel',
+        `the info-panel button's highlight goes off, label unchanged (tooltip "${s5.titleInfo}")`);
     await page.click('#infoPanelToggleBtn');
     await page.waitForTimeout(350);
     const s6 = await snap();
-    check(s6.labelInfo === 'Hide Panel', `and back to "Hide Panel" (got "${s6.labelInfo}")`);
+    check(s6.activeInfo && s6.titleInfo === 'Hide info panel (I)', `and back on (tooltip "${s6.titleInfo}")`);
 
-    // ---------------- 5. No shimmy: the label swap must not resize --------
-    // "Hide" and "Show" are different widths in a proportional font, so an
-    // unpinned button resizes on every toggle — and because the pair is
-    // right-aligned, a width change on the info button also shoves the 3D
-    // button sideways. Each button is pinned to its own widest label, so
-    // every state below must agree to the pixel.
+    // ---------------- 5. No shimmy: toggling must not resize -------------
+    // The pair is right-aligned, so a width change on the info button would
+    // shove the 3D button sideways. The labels are fixed, so every state
+    // below must agree to the pixel — a highlight that changed the padding
+    // or border width would fail here.
     const all = [s0, s1, s2, s3, s4, s5, s6];
     const widths3d = all.map(s => s.btn3dWidth);
     const widthsInfo = all.map(s => s.btnInfoWidth);
@@ -234,18 +249,16 @@ try {
     const spread = (a) => Math.max(...a) - Math.min(...a);
     console.log('    3D widths:', widths3d.map(w => w.toFixed(2)).join(' '),
         '| info widths:', widthsInfo.map(w => w.toFixed(2)).join(' '));
-    // Both labels are covered on both buttons: 3D "Hide" at s0/s2/s4/s5/s6
-    // and "Show" at s1/s3; info "Hide" everywhere except s5, "Show" at s5.
+    // Both states are covered on both buttons: 3D shown at s0/s2/s4/s5/s6
+    // and hidden at s1/s3; info shown everywhere except s5, hidden at s5.
     check(spread(widths3d) < 0.5,
-        `the 3D toggle keeps one width across Hide/Show (spread ${spread(widths3d).toFixed(2)}px)`);
+        `the 3D toggle keeps one width shown and hidden (spread ${spread(widths3d).toFixed(2)}px)`);
     check(spread(widthsInfo) < 0.5,
-        `the info-panel toggle keeps one width across Hide/Show (spread ${spread(widthsInfo).toFixed(2)}px)`);
+        `the info-panel toggle keeps one width shown and hidden (spread ${spread(widthsInfo).toFixed(2)}px)`);
     check(spread(lefts3d) < 0.5,
         `the 3D toggle never shifts position (left-edge spread ${spread(lefts3d).toFixed(2)}px)`);
 
-    // The pin must be the WIDER label, not a truncation of it: a button
-    // clamped to the narrower "Hide" width would still have a stable width
-    // and pass the checks above while clipping "Show 3D View".
+    // A stable width is no use if it clips the label.
     const fit = await page.evaluate(() => {
         const out = {};
         for (const id of ['viewport3dToggleBtn', 'infoPanelToggleBtn']) {
@@ -261,8 +274,15 @@ try {
     }
 
     // ---------------- 6. No collateral damage ----------------------------
-    check(s4.labelInfo === 'Hide Panel',
-        `the info-panel button label is untouched throughout (got "${s4.labelInfo}")`);
+    check([s0, s1, s2, s3, s4].every(s => s.activeInfo),
+        'the info-panel button stays highlighted while only the 3D viewer is toggled');
+
+    // ---------------- 7. The toolbar fits a 1440 px window ----------------
+    await page.setViewportSize({ width: 1440, height: 950 });
+    await page.waitForTimeout(200);
+    const s7 = await snap();
+    check(s7.toolbarScrollOverflow <= 0 && s7.gapToEdge >= 0,
+        `at 1440 px nothing overflows the toolbar and "Panel" ends inside the window (overflow ${s7.toolbarScrollOverflow}px, right gap ${s7.gapToEdge.toFixed(1)}px)`);
     check(errs.length === 0, `no page errors (${errs.length}${errs.length ? ': ' + errs.slice(0, 2).join(' | ') : ''})`);
 
 } finally {

@@ -26,21 +26,22 @@
 // import in ui/sessions-panes.js (see CLAUDE.md › Dependencies).
 import { DockviewComponent, themeDark } from 'https://cdn.jsdelivr.net/npm/dockview-core@6.6.1/+esm';
 
-import { state, videoController, getActiveSession } from './app-state.js?v=a5716e255e8f';
-import { Viewport3D } from './viewport3d.js?v=a5716e255e8f';
+import { state, videoController, getActiveSession } from './app-state.js?v=42ccb086de1a';
+import { Viewport3D } from './viewport3d.js?v=42ccb086de1a';
 import {
     drawFrameOverlays, drawLegend, drawViewNameLabel, getTrackColor, getGroupColor,
-} from './overlays.js?v=a5716e255e8f';
-import { getVisibilitySettings } from './rendering.js?v=a5716e255e8f';
+} from './overlays.js?v=42ccb086de1a';
+import { getVisibilitySettings } from './rendering.js?v=42ccb086de1a';
 import {
     getInstanceGroupsForFrame,
     ensureLazyFrameData,
+    ensureLazyTrailWindow,
     triangulateAndReproject,
     storeReprojectedInstances,
     sessionHasCalibration,
-} from '../pose/triangulation.js?v=a5716e255e8f';
-import { points3dNodeCount } from '../pose/pose-data.js?v=a5716e255e8f';
-import { setStatus } from '../import-export/save-load.js?v=a5716e255e8f';
+} from '../pose/triangulation.js?v=42ccb086de1a';
+import { points3dNodeCount } from '../pose/pose-data.js?v=42ccb086de1a';
+import { setStatus } from '../import-export/save-load.js?v=42ccb086de1a';
 
 import {
     TILE_3D, RES_PRESETS, RES_CUSTOM, MAX_OUT_DIM,
@@ -50,16 +51,16 @@ import {
     defaultOverlayExportSettings, applyStoredSettings, saveOverlayExportSettings,
     overlayOptionsFrom, seedLayoutPlan,
     distributeAxisSizes, SASH_SHARE_FAR,
-} from './overlay-export-layout.js?v=a5716e255e8f';
-import { createMp4Writer, videoEncodingAvailable } from './video-encode.js?v=a5716e255e8f';
-import { fileSystemAccessHint } from './browser-hints.js?v=a5716e255e8f';
+} from './overlay-export-layout.js?v=42ccb086de1a';
+import { createMp4Writer, videoEncodingAvailable } from './video-encode.js?v=42ccb086de1a';
+import { fileSystemAccessHint } from './browser-hints.js?v=42ccb086de1a';
 // The main window's per-camera display settings. `ui/video-filters.js` imports NO
 // project modules, so this adds no cycle — and going through the SAME
 // `buildVideoFilter` the live canvases use is what stops the export drifting from
 // what the user sees (`applyVideoFilters` in ui/sessions-panes.js).
 import {
     buildVideoFilter, getSessionBrightness, getSessionContrast, getSessionRotation,
-} from './video-filters.js?v=a5716e255e8f';
+} from './video-filters.js?v=42ccb086de1a';
 
 // Re-exported so callers/tests have one import site for the feature.
 export { TILE_3D };
@@ -927,6 +928,13 @@ export function showOverlayExportModal() {
 
         if (session.lazyLoader && !session.frameGroups.has(f)) {
             try { await ensureLazyFrameData(f); } catch (e) { /* ignore */ }
+            if (token !== previewToken) return;
+        }
+        // The frames behind `f` the node trails draw (see ensureLazyTrailWindow).
+        var trailLoad = session.lazyLoader && settings.trailLength > 0
+            ? ensureLazyTrailWindow(f, settings.trailLength) : null;
+        if (trailLoad) {
+            await trailLoad;
             if (token !== previewToken) return;
         }
 
@@ -1934,6 +1942,12 @@ export function showOverlayExportModal() {
 
                 if (session.lazyLoader && !session.frameGroups.has(f)) {
                     try { await ensureLazyFrameData(f); } catch (e) { /* frame stays empty */ }
+                }
+                // The first frame's trail reaches back before the export range;
+                // every later frame's window is already resident.
+                if (session.lazyLoader && settings.trailLength > 0) {
+                    var expTrailLoad = ensureLazyTrailWindow(f, settings.trailLength);
+                    if (expTrailLoad) await expTrailLoad;
                 }
                 var frameGroup = session.getFrameGroup(f);
                 var groups = getInstanceGroupsForFrame(f);

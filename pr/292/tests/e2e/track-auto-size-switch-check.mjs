@@ -107,7 +107,7 @@ try {
     check(markersA === 0, 'Track All: the stale marker from before was cleared');
     check(!(await tabOpen()), 'Track All: the ID Switches tab is not opened when nothing is found');
     let bx = await boxes();
-    check(JSON.stringify(bx) === JSON.stringify(PRED_ONLY) && /showing Predicted only \(toolbar\)/.test(st),
+    check(JSON.stringify(bx) === JSON.stringify(PRED_ONLY) && /showing Predictions only \(toolbar\)/.test(st),
         `Track All: only Predicted is shown afterwards (User/Pred/Reproj/Errors = ${bx}), and the status says so`);
 
     // ---- 2a. Track Frame Range on the session Track All just tracked: the check covers the WHOLE
@@ -116,7 +116,7 @@ try {
     st = await statusText();
     check(/\(601–900\)/.test(st) && /ID-switch check \(body size\): no possible switches/.test(st),
         `Track Frame Range after Track All: check ran over the whole session ("${st}")`);
-    check(!/showing Predicted only/.test(st) && JSON.stringify(await boxes()) === JSON.stringify(PRED_ONLY),
+    check(!/showing Predictions only/.test(st) && JSON.stringify(await boxes()) === JSON.stringify(PRED_ONLY),
         'boxes already Predicted-only: nothing changes, no note');
 
     // ---- 2b. Track Frame Range on a fresh session: 10 s of tracking -> skipped, range still succeeds
@@ -131,7 +131,7 @@ try {
     check(/^Assigned 2 identities .*\(1–300\)/.test(st) && /ID-switch check \(body size\): skipped — needs at least 60 s of tracking/.test(st),
         `Track Frame Range: check ran and reports why it was skipped ("${st}")`);
     bx = await boxes();
-    check(JSON.stringify(bx) === JSON.stringify(PRED_ONLY) && /showing Predicted only/.test(st), `Track Frame Range: only Predicted shown afterwards (${bx})`);
+    check(JSON.stringify(bx) === JSON.stringify(PRED_ONLY) && /showing Predictions only/.test(st), `Track Frame Range: only Predictions shown afterwards (${bx})`);
 
     // ---- 5. single-frame Track Frame
     await tickAll();
@@ -142,7 +142,7 @@ try {
         return document.getElementById('statusText').textContent;
     });
     bx = await boxes();
-    check(/^Frame 121: 2 identities/.test(tf) && /showing Predicted only/.test(tf) && JSON.stringify(bx) === JSON.stringify(PRED_ONLY),
+    check(/^Frame 121: 2 identities/.test(tf) && /showing Predictions only/.test(tf) && JSON.stringify(bx) === JSON.stringify(PRED_ONLY),
         `Track Frame: only Predicted shown afterwards (${bx}; "${tf}")`);
 
     // ---- 3. setting off: neither pass runs it
