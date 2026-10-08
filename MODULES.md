@@ -1900,7 +1900,9 @@ Tracking Wizard's `scWindowSize` / `scOksStddev` / `scConnectBreaks`. It writes
 the TRACKS, as `sleap-nn track` does, plus one identity per track, then follows
 the multi-camera pass's contract: `markDirty()` after the last bail-out, the
 previous identities and ID-switch results cleared, Color: ID, predictions only,
-Timeline and 3D viewer closed, and the automatic IMAGE check when it is on. It
+Timeline and 3D viewer closed, and the automatic coat-brightness check
+(`autoBrightnessSwitchCheck`, default on — no model, no GPU) and image check
+(`autoImageSwitchCheck`) when they are on. It
 keeps Track All's candidate moments on the session (`session._idSwitchCandidates`,
 cleared at the start of the run) for the checks to test.
 The automatic body-size check is deliberately not run on one camera — the
@@ -3591,18 +3593,20 @@ results}` (points3d buffers transferred) or `{type:'error', id, message}`.
 
 ### pose/id-switch-check.js
 
-**Purpose.** The analysis behind Tracks ▸ **Check ID Switches (Body Size)…** and
-**(Images)…**, which also run automatically after Track All / Track Frame Range
-(`ui/id-switch-modal.js`). Flags close encounters between two tracked identities
-where the animals leaving the encounter look more like each other's identity than
-their own — a possible identity switch. Two cues through ONE machinery: body size
-(3D bone lengths, cheap, no video) and appearance (embeddings of masked,
-pose-aligned crops, supplied by the caller — `ui/image-embedder.js` in the app).
-Pure — no DOM, no app state — so both run headlessly (the image check with any
-embedding provider).
+**Purpose.** The analysis behind Tracks ▸ **Check ID Switches (Body Size)…**,
+**(Images)…** and **(Coat Brightness)…**, which also run automatically after Track
+All / Track Frame Range (`ui/id-switch-modal.js`). Flags close encounters between
+two tracked identities where the animals leaving the encounter look more like each
+other's identity than their own — a possible identity switch. Three cues through
+ONE machinery: body size (3D bone lengths, cheap, no video), appearance
+(embeddings of masked, pose-aligned crops, supplied by the caller —
+`ui/image-embedder.js` in the app) and coat brightness (the grey level at each
+animal's body keypoints — `ui/brightness-sampler.js`; the image check's code on a
+4-number vector, `checkVectorSwitches`). Pure — no DOM, no app state — so all run
+headlessly (the image and brightness checks with any vector provider).
 
 **Key exports.** `checkSizeSwitches(session, opts)` and
-`checkImageSwitches(session, opts)` (async) -> `{ok, flags, changes, encounters, moments,
+`checkImageSwitches(session, opts)` and `checkBrightnessSwitches(session, opts)` (async) -> `{ok, flags, changes, encounters, moments,
 identities, sampledFrames, closeDistance, threshold, fps, step, sampleHz, cue}`
 (+ `bones` for size; + `imageHz`, `crops`, `cameras` for images) or
 `{ok:false, reason}`; `markChangePoints(scored, o)` (the change-point step,
@@ -3616,7 +3620,8 @@ keyframeGap, maxShift}` (which frame each image sample decodes in one camera —
 `REFERENCE_HZ` (15); `SIZE_CHECK_DEFAULTS` (`fps` REQUIRED, `sampleHz` 15,
 `folds` 5, `gapSeconds` 10, `syncSeconds` 1, `threshold` -50, `continueBelow` 0,
 `followSeconds` 60, `minTrackedSeconds` 60, `sepFactor` 0.65, `signal`, `moments` null,
-`momentSeconds` 15, `momentThreshold` -200, ...);
+`momentSeconds` 15, `momentThreshold` -200, ...); `BRIGHTNESS_CHECK_DEFAULTS` (the
+image defaults + `imageHz` 4, `threshold` -800, `pcaDims` 8 — see "Coat brightness" below);
 `IMAGE_CHECK_DEFAULTS` (+ `imageHz` 2, `threshold` -25, `pcaDims` 32,
 `getEmbeddings` REQUIRED: `async (frame, items[{k, group}]) -> per item
 [{camera, vector}]`, STARTED in increasing frame order with up to `inFlight`
@@ -3685,6 +3690,21 @@ in the app and re-scored offline):
   26 of 59 (episodes alone 19) at the same 15 false rows; at -100, 14 and 2.
   Moments inside an encounter are kept — dropping them halved what they caught.
 
+**Coat brightness (2026-10-08).** `checkBrightnessSwitches` runs the image check's
+code (`checkVectorSwitches`: one classifier per view, the same encounters and
+candidate moments) on a 4-number vector per animal and view — the 10th / 50th /
+90th percentile and the mean of the grey level at its body keypoints, log-scaled
+(`ui/brightness-sampler.js`). Calibrated on the 35 proofread single-camera SLAP
+videos, offline through this code and then in the app: its candidate-moment rows
+caught 14 of the 59 real switches with NO false rows — 12 of them the same
+switches the image check's moment rows catch (13; 15 together) — so on mice whose
+coats differ it matches the image check without a model or GPU. Its ENCOUNTER
+rows were noise at every threshold (-25: 13 real switches for 96 false rows;
+-200: 3 for 34; -800: 0 for 9), hence `threshold` -800. Percentiles over the body
+nodes, rather than named body regions, need no particular skeleton and did
+slightly better (14 vs 12; the median alone 11). Not calibrated on multi-camera
+data.
+
 **Calibration (2026-10-03).** Size: on the 5-mouse tail-mark recording
 (194366_05mice_flippers, 108k frames, 8 cameras) planted swaps AUC 0.95; the real
 gate-off switch (frame 74,544) is an onset; the verified run gets 7 false change
@@ -3733,7 +3753,8 @@ set, so swapping the two animals' labels after it turns its score S into exactly
 
 **Imports from project modules.** `pose/pose-data.js` (`readPoint3d`).
 
-**Imported by.** `ui/id-switch-modal.js`, `ui/image-embedder.js` (`planKeyframeSamples`, `KEYFRAME_GAP_TOLERANCE`).
+**Imported by.** `ui/id-switch-modal.js`, `ui/image-embedder.js` (`planKeyframeSamples`, `KEYFRAME_GAP_TOLERANCE`),
+`ui/brightness-sampler.js` (`planKeyframeSamples`).
 
 **Coverage.** `tests/test-id-switch-check.mjs` (synthetic 3-animal sessions defined
 in time: clean -> no flags; minority / majority switch -> onset / end change point;
@@ -8466,8 +8487,9 @@ ticks out only when the frame count changed — called from `updateSeekbarVisual
 point beats a repeat); `describeSwitchMarker(m)` (the tooltip text).
 
 **Drawing.** One tick per marker at `frame / (totalFrames - 1)` — the thumb's own
-mapping: amber = size, cyan = images, amber-over-cyan = "Both" (drawn once, on the
-size marker; its image twin is skipped), follow-on fainter and shorter,
+mapping: amber = size, cyan = images, violet = coat brightness; a "Both" tick wears
+its two checks' colours (`cue-both-<earlier>-<later>`; drawn once, on the earlier
+check's marker — size, then images, then brightness — its twin skipped), follow-on fainter and shorter,
 still-swapped repeat a short faint tick, `reviewed` (ticked in the tab) dimmed.
 Over the track, under the thumb, `pointer-events: none`: the seekbar's
 mousedown/drag handlers (`ui/ui-wiring.js`) snap to a tick within 5 px, and the
@@ -8793,8 +8815,16 @@ markers on the seekbar — called after a check, from `updateInfoPanel` and from
 `clearIdSwitchResults(session?)` (called by `runTrackingPass` before it relabels);
 `ID_SWITCH_LEAD_IN_SECONDS`, `idSwitchLeadInFrame(marker, fps)`,
 `updateIdSwitchProgress(frame)`; back-compat
-`runSizeSwitchCheck`. `inject: {createEmbedder, hasWebGPU}` replaces the image
-model and the WebGPU probe — test-only (`tests/e2e/id-switch-image-check.mjs`).
+`runSizeSwitchCheck`. `inject: {createEmbedder, hasWebGPU, createBrightnessSampler}`
+replaces the image model, the WebGPU probe and the coat-brightness sampler —
+test-only (`tests/e2e/id-switch-image-check.mjs`, `tests/e2e/single-camera-track-all.mjs`).
+
+**The coat-brightness check** (`brightness: true`, `runBrightness`) runs
+`checkBrightnessSwitches` with `ui/brightness-sampler.js`'s vectors under the same
+cancellable progress dialog as images ("Reading coat brightness in N views: frame
+i of n"), reading `brightnessCheckHz` (4) and `brightnessCheckThreshold` (-800).
+It needs the videos but no WebGPU; without videos it says so. Its rows and ticks
+are violet; "About these flags" names it and its sampling.
 
 **Runs automatically after tracking.** `pose/tracker.js`'s `runTrackingPass` calls
 `runIdSwitchChecks({auto: true, statusPrefix, size, image})` after BOTH Track All
@@ -8804,7 +8834,9 @@ the videos + WebGPU). Auto mode appends each check's result to the pass's status
 line ("Assigned N identities … · ID-switch check (body size): …; ID-switch check
 (images): …"), opens the ID Switches tab only when a possible switch is found, and reports
 a check that cannot run as "skipped — reason", never as a failure of the pass. It
-always analyses the WHOLE session's identities.
+always analyses the WHOLE session's identities. After a SINGLE-CAMERA Track All
+the coat-brightness check runs instead of body size (`autoBrightnessSwitchCheck`,
+default on — see `pose/tracker.js`).
 
 **On a single-camera session** (`pose/single-camera-tracking.js`) the checks also
 test Track All's candidate moments (`session._idSwitchCandidates`, passed as
@@ -8863,8 +8895,9 @@ identity's colour, as in the overlays), score, the encounter's span ("close
 4:59.6–5:01.7 (frames 17,977–18,105)") with an **end ⇥** button, and
 "frame N · check · note" (Both / size / images; "follows the switch at m:ss";
 "labelling changes here; earlier encounters look swapped"; "still swapped"). A
-change point both checks found (same pair within 1 s) is ONE "Both" row (scores
-"size / image"). Clicking a row navigates there; ticking it dims the row and its
+change point two checks found (same pair within 1 s) is ONE "Both" row on the
+earlier check's result (size, then images, then coat brightness; scores "first /
+second", the two checks named in its tooltip). Clicking a row navigates there; ticking it dims the row and its
 seekbar tick (`reviewed`). **Where a row lands:** an encounter's frame is the
 LAST close sample (the labels are read from the tracklets AFTER it), so a swap
 happens before it, while the animals are close; clicking a row therefore lands
@@ -8958,8 +8991,11 @@ a session's check results (`session._idSwitch`) and their `.slp` serialization,
 ids, are what a reopened project still agrees on); `idSwitchPrimary(res)` (change
 points), `idSwitchMarkers(res)` (+ repeats), `idSwitchOnsets(res)` (the
 "possible switches" count), `idSwitchEncounterCount(res)`;
-`linkIdSwitchResults(results)` (tag each marker's `cue`, link a size and an image
-change point of the same pair within 1 s as `agree` — "Both");
+`linkIdSwitchResults(results)` (tag each marker's `cue`; link each change point of
+a later check to the first unlinked change point of an earlier one, same pair
+within 1 s, as `agree` — "Both"); `ID_SWITCH_CUES` (`['size', 'image',
+'brightness']`, the order of precedence); `idSwitchIsSecondary(m)` (the later half
+of a "Both" pair — listed and drawn through its partner);
 `serializeIdSwitchReview(session)` -> payload or `null` (no check results -> no
 key, so untouched projects keep their bytes); `ingestIdSwitchReview(session,
 payload)` (rebuilds `session._idSwitch`, re-links "Both"; ignores anything
@@ -9213,7 +9249,10 @@ disposes a WebNN model);
 `chooseBackend(trial)`, `WEBNN_BATCH`, `WEBNN_TRIAL_FRAMES`; `createCropPool()` -> `{run(image, crops) ->
 Promise<Float32Array[]>, broken, terminate()}` or null; crop helpers
 `cropGeometry`, `cutCrop`, `convexHull`, `writeInputTensor`, `skeletonIndex(nodes)`,
-`frameCropGeometry(session, frame, items, cams, atFrames, sk)` -> `geo[view][item]`; constants
+`frameCropGeometry(session, frame, items, cams, atFrames, sk)` -> `geo[view][item]`, built on
+`mapFrameInstances(session, frame, items, cams, atFrames, fn)` (fn(instance) per view and item, on
+the frame each view decodes, hydrating a lazy project's frames around the read) and
+`streamingReader(decoder, frames, decode)` — both shared with `ui/brightness-sampler.js`; constants
 `TRANSFORMERS_URL`, `IMAGE_MODEL_ID`, `IMAGE_MODEL_MB`, `CROP` (160), `INPUT` (224).
 
 **The crop** (must match the calibration): rotate so the nose points right
@@ -9252,7 +9291,7 @@ so the crop worker can load it); `mediabunny`
 import would break this module in Node tests and in the crop worker, which has no
 importmap). Spawns `ui/image-crop-worker.js`.
 
-**Imported by.** `ui/id-switch-modal.js`, `ui/image-crop-worker.js`.
+**Imported by.** `ui/id-switch-modal.js`, `ui/image-crop-worker.js`, `ui/brightness-sampler.js`.
 
 **Coverage.** Crop geometry, `selectViews`, `chooseBackend`, the resize table and
 the keyframe line of `formatEmbedTiming` in
@@ -9264,6 +9303,48 @@ sample, bit-identical planes, sparse video unchanged); accuracy on real data by
 `tests/e2e/_diag-image-keyframe-snap.mjs` (diagnostic, not in the suite);
 the full path on real data by a scratch harness (not in the suite: it needs the
 proofread videos and GPU) — see the image-check notes above.
+
+---
+
+### ui/brightness-sampler.js
+
+**Purpose.** The vector provider behind Tracks ▸ **Check ID Switches (Coat
+Brightness)…** (`pose/id-switch-check.js` `checkBrightnessSwitches`): for each
+animal in each view, how bright its coat is. Reads the mean grey level (0.299 R +
+0.587 G + 0.114 B, as the image crops) in a disc at every body (non-tail)
+keypoint — radius 1/35 of the animal's body extent, 1–8 px (4 px for the ~140 px
+mice it was calibrated on) — and summarises them as the 10th / 50th / 90th
+percentile and the mean, log-scaled. Percentiles over whatever body nodes the
+skeleton has, so no node names are needed; missing and occluded keypoints are
+skipped, and fewer than 4 left gives no vector there. No model and no GPU: the
+only cost is decoding the video, which it streams per view exactly as the image
+check does (`streamingReader`, keyframe plans) — about 24 s for a 10-min,
+4-mouse, one-camera HEVC video at the default 4 samples/s.
+
+**Why a separate cue from images.** DINOv2 is trained to be invariant to
+brightness, which under IR is exactly what tells white, brown and black mice
+apart; this measures it directly. On the proofread single-camera SLAP videos its
+candidate-moment rows caught 14 real switches with no false rows (the image
+check's: 13; 12 shared), without a model download or WebGPU.
+
+**Key exports.** `createBrightnessSampler(session, {keyframes?})` ->
+`{getEmbeddings(frame, items), prepareFrames, releaseFrames, inFlight, views,
+stats}` (throws without loaded videos or with fewer than 4 body nodes);
+`brightnessFeatures(values)`; `bodyPoints(inst, bodyIdx)` -> `{pts, r}` | null;
+`discMean(px, w, h, x0, y0, x, y, r)`; `sampleAnimals(image, animals, canvas)`
+(one read of the region covering every animal's discs); `discRadius(extent)`;
+`BRIGHTNESS_QUANTILES`, `MIN_BRIGHTNESS_POINTS`, `BRIGHTNESS_IN_FLIGHT`.
+
+**Imports from project modules.** `ui/app-state.js` (`state.views`),
+`ui/image-embedder.js` (`skeletonIndex`, `mapFrameInstances`, `streamingReader`,
+`keyframeIndices`), `pose/id-switch-check.js` (`planKeyframeSamples`).
+
+**Imported by.** `ui/id-switch-modal.js`.
+
+**Coverage.** `tests/test-id-switch-check.mjs` (the pure helpers, and the check on
+synthetic coats catching a swap between equal-sized animals that the size check
+misses) and `tests/e2e/single-camera-track-all.mjs` §5 (the check in the real tab,
+with a stand-in sampler); on real data by `tests/e2e/_real-single-camera.mjs`.
 
 ---
 
@@ -9352,7 +9433,9 @@ Shortcuts and the Hot Keys modal where people look for them.
   check after Track All / Track Frame Range, default 1; `autoImageSwitchCheck` —
   0/1, the image check likewise, default 0; `imageCheckThreshold` -25;
   `imageCheckHz` 2; `imageCheckMaxViews` 3; `imageCheckWebNN` — 0/1, try WebNN,
-  default 0). The remaining catalog entries (`epipolarDecay`, `reprojSigma`, `epipolarWeight`,
+  default 0; `autoBrightnessSwitchCheck` — 0/1, the coat-brightness check after
+  SINGLE-CAMERA Track All, default 1; `brightnessCheckThreshold` -800;
+  `brightnessCheckHz` 4). The remaining catalog entries (`epipolarDecay`, `reprojSigma`, `epipolarWeight`,
   `reprojWeight`, `minMatchScore`, `prevIdentityBonus`, `reprojGate2/3/4`,
   `track3dWeight`) drive the bench-only luc3d matcher and are hidden from the UI
   but still resolve via `getTrackingThreshold`. `getTrackingThresholds` returns
@@ -10252,6 +10335,8 @@ stopping at the last frame; the step transport buttons/keys stop it first.
   Tracks ▸ **Check ID Switches (Body Size)…** (`menuCheckSizeSwitches`) calls
   `runIdSwitchChecks({size: true, navigateToFrame})`, and Tracks ▸ **Check ID
   Switches (Images)…** (`menuCheckImageSwitches`) `runIdSwitchChecks({image: true,
+  navigateToFrame})`, and Tracks ▸ **Check ID Switches (Coat Brightness)…**
+  (`menuCheckBrightnessSwitches`) `runIdSwitchChecks({brightness: true,
   navigateToFrame})`, from `ui/id-switch-modal.js`; `setIdSwitchNavigator` and
   `setIdSwitchRefresher` (the repaint after the tab fixes a switch) are called
   once at setup.

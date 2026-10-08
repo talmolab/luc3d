@@ -16,7 +16,7 @@
  * fitted models:
  *
  *   { v: 1,
- *     checks: { size?|image?: { encounters, sampleHz, step, fps, fpsFromVideo,
+ *     checks: { size?|image?|brightness?: { encounters, sampleHz, step, fps, fpsFromVideo,
  *                                [imageHz, crops, cameras, model: {name, note}],
  *                                points: [[frame, nameA, nameB, score, kind, followOf, continues, startFrame, link,
  *                                          look?], …] } },
@@ -66,21 +66,34 @@ export function idSwitchEncounterCount(res) {
     return res.encounters ? res.encounters.length : (res.encounterCount || 0);
 }
 
-/** Tag every marker with its check, and link change points both checks found (same pair, within 1 s) as `agree`. */
+/**
+ * The checks, in order of precedence: when two find the same change point, the
+ * row is shown once, on the earlier check's result ("Both").
+ */
+export const ID_SWITCH_CUES = ['size', 'image', 'brightness'];
+
+/** True for the later half of a "Both" pair — drawn and listed through its partner. */
+export function idSwitchIsSecondary(m) {
+    return !!(m && m.agree && ID_SWITCH_CUES.indexOf(m.cue) > ID_SWITCH_CUES.indexOf(m.agree.cue));
+}
+
+/**
+ * Tag every marker with its check, and link change points two checks found (same
+ * pair, within 1 s) as `agree`: each change point of a later check to the first
+ * unlinked one of an earlier check (size before images before brightness).
+ */
 export function linkIdSwitchResults(results) {
-    ['size', 'image'].forEach(function (cue) {
-        var r = results[cue];
-        if (r && r.ok) idSwitchMarkers(r).forEach(function (m) { m.cue = cue; delete m.agree; });
-    });
-    var s = results.size, im = results.image;
-    if (!(s && s.ok && im && im.ok)) return;
-    var tol = Math.max(1, Math.round(s.fps || 30));
-    var samePair = function (a, b) {
-        return (a.nameA === b.nameA && a.nameB === b.nameB) || (a.nameA === b.nameB && a.nameB === b.nameA);
-    };
-    idSwitchPrimary(im).forEach(function (m) {
-        var hit = idSwitchPrimary(s).find(function (x) { return samePair(x, m) && Math.abs(x.frame - m.frame) <= tol; });
-        if (hit) { m.agree = hit; hit.agree = m; }
+    var ran = ID_SWITCH_CUES.filter(function (cue) { return results[cue] && results[cue].ok; });
+    ran.forEach(function (cue) { idSwitchMarkers(results[cue]).forEach(function (m) { m.cue = cue; delete m.agree; }); });
+    if (ran.length < 2) return;
+    var tol = Math.max(1, Math.round(results[ran[0]].fps || 30));
+    ran.forEach(function (cue, i) {
+        idSwitchPrimary(results[cue]).forEach(function (m) {
+            for (var j = 0; j < i && !m.agree; j++) {
+                var hit = idSwitchPrimary(results[ran[j]]).find(function (x) { return !x.agree && samePair(x, m) && Math.abs(x.frame - m.frame) <= tol; });
+                if (hit) { m.agree = hit; hit.agree = m; }
+            }
+        });
     });
 }
 
@@ -161,7 +174,7 @@ export function idSwitchFixFor(st, m) {
  */
 export function idSwitchRenameForFix(st, fix) {
     var remap = new Map();
-    ['size', 'image'].forEach(function (cue) {
+    ID_SWITCH_CUES.forEach(function (cue) {
         var r = st.results[cue];
         if (!(r && r.ok)) return;
         idSwitchMarkers(r).forEach(function (m) {
@@ -191,7 +204,7 @@ export function serializeIdSwitchReview(session) {
     var st = session && session._idSwitch;
     if (!st || !st.results) return null;
     var checks = {};
-    ['size', 'image'].forEach(function (cue) {
+    ID_SWITCH_CUES.forEach(function (cue) {
         var r = st.results[cue];
         if (!(r && r.ok)) return;
         var c = {
@@ -204,7 +217,7 @@ export function serializeIdSwitchReview(session) {
                 return p;
             }),
         };
-        if (cue === 'image') {
+        if (cue !== 'size') {                                   // image / brightness: samples per second, samples, views
             c.imageHz = r.imageHz; c.crops = r.crops; c.cameras = (r.cameras || []).slice();
             if (r.model && r.model.note) c.model = { name: r.model.name, note: r.model.note };
         }
@@ -232,7 +245,7 @@ export function ingestIdSwitchReview(session, payload) {
     try {
         if (!payload || typeof payload !== 'object' || payload.v !== 1 || !payload.checks || typeof payload.checks !== 'object') return session;
         var results = {};
-        ['size', 'image'].forEach(function (cue) {
+        ID_SWITCH_CUES.forEach(function (cue) {
             var c = payload.checks[cue];
             if (!c || typeof c !== 'object' || !Array.isArray(c.points)) return;
             var flags = [];
@@ -256,7 +269,7 @@ export function ingestIdSwitchReview(session, payload) {
             var r = { ok: true, restored: true, flags: flags, changes: [], encounterCount: isNum(c.encounters) ? c.encounters : 0,
                       sampleHz: isNum(c.sampleHz) ? c.sampleHz : 0, step: isNum(c.step) ? c.step : 1, fps: isNum(c.fps) ? c.fps : 0,
                       fpsFromVideo: !!c.fpsFromVideo };
-            if (cue === 'image') {
+            if (cue !== 'size') {
                 r.imageHz = isNum(c.imageHz) ? c.imageHz : 0; r.crops = isNum(c.crops) ? c.crops : 0;
                 r.cameras = Array.isArray(c.cameras) ? c.cameras.filter(function (x) { return typeof x === 'string'; }) : [];
                 if (c.model && typeof c.model.note === 'string') r.model = { name: String(c.model.name || ''), note: c.model.note };

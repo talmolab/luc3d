@@ -43,6 +43,9 @@ const THRESHOLD_DEFAULTS = {
     imageCheckHz: 2,
     imageCheckMaxViews: 3,
     imageCheckWebNN: 0,
+    autoBrightnessSwitchCheck: 1,
+    brightnessCheckThreshold: -800,
+    brightnessCheckHz: 4,
 };
 
 const SETTINGS_STUB = `

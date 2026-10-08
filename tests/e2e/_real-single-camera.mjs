@@ -9,7 +9,8 @@
  * Opens the .slp with Load SLP (the File System Access pickers are removed so
  * the app falls back to plain file inputs, which Playwright answers), picks the
  * video with "Select Video Files", answers Track All's animal-count prompt with
- * N, waits for Track All and its automatic size check, optionally runs Tracks ▸
+ * N, waits for Track All and its automatic checks (coat brightness on one
+ * camera, per the Tracking Wizard), optionally runs Tracks ▸
  * Check ID Switches (Images), and writes OUT: every detection's frame, its
  * position in the frame's instance list, its new track and two coordinates (to
  * join it to other copies of the file), plus every scored encounter and the
@@ -80,8 +81,8 @@ try {
     const status = () => page.evaluate(() => (document.getElementById('statusText') || document.getElementById('status') || {}).textContent || '');
     await page.evaluate(() => document.getElementById('tbTrackAll').click());
     await page.waitForFunction(() => /Tracked \d+ animal|Track All error/.test(((document.getElementById('statusText') || document.getElementById('status') || {}).textContent) || ''), { timeout: 600000 });
-    // the automatic size check appends to the same status line
-    await page.waitForFunction(() => /ID-switch check/.test(((document.getElementById('statusText') || document.getElementById('status') || {}).textContent) || ''), { timeout: 600000 }).catch(() => {});
+    // the automatic checks append to the same status line (on one camera: coat brightness, after a note about size)
+    await page.waitForFunction(() => /ID-switch check \((body size|coat brightness|images)\): (?!not run)/.test(((document.getElementById('statusText') || document.getElementById('status') || {}).textContent) || ''), { timeout: 900000 }).catch(() => {});
     log('status: ' + await status());
 
     if (process.env.IMAGE === '1') {

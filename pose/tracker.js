@@ -1572,11 +1572,13 @@ async function runSingleCameraTrackAll(session, bail) {
         // The automatic body-size check is NOT run on one camera: a 2D bone length changes with posture
         // and distance from the camera, and on 35 proofread SLAP videos it caught 2 of 59 real swaps at its
         // threshold (encounter AUC 0.55) for 6 false rows. The menu still runs it; images run as usual.
+        // ...and runs the coat-brightness check instead (`autoBrightnessSwitchCheck`, default on): no model, no GPU.
         var autoSize = getTrackingThreshold('autoSwitchCheck') > 0, autoImage = getTrackingThreshold('autoImageSwitchCheck') > 0;
+        var autoBrightness = getTrackingThreshold('autoBrightnessSwitchCheck') > 0;
         if (autoSize && res.numIdentities > 1) doneMsg += ' · ' + SINGLE_CAMERA_SIZE_SKIP_NOTE;
         setStatus(doneMsg, 'success');
-        if (res.numIdentities > 1 && autoImage) {
-            await runIdSwitchChecks({ auto: true, statusPrefix: doneMsg, size: false, image: true });
+        if (res.numIdentities > 1 && (autoImage || autoBrightness)) {
+            await runIdSwitchChecks({ auto: true, statusPrefix: doneMsg, size: false, image: autoImage, brightness: autoBrightness });
         }
         var lo = Infinity, hi = -Infinity;
         for (var f of session.frameGroups.keys()) { if (f < lo) lo = f; if (f > hi) hi = f; }

@@ -262,6 +262,18 @@ function identityGroupsAt(session, frame) {
  * @returns {Array<Array<Object|null>>} geo[vi][itemIndex]
  */
 export function frameCropGeometry(session, frame, items, cams, atFrames, sk) {
+    return mapFrameInstances(session, frame, items, cams, atFrames, function (inst) { return cropGeometry(inst, sk); });
+}
+
+/**
+ * `fn(instance)` for each camera `cams[vi]` and each item, on the frame view vi
+ * decodes (`atFrames[vi]`) — the walk behind `frameCropGeometry`, shared with the
+ * coat-brightness sampler (ui/brightness-sampler.js). Hydrates and releases a lazy
+ * project's frames around the read (see frameCropGeometry). A missing instance
+ * maps to null without calling `fn`.
+ * @returns {Array<Array<*>>} out[vi][itemIndex]
+ */
+export function mapFrameInstances(session, frame, items, cams, atFrames, fn) {
     const touched = new Set([frame]);
     atFrames.forEach(function (f) { touched.add(f); });
     const hydrated = [];
@@ -273,7 +285,7 @@ export function frameCropGeometry(session, frame, items, cams, atFrames, sk) {
             return items.map(function (it) {
                 const g = groups ? groups.get(it.group.identityId) : it.group;
                 const inst = g && g.instances && g.instances.get(cam);
-                return inst ? cropGeometry(inst, sk) : null;
+                return inst ? fn(inst) : null;
             });
         });
     } finally {
@@ -387,7 +399,7 @@ export function keyframeIndices(decoder) {
  * decoder has no mediabunny backend (the HTML5 fallback), so the caller uses
  * `getFrame`.
  */
-function streamingReader(decoder, frames, decode) {
+export function streamingReader(decoder, frames, decode) {
     const be = decoder && decoder._mbBackend;
     if (!be || !be.sink || typeof be.sink.samplesAtTimestamps !== 'function' || !be._frameTimes) return null;
     decode = decode || frames;
