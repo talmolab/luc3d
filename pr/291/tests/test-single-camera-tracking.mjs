@@ -23,6 +23,10 @@
  *     through weak, near-zero scores and ends only at a clearly positive one —
  *     on the topC video's own scores, one row whose Fix reaches the end instead
  *     of two rows with the stretch between them unfixed.
+ *  6. `singleCameraCheckOptions`: on one camera every check ignores encounters
+ *     scoring exactly 0 (no samples) when finding runs — on a real video's own
+ *     scores, a swap running from the session start is fixed from frame 0, not
+ *     from the pair's first encounter that had evidence.
  *
  * Run:  node tests/test-single-camera-tracking.mjs
  */
@@ -242,6 +246,28 @@ group('5. The image check on one camera: a run ends only at a clearly positive e
     const on = back.find(x => x.kind === 'onset');
     ok(on && on.frame === 300 && on.switchBackAt === 800 && ch.length === 1 && ch[0].frame === 800,
         `a real switch back (+450) still ends the run there: onset 300, labels right again at ${on && on.switchBackAt}`);
+}
+
+group('6. On one camera, an encounter with no samples is no evidence');
+{
+    eq(JSON.stringify(SCT.singleCameraCheckOptions('image', -25)), '{"skipEmpty":true,"continueBelow":25}', 'image: empty encounters skipped, runs end above +25');
+    eq(JSON.stringify(SCT.singleCameraCheckOptions('brightness', -800)), '{"skipEmpty":true}', 'brightness: empty encounters skipped');
+    eq(JSON.stringify(SCT.singleCameraCheckOptions('size')), '{"skipEmpty":true}', 'size: empty encounters skipped');
+    // 10072022143153-mid, id_0 / id_2: swapped from 0:00 to 2:16.7, but the pair's first encounter (0:03.9) had no samples
+    const scores = [0, -46, -64, 0, -1, -11, 12, 41];
+    const enc = () => scores.map((score, i) => ({ frame: 100 * (i + 1), startFrame: 100 * (i + 1) - 10, identityA: 0, identityB: 2,
+                                                  nameA: 'id_0', nameB: 'id_2', score }));
+    const O = { threshold: -25, continueBelow: 25, followSeconds: 60, fps: 30 };
+    let sc = enc(), ch = CHK.markChangePoints(sc, O);
+    let rows = sc.filter(x => x.flagged && !x.continues).concat(ch);
+    ok(rows.length === 2 && ch[0].switchedAt === 200, `without: the empty first encounter reads as "right", so the stretch starts at 200 (${JSON.stringify(rows.map(x => [x.frame, x.kind, x.switchedAt]))})`);
+    sc = enc(); ch = CHK.markChangePoints(sc, Object.assign({}, O, SCT.singleCameraCheckOptions('image', -25)));
+    rows = sc.filter(x => x.flagged && !x.continues).concat(ch);
+    ok(rows.length === 1 && rows[0].kind === 'end' && rows[0].frame === 800 && rows[0].switchedAt === null,
+        `with: one 'end' row at 800, the stretch from the session start (${JSON.stringify(rows.map(x => [x.frame, x.kind, x.switchedAt]))})`);
+    ok(sc[0].flagged && sc[0].continues && sc[3].flagged && sc[3].continues, '…and the empty encounters inside the stretch are its repeats');
+    sc = enc(); CHK.markChangePoints(sc, Object.assign({}, O, { skipEmpty: false }));
+    ok(sc[1].kind === 'onset', 'the default (several cameras) is unchanged: the empty encounter still counts');
 }
 
 console.log(`\n${failed === 0 ? '✓ PASS' : '✗ FAIL'} — ${passed} passed, ${failed} failed`);

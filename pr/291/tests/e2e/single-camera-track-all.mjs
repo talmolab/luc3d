@@ -30,7 +30,8 @@
  *     and its ticks are on the seekbar.
  *  6. The image check (stand-in embedder) on one camera ends a run of flagged
  *     encounters only at a clearly positive one: `continueBelow` = +|threshold|
- *     (pose/single-camera-tracking.js `singleCameraImageContinueBelow`).
+ *     (pose/single-camera-tracking.js `singleCameraImageContinueBelow`); and every
+ *     check there skips encounters with no samples (`skipEmpty`).
  *
  * Run: node tests/e2e/single-camera-track-all.mjs
  */
@@ -245,10 +246,13 @@ try {
             [{ camera: 'mouse_video', vector: Float32Array.from(proto[animalOf.get(it.group.instances.get('mouse_video'))], v => v + 0.3 * (r() - 0.5)) }]) });
         await M.runIdSwitchChecks({ image: true, inject: { createEmbedder: fake, hasWebGPU: async () => true } });
         const res = S._idSwitch.results.image;
-        return { ok: !!(res && res.ok), threshold: res && res.threshold, continueBelow: res && res.continueBelow };
+        return { ok: !!(res && res.ok), threshold: res && res.threshold, continueBelow: res && res.continueBelow, skipEmpty: res && res.skipEmpty,
+                 sizeSkip: S._idSwitch.results.size && S._idSwitch.results.size.skipEmpty, brSkip: S._idSwitch.results.brightness && S._idSwitch.results.brightness.skipEmpty };
     });
     check(img.ok && img.threshold === -25 && img.continueBelow === 25,
         `the image check ran at threshold ${img.threshold} with runs ending only above ${img.continueBelow} (want -25 / +25)`);
+    check(img.skipEmpty === true && img.sizeSkip === true && img.brSkip === true,
+        `every check on one camera skips encounters with no samples (image ${img.skipEmpty}, size ${img.sizeSkip}, brightness ${img.brSkip})`);
 
     check(errs.length === 0, 'no page errors' + (errs.length ? ': ' + errs.join(' | ') : ''));
 } finally {

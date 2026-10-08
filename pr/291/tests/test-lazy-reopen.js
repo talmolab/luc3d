@@ -35,7 +35,7 @@
     // Resolve against the test page (tests/test-runner.html) so this stays
     // correct on localhost AND the GitHub Pages sub-path preview — see the
     // identical constant in test-slp-streaming-write.js.
-    const h5wasmUrl = new URL('../lib/h5wasm/h5wasm.iife.js?v=9dea10fb6eba', document.baseURI).href;
+    const h5wasmUrl = new URL('../lib/h5wasm/h5wasm.iife.js?v=3b23de5d012e', document.baseURI).href;
 
     const CAMS = ['Camera_A', 'Camera_B'];
     // Camera provenance is detectable from x alone: A's x-coords sit near 100,
@@ -156,7 +156,7 @@
 
     /**
      * `openProjectSlp` resolves its internal h5wasm worker script as
-     * `new URL('lib/h5wasm/h5wasm.iife.js?v=9dea10fb6eba', document.baseURI)` — correct on the
+     * `new URL('lib/h5wasm/h5wasm.iife.js?v=3b23de5d012e', document.baseURI)` — correct on the
      * app page, but the test page lives under /tests/, so that resolves to the
      * nonexistent /tests/lib/... . Temporarily shadow window.SleapIO with a
      * pass-through whose readSlpStreaming forces the correct h5wasmUrl; the
@@ -200,7 +200,7 @@
     }
 
     async function reconstructLazy(session, opened, loader) {
-        const slpImport = await import('../import-export/slp-import.js?v=9dea10fb6eba');
+        const slpImport = await import('../import-export/slp-import.js?v=3b23de5d012e');
         assertTrue(typeof slpImport.reconstructInstanceGroupsFromSessionLazy === 'function',
             'reconstructInstanceGroupsFromSessionLazy not exported from slp-import.js');
         // Signature: (session, typedSession, loader, nodeNames, opts).
@@ -250,8 +250,8 @@
         it('lightweight reconstruct + on-scrub hydration', async function () {
             const S = window.SleapIO;
             assertTrue(!!window.Session && !!window.Camera && !!window.Skeleton, 'pose-data not bridged');
-            const tri = await import('../pose/triangulation.js?v=9dea10fb6eba');
-            const appState = await import('../ui/app-state.js?v=9dea10fb6eba');
+            const tri = await import('../pose/triangulation.js?v=3b23de5d012e');
+            const appState = await import('../ui/app-state.js?v=3b23de5d012e');
             const state = appState.state;
 
             const bytes = await buildProjectFixtureBytes(S);
@@ -326,7 +326,7 @@
 
         it('re-save appends the shared store once + video fallback', async function () {
             const S = window.SleapIO;
-            const { buildSessionSlpBytesStreaming } = await import('../import-export/slp-streaming-write.js?v=9dea10fb6eba');
+            const { buildSessionSlpBytesStreaming } = await import('../import-export/slp-streaming-write.js?v=3b23de5d012e');
 
             const bytes = await buildProjectFixtureBytes(S);
             const { loader, opened } = await openProjectFixture(bytes, 'lazy-reopen-a3.slp');
@@ -366,7 +366,7 @@
 
         it('re-save remaps permuted native video ids', async function () {
             const S = window.SleapIO;
-            const { buildSessionSlpBytesStreaming } = await import('../import-export/slp-streaming-write.js?v=9dea10fb6eba');
+            const { buildSessionSlpBytesStreaming } = await import('../import-export/slp-streaming-write.js?v=3b23de5d012e');
 
             // Fixture B: labels.videos = [videoB, videoA] — Camera_A's frames
             // reference NATIVE store video id 1, Camera_B's id 0.
@@ -424,7 +424,7 @@
             // ("<d" = h5wasm float64) at all three writer sites; this guards it
             // across re-vendors for the eager AND streaming writers.
             const S = window.SleapIO;
-            const { buildSessionSlpBytesStreaming } = await import('../import-export/slp-streaming-write.js?v=9dea10fb6eba');
+            const { buildSessionSlpBytesStreaming } = await import('../import-export/slp-streaming-write.js?v=3b23de5d012e');
 
             const eagerBytes = await buildProjectFixtureBytes(S); // saveSlpToBytes output
             const { loader, opened } = await openProjectFixture(eagerBytes, 'lazy-reopen-dtype.slp');
@@ -460,7 +460,7 @@
             // (SioLazyLoader.remapTracksFromIdentity) carries the whole
             // project, independent of what's been visited/scrubbed.
             const S = window.SleapIO;
-            const { buildSessionSlpBytesStreaming } = await import('../import-export/slp-streaming-write.js?v=9dea10fb6eba');
+            const { buildSessionSlpBytesStreaming } = await import('../import-export/slp-streaming-write.js?v=3b23de5d012e');
 
             const bytes = await buildProjectFixtureBytes(S);
             const { loader, opened } = await openProjectFixture(bytes, 'lazy-reopen-propagate.slp');
@@ -696,8 +696,8 @@
                 // reporter is looking at the beginning of the video, which is
                 // precisely the part that IS resident. On-scrub hydration reads
                 // `state.session` (pose/triangulation.js), so wire it.
-                const tri = await import('../pose/triangulation.js?v=9dea10fb6eba');
-                const { state } = await import('../ui/app-state.js?v=9dea10fb6eba');
+                const tri = await import('../pose/triangulation.js?v=3b23de5d012e');
+                const { state } = await import('../ui/app-state.js?v=3b23de5d012e');
                 const prevSession = state.session;
                 try {
                     state.session = session;
