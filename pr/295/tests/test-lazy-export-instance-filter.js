@@ -33,7 +33,7 @@
 (function () {
     const { describe, it, assertEqual, assertTrue, assertDeepEqual } = TestFramework;
 
-    const h5wasmUrl = new URL('../lib/h5wasm/h5wasm.iife.js?v=c54ae5280da2', document.baseURI).href;
+    const h5wasmUrl = new URL('../lib/h5wasm/h5wasm.iife.js?v=ef4694d93c7a', document.baseURI).href;
 
     async function storeBytes(S, fn, n) {
         const sk = new S.Skeleton({ nodes: [new S.Node('nose'), new S.Node('tail')], edges: [new S.Edge(new S.Node('nose'), new S.Node('tail'))], name: 'sk' });
@@ -63,7 +63,7 @@
     describe('file-io.js lazy export fast-path gating (Per-Session / By-Cam export)', function () {
         it('exportSlpClientSide: default instanceFilter still uses the lazy fast-path — every frame survives, not just the resident one', async function () {
             const S = window.SleapIO;
-            const { exportSlpClientSide } = await import('../import-export/file-io.js?v=c54ae5280da2');
+            const { exportSlpClientSide } = await import('../import-export/file-io.js?v=ef4694d93c7a');
 
             const N = 6;
             const lab = await openLazy(S, await storeBytes(S, 'cam0.mp4', N), 'e1.slp');
@@ -139,7 +139,7 @@
 
         it('exportSlpMultiSession: default instanceFilter (single-session "By Cam" case) also uses the lazy fast-path', async function () {
             const S = window.SleapIO;
-            const { exportSlpMultiSession } = await import('../import-export/file-io.js?v=c54ae5280da2');
+            const { exportSlpMultiSession } = await import('../import-export/file-io.js?v=ef4694d93c7a');
 
             const N = 4;
             const lab = await openLazy(S, await storeBytes(S, 'camX.mp4', N), 'e2.slp');
@@ -184,7 +184,7 @@
             // actually blocks the fast path in that case, so the export goes
             // through the eager (correction-aware) builder instead.
             const S = window.SleapIO;
-            const { exportSlpClientSide } = await import('../import-export/file-io.js?v=c54ae5280da2');
+            const { exportSlpClientSide } = await import('../import-export/file-io.js?v=ef4694d93c7a');
 
             const N = 3;
             const lab = await openLazy(S, await storeBytes(S, 'camC.mp4', N), 'e3.slp');
@@ -257,7 +257,7 @@
             // stream the whole project through the same per-frame builder the eager
             // path uses — covering every frame AND keeping the correction.
             const S = window.SleapIO;
-            const { exportSlpClientSide } = await import('../import-export/file-io.js?v=c54ae5280da2');
+            const { exportSlpClientSide } = await import('../import-export/file-io.js?v=ef4694d93c7a');
 
             const N = 3;
             const lab = await openLazy(S, await storeBytes(S, 'camD.mp4', N), 'e4.slp');
@@ -286,7 +286,7 @@
             // The streaming path hydrates through `batchLoadLazyFrames`, which reads
             // the ACTIVE session — so make this session active, as it is in the app
             // when the user exports the project they are looking at.
-            const appState = await import('../ui/app-state.js?v=c54ae5280da2');
+            const appState = await import('../ui/app-state.js?v=ef4694d93c7a');
             const prevSession = appState.state.session;
             appState.state.session = session;
 

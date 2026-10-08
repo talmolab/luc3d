@@ -5,41 +5,41 @@
 
 import {
     Skeleton, Camera, Session,
-} from '../pose/pose-data.js?v=c54ae5280da2';
-import { getInstanceGroupsForFrame } from '../pose/triangulation.js?v=c54ae5280da2';
-import { REPROJECTION_COLOR, getTrackColor, getGroupColor } from './overlays.js?v=c54ae5280da2';
-import { drawAllOverlays, updateFrameCounters } from './rendering.js?v=c54ae5280da2';
-import { isInteractiveClickTarget } from './interaction.js?v=c54ae5280da2';
-import { persistSectionState } from './section-state.js?v=c54ae5280da2';
-import { buildLazySelect } from './lazy-select.js?v=c54ae5280da2';
-import { refreshIdSwitchPanel } from './id-switch-modal.js?v=c54ae5280da2';
-import { isInfoPanelVisible, markInfoPanelStale } from './panel-visibility.js?v=c54ae5280da2';
+} from '../pose/pose-data.js?v=ef4694d93c7a';
+import { getInstanceGroupsForFrame } from '../pose/triangulation.js?v=ef4694d93c7a';
+import { REPROJECTION_COLOR, getTrackColor, getGroupColor } from './overlays.js?v=ef4694d93c7a';
+import { drawAllOverlays, updateFrameCounters } from './rendering.js?v=ef4694d93c7a';
+import { isInteractiveClickTarget } from './interaction.js?v=ef4694d93c7a';
+import { persistSectionState } from './section-state.js?v=ef4694d93c7a';
+import { buildLazySelect } from './lazy-select.js?v=ef4694d93c7a';
+import { refreshIdSwitchPanel } from './id-switch-modal.js?v=ef4694d93c7a';
+import { isInfoPanelVisible, markInfoPanelStale } from './panel-visibility.js?v=ef4694d93c7a';
 import { state, timeline, interactionManager, rememberSkeleton, buildRememberedSkeleton,
-         setProjectSkeleton, getProjectSkeleton } from './app-state.js?v=c54ae5280da2';
-import { setStatus, markDirty } from '../import-export/save-load.js?v=c54ae5280da2';
-import { buildSkeletonJSON, parseSkeletonJSON } from '../import-export/skeleton-json.js?v=c54ae5280da2';
+         setProjectSkeleton, getProjectSkeleton } from './app-state.js?v=ef4694d93c7a';
+import { setStatus, markDirty } from '../import-export/save-load.js?v=ef4694d93c7a';
+import { buildSkeletonJSON, parseSkeletonJSON } from '../import-export/skeleton-json.js?v=ef4694d93c7a';
 import {
     handleLoadVideos, handleLoadCalibration, autoAssignVideosToCameras,
     createViewForVideoFile, rebuildVideoController, fitCanvasesToCells,
     loadSingleSessionFromCache, removeVideoFile,
-} from '../loading/session-loader.js?v=c54ae5280da2';
+} from '../loading/session-loader.js?v=ef4694d93c7a';
 
 // Circular import — these are still defined in app.js for now. They will be
 // retargeted as later passes land:
 // - swapAssignTrack, propagateIdentityForward, unlinkGroup, showGroupContextMenu
 //   → ui/identity-assignment.js (Pass 3f)
 // Pass 3e-1: unlinkGroup + showGroupContextMenu moved to ui-wiring.js.
-import { unlinkGroup, showGroupContextMenu } from './ui-wiring.js?v=c54ae5280da2';
+import { unlinkGroup, showGroupContextMenu } from './ui-wiring.js?v=ef4694d93c7a';
 // Pass 3f: swapAssignTrack + propagateIdentityForward moved to identity-assignment.js.
 // luc3d #172: every manual identity switch routes through applyIdentitySwitch,
 // which subsumes this file's former direct propagateIdentityForward calls.
 import {
     swapAssignTrack, applyIdentitySwitch, describeIdentitySwitch,
-} from './identity-assignment.js?v=c54ae5280da2';
+} from './identity-assignment.js?v=ef4694d93c7a';
 // Pass 3h: populateSessionsPanel / populateViewStrip / populateSessionStrip moved to sessions-panes.js.
 import {
     populateSessionsPanel, populateViewStrip, populateSessionStrip,
-} from './sessions-panes.js?v=c54ae5280da2';
+} from './sessions-panes.js?v=ef4694d93c7a';
 // Block 2 (Prompt 4): per-session timeline visibility toggles.
 import {
     toggleCameraVisibility,
@@ -48,7 +48,7 @@ import {
     getCameraVisibilityList,
     getTrackVisibilityList,
     getIdentityVisibilityList,
-} from './timeline-visibility.js?v=c54ae5280da2';
+} from './timeline-visibility.js?v=ef4694d93c7a';
 
 // ============================================
 // Inline name entry for "+ New Track" / "+ New ID"
@@ -1990,6 +1990,11 @@ export function updateFrameInfo(frameIdx, instanceGroups) {
                 var reprojTrackName = (group.identityId >= 0 && state.session.tracks[group.identityId]) || ('Group ' + i);
                 rtdTrack.appendChild(document.createTextNode(reprojTrackName));
 
+                // Holds the Identity column's place. Without it every later cell
+                // sat one column left: the view count under Identity, the badge
+                // under Views, the error under Type.
+                const rtdIdentity = document.createElement('td');
+
                 const rtdViews = document.createElement('td');
                 rtdViews.className = 'mono';
                 rtdViews.textContent = group.reprojectedInstances.size + '/' + state.session.cameras.length;
@@ -1998,7 +2003,7 @@ export function updateFrameInfo(frameIdx, instanceGroups) {
                 const rtdType = document.createElement('td');
                 const rbadge = document.createElement('span');
                 rbadge.className = 'badge badge-reproj';
-                rbadge.textContent = 'Reproj';
+                rbadge.textContent = 'Reprojection';
                 rtdType.appendChild(rbadge);
 
                 const rtdError = document.createElement('td');
@@ -2012,6 +2017,7 @@ export function updateFrameInfo(frameIdx, instanceGroups) {
                 rtdEmpty.style.padding = '0';
 
                 rtr.appendChild(rtdTrack);
+                rtr.appendChild(rtdIdentity);
                 rtr.appendChild(rtdViews);
                 rtr.appendChild(rtdType);
                 rtr.appendChild(rtdError);
