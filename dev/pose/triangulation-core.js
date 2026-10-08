@@ -16,8 +16,8 @@
  * `options.reprojErrorThreshold` instead.
  */
 
-import { makePoints3d, points3dNodeCount, hasPoint3d, getPoint3d, readPoint3d, setPoint3d, clearPoint3d } from './pose-data.js?v=cec4e701a884';
-import { jacobiEigen } from './plane-fit.js?v=cec4e701a884';
+import { makePoints3d, points3dNodeCount, hasPoint3d, getPoint3d, readPoint3d, setPoint3d, clearPoint3d } from './pose-data.js?v=173b1dfa905b';
+import { jacobiEigen } from './plane-fit.js?v=173b1dfa905b';
 export { jacobiEigen };
 
 // Settings readers for `triangulateAndReproject` (see the header). Unset means

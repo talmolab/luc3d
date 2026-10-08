@@ -33,7 +33,7 @@ const THRESHOLD_DEFAULTS = {
     distanceThreshold: 25,
     timePenalty: 0.1,
     stale: 20,
-    matchGate: 1,
+    matchGate: 0,
     autoSwitchCheck: 1,
     autoImageSwitchCheck: 0,
     imageCheckThreshold: -25,
