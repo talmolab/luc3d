@@ -147,11 +147,11 @@ eq(p.next.headline, 'Neither check flagged an ID switch.', 'both clear: headline
 eq(p.next.caveat, null, 'both clear: no caveat');
 eq(p.secondary.length, 0, 'both clear: nothing else to run');
 
-// image check could not run (e.g. no WebGPU): do not push it
-p = plan(two, C('clear', { switches: 0, encounters: 40 }), C('skipped', { reason: 'needs WebGPU' }));
+// image check could not run (e.g. no videos loaded — without a GPU it now runs on the CPU): do not push it
+p = plan(two, C('clear', { switches: 0, encounters: 40 }), C('skipped', { reason: 'needs the session\'s videos to be loaded' }));
 eq(p.next.caveat, null, 'image check skipped: no caveat pointing at a check that cannot run');
 eq(p.secondary.length, 0, 'image check skipped: not offered again');
-eq(p.checks[1].text, 'Skipped — needs WebGPU', 'check row: skipped, with the reason');
+eq(p.checks[1].text, 'Skipped — needs the session\'s videos to be loaded', 'check row: skipped, with the reason');
 
 // a cancelled image check can be run again
 p = plan(two, C('clear', { switches: 0, encounters: 40 }), C('cancelled'));
