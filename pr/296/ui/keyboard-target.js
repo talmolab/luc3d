@@ -15,7 +15,7 @@
 //
 // meaning "don't steal keys from someone who is typing". But `tagName` is
 // `INPUT` for a CHECKBOX too, and for a radio, a range slider and a file
-// picker. So the moment the user clicked the User / Predicted / Reproj / Errors
+// picker. So the moment the user clicked the User / Predictions / Reprojections / Errors
 // checkbox, that one test went true for every keystroke and EVERY shortcut in
 // the app went dead — spacebar toggled the checkbox instead of playing the
 // video, and the only cure was to click back onto a video pane.

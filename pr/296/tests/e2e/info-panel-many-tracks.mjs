@@ -14,7 +14,7 @@
  *   1. the two track counts produce the SAME number of <option>s per update —
  *      at most 3 per Track select;
  *   2. every closed Track select shows what the eager build showed (its
- *      track's name, "(none)" / "—" for a trackless row);
+ *      track's name, "(none)" for a trackless row);
  *   3. a real click fills the full list (head, every track in order, tail)
  *      before the list opens, without changing the select's width; focus does
  *      too (the keyboard path);
@@ -129,7 +129,7 @@ try {
     const gShown = big.groupRows.map(r => r.shown).sort();
     check(JSON.stringify(gShown) === JSON.stringify(big.expectGroups.slice().sort()),
         'group rows show track_3, track_999 and (none)', gShown);
-    const ulExpect = UNLINKED_TRACKS(1000).map(tr => tr == null ? '—' : 'track_' + tr);
+    const ulExpect = UNLINKED_TRACKS(1000).map(tr => tr == null ? '(none)' : 'track_' + tr);
     const ulShown = big.ulRows.map(r => r.shown);
     const perCam = [];
     for (let c = 0; c < CAMS; c++) perCam.push(ulShown.slice(c * 5, c * 5 + 5).join(','));
@@ -139,7 +139,9 @@ try {
         'and each select\'s value is its track index (-1 when trackless)');
 
     // ---- 3. a real click fills the list before it opens --------------------
-    const ulTrackSel = (i) => page.locator('#unlinkedTable tbody tr:not(.unlinked-camera-header) td:first-child select').nth(i);
+    // The first select in the Track / Identity cell is the track dropdown; the
+    // identity dropdown is stacked under it.
+    const ulTrackSel = (i) => page.locator('#unlinkedTable tbody tr:not(.unlinked-camera-header) td:first-child select:first-of-type').nth(i);
     const widthBefore = await ulTrackSel(0).evaluate(el => el.offsetWidth);
     await ulTrackSel(0).click();
     await page.keyboard.press('Escape');
@@ -154,8 +156,8 @@ try {
     }));
     check(clicked.n === 1002, `a click fills head + 1,000 tracks + tail (${clicked.n})`);
     check(clicked.inOrder, 'every track, in track order, value = index');
-    check(clicked.first.join('|') === '-1|—' && clicked.last.join('|') === '__new__|(+) New Track',
-        'head "—" and tail "(+) New Track" are kept', [clicked.first, clicked.last]);
+    check(clicked.first.join('|') === '-1|(none)' && clicked.last.join('|') === '__new__|(+) New Track',
+        'head "(none)" and tail "(+) New Track" are kept', [clicked.first, clicked.last]);
     check(clicked.value === '0', 'the selection is unchanged by filling', clicked.value);
     check(clicked.width === widthBefore, `the select keeps its closed width (${widthBefore}px)`, clicked.width);
 
@@ -171,7 +173,7 @@ try {
     const picked = await page.evaluate(() => {
         const s = window.__lucid.state.session;
         const ul = s.getFrameGroup(0).getUnlinkedInstances('cam0').map(u => u.instance.trackIdx);
-        const sels = Array.from(document.querySelectorAll('#unlinkedTable tbody tr:not(.unlinked-camera-header) td:first-child select'));
+        const sels = Array.from(document.querySelectorAll('#unlinkedTable tbody tr:not(.unlinked-camera-header) td:first-child select:first-of-type'));
         return { ul, shown: sels.slice(0, 5).map(el => el.options[el.selectedIndex].textContent) };
     });
     check(picked.ul[0] === 500 && picked.ul[2] === 0,
@@ -180,7 +182,9 @@ try {
         'the rebuilt panel shows the swap', picked.shown);
 
     // A group row: "(none)" un-tracks the whole group.
-    const grpTrackSel = page.locator('#instanceGroupsTable tbody tr td:first-child select');
+    // The track dropdown is the FIRST select in the Track / Identity cell; the
+    // identity dropdown is stacked under it in the same cell.
+    const grpTrackSel = page.locator('#instanceGroupsTable tbody tr td:first-child select:first-of-type');
     const gIdx = await grpTrackSel.evaluateAll(els => els.findIndex(el => el.value === '3'));
     await grpTrackSel.nth(gIdx).focus();
     await grpTrackSel.nth(gIdx).selectOption('-1');
