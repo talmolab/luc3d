@@ -57,6 +57,7 @@ import {
 } from '../pose/triangulation.js';
 import { SioLazyLoader } from './sio-lazy-loader.js';
 import { unionTrackNames, remapTrackIdx } from './track-union.js';
+import { nodeOrderRemap, permuteColumnarNodes, permuteInstanceNodes } from './slp-skeleton.js';
 
 // Status UI moved to import-export/save-load.js in Pass 3c-1.
 import {
@@ -2920,6 +2921,8 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
 
         var firstSession = null;
         var skeletonFromSlp = null;
+        var skeletonCam = null;     // the camera skeletonFromSlp came from
+        var skeletonMismatches = []; // { camName, missing, extra } — different nodes, not remappable
         var slpVersionsLoaded = {}; // camName -> version number loaded
 
         // Launch all SLP/H5 parses — use lazy loading for large H5 files
@@ -3099,6 +3102,33 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
 
             if (slpData.skeleton && !skeletonFromSlp) {
                 skeletonFromSlp = slpData.skeleton;
+                skeletonCam = camName;
+            }
+
+            // The session has ONE skeleton, the first parsed camera's, and
+            // every instance below is stored by column. A camera whose file
+            // lists the same nodes in another order is re-ordered onto it by
+            // name; one with different nodes is reported rather than loaded
+            // under names that are not its own. (`SioLazyLoader._unifyNodeOrder`
+            // is the lazy path's half; loading/slp-skeleton.js.)
+            if (slpData.skeleton && slpData.skeleton !== skeletonFromSlp) {
+                var nodeRemap = nodeOrderRemap(skeletonFromSlp.nodes || [], slpData.skeleton.nodes || []);
+                if (nodeRemap.kind === 'reordered') {
+                    if (slpData.columnar) {
+                        permuteColumnarNodes(slpData.columnar, nodeRemap.perm);
+                    } else if (slpData.frames) {
+                        for (var pfi = 0; pfi < slpData.frames.length; pfi++) {
+                            var pInsts = slpData.frames[pfi].instances || [];
+                            for (var pii = 0; pii < pInsts.length; pii++) permuteInstanceNodes(pInsts[pii], nodeRemap.perm);
+                        }
+                    }
+                    console.log('[session-folder] ' + camName + ': skeleton nodes re-ordered to match ' + skeletonCam + '\'s');
+                } else if (nodeRemap.kind === 'mismatch') {
+                    skeletonMismatches.push({ camName: camName, missing: nodeRemap.missing, extra: nodeRemap.extra });
+                    console.warn('[session-folder] ' + camName + ': skeleton nodes differ from ' + skeletonCam
+                        + '\'s (missing ' + JSON.stringify(nodeRemap.missing) + ', extra '
+                        + JSON.stringify(nodeRemap.extra) + ') — loaded by column, names may be wrong');
+                }
             }
 
             if (!state.session) {
@@ -3161,6 +3191,15 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
                 }
             }
             state.session.lazyLoader = lazyLoader;
+            if (lazyLoader.nodeOrderMismatches) {
+                for (var [mmCam, mm] of lazyLoader.nodeOrderMismatches) {
+                    skeletonMismatches.push({ camName: mmCam, missing: mm.missing, extra: mm.extra });
+                    skeletonCam = skeletonCam || lazyLoader.skeletonCam;
+                    console.warn('[session-folder] ' + mmCam + ': skeleton nodes differ from ' + skeletonCam
+                        + '\'s (missing ' + JSON.stringify(mm.missing) + ', extra '
+                        + JSON.stringify(mm.extra) + ') — loaded by column, names may be wrong');
+                }
+            }
             if (lazyLoader.trackOccupancy.size > 0) {
                 state.session.trackOccupancy = lazyLoader.trackOccupancy;
             }
@@ -3526,6 +3565,12 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
         } else if (slpFailures.length === 0 && staleWarnings.length > 0) {
             statusMsg += ' — newer .slp present but not loaded: ' + staleWarnings.join('; ');
             statusKind = 'warning';
+        }
+        if (skeletonMismatches.length > 0) {
+            statusMsg += ' — skeleton nodes differ from ' + skeletonCam + '\'s in '
+                + skeletonMismatches.map(function (m) { return m.camName; }).join(', ')
+                + ' (node names there may be wrong)';
+            if (statusKind === 'success') statusKind = 'warning';
         }
         setStatus(statusMsg, statusKind);
 

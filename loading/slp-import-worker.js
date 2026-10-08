@@ -21,6 +21,7 @@
  */
 
 import * as h5wasm from '../lib/h5wasm/hdf5_hl.js';   // local vendored 0.10.3 ESM
+import { parseSlpSkeleton } from './slp-skeleton.js';
 
 var h5wasmReady = false;
 var FS = null;
@@ -154,74 +155,12 @@ async function parseSlp(file) {
         }
 
         // --- Skeleton ---
-        // IMPORTANT: metadataJson.nodes is the GLOBAL node list (arbitrary order).
-        // skeletons[0].nodes defines the SKELETON ordering via id fields.
-        // Points in the HDF5 dataset are stored in skeleton order.
-        // We must reorder node names and remap edge indices to skeleton order.
-        var nodes = [];
-        var edges = [];
-        var skelName = 'skeleton';
-
-        // Get global node names first
-        var globalNodes = [];
-        if (metadataJson.nodes) {
-            globalNodes = metadataJson.nodes.map(function (n) { return n.name || n; });
-        }
-
-        if (metadataJson.skeletons && metadataJson.skeletons.length > 0) {
-            var skel = metadataJson.skeletons[0];
-            skelName = (skel.graph && skel.graph.name) || skel.name || 'skeleton';
-
-            // Build global-ID → skeleton-position map from skeleton's node ordering
-            // skel.nodes[i].id = global node ID at skeleton position i
-            var idToPos = {};
-            var hasIdMapping = skel.nodes && skel.nodes.length > 0
-                && skel.nodes[0] && typeof skel.nodes[0].id === 'number';
-
-            if (hasIdMapping) {
-                for (var ni = 0; ni < skel.nodes.length; ni++) {
-                    idToPos[skel.nodes[ni].id] = ni;
-                }
-                // Reorder node names to match skeleton ordering
-                nodes = [];
-                for (var ni2 = 0; ni2 < skel.nodes.length; ni2++) {
-                    var gid = skel.nodes[ni2].id;
-                    nodes.push(gid < globalNodes.length ? globalNodes[gid] : 'node_' + ni2);
-                }
-            } else {
-                // No id mapping, use global order directly
-                nodes = globalNodes;
-            }
-
-            // Extract edges, remapping from global IDs to skeleton positions
-            if (skel.links) {
-                for (var li = 0; li < skel.links.length; li++) {
-                    var link = skel.links[li];
-                    if (typeof link.source === 'number' && typeof link.target === 'number') {
-                        // Skip symmetry edges (type 2), keep regular edges (type 1)
-                        var isSymmetry = false;
-                        if (link.type) {
-                            var typeVal = link.type['py/tuple'];
-                            if (!typeVal && link.type['py/reduce']) {
-                                var ra = link.type['py/reduce'];
-                                if (Array.isArray(ra) && ra.length >= 2) typeVal = ra[1]['py/tuple'];
-                            }
-                            if (typeVal && typeVal[0] === 2) isSymmetry = true;
-                        }
-                        if (!isSymmetry) {
-                            // Remap from global node IDs to skeleton positions
-                            var srcPos = hasIdMapping ? idToPos[link.source] : link.source;
-                            var dstPos = hasIdMapping ? idToPos[link.target] : link.target;
-                            if (srcPos !== undefined && dstPos !== undefined) {
-                                edges.push([srcPos, dstPos]);
-                            }
-                        }
-                    }
-                }
-            }
-        } else {
-            nodes = globalNodes;
-        }
+        // Column order + BODY edges, from either skeleton layout (flat, or
+        // classic SLEAP's `nx_graph`-nested one) — see loading/slp-skeleton.js.
+        var parsedSkeleton = parseSlpSkeleton(metadataJson);
+        var nodes = parsedSkeleton.nodes;
+        var edges = parsedSkeleton.edges;
+        var skelName = parsedSkeleton.name;
 
         progress('Skeleton: ' + nodes.length + ' nodes, ' + edges.length + ' edges');
 

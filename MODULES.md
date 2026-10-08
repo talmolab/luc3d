@@ -11392,6 +11392,79 @@ open-resolution orders plus eager, the store, occupancy and the streaming
 writer's header). The e2e file and the `LazyFrameLoader` tests were confirmed
 to FAIL on the pre-fix build.
 
+### loading/slp-skeleton.js
+
+**Purpose.** A `.slp`'s skeleton, read from its `metadata.json`, and the
+node-order reconciliation a per-camera folder load needs — pure functions,
+imports nothing, so it loads in the SLP import worker, on the main thread and
+in Node.
+
+**Why it exists.** `metadata.json.skeletons[i]` is a networkx node-link graph
+stored in one of TWO layouts: FLAT (`{directed, graph, links, multigraph,
+nodes}`) or, in classic PyQt-SLEAP's jsonpickled template form, NESTED under
+`nx_graph` (`{description, nx_graph: {...}, preview_image}`). Column `i` of the
+`points`/`pred_points` tables is the node `metadata.nodes[graph.nodes[i].id]`
+— `metadata.nodes` is the GLOBAL list in arbitrary order. Both readers
+(`loading/slp-import-worker.js` and the vendored sleap-io.js `parseSkeletons`)
+read `entry.nodes` / `entry.links` only, so on a nested entry they fell back to
+the global order (every keypoint column named after the wrong node) and found
+no links. Found on `2022-10-07/10072022142111/back` (a SLEAP 1.2.9 file, the
+only nested one of the 48 prediction files of the six proofread sessions):
+`back` is the first camera parsed, so the whole session took its skeleton —
+nothing errored, geometry by column was untouched (Track All, triangulation),
+and everything BY NAME was wrong (labels, Tracking Wizard node weights, the
+size check's body nodes, the image check's crop orientation and mask). After
+the fix LUCID's by-name medians on that file (Nose–Head 36.5 px, Ear_L–Ear_R
+42.4, Nose–TailTip 206.1) match Python sleap-io's exactly; mis-named they were
+66 / 172 / 83.
+
+**Key exports.**
+- `skeletonGraph(entry)` → `entry.nx_graph` when present, else the entry.
+- `parseSlpSkeleton(metadataJson)` → `{name, nodes, edges}`: `nodes` in COLUMN
+  order, `edges` the BODY edges as column positions (symmetries excluded). The
+  raw worker's skeleton parse, moved here unchanged except for the two fixes.
+- `resolveEdgeType(type, cache, state)` — jsonpickle writes each EdgeType in
+  full the first time (`py/reduce` or a bare `py/tuple`) and as
+  `{"py/id": n}` after, numbered by first appearance. The worker used to read
+  the inline form only, so a skeleton's SECOND and later symmetries (always
+  references) became body edges. Same rule as the vendored `resolveEdgeType`.
+- `nodeOrderRemap(sessionNodes, camNodes)` → `{kind: 'same'}`,
+  `{kind: 'reordered', perm}` (`perm[s]` = camera column of session node `s`)
+  or `{kind: 'mismatch', missing, extra}` (different names, a different count
+  or a repeated name — no by-name remap exists).
+- `permuteNodeAxis(buf, perm, width)`, `permuteColumnarNodes(col, perm)` (the
+  worker's columnar result), `permuteInstanceNodes(inst, perm)` (the nested
+  `frames` shape), `permuteStoreNodeRows(store, perm)` (a sleap-io.js
+  `LazyDataStore`: each instance's point rows in `pointsData` or
+  `predPointsData`, every column; a span that is not `perm.length` rows is left
+  alone). All in place.
+- `EDGE_BODY`, `EDGE_SYMMETRY`.
+
+**The per-camera guard.** The session has ONE skeleton; a camera whose file
+lists the same nodes in another order is re-ordered onto it BY NAME (eager:
+`handleLoadSessionFolderPerCamera` permutes the parse result; lazy:
+`SioLazyLoader._unifyNodeOrder` permutes the store), and a camera with
+different names is loaded by column as before but NAMED in the status bar
+(`… — skeleton nodes differ from back's in top (node names there may be
+wrong)`) and the console. On the real sessions every camera agrees once the
+nested file is read correctly, so nothing is remapped there.
+
+**Imports from project modules.** None (deliberately).
+
+**Imported by.** `loading/slp-import-worker.js` (`parseSlpSkeleton`),
+`loading/session-loader.js` (`nodeOrderRemap`, `permuteColumnarNodes`,
+`permuteInstanceNodes`), `loading/sio-lazy-loader.js` (`nodeOrderRemap`,
+`permuteStoreNodeRows`).
+
+**Tests.** `tests/test-slp-skeleton.mjs` (the real file's metadata in both
+layouts, through this module AND the vendored `parseSkeletons`; symmetries by
+reference; the remap and all four permuters — the vendored half confirmed to
+fail on the unpatched chunk), `tests/e2e/slp-nested-skeleton.mjs` (four
+Python-sleap-io fixtures from `tests/fixtures/slp-nested-skeleton/`, every point
+encoding its node name: both HDF5 readers, `SioLazyLoader` in four open orders,
+and the per-camera folder loader eager and lazy — 31 checks fail on the pre-fix
+build).
+
 ### loading/session-loader.js
 
 **Purpose.** Orchestrator for every session-loading workflow — empty
@@ -11608,6 +11681,19 @@ eager session's list (impossible since the per-folder routing below) is gone.
 Covered by `tests/e2e/percam-track-union.mjs` (all six lazy open orders and the
 eager path give the same list; confirmed to fail pre-fix).
 
+**One skeleton for the folder, every camera's columns named by it.** The
+session skeleton is the first parsed camera's (`skeletonFromSlp`; lazy: the
+first camera BY NAME, `lazyLoader.skeleton`). A camera whose file lists the same
+node names in another order is re-ordered onto it by name before its instances
+are built (`nodeOrderRemap` + `permuteColumnarNodes` / `permuteInstanceNodes`;
+the lazy half is `SioLazyLoader._unifyNodeOrder`). A camera with DIFFERENT
+names cannot be remapped without inventing a correspondence, so it is loaded by
+column as before but named in the closing status (a warning) and the console,
+with its missing/extra nodes — never silently. See `loading/slp-skeleton.js`,
+which is also where the nested-`nx_graph` skeleton fix lives (the reason this
+mattered: a nested first camera used to give the whole session the GLOBAL node
+order). Covered by `tests/e2e/slp-nested-skeleton.mjs`.
+
 **The routing decision is per FOLDER, not per file.** Deciding per file let one
 folder come back part eager and part lazy, and that combination is silently
 lossy: the eager cameras populate `session.frameGroups` during load, and
@@ -11690,6 +11776,8 @@ blank until the user manually re-ran Triangulate All. Covered by
   (`shouldUseLazyH5`, `shouldUseLazySlp`, `LazyFrameLoader`),
   `./sio-lazy-loader.js` (`SioLazyLoader`),
   `./track-union.js` (`unionTrackNames`, `remapTrackIdx`),
+  `./slp-skeleton.js` (`nodeOrderRemap`, `permuteColumnarNodes`,
+  `permuteInstanceNodes` — the per-camera node-order guard),
   `../import-export/save-load.js`,
   `../ui/rendering.js` (`drawAllOverlays`, `setReprojErrorVisible`),
   `../ui/info-panel.js` (`updateInfoPanel`, `promptImportSkeletonForAllSessions`),
@@ -11770,7 +11858,8 @@ camera until a propagate action happened to rebuild it, unlike the per-camera
 maps it to `null`), score,
 type, points, occluded}`, LRU-cached), `prefetch`, `close` (also clears
 `videoIdByCam`); fields `nFrames`,
-`skeleton`, `trackNames`, `videos`, `trackOccupancy`, `videoIdByCam` (only set
+`skeleton`, `skeletonCam`, `trackNames`, `videos`, `trackOccupancy`,
+`nodeOrderMismatches`, `videoIdByCam` (only set
 by `openProjectSlp`; `null` on the per-camera `open()` path), `isSync = true` (so
 `batchLoadLazyFrames` takes its worker-free path), and `sourceFiles` (camName →
 the `File`/`Blob` it was opened from — a local-disk `File` is a cheap lazy
@@ -11812,6 +11901,25 @@ instance columns for pass 2; see `import-export/save-load.js`). `close()`
 clears it. `remapTracksFromIdentity` resets each camera's
 own names to the propagated list (and `trackNames` with it), so a later
 `_unifyTracks` starts from that. Covered by `tests/e2e/percam-track-union.mjs`.
+
+**Node order: every store re-ordered into the session skeleton's
+(`_unifyNodeOrder`).** The session skeleton is the first camera BY NAME's
+(`skeleton`, and `skeletonCam` names that camera). A camera whose file lists
+the same nodes in another order would otherwise have every keypoint drawn,
+tracked by name and SAVED under another node's name, because every consumer of
+a store — the materializer, `appendStore`, `describeStoreFrame`, member-2D
+re-adoption — reads point rows by POSITION. `open()` records each camera's own
+column order in `_nodeOrderByCam` and calls `_unifyNodeOrder()`, which, exactly
+like `_unifyTracks`, re-derives from each store's CURRENT order after every open
+(a camera that sorts earlier and opens later changes the target, and stores
+already re-ordered move again), permutes the point rows in place
+(`permuteStoreNodeRows`), clears the frame caches, and does NOT set
+`_storeEditedInMemory` (a re-open repeats it). A camera with different names
+is left as read and listed in `nodeOrderMismatches` (camName →
+`{missing, extra}`) for the folder loader to report. A re-ordered camera's
+materialized typed instances still carry its file's `Skeleton`; nothing in
+LUCID reads it. Covered by `tests/e2e/slp-nested-skeleton.mjs` (four open
+orders).
 
 `trackOccupancy` (phase-5) is populated per camera by `_computeSparseOccupancy(labels,
 nFrames, rowMap?)` — one O(nInstances) pass over the columnar store (`framesData.frame_idx` +
@@ -12023,7 +12131,8 @@ null for a camera this loader does not back. The playback eviction
 (`pose/lazy-residency.js`) proves a resident frame rebuildable against it;
 `tests/e2e/lazy-playback-eviction.mjs` pins it to the real materializer.
 
-**Imports.** `./track-union.js` (`unionTrackNames`);
+**Imports.** `./track-union.js` (`unionTrackNames`); `./slp-skeleton.js`
+(`nodeOrderRemap`, `permuteStoreNodeRows`);
 `window.SleapIO.readSlpStreaming` / `window.SleapIO.Track` (via the index.html
 bridge) and the local vendored `lib/h5wasm/h5wasm.iife.js` (passed as
 `h5wasmUrl`).
@@ -12110,7 +12219,17 @@ TRANSFERRED (zero-copy) in the `postMessage`. Only `parseSlpH5(file, null,
 other caller still gets `data.frames`. The equivalence test also requires the
 columnar result to expand back to exactly the nested `frames`.
 
-**Imports from project modules.** None.
+**Skeleton: `parseSlpSkeleton` (`loading/slp-skeleton.js`).** The skeleton
+parse used to be inline here and read `skeletons[0].nodes` / `.links` only, so
+a classic-SLEAP entry NESTED under `nx_graph` came back in the GLOBAL node
+order with no edges (every keypoint column mis-named; found on a real SLEAP
+1.2.9 camera that then named a whole session), and a skeleton's second and
+later symmetries — jsonpickled as `{"py/id": n}` references — came back as body
+edges. It now calls the shared, Node-testable parser, which fixes both and
+agrees with the vendored sleap-io.js reader. `data.skeleton` is unchanged in
+shape (`{name, nodes, edges}`, nodes in column order).
+
+**Imports from project modules.** `./slp-skeleton.js` (`parseSlpSkeleton`).
 
 **Imported by.** Spawned via
 `new Worker(new URL('loading/slp-import-worker.js?v=' + Date.now(), document.baseURI), {type: 'module'})`
