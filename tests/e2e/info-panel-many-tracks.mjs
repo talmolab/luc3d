@@ -180,7 +180,9 @@ try {
         'the rebuilt panel shows the swap', picked.shown);
 
     // A group row: "(none)" un-tracks the whole group.
-    const grpTrackSel = page.locator('#instanceGroupsTable tbody tr td:first-child select');
+    // The track dropdown is the FIRST select in the Track / Identity cell; the
+    // identity dropdown is stacked under it in the same cell.
+    const grpTrackSel = page.locator('#instanceGroupsTable tbody tr td:first-child select:first-of-type');
     const gIdx = await grpTrackSel.evaluateAll(els => els.findIndex(el => el.value === '3'));
     await grpTrackSel.nth(gIdx).focus();
     await grpTrackSel.nth(gIdx).selectOption('-1');

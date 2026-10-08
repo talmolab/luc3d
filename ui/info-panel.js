@@ -1349,6 +1349,13 @@ function updateStatusBarForFrame(meanError) {
  * @param {number} maxWidth - px.
  * @returns {HTMLSelectElement}
  */
+// Width of the Grouped Instances table's track and identity dropdowns. They
+// are STACKED in one "Track / Identity" column, so a row is two lines tall but
+// the table fits a 300 px info panel (the panel's default width) — side by
+// side at 90 px each, the table was 389 px and scrolled sideways. Both share
+// this width so they line up. Covered by tests/e2e/info-panel-grouped-table.mjs.
+const GROUP_SELECT_PX = 80;
+
 function buildTrackSelect(trackIdx, noneLabel, maxWidth) {
     const session = state.session;
     const tracks = session.tracks || [];
@@ -1739,7 +1746,8 @@ export function updateFrameInfo(frameIdx, instanceGroups) {
             var groupDisplayTrackIdx = (firstGroupInst && firstGroupInst.trackIdx != null && firstGroupInst.trackIdx >= 0)
                 ? firstGroupInst.trackIdx
                 : -1;
-            var trackSelect = buildTrackSelect(groupDisplayTrackIdx, '(none)', 90);
+            var trackSelect = buildTrackSelect(groupDisplayTrackIdx, '(none)', GROUP_SELECT_PX);
+            trackSelect.style.width = GROUP_SELECT_PX + 'px';
             (function (g, sel, curTrack) {
                 function applyTrack(newTrack) {
                     if (newTrack < 0) {
@@ -1801,10 +1809,11 @@ export function updateFrameInfo(frameIdx, instanceGroups) {
                 tdTrack.appendChild(dirtyDot);
             }
 
-            // Identity column (separate td)
-            const tdIdentity = document.createElement('td');
+            // Identity dropdown: stacked UNDER the track dropdown in the same
+            // "Track / Identity" cell (see GROUP_SELECT_PX).
             const idSelect = document.createElement('select');
-            idSelect.style.cssText = 'font-size:10px;background:var(--bg-tertiary);color:var(--text-primary);border:1px solid var(--border-color);border-radius:3px;padding:0 2px;max-width:90px;';
+            idSelect.style.cssText = 'font-size:10px;background:var(--bg-tertiary);color:var(--text-primary);border:1px solid var(--border-color);border-radius:3px;padding:0 2px;' +
+                'display:block;margin-top:3px;width:' + GROUP_SELECT_PX + 'px;max-width:' + GROUP_SELECT_PX + 'px;';
             const optNone = document.createElement('option');
             optNone.value = '-1';
             optNone.textContent = '(none)';
@@ -1882,7 +1891,7 @@ export function updateFrameInfo(frameIdx, instanceGroups) {
                 sel.addEventListener('mousedown', function (e) { e.stopPropagation(); });
                 sel.addEventListener('mouseup', function (e) { e.stopPropagation(); });
             })(group, idSelect);
-            tdIdentity.appendChild(idSelect);
+            tdTrack.appendChild(idSelect);
 
             // Views column
             const tdViews = document.createElement('td');
@@ -1932,7 +1941,6 @@ export function updateFrameInfo(frameIdx, instanceGroups) {
             unlinkBtn.style.cssText = 'background:none;border:none;color:var(--text-secondary);cursor:pointer;font-size:14px;padding:2px 4px;line-height:1;';
 
             tr.appendChild(tdTrack);
-            tr.appendChild(tdIdentity);
             tr.appendChild(tdViews);
             tr.appendChild(tdType);
             tr.appendChild(tdError);
@@ -1981,6 +1989,10 @@ export function updateFrameInfo(frameIdx, instanceGroups) {
                     rtr.classList.add('selected');
                 }
 
+                // The badge leads the row, in the Track / Identity column: the
+                // group's name is on the row just above, and the Type column is
+                // then only as wide as "Pred*" — which is what lets the table fit
+                // a 300 px panel. The name stays in the tooltip.
                 const rtdTrack = document.createElement('td');
                 const rdot = document.createElement('span');
                 rdot.className = 'track-indicator';
@@ -1988,23 +2000,19 @@ export function updateFrameInfo(frameIdx, instanceGroups) {
                 rdot.style.marginRight = '4px';
                 rtdTrack.appendChild(rdot);
                 var reprojTrackName = (group.identityId >= 0 && state.session.tracks[group.identityId]) || ('Group ' + i);
-                rtdTrack.appendChild(document.createTextNode(reprojTrackName));
-
-                // Holds the Identity column's place. Without it every later cell
-                // sat one column left: the view count under Identity, the badge
-                // under Views, the error under Type.
-                const rtdIdentity = document.createElement('td');
+                rtdTrack.title = 'Reprojection of ' + reprojTrackName;
 
                 const rtdViews = document.createElement('td');
                 rtdViews.className = 'mono';
                 rtdViews.textContent = group.reprojectedInstances.size + '/' + state.session.cameras.length;
                 rtdViews.title = Array.from(group.reprojectedInstances.keys()).join(', ');
 
-                const rtdType = document.createElement('td');
                 const rbadge = document.createElement('span');
                 rbadge.className = 'badge badge-reproj';
                 rbadge.textContent = 'Reprojection';
-                rtdType.appendChild(rbadge);
+                rtdTrack.appendChild(rbadge);
+
+                const rtdType = document.createElement('td');
 
                 const rtdError = document.createElement('td');
                 rtdError.className = 'mono reproj-error-col';
@@ -2017,7 +2025,6 @@ export function updateFrameInfo(frameIdx, instanceGroups) {
                 rtdEmpty.style.padding = '0';
 
                 rtr.appendChild(rtdTrack);
-                rtr.appendChild(rtdIdentity);
                 rtr.appendChild(rtdViews);
                 rtr.appendChild(rtdType);
                 rtr.appendChild(rtdError);
