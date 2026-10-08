@@ -28,22 +28,22 @@ import {
     state,
     videoController, interactionManager, viewport3d, timeline, paneManager,
     setVideoController, setPaneManager,
-} from './app-state.js?v=193474d6551c';
-import { FrameGroup, UnlinkedInstance, Camera, someValidPoint3d, pooledPoints3d } from '../pose/pose-data.js?v=193474d6551c';
-import { hydrateFrameMembers2d, releaseFrameMembers2d } from '../pose/lazy-residency.js?v=193474d6551c';
+} from './app-state.js?v=cec4e701a884';
+import { FrameGroup, UnlinkedInstance, Camera, someValidPoint3d, pooledPoints3d } from '../pose/pose-data.js?v=cec4e701a884';
+import { hydrateFrameMembers2d, releaseFrameMembers2d } from '../pose/lazy-residency.js?v=cec4e701a884';
 import {
     triangulateAndReproject, storeReprojectedInstances, getInstanceGroupsForFrame,
     sessionHasCalibration, resolveTriangulationMethod,
-} from '../pose/triangulation.js?v=193474d6551c';
+} from '../pose/triangulation.js?v=cec4e701a884';
 import {
     cellResizeObserver,
     createViewForVideoFile,
     rebuildVideoController,
     fitCanvasesToCells,
     updateTotalFrames,
-} from '../loading/session-loader.js?v=193474d6551c';
-import { OnDemandVideoDecoder } from '../loading/video.js?v=193474d6551c';
-import { setStatus, showLoading, hideLoading, quickSave, markDirty } from '../import-export/save-load.js?v=193474d6551c';
+} from '../loading/session-loader.js?v=cec4e701a884';
+import { OnDemandVideoDecoder } from '../loading/video.js?v=cec4e701a884';
+import { setStatus, showLoading, hideLoading, quickSave, markDirty } from '../import-export/save-load.js?v=cec4e701a884';
 import {
     CONTRAST_MIN, CONTRAST_MAX, clampContrast,
     BRIGHTNESS_MIN, BRIGHTNESS_MAX, clampBrightness,
@@ -51,26 +51,27 @@ import {
     buildVideoFilter, getSessionContrast, setSessionContrast,
     getSessionBrightness, setSessionBrightness,
     getSessionRotation, setSessionRotation,
-} from './video-filters.js?v=193474d6551c';
+} from './video-filters.js?v=cec4e701a884';
 // `clampRotation` moved to the dependency-free `video-filters.js` so the test
 // runners can bridge it; re-exported here because `ui/ui-wiring.js` (and the
 // module map) have always imported it from this module.
 export { clampRotation };
-import { drawAllOverlays, setReprojErrorVisible } from './rendering.js?v=193474d6551c';
+import { drawAllOverlays, setReprojErrorVisible } from './rendering.js?v=cec4e701a884';
 // `ui/ui-wiring.js` imports this module, so this is a cycle — hoist-safe
 // because the only read is inside the view strip's click handler, which cannot
 // run during module evaluation.
-import { setSoloView } from './ui-wiring.js?v=193474d6551c';
-import { updateInfoPanel, populateTimelineVisibility } from './info-panel.js?v=193474d6551c';
-import { refreshIdSwitchPanel } from './id-switch-modal.js?v=193474d6551c';
+import { setSoloView } from './ui-wiring.js?v=cec4e701a884';
+import { clearReadout, refreshReadoutTotals } from './frame-readout.js?v=cec4e701a884';
+import { updateInfoPanel, populateTimelineVisibility } from './info-panel.js?v=cec4e701a884';
+import { refreshIdSwitchPanel } from './id-switch-modal.js?v=cec4e701a884';
 // `autoAssignState` is a mutable binding tracked via ESM live binding.
 // The cycle (identity-assignment imports panelRenderers from here) is
 // hoist-safe because both reads are inside function bodies.
-import { autoAssignState } from './identity-assignment.js?v=193474d6551c';
+import { autoAssignState } from './identity-assignment.js?v=cec4e701a884';
 
 // Pass 3i-3: setup3DViewport moved to pose/initialization.js.
-import { setup3DViewport } from '../pose/initialization.js?v=193474d6551c';
-import { getLoadingProgressModal } from './loading-progress-modal.js?v=193474d6551c';
+import { setup3DViewport } from '../pose/initialization.js?v=cec4e701a884';
+import { getLoadingProgressModal } from './loading-progress-modal.js?v=cec4e701a884';
 
 // ============================================
 // Dockview Pane Manager
@@ -1655,8 +1656,7 @@ export function removeSession(idx) {
         }
 
         // Reset frame counter display
-        document.getElementById('currentFrame').textContent = '0';
-        document.getElementById('totalFrames').textContent = '0';
+        clearReadout();
 
         // Show dock empty message
         var emptyMsg = document.getElementById('videoDockEmpty');
@@ -2148,7 +2148,7 @@ export async function switchSession(newIdx) {
     } else if (newSession.totalFrames > 0) {
         state.totalFrames = newSession.totalFrames;
         state.fps = newSession.fps || 30;
-        document.getElementById('totalFrames').textContent = state.totalFrames;
+        refreshReadoutTotals();
         document.getElementById('fpsDisplay').textContent = state.fps.toFixed(1) + ' fps';
     }
 
