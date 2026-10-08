@@ -5,8 +5,8 @@
  * This worker handles all HDF5 operations, keeping the main thread free for rendering.
  */
 
-import * as h5wasm from '../lib/h5wasm/hdf5_hl.js?v=f377f29bde87';   // local vendored 0.10.3 ESM
-import { SLPPackageReader } from './slp-package-reader.js?v=f377f29bde87';
+import * as h5wasm from '../lib/h5wasm/hdf5_hl.js?v=0249513dd31f';   // local vendored 0.10.3 ESM
+import { SLPPackageReader } from './slp-package-reader.js?v=0249513dd31f';
 
 let h5wasmReady = false;
 let reader = null;

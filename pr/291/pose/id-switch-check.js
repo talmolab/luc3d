@@ -43,7 +43,7 @@
  * Depends on: pose-data.js (readPoint3d). Pure — no DOM, no app state.
  */
 
-import { readPoint3d } from './pose-data.js?v=f377f29bde87';
+import { readPoint3d } from './pose-data.js?v=0249513dd31f';
 
 /** Bone (node-pair) lengths used as the size signature. Pairs whose nodes the
  *  session skeleton lacks are skipped. */
@@ -407,14 +407,14 @@ function finish(grid, LP, present, weight, o, extra) {
                  nameA: idents[e.a].name, nameB: idents[e.b].name, score: S };
     }).sort(function (x, y) { return x.frame - y.frame; });
     var changes = markChangePoints(scored, o);
-    var flags = scored.filter(function (s) { return s.flagged; });
-    // Candidate moments are tested separately and only ADD change points: encounters score exactly as without them.
+    // Candidate moments are tested separately: encounters score and flag exactly as without them, and only
+    // which change points are listed changes (a moment's row can take over an encounter's, momentChangePoints).
     var moments = o.moments && o.moments.length ? testMoments(grid, LP, present, weight, o) : [];
-    if (moments.length) {
-        momentChangePoints(moments, flags.concat(changes), o).forEach(function (m) { (m.kind === 'end' ? changes : flags).push(m); });
-        flags.sort(function (x, y) { return x.frame - y.frame; });
-        changes.sort(function (x, y) { return x.frame - y.frame; });
-    }
+    var added = moments.length ? momentChangePoints(moments, scored, changes, o) : [];
+    var byFrame = function (x, y) { return x.frame - y.frame; };
+    var flags = scored.filter(function (s) { return s.flagged; })
+        .concat(added.filter(function (m) { return m.kind !== 'end'; })).sort(byFrame);
+    changes = changes.concat(added.filter(function (m) { return m.kind === 'end'; })).sort(byFrame);
     return Object.assign({
         ok: true, flags: flags, changes: changes, encounters: scored, moments: moments,
         identities: idents.map(function (id) { return id.name; }),
@@ -480,42 +480,117 @@ function testMoments(grid, LP, present, weight, o) {
 }
 
 /**
- * The tested moments that become change points: scored below `momentThreshold`,
- * and not within 3 s of one of the pair's encounter change points (`existing`),
- * which stands. A moment whose AFTER side disagrees is an 'onset' (the stretch
- * after it looks swapped; `switchBackAt` = the pair's next change point, or null
- * at the session's end); one whose BEFORE side disagrees is an 'end' (the stretch
- * before it; `switchedAt` = the pair's previous change point, or null at the
- * start). `followOf` as for encounters (markChangePoints).
+ * The tested moments that become change points, merged with the encounters'
+ * (mutates `scored` and `changes`; returns the moment change points to add).
+ *
+ * A moment scoring below `momentThreshold` is a change point unless one of the
+ * pair's encounter change points is within 3 s (that one stands): an 'onset'
+ * when its AFTER side disagrees (the stretch after it looks swapped), an 'end'
+ * when its BEFORE side does. One swapped stretch keeps ONE row, and so one fix:
+ *  - An onset absorbs the pair's flagged run it starts: the run's encounters
+ *    after it (continuing while flagged or below `continueBelow`, as a run
+ *    does), and the run's first encounter just BEFORE it, whose evidence window
+ *    runs across the moment (the reason moments exist). That run's onset row
+ *    becomes a repeat; `switchBackAt` = the first encounter after it that reads
+ *    right again (whose 'end' row, if any, now pairs with the moment), else the
+ *    pair's next moment, else null (to the session's end).
+ *  - An 'end' closes the flagged run before it: `switchedAt` = the run's onset
+ *    row, whose `switchBackAt` becomes the moment, and the run's own 'end' row
+ *    is dropped. With no run before it, `switchedAt` = the pair's previous
+ *    encounter (labels read right after it), else its previous moment, else
+ *    null (from the session's start).
+ * Encounters scoring exactly 0 (no samples on either side) are skipped: they
+ * neither continue nor end a stretch, and an 'end' row on one inside the
+ * stretch is dropped.
+ * A moment contradicting a run is skipped — an onset after two of the run's
+ * encounters, an 'end' with the run still flagged after it — so no two rows'
+ * fixes overlap. Follow-ons (`followOf`) are then re-linked over every row.
+ * Exported, like markChangePoints, so it can be tested on hand-made scores.
+ * @param {Array} moments  tested moments (testMoments), sorted by frame
+ * @param {Array} scored   encounters, sorted by frame, after markChangePoints
+ * @param {Array} changes  markChangePoints' 'end' change points
+ * @param {object} o       momentThreshold, continueBelow, followSeconds, fps
  */
-function momentChangePoints(moments, existing, o) {
+export function momentChangePoints(moments, scored, changes, o) {
     var near = 3 * o.fps, out = [];
     var samePair = function (x, y) { return x.identityA === y.identityA && x.identityB === y.identityB; };
+    var rows = scored.filter(function (x) { return x.flagged && !x.continues; }).concat(changes);
+    // The pair's encounters that carry evidence, by frame (scored is sorted). A score of exactly 0 had no
+    // samples on either side: it says nothing about the labels, so a stretch runs through it.
+    var pairOf = new Map();
+    var encounters = function (m) {
+        var key = m.identityA + ':' + m.identityB;
+        if (!pairOf.has(key)) pairOf.set(key, scored.filter(function (x) { return samePair(x, m) && (x.flagged || x.score !== 0); }));
+        return pairOf.get(key);
+    };
+    var dropEnds = function (m, lo, hi) {     // the pair's encounter 'end' rows inside a merged stretch (lo, hi]
+        for (var c = changes.length - 1; c >= 0; c--) if (samePair(changes[c], m) && changes[c].frame > lo && changes[c].frame <= hi) changes.splice(c, 1);
+    };
+    var after = function (L, f) { var i = 0; while (i < L.length && L[i].frame <= f) i++; return i; };
     moments.forEach(function (m) {
         if (!(m.score < o.momentThreshold)) return;
-        if (existing.some(function (x) { return !x.continues && samePair(x, m) && Math.abs(x.frame - m.frame) < near; })) return;
+        if (rows.some(function (x) { return samePair(x, m) && Math.abs(x.frame - m.frame) < near; })) return;
+        var L = encounters(m), i = after(L, m.frame), prev = L[i - 1], next = L[i];
+        if (m.side === 'after' ? prev && prev.flagged && i >= 2 && L[i - 2].flagged
+            : next && next.flagged && (prev ? prev.flagged : next.continues)) return;
         out.push(Object.assign({}, m, { flagged: m.side === 'after', continues: false, kind: m.side === 'after' ? 'onset' : 'end' }));
     });
-    var all = existing.filter(function (x) { return !x.continues; }).concat(out).sort(function (x, y) { return x.frame - y.frame; });
+    var demote = function (e) {               // an encounter row the moment's row takes over: now a repeat
+        if (e.kind !== 'onset' || e.continues) return;
+        e.continues = true; delete e.kind; delete e.switchBackAt; delete e.followOf;
+    };
     out.forEach(function (m) {
-        var pair = all.filter(function (x) { return x !== m && samePair(x, m); });
+        var L = encounters(m), i = after(L, m.frame);
+        var mine = out.filter(function (x) { return x !== m && samePair(x, m); });
         if (m.kind === 'onset') {
-            var nx = pair.filter(function (x) { return x.frame > m.frame; })[0];
-            m.switchBackAt = nx ? nx.frame : null;
+            var lim = mine.filter(function (x) { return x.frame > m.frame; })[0], stop = null;
+            var lo0 = mine.filter(function (x) { return x.frame < m.frame; }).pop();
+            if (L[i - 1] && L[i - 1].flagged && !(lo0 && lo0.frame >= L[i - 1].frame)) demote(L[i - 1]);
+            for (var j = i; j < L.length && !(lim && L[j].frame >= lim.frame); j++) {
+                if (L[j].flagged || L[j].score < o.continueBelow) { demote(L[j]); continue; }
+                stop = L[j]; break;
+            }
+            m.switchBackAt = stop ? stop.frame : lim ? lim.frame : null;
+            dropEnds(m, m.frame, (stop ? stop.frame : lim ? lim.frame : Infinity) - 1);
+            if (stop) changes.forEach(function (c) { if (samePair(c, m) && c.frame === stop.frame) c.switchedAt = m.frame; });
         } else {
-            var pv = pair.filter(function (x) { return x.frame < m.frame; }).pop();
-            m.switchedAt = pv ? pv.frame : null;
-        }
-        for (var i = all.length - 1; i >= 0; i--) {
-            var p = all[i];
-            if (p === m || p.frame >= m.frame) continue;
-            if (m.frame - p.frame > o.followSeconds * o.fps) break;
-            if (p.followOf != null) continue;
-            var shared = [p.identityA, p.identityB].filter(function (id) { return id === m.identityA || id === m.identityB; });
-            if (shared.length === 1) { m.followOf = p.frame; break; }
+            var lo = mine.filter(function (x) { return x.frame < m.frame; }).pop(), first = null, k = i - 1;
+            for (; k >= 0 && !(lo && L[k].frame <= lo.frame) && L[k].flagged; k--) first = L[k];
+            var before = k >= 0 && !(lo && L[k].frame <= lo.frame) ? L[k] : null;
+            if (first && first.kind === 'onset' && !first.continues) { m.switchedAt = first.frame; first.switchBackAt = m.frame; }
+            else m.switchedAt = before ? before.frame : lo ? lo.frame : null;
+            if (first) {
+                for (var r = k + 1; r < i; r++) if (L[r] !== first) demote(L[r]);   // later runs inside the stretch
+                dropEnds(m, first.frame, L[i] ? L[i].frame : Infinity);
+            }
         }
     });
+    if (out.length) {
+        var primary = scored.filter(function (x) { return x.kind === 'onset' && !x.continues; }).concat(changes, out);
+        primary.forEach(function (x) { delete x.followOf; });
+        linkFollowOns(primary.sort(function (x, y) { return x.frame - y.frame; }), o);
+    }
     return out;
+}
+
+/**
+ * Follow-ons: after a switch, each swapped identity carries the wrong label into
+ * its encounters with OTHER animals too, so those surface as change points of
+ * their own. Link a change point to an earlier one (of a different pair) that
+ * shares an identity and lies within `followSeconds` (`followOf`).
+ * @param {Array} primary  change points sorted by frame
+ */
+function linkFollowOns(primary, o) {
+    for (var pi = 0; pi < primary.length; pi++) {
+        var cur = primary[pi];
+        for (var pj = pi - 1; pj >= 0; pj--) {
+            var prev = primary[pj];
+            if (cur.frame - prev.frame > o.followSeconds * o.fps) break;
+            if (prev.followOf != null) continue;
+            var sameIds = [prev.identityA, prev.identityB].filter(function (id) { return id === cur.identityA || id === cur.identityB; });
+            if (sameIds.length === 1) { cur.followOf = prev.frame; break; }
+        }
+    }
 }
 
 /**
@@ -567,21 +642,8 @@ export function markChangePoints(scored, o) {
         }
     });
     changes.sort(function (x, y) { return x.frame - y.frame; });
-    // Follow-ons: after a switch, each swapped identity carries the wrong label into its encounters
-    // with OTHER animals too, so those surface as change points of their own. Link a change point to
-    // an earlier one (of a different pair) that shares an identity and lies within `followSeconds`.
-    var primary = scored.filter(function (x) { return x.kind === 'onset'; }).concat(changes)
-        .sort(function (x, y) { return x.frame - y.frame; });
-    for (var pi = 0; pi < primary.length; pi++) {
-        var cur = primary[pi];
-        for (var pj = pi - 1; pj >= 0; pj--) {
-            var prev = primary[pj];
-            if (cur.frame - prev.frame > o.followSeconds * o.fps) break;
-            if (prev.followOf != null) continue;
-            var sameIds = [prev.identityA, prev.identityB].filter(function (id) { return id === cur.identityA || id === cur.identityB; });
-            if (sameIds.length === 1) { cur.followOf = prev.frame; break; }
-        }
-    }
+    linkFollowOns(scored.filter(function (x) { return x.kind === 'onset'; }).concat(changes)
+        .sort(function (x, y) { return x.frame - y.frame; }), o);
     return changes;
 }
 

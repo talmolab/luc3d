@@ -166,7 +166,7 @@ await switchCase(7, 'end');
 group('Moments — a switch AWAY from every encounter is found at the moment it happened');
 {
     // animals 0 and 1 exchange labels at home, 400 mm apart, between their encounters 18 and 21
-    const FPS = 60, sig = r => JSON.stringify(r.encounters.map(e => [e.frame, e.nameA, e.nameB, e.score, !!e.flagged, e.kind || '']));
+    const FPS = 60, sig = r => JSON.stringify(r.encounters.map(e => [e.frame, e.nameA, e.nameB, e.score, !!e.flagged]));
     const isPair01 = e => [e.nameA, e.nameB].sort().join() === 'id_0,id_1';
     const late = 300 + 18 * 260 + 160, lateFrame = Math.round(late / 15 * FPS);
     const { session, events } = buildSession(null, FPS, SCALES, { swapAtU: late, swapPair: [0, 1] });
@@ -179,10 +179,13 @@ group('Moments — a switch AWAY from every encounter is found at the moment it 
     const moment = { frame: lateFrame, startFrame: lateFrame - 10, identityA: ids[0].id, identityB: ids[1].id, cues: ['tracklet'] };
     const decoys = [0.3, 0.55].map(q => ({ frame: Math.round(q * lateFrame), startFrame: Math.round(q * lateFrame), identityA: ids[0].id, identityB: ids[2].id, cues: ['ambiguity'] }));
     const withM = await SC.checkSizeSwitches(session, { fps: FPS, moments: [moment].concat(decoys) });
-    eq(sig(withM), sig(plain), 'moments only ADD change points: every encounter scores and flags exactly as without them');
+    eq(sig(withM), sig(plain), 'every encounter scores and flags exactly as without moments');
     const mrow = withM.flags.concat(withM.changes).filter(x => x.look);
     ok(mrow.length === 1 && Math.abs(mrow[0].frame - lateFrame) <= 4 && mrow[0].kind === 'onset' && mrow[0].side === 'after',
         `the switch is a change point AT the moment, an onset (the swapped stretch is after it): ${JSON.stringify(mrow.map(x => [x.frame, x.kind, Math.round(x.score)]))}`);
+    const rows01 = withM.flags.filter(f => !f.continues).concat(withM.changes).filter(isPair01);
+    ok(rows01.length === 1 && rows01[0] === mrow[0] && withM.encounters.find(e => e.frame === p0[0].frame).continues,
+        `ONE row for the swap: the encounter before it, whose window ran across it, is now a repeat of the moment's row (rows ${JSON.stringify(rows01.map(x => [x.frame, x.look ? 'moment' : 'encounter']))})`);
     eq(JSON.stringify(mrow[0] && mrow[0].look), '["tracklet"]', 'it carries the moment\'s cues');
     ok(mrow[0] && mrow[0].switchBackAt === null, '…and its swapped stretch runs to the end of the session (nothing switches it back)');
     eq(withM.moments.length, 3, 'all three moments were tested');
@@ -195,6 +198,9 @@ group('Moments — a switch AWAY from every encounter is found at the moment it 
     const er = eM.flags.concat(eM.changes).filter(x => x.look);
     ok(er.length === 1 && er[0].kind === 'end' && er[0].side === 'before' && er[0].switchedAt === null && eM.changes.includes(er[0]),
         `a majority swap: the moment is an 'end' (fix the stretch before it, from the session start): ${JSON.stringify(er.map(x => [x.frame, x.kind, x.switchedAt]))}`);
+    const eRows = eM.flags.filter(f => !f.continues).concat(eM.changes).filter(isPair01);
+    ok(eRows.length === 1 && eRows[0] === er[0],
+        `…and the only row of it: the encounter 'end' after the moment is dropped (rows ${JSON.stringify(eRows.map(x => [x.frame, x.kind, x.look ? 'moment' : 'encounter']))})`);
 
     // a moment at one of the pair's encounter change points yields to it (one row, the encounter's)
     const { session: S3, encounterEnds } = buildSession(19);

@@ -6,27 +6,27 @@
 // - updateFrameCounters: status-bar frame counters (labeled / triangulated / instances),
 //   whole-project on a lazy project too (counting logic in ui/frame-counters.js).
 
-import { state, interactionManager, timeline } from './app-state.js?v=f377f29bde87';
-import { points3dNodeCount } from '../pose/pose-data.js?v=f377f29bde87';
+import { state, interactionManager, timeline } from './app-state.js?v=0249513dd31f';
+import { points3dNodeCount } from '../pose/pose-data.js?v=0249513dd31f';
 import {
     ensureLazyFrameData, getInstanceGroupsForFrame,
     triangulateAndReproject, storeReprojectedInstances,
-} from '../pose/triangulation.js?v=f377f29bde87';
-import { drawFrameOverlays } from './overlays.js?v=f377f29bde87';
-import { syncViewLegends } from './view-legend.js?v=f377f29bde87';
-import { isCameraTracked } from './settings.js?v=f377f29bde87';
+} from '../pose/triangulation.js?v=0249513dd31f';
+import { drawFrameOverlays } from './overlays.js?v=0249513dd31f';
+import { syncViewLegends } from './view-legend.js?v=0249513dd31f';
+import { isCameraTracked } from './settings.js?v=0249513dd31f';
 // Plane placements draw on the same overlay canvas, so they must run AFTER
 // drawFrameOverlays (which opens with a clearRect). Circular import — safe
 // because the call site is inside drawAllOverlays' body.
-import { drawPlaneOverlays, applyPlaneModeToolbarLock } from './plane-definition.js?v=f377f29bde87';
+import { drawPlaneOverlays, applyPlaneModeToolbarLock } from './plane-definition.js?v=0249513dd31f';
 
 // Pass 3f: editGroupState + finishEditGroup moved to ui/identity-assignment.js.
-import { editGroupState, finishEditGroup } from './identity-assignment.js?v=f377f29bde87';
-import { updateFrameInfo } from './info-panel.js?v=f377f29bde87';
+import { editGroupState, finishEditGroup } from './identity-assignment.js?v=0249513dd31f';
+import { updateFrameInfo } from './info-panel.js?v=0249513dd31f';
 import {
     computeFrameCounterBaseline, computeLazyCameraBaseline, createFrameCounterBaselineBuilder,
     countFrameCounters, nonResidentCameraCounts,
-} from './frame-counters.js?v=f377f29bde87';
+} from './frame-counters.js?v=0249513dd31f';
 
 // ============================================
 // Reproj/Error visibility
