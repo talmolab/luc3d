@@ -2602,6 +2602,21 @@ merge runs across real switch-backs (15 caught). The brightness check keeps 0:
 its encounter scores are mostly noise, and +800 cost it a swap. The size check
 and multi-camera image check are unchanged (not measured).
 
+**Empty encounters are no evidence.** Every check on one camera also runs with
+`skipEmpty` (`singleCameraCheckOptions`): runs ignore encounters scoring exactly
+0, which had no samples on either side — 44.5% of the image check's encounters
+on the 35 SLAP videos (2 samples a second; one camera's animals are seldom alone
+for long), 24.4% of brightness's. Counted as "reads right", they started a
+swapped stretch at the first encounter WITH evidence: a Fix from 0:04.2 for a
+swap from 0:00, or from 0:25.9 when the pair's six encounters before it were all
+empty. Skipping them: image rows 78 -> 68 (false 51 -> 42), 18 of 59 swaps caught
+either way, rows whose Fix has a wrong far edge 4 -> 2, rows fully undone (with
+the boundary set by the user) 9 -> 11; brightness rows 21 -> 18 (false 7 -> 4),
+14 caught either way. Body size on one camera is unmeasured (15 Hz, rarely
+empty). The two far edges left are chained swaps — a pair's stretch starting
+where ANOTHER pair swapped, or a three-animal rotation — which one pair's rows
+cannot see.
+
 **Key exports.** `singleCameraName(session)` (the camera, or null);
 `singleCameraTrackerConfig(numAnimals, {windowSize, oksStddev, connectBreaks})`;
 `trackSingleCamera(session, cfg, {onProgress, signal, fps, look})` ->
@@ -2610,7 +2625,9 @@ out, inputTracks, ambiguous, look, fps)`; `CANDIDATE_DEFAULTS` (`ambiguityMargin
 0.1, `trackletGapFrames` 5, `clusterSeconds` 3); `singleCameraCheckSession(session)`
 -> stand-in | null | `{fail}`; `swapSingleCameraIdentities(session, from, to, idA, idB)`
 -> `{frames, tracks: boolean}` | null; `singleCameraImageContinueBelow(threshold)`
--> |threshold| (above); `SINGLE_CAMERA_LAZY_REASON`.
+-> |threshold| (above); `singleCameraCheckOptions(cue, threshold)` -> the options
+every check runs with on one camera (`{skipEmpty: true}`, plus `continueBelow`
+for the image check); `SINGLE_CAMERA_LAZY_REASON`.
 
 **Imports from project modules.** `pose/sleap-tracker.js`.
 
@@ -3630,7 +3647,7 @@ headlessly (the image and brightness checks with any vector provider).
 
 **Key exports.** `checkSizeSwitches(session, opts)` and
 `checkImageSwitches(session, opts)` and `checkBrightnessSwitches(session, opts)` (async) -> `{ok, flags, changes, encounters, moments,
-identities, sampledFrames, closeDistance, threshold, continueBelow, fps, step, sampleHz, cue}`
+identities, sampledFrames, closeDistance, threshold, continueBelow, skipEmpty, fps, step, sampleHz, cue}`
 (+ `bones` for size; + `imageHz`, `crops`, `cameras` for images) or
 `{ok:false, reason}`; `markChangePoints(scored, o)` (the change-point step,
 exported so calibration can re-apply thresholds to the same scores);
@@ -3680,7 +3697,12 @@ stretch, which is what fixing it swaps: an onset's `switchBackAt` (the pair's
 encounter after the run — for a lone middle flag that encounter is no change
 point of its own — or null when the run reaches the end) and an 'end''s
 `switchedAt` (the run's first encounter, or null when the run starts the
-session). A change point within `followSeconds` after another of a different
+session). With `skipEmpty` (on for single-camera sessions, see
+`pose/single-camera-tracking.js` `singleCameraCheckOptions`) runs are found
+among the encounters that had samples: one scoring exactly 0 had none on either
+side, says nothing about the labels, and is a repeat when inside a run's
+stretch, so a run with only empty encounters before it starts the session. A
+change point within `followSeconds` after another of a different
 pair sharing an identity is its follow-on (`followOf`). A candidate moment's
 change point is taken as if it came 3 s earlier, so other pairs' encounter rows
 up to 3 s before it follow IT (`linkFollowOns`): the moment was tested on both
@@ -8978,7 +9000,8 @@ usual. Single-camera Track All runs the coat-brightness check automatically, and
 the image check when `autoImageSwitchCheck` is on — never body size, which from
 one view is not a usable cue (see `pose/single-camera-tracking.js`). The image
 check there ends a run of flagged encounters only above +|imageCheckThreshold|
-(`continueBelow`, from `singleCameraImageContinueBelow`; the result carries it).
+(`continueBelow`), and every check there skips encounters with no samples
+(`skipEmpty`) — both from `singleCameraCheckOptions`; results carry both.
 On a real 10-min single-camera SLAP video in headless Chrome the image check
 took 32 s (one view, 3 mice, 2 crops/s).
 
@@ -9088,7 +9111,7 @@ rename them wrongly.
 `ui/loading-overlay.js` (`showLoadingProgress`, `hideLoading`, `yieldToPaint`),
 `ui/settings.js` (`getTrackingThreshold`), `pose/id-switch-check.js`,
 `pose/single-camera-tracking.js` (`singleCameraName`, `singleCameraCheckSession`,
-`swapSingleCameraIdentities`, `singleCameraImageContinueBelow`),
+`swapSingleCameraIdentities`, `singleCameraCheckOptions`),
 `ui/image-embedder.js` (`hasWebGPU`, `createImageEmbedder`),
 `ui/id-switch-review.js` (row keys, change-point helpers, `linkIdSwitchResults`,
 `idSwitchFixPlan`, `idSwitchFixFor`, `idSwitchRenameForFix`),

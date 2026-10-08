@@ -710,6 +710,12 @@ the animal count, connect single breaks). Rules:
   frame, progress bar, the range where a Fix takes the current frame as its
   boundary — is ±2 s, not ±1 s (`idSwitchLeadSeconds`), because one view places
   the close spell less exactly. Multi-camera keeps 1 s.
+- **On one camera an encounter scoring exactly 0 is no evidence** (`skipEmpty`,
+  `singleCameraCheckOptions`). It had no samples on either side — 44.5% of the
+  image check's encounters on the SLAP videos — and counting it as "reads
+  right" started swapped stretches late (a Fix from 0:04.2 for a swap from
+  0:00). Skipping them: false rows 51 -> 42 with the same swaps caught, wrong
+  far edges 4 -> 2. Multi-camera checks still count them (not measured).
 - **Eager only.** A lazy (> 150 MB) single-camera project is refused with a
   reason, never tracked from its resident window — the resident-only bug class.
 

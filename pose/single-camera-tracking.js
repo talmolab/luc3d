@@ -254,6 +254,33 @@ export function singleCameraImageContinueBelow(threshold) {
 }
 
 /**
+ * The options every ID-switch check runs with on a single-camera session, on
+ * top of its own (`ui/id-switch-modal.js` merges them in):
+ *  - `skipEmpty`: runs of flagged encounters ignore encounters scoring exactly 0.
+ *    Those had no samples on either side (the image check reads 2 per second, and
+ *    one camera's animals are seldom alone for long), so they say nothing about the
+ *    labels — yet counting them as "reads right" started a swapped stretch at the
+ *    first encounter WITH evidence: a Fix from 0:04.2 for a swap running from
+ *    0:00, or from 0:25.9 when all six of the pair's encounters before it were
+ *    empty. On the 35 proofread SLAP videos 44.5% of the image check's encounters
+ *    (24.4% of brightness's) score 0; skipping them: image rows 78 -> 68 (false
+ *    51 -> 42) with the same 18 of 59 swaps caught, rows whose Fix has a wrong far
+ *    edge 4 -> 2, and swaps fully undone 9 -> 11 rows (with the boundary set by
+ *    the user); brightness rows 21 -> 18 (false 7 -> 4), 14 caught either way.
+ *    Not measured for body size on one camera (sampled at 15 Hz, so rarely empty).
+ *  - image check only: `continueBelow` = `singleCameraImageContinueBelow(threshold)`.
+ * Multi-camera checks run without either (not measured there).
+ * @param {'size'|'image'|'brightness'} cue
+ * @param {number} threshold  that check's threshold
+ * @returns {{skipEmpty: boolean, continueBelow?: number}}
+ */
+export function singleCameraCheckOptions(cue, threshold) {
+    var o = { skipEmpty: true };
+    if (cue === 'image') o.continueBelow = singleCameraImageContinueBelow(threshold);
+    return o;
+}
+
+/**
  * A read-only stand-in session the ID-switch checks (and the image embedder)
  * can read for a single-camera session: one InstanceGroup-shaped object per
  * identified detection, with its 2D as `points3d` (x, y, 0) and the detection

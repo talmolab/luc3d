@@ -34,7 +34,7 @@ import { setStatus, markDirty } from '../import-export/save-load.js';
 import { showLoadingProgress, hideLoading, yieldToPaint } from './loading-overlay.js';
 import { getTrackingThreshold } from './settings.js';
 import { checkSizeSwitches, checkImageSwitches, checkBrightnessSwitches } from '../pose/id-switch-check.js';
-import { singleCameraName, singleCameraCheckSession, swapSingleCameraIdentities, singleCameraImageContinueBelow } from '../pose/single-camera-tracking.js';
+import { singleCameraName, singleCameraCheckSession, swapSingleCameraIdentities, singleCameraCheckOptions } from '../pose/single-camera-tracking.js';
 import { hasWebGPU, createImageEmbedder, IMAGE_MODEL_MB, formatEmbedTiming } from './image-embedder.js';
 import { createBrightnessSampler } from './brightness-sampler.js';
 import { idSwitchRowKey as rowKey, idSwitchPrimary as primaryOf, idSwitchMarkers as markersOf, idSwitchOnsets as countOnsets,
@@ -173,16 +173,18 @@ function openProgressDialog(title) {
 // Running the checks
 // ---------------------------------------------------------------------------
 
-async function runSize(session, rate, moments) {
+async function runSize(session, rate, moments, single) {
     var label = 'Checking ID switches (body size)';
     showLoadingProgress(label, 0, 1);
     await yieldToPaint();
     try {
-        return await checkSizeSwitches(session, {
+        var opts = {
             fps: rate.fps,
             moments: moments,
             onProgress: async function (done, total) { showLoadingProgress(label, done, total); await yieldToPaint(); },
-        });
+        };
+        if (single) Object.assign(opts, singleCameraCheckOptions('size'));    // see pose/single-camera-tracking.js
+        return await checkSizeSwitches(session, opts);
     } finally { hideLoading(); }
 }
 
@@ -220,8 +222,8 @@ async function runImage(session, rate, inject, moments, single) {
                 await yieldToPaint();
             },
         };
-        // On one camera a run of flagged encounters ends only at a clearly positive one (see the helper).
-        if (single) opts.continueBelow = singleCameraImageContinueBelow(threshold);
+        // On one camera: empty encounters are no evidence, and a run ends only at a clearly positive one.
+        if (single) Object.assign(opts, singleCameraCheckOptions('image', threshold));
         var res = await checkImageSwitches(session, opts);
         if (res && embedder.backend) res.model = embedder.backend();   // after releaseFrames: the final word
         if (res && embedder.stats) {
@@ -240,7 +242,7 @@ async function runImage(session, rate, inject, moments, single) {
  * ui/brightness-sampler.js): decodes the videos like the image check, but needs no model and no GPU.
  * Runs under the same cancellable progress dialog.
  */
-async function runBrightness(session, rate, inject, moments) {
+async function runBrightness(session, rate, inject, moments, single) {
     inject = inject || {};
     var sampler;
     try { sampler = (inject.createBrightnessSampler || createBrightnessSampler)(session, {}); }
@@ -248,7 +250,7 @@ async function runBrightness(session, rate, inject, moments) {
     var prog = openProgressDialog('Checking ID switches (coat brightness)');
     var t0 = performance.now();
     try {
-        return await checkBrightnessSwitches(session, {
+        var opts = {
             fps: rate.fps,
             imageHz: getTrackingThreshold('brightnessCheckHz') || 4,
             threshold: getTrackingThreshold('brightnessCheckThreshold'),
@@ -269,7 +271,9 @@ async function runBrightness(session, rate, inject, moments) {
                 }
                 await yieldToPaint();
             },
-        });
+        };
+        if (single) Object.assign(opts, singleCameraCheckOptions('brightness', opts.threshold));
+        return await checkBrightnessSwitches(session, opts);
     } catch (e) {
         if (e && e.name === 'AbortError') return { ok: false, reason: 'cancelled', cancelled: true };
         throw e;
@@ -322,9 +326,9 @@ export async function runIdSwitchChecks(opts) {
     for (var cue of cues) {
         var res;
         try {
-            res = cue === 'size' ? await runSize(target, rate, moments)
+            res = cue === 'size' ? await runSize(target, rate, moments, single)
                 : cue === 'image' ? await runImage(target, rate, opts.inject, moments, single)
-                : await runBrightness(target, rate, opts.inject, moments);
+                : await runBrightness(target, rate, opts.inject, moments, single);
         }
         catch (e) {
             console.error('[id-switch-check:' + cue + ']', e);

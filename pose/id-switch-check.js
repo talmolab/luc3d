@@ -68,6 +68,8 @@ export const SIZE_CHECK_DEFAULTS = {
     continueBelow: 0,   // ...and continues while the pair's next encounters still score below this
                         // (hysteresis: a persisting switch keeps scoring negative, if not always < -50)
     followSeconds: 60,  // a change point this soon after one sharing an identity is its follow-on
+    skipEmpty: false,   // runs ignore encounters scoring exactly 0 (no samples on either side, so no evidence);
+                        // on for single-camera sessions (pose/single-camera-tracking.js `singleCameraCheckOptions`)
     minTrackedSeconds: 60, // refuse with less tracked data than this: the model can't be learned reliably
     sepFactor: 0.65,    // "close" = centroids nearer than sepFactor x median body extent
     sepDistance: null,  // override the close distance directly (world units)
@@ -418,7 +420,7 @@ function finish(grid, LP, present, weight, o, extra) {
     return Object.assign({
         ok: true, flags: flags, changes: changes, encounters: scored, moments: moments,
         identities: idents.map(function (id) { return id.name; }),
-        sampledFrames: T, closeDistance: grid.sep, threshold: o.threshold, continueBelow: o.continueBelow,
+        sampledFrames: T, closeDistance: grid.sep, threshold: o.threshold, continueBelow: o.continueBelow, skipEmpty: !!o.skipEmpty,
         fps: o.fps, step: grid.step, sampleHz: grid.hz,
     }, extra || {});
 }
@@ -617,7 +619,7 @@ function linkFollowOns(primary, o) {
  * Mark change points on scored encounters (mutates them: `flagged`,
  * `continues`, `kind`, `followOf`) and return the `kind: 'end'` change points.
  * Exported so the threshold can be re-applied to the same scores (calibration)
- * without re-running a check. `o` needs threshold, continueBelow, followSeconds, fps.
+ * without re-running a check. `o` needs threshold, continueBelow, followSeconds, fps (and `skipEmpty`, optional).
  * @param {Array} scored  encounters sorted by frame
  */
 export function markChangePoints(scored, o) {
@@ -639,7 +641,10 @@ export function markChangePoints(scored, o) {
         if (!byPair.has(key)) byPair.set(key, []);
         byPair.get(key).push(sc);
     });
-    byPair.forEach(function (L) {
+    byPair.forEach(function (L0) {
+        // `skipEmpty`: an encounter scoring exactly 0 had no samples on either side, so it says nothing about
+        // the labels. Runs are then found among the others, and a 0 inside a run's stretch is one of its repeats.
+        var L = o.skipEmpty ? L0.filter(function (sc) { return sc.score !== 0; }) : L0;
         // hysteresis: a run starts below `threshold` and extends FORWARD while scores stay below
         // `continueBelow`. (Not backward: that would move an onset onto weaker evidence before it.)
         for (var n0 = 0; n0 < L.length; n0++) {
@@ -659,6 +664,13 @@ export function markChangePoints(scored, o) {
                 switchedAt: atStart ? null : L[n].frame }));
             if (!(atStart && !atEnd)) { L[n].kind = 'onset'; L[n].switchBackAt = atEnd ? null : L[m2 + 1].frame; }
             n = m2;
+        }
+        if (L !== L0) {
+            var prevEv = null, k0 = 0;
+            L0.forEach(function (sc) {
+                if (sc.score !== 0) { prevEv = sc; k0++; return; }
+                if (prevEv ? prevEv.flagged : (L[k0] && L[k0].flagged)) { sc.flagged = true; sc.continues = true; }
+            });
         }
     });
     changes.sort(function (x, y) { return x.frame - y.frame; });
