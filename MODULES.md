@@ -5186,10 +5186,10 @@ info panel, and timeline.
 
 **User-facing features.** Drag-to-resize panel boundaries between video
 grid / 3D / info-panel / timeline. Also wires the two toolbar panel-toggle
-buttons (`#infoPanelToggleBtn`, `#viewport3dToggleBtn`) and keeps their labels
+buttons (`#infoPanelToggleBtn`, `#viewport3dToggleBtn`) and keeps their state
 in sync from the `MutationObserver` that watches the 3D container's and info
 wrapper's `class` attributes — so a collapse from any entry point (button, `\`,
-View menu) relabels both buttons, and the initial labels are correct.
+View menu) updates both buttons, and the initial state is correct.
 
 ---
 
@@ -7217,7 +7217,7 @@ plane node, the info panel is the plane panel, and `interactionManager`'s
 selection is a plane — so pressing Group or Triangulate would operate on a pose
 selection the user can no longer see or change, producing an edit they did not
 mean and cannot observe. The VISIBILITY controls (User / Predicted / Reproj /
-Errors), Sessions, Color and Hide Panel are deliberately NOT blocked: they
+Errors), Sessions, Color and the Panel toggle are deliberately NOT blocked: they
 change what is DRAWN, not what is annotated, and turning Predicted off to see
 the plane you are placing is exactly what the mode is for.
 
@@ -10129,9 +10129,9 @@ stopping at the last frame; the step transport buttons/keys stop it first.
   `data-trail-len`), and both pickers go through `setTrailLength`, whose
   `updateTrailChecks` moves the checkmark in BOTH menus and rewrites the
   button's tooltip ("Node trails: 50 frames"). The label stays a bare
-  "Trails ▾" on purpose, to save toolbar width: with this group the toolbar
-  needs ~1,516 px (~1,428 before it), and "Trails: 500" in the label would add
-  ~25 px more. The button is a `.tri-dropdown`, so its menu opens on hover in
+  "Trails ▾" on purpose, to save toolbar width: the toolbar needs ~1,416 px
+  with it (see the panel toggles below), and "Trails: 500" in the label would
+  add ~25 px more. The button is a `.tri-dropdown`, so its menu opens on hover in
   pure CSS exactly like the Triangulate split buttons', and like theirs stays
   up after a pick until the pointer leaves; clicking the button itself does
   nothing. Display state, never saved; not in the Defining Plane Mode
@@ -10206,7 +10206,7 @@ stopping at the last frame; the step transport buttons/keys stop it first.
   cannot drift apart.
 - Toggles: `toggleInfoPanel`, `refreshInfoPanelAfterShow`,
   `updateInfoPanelToggleBtn`, `toggle3DViewport`,
-  `update3DViewportToggleBtn`, `lockPanelToggleWidths`, `toggleTimeline`,
+  `update3DViewportToggleBtn`, `toggleTimeline`,
   `syncTimelineToggleButton`, `fitTimelineToData`.
 - View modes: `enterSingleViewMode`, `cycleSingleView`, `setSoloView`,
   `setGridMode`, `updateVideoGridDisplay`, `showViewIndicator`. See
@@ -10265,29 +10265,28 @@ actually skipped (`consumeInfoPanelStale`). Covered by
 `tests/e2e/panel-toggle-independence.mjs`.
 
 **Toolbar toggle buttons (issue #151).** Both panels have a labelled button at
-the far right of the toolbar, `#viewport3dToggleBtn` ("Hide/Show 3D View") to
-the left of `#infoPanelToggleBtn` ("Hide/Show Panel"), grouped in
+the far right of the toolbar, `#viewport3dToggleBtn` ("3D") to the left of
+`#infoPanelToggleBtn` ("Panel"), grouped in
 `.toolbar-group.panel-toggles` and outlined (`.panel-toggle-btn`) so they read
 as layout controls rather than as more annotation actions. Previously the 3D
 viewport could only be collapsed from `\` or View ▸ Toggle 3D Viewport, neither
 of which is discoverable. `update3DViewportToggleBtn` /
-`updateInfoPanelToggleBtn` derive each label from the container's `collapsed`
-class rather than from whoever did the toggling, so all three entry points stay
-in sync; both are called from the toggle itself **and** from the
+`updateInfoPanelToggleBtn` derive each button's state from the container's
+`collapsed` class rather than from whoever did the toggling, so all three entry
+points stay in sync; both are called from the toggle itself **and** from the
 `MutationObserver` in `ui/layout-controls.js` that already watches those two
-containers' class attributes (which is also what sets the initial labels). Both
-labels for both buttons live in one `PANEL_TOGGLE_BUTTONS` table, which is also
-what `lockPanelToggleWidths` measures.
+containers' class attributes (which is also what sets the initial state).
 
-`lockPanelToggleWidths` (called once from `setupSplitHandles`) pins each button
-to the width of its own **wider** label, because "Hide" and "Show" are not the
-same width in the toolbar's proportional system font: unpinned, the 3D toggle
-measured 90.5px as "Hide 3D View" and 95.8px as "Show 3D View", and since the
-pair is right-aligned, the 5.3px growth on a label swap also shoved the button
-to its left sideways on every toggle. The width is measured from the real
-labels rather than hardcoded, so it stays correct if a label, the font size or
-the button padding changes; the app ships only system fonts, so there is no
-late web-font reflow to re-measure for.
+The labels are short and **fixed**: the button is highlighted (`.active`,
+`aria-pressed`) while its panel is shown — the same kind of toggle as
+`#tbSessions` at the toolbar's left edge — and the tooltip says what a click
+will do ("Hide 3D viewer (\)" / "Show 3D viewer (\)"), via the private
+`syncPanelToggleBtn`. They used to swap "Hide 3D View" / "Show 3D View" and
+"Hide Panel" / "Show Panel", which cost ~95px of toolbar width and needed
+`lockPanelToggleWidths` to pin each button to its wider label so a swap did not
+shove its neighbour sideways ("Hide" and "Show" are different widths in a
+proportional font). A fixed label cannot resize, so that function is gone. With
+the short labels the whole toolbar fits a 1440 px window (it needs ~1,416 px).
 
 **Single-view ("solo") mode.** `v` (`singleViewMode`) calls
 `enterSingleViewMode`, which caches the dockview grid layout
