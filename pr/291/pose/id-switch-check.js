@@ -43,7 +43,7 @@
  * Depends on: pose-data.js (readPoint3d). Pure — no DOM, no app state.
  */
 
-import { readPoint3d } from './pose-data.js?v=081b9b77ef21';
+import { readPoint3d } from './pose-data.js?v=9dea10fb6eba';
 
 /** Bone (node-pair) lengths used as the size signature. Pairs whose nodes the
  *  session skeleton lacks are skipped. */
@@ -584,14 +584,28 @@ export function momentChangePoints(moments, scored, changes, o) {
  * its encounters with OTHER animals too, so those surface as change points of
  * their own. Link a change point to an earlier one (of a different pair) that
  * shares an identity and lies within `followSeconds` (`followOf`).
+ *
+ * A candidate moment's change point outranks encounter change points up to 3 s
+ * BEFORE it: it is taken as if it came 3 s earlier, so they follow it rather
+ * than it following them. Both say the same contact changed something; the
+ * moment was tested on both sides of the exact place (13 of 13 real on the SLAP
+ * videos), while an encounter row of another pair a second or two away is
+ * usually the swapped animal's wrong label showing up in that pair. On those
+ * videos this made the swapped pair's row the primary in 13 of 23 swaps instead
+ * of 11, and Fixing the primaries fully undid 7 instead of 6. Without moments
+ * (every multi-camera check) the order is plain time.
  * @param {Array} primary  change points sorted by frame
  */
 function linkFollowOns(primary, o) {
+    var lead = 3 * o.fps, at = function (x) { return x.look ? x.frame - lead : x.frame; };
+    if (primary.some(function (x) { return x.look; })) {
+        primary = primary.slice().sort(function (x, y) { return at(x) - at(y) || x.frame - y.frame; });
+    }
     for (var pi = 0; pi < primary.length; pi++) {
         var cur = primary[pi];
         for (var pj = pi - 1; pj >= 0; pj--) {
             var prev = primary[pj];
-            if (cur.frame - prev.frame > o.followSeconds * o.fps) break;
+            if (at(cur) - at(prev) > o.followSeconds * o.fps) break;
             if (prev.followOf != null) continue;
             var sameIds = [prev.identityA, prev.identityB].filter(function (id) { return id === cur.identityA || id === cur.identityB; });
             if (sameIds.length === 1) { cur.followOf = prev.frame; break; }

@@ -54,18 +54,18 @@
 // `type: 'plane'` never has to be handled by code that switches on
 // user/predicted/reprojected.
 
-import { Instance } from './pose-data.js?v=081b9b77ef21';
+import { Instance } from './pose-data.js?v=9dea10fb6eba';
 import {
     PlaneNode, PlaneNodePool, PLANE_NODE_COLORS, defaultNodeColor, nodeFreezeState,
-} from './plane-nodes.js?v=081b9b77ef21';
+} from './plane-nodes.js?v=9dea10fb6eba';
 import {
     MeshObject3D, MeshObjectSet, MESH_OBJECT_COLORS, defaultMeshObjectColor,
-} from './mesh-object-3d.js?v=081b9b77ef21';
+} from './mesh-object-3d.js?v=9dea10fb6eba';
 // The ONE plane fit in the app, in its own DOM-free module so this one can
 // enforce a `plane-locked` node without importing `pose/triangulation.js`.
 import {
     fitPlaneToPoints3d, planeIntersectionBasis, projectOntoPlaneIntersection,
-} from './plane-fit.js?v=081b9b77ef21';
+} from './plane-fit.js?v=9dea10fb6eba';
 
 // Re-exported so callers can reach the whole plane model through one import.
 export { PlaneNode, PlaneNodePool, PLANE_NODE_COLORS, defaultNodeColor, nodeFreezeState };
