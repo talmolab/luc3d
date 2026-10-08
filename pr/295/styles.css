@@ -3059,6 +3059,16 @@ body {
   max-width: 120px;
 }
 
+/* The Grouped Instances table runs 4px side padding instead of 6px: with its
+   track and identity dropdowns stacked in one column (ui/info-panel.js
+   GROUP_SELECT_PX), that is the last ~20px it needs to fit a 300px panel. The
+   unlink cell's inline `padding:0` still wins. */
+#instanceGroupsTable thead th,
+#instanceGroupsTable tbody td {
+  padding-left: 4px;
+  padding-right: 4px;
+}
+
 .data-table .mono {
   font-family: "SF Mono", "Fira Code", "Cascadia Code", monospace;
   font-size: 11px;
