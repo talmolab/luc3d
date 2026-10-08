@@ -1026,6 +1026,10 @@ body {
   overflow: visible;
 }
 
+/* Each group's right border is the ONE divider between groups. There used to
+   be a `.toolbar-separator` line beside it as well, which drew every boundary
+   twice and cost ~13px apiece — enough to push the panel toggles off a 1440px
+   window once the labels were spelled out. */
 .toolbar-group {
   display: flex;
   align-items: center;
@@ -2456,14 +2460,6 @@ body {
   line-height: 1.5;
 }
 
-.toolbar-separator {
-  width: 1px;
-  height: 20px;
-  background: var(--border-color);
-  margin: 0 4px;
-  flex-shrink: 0;
-}
-
 /* --------------------------------------------------------------------------
    Timeline
    -------------------------------------------------------------------------- */
@@ -3569,6 +3565,7 @@ input[type="range"]::-moz-range-track {
   display: inline-flex;
   align-items: center;
   gap: 4px;
+  margin-left: 4px;
   padding: 2px 8px;
   border-radius: 12px;
   font-size: 11px;

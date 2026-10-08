@@ -110,7 +110,7 @@ try {
         const boxes = JSON.stringify(await readBoxes());
         check(succeeded(msg), `${r.key}. ${r.label}: ran ("${msg.slice(0, 70)}…")`);
         check(boxes === REPROJ_ONLY, `${r.key}. boxes end Reproj-only (User, Predicted, Reproj, Errors = ${boxes})`);
-        check(/showing Reproj only/.test(msg), `${r.key}. the status line says so`);
+        check(/showing Reprojections only/.test(msg), `${r.key}. the status line says so`);
     }
 
     // ---- E. single-frame Triangulate leaves the boxes alone ------------------------
@@ -124,14 +124,14 @@ try {
     });
     await page.waitForTimeout(500);
     check(JSON.stringify(await readBoxes()) === '[true,true,true,true]',
-        'E. single-frame Triangulate leaves User / Predicted / Reproj / Errors as they were');
+        'E. single-frame Triangulate leaves User / Predicted / Reprojections / Errors as they were');
 
     // ---- F. already Reproj-only: no change, no note --------------------------------------
     await useSession('reprojOnly_F', true);
     await setBoxes([false, false, true, false]);
     const msgF = await runAndWait(() => document.getElementById('tbTriangulateAll').click());
     check(JSON.stringify(await readBoxes()) === REPROJ_ONLY, 'F. boxes stay Reproj-only');
-    check(!/showing Reproj only/.test(msgF), `F. no note when nothing changed ("${msgF.slice(0, 60)}…")`);
+    check(!/showing Reprojections only/.test(msgF), `F. no note when nothing changed ("${msgF.slice(0, 60)}…")`);
 
     // ---- G. a selection of a now-hidden type is cleared -----------------------------------
     await useSession('reprojOnly_G', true);
