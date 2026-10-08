@@ -21,74 +21,75 @@
 import {
     state, videoController, interactionManager, viewport3d, timeline, paneManager,
     setVideoController, VIEW_NAMES, buildRememberedSkeleton, setProjectSkeleton,
-} from '../ui/app-state.js?v=69dc879780bd';
+} from '../ui/app-state.js?v=f377f29bde87';
 
 import {
     Session, Skeleton, Camera, Instance, UnlinkedInstance, FrameGroup, Identity,
-} from '../pose/pose-data.js?v=69dc879780bd';
+} from '../pose/pose-data.js?v=f377f29bde87';
 
-import { OnDemandVideoDecoder, VideoController } from './video.js?v=69dc879780bd';
-import { videoLoadFailureText } from './video-codec-diagnosis.js?v=69dc879780bd';
-import { fileSystemAccessHint } from '../ui/browser-hints.js?v=69dc879780bd';
+import { OnDemandVideoDecoder, VideoController } from './video.js?v=f377f29bde87';
+import { videoLoadFailureText } from './video-codec-diagnosis.js?v=f377f29bde87';
+import { fileSystemAccessHint } from '../ui/browser-hints.js?v=f377f29bde87';
 
 import {
     pickFiles, pickFolder, pickVideoFiles,
     parseCalibrationTOML, parseCalibrationJSON, parseSlpH5, parseSlpViaSleapIO,
     loadCalibrationFile,
-} from '../import-export/file-io.js?v=69dc879780bd';
+} from '../import-export/file-io.js?v=f377f29bde87';
 
-import { resolveImportTrackIdx, nulledNodesFromOcclusion } from '../import-export/import-track-resolve.js?v=69dc879780bd';
+import { resolveImportTrackIdx, nulledNodesFromOcclusion } from '../import-export/import-track-resolve.js?v=f377f29bde87';
 // Pure `.slp`-per-camera selection rule. Extracted so it can be bridged into
 // the browser test runner (session-loader itself pulls app.js) — same reason
 // and same shape as `resolveImportTrackIdx` above.
-import { chooseCameraSlp } from './percam-slp-choice.js?v=69dc879780bd';
+import { chooseCameraSlp } from './percam-slp-choice.js?v=f377f29bde87';
 // Shared SLP grouped-reconstruction (identities + InstanceGroups + nulledNodes/
 // occlusion + 3D points). Circular ESM import (slp-import imports back
 // recomputeUploadedCameras); only invoked inside a function body.
-import { restoreGroupingAndUnlink, reconstructInstanceGroupsFromSessionLazy } from '../import-export/slp-import.js?v=69dc879780bd';
-import { REBASED_CALIBRATION_NAME, pickCalibrationFile } from './calibration-pick.js?v=69dc879780bd';
+import { restoreGroupingAndUnlink, reconstructInstanceGroupsFromSessionLazy } from '../import-export/slp-import.js?v=f377f29bde87';
+import { REBASED_CALIBRATION_NAME, pickCalibrationFile } from './calibration-pick.js?v=f377f29bde87';
 import {
     isCalibrationImagesVideo, preferNonCalibrationVideos, matchVideoToCamera,
-} from './video-file-pick.js?v=69dc879780bd';
+} from './video-file-pick.js?v=f377f29bde87';
 
 import {
     LazyFrameLoader, shouldUseLazyH5, shouldUseLazySlp, getInstanceGroupsForFrame,
     ensureLazyFrameData,
-} from '../pose/triangulation.js?v=69dc879780bd';
-import { SioLazyLoader } from './sio-lazy-loader.js?v=69dc879780bd';
-import { unionTrackNames, remapTrackIdx } from './track-union.js?v=69dc879780bd';
+} from '../pose/triangulation.js?v=f377f29bde87';
+import { SioLazyLoader } from './sio-lazy-loader.js?v=f377f29bde87';
+import { unionTrackNames, remapTrackIdx } from './track-union.js?v=f377f29bde87';
 
 // Status UI moved to import-export/save-load.js in Pass 3c-1.
 import {
     setStatus, showLoading, hideLoading, ensureNo3dImportBlockingLoad,
-} from '../import-export/save-load.js?v=69dc879780bd';
-import { showLoadingProgress, createProgressPacer, yieldToPaint } from '../ui/loading-overlay.js?v=69dc879780bd';
+} from '../import-export/save-load.js?v=f377f29bde87';
+import { showLoadingProgress, createProgressPacer, yieldToPaint } from '../ui/loading-overlay.js?v=f377f29bde87';
 
 // Circular import — these are still defined in app.js for now. See module
 // header note. They are only invoked inside function bodies, never at
 // module-init time, so live-binding lookup keeps them functional.
-import { drawAllOverlays, setReprojErrorVisible } from '../ui/rendering.js?v=69dc879780bd';
-import { updateInfoPanel, promptImportSkeletonForAllSessions } from '../ui/info-panel.js?v=69dc879780bd';
-import { noteSessionCalibrationDivergence } from '../ui/calibration-notice.js?v=69dc879780bd';
-import { parseSkeletonJSON } from '../import-export/skeleton-json.js?v=69dc879780bd';
+import { drawAllOverlays, setReprojErrorVisible } from '../ui/rendering.js?v=f377f29bde87';
+import { updateInfoPanel, promptImportSkeletonForAllSessions } from '../ui/info-panel.js?v=f377f29bde87';
+import { noteSessionCalibrationDivergence } from '../ui/calibration-notice.js?v=f377f29bde87';
+import { refreshReadoutTotals } from '../ui/frame-readout.js?v=f377f29bde87';
+import { parseSkeletonJSON } from '../import-export/skeleton-json.js?v=f377f29bde87';
 // Pass 3i-3: setupInteraction / setup3DViewport / setupTimeline / updateFpsDisplay /
 // hideWelcomeOverlay moved to pose/initialization.js.
 import {
     setupInteraction, setup3DViewport, setupTimeline,
     updateFpsDisplay,
     hideWelcomeOverlay,
-} from '../pose/initialization.js?v=69dc879780bd';
+} from '../pose/initialization.js?v=f377f29bde87';
 // Pass 3h: populateViewStrip / populateSessionStrip / switchSession moved to sessions-panes.js.
 import {
     populateViewStrip, populateSessionStrip, switchSession, multiSelectViews,
-} from '../ui/sessions-panes.js?v=69dc879780bd';
+} from '../ui/sessions-panes.js?v=f377f29bde87';
 // Pass 3e-1: updateSeekbar / fitTimelineToData / onPlaybackStateChange moved to ui-wiring.js.
 import {
     updateSeekbar, fitTimelineToData, onPlaybackStateChange, updateVideoGridDisplay,
-} from '../ui/ui-wiring.js?v=69dc879780bd';
-import { getLoadingProgressModal } from '../ui/loading-progress-modal.js?v=69dc879780bd';
-import { readVisibilityMetadata } from '../import-export/visibility-metadata.js?v=69dc879780bd';
-import { readPlaneMetadata, resetPlaneState } from '../import-export/plane-metadata.js?v=69dc879780bd';
+} from '../ui/ui-wiring.js?v=f377f29bde87';
+import { getLoadingProgressModal } from '../ui/loading-progress-modal.js?v=f377f29bde87';
+import { readVisibilityMetadata } from '../import-export/visibility-metadata.js?v=f377f29bde87';
+import { readPlaneMetadata, resetPlaneState } from '../import-export/plane-metadata.js?v=f377f29bde87';
 
 // Module-private debounce timer for the zoom-redraw callback in
 // rebuildVideoController(). app.js's setupEmptyVideoController() has its own
@@ -1215,7 +1216,7 @@ export function rebuildVideoController() {
         timeline.setData(state.session);
     }
 
-    document.getElementById('totalFrames').textContent = state.totalFrames;
+    refreshReadoutTotals();
     document.getElementById('fpsDisplay').textContent = state.fps.toFixed(1) + ' fps';
 
     // Surface frame-accurate mediabunny backend failures in the status bar
@@ -1268,7 +1269,7 @@ export function updateTotalFrames() {
     if (maxFrames > 0) {
         state.totalFrames = maxFrames;
         state.fps = bestFps;
-        document.getElementById('totalFrames').textContent = state.totalFrames;
+        refreshReadoutTotals();
         document.getElementById('fpsDisplay').textContent = state.fps.toFixed(1) + ' fps';
         if (timeline) {
             timeline.setTotalFrames(maxFrames);
@@ -1278,7 +1279,7 @@ export function updateTotalFrames() {
         // frame count cannot leak into this one.
         state.totalFrames = 0;
         state.fps = 30;
-        document.getElementById('totalFrames').textContent = '0';
+        refreshReadoutTotals();
         document.getElementById('fpsDisplay').textContent = '30.0 fps';
         if (timeline) {
             timeline.setTotalFrames(1);
@@ -2520,8 +2521,7 @@ export async function handleLoadProjectSlpLazy(slpFile) {
         // write the frame counter + timeline span from the labeled-frame count
         // directly. attachVideosForLazyReopen refines both from the real
         // decoders once videos are attached.
-        var tfEl = document.getElementById('totalFrames');
-        if (tfEl) tfEl.textContent = state.totalFrames;
+        refreshReadoutTotals();
 
         // 3D viewport (needs a live session).
         if (hasCalibration) {
