@@ -162,20 +162,29 @@ try {
         const cands = S._idSwitchCandidates;
         S._idSwitchCandidates = null;
         await M.runIdSwitchChecks({ size: true });
-        const without = Array.from(document.querySelectorAll('#idSwitchPanel .id-switch-row')).map(r => Number(r.dataset.frame));
+        const without = Array.from(document.querySelectorAll('#idSwitchPanel .id-switch-row')).map(r => ({ frame: Number(r.dataset.frame), key: r.dataset.key }));
         S._idSwitchCandidates = cands;
         await M.runIdSwitchChecks({ size: true });
-        const rows = Array.from(document.querySelectorAll('#idSwitchPanel .id-switch-row')).map(r => ({ frame: Number(r.dataset.frame), text: r.textContent }));
+        const rows = Array.from(document.querySelectorAll('#idSwitchPanel .id-switch-row')).map(r => ({ frame: Number(r.dataset.frame), key: r.dataset.key, text: r.textContent }));
+        const repeats = S._idSwitch.results.size.flags.filter(m => m.continues).map(m => m.frame);
         const R = await import('/ui/id-switch-review.js');
         const saved = JSON.parse(JSON.stringify(R.serializeIdSwitchReview(S)));
         const copy = { _idSwitch: null };
         R.ingestIdSwitchReview(copy, saved);
         const back = copy._idSwitch ? copy._idSwitch.results.size.flags.filter(m => m.look) : [];
-        return { rows, without, back: back.map(m => [m.frame, m.look]) };
+        return { rows, without, repeats, back: back.map(m => [m.frame, m.look]) };
     }, [t0, t1, tr]);
     const mrow = row4.rows.find(r => Math.abs(r.frame - 1800) <= 2);
-    check(!row4.without.some(f => Math.abs(f - 1800) <= 2) && mrow, `the moment adds a row AT the switch (rows ${row4.rows.map(r => r.frame).join(', ')}; without it ${row4.without.join(', ')})`);
-    check(JSON.stringify(row4.rows.filter(r => r !== mrow).map(r => r.frame)) === JSON.stringify(row4.without), '…and every other row is as it was without moments');
+    check(!row4.without.some(r => Math.abs(r.frame - 1800) <= 2) && mrow, `the moment adds a row AT the switch (rows ${row4.rows.map(r => r.frame).join(', ')}; without it ${row4.without.map(r => r.frame).join(', ')})`);
+    // Without the moment the swap's only row is the pair's encounter BEFORE it, whose evidence window ran across
+    // the switch. That is the same swapped stretch, so the moment's row takes it over (one row, one fix) …
+    const pairOf = k => k.split(':').slice(2).sort().join();
+    const taken = row4.without.filter(r => r.frame < 1800 && pairOf(r.key) === pairOf(mrow.key));
+    check(taken.length === 1 && !row4.rows.some(r => r.key === taken[0].key) && row4.repeats.includes(taken[0].frame),
+        `…taking over the pair's encounter row before it, now a repeat (${taken.map(r => r.frame)})`);
+    // … and leaves every other row as it was
+    check(JSON.stringify(row4.rows.filter(r => r !== mrow).map(r => r.key)) === JSON.stringify(row4.without.filter(r => !taken.includes(r)).map(r => r.key)),
+        '…and every other row is as it was without moments');
     check(mrow && /input tracklet changes animal/.test(mrow.text) && !/close/.test(mrow.text),
         'the row says why it was looked at, and does not call it a close encounter: ' + (mrow || {}).text);
     check(row4.back.length === 1 && JSON.stringify(row4.back[0][1]) === '["tracklet"]', 'the cue survives the saved checklist: ' + JSON.stringify(row4.back));

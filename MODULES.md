@@ -3616,6 +3616,8 @@ identities, sampledFrames, closeDistance, threshold, fps, step, sampleHz, cue}`
 (+ `bones` for size; + `imageHz`, `crops`, `cameras` for images) or
 `{ok:false, reason}`; `markChangePoints(scored, o)` (the change-point step,
 exported so calibration can re-apply thresholds to the same scores);
+`momentChangePoints(moments, scored, changes, o)` (merges tested candidate
+moments into those change points — see below; exported for the tests);
 `fitSoftmax(X, y, n, D, K, opts)` (L2 multinomial logistic regression, Adam);
 `fitPCA(X, n, D, k)` (randomized subspace iteration);
 `KEYFRAME_GAP_TOLERANCE` (1.1);
@@ -3667,17 +3669,40 @@ pair sharing an identity is its follow-on (`followOf`).
 happened OUTSIDE a close encounter — `[{frame, startFrame, identityA, identityB,
 cues}]`, from `pose/single-camera-tracking.js` `candidateMoments` (the tracker
 nearly chose the exchange; the input file's own tracklet changes animal). They
-only ADD change points: encounters score and flag exactly as without them.
+never change how encounters score or flag (see "One swapped stretch" below).
 Each moment is tested on its own (`testMoments`): the evidence that a is a and
 b is b over the `momentSeconds` (15) BEFORE it and, separately, AFTER it, from
 samples where each animal is apart from every other. If the two sides disagree
 in sign the score is minus the weaker side's evidence, else plus it; below
 `momentThreshold` (-200) it is a change point (`momentChangePoints`) — an
-'onset' when the after side disagrees (in `flags`, `switchBackAt` = the pair's
-next change point or null), an 'end' when the before side does (in `changes`,
-`switchedAt` = the previous one or null) — unless one of the pair's encounter
-change points is within 3 s, which stands. Every tested moment is returned as
-`moments` (`side`, `look` = its cues); a moment change point carries `look`.
+'onset' when the after side disagrees (in `flags`), an 'end' when the before
+side does (in `changes`) — unless one of the pair's encounter change points is
+within 3 s, which stands. Every tested moment is returned as `moments` (`side`,
+`look` = its cues); a moment change point carries `look`.
+
+**One swapped stretch, one row, one fix.** A moment's row merges with the
+pair's flagged encounter run it starts or ends, because two rows for one
+stretch meant two fixes (on the 5-mouse topC video a moment at 22:59.1 linked
+to the same pair's encounter onset 4.9 s later, so its fix stopped there and a
+second Fix was needed). An onset takes over the run's onset row — the run's
+first encounter just BEFORE it (whose evidence window ran across the moment, the
+reason moments exist) or AFTER it — which becomes a repeat; its `switchBackAt`
+is the first of the pair's later encounters that reads right again (flagged or
+below `continueBelow` continues, as a run does), whose 'end' row now pairs with
+it, else the pair's next moment, else null. An 'end' closes the run before it:
+`switchedAt` = the run's onset row (whose `switchBackAt` becomes the moment),
+the run's own 'end' row after it is dropped; with no run before it,
+`switchedAt` = the pair's previous encounter, else its previous moment, else
+null. An encounter scoring exactly 0 had no samples on either side, so it
+neither ends nor continues a stretch (an 'end' row on one inside the stretch is
+dropped). A moment that contradicts a run is skipped (an onset after two of the
+run's encounters; an 'end' with the run still flagged after it), so no two
+rows' fixes overlap. Encounter scores and `flagged` never change — only which
+rows are listed — and follow-ons are re-linked over the final rows. Re-scored
+on the 35 SLAP videos' in-app evidence (2026-10-08), image cue: 111 rows -> 96,
+false encounter rows 84 -> 71, same 17 of 59 swaps caught, moment rows still
+13/13 real, and same-pair fixes that overlap or meet end to end 6 -> 0;
+brightness: 22 -> 21 rows, 14 of 59 caught either way, 1 -> 0.
 Three findings shaped this, all on the 35 proofread single-camera SLAP videos
 (59 real switches after single-camera Track All, image cue, evidence captured
 in the app and re-scored offline):
@@ -9106,7 +9131,8 @@ draw; not the encounters or the fitted models. A restored check result has
 
 **Coverage.** `tests/test-id-switch-check.mjs` (lossless reopen -> re-save,
 "Both" re-link, ticks, garbage tolerance, nothing written without results);
-`tests/test-id-switch-fix.mjs` (the links, the plans, renaming, fixes round trip);
+`tests/test-id-switch-fix.mjs` (the links, the plans, renaming, fixes round trip,
+and §6 a candidate moment's row taking over its stretch);
 `tests/e2e/visibility-settings-roundtrip.mjs` (both writers, real reader).
 
 ---

@@ -684,8 +684,11 @@ the animal count, connect single breaks). Rules:
   (`pose/id-switch-check.js` `testMoments`, 15 s each side, -200). Reading only
   after a moment caught 1 more real swap of 59: the classifier is fit to the
   tracker's own labels, and a swap covering most of the video is what it
-  learns. Moments only ADD change points; encounters score exactly as without
-  them. They are not saved (their input tracklets are rewritten).
+  learns. Encounters score and flag exactly as without moments; a moment's row
+  takes over the encounter rows of the swapped stretch it starts or ends
+  (`momentChangePoints`), so one swap is one row and one Fix — two rows meant
+  two fixes, the first stopping where the second began. Moments are not saved
+  (their input tracklets are rewritten).
 - **On one camera the automatic check is coat brightness, not body size.**
   `ui/brightness-sampler.js` reads the grey level at each animal's body
   keypoints and `checkBrightnessSwitches` runs the image check's code on it — no
