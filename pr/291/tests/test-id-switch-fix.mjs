@@ -301,6 +301,17 @@ console.log('6. momentChangePoints: one row (and one fix) per swapped stretch');
     ok(r.rows.length === 1 && r.rows[0].frame === 295 && r.rows[0].switchedAt === null && plan(r, r.rows[0]).from === 0,
         `the moment's 'end' covers the stretch from frame 0, and that row is dropped: ${desc(r)}`);
 
+    // an 'end' moment does not read its own contact as the stretch before it (that encounter's score is the
+    // labels AFTER the moment): on a real video this made a Fix of one frame (0:12.0-0:12.1) for a 12-s swap
+    sc = encounters(6, []);                                         // clean encounters at 100..600, the one at 300 inside the contact
+    r = run(sc, [moment(302, 'before')]);                           // its contact: 297..302
+    ok(r.rows.length === 1 && r.rows[0].switchedAt === 200 && plan(r, r.rows[0]).from === 201,
+        `the 'end' reaches back past its own contact to the encounter before it: from ${r.rows[0] && plan(r, r.rows[0]).from} (not 301)`);
+    sc = encounters(1, []).map(e => Object.assign(e, { frame: 360, startFrame: 360 }));
+    r = run(sc, [Object.assign(moment(363, 'before'), { startFrame: 360 })]);
+    ok(r.rows.length === 1 && r.rows[0].switchedAt === null && plan(r, r.rows[0]).from === 0,
+        `with no earlier encounter it covers the session from frame 0 (from ${r.rows[0] && plan(r, r.rows[0]).from})`);
+
     // two moments of the pair with only clean encounters around them pair with each other
     sc = encounters(6, []);
     r = run(sc, [moment(130, 'after'), moment(170, 'before')]);
