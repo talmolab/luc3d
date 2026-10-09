@@ -6382,6 +6382,14 @@ data sources. Plus visibility-toggle helpers and frame counter updates.
     `ss = clamp(OVERLAY_QUALITY * cssW * zs / videoW, 1, zs)`. The lower bound
     of 1 means an unzoomed view is byte-for-byte what it was before, so this
     cannot regress the ordinary case.
+  - **`ss` is QUANTIZED to 1/4 steps, rounded UP**, and that is not a detail.
+    It now depends on `cssW`, which `ss = zs` did not — so without the
+    quantization a pane SASH DRAG (`cssW` moving a pixel per frame) reallocates
+    the whole backing store on EVERY redraw, which the old code never did at
+    any zoom. Measured at zoom 8 with canvas acceleration off: 59 reallocations
+    over a 60-step drag at 3.49 ms per redraw, against 0.32 ms unzoomed; with
+    it, 1-2 reallocations and 0.39 ms. Rounding up is what keeps quantizing
+    from ever dropping quality below what `OVERLAY_QUALITY` asks for.
   - **`OVERLAY_QUALITY` has a floor of 2** (`Math.max(2, devicePixelRatio)`) and
     that floor is not cosmetic. Nodes and edges are vector shapes whose
     smoothness comes from this ratio, and a cell showing a 1280px video in 283px
