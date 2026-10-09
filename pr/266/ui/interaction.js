@@ -14,9 +14,10 @@
  * ES module. Exports `InteractionManager` and `isInteractiveClickTarget`.
  */
 
-import { Instance } from '../pose/pose-data.js?v=ff7b87d14426';
-import { getOrComputeReprojectedInstance } from '../pose/triangulation.js?v=ff7b87d14426';
-import { shouldIgnoreShortcut } from './keyboard-target.js?v=ff7b87d14426';
+import { Instance } from '../pose/pose-data.js?v=a07978e22373';
+import { getOrComputeReprojectedInstance } from '../pose/triangulation.js?v=a07978e22373';
+import { shouldIgnoreShortcut } from './keyboard-target.js?v=a07978e22373';
+import { deleteTargetsFromStore, groupMemberTargets, unlinkedTarget } from './custom-delete-ops.js?v=a07978e22373';
 
 // ============================================
 // Alt + wheel instance rotation
@@ -2559,6 +2560,16 @@ export class InteractionManager {
      * Otherwise, removes only the instance for the last-clicked camera.
      * If that was the last camera in the group, removes the whole group.
      *
+     * On a lazy project every path first removes the deleted instances' rows
+     * from the columnar store (`deleteTargetsFromStore`) and only then edits
+     * the resident frame. Editing the frame alone is not a delete there: a
+     * predicted-only frame is released by every windowed sweep and playback
+     * eviction and re-hydrated from the store, and the streaming save writes
+     * the store rows of any camera-frame without a user instance — so the
+     * instance came back either way. The store call must come FIRST, while the
+     * victims are still in the group and frame, because it renumbers the
+     * survivors' `_rawInstIndex` and recognises the victims by theirs.
+     *
      * @param {boolean} [deleteAll=false] - If true, delete from all cameras
      * @private
      */
@@ -2575,6 +2586,7 @@ export class InteractionManager {
             const deletedViews = viewName ? [viewName] : [];
             this.clearSelection();
 
+            deleteTargetsFromStore(state.session, [unlinkedTarget(frameIdx, ul)]);
             const fg = state.session.getFrameGroup(frameIdx);
             if (fg) {
                 fg.removeUnlinkedById(ul.id);
@@ -2603,6 +2615,8 @@ export class InteractionManager {
 
         // Clear selection before modifying data
         this.clearSelection();
+
+        deleteTargetsFromStore(state.session, groupMemberTargets(frameIdx, group, deletedViews));
 
         if (deleteAll || !viewName) {
             // Full group removal (existing behavior)

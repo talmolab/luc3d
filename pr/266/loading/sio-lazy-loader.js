@@ -25,7 +25,21 @@
  * timeline reads the `sparse` flag to take a segment branch and caps the rows it
  * renders (first-N per camera by appearance) so a pathological track count can't
  * blow up the canvas. See `ui/timeline.js:_buildTrackSegments`.
+ *
+ * Track indices: every camera's store is re-indexed into ONE track list,
+ * `trackNames`, the union of the cameras' own track names
+ * (`loading/track-union.js`) — see `_unifyTracks`.
  */
+
+import { unionTrackNames } from './track-union.js?v=a07978e22373';
+
+/**
+ * `deleteInstanceRows` moves surviving rows with one `copyWithin` per run when
+ * at most this many rows go, element by element otherwise. Measured on 2.7M rows
+ * x 10 columns: runs ~5 ms for a single delete vs ~70 ms for the loop, and the
+ * loop wins once runs get short and numerous.
+ */
+var DELETE_RUN_COPY_MAX = 4096;
 
 /**
  * Adapt a materialized sleap-io.js typed Instance/PredictedInstance into the flat
@@ -99,7 +113,31 @@ export class SioLazyLoader {
 
         this.nFrames = 0;
         this.skeleton = null;
+        /**
+         * The session track list: the union of every `open()`ed camera's own
+         * track names (`loading/track-union.js`), rebuilt after each open. Each
+         * camera's store is rewritten to index THIS list (see `_unifyTracks`).
+         */
         this.trackNames = [];
+        /**
+         * camName -> { names, toSession }: the camera's OWN track names (as read
+         * from its file, or as last rewritten by `remapTracksFromIdentity`) and
+         * the session index each one currently holds in `trackNames` — i.e. the
+         * value its rows carry in `instancesData.track`. Only `open()` adds to
+         * it; `openProjectSlp`'s one shared store already has one list.
+         */
+        this._trackSourceByCam = new Map();
+        /** camName -> skeleton dict, so `skeleton` is chosen by camera name, not by I/O timing. */
+        this._skeletonByCam = new Map();
+        /**
+         * True once a store has been edited IN MEMORY (`remapTracksFromIdentity`,
+         * `deleteInstanceRows`) — i.e. the columns no longer match the source
+         * files. The multi-session save's pass 2 re-opens those files, so it
+         * keeps this loader's frame + instance columns from pass 1 when set
+         * (`commitSessionForMultiSessionSave`, import-export/save-load.js).
+         * `_unifyTracks`' load-time re-index does NOT set it: a re-open repeats it.
+         */
+        this._storeEditedInMemory = false;
         // Embedded calibration recovered from a project .slp's sessions_json
         // (raw calibration dict + camcorder→video map), used by the session
         // builder when the folder has no separate calibration.toml.
@@ -115,8 +153,13 @@ export class SioLazyLoader {
     }
 
     /**
-     * Open one camera's `.slp` lazily and record its metadata. First camera's
-     * skeleton/tracks win (matches LazyFrameLoader).
+     * Open one camera's `.slp` lazily and record its metadata. Callers open
+     * every camera in PARALLEL, so nothing here may depend on which open
+     * finishes first: the skeleton is the one of the first camera BY NAME that
+     * has one, and `trackNames` is the union of every opened camera's tracks,
+     * with each camera's store re-indexed into it (`_unifyTracks`). The result
+     * is the same for any resolution order — including a later re-open of the
+     * same files (`reopenSessionLazyLoader`, the multi-session save's pass 2).
      */
     async open(cameraName, file, onProgress) {
         var SIO = window.SleapIO;
@@ -125,7 +168,7 @@ export class SioLazyLoader {
         }
         // Point the reader's internal I/O worker at LUCID's local vendored h5wasm
         // IIFE (document.baseURI keeps this correct on sub-path deployments).
-        var h5wasmUrl = new URL('lib/h5wasm/h5wasm.iife.js?v=ff7b87d14426', document.baseURI).href;
+        var h5wasmUrl = new URL('lib/h5wasm/h5wasm.iife.js?v=a07978e22373', document.baseURI).href;
         var labels = await SIO.readSlpStreaming(file, {
             lazy: true,
             openVideos: false,
@@ -167,13 +210,15 @@ export class SioLazyLoader {
         try { labels.frameCacheLimit = this.internalFrameCacheLimit; } catch (e) { /* older bundle */ }
 
         var skel = labels.skeletons && labels.skeletons[0];
-        if (!this.skeleton && skel) {
-            this.skeleton = {
-                name: skel.name || 'skeleton',
-                nodes: skel.nodeNames,
-                edges: skel.edgeIndices,
-            };
-            this.trackNames = (labels.tracks || []).map(function (t) { return t.name; });
+        this._skeletonByCam.set(cameraName, skel ? {
+            name: skel.name || 'skeleton',
+            nodes: skel.nodeNames,
+            edges: skel.edgeIndices,
+        } : null);
+        this.skeleton = null;
+        var skelCams = Array.from(this._skeletonByCam.keys()).sort();
+        for (var sci = 0; sci < skelCams.length && !this.skeleton; sci++) {
+            this.skeleton = this._skeletonByCam.get(skelCams[sci]);
         }
         this.numNodesByCam.set(cameraName, skel ? skel.nodeNames.length : 0);
 
@@ -193,22 +238,138 @@ export class SioLazyLoader {
         this.frameRowByCam.set(cameraName, rowMap);
         if (maxFrameIdx + 1 > this.nFrames) this.nFrames = maxFrameIdx + 1;
 
-        // Sparse per-track occupancy for the timeline's presence bars. Best-effort:
-        // a cheap columnar pass, never blocking the load.
-        try {
-            var occ = this._computeSparseOccupancy(labels, maxFrameIdx + 1);
-            if (occ) this.trackOccupancy.set(cameraName, occ);
-        } catch (e) { /* occupancy is optional; ignore */ }
+        // This camera's own tracks, then re-index every camera into the union.
+        // The store still holds this file's own indices, so its map starts as
+        // the identity. Also computes this camera's sparse occupancy (the
+        // Tracks Timeline's presence bars), which must be keyed by SESSION
+        // track index and so has to come after the re-index.
+        var ownNames = (labels.tracks || []).map(function (t) { return t && t.name != null ? String(t.name) : ''; });
+        var ownToSession = new Int32Array(ownNames.length);
+        for (var oi = 0; oi < ownToSession.length; oi++) ownToSession[oi] = oi;
+        this._trackSourceByCam.set(cameraName, { names: ownNames, toSession: ownToSession });
+        this._unifyTracks(cameraName);
 
         var v = labels.videos && labels.videos[0];
         this.videos.set(cameraName, v ? { filename: v.filename, shape: v.shape } : null);
 
         return {
             skeleton: this.skeleton,
-            trackNames: this.trackNames,
+            // THIS camera's own tracks. The session's list is `this.trackNames`,
+            // which is only final once every camera has been opened.
+            trackNames: ownNames,
             nFrames: this.nFrames,
             videos: [this.videos.get(cameraName)],
         };
+    }
+
+    /**
+     * Re-index every `open()`ed camera's store into ONE track list — the union
+     * of their own track names, cameras in sorted name order
+     * (`unionTrackNames`) — so that `instancesData.track` holds a
+     * `trackNames` (= `session.tracks`) index in EVERY camera, which is what
+     * every consumer assumes: `adaptTypedInstance`, `forEachInstanceRow`,
+     * `_computeSparseOccupancy`, `remapTracksFromIdentity` and the streaming
+     * writer, which reads both columns and `labels.tracks` by reference.
+     *
+     * Runs after EACH open, from the cameras' OWN names (never from a previous
+     * union), so the final state is the same whichever order the parallel opens
+     * resolve in. For each camera:
+     *   - its `labels.tracks` (shared by reference with `_lazyDataStore.tracks`)
+     *     is rebuilt IN PLACE to the union, keeping its own `Track` objects at
+     *     their new indices — materialization resolves `tracks[id]`, so the
+     *     column and the list must change together;
+     *   - its track column is rewritten only when its indices move — for the
+     *     newly opened camera (whose values are still its file's own indices,
+     *     and any value outside its own list must become trackless rather than
+     *     come to name an appended track) or when a later camera's names
+     *     re-ordered the union. On the real folders every camera's names are
+     *     `track_0..track_{n-1}`, every map is the identity, and the only work
+     *     is one read pass over the new camera's column;
+     *   - its occupancy is recomputed if its column changed, else only its
+     *     `nTracks` is updated.
+     * Equal name lists in every camera also make the streaming writer's
+     * name-signature dedup (`buildSessionRefGraph`) write the tracks ONCE,
+     * rather than one copy per camera.
+     *
+     * @param {string} [newCam] - the camera just opened
+     */
+    _unifyTracks(newCam) {
+        var self = this;
+        var cams = Array.from(this._trackSourceByCam.keys());
+        var union = unionTrackNames(cams.map(function (c) {
+            return { camName: c, names: self._trackSourceByCam.get(c).names };
+        }));
+        var TrackCtor = window.SleapIO && window.SleapIO.Track;
+        var cacheStale = false;
+        for (var ci = 0; ci < cams.length; ci++) {
+            var cam = cams[ci];
+            var src = this._trackSourceByCam.get(cam);
+            var next = union.remapByCam.get(cam);
+            var labels = this.labelsByCam.get(cam);
+            var store = labels && labels._lazyDataStore;
+            var tracks = labels && labels.tracks;
+            if (!labels || !Array.isArray(tracks)) continue;
+
+            var moved = cam === newCam;
+            for (var mi = 0; mi < next.length && !moved; mi++) moved = next[mi] !== src.toSession[mi];
+
+            // 1. Column: current value -> new value, through the old map's inverse.
+            var rewritten = 0;
+            var col = store && store.instancesData && store.instancesData.track;
+            if (moved && col) {
+                var step = new Int32Array(tracks.length).fill(-1);
+                for (var si = 0; si < src.toSession.length; si++) {
+                    if (src.toSession[si] < step.length) step[src.toSession[si]] = next[si];
+                }
+                var big = typeof BigInt64Array !== 'undefined' && col instanceof BigInt64Array;
+                for (var j = 0; j < col.length; j++) {
+                    var cur = Number(col[j]);
+                    if (!(cur >= 0)) continue;   // trackless (-1/NaN) stays as it is
+                    var nv = (cur < step.length && cur === Math.floor(cur)) ? step[cur] : -1;
+                    if (nv !== cur) { col[j] = big ? BigInt(nv) : nv; rewritten++; }
+                }
+            }
+
+            // 2. labels.tracks -> the union, in place, reusing this camera's Track objects.
+            var rebuilt = new Array(union.names.length);
+            for (var ti = 0; ti < next.length; ti++) {
+                var own = src.toSession[ti] < tracks.length ? tracks[src.toSession[ti]] : null;
+                if (own) rebuilt[next[ti]] = own;
+            }
+            for (var ui = 0; ui < rebuilt.length; ui++) {
+                if (!rebuilt[ui]) rebuilt[ui] = TrackCtor ? new TrackCtor(union.names[ui]) : { name: union.names[ui] };
+            }
+            tracks.length = 0;
+            for (var pi = 0; pi < rebuilt.length; pi++) tracks.push(rebuilt[pi]);
+            src.toSession = next;
+
+            // 3. Occupancy, keyed by session index.
+            var occ = this.trackOccupancy.get(cam);
+            if (cam === newCam || rewritten > 0) {
+                try {
+                    var nf = 0;
+                    var rm = this.frameRowByCam.get(cam);
+                    if (rm) for (var fk of rm.keys()) if (fk + 1 > nf) nf = fk + 1;
+                    var fresh = this._computeSparseOccupancy(labels, nf);
+                    if (fresh) this.trackOccupancy.set(cam, fresh);
+                    else this.trackOccupancy.delete(cam);
+                } catch (e) { /* occupancy is optional; ignore */ }
+            } else if (occ) {
+                occ.nTracks = union.names.length;
+            }
+            if (rewritten > 0) {
+                cacheStale = true;
+                if (labels._lazyFrameList && typeof labels._lazyFrameList.clearCache === 'function') {
+                    labels._lazyFrameList.clearCache();
+                }
+                if (cam !== newCam) {
+                    console.log('[SioLazyLoader] ' + cam + ': ' + rewritten +
+                        ' instance rows re-indexed into the ' + union.names.length + '-track session list');
+                }
+            }
+        }
+        if (cacheStale) { this.cache.clear(); this.cacheOrder = []; }
+        this.trackNames = union.names;
     }
 
     /**
@@ -237,7 +398,7 @@ export class SioLazyLoader {
         if (!SIO || typeof SIO.readSlpStreaming !== 'function') {
             throw new Error('sleap-io.js readSlpStreaming not available on window.SleapIO');
         }
-        var h5wasmUrl = new URL('lib/h5wasm/h5wasm.iife.js?v=ff7b87d14426', document.baseURI).href;
+        var h5wasmUrl = new URL('lib/h5wasm/h5wasm.iife.js?v=a07978e22373', document.baseURI).href;
         var labels = await SIO.readSlpStreaming(file, {
             lazy: true,
             openVideos: false,
@@ -581,16 +742,26 @@ export class SioLazyLoader {
      *   and `type` is `'predicted'`/`'user'` decoded from `instance_type`
      *   (1 = predicted, matching `appendStore`). Pre-existing callers take three
      *   parameters and are unaffected.
+     * @param {{camera?: string, start?: number, end?: number}} [opts] - Narrow
+     *   the walk, for the status bar's per-camera counters
+     *   (`ui/frame-counters.js`), which read ONE camera and spread a
+     *   whole-project walk over several short tasks. `camera` visits that
+     *   camera's rows only. `start`/`end` (frame indices, end exclusive) visit
+     *   just that range, in ascending frame order; without them every frame is
+     *   visited in the row map's own order, as before.
      */
-    forEachInstanceRow(visitFn) {
+    forEachInstanceRow(visitFn, opts) {
+        var onlyCamera = opts && opts.camera != null ? opts.camera : null;
+        var ranged = !!opts && opts.start != null && opts.end != null;
         for (var camName of this.labelsByCam.keys()) {
+            if (onlyCamera !== null && camName !== onlyCamera) continue;
             var labels = this.labelsByCam.get(camName);
             var store = labels && labels._lazyDataStore;
             var rowMap = this.frameRowByCam.get(camName);
             if (!store || !rowMap) continue;
             var fd = store.framesData || {};
             var idn = store.instancesData || {};
-            for (var [frameIdx, frameRow] of rowMap) {
+            var visitFrame = function (frameIdx, frameRow) {
                 var iStart = Number(fd.instance_id_start ? fd.instance_id_start[frameRow] : 0) || 0;
                 var iEnd = Number(fd.instance_id_end ? fd.instance_id_end[frameRow] : 0) || 0;
                 for (var j = iStart; j < iEnd; j++) {
@@ -603,8 +774,72 @@ export class SioLazyLoader {
                         type: (idn.instance_type && Number(idn.instance_type[j]) === 1) ? 'predicted' : 'user',
                     });
                 }
+            };
+            if (ranged) {
+                for (var f = Math.max(0, opts.start); f < opts.end; f++) {
+                    var r = rowMap.get(f);
+                    if (r !== undefined) visitFrame(f, r);
+                }
+            } else {
+                for (var [frameIdx, frameRow] of rowMap) visitFrame(frameIdx, frameRow);
             }
         }
+    }
+
+    /**
+     * What re-hydrating one camera-frame from the store WOULD produce, read
+     * straight from the columns — no frame or instance is materialized. The
+     * playback eviction (`pose/lazy-residency.js`) compares a resident
+     * FrameGroup against this to prove it is rebuildable before dropping it.
+     *
+     * Entry `k` is the store instance at in-frame offset `k`, i.e. the row an
+     * `Instance._rawInstIndex` of `k` names. Mirrors what `_extractCamFrame`
+     * (via the store's `materializeFrame` + `adaptTypedInstance`) would build:
+     *   - `trackIdx[k]`: the session track index, or -1 for trackless. A track
+     *     id with no `Track` behind it is trackless there too.
+     *   - `predicted[k]`: 1 unless `instance_type` is 0 (a user instance).
+     *
+     * @param {string} camName
+     * @param {number} frameIdx - video frame index
+     * @returns {{count: number, trackIdx: Int32Array, predicted: Uint8Array}|null}
+     *   null when this loader does not back `camName` at all (the caller must
+     *   then treat that camera's data as NOT rebuildable). A camera with no row
+     *   for this frame reports `count: 0`.
+     */
+    describeStoreFrame(camName, frameIdx) {
+        var labels = this.labelsByCam.get(camName);
+        var rowMap = this.frameRowByCam.get(camName);
+        var store = labels && labels._lazyDataStore;
+        if (!store || !rowMap) return null;
+        var row = rowMap.get(frameIdx);
+        if (row === undefined) return { count: 0, trackIdx: new Int32Array(0), predicted: new Uint8Array(0) };
+        var fd = store.framesData || {};
+        var idn = store.instancesData || {};
+        var iStart = Number(fd.instance_id_start ? fd.instance_id_start[row] : 0) || 0;
+        var iEnd = Number(fd.instance_id_end ? fd.instance_id_end[row] : 0) || 0;
+        var n = Math.max(0, iEnd - iStart);
+        // `materializeFrame` resolves the column against the STORE's list and
+        // `adaptTypedInstance` takes `indexOf` in `labels.tracks`. They are one
+        // array (see `_unifyTracks`), in which case the id IS the index — a
+        // duplicated Track object would make `indexOf` smaller, which reads here
+        // as a mismatch, i.e. "not rebuildable": the safe direction.
+        var storeTracks = store.tracks || labels.tracks || [];
+        var labelTracks = labels.tracks || [];
+        var sameList = storeTracks === labelTracks;
+        var trackIdx = new Int32Array(n);
+        var predicted = new Uint8Array(n);
+        for (var k = 0; k < n; k++) {
+            var j = iStart + k;
+            // Same defaults as `materializeFrame`: an absent track is -1, an
+            // absent type is 0 (a user instance).
+            var rawTrack = idn.track ? idn.track[j] : undefined;
+            var tid = Number(rawTrack == null ? -1 : rawTrack);
+            var t = tid >= 0 ? storeTracks[tid] : null;
+            trackIdx[k] = !t ? -1 : (sameList ? tid : labelTracks.indexOf(t));
+            var rawType = idn.instance_type ? idn.instance_type[j] : undefined;
+            predicted[k] = Number(rawType == null ? 0 : rawType) === 0 ? 0 : 1;
+        }
+        return { count: n, trackIdx: trackIdx, predicted: predicted };
     }
 
     /**
@@ -678,6 +913,16 @@ export class SioLazyLoader {
                         tracksArr.push(new TrackCtor(newTrackNames[t]));
                     }
                 }
+            }
+            // Every camera now indexes `newTrackNames` directly, so that is its
+            // own list from here on (a later `_unifyTracks` must start from it,
+            // not from the file's pre-propagate names).
+            var srcAfter = this._trackSourceByCam.get(camName);
+            if (srcAfter) {
+                var idAfter = new Int32Array(newTrackNames.length);
+                for (var ia = 0; ia < idAfter.length; ia++) idAfter[ia] = ia;
+                srcAfter.names = newTrackNames.map(String);
+                srcAfter.toSession = idAfter;
             }
 
             var fd = store.framesData || {};
@@ -770,6 +1015,8 @@ export class SioLazyLoader {
                 }
             }
         }
+        this.trackNames = newTrackNames.map(String);
+        if (changed > 0 || rebuiltLabels.size > 0) this._storeEditedInMemory = true;
         if (errorRows > 0) {
             console.error('[remapTracksFromIdentity] ' + errorRows + ' row(s) failed and were left with their ' +
                 'OLD (now likely out-of-range) track index — those rows will show as trackless once ' +
@@ -826,6 +1073,27 @@ export class SioLazyLoader {
      * whose target was deleted to `-1` — mirroring what `appendStore`'s own
      * `outIdxOf` already does for rows skipped by the overlay.
      *
+     * ## Cost: one keypress, not one bulk operation
+     *
+     * Every interactive Delete goes through here too (`ui/interaction.js`
+     * `_deleteSelected`, via `deleteTargetsFromStore`), so a single-row delete
+     * must not cost what a whole-project one does. Measured on a real-size
+     * shared store (180,210 frames x 5 cameras, 2.7M instance rows) it used to
+     * be 130-200 ms and ~216 MB of fresh column buffers per keypress, from three
+     * whole-project passes. Each is now bounded by what was deleted:
+     *  - `opts.only` walks just the named (camera, frame) rows instead of
+     *    calling `shouldDeleteFn` on all 2.7M;
+     *  - columns are compacted IN PLACE from the first deleted row (rows before
+     *    it do not move) and re-exposed as a shorter `subarray` view — no new
+     *    buffer, unless more than half the rows went, when a right-sized copy
+     *    gives the memory back as the old fresh-array compaction did;
+     *  - track occupancy is rebuilt only for a camera that LOST a row. On a
+     *    shared store every camera's ranges shift, but a camera's occupancy is
+     *    its frames' track values, which only its own deletions change.
+     * In place is safe because every reader indexes `store.instancesData.<col>`
+     * element-wise and fresh (`appendStore`, the store's own `materializeFrame`,
+     * `forEachInstanceRow`); nothing holds a column across a delete.
+     *
      * CALLER CONTRACT: this only touches the store. The caller must also
      * renumber `_rawInstIndex` on every surviving resident/group instance in
      * each touched (camera, frame) — otherwise `refFor` writes grouping refs
@@ -837,9 +1105,15 @@ export class SioLazyLoader {
      *   Called once per instance row per camera. `offsetInFrame` is the row's
      *   position within its (camera, frame) list — i.e. the value an
      *   `Instance._rawInstIndex` would carry.
+     * @param {{only?: Map<string, Map<number, *>|Set<number>>}} [opts]
+     *   `only` — camName -> the frame indices (a Map's keys or a Set) whose rows
+     *   may be deleted. `shouldDeleteFn` is then called for those camera-frames'
+     *   rows ONLY; a camera or frame not named is never visited. Purely a
+     *   narrowing of the walk: the predicate still decides every row.
      * @returns {{deleted: number, errorRows: number, firstError: Error|null, byCamera: Object.<string, number>}}
      */
-    deleteInstanceRows(shouldDeleteFn) {
+    deleteInstanceRows(shouldDeleteFn, opts) {
+        var only = opts && opts.only ? opts.only : null;
         var deleted = 0;
         var errorRows = 0;
         var firstError = null;
@@ -880,11 +1154,26 @@ export class SioLazyLoader {
             // spent two PRs removing.
             var kill = new Uint8Array(nInst);
             var storeDeleted = 0;
+            var firstKill = nInst;          // rows before it keep their index
+            var camsHit = [];               // cameras that lost a row (occupancy)
             for (var ci = 0; ci < camNames.length; ci++) {
                 var cn = camNames[ci];
                 var rowMap = this.frameRowByCam.get(cn);
                 var camDeleted = 0;
-                for (var [frameIdx, frameRow] of rowMap) {
+                // `opts.only` narrows the walk to the named camera-frames (see
+                // the cost note above); without it every row is offered.
+                var frameRows = rowMap;
+                if (only) {
+                    var wanted = only.get(cn);
+                    frameRows = [];
+                    if (wanted) {
+                        for (var wf of wanted.keys()) {
+                            var wr = rowMap.get(wf);
+                            if (wr !== undefined) frameRows.push([wf, wr]);
+                        }
+                    }
+                }
+                for (var [frameIdx, frameRow] of frameRows) {
                     var iStart = Number(fd.instance_id_start[frameRow]) || 0;
                     var iEnd = Number(fd.instance_id_end[frameRow]) || 0;
                     if (iStart < 0) iStart = 0;
@@ -896,6 +1185,7 @@ export class SioLazyLoader {
                         try {
                             if (!kill[j] && shouldDeleteFn(cn, frameIdx, j - iStart, j)) {
                                 kill[j] = 1;
+                                if (j < firstKill) firstKill = j;
                                 deleted++; storeDeleted++; camDeleted++;
                             }
                         } catch (rowErr) {
@@ -909,6 +1199,7 @@ export class SioLazyLoader {
                     }
                 }
                 byCamera[cn] = (byCamera[cn] || 0) + camDeleted;
+                if (camDeleted > 0) camsHit.push(cn);
             }
             if (storeDeleted === 0) continue;   // nothing matched in this store
 
@@ -921,22 +1212,60 @@ export class SioLazyLoader {
             // Iterating `Object.keys` instead of a hardcoded column list so a
             // future schema addition is carried through rather than silently
             // left at the old length (which would desync the columns).
-            // `col.constructor` preserves typed-vs-plain and the element type
-            // (#193 made these typed arrays; `score` is float, `track` is int).
+            // In place, from `firstKill` (see the cost note above): survivors
+            // only ever move DOWN, so a forward copy never reads a slot it has
+            // already overwritten. A typed column is then re-exposed as a
+            // `subarray` view (#193 made these typed arrays; the view keeps
+            // the element type — `score` float, `track` int); a plain one is
+            // truncated. When more than half the rows went, `slice` hands back
+            // a right-sized copy so a bulk delete still releases its memory.
+            // A FEW deleted rows (an interactive delete) leave a few long runs of
+            // survivors, and `copyWithin` moves each run as one memmove: 10
+            // columns x 2.7M rows in ~5 ms against ~70 ms element by element.
+            // MANY deleted rows leave many short runs, where the per-call cost
+            // loses to the plain loop — hence the cutoff.
+            var runs = null;   // flat [start, end) pairs of surviving rows past firstKill
+            if (storeDeleted <= DELETE_RUN_COPY_MAX) {
+                runs = [];
+                var rs = firstKill;
+                while (rs < nInst) {
+                    while (rs < nInst && kill[rs]) rs++;
+                    var re = rs;
+                    while (re < nInst && !kill[re]) re++;
+                    if (re > rs) runs.push(rs, re);
+                    rs = re;
+                }
+            }
+            var shrink = nSurv * 2 < nInst;
+            var compacted = new Map();   // column -> its output: an array under two keys moves ONCE
             var idnKeys = Object.keys(idn);
             for (var ki = 0; ki < idnKeys.length; ki++) {
                 var col = idn[idnKeys[ki]];
+                if (compacted.has(col)) { idn[idnKeys[ki]] = compacted.get(col); continue; }
                 if (!col || typeof col.length !== 'number' || col.length !== nInst) continue;
-                var isTyped = typeof col.subarray === 'function';
-                var out = isTyped ? new col.constructor(nSurv) : new Array(nSurv);
-                var w = 0;
-                for (var s = 0; s < nInst; s++) if (!kill[s]) out[w++] = col[s];
+                var w = firstKill;
+                if (runs) {
+                    for (var rr = 0; rr < runs.length; rr += 2) {
+                        col.copyWithin(w, runs[rr], runs[rr + 1]);
+                        w += runs[rr + 1] - runs[rr];
+                    }
+                } else {
+                    for (var s = firstKill; s < nInst; s++) if (!kill[s]) col[w++] = col[s];
+                }
+                var out;
+                if (typeof col.subarray === 'function') {
+                    out = shrink ? col.slice(0, nSurv) : col.subarray(0, nSurv);
+                } else {
+                    col.length = nSurv;
+                    out = col;
+                }
                 // Reassign the PROPERTY on the same `instancesData` object —
                 // never replace the object itself. `appendStore` and
                 // `_computeSparseOccupancy` both read `store.instancesData.<col>`
                 // fresh on each access, so this is picked up; replacing the
                 // container would orphan any held reference to it.
                 idn[idnKeys[ki]] = out;
+                compacted.set(col, out);
             }
 
             // ---- 4. Remap from_predicted through the same table. Values are
@@ -971,9 +1300,10 @@ export class SioLazyLoader {
             // the compacted columns, exactly as remapTracksFromIdentity does —
             // `session.trackOccupancy` is this same Map by reference, so the
             // Tracks Timeline picks it up. Without this it shows presence bars
-            // for deleted instances forever.
-            for (var ci2 = 0; ci2 < camNames.length; ci2++) {
-                var cn2 = camNames[ci2];
+            // for deleted instances forever. Only the cameras that LOST a row:
+            // on a shared store the others' ranges moved, but not their content.
+            for (var ci2 = 0; ci2 < camsHit.length; ci2++) {
+                var cn2 = camsHit[ci2];
                 try {
                     var newOcc = this._computeSparseOccupancy(labels, this.nFrames, this.frameRowByCam.get(cn2));
                     if (newOcc) this.trackOccupancy.set(cn2, newOcc);
@@ -1010,6 +1340,7 @@ export class SioLazyLoader {
                 'PROJECT — the delete is incomplete and the caller must report it rather than claim ' +
                 'success. First error:', firstError);
         }
+        if (deleted > 0) this._storeEditedInMemory = true;
         return { deleted: deleted, errorRows: errorRows, firstError: firstError, byCamera: byCamera };
     }
 
@@ -1019,6 +1350,9 @@ export class SioLazyLoader {
         this.labelsByCam.clear();
         this.frameRowByCam.clear();
         this.numNodesByCam.clear();
+        this._trackSourceByCam.clear();
+        this._skeletonByCam.clear();
+        this._storeEditedInMemory = false;
         this.cache.clear();
         this.cacheOrder = [];
         this.videos.clear();

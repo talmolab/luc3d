@@ -16,22 +16,24 @@ import {
     reprojectPoints,
     computeInstanceDistanceTo,
     hungarianAlgorithm
-} from './triangulation.js?v=ff7b87d14426';
-import { CrossViewTracker, Detection } from './cross-view-tracker.js?v=ff7b87d14426';
-import { InstanceGroup, points3dNodeCount, hasPoint3d, readPoint3d } from './pose-data.js?v=ff7b87d14426';
+} from './triangulation.js?v=a07978e22373';
+import { CrossViewTracker, Detection } from './cross-view-tracker.js?v=a07978e22373';
+import { InstanceGroup, points3dNodeCount, hasPoint3d, readPoint3d, pooledPoints3d } from './pose-data.js?v=a07978e22373';
 
 // Pass 3i-1: tracker UI/integration (was in app.js)
-import { state, interactionManager, timeline, viewport3d, getActiveSession } from '../ui/app-state.js?v=ff7b87d14426';
-import { getNodeWeightArray, getTrackingThresholds, getTrackingThreshold, isCameraTracked } from '../ui/settings.js?v=ff7b87d14426';
-import { setStatus, hideLoading } from '../import-export/save-load.js?v=ff7b87d14426';
-import { showLoadingProgress, createProgressPacer, yieldToPaint } from '../ui/loading-overlay.js?v=ff7b87d14426';
-import { loadAllLazyFrames, sweepLazyFrameWindows } from './triangulation.js?v=ff7b87d14426';
-import { drawAllOverlays, showPredictedOnly, PREDICTED_ONLY_NOTE } from '../ui/rendering.js?v=ff7b87d14426';
-import { updateInfoPanel } from '../ui/info-panel.js?v=ff7b87d14426';
-import { setColorByIdentity } from '../ui/color-by.js?v=ff7b87d14426';
-import { runIdSwitchChecks, clearIdSwitchResults } from '../ui/id-switch-modal.js?v=ff7b87d14426';
-import { collapseTimeline } from '../ui/timeline-controller.js?v=ff7b87d14426';
-import { collapseViewport3D } from '../ui/panel-visibility.js?v=ff7b87d14426';
+import { state, interactionManager, timeline, viewport3d, getActiveSession } from '../ui/app-state.js?v=a07978e22373';
+import { getNodeWeightArray, getTrackingThresholds, getTrackingThreshold, isCameraTracked } from '../ui/settings.js?v=a07978e22373';
+import { markDirty, setStatus, hideLoading } from '../import-export/save-load.js?v=a07978e22373';
+import { showLoadingProgress, createProgressPacer, yieldToPaint } from '../ui/loading-overlay.js?v=a07978e22373';
+import { loadAllLazyFrames, sweepLazyFrameWindows } from './triangulation.js?v=a07978e22373';
+import { drawAllOverlays, showPredictedOnly, PREDICTED_ONLY_NOTE } from '../ui/rendering.js?v=a07978e22373';
+import { updateInfoPanel } from '../ui/info-panel.js?v=a07978e22373';
+import { setColorByIdentity } from '../ui/color-by.js?v=a07978e22373';
+import { runIdSwitchChecks, clearIdSwitchResults } from '../ui/id-switch-modal.js?v=a07978e22373';
+import { summarizeTrackedIdentities, describeSwitchCheck } from '../ui/track-summary.js?v=a07978e22373';
+import { showTrackSummaryModal } from '../ui/track-summary-modal.js?v=a07978e22373';
+import { collapseTimeline } from '../ui/timeline-controller.js?v=a07978e22373';
+import { collapseViewport3D } from '../ui/panel-visibility.js?v=a07978e22373';
 
 /**
  * A frame index as the USER sees it: 1-based.
@@ -976,7 +978,10 @@ export function commitTrackedFrame(session, trk, frameIdx, trackToIdentity, iden
         }
 
         var group = new InstanceGroup(nextGroupId(), identityId);
-        group.points3d = target.points3d;
+        // A COPY in the slab pool (pose-data.js `pooledPoints3d`): one
+        // ArrayBuffer per group was 539,545 of them for a full Track All, and it
+        // also stops the group sharing the tracker target's live array.
+        group.points3d = pooledPoints3d(target.points3d);
         for (var m = 0; m < members.length; m++) {
             var camName = members[m].camName;
             var det = members[m].det;
@@ -1124,6 +1129,10 @@ export function trackCurrentFrame() {
         return;
     }
 
+    // Every bail-out is above; from here on the frame's tracking state is
+    // rewritten, so the project no longer matches its file — see the matching
+    // call in runTrackingPass for why this is unconditional.
+    markDirty();
     try {
         // Single-frame pass (births only — no cross-frame history). Populates
         // identities + per-frame map + InstanceGroups for this frame;
@@ -1318,6 +1327,10 @@ async function runTrackingPass(range) {
         if (!promptNumAnimals()) return bail;
     }
 
+    // How long tracking took, for the summary box: from here (after the animal-count
+    // prompt, so the user's typing is not counted) to the end of the identity pass.
+    var trackStart = performance.now();
+
     // A non-windowed lazy session materializes every frame first, so the run
     // has two labelled stages; everything else is the identity pass alone.
     var STEPS = (loader && !windowed) ? 2 : 1;
@@ -1377,6 +1390,15 @@ async function runTrackingPass(range) {
         isRange ? '(range ' + lo + '–' + hi + ', 0-based)' : '');
     console.time('[' + label + '] total');
 
+    // Every bail-out is above; this is where the pass starts rewriting project
+    // state, so flag it unsaved here (save dot, `• Lucid` title, and the
+    // unload / switch-session prompts) — as triangulateAllFrames does. It is
+    // deliberately NOT conditional on what the run finds: the clear below runs
+    // first, so a re-run that matches nothing (or throws partway) has still
+    // wiped the previous result, and gating on numTargets/numIdentities would
+    // leave exactly that unflagged. Covers both sweeps (windowed and not).
+    markDirty();
+
     // ID-switch results (Tracks ▸ Check ID Switches; the ID Switches tab + timeline markers)
     // describe the identities this pass is about to replace — drop them, for a range too.
     clearIdSwitchResults(session);
@@ -1417,6 +1439,7 @@ async function runTrackingPass(range) {
                 { start: lo, end: hi, identityPool: identityPool })
             : await runCrossViewTrackerProgress(session, cameras, frameIndices, false,
                 effectiveNumAnimals, onProgress, identityPool);
+        var trackMs = performance.now() - trackStart;
         hideLoading();
         // The run's product is identities, so show them (#242): switch Color
         // from Tracks to ID. Only when it assigned any — otherwise there is
@@ -1441,18 +1464,44 @@ async function runTrackingPass(range) {
         var doneMsg = 'Assigned ' + lres.numIdentities + ' identities across ' +
             totalFrameCount + ' frames' +
             (isRange ? ' (' + displayFrame(lo) + '–' + displayFrame(hi) + ')' : '') +
-            (switchedToIds ? ', now coloring by ID' : '') +
+            (switchedToIds ? ', now coloring by Identity' : '') +
             ' — use Tracks ▸ Propagate IDs → Tracks to apply' + (predOnly ? PREDICTED_ONLY_NOTE : '');
         setStatus(doneMsg, 'success');
         // Then check the result for identity switches (ui/id-switch-modal.js): by body
         // size (Tracking Wizard `autoSwitchCheck`, default on) and/or by images
-        // (`autoImageSwitchCheck`, default off — minutes, needs the videos + WebGPU).
+        // (`autoImageSwitchCheck`, default off — minutes, needs the videos; with no GPU it runs on the CPU, slower).
         // After a range this covers the WHOLE session's identities, so a re-tracked
         // window is checked against the frames around it; with too little tracked
         // data a check reports itself skipped. It never fails the tracking pass.
         var autoSize = getTrackingThreshold('autoSwitchCheck') > 0, autoImage = getTrackingThreshold('autoImageSwitchCheck') > 0;
+        var checkRes = null;
         if (lres.numIdentities > 1 && (autoSize || autoImage)) {
-            await runIdSwitchChecks({ auto: true, statusPrefix: doneMsg, size: autoSize, image: autoImage });
+            checkRes = await runIdSwitchChecks({ auto: true, statusPrefix: doneMsg, size: autoSize, image: autoImage });
+        }
+        // Track All ends on a summary box (ui/track-summary-modal.js): how tracking
+        // went and how long it and each check took, what the checks concluded — "not run" and "skipped" included, which
+        // the status line alone made look like "found nothing" — and the next step.
+        // A range does not: it is a targeted re-run, inspected on the timeline. The
+        // tracking already succeeded, so a summary that fails only logs.
+        if (!isRange) {
+            try {
+                // `runIdSwitchChecks` returns null only when there were no tracked 3D skeletons to check.
+                var noSkeletons = 'no tracked 3D skeletons';
+                showTrackSummaryModal(
+                    summarizeTrackedIdentities(session, {
+                        frames: totalFrameCount, animals: effectiveNumAnimals, animalsAuto: trackerNumAnimals == null,
+                        elapsedMs: trackMs,
+                        // The recording's rate, as the ID-switch checks read it (measured
+                        // from the video when one is loaded), for the real-time multiplier.
+                        fps: state.fps > 0 ? state.fps : (session.fps > 0 ? session.fps : 0),
+                    }),
+                    {
+                        size: describeSwitchCheck(autoSize, checkRes && checkRes.size, lres.numIdentities, noSkeletons),
+                        image: describeSwitchCheck(autoImage, checkRes && checkRes.image, lres.numIdentities, noSkeletons),
+                    });
+            } catch (e) {
+                console.error('[' + label + '] summary failed:', e);
+            }
         }
         // Report the span actually swept. For Track All that is whatever the
         // project turned out to hold; for a range it is the clamped, normalized

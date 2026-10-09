@@ -15,6 +15,8 @@
  * surface.
  */
 
+import { trailFrames, trailRate } from './trail-presets.js?v=a07978e22373';
+
 export const state = {
     views: [],          // { name, decoder, canvas, ctx, overlayCanvas, overlayCtx, videoWidth, videoHeight }
     videoFiles: [],     // { file, name, decoder, videoWidth, videoHeight, frameCount, assignedCamera }
@@ -36,7 +38,12 @@ export const state = {
     exportDirHandle: null,      // FileSystemDirectoryHandle from showDirectoryPicker(), retained across exports
     cameraDirMap: {},           // camName -> subdirectory name, cached from session folder load
     colorByIdentity: false,     // false = color by track, true = color by identity
-    trailLength: 0,             // node-trail history length in frames (0 = off; presets 10/50/100). Set via Tracks menu.
+    trailSeconds: 0,            // node-trail length in SECONDS (0 = off; presets ¼/½/1/2 s or Custom…, ui/trail-presets.js). Set via Tracks menu / Trails button.
+    // The trail in FRAMES, derived — never stored — so it follows `fps` when a
+    // video loads or the FPS pill is edited. Setting it (tests and benches pin a
+    // frame count) stores the same span in seconds at the current rate.
+    get trailLength() { return trailFrames(this.trailSeconds, this.fps); },
+    set trailLength(frames) { this.trailSeconds = frames > 0 ? frames / trailRate(this.fps) : 0; },
     decoderPool: [],            // Persistent OnDemandVideoDecoder instances, reused across session switches
     slpFileHandle: null,        // FileSystemFileHandle for quick save
     isDirty: false,             // true when unsaved annotation changes exist

@@ -2058,6 +2058,8 @@ function trailViewInstances(fg, viewName) {
 // up to and including `frameIdx` — like SLEAP's `labels.find(video,
 // range(0,frame_idx+1))[-trail_length:]`: sparse-aware, and only reads frames
 // already in `session.frameGroups` (no lazy-H5 fetch — the perf concern in #102).
+// On a lazy project the window ends at the first frame that is not resident
+// (see `trailWindowFrames`); the draw path hydrates it beforehand.
 // Trails are drawn for EVERY track (linked+unlinked, by per-view `trackIdx`) that
 // appears anywhere in the window — including tracks that have already VANISHED
 // from the current frame, so a track's trail lingers and fades out over the window
@@ -2070,7 +2072,7 @@ export function drawNodeTrails(ctx, viewName, session, frameIdx, options) {
     var trailLength = options.trailLength || 0;
     if (trailLength <= 0 || !session || frameIdx == null || !session.frameGroups) return;
 
-    var windowIdx = trailWindowFrames(session.frameGroups, frameIdx, trailLength);
+    var windowIdx = trailWindowFrames(session.frameGroups, frameIdx, trailLength, !!session.lazyLoader);
     if (windowIdx.length < 2) return;                 // need at least one segment
     var W = windowIdx.length;
 
@@ -2178,10 +2180,22 @@ export function drawNodeTrails(ctx, viewName, session, frameIdx, options) {
  * (labelled frames far apart) walking could take many more steps than there
  * are frames, so after `frameGroups.size` steps it falls back to the scan,
  * which then costs no more than the walk already did.
+ *
+ * `residentOnly` is for a LAZY project, where `frameGroups` is a residency
+ * window: a missing frame there is one not hydrated yet, not one with no
+ * labels. Skipping it would join the trail to whatever is still resident from
+ * before a seek, thousands of frames back — so the window ends at the first
+ * missing frame instead. `ensureLazyTrailWindow` (pose/triangulation.js)
+ * hydrates the window before a draw, so this only shortens a trail while its
+ * frames are still arriving.
  */
-export function trailWindowFrames(frameGroups, frameIdx, trailLength) {
+export function trailWindowFrames(frameGroups, frameIdx, trailLength, residentOnly) {
     var want = trailLength + 1;
     var out = [];
+    if (residentOnly) {
+        for (var r = frameIdx; r >= 0 && out.length < want && frameGroups.has(r); r--) out.push(r);
+        return out;
+    }
     var limit = frameGroups.size;
     var idx = frameIdx, steps = 0;
     for (; idx >= 0 && out.length < want && steps < limit; idx--, steps++) {

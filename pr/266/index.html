@@ -6,7 +6,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Multi-View Pose Proofreader</title>
-    <link rel="stylesheet" href="styles.css?v=ff7b87d14426">
+    <link rel="stylesheet" href="styles.css?v=a07978e22373">
     <!-- Pinned: dockview-core 7.x renamed api.onUnhandledDragOverEvent →
          onUnhandledDragOver, so the unpinned /+esm import broke pane docking
          whenever the CDN cache refreshed. Keep this pin in sync with the
@@ -18,17 +18,17 @@
     <script src="https://cdn.jsdelivr.net/npm/three@0.147.0/build/three.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/three@0.147.0/examples/js/controls/OrbitControls.js"></script>
     <!-- h5wasm for in-browser HDF5 read/write — local vendored 0.10.3 IIFE (global `h5wasm`); see lib/h5wasm/PROVENANCE.txt -->
-    <script src="./lib/h5wasm/h5wasm.iife.js?v=ff7b87d14426"></script>
+    <script src="./lib/h5wasm/h5wasm.iife.js?v=a07978e22373"></script>
     <!-- Video encode AND decode both go through mediabunny (importmap below):
          export via ui/video-encode.js, decode via sleap-io.js's backend. -->
     <!-- Import map for sleap-io.js ESM dependencies -->
     <script type="importmap">
     {
         "imports": {
-            "h5wasm": "./lib/h5wasm/hdf5_hl.js?v=ff7b87d14426",
+            "h5wasm": "./lib/h5wasm/hdf5_hl.js?v=a07978e22373",
             "yaml": "https://cdn.jsdelivr.net/npm/yaml@2.8.0/browser/index.js",
-            "mediabunny": "./lib/mediabunny/mediabunny.min.mjs?v=ff7b87d14426",
-            "pako": "./lib/pako/pako.esm.mjs?v=ff7b87d14426"
+            "mediabunny": "./lib/mediabunny/mediabunny.min.mjs?v=a07978e22373",
+            "pako": "./lib/pako/pako.esm.mjs?v=a07978e22373"
         }
     }
     </script>
@@ -140,14 +140,8 @@
                     <div class="menu-dropdown-item has-submenu" id="menuTrailsParent">
                         <span>Node Trails</span>
                         <span class="submenu-arrow">▶</span>
-                        <div class="menu-dropdown submenu" id="menuTrailsSubmenu">
-                            <div class="menu-dropdown-item" id="menuTrailsOff"><span><span class="trail-check">✓</span>Off</span></div>
-                            <div class="menu-dropdown-item" id="menuTrails10"><span><span class="trail-check"></span>10 frames</span></div>
-                            <div class="menu-dropdown-item" id="menuTrails50"><span><span class="trail-check"></span>50 frames</span></div>
-                            <div class="menu-dropdown-item" id="menuTrails100"><span><span class="trail-check"></span>100 frames</span></div>
-                            <div class="menu-dropdown-item" id="menuTrails250"><span><span class="trail-check"></span>250 frames</span></div>
-                            <div class="menu-dropdown-item" id="menuTrails500"><span><span class="trail-check"></span>500 frames</span></div>
-                        </div>
+                        <!-- Items built from TRAIL_PRESETS in ui/ui-wiring.js, like the toolbar's Trails menu. -->
+                        <div class="menu-dropdown submenu" id="menuTrailsSubmenu" role="menu"></div>
                     </div>
                     <div class="menu-separator"></div>
                     <div class="menu-dropdown-item" id="menuTrackingWizard">Tracking Wizard...</div>
@@ -195,7 +189,6 @@
                 <button class="toolbar-btn" id="tbDeleteInstance" title="Delete selected instance (Del)">-
                     Instance</button>
             </div>
-            <div class="toolbar-separator"></div>
             <div class="toolbar-group">
                 <button class="toolbar-btn" id="tbGroup" title="Group selected instances (⇧G or C)">Group</button>
                 <button class="toolbar-btn" id="tbEditGroup" title="Edit selected group membership">Edit Group</button>
@@ -213,9 +206,10 @@
                         <div class="tri-dropdown-item" data-method="ba">Ref <span class="tri-dropdown-hint">Slow &amp; Accurate</span></div>
                     </div>
                 </div>
+                <!-- Inside the Triangulate group so it stays on this side of the
+                     group's divider (ui/info-panel.js updateTriangulationBadge). -->
+                <span class="triangulation-badge" id="triangulationBadge" style="display:none"></span>
             </div>
-            <span class="triangulation-badge" id="triangulationBadge" style="display:none"></span>
-            <div class="toolbar-separator"></div>
             <div class="toolbar-group">
                 <div class="tri-dropdown" id="trackFrameDropdown">
                     <button class="toolbar-btn" id="tbTrackFrame" title="Track current frame (Shift+T)">Track Frame <span class="tri-caret">▾</span></button>
@@ -225,22 +219,32 @@
                 </div>
                 <button class="toolbar-btn" id="tbTrackAll" title="Track all frames (Ctrl+Shift+T)">Track All</button>
             </div>
-            <div class="toolbar-separator"></div>
             <div class="toolbar-group toolbar-checkboxes">
                 <label><input type="checkbox" id="visUser" checked> User</label>
-                <label><input type="checkbox" id="visPredicted" checked> Predicted</label>
-                <label><input type="checkbox" id="visReprojections" checked> Reproj</label>
+                <label><input type="checkbox" id="visPredicted" checked> Predictions</label>
+                <label><input type="checkbox" id="visReprojections" checked> Reprojections</label>
                 <label><input type="checkbox" id="visErrors" checked> Errors</label>
             </div>
-            <div class="toolbar-separator"></div>
-            <div class="toolbar-group">
-                <span class="toolbar-checkboxes" style="margin-right:6px;font-weight:bold;">Color</span>
+            <div class="toolbar-group" role="group" aria-label="Color by">
                 <button class="toolbar-btn active" id="colorByTracks" title="Color instances by track">Tracks</button>
-                <button class="toolbar-btn" id="colorById" title="Color instances by identity">ID</button>
+                <button class="toolbar-btn" id="colorById" title="Color instances by identity">Identity</button>
+            </div>
+            <!-- Node Trails (issue #102). Same presets and state as Tracks ▸ Node
+                 Trails; the items are built from that one list in ui/ui-wiring.js.
+                 Opens on hover, like the Triangulate menus. The label stays a bare
+                 "Trails" (the value is the menu's checkmark and the tooltip) to
+                 save toolbar width; the button turns blue (.active) while a
+                 trail is on. -->
+            <div class="toolbar-group">
+                <div class="tri-dropdown" id="trailsDropdown">
+                    <button class="toolbar-btn" id="tbTrails" aria-haspopup="menu"
+                        title="Node trails: off">Trails <span class="tri-caret">▾</span></button>
+                    <div class="tri-dropdown-menu" id="trailsMenu" role="menu"></div>
+                </div>
             </div>
             <div class="toolbar-group panel-toggles">
-                <button class="toolbar-btn panel-toggle-btn" id="viewport3dToggleBtn" title="Toggle 3D viewer (\)">Hide 3D View</button>
-                <button class="toolbar-btn panel-toggle-btn" id="infoPanelToggleBtn" title="Toggle info panel (I)">Hide Panel</button>
+                <button class="toolbar-btn panel-toggle-btn active" id="viewport3dToggleBtn" aria-pressed="true" title="Hide 3D viewer (\)">3D</button>
+                <button class="toolbar-btn panel-toggle-btn active" id="infoPanelToggleBtn" aria-pressed="true" title="Hide info panel (I)">Panel</button>
             </div>
         </div>
 
@@ -367,8 +371,7 @@
                         <table class="data-table" id="instanceGroupsTable">
                             <thead>
                                 <tr>
-                                    <th>Track</th>
-                                    <th>Identity</th>
+                                    <th>Track / Identity</th>
                                     <th>Views</th>
                                     <th>Type</th>
                                     <th class="reproj-error-col" style="display:none">Error</th>
@@ -386,8 +389,7 @@
                         <table class="data-table" id="unlinkedTable">
                             <thead>
                                 <tr>
-                                    <th>Track</th>
-                                    <th>ID</th>
+                                    <th>Track / Identity</th>
                                     <th>Type</th>
                                     <th>Points</th>
                                     <th>Score</th>
@@ -462,7 +464,7 @@
                             <button class="line-style-btn" data-style="dashed" title="Dashed"><svg width="40" height="12"><line x1="2" y1="6" x2="38" y2="6" stroke="currentColor" stroke-width="2" stroke-dasharray="6,4"/></svg></button>
                         </div>
                     </div>
-                    <h3>Predicted</h3>
+                    <h3>Predictions</h3>
                     <div class="vis-slider-row">
                         <span>Node Size</span>
                         <input type="range" id="visPredNodeSize" min="1" max="50" value="6" step="1">
@@ -1298,9 +1300,15 @@
 
         <!-- Playback Controls -->
         <div class="controls-bar">
+            <!-- Frame readout (ui/frame-readout.js): a 3-column grid, so both
+                 slashes line up — time / duration above, frame / total below. -->
             <div class="frame-display">
+                <span class="frame-time" id="currentTime" title="Time of the current frame, at the playback FPS">00:00.000</span>
+                <span class="frame-time frame-sep">/</span>
+                <span class="frame-time" id="totalTime" title="Duration, at the playback FPS">00:00.000</span>
                 <span class="current-frame" id="currentFrame">1</span>
-                <span>/ <span id="totalFrames">0</span></span>
+                <span class="frame-sep">/</span>
+                <span id="totalFrames">0</span>
             </div>
 
             <div class="transport-controls">
@@ -1372,7 +1380,7 @@
             InstanceGroup as SioInstanceGroup, FrameGroup as SioFrameGroup,
             Identity as SioIdentity, Instance3D, PredictedInstance3D,
             MediaBunnyVideoBackend
-        } from './lib/sleap-io/index.browser.js?v=ff7b87d14426';
+        } from './lib/sleap-io/index.browser.js?v=a07978e22373';
         window.SleapIO = {
             Labels, LabeledFrame, Instance, PredictedInstance,
             Skeleton, Node, Edge, Video, Track, saveSlpToBytes,
@@ -1386,7 +1394,7 @@
         window.dispatchEvent(new Event('sleapio-ready'));
     </script>
 
-    <script type="module" src="app.js?v=ff7b87d14426"></script>
+    <script type="module" src="app.js?v=a07978e22373"></script>
 </body>
 
 </html>

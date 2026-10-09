@@ -7,55 +7,57 @@
 import {
     Skeleton, Camera, Instance, UnlinkedInstance, FrameGroup, Identity,
     InstanceGroup, Session,
-    asPoints3d, points3dNodeCount, someValidPoint3d,
-} from '../pose/pose-data.js?v=ff7b87d14426';
+    asPoints3d, points3dNodeCount, someValidPoint3d, lazyPlaceholderXY, pooledPoints3d,
+} from '../pose/pose-data.js?v=a07978e22373';
 import {
     reprojectPointsCamera, reprojectPoints, computeReprojectionErrors,
     storeReprojectedInstances, getInstanceGroupsForFrame,
-} from '../pose/triangulation.js?v=ff7b87d14426';
+} from '../pose/triangulation.js?v=a07978e22373';
 import {
     parseSlpH5, parseSlpViaSleapIO, instanceMatchesPoints, parsePoints3dH5, pickFiles,
-} from './file-io.js?v=ff7b87d14426';
+} from './file-io.js?v=a07978e22373';
 import {
     validateSkeletonCompatibility, mergeTracksIntoSession,
     mergeSlpFramesIntoSession, rebuildInstanceGroupsForFrames,
-} from './slp-merge.js?v=ff7b87d14426';
-import { OnDemandVideoDecoder, EmbeddedVideoDecoder } from '../loading/video.js?v=ff7b87d14426';
+} from './slp-merge.js?v=a07978e22373';
+import { OnDemandVideoDecoder, EmbeddedVideoDecoder } from '../loading/video.js?v=a07978e22373';
 import {
     state,
     videoController, interactionManager, viewport3d, timeline, paneManager,
     setVideoController,
-} from '../ui/app-state.js?v=ff7b87d14426';
+} from '../ui/app-state.js?v=a07978e22373';
 import {
     autoAssignVideosToCameras, forceVideoSelection, forceVideoSelectionWithFolder,
     showParentDirMatchSummary, createViewForVideoFile, updateTotalFrames,
     updateGridLayout, createVideoPromptCell, fitCanvasesToCells,
     rebuildVideoController, resolveImportTrackIdx, isCalibrationVideoFile,
-} from '../loading/session-loader.js?v=ff7b87d14426';
-import { remapGlobalTrackToSession, nulledNodesFromOcclusion } from './import-track-resolve.js?v=ff7b87d14426';
+} from '../loading/session-loader.js?v=a07978e22373';
+import { preferNonCalibrationVideos } from '../loading/video-file-pick.js?v=a07978e22373';
+import { remapGlobalTrackToSession, nulledNodesFromOcclusion } from './import-track-resolve.js?v=a07978e22373';
 import {
     showLoading, hideLoading, setStatus, clearDirty, ensureNo3dImportBlockingLoad,
-} from './save-load.js?v=ff7b87d14426';
+} from './save-load.js?v=a07978e22373';
 
 // Circular import — these are still defined in app.js for now. They are only
 // invoked inside function bodies, never at module-init time, so live-binding
 // lookup keeps them functional.
-import { drawAllOverlays, setReprojErrorVisible } from '../ui/rendering.js?v=ff7b87d14426';
-import { updateInfoPanel, promptImportSkeletonForAllSessions } from '../ui/info-panel.js?v=ff7b87d14426';
-import { noteSessionCalibrationDivergence } from '../ui/calibration-notice.js?v=ff7b87d14426';
+import { drawAllOverlays, setReprojErrorVisible } from '../ui/rendering.js?v=a07978e22373';
+import { updateInfoPanel, promptImportSkeletonForAllSessions } from '../ui/info-panel.js?v=a07978e22373';
+import { noteSessionCalibrationDivergence } from '../ui/calibration-notice.js?v=a07978e22373';
 // Pass 3i-3: setup3DViewport moved to pose/initialization.js.
-import { setup3DViewport } from '../pose/initialization.js?v=ff7b87d14426';
+import { setup3DViewport } from '../pose/initialization.js?v=a07978e22373';
 // Pass 3e-1: fitTimelineToData moved to ui-wiring.js.
-import { fitTimelineToData, updateSeekbar } from '../ui/ui-wiring.js?v=ff7b87d14426';
+import { fitTimelineToData, updateSeekbar } from '../ui/ui-wiring.js?v=a07978e22373';
+import { refreshReadoutTotals } from '../ui/frame-readout.js?v=a07978e22373';
 // Block 1 (Prompt 4): keep timeline._uploadedCameras in sync after SLP
 // load so the gutter filters to the cameras that actually have video
 // assignments rather than every calibration camera.
-import { recomputeUploadedCameras } from '../loading/session-loader.js?v=ff7b87d14426';
+import { recomputeUploadedCameras } from '../loading/session-loader.js?v=a07978e22373';
 // Pass 3h: populateViewStrip / populateSessionStrip moved to sessions-panes.js.
-import { populateViewStrip, populateSessionStrip } from '../ui/sessions-panes.js?v=ff7b87d14426';
-import { getLoadingProgressModal } from '../ui/loading-progress-modal.js?v=ff7b87d14426';
-import { readVisibilityMetadata } from './visibility-metadata.js?v=ff7b87d14426';
-import { readPlaneMetadata, resetPlaneState } from './plane-metadata.js?v=ff7b87d14426';
+import { populateViewStrip, populateSessionStrip } from '../ui/sessions-panes.js?v=a07978e22373';
+import { getLoadingProgressModal } from '../ui/loading-progress-modal.js?v=a07978e22373';
+import { readVisibilityMetadata } from './visibility-metadata.js?v=a07978e22373';
+import { readPlaneMetadata, resetPlaneState } from './plane-metadata.js?v=a07978e22373';
 
 /**
  * SLP import parse dispatcher (PR 5.1). Routes real `.slp` files through
@@ -235,7 +237,7 @@ export async function reconstructInstanceGroupsFromDicts(session, fgDicts, camKe
             // Restore 3D points
             var _igPts = asPoints3d(igDict.points);
             if (points3dNodeCount(_igPts) > 0) {
-                group.points3d = _igPts;
+                group.points3d = pooledPoints3d(_igPts);
                 restoredWith3d++;
                 // Which solver produced this 3D (persisted in metadata.lucid;
                 // absent = DLT). Without it a reopened project has BA 3D with an
@@ -431,7 +433,7 @@ export async function reconstructInstanceGroupsFromSession(session, typedSession
             var i3d = typedIG.instance3d;
             var _i3dPts = asPoints3d(i3d && i3d.points);
             if (points3dNodeCount(_i3dPts) > 0) {
-                group.points3d = _i3dPts;
+                group.points3d = pooledPoints3d(_i3dPts);
                 restoredWith3d++;
                 // Which solver produced this 3D (persisted in metadata.lucid;
                 // absent = DLT). Without it a reopened project has BA 3D with an
@@ -538,12 +540,14 @@ export async function reconstructInstanceGroupsFromSessionLazy(session, typedSes
                 // each member's 2D here materializes the lazy store frame-by-frame
                 // (~324k times on a real cage5 project) and degrades to hours. The
                 // 2D is instead hydrated on scrub from the lazy store by
-                // `_rawInstIndex` (see `hydrateLazyFrameGroups` in triangulation.js).
-                // A null-filled placeholder keeps the Instance valid until then; the
-                // constructor turns it into a NaN-filled Float64Array of the right
-                // node count (and an all-clear occlusion set), so nothing else is
-                // needed to make the placeholder node-aligned.
-                var points = new Array(numNodes).fill(null);
+                // `_rawInstIndex` (see `finalizeLazyFrameGroup` in triangulation.js).
+                // The placeholder keeps the Instance valid and node-aligned until
+                // then: ONE NaN-filled Float64Array per node count, SHARED by every
+                // placeholder member (`lazyPlaceholderXY`) — the constructor adopts
+                // it by reference. A private buffer each was ~335 B and one
+                // ArrayBuffer per member (2.66M members on the real cage5 project);
+                // `Instance._ownXY` copies it before any in-place write.
+                var points = lazyPlaceholderXY(numNodes);
 
                 var instMeta = instanceMetaMap[igCamName] || {};
                 var _isPred = PredI ? (typedInst instanceof PredI)
@@ -575,7 +579,13 @@ export async function reconstructInstanceGroupsFromSessionLazy(session, typedSes
             var i3d = typedIG.instance3d;
             var _i3dPts = asPoints3d(i3d && i3d.points);
             if (points3dNodeCount(_i3dPts) > 0) {
-                group.points3d = _i3dPts; // REUSE — asPoints3d passes a flat array through uncopied
+                // Copied into the slab pool (pose-data.js `pooledPoints3d`): the
+                // reader hands one compacted Float64Array per group (#189), i.e.
+                // one ArrayBuffer per group — 539,545 on an 8-camera, 108,000-frame
+                // project, each swept by every full GC. The copy is ~360 B per
+                // group of backing store (outside V8's pointer cage), and the
+                // reader's array is released with its typed group.
+                group.points3d = pooledPoints3d(_i3dPts);
                 restoredWith3d++;
                 // Which solver produced this 3D (persisted in metadata.lucid;
                 // absent = DLT). Without it a reopened project has BA 3D with an
@@ -1220,7 +1230,7 @@ export async function handleLoadSlpFile(slpFile) {
             // --- Embedded videos: use frame-worker for on-demand extraction ---
             showLoading('Loading embedded video frames...');
 
-            var frameWorker = new Worker(new URL('../loading/frame-worker.js?v=ff7b87d14426', import.meta.url), { type: 'module' });
+            var frameWorker = new Worker(new URL('../loading/frame-worker.js?v=a07978e22373', import.meta.url), { type: 'module' });
             var embeddedVideoInfos = await new Promise(function (resolve, reject) {
                 frameWorker.onmessage = function (e) {
                     var msg = e.data;
@@ -1367,6 +1377,44 @@ export async function handleLoadSlpFile(slpFile) {
                 });
                 var cameraNames = cameras.map(function (c) { return c.name; });
 
+                // The camera a picked video belongs to: parent directory, then
+                // exact stem, then the filename the SLP references for that
+                // camera. Hoisted out of the post-load assignment loop so the
+                // de-prioritization below can group by the SAME answer the
+                // assignment will give — matching twice with two different
+                // rules is how a video gets dropped for one camera and bound to
+                // another.
+                var slpMatchCam = function (vFile) {
+                    var mStem = vFile.name.replace(/\.[^.]+$/, '');
+                    var mRel = vFile.webkitRelativePath || vFile.name;
+                    var mParts = mRel.split('/');
+                    var mParentDir = mParts.length >= 2 ? mParts[mParts.length - 2] : null;
+
+                    if (mParentDir && cameraNames.indexOf(mParentDir) >= 0) return mParentDir;
+                    if (cameraNames.indexOf(mStem) >= 0) return mStem;
+                    for (var cmi in videoIdxToCameraName) {
+                        var camN = videoIdxToCameraName[cmi];
+                        var vMeta = slpData.videos[cmi];
+                        if (!vMeta) continue;
+                        var refPath = vMeta.sourceFilename || vMeta.filename || '';
+                        if (refPath === '.') continue;
+                        var refBase = refPath.replace(/^.*[\/\\]/, '').replace(/\.[^.]+$/, '').toLowerCase();
+                        if (mStem.toLowerCase() === refBase || mStem.toLowerCase().indexOf(refBase) >= 0) return camN;
+                    }
+                    return null;
+                };
+
+                // A `-calibration` stem loses to a plainly-named video of the
+                // SAME camera, but still loads when it is that camera's only
+                // candidate (#199). Applied before the decoders open so a
+                // superseded clip is never decoded.
+                var _slpPref = preferNonCalibrationVideos(vidFiles, slpMatchCam);
+                if (_slpPref.dropped.length) {
+                    console.log('[load-slp] preferring plainly-named videos over calibration-named ' +
+                        _slpPref.dropped.map(function (f) { return '"' + f.name + '"'; }).join(', '));
+                    vidFiles = _slpPref.kept;
+                }
+
                 var slpModal = getLoadingProgressModal({ title: 'Importing project' });
                 slpModal.show();
 
@@ -1423,35 +1471,9 @@ export async function handleLoadSlpFile(slpFile) {
                     var vFile = slpEntry.file;
                     var stem = vFile.name.replace(/\.[^.]+$/, '');
 
-                    // Match to camera by parent directory name or filename
-                    var assignedCam = null;
-                    var relPath = vFile.webkitRelativePath || vFile.name;
-                    var pathParts = relPath.split('/');
-                    var parentDir = pathParts.length >= 2 ? pathParts[pathParts.length - 2] : null;
-
-                    // Try parent directory name → camera name
-                    if (parentDir && cameraNames.indexOf(parentDir) >= 0) {
-                        assignedCam = parentDir;
-                    }
-                    // Try video stem → camera name
-                    if (!assignedCam && cameraNames.indexOf(stem) >= 0) {
-                        assignedCam = stem;
-                    }
-                    // Try matching against SLP video references
-                    if (!assignedCam) {
-                        for (var cmi in videoIdxToCameraName) {
-                            var camN = videoIdxToCameraName[cmi];
-                            var vMeta = slpData.videos[cmi];
-                            if (!vMeta) continue;
-                            var refPath = vMeta.sourceFilename || vMeta.filename || '';
-                            if (refPath === '.') continue;
-                            var refBase = refPath.replace(/^.*[\/\\]/, '').replace(/\.[^.]+$/, '').toLowerCase();
-                            if (stem.toLowerCase() === refBase || stem.toLowerCase().indexOf(refBase) >= 0) {
-                                assignedCam = camN;
-                                break;
-                            }
-                        }
-                    }
+                    // Match to camera by parent directory name or filename —
+                    // the same answer the de-prioritization above grouped by.
+                    var assignedCam = slpMatchCam(vFile);
 
                     state.videoFiles.push({
                         file: vFile, name: stem, decoder: slpEntry.decoder,
@@ -1819,7 +1841,7 @@ export async function handleAddSlp() {
         if (hasEmbedded) {
             showLoading('Loading embedded video frames...');
 
-            var frameWorker = new Worker(new URL('../loading/frame-worker.js?v=ff7b87d14426', import.meta.url), { type: 'module' });
+            var frameWorker = new Worker(new URL('../loading/frame-worker.js?v=a07978e22373', import.meta.url), { type: 'module' });
             var embeddedVideoInfos = await new Promise(function (resolve, reject) {
                 frameWorker.onmessage = function (e) {
                     var msg = e.data;
@@ -2127,12 +2149,12 @@ export async function handleLoadPoints3dH5() {
                 }
                 if (existingGroup) {
                     // Assign 3D points to existing group
-                    existingGroup.points3d = asPoints3d(pts3d);
+                    existingGroup.points3d = pooledPoints3d(pts3d);
                     existingGroup.markClean();
                 } else {
                     // Create a new InstanceGroup with just 3D data
                     var newGroup = new InstanceGroup(Date.now() + frameIdx * 100 + trackIdx, trackIdx); // identityId = trackIdx
-                    newGroup.points3d = asPoints3d(pts3d);
+                    newGroup.points3d = pooledPoints3d(pts3d);
                     newGroup.markClean();
                     frameGroupsList.push(newGroup);
                 }
@@ -2167,8 +2189,7 @@ export async function handleLoadPoints3dH5() {
             // No decoders exist, so updateTotalFrames() (which reads decoder
             // sample counts) would reset this to 0 — write the frame-counter
             // DOM directly instead.
-            var totalEl = document.getElementById('totalFrames');
-            if (totalEl) totalEl.textContent = state.totalFrames;
+            refreshReadoutTotals();
         }
 
         drawAllOverlays(state.currentFrame);
