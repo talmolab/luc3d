@@ -9523,11 +9523,44 @@ Rows whose camera is excluded from tracking in the Tracking Wizard
 both the gutter label and the occupancy bars — distinct from the
 per-session visibility filter (`_hiddenCameras`), which drops the row entirely.
 
-**Canvas backing-store cap.** `resize()` clamps the canvas backing store to
-`MAX_CANVAS` (32000px/side). A tall timeline (e.g. 8 views × their tracks/
-identities) makes `getPreferredHeight() * devicePixelRatio` exceed the browser's
-~32767px `<canvas>` limit, which fails to allocate and renders as the broken-
-canvas "sad face" over just the timeline region. When that would happen the
+**The canvas is a BAND of the content, not all of it.** Inside the scroll
+wrapper (`_trackScrollEl`), a spacer (`_spacerEl`) carries the timeline's full
+content height — `max(getPreferredHeight(), visible height)` — so the scroll
+range and native scrolling are what they always were. The canvas is absolutely
+positioned over only a band of that content (`_placeBand`): from one margin
+above the scroll position to one margin below the visible bottom (margin = the
+visible height, at least 256 px), clamped to the content, so at most
+visible + 2 margins tall. Drawing stays in CONTENT coordinates — the context
+transform carries `-_bandTop` — and whatever falls outside the band is simply
+clipped; `_drawTrackBars` also skips rows outside it. A scroll inside the band
+costs nothing (the canvas scrolls with the content); one that brings the
+visible rows within half a margin of the band's edge (`_handleTrackScroll`, on
+the wrapper's `scroll` event) moves the band and redraws. `_cssHeight` and
+`_layout` are still the CONTENT's, so the layout, the label area and the
+playhead element are unchanged; the hover tooltip is placed from the pointer's
+client position (canvas `offsetY` is now band-relative). The wrapper's
+background is the timeline's, so a band edge reached mid-fling reads as
+background for the frame before the redraw.
+
+The canvas used to be the full content height. On the 17-camera MultiCam_18
+project that is 561 rows, 3,600 × 12,704 device px (174 MB), every redraw
+rasterizing all of it while the wrapper showed about a sixth; as a band it is
+3,600 × 1,884 (26 MB), and a redraw including the GPU raster went from ~279 ms
+to ~28 ms (headless, forced readback; 126 → 29 ms on the 8-camera HardFight
+project). Screenshots of the timeline at the top, middle and bottom of its
+scroll range are pixel-identical to the full-height canvas's. A collapsed
+timeline (visible height 0) now keeps only a ~512 px band instead of a
+full-size canvas. Covered by `tests/test-timeline-visible-band.js` (the band's
+size and the spacer's scroll range; band pixels equal a full-height reference
+rendering at the same content rows, in the middle and at the bottom, labels
+included; no redraw for a scroll inside the band, one for a scroll past it; the
+playhead still spans the content; a content that fits is one band) and the
+backing-store clamp cases in `tests/test-timeline-height.js`.
+
+**Canvas backing-store cap.** `_placeBand` still clamps the backing store to
+`MAX_CANVAS` (32000px/side): a browser `<canvas>` larger than ~32767px per side
+fails to allocate and renders as the broken-canvas "sad face". The band is
+rarely near that now (width × dpr is the likelier case); when it would be, the
 effective device-pixel ratio is scaled down (CSS size + scroll unchanged; only
 backing resolution drops) so the canvas always allocates.
 
