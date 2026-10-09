@@ -401,6 +401,99 @@
         });
     });
 
+    // Only the views on screen are decoded and played (`callbacks.isViewShown`,
+    // which the app feeds `isViewDocked`): with one camera solo'd out of 17,
+    // the other 16 used to decode every step and play during playback.
+    describe('VideoController - Only shown views (isViewShown)', function () {
+        var state, ctrl, shown;
+
+        beforeEach(function () {
+            state = createTestState(3, 100);
+            shown = { cam0: false, cam1: true, cam2: false };
+            ctrl = new VideoController(state, {
+                drawOverlays: function () {},
+                updateSeekbar: function () {},
+                isViewShown: function (v) { return !!shown[v.name]; },
+            });
+        });
+
+        it('seekToFrame decodes the shown views only', async function () {
+            await ctrl.seekToFrame(42);
+            assertEqual(state.views[1].decoder.lastSeekedFrame, 42, 'shown cam1 decoded');
+            assertEqual(state.views[0].decoder.lastSeekedFrame, null, 'hidden cam0 not decoded');
+            assertEqual(state.views[2].decoder.lastSeekedFrame, null, 'hidden cam2 not decoded');
+            assertEqual(state.currentFrame, 42);
+        });
+
+        it('with no view shown, seekToFrame decodes every view (as without the callback)', async function () {
+            shown = {};
+            await ctrl.seekToFrame(7);
+            for (var i = 0; i < state.views.length; i++) {
+                assertEqual(state.views[i].decoder.lastSeekedFrame, 7, 'view ' + i + ' decoded');
+            }
+        });
+
+        it('startPlayback plays the shown views only', async function () {
+            ctrl.startPlayback();
+            await new Promise(function (r) { setTimeout(r, 0); });
+            assertTrue(state.views[1].decoder.playingNative, 'shown cam1 plays');
+            assertFalse(state.views[0].decoder.playingNative, 'hidden cam0 does not play');
+            assertFalse(state.views[2].decoder.playingNative, 'hidden cam2 does not play');
+            ctrl.stopPlayback();
+        });
+
+        it('a change of shown views during playback restarts it on the new views', async function () {
+            ctrl.startPlayback();
+            await new Promise(function (r) { setTimeout(r, 0); });
+            assertTrue(state.views[1].decoder.playingNative, 'cam1 plays first');
+            shown = { cam0: false, cam1: false, cam2: true };   // the solo view switched
+            for (var i = 0; i < 20 && !state.views[2].decoder.playingNative; i++) {
+                await new Promise(function (r) { setTimeout(r, 20); });
+            }
+            assertTrue(state.isPlaying, 'still playing after the switch');
+            assertTrue(state.views[2].decoder.playingNative, 'newly shown cam2 plays');
+            assertFalse(state.views[1].decoder.playingNative, 'no-longer-shown cam1 is paused');
+            ctrl.stopPlayback();
+        });
+
+        it('a view that goes off screen has its decoded frames released; a shown one keeps them', async function () {
+            var released = [0, 0, 0];
+            state.views.forEach(function (v, i) { v.decoder.releaseFrames = function () { released[i]++; }; });
+            await ctrl.seekToFrame(5);                       // cam1 shown
+            assertEqual(released.join(), '0,0,0', 'nothing released while the shown set is unchanged');
+            shown = { cam0: false, cam1: false, cam2: true };   // the solo view switched to cam2
+            await ctrl.seekToFrame(6);
+            assertEqual(released[1], 1, 'cam1, no longer shown, released its frames');
+            assertEqual(released[2], 0, 'cam2, now shown, keeps its frames');
+            assertEqual(released[0], 0, 'cam0, never shown, untouched');
+            await ctrl.seekToFrame(7);
+            assertEqual(released[1], 1, 'released once, on the transition — not on every step');
+        });
+
+        it('a decoder reused by a shown view is not released (decoders are pooled across sessions)', async function () {
+            var released = 0;
+            var shared = state.views[1].decoder;
+            shared.releaseFrames = function () { released++; };
+            await ctrl.seekToFrame(5);                       // cam1 (shared decoder) shown
+            // A session switch: new view objects, cam2 now holds the same decoder.
+            state.views[2].decoder = shared;
+            shown = { cam0: false, cam1: false, cam2: true };
+            await ctrl.seekToFrame(6);
+            assertEqual(released, 0, 'the shared decoder is still shown through cam2, so it keeps its frames');
+        });
+
+        it('pausePlayback re-decodes the shown views only', async function () {
+            ctrl.startPlayback();
+            await new Promise(function (r) { setTimeout(r, 0); });
+            state.views.forEach(function (v) { v.decoder.lastSeekedFrame = null; });
+            state.currentFrame = 10;
+            ctrl.pausePlayback();
+            await new Promise(function (r) { setTimeout(r, 0); });
+            assertEqual(state.views[1].decoder.lastSeekedFrame, 10, 'shown cam1 re-decoded');
+            assertEqual(state.views[0].decoder.lastSeekedFrame, null, 'hidden cam0 not re-decoded');
+        });
+    });
+
     describe('VideoController - Views without decoders', function () {
         it('seekToFrame skips views without decoder', async function () {
             var state = createTestState(1, 100);
