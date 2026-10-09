@@ -16,8 +16,8 @@
  * `options.reprojErrorThreshold` instead.
  */
 
-import { makePoints3d, points3dNodeCount, hasPoint3d, getPoint3d, readPoint3d, setPoint3d, clearPoint3d } from './pose-data.js?v=d5489343e579';
-import { jacobiEigen } from './plane-fit.js?v=d5489343e579';
+import { makePoints3d, points3dNodeCount, hasPoint3d, getPoint3d, readPoint3d, setPoint3d, clearPoint3d } from './pose-data.js?v=31b08ec83d84';
+import { jacobiEigen } from './plane-fit.js?v=31b08ec83d84';
 export { jacobiEigen };
 
 // Settings readers for `triangulateAndReproject` (see the header). Unset means
@@ -1349,7 +1349,7 @@ export function triangulateAndReproject(instanceGroup, cameras, options) {
     let points3d = triangulateFrom(allObservations);
 
     // Robust triangulation (the Tracking Wizard's "Reprojection error threshold
-    // (px)", default 25; 0 turns it off): iteratively drop any 2D node whose
+    // (px)", default 50; 0 turns it off): iteratively drop any 2D node whose
     // reprojection error in a view exceeds the threshold, then re-triangulate that
     // node from the remaining reliable views. A node left with <2 views
     // triangulates to null (DLT returns null) — i.e. it is dropped from 3D rather

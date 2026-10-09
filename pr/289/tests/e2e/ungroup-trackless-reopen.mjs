@@ -183,8 +183,9 @@ try {
     check(after.groupsLeft === 0, 'both groups were ungrouped', { left: after.groupsLeft });
     check(after.rows.length === 6, '6 ungrouped rows (2 animals x 3 cameras)', { got: after.rows.length });
     console.log('    rows:', JSON.stringify(after.rows));
-    const dashes = after.rows.filter(r => r.id === '—' || r.id == null);
-    check(dashes.length === 0, 'NO row lost its ID to "—" (the reported bug)', { dashes: dashes.length });
+    // A lost ID reads "(none)" (the "—" of the original report, renamed).
+    const dashes = after.rows.filter(r => r.id === '(none)' || r.id == null);
+    check(dashes.length === 0, 'NO row lost its ID to "(none)" (the reported bug)', { dashes: dashes.length });
     check(after.rows.filter(r => r.id === 'id_0').length === 3, 'id_0 retained in all 3 views');
     check(after.rows.filter(r => r.id === 'id_1').length === 3, 'id_1 retained in all 3 views');
 

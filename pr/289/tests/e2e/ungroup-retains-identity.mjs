@@ -86,8 +86,8 @@ try {
         AS.state.views = [];
     });
 
-    // Sanity: the GROUPED rows show the identity to begin with, so a later "—"
-    // is a loss caused by ungrouping and not an empty fixture.
+    // Sanity: the GROUPED rows show the identity to begin with, so a later
+    // "(none)" is a loss caused by ungrouping and not an empty fixture.
     const before = await page.evaluate(async () => {
         const ip = await import('/ui/info-panel.js');
         ip.updateInfoPanel();
@@ -110,8 +110,9 @@ try {
         ip.updateInfoPanel();
 
         // Read the Ungrouped Instances table exactly as the tester sees it.
-        // Row layout (ui/info-panel.js): [Track <select>, ID <select>, Type,
-        // Points, Score]; camera header rows have a single colSpan cell.
+        // Row layout (ui/info-panel.js): [Track / Identity (the track <select>
+        // with the identity <select> stacked under it), Type, Points, Score];
+        // camera header rows have a single colSpan cell.
         const rows = [];
         let camera = null;
         for (const tr of document.querySelectorAll('#unlinkedTable tbody tr')) {
@@ -133,9 +134,10 @@ try {
     check(after.rows.length === 6, `6 ungrouped rows — 2 animals x 3 cameras (got ${after.rows.length})`);
     console.log('    rows:', JSON.stringify(after.rows));
 
-    const dashes = after.rows.filter(r => r.id === '—' || r.id === null);
+    // A lost ID reads "(none)" (the "—" of the original report, renamed).
+    const dashes = after.rows.filter(r => r.id === '(none)' || r.id === null);
     check(dashes.length === 0,
-        `no row lost its ID to "—" (got ${dashes.length} of ${after.rows.length})`);
+        `no row lost its ID to "(none)" (got ${dashes.length} of ${after.rows.length})`);
 
     const names = after.rows.map(r => r.id).sort();
     check(names.filter(n => n === 'animal_A').length === 3,

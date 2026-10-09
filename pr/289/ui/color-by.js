@@ -1,4 +1,4 @@
-// ui/color-by.js — the toolbar's Color: Tracks / ID setting
+// ui/color-by.js — the toolbar's Tracks / Identity coloring setting
 // (`state.colorByIdentity`), settable from anywhere.
 //
 // The toggle's DOM and its redraws live in `ui/ui-wiring.js`, but the tracker
