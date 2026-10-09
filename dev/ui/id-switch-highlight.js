@@ -27,6 +27,14 @@
  * `session.getIdentityIdForUnlinkedInstance`. One box encloses both (or the one
  * visible in that view), labelled "id_a ↔ id_b" in the identities' colours.
  *
+ * The box encloses only the nodes the Tracking Wizard weights above 0 (Settings ▸
+ * Tracking Wizard ▸ Node weights), so with the tail nodes at 0 it frames the
+ * bodies and heads, not a tail sweeping across half the view. An instance none
+ * of whose weighted nodes is visible in a view falls back to all of its nodes,
+ * so an animal is never dropped from the box; so does a skeleton weighted 0
+ * throughout. Applying new weights recomputes the box at once
+ * (`refreshIdSwitchHighlight`, from ui/settings-modal.js).
+ *
  * The box takes the colour of the progress-bar SECTION the frame is in —
  * `ID_SWITCH_SECTION_RGB`, which the bar (ui/id-switch-modal.js `progressHtml`)
  * reads too, so the two cannot drift: orange over the lead-in and lead-out,
@@ -37,8 +45,9 @@
  * `updateIdSwitchProgress`).
  */
 
-import { state } from './app-state.js?v=4223f1549329';
-import { makeVideoToCanvasTransform } from './overlays.js?v=4223f1549329';
+import { state } from './app-state.js?v=1f96fd67ba8d';
+import { makeVideoToCanvasTransform } from './overlays.js?v=1f96fd67ba8d';
+import { getNodeWeightArray } from './settings.js?v=1f96fd67ba8d';
 
 var _target = null;          // {nameA, nameB, p0, s, e, p1}
 var _frame = -1;             // frame the boxes were computed for
@@ -110,15 +119,35 @@ function identityName(session, inst, cam, frame, group) {
     return g ? g.name : null;
 }
 
-function extend(box, inst) {
-    var n = inst.numNodes != null ? inst.numNodes : 0;
+/**
+ * The nodes the box encloses: `mask[k]` true for a node weighted above 0 in the
+ * Tracking Wizard, or `null` (every node) when nothing is weighted 0 or nothing is left.
+ */
+export function idSwitchBoxNodeMask(nodeNames) {
+    var w = getNodeWeightArray(nodeNames);
+    if (!w || !w.length) return null;
+    var mask = w.map(function (x) { return x > 0; });
+    var kept = mask.filter(Boolean).length;
+    return kept === 0 || kept === mask.length ? null : mask;
+}
+
+/** Grow `box` by `inst`'s visible nodes in `mask` (all when null); @returns how many it took. */
+function extendBy(box, inst, mask) {
+    var n = inst.numNodes != null ? inst.numNodes : 0, used = 0;
     for (var k = 0; k < n; k++) {
+        if (mask && !mask[k]) continue;
         if (inst.hasPoint && !inst.hasPoint(k)) continue;
         var x = inst.getX(k), y = inst.getY(k);
         if (!isFinite(x) || !isFinite(y)) continue;
         if (x < box.x0) box.x0 = x; if (y < box.y0) box.y0 = y;
         if (x > box.x1) box.x1 = x; if (y > box.y1) box.y1 = y;
+        used++;
     }
+    return used;
+}
+
+function extend(box, inst, mask) {
+    if (!extendBy(box, inst, mask) && mask) extendBy(box, inst, null);   // only zero-weight nodes visible
 }
 
 function computeBoxes(frame) {
@@ -129,15 +158,16 @@ function computeBoxes(frame) {
     var groups = (session.instanceGroups && session.instanceGroups.get(frame)) || [];
     var fg = session.getFrameGroup ? session.getFrameGroup(frame) : null;
     var names = [_target.nameA, _target.nameB];
+    var mask = idSwitchBoxNodeMask(session.skeleton && session.skeleton.nodes);
     (state.views || []).forEach(function (v) {
         var cam = v.cameraName || v.name, box = { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity }, found = 0;
         groups.forEach(function (g) {
             var inst = g.getInstance ? g.getInstance(cam) : null;
-            if (inst && names.indexOf(identityName(session, inst, cam, frame, g)) >= 0) { extend(box, inst); found++; }
+            if (inst && names.indexOf(identityName(session, inst, cam, frame, g)) >= 0) { extend(box, inst, mask); found++; }
         });
         if (fg && fg.getUnlinkedInstances) fg.getUnlinkedInstances(cam).forEach(function (u) {
             var inst = u && (u.instance || u);
-            if (inst && inst.getX && names.indexOf(identityName(session, inst, cam, frame, null)) >= 0) { extend(box, inst); found++; }
+            if (inst && inst.getX && names.indexOf(identityName(session, inst, cam, frame, null)) >= 0) { extend(box, inst, mask); found++; }
         });
         if (found && box.x1 >= box.x0) _boxes.set(v.name, box);
     });
