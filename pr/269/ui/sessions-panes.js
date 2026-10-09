@@ -28,21 +28,22 @@ import {
     state,
     videoController, interactionManager, viewport3d, timeline, paneManager,
     setVideoController, setPaneManager,
-} from './app-state.js?v=5742b520de9a';
-import { FrameGroup, UnlinkedInstance, Camera, someValidPoint3d } from '../pose/pose-data.js?v=5742b520de9a';
+} from './app-state.js?v=f779d289d596';
+import { FrameGroup, UnlinkedInstance, Camera, someValidPoint3d, pooledPoints3d } from '../pose/pose-data.js?v=f779d289d596';
+import { hydrateFrameMembers2d, releaseFrameMembers2d } from '../pose/lazy-residency.js?v=f779d289d596';
 import {
     triangulateAndReproject, storeReprojectedInstances, getInstanceGroupsForFrame,
     sessionHasCalibration, resolveTriangulationMethod,
-} from '../pose/triangulation.js?v=5742b520de9a';
+} from '../pose/triangulation.js?v=f779d289d596';
 import {
     cellResizeObserver,
     createViewForVideoFile,
     rebuildVideoController,
     fitCanvasesToCells,
     updateTotalFrames,
-} from '../loading/session-loader.js?v=5742b520de9a';
-import { OnDemandVideoDecoder } from '../loading/video.js?v=5742b520de9a';
-import { setStatus, showLoading, hideLoading, quickSave, markDirty } from '../import-export/save-load.js?v=5742b520de9a';
+} from '../loading/session-loader.js?v=f779d289d596';
+import { OnDemandVideoDecoder } from '../loading/video.js?v=f779d289d596';
+import { setStatus, showLoading, hideLoading, quickSave, markDirty } from '../import-export/save-load.js?v=f779d289d596';
 import {
     CONTRAST_MIN, CONTRAST_MAX, clampContrast,
     BRIGHTNESS_MIN, BRIGHTNESS_MAX, clampBrightness,
@@ -50,26 +51,27 @@ import {
     buildVideoFilter, getSessionContrast, setSessionContrast,
     getSessionBrightness, setSessionBrightness,
     getSessionRotation, setSessionRotation,
-} from './video-filters.js?v=5742b520de9a';
+} from './video-filters.js?v=f779d289d596';
 // `clampRotation` moved to the dependency-free `video-filters.js` so the test
 // runners can bridge it; re-exported here because `ui/ui-wiring.js` (and the
 // module map) have always imported it from this module.
 export { clampRotation };
-import { drawAllOverlays, setReprojErrorVisible } from './rendering.js?v=5742b520de9a';
+import { drawAllOverlays, setReprojErrorVisible } from './rendering.js?v=f779d289d596';
 // `ui/ui-wiring.js` imports this module, so this is a cycle — hoist-safe
 // because the only read is inside the view strip's click handler, which cannot
 // run during module evaluation.
-import { setSoloView } from './ui-wiring.js?v=5742b520de9a';
-import { updateInfoPanel, populateTimelineVisibility } from './info-panel.js?v=5742b520de9a';
-import { refreshIdSwitchPanel } from './id-switch-modal.js?v=5742b520de9a';
+import { setSoloView } from './ui-wiring.js?v=f779d289d596';
+import { clearReadout, refreshReadoutTotals } from './frame-readout.js?v=f779d289d596';
+import { updateInfoPanel, populateTimelineVisibility } from './info-panel.js?v=f779d289d596';
+import { refreshIdSwitchPanel } from './id-switch-modal.js?v=f779d289d596';
 // `autoAssignState` is a mutable binding tracked via ESM live binding.
 // The cycle (identity-assignment imports panelRenderers from here) is
 // hoist-safe because both reads are inside function bodies.
-import { autoAssignState } from './identity-assignment.js?v=5742b520de9a';
+import { autoAssignState } from './identity-assignment.js?v=f779d289d596';
 
 // Pass 3i-3: setup3DViewport moved to pose/initialization.js.
-import { setup3DViewport } from '../pose/initialization.js?v=5742b520de9a';
-import { getLoadingProgressModal } from './loading-progress-modal.js?v=5742b520de9a';
+import { setup3DViewport } from '../pose/initialization.js?v=f779d289d596';
+import { getLoadingProgressModal } from './loading-progress-modal.js?v=f779d289d596';
 
 // ============================================
 // Dockview Pane Manager
@@ -1451,6 +1453,22 @@ function moveVideosToSession(viewNames, fromIdx, toIdx) {
 
         // 2. Remove view from InstanceGroups and re-triangulate
         for (var [frameIdx2, groups] of fromSession.instanceGroups) {
+            // The re-solve below reads the REMAINING members' 2D. On a lazy
+            // project a member of a frame that is not resident is a `_lazy2d`
+            // placeholder whose 2D is all-NaN — after a reopen, and since #280
+            // after Track All / Triangulate All too (`releaseFrameMembers2d`).
+            // Triangulating placeholders finds no 3D, so the group silently KEPT
+            // its old points3d — solved WITH the view that just moved — and was
+            // still marked clean. Hydrate this frame's members from the store for
+            // the re-solve (only when one of its groups loses the view), and give
+            // the 2D back after, exactly as the image ID-switch check does.
+            var hydrated2d = false;
+            for (var hgi = 0; hgi < groups.length; hgi++) {
+                if (groups[hgi].instances.has(viewName) || groups[hgi].reprojectedInstances.has(viewName)) {
+                    hydrated2d = hydrateFrameMembers2d(fromSession, frameIdx2) > 0;
+                    break;
+                }
+            }
             for (var gi = 0; gi < groups.length; gi++) {
                 var group = groups[gi];
                 if (group.instances.has(viewName) || group.reprojectedInstances.has(viewName)) {
@@ -1473,7 +1491,7 @@ function moveVideosToSession(viewNames, fromIdx, toIdx) {
                                 { method: resolveTriangulationMethod(group) });
                             var valid = someValidPoint3d(result.points3d);
                             if (valid) {
-                                group.points3d = result.points3d;
+                                group.points3d = pooledPoints3d(result.points3d);
                                 group.triangulationMethod = result.method;
                                 group.reprojections = result.reprojections;
                                 storeReprojectedInstances(group, result, fromSession.cameras);
@@ -1488,6 +1506,7 @@ function moveVideosToSession(viewNames, fromIdx, toIdx) {
                     }
                 }
             }
+            if (hydrated2d) releaseFrameMembers2d(fromSession, frameIdx2);
         }
 
         // 3. Move video file reference (only search within origin session's indices)
@@ -1637,8 +1656,7 @@ export function removeSession(idx) {
         }
 
         // Reset frame counter display
-        document.getElementById('currentFrame').textContent = '0';
-        document.getElementById('totalFrames').textContent = '0';
+        clearReadout();
 
         // Show dock empty message
         var emptyMsg = document.getElementById('videoDockEmpty');
@@ -2130,7 +2148,7 @@ export async function switchSession(newIdx) {
     } else if (newSession.totalFrames > 0) {
         state.totalFrames = newSession.totalFrames;
         state.fps = newSession.fps || 30;
-        document.getElementById('totalFrames').textContent = state.totalFrames;
+        refreshReadoutTotals();
         document.getElementById('fpsDisplay').textContent = state.fps.toFixed(1) + ' fps';
     }
 

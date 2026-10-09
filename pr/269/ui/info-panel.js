@@ -5,42 +5,43 @@
 
 import {
     Skeleton, Camera, Session,
-} from '../pose/pose-data.js?v=5742b520de9a';
-import { getInstanceGroupsForFrame } from '../pose/triangulation.js?v=5742b520de9a';
-import { REPROJECTION_COLOR, getTrackColor, getGroupColor } from './overlays.js?v=5742b520de9a';
-import { drawAllOverlays, updateFrameCounters } from './rendering.js?v=5742b520de9a';
-import { isInteractiveClickTarget } from './interaction.js?v=5742b520de9a';
-import { persistSectionState } from './section-state.js?v=5742b520de9a';
+} from '../pose/pose-data.js?v=f779d289d596';
+import { getInstanceGroupsForFrame } from '../pose/triangulation.js?v=f779d289d596';
+import { REPROJECTION_COLOR, getTrackColor, getGroupColor } from './overlays.js?v=f779d289d596';
+import { drawAllOverlays, updateFrameCounters } from './rendering.js?v=f779d289d596';
+import { isInteractiveClickTarget } from './interaction.js?v=f779d289d596';
+import { persistSectionState } from './section-state.js?v=f779d289d596';
+import { buildLazySelect } from './lazy-select.js?v=f779d289d596';
 import { confirmSkeletonEdit, isSkeletonEditWarningSuppressed,
-         setSkeletonEditWarningSuppressed } from './skeleton-edit-warning.js?v=5742b520de9a';
-import { refreshIdSwitchPanel } from './id-switch-modal.js?v=5742b520de9a';
-import { isInfoPanelVisible, markInfoPanelStale } from './panel-visibility.js?v=5742b520de9a';
+         setSkeletonEditWarningSuppressed } from './skeleton-edit-warning.js?v=f779d289d596';
+import { refreshIdSwitchPanel } from './id-switch-modal.js?v=f779d289d596';
+import { isInfoPanelVisible, markInfoPanelStale } from './panel-visibility.js?v=f779d289d596';
 import { state, timeline, interactionManager, rememberSkeleton, buildRememberedSkeleton,
-         setProjectSkeleton, getProjectSkeleton } from './app-state.js?v=5742b520de9a';
-import { setStatus, markDirty } from '../import-export/save-load.js?v=5742b520de9a';
-import { buildSkeletonJSON, parseSkeletonJSON } from '../import-export/skeleton-json.js?v=5742b520de9a';
+         setProjectSkeleton, getProjectSkeleton } from './app-state.js?v=f779d289d596';
+import { setStatus, markDirty } from '../import-export/save-load.js?v=f779d289d596';
+import { buildSkeletonJSON, parseSkeletonJSON } from '../import-export/skeleton-json.js?v=f779d289d596';
 import {
     handleLoadVideos, handleLoadCalibration, autoAssignVideosToCameras,
     createViewForVideoFile, rebuildVideoController, fitCanvasesToCells,
     loadSingleSessionFromCache, removeVideoFile,
-} from '../loading/session-loader.js?v=5742b520de9a';
+} from '../loading/session-loader.js?v=f779d289d596';
 
 // Circular import — these are still defined in app.js for now. They will be
 // retargeted as later passes land:
 // - swapAssignTrack, propagateIdentityForward, unlinkGroup, showGroupContextMenu
 //   → ui/identity-assignment.js (Pass 3f)
 // Pass 3e-1: unlinkGroup + showGroupContextMenu moved to ui-wiring.js.
-import { unlinkGroup, showGroupContextMenu } from './ui-wiring.js?v=5742b520de9a';
+import { unlinkGroup, showGroupContextMenu } from './ui-wiring.js?v=f779d289d596';
 // Pass 3f: swapAssignTrack + propagateIdentityForward moved to identity-assignment.js.
 // luc3d #172: every manual identity switch routes through applyIdentitySwitch,
 // which subsumes this file's former direct propagateIdentityForward calls.
 import {
     swapAssignTrack, applyIdentitySwitch, describeIdentitySwitch,
-} from './identity-assignment.js?v=5742b520de9a';
+} from './identity-assignment.js?v=f779d289d596';
 // Pass 3h: populateSessionsPanel / populateViewStrip / populateSessionStrip moved to sessions-panes.js.
 import {
     populateSessionsPanel, populateViewStrip, populateSessionStrip,
-} from './sessions-panes.js?v=5742b520de9a';
+} from './sessions-panes.js?v=f779d289d596';
 // Block 2 (Prompt 4): per-session timeline visibility toggles.
 import {
     toggleCameraVisibility,
@@ -49,10 +50,10 @@ import {
     getCameraVisibilityList,
     getTrackVisibilityList,
     getIdentityVisibilityList,
-} from './timeline-visibility.js?v=5742b520de9a';
+} from './timeline-visibility.js?v=f779d289d596';
 
 // ============================================
-// Inline name entry for "+ New Track" / "+ New ID"
+// Inline name entry for "+ New Track" / "+ New Identity"
 // ============================================
 
 // Replace a track/identity <select> with an inline text box so the user can
@@ -1389,12 +1390,14 @@ function aggregateReprojectionError(frameIdx) {
  * is collapsed.
  *
  * The project-wide counters (`updateFrameCounters`) are skipped during
- * playback: they walk EVERY frame group to recount labeled / triangulated
- * frames — ~8–9 ms on a 36,000-frame project — yet don't depend on the frame
- * being shown, so recomputing them on the ~10 Hz playback updates only blocked
- * the video-frame callback long enough to drop frames (measured with
- * tests/e2e/_bench-playback.mjs). `VideoController.stopPlayback` redraws with
- * `isPlaying` false, so they are refreshed the moment playback stops.
+ * playback: they walk every RESIDENT frame group to recount labeled /
+ * triangulated frames — every frame of an eager project, ~8–9 ms at 36,000
+ * frames (a lazy project adds a cached baseline for the rest) — yet don't
+ * depend on the frame being shown, so recomputing them on the ~10 Hz playback
+ * updates only blocked the video-frame callback long enough to drop frames
+ * (measured with tests/e2e/_bench-playback.mjs). `VideoController.stopPlayback`
+ * redraws with `isPlaying` false, so they are refreshed the moment playback
+ * stops.
  *
  * @param {number|null} meanError
  */
@@ -1402,6 +1405,42 @@ function updateStatusBarForFrame(meanError) {
     document.getElementById('statusError').textContent = 'Error: ' +
         (meanError != null ? meanError.toFixed(2) + ' px' : '-');
     if (!state.isPlaying) updateFrameCounters();
+}
+
+/**
+ * The Track `<select>` of one instance row: "(none)"/"—", every session track,
+ * "(+) New Track". Built LAZILY (`ui/lazy-select.js`) — until the user presses
+ * or focuses it, it holds only the head, the current track and the tail.
+ * `updateFrameInfo` rebuilds one per row on every update, and an eager build
+ * made that O(rows × tracks): ~35,000 `<option>`s per update on an un-tracked
+ * prediction project with 863 tracks, which capped playback at ~5 fps.
+ *
+ * @param {number} trackIdx - the row's track, or -1 for a trackless row.
+ * @param {string} noneLabel - "(none)" (groups) or "—" (unlinked rows).
+ * @param {number} maxWidth - px.
+ * @returns {HTMLSelectElement}
+ */
+// Width of the track and identity dropdowns in BOTH instance tables (Grouped
+// and Ungrouped). They are STACKED in one "Track / Identity" column, so a row
+// is two lines tall but each table fits a 300 px info panel (the panel's
+// default width) — side by side, Grouped was ~390 px and Ungrouped ~324 px,
+// and the Instances tab scrolled sideways. One width for all four dropdowns so
+// they line up. Covered by tests/e2e/info-panel-instance-tables.mjs.
+const STACKED_SELECT_PX = 80;
+
+function buildTrackSelect(trackIdx, noneLabel, maxWidth) {
+    const session = state.session;
+    const tracks = session.tracks || [];
+    return buildLazySelect({
+        cssText: 'font-size:10px;background:var(--bg-tertiary);color:var(--text-primary);border:1px solid var(--border-color);border-radius:3px;padding:0 2px;max-width:' + maxWidth + 'px;',
+        head: ['-1', noneLabel],
+        tail: ['__new__', '(+) New Track'],
+        value: trackIdx,
+        label: trackIdx >= 0 && trackIdx < tracks.length ? tracks[trackIdx] : undefined,
+        entries: function () {
+            return (session.tracks || []).map(function (name, i) { return [i, name]; });
+        },
+    });
 }
 
 export function updateFrameInfo(frameIdx, instanceGroups) {
@@ -1770,34 +1809,17 @@ export function updateFrameInfo(frameIdx, instanceGroups) {
 
             // Track column (with color dot)
             const tdTrack = document.createElement('td');
-            // Track dropdown
-            var trackSelect = document.createElement('select');
-            trackSelect.style.cssText = 'font-size:10px;background:var(--bg-tertiary);color:var(--text-primary);border:1px solid var(--border-color);border-radius:3px;padding:0 2px;max-width:90px;';
-            // "(none)" — a trackless group. Must exist so a group with no track
-            // shows as trackless instead of silently snapping to the first track.
-            var noneTrackOpt = document.createElement('option');
-            noneTrackOpt.value = '-1';
-            noneTrackOpt.textContent = '(none)';
-            trackSelect.appendChild(noneTrackOpt);
-            for (var tsi = 0; tsi < (state.session.tracks || []).length; tsi++) {
-                var tOpt = document.createElement('option');
-                tOpt.value = tsi;
-                tOpt.textContent = state.session.tracks[tsi];
-                trackSelect.appendChild(tOpt);
-            }
-            var newTrackOpt = document.createElement('option');
-            newTrackOpt.value = '__new__';
-            newTrackOpt.textContent = '(+) New Track';
-            trackSelect.appendChild(newTrackOpt);
-            // Source the current track from the first instance's trackIdx, NOT
-            // group.identityId. A trackless group (trackIdx == null — e.g. one
-            // formed by grouping trackless instances) shows "(none)"; it must
-            // NOT default to the first track (index 0).
+            // Track dropdown. Source the current track from the first
+            // instance's trackIdx, NOT group.identityId. A trackless group
+            // (trackIdx == null — e.g. one formed by grouping trackless
+            // instances) shows "(none)"; it must NOT default to the first
+            // track (index 0), which is why "(none)" must exist at all.
             var firstGroupInst = group.instances.values().next().value;
             var groupDisplayTrackIdx = (firstGroupInst && firstGroupInst.trackIdx != null && firstGroupInst.trackIdx >= 0)
                 ? firstGroupInst.trackIdx
                 : -1;
-            trackSelect.value = String(groupDisplayTrackIdx);
+            var trackSelect = buildTrackSelect(groupDisplayTrackIdx, '(none)', STACKED_SELECT_PX);
+            trackSelect.style.width = STACKED_SELECT_PX + 'px';
             (function (g, sel, curTrack) {
                 function applyTrack(newTrack) {
                     if (newTrack < 0) {
@@ -1859,10 +1881,11 @@ export function updateFrameInfo(frameIdx, instanceGroups) {
                 tdTrack.appendChild(dirtyDot);
             }
 
-            // Identity column (separate td)
-            const tdIdentity = document.createElement('td');
+            // Identity dropdown: stacked UNDER the track dropdown in the same
+            // "Track / Identity" cell (see STACKED_SELECT_PX).
             const idSelect = document.createElement('select');
-            idSelect.style.cssText = 'font-size:10px;background:var(--bg-tertiary);color:var(--text-primary);border:1px solid var(--border-color);border-radius:3px;padding:0 2px;max-width:90px;';
+            idSelect.style.cssText = 'font-size:10px;background:var(--bg-tertiary);color:var(--text-primary);border:1px solid var(--border-color);border-radius:3px;padding:0 2px;' +
+                'display:block;margin-top:3px;width:' + STACKED_SELECT_PX + 'px;max-width:' + STACKED_SELECT_PX + 'px;';
             const optNone = document.createElement('option');
             optNone.value = '-1';
             optNone.textContent = '(none)';
@@ -1878,7 +1901,7 @@ export function updateFrameInfo(frameIdx, instanceGroups) {
             }
             var newIdOpt = document.createElement('option');
             newIdOpt.value = '__new__';
-            newIdOpt.textContent = '(+) New ID';
+            newIdOpt.textContent = '(+) New Identity';
             idSelect.appendChild(newIdOpt);
             // Show the per-frame identity for the group's LIVE trackIdx, not the
             // stale per-group field: group.identityId is only refreshed on the
@@ -1918,7 +1941,7 @@ export function updateFrameInfo(frameIdx, instanceGroups) {
                     drawAllOverlays(state.currentFrame);
                     updateInfoPanel();
                     // `cap: true` (not `keepSize`): assigning an identity — a new
-                    // one from "(+) New ID" in particular — can add an occupied
+                    // one from "(+) New Identity" in particular — can add an occupied
                     // row in the ID/Both timeline modes; `keepSize` would collapse
                     // the row area (the identity mirror of issue #137).
                     if (timeline) timeline.refreshTracks(state.session, { cap: true });
@@ -1940,7 +1963,7 @@ export function updateFrameInfo(frameIdx, instanceGroups) {
                 sel.addEventListener('mousedown', function (e) { e.stopPropagation(); });
                 sel.addEventListener('mouseup', function (e) { e.stopPropagation(); });
             })(group, idSelect);
-            tdIdentity.appendChild(idSelect);
+            tdTrack.appendChild(idSelect);
 
             // Views column
             const tdViews = document.createElement('td');
@@ -1990,7 +2013,6 @@ export function updateFrameInfo(frameIdx, instanceGroups) {
             unlinkBtn.style.cssText = 'background:none;border:none;color:var(--text-secondary);cursor:pointer;font-size:14px;padding:2px 4px;line-height:1;';
 
             tr.appendChild(tdTrack);
-            tr.appendChild(tdIdentity);
             tr.appendChild(tdViews);
             tr.appendChild(tdType);
             tr.appendChild(tdError);
@@ -2039,6 +2061,10 @@ export function updateFrameInfo(frameIdx, instanceGroups) {
                     rtr.classList.add('selected');
                 }
 
+                // The badge leads the row, in the Track / Identity column: the
+                // group's name is on the row just above, and the Type column is
+                // then only as wide as "Pred*" — which is what lets the table fit
+                // a 300 px panel. The name stays in the tooltip.
                 const rtdTrack = document.createElement('td');
                 const rdot = document.createElement('span');
                 rdot.className = 'track-indicator';
@@ -2046,18 +2072,19 @@ export function updateFrameInfo(frameIdx, instanceGroups) {
                 rdot.style.marginRight = '4px';
                 rtdTrack.appendChild(rdot);
                 var reprojTrackName = (group.identityId >= 0 && state.session.tracks[group.identityId]) || ('Group ' + i);
-                rtdTrack.appendChild(document.createTextNode(reprojTrackName));
+                rtdTrack.title = 'Reprojection of ' + reprojTrackName;
 
                 const rtdViews = document.createElement('td');
                 rtdViews.className = 'mono';
                 rtdViews.textContent = group.reprojectedInstances.size + '/' + state.session.cameras.length;
                 rtdViews.title = Array.from(group.reprojectedInstances.keys()).join(', ');
 
-                const rtdType = document.createElement('td');
                 const rbadge = document.createElement('span');
                 rbadge.className = 'badge badge-reproj';
-                rbadge.textContent = 'Reproj';
-                rtdType.appendChild(rbadge);
+                rbadge.textContent = 'Reprojection';
+                rtdTrack.appendChild(rbadge);
+
+                const rtdType = document.createElement('td');
 
                 const rtdError = document.createElement('td');
                 rtdError.className = 'mono reproj-error-col';
@@ -2142,7 +2169,7 @@ export function updateFrameInfo(frameIdx, instanceGroups) {
             var headerTr = document.createElement('tr');
             headerTr.className = 'unlinked-camera-header';
             var headerTd = document.createElement('td');
-            headerTd.colSpan = 3;
+            headerTd.colSpan = 4;   // the whole row
             headerTd.textContent = cam.name;
             headerTd.style.cssText = 'font-weight:bold;color:var(--text-primary);font-size:11px;padding:4px 6px 2px;';
             headerTr.appendChild(headerTd);
@@ -2162,30 +2189,15 @@ export function updateFrameInfo(frameIdx, instanceGroups) {
                     }
                 }
 
-                // Track column with dropdown. Includes a "—" (None)
-                // option so trackless user instances (trackIdx == null,
+                // Track dropdown. Includes a "(none)" option — the same label
+                // the Grouped table uses — so trackless user instances (trackIdx == null,
                 // e.g., reprojections imported from a 2D SLP with
                 // track=null) are displayed distinctly from a real
                 // track-0 instance instead of silently falling back
                 // to the first track.
                 const tdTrackUl = document.createElement('td');
-                var trackSelect = document.createElement('select');
-                trackSelect.style.cssText = 'font-size:10px;background:var(--bg-tertiary);color:var(--text-primary);border:1px solid var(--border-color);border-radius:3px;padding:0 2px;max-width:80px;';
-                var noneTrackOpt = document.createElement('option');
-                noneTrackOpt.value = '-1';
-                noneTrackOpt.textContent = '—';
-                trackSelect.appendChild(noneTrackOpt);
-                for (var ti = 0; ti < (state.session.tracks || []).length; ti++) {
-                    var tOpt = document.createElement('option');
-                    tOpt.value = ti;
-                    tOpt.textContent = state.session.tracks[ti];
-                    trackSelect.appendChild(tOpt);
-                }
-                var newTrackOptUl = document.createElement('option');
-                newTrackOptUl.value = '__new__';
-                newTrackOptUl.textContent = '(+) New Track';
-                trackSelect.appendChild(newTrackOptUl);
-                trackSelect.value = ul.instance.trackIdx != null ? String(ul.instance.trackIdx) : '-1';
+                var trackSelect = buildTrackSelect(ul.instance.trackIdx != null ? ul.instance.trackIdx : -1, '(none)', STACKED_SELECT_PX);
+                trackSelect.style.width = STACKED_SELECT_PX + 'px';
                 (function (ulObj, inst, sel, camNameForUl) {
                     function applyTrack(newTrack) {
                         var propagated = swapAssignTrack(state.currentFrame, camNameForUl, inst, newTrack, state.session);
@@ -2214,7 +2226,7 @@ export function updateFrameInfo(frameIdx, instanceGroups) {
                             // User explicitly chose "None" — leave trackless.
                             if (inst.trackIdx == null) return;
                             inst.trackIdx = null;
-                            setStatus('Track → — on ' + camNameForUl, 'success');
+                            setStatus('Track → (none) on ' + camNameForUl, 'success');
                             drawAllOverlays(state.currentFrame);
                             updateInfoPanel();
                             if (timeline) timeline.refreshTracks(state.session, { keepSize: true });
@@ -2229,13 +2241,14 @@ export function updateFrameInfo(frameIdx, instanceGroups) {
                 })(ul, ul.instance, trackSelect, cam.name);
                 tdTrackUl.appendChild(trackSelect);
 
-                // Identity column for unlinked instances
-                const tdIdUl = document.createElement('td');
+                // Identity dropdown, stacked under the track dropdown in the same
+                // "Track / Identity" cell (see STACKED_SELECT_PX).
                 var idSelectUl = document.createElement('select');
-                idSelectUl.style.cssText = 'font-size:10px;background:var(--bg-tertiary);color:var(--text-primary);border:1px solid var(--border-color);border-radius:3px;padding:0 2px;max-width:70px;';
+                idSelectUl.style.cssText = 'font-size:10px;background:var(--bg-tertiary);color:var(--text-primary);border:1px solid var(--border-color);border-radius:3px;padding:0 2px;' +
+                    'display:block;margin-top:3px;width:' + STACKED_SELECT_PX + 'px;max-width:' + STACKED_SELECT_PX + 'px;';
                 var optNoneUl = document.createElement('option');
                 optNoneUl.value = '-1';
-                optNoneUl.textContent = '—';
+                optNoneUl.textContent = '(none)';
                 idSelectUl.appendChild(optNoneUl);
                 for (var idi = 0; idi < (state.session.identities || []).length; idi++) {
                     var idOpt = document.createElement('option');
@@ -2245,7 +2258,7 @@ export function updateFrameInfo(frameIdx, instanceGroups) {
                 }
                 var newIdOptUl = document.createElement('option');
                 newIdOptUl.value = '__new__';
-                newIdOptUl.textContent = '(+) New ID';
+                newIdOptUl.textContent = '(+) New Identity';
                 idSelectUl.appendChild(newIdOptUl);
                 // Pre-select from the canonical unlinked-identity resolver:
                 // the per-frame entry for a tracked instance, the retained
@@ -2270,7 +2283,7 @@ export function updateFrameInfo(frameIdx, instanceGroups) {
                             setStatus(describeIdentitySwitch(state.session, resUl,
                                 idObjUl ? idObjUl.name : String(newIdVal)), 'success');
                         } else {
-                            // "—": a trackless row's identity lives on the
+                            // "(none)": a trackless row's identity lives on the
                             // instance (luc3d #201); a tracked row's in the map.
                             if (inst.trackIdx == null) inst.identityId = null;
                             else state.session.clearTrackIdentity(inst.trackIdx, camNameForId);
@@ -2300,7 +2313,7 @@ export function updateFrameInfo(frameIdx, instanceGroups) {
                     sel.addEventListener('mousedown', function (ev) { ev.stopPropagation(); });
                     sel.addEventListener('mouseup', function (ev) { ev.stopPropagation(); });
                 })(ul.instance, idSelectUl, cam.name);
-                tdIdUl.appendChild(idSelectUl);
+                tdTrackUl.appendChild(idSelectUl);
 
                 const tdType = document.createElement('td');
                 var instType = ul.instance.type || 'user';
@@ -2319,7 +2332,6 @@ export function updateFrameInfo(frameIdx, instanceGroups) {
                 tdScore.textContent = ul.instance.score != null ? ul.instance.score.toFixed(2) : '-';
 
                 tr.appendChild(tdTrackUl);
-                tr.appendChild(tdIdUl);
                 tr.appendChild(tdType);
                 tr.appendChild(tdPoints);
                 tr.appendChild(tdScore);

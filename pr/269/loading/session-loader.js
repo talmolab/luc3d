@@ -21,73 +21,75 @@
 import {
     state, videoController, interactionManager, viewport3d, timeline, paneManager,
     setVideoController, VIEW_NAMES, buildRememberedSkeleton, setProjectSkeleton,
-} from '../ui/app-state.js?v=5742b520de9a';
+} from '../ui/app-state.js?v=f779d289d596';
 
 import {
     Session, Skeleton, Camera, Instance, UnlinkedInstance, FrameGroup, Identity,
-} from '../pose/pose-data.js?v=5742b520de9a';
+} from '../pose/pose-data.js?v=f779d289d596';
 
-import { OnDemandVideoDecoder, VideoController } from './video.js?v=5742b520de9a';
-import { videoLoadFailureText } from './video-codec-diagnosis.js?v=5742b520de9a';
-import { fileSystemAccessHint } from '../ui/browser-hints.js?v=5742b520de9a';
+import { OnDemandVideoDecoder, VideoController } from './video.js?v=f779d289d596';
+import { videoLoadFailureText } from './video-codec-diagnosis.js?v=f779d289d596';
+import { fileSystemAccessHint } from '../ui/browser-hints.js?v=f779d289d596';
 
 import {
     pickFiles, pickFolder, pickVideoFiles,
     parseCalibrationTOML, parseCalibrationJSON, parseSlpH5, parseSlpViaSleapIO,
     loadCalibrationFile,
-} from '../import-export/file-io.js?v=5742b520de9a';
+} from '../import-export/file-io.js?v=f779d289d596';
 
-import { resolveImportTrackIdx, nulledNodesFromOcclusion } from '../import-export/import-track-resolve.js?v=5742b520de9a';
+import { resolveImportTrackIdx, nulledNodesFromOcclusion } from '../import-export/import-track-resolve.js?v=f779d289d596';
 // Pure `.slp`-per-camera selection rule. Extracted so it can be bridged into
 // the browser test runner (session-loader itself pulls app.js) — same reason
 // and same shape as `resolveImportTrackIdx` above.
-import { chooseCameraSlp } from './percam-slp-choice.js?v=5742b520de9a';
+import { chooseCameraSlp } from './percam-slp-choice.js?v=f779d289d596';
 // Shared SLP grouped-reconstruction (identities + InstanceGroups + nulledNodes/
 // occlusion + 3D points). Circular ESM import (slp-import imports back
 // recomputeUploadedCameras); only invoked inside a function body.
-import { restoreGroupingAndUnlink, reconstructInstanceGroupsFromSessionLazy } from '../import-export/slp-import.js?v=5742b520de9a';
-import { REBASED_CALIBRATION_NAME, pickCalibrationFile } from './calibration-pick.js?v=5742b520de9a';
+import { restoreGroupingAndUnlink, reconstructInstanceGroupsFromSessionLazy } from '../import-export/slp-import.js?v=f779d289d596';
+import { REBASED_CALIBRATION_NAME, pickCalibrationFile } from './calibration-pick.js?v=f779d289d596';
 import {
     isCalibrationImagesVideo, preferNonCalibrationVideos, matchVideoToCamera,
-} from './video-file-pick.js?v=5742b520de9a';
+} from './video-file-pick.js?v=f779d289d596';
 
 import {
     LazyFrameLoader, shouldUseLazyH5, shouldUseLazySlp, getInstanceGroupsForFrame,
     ensureLazyFrameData,
-} from '../pose/triangulation.js?v=5742b520de9a';
-import { SioLazyLoader } from './sio-lazy-loader.js?v=5742b520de9a';
+} from '../pose/triangulation.js?v=f779d289d596';
+import { SioLazyLoader } from './sio-lazy-loader.js?v=f779d289d596';
+import { unionTrackNames, remapTrackIdx } from './track-union.js?v=f779d289d596';
 
 // Status UI moved to import-export/save-load.js in Pass 3c-1.
 import {
     setStatus, showLoading, hideLoading, ensureNo3dImportBlockingLoad,
-} from '../import-export/save-load.js?v=5742b520de9a';
-import { showLoadingProgress, createProgressPacer, yieldToPaint } from '../ui/loading-overlay.js?v=5742b520de9a';
+} from '../import-export/save-load.js?v=f779d289d596';
+import { showLoadingProgress, createProgressPacer, yieldToPaint } from '../ui/loading-overlay.js?v=f779d289d596';
 
 // Circular import — these are still defined in app.js for now. See module
 // header note. They are only invoked inside function bodies, never at
 // module-init time, so live-binding lookup keeps them functional.
-import { drawAllOverlays, setReprojErrorVisible } from '../ui/rendering.js?v=5742b520de9a';
-import { updateInfoPanel, promptImportSkeletonForAllSessions } from '../ui/info-panel.js?v=5742b520de9a';
-import { noteSessionCalibrationDivergence } from '../ui/calibration-notice.js?v=5742b520de9a';
-import { parseSkeletonJSON } from '../import-export/skeleton-json.js?v=5742b520de9a';
+import { drawAllOverlays, setReprojErrorVisible } from '../ui/rendering.js?v=f779d289d596';
+import { updateInfoPanel, promptImportSkeletonForAllSessions } from '../ui/info-panel.js?v=f779d289d596';
+import { noteSessionCalibrationDivergence } from '../ui/calibration-notice.js?v=f779d289d596';
+import { refreshReadoutTotals } from '../ui/frame-readout.js?v=f779d289d596';
+import { parseSkeletonJSON } from '../import-export/skeleton-json.js?v=f779d289d596';
 // Pass 3i-3: setupInteraction / setup3DViewport / setupTimeline / updateFpsDisplay /
 // hideWelcomeOverlay moved to pose/initialization.js.
 import {
     setupInteraction, setup3DViewport, setupTimeline,
     updateFpsDisplay,
     hideWelcomeOverlay,
-} from '../pose/initialization.js?v=5742b520de9a';
+} from '../pose/initialization.js?v=f779d289d596';
 // Pass 3h: populateViewStrip / populateSessionStrip / switchSession moved to sessions-panes.js.
 import {
     populateViewStrip, populateSessionStrip, switchSession, multiSelectViews,
-} from '../ui/sessions-panes.js?v=5742b520de9a';
+} from '../ui/sessions-panes.js?v=f779d289d596';
 // Pass 3e-1: updateSeekbar / fitTimelineToData / onPlaybackStateChange moved to ui-wiring.js.
 import {
     updateSeekbar, fitTimelineToData, onPlaybackStateChange, updateVideoGridDisplay,
-} from '../ui/ui-wiring.js?v=5742b520de9a';
-import { getLoadingProgressModal } from '../ui/loading-progress-modal.js?v=5742b520de9a';
-import { readVisibilityMetadata } from '../import-export/visibility-metadata.js?v=5742b520de9a';
-import { readPlaneMetadata, resetPlaneState } from '../import-export/plane-metadata.js?v=5742b520de9a';
+} from '../ui/ui-wiring.js?v=f779d289d596';
+import { getLoadingProgressModal } from '../ui/loading-progress-modal.js?v=f779d289d596';
+import { readVisibilityMetadata } from '../import-export/visibility-metadata.js?v=f779d289d596';
+import { readPlaneMetadata, resetPlaneState } from '../import-export/plane-metadata.js?v=f779d289d596';
 
 // Module-private debounce timer for the zoom-redraw callback in
 // rebuildVideoController(). app.js's setupEmptyVideoController() has its own
@@ -1214,7 +1216,7 @@ export function rebuildVideoController() {
         timeline.setData(state.session);
     }
 
-    document.getElementById('totalFrames').textContent = state.totalFrames;
+    refreshReadoutTotals();
     document.getElementById('fpsDisplay').textContent = state.fps.toFixed(1) + ' fps';
 
     // Surface frame-accurate mediabunny backend failures in the status bar
@@ -1267,7 +1269,7 @@ export function updateTotalFrames() {
     if (maxFrames > 0) {
         state.totalFrames = maxFrames;
         state.fps = bestFps;
-        document.getElementById('totalFrames').textContent = state.totalFrames;
+        refreshReadoutTotals();
         document.getElementById('fpsDisplay').textContent = state.fps.toFixed(1) + ' fps';
         if (timeline) {
             timeline.setTotalFrames(maxFrames);
@@ -1277,7 +1279,7 @@ export function updateTotalFrames() {
         // frame count cannot leak into this one.
         state.totalFrames = 0;
         state.fps = 30;
-        document.getElementById('totalFrames').textContent = '0';
+        refreshReadoutTotals();
         document.getElementById('fpsDisplay').textContent = '30.0 fps';
         if (timeline) {
             timeline.setTotalFrames(1);
@@ -2519,8 +2521,7 @@ export async function handleLoadProjectSlpLazy(slpFile) {
         // write the frame counter + timeline span from the labeled-frame count
         // directly. attachVideosForLazyReopen refines both from the real
         // decoders once videos are attached.
-        var tfEl = document.getElementById('totalFrames');
-        if (tfEl) tfEl.textContent = state.totalFrames;
+        refreshReadoutTotals();
 
         // 3D viewport (needs a live session).
         if (hasCalibration) {
@@ -2603,6 +2604,11 @@ export async function handleLoadProjectSlpLazy(slpFile) {
  * `subarray` view): a view would pin the whole camera buffer, and structured-
  * cloning a view (e.g. posting an instance to a worker) copies its entire
  * underlying buffer.
+ *
+ * `trackRemap` maps this camera's OWN track index to the session's
+ * (`unionTrackNames`, `loading/track-union.js`); an index it does not cover is
+ * trackless (`remapTrackIdx`), never kept raw — a raw index would name
+ * whichever session track happens to sit there.
  */
 export function addColumnarFramesToSession(session, camName, col, trackRemap) {
     var nn = col.numNodes;
@@ -2615,7 +2621,7 @@ export function addColumnarFramesToSession(session, camName, col, trackRemap) {
         var fg = session.getFrameGroup(frameIdx);
         for (var i = col.instOffsets[f], end = col.instOffsets[f + 1]; i < end; i++) {
             var rawTrackIdx = col.trackIdx[i];
-            var remappedTrackIdx = trackRemap[rawTrackIdx] !== undefined ? trackRemap[rawTrackIdx] : rawTrackIdx;
+            var remappedTrackIdx = remapTrackIdx(trackRemap, rawTrackIdx);
             var instType = col.type[i] === 1 ? 'predicted' : 'user';
             var trackIdx = resolveImportTrackIdx(session, remappedTrackIdx, instType);
             var instance = new Instance(col.xy.slice(i * stride, (i + 1) * stride),
@@ -3073,6 +3079,15 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
             showLoading('Building session data...');
         }
 
+        // ONE session track list for the whole folder, built before any camera's
+        // instances: the union of every parsed camera's own track names, cameras
+        // in sorted name order (`loading/track-union.js` — the same rule both
+        // lazy loaders apply, so a folder gives the same `session.tracks` on
+        // either path). Each camera's own indices are mapped into it below.
+        var trackUnion = unionTrackNames(parseJobs.map(function (job, j) {
+            return { camName: job.camName, names: (parseResults[j] && parseResults[j].tracks) || [] };
+        }).filter(function (entry, j) { return !!parseResults[j]; }));
+
         for (var pri = 0; pri < parseJobs.length; pri++) {
             if (pri > 0 && buildPacer.due()) {
                 showLoadingProgress('Building session', pri, parseJobs.length, loadStep(2, 'cameras'));
@@ -3088,7 +3103,7 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
 
             if (!state.session) {
                 var skeleton = new Skeleton('skeleton', [], []);
-                var tracks = slpData.tracks || ['track_0'];
+                var tracks = trackUnion.names;
                 var sessionName = folderName || ('Session ' + (state.sessions.length + 1));
                 state.session = new Session(cameras.length > 0 ? cameras : [], skeleton, tracks, sessionName);
                 firstSession = state.session;
@@ -3098,18 +3113,7 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
                 }
             }
 
-            var trackRemap = {};
-            if (slpData.tracks) {
-                for (var ti = 0; ti < slpData.tracks.length; ti++) {
-                    var existingIdx = state.session.tracks.indexOf(slpData.tracks[ti]);
-                    if (existingIdx >= 0) {
-                        trackRemap[ti] = existingIdx;
-                    } else {
-                        trackRemap[ti] = state.session.tracks.length;
-                        state.session.tracks.push(slpData.tracks[ti]);
-                    }
-                }
-            }
+            var trackRemap = trackUnion.remapByCam.get(camName) || new Int32Array(0);
 
             if (slpData.columnar) {
                 addColumnarFramesToSession(state.session, camName, slpData.columnar, trackRemap);
@@ -3125,7 +3129,7 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
                         for (var ii = 0; ii < frameData.instances.length; ii++) {
                             var inst = frameData.instances[ii];
                             var rawTrackIdx = inst.trackIdx !== undefined ? inst.trackIdx : (inst.track_idx !== undefined ? inst.track_idx : 0);
-                            var remappedTrackIdx = trackRemap[rawTrackIdx] !== undefined ? trackRemap[rawTrackIdx] : rawTrackIdx;
+                            var remappedTrackIdx = remapTrackIdx(trackRemap, rawTrackIdx);
                             var instType = inst.type || (inst.from_predicted !== undefined ? 'predicted' : 'user');
                             var trackIdx = resolveImportTrackIdx(state.session, remappedTrackIdx, instType);
                             var instance = new Instance(inst.points || [], trackIdx, instType, inst.score || 1.0);
@@ -3137,11 +3141,15 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
             }
         }
 
-        // Integrate lazy loader metadata into session
+        // Integrate lazy loader metadata into session. The folder is routed as ONE
+        // unit (above), so a lazy load has no eager cameras and no session yet.
         if (lazyLoader) {
             if (!state.session) {
                 var lazySkel = lazyLoader.skeleton || { name: 'skeleton', nodes: [], edges: [] };
                 var lazySkeleton = new Skeleton(lazySkel.name || 'skeleton', lazySkel.nodes || [], lazySkel.edges || []);
+                // The union of every camera's own tracks, each camera's store
+                // already re-indexed into it — the same list whichever camera's
+                // file finished opening first (`_unifyTracks` in both loaders).
                 var lazyTracks = lazyLoader.trackNames.length > 0 ? lazyLoader.trackNames : ['track_0'];
                 var sessionName = folderName || ('Session ' + (state.sessions.length + 1));
                 state.session = new Session(cameras.length > 0 ? cameras : [], lazySkeleton, lazyTracks, sessionName);
@@ -3150,14 +3158,6 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
                 if (state.sessions.indexOf(state.session) < 0) {
                     state.sessions.push(state.session);
                     state.activeSessionIdx = state.sessions.length - 1;
-                }
-            } else {
-                if (lazyLoader.trackNames) {
-                    for (var lti = 0; lti < lazyLoader.trackNames.length; lti++) {
-                        if (state.session.tracks.indexOf(lazyLoader.trackNames[lti]) < 0) {
-                            state.session.tracks.push(lazyLoader.trackNames[lti]);
-                        }
-                    }
                 }
             }
             state.session.lazyLoader = lazyLoader;

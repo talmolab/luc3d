@@ -9,23 +9,26 @@
 
 import { mat3x3Multiply, Camera, FrameGroup, Instance, UnlinkedInstance, InstanceGroup,
          makePoints3d, points3dNodeCount, hasPoint3d, getPoint3d, readPoint3d,
-         setPoint3d, clearPoint3d, someValidPoint3d, countPoints3d } from './pose-data.js?v=5742b520de9a';
+         setPoint3d, clearPoint3d, someValidPoint3d, countPoints3d, pooledPoints3d } from './pose-data.js?v=f779d289d596';
 // The Jacobi eigensolver and the least-squares plane fit live in
 // `pose/plane-fit.js`, so `pose/plane-data.js` can reach the fit without
 // importing this module — and the whole UI with it. `fitPlaneToPoints3d` is
 // re-exported unchanged, because every existing caller and test reads it here.
-import { jacobiEigen, fitPlaneToPoints3d } from './plane-fit.js?v=5742b520de9a';
+import { jacobiEigen, fitPlaneToPoints3d } from './plane-fit.js?v=f779d289d596';
 export { fitPlaneToPoints3d };
-import { state, timeline, viewport3d } from '../ui/app-state.js?v=5742b520de9a';
+import { state, timeline, viewport3d, interactionManager } from '../ui/app-state.js?v=f779d289d596';
 // Pass 3i-2: triangulation orchestration moved out of app.js
-import { setReprojErrorVisible, showReprojectionsOnly, REPROJ_ONLY_NOTE, drawAllOverlays } from '../ui/rendering.js?v=5742b520de9a';
-import { updateTriangulationBadge } from '../ui/info-panel.js?v=5742b520de9a';
-import { isCameraTracked, getTrackingThreshold, getDefaultTriangulationMethod } from '../ui/settings.js?v=5742b520de9a';
-import { markDirty, setStatus, showLoading, hideLoading } from '../import-export/save-load.js?v=5742b520de9a';
-import { showLoadingProgress, createProgressPacer, yieldToPaint } from '../ui/loading-overlay.js?v=5742b520de9a';
-import { createGroupSolver } from './triangulation-pool.js?v=5742b520de9a';
+import { setReprojErrorVisible, showReprojectionsOnly, REPROJ_ONLY_NOTE, drawAllOverlays } from '../ui/rendering.js?v=f779d289d596';
+import { updateTriangulationBadge } from '../ui/info-panel.js?v=f779d289d596';
+import { isCameraTracked, getTrackingThreshold, getDefaultTriangulationMethod } from '../ui/settings.js?v=f779d289d596';
+import { markDirty, setStatus, showLoading, hideLoading } from '../import-export/save-load.js?v=f779d289d596';
+import { showLoadingProgress, createProgressPacer, yieldToPaint } from '../ui/loading-overlay.js?v=f779d289d596';
+import { createGroupSolver } from './triangulation-pool.js?v=f779d289d596';
+import { unionTrackNames, remapTrackIdx, isIdentityRemap } from '../loading/track-union.js?v=f779d289d596';
+import { evictLazyFrameGroups, holdLazyResidency, releaseLazyResidency, releaseFrameMembers2d,
+         LAZY_RESIDENT_CAP, LAZY_KEEP_BEHIND } from './lazy-residency.js?v=f779d289d596';
 // Pass 3i-3: update3DViewport moved to pose/initialization.js.
-import { update3DViewport } from './initialization.js?v=5742b520de9a';
+import { update3DViewport } from './initialization.js?v=f779d289d596';
 // The pure math (DLT, refinement, reprojection, triangulateAndReproject) lives
 // in ./triangulation-core.js so a worker can load it; re-exported below so every
 // existing import of these names from this module keeps working.
@@ -42,7 +45,7 @@ import {
     computeReprojectionError, computeReprojectionErrors, computeMeanReprojectionError,
     invert3x3, triangulateAndReproject, __triangulationKernelsForTest,
     setTriangulationSettingsHooks,
-} from './triangulation-core.js?v=5742b520de9a';
+} from './triangulation-core.js?v=f779d289d596';
 export {
     triangulatePointDLT, triangulatePoints, BA_ROBUST_SCALE_PX,
     triangulatePointBA, triangulatePointsBA,
@@ -1535,6 +1538,36 @@ export function getOrComputeReprojectedInstance(group, camName) {
 // ============================================
 
 /**
+ * Re-key a worker's dense occupancy grid (`data[frame * nTracks + ownTrack]`)
+ * into the SPARSE form `SioLazyLoader` produces, keyed by SESSION track index —
+ * for a camera whose own indices are not already the session's
+ * (`LazyFrameLoader._unifyTracks`). Sparse rather than a wider dense grid
+ * because a wider grid costs nFrames x the WHOLE union per camera.
+ * `ui/timeline.js` reads both forms.
+ */
+function denseOccupancyToSparse(data, nTracks, nFrames, remap, nSessionTracks) {
+    var segments = new Map();
+    var counts = new Map();
+    for (var tr = 0; tr < nTracks; tr++) {
+        var key = remapTrackIdx(remap, tr);
+        if (key < 0) continue;
+        var segs = [], count = 0, start = -1;
+        for (var fi = 0; fi < nFrames; fi++) {
+            if (data[fi * nTracks + tr]) {
+                if (start < 0) start = fi;
+                count++;
+            } else if (start >= 0) {
+                segs.push({ start: start, end: fi - 1 });
+                start = -1;
+            }
+        }
+        if (start >= 0) segs.push({ start: start, end: nFrames - 1 });
+        if (segs.length > 0) { segments.set(key, segs); counts.set(key, count); }
+    }
+    return { sparse: true, nTracks: nSessionTracks, nFrames: nFrames, segments: segments, counts: counts };
+}
+
+/**
  * Per-camera worker-backed lazy loader for analysis H5 files. Spawns one
  * `loading/slp-import-worker.js` per camera, holds metadata, and serves
  * frame requests with prefetch + LRU caching.
@@ -1549,11 +1582,94 @@ export class LazyFrameLoader {
         this.prefetchAhead = 20;
         this.nFrames = 0;
         this.skeleton = null;
+        /** Session track list: the union of every camera's own track names (see `_unifyTracks`). */
         this.trackNames = [];
         this.videos = new Map();
         this.trackOccupancy = new Map();
         this._requestId = 0;
         this._pending = new Map();
+        /** camName -> Int32Array own track index -> session index; absent when it is the identity. */
+        this._trackRemapByCam = new Map();
+    }
+
+    /**
+     * Record one camera's worker metadata. Cameras open in PARALLEL, so this
+     * must not depend on arrival order: the skeleton comes from the first
+     * camera BY NAME, and `trackNames` is rebuilt as the union over every camera
+     * so far (`_unifyTracks`).
+     */
+    _registerCamera(cameraName, worker, data) {
+        this.workers.set(cameraName, worker);
+        this.metadata.set(cameraName, data);
+        var cams = Array.from(this.metadata.keys()).sort();
+        this.skeleton = null;
+        for (var i = 0; i < cams.length && !this.skeleton; i++) {
+            this.skeleton = this.metadata.get(cams[i]).skeleton || null;
+        }
+        if (data.nFrames > this.nFrames) this.nFrames = data.nFrames;
+        this.videos.set(cameraName, data.videos ? data.videos[0] : null);
+        this._unifyTracks();
+    }
+
+    /**
+     * Re-derive `trackNames` — the union of every camera's own track names,
+     * cameras in sorted name order (`loading/track-union.js`) — and how each
+     * camera's own track index maps into it. A worker only knows its own file,
+     * so its frames carry OWN indices and are re-indexed as they arrive
+     * (`_remapFrameTracks`); the occupancy grid, keyed by own index, is
+     * re-keyed here. Computed from the metadata, never from a previous union,
+     * so the result is the same whichever worker answers first.
+     */
+    _unifyTracks() {
+        var self = this;
+        var cams = Array.from(this.metadata.keys());
+        var union = unionTrackNames(cams.map(function (c) {
+            return { camName: c, names: self._ownTrackNames(self.metadata.get(c)) };
+        }));
+        var changed = false;
+        for (var ci = 0; ci < cams.length; ci++) {
+            var cam = cams[ci];
+            var remap = union.remapByCam.get(cam);
+            var nextRemap = isIdentityRemap(remap) ? null : remap;
+            var prev = this._trackRemapByCam.get(cam) || null;
+            var same = prev === nextRemap || (prev !== null && nextRemap !== null &&
+                prev.length === nextRemap.length && prev.every(function (v, k) { return v === nextRemap[k]; }));
+            if (!same) changed = true;
+            if (nextRemap) this._trackRemapByCam.set(cam, nextRemap);
+            else this._trackRemapByCam.delete(cam);
+
+            var md = this.metadata.get(cam);
+            if (md.trackOccupancy) {
+                this.trackOccupancy.set(cam, nextRemap
+                    ? denseOccupancyToSparse(md.trackOccupancy, md.nTracks, md.nFrames, nextRemap, union.names.length)
+                    : { data: md.trackOccupancy, nTracks: md.nTracks, nFrames: md.nFrames });
+            }
+        }
+        // A cached frame carries the indices of the map it arrived under.
+        if (changed) { this.cache.clear(); this.cacheOrder = []; }
+        this.trackNames = union.names;
+    }
+
+    /**
+     * A camera's own track names, padded to its column count with the worker's
+     * own `track_<i>` convention: `nTracks` comes from the data's shape and
+     * `track_names` can be shorter, and an unnamed column is still a track.
+     */
+    _ownTrackNames(md) {
+        var names = (md.trackNames || []).map(String);
+        var n = md.nTracks || 0;
+        for (var i = names.length; i < n; i++) names.push(n === 1 ? 'track' : 'track_' + i);
+        return names;
+    }
+
+    /** Re-index one worker frame's instances (own -> session track index), in place. */
+    _remapFrameTracks(cameraName, instances) {
+        var remap = this._trackRemapByCam.get(cameraName);
+        if (!remap || !instances) return;
+        for (var i = 0; i < instances.length; i++) {
+            var inst = instances[i];
+            if (inst && inst.trackIdx != null && inst.trackIdx >= 0) inst.trackIdx = remapTrackIdx(remap, inst.trackIdx);
+        }
     }
 
     open(cameraName, file, onProgress) {
@@ -1569,26 +1685,19 @@ export class LazyFrameLoader {
             worker.onmessage = function (e) {
                 var msg = e.data;
                 if (msg.type === 'metadata') {
-                    self.workers.set(cameraName, worker);
-                    self.metadata.set(cameraName, msg.data);
-                    if (!self.skeleton) {
-                        self.skeleton = msg.data.skeleton;
-                        self.trackNames = msg.data.trackNames;
-                    }
-                    if (msg.data.nFrames > self.nFrames) self.nFrames = msg.data.nFrames;
-                    self.videos.set(cameraName, msg.data.videos ? msg.data.videos[0] : null);
-                    if (msg.data.trackOccupancy) {
-                        self.trackOccupancy.set(cameraName, {
-                            data: msg.data.trackOccupancy,
-                            nTracks: msg.data.nTracks,
-                            nFrames: msg.data.nFrames,
-                        });
-                    }
+                    self._registerCamera(cameraName, worker, msg.data);
                     resolve(msg.data);
                 } else if (msg.type === 'frameData') {
+                    // Re-indexed HERE, the one place every frame passes through —
+                    // `getFrame`, `prefetch` and `batchLoadLazyFrames` all post
+                    // to the worker directly.
+                    self._remapFrameTracks(cameraName, msg.instances);
                     var cb = self._pending.get(msg.requestId);
                     if (cb) { self._pending.delete(msg.requestId); cb.resolve({ frameIdx: msg.frameIdx, instances: msg.instances }); }
                 } else if (msg.type === 'framesData') {
+                    for (var fdi = 0; fdi < (msg.frames || []).length; fdi++) {
+                        self._remapFrameTracks(cameraName, msg.frames[fdi] && msg.frames[fdi].instances);
+                    }
                     var cb2 = self._pending.get(msg.requestId);
                     if (cb2) { self._pending.delete(msg.requestId); cb2.resolve(msg.frames); }
                 } else if (msg.type === 'error') {
@@ -1679,7 +1788,7 @@ export class LazyFrameLoader {
         for (var entry of this.workers) {
             try { entry[1].postMessage({ type: 'close' }); entry[1].terminate(); } catch (e) { }
         }
-        this.workers.clear(); this.metadata.clear(); this.cache.clear();
+        this.workers.clear(); this.metadata.clear(); this.cache.clear(); this._trackRemapByCam.clear();
         this.cacheOrder = []; this._pending.clear();
     }
 }
@@ -1854,6 +1963,28 @@ export function lazyCamerasMissingFrom(session, fg) {
 }
 
 /**
+ * The trackIdx an `Instance` hydrated from a lazy loader carries: the loader's
+ * own index, or `null` for no track. Both lazy loaders hand over the COLUMNAR
+ * store's trackless value, `-1` (`SioLazyLoader`'s `adaptTypedInstance`; a
+ * `LazyFrameLoader` frame re-indexed out of range), and the four hydration
+ * paths below — `ensureLazyFrameData`, `hydrateLazyCameras`,
+ * `buildLazyFrameGroupSync`, `batchLoadLazyFrames` — used to pass it straight
+ * into `new Instance`. The in-memory sentinel is `null`
+ * (`resolveImportTrackIdx`, which every eager path applies), and the code that
+ * reads it tests `trackIdx == null`: with `-1`, `getInstanceColor` drew a
+ * trackless instance in the palette's last track colour instead of the
+ * ungrouped one, `getInstanceLabelName` gave it a "Track -1" pill, and both
+ * ignored the identity an ungrouped trackless instance retains (luc3d #201).
+ * The store itself keeps `-1` — `appendStore`, `forEachInstanceRow` and
+ * `remapTracksFromIdentity` all speak it — so this is applied here, where a
+ * store row becomes an `Instance`, and nowhere earlier. `frameIdentityMap`
+ * keys both the same (`Session._fimKey`), so no saved identity moves.
+ */
+function lazyInstanceTrackIdx(trackIdx) {
+    return (typeof trackIdx === 'number' && trackIdx >= 0) ? trackIdx : null;
+}
+
+/**
  * Hydrate ONLY `camNames` into the frame's existing FrameGroup.
  *
  * The rows are staged in a throwaway FrameGroup first so
@@ -1880,7 +2011,7 @@ async function hydrateLazyCameras(session, frameIdx, camNames) {
         if (haveUl && haveUl.length > 0) continue;
         for (var ii = 0; ii < instances.length; ii++) {
             var d = instances[ii];
-            var inst = new Instance(d.points || [], d.trackIdx, d.type || 'predicted', d.score || 0);
+            var inst = new Instance(d.points || [], lazyInstanceTrackIdx(d.trackIdx), d.type || 'predicted', d.score || 0);
             inst._rawInstIndex = ii;   // see the note in ensureLazyFrameData
             staged.addInstance(camName, inst);
             added++;
@@ -1929,7 +2060,7 @@ export async function ensureLazyFrameData(frameIdx) {
             var instData = instances[ii];
             var inst = new Instance(
                 instData.points || [],
-                instData.trackIdx,
+                lazyInstanceTrackIdx(instData.trackIdx),
                 instData.type || 'predicted',
                 instData.score || 0
             );
@@ -1958,6 +2089,9 @@ export async function ensureLazyFrameData(frameIdx) {
         if (session.frameGroups.has(pfIdx)) continue;
         buildLazyFrameGroupSync(pfIdx);
     }
+
+    // A new frame came in: drop far-away, rebuildable ones once over the cap.
+    evictLazyFrames(frameIdx);
 }
 
 /**
@@ -1978,7 +2112,7 @@ export function buildLazyFrameGroupSync(frameIdx) {
             var instData = instances[ii];
             var inst = new Instance(
                 instData.points || [],
-                instData.trackIdx,
+                lazyInstanceTrackIdx(instData.trackIdx),
                 instData.type || 'predicted',
                 instData.score || 0
             );
@@ -2050,7 +2184,7 @@ export async function batchLoadLazyFrames(startIdx, count, onProgress) {
             for (var ii = 0; ii < camData.instances.length; ii++) {
                 var instData = camData.instances[ii];
                 var inst = new Instance(
-                    instData.points || [], instData.trackIdx,
+                    instData.points || [], lazyInstanceTrackIdx(instData.trackIdx),
                     instData.type || 'predicted', instData.score || 0
                 );
                 // See ensureLazyFrameData's identical tag above.
@@ -2064,6 +2198,52 @@ export async function batchLoadLazyFrames(startIdx, count, onProgress) {
         if (onProgress && loaded % 100 === 0) onProgress(loaded, needEnd - needStart);
     }
     return loaded;
+}
+
+var _trailWindowLoad = null;
+
+/**
+ * Hydrate the node-trail window behind `frameIdx` on a lazy project — the
+ * `trailLength` frames before it — so a trail drawn right after a seek shows
+ * where each animal just was. A seek hydrates its target and the frames AHEAD
+ * of it (`ensureLazyFrameData`), never the ones behind, and trails draw
+ * resident frames only (`trailWindowFrames`), so without this a jump left the
+ * trail empty, and before that rule joined it to frames resident from before
+ * the jump.
+ *
+ * Cheap when there is nothing to do, which is every playback frame: the frames
+ * behind the playhead were just played and eviction protects them
+ * (`evictLazyFrames`' keep-behind covers the trail length), so the cost is one
+ * `frameGroups.has` per trail frame. A synchronous loader (`SioLazyLoader`)
+ * builds the missing frames before this returns; the worker-backed loader
+ * fetches them, one request at a time.
+ *
+ * @param {number} frameIdx
+ * @param {number} trailLength
+ * @returns {Promise<number>|null} for the worker-backed loader, a Promise of
+ *   the number of frames loaded; null when nothing was missing or the frames
+ *   are already built
+ */
+export function ensureLazyTrailWindow(frameIdx, trailLength) {
+    var session = state.session;
+    if (!session || !session.lazyLoader || !(trailLength > 0) || frameIdx == null) return null;
+    var lo = Math.max(0, frameIdx - trailLength);
+    var f = frameIdx - 1;
+    while (f >= lo && session.frameGroups.has(f)) f--;
+    if (f < lo) return null;                          // the whole window is resident
+    var loader = session.lazyLoader;
+    if (loader.isSync) {
+        for (; f >= lo; f--) buildLazyFrameGroupSync(f);
+        evictLazyFrames(frameIdx);
+        return null;
+    }
+    if (_trailWindowLoad) return null;
+    _trailWindowLoad = batchLoadLazyFrames(lo, frameIdx - lo).then(function (n) {
+        _trailWindowLoad = null;
+        evictLazyFrames(frameIdx);
+        return n;
+    }, function () { _trailWindowLoad = null; return 0; });
+    return _trailWindowLoad;
 }
 
 /**
@@ -2090,57 +2270,62 @@ export async function loadAllLazyFrames(onStatus) {
 }
 
 /**
- * Evict old lazy-loaded frames to keep memory bounded.
+ * Keep a lazy session's resident frames bounded — a no-op until
+ * `session.frameGroups` holds more than `LAZY_RESIDENT_CAP` frames, then one
+ * pass of `evictLazyFrameGroups` (pose/lazy-residency.js) with the app state it
+ * needs: windows around the on-screen frame and `anchorFrame` (the frame just
+ * hydrated, which a sequential consumer such as the overlay export reads next),
+ * a keep-behind that covers the node-trail length, everything the
+ * InteractionManager holds, and `state.triangulationResults`.
+ *
+ * Called after a NEW frame is hydrated by `ensureLazyFrameData` and by the
+ * playback loader (`ui/ui-wiring.js` `onPlaybackStateChange`) — never from
+ * `batchLoadLazyFrames`, whose sweep callers read a window back after awaits.
+ *
+ * @param {number} [anchorFrame] - defaults to the on-screen frame
+ * @returns {Object|null} the pass report, or null when nothing ran
  */
-export function evictLazyFrames(currentFrame) {
+export function evictLazyFrames(anchorFrame) {
     var session = state.session;
-    if (!session || !session.lazyLoader) return;
-
-    // (The loader's internal per-camera typed-frame cache is bounded automatically
-    // by `frameCacheLimit`, set in SioLazyLoader.open — no manual cap needed here.)
-    var maxKeep = 500;
-    var keys = Array.from(session.frameGroups.keys());
-    if (keys.length <= maxKeep) return;
-
-    if (!evictLazyFrames._counter) evictLazyFrames._counter = 0;
-    if (++evictLazyFrames._counter % 50 !== 0) return;
-
-    keys.sort(function (a, b) {
-        return Math.abs(a - currentFrame) - Math.abs(b - currentFrame);
+    if (!session || !session.lazyLoader) return null;
+    if (session.frameGroups.size <= LAZY_RESIDENT_CAP) return null;
+    return evictLazyFrameGroups(session, {
+        anchors: [state.currentFrame, anchorFrame != null ? anchorFrame : state.currentFrame],
+        behind: Math.max(LAZY_KEEP_BEHIND, (state.trailLength | 0) + 1),
+        refs: _uiHeldObjects(),
+        triangulationResults: state.triangulationResults,
     });
+}
 
-    var evicted = 0;
-    for (var i = maxKeep; i < keys.length; i++) {
-        var fIdx = keys[i];
-        if (fIdx === currentFrame) continue;
-
-        var fgEvict = session.frameGroups.get(fIdx);
-        if (!fgEvict) continue;
-
-        var hasUserData = false;
-        for (var [, insts] of fgEvict.instances) {
-            for (var instCheck of insts) {
-                if (instCheck.type === 'user') { hasUserData = true; break; }
-            }
-            if (hasUserData) break;
-        }
-        if (!hasUserData) {
-            for (var [, uInsts] of fgEvict.unlinkedInstances) {
-                for (var uInst of uInsts) {
-                    if (uInst.instance && uInst.instance.type === 'user') { hasUserData = true; break; }
-                }
-                if (hasUserData) break;
-            }
-        }
-        if (!hasUserData && session.instanceGroups.has(fIdx)) {
-            hasUserData = true;
-        }
-
-        if (!hasUserData) {
-            session.frameGroups.delete(fIdx);
-            evicted++;
-        }
+/**
+ * The pose objects the InteractionManager holds across frame changes — its
+ * selection, the Group-mode assignment pick, the drag in progress and the
+ * Edit Group target. None of them records a frame, so a frame containing one
+ * is kept rather than rebuilt with new objects behind the UI's back.
+ */
+function _uiHeldObjects() {
+    var im = interactionManager;
+    if (!im) return null;
+    var refs = new Set();
+    function addGroup(g) {
+        if (!g) return;
+        refs.add(g);
+        if (g.instances) for (var [, m] of g.instances) if (m) refs.add(m);
     }
+    function addUnlinked(ul) {
+        if (!ul) return;
+        refs.add(ul);
+        if (ul.instance) refs.add(ul.instance);
+    }
+    addGroup(im.selectedInstanceGroup);
+    addGroup(im.editGroupTarget);
+    addUnlinked(im.selectedUnlinked);
+    var picks = im.assignmentSelection || [];
+    for (var i = 0; i < picks.length; i++) addUnlinked(picks[i]);
+    // A grouped drag names its group by index into the ON-SCREEN frame, which
+    // is always protected; an unlinked drag holds the object itself.
+    if (im.dragInfo) addUnlinked(im.dragInfo.unlinked);
+    return refs;
 }
 
 /**
@@ -2857,7 +3042,7 @@ function _prepareGroupStep(group, cameras) {
 /** Store a solve's result on the group (the tail of `_triangulateGroupStep`). */
 function _applyGroupStep(group, prep, result) {
     group.triangulationMethod = result.method;
-    group.points3d = result.points3d;
+    group.points3d = pooledPoints3d(result.points3d);   // one slab, not one ArrayBuffer per group
     group.usedCameras = prep.usedCameras;
 }
 
@@ -2911,6 +3096,11 @@ function _applyGroupStep(group, prep, result) {
  * land in a durable structure (the store's own columns, `frameIdentityMap`,
  * `instanceGroups`) or mark the instance user-edited so its frame is pinned.
  *
+ * The playback eviction (`evictLazyFrames`, pose/lazy-residency.js) is HELD for
+ * the whole sweep: it protects windows around the on-screen frame, not around
+ * the window being swept, so a draw landing during one of the sweep's yields
+ * could otherwise drop frames the sweep hydrated and has not visited yet.
+ *
  * `opts.start`/`opts.end` (inclusive) restrict the sweep to a frame range — used
  * by the range operations (Triangulate Range). Omit both to sweep everything.
  *
@@ -2939,6 +3129,15 @@ function _hasFrameData(session, frameIdx) {
 }
 
 export async function sweepLazyFrameWindows(session, onFrame, opts) {
+    holdLazyResidency();
+    try {
+        return await _sweepLazyFrameWindowsHeld(session, onFrame, opts);
+    } finally {
+        releaseLazyResidency();
+    }
+}
+
+async function _sweepLazyFrameWindowsHeld(session, onFrame, opts) {
     opts = opts || {};
     var loader = session.lazyLoader;
     var windowed = loader && loader.isSync && typeof loader.releaseWindow === 'function';
@@ -2974,10 +3173,16 @@ export async function sweepLazyFrameWindows(session, onFrame, opts) {
             }
             // Release the window. Keep the on-screen current frame and any
             // user-edited frame; everything else is predicted-only and rebuildable.
+            // A released frame's group members give their 2D back to the store
+            // too (pose/lazy-residency.js) — or a Track All leaves every member
+            // of the project holding a private copy of its row (1.39 GB on the
+            // real 8-camera project).
+            var heldRefs = _uiHeldObjects();
             for (var rf = start; rf < end; rf++) {
                 if (rf === state.currentFrame) continue;
                 var rfg = session.frameGroups.get(rf);
                 if (rfg && !_fgHasUserInstances(rfg)) session.frameGroups.delete(rf);
+                releaseFrameMembers2d(session, rf, { refs: heldRefs });
             }
             loader.releaseWindow(start, end);
             windowCount++;
