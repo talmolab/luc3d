@@ -11,6 +11,15 @@
  * 3D point can flip a tracker assignment and change identities downstream. Each
  * comparison here uses Object.is per value (so NaN, -0 and +0 count).
  *
+ * ONE deliberate exception: the DLT's 4x4 null-vector solve. Its M = AᵀA is
+ * still bit-identical, and so is the Jacobi kernel, which stays as the
+ * fallback; but the solve itself is now inverse iteration (5x faster — it was
+ * 23% of Track All), which agrees with Jacobi to well under a nanometre rather
+ * than bit for bit. Those groups test the claims that change makes instead:
+ * agreement, a null vector no worse than Jacobi's, rotation invariance, and the
+ * fallback. Identities were checked unchanged by a before/after Track All on
+ * real recordings (see the PR that made the change).
+ *
  * Run: node tests/test-triangulation-kernels.mjs
  */
 import { register } from 'node:module';
@@ -51,19 +60,26 @@ function randCamera(i, distorted) {
         [rr(-200, 200), rr(-200, 200), rr(800, 1500)], [1280, 1024]);
 }
 
-group('DLT kernel == svd3x4 on the same A, bit for bit');
-{
-    let n = 0, bad = 0;
-    for (let trial = 0; trial < 3000; trial++) {
+// Random DLT systems, as built for the original `svd3x4(A)`: 2–8 views of a point.
+//   kind 'clean'        one point, ±3 px noise — what triangulation normally sees
+//   kind 'wild'         one point, ±300 px in x
+//   kind 'inconsistent' a DIFFERENT point in every view
+// In the last two the two smallest eigenvalues of M are close, so the null
+// vector is barely determined and inverse iteration converges slowly or hands
+// over to Jacobi.
+function dltSystems(count) {
+    const out = [];
+    for (let trial = 0; trial < count; trial++) {
+        const kind = trial % 5 === 0 ? 'wild' : trial % 5 === 1 ? 'inconsistent' : 'clean';
         const nObs = 2 + Math.floor(rnd() * 7);              // 2..8 views
         const cams = Array.from({ length: nObs }, (_, i) => randCamera(i, false));
         const xs = [], ys = [], Ps = [];
+        let X = [rr(-300, 300), rr(-300, 300), rr(-100, 300)];
         for (let i = 0; i < nObs; i++) {
-            // Real projections of one point plus noise; sometimes wild values.
             const P = cams[i].projectionMatrix;
-            const X = [rr(-300, 300), rr(-300, 300), rr(-100, 300)];
+            if (kind === 'inconsistent') X = [rr(-300, 300), rr(-300, 300), rr(-100, 300)];
             const w = P[2][0] * X[0] + P[2][1] * X[1] + P[2][2] * X[2] + P[2][3];
-            xs.push((P[0][0] * X[0] + P[0][1] * X[1] + P[0][2] * X[2] + P[0][3]) / w + rr(-3, 3) * (trial % 5 === 0 ? 100 : 1));
+            xs.push((P[0][0] * X[0] + P[0][1] * X[1] + P[0][2] * X[2] + P[0][3]) / w + rr(-3, 3) * (kind === 'wild' ? 100 : 1));
             ys.push((P[1][0] * X[0] + P[1][1] * X[1] + P[1][2] * X[2] + P[1][3]) / w + rr(-3, 3));
             Ps.push(P);
         }
@@ -73,12 +89,115 @@ group('DLT kernel == svd3x4 on the same A, bit for bit');
             A.push([x * P[2][0] - P[0][0], x * P[2][1] - P[0][1], x * P[2][2] - P[0][2], x * P[2][3] - P[0][3]]);
             A.push([y * P[2][0] - P[1][0], y * P[2][1] - P[1][1], y * P[2][2] - P[1][2], y * P[2][3] - P[1][3]]);
         }
-        const ref = K.svd3x4(A);
-        const got = Array.from(K.dltHomogeneousFlat(xs, ys, Ps, nObs, new Float64Array(4)));
-        n++;
+        out.push({ kind, X, xs, ys, Ps, nObs, A });
+    }
+    return out;
+}
+const SYSTEMS = dltSystems(3000);
+const flatOf = (rows) => Float64Array.from(rows.flat());
+const rayleigh = (M, v) => { let r = 0; for (let i = 0; i < 4; i++) for (let j = 0; j < 4; j++) r += v[i] * M[i * 4 + j] * v[j]; return r; };
+const toXYZ = (h) => [h[0] / h[3], h[1] / h[3], h[2] / h[3]];
+const dist3 = (p, q) => Math.hypot(p[0] - q[0], p[1] - q[1], p[2] - q[2]);
+
+group('DLT normal matrix M = AᵀA == the one svd3x4 builds, bit for bit');
+{
+    let bad = 0;
+    for (const s of SYSTEMS) {
+        const ref = flatOf(K.matMul(K.matTranspose(s.A), s.A));
+        const got = K.dltNormalMatrixFlat(s.xs, s.ys, s.Ps, s.nObs);
         if (!sameArr(ref, got)) { bad++; if (bad <= 3) console.error('   mismatch', ref, got); }
     }
-    ok(bad === 0, `${n} random 2–8-view systems: ${bad} differ`);
+    ok(bad === 0, `${SYSTEMS.length} random 2–8-view systems: ${bad} differ (the upper-triangle sums mirrored are exact)`);
+}
+
+group('Jacobi kernel (the fallback) == solveSmallestEigenvector4x4, bit for bit');
+{
+    let bad = 0;
+    for (const s of SYSTEMS) {
+        const M = flatOf(K.matMul(K.matTranspose(s.A), s.A));
+        const ref = K.solveSmallestEigenvector4x4(K.matMul(K.matTranspose(s.A), s.A));
+        const got = Array.from(K.smallestEigvec4Flat(M, new Float64Array(4)));
+        if (!sameArr(ref, got)) bad++;
+    }
+    ok(bad === 0, `${SYSTEMS.length} systems: ${bad} differ`);
+}
+
+group('DLT kernel (inverse iteration) agrees with svd3x4 (Jacobi)');
+{
+    // Clean systems: the same 3D point to well under a nanometre. Wild and
+    // inconsistent ones have no well-determined point, so the claim there is the
+    // one that matters: a null vector at least as good as Jacobi's — Rayleigh
+    // quotient vᵀMv, which the true smallest eigenvector minimizes, no larger.
+    let maxClean = 0, nClean = 0, worse = 0, nonUnit = 0;
+    for (const s of SYSTEMS) {
+        const M = flatOf(K.matMul(K.matTranspose(s.A), s.A));
+        const ref = K.svd3x4(s.A);
+        const got = Array.from(K.dltHomogeneousFlat(s.xs, s.ys, s.Ps, s.nObs, new Float64Array(4)));
+        if (Math.abs(Math.hypot(...got) - 1) > 1e-12) nonUnit++;
+        if (s.kind === 'clean') { nClean++; maxClean = Math.max(maxClean, dist3(toXYZ(ref), toXYZ(got))); }
+        const tr = M[0] + M[5] + M[10] + M[15];
+        if (rayleigh(M, got) > rayleigh(M, ref) * (1 + 1e-9) + 1e-15 * tr) worse++;
+    }
+    ok(maxClean < 1e-6, `${nClean} clean systems: largest 3D difference ${maxClean.toExponential(2)} mm (< 1e-6)`);
+    ok(worse === 0, `${SYSTEMS.length} systems: ${worse} with a worse null vector than Jacobi's`);
+    ok(nonUnit === 0, `${SYSTEMS.length} systems: ${nonUnit} results not unit length`);
+}
+
+group('inverse iteration: rotating the world rotates the answer (the frame-invariance argument)');
+{
+    // A rigid change of world frame turns M into QᵀMQ with Q = diag(R, 1) (see
+    // triangulatePointDLT). The null vector must turn with it.
+    const ax = [0.48, 0.6, 0.64], an = 2.84, c = Math.cos(an), sn = Math.sin(an), C = 1 - c;
+    const R = [[c + ax[0] * ax[0] * C, ax[0] * ax[1] * C - ax[2] * sn, ax[0] * ax[2] * C + ax[1] * sn],
+        [ax[1] * ax[0] * C + ax[2] * sn, c + ax[1] * ax[1] * C, ax[1] * ax[2] * C - ax[0] * sn],
+        [ax[2] * ax[0] * C - ax[1] * sn, ax[2] * ax[1] * C + ax[0] * sn, c + ax[2] * ax[2] * C]];
+    let worst = 0, n = 0;
+    for (const s of SYSTEMS) {
+        if (s.kind !== 'clean') continue;
+        const M = K.dltNormalMatrixFlat(s.xs, s.ys, s.Ps, s.nObs).slice();
+        const v = Array.from(K.smallestEigvec4Inverse(M, new Float64Array(4)));
+        const Mq = new Float64Array(16);
+        const Q = (i, j) => (i < 3 && j < 3 ? R[i][j] : (i === j ? 1 : 0));
+        for (let i = 0; i < 4; i++) for (let j = 0; j < 4; j++) {
+            let sum = 0;
+            for (let k = 0; k < 4; k++) for (let l = 0; l < 4; l++) sum += Q(k, i) * M[k * 4 + l] * Q(l, j);
+            Mq[i * 4 + j] = sum;
+        }
+        const vq = K.smallestEigvec4Inverse(Mq, new Float64Array(4));
+        const back = [0, 1, 2, 3].map(i => Q(i, 0) * vq[0] + Q(i, 1) * vq[1] + Q(i, 2) * vq[2] + Q(i, 3) * vq[3]);
+        worst = Math.max(worst, dist3(toXYZ(v), toXYZ(back)));
+        n++;
+    }
+    ok(worst < 1e-6, `${n} clean systems: largest drift ${worst.toExponential(2)} mm (< 1e-6)`);
+}
+
+group('inverse iteration: degenerate inputs are Jacobi\'s answer (the fallback), or a true null vector');
+{
+    const jac = (M) => Array.from(K.smallestEigvec4Flat(Float64Array.from(M), new Float64Array(4)));
+    const inv = (M) => Array.from(K.smallestEigvec4Inverse(Float64Array.from(M), new Float64Array(4)));
+    const zero = new Array(16).fill(0);
+    ok(sameArr(inv(zero), jac(zero)), 'all-zero M (no observations) -> the Jacobi fallback');
+    const withNaN = Array.from(flatOf(K.matMul(K.matTranspose(SYSTEMS[2].A), SYSTEMS[2].A))); withNaN[5] = NaN;
+    ok(sameArr(inv(withNaN), jac(withNaN)), 'NaN in M -> the Jacobi fallback');
+    const withInf = withNaN.slice(); withInf[5] = Infinity;
+    ok(sameArr(inv(withInf), jac(withInf)), 'Infinity in M -> the Jacobi fallback');
+    // Noise-free observations of one point: A has an exact null vector (rank 3) and
+    // M is singular, which a plain Cholesky cannot factor — the shift must make it.
+    const cams = [0, 1, 2].map(i => randCamera(i + 20, false));
+    const X = [12, -40, 150], xs = [], ys = [], Ps = [];
+    for (const cam of cams) {
+        const P = cam.projectionMatrix, w = P[2][0] * X[0] + P[2][1] * X[1] + P[2][2] * X[2] + P[2][3];
+        xs.push((P[0][0] * X[0] + P[0][1] * X[1] + P[0][2] * X[2] + P[0][3]) / w);
+        ys.push((P[1][0] * X[0] + P[1][1] * X[1] + P[1][2] * X[2] + P[1][3]) / w);
+        Ps.push(P);
+    }
+    const exact = toXYZ(K.dltHomogeneousFlat(xs, ys, Ps, 3, new Float64Array(4)));
+    ok(dist3(exact, X) < 1e-6, `noise-free 3-view point recovered to ${dist3(exact, X).toExponential(2)} mm`);
+    // Rank 2 (one view seen twice: the null space is a whole ray) — any unit vector in it will do.
+    const twice = K.dltHomogeneousFlat([xs[0], xs[0]], [ys[0], ys[0]], [Ps[0], Ps[0]], 2, new Float64Array(4));
+    const M2 = K.dltNormalMatrixFlat([xs[0], xs[0]], [ys[0], ys[0]], [Ps[0], Ps[0]], 2).slice();
+    const tr2 = M2[0] + M2[5] + M2[10] + M2[15];
+    ok(Math.abs(Math.hypot(...twice) - 1) < 1e-12 && rayleigh(M2, twice) <= 1e-12 * tr2, 'one view twice (rank 2): a unit null vector');
 }
 
 group('triangulatePointDLT end to end (null views, degenerate inputs)');

@@ -689,9 +689,23 @@ is untouched, and the null vector maps exactly. Four rules:
 - **The allocation-free kernel takes the frame as four OPTIONAL arguments.**
   `dltHomogeneousFlat(xs, ys, Ps, n, out, s, cx, cy, cz)` omitted is the
   identity frame, which reproduces the raw rows exactly — multiplying by 1 and
-  adding 0 are exact in IEEE 754 — so the bit-identity against `svd3x4(A)` that
-  `tests/test-triangulation-kernels.mjs` pins still holds. A kernel edit that
-  changes operation ORDER breaks that test, which is the intended signal.
+  adding 0 are exact in IEEE 754 — so the bit-identity of its M = AᵀA against
+  the one `svd3x4(A)` builds, which `tests/test-triangulation-kernels.mjs` pins,
+  still holds. A kernel edit that changes operation ORDER breaks that test,
+  which is the intended signal.
+- **The null vector is found by inverse iteration, NOT bit-identically to
+  `svd3x4`'s Jacobi.** `smallestEigvec4Inverse` was a deliberate break from
+  bit-identity: the Jacobi sweeps were 23% of a whole Track All (15 s of 65 s on
+  the 5-mouse recording). It agrees with Jacobi to ~1e-10 mm on real data,
+  is MORE rotation-invariant than Jacobi (it converges to machine precision
+  rather than stopping on an absolute tolerance), and anything it cannot settle
+  falls back to the Jacobi kernel, which is still bit-identical. It must
+  CONVERGE — a fixed number of steps leaves an error that depends on the start
+  vector, which does not rotate with the world, and the invariance tests catch
+  that (`INVERSE_TOL` loosened to 1e-5 fails two of them). Before changing the
+  solve again, compare Track All's identities before and after on real
+  recordings with `tests/e2e/_diag-trackall-ab.mjs`: a tiny 3D change is not
+  proof that no association flips.
 Covered by `tests/e2e/triangulation-frame-invariant.mjs`, confirmed to fail on
 the pre-fix build (7 checks red; a mis-associated point moves 6.01 mm instead
 of 2.4e-13 mm).
