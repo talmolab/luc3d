@@ -11,7 +11,11 @@
  * include it. A requestAnimationFrame loop runs ONLY while the frame is in the
  * interval, so the marching-ants outline moves even when paused; outside it the
  * canvases are cleared once and the loop stops. Boxes are recomputed only when
- * the frame changes.
+ * the frame changes — and, on a lazy project, when the frame on screen arrives:
+ * selecting a row jumps to a frame that is usually not resident yet, and its
+ * hydration redraws the overlays but is not a frame change, so the loop polls
+ * `frameGroups.has(frame)` while it waits (`_waiting`). Without that the box
+ * stayed empty until the frame next changed — i.e. until play was pressed.
  *
  * Kept cheap, because it runs during playback on every view: a view is repainted
  * when the frame changes and otherwise at most every `ANIM_MS` (the animation is
@@ -45,12 +49,13 @@
  * `updateIdSwitchProgress`).
  */
 
-import { state } from './app-state.js?v=4c3f7d0398e7';
-import { makeVideoToCanvasTransform } from './overlays.js?v=4c3f7d0398e7';
-import { getNodeWeightArray } from './settings.js?v=4c3f7d0398e7';
+import { state } from './app-state.js?v=c92e28a45028';
+import { makeVideoToCanvasTransform } from './overlays.js?v=c92e28a45028';
+import { getNodeWeightArray } from './settings.js?v=c92e28a45028';
 
 var _target = null;          // {nameA, nameB, p0, s, e, p1}
 var _frame = -1;             // frame the boxes were computed for
+var _waiting = false;        // that frame was not resident (lazy project): recompute once it is
 var _boxes = new Map();      // view name -> {x0, y0, x1, y1} in video px, or absent
 var _raf = 0;
 var _canvases = new WeakMap();
@@ -96,7 +101,7 @@ export function updateIdSwitchHighlight(frame) {
 
 function stop() {
     if (_raf && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(_raf);
-    _raf = 0; _frame = -1; _boxes.clear();
+    _raf = 0; _frame = -1; _waiting = false; _boxes.clear();
     if (!_cleared) {
         (state.views || []).forEach(function (v) {
             var c = _canvases.get(v);
@@ -152,9 +157,10 @@ function extend(box, inst, mask) {
 
 function computeBoxes(frame) {
     _boxes.clear();
+    _waiting = false;
     var session = state.session;
     if (!session || !_target) return;
-    if (session.frameGroups && !session.frameGroups.has(frame)) return;     // lazy project: frame not resident
+    if (session.frameGroups && !session.frameGroups.has(frame)) { _waiting = true; return; }   // lazy: not resident yet
     var groups = (session.instanceGroups && session.instanceGroups.get(frame)) || [];
     var fg = session.getFrameGroup ? session.getFrameGroup(frame) : null;
     var names = [_target.nameA, _target.nameB];
@@ -198,6 +204,10 @@ function colorOf(name) {
 function tick(t) {
     _raf = 0;
     if (!_target || _frame < 0) return;
+    // the frame on screen has been hydrated since (lazy project) — a hydration is not a frame change
+    if (_waiting && state.session && state.session.frameGroups && state.session.frameGroups.has(_frame)) {
+        computeBoxes(_frame); _paintFrame = -1;
+    }
     if (_frame === _paintFrame && t - _paintT < ANIM_MS) {      // same frame, animation step not due yet
         if (typeof requestAnimationFrame === 'function') _raf = requestAnimationFrame(tick);
         return;

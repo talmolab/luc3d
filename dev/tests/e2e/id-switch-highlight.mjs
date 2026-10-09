@@ -26,6 +26,9 @@
  *     0 in Settings ▸ Tracking Wizard and clicking Apply re-fits it at once (same
  *     frame) to the bodies; and an instance whose only visible node is weighted 0
  *     still counts (falls back to all its nodes) in that view and only that view.
+ *  9. Lazy project: clicking the row lands on a frame that is not resident yet.
+ *     The box appears as soon as that frame is hydrated — with no frame change,
+ *     which is all a hydration is — not only once play is pressed.
  *
  * Run: node tests/e2e/id-switch-highlight.mjs     (HL_SHOT=/path.png saves a screenshot)
  */
@@ -268,6 +271,24 @@ try {
     });
     check(JSON.stringify(masks) === JSON.stringify({ tti: [true, false, true], allZero: null, noneZero: null }),
         `the node mask: TTI left out; every node weighted 0, or none, encloses them all (${JSON.stringify(masks)})`);
+
+    // ---- 9. the landing frame is not resident (a lazy project): take frame 10 (the row's lead-in) out of
+    //      frameGroups, click the row, then put it back the way a hydration does — same frame, no seek
+    await page.evaluate(() => {
+        const S = window.__lucid.state.session;
+        window.__hlStash = S.frameGroups.get(10); S.frameGroups.delete(10);
+    });
+    await page.click('#idSwitchPanel .id-switch-row .id-switch-line1');               // the heading, not the bar under it
+    await page.waitForFunction(() => window.__lucid.state.currentFrame === 10, null, { timeout: 10000 }).catch(() => {});
+    await page.waitForTimeout(150);
+    const unresident = await census();
+    check(await cur() === 10 && unresident.every(v => v.total === 0),
+        `row clicked, frame 10 not resident yet: no box (${unresident.map(v => v.total)})`);
+    await page.evaluate(() => { window.__lucid.state.session.addFrameGroup(window.__hlStash); delete window.__hlStash; });
+    await page.waitForTimeout(150);
+    const hydrated = await census();
+    check(await cur() === 10 && hydrated.every(v => v.pair > 200 && v.far === 0),
+        `frame 10 hydrated, still on frame 10: the box appears without a frame change (${JSON.stringify(hydrated.map(v => [v.pair, v.far]))})`);
 
     // ---- 7. Clear stops it
     await page.click('#idSwitchClear');
