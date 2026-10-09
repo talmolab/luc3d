@@ -9,7 +9,7 @@
 // Extracted from app.js per the consolidated Pass 3 plan, Module 13.
 
 import { state, viewport3d, timeline, getActiveSession } from './app-state.js';
-import { InstanceGroup, UnlinkedInstance } from '../pose/pose-data.js';
+import { InstanceGroup, UnlinkedInstance, pooledPoints3d } from '../pose/pose-data.js';
 import {
     triangulateAndReproject,
     frameHasGroupedUserInstances,
@@ -346,7 +346,7 @@ export async function groupByIdentityAndTriangulateAll(explicitMethod) {
     var gSolver = createGroupSolver(cameras,
         { method: prefMethod, triangulateOnly: true, expectedGroups: totalFrames });
     function applyIdentitySolve(group, triResult) {
-        group.points3d = triResult.points3d;
+        group.points3d = pooledPoints3d(triResult.points3d);   // slab-pooled (pose-data.js)
         group.triangulationMethod = triResult.method;
         if (triResult.method === 'ba') solvedBa++; else solvedDlt++;
     }
@@ -741,7 +741,7 @@ async function groupByTrackAndTriangulateAll(selectedTrackIndices, selectedCamer
             if (result.method === 'ba') solvedBaT++; else solvedDltT++;
 
             group.reprojections = result.reprojections;
-            group.points3d = result.points3d;
+            group.points3d = pooledPoints3d(result.points3d);   // slab-pooled (pose-data.js)
             // NOT storeReprojectedInstances here — "Group by Track" sweeps the
             // WHOLE project; eagerly building a full Instance (+ its own
             // `occluded` array) per camera per group here was a major memory

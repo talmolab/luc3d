@@ -125,6 +125,9 @@
     <script src="test-timeline-sparse-occupancy.js"></script>
     <script src="test-timeline-playback-playhead.js"></script>
     <script src="test-grouped-track-dropdown.js"></script>
+    <!-- The info panel's lazily-filled Track <select> (ui/lazy-select.js). Needs
+         window.__LazySelect from the bridge below. -->
+    <script src="test-lazy-select.js"></script>
     <script src="test-track-identity-modals.js"></script>
     <script src="test-video-controller.js"></script>
     <script src="test-playback-frame-sync.js"></script>
@@ -191,6 +194,10 @@
          .slp files only brought back some of the views". -->
     <script src="test-percam-slp-choice.js"></script>
     <script src="test-lazy-camera-hydration.js"></script>
+    <!-- LazyFrameLoader (analysis .h5): one track list whichever worker answers
+         first, and frames re-indexed into it. Needs the LazyFrameLoader bridge
+         (pose/triangulation.js) below; stands in for Worker itself. -->
+    <script src="test-lazy-track-union.js"></script>
     <script src="test-occlusion-derive.js"></script>
 
     <!-- Tempdata triangulation pipeline tests -->
@@ -371,6 +378,11 @@
         // `collectDeletionTargets`/`previewCascade` are too generic to be globals.
         import * as __CustomDeleteOps from '../ui/custom-delete-ops.js';
         window.__CustomDeleteOps = __CustomDeleteOps;
+        // The status bar's counting rules (Labeled Frames / Instances /
+        // Triangulated). Imports no project modules; namespaced because names
+        // like `countFrameCounters` read as the app's, not a test helper's.
+        import * as __FrameCounters from '../ui/frame-counters.js';
+        window.__FrameCounters = __FrameCounters;
         // Pure geometry/settings half of "Export Video Overlays" — imports no
         // project modules (and, deliberately, no dockview), so it bridges without
         // dragging the modal's DOM/WebCodecs dependencies in. Own namespace: names
@@ -400,6 +412,10 @@
         // above, so it bridges without pulling app.js in.
         import * as __VisibilityMetadata from '../import-export/visibility-metadata.js';
         window.__VisibilityMetadata = __VisibilityMetadata;
+        // The info panel's lazily-filled Track <select>. Imports nothing, so it
+        // bridges without app.js. Namespaced: `buildLazySelect` is generic.
+        import * as __LazySelect from '../ui/lazy-select.js';
+        window.__LazySelect = __LazySelect;
         Object.assign(window, __PoseData, __AppState, __SkeletonJSON, __Triangulation, __Overlays,
                               __Viewport3D, __Timeline, __Interaction,
                               __SlpMerge, __FileIO, __Video,

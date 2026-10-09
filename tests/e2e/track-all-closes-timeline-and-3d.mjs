@@ -5,7 +5,7 @@
  * Fixture: the two-animal, three-camera rig from track-all-switches-to-id.mjs.
  * Asserted through the real toolbar buttons:
  *  1. Both open -> Track All -> both collapsed: the Timeline button no longer
- *     reads active, the 3D button reads "Show 3D View", and the 3D render loop
+ *     reads active, the 3D button is no longer highlighted, and the 3D render loop
  *     is paused (Viewport3D.setVisible(false)), not just hidden.
  *  2. Reopening each with its button restores the size it had before.
  *  3. Both already closed -> Track All leaves them closed (never OPENS them).
@@ -86,7 +86,7 @@ try {
         const c = document.getElementById('viewport3dContainer');
         const v = (await import('/ui/app-state.js')).viewport3d;
         return { collapsed: c.classList.contains('collapsed'), width: c.getBoundingClientRect().width,
-                 label: document.getElementById('viewport3dToggleBtn').textContent,
+                 active: document.getElementById('viewport3dToggleBtn').classList.contains('active'),
                  rendering: v ? v._visible !== false : null };
     });
     const openTimeline = async () => { if ((await tl()).collapsed) await page.click('#timelineToggleBtn'); };
@@ -98,6 +98,8 @@ try {
             const t = document.getElementById('statusText').textContent;
             return t !== b && /Assigned \d+ identities|error/i.test(t);
         }, before, { timeout: 30000 });
+        // Track All ends on its summary box (tests/e2e/track-all-summary.mjs); close it as a user would.
+        await page.click('#trackSummaryClose', { timeout: 30000 });
     };
 
     // ---- 1. open -> Track All -> closed --------------------------------------------------
@@ -112,7 +114,7 @@ try {
     check(!s.collapsed && s.height > 0, `precondition: Timeline is open (${s.height}px)`);
     const openHeight = s.height;
     let d = await v3();
-    check(!d.collapsed && d.width > 0 && d.label === 'Hide 3D View', `precondition: 3D viewer is open (${d.width}px)`);
+    check(!d.collapsed && d.width > 0 && d.active, `precondition: 3D viewer is open (${d.width}px)`);
     const openWidth = d.width;
     await runTrackAll();
     const ids = await page.evaluate(() => window.__lucid.state.session.identities.length);
@@ -120,10 +122,10 @@ try {
     s = await tl();
     check(s.collapsed && s.height === 0, `after Track All the Timeline is collapsed (${s.height}px)`);
     check(!s.btnActive, 'the Timeline toolbar button no longer reads active');
-    await page.waitForTimeout(100);   // let the MutationObserver relabel the button
+    await page.waitForTimeout(100);   // let the MutationObserver update the button
     d = await v3();
     check(d.collapsed, 'after Track All the 3D viewer is collapsed');
-    check(d.label === 'Show 3D View', `the 3D toolbar button reads "${d.label}"`);
+    check(!d.active, 'the 3D toolbar button is no longer highlighted');
     if (d.rendering === null) console.log('  - no Viewport3D instance in this build; skipped the render-loop check');
     else check(d.rendering === false, 'the 3D render loop is paused, not just hidden');
 

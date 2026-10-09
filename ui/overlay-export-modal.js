@@ -35,6 +35,7 @@ import { getVisibilitySettings } from './rendering.js';
 import {
     getInstanceGroupsForFrame,
     ensureLazyFrameData,
+    ensureLazyTrailWindow,
     triangulateAndReproject,
     storeReprojectedInstances,
     sessionHasCalibration,
@@ -927,6 +928,13 @@ export function showOverlayExportModal() {
 
         if (session.lazyLoader && !session.frameGroups.has(f)) {
             try { await ensureLazyFrameData(f); } catch (e) { /* ignore */ }
+            if (token !== previewToken) return;
+        }
+        // The frames behind `f` the node trails draw (see ensureLazyTrailWindow).
+        var trailLoad = session.lazyLoader && settings.trailLength > 0
+            ? ensureLazyTrailWindow(f, settings.trailLength) : null;
+        if (trailLoad) {
+            await trailLoad;
             if (token !== previewToken) return;
         }
 
@@ -1934,6 +1942,12 @@ export function showOverlayExportModal() {
 
                 if (session.lazyLoader && !session.frameGroups.has(f)) {
                     try { await ensureLazyFrameData(f); } catch (e) { /* frame stays empty */ }
+                }
+                // The first frame's trail reaches back before the export range;
+                // every later frame's window is already resident.
+                if (session.lazyLoader && settings.trailLength > 0) {
+                    var expTrailLoad = ensureLazyTrailWindow(f, settings.trailLength);
+                    if (expTrailLoad) await expTrailLoad;
                 }
                 var frameGroup = session.getFrameGroup(f);
                 var groups = getInstanceGroupsForFrame(f);

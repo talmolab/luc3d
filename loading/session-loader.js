@@ -47,12 +47,16 @@ import { chooseCameraSlp } from './percam-slp-choice.js';
 // recomputeUploadedCameras); only invoked inside a function body.
 import { restoreGroupingAndUnlink, reconstructInstanceGroupsFromSessionLazy } from '../import-export/slp-import.js';
 import { REBASED_CALIBRATION_NAME, pickCalibrationFile } from './calibration-pick.js';
+import {
+    isCalibrationImagesVideo, preferNonCalibrationVideos, matchVideoToCamera,
+} from './video-file-pick.js';
 
 import {
     LazyFrameLoader, shouldUseLazyH5, shouldUseLazySlp, getInstanceGroupsForFrame,
     ensureLazyFrameData,
 } from '../pose/triangulation.js';
 import { SioLazyLoader } from './sio-lazy-loader.js';
+import { unionTrackNames, remapTrackIdx } from './track-union.js';
 
 // Status UI moved to import-export/save-load.js in Pass 3c-1.
 import {
@@ -66,6 +70,7 @@ import { showLoadingProgress, createProgressPacer, yieldToPaint } from '../ui/lo
 import { drawAllOverlays, setReprojErrorVisible } from '../ui/rendering.js';
 import { updateInfoPanel, promptImportSkeletonForAllSessions } from '../ui/info-panel.js';
 import { noteSessionCalibrationDivergence } from '../ui/calibration-notice.js';
+import { refreshReadoutTotals } from '../ui/frame-readout.js';
 import { parseSkeletonJSON } from '../import-export/skeleton-json.js';
 // Pass 3i-3: setupInteraction / setup3DViewport / setupTimeline / updateFpsDisplay /
 // hideWelcomeOverlay moved to pose/initialization.js.
@@ -420,15 +425,17 @@ export async function handleLoadVideos() {
  * loaded as a session video. Their filenames embed the camera name, so the
  * substring matcher in autoAssignVideosToCameras (and the SLP-import camera
  * matcher) would otherwise bind them to a real camera and surface them as an
- * extra view. Detect by path segment (robust to whichever directory the user
- * picked as the root) OR by the `-calibration` / `_calibration` filename stem.
+ * extra view. Detected by path segment, so the answer does not depend on which
+ * directory the user picked as the root.
+ *
+ * This used to ALSO exclude any `-calibration` / `_calibration` filename stem,
+ * which silently dropped `cam1-calibration.mp4` — an ordinary session video an
+ * alpha tester had named that way (#199). That stem is now a de-prioritizing
+ * hint instead of an exclusion, applied per camera by
+ * `preferNonCalibrationVideos`; see `loading/video-file-pick.js`.
  */
 export function isCalibrationVideoFile(file) {
-    if (!file) return false;
-    var relPath = (file.webkitRelativePath || file.name || '').replace(/\\/g, '/').toLowerCase();
-    if (relPath.split('/').indexOf('calibration_images') >= 0) return true;
-    var stem = (file.name || '').toLowerCase().replace(/\.[^.]+$/, '');
-    return stem.endsWith('-calibration') || stem.endsWith('_calibration');
+    return isCalibrationImagesVideo(file);
 }
 
 export function autoAssignVideosToCameras() {
@@ -1209,7 +1216,7 @@ export function rebuildVideoController() {
         timeline.setData(state.session);
     }
 
-    document.getElementById('totalFrames').textContent = state.totalFrames;
+    refreshReadoutTotals();
     document.getElementById('fpsDisplay').textContent = state.fps.toFixed(1) + ' fps';
 
     // Surface frame-accurate mediabunny backend failures in the status bar
@@ -1262,7 +1269,7 @@ export function updateTotalFrames() {
     if (maxFrames > 0) {
         state.totalFrames = maxFrames;
         state.fps = bestFps;
-        document.getElementById('totalFrames').textContent = state.totalFrames;
+        refreshReadoutTotals();
         document.getElementById('fpsDisplay').textContent = state.fps.toFixed(1) + ' fps';
         if (timeline) {
             timeline.setTotalFrames(maxFrames);
@@ -1272,7 +1279,7 @@ export function updateTotalFrames() {
         // frame count cannot leak into this one.
         state.totalFrames = 0;
         state.fps = 30;
-        document.getElementById('totalFrames').textContent = '0';
+        refreshReadoutTotals();
         document.getElementById('fpsDisplay').textContent = '30.0 fps';
         if (timeline) {
             timeline.setTotalFrames(1);
@@ -2090,6 +2097,20 @@ export async function handleLoadSessionFolderSingleSlp() {
         setVideoController(null);
         paneManager.clearAll();
 
+        // Within each camera, a `-calibration` stem loses to a plainly-named
+        // sibling but is loaded when it is that camera's only candidate (#199).
+        if (cameras.length > 0) {
+            var _camNames = cameras.map(function (c) { return c.name; });
+            var _vPref = preferNonCalibrationVideos(videoFiles, function (f) {
+                return matchVideoToCamera(f, _camNames);
+            });
+            if (_vPref.dropped.length) {
+                console.log('[single-slp] preferring plainly-named videos over calibration-named ' +
+                    _vPref.dropped.map(function (f) { return '"' + f.name + '"'; }).join(', '));
+                videoFiles = _vPref.kept;
+            }
+        }
+
         // Order videos by calibration camera index so the 2D viewers appear in
         // the project's camera order, not the folder's file-enumeration order
         // (pickFolder returns files in an OS-dependent order, which made the
@@ -2245,34 +2266,37 @@ export async function attachVideosForLazyReopen(session, loader, pickedFilesOver
 
     // Filter to real session videos and match each to a camera.
     var vidExts = ['.mp4', '.avi', '.mov', '.mkv', '.webm'];
+    var candidates = [];
+    for (var cfi = 0; cfi < picked.length; cfi++) {
+        var cFile = picked[cfi];
+        if (!cFile || !cFile.name) continue;
+        var cExt = cFile.name.substring(cFile.name.lastIndexOf('.')).toLowerCase();
+        if (vidExts.indexOf(cExt) < 0 || isCalibrationVideoFile(cFile)) continue;
+        var cStem = cFile.name.replace(/\.[^.]+$/, '');
+        if (state.videoFiles.some(function (vf) { return vf.name === cStem; })) continue;
+        candidates.push(cFile);
+    }
+
+    // De-prioritize a `-calibration` stem WITHIN its camera, so a plainly-named
+    // sibling wins the first-wins pick below whatever the enumeration order is,
+    // while a camera whose only candidate is calibration-named still loads it
+    // (#199).
+    var _lrPref = preferNonCalibrationVideos(candidates, function (f) {
+        return matchVideoToCamera(f, camNames, refBaseByCam);
+    });
+    if (_lrPref.dropped.length) {
+        console.log('[lazy-reopen] preferring plainly-named videos over calibration-named ' +
+            _lrPref.dropped.map(function (f) { return '"' + f.name + '"'; }).join(', '));
+        candidates = _lrPref.kept;
+    }
+
     var toLoad = [];
     var unmatched = 0;
-    for (var pfi = 0; pfi < picked.length; pfi++) {
-        var pFile = picked[pfi];
-        if (!pFile || !pFile.name) continue;
-        var pExt = pFile.name.substring(pFile.name.lastIndexOf('.')).toLowerCase();
-        if (vidExts.indexOf(pExt) < 0 || isCalibrationVideoFile(pFile)) continue;
+    for (var pfi = 0; pfi < candidates.length; pfi++) {
+        var pFile = candidates[pfi];
         var pStem = pFile.name.replace(/\.[^.]+$/, '');
-        var pStemLower = pStem.toLowerCase();
-        if (state.videoFiles.some(function (vf) { return vf.name === pStem; })) continue;
-
         var pRel = pFile.webkitRelativePath || pFile.name;
-        var pParts = pRel.split('/');
-        var pParentDir = pParts.length >= 2 ? pParts[pParts.length - 2].toLowerCase() : null;
-
-        var assignedCam = null;
-        for (var mci = 0; mci < camNames.length && !assignedCam; mci++) {
-            if (pParentDir && pParentDir === camNames[mci].toLowerCase()) assignedCam = camNames[mci];
-        }
-        for (var sci = 0; sci < camNames.length && !assignedCam; sci++) {
-            if (pStemLower.indexOf(camNames[sci].toLowerCase()) >= 0) assignedCam = camNames[sci];
-        }
-        for (var bci = 0; bci < camNames.length && !assignedCam; bci++) {
-            var refBase = refBaseByCam.get(camNames[bci]);
-            if (refBase && (pStemLower === refBase || pStemLower.indexOf(refBase) >= 0 || refBase.indexOf(pStemLower) >= 0)) {
-                assignedCam = camNames[bci];
-            }
-        }
+        var assignedCam = matchVideoToCamera(pFile, camNames, refBaseByCam);
         if (!assignedCam) { unmatched++; continue; }
         if (toLoad.some(function (e) { return e.assignedCam === assignedCam; })) continue;
         toLoad.push({ file: pFile, stem: pStem, rel: pRel, assignedCam: assignedCam });
@@ -2497,8 +2521,7 @@ export async function handleLoadProjectSlpLazy(slpFile) {
         // write the frame counter + timeline span from the labeled-frame count
         // directly. attachVideosForLazyReopen refines both from the real
         // decoders once videos are attached.
-        var tfEl = document.getElementById('totalFrames');
-        if (tfEl) tfEl.textContent = state.totalFrames;
+        refreshReadoutTotals();
 
         // 3D viewport (needs a live session).
         if (hasCalibration) {
@@ -2581,6 +2604,11 @@ export async function handleLoadProjectSlpLazy(slpFile) {
  * `subarray` view): a view would pin the whole camera buffer, and structured-
  * cloning a view (e.g. posting an instance to a worker) copies its entire
  * underlying buffer.
+ *
+ * `trackRemap` maps this camera's OWN track index to the session's
+ * (`unionTrackNames`, `loading/track-union.js`); an index it does not cover is
+ * trackless (`remapTrackIdx`), never kept raw — a raw index would name
+ * whichever session track happens to sit there.
  */
 export function addColumnarFramesToSession(session, camName, col, trackRemap) {
     var nn = col.numNodes;
@@ -2593,7 +2621,7 @@ export function addColumnarFramesToSession(session, camName, col, trackRemap) {
         var fg = session.getFrameGroup(frameIdx);
         for (var i = col.instOffsets[f], end = col.instOffsets[f + 1]; i < end; i++) {
             var rawTrackIdx = col.trackIdx[i];
-            var remappedTrackIdx = trackRemap[rawTrackIdx] !== undefined ? trackRemap[rawTrackIdx] : rawTrackIdx;
+            var remappedTrackIdx = remapTrackIdx(trackRemap, rawTrackIdx);
             var instType = col.type[i] === 1 ? 'predicted' : 'user';
             var trackIdx = resolveImportTrackIdx(session, remappedTrackIdx, instType);
             var instance = new Instance(col.xy.slice(i * stride, (i + 1) * stride),
@@ -2698,6 +2726,20 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
                         cameraDirs[dirName].slps.push(file);
                     }
                 }
+            }
+        }
+
+        // One camera directory is one camera, so the directory IS the group a
+        // `-calibration` stem is de-prioritized within: a dir holding both
+        // `cam1.mp4` and `cam1-calibration.mp4` loads the former, a dir holding
+        // only the latter loads it. Applied before the counts below so the
+        // "no video" popup and the progress total see the real candidates.
+        for (var pdn in cameraDirs) {
+            var _pref = preferNonCalibrationVideos(cameraDirs[pdn].videos, function () { return pdn; });
+            if (_pref.dropped.length) {
+                console.log('[session-folder] ' + pdn + ': preferring "' + _pref.kept[0].name +
+                    '" over calibration-named ' + _pref.dropped.map(function (f) { return '"' + f.name + '"'; }).join(', '));
+                cameraDirs[pdn].videos = _pref.kept;
             }
         }
 
@@ -3037,6 +3079,15 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
             showLoading('Building session data...');
         }
 
+        // ONE session track list for the whole folder, built before any camera's
+        // instances: the union of every parsed camera's own track names, cameras
+        // in sorted name order (`loading/track-union.js` — the same rule both
+        // lazy loaders apply, so a folder gives the same `session.tracks` on
+        // either path). Each camera's own indices are mapped into it below.
+        var trackUnion = unionTrackNames(parseJobs.map(function (job, j) {
+            return { camName: job.camName, names: (parseResults[j] && parseResults[j].tracks) || [] };
+        }).filter(function (entry, j) { return !!parseResults[j]; }));
+
         for (var pri = 0; pri < parseJobs.length; pri++) {
             if (pri > 0 && buildPacer.due()) {
                 showLoadingProgress('Building session', pri, parseJobs.length, loadStep(2, 'cameras'));
@@ -3052,7 +3103,7 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
 
             if (!state.session) {
                 var skeleton = new Skeleton('skeleton', [], []);
-                var tracks = slpData.tracks || ['track_0'];
+                var tracks = trackUnion.names;
                 var sessionName = folderName || ('Session ' + (state.sessions.length + 1));
                 state.session = new Session(cameras.length > 0 ? cameras : [], skeleton, tracks, sessionName);
                 firstSession = state.session;
@@ -3062,18 +3113,7 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
                 }
             }
 
-            var trackRemap = {};
-            if (slpData.tracks) {
-                for (var ti = 0; ti < slpData.tracks.length; ti++) {
-                    var existingIdx = state.session.tracks.indexOf(slpData.tracks[ti]);
-                    if (existingIdx >= 0) {
-                        trackRemap[ti] = existingIdx;
-                    } else {
-                        trackRemap[ti] = state.session.tracks.length;
-                        state.session.tracks.push(slpData.tracks[ti]);
-                    }
-                }
-            }
+            var trackRemap = trackUnion.remapByCam.get(camName) || new Int32Array(0);
 
             if (slpData.columnar) {
                 addColumnarFramesToSession(state.session, camName, slpData.columnar, trackRemap);
@@ -3089,7 +3129,7 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
                         for (var ii = 0; ii < frameData.instances.length; ii++) {
                             var inst = frameData.instances[ii];
                             var rawTrackIdx = inst.trackIdx !== undefined ? inst.trackIdx : (inst.track_idx !== undefined ? inst.track_idx : 0);
-                            var remappedTrackIdx = trackRemap[rawTrackIdx] !== undefined ? trackRemap[rawTrackIdx] : rawTrackIdx;
+                            var remappedTrackIdx = remapTrackIdx(trackRemap, rawTrackIdx);
                             var instType = inst.type || (inst.from_predicted !== undefined ? 'predicted' : 'user');
                             var trackIdx = resolveImportTrackIdx(state.session, remappedTrackIdx, instType);
                             var instance = new Instance(inst.points || [], trackIdx, instType, inst.score || 1.0);
@@ -3101,11 +3141,15 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
             }
         }
 
-        // Integrate lazy loader metadata into session
+        // Integrate lazy loader metadata into session. The folder is routed as ONE
+        // unit (above), so a lazy load has no eager cameras and no session yet.
         if (lazyLoader) {
             if (!state.session) {
                 var lazySkel = lazyLoader.skeleton || { name: 'skeleton', nodes: [], edges: [] };
                 var lazySkeleton = new Skeleton(lazySkel.name || 'skeleton', lazySkel.nodes || [], lazySkel.edges || []);
+                // The union of every camera's own tracks, each camera's store
+                // already re-indexed into it — the same list whichever camera's
+                // file finished opening first (`_unifyTracks` in both loaders).
                 var lazyTracks = lazyLoader.trackNames.length > 0 ? lazyLoader.trackNames : ['track_0'];
                 var sessionName = folderName || ('Session ' + (state.sessions.length + 1));
                 state.session = new Session(cameras.length > 0 ? cameras : [], lazySkeleton, lazyTracks, sessionName);
@@ -3114,14 +3158,6 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
                 if (state.sessions.indexOf(state.session) < 0) {
                     state.sessions.push(state.session);
                     state.activeSessionIdx = state.sessions.length - 1;
-                }
-            } else {
-                if (lazyLoader.trackNames) {
-                    for (var lti = 0; lti < lazyLoader.trackNames.length; lti++) {
-                        if (state.session.tracks.indexOf(lazyLoader.trackNames[lti]) < 0) {
-                            state.session.tracks.push(lazyLoader.trackNames[lti]);
-                        }
-                    }
                 }
             }
             state.session.lazyLoader = lazyLoader;

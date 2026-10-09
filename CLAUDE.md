@@ -3,10 +3,10 @@
 Multi-view pose annotation GUI. No build system — pure vanilla JS served as static files.
 
 ## Architecture
-ES modules, vanilla JS (no build step). `index.html` loads `app.js` as `<script type="module">`; `app.js` is a 2-line entry point that imports from `pose/`. The 94 modules are grouped into four directories:
-- `pose/` — data model, cross-view tracking, DLT triangulation (the pure math in `triangulation-core.js`, solved in parallel by `triangulation-pool.js` + `triangulation-worker.js`), plane annotation model (planes + the global plane-node pool), 3D mesh objects (groups of planes) and their derived geometry, plane/origin serialization, origin transform, whole-project origin re-base, cross-session calibration comparison, plane-to-plane angle, the least-squares plane fit, multi-view display alignment (`view-align.js`), the ID-switch checks by body size and images (`id-switch-check.js`), app initialization (21 files)
-- `ui/` — UI state, canvas rendering, mouse/keyboard interaction, info panel, modals, timeline, 3D viewport, panel visibility, video encoding, video display settings, keyboard-target arbitration, modal geometry, view legend, plane definition, 3D mesh objects, origin definition, origin re-base, cross-session calibration notice, plane angle, frame-range tracking, collapsible section state, info tooltips, plane visibility, browser-specific hints, the loading overlay + its progress bar, the Align Views to References dialog, the seekbar hover tooltip, the Color: Tracks/ID setting, the Check ID Switches runner + ID Switches panel tab (and its saved review checklist), its seekbar ticks and in-view highlight, its image embedder and crop worker, settings — the Define Planes panel is split across `plane-definition.js` (the hub) plus its three section modules and three helpers (54 files)
-- `loading/` — video decoding, unplayable-codec diagnosis, session loading, SLP/package readers, per-camera SLP choice, calibration-file selection, web workers (9 files)
+ES modules, vanilla JS (no build step). `index.html` loads `app.js` as `<script type="module">`; `app.js` is a 2-line entry point that imports from `pose/`. The 104 modules are grouped into four directories:
+- `pose/` — data model, cross-view tracking, DLT triangulation (the pure math in `triangulation-core.js`, solved in parallel by `triangulation-pool.js` + `triangulation-worker.js`), plane annotation model (planes + the global plane-node pool), 3D mesh objects (groups of planes) and their derived geometry, plane/origin serialization, origin transform, whole-project origin re-base, cross-session calibration comparison, plane-to-plane angle, the least-squares plane fit, multi-view display alignment (`view-align.js`), the ID-switch checks by body size and images (`id-switch-check.js`), the lazy project's playback eviction (`lazy-residency.js`), app initialization (22 files)
+- `ui/` — UI state, canvas rendering, mouse/keyboard interaction, info panel (and its lazily-filled Track dropdown), modals, timeline, 3D viewport, panel visibility, video encoding, video display settings, keyboard-target arbitration, modal geometry, view legend, plane definition, 3D mesh objects, origin definition, origin re-base, cross-session calibration notice, plane angle, frame-range tracking, collapsible section state, info tooltips, plane visibility, browser-specific hints, the loading overlay + its progress bar, the Align Views to References dialog, the seekbar hover tooltip, the status bar's whole-project frame counters, the controls bar's time / frame readout, the Tracks / Identity coloring setting, the node-trail lengths (`trail-presets.js` — presets or a custom value typed in seconds or frames, stored in seconds, drawn as `seconds × fps` frames), the Check ID Switches runner + ID Switches panel tab (and its saved review checklist), its seekbar ticks and in-view highlight, its image embedder and its crop and CPU-model workers, the Track All summary box (`track-summary.js` decides what it says, `track-summary-modal.js` renders it), settings — the Define Planes panel is split across `plane-definition.js` (the hub) plus its three section modules and three helpers (61 files)
+- `loading/` — video decoding, unplayable-codec diagnosis, session loading, SLP/package readers, per-camera SLP choice, calibration-file selection, video-file selection, the per-camera track-list union (`session.tracks` for a per-camera folder), web workers (11 files)
 - `import-export/` — file I/O, save/load, SLP import/merge, visibility metadata, plane metadata, 3D mesh export (10 files)
 - `demo-data.js` — synthetic skeleton and camera data
 - `styles.css` — all styling
@@ -206,7 +206,14 @@ terms require the notice be kept intact and mediabunny is MPL-2.0). dockview-cor
   either, or any change to the crop, needs a recalibration (see MODULES.md
   `pose/id-switch-check.js`). An opt-in (`imageCheckWebNN`) also tries the
   same model on WebNN and keeps it only if a trial shows it faster AND
-  consistent with WebGPU (see MODULES.md `ui/image-embedder.js`).
+  consistent with WebGPU (see MODULES.md `ui/image-embedder.js`). **Without a
+  hardware GPU it still runs**, on the CPU: the fp32 model (never the CPU
+  runtime's default int8, which is what drifts from the calibration) in module
+  workers, `ui/image-model-worker.js` — on the main thread one model run freezes
+  the page for seconds, and onnxruntime's own `wasm.proxy` worker cannot start
+  from the CDN bundle. ~15x slower than a GPU with 4 workers, ~600 MB each. A
+  software WebGPU adapter (SwiftShader) counts as no GPU: it is 10x slower than
+  one CPU worker. See MODULES.md `ui/image-embedder.js` "The CPU path".
 - **Video export = mediabunny, via `ui/video-encode.js` — the app's one encoding
   seam.** sleap-io.js has NO browser encoder (its `renderVideo()` shells out to a
   native `ffmpeg` and is Node-entry-only; its docs say "there is no encoder in the
@@ -518,7 +525,7 @@ Three rules hold, and there are tests pinning each:
   and sleap-io.js round-trip as opaque JSON, so files stay SLEAP-GUI readable and
   no other `.slp` import/export path changes.
 
-The panel's **global appearance preferences** (User / Predicted / Reprojections /
+The panel's **global appearance preferences** (User / Predictions / Reprojections /
 Planes / Display Legend / 3D Viewer) deliberately stay in
 `localStorage.visibilitySettings` — they are browser-local display taste, not
 project state. Do not move them into the `.slp`.
@@ -585,6 +592,65 @@ Rules, each with a test pinning it:
 Coverage: `tests/test-plane-serialization.mjs` (unit, the mapping) and
 `tests/e2e/plane-persistence-roundtrip.mjs` (real app, both `.slp` writers, the
 dirty flag, the scope split, and both negative controls).
+
+## A lazy project's resident frames are a WINDOW — and eviction must be lossless
+
+On a lazy project `session.frameGroups` holds the hydrated frames only. Playback
+used to keep every frame it ever hydrated: the playback loader topped up 5,000
+frames ahead and `evictLazyFrames` had no caller, so on the 8-camera
+`05mice_flippers` project resident frames went 5,145 -> 31,600 over five 20 s runs
+while the heap climbed toward the renderer's ~4.2 GB limit.
+`pose/lazy-residency.js` now evicts during playback. Five rules:
+
+- **Drop a frame only if re-hydrating it rebuilds EXACTLY what is resident**
+  (`frameEvictionBlocker`, compared against `SioLazyLoader.describeStoreFrame`,
+  which `tests/e2e/lazy-playback-eviction.mjs` pins to the real materializer).
+  Anything only the resident frame knows keeps it: a user instance, a modified /
+  backed-up / nulled one, a deleted or added row, a track changed only in memory,
+  a #201 identity on a trackless instance, a skeleton-node change, a camera the
+  loader does not back, or an object the InteractionManager holds.
+- **A user instance ALWAYS pins its frame, group member or not.** A member does
+  survive eviction (it lives in `instanceGroups` and comes back as the same
+  object on a revisit), but the streaming save reads its 2D edit overlay from
+  RESIDENT frames only (`buildSessionRefGraph`). Save while it is evicted and the
+  store's original row is written instead — `sequence-lazy-workflow.mjs` cycle 7
+  fails exactly that way with the `user`/`modified` blockers removed.
+- **Never evict from `batchLoadLazyFrames`, and hold eviction during a sweep.**
+  The sweeps hydrate a window and read it back after awaits; the protected
+  windows follow the on-screen frame, not the sweep. `sweepLazyFrameWindows`
+  holds residency for its whole run.
+- **The playback lookahead IS the protected ahead-window** — one constant,
+  `LAZY_PLAYBACK_AHEAD`, used by the loader and the eviction. Grow one without
+  the other and playback evicts what it just loaded, then reloads it.
+  `LAZY_KEEP_BEHIND` must stay above the longest node trail (500): trails draw
+  resident frames only. A seek hydrates its target and the frames AHEAD, so
+  the draw path fills the trail's window behind it (`ensureLazyTrailWindow`),
+  and on a lazy project a non-resident frame ENDS the trail
+  (`trailWindowFrames`' `residentOnly`). Skipping it instead joined every trail
+  to frames still resident from before the jump.
+- **Dropping a frame drops its derived reprojection caches too** — exactly the
+  state Triangulate All leaves every frame in; the draw path re-derives them.
+
+`session.instanceGroups` is NOT evicted, deliberately: it is the project's
+grouping and 3D, bounded by project size rather than by playback, and the save
+reads it whole. **Its members' 2D, though, goes back to the store** whenever
+their frame stops being resident (`releaseFrameMembers2d`): after a Track All
+every one of the 4,152,565 members held a private copy of its store row —
+1.39 GB and ~4.2M ArrayBuffers for every full GC to sweep, which is what kept
+post-Track-All playback degrading run over run. Three more rules:
+
+- **The shared placeholder is never written.** Released members — and a
+  reopened project's — all point at `lazyPlaceholderXY(numNodes)`; the three
+  in-place writers on `Instance` call `_ownXY()` first. A new in-place writer
+  must too, or one edit moves every lightweight member in the project.
+- **Release only what re-hydration gives back exactly** (`member2dReleaseBlocker`):
+  an untouched prediction on a non-resident frame, with no occlusion set and its
+  store row present. Re-adoption keys on the member's CURRENT `_rawInstIndex`,
+  never a cached row — store compaction renumbers released members too.
+- **A reader of member 2D on a frame it does not hydrate must bracket the read**
+  with `hydrateFrameMembers2d` / `releaseFrameMembers2d`. The image ID-switch
+  check was the one such reader (`frameCropGeometry`, `ui/image-embedder.js`);
+  reading the members directly found no keypoints on every such frame.
 
 ## Triangulation must not depend on where the origin is
 
@@ -1322,8 +1388,8 @@ do) or the container resizable — not scrollable twice.
 `Track Frame` and `Track All` are disabled while the mode is on
 (`applyPlaneModeToolbarLock` in `ui/plane-definition.js`) — they act on POSE
 annotation, which in the mode is a selection the user can no longer see or
-change. The **visibility** controls (User / Predicted / Reproj / Errors),
-Sessions, Color and Hide Panel stay live: they change what is DRAWN, not what
+change. The **visibility** controls (User / Predictions / Reprojections / Errors),
+Sessions, Tracks / Identity and the Panel toggle stay live: they change what is DRAWN, not what
 is annotated. Adding a button to that lock means adding its id to
 `PLANE_LOCKED_TOOLBAR_IDS`; if it opens a menu, its wrapper also needs
 `PLANE_LOCKED_DROPDOWN_IDS` (a `.tri-dropdown` menu opens on hover and its
@@ -1336,7 +1402,7 @@ The mode itself is entered from **View ▸ Define Planes** or **`Mod+Shift+P`**
 (`definePlanes` in `ACTION_CATALOG`, dispatched to `togglePlaneMode`). Both go
 through that one function, because leaving the mode has unwinding to do — Set
 Origin Mode, the angle dialog, the toolbar lock — and a second entry point would
-be a second place to forget it. `p` alone is Toggle Predicted; the two are kept
+be a second place to forget it. `p` alone is Toggle Predictions; the two are kept
 apart only by `matchChord`'s rule that a bare letter requires shift to be UP, so
 that pairing is pinned by `tests/e2e/define-planes-shortcut.mjs` along with the
 binding being suppressed while a plane-name field has focus.
@@ -1582,7 +1648,7 @@ There are **three** test populations, each with its own runner. Run all three �
 they cover disjoint code, and a green run of one says nothing about the others.
 
 ```bash
-node tests/e2e/run-unit-tests.mjs     # tests/*.js  (browser suite, headless) — 1574 assertions
+node tests/e2e/run-unit-tests.mjs     # tests/*.js  (browser suite, headless) — 1603 assertions
 node tests/run-mjs-tests.mjs          # tests/test-*.mjs  (native-ESM Node tests)
 node tests/e2e/<name>.mjs             # tests/e2e/*.mjs  (Playwright, one file per behavior)
 ```
@@ -1610,6 +1676,14 @@ node tests/e2e/<name>.mjs             # tests/e2e/*.mjs  (Playwright, one file p
     returns a plausible count, and only shows up a cycle later once the wrong
     state has been saved. `FRAMES=`/`CAMS=`/`NODES=`/`KEEP=1` are configurable; it
     asserts its own lazy precondition so it cannot silently stop testing that.
+    Its sibling class is the **resident-only EDIT**: a change made to a resident
+    predicted-only frame and nowhere else is undone by the next window release
+    (sweeps, playback eviction) and by the streaming save, which writes the
+    store rows of any camera-frame without a user instance. Cycle 5c pins this
+    for the interactive deletes — which must go through `deleteTargetsFromStore`
+    (`ui/custom-delete-ops.js`) — by deleting through the real Delete paths,
+    asserting the frames were RELEASED before re-hydrating them, then saving and
+    reopening.
   - `video-encode-streaming.mjs` — the **only** coverage of the streaming video
     export path. Headless Chromium exposes `showSaveFilePicker()` but rejects it
     instantly with `AbortError`, so neither video modal can reach that path under

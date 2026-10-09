@@ -92,7 +92,7 @@ const ACTION_CATALOG = [
     { id: 'zoomReset', label: 'Reset video zoom', category: 'View', binding: '0', editable: false, dispatched: false },
     { id: 'rotateVideo', label: 'Rotate active video (hold)', category: 'View', binding: 'Shift+R + ← / →', editable: false, dispatched: false },
     { id: 'toggleUser', label: 'Toggle User keypoints', category: 'View', binding: 'u', editable: true, dispatched: true },
-    { id: 'togglePredicted', label: 'Toggle Predicted keypoints', category: 'View', binding: 'p', editable: true, dispatched: true },
+    { id: 'togglePredicted', label: 'Toggle Predictions', category: 'View', binding: 'p', editable: true, dispatched: true },
     { id: 'toggleReproj', label: 'Toggle Reprojections', category: 'View', binding: 'r', editable: true, dispatched: true },
     { id: 'toggleErrors', label: 'Toggle Errors', category: 'View', binding: 'e', editable: true, dispatched: true },
     { id: 'definePlanes', label: 'Toggle Defining Plane Mode', category: 'View', binding: 'Mod+Shift+P', editable: true, dispatched: true },
@@ -353,9 +353,9 @@ const TRACKING_THRESHOLDS = [
         desc: 'The stale-anchor fix (pose/cross-view-tracker.js, 2026-08-14): evict a target\'s per-camera detection once it is older than this many frames, before that frame\'s matching runs, so a target cannot be re-triangulated from one fresh view fused with several ancient ones after an occlusion. 0 = off (reproduces the pre-fix, unbounded-staleness reference behavior). Validated default 20; measured to cut sustained ID switches roughly in half to 5x on both benchmark corpora when paired with a lower distance threshold.',
     },
     {
-        id: 'matchGate', label: 'Reject negative matches (gate)', default: 1,
+        id: 'matchGate', label: 'Reject negative matches (gate)', default: 0,
         min: 0, max: 1, step: 1, kind: 'toggle',     // an on/off switch in the wizard (stored as 1 / 0)
-        desc: 'The match gate (pose/cross-view-tracker.js, 2026-10-03). On: a tracked target only takes a detection it scores positively on (roughly, within the distance threshold of where it is), instead of being forced onto whatever is left. Stops a spare target and an extra detection (e.g. a reflection) from trading a correct match away. Targets lost for longer than the stale window still re-acquire ungated. Off: the pre-gate forced assignment.',
+        desc: 'The match gate (pose/cross-view-tracker.js, 2026-10-03). On: a tracked target only takes a detection it scores positively on (roughly, within the distance threshold of where it is), instead of being forced onto whatever is left. Stops a spare target and an extra detection (e.g. a reflection) from trading a correct match away. Targets lost for longer than the stale window still re-acquire ungated. Off (the default): the pre-gate forced assignment — on proofread benchmarks the gate helped SLAP but gave about 6x the ID switches on Mouse-Dyad-10M and 10x on s-DANNCE (#285).',
     },
     {
         id: 'autoSwitchCheck', label: 'Check ID switches after tracking (body size)', default: 1,
@@ -365,7 +365,7 @@ const TRACKING_THRESHOLDS = [
     {
         id: 'autoImageSwitchCheck', label: 'Check ID switches after tracking (image detection)', default: 0,
         min: 0, max: 1, step: 1, kind: 'toggle',     // an on/off switch in the wizard (stored as 1 / 0)
-        desc: 'After Track All or Track Frame Range, also check close encounters by APPEARANCE: crops of each animal in every camera are embedded with an image model on the GPU (Tracks ▸ Check ID Switches (Images)). Catches animals of similar size that look different (e.g. coat colour), which the size check cannot. Slow — minutes for a long recording — and needs the videos loaded and WebGPU (current Chrome/Edge); the model (~44 MB) downloads on first use.',
+        desc: 'After Track All or Track Frame Range, also check close encounters by APPEARANCE: crops of each animal in every camera are embedded with an image model on the GPU (Tracks ▸ Check ID Switches (Images)). Catches animals of similar size that look different (e.g. coat colour), which the size check cannot. Slow — minutes for a long recording — and needs the videos loaded; the model (~44 MB) downloads on first use. Without a GPU (WebGPU) it still runs, on the CPU: about 15x slower, so a long recording can take hours.',
     },
     {
         id: 'imageCheckThreshold', label: 'Image check: flag threshold', default: -25,
