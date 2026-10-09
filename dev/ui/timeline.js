@@ -8,9 +8,9 @@
  * ES module. Exports `Timeline`.
  */
 
-import { getTrackColor, NULL_ID_COLOR } from './overlays.js?v=1f96fd67ba8d';
-import { someValidPoint3d, points3dNodeCount, hasPoint3d } from '../pose/pose-data.js?v=1f96fd67ba8d';
-import { isCameraTracked } from './settings.js?v=1f96fd67ba8d';
+import { getTrackColor, NULL_ID_COLOR } from './overlays.js?v=4c3f7d0398e7';
+import { someValidPoint3d, points3dNodeCount, hasPoint3d } from '../pose/pose-data.js?v=4c3f7d0398e7';
+import { isCameraTracked } from './settings.js?v=4c3f7d0398e7';
 
 /**
  * Parse a `session.frameIdentityMap` key ("frameIdx:camName:trackIdx") into
@@ -234,15 +234,40 @@ export class Timeline {
 
         // --- Create canvas ---------------------------------------------------
 
+        // The wrapper's scroll height is the timeline's FULL content height,
+        // carried by this spacer; the canvas is only a BAND of it around what
+        // is visible (`_placeBand`). It used to be the full content height:
+        // 3,600 x 12,704 device pixels (~183 MB) on a 17-camera, 561-row
+        // project, every redraw rasterizing all of it although the scroll area
+        // shows about a sixth. The band is at most the visible height plus one
+        // margin above and one below, positioned in content coordinates, so
+        // native scrolling still moves it smoothly; a scroll that nears its
+        // edge re-centres it and redraws.
+        /** @type {HTMLDivElement} */
+        this._spacerEl = document.createElement('div');
+        this._spacerEl.className = 'timeline-spacer';
+        this._spacerEl.style.width = '1px';
+        this._spacerEl.style.height = '0';
+        this._spacerEl.style.pointerEvents = 'none';
+        this._trackScrollEl.appendChild(this._spacerEl);
+        // A band edge reached mid-fling shows the wrapper for a frame: make it
+        // read as timeline background rather than a gap.
+        this._trackScrollEl.style.background = this.BG_COLOR;
+
         /** @type {HTMLCanvasElement} */
         this._canvas = document.createElement('canvas');
         this._canvas.style.display = 'block';
-        this._canvas.style.width = '100%';
-        this._canvas.style.height = '100%';
+        this._canvas.style.position = 'absolute';
+        this._canvas.style.left = '0';
+        this._canvas.style.top = '0';
         this._canvas.style.cursor = 'pointer';
-        // Canvas lives inside the scroll wrapper so vertical overflow
-        // produces a scrollbar instead of clipping.
         this._trackScrollEl.appendChild(this._canvas);
+
+        /** The canvas band, in content CSS px: top and height (`_placeBand`). */
+        this._bandTop = 0;
+        this._bandHeight = 0;
+        /** Backing-store scale of the band (devicePixelRatio, clamped under the canvas size cap). */
+        this._effDpr = 1;
 
         /** @type {CanvasRenderingContext2D} */
         this._ctx = this._canvas.getContext('2d');
@@ -397,6 +422,8 @@ export class Timeline {
         this._canvas.addEventListener('touchmove', this._onTouchMove, { passive: false });
         this._canvas.addEventListener('touchend', this._onTouchEnd);
         this._canvas.addEventListener('contextmenu', this._onContextMenu);
+        this._onTrackScroll = this._handleTrackScroll.bind(this);
+        this._trackScrollEl.addEventListener('scroll', this._onTrackScroll, { passive: true });
 
         // --- ResizeObserver --------------------------------------------------
 
@@ -411,6 +438,71 @@ export class Timeline {
     // -----------------------------------------------------------------------
     // Public API
     // -----------------------------------------------------------------------
+
+    /**
+     * Fit the canvas to the band of content around the visible rows: from one
+     * margin above the scroll position to one margin below the visible
+     * bottom (margin = the visible height, at least 256 px), clamped to the
+     * content. Reallocates the backing store only when the band's pixel size
+     * changes (or `force`), positions the canvas at the band's top, and sets
+     * the context transform so drawing stays in CONTENT coordinates —
+     * anything outside the band is simply clipped. Returns whether the band
+     * moved or resized (the caller then redraws).
+     *
+     * Browsers cap a <canvas> backing store at ~32767px per side; setting a
+     * canvas larger fails to allocate and renders as the broken-canvas "sad
+     * face". The band is rarely that tall now, but the ratio is still scaled
+     * down to stay under the cap (CSS size unchanged; only backing resolution
+     * drops).
+     *
+     * @param {boolean} [force]
+     * @returns {boolean}
+     * @private
+     */
+    _placeBand(force) {
+        var w = this._cssWidth || 0, h = this._cssHeight || 0;
+        var viewH = Math.max(0, this._viewHeight || 0);
+        var margin = Math.max(viewH, 256);
+        var bandH = Math.min(h, viewH + 2 * margin);
+        var scrollTop = this._trackScrollEl ? (this._trackScrollEl.scrollTop || 0) : 0;
+        var bandTop = Math.max(0, Math.min(Math.round(scrollTop - margin), Math.max(0, h - bandH)));
+        var dpr = (typeof window !== 'undefined' && window.devicePixelRatio) || 1;
+        var MAX_CANVAS = 32000;
+        var effDpr = dpr;
+        if (w > 0 && w * effDpr > MAX_CANVAS) effDpr = MAX_CANVAS / w;
+        if (bandH > 0 && bandH * effDpr > MAX_CANVAS) effDpr = MAX_CANVAS / bandH;
+        var pw = Math.max(1, Math.floor(w * effDpr)), ph = Math.max(1, Math.floor(bandH * effDpr));
+        var resized = force || this._canvas.width !== pw || this._canvas.height !== ph || this._effDpr !== effDpr;
+        var moved = bandTop !== this._bandTop;
+        if (!resized && !moved) return false;
+        if (this._canvas.width !== pw) this._canvas.width = pw;
+        if (this._canvas.height !== ph) this._canvas.height = ph;
+        if (resized) this._canvas.style.height = bandH + 'px';
+        if (moved || resized) this._canvas.style.top = bandTop + 'px';
+        this._bandTop = bandTop;
+        this._bandHeight = bandH;
+        this._effDpr = effDpr;
+        // (Re)set every time: assigning width/height resets the context state.
+        this._ctx.setTransform(effDpr, 0, 0, effDpr, 0, -bandTop * effDpr);
+        return true;
+    }
+
+    /**
+     * The track area scrolled: if the visible rows come within half a margin
+     * of the band's edge, move the band and redraw it. Scrolling inside the
+     * band costs nothing — the canvas scrolls natively with the content.
+     * @private
+     */
+    _handleTrackScroll() {
+        var h = this._cssHeight || 0;
+        if (!h) return;
+        var viewH = Math.max(0, this._viewHeight || 0);
+        var half = Math.max(viewH, 256) / 2;
+        var top = this._trackScrollEl.scrollTop || 0;
+        var needTop = Math.max(0, top - half), needBottom = Math.min(h, top + viewH + half);
+        if (needTop >= this._bandTop && needBottom <= this._bandTop + this._bandHeight) return;
+        if (this._placeBand(false)) this.redraw();
+    }
 
     /**
      * Update the current frame indicator.
@@ -558,7 +650,6 @@ export class Timeline {
      * number labels at the bottom remain visible as long as possible.
      */
     resize() {
-        var dpr = window.devicePixelRatio || 1;
         var rect = this._container.getBoundingClientRect();
         var w = Math.round(rect.width);
 
@@ -580,24 +671,15 @@ export class Timeline {
         var h = Math.max(natural, availableH);
         if (h < 0) h = 0;
 
-        // Browsers cap a <canvas> backing store at ~32767px per side; setting a
-        // canvas larger fails to allocate and the element renders as the broken-
-        // canvas "sad face". A tall timeline (e.g. 8 views × their tracks/
-        // identities) makes h*dpr exceed that. Scale the backing-store device
-        // ratio down just enough to stay under the cap — CSS size (style.width/
-        // height) and scroll are unchanged, so only backing resolution drops,
-        // and only when the timeline is extremely tall.
-        var MAX_CANVAS = 32000;
-        var effDpr = dpr;
-        if (w > 0 && w * effDpr > MAX_CANVAS) effDpr = MAX_CANVAS / w;
-        if (h > 0 && h * effDpr > MAX_CANVAS) effDpr = MAX_CANVAS / h;
-        this._canvas.width = Math.max(1, Math.floor(w * effDpr));
-        this._canvas.height = Math.max(1, Math.floor(h * effDpr));
+        // The spacer carries the full content height (the wrapper's scroll
+        // height, so scrolling is unchanged); the canvas covers only a band
+        // of it (`_placeBand`).
+        this._spacerEl.style.height = h + 'px';
         this._canvas.style.width = w + 'px';
-        this._canvas.style.height = h + 'px';
-        this._ctx.setTransform(effDpr, 0, 0, effDpr, 0, 0);
         this._cssWidth = w;
         this._cssHeight = h;
+        this._viewHeight = availableH;
+        this._placeBand(true);
         this._clampScroll();
         this._scrollbarTrack.style.left = this.LEFT_MARGIN + 'px';
         this._scrollbarTrack.style.right = this.RIGHT_PADDING + 'px';
@@ -723,9 +805,10 @@ export class Timeline {
         const H = this._cssHeight;
         if (!W || !H) return;
 
-        // --- Background ---
+        // --- Background (the band; everything below draws in content
+        // coordinates and the canvas clips it to the band) ---
         ctx.fillStyle = this.BG_COLOR;
-        ctx.fillRect(0, 0, W, H);
+        ctx.fillRect(0, this._bandTop, W, this._bandHeight || H);
 
         // --- Compute layout (applies collapse priority) ---
         const layout = this._computeLayout(H);
@@ -798,6 +881,7 @@ export class Timeline {
         this._canvas.removeEventListener('touchmove', this._onTouchMove);
         this._canvas.removeEventListener('touchend', this._onTouchEnd);
         this._canvas.removeEventListener('contextmenu', this._onContextMenu);
+        if (this._trackScrollEl) this._trackScrollEl.removeEventListener('scroll', this._onTrackScroll);
         this._resizeObserver.disconnect();
         // Canvas now lives inside _trackScrollEl, not directly on the
         // container. Remove the wrapper (which carries the canvas with it).
@@ -2040,9 +2124,14 @@ export class Timeline {
         const X_CONNECTOR = X_CAM_RIGHT + (maxCamW > 0 ? colGap : 0);
         const X_TRACK = X_CONNECTOR + maxConnW;
 
+        // Rows outside the canvas band would be clipped anyway; skip them.
+        const bandTop = this._bandTop || 0;
+        const bandBottom = this._bandHeight ? bandTop + this._bandHeight : Infinity;
+
         for (let t = 0; t < this._trackSegments.length; t++) {
             const track = this._trackSegments[t];
             const rowY = top + rowYPositions[t];
+            if (rowY + this.TRACK_ROW_HEIGHT < bandTop || rowY > bandBottom) continue;
             const labelY = rowY + this.TRACK_ROW_HEIGHT / 2;
 
             // Tracking-excluded: this camera is turned off in the Tracking Wizard
@@ -2662,7 +2751,10 @@ export class Timeline {
                 if (marker.modified) parts.push('modified');
                 if (parts.length > 0) text += ' (' + parts.join(', ') + ')';
             }
-            this._showTooltip(x, y, text);
+            // `y` is relative to the canvas BAND; the tooltip lives in the
+            // container, so place it from the pointer's client position.
+            var crect = this._container.getBoundingClientRect();
+            this._showTooltip(x, e.clientY - crect.top, text);
         } else {
             this._hideTooltip();
         }
