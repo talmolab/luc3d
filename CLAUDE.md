@@ -3,9 +3,9 @@
 Multi-view pose annotation GUI. No build system — pure vanilla JS served as static files.
 
 ## Architecture
-ES modules, vanilla JS (no build step). `index.html` loads `app.js` as `<script type="module">`; `app.js` is a 2-line entry point that imports from `pose/`. The 104 modules are grouped into four directories:
-- `pose/` — data model, cross-view tracking, DLT triangulation (the pure math in `triangulation-core.js`, solved in parallel by `triangulation-pool.js` + `triangulation-worker.js`), plane annotation model (planes + the global plane-node pool), 3D mesh objects (groups of planes) and their derived geometry, plane/origin serialization, origin transform, whole-project origin re-base, cross-session calibration comparison, plane-to-plane angle, the least-squares plane fit, multi-view display alignment (`view-align.js`), the ID-switch checks by body size and images (`id-switch-check.js`), the lazy project's playback eviction (`lazy-residency.js`), app initialization (22 files)
-- `ui/` — UI state, canvas rendering, mouse/keyboard interaction, info panel (and its lazily-filled Track dropdown), modals, timeline, 3D viewport, panel visibility, video encoding, video display settings, keyboard-target arbitration, modal geometry, view legend, plane definition, 3D mesh objects, origin definition, origin re-base, cross-session calibration notice, plane angle, frame-range tracking, collapsible section state, info tooltips, plane visibility, browser-specific hints, the loading overlay + its progress bar, the Align Views to References dialog, the seekbar hover tooltip, the status bar's whole-project frame counters, the controls bar's time / frame readout, the Tracks / Identity coloring setting, the node-trail lengths (`trail-presets.js` — presets or a custom value typed in seconds or frames, stored in seconds, drawn as `seconds × fps` frames), the Check ID Switches runner + ID Switches panel tab (and its saved review checklist), its seekbar ticks and in-view highlight, its image embedder and its crop and CPU-model workers, the Track All summary box (`track-summary.js` decides what it says, `track-summary-modal.js` renders it), settings — the Define Planes panel is split across `plane-definition.js` (the hub) plus its three section modules and three helpers (61 files)
+ES modules, vanilla JS (no build step). `index.html` loads `app.js` as `<script type="module">`; `app.js` is a 2-line entry point that imports from `pose/`. The 106 modules are grouped into four directories:
+- `pose/` — data model, cross-view tracking, DLT triangulation (the pure math in `triangulation-core.js`, solved in parallel by `triangulation-pool.js` + `triangulation-worker.js`), plane annotation model (planes + the global plane-node pool), 3D mesh objects (groups of planes) and their derived geometry, plane/origin serialization, origin transform, whole-project origin re-base, cross-session calibration comparison, plane-to-plane angle, the least-squares plane fit, multi-view display alignment (`view-align.js`), the ID-switch checks by body size and images (`id-switch-check.js`), the lazy project's playback eviction (`lazy-residency.js`), the skeleton-edit impact tally (`skeleton-edit-impact.js`), app initialization (23 files)
+- `ui/` — UI state, canvas rendering, mouse/keyboard interaction, info panel (and its lazily-filled Track dropdown), modals, timeline, 3D viewport, panel visibility, video encoding, video display settings, keyboard-target arbitration, modal geometry, view legend, plane definition, 3D mesh objects, origin definition, origin re-base, cross-session calibration notice, plane angle, frame-range tracking, collapsible section state, info tooltips, plane visibility, browser-specific hints, the loading overlay + its progress bar, the Align Views to References dialog, the seekbar hover tooltip, the status bar's whole-project frame counters, the controls bar's time / frame readout, the Tracks / Identity coloring setting, the node-trail lengths (`trail-presets.js` — presets or a custom value typed in seconds or frames, stored in seconds, drawn as `seconds × fps` frames), the Check ID Switches runner + ID Switches panel tab (and its saved review checklist), its seekbar ticks and in-view highlight, its image embedder and its crop and CPU-model workers, the Track All summary box (`track-summary.js` decides what it says, `track-summary-modal.js` renders it), the skeleton-edit confirmation (`skeleton-edit-warning.js`), settings — the Define Planes panel is split across `plane-definition.js` (the hub) plus its three section modules and three helpers (62 files)
 - `loading/` — video decoding, unplayable-codec diagnosis, session loading, SLP/package readers, per-camera SLP choice, calibration-file selection, video-file selection, the per-camera track-list union (`session.tracks` for a per-camera folder), web workers (11 files)
 - `import-export/` — file I/O, save/load, SLP import/merge, visibility metadata, plane metadata, 3D mesh export (10 files)
 - `demo-data.js` — synthetic skeleton and camera data
@@ -1374,6 +1374,92 @@ on a build that simply ignores the frame). The axis claim was
 additionally confirmed against **real Blender** (`--background`, gltf + stl
 importers): both files put the tracked corner at (0, 0, 300).
 
+## A skeleton edit re-shapes every annotation in the project
+
+The Skeleton tab's node/edge controls look like settings and are not.
+`Instance` stores one flat `Float64Array(2N)` keyed by node INDEX, and
+**one skeleton per project** means every `state.sessions[*].skeleton` is the
+SAME object — so a node typed into that box re-shapes every instance in every
+loaded session at once. The only signal used to be a `console.warn` nobody
+sees.
+
+All five edits — add node, remove node, rename node, add edge, remove edge —
+now go through `confirmSkeletonEdit` (`ui/skeleton-edit-warning.js`), counting
+with `pose/skeleton-edit-impact.js`. Eight things are load-bearing:
+
+- **The dialog is a title, ONE SENTENCE and the counts.** A bulleted
+  `What changes` block and an always-on `There is no undo…` caution were both
+  removed: four paragraphs of prose above the one thing a reader can act on,
+  restating per edit what the lead already said, plus a box that by its third
+  appearance is scenery — which costs the lazy warning its weight too. Keep the
+  per-edit detail in MODULES.md; `tests/e2e/skeleton-edit-warning.mjs` asserts
+  both are absent, because copy like that creeps back one paragraph at a time.
+- **The counts are the WHOLE project, and the enumeration is the same one
+  `pose/origin-rebase.js` uses.** Never `frameGroups` alone on a lazy project
+  (a resident window — 31 of 180,210 frames on the real project, so the tally
+  comes out plausible, tiny and wrong), and never group members alone (most of
+  an imported `.slp` is ungrouped predictions in `unlinkedInstances`). Lazy →
+  `lazyLoader.forEachInstanceRow`; eager → frame-group instances plus the
+  unlinked pool, which are disjoint by construction.
+- **The headline block IS the total; the by-session block says WHICH session.**
+  Every headline number is a FOLD of `perSession`, so the two cannot disagree —
+  and the by-session block deliberately carries **no `Total` row**, because
+  that is the headline restated a few rows down and two copies of one number
+  invite the reader to check them against each other instead of reading either.
+  A session on a DIFFERENT-shaped skeleton is NOT counted — the edit does not
+  reach it — and is named separately instead of silently shortening the total.
+- **A lazy project is told, loudly, not to do this.** Both propagation methods
+  are RESIDENT-ONLY by necessity: the columnar store has a fixed node count
+  per instance, so a skeleton edit cannot be expressed in it at all and a
+  non-resident frame comes back on the PREVIOUS skeleton — no error, no
+  symptom, until a save writes two node counts into one project. The red
+  warning names `nonResidentFrames` and says what to do instead. A project
+  that merely HAS a `lazyLoader` but is fully resident does not get it: a
+  warning that fires when nothing is wrong is a warning nobody reads.
+- **No annotations, no dialog.** Building the first skeleton is N node names
+  typed into a box; `skeletonEditNeedsConfirmation` applies the edit straight
+  through when there are no instances, no groups and nothing lazy.
+- **"Do not show again" is the user's own version of that gate**, cached in
+  `localStorage.skeletonEditWarningOff`. Browser-local display taste, so it
+  must NOT reach the `.slp` — it is a property of this browser, not the
+  project, and opening a colleague's project must not silence their warnings.
+  It is checked BEFORE the tally (which walks a lazy project's whole columnar
+  store), recorded **only when the edit is APPLIED** (ticked and then cancelled
+  it does nothing — guessing which of two opposite intentions won would silence
+  a data-loss warning on the strength of a dialog the user rejected), and
+  storage failures fall back to WARNING, never to skipping. The way back on is
+  `#skeletonWarnOffNote` in the Skeleton tab, shown only while it is set: a
+  setting a user can switch off and never find again is a trap.
+- **A new node arrives HIDDEN on hand-labelled instances** — placed beside the
+  animal (fanned off the centroid of its placed points) and added to
+  `nulledNodes`, so it draws a grey, CLICKABLE marker. An empty slot draws
+  nothing, and a node that draws nothing can never be clicked, so the node the
+  user just added would be permanently unplaceable on every instance that
+  already existed. `nulledNodes` round-trips through the `.slp` (finite xy +
+  `visible: false`), so the hidden state survives a save. **PREDICTED
+  instances get an empty slot**: their points are model output and nothing is
+  invented for them — `_convertToUserInstance` fills them when they become
+  editable.
+- **The 2D, `nulledNodes` and `InstanceGroup.points3d` move TOGETHER**, all
+  three being on one node index space. A removal splices the 3D rather than
+  nulling it: discarding the array cost the project every triangulated
+  keypoint it had because one node was deleted. Both paths drop the group's
+  cached `reprojections` / `reprojectedInstances`, which are per-node arrays
+  at the old count, and mark it dirty. The re-shaped array goes back through
+  `pooledPoints3d` and the emptied `reprojectedInstances` back to the shared
+  `NO_REPROJECTED_INSTANCES`: this walks every group in the project, so doing
+  neither would un-pool the project's whole 3D as the price of one edit.
+
+Every edit also calls `markDirty()` — they did not before, so a skeleton edit
+used to leave the project looking saved.
+
+Coverage: `tests/test-skeleton-edit-impact.mjs` (the tally, with negative
+controls for the fully-resident loader, the differently-shaped skeleton and the
+no-mutation guarantee), the `Session` block of `tests/test-pose-data.js` (the
+hidden placement, the predicted carve-out, the 3D splice, the `nulledNodes`
+re-seat) and `tests/e2e/skeleton-edit-warning.mjs` (all five edits in the real
+app over a two-session project, both cancels leaving it byte-identical).
+
 ## UI Conventions
 **No scroll-within-scroll.** A panel or modal gets ONE scroller. Do not give an
 inner widget its own `max-height` + `overflow-y: auto` inside something that
@@ -1648,7 +1734,7 @@ There are **three** test populations, each with its own runner. Run all three �
 they cover disjoint code, and a green run of one says nothing about the others.
 
 ```bash
-node tests/e2e/run-unit-tests.mjs     # tests/*.js  (browser suite, headless) — 1603 assertions
+node tests/e2e/run-unit-tests.mjs     # tests/*.js  (browser suite, headless) — 1624 assertions
 node tests/run-mjs-tests.mjs          # tests/test-*.mjs  (native-ESM Node tests)
 node tests/e2e/<name>.mjs             # tests/e2e/*.mjs  (Playwright, one file per behavior)
 ```

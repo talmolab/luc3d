@@ -6491,7 +6491,8 @@ body.origin-mode-lock .timeline-container {
    for the same reason. It carries no caution and no todo list: it is a note
    saying which sessions loaded which calibration, and nothing else. */
 .origin-rebase-modal,
-.calib-notice-modal {
+.calib-notice-modal,
+.skeleton-edit-modal {
   min-width: 440px;
   max-width: 560px;
   /* Three tables plus two cautions is tall — ~975px on a multi-session
@@ -6507,7 +6508,8 @@ body.origin-mode-lock .timeline-container {
    below the fold. Still one scroller — sticky does not add another, it just
    keeps this row out of the scrolled flow. */
 .origin-rebase-modal .modal-actions,
-.calib-notice-modal .modal-actions {
+.calib-notice-modal .modal-actions,
+.skeleton-edit-modal .modal-actions {
   position: sticky;
   bottom: -20px;
   margin: 0 -22px -20px;
@@ -6770,6 +6772,62 @@ details[open] > summary.origin-rebase-block-title::before {
   margin-bottom: 6px;
   font-variant-numeric: tabular-nums;
 }
+
+/* Skeleton edit confirmation (ui/skeleton-edit-warning.js). It reuses
+   `.origin-rebase-block` / `-table` / `-caution` wholesale; all it needs of its
+   own is the action row, which carries "Do not show again" on the LEFT of the
+   two buttons. The checkbox is not a third action — it qualifies the one the
+   user is about to take — so it sits apart from them rather than in the row. */
+.skeleton-edit-actions {
+  justify-content: space-between;
+  align-items: center;
+}
+
+.skeleton-edit-buttons {
+  display: flex;
+  gap: 8px;
+}
+
+.skeleton-edit-again {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.skeleton-edit-again input {
+  margin: 0;
+  cursor: pointer;
+}
+
+/* The way back on, in the Skeleton tab. Present in the markup always and shown
+   only while the preference is set, so it costs nothing in the ordinary case —
+   and `display` is driven from `populateSkeletonTable`, the one refresh point
+   after every skeleton mutation. */
+#skeletonWarnOffNote {
+  margin-top: 8px;
+  padding: 6px 8px;
+  border-radius: 3px;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+}
+
+#skeletonWarnOffNote button {
+  margin-left: 4px;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: var(--accent, #4a9eff);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
 /* Tracks ▸ Check ID Switches — the ID Switches tab of the right panel (ui/id-switch-modal.js
    refreshIdSwitchPanel). The tab content is the panel's one scroller; the toolbar sticks. */
 .id-switch-summary { font-size: 12px; margin: 2px 0; }

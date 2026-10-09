@@ -902,6 +902,72 @@ session is included) and `tests/e2e/set-new-calibration.mjs`.
 
 ---
 
+### pose/skeleton-edit-impact.js
+
+**Purpose.** Count what a skeleton node/edge edit is about to re-shape, so
+`ui/skeleton-edit-warning.js` can state it BEFORE anything is mutated. DOM-free
+and side-effect-free: it reads the project and returns a tally, and a test pins
+that it leaves the skeleton, the 3D, the reprojection cache, the dirty flags and
+every instance's node count exactly as it found them.
+
+**Why it exists.** The Skeleton tab's controls look like settings and are not.
+`Instance` stores one flat `Float64Array(2N)` keyed by node INDEX, so adding or
+removing a node re-shapes every annotation in the project — and LUCID is one
+skeleton per project (`setProjectSkeleton` points every session at one object),
+so the edit is never local to the session whose panel is open. The only signal
+before this was a `console.warn`.
+
+**It walks the project exactly as `pose/origin-rebase.js`'s
+`countRebaseTargets` does**, and for the same two reasons:
+- **The 2D population is the WHOLE population.** Most of an imported `.slp` is
+  ungrouped predictions in `FrameGroup.unlinkedInstances`, so counting group
+  members alone reports a few dozen on a project holding hundreds of thousands.
+- **Never `frameGroups` alone on a lazy project.** It is a small resident window
+  (31 of 180,210 frames on the real project), so a tally built from it is
+  plausible, tiny and wrong. A lazy session is counted through
+  `lazyLoader.forEachInstanceRow` — the columnar store, no frame materialized —
+  and `perSession[i].instanceScope` says which enumeration answered.
+
+**`lazy` is `resident < total`, and it is the headline.** Both propagation
+methods are RESIDENT-ONLY by necessity (the store has a fixed node count per
+instance; a skeleton edit cannot be expressed in it at all), so the frames not in
+memory come back on the PREVIOUS skeleton — silently, long after the edit.
+`residentFrames` / `totalFrames` / `nonResidentFrames` are what the dialog's red
+warning quotes. A project that happens to have a `lazyLoader` but is fully
+resident is NOT flagged: a warning that fires when nothing is wrong is a warning
+nobody reads.
+
+**Key exports.**
+- `splitSessionsBySkeleton(sessions, skeleton)` → `{shared, others}`. Reference
+  identity first (what "one skeleton per project" actually produces), then
+  `Skeleton.compatibilityKey()` for a same-shaped copy. A session on a
+  DIFFERENT-shaped skeleton is not re-shaped by this edit and goes in `others`,
+  so the dialog can say it exists rather than leaving the totals quietly short.
+- `countSkeletonEditImpact(sessions)` → the tally: `userInstances`,
+  `predictedInstances`, `instances`, `reprojectedInstances`, `groups`,
+  `keypoints3d`, the lazy fields above, and `perSession` — the same record once
+  per session. Every total is a FOLD of `perSession`, so the dialog's by-session
+  rows and its Total row cannot be two different arithmetics.
+- `skeletonEditNeedsConfirmation(tally)` → the gate. Building the first skeleton
+  is N node names typed into a box; a modal per node would make the feature
+  unusable, so a project with no instances, no groups and nothing lazy applies
+  the edit straight through. `anyLazy` counts on its own, because that is the one
+  case where zero counts mean nothing — the annotations are in the file.
+
+**Imports from project modules.** None (deliberately — it is reached from a UI
+module but depends on nothing, so it stays Node-testable).
+
+**Imported by.** `ui/skeleton-edit-warning.js`.
+
+**Tests.** `tests/test-skeleton-edit-impact.mjs` (ESM, over REAL
+`Session`/`Instance` fixtures: the grouped+ungrouped split, the total-equals-the-
+fold property, the lazy store branch with a fully-resident negative control, the
+same-skeleton scope with a differently-shaped negative control and a
+one-renamed-node control, the gate in both directions, and that nothing is
+mutated) and `tests/e2e/skeleton-edit-warning.mjs` end to end.
+
+---
+
 ### pose/calibration-compare.js
 
 **Purpose.** Do the sessions of a multi-session project agree about where the
@@ -1827,6 +1893,41 @@ session graph that holds them.
   `_promoteIfMixed`), skeleton propagation
   (`propagateNodeAdded`/`propagateNodeRemoved`), camera-rename
   (`renameCameraInAllData`).
+
+  **Skeleton propagation re-shapes the 2D, the `nulledNodes` sets and the 3D
+  together**, because all three are indexed by the same node index and anything
+  that drifts re-seats every node past the edit onto its neighbour:
+  - `propagateNodeAdded(opts)` — appends a slot to every instance.
+    **`opts.hidden`** (what `ui/info-panel.js` passes; default off keeps the raw
+    data-model behaviour) places the node beside the instance's placed points and
+    adds it to `nulledNodes`, so it draws a grey, CLICKABLE marker. An empty slot
+    draws nothing, and a node that draws nothing can never be clicked — so the
+    node the user just added to the skeleton would be permanently unplaceable on
+    every instance that already existed. Same remedy `InteractionManager` already
+    applies to a null template slot. **PREDICTED instances are left empty**:
+    their points are model output and nothing is invented for them;
+    `_convertToUserInstance` fills and flags them when they become editable.
+  - `propagateNodeRemoved(nodeIdx)` — splices the node out of every instance,
+    re-seats `nulledNodes` above it, and **splices `InstanceGroup.points3d`**
+    rather than nulling it. Discarding the whole array (what this used to do)
+    cost the project every triangulated keypoint it had because one node was
+    deleted; the group is still marked dirty, so a re-solve is offered rather
+    than compulsory.
+  - Both drop the group's cached reprojections (`reprojections` and
+    `reprojectedInstances`), which are per-node arrays at the OLD node count and
+    would otherwise draw the previous skeleton over the new one.
+    `reprojectedInstances` is handed back to `NO_REPROJECTED_INSTANCES` rather
+    than `clear()`ed — a group with nothing cached is what the shared empty map
+    is for.
+  - Both re-shape `points3d` through **`pooledPoints3d`**. They walk every group
+    in the project, which is a BULK path by the pool's own rule, so leaving each
+    re-shaped array on its own `ArrayBuffer` would un-pool the whole project's
+    3D (one buffer per group again) as the price of one skeleton edit.
+  - Both are **RESIDENT-ONLY by necessity** (`_warnResidentOnlyStructuralEdit`):
+    the columnar store has a fixed node count per instance, so the edit cannot be
+    expressed there at all and a non-resident frame comes back on the previous
+    skeleton. `pose/skeleton-edit-impact.js` measures that and
+    `ui/skeleton-edit-warning.js` warns about it before the edit.
   **`videoContrast`** / **`videoBrightness`** / **`videoRotation`** (issue #149
   and follow-ups) — three `{ cameraName: int }` maps: contrast in [−100, 100],
   brightness percentage in [0, 200], rotation degrees in [−179, 180]. All
@@ -4670,6 +4771,30 @@ try/caught, and a browser that refuses storage just gets the markup's default
 `open`. This is the collapsible-section remedy the "no scroll-within-scroll"
 convention in `CLAUDE.md` prescribes.
 
+**Every skeleton edit confirms first, and marks the project dirty.** All five
+node/edge controls (add node, the `×` on a node row, the node-name field's
+`change`, add edge, the `×` on an edge row) run their mutation inside a
+`confirmSkeletonEdit` callback (`ui/skeleton-edit-warning.js`) and call
+`markDirty()` — which they did not before, so a skeleton edit used to leave the
+project looking saved. Three details:
+- **The rename handler puts the typed text back** (`nameInput.value =
+  sk.nodes[i]`) right after raising the dialog, and the confirm callback's
+  `populateSkeletonTable()` rebuilds the row with the new name. Otherwise a
+  cancelled rename leaves the field showing a name the skeleton does not have.
+- **Add Edge validates BEFORE confirming.** A duplicate or self-edge is a no-op,
+  and asking the user to approve something that then does nothing makes the
+  dialog read as noise. The `addEdge` call inside the callback keeps its own
+  guard, since the dialog is dismissible and the model can move under it.
+- **`propagateNodeAddedAllSessions` passes `{hidden: true}`** — this is the
+  INTERACTIVE path, so the new node has to be reachable. See
+  `Session.propagateNodeAdded`.
+- **`#skeletonWarnOffNote` is the way back from "Do not show again."**
+  `populateSkeletonTable` sets its `display` from
+  `isSkeletonEditWarningSuppressed()` (so it costs nothing in the ordinary
+  case), and `setupSkeletonEditing` wires `#btnSkeletonWarnOn` at SETUP — like
+  the Videos tab's two buttons and for the same reason: a handler assigned
+  inside a per-session rebuild is missing exactly when there is no session yet.
+
 **Skeleton persistence.** `populateSkeletonTable` calls `rememberSkeleton` on every
 refresh — the central point after any editor mutation (add/remove node or edge,
 Load Skeleton) or loaded project — so the current non-empty skeleton is cached for
@@ -4689,6 +4814,9 @@ on reload); see `ui/app-state.js`.
   under the `skeletonSectionsOpen` key).
 - `./lazy-select.js` — `buildLazySelect`, behind `buildTrackSelect` (both
   instance tables' Track `<select>`s).
+- `./skeleton-edit-warning.js` — `confirmSkeletonEdit`, wrapped around all five
+  node/edge mutations, plus `isSkeletonEditWarningSuppressed` /
+  `setSkeletonEditWarningSuppressed` for `#skeletonWarnOffNote`.
 - `./id-switch-modal.js` — `refreshIdSwitchPanel`: `updateInfoPanel` re-renders
   the ID Switches tab (and its seekbar markers) for the active session.
 - `./app-state.js` — `state`, `timeline`, `interactionManager`,
@@ -11368,6 +11496,100 @@ clamp and the flip, hover/click/Esc/outside-click dismissal, that `title` is
 gone while `aria-label` is not, that the status bar is left untouched (the
 regression), and the delegation case above. `tests/e2e/plane-section-info.mjs`
 covers the section headings' ⓘ and the no-fold rule.
+
+### ui/skeleton-edit-warning.js
+
+**Purpose.** The confirmation the Skeleton tab's five edits — add node, remove
+node, rename node, add edge, remove edge — go through before they are applied.
+
+**Why.** Those controls look like settings and are not. The skeleton is the
+shape every annotation is stored against (`Instance` keeps one flat
+`Float64Array(2N)` keyed by node INDEX) and LUCID is one skeleton per project,
+so a node typed into that box re-shapes every instance in every loaded session at
+once. The only prior signal was a `console.warn`.
+
+Six things about it:
+- **It is a title, ONE SENTENCE, and the counts.** It used to carry a bulleted
+  `What changes` block and an always-on `There is no undo…` caution as well:
+  four paragraphs of prose above the one thing a reader can act on, restating
+  per edit what the lead already said, plus a box that by its third appearance
+  is scenery — which costs the lazy warning below it its weight too. The
+  per-edit detail lives here instead. `tests/e2e/skeleton-edit-warning.mjs`
+  asserts both are ABSENT, because copy like that creeps back one paragraph at
+  a time.
+- **It states a TOTAL, then WHICH session.** The headline block is the whole
+  project — every session sharing the skeleton, folded from `perSession`
+  (`pose/skeleton-edit-impact.js`). A `By session` block appears when more than
+  one session is loaded, answering the one question the block above cannot. It
+  carries **no `Total` row of its own**: that is the headline block restated a
+  few rows down, and two copies of one number invite the reader to check them
+  against each other instead of reading either. `tests/e2e/skeleton-edit-warning.mjs`
+  asserts its absence.
+- **A lazy project gets a RED warning advising against the edit**, naming the
+  non-resident frame count. Propagation is resident-only by necessity, so those
+  frames come back on the PREVIOUS skeleton with no error and nothing on screen
+  to show it, until a save writes two node counts into one project. NEGATIVE
+  CONTROL: a fully-resident project gets no such warning.
+- **It is SKIPPED when there is nothing to warn about**
+  (`skeletonEditNeedsConfirmation`). Building the first skeleton is N node names
+  typed into a box, and a modal per node would make the feature unusable.
+- **"Do not show again" is the user's own version of that gate.** Cached in
+  `localStorage.skeletonEditWarningOff` — browser-local display taste, the same
+  class as the panel's section folds, so it must NOT reach the `.slp`: it is a
+  property of this browser, not the project, and opening a colleague's project
+  must not silence their warnings. Three rules:
+  - **The suppression check runs FIRST, before the tally**, which walks a lazy
+    project's whole columnar store. A user who turned the dialog off should not
+    keep paying for one that will not open.
+  - **It is recorded only when the edit is APPLIED.** Ticked and then cancelled
+    it does nothing: "do not show this again" alongside "do not do this" is two
+    different intentions, and guessing which won would silence a warning about
+    silent data loss on the strength of a dialog the user rejected.
+  - **Storage is best-effort, and the failure direction is to WARN.** A private
+    window throws on read and on write; a browser that cannot remember the
+    preference keeps showing the dialog.
+  The way back on is `#skeletonWarnOffNote` in the Skeleton tab (shown only
+  while the preference is set, wired at setup by `setupSkeletonEditing`,
+  displayed by `populateSkeletonTable`) — a setting a user can switch off and
+  never find again is a trap.
+- **The caller owns the mutation.** This module shows a dialog and calls back; it
+  never touches the skeleton. Each edit's propagation differs (a node add grows
+  instance buffers, an edge add only repaints), so it stays in `ui/info-panel.js`
+  beside the control it belongs to.
+
+**Key exports.**
+- `confirmSkeletonEdit(edit, onConfirm)` — `edit` is
+  `{kind: 'add-node'|'remove-node'|'rename-node'|'add-edge'|'remove-edge', label}`.
+- `isSkeletonEditWarningSuppressed()` / `setSkeletonEditWarningSuppressed(off)` —
+  the "Do not show again" preference, read and cleared by `ui/info-panel.js`'s
+  Skeleton-tab note.
+- `describeSkeletonEdit(edit)` → `{title, lead}`. One table rather than strings
+  at the five call sites: the edits differ in exactly this, and a consequence
+  written beside the button that causes it is a consequence that drifts from
+  what the code does. One sentence each, and the three non-destructive edits
+  open on *"No coordinates move"* — a dialog that only ever lists damage trains
+  the user to dismiss it.
+
+**Geometry and classes are shared with `ui/origin-rebase.js`'s confirmation**
+(`.origin-rebase-block` / `-table` / `-caution`, plus `.skeleton-edit-modal` on
+the same `max-height` + sticky-actions rule), for the reason
+`ui/calibration-notice.js` shares them: same kind of dialog, a stack of titled
+blocks whose height depends on the project. All it adds of its own is the action
+row (`.skeleton-edit-actions` / `-buttons` / `-again`, which puts the checkbox on
+the LEFT of the two buttons — it is not a third action, it qualifies the one the
+user is about to take) and `#skeletonWarnOffNote`.
+
+**Imports from project modules.** `./app-state.js` (`state`),
+`../pose/skeleton-edit-impact.js`.
+
+**Imported by.** `ui/info-panel.js`.
+
+**Tests.** `tests/e2e/skeleton-edit-warning.mjs` — all five edits in the real
+app over a two-session project: the copy, the counts (grouped AND ungrouped), the
+by-session rows summing to the Total row, Esc and Cancel leaving the project
+byte-identical, confirming reaching BOTH sessions with the new node hidden on
+hand-labelled instances and empty on predicted ones, the lazy warning with a
+resident negative control, and the no-dialog gate.
 
 ### ui/section-state.js
 
