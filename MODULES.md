@@ -9060,7 +9060,13 @@ lead-in and lead-out, red over the close spell — from `ID_SWITCH_SECTION_RGB`,
 which the bar (`ui/id-switch-modal.js` `progressHtml`) also reads, so the two
 cannot drift. Lines, padding and text are
 sized in SCREEN pixels (canvas width / (layout width × zoom)), so a small tile
-of a large video stays readable. Lazy projects: nothing for a non-resident frame.
+of a large video stays readable. Lazy projects: nothing for a non-resident frame
+— and the box appears once that frame is hydrated. Selecting a row jumps to a
+frame that is usually not resident yet, and its hydration redraws the overlays
+without being a frame change, so while the frame is missing (`_waiting`) the
+animation loop checks `frameGroups.has(frame)` on each tick and recomputes when
+it lands. Before that, the box stayed empty until the frame next changed (i.e.
+until play was pressed).
 
 **Imports from project modules.** `ui/app-state.js` (`state`), `ui/overlays.js`
 (`makeVideoToCanvasTransform`), `ui/settings.js` (`getNodeWeightArray`).
@@ -9073,8 +9079,10 @@ the pair and not the third animal, animates while paused, orange in the
 lead-in / red in the close spell / orange in the lead-out with the bar's
 sections matching, the bar's playhead and click / drag seeking, cleared past the
 interval and redrawn on return, a moved box leaves nothing behind, Clear stops
-it, a zero-weight node is left out — re-fit on Apply without a frame change — and
-the fallback for an instance showing only zero-weight nodes); `tests/e2e/_bench-playback.mjs` scenario `idswitch` (playback cost on a real
+it, a zero-weight node is left out — re-fit on Apply without a frame change —
+the fallback for an instance showing only zero-weight nodes, and a row whose
+landing frame is not resident gets its box when the frame is hydrated, with no
+frame change); `tests/e2e/_bench-playback.mjs` scenario `idswitch` (playback cost on a real
 project with a row selected over the whole run).
 
 ---
