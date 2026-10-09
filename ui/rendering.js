@@ -466,10 +466,11 @@ export function drawAllOverlays(frameIdx, viewFrames) {
 
     // Update info panel with current frame stats + the timeline playhead.
     // During playback these are THROTTLED to ~10 Hz: `updateFrameInfo` rebuilds
-    // info-panel DOM and re-aggregates reprojection errors, and
-    // `timeline.setCurrentFrame` does a full timeline-canvas `redraw()` — both
-    // per frame. A human can't read either at playback speed, and doing them
-    // every frame is a major per-frame cost that caps buffered playback fps.
+    // info-panel DOM and re-aggregates reprojection errors per frame — a human
+    // can't read it at playback speed, and doing it every frame is a major
+    // per-frame cost that caps buffered playback fps. (`timeline.setCurrentFrame`
+    // only moves the playhead element now, ui/timeline.js, so it is cheap; it
+    // shares the throttle because it always has.)
     // The skeleton overlays + video above still update every frame, so tracking
     // stays smooth and frame-accurate; only these two auxiliary updates coalesce.
     // When paused (seek/step) they always run so the panel/playhead are exact.
@@ -477,8 +478,6 @@ export function drawAllOverlays(frameIdx, viewFrames) {
     if (!state.isPlaying || (_auxNow - _lastAuxUpdate) >= AUX_UPDATE_MS) {
         _lastAuxUpdate = _auxNow;
         updateFrameInfo(frameIdx, instanceGroups);
-        // While playing, only the playhead moves: let the timeline blit its
-        // cached track/marker layer instead of a full redraw (ui/timeline.js).
         if (timeline) timeline.setCurrentFrame(frameIdx, state.isPlaying ? { playback: true } : undefined);
     }
 }
