@@ -21,6 +21,11 @@
  *  6. When the animals move between frames, the old box is cleared completely (a
  *     repaint clears only the rectangle the last one drew, not the whole canvas).
  *  7. "Clear" in the tab stops it.
+ *  8. The box encloses only nodes the Tracking Wizard weights above 0: with
+ *     id_0's TTI stretched out to the top right it reaches the tail; weighting TTI
+ *     0 in Settings ▸ Tracking Wizard and clicking Apply re-fits it at once (same
+ *     frame) to the bodies; and an instance whose only visible node is weighted 0
+ *     still counts (falls back to all its nodes) in that view and only that view.
  *
  * Run: node tests/e2e/id-switch-highlight.mjs     (HL_SHOT=/path.png saves a screenshot)
  */
@@ -209,6 +214,60 @@ try {
     }));
     check(moved.every(v => v.oldPlace === 0 && v.newPlace > 200),
         `the box moved with them and nothing is left where it was (${JSON.stringify(moved)})`);
+
+    // ---- 8. zero-weight nodes are left out of the box. Frame 78: id_0's TTI (node 3) out at (420, 60) in
+    //      both views. Frame 77: in camB only, id_1 has nothing visible but its TTI, out at (420, 60).
+    await page.evaluate(async () => {
+        const pd = await import('/pose/pose-data.js'); const S = window.__lucid.state.session;
+        const reshape = (f, a, cam, fn) => {
+            const g = S.instanceGroups.get(f)[a], old = g.getInstance(cam), pts = [];
+            for (let k = 0; k < old.numNodes; k++) pts.push(fn(k, old.getX(k), old.getY(k)));
+            g.addInstance(cam, new pd.Instance(pts, null, 'predicted', 0.9));
+        };
+        for (const cam of ['camA', 'camB']) reshape(78, 0, cam, (k, x, y) => k === 3 ? [420, 60] : [x, y]);
+        reshape(77, 1, 'camB', k => k === 3 ? [420, 60] : [NaN, NaN]);
+    });
+    const tailCensus = () => page.evaluate(() => window.__lucid.state.views.map(v => {
+        const c = v.wrapper.querySelector('.id-switch-canvas');
+        const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data, sx = c.width / 640, sy = c.height / 480;
+        let tail = 0, pair = 0;
+        for (let y = 0; y < c.height; y++) for (let x = 0; x < c.width; x++) {
+            if (!d[(y * c.width + x) * 4 + 3]) continue;
+            const vx = x / sx, vy = y / sy;
+            if (vx > 330 && vx < 450 && vy < 140) tail++; else if (vx < 300 && vy < 320) pair++;
+        }
+        return { tail, pair };
+    }));
+    await page.keyboard.press('ArrowLeft');                                           // 79 -> 78
+    await page.waitForFunction(() => window.__lucid.state.currentFrame === 78, null, { timeout: 10000 }).catch(() => {});
+    await page.waitForTimeout(200);
+    const wide = await tailCensus();
+    check(wide.every(v => v.tail > 50), `every node weighted 1: the box reaches id_0's outstretched TTI (${JSON.stringify(wide)})`);
+    await page.evaluate(async () => (await import('/ui/settings-modal.js')).showSettingsModal('wizard'));
+    await page.fill('input[aria-label="Weight for node TTI"]', '0');
+    await page.click('.settings-btn-apply');
+    await page.waitForTimeout(200);
+    const tight = await tailCensus();
+    const frameAfterApply = await cur();
+    check(frameAfterApply === 78 && tight.every(v => v.tail === 0 && v.pair > 200),
+        `TTI weighted 0 + Apply, still frame 78: the box shrinks to the bodies, the tail is outside it (${JSON.stringify(tight)})`);
+    await page.keyboard.press('ArrowLeft');                                           // 78 -> 77
+    await page.waitForFunction(() => window.__lucid.state.currentFrame === 77, null, { timeout: 10000 }).catch(() => {});
+    await page.waitForTimeout(200);
+    const fallback = await tailCensus();
+    check(fallback[0].tail === 0 && fallback[1].tail > 50,
+        `frame 77: id_1 shows only its zero-weight TTI in camB, so camB's box falls back to it; camA's does not reach it (${JSON.stringify(fallback)})`);
+    const masks = await page.evaluate(async () => {
+        const H = await import('/ui/id-switch-highlight.js'), St = await import('/ui/settings.js');
+        const out = { tti: H.idSwitchBoxNodeMask(['Nose', 'TTI', 'Trunk']) };
+        St.setNodeWeights({ Nose: 0, TTI: 0, Trunk: 0 });
+        out.allZero = H.idSwitchBoxNodeMask(['Nose', 'TTI', 'Trunk']);
+        St.setNodeWeights({});
+        out.noneZero = H.idSwitchBoxNodeMask(['Nose', 'TTI', 'Trunk']);
+        return out;
+    });
+    check(JSON.stringify(masks) === JSON.stringify({ tti: [true, false, true], allZero: null, noneZero: null }),
+        `the node mask: TTI left out; every node weighted 0, or none, encloses them all (${JSON.stringify(masks)})`);
 
     // ---- 7. Clear stops it
     await page.click('#idSwitchClear');
