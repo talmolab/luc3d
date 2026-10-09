@@ -3939,6 +3939,27 @@ O(resident) per call and exact whatever the resident set is — scrubbing,
 eviction and sweeps' window release need no rebuild. Only a change to frames
 that are NOT resident (a bulk operation) does.
 
+**An EAGER project counts from a baseline too — and re-counts only the drawn
+frame.** There every frame is resident, so "resident frames live" was a walk of
+the WHOLE project on every redraw, i.e. on every frame step: ~10 ms of each
+~18 ms step on a 36,000-frame × 17-camera project (the single largest cost of a
+step once #301 stopped decoding hidden cameras). The builder now gives an eager
+project (no lazy loader) a camera half built from the `FrameGroup`s with
+`residentFrameUserCount`, and marks the result `eager: true`;
+`countFrameCounters` then returns the baseline's totals with no walk at all,
+and `refreshCountedFrame(session, baseline, f)` — which `updateFrameCounters`
+calls for the drawn frame on every update — re-counts frame `f` into EVERY
+camera half held and into the 3D half, adjusting the totals: O(cameras). That
+keeps it exact through edits, which are always to the frame on screen and
+always followed by a redraw of it. A change to frames NOT on screen is a bulk
+operation, which ends with a same-frame redraw — and `updateFrameCounters`
+rebuilds the baseline after any same-frame redraw, exactly as on a lazy
+project; on an eager project that rebuild DROPS the other views' halves (every
+frame being resident, `nonResidentCameraCounts` cannot tell an edit from a bulk
+change), and each is rebuilt — one walk — when its view is next active.
+Side effect: Triangulated on an eager project now counts a frame with 3D but no
+2D `FrameGroup` too, as the lazy count always did; the walk never reached it.
+
 **Exports.**
 - `residentFrameUserCount(fg, cam)` -> `-1` if the frame is not labeled in
   `cam`, else its user-instance count (one number, so the per-frame loop
@@ -3950,16 +3971,22 @@ that are NOT resident (a bulk operation) does.
   avoids it), so the caller spreads it over short tasks. `step` does about
   `budget` frames / `instanceGroups` entries and returns true when done.
   `result` = `{tri: {byFrame: Uint8Array, total}, cams: Map<cam, {byFrame:
-  Int32Array, labeledTotal, usersTotal}>}`; the camera half is absent when the
-  project is not lazy or its loader cannot enumerate rows (the worker-backed
-  analysis-`.h5` loader — every frame with data is then resident). `tri: false`
+  Int32Array, labeledTotal, usersTotal}>, eager}`; on an eager project the
+  camera half comes from the `FrameGroup`s and `eager` is true; the camera half
+  is absent when the project is lazy but its loader cannot enumerate rows (the
+  worker-backed analysis-`.h5` loader — every frame with data is then
+  resident). `tri: false`
   skips the 3D half. The session is read live between steps; a change mid-build
   can leave the result stale, and the caller rebuilds after changes anyway.
 - `computeFrameCounterBaseline(session, cam)` / `computeLazyCameraBaseline(session, cam)`
   — the same, run to completion (whole baseline / camera half only).
 - `countFrameCounters(session, cam, baseline)` -> `{labeled, instances,
-  triangulated}`. With no baseline (or none for `cam`), Labeled / Instances are
-  the old resident-only count.
+  triangulated}`. With an eager baseline holding `cam`'s half (or no `cam`):
+  the baseline's totals, no walk. With no baseline (or none for `cam`),
+  Labeled / Instances are the old resident-only count.
+- `refreshCountedFrame(session, baseline, f)` — re-count frame `f` into an
+  EAGER baseline in place (every camera half + the 3D half, totals adjusted;
+  arrays grow for a frame past their end). A no-op on a lazy baseline.
 - `nonResidentCameraCounts(session, half)` -> `{labeled, instances}` — the part
   of a camera half that `countFrameCounters` actually uses. Two builds that
   differ here saw a change to non-resident frames (a bulk operation), which
@@ -3972,7 +3999,15 @@ that are NOT resident (a bulk operation) does.
 
 **Tests.** `tests/test-frame-counters.mjs` (lazy: counts equal a fully-hydrated
 count through the real `batchLoadLazyFrames`, with negative controls; residency
-changes need no rebuild; a bulk change does; sliced == one-shot build),
+changes need no rebuild; a bulk change does; sliced == one-shot build. Eager:
+baseline totals equal the full walk; counting and re-counting iterate no
+frames; an edit shows only once its frame is re-counted (the negative control
+proving the count is the baseline), across two cameras, un-labeling, 3D, a
+frame past the arrays' end; the 3D-only frame the walk missed),
+`tests/e2e/status-counters-eager.mjs` (the real `updateFrameCounters` and
+status-bar text on an eager project: 60 steps walk the frames 0 times — 60 on
+the pre-fix build — and the text stays exact through an on-screen edit, a
+two-camera edit, a bulk change off screen and camera switches),
 `tests/test-bottom-bar.js` (the rules, on eager sessions, against this module
 rather than a copy), and `tests/e2e/sequence-lazy-workflow.mjs`'s
 `checkCounters` (the real status bar on a lazily reopened project: at reopen,
@@ -6408,10 +6443,14 @@ data sources. Plus visibility-toggle helpers and frame counter updates.
   whole-project baseline live in `ui/frame-counters.js`; this function owns
   WHICH camera (`interactionManager.lastInteractedView`, else the first view),
   WHEN to (re)build the baseline, and the DOM. Per call it is
-  O(resident frames) — `countFrameCounters` counts resident frames live and
-  takes everything else from the cached baseline — the same work the old loop
-  did. Still skipped during playback (`updateStatusBarForFrame`,
-  `ui/info-panel.js`).
+  O(resident frames) on a lazy project — `countFrameCounters` counts resident
+  frames live and takes everything else from the cached baseline — and O(1) in
+  project size on an EAGER one, where every frame is resident: there it
+  re-counts the drawn frame into the baseline (`refreshCountedFrame`) and shows
+  the baseline's totals. (It walked all 36,000 frames x 17 cameras of an eager
+  project on every step before, ~10 ms per step.) A finished rebuild of an eager
+  baseline drops the other views' halves rather than comparing them. Still
+  skipped during playback (`updateStatusBarForFrame`, `ui/info-panel.js`).
 
   The baseline is cached per session in a `WeakMap` (so a closed project and
   its store are never retained by the status bar), with one camera half per
