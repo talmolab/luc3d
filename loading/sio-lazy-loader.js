@@ -29,9 +29,15 @@
  * Track indices: every camera's store is re-indexed into ONE track list,
  * `trackNames`, the union of the cameras' own track names
  * (`loading/track-union.js`) — see `_unifyTracks`.
+ *
+ * Node order: every camera's store is re-ordered into the session skeleton's
+ * node order when its file lists the same nodes in another order, and a camera
+ * with different nodes is reported in `nodeOrderMismatches` — see
+ * `_unifyNodeOrder` (`loading/slp-skeleton.js`).
  */
 
 import { unionTrackNames } from './track-union.js';
+import { nodeOrderRemap, permuteStoreNodeRows } from './slp-skeleton.js';
 
 /**
  * `deleteInstanceRows` moves surviving rows with one `copyWithin` per run when
@@ -113,6 +119,8 @@ export class SioLazyLoader {
 
         this.nFrames = 0;
         this.skeleton = null;
+        /** The camera `skeleton` was taken from (the first BY NAME that has one). */
+        this.skeletonCam = null;
         /**
          * The session track list: the union of every `open()`ed camera's own
          * track names (`loading/track-union.js`), rebuilt after each open. Each
@@ -129,6 +137,14 @@ export class SioLazyLoader {
         this._trackSourceByCam = new Map();
         /** camName -> skeleton dict, so `skeleton` is chosen by camera name, not by I/O timing. */
         this._skeletonByCam = new Map();
+        /** camName -> the node names its store's point rows are CURRENTLY in (see `_unifyNodeOrder`). */
+        this._nodeOrderByCam = new Map();
+        /**
+         * camName -> `{ missing, extra }` for every opened camera whose file's
+         * nodes are not the session skeleton's (so no by-name remap exists).
+         * Rebuilt after each open; the folder loader reports it.
+         */
+        this.nodeOrderMismatches = new Map();
         /**
          * True once a store has been edited IN MEMORY (`remapTracksFromIdentity`,
          * `deleteInstanceRows`) — i.e. the columns no longer match the source
@@ -216,11 +232,15 @@ export class SioLazyLoader {
             edges: skel.edgeIndices,
         } : null);
         this.skeleton = null;
+        this.skeletonCam = null;
         var skelCams = Array.from(this._skeletonByCam.keys()).sort();
         for (var sci = 0; sci < skelCams.length && !this.skeleton; sci++) {
             this.skeleton = this._skeletonByCam.get(skelCams[sci]);
+            if (this.skeleton) this.skeletonCam = skelCams[sci];
         }
         this.numNodesByCam.set(cameraName, skel ? skel.nodeNames.length : 0);
+        if (skel) this._nodeOrderByCam.set(cameraName, skel.nodeNames.slice());
+        this._unifyNodeOrder();
 
         // Build videoFrameIdx -> store-row map from the columnar frame_idx column,
         // so the app's video frame number resolves to the correct lazy-frame row
@@ -370,6 +390,56 @@ export class SioLazyLoader {
         }
         if (cacheStale) { this.cache.clear(); this.cacheOrder = []; }
         this.trackNames = union.names;
+    }
+
+    /**
+     * Re-order every `open()`ed camera's store into the session skeleton's
+     * node order (`this.skeleton`, the first camera BY NAME), so each camera's
+     * column `i` is the node `this.skeleton.nodes[i]` names. The session has
+     * ONE skeleton and every consumer of a lazy store — the materializer, the
+     * streaming writer's `appendStore`, `describeStoreFrame` — reads its point
+     * rows by POSITION, so a camera whose file lists the same nodes in another
+     * order would otherwise have every keypoint drawn, tracked by name and
+     * saved under another node's name.
+     *
+     * Like `_unifyTracks` it runs after EACH open and tracks each store's
+     * CURRENT order, so the result is the same whichever order the parallel
+     * opens resolve in (a camera that sorts earlier and opens later changes
+     * the target, and stores already re-ordered move again), and it is NOT an
+     * in-memory edit: a re-open of the same files repeats it. A camera whose
+     * nodes differ by NAME is left as read and recorded in
+     * `nodeOrderMismatches`; nothing can be remapped there without inventing
+     * a correspondence, so the folder loader says so instead.
+     *
+     * The typed `Skeleton` a re-ordered camera's materialized instances carry
+     * keeps the file's order; nothing in LUCID reads it (`adaptTypedInstance`
+     * reads points by index).
+     */
+    _unifyNodeOrder() {
+        this.nodeOrderMismatches = new Map();
+        var target = this.skeleton && this.skeleton.nodes;
+        if (!target || target.length === 0) return;
+        var cacheStale = false;
+        for (var [cam, current] of this._nodeOrderByCam) {
+            var r = nodeOrderRemap(target, current);
+            if (r.kind === 'same') continue;
+            if (r.kind === 'mismatch') {
+                this.nodeOrderMismatches.set(cam, { missing: r.missing, extra: r.extra });
+                continue;
+            }
+            var labels = this.labelsByCam.get(cam);
+            var store = labels && labels._lazyDataStore;
+            if (!store) continue;
+            var moved = permuteStoreNodeRows(store, r.perm);
+            this._nodeOrderByCam.set(cam, target.slice());
+            if (labels._lazyFrameList && typeof labels._lazyFrameList.clearCache === 'function') {
+                labels._lazyFrameList.clearCache();
+            }
+            cacheStale = true;
+            console.log('[SioLazyLoader] ' + cam + ': ' + moved +
+                ' instances re-ordered into the session skeleton\'s node order');
+        }
+        if (cacheStale) { this.cache.clear(); this.cacheOrder = []; }
     }
 
     /**
@@ -1352,6 +1422,8 @@ export class SioLazyLoader {
         this.numNodesByCam.clear();
         this._trackSourceByCam.clear();
         this._skeletonByCam.clear();
+        this._nodeOrderByCam.clear();
+        this.nodeOrderMismatches = new Map();
         this._storeEditedInMemory = false;
         this.cache.clear();
         this.cacheOrder = [];

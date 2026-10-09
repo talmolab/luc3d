@@ -3,10 +3,10 @@
 Multi-view pose annotation GUI. No build system — pure vanilla JS served as static files.
 
 ## Architecture
-ES modules, vanilla JS (no build step). `index.html` loads `app.js` as `<script type="module">`; `app.js` is a 2-line entry point that imports from `pose/`. The 104 modules are grouped into four directories:
+ES modules, vanilla JS (no build step). `index.html` loads `app.js` as `<script type="module">`; `app.js` is a 2-line entry point that imports from `pose/`. The 105 modules are grouped into four directories:
 - `pose/` — data model, cross-view tracking, DLT triangulation (the pure math in `triangulation-core.js`, solved in parallel by `triangulation-pool.js` + `triangulation-worker.js`), plane annotation model (planes + the global plane-node pool), 3D mesh objects (groups of planes) and their derived geometry, plane/origin serialization, origin transform, whole-project origin re-base, cross-session calibration comparison, plane-to-plane angle, the least-squares plane fit, multi-view display alignment (`view-align.js`), the ID-switch checks by body size and images (`id-switch-check.js`), the lazy project's playback eviction (`lazy-residency.js`), app initialization (22 files)
 - `ui/` — UI state, canvas rendering, mouse/keyboard interaction, info panel (and its lazily-filled Track dropdown), modals, timeline, 3D viewport, panel visibility, video encoding, video display settings, keyboard-target arbitration, modal geometry, view legend, plane definition, 3D mesh objects, origin definition, origin re-base, cross-session calibration notice, plane angle, frame-range tracking, collapsible section state, info tooltips, plane visibility, browser-specific hints, the loading overlay + its progress bar, the Align Views to References dialog, the seekbar hover tooltip, the status bar's whole-project frame counters, the controls bar's time / frame readout, the Tracks / Identity coloring setting, the node-trail lengths (`trail-presets.js` — presets or a custom value typed in seconds or frames, stored in seconds, drawn as `seconds × fps` frames), the Check ID Switches runner + ID Switches panel tab (and its saved review checklist), its seekbar ticks and in-view highlight, its image embedder and its crop and CPU-model workers, the Track All summary box (`track-summary.js` decides what it says, `track-summary-modal.js` renders it), settings — the Define Planes panel is split across `plane-definition.js` (the hub) plus its three section modules and three helpers (61 files)
-- `loading/` — video decoding, unplayable-codec diagnosis, session loading, SLP/package readers, per-camera SLP choice, calibration-file selection, video-file selection, the per-camera track-list union (`session.tracks` for a per-camera folder), web workers (11 files)
+- `loading/` — video decoding, unplayable-codec diagnosis, session loading, SLP/package readers, per-camera SLP choice, calibration-file selection, video-file selection, the per-camera track-list union (`session.tracks` for a per-camera folder), the `.slp` skeleton reader + per-camera node-order remap (`slp-skeleton.js`), web workers (12 files)
 - `import-export/` — file I/O, save/load, SLP import/merge, visibility metadata, plane metadata, 3D mesh export (10 files)
 - `demo-data.js` — synthetic skeleton and camera data
 - `styles.css` — all styling
@@ -474,6 +474,24 @@ terms require the notice be kept intact and mediabunny is MPL-2.0). dockview-cor
   pass in both states — so it pins the memory shape, not just current behavior.
   Two patched sites, marked `// LUCID local patch (luc3d #193)`. **Re-apply after
   any re-vendor** (grep the marker) and report upstream.
+  **LOCAL PATCH (luc3d nested-skeleton) — a BACKPORT, already fixed upstream:**
+  `lib/sleap-io/chunk-H7G4PJNA.js` `parseSkeletons` read `entry.nodes` /
+  `entry.links` / `entry.graph` off each `metadata.skeletons[i]`, but classic
+  PyQt-SLEAP stores that node-link graph NESTED under `nx_graph`
+  (`{description, nx_graph: {...}, preview_image}`). On a nested entry it found
+  no nodes, fell back to the GLOBAL `metadata.nodes` order — every keypoint
+  column named after the wrong node — and no links. Seen on a real SLEAP 1.2.9
+  camera (`2022-10-07/10072022142111/back`); because the per-camera loader takes
+  the session skeleton from one camera, that one file mis-named a whole
+  session's nodes (geometry by column was untouched, so Track All and
+  triangulation looked fine; everything by NAME was wrong). Patched to read the
+  graph from `entry.nx_graph` when present, else the entry — exactly upstream
+  **sleap-io.js#250 (v0.5.10)**, so **drop it when re-vendoring >= 0.5.10**
+  rather than re-applying it (and nothing to report). Three sites, marked
+  `// LUCID local patch (luc3d nested-skeleton)`. LUCID's raw worker had the same
+  blind spot and now shares `loading/slp-skeleton.js`'s parser. Guarded by
+  `tests/test-slp-skeleton.mjs` (fails on the unpatched chunk) and
+  `tests/e2e/slp-nested-skeleton.mjs`.
   **OBSOLETE PATCH (issue #134):** the old inline-points-fallback patch to
   `serializeInstanceGroup` is **gone and must NOT be re-applied.** SLP 2.8 (0.5.5)
   replaced the inline `frame_group_dicts` serializer with the columnar
