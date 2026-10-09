@@ -2941,8 +2941,8 @@ subtitle is populated for loaded projects, not just freshly triangulated ones.
   Views panel (`isCameraTracked`, or `options.includedCameras` override) never
   contribute to the 3D solve, but are still reprojected INTO — an excluded view
   shows the reprojected skeleton + its error without influencing geometry. (2)
-  Reprojection-error threshold (Tracking Wizard `reprojErrorThreshold` px, opt-in /
-  default 0 = off, or `options.reprojErrorThreshold`): does not include a
+  Reprojection-error threshold (Tracking Wizard `reprojErrorThreshold` px, default
+  50, 0 = off, or `options.reprojErrorThreshold`): does not include a
   **node-in-a-view** (one 2D keypoint) whose reprojection error exceeds the
   threshold, and re-triangulates that node from the remaining views. It acts per
   node within a view — never on a whole view (wizard's job). Excludes the single
@@ -9389,7 +9389,7 @@ Shortcuts and the Hot Keys modal where people look for them.
   only (`filterMinVisibleNodes`, `filterMinInstanceScore`, `corr2dWeight`,
   `corr3dWeight`, `velocityThreshold`, `distanceThreshold`, `timePenalty`,
   `stale`, `matchGate` (0/1 toggle for the CrossViewTracker match gate),
-  `reprojErrorThreshold`, `autoSwitchCheck` — 0/1, run the body-size ID-switch
+  `reprojErrorThreshold` (px, default 50; 0 = off), `autoSwitchCheck` — 0/1, run the body-size ID-switch
   check after Track All / Track Frame Range, default 1; `autoImageSwitchCheck` —
   0/1, the image check likewise, default 0; `imageCheckThreshold` -25;
   `imageCheckHz` 2; `imageCheckMaxViews` 3; `imageCheckWebNN` — 0/1, try WebNN,

@@ -388,9 +388,9 @@ const TRACKING_THRESHOLDS = [
         desc: 'Also try the browser\'s WebNN API, which on Windows can use NVIDIA tensor cores (Chrome: enable chrome://flags/#web-machine-learning-neural-network). The first frames are embedded both ways; WebNN is kept only if it is faster and its embeddings match the calibrated WebGPU model. "About these flags" in the ID Switches tab says which was used. On macOS (Chrome 154) it measured ~10x slower, CPU only, so the trial keeps WebGPU there.',
     },
     {
-        id: 'reprojErrorThreshold', label: 'Reprojection error threshold (px)', default: 0,
+        id: 'reprojErrorThreshold', label: 'Reprojection error threshold (px)', default: 50,
         min: 0, max: 500, step: 1,
-        desc: 'Robust triangulation: after an initial 3D solve, drop any 2D node whose reprojection error in a view exceeds this many pixels, then re-triangulate that node from the remaining reliable views. A node left with fewer than 2 reliable views is dropped from 3D. 0 = disabled (use all views). Views excluded in the Camera Views panel never contribute to triangulation regardless.',
+        desc: 'Robust triangulation: after an initial 3D solve, drop any 2D node whose reprojection error in a view exceeds this many pixels, then re-triangulate that node from the remaining reliable views. A node left with fewer than 2 reliable views is dropped from 3D. Default 50; 0 = disabled (use all views). Views excluded in the Camera Views panel never contribute to triangulation regardless.',
     },
 ];
 
