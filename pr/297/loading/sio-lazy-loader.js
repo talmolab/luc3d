@@ -40,8 +40,8 @@
  * the loader it re-opens.
  */
 
-import { unionTrackNames } from './track-union.js?v=872fe7377e0b';
-import { nodeOrderRemap, permuteStoreNodeRows } from './slp-skeleton.js?v=872fe7377e0b';
+import { unionTrackNames } from './track-union.js?v=e8895024ed3c';
+import { nodeOrderRemap, permuteStoreNodeRows } from './slp-skeleton.js?v=e8895024ed3c';
 
 /**
  * `deleteInstanceRows` moves surviving rows with one `copyWithin` per run when
@@ -200,7 +200,7 @@ export class SioLazyLoader {
         }
         // Point the reader's internal I/O worker at LUCID's local vendored h5wasm
         // IIFE (document.baseURI keeps this correct on sub-path deployments).
-        var h5wasmUrl = new URL('lib/h5wasm/h5wasm.iife.js?v=872fe7377e0b', document.baseURI).href;
+        var h5wasmUrl = new URL('lib/h5wasm/h5wasm.iife.js?v=e8895024ed3c', document.baseURI).href;
         var labels = await SIO.readSlpStreaming(file, {
             lazy: true,
             openVideos: false,
@@ -555,7 +555,7 @@ export class SioLazyLoader {
         if (!SIO || typeof SIO.readSlpStreaming !== 'function') {
             throw new Error('sleap-io.js readSlpStreaming not available on window.SleapIO');
         }
-        var h5wasmUrl = new URL('lib/h5wasm/h5wasm.iife.js?v=872fe7377e0b', document.baseURI).href;
+        var h5wasmUrl = new URL('lib/h5wasm/h5wasm.iife.js?v=e8895024ed3c', document.baseURI).href;
         var labels = await SIO.readSlpStreaming(file, {
             lazy: true,
             openVideos: false,
