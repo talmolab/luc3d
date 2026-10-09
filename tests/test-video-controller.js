@@ -494,6 +494,100 @@
         });
     });
 
+    // Decoded-frame cache budget: every decoder used to cache a fixed 60
+    // frames, ~8 GB of ImageBitmaps on 17 cameras at 1680x1200, and Chrome then
+    // garbage-collected most of the time. The shown views now share a budget.
+    describe('VideoController - decoded-frame cache budget', function () {
+        var FRAME_1680 = 1680 * 1200 * 4, FRAME_1280 = 1280 * 1024 * 4, FRAME_640 = 640 * 480 * 4;
+        function times(n, v) { var a = []; for (var i = 0; i < n; i++) a.push(v); return a; }
+
+        it('frameCacheFrames splits a budget across views, within [MIN, MAX]', function () {
+            assertEqual(frameCacheFrames(2560, times(17, FRAME_1680)), 19, '17 cameras at 1680x1200 in 2560 MB');
+            assertEqual(frameCacheFrames(2560, times(1, FRAME_1680)), FRAME_CACHE_MAX, 'one camera: capped at the old 60');
+            assertEqual(frameCacheFrames(2560, times(8, FRAME_1280)), FRAME_CACHE_MAX, '8 cameras at 1280x1024: still 60 (unchanged)');
+            assertEqual(frameCacheFrames(2560, times(60, FRAME_1680)), FRAME_CACHE_MIN, 'so many cameras the share is tiny: the floor');
+            assertEqual(frameCacheFrames(2560, []), FRAME_CACHE_MAX, 'no frame sizes known: the old 60');
+            assertEqual(FRAME_CACHE_MAX, 60);
+            assertEqual(FRAME_CACHE_MIN, 12);
+        });
+
+        function spySizes(state) {
+            var sizes = {};
+            state.views.forEach(function (v) { v.decoder.setCacheSize = function (n) { sizes[v.name] = n; }; });
+            return sizes;
+        }
+        async function withBudget(mb, fn) {
+            var saved = window.LUCID_FRAME_CACHE_MB;
+            window.LUCID_FRAME_CACHE_MB = mb;
+            try { await fn(); } finally { window.LUCID_FRAME_CACHE_MB = saved; }
+        }
+
+        it('sizes every shown view from the budget, and re-sizes when the shown set changes', async function () {
+            // 60 MB over three 640x480 views (1.17 MB a frame): 17 each; over one: 51.
+            await withBudget(60, async function () {
+                var state = createTestState(3, 100);
+                var sizes = spySizes(state);
+                var shown = { cam0: true, cam1: true, cam2: true };
+                var ctrl = new VideoController(state, {
+                    drawOverlays: function () {}, updateSeekbar: function () {},
+                    isViewShown: function (v) { return !!shown[v.name]; },
+                });
+                await ctrl.seekToFrame(1);
+                assertEqual(JSON.stringify(sizes), JSON.stringify({ cam0: 17, cam1: 17, cam2: 17 }), 'grid: 17 each');
+                assertEqual(Math.floor(60 * 1048576 / (3 * FRAME_640)), 17, 'arithmetic of the expectation');
+                shown = { cam1: true };
+                await ctrl.seekToFrame(2);
+                assertEqual(sizes.cam1, 51, 'solo: the shown view gets the whole budget');
+                assertEqual(sizes.cam0, 17, 'hidden: the all-views share (the export preview decodes every view)');
+                assertEqual(sizes.cam2, 17, 'hidden: the all-views share');
+                for (var k in sizes) delete sizes[k];
+                await ctrl.seekToFrame(3);
+                assertEqual(Object.keys(sizes).length, 0, 'unchanged shown set: no re-sizing on every step');
+            });
+        });
+
+        it('applies without an isViewShown callback (every view counts as shown)', async function () {
+            await withBudget(60, async function () {
+                var state = createTestState(3, 100);
+                var sizes = spySizes(state);
+                var ctrl = new VideoController(state, { drawOverlays: function () {}, updateSeekbar: function () {} });
+                await ctrl.seekToFrame(1);
+                assertEqual(JSON.stringify(sizes), JSON.stringify({ cam0: 17, cam1: 17, cam2: 17 }));
+            });
+        });
+
+        it('startPlayback releases every view\'s cached frames', async function () {
+            var state = createTestState(2, 100);
+            var released = [0, 0];
+            state.views.forEach(function (v, i) { v.decoder.releaseFrames = function () { released[i]++; }; });
+            var ctrl = new VideoController(state, { drawOverlays: function () {}, updateSeekbar: function () {} });
+            ctrl.startPlayback();
+            assertEqual(released.join(), '1,1', 'each decoder released once at playback start');
+            ctrl.stopPlayback();
+        });
+
+        it('OnDemandVideoDecoder.setCacheSize evicts down to the new size, farthest from the last step first', function () {
+            var dec = new OnDemandVideoDecoder({ cacheSize: 60 });
+            var closed = [];
+            var cache = new Map();
+            for (var f = 0; f < 30; f++) {
+                (function (k) { cache.set(k, { close: function () { closed.push(k); } }); })(f);
+            }
+            dec._mbBackend = { cache: cache, cacheSize: 60 };
+            dec._lastStepFrame = 20;
+            dec.setCacheSize(10);
+            assertEqual(dec.cacheSize, 10, 'decoder cacheSize');
+            assertEqual(dec._mbBackend.cacheSize, 10, 'backend cacheSize');
+            assertEqual(cache.size, 10, 'cache trimmed to 10');
+            assertTrue(cache.has(20), 'the current frame is kept');
+            cache.forEach(function (_, k) { assertTrue(Math.abs(k - 20) <= 5, 'kept frame ' + k + ' is near the current one'); });
+            assertEqual(closed.length, 20, 'every evicted bitmap was closed');
+            dec.setCacheSize(40);
+            assertEqual(cache.size, 10, 'growing evicts nothing');
+            assertEqual(dec._mbBackend.cacheSize, 40);
+        });
+    });
+
     describe('VideoController - Views without decoders', function () {
         it('seekToFrame skips views without decoder', async function () {
             var state = createTestState(1, 100);

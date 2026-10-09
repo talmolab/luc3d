@@ -13021,6 +13021,9 @@ a zoomed-in image keeps the same region centered instead of jumping.
 - `STEP_CURSOR_IDLE_MS` (3000) — idle time before a paused-stepping stream closes.
 - `STEP_BACK_CHUNK` (24) — frames decoded and cached per backward step.
 - `STEP_BACK_WARM_MS` (250) — pause after landing on a frame before warming the chunk behind it.
+- `FRAME_CACHE_BUDGET_MB` (2560), `FRAME_CACHE_MAX` (60), `FRAME_CACHE_MIN` (12),
+  `frameCacheFrames(budgetMB, frameBytes[])` — the decoded-frame cache budget
+  (see "The decoded-frame caches share a budget" below).
 - `OnDemandVideoDecoder` — class. Selected methods: `init(source)`,
   `getFrame(frameIndex)` (mediabunny: via `_mbGetFrame`, the open stepping
   stream), `releaseStepCursor()`, `releaseFrames()` (closes and drops every
@@ -13028,7 +13031,9 @@ a zoomed-in image keeps the same region centered instead of jumping.
   the stepping streams, keeping the decoder open; called by
   `VideoController._shownViews` for a view that went off screen, since 17
   cameras' full 60-frame caches at 1680×1200 are ~8 GB of ImageBitmaps and keep
-  Chrome garbage-collecting), `_initMediabunny(source)` /
+  Chrome garbage-collecting), `setCacheSize(n)` (re-sizes both frame caches,
+  evicting at once — the backend's frames farthest from the last stepped frame
+  first; set by the controller's budget), `_initMediabunny(source)` /
   `_mediabunnyEnabled()` (default-on frame-accurate backend, issue #115),
   `_mbCannotDecode(backend)` (null, or `{reason: 'codec', codec, codecString}`
   when WebCodecs cannot decode the track — the backend is then dropped and
@@ -13101,6 +13106,56 @@ every cost of the full grid in place (jumps ~2.1 s, steps ~170 ms, playback ~11
 new pictures/s), because the 16 hidden decoders still decoded every step and
 played. Covered by `tests/test-video-controller.js` ("Only shown views") and
 `tests/e2e/solo-view-decodes-shown-only.mjs`.
+
+**The decoded-frame caches share a budget** — `FRAME_CACHE_BUDGET_MB` (2560;
+`window.LUCID_FRAME_CACHE_MB` overrides). Each decoder caches decoded frames as
+ImageBitmaps for paused stepping, 8 MB apiece at 1680×1200, and every decoder
+used to keep a fixed 60. On 17 cameras that is ~8 GB alive at once, and Chrome
+then garbage-collects most of the time. `_applyFrameCacheBudget` (run by
+`_shownViews` whenever the shown decoders change) gives each SHOWN decoder
+`frameCacheFrames(budget, shown frame sizes)` frames, clamped to
+[`FRAME_CACHE_MIN` 12, `FRAME_CACHE_MAX` 60], and each hidden one the share it
+would have with every view shown (the overlay-export preview decodes every
+view). The result: 19 frames on 17 cameras at 1680×1200, 60 for one solo'd
+camera, and 60 — unchanged — for 8 cameras at 1280×1024. `startPlayback` also
+`releaseFrames()` every decoder: playback never reads the caches, and after it
+they hold frames from wherever stepping last was.
+
+Grid-mode sweep on the 17-camera MultiCam_18 project (headed Chrome, fixed
+cache sizes forced after load; GC = share of main-thread samples):
+
+| frames/camera | cache | jump (median) | step fwd p90 | step back p90 | hold → / ← frames/s | playback redraws/s | GC stepping / playing |
+|---|---|---|---|---|---|---|---|
+| 60 (old) | 8.2 GB | 2,563 ms | 1,187 ms | 104 ms | 5.3 / 7.7 | 6.4 | 62% / 69% |
+| 36 | 4.9 GB | 1,351 ms | 36 ms | 45 ms | 14.3 / 12.3 | 13.3 | 2% / 64% |
+| 24 | 3.3 GB | 1,297 ms | 27 ms | 32 ms | 16.3 / 11.3 | 53.6 | 0% / 1% |
+| 12 | 1.6 GB | 1,273 ms | 32 ms | 588 ms | 14.7 / 7.0 | 56.1 | 0% / 1% |
+| 6 | 0.8 GB | 1,288 ms | 27 ms | 1,481 ms | 15.3 / 3.7 | 57.2 | 0% / 2% |
+| **19 (budget)** | 2.6 GB | 1,460 ms | 30 ms | 32 ms | 15.3 / 9.0 | 53.7 | ~0% / ~0% |
+
+The same sweep on the 5-camera Mimica project (H.264 with B-frames,
+1280×1024 at 150 fps, lazy; caches never reach 1.6 GB, so GC is ~0% throughout
+and only stepping BACK depends on the size; the budget gives it 60):
+
+| frames/camera | cache | jump (median) | step fwd p90 | step back p90 | hold → / ← frames/s | playback new pictures/s |
+|---|---|---|---|---|---|---|
+| 60 (old = budget) | 1.6 GB | 258 ms | 7 ms | 12 ms | 33 / 32 | 120 |
+| 36 | 0.9 GB | 255 ms | 7 ms | 13 ms | 33 / 32 | 120 |
+| 24 | 0.6 GB | 261 ms | 7 ms | 12 ms | 33 / 32 | 120 |
+| 12 | 0.3 GB | 256 ms | 7 ms | 253 ms | 33 / 20 | 120 |
+| 6 | 0.2 GB | 259 ms | 7 ms | 322 ms | 33 / 11 | 120 |
+
+(33 frames/s is the 30 ms key repeat and 120 the 120 Hz display: both ceilings.)
+With the budget, Mimica and the 8-camera HardFight_1kModels both measure the
+same as before it, grid and solo.
+
+Stepping stops garbage-collecting below ~5 GB of cached frames and playback
+below ~3.3 GB; under 12 frames the backward chunk (40% of the cache,
+`_backChunkSize`) gets so short that held back-stepping falls off. Grid
+playback above ~54 redraws/s is decode-bound (17 × 120 fps of 2-MP HEVC; ~35%
+of frames dropped by the `<video>`s), and a jump is a keyframe decode of up to
+249 frames in 17 views. Covered by `tests/test-video-controller.js`
+("decoded-frame cache budget").
 
 **`setupZoomHandlers`'s wheel-to-zoom stands down while Alt is held.** Alt
 turns the wheel into the instance-rotation control (`ui/interaction.js`
