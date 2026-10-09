@@ -882,6 +882,11 @@ export function setupMenus() {
         closeMenus();
         runIdSwitchChecks({ image: true, navigateToFrame: navigateToFrame });
     });
+    // Tracks ▸ Check ID Switches (Coat Brightness): by how bright each coat is — needs the videos, no GPU.
+    document.getElementById('menuCheckBrightnessSwitches').addEventListener('click', function () {
+        closeMenus();
+        runIdSwitchChecks({ brightness: true, navigateToFrame: navigateToFrame });
+    });
 
     // Propagate Tracks → IDs (one-shot): each track label becomes an identity,
     // stamped per-frame on every instance. (Was the "Trust Track Labels"

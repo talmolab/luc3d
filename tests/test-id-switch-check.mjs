@@ -65,8 +65,10 @@ function pose(scale, cx, cy, heading, r) {
  * of them walk to a meeting point, stay within ~20 mm for a while, and walk back.
  * `swapAfter` = index of the encounter after which the two animals' identity
  * labels are exchanged for the rest of the session (null = clean).
+ * `opts.swapAtU` + `opts.swapPair` instead exchange two animals' labels at an
+ * arbitrary time — e.g. while they are far apart, away from every encounter.
  */
-function buildSession(swapAfter, fps = 60, scales = SCALES) {
+function buildSession(swapAfter, fps = 60, scales = SCALES, opts = {}) {
     const r = rng(7);
     const home = [[0, 0], [400, 0], [200, 350]];
     const PAIRS = [[0, 1], [1, 2], [0, 2]];
@@ -76,7 +78,8 @@ function buildSession(swapAfter, fps = 60, scales = SCALES) {
     const session = new PD.Session([], new PD.Skeleton('m', NODES, []), [], 'synthetic');
     for (let i = 0; i < 3; i++) session.addIdentity('id_' + i);
     const encounterEnds = events.map(ev => ({ frame: Math.round((ev.t0 + 60) / 15 * fps), pair: ev.pair }));
-    const swapU = swapAfter != null ? events[swapAfter].t0 + 60 : Infinity;
+    const swapU = opts.swapAtU != null ? opts.swapAtU : swapAfter != null ? events[swapAfter].t0 + 60 : Infinity;
+    const swapPair = opts.swapPair || (swapAfter != null ? events[swapAfter].pair : null);
     let gid = 1;
     for (let f = 0; f < nFrames; f++) {
         const u = f * 15 / fps;
@@ -93,7 +96,7 @@ function buildSession(swapAfter, fps = 60, scales = SCALES) {
             }
         }
         const label = [0, 1, 2];
-        if (u >= swapU) { const [a, b] = events[swapAfter].pair; [label[a], label[b]] = [label[b], label[a]]; }
+        if (u >= swapU) { const [a, b] = swapPair; [label[a], label[b]] = [label[b], label[a]]; }
         session.instanceGroups.set(f, [0, 1, 2].map(k => {
             const g = new PD.InstanceGroup(gid++, session.identities[label[k]].id);
             g.points3d = pose(scales[k], pos[k][0], pos[k][1], (u / 50 + k) % (2 * Math.PI), r);
@@ -160,6 +163,53 @@ await switchCase(16, 'onset');
 group('A switch early in the session (swapped stretch is the MAJORITY) — change point still at the switch');
 await switchCase(7, 'end');
 
+group('Moments — a switch AWAY from every encounter is found at the moment it happened');
+{
+    // animals 0 and 1 exchange labels at home, 400 mm apart, between their encounters 18 and 21
+    const FPS = 60, sig = r => JSON.stringify(r.encounters.map(e => [e.frame, e.nameA, e.nameB, e.score, !!e.flagged]));
+    const isPair01 = e => [e.nameA, e.nameB].sort().join() === 'id_0,id_1';
+    const late = 300 + 18 * 260 + 160, lateFrame = Math.round(late / 15 * FPS);
+    const { session, events } = buildSession(null, FPS, SCALES, { swapAtU: late, swapPair: [0, 1] });
+    const ids = session.identities;
+    const plain = await SC.checkSizeSwitches(session, { fps: FPS });
+    const prevEnc = Math.round((events[18].t0 + 60) / 15 * FPS);
+    const p0 = plain.flags.filter(f => !f.continues && isPair01(f)).concat(plain.changes.filter(isPair01));
+    ok(p0.length === 1 && Math.abs(p0[0].frame - prevEnc) < FPS,
+        `without moments it is put on the pair's PREVIOUS encounter, whose time apart runs across it (${p0.map(x => x.frame)} vs switch ${lateFrame})`);
+    const moment = { frame: lateFrame, startFrame: lateFrame - 10, identityA: ids[0].id, identityB: ids[1].id, cues: ['tracklet'] };
+    const decoys = [0.3, 0.55].map(q => ({ frame: Math.round(q * lateFrame), startFrame: Math.round(q * lateFrame), identityA: ids[0].id, identityB: ids[2].id, cues: ['ambiguity'] }));
+    const withM = await SC.checkSizeSwitches(session, { fps: FPS, moments: [moment].concat(decoys) });
+    eq(sig(withM), sig(plain), 'every encounter scores and flags exactly as without moments');
+    const mrow = withM.flags.concat(withM.changes).filter(x => x.look);
+    ok(mrow.length === 1 && Math.abs(mrow[0].frame - lateFrame) <= 4 && mrow[0].kind === 'onset' && mrow[0].side === 'after',
+        `the switch is a change point AT the moment, an onset (the swapped stretch is after it): ${JSON.stringify(mrow.map(x => [x.frame, x.kind, Math.round(x.score)]))}`);
+    const rows01 = withM.flags.filter(f => !f.continues).concat(withM.changes).filter(isPair01);
+    ok(rows01.length === 1 && rows01[0] === mrow[0] && withM.encounters.find(e => e.frame === p0[0].frame).continues,
+        `ONE row for the swap: the encounter before it, whose window ran across it, is now a repeat of the moment's row (rows ${JSON.stringify(rows01.map(x => [x.frame, x.look ? 'moment' : 'encounter']))})`);
+    eq(JSON.stringify(mrow[0] && mrow[0].look), '["tracklet"]', 'it carries the moment\'s cues');
+    ok(mrow[0] && mrow[0].switchBackAt === null, '…and its swapped stretch runs to the end of the session (nothing switches it back)');
+    eq(withM.moments.length, 3, 'all three moments were tested');
+    ok(withM.moments.filter(m => !isPair01(m)).every(m => m.score > 0), 'the moments on a clean pair agree on both sides (positive)');
+
+    // a switch EARLY, so the swapped labelling is the session's majority: the stretch BEFORE the moment is the odd one
+    const early = 300 + 2 * 260 + 160, earlyFrame = Math.round(early / 15 * FPS);
+    const E = buildSession(null, FPS, SCALES, { swapAtU: early, swapPair: [0, 1] }).session;
+    const eM = await SC.checkSizeSwitches(E, { fps: FPS, moments: [{ frame: earlyFrame, startFrame: earlyFrame, identityA: E.identities[0].id, identityB: E.identities[1].id, cues: ['ambiguity'] }] });
+    const er = eM.flags.concat(eM.changes).filter(x => x.look);
+    ok(er.length === 1 && er[0].kind === 'end' && er[0].side === 'before' && er[0].switchedAt === null && eM.changes.includes(er[0]),
+        `a majority swap: the moment is an 'end' (fix the stretch before it, from the session start): ${JSON.stringify(er.map(x => [x.frame, x.kind, x.switchedAt]))}`);
+    const eRows = eM.flags.filter(f => !f.continues).concat(eM.changes).filter(isPair01);
+    ok(eRows.length === 1 && eRows[0] === er[0],
+        `…and the only row of it: the encounter 'end' after the moment is dropped (rows ${JSON.stringify(eRows.map(x => [x.frame, x.kind, x.look ? 'moment' : 'encounter']))})`);
+
+    // a moment at one of the pair's encounter change points yields to it (one row, the encounter's)
+    const { session: S3, encounterEnds } = buildSession(19);
+    const onsetF = encounterEnds[19].frame;
+    const r3 = await SC.checkSizeSwitches(S3, { fps: 60, moments: [{ frame: onsetF + 30, startFrame: onsetF, identityA: S3.identities[1].id, identityB: S3.identities[2].id, cues: ['ambiguity'] }] });
+    ok(r3.moments.length === 1 && r3.moments[0].score < -200, 'the moment at an encounter switch is tested and disagrees');
+    eq(r3.flags.concat(r3.changes).filter(x => x.look).length, 0, '…but adds no row: the encounter\'s change point within 3 s stands');
+}
+
 group('Frame-rate independence — the same scenario recorded at 25, 30, 60 and 120 fps');
 {
     const SWAP = 16, out = {};
@@ -216,6 +266,67 @@ group('Image check — catches a swap between animals of IDENTICAL size (the siz
     ok(stages.has('embed') && stages.has('fit'), 'progress reports both stages');
     const clean = await SC.checkImageSwitches(buildSession(null, 60, [1, 1, 1]).session, { fps: 60, getEmbeddings: syntheticEmbedder() });
     eq(clean.flags.length, 0, 'image check: clean labels → no flags');
+}
+
+group('Coat brightness check — the image machinery on brightness vectors (ui/brightness-sampler.js)');
+{
+    const B = await import(pathToFileURL(path.join(ROOT, 'ui', 'brightness-sampler.js')).href);
+    // pure pieces: radius, disc mean, features, keypoint selection
+    eq(B.discRadius(140), 4, 'disc radius: 4 px for a 140 px animal (what it was calibrated on)');
+    ok(B.discRadius(5) === 1 && B.discRadius(2000) === 8, 'disc radius clamped to 1–8 px');
+    const w = 20, h = 10, px = new Uint8ClampedArray(w * h * 4);
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) { const o = (y * w + x) * 4; const v = x < 10 ? 40 : 200; px[o] = px[o + 1] = px[o + 2] = v; px[o + 3] = 255; }
+    eq(Math.round(B.discMean(px, w, h, 100, 50, 104, 55, 2)), 40, 'disc mean reads the dark half (region origin offset)');
+    eq(Math.round(B.discMean(px, w, h, 100, 50, 115, 55, 2)), 200, '…and the bright half');
+    ok(Number.isNaN(B.discMean(px, w, h, 100, 50, 300, 300, 2)), 'a disc wholly outside the region: NaN');
+    ok(B.brightnessFeatures([10, 20, 30]) === null, 'fewer than 4 keypoints: no vector');
+    const f = B.brightnessFeatures([200, 10, 30, 20, NaN, 40]);
+    ok(f && f.length === 4 && Math.abs(f[1] - Math.log(1 + 30)) < 1e-12 && Math.abs(f[3] - Math.log(1 + 60)) < 1e-12,
+        'features: log(1+x) of the 10th / 50th / 90th percentile and the mean, NaN skipped');
+    const inst = new PD.Instance([[0, 0], [10, 0], [0, 10], null, [140, 0]], 0, 'predicted', 1);
+    inst.setOccluded(2, true);
+    const bp = B.bodyPoints(inst, [0, 1, 2, 3, 4]);
+    ok(bp === null, 'occluded and missing keypoints are skipped (3 left: no vector)');
+    const bp2 = B.bodyPoints(new PD.Instance([[0, 0], [10, 0], [0, 10], [70, 0], [140, 0]], 0, 'predicted', 1), [0, 1, 2, 3, 4]);
+    ok(bp2 && bp2.pts.length === 5 && bp2.r === 4, `body points and their radius (${bp2 && bp2.r} px)`);
+
+    // the check: animals of IDENTICAL size whose coats differ — size misses the swap, brightness finds it
+    const SWAP = 16, coat = [30, 90, 200];
+    const { session, events, encounterEnds } = buildSession(SWAP, 60, [1, 1, 1]);
+    let seed = 3; const r = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+    const provider = async (frame, items) => items.map(it => ['cA', 'cB'].map(cam => {
+        const g = coat[it.group._animal], vals = Array.from({ length: 11 }, () => g * (0.8 + 0.4 * r()));
+        return { camera: cam, vector: B.brightnessFeatures(vals) };
+    }));
+    const size = await SC.checkSizeSwitches(session, { fps: 60 });
+    const br = await SC.checkBrightnessSwitches(session, { fps: 60, threshold: -200, getEmbeddings: provider });
+    const pairKey = events[SWAP].pair.map(k => 'id_' + k).sort().join(), isPair = e => [e.nameA, e.nameB].sort().join() === pairKey;
+    ok(!size.flags.concat(size.changes).some(f => isPair(f) && Math.abs(f.frame - encounterEnds[SWAP].frame) <= 60), 'size misses it (equal sizes)');
+    const onset = br.flags.find(f => !f.continues && isPair(f));
+    ok(br.ok && br.cue === 'brightness' && onset && Math.abs(onset.frame - encounterEnds[SWAP].frame) <= 60,
+        `brightness check: onset at the switch (frame ${onset && onset.frame}, switch ${encounterEnds[SWAP].frame})`);
+    ok(Math.abs(br.imageHz - 15 / 4) < 1e-9 && br.cameras.length === 2, `samples at ~4/s by default (${br.imageHz.toFixed(2)} Hz) from both views`);
+    eq(SC.BRIGHTNESS_CHECK_DEFAULTS.threshold, -800, 'its encounter threshold defaults to the strict -800');
+    const none = await SC.checkBrightnessSwitches(session, { fps: 60, getEmbeddings: async (f, items) => items.map(() => []) });
+    ok(!none.ok && /coat brightness/.test(none.reason), 'nothing sampled: says so (' + none.reason + ')');
+
+    // three checks: "Both" goes to the earlier one, and a later check links to the first free match
+    const R = await import(pathToFileURL(path.join(ROOT, 'ui', 'id-switch-review.js')).href);
+    const res3 = {
+        size: { ok: true, fps: 30, flags: [{ frame: 100, nameA: 'id_0', nameB: 'id_1', score: -90 }], changes: [] },
+        image: { ok: true, fps: 30, flags: [{ frame: 110, nameA: 'id_1', nameB: 'id_0', score: -300 }, { frame: 500, nameA: 'id_0', nameB: 'id_2', score: -300 }], changes: [] },
+        brightness: { ok: true, fps: 30, flags: [{ frame: 105, nameA: 'id_0', nameB: 'id_1', score: -900 }, { frame: 505, nameA: 'id_0', nameB: 'id_2', score: -900 }, { frame: 900, nameA: 'id_1', nameB: 'id_2', score: -900 }], changes: [] },
+    };
+    R.linkIdSwitchResults(res3);
+    const [s0] = res3.size.flags, [i0, i1] = res3.image.flags, [b0, b1, b2] = res3.brightness.flags;
+    ok(s0.agree === i0 && i0.agree === s0, 'size and images agree at 100: linked');
+    ok(!b0.agree, 'brightness at 105: its match is already taken, so it stands alone');
+    ok(b1.agree === i1 && R.idSwitchIsSecondary(b1) && !R.idSwitchIsSecondary(i1), 'brightness at 505 joins the image row, which shows it ("Both")');
+    ok(!b2.agree && !R.idSwitchIsSecondary(b2), 'a change point only brightness found is its own row');
+    eq(b2.cue, 'brightness', 'every marker is tagged with its check');
+    const saved = JSON.parse(JSON.stringify(R.serializeIdSwitchReview({ _idSwitch: { results: { brightness: Object.assign({ encounters: [1], sampleHz: 15, step: 2, imageHz: 3.75, crops: 99, cameras: ['v'] }, res3.brightness) }, reviewed: new Set() } })));
+    const back = R.ingestIdSwitchReview({}, saved)._idSwitch.results.brightness;
+    ok(back && back.flags.length === 3 && back.imageHz === 3.75 && back.crops === 99, 'a brightness result is saved and reopened with its sampling');
 }
 
 group('Image check — several frames in flight (so a provider can batch them)');
@@ -485,6 +596,14 @@ group('Checklist save / reopen (ui/id-switch-review.js)');
         catch (e) { threw = true; }
     }
     ok(!threw && n === 8, `malformed payloads are ignored without throwing (${n}/8)`);
+    // a single-camera candidate moment's cues ride along as a 10th column, written only for such a point
+    const withLook = { size: { ok: true, encounters: [1], sampleHz: 15, step: 2, fps: 30, fpsFromVideo: true,
+        flags: [pt(300, 'id_0', 'id_1', -400, { kind: 'onset', look: ['tracklet', 'ambiguity'] }), pt(600, 'id_0', 'id_2', -80)], changes: [] } };
+    R.linkIdSwitchResults(withLook);
+    const pl = JSON.parse(JSON.stringify(R.serializeIdSwitchReview({ _idSwitch: { results: withLook, reviewed: new Set() } })));
+    ok(pl.checks.size.points[0].length === 10 && pl.checks.size.points[1].length === 9, 'a moment point has a 10th column; an encounter point keeps 9');
+    const lk = R.ingestIdSwitchReview({}, pl)._idSwitch.results.size.flags;
+    eq(JSON.stringify(lk.map(m => m.look || null)), '[["tracklet","ambiguity"],null]', 'the cues come back on the moment point only');
 }
 
 group('Failure reasons');

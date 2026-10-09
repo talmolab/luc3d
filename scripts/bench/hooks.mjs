@@ -34,12 +34,18 @@ const THRESHOLD_DEFAULTS = {
     timePenalty: 0.1,
     stale: 20,
     matchGate: 0,
+    scWindowSize: 5,
+    scOksStddev: 0.1,
+    scConnectBreaks: 1,
     autoSwitchCheck: 1,
     autoImageSwitchCheck: 0,
     imageCheckThreshold: -25,
     imageCheckHz: 2,
     imageCheckMaxViews: 3,
     imageCheckWebNN: 0,
+    autoBrightnessSwitchCheck: 1,
+    brightnessCheckThreshold: -800,
+    brightnessCheckHz: 4,
 };
 
 const SETTINGS_STUB = `

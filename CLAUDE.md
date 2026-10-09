@@ -3,9 +3,9 @@
 Multi-view pose annotation GUI. No build system — pure vanilla JS served as static files.
 
 ## Architecture
-ES modules, vanilla JS (no build step). `index.html` loads `app.js` as `<script type="module">`; `app.js` is a 2-line entry point that imports from `pose/`. The 104 modules are grouped into four directories:
-- `pose/` — data model, cross-view tracking, DLT triangulation (the pure math in `triangulation-core.js`, solved in parallel by `triangulation-pool.js` + `triangulation-worker.js`), plane annotation model (planes + the global plane-node pool), 3D mesh objects (groups of planes) and their derived geometry, plane/origin serialization, origin transform, whole-project origin re-base, cross-session calibration comparison, plane-to-plane angle, the least-squares plane fit, multi-view display alignment (`view-align.js`), the ID-switch checks by body size and images (`id-switch-check.js`), the lazy project's playback eviction (`lazy-residency.js`), app initialization (22 files)
-- `ui/` — UI state, canvas rendering, mouse/keyboard interaction, info panel (and its lazily-filled Track dropdown), modals, timeline, 3D viewport, panel visibility, video encoding, video display settings, keyboard-target arbitration, modal geometry, view legend, plane definition, 3D mesh objects, origin definition, origin re-base, cross-session calibration notice, plane angle, frame-range tracking, collapsible section state, info tooltips, plane visibility, browser-specific hints, the loading overlay + its progress bar, the Align Views to References dialog, the seekbar hover tooltip, the status bar's whole-project frame counters, the controls bar's time / frame readout, the Tracks / Identity coloring setting, the node-trail lengths (`trail-presets.js` — presets or a custom value typed in seconds or frames, stored in seconds, drawn as `seconds × fps` frames), the Check ID Switches runner + ID Switches panel tab (and its saved review checklist), its seekbar ticks and in-view highlight, its image embedder and its crop and CPU-model workers, the Track All summary box (`track-summary.js` decides what it says, `track-summary-modal.js` renders it), settings — the Define Planes panel is split across `plane-definition.js` (the hub) plus its three section modules and three helpers (61 files)
+ES modules, vanilla JS (no build step). `index.html` loads `app.js` as `<script type="module">`; `app.js` is a 2-line entry point that imports from `pose/`. The 107 modules are grouped into four directories:
+- `pose/` — data model, cross-view tracking, DLT triangulation (the pure math in `triangulation-core.js`, solved in parallel by `triangulation-pool.js` + `triangulation-worker.js`), plane annotation model (planes + the global plane-node pool), 3D mesh objects (groups of planes) and their derived geometry, plane/origin serialization, origin transform, whole-project origin re-base, cross-session calibration comparison, plane-to-plane angle, the least-squares plane fit, multi-view display alignment (`view-align.js`), the ID-switch checks by body size and images (`id-switch-check.js`), the lazy project's playback eviction (`lazy-residency.js`), SLEAP's single-camera tracker ported from sleap-nn (`sleap-tracker.js`) and single-camera Track All + its ID-switch checks (`single-camera-tracking.js`), app initialization (24 files)
+- `ui/` — UI state, canvas rendering, mouse/keyboard interaction, info panel (and its lazily-filled Track dropdown), modals, timeline, 3D viewport, panel visibility, video encoding, video display settings, keyboard-target arbitration, modal geometry, view legend, plane definition, 3D mesh objects, origin definition, origin re-base, cross-session calibration notice, plane angle, frame-range tracking, collapsible section state, info tooltips, plane visibility, browser-specific hints, the loading overlay + its progress bar, the Align Views to References dialog, the seekbar hover tooltip, the status bar's whole-project frame counters, the controls bar's time / frame readout, the Tracks / Identity coloring setting, the node-trail lengths (`trail-presets.js` — presets or a custom value typed in seconds or frames, stored in seconds, drawn as `seconds × fps` frames), the Check ID Switches runner + ID Switches panel tab (and its saved review checklist), its seekbar ticks and in-view highlight, its image embedder and its crop and CPU-model workers, its coat-brightness sampler, the Track All summary box (`track-summary.js` decides what it says, `track-summary-modal.js` renders it), settings — the Define Planes panel is split across `plane-definition.js` (the hub) plus its three section modules and three helpers (62 files)
 - `loading/` — video decoding, unplayable-codec diagnosis, session loading, SLP/package readers, per-camera SLP choice, calibration-file selection, video-file selection, the per-camera track-list union (`session.tracks` for a per-camera folder), web workers (11 files)
 - `import-export/` — file I/O, save/load, SLP import/merge, visibility metadata, plane metadata, 3D mesh export (10 files)
 - `demo-data.js` — synthetic skeleton and camera data
@@ -651,6 +651,87 @@ post-Track-All playback degrading run over run. Three more rules:
   with `hydrateFrameMembers2d` / `releaseFrameMembers2d`. The image ID-switch
   check was the one such reader (`frameCropGeometry`, `ui/image-embedder.js`);
   reading the members directly found no keypoints on every such frame.
+
+## Single-camera Track All is sleap-nn's tracker — keep it a faithful port
+
+A session with ONE camera (a plain SLEAP predictions file opened with File ▸
+Load SLP) has no cross-view matching and no 3D, so Track All runs SLEAP's own
+tracker instead: `pose/sleap-tracker.js` is a port of `sleap_nn.tracking`
+(talmolab/sleap-nn @ `3d21684419ca`), driven by `pose/single-camera-tracking.js`
+in sleap-nn's known-count setup (`local_queues`, `max_tracks` = target count =
+the animal count, connect single breaks). Rules:
+
+- **It must give `sleap-nn track`'s answer, ties included.** OKS at sleap-nn's
+  default stddev underflows to exactly 0 for poses ~1.5 body lengths apart, so
+  ties are routine and whatever breaks them decides real tracks. That is why
+  the port carries SciPy's `linear_sum_assignment` line for line, numpy's
+  unstable argsort (`SMALL_QUICKSORT = 15`), CPython 3.11's set iteration order
+  (`fixed_window`'s column order) and numpy's pairwise summation. Do not
+  "simplify" any of them to a JS built-in: a stable sort or a different
+  Hungarian is still optimal and still wrong. Measured identical on ~520,000
+  real detections; `tests/test-sleap-tracker.mjs` compares every track id on a
+  synthetic fixture tracked by upstream (regenerate it with
+  `tests/fixtures/sleap-tracker/make_fixture.py` when moving to a newer sleap-nn).
+- **It writes the TRACKS**, as sleap-nn does, plus one identity per track
+  (`track_k` <-> `id_k`, identity following the track through the map) —
+  unlike multi-camera Track All, which writes identities only. On one camera a
+  track is the animal's identity and is what the saved `.slp` hands back to
+  SLEAP; for the same reason an ID Switches tab Fix swaps tracks there.
+- **The one deliberate departure is the default OKS tolerance: 0.1, not 0.025**
+  (Tracking Wizard `scOksStddev`; sleap-nn's own value for its noisier Kalman
+  keypoints). On 35 proofread 10-min SLAP videos it took sleap-nn's known-count
+  setup from 85.8% to 93.6% correct and 156 to 102 lasting swaps. Everything
+  else is sleap-nn's default.
+- **The ID-switch checks read a 2D stand-in** (`singleCameraCheckSession`:
+  `points3d` = (x, y, 0)). They are unit-free, so this is sound, but body size
+  in 2D is not a usable cue (2 of 59 real swaps caught, AUC 0.55), so Track All
+  does not run it automatically on one camera — it says so in the status line,
+  and the menu still runs it. The image check needs nothing 3D.
+- **Where to look comes from the tracking; whether it switched comes from both
+  sides.** Track All also returns candidate moments (`candidateMoments`: the
+  tracker nearly chose the exchange — read through `SleapTracker`'s read-only
+  observer — or the input file's own tracklet changes animal), and the checks
+  test each one by comparing the evidence BEFORE and AFTER it
+  (`pose/id-switch-check.js` `testMoments`, 15 s each side, -200). Reading only
+  after a moment caught 1 more real swap of 59: the classifier is fit to the
+  tracker's own labels, and a swap covering most of the video is what it
+  learns. Encounters score and flag exactly as without moments; a moment's row
+  takes over the encounter rows of the swapped stretch it starts or ends
+  (`momentChangePoints`), so one swap is one row and one Fix — two rows meant
+  two fixes, the first stopping where the second began. Moments are not saved
+  (their input tracklets are rewritten).
+- **On one camera the automatic check is coat brightness, not body size.**
+  `ui/brightness-sampler.js` reads the grey level at each animal's body
+  keypoints and `checkBrightnessSwitches` runs the image check's code on it — no
+  model, no GPU. Its candidate-moment rows caught 14 of 59 real swaps with no
+  false rows (the image check's: 13, 12 shared); its encounter rows were noise,
+  hence its strict -800 encounter threshold. Uncalibrated on multi-camera data,
+  so it is not run automatically there.
+- **On one camera the image check ends a swapped stretch only at a clearly
+  positive encounter** (`continueBelow` = +|threshold|,
+  `singleCameraImageContinueBelow`), not at any score above 0. A near-zero
+  encounter in a huddle split one swap into two rows and left the stretch
+  between them unfixed (topC: 93.8% -> 99.9% correct after both Fixes; SLAP:
+  false rows 71 -> 51, 18 of 59 caught instead of 17). Brightness keeps 0 (its
+  encounter scores are noise); size and multi-camera are unchanged.
+- **Two more single-camera choices in the ID Switches tab, both measured on the
+  35 SLAP videos.** A candidate moment's row is never a follow-on, and it
+  outranks other pairs' encounter rows up to 3 s before it (they follow it);
+  with `clearestEndLeads` the clearest of nearby encounter 'end' rows leads
+  them. Following any earlier row within 60 s that shares an animal had hidden
+  real swaps behind false primaries; the right pair is now the primary in 18 of
+  23 swaps instead of 11 (`linkFollowOns`). And a row's window — landing
+  frame, progress bar, the range where a Fix takes the current frame as its
+  boundary — is ±2 s, not ±1 s (`idSwitchLeadSeconds`), because one view places
+  the close spell less exactly. Multi-camera keeps 1 s.
+- **On one camera an encounter scoring exactly 0 is no evidence** (`skipEmpty`,
+  `singleCameraCheckOptions`). It had no samples on either side — 44.5% of the
+  image check's encounters on the SLAP videos — and counting it as "reads
+  right" started swapped stretches late (a Fix from 0:04.2 for a swap from
+  0:00). Skipping them: false rows 51 -> 42 with the same swaps caught, wrong
+  far edges 4 -> 2. Multi-camera checks still count them (not measured).
+- **Eager only.** A lazy (> 150 MB) single-camera project is refused with a
+  reason, never tracked from its resident window — the resident-only bug class.
 
 ## Triangulation must not depend on where the origin is
 

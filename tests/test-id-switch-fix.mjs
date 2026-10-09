@@ -18,6 +18,12 @@
  *     the fixed pair and rows outside alone, follows keys, and is an involution.
  *  5. The fixes and the links survive `serializeIdSwitchReview` →
  *     `ingestIdSwitchReview`, and garbage is ignored.
+ *  6. `momentChangePoints`: one swapped stretch keeps ONE row, so one fix. A
+ *     candidate moment's row takes over the encounter rows of its stretch (the
+ *     run's onset after it — the 5-mouse topC case, where the moment's fix
+ *     stopped at that onset and a second fix was needed — or just before it; the
+ *     run's 'end' row for an 'end' moment), links to the stretch's real far
+ *     edge, skips a moment that contradicts a run, and re-links follow-ons.
  *
  * Run: node tests/test-id-switch-fix.mjs
  */
@@ -210,6 +216,125 @@ console.log('5. serialize / ingest');
     ok(!('fixes' in none), 'no fixes key when nothing was fixed');
     payload.fixes.push('junk', [1, 2], ['k', '', 'a', 'b', 9, 3]);
     ok(RV.ingestIdSwitchReview({}, payload)._idSwitch.fixes.length === 1, 'malformed fixes are ignored');
+}
+
+// ---- 6. moments merge with the stretch they start or end ----------------------------------------
+console.log('6. momentChangePoints: one row (and one fix) per swapped stretch');
+{
+    const OM = Object.assign({}, O, { momentThreshold: -200 });    // fps 30: rows within 90 frames stand
+    const moment = (frame, side) => ({ frame, startFrame: frame - 5, identityA: 0, identityB: 1, nameA: 'a', nameB: 'b',
+                                       score: -300, side, look: ['tracklet'] });
+    const run = (scored, moments) => {
+        scored.sort((x, y) => x.frame - y.frame);
+        const changes = SC.markChangePoints(scored, OM), added = SC.momentChangePoints(moments, scored, changes, OM);
+        const byFrame = (x, y) => x.frame - y.frame;
+        const r = { ok: true, flags: scored.filter(s => s.flagged).concat(added.filter(m => m.kind !== 'end')).sort(byFrame),
+                    changes: changes.concat(added.filter(m => m.kind === 'end')).sort(byFrame), encounters: scored, fps: 30 };
+        r.rows = RV.idSwitchPrimary(r).filter(x => x.nameA === 'a');
+        return r;
+    };
+    const desc = r => JSON.stringify(r.rows.map(x => [x.frame, x.kind, x.look ? 'M' : 'E']));
+    const plan = (r, m) => RV.idSwitchFixPlan(m, r, { currentFrame: null, totalFrames: 1000 });
+
+    // the topC case: a moment, then the pair's next encounter starts a flagged run that reaches the end
+    let sc = encounters(6, [3, 4, 5]);
+    let before = resultOf(encounters(6, [3, 4, 5]));
+    ok(before.flags.find(f => f.kind === 'onset').frame === 400, 'without the moment, the run\'s onset row is the encounter at 400');
+    let r = run(sc, [moment(305, 'after')]);
+    ok(r.rows.length === 1 && r.rows[0].look && r.rows[0].frame === 305, `one row, the moment's: ${desc(r)}`);
+    ok(sc.find(e => e.frame === 400).continues && sc.find(e => e.frame === 400).flagged, '…the encounter at 400 is now a repeat (still flagged)');
+    let p = plan(r, r.rows[0]);
+    ok(r.rows[0].switchBackAt === null && p.from === 306 && p.to === 999,
+        `the moment's fix covers the whole stretch, 306..999 (${p.from}..${p.to}); before this it stopped at 400`);
+
+    // a middle run: the moment takes over its onset row and pairs with its 'end' row
+    sc = encounters(8, [3, 4]);
+    r = run(sc, [moment(305, 'after')]);
+    const endRow = r.changes.find(c => !c.look);
+    ok(r.rows.length === 2 && r.rows[0].frame === 305 && endRow && endRow.frame === 600, `moment + the run's 'end' row: ${desc(r)}`);
+    ok(r.rows[0].switchBackAt === 600 && endRow.switchedAt === 305, `linked both ways (${r.rows[0].switchBackAt}, ${endRow.switchedAt})`);
+    p = plan(r, r.rows[0]);
+    let pe = plan(r, endRow);
+    ok(p.from === 306 && p.to === 600 && p.partnerKey === RV.idSwitchRowKey(endRow) && pe.from === 306 && pe.to === 600,
+        `both rows plan the same fix, 306..600 (${p.from}..${p.to} / ${pe.from}..${pe.to}), as partners`);
+
+    // the run's first encounter is just BEFORE the moment: its window ran across the moment, the moment's row takes over
+    sc = encounters(6, [3, 4, 5]);
+    r = run(sc, [moment(495, 'after')]);
+    ok(r.rows.length === 1 && r.rows[0].frame === 495 && r.rows[0].switchBackAt === null && sc.find(e => e.frame === 400).continues,
+        `moment after the run's first encounter: one row, the moment's (${desc(r)})`);
+
+    // a moment two encounters into a run contradicts it: the encounters stand
+    sc = encounters(8, [2, 3, 4, 5]);
+    r = run(sc, [moment(495, 'after')]);
+    ok(r.rows.length === 2 && !r.rows.some(x => x.look) && r.rows[0].frame === 300 && r.rows[0].switchBackAt === 700,
+        `an onset deep inside a run adds nothing: ${desc(r)}`);
+
+    // 'end' (the stretch BEFORE the moment is the odd one): it closes the run's onset row, the run's 'end' row goes
+    sc = encounters(8, [2, 3]);
+    r = run(sc, [moment(405, 'before')]);
+    const on = r.rows.find(x => x.kind === 'onset'), mEnd = r.rows.find(x => x.look);
+    ok(r.rows.length === 2 && on.frame === 300 && mEnd && mEnd.frame === 405 && !r.changes.some(c => c.frame === 500),
+        `onset 300 + the moment's 'end' 405; the encounter 'end' at 500 is dropped: ${desc(r)}`);
+    p = plan(r, on); pe = plan(r, mEnd);
+    ok(on.switchBackAt === 405 && mEnd.switchedAt === 300 && p.to === 405 && pe.from === 301 && pe.to === 405 && p.partnerKey === RV.idSwitchRowKey(mEnd),
+        `paired: one fix, 301..405 (${p.from}..${p.to} / ${pe.from}..${pe.to})`);
+    sc = encounters(6, [0, 1]);                                     // swapped from the session start
+    r = run(sc, [moment(205, 'before')]);
+    ok(r.rows.length === 1 && r.rows[0].frame === 205 && r.rows[0].switchedAt === null,
+        `swapped from the start: the moment's 'end' is the only row, from frame 0 (${desc(r)})`);
+    sc = encounters(8, [2, 3, 4]);                                  // the run is still flagged after it: contradicts it
+    r = run(sc, [moment(305, 'before')]);
+    ok(!r.rows.some(x => x.look), `an 'end' inside a run adds nothing: ${desc(r)}`);
+
+    // an encounter scoring exactly 0 had no samples: it neither ends nor continues a stretch
+    sc = encounters(8, [3, 5, 6, 7]); sc[4].score = 0;            // runs 400 and 600..800, a no-evidence encounter at 500
+    before = resultOf(encounters(8, [3, 5, 6, 7]).map((e, i) => i === 4 ? Object.assign(e, { score: 0 }) : e));
+    ok(RV.idSwitchPrimary(before).length === 2, 'without the moment, the no-evidence encounter at 500 splits the swap into two onset rows');
+    r = run(sc, [moment(305, 'after')]);
+    ok(r.rows.length === 1 && r.rows[0].frame === 305 && r.rows[0].switchBackAt === null,
+        `the moment's row runs through it to the end: ${desc(r)}, switchBackAt ${r.rows[0].switchBackAt}`);
+    sc = encounters(6, [0]); sc[1].score = 0;                       // swapped from the start; its 'end' row sits on 200, no evidence
+    before = resultOf(encounters(6, [0]).map((e, i) => i === 1 ? Object.assign(e, { score: 0 }) : e));
+    ok(before.changes.length === 1 && before.changes[0].frame === 200, 'without the moment, the encounter \'end\' row is the no-evidence encounter at 200');
+    r = run(sc, [moment(295, 'before')]);                          // > 3 s (90 frames) from that row, or it would stand
+    ok(r.rows.length === 1 && r.rows[0].frame === 295 && r.rows[0].switchedAt === null && plan(r, r.rows[0]).from === 0,
+        `the moment's 'end' covers the stretch from frame 0, and that row is dropped: ${desc(r)}`);
+
+    // an 'end' moment does not read its own contact as the stretch before it (that encounter's score is the
+    // labels AFTER the moment): on a real video this made a Fix of one frame (0:12.0-0:12.1) for a 12-s swap
+    sc = encounters(6, []);                                         // clean encounters at 100..600, the one at 300 inside the contact
+    r = run(sc, [moment(302, 'before')]);                           // its contact: 297..302
+    ok(r.rows.length === 1 && r.rows[0].switchedAt === 200 && plan(r, r.rows[0]).from === 201,
+        `the 'end' reaches back past its own contact to the encounter before it: from ${r.rows[0] && plan(r, r.rows[0]).from} (not 301)`);
+    sc = encounters(1, []).map(e => Object.assign(e, { frame: 360, startFrame: 360 }));
+    r = run(sc, [Object.assign(moment(363, 'before'), { startFrame: 360 })]);
+    ok(r.rows.length === 1 && r.rows[0].switchedAt === null && plan(r, r.rows[0]).from === 0,
+        `with no earlier encounter it covers the session from frame 0 (from ${r.rows[0] && plan(r, r.rows[0]).from})`);
+
+    // a moment outranks another pair's encounter row up to 3 s before it: that row follows the moment
+    sc = encounters(6, [2], [0, 2], ['a', 'c']);                    // an a/c encounter onset at 300
+    r = run(sc, [moment(340, 'after')]);                            // an a/b moment 40 frames (1.3 s) later
+    let enc = r.rows.find(x => !x.look), mom = r.rows.find(x => x.look);
+    ok(mom.followOf == null && enc.followOf === 340,
+        `the moment is the primary, the a/c row 1.3 s before it follows it (moment followOf ${mom.followOf}, a/c row ${enc.followOf})`);
+    sc = encounters(6, [2], [0, 2], ['a', 'c']);
+    r = run(sc, [moment(400, 'after')]);                            // 100 frames (3.3 s) later
+    enc = r.rows.find(x => !x.look); mom = r.rows.find(x => x.look);
+    ok(enc.followOf == null && mom.followOf == null,
+        `more than 3 s apart, the a/c row does not follow the moment, and a moment never follows anything: both primaries (${enc.followOf}, ${mom.followOf})`);
+
+    // two moments of the pair with only clean encounters around them pair with each other
+    sc = encounters(6, []);
+    r = run(sc, [moment(130, 'after'), moment(170, 'before')]);
+    ok(r.rows.length === 2 && r.rows[0].switchBackAt === 170 && r.rows[1].switchedAt === 130,
+        `onset 130 and 'end' 170 are one stretch (${r.rows[0].switchBackAt}, ${r.rows[1].switchedAt})`);
+
+    // follow-ons are re-linked: another pair's row that followed the replaced encounter row now follows the moment
+    sc = encounters(6, [3, 4, 5]).concat(encounters(1, [0], [0, 2], ['a', 'c']).map(e => Object.assign(e, { frame: 450, startFrame: 430 })));
+    r = run(sc, [moment(305, 'after')]);
+    const follow = sc.find(e => e.identityB === 2);
+    ok(follow.kind === 'onset' && follow.followOf === 305, `the other pair's onset follows the moment now (${follow.followOf}; was 400)`);
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

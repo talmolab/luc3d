@@ -1893,6 +1893,27 @@ which was removed during the ESM migration).
 epipolar/reprojection scoring, Hungarian assignment, multi-frame
 identity propagation.
 
+**One camera: SLEAP's tracker.** A session with a single camera (a plain SLEAP
+predictions file opened with Load SLP) has nothing to match across views and no
+3D, so `runTrackingPass` hands Track All to `runSingleCameraTrackAll`, which
+runs sleap-nn's tracker (`pose/sleap-tracker.js`, via
+`pose/single-camera-tracking.js`) with the animal count as its track cap and the
+Tracking Wizard's `scWindowSize` / `scOksStddev` / `scConnectBreaks`. It writes
+the TRACKS, as `sleap-nn track` does, plus one identity per track, then follows
+the multi-camera pass's contract: `markDirty()` after the last bail-out, the
+previous identities and ID-switch results cleared, Color: ID, predictions only,
+Timeline and 3D viewer closed, and the automatic coat-brightness check
+(`autoBrightnessSwitchCheck`, default on — no model, no GPU) and image check
+(`autoImageSwitchCheck`) when they are on. It
+keeps Track All's candidate moments on the session (`session._idSwitchCandidates`,
+cleared at the start of the run) for the checks to test.
+The automatic body-size check is deliberately not run on one camera — the
+status line says so (`SINGLE_CAMERA_SIZE_SKIP_NOTE`) and the menu still runs
+it: in the app on 35 proofread SLAP videos it caught 2 of 59 real swaps at -50
+(encounter AUC 0.55) for 6 false rows. Track Frame and Track Frame Range refuse
+on one camera, saying why, as does Track All on a lazy one-camera project.
+~1 s for an 18,000-frame, 3-mouse video in the app.
+
 **Track All closes the Timeline and the 3D viewer.** On success, a full Track
 All calls `collapseTimeline()` (`ui/timeline-controller.js`) and
 `collapseViewport3D(viewport3d)` (`ui/panel-visibility.js`) so the views showing
@@ -2085,6 +2106,8 @@ drifts upward (e.g., 4 → 11 on the test fixture).
   across every frame with temporal continuity signals.
 
 **Imports from project modules.**
+- `./single-camera-tracking.js` — `singleCameraName`, `singleCameraTrackerConfig`,
+  `trackSingleCamera`, `SINGLE_CAMERA_LAZY_REASON` (the one-camera Track All).
 - `./pose-data.js` — `InstanceGroup`, `points3dNodeCount`, `hasPoint3d`,
   `readPoint3d`, `pooledPoints3d` (`commitTrackedFrame` stores a COPY of the
   target's 3D in the slab pool — one ArrayBuffer per group was 539,545 for a
@@ -2434,6 +2457,210 @@ reused by passing the bare extrinsic + normalized points:
 `epipolarErrorMatrix`).
 
 **Imported by.** `pose/tracker.js`.
+
+---
+
+### pose/sleap-tracker.js
+
+**Purpose.** SLEAP's single-camera pose tracker: a port of `sleap_nn.tracking`
+(talmolab/sleap-nn @ 3d21684419ca, 2026-10-02 — `Tracker`, `run_tracker`,
+`connect_single_breaks`, the `fixed_window` and `local_queues` candidates,
+`utils.py`) and of `evaluation.compute_oks`. It is what `sleap-nn track` runs on
+an existing predictions file. Used by single-camera Track All
+(`pose/single-camera-tracking.js`). Pure — no DOM, no app state, no imports.
+
+**It agrees with upstream on every track id**, ties included, and that is the
+point of the module: a SLEAP user re-tracking in LUCID gets the answer
+`sleap-nn track` would give. Measured: 9 full proofread SLAP videos (both
+candidate methods) and 9 option combinations, ~520,000 detections, all
+identical; ~0.35–0.65 s per 18,000-frame video in JS against ~50 s in Python
+(most of which is sleap-nn decoding every video frame it never reads). Ties are
+common — OKS at the default stddev underflows to exactly 0 for poses more than
+~1.5 body lengths apart — so everything that decides one is ported exactly:
+- `linearSumAssignment` — SciPy's `rectangular_lsap.cpp` (Crouse's shortest
+  augmenting path), line for line, including its reverse `remaining` order and
+  the transpose of a tall matrix.
+- `numpyArgsort` — `np.argsort`'s generic introsort (median-of-3 partitions,
+  `SMALL_QUICKSORT = 15`, insertion sort below), which greedy matching and NMS
+  read their ties from. It is NOT stable. This is what numpy runs on arm64 and
+  on x86 without AVX-512; with AVX-512 numpy dispatches to x86-simd-sort, so
+  upstream itself breaks those ties differently there. Checked on 406
+  tie-heavy arrays.
+- `pySetOrder` — CPython 3.11's set iteration order (open addressing, 9 linear
+  probes, ×4 resize at 3/5 full). `fixed_window`'s `current_tracks` is
+  `list(set(...))`, so this IS its score-matrix column order.
+- OKS sums the per-node similarities in numpy's pairwise order (`pairwiseSum`;
+  plain pairwise over all elements, confirmed bit-exact on 20,000 sums).
+What is not bit-exact: `Math.exp` vs numpy's `exp` (last ulp) and
+`euclidean_dist` on keypoints (BLAS `dot` in numpy). Both only matter in a
+near-tie; none showed up on the real data.
+
+**Not ported:** `FlowShiftTracker` (optical flow on the video),
+`KalmanShiftTracker` (EM-fitted Kalman filter — on 6 proofread cameras sleap-nn's
+own Kalman tracker made 39 lasting swap events to the base tracker's 16), the
+appearance blend and the `embeddings`/`masks` features.
+
+**Key exports.** `SLEAP_TRACKER_DEFAULTS` (sleap-nn's `run_tracker` defaults, in
+camelCase: `windowSize` 5, `candidatesMethod` 'fixed_window', `features`
+'keypoints', `scoringMethod` 'oks', `scoringReduction` 'mean', `oksStddev`
+null -> 0.025, `trackMatchingMethod` 'hungarian', `maxTracks`,
+`postConnectSingleBreaks`, `targetInstanceCount`, pre-/clean-cull options);
+`SleapTracker` (class: `new SleapTracker(cfg, observe?)` — `observe` is called
+after each frame's matching with `{frameIdx, dets, tracks, cost, nr, nc, pairs}`
+and is read-only, so parity is untouched; `track(dets, frameIdx)` -> per detection a track id,
+`null` = dropped, `undefined` = a prediction left alone on a frame with user
+instances — sleap-nn tracks only those there); `runSleapTracker(frames, cfg)` /
+`runSleapTrackerAsync(frames, cfg, {onProgress, signal, yieldEvery})` (the
+whole `run_tracker`, post-processing included); `connectSingleBreaks`;
+`instancesOverCount` (culling); `computeOks`; `countValidPoints`;
+`linearSumAssignment`; `numpyArgsort`; `pySetOrder`. A detection is
+`{points: Float64Array(2K) NaN-missing, score, isUser?}`.
+
+**Imports from project modules.** None.
+
+**Imported by.** `pose/single-camera-tracking.js`.
+
+**Coverage.** `tests/test-sleap-tracker.mjs` against
+`tests/fixtures/sleap-tracker/reference.json` — 900 frames of synthetic
+detections (close passes, missed detections, missing nodes, spurious poses,
+empty frames) tracked by upstream sleap-nn under six configs, every track id
+compared — plus SciPy's / numpy's / CPython's answers on tie cases. Regenerate
+the fixture with `tests/fixtures/sleap-tracker/make_fixture.py <sleap-nn
+checkout>` (run with sleap-nn's own Python) when moving the port to a newer
+sleap-nn.
+
+---
+
+### pose/single-camera-tracking.js
+
+**Purpose.** Track All and the ID-switch checks on a session with ONE camera — a
+plain SLEAP predictions file opened with File ▸ Load SLP, which gets one
+placeholder `Camera` and every detection unlinked. With one view there is no
+cross-view matching and no 3D, so Track All runs SLEAP's tracker
+(`pose/sleap-tracker.js`) instead, in sleap-nn's recommended known-count setup:
+`local_queues`, `max_tracks` = `tracking_target_instance_count` = the animal
+count, connect single breaks.
+
+**It writes the TRACKS**, as `sleap-nn track` does — unlike multi-camera Track
+All, which writes identities only and leaves Propagate IDs → Tracks to the
+user. On one camera a track IS an animal's identity, and tracks are what a
+saved `.slp` hands back to SLEAP. `session.tracks` becomes `track_0…`, every
+instance's `trackIdx` is rewritten, and identity `id_k` (id k) is tied to track
+k through `frameIdentityMap` — keyed by track, so identity follows the track
+from then on. A detection the tracker drops (over the animal count, too few
+points) becomes trackless, as do predictions on a frame that has user instances.
+Occluded nodes are fed to the tracker as missing: SLEAP's invisible points read
+as NaN in sleap-nn.
+
+**The default OKS tolerance is 0.1, not sleap-nn's 0.025** (Tracking Wizard
+`scOksStddev`). On 35 proofread 10-min SLAP camera videos (3–4 mice, different
+coat colours; each track paired 1:1 with a proofread animal): sleap-nn's
+known-count defaults 85.8% correct, 156 lasting swaps; at 0.1, 93.6% and 102;
+0.15 93.1%; 0.2 and above worse again (0.5: 75.1%). The mechanism is general —
+at 0.025 every pose more than ~1.5 body lengths from a track scores exactly 0,
+so after a fast move or a gap the assignment is decided by tie-breaking.
+Window 10 was about the same as 5 (88.4% at 0.025), 30 much worse.
+
+**The ID-switch checks read a stand-in** (`singleCameraCheckSession`): one
+InstanceGroup-shaped object per identified detection, its 2D as `points3d`
+(x, y, 0), the detection under `instances` (what the image check crops). The
+checks are relative to the median body size and standardise their features, so
+pixels instead of millimetres cost nothing; but a 2D bone length also changes
+with posture and distance from the camera, so body size is not a usable cue on
+one camera, and single-camera Track All does not run it automatically. Measured
+in the app on 35 proofread 10-min SLAP videos (59 real swaps after Track All):
+size caught 2 at -50 (encounter AUC 0.55, 6 false rows); the image check —
+with talmolab/luc3d#286's episode scoring, which was unmerged at the time —
+caught 19 at its -200 default for 15 false rows (0.4 per 10 min), 32 s per
+10-min, 3-mouse video. Most of the swaps it misses are not at an encounter it
+scores (multi-animal contacts, or one animal's detection missing for seconds
+while its track takes another animal).
+
+**A fix swaps the tracks** (`swapSingleCameraIdentities`), so the saved file
+carries it, when each of the two identities is one track over the range (always
+true after single-camera Track All); otherwise — identities hand-edited apart
+from their tracks — it swaps the identity layer alone, like a multi-camera fix.
+It is its own inverse, which is how Undo works.
+
+**Where to look: candidate moments.** Most of the switches the checks miss are
+not at an encounter they score: they happen in contacts of three animals, or
+while one animal's detection is missing for seconds and its track takes another
+animal. So Track All also returns `moments` (`candidateMoments`), read from the
+tracking itself at no cost: 'ambiguity' — two tracks whose EXCHANGED assignment
+would have cost the tracker less than `ambiguityMargin` (0.1, OKS units) more
+than the chosen one (through `SleapTracker`'s read-only observer); and
+'tracklet' — a tracklet of the INPUT file (SLEAP's own tracking, captured before
+it is rewritten) that passes from one identity to another within 5 frames. Per
+pair, candidates within 3 s are one moment at the run's last frame. They are
+kept on the session as `session._idSwitchCandidates` (NOT saved: the input
+tracklets they come from are gone once the project is saved) and tested by the
+checks (`pose/id-switch-check.js` `opts.moments`). On the 35 proofread videos
+they put a moment within 3 s of 44 of 59 switches (ambiguity alone 17,
+tracklets alone 42), about 10 moments per 10 min. Ambiguity is observed before
+connect-single-breaks renumbers tracks, so its ids are read through the final
+output, never from the observer.
+
+**Eager sessions only.** A lazy (> 150 MB) single-camera project is refused with
+`SINGLE_CAMERA_LAZY_REASON` rather than tracked from its resident window. Track
+Frame and Track Frame Range are refused on one camera (the tracker is temporal,
+and a range would need its new tracks mapped onto the old ones).
+
+**Where the image check's swapped stretch ends.** On one camera the image check
+ends a run of flagged encounters only at an encounter scoring above
++|threshold| (`singleCameraImageContinueBelow`, passed as `continueBelow` by
+`ui/id-switch-modal.js`), not at any score above 0 as elsewhere. Crowded contacts
+leave each animal alone for a few seconds, so an encounter in a huddle scores
+near 0 either way, and ending the run there split one swap into two rows with
+the stretch between them unfixed: on the 5-mouse topC video a +24 (median
+|score| 331) ended the id_3 / id_4 swap at 25:23.9, and Fixing both rows left the
+tracks 93.8% correct instead of 99.9%. On the 35 proofread SLAP videos (image
+check at -25): rows 96 -> 78 (false 71 -> 51), 18 of 59 swaps caught instead of
+17, and the real rows' Fixes add 66 accuracy points instead of 54. +50 or +100
+merge runs across real switch-backs (15 caught). The brightness check keeps 0:
+its encounter scores are mostly noise, and +800 cost it a swap. The size check
+and multi-camera image check are unchanged (not measured).
+
+**Empty encounters are no evidence.** Every check on one camera also runs with
+`skipEmpty` (`singleCameraCheckOptions`): runs ignore encounters scoring exactly
+0, which had no samples on either side — 44.5% of the image check's encounters
+on the 35 SLAP videos (2 samples a second; one camera's animals are seldom alone
+for long), 24.4% of brightness's. Counted as "reads right", they started a
+swapped stretch at the first encounter WITH evidence: a Fix from 0:04.2 for a
+swap from 0:00, or from 0:25.9 when the pair's six encounters before it were all
+empty. Skipping them: image rows 78 -> 68 (false 51 -> 42), 18 of 59 swaps caught
+either way, rows whose Fix has a wrong far edge 4 -> 2, rows fully undone (with
+the boundary set by the user) 9 -> 11; brightness rows 21 -> 18 (false 7 -> 4),
+14 caught either way. Body size on one camera is unmeasured (15 Hz, rarely
+empty). The two far edges left are chained swaps — a pair's stretch starting
+where ANOTHER pair swapped, or a three-animal rotation — which one pair's rows
+cannot see.
+
+**Key exports.** `singleCameraName(session)` (the camera, or null);
+`singleCameraTrackerConfig(numAnimals, {windowSize, oksStddev, connectBreaks})`;
+`trackSingleCamera(session, cfg, {onProgress, signal, fps, look})` ->
+`{numIdentities, frames, tracked, untracked, moments}`; `candidateMoments(frames,
+out, inputTracks, ambiguous, look, fps)`; `CANDIDATE_DEFAULTS` (`ambiguityMargin`
+0.1, `trackletGapFrames` 5, `clusterSeconds` 3); `singleCameraCheckSession(session)`
+-> stand-in | null | `{fail}`; `swapSingleCameraIdentities(session, from, to, idA, idB)`
+-> `{frames, tracks: boolean}` | null; `singleCameraImageContinueBelow(threshold)`
+-> |threshold| (above); `singleCameraCheckOptions(cue, threshold)` -> the options
+every check runs with on one camera (`{skipEmpty: true, clearestEndLeads: true}`,
+plus `continueBelow` for the image check); `SINGLE_CAMERA_LAZY_REASON`.
+
+**Imports from project modules.** `pose/sleap-tracker.js`.
+
+**Imported by.** `pose/tracker.js` (Track All), `ui/id-switch-modal.js` (the
+checks and the fix).
+
+**Coverage.** `tests/test-single-camera-tracking.mjs` (one track per animal
+across 18 input tracklet breaks, the spurious detection and the user frame, the
+stand-in and a planted swap found by the real size check, the track swap and
+its fallback, the refusals, and §5 the image check's run-ending rule on topC's
+own scores) and `tests/e2e/single-camera-track-all.mjs` (the real buttons, the
+refusals, a planted swap found, fixed and undone through the ID Switches tab,
+and §6 the rule applied by the app; `tests/e2e/id-switch-image-check.mjs` pins
+that several cameras keep 0). `tests/e2e/_real-single-camera.mjs` runs the whole thing
+on a real SLEAP file through File ▸ Load SLP.
 
 ---
 
@@ -3443,22 +3670,26 @@ results}` (points3d buffers transferred) or `{type:'error', id, message}`.
 
 ### pose/id-switch-check.js
 
-**Purpose.** The analysis behind Tracks ▸ **Check ID Switches (Body Size)…** and
-**(Images)…**, which also run automatically after Track All / Track Frame Range
-(`ui/id-switch-modal.js`). Flags close encounters between two tracked identities
-where the animals leaving the encounter look more like each other's identity than
-their own — a possible identity switch. Two cues through ONE machinery: body size
-(3D bone lengths, cheap, no video) and appearance (embeddings of masked,
-pose-aligned crops, supplied by the caller — `ui/image-embedder.js` in the app).
-Pure — no DOM, no app state — so both run headlessly (the image check with any
-embedding provider).
+**Purpose.** The analysis behind Tracks ▸ **Check ID Switches (Body Size)…**,
+**(Images)…** and **(Coat Brightness)…**, which also run automatically after Track
+All / Track Frame Range (`ui/id-switch-modal.js`). Flags close encounters between
+two tracked identities where the animals leaving the encounter look more like each
+other's identity than their own — a possible identity switch. Three cues through
+ONE machinery: body size (3D bone lengths, cheap, no video), appearance
+(embeddings of masked, pose-aligned crops, supplied by the caller —
+`ui/image-embedder.js` in the app) and coat brightness (the grey level at each
+animal's body keypoints — `ui/brightness-sampler.js`; the image check's code on a
+4-number vector, `checkVectorSwitches`). Pure — no DOM, no app state — so all run
+headlessly (the image and brightness checks with any vector provider).
 
 **Key exports.** `checkSizeSwitches(session, opts)` and
-`checkImageSwitches(session, opts)` (async) -> `{ok, flags, changes, encounters,
-identities, sampledFrames, closeDistance, threshold, fps, step, sampleHz, cue}`
+`checkImageSwitches(session, opts)` and `checkBrightnessSwitches(session, opts)` (async) -> `{ok, flags, changes, encounters, moments,
+identities, sampledFrames, closeDistance, threshold, continueBelow, skipEmpty, clearestEndLeads, fps, step, sampleHz, cue}`
 (+ `bones` for size; + `imageHz`, `crops`, `cameras` for images) or
 `{ok:false, reason}`; `markChangePoints(scored, o)` (the change-point step,
 exported so calibration can re-apply thresholds to the same scores);
+`momentChangePoints(moments, scored, changes, o)` (merges tested candidate
+moments into those change points — see below; exported for the tests);
 `fitSoftmax(X, y, n, D, K, opts)` (L2 multinomial logistic regression, Adam);
 `fitPCA(X, n, D, k)` (randomized subspace iteration);
 `KEYFRAME_GAP_TOLERANCE` (1.1);
@@ -3467,7 +3698,9 @@ keyframeGap, maxShift}` (which frame each image sample decodes in one camera —
 "Keyframe sampling" under `ui/image-embedder.js`); `SIZE_BONES`;
 `REFERENCE_HZ` (15); `SIZE_CHECK_DEFAULTS` (`fps` REQUIRED, `sampleHz` 15,
 `folds` 5, `gapSeconds` 10, `syncSeconds` 1, `threshold` -50, `continueBelow` 0,
-`followSeconds` 60, `minTrackedSeconds` 60, `sepFactor` 0.65, `signal`, ...);
+`followSeconds` 60, `minTrackedSeconds` 60, `sepFactor` 0.65, `signal`, `moments` null,
+`momentSeconds` 15, `momentThreshold` -200, ...); `BRIGHTNESS_CHECK_DEFAULTS` (the
+image defaults + `imageHz` 4, `threshold` -800, `pcaDims` 8 — see "Coat brightness" below);
 `IMAGE_CHECK_DEFAULTS` (+ `imageHz` 2, `threshold` -25, `pcaDims` 32,
 `getEmbeddings` REQUIRED: `async (frame, items[{k, group}]) -> per item
 [{camera, vector}]`, STARTED in increasing frame order with up to `inFlight`
@@ -3501,8 +3734,105 @@ stretch, which is what fixing it swaps: an onset's `switchBackAt` (the pair's
 encounter after the run — for a lone middle flag that encounter is no change
 point of its own — or null when the run reaches the end) and an 'end''s
 `switchedAt` (the run's first encounter, or null when the run starts the
-session). A change point within `followSeconds` after another of a different
-pair sharing an identity is its follow-on (`followOf`).
+session). With `skipEmpty` (on for single-camera sessions, see
+`pose/single-camera-tracking.js` `singleCameraCheckOptions`) runs are found
+among the encounters that had samples: one scoring exactly 0 had none on either
+side, says nothing about the labels, and is a repeat when inside a run's
+stretch, so a run with only empty encounters before it starts the session. A
+change point within `followSeconds` after another of a different
+pair sharing an identity is its follow-on (`followOf`). Candidate moments
+(single camera only) change this twice (`linkFollowOns`): a moment's change
+point is NEVER a follow-on — it was tested on both sides of its own place, while
+following any earlier row within 60 s sharing an animal hid 4 real swaps on the
+35 SLAP videos behind false primaries up to 25 s before them — and it is taken
+as if it came 3 s earlier, so other pairs' encounter rows up to 3 s before it
+follow IT (a nearby encounter row of another pair is usually the swapped
+animal's wrong label showing up there). With `clearestEndLeads` (single camera),
+among encounter 'end' change points within 5 s of each other sharing an animal,
+the one reading right again most clearly (highest score) leads: after an early
+swap the swapped animals' other pairs also read right again, a second or two
+BEFORE the swapped pair (windows running past the swap). On the SLAP videos,
+image check: the swapped pair's row is the primary in 18 of 23 swaps (11 with
+plain time order, 13 with the 3-s rule alone), real swaps hidden as follow-ons
+5 -> 1, Fixing the primaries fully undoes 9 instead of 8, false primaries
+29 -> 28; brightness 12 of 15 instead of 10; topC unchanged. Ranking every row of
+a 60-s cluster by score instead was worse (4 undone): a strong false row a
+minute away then claims the real one. Without moments or the option (every
+multi-camera check) the order is plain time.
+
+**Candidate moments (`opts.moments`, single camera).** Places a switch may have
+happened OUTSIDE a close encounter — `[{frame, startFrame, identityA, identityB,
+cues}]`, from `pose/single-camera-tracking.js` `candidateMoments` (the tracker
+nearly chose the exchange; the input file's own tracklet changes animal). They
+never change how encounters score or flag (see "One swapped stretch" below).
+Each moment is tested on its own (`testMoments`): the evidence that a is a and
+b is b over the `momentSeconds` (15) BEFORE it and, separately, AFTER it, from
+samples where each animal is apart from every other. If the two sides disagree
+in sign the score is minus the weaker side's evidence, else plus it; below
+`momentThreshold` (-200) it is a change point (`momentChangePoints`) — an
+'onset' when the after side disagrees (in `flags`), an 'end' when the before
+side does (in `changes`) — unless one of the pair's encounter change points is
+within 3 s, which stands. Every tested moment is returned as `moments` (`side`,
+`look` = its cues); a moment change point carries `look`.
+
+**One swapped stretch, one row, one fix.** A moment's row merges with the
+pair's flagged encounter run it starts or ends, because two rows for one
+stretch meant two fixes (on the 5-mouse topC video a moment at 22:59.1 linked
+to the same pair's encounter onset 4.9 s later, so its fix stopped there and a
+second Fix was needed). An onset takes over the run's onset row — the run's
+first encounter just BEFORE it (whose evidence window ran across the moment, the
+reason moments exist) or AFTER it — which becomes a repeat; its `switchBackAt`
+is the first of the pair's later encounters that reads right again (flagged or
+below `continueBelow` continues, as a run does), whose 'end' row now pairs with
+it, else the pair's next moment, else null. An 'end' closes the run before it:
+`switchedAt` = the run's onset row (whose `switchBackAt` becomes the moment),
+the run's own 'end' row after it is dropped; with no run before it,
+`switchedAt` = the pair's previous encounter, else its previous moment, else
+null — "previous" meaning ended before the moment's own contact began, since an
+encounter ending inside it is the moment itself and its score describes the
+labels after it (reading it made a one-frame Fix for a 12-s swap on a SLAP
+video; fixing that took the Fixes that fully undo their swap from 5 to 6 of 24
+for images and 4 to 6 of 14 for brightness). An encounter scoring exactly 0 had no samples on either side, so it
+neither ends nor continues a stretch (an 'end' row on one inside the stretch is
+dropped). A moment that contradicts a run is skipped (an onset after two of the
+run's encounters; an 'end' with the run still flagged after it), so no two
+rows' fixes overlap. Encounter scores and `flagged` never change — only which
+rows are listed — and follow-ons are re-linked over the final rows. Re-scored
+on the 35 SLAP videos' in-app evidence (2026-10-08), image cue: 111 rows -> 96,
+false encounter rows 84 -> 71, same 17 of 59 swaps caught, moment rows still
+13/13 real, and same-pair fixes that overlap or meet end to end 6 -> 0;
+brightness: 22 -> 21 rows, 14 of 59 caught either way, 1 -> 0.
+Three findings shaped this, all on the 35 proofread single-camera SLAP videos
+(59 real switches after single-camera Track All, image cue, evidence captured
+in the app and re-scored offline):
+- **Where to look was not the problem.** The candidates put a moment within 3 s
+  of 44 of the 59 switches; the contact episodes (#286) reach 19.
+- **Reading only AFTER a moment does not work** (+1 switch). The classifier is
+  fit to the tracker's own labels, and many of these swaps cover most of the
+  video (several start in the first 15–50 s and last 380–590 s), so the
+  swapped labelling is what it learns and the evidence after the swap agrees
+  with it. Testing both sides catches the change whichever side is the odd one.
+- **Windows must be fixed, not cut at the pair's neighbouring encounters or
+  moments**: mice in contact meet every few seconds, and cut windows left too
+  little evidence (3 switches caught). 10, 15 and 20 s behave alike; 15 s at
+  -200: 13 of 59 switches with 0 false rows on its own; with #286's episode rows
+  26 of 59 (episodes alone 19) at the same 15 false rows; at -100, 14 and 2.
+  Moments inside an encounter are kept — dropping them halved what they caught.
+
+**Coat brightness (2026-10-08).** `checkBrightnessSwitches` runs the image check's
+code (`checkVectorSwitches`: one classifier per view, the same encounters and
+candidate moments) on a 4-number vector per animal and view — the 10th / 50th /
+90th percentile and the mean of the grey level at its body keypoints, log-scaled
+(`ui/brightness-sampler.js`). Calibrated on the 35 proofread single-camera SLAP
+videos, offline through this code and then in the app: its candidate-moment rows
+caught 14 of the 59 real switches with NO false rows — 12 of them the same
+switches the image check's moment rows catch (13; 15 together) — so on mice whose
+coats differ it matches the image check without a model or GPU. Its ENCOUNTER
+rows were noise at every threshold (-25: 13 real switches for 96 false rows;
+-200: 3 for 34; -800: 0 for 9), hence `threshold` -800. Percentiles over the body
+nodes, rather than named body regions, need no particular skeleton and did
+slightly better (14 vs 12; the median alone 11). Not calibrated on multi-camera
+data.
 
 **Calibration (2026-10-03).** Size: on the 5-mouse tail-mark recording
 (194366_05mice_flippers, 108k frames, 8 cameras) planted swaps AUC 0.95; the real
@@ -3552,7 +3882,8 @@ set, so swapping the two animals' labels after it turns its score S into exactly
 
 **Imports from project modules.** `pose/pose-data.js` (`readPoint3d`).
 
-**Imported by.** `ui/id-switch-modal.js`, `ui/image-embedder.js` (`planKeyframeSamples`, `KEYFRAME_GAP_TOLERANCE`).
+**Imported by.** `ui/id-switch-modal.js`, `ui/image-embedder.js` (`planKeyframeSamples`, `KEYFRAME_GAP_TOLERANCE`),
+`ui/brightness-sampler.js` (`planKeyframeSamples`).
 
 **Coverage.** `tests/test-id-switch-check.mjs` (synthetic 3-animal sessions defined
 in time: clean -> no flags; minority / majority switch -> onset / end change point;
@@ -8401,8 +8732,9 @@ ticks out only when the frame count changed — called from `updateSeekbarVisual
 point beats a repeat); `describeSwitchMarker(m)` (the tooltip text).
 
 **Drawing.** One tick per marker at `frame / (totalFrames - 1)` — the thumb's own
-mapping: amber = size, cyan = images, amber-over-cyan = "Both" (drawn once, on the
-size marker; its image twin is skipped), follow-on fainter and shorter,
+mapping: amber = size, cyan = images, violet = coat brightness; a "Both" tick wears
+its two checks' colours (`cue-both-<earlier>-<later>`; drawn once, on the earlier
+check's marker — size, then images, then brightness — its twin skipped), follow-on fainter and shorter,
 still-swapped repeat a short faint tick, `reviewed` (ticked in the tab) dimmed.
 Over the track, under the thumb, `pointer-events: none`: the seekbar's
 mousedown/drag handlers (`ui/ui-wiring.js`) snap to a tick within 5 px, and the
@@ -8729,10 +9061,20 @@ fix / undo — overlays, 3D, info panel, timeline — keeping this module a leaf
 markers on the seekbar — called after a check, from `updateInfoPanel` and from
 `switchSession`); `openIdSwitchPanel()` (show the panel, if hidden, on the tab);
 `clearIdSwitchResults(session?)` (called by `runTrackingPass` before it relabels);
-`ID_SWITCH_LEAD_IN_SECONDS`, `idSwitchLeadInFrame(marker, fps)`,
+`ID_SWITCH_LEAD_IN_SECONDS` (1), `ID_SWITCH_SINGLE_CAMERA_LEAD_SECONDS` (2),
+`idSwitchLeadSeconds(session)` (2 on a single-camera session, else 1),
+`idSwitchLeadInFrame(marker, fps, seconds?)`,
 `updateIdSwitchProgress(frame)`; back-compat
-`runSizeSwitchCheck`. `inject: {createEmbedder}` replaces the image model —
-test-only (`tests/e2e/id-switch-image-check.mjs`).
+`runSizeSwitchCheck`. `inject: {createEmbedder, createBrightnessSampler}` replaces
+the image model and the coat-brightness sampler — test-only
+(`tests/e2e/id-switch-image-check.mjs`, `tests/e2e/single-camera-track-all.mjs`).
+
+**The coat-brightness check** (`brightness: true`, `runBrightness`) runs
+`checkBrightnessSwitches` with `ui/brightness-sampler.js`'s vectors under the same
+cancellable progress dialog as images ("Reading coat brightness in N views: frame
+i of n"), reading `brightnessCheckHz` (4) and `brightnessCheckThreshold` (-800).
+It needs the videos but no model; without videos it says so. Its rows and ticks
+are violet; "About these flags" names it and its sampling.
 
 **Runs automatically after tracking.** `pose/tracker.js`'s `runTrackingPass` calls
 `runIdSwitchChecks({auto: true, statusPrefix, size, image})` after BOTH Track All
@@ -8745,7 +9087,32 @@ a check that cannot run as "skipped — reason", never as a failure of the pass.
 always analyses the WHOLE session's identities. Each result it returns carries
 `elapsedMs`, the check's wall-clock time (model download and video decoding
 included), which the Track All summary box shows (`ui/track-summary.js`); it is
-not saved — `serializeIdSwitchReview` (`ui/id-switch-review.js`) picks its fields explicitly.
+not saved — `serializeIdSwitchReview` (`ui/id-switch-review.js`) picks its fields explicitly. After a SINGLE-CAMERA Track All
+the coat-brightness check runs instead of body size (`autoBrightnessSwitchCheck`,
+default on — see `pose/tracker.js`).
+
+**On a single-camera session** (`pose/single-camera-tracking.js`) the checks also
+test Track All's candidate moments (`session._idSwitchCandidates`, passed as
+`moments`); a row from a moment reads "at …" instead of "close …" and says why it
+was looked at ("tracker nearly chose the swap", "input tracklet changes animal",
+and for an 'end' "the labels BEFORE it look swapped"). A fix renames the two
+identities in the stored candidates inside its range, so a later run tests the
+same animals. The checks run
+on `singleCameraCheckSession`'s stand-in — the one view's 2D as `points3d`
+(x, y, 0) — since there is no 3D; "nothing to check" means no identified
+detection rather than no 3D skeleton, and "About these flags" calls the size cue
+2D. A fix swaps the two TRACKS there (`swapSingleCameraIdentities`, which is
+also the undo), so the saved `.slp` carries it; its dialog says "(their tracks)"
+instead of "in every camera view". Results are kept on the real session as
+usual. Single-camera Track All runs the coat-brightness check automatically, and
+the image check when `autoImageSwitchCheck` is on — never body size, which from
+one view is not a usable cue (see `pose/single-camera-tracking.js`). The image
+check there ends a run of flagged encounters only above +|imageCheckThreshold|
+(`continueBelow`), and every check there skips encounters with no samples
+(`skipEmpty`) and lets the clearest of nearby 'end' rows lead
+(`clearestEndLeads`) — all from `singleCameraCheckOptions`; results carry them.
+On a real 10-min single-camera SLAP video in headless Chrome the image check
+took 32 s (one view, 3 mice, 2 crops/s).
 
 **The image check.** Needs the session's videos (else it says why). Not a GPU:
 without one the embedder runs the model on the CPU (`pickImageDevice` /
@@ -8815,12 +9182,19 @@ identity's colour, as in the overlays), score, the encounter's span ("close
 4:59.6–5:01.7 (frames 17,977–18,105)") with an **end ⇥** button, and
 "frame N · check · note" (Both / size / images; "follows the switch at m:ss";
 "labelling changes here; earlier encounters look swapped"; "still swapped"). A
-change point both checks found (same pair within 1 s) is ONE "Both" row (scores
-"size / image"). Clicking a row navigates there; ticking it dims the row and its
+change point two checks found (same pair within 1 s) is ONE "Both" row on the
+earlier check's result (size, then images, then coat brightness; scores "first /
+second", the two checks named in its tooltip). Clicking a row navigates there; ticking it dims the row and its
 seekbar tick (`reviewed`). **Where a row lands:** an encounter's frame is the
 LAST close sample (the labels are read from the tracklets AFTER it), so a swap
 happens before it, while the animals are close; clicking a row therefore lands
-`ID_SWITCH_LEAD_IN_SECONDS` (1 s) before the close spell STARTS
+`ID_SWITCH_LEAD_IN_SECONDS` (1 s) before the close spell STARTS — 2 s on a
+single-camera session (`idSwitchLeadSeconds`), where the whole row window (landing
+frame, progress bar, highlight, and where a Fix takes the current frame as its
+boundary) reaches 2 s either side: one view places the close spell less exactly,
+and on the 35 SLAP videos the labels flipped 1.5–2.5 s outside a ±1 s window on 2
+rows naming the swapped pair; with ±2 s both Fixes undo their swap (7 -> 9 of 24
+rows for images, 8 -> 10 of 30 for brightness; ±3 s adds none)
 (`idSwitchLeadInFrame`, from the flag's `startFrame`; its end frame when the start
 is unknown, e.g. a file saved before start frames were kept), so pressing play
 shows the whole interaction; **end ⇥** jumps to the end frame, and Next
@@ -8874,6 +9248,8 @@ rename them wrongly.
 `getActiveSession`), `import-export/save-load.js` (`setStatus`),
 `ui/loading-overlay.js` (`showLoadingProgress`, `hideLoading`, `yieldToPaint`),
 `ui/settings.js` (`getTrackingThreshold`), `pose/id-switch-check.js`,
+`pose/single-camera-tracking.js` (`singleCameraName`, `singleCameraCheckSession`,
+`swapSingleCameraIdentities`, `singleCameraCheckOptions`),
 `ui/image-embedder.js` (`createImageEmbedder`, `IMAGE_MODEL_MB`, `formatEmbedTiming`,
 `createLoadMeter`, `formatEmbedDevice`),
 `ui/id-switch-review.js` (row keys, change-point helpers, `linkIdSwitchResults`,
@@ -8910,8 +9286,11 @@ a session's check results (`session._idSwitch`) and their `.slp` serialization,
 ids, are what a reopened project still agrees on); `idSwitchPrimary(res)` (change
 points), `idSwitchMarkers(res)` (+ repeats), `idSwitchOnsets(res)` (the
 "possible switches" count), `idSwitchEncounterCount(res)`;
-`linkIdSwitchResults(results)` (tag each marker's `cue`, link a size and an image
-change point of the same pair within 1 s as `agree` — "Both");
+`linkIdSwitchResults(results)` (tag each marker's `cue`; link each change point of
+a later check to the first unlinked change point of an earlier one, same pair
+within 1 s, as `agree` — "Both"); `ID_SWITCH_CUES` (`['size', 'image',
+'brightness']`, the order of precedence); `idSwitchIsSecondary(m)` (the later half
+of a "Both" pair — listed and drawn through its partner);
 `serializeIdSwitchReview(session)` -> payload or `null` (no check results -> no
 key, so untouched projects keep their bytes); `ingestIdSwitchReview(session,
 payload)` (rebuilds `session._idSwitch`, re-links "Both"; ignores anything
@@ -8942,7 +9321,9 @@ fpsFromVideo, [imageHz, crops, cameras, model: {name, note}], points: [[frame,
 nameA, nameB, score (0.1), kind ('' | 'end'), followOf (frame | -1), continues
 (0 | 1), startFrame (the encounter's first close frame | -1; absent in files saved
 before it existed — they still open, rows then land on the end frame), link
-(`switchBackAt` / `switchedAt` | -1 for none; absent in older files)], …]}},
+(`switchBackAt` / `switchedAt` | -1 for none; absent in older files), look (a
+candidate moment's cues, e.g. `['tracklet']`; written ONLY for a point scored at
+a moment, so a project without single-camera moments saves byte-identically)], …]}},
 reviewed: [rowKey, …], fixes?: [[key, partnerKey, nameA, nameB, from, to], …]}`
 (`fixes` oldest first, only when something was fixed) — only what the tab and the timeline
 draw; not the encounters or the fitted models. A restored check result has
@@ -8955,7 +9336,8 @@ draw; not the encounters or the fitted models. A restored check result has
 
 **Coverage.** `tests/test-id-switch-check.mjs` (lossless reopen -> re-save,
 "Both" re-link, ticks, garbage tolerance, nothing written without results);
-`tests/test-id-switch-fix.mjs` (the links, the plans, renaming, fixes round trip);
+`tests/test-id-switch-fix.mjs` (the links, the plans, renaming, fixes round trip,
+and §6 a candidate moment's row taking over its stretch);
 `tests/e2e/visibility-settings-roundtrip.mjs` (both writers, real reader).
 
 ---
@@ -9228,7 +9610,10 @@ against `cutCrop` itself within 0.04 px, at any rotation);
 Promise<Float32Array[]>, broken, terminate()}` or null; crop helpers
 `cropGeometry` (now also `pts`: every keypoint, for the overlay — cutCrop ignores it), `cutCrop`,
 `convexHull`, `writeInputTensor`, `skeletonIndex(nodes)` (now also `n`, the node count),
-`frameCropGeometry(session, frame, items, cams, atFrames, sk)` -> `geo[view][item]`; constants
+`frameCropGeometry(session, frame, items, cams, atFrames, sk)` -> `geo[view][item]`, built on
+`mapFrameInstances(session, frame, items, cams, atFrames, fn)` (fn(instance) per view and item, on
+the frame each view decodes, hydrating a lazy project's frames around the read) and
+`streamingReader(decoder, frames, decode)` — both shared with `ui/brightness-sampler.js`; constants
 `TRANSFORMERS_URL`, `IMAGE_MODEL_ID`, `IMAGE_MODEL_MB`, `CROP` (160), `INPUT` (224).
 
 **The crop** (must match the calibration): rotate so the nose points right
@@ -9267,7 +9652,7 @@ so the crop worker can load it); `mediabunny`
 import would break this module in Node tests and in the crop worker, which has no
 importmap). Spawns `ui/image-crop-worker.js`.
 
-**Imported by.** `ui/id-switch-modal.js`, `ui/image-crop-worker.js`.
+**Imported by.** `ui/id-switch-modal.js`, `ui/image-crop-worker.js`, `ui/brightness-sampler.js`.
 
 **Coverage.** Crop geometry, `selectViews`, `chooseBackend`, the resize table and
 the keyframe line of `formatEmbedTiming` in
@@ -9279,6 +9664,48 @@ sample, bit-identical planes, sparse video unchanged); accuracy on real data by
 `tests/e2e/_diag-image-keyframe-snap.mjs` (diagnostic, not in the suite);
 the full path on real data by a scratch harness (not in the suite: it needs the
 proofread videos and GPU) — see the image-check notes above.
+
+---
+
+### ui/brightness-sampler.js
+
+**Purpose.** The vector provider behind Tracks ▸ **Check ID Switches (Coat
+Brightness)…** (`pose/id-switch-check.js` `checkBrightnessSwitches`): for each
+animal in each view, how bright its coat is. Reads the mean grey level (0.299 R +
+0.587 G + 0.114 B, as the image crops) in a disc at every body (non-tail)
+keypoint — radius 1/35 of the animal's body extent, 1–8 px (4 px for the ~140 px
+mice it was calibrated on) — and summarises them as the 10th / 50th / 90th
+percentile and the mean, log-scaled. Percentiles over whatever body nodes the
+skeleton has, so no node names are needed; missing and occluded keypoints are
+skipped, and fewer than 4 left gives no vector there. No model and no GPU: the
+only cost is decoding the video, which it streams per view exactly as the image
+check does (`streamingReader`, keyframe plans) — about 24 s for a 10-min,
+4-mouse, one-camera HEVC video at the default 4 samples/s.
+
+**Why a separate cue from images.** DINOv2 is trained to be invariant to
+brightness, which under IR is exactly what tells white, brown and black mice
+apart; this measures it directly. On the proofread single-camera SLAP videos its
+candidate-moment rows caught 14 real switches with no false rows (the image
+check's: 13; 12 shared), without a model download or WebGPU.
+
+**Key exports.** `createBrightnessSampler(session, {keyframes?})` ->
+`{getEmbeddings(frame, items), prepareFrames, releaseFrames, inFlight, views,
+stats}` (throws without loaded videos or with fewer than 4 body nodes);
+`brightnessFeatures(values)`; `bodyPoints(inst, bodyIdx)` -> `{pts, r}` | null;
+`discMean(px, w, h, x0, y0, x, y, r)`; `sampleAnimals(image, animals, canvas)`
+(one read of the region covering every animal's discs); `discRadius(extent)`;
+`BRIGHTNESS_QUANTILES`, `MIN_BRIGHTNESS_POINTS`, `BRIGHTNESS_IN_FLIGHT`.
+
+**Imports from project modules.** `ui/app-state.js` (`state.views`),
+`ui/image-embedder.js` (`skeletonIndex`, `mapFrameInstances`, `streamingReader`,
+`keyframeIndices`), `pose/id-switch-check.js` (`planKeyframeSamples`).
+
+**Imported by.** `ui/id-switch-modal.js`.
+
+**Coverage.** `tests/test-id-switch-check.mjs` (the pure helpers, and the check on
+synthetic coats catching a swap between equal-sized animals that the size check
+misses) and `tests/e2e/single-camera-track-all.mjs` §5 (the check in the real tab,
+with a stand-in sampler); on real data by `tests/e2e/_real-single-camera.mjs`.
 
 ---
 
@@ -9382,18 +9809,25 @@ Shortcuts and the Hot Keys modal where people look for them.
   included or tracking aborts with a warning.
 - `getTrackingThresholdDefs()` / `getTrackingThreshold(id)` /
   `getTrackingThresholds()` / `setTrackingThresholds(map)` — read/write the
-  tracker's user-editable thresholds. `getTrackingThresholdDefs` returns the
+  tracker's user-editable thresholds. Three of them configure single-camera
+  Track All (SLEAP's tracker, `pose/single-camera-tracking.js`): `scWindowSize`
+  (sleap-nn `--tracking_window_size`, default 5), `scOksStddev` (`--oks_stddev`,
+  default **0.1**, not sleap-nn's 0.025 — see that module) and `scConnectBreaks`
+  (0/1, `--post_connect_single_breaks`, default 1). `getTrackingThresholdDefs` returns the
   wizard's render catalog `[{ id, label, default, value, min, max, step, desc, kind }]`
   (`kind`: `'toggle'` for on/off settings, drawn as a switch; else `'number'`),
   **filtered to `WIZARD_THRESHOLD_IDS`** — the CrossViewTracker's free parameters
   only (`filterMinVisibleNodes`, `filterMinInstanceScore`, `corr2dWeight`,
   `corr3dWeight`, `velocityThreshold`, `distanceThreshold`, `timePenalty`,
   `stale`, `matchGate` (0/1 toggle for the CrossViewTracker match gate),
+  `scWindowSize`, `scOksStddev`, `scConnectBreaks` (single camera),
   `reprojErrorThreshold`, `autoSwitchCheck` — 0/1, run the body-size ID-switch
   check after Track All / Track Frame Range, default 1; `autoImageSwitchCheck` —
   0/1, the image check likewise, default 0; `imageCheckThreshold` -25;
   `imageCheckHz` 2; `imageCheckMaxViews` 3; `imageCheckWebNN` — 0/1, try WebNN,
-  default 0). The remaining catalog entries (`epipolarDecay`, `reprojSigma`, `epipolarWeight`,
+  default 0; `autoBrightnessSwitchCheck` — 0/1, the coat-brightness check after
+  SINGLE-CAMERA Track All, default 1; `brightnessCheckThreshold` -800;
+  `brightnessCheckHz` 4). The remaining catalog entries (`epipolarDecay`, `reprojSigma`, `epipolarWeight`,
   `reprojWeight`, `minMatchScore`, `prevIdentityBonus`, `reprojGate2/3/4`,
   `track3dWeight`) drive the bench-only luc3d matcher and are hidden from the UI
   but still resolve via `getTrackingThreshold`. `getTrackingThresholds` returns
@@ -10420,6 +10854,8 @@ stopping at the last frame; the step transport buttons/keys stop it first.
   Tracks ▸ **Check ID Switches (Body Size)…** (`menuCheckSizeSwitches`) calls
   `runIdSwitchChecks({size: true, navigateToFrame})`, and Tracks ▸ **Check ID
   Switches (Images)…** (`menuCheckImageSwitches`) `runIdSwitchChecks({image: true,
+  navigateToFrame})`, and Tracks ▸ **Check ID Switches (Coat Brightness)…**
+  (`menuCheckBrightnessSwitches`) `runIdSwitchChecks({brightness: true,
   navigateToFrame})`, from `ui/id-switch-modal.js`; `setIdSwitchNavigator` and
   `setIdSwitchRefresher` (the repaint after the tab fixes a switch) are called
   once at setup.

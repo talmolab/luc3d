@@ -68,12 +68,22 @@ export const SIZE_CHECK_DEFAULTS = {
     continueBelow: 0,   // ...and continues while the pair's next encounters still score below this
                         // (hysteresis: a persisting switch keeps scoring negative, if not always < -50)
     followSeconds: 60,  // a change point this soon after one sharing an identity is its follow-on
+    skipEmpty: false,   // runs ignore encounters scoring exactly 0 (no samples on either side, so no evidence);
+                        // on for single-camera sessions (pose/single-camera-tracking.js `singleCameraCheckOptions`)
+    clearestEndLeads: false, // among encounter 'end' rows within 5 s sharing an animal, the clearest leads (see
+                        // linkFollowOns); on for single-camera sessions
     minTrackedSeconds: 60, // refuse with less tracked data than this: the model can't be learned reliably
     sepFactor: 0.65,    // "close" = centroids nearer than sepFactor x median body extent
     sepDistance: null,  // override the close distance directly (world units)
     maxTrainRows: 20000,
     iterations: 300,
     signal: null,       // AbortSignal: the check throws an AbortError when it fires
+    moments: null,      // places a switch may have happened outside a close encounter: [{frame, startFrame,
+                        // identityA, identityB, cues}] (pose/single-camera-tracking.js `candidateMoments`). Each is
+                        // tested on its own: do the labels before it and after it disagree? See momentChangePoints.
+    momentSeconds: 15,  // evidence read on EACH side of a moment
+    momentThreshold: -200, // a moment is a change point when its two sides disagree by more than this
+                           // (calibrated 2026-10-07 on images, see MODULES.md: 13 of 59 real swaps, 0 false rows)
 };
 
 /** Image-check options on top of the shared ones. Threshold: see the calibration notes in MODULES.md. */
@@ -401,19 +411,245 @@ function finish(grid, LP, present, weight, o, extra) {
                  nameA: idents[e.a].name, nameB: idents[e.b].name, score: S };
     }).sort(function (x, y) { return x.frame - y.frame; });
     var changes = markChangePoints(scored, o);
+    // Candidate moments are tested separately: encounters score and flag exactly as without them, and only
+    // which change points are listed changes (a moment's row can take over an encounter's, momentChangePoints).
+    var moments = o.moments && o.moments.length ? testMoments(grid, LP, present, weight, o) : [];
+    var added = moments.length ? momentChangePoints(moments, scored, changes, o) : [];
+    var byFrame = function (x, y) { return x.frame - y.frame; };
+    var flags = scored.filter(function (s) { return s.flagged; })
+        .concat(added.filter(function (m) { return m.kind !== 'end'; })).sort(byFrame);
+    changes = changes.concat(added.filter(function (m) { return m.kind === 'end'; })).sort(byFrame);
     return Object.assign({
-        ok: true, flags: scored.filter(function (s) { return s.flagged; }), changes: changes, encounters: scored,
+        ok: true, flags: flags, changes: changes, encounters: scored, moments: moments,
         identities: idents.map(function (id) { return id.name; }),
-        sampledFrames: T, closeDistance: grid.sep, threshold: o.threshold,
+        sampledFrames: T, closeDistance: grid.sep, threshold: o.threshold, continueBelow: o.continueBelow, skipEmpty: !!o.skipEmpty, clearestEndLeads: !!o.clearestEndLeads,
         fps: o.fps, step: grid.step, sampleHz: grid.hz,
     }, extra || {});
+}
+
+/**
+ * Test each of `o.moments` — a place a switch may have happened outside a close
+ * encounter — on its own. The evidence for "a is a, b is b" (a-as-a against
+ * a-as-b, and b-as-b against b-as-a) is summed over the `momentSeconds` BEFORE
+ * the moment and, separately, the `momentSeconds` AFTER it, from samples in
+ * which each animal is apart from every other. If the labels changed there, the
+ * two sides disagree in sign; the score is then minus the weaker side's evidence
+ * (so a confident change is very negative), and otherwise plus it.
+ *
+ * Why both sides: the classifier learns from the tracker's own labels, so when a
+ * swap covers MOST of the session it is the swapped labelling that reads as
+ * right, and evidence after the swap alone agrees with it. Which side disagrees
+ * (`side`) says which one to fix. Measured on 35 proofread single-camera SLAP
+ * videos with the image check: reading only after each moment added 1 of 59 real
+ * swaps; the two-sided test adds 7 (13 on its own at -200, with no false rows).
+ * Windows are fixed, NOT cut at the pair's neighbouring encounters: mice in
+ * contact meet every few seconds, and cut windows left almost no evidence.
+ * A moment with no evidence on either side is skipped. Returns every tested
+ * moment, sorted by frame: {frame, startFrame, identityA, identityB, nameA,
+ * nameB, score, side: 'before'|'after', look: cues}.
+ */
+function testMoments(grid, LP, present, weight, o) {
+    var T = grid.T, K = grid.K, frames = grid.frames, idents = grid.idents, out = [];
+    var kOf = new Map(idents.map(function (id, k) { return [id.id, k]; }));
+    var alone = new Uint8Array(T * K);
+    grid.tl.forEach(function (t) { for (var i = t.start; i <= t.end; i++) alone[i * K + t.k] = 1; });
+    var sampleOf = function (f) {             // last sample at or before frame f, or -1
+        if (!(f >= frames[0])) return -1;
+        var lo = 0, hi = T - 1;
+        while (lo < hi) { var m = (lo + hi + 1) >> 1; if (frames[m] <= f) lo = m; else hi = m - 1; }
+        return lo;
+    };
+    var W = grid.secToSamples(o.momentSeconds);
+    var side = function (a, b, i0, i1) {      // evidence that a is a and b is b over samples [i0, i1]
+        var S = 0, n = 0;
+        for (var i = Math.max(0, i0); i <= Math.min(T - 1, i1); i++) {
+            if (alone[i * K + a] && present(i, a)) { S += LP[(i * K + a) * K + a] - LP[(i * K + a) * K + b]; n++; }
+            if (alone[i * K + b] && present(i, b)) { S += LP[(i * K + b) * K + b] - LP[(i * K + b) * K + a]; n++; }
+        }
+        return n ? S * weight : null;
+    };
+    o.moments.forEach(function (m) {
+        var a = kOf.get(m.identityA), b = kOf.get(m.identityB), e = sampleOf(m.frame);
+        if (a == null || b == null || a === b || e < 0) return;
+        var s0 = Math.max(0, Math.min(e, sampleOf(m.startFrame != null ? m.startFrame : m.frame)));
+        var before = side(a, b, s0 - W, s0 - 1), after = side(a, b, e + 1, e + W);
+        if (before == null || after == null) return;
+        var mag = Math.min(Math.abs(before), Math.abs(after));
+        var lo = Math.min(a, b), hi = Math.max(a, b);
+        out.push({ frame: frames[e], startFrame: frames[s0], identityA: idents[lo].id, identityB: idents[hi].id,
+                   nameA: idents[lo].name, nameB: idents[hi].name, score: (before < 0) !== (after < 0) ? -mag : mag,
+                   side: after < 0 ? 'after' : 'before', look: (m.cues || []).slice() });
+    });
+    return out.sort(function (x, y) { return x.frame - y.frame; });
+}
+
+/**
+ * The tested moments that become change points, merged with the encounters'
+ * (mutates `scored` and `changes`; returns the moment change points to add).
+ *
+ * A moment scoring below `momentThreshold` is a change point unless one of the
+ * pair's encounter change points is within 3 s (that one stands): an 'onset'
+ * when its AFTER side disagrees (the stretch after it looks swapped), an 'end'
+ * when its BEFORE side does. One swapped stretch keeps ONE row, and so one fix:
+ *  - An onset absorbs the pair's flagged run it starts: the run's encounters
+ *    after it (continuing while flagged or below `continueBelow`, as a run
+ *    does), and the run's first encounter just BEFORE it, whose evidence window
+ *    runs across the moment (the reason moments exist). That run's onset row
+ *    becomes a repeat; `switchBackAt` = the first encounter after it that reads
+ *    right again (whose 'end' row, if any, now pairs with the moment), else the
+ *    pair's next moment, else null (to the session's end).
+ *  - An 'end' closes the flagged run before it: `switchedAt` = the run's onset
+ *    row, whose `switchBackAt` becomes the moment, and the run's own 'end' row
+ *    is dropped. With no run before it, `switchedAt` = the pair's previous
+ *    encounter (labels read right after it), else its previous moment, else
+ *    null (from the session's start). "Before it" means ended before the
+ *    moment's own contact began: an encounter ending inside that contact is
+ *    the moment itself, and its score describes the labels AFTER it.
+ * Encounters scoring exactly 0 (no samples on either side) are skipped: they
+ * neither continue nor end a stretch, and an 'end' row on one inside the
+ * stretch is dropped.
+ * A moment contradicting a run is skipped — an onset after two of the run's
+ * encounters, an 'end' with the run still flagged after it — so no two rows'
+ * fixes overlap. Follow-ons (`followOf`) are then re-linked over every row.
+ * Exported, like markChangePoints, so it can be tested on hand-made scores.
+ * @param {Array} moments  tested moments (testMoments), sorted by frame
+ * @param {Array} scored   encounters, sorted by frame, after markChangePoints
+ * @param {Array} changes  markChangePoints' 'end' change points
+ * @param {object} o       momentThreshold, continueBelow, followSeconds, fps
+ */
+export function momentChangePoints(moments, scored, changes, o) {
+    var near = 3 * o.fps, out = [];
+    var samePair = function (x, y) { return x.identityA === y.identityA && x.identityB === y.identityB; };
+    var rows = scored.filter(function (x) { return x.flagged && !x.continues; }).concat(changes);
+    // The pair's encounters that carry evidence, by frame (scored is sorted). A score of exactly 0 had no
+    // samples on either side: it says nothing about the labels, so a stretch runs through it.
+    var pairOf = new Map();
+    var encounters = function (m) {
+        var key = m.identityA + ':' + m.identityB;
+        if (!pairOf.has(key)) pairOf.set(key, scored.filter(function (x) { return samePair(x, m) && (x.flagged || x.score !== 0); }));
+        return pairOf.get(key);
+    };
+    var dropEnds = function (m, lo, hi) {     // the pair's encounter 'end' rows inside a merged stretch (lo, hi]
+        for (var c = changes.length - 1; c >= 0; c--) if (samePair(changes[c], m) && changes[c].frame > lo && changes[c].frame <= hi) changes.splice(c, 1);
+    };
+    var after = function (L, f) { var i = 0; while (i < L.length && L[i].frame <= f) i++; return i; };
+    // An 'end' reads the stretch BEFORE it from encounters that ended before its own contact began: one
+    // ending inside the contact is the moment itself, and its score is about the labels AFTER it.
+    var beforeContact = function (L, m) { return after(L, (m.startFrame != null && m.startFrame <= m.frame ? m.startFrame : m.frame) - 1); };
+    moments.forEach(function (m) {
+        if (!(m.score < o.momentThreshold)) return;
+        if (rows.some(function (x) { return samePair(x, m) && Math.abs(x.frame - m.frame) < near; })) return;
+        var L = encounters(m), i = after(L, m.frame), next = L[i];
+        var prev = L[(m.side === 'after' ? i : beforeContact(L, m)) - 1];
+        if (m.side === 'after' ? prev && prev.flagged && i >= 2 && L[i - 2].flagged
+            : next && next.flagged && (prev ? prev.flagged : next.continues)) return;
+        out.push(Object.assign({}, m, { flagged: m.side === 'after', continues: false, kind: m.side === 'after' ? 'onset' : 'end' }));
+    });
+    var demote = function (e) {               // an encounter row the moment's row takes over: now a repeat
+        if (e.kind !== 'onset' || e.continues) return;
+        e.continues = true; delete e.kind; delete e.switchBackAt; delete e.followOf;
+    };
+    out.forEach(function (m) {
+        var L = encounters(m), i = after(L, m.frame);
+        var mine = out.filter(function (x) { return x !== m && samePair(x, m); });
+        if (m.kind === 'onset') {
+            var lim = mine.filter(function (x) { return x.frame > m.frame; })[0], stop = null;
+            var lo0 = mine.filter(function (x) { return x.frame < m.frame; }).pop();
+            if (L[i - 1] && L[i - 1].flagged && !(lo0 && lo0.frame >= L[i - 1].frame)) demote(L[i - 1]);
+            for (var j = i; j < L.length && !(lim && L[j].frame >= lim.frame); j++) {
+                if (L[j].flagged || L[j].score < o.continueBelow) { demote(L[j]); continue; }
+                stop = L[j]; break;
+            }
+            m.switchBackAt = stop ? stop.frame : lim ? lim.frame : null;
+            dropEnds(m, m.frame, (stop ? stop.frame : lim ? lim.frame : Infinity) - 1);
+            if (stop) changes.forEach(function (c) { if (samePair(c, m) && c.frame === stop.frame) c.switchedAt = m.frame; });
+        } else {
+            var ib = beforeContact(L, m), lo = mine.filter(function (x) { return x.frame < m.frame; }).pop(), first = null, k = ib - 1;
+            for (; k >= 0 && !(lo && L[k].frame <= lo.frame) && L[k].flagged; k--) first = L[k];
+            var before = k >= 0 && !(lo && L[k].frame <= lo.frame) ? L[k] : null;
+            if (first && first.kind === 'onset' && !first.continues) { m.switchedAt = first.frame; first.switchBackAt = m.frame; }
+            else m.switchedAt = before ? before.frame : lo ? lo.frame : null;
+            if (first) {
+                for (var r = k + 1; r < ib; r++) if (L[r] !== first) demote(L[r]);   // later runs inside the stretch
+                dropEnds(m, first.frame, L[i] ? L[i].frame : Infinity);
+            }
+        }
+    });
+    if (out.length) {
+        var primary = scored.filter(function (x) { return x.kind === 'onset' && !x.continues; }).concat(changes, out);
+        primary.forEach(function (x) { delete x.followOf; });
+        linkFollowOns(primary.sort(function (x, y) { return x.frame - y.frame; }), o);
+    }
+    return out;
+}
+
+/**
+ * Follow-ons: after a switch, each swapped identity carries the wrong label into
+ * its encounters with OTHER animals too, so those surface as change points of
+ * their own. Link a change point to an earlier one (of a different pair) that
+ * shares an identity and lies within `followSeconds` (`followOf`).
+ *
+ * Candidate moments (single camera only) change this twice:
+ *  - A moment's change point is NEVER a follow-on. It was tested on both sides
+ *    of its own place (13 of 13 real on the 35 proofread SLAP videos), so it is
+ *    not another row's echo — while following any earlier row within 60 s that
+ *    shares an animal hid 4 real swaps there behind false primaries up to 25 s
+ *    before them. Making them primaries: the swapped pair's row the primary in 17
+ *    of 23 swaps instead of 13, 9 fully undone by Fixing the primaries instead of
+ *    8, false primaries 29 -> 28 (brightness: 12 of 15 instead of 10).
+ *  - It also outranks encounter change points up to 3 s BEFORE it: it is taken
+ *    as if it came 3 s earlier, so they follow it (an encounter row of another
+ *    pair a second or two away is usually the swapped animal's wrong label).
+ * With `o.clearestEndLeads` (single camera, `singleCameraCheckOptions`), among
+ * encounter 'end' change points within 5 s of each other that share an animal,
+ * the one whose labels read right again most clearly (highest score) leads, as
+ * if it came first. After an early swap (the swapped labelling is the majority)
+ * the other pairs of a swapped animal read right again too, and their encounter
+ * windows can run past the swap, so their 'end' rows come a second or two BEFORE
+ * the swapped pair's: on one SLAP video +69, +37 and +36 led the real +444.
+ * Without moments or the option (every multi-camera check) the order is plain time.
+ * @param {Array} primary  change points sorted by frame
+ */
+function linkFollowOns(primary, o) {
+    var lead = 3 * o.fps, eff = new Map();
+    var at = function (x) { return eff.has(x) ? eff.get(x) : x.look ? x.frame - lead : x.frame; };
+    var shareOne = function (a, b) {
+        return [a.identityA, a.identityB].filter(function (id) { return id === b.identityA || id === b.identityB; }).length === 1;
+    };
+    if (o.clearestEndLeads) {
+        var ends = primary.filter(function (x) { return !x.look && x.kind === 'end'; }), seen = new Set();
+        ends.forEach(function (x) {
+            if (seen.has(x)) return;
+            var g = [x];                                 // x's group: 'end' rows linked by <= 5 s and one shared animal
+            for (var gi = 0; gi < g.length; gi++) ends.forEach(function (y) {
+                if (g.indexOf(y) < 0 && Math.abs(y.frame - g[gi].frame) <= 5 * o.fps && shareOne(y, g[gi])) g.push(y);
+            });
+            g.forEach(function (y) { seen.add(y); });
+            var best = g.reduce(function (b, y) { return y.score > b.score ? y : b; }, g[0]);
+            var first = g.reduce(function (f, y) { return Math.min(f, y.frame); }, Infinity);
+            if (best.frame !== first) eff.set(best, first - 1);
+        });
+    }
+    if (eff.size || primary.some(function (x) { return x.look; })) {
+        primary = primary.slice().sort(function (x, y) { return at(x) - at(y) || x.frame - y.frame; });
+    }
+    for (var pi = 0; pi < primary.length; pi++) {
+        var cur = primary[pi];
+        if (cur.look) continue;                        // a moment is never a follow-on
+        for (var pj = pi - 1; pj >= 0; pj--) {
+            var prev = primary[pj];
+            if (at(cur) - at(prev) > o.followSeconds * o.fps) break;
+            if (prev.followOf != null) continue;
+            if (shareOne(prev, cur)) { cur.followOf = prev.frame; break; }
+        }
+    }
 }
 
 /**
  * Mark change points on scored encounters (mutates them: `flagged`,
  * `continues`, `kind`, `followOf`) and return the `kind: 'end'` change points.
  * Exported so the threshold can be re-applied to the same scores (calibration)
- * without re-running a check. `o` needs threshold, continueBelow, followSeconds, fps.
+ * without re-running a check. `o` needs threshold, continueBelow, followSeconds, fps (and `skipEmpty`, optional).
  * @param {Array} scored  encounters sorted by frame
  */
 export function markChangePoints(scored, o) {
@@ -435,7 +671,10 @@ export function markChangePoints(scored, o) {
         if (!byPair.has(key)) byPair.set(key, []);
         byPair.get(key).push(sc);
     });
-    byPair.forEach(function (L) {
+    byPair.forEach(function (L0) {
+        // `skipEmpty`: an encounter scoring exactly 0 had no samples on either side, so it says nothing about
+        // the labels. Runs are then found among the others, and a 0 inside a run's stretch is one of its repeats.
+        var L = o.skipEmpty ? L0.filter(function (sc) { return sc.score !== 0; }) : L0;
         // hysteresis: a run starts below `threshold` and extends FORWARD while scores stay below
         // `continueBelow`. (Not backward: that would move an onset onto weaker evidence before it.)
         for (var n0 = 0; n0 < L.length; n0++) {
@@ -456,23 +695,17 @@ export function markChangePoints(scored, o) {
             if (!(atStart && !atEnd)) { L[n].kind = 'onset'; L[n].switchBackAt = atEnd ? null : L[m2 + 1].frame; }
             n = m2;
         }
+        if (L !== L0) {
+            var prevEv = null, k0 = 0;
+            L0.forEach(function (sc) {
+                if (sc.score !== 0) { prevEv = sc; k0++; return; }
+                if (prevEv ? prevEv.flagged : (L[k0] && L[k0].flagged)) { sc.flagged = true; sc.continues = true; }
+            });
+        }
     });
     changes.sort(function (x, y) { return x.frame - y.frame; });
-    // Follow-ons: after a switch, each swapped identity carries the wrong label into its encounters
-    // with OTHER animals too, so those surface as change points of their own. Link a change point to
-    // an earlier one (of a different pair) that shares an identity and lies within `followSeconds`.
-    var primary = scored.filter(function (x) { return x.kind === 'onset'; }).concat(changes)
-        .sort(function (x, y) { return x.frame - y.frame; });
-    for (var pi = 0; pi < primary.length; pi++) {
-        var cur = primary[pi];
-        for (var pj = pi - 1; pj >= 0; pj--) {
-            var prev = primary[pj];
-            if (cur.frame - prev.frame > o.followSeconds * o.fps) break;
-            if (prev.followOf != null) continue;
-            var sameIds = [prev.identityA, prev.identityB].filter(function (id) { return id === cur.identityA || id === cur.identityB; });
-            if (sameIds.length === 1) { cur.followOf = prev.frame; break; }
-        }
-    }
+    linkFollowOns(scored.filter(function (x) { return x.kind === 'onset'; }).concat(changes)
+        .sort(function (x, y) { return x.frame - y.frame; }), o);
     return changes;
 }
 
@@ -604,8 +837,41 @@ export function planKeyframeSamples(frames, keyframes, hasFrame) {
  * @returns {Promise<object>} as checkSizeSwitches, plus {imageHz, crops, cameras}.
  */
 export async function checkImageSwitches(session, opts) {
-    var o = Object.assign({}, IMAGE_CHECK_DEFAULTS, opts || {});
-    if (typeof o.getEmbeddings !== 'function') return failure('No image embedder available');
+    return checkVectorSwitches(session, Object.assign({}, IMAGE_CHECK_DEFAULTS, opts || {}), 'image');
+}
+
+/**
+ * Coat-brightness check: the image check's machinery on a much cheaper vector —
+ * the brightness of the coat at each animal's body keypoints
+ * (ui/brightness-sampler.js: 10th / 50th / 90th percentile and mean of the grey
+ * level in a small disc at each body keypoint, log-scaled). No model and no GPU,
+ * only the decoded video. Same options as the image check (`getEmbeddings`
+ * returns these vectors), with BRIGHTNESS_CHECK_DEFAULTS. Result `cue:
+ * 'brightness'`; `imageHz` / `crops` / `cameras` are its sample rate, samples
+ * and views.
+ */
+export async function checkBrightnessSwitches(session, opts) {
+    return checkVectorSwitches(session, Object.assign({}, BRIGHTNESS_CHECK_DEFAULTS, opts || {}), 'brightness');
+}
+
+/**
+ * Brightness-check options on top of the image check's. Calibrated 2026-10-08 on
+ * 35 proofread single-camera SLAP videos (3–4 mice of different coat colours, 59
+ * real switches after single-camera Track All): its candidate-moment rows caught
+ * 14 with no false rows — 12 of them the same switches the image check's moment
+ * rows catch (13) — while its ENCOUNTER rows were noise at every threshold (-200:
+ * 3 real, 34 false; -800: 0 and 9), hence the strict encounter threshold. Not
+ * calibrated on multi-camera data.
+ */
+export const BRIGHTNESS_CHECK_DEFAULTS = Object.assign({}, IMAGE_CHECK_DEFAULTS, {
+    imageHz: 4,         // samples per second per animal and view: no model, so it can sample densely
+    threshold: -800,    // encounter rows: see above
+    pcaDims: 8,         // the vectors are 4-dimensional; PCA keeps them whole
+});
+
+/** The image / brightness checks: a vector per (sample, animal, view), one classifier per view. */
+async function checkVectorSwitches(session, o, cue) {
+    if (typeof o.getEmbeddings !== 'function') return failure(cue === 'image' ? 'No image embedder available' : 'No brightness sampler available');
     var grid = buildGrid(session, o, false);
     if (grid.fail) return failure(grid.fail);
     var T = grid.T, K = grid.K;
@@ -650,7 +916,7 @@ export async function checkImageSwitches(session, opts) {
     } finally {
         if (typeof o.releaseFrames === 'function') o.releaseFrames();
     }
-    if (!crops) return failure('No crops could be embedded');
+    if (!crops) return failure(cue === 'image' ? 'No crops could be embedded' : 'No coat brightness could be sampled');
 
     // ---- per-camera blocked-CV classifiers -> mean log-probabilities per (sample, identity)
     var LP = new Float64Array(T * K * K), n = new Float64Array(T * K);
@@ -681,7 +947,7 @@ export async function checkImageSwitches(session, opts) {
     }
     for (var row3 = 0; row3 < T * K; row3++) if (n[row3] > 1) for (var c4 = 0; c4 < K; c4++) LP[row3 * K + c4] /= n[row3];
     var res = finish(grid, LP, function (i2, k2) { return n[i2 * K + k2] > 0; }, REFERENCE_HZ / imgHz, o,
-        { cue: 'image', imageHz: imgHz, crops: crops, cameras: cams });
+        { cue: cue, imageHz: imgHz, crops: crops, cameras: cams });
     if (progress) await progress('fit', cams.length * o.folds, cams.length * o.folds);
     return res;
 }

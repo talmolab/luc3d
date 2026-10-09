@@ -23,8 +23,10 @@
  *     re-run-with-different-settings workflow (#212). Each case asserts the
  *     prior result really was wiped, so it cannot pass vacuously.
  *  3. **A pass that bails out before touching anything does NOT mark dirty**
- *     (a NaN range, too few tracked views, too few cameras) — the flag is set at
- *     the mutation point, not on entry, so a refused click is not an edit.
+ *     (a NaN range, too few tracked views; on ONE camera Track Frame, Track
+ *     Frame Range and a lazy project's Track All) — the flag is set at the
+ *     mutation point, not on entry, so a refused click is not an edit. One
+ *     camera's Track All itself (SLEAP's tracker) does mark dirty.
  *
  * The automatic ID-switch checks that follow Track All / Track Frame Range are
  * switched OFF for the whole file: when one runs it calls `markDirty()` itself
@@ -222,9 +224,22 @@ try {
         out.oneViewAll = { dirty: window.__dirty(), ok: r.ok, groups: session.instanceGroups.size, status: window.__status() };
         settings.setCameraWeights({});
 
-        // A single-camera session: Track All refuses before clearing anything.
+        // A single-camera session runs SLEAP's tracker (pose/single-camera-tracking.js). Its refusals —
+        // Track Frame, Track Frame Range, and Track All on a LAZY project — touch nothing…
         const solo = window.__mkSession(window.__mkCams().slice(0, 1));
         window.__install(solo);
+        window.__clean();
+        tracker.trackCurrentFrame();
+        out.oneCamFrame = { dirty: window.__dirty(), status: window.__status() };
+        window.__clean();
+        const sr = await tracker.trackFrameRange(0, 10);
+        out.oneCamRange = { dirty: window.__dirty(), ok: sr.ok, status: window.__status() };
+        solo.lazyLoader = { isSync: true, nFrames: solo.frameGroups.size };
+        window.__clean();
+        const sl = await tracker.trackAll();
+        out.oneCamLazy = { dirty: window.__dirty(), ok: sl.ok, status: window.__status() };
+        // …while Track All itself rewrites the tracks, so it marks dirty like any tracking pass.
+        solo.lazyLoader = null;
         window.__clean();
         const s = await tracker.trackAll();
         out.oneCam = { dirty: window.__dirty(), ok: s.ok, status: window.__status() };
@@ -240,9 +255,16 @@ try {
     check(!c.oneViewAll.ok && /at least 2 views/i.test(c.oneViewAll.status),
         `precondition: Track All with one tracked view is refused ("${c.oneViewAll.status}")`);
     check(isFullyClean(c.oneViewAll.dirty), `a refused Track All does not mark dirty ${fmt(c.oneViewAll.dirty)}`);
-    check(!c.oneCam.ok && /at least 2 cameras/i.test(c.oneCam.status),
-        `precondition: Track All on a one-camera session is refused ("${c.oneCam.status}")`);
-    check(isFullyClean(c.oneCam.dirty), `a refused one-camera Track All does not mark dirty ${fmt(c.oneCam.dirty)}`);
+    check(/single camera use Track All/i.test(c.oneCamFrame.status), `precondition: Track Frame on one camera is refused ("${c.oneCamFrame.status}")`);
+    check(isFullyClean(c.oneCamFrame.dirty), `a refused one-camera Track Frame does not mark dirty ${fmt(c.oneCamFrame.dirty)}`);
+    check(!c.oneCamRange.ok && /multi-camera sessions/i.test(c.oneCamRange.status),
+        `precondition: Track Frame Range on one camera is refused ("${c.oneCamRange.status}")`);
+    check(isFullyClean(c.oneCamRange.dirty), `a refused one-camera Track Frame Range does not mark dirty ${fmt(c.oneCamRange.dirty)}`);
+    check(!c.oneCamLazy.ok && /lazily loaded/i.test(c.oneCamLazy.status),
+        `precondition: Track All on a lazy one-camera project is refused ("${c.oneCamLazy.status}")`);
+    check(isFullyClean(c.oneCamLazy.dirty), `a refused lazy one-camera Track All does not mark dirty ${fmt(c.oneCamLazy.dirty)}`);
+    check(c.oneCam.ok && /SLEAP's tracker/.test(c.oneCam.status), `one-camera Track All runs SLEAP's tracker ("${c.oneCam.status.slice(0, 70)}")`);
+    check(isFullyDirty(c.oneCam.dirty), `…and marks dirty ${fmt(c.oneCam.dirty)}`);
 
     // ---------------------------------------------------------------- phase 4
     // Windowed lazy session — the `sweepTrackAllFrames` path a reopened large
