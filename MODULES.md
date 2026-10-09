@@ -6341,14 +6341,14 @@ data sources. Plus visibility-toggle helpers and frame counter updates.
   including the Visibility checkbox handler that already ends in a redraw. **Playback throttle (issue #115):** the
   skeleton overlays + video redraw every frame, but the two *auxiliary* updates —
   `updateFrameInfo` (info-panel DOM + reproj-error aggregation) and
-  `timeline.setCurrentFrame` (a full timeline-canvas `redraw()`) — are coalesced
-  to ~10 Hz (`AUX_UPDATE_MS`) while `state.isPlaying`, since neither is legible at
-  playback speed and both were a per-frame cost capping buffered-playback fps.
-  When paused (seek/step) they run every call; `VideoController.stopPlayback`
-  fires one final unthrottled `drawAllOverlays` so the panel/playhead settle to
-  the exact stop frame. While playing, the timeline call passes
-  `{ playback: true }` so the timeline only moves its playhead over a cached
-  snapshot instead of a full redraw (see `ui/timeline.js`).
+  `timeline.setCurrentFrame` — are coalesced to ~10 Hz (`AUX_UPDATE_MS`) while
+  `state.isPlaying`, since neither is legible at playback speed and the info
+  panel is a per-frame cost capping buffered-playback fps. When paused
+  (seek/step) they run every call; `VideoController.stopPlayback` fires one
+  final unthrottled `drawAllOverlays` so the panel/playhead settle to the exact
+  stop frame. `timeline.setCurrentFrame` only moves the timeline's playhead
+  element now (no canvas repaint, see `ui/timeline.js`), so it is cheap either
+  way; the `{ playback: true }` it is passed while playing changes nothing.
 
   **Lazy reprojection fill — honors the group's triangulation method.** A group
   with `points3d` but no `reprojections`/`reprojectedInstances` is re-solved here
@@ -9531,20 +9531,40 @@ canvas "sad face" over just the timeline region. When that would happen the
 effective device-pixel ratio is scaled down (CSS size + scroll unchanged; only
 backing resolution drops) so the canvas always allocates.
 
-**Playback playhead fast path.** `setCurrentFrame(frameIdx, { playback: true })`
-(passed by `ui/rendering.js` only while `state.isPlaying`) does not repaint the
-timeline: the playhead is the only frame-dependent layer, so `redraw()` — while
-`_playbackMode` is set — snapshots the canvas just before drawing the playhead
-into `_staticCache`, and later playback calls blit that snapshot and draw only
-the playhead (`_drawFromStaticCache`). A full redraw on the 175-track HardFight
-project cost ~4.5 ms plus a forced style recalc (`ctx.font`) inside the
-video-frame callback, enough to drop video frames (`tests/e2e/_bench-playback.mjs`).
-Falls back to a full redraw when the visible window scrolls or the backing store
-changed size; any other `redraw()` (hover, resize, data change) re-snapshots, so
-the cache is always the last full redraw. A call WITHOUT the flag leaves playback
-mode, frees the snapshot and redraws in full even on the same frame (the
-`stopPlayback` settle call). Pixel-parity guarded by
-`tests/test-timeline-playback-playhead.js`.
+**The playhead is an element, not canvas paint.** It is the only
+frame-dependent thing on the timeline, so `setCurrentFrame` moves a positioned
+`div.timeline-playhead` (inside `_trackScrollEl`, so it scrolls with the rows;
+`pointer-events: none`, so the canvas keeps every pointer event) with a CSS
+transform — `_positionPlayhead` — and repaints NOTHING. The canvas is redrawn
+only when what it shows changes: data, zoom, size, range selection, or a scroll
+of the visible window — including the scroll `setCurrentFrame` itself makes
+when it follows a frame out of a zoomed window. Same geometry as the painted
+playhead: a 2.5 px line from the top to the label area (to the bottom when
+labels are hidden), a 10 × 6 px triangle on its foot, hidden when the frame is
+outside the window. A click or touch on the timeline moves it the same way.
+
+It used to be painted, so every frame step repainted the WHOLE canvas to move
+it — and the canvas is the timeline's full content height, not the visible
+part: on the 17-camera MultiCam_18 project 561 rows, 3,600 × 12,704 device
+pixels (~46 MP). On each step of a held arrow key (30 ms repeat) that outran
+the GPU at a Retina scale factor, and Chrome's 2D-canvas rate limiter blocked
+the page for 230–450 ms every ~0.6 s (`CanvasRenderingContext2D::FinalizeFrame`
+→ `SharedContextRateLimiter` → "GPU backpressure via
+GL_COMMANDS_COMPLETED_CHROMIUM" in a trace), holding stepping to ~19 frames/s
+on a main thread that was two-thirds idle. With `redraw` stubbed out, or at a
+1x scale factor, the same held key ran at the full 33 frames/s. This also
+REPLACES the old playback-only fast path (`_playbackMode` / `_staticCache`
+snapshot-and-blit, added because a full redraw inside the video-frame callback
+dropped frames): `opts.playback` is still accepted and changes nothing.
+
+`setFrameModified` now asks for a repaint (`_requestRedraw`: coalesced to one
+`requestAnimationFrame`, synchronous without rAF) when the flag actually
+changes: the white "modified" line is canvas paint, and a frame step's full
+repaint used to be the only thing that made a flag set without a redraw
+appear. Covered by `tests/test-timeline-playback-playhead.js` (no repaint on a
+step, playback call, click, or step inside a zoomed window; no playhead in the
+canvas pixels; geometry; hidden off-window; resize; the coalesced repaint for
+`setFrameModified`).
 
 **Trackpad / wheel semantics.** `_handleWheel` maps wheel input as:
 horizontal-dominant scroll (`|deltaX| > |deltaY|`) pans `_scrollFrame`
