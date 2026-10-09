@@ -8,8 +8,8 @@
  * Dependencies: mp4box.all.min.js (MP4Box)
  */
 
-import { shouldIgnoreShortcut } from '../ui/keyboard-target.js?v=538c9836a5e6';
-import { diagnoseUnplayableVideo } from './video-codec-diagnosis.js?v=538c9836a5e6';
+import { shouldIgnoreShortcut } from '../ui/keyboard-target.js?v=77dcdaae84b7';
+import { diagnoseUnplayableVideo } from './video-codec-diagnosis.js?v=77dcdaae84b7';
 
 // ---------------------------------------------------------------------------
 // Logging helper
@@ -784,6 +784,31 @@ export class OnDemandVideoDecoder {
         if (this._backWarmTimer) { clearTimeout(this._backWarmTimer); this._backWarmTimer = null; }
         if (this._backPrefetch) { this._backPrefetch.cancelled = true; this._backPrefetch = null; }
         this._closeStepStream();
+    }
+
+    /**
+     * Drop every decoded frame this decoder holds — the mediabunny backend's
+     * frame cache, the HTML5/WebCodecs cache — and its paused-stepping streams,
+     * keeping the decoder itself open. For a view that went OFF SCREEN
+     * (`VideoController._shownViews`): a 1680×1200 frame is 8 MB, so 17 cameras
+     * with full 60-frame caches hold ~8 GB of ImageBitmaps, and while that much
+     * stays alive Chrome garbage-collects almost continuously — measured: with
+     * one camera solo'd after using the grid, 68% of the main thread was GC and
+     * playback reached 63 of 120 pictures/s (43% dropped); with the hidden
+     * views' frames released, 115/s with none dropped. Nothing reads a hidden
+     * view's cache, and docking it again re-decodes the current frame.
+     */
+    releaseFrames() {
+        this.releaseStepCursor();
+        var be = this._mbBackend;
+        if (be && be.cache) {
+            be.cache.forEach(function (bitmap) { if (bitmap && typeof bitmap.close === 'function') bitmap.close(); });
+            be.cache.clear();
+        }
+        for (var entry of this.cache) {
+            if (entry[1] && typeof entry[1].close === 'function') entry[1].close();
+        }
+        this.cache.clear();
     }
 
     /** Close just the forward-stepping stream (reopened at a jump, or idle). */
@@ -2055,7 +2080,40 @@ export class VideoController {
     }
 
     /**
-     * Seek all views to the given frame in parallel, render, and call callbacks.
+     * The views to decode, play and paint: those with a decoder that are on
+     * screen, as `callbacks.isViewShown(view)` reports (the app passes
+     * `isViewDocked`). Undocked views — the 16 others while one camera is solo'd,
+     * or panes the user closed — are skipped, so their decoders cost nothing.
+     * Without the callback, or when it reports none shown, every view with a
+     * decoder (the previous behaviour).
+     *
+     * A decoder that WAS shown at the previous call and is not now has its
+     * decoded frames released (`releaseFrames`): left alone, the hidden views'
+     * full frame caches (~8 GB on 17 cameras at 1680×1200) keep Chrome
+     * garbage-collecting so often that the one view still shown stutters.
+     * Compared by decoder, not view object: decoders are pooled and reused
+     * across session switches, and one still in use must keep its frames.
+     */
+    _shownViews() {
+        var all = this.state.views.filter(function (v) { return v.decoder; });
+        var isShown = this.callbacks.isViewShown;
+        if (typeof isShown !== 'function') return all;
+        var shown = all.filter(function (v) { return isShown(v); });
+        if (!shown.length) shown = all;
+        var prev = this._lastShownDecoders;
+        var now = new Set(shown.map(function (v) { return v.decoder; }));
+        this._lastShownDecoders = now;
+        if (prev) {
+            prev.forEach(function (d) {
+                if (!now.has(d) && typeof d.releaseFrames === 'function') d.releaseFrames();
+            });
+        }
+        return shown;
+    }
+
+    /**
+     * Seek the shown views (`_shownViews`) to the given frame in parallel,
+     * render, and call callbacks.
      */
     async seekToFrame(frameIndex) {
         if (frameIndex < 0) frameIndex = 0;
@@ -2063,8 +2121,8 @@ export class VideoController {
 
         this.state.currentFrame = frameIndex;
 
-        // Decode all views in parallel
-        var views = this.state.views.filter(function (v) { return v.decoder; });
+        // Decode the shown views in parallel
+        var views = this._shownViews();
         var framePromises = views.map(function (view) {
             return view.decoder.getFrame(frameIndex).catch(function (e) {
                 videoLog("Error decoding frame " + frameIndex + " for view " + view.name + ": " + e.message, "error");
@@ -2080,8 +2138,11 @@ export class VideoController {
             var videoFrame = frames[i];
 
             if (videoFrame && view.ctx && view.canvas) {
-                // Draw video frame to the main canvas
-                view.ctx.drawImage(videoFrame, 0, 0, view.canvas.width, view.canvas.height);
+                // Draw video frame to the main canvas. A cached bitmap can have
+                // been closed while this seek awaited the other views (its view
+                // went off screen: `releaseFrames`) — skip it rather than throw.
+                try { view.ctx.drawImage(videoFrame, 0, 0, view.canvas.width, view.canvas.height); }
+                catch (e) { /* closed bitmap — the view is no longer shown */ }
             }
 
             // Clear the overlay canvas for fresh overlay drawing
@@ -2363,7 +2424,9 @@ export class VideoController {
         // the default is the smooth native <video> path below. Frame-accurate
         // stepping/seeking uses the mediabunny backend on BOTH paths, so only
         // continuous playback differs.
-        var allViews = this.state.views.filter(function (v) { return v.decoder; });
+        // Only the views on screen play (`_shownViews`): every <video> playing
+        // is a full-rate decode, and every refresh captures each playing view.
+        var allViews = this._shownViews();
         var mbViews = allViews.filter(function (v) { return v.decoder._mbBackend; });
         if (allViews.length > 0 && mbViews.length === allViews.length
             && this._bufferedPlaybackEnabled()) {
@@ -2375,10 +2438,22 @@ export class VideoController {
             return;
         }
 
-        // Start native playback on all decoders
+        // Start native playback on the shown views
         // Compute effective playback rate: (desired FPS / native FPS) * speed multiplier
         var speedMult = this.state.speedMultiplier || 1.0;
-        var views = this.state.views.filter(function (v) { return v.decoder; });
+        var views = allViews;
+        // Which views are playing. If that changes mid-playback (a different
+        // camera solo'd, a pane closed or docked), the loops below restart
+        // playback: a newly shown view's <video> is paused wherever it was
+        // left, and a restart re-seeks and plays exactly the views now shown.
+        var viewsKey = function (vs) { return vs.map(function (v) { return v.name; }).join('\n'); };
+        var playingKey = viewsKey(views);
+        var restartIfShownChanged = function (cur) {
+            if (viewsKey(cur) === playingKey) return false;
+            self.stopPlayback();
+            self.startPlayback();
+            return true;
+        };
         var nativeFps = (views.length > 0 && views[0].decoder.videoTrack && views[0].decoder.videoTrack.duration > 0)
             ? views[0].decoder.samples.length / (views[0].decoder.videoTrack.duration / views[0].decoder.videoTrack.timescale)
             : (this.state.fps || 30);
@@ -2412,7 +2487,8 @@ export class VideoController {
             if (frameIdx >= self.state.totalFrames) { self.stopPlayback(); return false; }
             self.state.currentFrame = frameIdx;
 
-            var currentViews = self.state.views.filter(function (v) { return v.decoder; });
+            var currentViews = self._shownViews();
+            if (restartIfShownChanged(currentViews)) return false;
             for (var j = 0; j < currentViews.length; j++) {
                 var view = currentViews[j];
                 if (view.decoder.drawCurrentFrame) {
@@ -2534,8 +2610,9 @@ export class VideoController {
         };
         function drawRefreshFrame(now) {
             if (!self.state.isPlaying) return false;
-            var cur = self.state.views.filter(function (v) { return v.decoder; });
+            var cur = self._shownViews();
             if (!cur.length) return false;
+            if (restartIfShownChanged(cur)) return false;
             var n = cur.length;
             if (!shown || shown.length !== n) {
                 if (pending) for (var q = 0; q < pending.length; q++) closeCap(pending[q]);
@@ -2686,7 +2763,7 @@ export class VideoController {
         }
 
         function startLoop() {
-            var live = self.state.views.filter(function (v) { return v.decoder; });
+            var live = views;
             var primaryDec = live.length ? live[0].decoder : null;
             var primaryEl = primaryDec && primaryDec._videoEl;
             var fps = (primaryDec && primaryDec._fps) || self.state.fps || 30;
@@ -2733,7 +2810,7 @@ export class VideoController {
                 videoLog('Playback loop: requestAnimationFrame fallback (no requestVideoFrameCallback)');
                 var onFrame = function () {
                     if (!self.state.isPlaying) return;
-                    var d0 = (self.state.views.filter(function (v) { return v.decoder; })[0] || {}).decoder;
+                    var d0 = primaryDec;
                     var frameIdx = (d0 && d0.getCurrentFrameIndex) ? d0.getCurrentFrameIndex() : self.state.currentFrame;
                     if (drawPlaybackFrame(frameIdx)) self._playRAF = requestAnimationFrame(onFrame);
                 };

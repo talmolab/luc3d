@@ -6,27 +6,27 @@
 // - updateFrameCounters: status-bar frame counters (labeled / triangulated / instances),
 //   whole-project on a lazy project too (counting logic in ui/frame-counters.js).
 
-import { state, interactionManager, timeline } from './app-state.js?v=538c9836a5e6';
-import { points3dNodeCount } from '../pose/pose-data.js?v=538c9836a5e6';
+import { state, interactionManager, timeline, isViewDocked } from './app-state.js?v=77dcdaae84b7';
+import { points3dNodeCount } from '../pose/pose-data.js?v=77dcdaae84b7';
 import {
     ensureLazyFrameData, ensureLazyTrailWindow, getInstanceGroupsForFrame,
     triangulateAndReproject, storeReprojectedInstances,
-} from '../pose/triangulation.js?v=538c9836a5e6';
-import { drawFrameOverlays } from './overlays.js?v=538c9836a5e6';
-import { syncViewLegends } from './view-legend.js?v=538c9836a5e6';
-import { isCameraTracked } from './settings.js?v=538c9836a5e6';
+} from '../pose/triangulation.js?v=77dcdaae84b7';
+import { drawFrameOverlays } from './overlays.js?v=77dcdaae84b7';
+import { syncViewLegends } from './view-legend.js?v=77dcdaae84b7';
+import { isCameraTracked } from './settings.js?v=77dcdaae84b7';
 // Plane placements draw on the same overlay canvas, so they must run AFTER
 // drawFrameOverlays (which opens with a clearRect). Circular import — safe
 // because the call site is inside drawAllOverlays' body.
-import { drawPlaneOverlays, applyPlaneModeToolbarLock } from './plane-definition.js?v=538c9836a5e6';
+import { drawPlaneOverlays, applyPlaneModeToolbarLock } from './plane-definition.js?v=77dcdaae84b7';
 
 // Pass 3f: editGroupState + finishEditGroup moved to ui/identity-assignment.js.
-import { editGroupState, finishEditGroup } from './identity-assignment.js?v=538c9836a5e6';
-import { updateFrameInfo } from './info-panel.js?v=538c9836a5e6';
+import { editGroupState, finishEditGroup } from './identity-assignment.js?v=77dcdaae84b7';
+import { updateFrameInfo } from './info-panel.js?v=77dcdaae84b7';
 import {
     computeFrameCounterBaseline, computeLazyCameraBaseline, createFrameCounterBaselineBuilder,
     countFrameCounters, nonResidentCameraCounts,
-} from './frame-counters.js?v=538c9836a5e6';
+} from './frame-counters.js?v=77dcdaae84b7';
 
 // ============================================
 // Reproj/Error visibility
@@ -326,8 +326,16 @@ export function drawAllOverlays(frameIdx, viewFrames) {
     // frames), each needing the same lazy reprojection fill — done once each.
     var filledFrames = null;
 
+    // Views not on screen (another camera is solo'd, or the pane was closed)
+    // have detached overlay canvases: skip them. Docking one again creates a
+    // new canvas and redraws (`refreshPaneInteractions`), so nothing stale is
+    // ever shown. With NO view docked, draw them all — the same fallback as
+    // `VideoController._shownViews`.
+    const anyDocked = state.views.some(isViewDocked);
+
     for (const view of state.views) {
         if (!view.overlayCtx || !view.overlayCanvas) continue;
+        if (anyDocked && !isViewDocked(view)) continue;
 
         // This view's frame: during playback, the frame ITS canvas shows
         // (`viewFrames`); otherwise — or if that frame isn't hydrated in a lazy
