@@ -34,9 +34,26 @@ FIGS = Path(__file__).resolve().parent.parent
 OUT = FIGS / "out"
 
 
-def load(name: str) -> dict:
-    """Read `figs/out/<name>`, or explain what to run if it is missing."""
+def load(name: str, variant: bool = True) -> dict:
+    """Read `figs/out/<name>`, or explain what to run if it is missing.
+
+    With `FIG_VARIANT=<v>` in the environment, `figs/out/<stem>_<v><ext>` is read
+    instead when it exists (e.g. fig6_detections_proofread.json), so a whole figure
+    can be rebuilt from an alternative measurement without touching the panels
+    (2026-10-06: the Fig 4 proofread-2D variant). Pair with `FIG_TAG` in style.save.
+
+    `variant=False` pins the base file even under FIG_VARIANT -- for a panel that
+    must stay on the raw detections inside a proofread variant (the new Fig 4b's
+    IDF1, 2026-10-07: proofread IDF1 is ~1.0 everywhere and says nothing).
+    """
+    import os
     p = OUT / name
+    v = os.environ.get("FIG_VARIANT") if variant else None
+    if v:
+        alt = OUT / f"{p.stem}_{v}{p.suffix}"
+        if alt.exists():
+            print(f"  [variant {v}] {name} -> {alt.name}")
+            p = alt
     if not p.exists():
         sys.exit(
             f"missing figs/out/{name}\n"

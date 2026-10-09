@@ -653,9 +653,11 @@ def save(fig, fig_no, letter, slug, *, png: bool = True, close: bool = True) -> 
     A companion PNG is written by default so panels can be eyeballed without a
     PDF viewer; the PDF is the artefact that goes into Illustrator.
     """
-    out = FIGURES / f"fig{fig_no}"
+    import os
+    fid = f"{fig_no}{os.environ.get('FIG_TAG', '')}"      # FIG_TAG=b -> figures/fig4b/fig4b<letter>_... (variant builds)
+    out = FIGURES / f"fig{fid}"
     out.mkdir(parents=True, exist_ok=True)
-    stem = out / f"fig{fig_no}{letter}_{slug}"
+    stem = out / f"fig{fid}{letter}_{slug}"
     # NO tight bbox. The panel already declared its exact size on the column grid
     # and `constrained_layout` fitted the labels inside it; trimming to the ink
     # would make the output size depend on tick-label length, which is what made
@@ -671,7 +673,8 @@ def save(fig, fig_no, letter, slug, *, png: bool = True, close: bool = True) -> 
 
 def data_path(fig_no, name) -> Path:
     """`data/figN/<name>` -- the committed, plot-ready table for a panel."""
-    d = DATA / f"fig{fig_no}"
+    import os
+    d = DATA / f"fig{fig_no}{os.environ.get('FIG_TAG', '')}"
     d.mkdir(parents=True, exist_ok=True)
     return d / name
 

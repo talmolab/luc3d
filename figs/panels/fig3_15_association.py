@@ -43,7 +43,9 @@ from src.style import grid, use  # noqa: E402
 import panels.fig3_01_association as fig3a  # noqa: E402
 
 FIGS = Path(__file__).resolve().parent.parent
-OUT = FIGS / "figures" / "fig3" / "_association_top.pdf"
+# FIG_TAG=b writes into figures/fig3b/ (variant builds, 2026-10-07)
+OUT = (FIGS / "figures" / f"fig3{__import__('os').environ.get('FIG_TAG', '')}"
+       / "_association_top.pdf")
 
 #: 13c's own tab10 blue/orange/green (`blender-images/hyp_common.py`'s
 #: TAB10_3), keyed on the SAME identity indices fig3_01_association.py already

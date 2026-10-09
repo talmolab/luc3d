@@ -32,6 +32,9 @@ import fitz
 
 FIGS = Path(__file__).resolve().parent
 FIGURES = FIGS / "figures"
+#: FIG_TAG=b reads and writes figures/figNb/figNb<letter>_* (variant builds, 2026-10-07);
+#: unset = the base figure folders, unchanged.
+TAG = __import__("os").environ.get("FIG_TAG", "")
 
 # Scale for the 12 plot panels. 0.635 puts three 88 mm panels (plus gutters) on the
 # 180 mm page and prints the 8 pt body at ~5 pt -- dense but legible; below ~0.55
@@ -130,7 +133,7 @@ def build_block(outdir: Path) -> None:
     docs, dims = {}, {}
     for row in BLOCK_ROWS:
         for f, l, s in row:
-            d = fitz.open(FIGURES / f"fig{f}" / f"fig{f}{l}_{s}.pdf")
+            d = fitz.open(FIGURES / f"fig{f}{TAG}" / f"fig{f}{TAG}{l}_{s}.pdf")
             docs[l] = d
             dims[l] = (d[0].rect.width / MM, d[0].rect.height / MM)
     if len({dims[l] for row in BLOCK_ROWS for _f, l, _s in row}) != 1:
@@ -168,7 +171,7 @@ def build_block(outdir: Path) -> None:
                          fontsize=key_pt, color=rgb)
         kx += hebo.text_length(name, fontsize=key_pt) + key_gap
 
-    dst = outdir / "fig6a_block.pdf"
+    dst = outdir / f"fig6{TAG}a_block.pdf"
     out.save(dst, deflate=True)
     out.close()
     print(f"  fig6a <- fig7 a+b / c+d block  ({BLOCK_W:.2f} x {total_h:.2f} mm, "
@@ -178,7 +181,7 @@ def build_block(outdir: Path) -> None:
 
 
 def sync() -> None:
-    outdir = FIGURES / "fig6"
+    outdir = FIGURES / f"fig6{TAG}"
     outdir.mkdir(parents=True, exist_ok=True)
     for name in STALE:
         p = outdir / name
@@ -187,11 +190,11 @@ def sync() -> None:
             print(f"  removed stale {name}")
     build_block(outdir)
     for letter, src_fig, src_letter, slug, scale in MAPPING:
-        src = FIGURES / f"fig{src_fig}" / f"fig{src_fig}{src_letter}_{slug}.pdf"
+        src = FIGURES / f"fig{src_fig}{TAG}" / f"fig{src_fig}{TAG}{src_letter}_{slug}.pdf"
         if not src.exists():
             print(f"  MISSING source {src.relative_to(FIGS)} -- fig6{letter} skipped")
             continue
-        dst = outdir / f"fig6{letter}_{slug}.pdf"
+        dst = outdir / f"fig6{TAG}{letter}_{slug}.pdf"
         sdoc = fitz.open(src)
         r = sdoc[0].rect
         ddoc = fitz.open()

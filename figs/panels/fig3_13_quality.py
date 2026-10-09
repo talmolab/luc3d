@@ -62,7 +62,13 @@ def main():
     df, detail, methods, vdetail, session_rates = fig3c.build(as_shipped=False)
 
     # x10: fig3c.PER is 10,000, this panel is per 100,000 -- see docstring.
-    scale = 100_000 / fig3c.PER
+    # Fig 3b (FIG_TAG=b, 2026-10-08, Eric: "3e should be in ... % of frames
+    # misgrouped"): the same rates as a PERCENT of clean frames. Base Fig 3 keeps
+    # per 100,000 until that is decided for the manuscript figure.
+    # 2026-10-09: the former Fig 3c/4c/6c variant (>= 5 visible body keypoints, tail excluded) is now the base figure:
+    # per-session % axis is the default; the old per-100,000 symlog render is gone.
+    pct = True
+    scale = (100.0 if pct else 100_000) / fig3c.PER
     pooled = {name: scale * np.concatenate([session_rates[(lab, name)]
                                            for lab in df.label.unique()
                                            if len(session_rates[(lab, name)])])
@@ -75,20 +81,29 @@ def main():
         v = pooled[name]
         if not len(v):
             continue
-        ax.scatter(np.full(len(v), i) + rng.uniform(-0.16, 0.16, len(v)),
-                  v, s=4, color=color, alpha=0.35, linewidths=0, zorder=1)
+        if not pct:   # Fig 3b drops the per-session dots (Eric, 2026-10-08)
+            ax.scatter(np.full(len(v), i) + rng.uniform(-0.16, 0.16, len(v)),
+                      v, s=4, color=color, alpha=0.35, linewidths=0, zorder=1)
         # THICKER THROUGHOUT (Eric: "thicken the lines"), roughly 1.6x Fig 3c's
         # own 1.1/0.9/0.9 pt -- enough that greedy's near-zero box reads as a
         # deliberately thin mark rather than nothing, on both series equally so
         # they stay a matched pair. FILLED, with a WHITE median line (13i's
         # style -- see docstring), not a same-colour median on an unfilled box.
+        # Figs 3b/3c (Eric, 2026-10-08: "make it a little thicker so we can see the
+        # green"): heavier outlines, and the median in the box's own colour when the box
+        # is too thin for a white line (a white median ERASES greedy's ~0.01% box).
+        lw_box, lw_wh = (3.5, 2.5) if pct else (1.8, 1.5)
+        q1, q3 = np.percentile(v, [25, 75])
+        # median always white; a THIN white line on a box too thin for the 2 pt one
+        # (Eric, 2026-10-08: "it still needs a thin white line")
+        med_lw = 2.0 if (not pct or (q3 - q1) > 0.05) else 0.7
         ax.boxplot([v], positions=[i], widths=0.5, patch_artist=True,
                   showfliers=False, zorder=3, manage_ticks=False,
-                  medianprops=dict(color="white", linewidth=2.0),
+                  medianprops=dict(color="white", linewidth=med_lw, zorder=6),
                   boxprops=dict(facecolor=to_rgba(color, 0.85), edgecolor=color,
-                                linewidth=1.8),
-                  whiskerprops=dict(color=color, linewidth=1.5),
-                  capprops=dict(color=color, linewidth=1.5))
+                                linewidth=lw_box),
+                  whiskerprops=dict(color=color, linewidth=lw_wh),
+                  capprops=dict(color=color, linewidth=lw_wh))
 
     # full 7 pt again: the 2026-08-25 width rebalance took the cell from
     # 36.1 to 47.25 mm, and "greedy, fresh anchor (shipped)" measures ~37 mm
@@ -98,16 +113,30 @@ def main():
     ax.set_xticklabels([""] * len(methods))
     ax.tick_params(axis="x", length=0)
     ax.set_xlim(-0.6, len(methods) - 0.4)
-    ax.set_yscale("symlog", linthresh=1, linscale=0.6)
-    top = max(400, float(max(v.max() for v in pooled.values() if len(v))) * 10 ** 0.25)
-    ax.set_ylim(0, top)
-    # AS MANY DECADES AS `top` NEEDS, not Fig 3c's single hardcoded "+1000" step
-    # -- the x10 rescale pushes `top` past 1000 routinely, sometimes past 10000.
-    decades = [0, 1, 10, 100, 1000, 10_000, 100_000]
-    yticks = [d for d in decades if d == 0 or d <= top]
-    ax.set_yticks(yticks)
-    ax.set_yticklabels([f"{d:,}" for d in yticks])
-    ax.set_ylabel("frames misgrouped vs GT\nper 100,000 clean frames")
+    if pct:
+        # LINEAR percent axis for Fig 3b (Eric, 2026-10-08: "also no log scale").
+        from matplotlib.ticker import FuncFormatter, MaxNLocator
+        # fixed 0-2% (Eric, 2026-10-08: first "go to 3 percent", then "go to 2%"); with the
+        # dots gone the boxes and whiskers are what is drawn, and they sit well inside
+        # 3b and 3c: 0-0.8% (Eric, 2026-10-08: "lets make the y axis .8 now")
+        ax.set_ylim(0, 0.8)
+        ax.yaxis.set_major_locator(MaxNLocator(nbins=5))
+        ax.yaxis.set_major_formatter(FuncFormatter(lambda y, _: "0" if y == 0 else f"{y:g}%"))
+        # PER SESSION, labelled as such (Eric, 2026-10-08: "lets go back to per session
+        # but then label it correctly"): each value is one session's misgrouped frames
+        # / that session's eligible frames; the box summarises the sessions.
+        ax.set_ylabel("% frames misgrouped\nper session")
+    else:
+        ax.set_yscale("symlog", linthresh=1, linscale=0.6)
+        top = max(400, float(max(v.max() for v in pooled.values() if len(v))) * 10 ** 0.25)
+        ax.set_ylim(0, top)
+        # AS MANY DECADES AS `top` NEEDS, not Fig 3c's single hardcoded "+1000" step
+        # -- the x10 rescale pushes `top` past 1000 routinely, sometimes past 10000.
+        decades = [0, 1, 10, 100, 1000, 10_000, 100_000]
+        yticks = [d for d in decades if d == 0 or d <= top]
+        ax.set_yticks(yticks)
+        ax.set_yticklabels([f"{d:,}" for d in yticks])
+        ax.set_ylabel("frames misgrouped vs GT\nper 100,000 clean frames")
     # shared cell x, so the four data cells line up as a grid -- see
     # fig13_sync.CELL_AXES_X.
     place_cell_axes(fig, ax, "quality_col")

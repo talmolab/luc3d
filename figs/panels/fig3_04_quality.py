@@ -123,8 +123,14 @@ PER = 10_000
 
 def variant_deposit_name():
     """The newest fresh-anchor quality deposit, or a message saying what to run."""
+    # `_unfilt` (and any FIG_VARIANT-tagged twin) is excluded here: the base name is
+    # chosen first, and data_loader.load() then swaps in `<stem>_<variant>.json` under
+    # FIG_VARIANT. Without this, `..._unfilt.json` sorts AFTER its base file and the
+    # base Fig 3 would silently draw the unfiltered run (2026-10-07).
     hits = sorted(p.name for p in (Path(__file__).resolve().parent.parent / "out")
-                  .glob(VARIANT_GLOB) if "__shipped" not in p.name)
+                  .glob(VARIANT_GLOB)
+                  if "__shipped" not in p.name
+                  and not p.stem.endswith(("_unfilt", "_bvis4", "_bvis5")))
     if not hits:
         sys.exit("fig3d: no fresh-anchor quality deposit. Run:\n"
                  "  PY=/root/vast/eric/luc3d-bench/liezl_env/bin/python\n"

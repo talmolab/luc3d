@@ -100,7 +100,13 @@ DRIVER = REPO / "figs" / "fig6-bench" / "fig6_bench.mjs"
 EXPERIMENTAL = REPO / "figs" / "fig6-bench" / "xv_experimental.js"
 PROBE_DRIVER = REPO / "figs" / "fig3-bench" / "fig3_exhaustive_probe.mjs"
 
-VAR_ROOT = OUT_DIR / "tmp" / "headtohead_var"
+#: FIG3_VARIANT=unfilt (2026-10-07, Fig 3b): fig3_headtohead reads the unfiltered pool and
+#: its exhaustive cache from out/tmp/headtohead_unfilt; this script's greedy cells go to
+#: headtohead_var_unfilt and its deposits gain an `_unfilt` suffix, which is what
+#: data_loader.load() looks for under FIG_VARIANT=unfilt. Unset = unchanged.
+VARIANT = os.environ.get("FIG3_VARIANT", "")
+VSUFFIX = f"_{VARIANT}" if VARIANT else ""
+VAR_ROOT = OUT_DIR / "tmp" / f"headtohead_var{VSUFFIX}"
 
 #: The fresh anchor, exactly as Fig 3g / Fig 7's variant / Fig 8's winner state it.
 #: corr3dWeight stays at the shipped 6: corr3dWeight 12 is settled as not worth it
@@ -286,8 +292,8 @@ def run_pipeline(tag, params, jobs, only, idf1, force_greedy, quality=True):
     print(f"\n=== [{tag}] head-to-head: greedy re-run + agreement "
           f"(idf1={'on' if idf1 else 'OFF'}) ===", flush=True)
     hh.main()
-    dep_hh = move_deposit(sandbox / "fig3_headtohead.json",
-                          OUT_DIR / f"fig3_headtohead__{tag}.json")
+    dep_hh = move_deposit(sandbox / f"fig3_headtohead{hh.SUFFIX}.json",
+                          OUT_DIR / f"fig3_headtohead__{tag}{VSUFFIX}.json")
 
     dep_q = None
     if quality:
@@ -296,8 +302,8 @@ def run_pipeline(tag, params, jobs, only, idf1, force_greedy, quality=True):
         q.OUT_DIR = sandbox
         print(f"\n=== [{tag}] quality: GT grouping accuracy + cost gap ===", flush=True)
         q.main()
-        dep_q = move_deposit(sandbox / "fig3_quality.json",
-                             OUT_DIR / f"fig3_quality__{tag}.json")
+        dep_q = move_deposit(sandbox / f"fig3_quality{hh.SUFFIX}.json",
+                             OUT_DIR / f"fig3_quality__{tag}{VSUFFIX}.json")
 
     for dep in (dep_hh, dep_q):
         if dep is None:

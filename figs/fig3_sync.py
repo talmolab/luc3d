@@ -89,6 +89,9 @@ import fitz
 
 FIGS = Path(__file__).resolve().parent
 FIGURES = FIGS / "figures"
+#: FIG_TAG=b reads and writes figures/figNb/figNb<letter>_* (variant builds, 2026-10-07);
+#: unset = the base figure folders, unchanged.
+TAG = __import__("os").environ.get("FIG_TAG", "")
 sys.path.insert(0, str(FIGS))
 from assemble import INK, LETTER_LEAD, LETTER_PT, MM, ROW_GAP, TITLE_PT, TITLES  # noqa: E402
 
@@ -262,13 +265,13 @@ def _open_scaled(src: Path, scale: float | None = None, w_mm: float | None = Non
 def copy_panel(dst_fig: int, dst_letter: str, src_fig: int, src_letter: str, slug: str,
               *, scale: float = NATIVE_SCALE, w_mm: float | None = None,
               h_mm: float | None = None) -> None:
-    src = FIGURES / f"fig{src_fig}" / f"fig{src_fig}{src_letter}_{slug}.pdf"
+    src = FIGURES / f"fig{src_fig}{TAG}" / f"fig{src_fig}{TAG}{src_letter}_{slug}.pdf"
     if not src.exists():
         print(f"  MISSING source {src.relative_to(FIGS)} -- fig{dst_fig}{dst_letter} skipped")
         return
-    outdir = FIGURES / f"fig{dst_fig}"
+    outdir = FIGURES / f"fig{dst_fig}{TAG}"
     outdir.mkdir(parents=True, exist_ok=True)
-    dst = outdir / f"fig{dst_fig}{dst_letter}_{slug}.pdf"
+    dst = outdir / f"fig{dst_fig}{TAG}{dst_letter}_{slug}.pdf"
     ddoc = _open_scaled(src, scale=None if (w_mm or h_mm) else scale, w_mm=w_mm, h_mm=h_mm)
     ddoc.save(dst, deflate=True)
     ddoc.close()
@@ -320,8 +323,8 @@ def build_stack(dst_fig: int, dst_letter: str, top: tuple, bottom: tuple,
     b_fig, b_letter, b_slug = bottom
     drawn_letter = bottom_letter if bottom_letter is not None else b_letter
     a_src = top_path if top_path is not None else \
-        FIGURES / f"fig{t_fig}" / f"fig{t_fig}{t_letter}_{t_slug}.pdf"
-    b_src = FIGURES / f"fig{b_fig}" / f"fig{b_fig}{b_letter}_{b_slug}.pdf"
+        FIGURES / f"fig{t_fig}{TAG}" / f"fig{t_fig}{TAG}{t_letter}_{t_slug}.pdf"
+    b_src = FIGURES / f"fig{b_fig}{TAG}" / f"fig{b_fig}{TAG}{b_letter}_{b_slug}.pdf"
     da, db = fitz.open(a_src), fitz.open(b_src)
     ra, rb = da[0].rect, db[0].rect
     w = ra.width * scale
@@ -368,9 +371,9 @@ def build_stack(dst_fig: int, dst_letter: str, top: tuple, bottom: tuple,
         page.insert_text(fitz.Point(tx, letter_y), title, fontname="Fig13StackHeboBold",
                          fontsize=TITLE_PT, color=INK)
 
-    outdir = FIGURES / f"fig{dst_fig}"
+    outdir = FIGURES / f"fig{dst_fig}{TAG}"
     outdir.mkdir(parents=True, exist_ok=True)
-    dst = outdir / f"fig{dst_fig}{dst_letter}_{t_slug}.pdf"
+    dst = outdir / f"fig{dst_fig}{TAG}{dst_letter}_{t_slug}.pdf"
     out.save(dst, deflate=True)
     out.close()
     top_src_desc = a_src.name if top_path is not None else f"fig{t_fig}{t_letter}"
@@ -391,7 +394,7 @@ def build_column(dst_fig: int, dst_letter: str, dst_slug: str, items: list,
     build_stack draws its bottom half's. Returns the column's height in mm."""
     from assemble import axes_extent
 
-    srcs = [FIGURES / f"fig{f}" / f"fig{f}{l}_{s}.pdf" for f, l, s, _ in items]
+    srcs = [FIGURES / f"fig{f}{TAG}" / f"fig{f}{TAG}{l}_{s}.pdf" for f, l, s, _ in items]
     docs = [fitz.open(p) for p in srcs]
     ws = [d[0].rect.width * scale for d in docs]
     hs = [d[0].rect.height * scale for d in docs]
@@ -426,7 +429,7 @@ def build_column(dst_fig: int, dst_letter: str, dst_slug: str, items: list,
         d.close()
 
     col_w, col_h = page.rect.width / MM, page.rect.height / MM
-    dst = FIGURES / f"fig{dst_fig}" / f"fig{dst_fig}{dst_letter}_{dst_slug}.pdf"
+    dst = FIGURES / f"fig{dst_fig}{TAG}" / f"fig{dst_fig}{TAG}{dst_letter}_{dst_slug}.pdf"
     out.save(dst, deflate=True)
     out.close()
     print(f"  fig{dst_fig}{dst_letter} <- column of {len(items)} (x{scale:g}, "
@@ -435,9 +438,9 @@ def build_column(dst_fig: int, dst_letter: str, dst_slug: str, items: list,
 
 
 def sync() -> None:
-    hyp = FIGURES / "fig3" / "fig3c_hyp_illustration.pdf"
-    quality = FIGURES / "fig3" / "fig3e_quality.pdf"
-    assoc_top = FIGURES / "fig3" / "_association_top.pdf"
+    hyp = FIGURES / f"fig3{TAG}" / f"fig3{TAG}c_hyp_illustration.pdf"
+    quality = FIGURES / f"fig3{TAG}" / f"fig3{TAG}e_quality.pdf"
+    assoc_top = FIGURES / f"fig3{TAG}" / "_association_top.pdf"
     if not hyp.exists():
         print(f"  MISSING {hyp.relative_to(FIGS)} -- run "
               f"panels/fig3_10_hyp_illustration.py first")
@@ -469,10 +472,10 @@ def sync() -> None:
     # each is trued here to the EXACT cell height that closes the rectangle:
     #   idsw_h     = IDSW_W / AR         (AR = idswitch panel aspect, w/h)
     #   cell_h     = (idsw_h - (ROW_GAP + LETTER_LEAD)) / 2
-    idsw = FIGURES / "fig3" / "fig3d_idswitch.pdf"
+    idsw = FIGURES / f"fig3{TAG}" / f"fig3{TAG}d_idswitch.pdf"
     cells = [("e", "quality"), ("f", "head_to_head"),
              ("g", "sweep_switches"), ("h", "sweep_idf1")]
-    missing = [p for p in [idsw] + [FIGURES / "fig3" / f"fig3{l}_{s}.pdf"
+    missing = [p for p in [idsw] + [FIGURES / f"fig3{TAG}" / f"fig3{TAG}{l}_{s}.pdf"
                                     for l, s in cells] if not p.exists()]
     if missing:
         for p in missing:
@@ -489,7 +492,7 @@ def sync() -> None:
               f"CELL_H {CELL_H:g}mm the panel scripts build at -- update CELL_H "
               f"and re-run the cell panel scripts, or the true-up stretch will show")
     for letter, slug in cells:
-        rescale_pdf(FIGURES / "fig3" / f"fig3{letter}_{slug}.pdf", CELL_W, cell_h)
+        rescale_pdf(FIGURES / f"fig3{TAG}" / f"fig3{TAG}{letter}_{slug}.pdf", CELL_W, cell_h)
     col_h = build_column(3, "e", "quality_col",
                          [(3, "e", "quality", "e"),
                           (3, "f", "head_to_head", "f")], 1.0)

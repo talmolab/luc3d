@@ -30,10 +30,19 @@ BENCH = Path("/root/vast/eric/luc3d-bench")
 BMROOT = Path("/root/vast/eric/BMimica")
 DRIVER = REPO / "figs" / "fig3-bench" / "fig3_bench.mjs"
 OUT_DIR = REPO / "figs" / "out"
-TMP_DIR = OUT_DIR / "tmp" / "scale_runtime"
+#: FIG3_VARIANT=unfilt (2026-10-07, Fig 3b): SLAP-2M cells read the UNFILTERED
+#: pre-proofreading predictions, caches go to scale_runtime_unfilt and the deposits are
+#: fig3_runtime_unfilt.json / fig3_scale_unfilt.json. Unset = unchanged.
+import os  # noqa: E402
+VARIANT = os.environ.get("FIG3_VARIANT", "")
+SUFFIX = f"_{VARIANT}" if VARIANT else ""
+TMP_DIR = OUT_DIR / "tmp" / f"scale_runtime{SUFFIX}"
 
 MASTER = BENCH / "outputs" / "sleap_nn_master_sheet.tsv"
-KEEPTRACK = BENCH / "outputs" / "keeptrack_h5s"
+KEEPTRACK = {"unfilt": OUT_DIR / "tmp" / "predslp_pool",
+             "bvis4": OUT_DIR / "tmp" / "lite_pools" / "bvis4",
+             "bvis5": OUT_DIR / "tmp" / "lite_pools" / "bvis5"}.get(
+                 VARIANT, BENCH / "outputs" / "keeptrack_h5s")
 BM_DET = BENCH / "outputs" / "bmimica" / "det_h5"
 BM_GT = BENCH / "outputs" / "bmimica" / "gt"
 BM_SESSION = "20250827_141755"
@@ -203,9 +212,10 @@ def main():
         "points": points,
     }
     OUT_DIR.mkdir(parents=True, exist_ok=True)
-    (OUT_DIR / "fig3_runtime.json").write_text(json.dumps(runtime_out, indent=2))
-    (OUT_DIR / "fig3_scale.json").write_text(json.dumps(scale_out, indent=2))
-    print(f"wrote {OUT_DIR / 'fig3_runtime.json'} and {OUT_DIR / 'fig3_scale.json'}", flush=True)
+    (OUT_DIR / f"fig3_runtime{SUFFIX}.json").write_text(json.dumps(runtime_out, indent=2))
+    (OUT_DIR / f"fig3_scale{SUFFIX}.json").write_text(json.dumps(scale_out, indent=2))
+    print(f"wrote {OUT_DIR / f'fig3_runtime{SUFFIX}.json'} and "
+          f"{OUT_DIR / f'fig3_scale{SUFFIX}.json'}", flush=True)
 
 
 if __name__ == "__main__":

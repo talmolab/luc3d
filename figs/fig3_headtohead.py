@@ -68,12 +68,28 @@ BMROOT = Path("/root/vast/eric/BMimica")
 GREEDY_DRIVER = REPO / "figs" / "fig3-bench" / "fig3_bench.mjs"
 EXH_DRIVER = REPO / "figs" / "fig3-bench" / "fig3_exhaustive.mjs"
 OUT_DIR = REPO / "figs" / "out"
-TMP_DIR = OUT_DIR / "tmp" / "headtohead"
+#: FIG3_VARIANT=unfilt (2026-10-07, Fig 3b): the SLAP-2M configs read the UNFILTERED
+#: pre-proofreading predictions (out/tmp/predslp_pool) instead of the sleap-nn-filtered
+#: keeptrack pool, and every output is tagged -- caches in out/tmp/headtohead_unfilt,
+#: deposit fig3_headtohead_unfilt.json (read by panels under FIG_VARIANT=unfilt) -- so
+#: the base Fig 3 deposits and caches are never touched. Unset = unchanged behaviour.
+VARIANT = os.environ.get("FIG3_VARIANT", "")
+#: FIG3_VARIANT=bvis4 (2026-10-08): the light-filtered pool -- unfiltered predictions minus
+#: detections with < 4 visible BODY keypoints (figs/build_lite_pools.py) -- the rule Eric
+#: chose for Figs 3b/4b/6b.
+#: FIG3_VARIANT=bvis5 (2026-10-08): the same rule at >= 5 body keypoints (Figs 3c/4c/6c).
+if VARIANT not in ("", "unfilt", "bvis4", "bvis5"):
+    raise SystemExit(f"FIG3_VARIANT={VARIANT!r}: only unfilt / bvis4 / bvis5 are defined")
+SUFFIX = f"_{VARIANT}" if VARIANT else ""
+TMP_DIR = OUT_DIR / "tmp" / f"headtohead{SUFFIX}"
 
 MAX_HYPOTHESES = 1_000_000
 
 MASTER = BENCH / "outputs" / "sleap_nn_master_sheet.tsv"
-KEEPTRACK = BENCH / "outputs" / "keeptrack_h5s"
+KEEPTRACK = {"unfilt": OUT_DIR / "tmp" / "predslp_pool",
+             "bvis4": OUT_DIR / "tmp" / "lite_pools" / "bvis4",
+             "bvis5": OUT_DIR / "tmp" / "lite_pools" / "bvis5"}.get(
+                 VARIANT, BENCH / "outputs" / "keeptrack_h5s")
 
 BM_MASTER = BENCH / "outputs" / "bmimica" / "bmimica_master.tsv"
 BM_DET = BENCH / "outputs" / "bmimica" / "det_h5"
@@ -593,8 +609,8 @@ def main():
         },
     }
     OUT_DIR.mkdir(parents=True, exist_ok=True)
-    (OUT_DIR / "fig3_headtohead.json").write_text(json.dumps(out, indent=2))
-    print(f"\nwrote {OUT_DIR / 'fig3_headtohead.json'}", flush=True)
+    (OUT_DIR / f"fig3_headtohead{SUFFIX}.json").write_text(json.dumps(out, indent=2))
+    print(f"\nwrote {OUT_DIR / f'fig3_headtohead{SUFFIX}.json'}", flush=True)
     print(f"total: {total_agree:,}/{total_frames_compared:,} frames agree "
           f"({(total_agree / total_frames_compared if total_frames_compared else 0):.6%})",
           flush=True)

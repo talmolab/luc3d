@@ -22,7 +22,7 @@ WHAT CAN AND CANNOT BE REDONE THIS WAY, because the answer is lopsided and matte
                             switches) for all 50 sessions.
   Fig 7b-7g                 SLAP-2M, 74 sessions -> NOW CAN, via `--slap2m`. This entry
                             used to read "CANNOT: the improved tracker has never been run
-                            on SLAP-2M". It has been now (`figs/fig5_slap2m.py --pool
+                            on SLAP-2M". It has been now (`figs/fig4_slap2m.py --pool
                             predictions`), and re-scored to per-(session, camera)
                             granularity by `figs/fig6_slap2m_rescore.py`. See
                             `--slap2m` below. The regime caveat still holds and is still

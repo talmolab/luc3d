@@ -53,6 +53,8 @@ RESCORE_DRIVER = REPO / "figs" / "fig3-bench" / "fig3_rescore_frames.mjs"
 sys.path.insert(0, str(REPO / "figs"))
 sys.path.insert(0, str(BENCH / "scripts"))
 import evaluate as ev  # noqa: E402  (installs the np.asfarray shim + motmetrics)
+import score_notail  # noqa: E402
+score_notail.install(ev)   # SCORE_NOTAIL=1: no tail keypoints in any GT-matching box
 import motmetrics as mm  # noqa: E402
 
 import fig3_headtohead as hh  # noqa: E402  (single source of configs + sessions)
@@ -532,8 +534,9 @@ def main():
         "configs": configs_out,
     }
     OUT_DIR.mkdir(parents=True, exist_ok=True)
-    (OUT_DIR / "fig3_quality.json").write_text(json.dumps(out, indent=2))
-    print(f"wrote {OUT_DIR / 'fig3_quality.json'}", flush=True)
+    # tagged under FIG3_VARIANT (see fig3_headtohead.VARIANT); caches follow hh.TMP_DIR
+    (OUT_DIR / f"fig3_quality{hh.SUFFIX}.json").write_text(json.dumps(out, indent=2))
+    print(f"wrote {OUT_DIR / f'fig3_quality{hh.SUFFIX}.json'}", flush=True)
 
 
 if __name__ == "__main__":

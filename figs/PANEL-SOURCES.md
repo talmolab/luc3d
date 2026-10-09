@@ -21,12 +21,14 @@ Build order for any figure is: run the measurement pass (column *measured by*) �
 | **a** | Protocol | `panels/fig2_01_protocol.py` | `out/fig2-protocol.json`, `out/fig2a_scene.json`, `blender-images/renders/fig2a_pose.png` | `blender-images/fig1d_scene.py`, `figs/fig2_protocol.mjs`, `figs/fig2_protocol.mjs, figs/fig2a_scene.py` | — |
 | **b** | Placements vs rig size | `panels/fig2_02_placements_vs_rig.py` | `out/fig2.json` | `figs/fig2_protocol.mjs` | `data/fig2/fig2b_placements_vs_rig.csv` |
 | **c** | Error vs cameras in the solve | `panels/fig2_03_reprojection_accuracy.py` | `out/fig2.json`, `out/fig4_by_views.json` | `figs/fig2_protocol.mjs`, `figs/fig2_solvers_by_views.mjs` | `data/fig2/fig2c_error_by_cameras.csv`, `data/fig2/fig2c_heldout_by_cameras.csv` |
-| **d** | Anchor-pair geometry | `panels/fig2_04_baseline_angle.py` | `out/fig2.json`, `out/fig5_views.json` | `figs/fig2_protocol.mjs`, `figs/fig4_views.py` | `data/fig2/fig2d_baseline_angle.csv` |
+| **d** | Anchor-pair geometry | `panels/fig2_04_baseline_angle.py` | `out/fig2.json`, `out/fig5_views.json` | `figs/fig2_protocol.mjs`, `figs/fig5_views.py` | `data/fig2/fig2d_baseline_angle.csv` |
 | **e** | Accuracy vs cameras used | `panels/fig2_06_solver_accuracy.py` | `out/fig4_robust_sessions.json` | — | — |
 | **f** | Triangulation: LUC3D vs Anipose | `panels/fig2_07_per_session.py` | — (drawn) | — | — |
 | **g** | Time per keypoint | `panels/fig2_08_time_per_keypoint.py` | — (drawn) | — | — |
 
 ## Figure 3
+
+> **SLAP-2M input since 2026-10-09 (Figs 3, 4 and 6).** The former "c" variant is the base: SLEAP's pre-proofreading predictions with none of sleap-nn's filters, minus detections with fewer than 5 visible BODY keypoints (`figs/build_lite_pools.py bvis5`). The tail is excluded from all scoring (`SCORE_NOTAIL=1`, `figs/score_notail.py`). There is no match gate. The base deposits `out/fig3_headtohead.json`, `fig3_quality.json`, `fig3_quality__distanceThreshold25-stale20-sync_e508a7ab.json`, `fig3_runtime.json`, `fig3_scale.json`, `fig7_variant_best.json` and `fig6_slap2m_fair{.json,_percam.csv}` are byte copies of their `_bvis5` runs. The b (>= 4) and c variant folders were retired. Everything they replaced is in `out/backups/pre-promote-3c4c6c_2026-10-09.tar.gz`.
 
 | Panel | Title | Drawn by | Reads | Measured by | Deposits |
 |---|---|---|---|---|---|
@@ -34,8 +36,8 @@ Build order for any figure is: run the measurement pass (column *measured by*) �
 | **b** |  | `panels/fig3_03_cost_model.py` (drawn inside **a**'s composite) | `out/fig3_headtohead.json`, `out/fig3_runtime.json` | `figs/fig3_headtohead.py`, `figs/fig3_scale_runtime.py` | `data/fig3/fig3b_cost_model.csv` |
 | **c** | Visualization of ID grouping hypotheses in two camera views | `panels/fig3_10_hyp_illustration.py` | — (drawn) | — | — |
 | **d** | An identity switch in one camera view | `panels/fig3_16_idswitch.py` | — (drawn) | — | — |
-| **e** | Grouping accuracy | `panels/fig3_13_quality.py` | — (drawn) | — | — |
-| **f** | Time per frame | `panels/fig3_18_head_to_head.py` (drawn inside **e**'s composite) | — (drawn) | — | — |
+| **e** | Grouping accuracy | `panels/fig3_13_quality.py` | `out/fig3_quality.json`, `out/fig3_quality__distanceThreshold25-stale20-sync_e508a7ab.json` (copies of the `_bvis5` runs, see note) | `figs/fig3_headtohead.py`, `figs/fig3_quality.py`, `figs/fig3_hh_freshanchor.py --run` with `FIG3_VARIANT=bvis5 SCORE_NOTAIL=1` | `data/fig3/fig3c_quality.csv` |
+| **f** | Time per frame | `panels/fig3_18_head_to_head.py` (drawn inside **e**'s composite) | `out/fig3_headtohead.json`, `out/fig3_runtime.json` (copies of `_bvis5`) | `figs/fig3_headtohead.py`, `figs/fig3_scale_runtime.py` with `FIG3_VARIANT=bvis5`, timed on a quiet machine | `data/fig3/fig3e_head_to_head.csv` |
 | **g** | 3D term sweep | `panels/fig3_17_sweep_split.py` | `out/fig3_exhaustive_bmimica.json`, `out/fig3_frame_matched_bmimica.json` | — | — |
 | **h** |  | `panels/fig3_17_sweep_split.py` (drawn inside **g**'s composite) | `out/fig3_exhaustive_bmimica.json`, `out/fig3_frame_matched_bmimica.json` | — | — |
 
@@ -43,24 +45,22 @@ Build order for any figure is: run the measurement pass (column *measured by*) �
 
 | Panel | Title | Drawn by | Reads | Measured by | Deposits |
 |---|---|---|---|---|---|
-| **a** | 3D pose and 2D camera views for social rearing behavior | `panels/fig4_05_upright_views.py` | `out/fig5_views.json`, `blender-images/renders/fig4a_upright.png` | `figs/fig4_views.py` | `data/fig4/fig4a_camera_gaps.csv` |
-| **b** | Both rise, noses converge — female reaches higher | `panels/fig4_06_upright_dynamics.py` | `out/fig5_upright.json` | `figs/fig4_upright.py` | `data/fig4/fig4d_upright_dynamics.csv` |
-| **c** | One animal is up first | `panels/fig4_08_upright_initiator.py` | `out/fig5_upright.json` | `figs/fig4_upright.py` | `data/fig4/fig4c_initiator_lag.csv` |
-| **d** | Female is still; male is travelling | `panels/fig4_09_upright_velocity.py` | `out/fig5_upright.json` | `figs/fig4_upright.py` | `data/fig4/fig4d_upright_velocity.csv` |
-| **e** | Male is pursuing female | `panels/fig4_07_upright_stats.py` | `out/fig5_upright.json` | `figs/fig4_upright.py` | `data/fig4/fig4e_upright_stats.csv` |
-| **f** | Female initiates displays | `panels/fig4_10_leader.py` | `out/fig5_upright.json` | `figs/fig4_upright.py` | — |
-| **g** | Female rears first; male mostly joins in | `panels/fig4_12_coupling.py` | `out/fig5_rear_coupling_2animal.json` | `figs/fig4_rear_coupling.py --slap-animals 2` | `data/fig4/fig4g_rear_coupling.csv` |
+| **a** | Levels of tracking difficulty | `panels/fig4_13_enrichment_grid.py` | `out/fig6-app.json`, `blender-images/renders/enrich_a1_o0.png` | `blender-images/enrichment_scene.py`, `figs/fig4_app.mjs` | — |
+| **b** | Keypoints that cannot be triangulated | `panels/fig4_14_occlusion.py` | `out/fig4_recovery_proofread2d.json` (tail nodes dropped in the panel) | `figs/fig4_recovery_proofread2d.py` | `data/fig4/fig4b_occlusion.csv`, `data/fig4/fig4b_occlusion_sessions.csv` |
+| **c** | Disagreement across cameras | `panels/fig4_06_detection_quality.py` (`main_v2`) | `out/fig6_detections_proofread_notail.json` (80th, 95th, 98th percentiles) | `figs/fig4_detections.py --detections proofread --exclude-nodes TailTip,Tail_0,Tail_1,Tail_2` | `data/fig4/fig4c_error_when_present.csv` |
+| **d** | Identity tracking accuracy | `panels/fig4_11_idf1_by_difficulty.py` | `out/fig9_slap2m_lite_bvis5_notailscore.json` | `figs/build_lite_pools.py bvis5`, then `figs/fig4_slap2m.py --pool lite_bvis5` with `SCORE_NOTAIL=1` | `data/fig4/fig4b_idf1_by_difficulty.csv` |
 
 ## Figure 5
 
 | Panel | Title | Drawn by | Reads | Measured by | Deposits |
 |---|---|---|---|---|---|
-| **a** | Levels of tracking difficulty | `panels/fig5_13_enrichment_grid.py` | `out/fig6-app.json`, `blender-images/renders/enrich_a1_o0.png` | `blender-images/enrichment_scene.py`, `figs/fig5_app.mjs` | — |
-| **b** | Cross-view IDF1 by difficulty | `panels/fig5_11_idf1_by_difficulty.py` | `out/fig6_detections.json`, `out/fig9_slap2m.json` | `figs/fig5_detections.py`, `figs/fig5_slap2m.py` | `data/fig5/fig5b_idf1_by_difficulty.csv` |
-| **c** | Missing keypoints vs difficulty and cameras | `panels/fig5_12_recovery_surface.py` | `out/fig6_recovery.json` | — | `data/fig5/fig5c_recovery_surface.csv` |
-| **d** | Animal-count control | `panels/fig5_07_animal_count.py` | `out/fig6_detections.json` | `figs/fig5_detections.py` | `data/fig5/fig5d_animal_count.csv` |
-| **e** | Detection quality | `panels/fig5_06_detection_quality.py` | `out/fig6_detections.json` | `figs/fig5_detections.py` | `data/fig5/fig5e_detection_quality.csv` |
-| **f** | Difficulty strata | `panels/fig5_08_difficulty_strata.py` | `out/fig6_detections.json` | `figs/fig5_detections.py` | `data/fig5/fig5f_difficulty_strata.csv` |
+| **a** | 3D pose and 2D camera views for social rearing behavior | `panels/fig5_05_upright_views.py` | `out/fig5_views.json`, `blender-images/renders/fig5a_upright.png` | `figs/fig5_views.py` | `data/fig5/fig5a_camera_gaps.csv` |
+| **b** | Both rise, noses converge — female reaches higher | `panels/fig5_06_upright_dynamics.py` | `out/fig5_upright.json` | `figs/fig5_upright.py` | `data/fig5/fig5d_upright_dynamics.csv` |
+| **c** | One animal is up first | `panels/fig5_08_upright_initiator.py` | `out/fig5_upright.json` | `figs/fig5_upright.py` | `data/fig5/fig5c_initiator_lag.csv` |
+| **d** | Female is still; male is traveling | `panels/fig5_09_upright_velocity.py` | `out/fig5_upright.json` | `figs/fig5_upright.py` | `data/fig5/fig5d_upright_velocity.csv` |
+| **e** | Male is pursuing female | `panels/fig5_07_upright_stats.py` | `out/fig5_upright.json` | `figs/fig5_upright.py` | `data/fig5/fig5e_upright_stats.csv` |
+| **f** | Female initiates displays | `panels/fig5_10_leader.py` | `out/fig5_upright.json` | `figs/fig5_upright.py` | — |
+| **g** | Female rears first; male mostly joins in | `panels/fig5_12_coupling.py` | `out/fig5_rear_coupling_2animal.json` | `figs/fig5_rear_coupling.py --slap-animals 2` | `data/fig5/fig5g_rear_coupling.csv` |
 
 ## Figure 6
 
@@ -69,23 +69,26 @@ Supplementary identity figure (the repo's fig11 before the 2026-08-26 renumberin
 | Panel | Title | Drawn by | Reads | Measured by | Deposits |
 |---|---|---|---|---|---|
 | **a** | Within vs cross IDF1 | `panels/fig6_05_within_vs_cross.py` | `out/fig3_trackers.json`, `out/fig7_sleap_scoped.json`, `out/fig7_variant_best.json` | `figs/fig3_trackers.py`, `figs/fig6_sleap_scoped.py` | `data/fig6/fig6a_within_vs_cross.csv`, `data/fig6/fig6a_within_vs_cross_variant.csv` |
-| **b** | Within-view IDF1 | `panels/fig6_01_survival.py` (drawn inside **a**'s composite) | `out/fig3_trackers.json`, `out/fig7_variant_best.json` | `figs/fig3_trackers.py` | `data/fig6/fig6b_survival.csv` |
-| **c** | Per-session paired difference | `panels/fig6_02_by_animals.py` (drawn inside **a**'s composite) | `out/fig3_trackers.json`, `out/fig7_variant_best.json` | `figs/fig3_trackers.py` | `data/fig6/fig6c_by_animals.csv` |
-| **d** | Error composition | `panels/fig6_03_error_decomposition.py` (drawn inside **a**'s composite) | `out/fig3_trackers.json`, `out/fig7_variant_best.json` | `figs/fig3_trackers.py` | `data/fig6/fig6d_error_decomposition.csv` |
+| **b** | Within-view IDF1 | `panels/fig6_01_survival.py` (drawn inside **a**'s composite) | `out/fig7_variant_best.json` `slap2m_fair` (copy of `_bvis5`) | `figs/fig6_slap2m_fair.py` stages sleapsrc to install, with `FAIR_VARIANT=bvis5 SCORE_NOTAIL=1` | `data/fig6/fig6b_survival.csv` |
+| **c** | Per-session paired difference | `panels/fig6_02_by_animals.py` (drawn inside **a**'s composite) | `out/fig7_variant_best.json` `slap2m_fair` (copy of `_bvis5`) | `figs/fig6_slap2m_fair.py`, as b | `data/fig6/fig6c_by_animals.csv` |
+| **d** | Error composition | `panels/fig6_03_error_decomposition.py` (drawn inside **a**'s composite) | `out/fig7_variant_best.json` `slap2m_fair` (copy of `_bvis5`) | `figs/fig6_slap2m_fair.py`, as b | `data/fig6/fig6d_error_decomposition.csv` |
 | **e** | The tracker's 2D and 3D anchor correspondence | `panels/fig6_00_chen_style.py` | — (drawn) | — | — |
 | **f** | Staleness horizon sweep on Mouse-Dyad-10M sessions | `panels/fig6_07_pr_switches.py` | `out/fig8_methods_50.json` | — | — |
+| **g** | Cross-View IDF1 for s-DANNCE rats | `panels/fig6_09_sdannce_survival.py` | — (drawn) | — | `data/fig6/fig6g_sdannce_survival.csv` |
 
 ## Figure 7
 
 | Panel | Title | Drawn by | Reads | Measured by | Deposits |
 |---|---|---|---|---|---|
-| **a** | Reprojection error, 8-camera rig | `panels/fig7_00_error_cdf.py` | `out/fig7_calibration.json` | — | `data/fig7/fig7ac_error_cdf.csv` |
-| **b** | — | **MISSING** | | | |
-| **c** | Reprojection error, 18-camera rig | `panels/fig7_00_error_cdf.py` | `out/fig7_calibration.json` | — | `data/fig7/fig7ac_error_cdf.csv` |
-| **d** | Per camera, 18-camera rig | `panels/fig7_01_per_camera.py` | `out/fig7_calibration.json` | — | `data/fig7/fig7bd_per_camera.csv` |
-| **e** | What the difference is made of | `panels/fig7_04_mechanism.py` | `out/fig7_calibration.json` | — | `data/fig7/fig7e_mechanism.csv` |
-| **f** | Time to calibrate | `panels/fig7_02_runtime.py` | `out/fig7_calibration.json` | — | `data/fig7/fig7f_runtime.csv` |
-| **g** | Recovered vs known cameras | `panels/fig7_05_ground_truth.py` | `out/fig7_calibration.json` | — | `data/fig7/fig7g_ground_truth.csv` |
+| **a** | Reprojection error, SLAP-2M rig | `panels/fig7_00_error_cdf.py` | `out/fig7_calibration.json` | — | `data/fig7/fig7ace_error_cdf.csv` |
+| **b** | Per camera, SLAP-2M rig | `panels/fig7_01_per_camera.py` | `out/fig7_calibration.json` | — | `data/fig7/fig7bdf_per_camera.csv` |
+| **c** | Reprojection error, Mouse-Dyad-10M rig | `panels/fig7_00_error_cdf.py` | `out/fig7_calibration.json` | — | `data/fig7/fig7ace_error_cdf.csv` |
+| **d** | Per camera, Mouse-Dyad-10M rig | `panels/fig7_01_per_camera.py` | `out/fig7_calibration.json` | — | `data/fig7/fig7bdf_per_camera.csv` |
+| **e** | Reprojection error, 18-camera rig | `panels/fig7_00_error_cdf.py` | `out/fig7_calibration.json` | — | `data/fig7/fig7ace_error_cdf.csv` |
+| **f** | Per camera, 18-camera rig | `panels/fig7_01_per_camera.py` | `out/fig7_calibration.json` | — | `data/fig7/fig7bdf_per_camera.csv` |
+| **g** | Solver ablation, 18-camera rig | `panels/fig7_04_mechanism.py` | `out/fig7_calibration.json` | — | `data/fig7/fig7g_mechanism.csv` |
+| **h** | Time to calibrate | `panels/fig7_02_runtime.py` | `out/fig7_calibration.json` | — | `data/fig7/fig7h_runtime.csv` |
+| **i** | Recovered vs known cameras | `panels/fig7_05_ground_truth.py` | `out/fig7_calibration.json` | — | `data/fig7/fig7i_ground_truth.csv` |
 
 ## Panel scripts kept but not placed
 
@@ -101,6 +104,9 @@ These still run under `make_figures.py` and still deposit their CSVs; they are n
 | `panels/fig3_04_quality.py` | greedy vs exhaustive against GROUND TRUTH, per configuration --. |
 | `panels/fig3_05_sweep.py` | 3D-term ablation: ID-switch RATE and cross-view IDF1 against r = corr3d/corr2d,. |
 | `panels/fig3_06_head_to_head.py` | greedy vs exhaustive, run for real, on identical detections: time per frame. |
+| `panels/fig6_08_sdannce_common.py` | Shared loader for Fig 6's social-DANNCE panels (g, h, i). |
+| `panels/fig6_10_sdannce_cameras.py` | how many cameras identity needs on the social-DANNCE rats, no noise. |
+| `panels/fig6_11_sdannce_contact.py` | identity holds through close contact; the few losses sit at. |
 | `panels/fig6_variant_common.py` | Shared machinery for the tracker arms of Fig 7's SLAP-2M panels (b-f since the. |
 | `panels/fig7_03_robustness.py` | the two ways this benchmark could have been rigged, tested. |
 | `panels/fig7_common.py` | Shared vocabulary for Fig 7's panels, so they cannot disagree with each other. |

@@ -31,6 +31,8 @@ import numpy as np
 BENCH = Path("/root/vast/eric/luc3d-bench")
 sys.path.insert(0, str(BENCH / "scripts"))
 import evaluate as ev  # noqa: E402  (installs the np.asfarray shim + motmetrics)
+import score_notail  # noqa: E402
+score_notail.install(ev)   # SCORE_NOTAIL=1: no tail keypoints in any scoring box
 import motmetrics as mm  # noqa: E402
 
 #: Metrics asked of motmetrics. `idf1` and `num_switches` were the original two and their

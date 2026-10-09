@@ -31,6 +31,7 @@ when a figure exceeds that.
 """
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -116,21 +117,19 @@ TITLES = {
     (3, "f"): "Time per frame",
     (3, "g"): "3D term sweep",
     # Fig 4 (social rearing; the repo's fig5).
-    (4, "a"): "3D pose and 2D camera views for social rearing behavior",
-    (4, "b"): "Both rise, noses converge — female reaches higher",
-    (4, "c"): "One animal is up first",
-    (4, "d"): "Female is still; male is traveling",
-    (4, "e"): "Male is pursuing female",
-    (4, "f"): "Female initiates displays",
-    (4, "g"): "Female rears first; male mostly joins in",
+    (5, "a"): "3D pose and 2D camera views for social rearing behavior",
+    (5, "b"): "Both rise, noses converge — female reaches higher",
+    (5, "c"): "One animal is up first",
+    (5, "d"): "Female is still; male is traveling",
+    (5, "e"): "Male is pursuing female",
+    (5, "f"): "Female initiates displays",
+    (5, "g"): "Female rears first; male mostly joins in",
     # Fig 5 (SLAP-2M datasets; the repo's fig6, re-lettered 2026-08-19 --
     # difficulty grid leads the figure).
-    (5, "a"): "Levels of tracking difficulty",
-    (5, "b"): "Cross-view IDF1 by difficulty",
-    (5, "c"): "Missing keypoints vs difficulty and cameras",
-    (5, "d"): "Animal-count control",
-    (5, "e"): "Detection quality",
-    (5, "f"): "Difficulty strata",
+    (4, "a"): "Levels of tracking difficulty",
+    (4, "b"): "Keypoints that cannot be triangulated",
+    (4, "c"): "Disagreement across cameras",
+    (4, "d"): "Identity tracking accuracy",
     # Fig 6 (supplementary identity comparison + fresh-anchor sweep; the repo's
     # fig11, itself the old fig7 tracker comparison + the old fig8d sweep + the
     # Chen-2020-style anchor diagram). a is the pre-merged 2x2 tracker block
@@ -141,6 +140,7 @@ TITLES = {
     (6, "d"): "Error composition",
     (6, "e"): "The tracker's 2D and 3D anchor correspondence",
     (6, "f"): "Staleness horizon sweep on Mouse-Dyad-10M sessions",
+    (6, "g"): "Cross-View IDF1 for s-DANNCE rats",
     # Fig 7 (calibration benchmark; calibrat3 vs Anipose on two real rigs).
     (7, "a"): "Reprojection error, SLAP-2M rig",
     (7, "b"): "Per camera, SLAP-2M rig",
@@ -261,19 +261,23 @@ LAYOUTS = {
     # the composite); e/f and g/h are that sync's two column composites.
     3: [[("a", "association"), ("c", "hyp_illustration")],
         [("d", "idswitch"), ("e", "quality_col"), ("g", "sweep_col")]],
-    4: [[("a", "upright_views"), ("b", "upright_dynamics")],
+    5: [[("a", "upright_views"), ("b", "upright_dynamics")],
         [("c", "upright_initiator"), ("d", "upright_velocity"),
          ("e", "upright_stats")],
         [("f", "leader"), ("g", "rear_coupling")]],
-    5: [[("a", "enrichment_grid")],
-        [("b", "idf1_by_difficulty"), ("c", "recovery_surface")],
-        [("d", "animal_count"), ("e", "detection_quality")],
-        [("f", "difficulty_strata")]],
+    # 2026-10-09: the former Fig 4c layout is the base Fig 4 (A over b/c/d thirds).
+    4: [[("a", "enrichment_grid")],
+        [("b", "occlusion"), ("c", "error_when_present"),
+         ("d", "idf1_by_difficulty")]],
     # a is the pre-merged 2x2 tracker block (fig6_sync.build_block; sub-letters
     # b/c/d drawn via EXTRA_LETTERS so they sit level with a and e); the anchor
     # diagram spans both of a's rows; the sweep closes the rectangle full width.
+    # g added 2026-10-03: the social-DANNCE rat benchmark (geometry only, no
+    # added noise), restored from the deleted Fig 10. It shares f's row, which
+    # was re-laid out at two-thirds width for it. The camera-count and contact
+    # panels (fig6_10, fig6_11) still render and deposit but are not placed.
     6: [[("a", "block"), ("e", "chen_style")],
-        [("f", "pr_switches")]],
+        [("f", "pr_switches"), ("g", "sdannce_survival")]],
     # Fig 7 (calibration benchmark, added 2026-09-15). Rows 1 and 2 are the SAME
     # two panels on two rigs -- pooled distribution at a third, per-camera boxes at
     # two-thirds -- so the reader can read straight down a camera column from the
@@ -363,8 +367,37 @@ def axes_extent(pdf: Path) -> tuple[float, float] | None:
     return None if x0 < 3.0 else (x0, x1)
 
 
+#: FIG_TAG=b builds the variant composite figures/fig4b/fig4b.pdf from the panels that
+#: src/style.save wrote under the same tag; LAYOUTS/TITLES/FOOTERS stay keyed by the
+#: base figure number. FIG_VARIANT names the alternative deposit set (see
+#: src/data_loader.load) and is printed in the footer so the proof is self-describing.
+TAG = os.environ.get("FIG_TAG", "")
+VARIANT = os.environ.get("FIG_VARIANT", "")
+
+#: Per-tag overrides of LAYOUTS / TITLES, for a variant whose panel set differs from
+#: the base figure. (4, "b") is the 2026-10-07 Fig 4b (Eric): A unchanged; D (animal
+#: count) and F (strata table) dropped; d = cross-view IDF1 on the RAW detections
+#: (pinned in its panel, even under a proofread FIG_VARIANT); b = occlusion, the old
+#: heat-map replaced by the share of keypoints seen by 0 or 1 camera (line plot);
+#: c = error when present with its 98th percentile; d = IDF1, last (Eric, round 2).
+#: Per-tag overrides of LAYOUTS / TITLES / FOOTERS for variant builds (FIG_TAG=<x>).
+#: Empty since 2026-10-09: the b (>= 4 body keypoints) and c (>= 5) variants of Figs 3, 4
+#: and 6 were retired and c became the base figures.
+TAG_LAYOUTS = {}
+TAG_TITLES = {}
+TAG_FOOTERS = {}
+
+
+def layout(fig_no: int):
+    return TAG_LAYOUTS.get((fig_no, TAG), LAYOUTS.get(fig_no))
+
+
+def title_of(fig_no: int, letter: str):
+    return TAG_TITLES.get((fig_no, TAG, letter), TITLES.get((fig_no, letter)))
+
+
 def panel_pdf(fig_no: int, letter: str, slug: str) -> Path | None:
-    p = FIGURES / f"fig{fig_no}" / f"fig{fig_no}{letter}_{slug}.pdf"
+    p = FIGURES / f"fig{fig_no}{TAG}" / f"fig{fig_no}{TAG}{letter}_{slug}.pdf"
     return p if p.exists() else None
 
 
@@ -377,7 +410,7 @@ def stale(fig_no: int) -> list[str]:
     the build noticed, because `assemble` only checks that a panel PDF EXISTS.
     """
     out = []
-    for row in LAYOUTS.get(fig_no, []):
+    for row in layout(fig_no) or []:
         for letter, slug in row:
             pdf = panel_pdf(fig_no, letter, slug)
             if pdf is None:
@@ -391,10 +424,10 @@ def stale(fig_no: int) -> list[str]:
 
 
 def assemble(fig_no: int) -> Path | None:
-    if fig_no not in LAYOUTS:
+    rows = layout(fig_no)
+    if rows is None:
         print(f"  fig{fig_no}: no layout defined in assemble.py")
         return None
-    rows = LAYOUTS[fig_no]
 
     for s_ in stale(fig_no):
         print(f"  fig{fig_no}: STALE — {s_} is newer than its PDF; re-run its panel")
@@ -448,7 +481,18 @@ def assemble(fig_no: int) -> Path | None:
             x += w + GUTTER
         y += max(h for *_, h in row) + ROW_GAP
 
-    foot = FOOTERS.get(fig_no, [])
+    foot = list(FOOTERS.get(fig_no, []))
+    if (fig_no, TAG) in TAG_FOOTERS:
+        # None = no footer at all for that variant (Eric, 2026-10-08, Fig 3b: "get rid of
+        # that figure legend at the bottom ... its not necessary")
+        if TAG_FOOTERS[(fig_no, TAG)] is not None:
+            foot.append(f"Variant fig{fig_no}{TAG}: "
+                        + TAG_FOOTERS[(fig_no, TAG)].format(v=VARIANT))
+    elif TAG or VARIANT:
+        note = "proofread per-camera 2D labels in place of the detector"
+        if "notail" in VARIANT:
+            note += ", tail nodes (TailTip, Tail_0-2) excluded"
+        foot.append(f"Variant fig{fig_no}{TAG} (FIG_VARIANT={VARIANT}): {note}.")
     page_w, page_h = PAGE_W, y - ROW_GAP + MARGIN + FOOTER_LEAD * len(foot)
     if over:
         for letters, w in over:
@@ -470,7 +514,7 @@ def assemble(fig_no: int) -> Path | None:
         # panel has no entry, so a newly added panel is not blocked on naming it --
         # but check TITLES after any re-lettering, because a title that has drifted
         # onto the wrong panel is worse than none.
-        title = TITLES.get((fig_no, letter))
+        title = title_of(fig_no, letter)
         if title:
             tx = lx + 4.4
             if (fig_no, letter) not in TITLE_FLUSH:
@@ -505,7 +549,8 @@ def assemble(fig_no: int) -> Path | None:
                          color=(0.45, 0.45, 0.45))
         fy += FOOTER_LEAD
 
-    out = FIGURES / f"fig{fig_no}" / f"fig{fig_no}.pdf"
+    out = FIGURES / f"fig{fig_no}{TAG}" / f"fig{fig_no}{TAG}.pdf"
+    out.parent.mkdir(parents=True, exist_ok=True)
     doc.save(out, deflate=True)
     flag = "  ** over the 200 mm ceiling **" if page_h > MAX_H else ""
     print(f"  assembled {out.relative_to(FIGS)}  "

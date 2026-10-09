@@ -119,6 +119,9 @@ SERIES = [
 ]
 
 
+FIGS_DIR = Path(__file__).resolve().parent.parent
+
+
 def build(deposit_name="fig8_methods_50.json"):
     d = load(deposit_name)
     cells = {c["config"]: c for c in d["cells"] if c.get("idf1_cross") is not None}
@@ -183,7 +186,10 @@ def main(deposit_name="fig8_methods_50.json"):
     # 55, not 62: the vertical white this panel used to carry (key stack, then
     # generous margins) is gone -- Eric, 2026-08-25: "get rid of the white space
     # in between, also bring up the legend from no eviction stale 1 stale 10 etc".
-    fig, axes = grid(1, 3, span="full", row=55.0)
+    # TWO-THIRDS, not full (2026-10-03): panel g (the social-DANNCE survival
+    # curve) shares this row. Re-laid out at the narrower width rather than
+    # shrunk as a vector, so the type keeps its size.
+    fig, axes = grid(1, 3, span="two-thirds", row=55.0)
     # The key is a single HORIZONTAL line along the BOTTOM since 2026-08-25 (Eric:
     # "the legend for no eviction stale 1, 10 etc is taking up too much white
     # space, that is prime real estate ... maybe we can put it horizontally at the
@@ -298,7 +304,9 @@ def main(deposit_name="fig8_methods_50.json"):
     axS.set_xlim(lo, df.switches_pct.max() * 9.0)
     axS.tick_params(axis="x", labelsize=6.5)
     from matplotlib.ticker import FuncFormatter, LogLocator, NullFormatter
-    axS.xaxis.set_major_locator(LogLocator(base=10.0, subs=(1.0, 3.0), numticks=12))
+    # decades only since the two-thirds re-layout: at 1 and 3 per decade the four
+    # labels ran into each other on the narrower axis
+    axS.xaxis.set_major_locator(LogLocator(base=10.0, subs=(1.0,), numticks=12))
     axS.xaxis.set_major_formatter(FuncFormatter(lambda v, _p: f"{v:g}%"))
     axS.xaxis.set_minor_formatter(NullFormatter())
 
@@ -349,6 +357,17 @@ def main(deposit_name="fig8_methods_50.json"):
     if missing:
         note += "\nnot yet measured at 50 sessions: " + ", ".join(missing)
     footnote(axP, note)
+    # Panel g shares this row and copies these axes' size and baseline, so the
+    # two panels' plots line up (Eric, 2026-10-03: "f and G should have the
+    # same size x and y axis"). Written after the layout is final.
+    fig.canvas.draw()
+    import json
+    W, H = fig.get_size_inches() * 25.4
+    boxes = [a.get_position() for a in axes]
+    (FIGS_DIR / "figures" / "fig6" / "fig6f_axes.json").write_text(json.dumps({
+        "fig_mm": [W, H],
+        "axes_mm": [[b.x0 * W, b.y0 * H, b.width * W, b.height * H]
+                    for b in boxes]}, indent=1))
     save(fig, 6, "f", "pr_switches")
 
 

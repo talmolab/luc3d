@@ -336,7 +336,13 @@ def main(variant=False, corrected=True, fresh_arm=False):
     # labels, the ahead/behind key, ticks, axis labels) is set at COMPACT_FS,
     # which prints ~5.5 pt after the shrink. The --variant diagnostic keeps
     # everything at its original sizes.
-    ax.text(0.98, 0.96, "LUC3D ahead", transform=ax.transAxes, ha="right",
+    # Fig 6b (FIG_TAG=b, unfiltered pool, 2026-10-07): the 3- and 4-animal median
+    # labels reach the top band, so the key moves to the empty upper-LEFT corner
+    # there (cell 1 sits at 0 with its label below). The base figure is unchanged.
+    # 2026-10-09: the former Fig 3c/4c/6c variant (>= 5 visible body keypoints, tail excluded) is now the base figure: key on the left is the default.
+    key_left = not variant
+    ax.text(0.02 if key_left else 0.98, 0.96, "LUC3D ahead", transform=ax.transAxes,
+            ha="left" if key_left else "right",
             va="top", color=LUC3D, fontsize=6.5 if variant else COMPACT_FS,
             fontweight="bold")
     # compact render: LOWER LEFT, not lower right -- the 4-animal cell's median
@@ -349,7 +355,9 @@ def main(variant=False, corrected=True, fresh_arm=False):
             va="bottom", color=SLEAP, fontsize=6.5 if variant else COMPACT_FS,
             fontweight="bold")
     if not variant:
-        ax.set_ylim(-lim * 1.02, lim * 1.02)
+        # Figs 6b/6c (key on the left): 60% headroom on top so "LUC3D ahead" clears the
+        # 2-animal median label that sits under it (2026-10-08). Base figure unchanged.
+        ax.set_ylim(-lim * 1.02, lim * (1.6 if key_left else 1.02))
         ax.tick_params(labelsize=COMPACT_FS)
         ax.xaxis.label.set_fontsize(COMPACT_FS)
         ax.yaxis.label.set_fontsize(COMPACT_FS)

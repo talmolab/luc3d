@@ -68,6 +68,52 @@ SLEAP_OUT = FAIR / "sleap_cap"
 BYTE_OUT = FAIR / "bytetrack_noretire_stitch"
 LUC3D = OUT / "tmp" / "fig9slap" / "sync_stale20_dist25"
 SLEAP_PY = BENCH / "sleap_nn_env" / "bin" / "python"      # sleap-nn 0.2.0
+#: FAIR_VARIANT=unfilt (2026-10-07, Fig 6b): all three trackers on the UNFILTERED
+#: pre-proofreading predictions, NO match gate (eric/figs' tracker has none). Every path
+#: and deposit is tagged so the base Fig 6 inputs are never touched:
+#:   pool       out/tmp/predslp_pool                 (was keeptrack_h5s)
+#:   outputs    out/tmp/slap2m_fair_unfilt/          (was luc3d-bench/outputs/slap2m_fair)
+#:   LUC3D      out/tmp/fig9slap_predslp/sync_stale20_dist25, checked against
+#:              fig9_slap2m_predslp.json             (was fig9slap / fig9_slap2m.json)
+#:   SLEAP      sleap-nn track with NO --filter_* flags, same N cap
+#:   deposits   fig6_slap2m_fair_unfilt{.json,_percam.csv}; install writes
+#:              fig7_variant_best_unfilt.json (seeded from the base file), which the
+#:              panels read under FIG_VARIANT=unfilt.
+#: FAIR_SLEAP_PY overrides the sleap-nn interpreter (the bench env is broken, 2026-10-07).
+VARIANT = os.environ.get("FAIR_VARIANT", "")
+if VARIANT not in ("", "unfilt", "bvis4", "bvis5"):
+    raise SystemExit(f"FAIR_VARIANT={VARIANT!r}: only unfilt / bvis4 / bvis5 are defined")
+SUFFIX = f"_{VARIANT}" if VARIANT else ""
+REF_JSON = "fig9_slap2m.json"
+if VARIANT == "unfilt":
+    POOL = OUT / "tmp" / "predslp_pool"
+    FAIR = OUT / "tmp" / "slap2m_fair_unfilt"
+    SLEAP_OUT = FAIR / "sleap_cap"
+    BYTE_OUT = FAIR / "bytetrack_noretire_stitch"
+    LUC3D = OUT / "tmp" / "fig9slap_predslp" / "sync_stale20_dist25"
+    REF_JSON = "fig9_slap2m_predslp.json"
+#: FAIR_VARIANT=bvis4 (2026-10-08, Eric chose "Body >= 4"): the unfiltered predictions minus
+#: detections with < 4 visible BODY keypoints. sleap-nn's own filter counts the tail, so
+#: SLEAP gets body>=4-filtered copies of the raw .predictions.slp (stage `sleapsrc`) and
+#: runs with NO filter flags -- the same detections LUC3D and ByteTrack see.
+#: FAIR_VARIANT=bvis5 is the same at >= 5 body keypoints (Figs 3c/4c/6c, 2026-10-08).
+SLEAP_SRC = None
+BODY_MIN = None
+if VARIANT in ("bvis4", "bvis5"):
+    BODY_MIN = int(VARIANT[-1])
+    POOL = OUT / "tmp" / "lite_pools" / VARIANT
+    FAIR = OUT / "tmp" / f"slap2m_fair_{VARIANT}"
+    SLEAP_OUT = FAIR / "sleap_cap"
+    BYTE_OUT = FAIR / "bytetrack_noretire_stitch"
+    SLEAP_SRC = FAIR / "src"
+    LUC3D = OUT / "tmp" / f"fig9slap_lite_{VARIANT}" / "sync_stale20_dist25"
+    REF_JSON = f"fig9_slap2m_lite_{VARIANT}.json"
+#: tail-free scoring everywhere (score_notail): GT, LUC3D, SLEAP and ByteTrack boxes
+import score_notail  # noqa: E402
+if score_notail.ACTIVE:
+    REF_JSON = REF_JSON.replace(".json", "_notailscore.json")
+if os.environ.get("FAIR_SLEAP_PY"):
+    SLEAP_PY = Path(os.environ["FAIR_SLEAP_PY"])
 CAMS = ["back", "backL", "mid", "midL", "top", "topL"]
 
 #: Copied from `scripts/sleap_nn/retrack_one.py` (the flags that BUILT the pool).
@@ -81,6 +127,9 @@ SHARED_FLAGS = [
     "--tracking", "--tracking_window_size", "15",
     "--post_connect_single_breaks",
 ]
+if VARIANT in ("unfilt", "bvis4", "bvis5"):   # sleap-nn's filters are opt-in; no flags = none
+    SHARED_FLAGS = ["--tracking", "--tracking_window_size", "15",
+                    "--post_connect_single_breaks"]
 
 
 def cap_flags(n):
@@ -101,9 +150,54 @@ def master():
             for i, r in enumerate(rows)]
 
 
+# ------------------------------------------------------------- stage: sleapsrc
+def sleapsrc_job(args):
+    """Copy one raw .predictions.slp minus instances with < BODY_MIN visible BODY keypoints
+    -- build_lite_pools.py's `bvisN` rule, applied to the file SLEAP reads."""
+    sid, cam, src = args
+    dst = SLEAP_SRC / sid / f"{cam}.slp"
+    if dst.exists() and dst.stat().st_size > 1000:
+        return sid, cam, "skip", 0, 0
+    if not src or not Path(src).exists():
+        return sid, cam, "no_src", 0, 0
+    import sleap_io as sio
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    L = sio.load_slp(src)
+    body = [i for i in range(len(L.skeletons[0].nodes)) if i not in (4, 7, 8, 9)]
+    kept = dropped = 0
+    for lf in L.labeled_frames:
+        keep = []
+        for inst in lf.instances:
+            pts = inst.numpy()
+            if np.isfinite(pts[body, 0]).sum() >= BODY_MIN:
+                keep.append(inst)
+            else:
+                dropped += 1
+        kept += len(keep)
+        lf.instances = keep
+    tmp = dst.with_suffix(".partial.slp")
+    sio.save_slp(L, str(tmp))
+    tmp.rename(dst)
+    return sid, cam, "ok", kept, dropped
+
+
+def stage_sleapsrc(rows, workers):
+    jobs = [(r["session"], c, r[f"{c}_raw"]) for r in rows for c in CAMS]
+    from concurrent.futures import ProcessPoolExecutor
+    tk = td = 0
+    with ProcessPoolExecutor(workers) as ex:
+        for sid, cam, st, k, d in ex.map(sleapsrc_job, jobs):
+            tk += k; td += d
+            if st not in ("ok", "skip"):
+                print(f"[sleapsrc] {sid}/{cam} {st}", flush=True)
+    print(f"[sleapsrc] done: kept {tk:,}, dropped {td:,} instances -> {SLEAP_SRC}", flush=True)
+
+
 # ---------------------------------------------------------------- stage: sleap
 def sleap_job(args):
     sid, cam, src, n = args
+    if SLEAP_SRC is not None:            # body>=4-filtered copy (stage sleapsrc)
+        src = str(SLEAP_SRC / sid / f"{cam}.slp")
     dst = SLEAP_OUT / sid / f"{cam}.slp"
     dst.parent.mkdir(parents=True, exist_ok=True)
     if dst.exists() and dst.stat().st_size > 1000:
@@ -175,6 +269,8 @@ def byte_job(args):
     import h5py
     sys.path.insert(0, str(BENCH / "scripts"))
     sys.path.insert(0, str(REPO / "figs"))
+    import run_bytetrack_bench as _rbb
+    score_notail.install_fn(_rbb, "bbox_from_keypoints")   # tail-free ByteTrack boxes
     from run_bytetrack_bench import run_camera_session
     from fig6_bytetrack_max2 import stitch_to_2
     dst = BYTE_OUT / sid / f"{cam}.h5"
@@ -240,6 +336,7 @@ def score_job(r):
     import h5py
     sys.path.insert(0, str(BENCH / "scripts"))
     import evaluate as ev
+    score_notail.install(ev)
     tmpdir = FAIR / "_score_tmp" / r["session"]
     tmpdir.mkdir(parents=True, exist_ok=True)
     out = []
@@ -313,7 +410,7 @@ def stats(rows):
 def gate_luc3d(rows):
     """This harness's LUC3D per-camera IDF1 must match the fig9_slap2m.json
     deposit that the manuscript's keeptrack LUC3D numbers come from."""
-    d = json.loads((OUT / "fig9_slap2m.json").read_text())
+    d = json.loads((OUT / REF_JSON).read_text())
     cell = [c for c in d["cells"] if c["config"] == "sync_stale20_dist25"][0]
     ref = {p["session"]: p["per_camera_idf1"] for p in cell["per_session"]}
     mine = {}
@@ -324,7 +421,7 @@ def gate_luc3d(rows):
     for s, pc in ref.items():
         if s in mine:
             diffs += [abs(a - mine[s][c]) for a, c in zip(pc, CAMS)]
-    g = {"reference": "fig9_slap2m.json cells[sync_stale20_dist25].per_camera_idf1",
+    g = {"reference": f"{REF_JSON} cells[sync_stale20_dist25].per_camera_idf1",
          "n_camera_sessions": len(diffs), "max_abs_diff": max(diffs),
          "within_mean_ref": cell["all_sessions"]["idf1_within"]}
     print(f"[gate] LUC3D vs fig9 deposit: {len(diffs)} camera-sessions, max |diff| "
@@ -345,7 +442,7 @@ def stage_score(rows, workers):
                 print(f"[score] FAILED {futs[f]}: {e!r}", flush=True)
     allrows.sort(key=lambda x: (x["session"], x["camera"], x["tracker"]))
     keys = list(dict.fromkeys(k for x in allrows for k in x))
-    csv_path = OUT / "fig6_slap2m_fair_percam.csv"
+    csv_path = OUT / f"fig6_slap2m_fair{SUFFIX}_percam.csv"
     with open(csv_path, "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=keys)
         w.writeheader()
@@ -354,20 +451,20 @@ def stage_score(rows, workers):
     out = {"generated_by": "figs/fig6_slap2m_fair.py --stage score",
            "pool": str(POOL), "n_sessions": len({x["session"] for x in allrows}),
            "arms": {"luc3d": f"shipped tracker, {LUC3D}",
-                    "sleap": "sleap-nn 0.2.0, pool filters + --max_tracks N "
+                    "sleap": "sleap-nn 0.2.0, " + ("NO filters" if VARIANT == "unfilt" else "pool filters") + " + --max_tracks N "
                              "--candidates_method local_queues "
                              "--tracking_clean_instance_count N (N = animals)",
                     "bytetrack": "supervision 0.30.0, lost_track_buffer = n_frames + "
                                  "stitch_to_2(n_slots=N), no GT"},
            "scorer": "luc3d-bench scripts/evaluate.py eval_camera (motmetrics, IoU 0.5)",
            "gate_luc3d": gate_luc3d(allrows), **s}
-    (OUT / "fig6_slap2m_fair.json").write_text(json.dumps(out, indent=1))
+    (OUT / f"fig6_slap2m_fair{SUFFIX}.json").write_text(json.dumps(out, indent=1))
     print(json.dumps({"within_view_mean": s["within_view_mean"],
                       "within_view_median": s["within_view_median"]}, indent=1))
     for k, v in s["paired"].items():
         print(f"  {k:32s} n={v['n_sessions']:2d} mean {v['mean']:+.3f} median "
               f"{v['median']:+.3f} wins {v['wins']}/{v['n_sessions']} sign p={v['sign_p']:.2g}")
-    print(f"[score] wrote {csv_path} and {OUT / 'fig6_slap2m_fair.json'}")
+    print(f"[score] wrote {csv_path} and {OUT / f'fig6_slap2m_fair{SUFFIX}.json'}")
 
 
 def stage_install():
@@ -377,18 +474,21 @@ def stage_install():
     import shutil
     sys.path.insert(0, str(REPO / "figs"))
     import fig3_trackers as f3
-    csv_path = OUT / "fig6_slap2m_fair_percam.csv"
+    csv_path = OUT / f"fig6_slap2m_fair{SUFFIX}_percam.csv"
     old = f3.SLAP2M
     try:
         f3.SLAP2M = str(csv_path)
         block = json.loads(json.dumps(f3.slap2m()))
     finally:
         f3.SLAP2M = old
-    block["source"] = (f"{csv_path.name} (figs/fig6_slap2m_fair.py): keeptrack pool; "
+    block["source"] = (f"{csv_path.name} (figs/fig6_slap2m_fair.py): {POOL.name} pool; "
                        "LUC3D shipped tracker; SLEAP capped at N; ByteTrack never-retire "
                        "+ stitch to N")
-    vb = OUT / "fig7_variant_best.json"
-    bak = OUT / "fig7_variant_best.pre_slap2m_fair.json"
+    vb = OUT / f"fig7_variant_best{SUFFIX}.json"
+    bak = OUT / f"fig7_variant_best{SUFFIX}.pre_slap2m_fair.json"
+    if VARIANT and not vb.exists():
+        # seed the variant file from the base one; only its slap2m_fair block changes
+        shutil.copy2(OUT / "fig7_variant_best.json", vb)
     if not bak.exists():
         shutil.copy2(vb, bak)
     t = json.loads(vb.read_text())
@@ -405,7 +505,8 @@ def stage_install():
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--stage", required=True,
-                    choices=["sleap", "verify", "bytetrack", "score", "stats", "install"])
+                    choices=["sleapsrc", "sleap", "verify", "bytetrack", "score", "stats",
+                             "install"])
     ap.add_argument("--workers", type=int, default=16)
     ap.add_argument("--sessions", default=None)
     a = ap.parse_args()
@@ -413,7 +514,9 @@ def main():
     if a.sessions:
         want = set(a.sessions.split(","))
         rows = [r for r in rows if r["session"] in want]
-    if a.stage == "sleap":
+    if a.stage == "sleapsrc":
+        stage_sleapsrc(rows, a.workers)
+    elif a.stage == "sleap":
         stage_sleap(rows, a.workers)
     elif a.stage == "verify":
         sys.exit(stage_verify(rows))
@@ -422,9 +525,9 @@ def main():
     elif a.stage == "stats":
         # recompute the paired statistics from the deposited per-camera CSV
         import csv as _csv
-        with open(OUT / "fig6_slap2m_fair_percam.csv") as f:
+        with open(OUT / f"fig6_slap2m_fair{SUFFIX}_percam.csv") as f:
             allrows = list(_csv.DictReader(f))
-        jp = OUT / "fig6_slap2m_fair.json"
+        jp = OUT / f"fig6_slap2m_fair{SUFFIX}.json"
         j = json.loads(jp.read_text())
         j.update(stats(allrows))
         jp.write_text(json.dumps(j, indent=1))
