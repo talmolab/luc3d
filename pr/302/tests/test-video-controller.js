@@ -1,0 +1,611 @@
+/**
+ * test-video-controller.js - Tests for VideoController (video.js)
+ *
+ * Tests: seekToFrame, scrubToFrame, togglePlayback, startPlayback, stopPlayback,
+ * zoom/pan helpers, and callback invocation.
+ * Uses mock decoders (no real video files needed).
+ */
+
+(function () {
+    const { describe, it, beforeEach, assertEqual, assertNotNull,
+        assertTrue, assertFalse, assertGreaterThan } = TestFramework;
+
+    // Mock decoder - simulates OnDemandVideoDecoder without real video
+    function createMockDecoder(width, height, totalFrames) {
+        var w = width || 640;
+        var h = height || 480;
+        // Create a real offscreen canvas that drawImage can accept
+        var offCanvas = document.createElement('canvas');
+        offCanvas.width = w;
+        offCanvas.height = h;
+
+        return {
+            samples: new Array(totalFrames || 100),
+            _fps: 30,
+            _videoReady: true,
+            videoTrack: { video: { width: w, height: h } },
+            cache: new Map(),
+            lastSeekedFrame: null,
+            playingNative: false,
+            pausedNative: false,
+            _mockCanvas: offCanvas,
+
+            getFrame: function (frameIndex) {
+                this.lastSeekedFrame = frameIndex;
+                // Return a canvas element (valid for drawImage)
+                return Promise.resolve(this._mockCanvas);
+            },
+            drawCurrentFrame: function (ctx, w, h) {
+                // Mock: just fill with a color
+                return true;
+            },
+            getCurrentFrameIndex: function () {
+                return this.lastSeekedFrame || 0;
+            },
+            playNative: function () {
+                this.playingNative = true;
+            },
+            pauseNative: function () {
+                this.pausedNative = true;
+                this.playingNative = false;
+            },
+            seekNative: function (frameIndex) {
+                this.lastSeekedFrame = frameIndex;
+            },
+        };
+    }
+
+    // Mock canvas with a stubbed 2d context
+    function createMockCanvas(width, height) {
+        var canvas = document.createElement('canvas');
+        canvas.width = width || 640;
+        canvas.height = height || 480;
+        return canvas;
+    }
+
+    function createMockView(name, width, height, totalFrames) {
+        var canvas = createMockCanvas(width, height);
+        var overlayCanvas = createMockCanvas(width, height);
+        return {
+            name: name || 'cam1',
+            decoder: createMockDecoder(width, height, totalFrames),
+            canvas: canvas,
+            ctx: canvas.getContext('2d'),
+            overlayCanvas: overlayCanvas,
+            overlayCtx: overlayCanvas.getContext('2d'),
+            videoWidth: width || 640,
+            videoHeight: height || 480,
+        };
+    }
+
+    function createTestState(numViews, totalFrames) {
+        numViews = numViews || 1;
+        totalFrames = totalFrames || 100;
+        var views = [];
+        for (var i = 0; i < numViews; i++) {
+            views.push(createMockView('cam' + i, 640, 480, totalFrames));
+        }
+        return {
+            views: views,
+            currentFrame: 0,
+            totalFrames: totalFrames,
+            fps: 30,
+            isPlaying: false,
+            playInterval: null,
+        };
+    }
+
+    describe('VideoController - Construction', function () {
+        it('creates controller with state and callbacks', function () {
+            var state = createTestState();
+            var ctrl = new VideoController(state, {});
+            assertNotNull(ctrl);
+            assertEqual(ctrl.state, state);
+        });
+    });
+
+    describe('VideoController - seekToFrame', function () {
+        var state, ctrl, overlaysCalled, seekbarFrame;
+
+        beforeEach(function () {
+            overlaysCalled = false;
+            seekbarFrame = -1;
+            state = createTestState(2, 100);
+            ctrl = new VideoController(state, {
+                drawOverlays: function (f) { overlaysCalled = true; },
+                updateSeekbar: function (f) { seekbarFrame = f; },
+            });
+        });
+
+        it('updates state.currentFrame', async function () {
+            await ctrl.seekToFrame(42);
+            assertEqual(state.currentFrame, 42);
+        });
+
+        it('clamps negative frames to 0', async function () {
+            await ctrl.seekToFrame(-5);
+            assertEqual(state.currentFrame, 0);
+        });
+
+        it('clamps frames exceeding total to totalFrames-1', async function () {
+            await ctrl.seekToFrame(999);
+            assertEqual(state.currentFrame, 99);
+        });
+
+        it('calls drawOverlays callback', async function () {
+            await ctrl.seekToFrame(10);
+            assertTrue(overlaysCalled, 'drawOverlays should be called');
+        });
+
+        it('calls updateSeekbar callback with correct frame', async function () {
+            await ctrl.seekToFrame(25);
+            assertEqual(seekbarFrame, 25);
+        });
+
+        it('seeks all views in parallel', async function () {
+            await ctrl.seekToFrame(33);
+            for (var i = 0; i < state.views.length; i++) {
+                assertEqual(state.views[i].decoder.lastSeekedFrame, 33,
+                    'View ' + i + ' should seek to frame 33');
+            }
+        });
+    });
+
+    describe('VideoController - scrubToFrame', function () {
+        var state, ctrl, seekbarFrame;
+
+        beforeEach(function () {
+            seekbarFrame = -1;
+            state = createTestState(1, 100);
+            ctrl = new VideoController(state, {
+                updateSeekbar: function (f) { seekbarFrame = f; },
+            });
+        });
+
+        it('scrubs to target frame', async function () {
+            ctrl.scrubToFrame(50);
+            // Wait for async processing
+            await new Promise(function (r) { setTimeout(r, 50); });
+            assertEqual(state.currentFrame, 50);
+        });
+
+        it('coalesces rapid scrub requests', async function () {
+            // Fire multiple scrubs rapidly
+            ctrl.scrubToFrame(10);
+            ctrl.scrubToFrame(20);
+            ctrl.scrubToFrame(30);
+            ctrl.scrubToFrame(40);
+            // Wait for processing
+            await new Promise(function (r) { setTimeout(r, 100); });
+            // Should end at last target (40), possibly skipping intermediate
+            assertEqual(state.currentFrame, 40, 'Should end at last scrub target');
+        });
+
+        // Issue #115 followup: arrow-key stepping (and the transport
+        // Next/Prev buttons) call scrubToFrame(state.currentFrame + 1), NOT
+        // seekToFrame directly, precisely so rapid presses (faster than one
+        // real decode round-trip) coalesce to the final target instead of
+        // queuing/decoding/painting every intermediate frame in order — which
+        // visibly lags the display behind the input and can even paint stale
+        // frames out of order. This uses a decoder with artificial decode
+        // latency (a real per-frame WebCodecs decode isn't instant) to prove
+        // that firing several rapid relative "+1" steps (the exact call
+        // pattern ui-wiring.js's arrow handler uses) settles correctly
+        // WITHOUT decoding every intermediate frame one-by-one.
+        it('coalesces rapid relative "+1" steps (arrow-key stepping pattern) instead of decoding every intermediate frame', async function () {
+            var decodeCalls = [];
+            var slowState = createTestState(1, 100);
+            slowState.views[0].decoder.getFrame = function (frameIndex) {
+                decodeCalls.push(frameIndex);
+                return new Promise(function (resolve) {
+                    setTimeout(function () { resolve(slowState.views[0].decoder._mockCanvas); }, 20);
+                });
+            };
+            var slowCtrl = new VideoController(slowState, { updateSeekbar: function () {} });
+
+            // Mirror the real arrow-key handler exactly: read state.currentFrame
+            // at call time, request +1, fired rapidly without awaiting.
+            for (var i = 0; i < 6; i++) {
+                slowCtrl.scrubToFrame(slowState.currentFrame + 1);
+                await new Promise(function (r) { setTimeout(r, 3); }); // faster than the 20ms decode
+            }
+            await new Promise(function (r) { setTimeout(r, 200); }); // let everything settle
+
+            assertTrue(decodeCalls.length < 6, 'fewer decode calls than requests — intermediate frames were coalesced, not all individually decoded (got ' + decodeCalls.length + ' calls: ' + JSON.stringify(decodeCalls) + ')');
+            assertTrue(slowState.currentFrame > 0, 'still advanced forward from frame 0 (got ' + slowState.currentFrame + ')');
+        });
+    });
+
+    describe('VideoController - Playback', function () {
+        var state, ctrl, playbackState;
+
+        beforeEach(function () {
+            playbackState = null;
+            state = createTestState(2, 100);
+            ctrl = new VideoController(state, {
+                onPlaybackStateChange: function (isPlaying) { playbackState = isPlaying; },
+                drawOverlays: function () {},
+                updateSeekbar: function () {},
+            });
+        });
+
+        it('togglePlayback starts playback when stopped', function () {
+            assertFalse(state.isPlaying);
+            ctrl.togglePlayback();
+            assertTrue(state.isPlaying, 'Should be playing after toggle');
+            assertTrue(playbackState, 'Callback should report playing');
+            ctrl.stopPlayback(); // cleanup
+        });
+
+        it('togglePlayback stops playback when playing', function () {
+            ctrl.startPlayback();
+            assertTrue(state.isPlaying);
+            ctrl.togglePlayback();
+            assertFalse(state.isPlaying, 'Should be stopped after toggle');
+            assertFalse(playbackState, 'Callback should report stopped');
+        });
+
+        it('startPlayback does nothing if already playing', function () {
+            ctrl.startPlayback();
+            assertTrue(state.isPlaying);
+            ctrl.startPlayback(); // should not error
+            assertTrue(state.isPlaying);
+            ctrl.stopPlayback();
+        });
+
+        it('startPlayback calls playNative on decoders', async function () {
+            ctrl.startPlayback();
+            // play() now starts only AFTER the pre-play seek settles (async), so
+            // flush microtasks/timers before asserting (issue #115 followup).
+            await new Promise(function (r) { setTimeout(r, 0); });
+            for (var i = 0; i < state.views.length; i++) {
+                assertTrue(state.views[i].decoder.playingNative,
+                    'Decoder ' + i + ' should be playing');
+            }
+            ctrl.stopPlayback();
+        });
+
+        it('stopPlayback calls pauseNative on decoders', function () {
+            ctrl.startPlayback();
+            ctrl.stopPlayback();
+            for (var i = 0; i < state.views.length; i++) {
+                assertTrue(state.views[i].decoder.pausedNative,
+                    'Decoder ' + i + ' should be paused');
+            }
+        });
+
+        it('pausePlayback stops and re-decodes the frame it stopped on (no forward step)', async function () {
+            var overlaid = [];
+            ctrl.callbacks.drawOverlays = function (f) { overlaid.push(f); };
+            ctrl.startPlayback();
+            await new Promise(function (r) { setTimeout(r, 0); });
+            state.views.forEach(function (v) { v.decoder.lastSeekedFrame = null; });
+            state.currentFrame = 10;
+            ctrl.pausePlayback();
+            await new Promise(function (r) { setTimeout(r, 0); });   // seekToFrame is async
+            assertFalse(state.isPlaying, 'paused');
+            assertEqual(state.currentFrame, 10, 'rests on the frame playback stopped on — no +1 step');
+            state.views.forEach(function (v, i) {
+                assertEqual(v.decoder.lastSeekedFrame, 10, 'view ' + i + ' re-decoded frame 10 via getFrame');
+            });
+            assertEqual(overlaid[overlaid.length - 1], 10, 'overlay redrawn at the same frame after the re-decode');
+        });
+
+        it('pausePlayback at the last frame stays on the last frame', async function () {
+            ctrl.startPlayback();
+            await new Promise(function (r) { setTimeout(r, 0); });
+            state.currentFrame = state.totalFrames - 1;   // 99
+            ctrl.pausePlayback();
+            await new Promise(function (r) { setTimeout(r, 0); });
+            assertEqual(state.currentFrame, state.totalFrames - 1, 'stays on the last frame');
+        });
+
+        it('pausePlayback does not re-decode when not playing', async function () {
+            state.currentFrame = 20;
+            assertFalse(state.isPlaying);
+            ctrl.pausePlayback();   // wasPlaying false → stop only
+            await new Promise(function (r) { setTimeout(r, 0); });
+            assertEqual(state.currentFrame, 20, 'frame unchanged when already paused');
+            state.views.forEach(function (v, i) {
+                assertEqual(v.decoder.lastSeekedFrame, null, 'view ' + i + ' not re-decoded');
+            });
+        });
+
+        it('stopPlayback cancels animation frame', async function () {
+            ctrl.startPlayback();
+            // the rAF loop now starts after the pre-play seek settles (async).
+            await new Promise(function (r) { setTimeout(r, 0); });
+            assertNotNull(ctrl._playRAF, 'Should have RAF handle');
+            ctrl.stopPlayback();
+            // _playRAF should be cleared
+            assertTrue(ctrl._playRAF === null || ctrl._playRAF === undefined,
+                'RAF handle should be cleared');
+        });
+    });
+
+    describe('VideoController - Zoom', function () {
+        var state, ctrl;
+
+        beforeEach(function () {
+            state = createTestState(2, 100);
+            ctrl = new VideoController(state, {});
+        });
+
+        it('initZoom sets default zoom state', function () {
+            var view = state.views[0];
+            ctrl.initZoom(view);
+            assertNotNull(view.zoom);
+            assertEqual(view.zoom.scale, 1.0);
+            assertEqual(view.zoom.offsetX, 0);
+            assertEqual(view.zoom.offsetY, 0);
+        });
+
+        it('zoomVideo changes scale', function () {
+            var view = state.views[0];
+            ctrl.initZoom(view);
+            ctrl.zoomVideo(view, 2.0);
+            assertEqual(view.zoom.scale, 2.0);
+        });
+
+        it('zoomVideo clamps scale to range [0.25, 10]', function () {
+            var view = state.views[0];
+            ctrl.initZoom(view);
+            ctrl.zoomVideo(view, 100); // would be 100x
+            assertEqual(view.zoom.scale, 10, 'Should clamp to 10');
+            ctrl.zoomVideo(view, 0.001); // would be 0.01
+            assertTrue(view.zoom.scale >= 0.25, 'Should not go below 0.25');
+        });
+
+        it('resetZoom restores default', function () {
+            var view = state.views[0];
+            ctrl.initZoom(view);
+            ctrl.zoomVideo(view, 3.0);
+            ctrl.resetZoom(view);
+            assertEqual(view.zoom.scale, 1.0);
+            assertEqual(view.zoom.offsetX, 0);
+            assertEqual(view.zoom.offsetY, 0);
+        });
+
+        it('zoomAllVideos applies to all views', function () {
+            ctrl.initZoom(state.views[0]);
+            ctrl.initZoom(state.views[1]);
+            ctrl.zoomAllVideos(2.0);
+            for (var i = 0; i < state.views.length; i++) {
+                assertEqual(state.views[i].zoom.scale, 2.0,
+                    'View ' + i + ' should be at 2x zoom');
+            }
+        });
+
+        it('resetAllZoom resets all views', function () {
+            ctrl.initZoom(state.views[0]);
+            ctrl.initZoom(state.views[1]);
+            ctrl.zoomAllVideos(3.0);
+            ctrl.resetAllZoom();
+            for (var i = 0; i < state.views.length; i++) {
+                assertEqual(state.views[i].zoom.scale, 1.0,
+                    'View ' + i + ' should be at 1x zoom');
+            }
+        });
+
+        it('zoomVideo with cursor position adjusts offset', function () {
+            var view = state.views[0];
+            ctrl.initZoom(view);
+            // Zoom in at position (100, 100) by 2x
+            ctrl.zoomVideo(view, 2.0, 100, 100);
+            assertEqual(view.zoom.scale, 2.0);
+            // Offset should be adjusted so (100,100) stays in place
+            // At 1x with offset 0: content point = (100, 100)
+            // At 2x: offset should be 100 - 100*2 = -100
+            assertEqual(view.zoom.offsetX, -100);
+            assertEqual(view.zoom.offsetY, -100);
+        });
+    });
+
+    // Only the views on screen are decoded and played (`callbacks.isViewShown`,
+    // which the app feeds `isViewDocked`): with one camera solo'd out of 17,
+    // the other 16 used to decode every step and play during playback.
+    describe('VideoController - Only shown views (isViewShown)', function () {
+        var state, ctrl, shown;
+
+        beforeEach(function () {
+            state = createTestState(3, 100);
+            shown = { cam0: false, cam1: true, cam2: false };
+            ctrl = new VideoController(state, {
+                drawOverlays: function () {},
+                updateSeekbar: function () {},
+                isViewShown: function (v) { return !!shown[v.name]; },
+            });
+        });
+
+        it('seekToFrame decodes the shown views only', async function () {
+            await ctrl.seekToFrame(42);
+            assertEqual(state.views[1].decoder.lastSeekedFrame, 42, 'shown cam1 decoded');
+            assertEqual(state.views[0].decoder.lastSeekedFrame, null, 'hidden cam0 not decoded');
+            assertEqual(state.views[2].decoder.lastSeekedFrame, null, 'hidden cam2 not decoded');
+            assertEqual(state.currentFrame, 42);
+        });
+
+        it('with no view shown, seekToFrame decodes every view (as without the callback)', async function () {
+            shown = {};
+            await ctrl.seekToFrame(7);
+            for (var i = 0; i < state.views.length; i++) {
+                assertEqual(state.views[i].decoder.lastSeekedFrame, 7, 'view ' + i + ' decoded');
+            }
+        });
+
+        it('startPlayback plays the shown views only', async function () {
+            ctrl.startPlayback();
+            await new Promise(function (r) { setTimeout(r, 0); });
+            assertTrue(state.views[1].decoder.playingNative, 'shown cam1 plays');
+            assertFalse(state.views[0].decoder.playingNative, 'hidden cam0 does not play');
+            assertFalse(state.views[2].decoder.playingNative, 'hidden cam2 does not play');
+            ctrl.stopPlayback();
+        });
+
+        it('a change of shown views during playback restarts it on the new views', async function () {
+            ctrl.startPlayback();
+            await new Promise(function (r) { setTimeout(r, 0); });
+            assertTrue(state.views[1].decoder.playingNative, 'cam1 plays first');
+            shown = { cam0: false, cam1: false, cam2: true };   // the solo view switched
+            for (var i = 0; i < 20 && !state.views[2].decoder.playingNative; i++) {
+                await new Promise(function (r) { setTimeout(r, 20); });
+            }
+            assertTrue(state.isPlaying, 'still playing after the switch');
+            assertTrue(state.views[2].decoder.playingNative, 'newly shown cam2 plays');
+            assertFalse(state.views[1].decoder.playingNative, 'no-longer-shown cam1 is paused');
+            ctrl.stopPlayback();
+        });
+
+        it('a view that goes off screen has its decoded frames released; a shown one keeps them', async function () {
+            var released = [0, 0, 0];
+            state.views.forEach(function (v, i) { v.decoder.releaseFrames = function () { released[i]++; }; });
+            await ctrl.seekToFrame(5);                       // cam1 shown
+            assertEqual(released.join(), '0,0,0', 'nothing released while the shown set is unchanged');
+            shown = { cam0: false, cam1: false, cam2: true };   // the solo view switched to cam2
+            await ctrl.seekToFrame(6);
+            assertEqual(released[1], 1, 'cam1, no longer shown, released its frames');
+            assertEqual(released[2], 0, 'cam2, now shown, keeps its frames');
+            assertEqual(released[0], 0, 'cam0, never shown, untouched');
+            await ctrl.seekToFrame(7);
+            assertEqual(released[1], 1, 'released once, on the transition — not on every step');
+        });
+
+        it('a decoder reused by a shown view is not released (decoders are pooled across sessions)', async function () {
+            var released = 0;
+            var shared = state.views[1].decoder;
+            shared.releaseFrames = function () { released++; };
+            await ctrl.seekToFrame(5);                       // cam1 (shared decoder) shown
+            // A session switch: new view objects, cam2 now holds the same decoder.
+            state.views[2].decoder = shared;
+            shown = { cam0: false, cam1: false, cam2: true };
+            await ctrl.seekToFrame(6);
+            assertEqual(released, 0, 'the shared decoder is still shown through cam2, so it keeps its frames');
+        });
+
+        it('pausePlayback re-decodes the shown views only', async function () {
+            ctrl.startPlayback();
+            await new Promise(function (r) { setTimeout(r, 0); });
+            state.views.forEach(function (v) { v.decoder.lastSeekedFrame = null; });
+            state.currentFrame = 10;
+            ctrl.pausePlayback();
+            await new Promise(function (r) { setTimeout(r, 0); });
+            assertEqual(state.views[1].decoder.lastSeekedFrame, 10, 'shown cam1 re-decoded');
+            assertEqual(state.views[0].decoder.lastSeekedFrame, null, 'hidden cam0 not re-decoded');
+        });
+    });
+
+    // Decoded-frame cache budget: every decoder used to cache a fixed 60
+    // frames, ~8 GB of ImageBitmaps on 17 cameras at 1680x1200, and Chrome then
+    // garbage-collected most of the time. The shown views now share a budget.
+    describe('VideoController - decoded-frame cache budget', function () {
+        var FRAME_1680 = 1680 * 1200 * 4, FRAME_1280 = 1280 * 1024 * 4, FRAME_640 = 640 * 480 * 4;
+        function times(n, v) { var a = []; for (var i = 0; i < n; i++) a.push(v); return a; }
+
+        it('frameCacheFrames splits a budget across views, within [MIN, MAX]', function () {
+            assertEqual(frameCacheFrames(2560, times(17, FRAME_1680)), 19, '17 cameras at 1680x1200 in 2560 MB');
+            assertEqual(frameCacheFrames(2560, times(1, FRAME_1680)), FRAME_CACHE_MAX, 'one camera: capped at the old 60');
+            assertEqual(frameCacheFrames(2560, times(8, FRAME_1280)), FRAME_CACHE_MAX, '8 cameras at 1280x1024: still 60 (unchanged)');
+            assertEqual(frameCacheFrames(2560, times(60, FRAME_1680)), FRAME_CACHE_MIN, 'so many cameras the share is tiny: the floor');
+            assertEqual(frameCacheFrames(2560, []), FRAME_CACHE_MAX, 'no frame sizes known: the old 60');
+            assertEqual(FRAME_CACHE_MAX, 60);
+            assertEqual(FRAME_CACHE_MIN, 12);
+        });
+
+        function spySizes(state) {
+            var sizes = {};
+            state.views.forEach(function (v) { v.decoder.setCacheSize = function (n) { sizes[v.name] = n; }; });
+            return sizes;
+        }
+        async function withBudget(mb, fn) {
+            var saved = window.LUCID_FRAME_CACHE_MB;
+            window.LUCID_FRAME_CACHE_MB = mb;
+            try { await fn(); } finally { window.LUCID_FRAME_CACHE_MB = saved; }
+        }
+
+        it('sizes every shown view from the budget, and re-sizes when the shown set changes', async function () {
+            // 60 MB over three 640x480 views (1.17 MB a frame): 17 each; over one: 51.
+            await withBudget(60, async function () {
+                var state = createTestState(3, 100);
+                var sizes = spySizes(state);
+                var shown = { cam0: true, cam1: true, cam2: true };
+                var ctrl = new VideoController(state, {
+                    drawOverlays: function () {}, updateSeekbar: function () {},
+                    isViewShown: function (v) { return !!shown[v.name]; },
+                });
+                await ctrl.seekToFrame(1);
+                assertEqual(JSON.stringify(sizes), JSON.stringify({ cam0: 17, cam1: 17, cam2: 17 }), 'grid: 17 each');
+                assertEqual(Math.floor(60 * 1048576 / (3 * FRAME_640)), 17, 'arithmetic of the expectation');
+                shown = { cam1: true };
+                await ctrl.seekToFrame(2);
+                assertEqual(sizes.cam1, 51, 'solo: the shown view gets the whole budget');
+                assertEqual(sizes.cam0, 17, 'hidden: the all-views share (the export preview decodes every view)');
+                assertEqual(sizes.cam2, 17, 'hidden: the all-views share');
+                for (var k in sizes) delete sizes[k];
+                await ctrl.seekToFrame(3);
+                assertEqual(Object.keys(sizes).length, 0, 'unchanged shown set: no re-sizing on every step');
+            });
+        });
+
+        it('applies without an isViewShown callback (every view counts as shown)', async function () {
+            await withBudget(60, async function () {
+                var state = createTestState(3, 100);
+                var sizes = spySizes(state);
+                var ctrl = new VideoController(state, { drawOverlays: function () {}, updateSeekbar: function () {} });
+                await ctrl.seekToFrame(1);
+                assertEqual(JSON.stringify(sizes), JSON.stringify({ cam0: 17, cam1: 17, cam2: 17 }));
+            });
+        });
+
+        it('startPlayback releases every view\'s cached frames', async function () {
+            var state = createTestState(2, 100);
+            var released = [0, 0];
+            state.views.forEach(function (v, i) { v.decoder.releaseFrames = function () { released[i]++; }; });
+            var ctrl = new VideoController(state, { drawOverlays: function () {}, updateSeekbar: function () {} });
+            ctrl.startPlayback();
+            assertEqual(released.join(), '1,1', 'each decoder released once at playback start');
+            ctrl.stopPlayback();
+        });
+
+        it('OnDemandVideoDecoder.setCacheSize evicts down to the new size, farthest from the last step first', function () {
+            var dec = new OnDemandVideoDecoder({ cacheSize: 60 });
+            var closed = [];
+            var cache = new Map();
+            for (var f = 0; f < 30; f++) {
+                (function (k) { cache.set(k, { close: function () { closed.push(k); } }); })(f);
+            }
+            dec._mbBackend = { cache: cache, cacheSize: 60 };
+            dec._lastStepFrame = 20;
+            dec.setCacheSize(10);
+            assertEqual(dec.cacheSize, 10, 'decoder cacheSize');
+            assertEqual(dec._mbBackend.cacheSize, 10, 'backend cacheSize');
+            assertEqual(cache.size, 10, 'cache trimmed to 10');
+            assertTrue(cache.has(20), 'the current frame is kept');
+            cache.forEach(function (_, k) { assertTrue(Math.abs(k - 20) <= 5, 'kept frame ' + k + ' is near the current one'); });
+            assertEqual(closed.length, 20, 'every evicted bitmap was closed');
+            dec.setCacheSize(40);
+            assertEqual(cache.size, 10, 'growing evicts nothing');
+            assertEqual(dec._mbBackend.cacheSize, 40);
+        });
+    });
+
+    describe('VideoController - Views without decoders', function () {
+        it('seekToFrame skips views without decoder', async function () {
+            var state = createTestState(1, 100);
+            // Add a view with no decoder
+            state.views.push({
+                name: 'empty',
+                decoder: null,
+                canvas: createMockCanvas(),
+                ctx: createMockCanvas().getContext('2d'),
+                overlayCanvas: createMockCanvas(),
+                overlayCtx: createMockCanvas().getContext('2d'),
+            });
+
+            var ctrl = new VideoController(state, {});
+            // Should not throw
+            await ctrl.seekToFrame(10);
+            assertEqual(state.currentFrame, 10);
+        });
+    });
+
+})();
