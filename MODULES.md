@@ -9026,9 +9026,10 @@ before they come close -> 1 s after they separate — the row's progress-bar spa
 (`s..e` is the close spell); `updateIdSwitchHighlight(frame)` (every frame
 change, via `ui/id-switch-modal.js` `updateIdSwitchProgress`);
 `refreshIdSwitchHighlight()` (recompute the boxes at the current frame after the
-identities changed — a fix); `getIdSwitchHighlight()`; `ID_SWITCH_SECTION_RGB` (`{lead, close}` as `r, g, b`
+identities changed — a fix — or the node weights did, on Settings Apply); `getIdSwitchHighlight()`; `ID_SWITCH_SECTION_RGB` (`{lead, close}` as `r, g, b`
 strings — orange / red) and `idSwitchSection(target, frame)` (`'close'` over
-`[s, e]`, else `'lead'`).
+`[s, e]`, else `'lead'`); `idSwitchBoxNodeMask(nodeNames)` (`mask[k]` true for a
+node weighted above 0, or `null` = every node when none or all are weighted 0).
 
 **How.** Draws on its OWN canvas per view (`.id-switch-canvas`, appended to the
 view's `.canvas-wrapper`, `pointer-events: none`), backing size video × zoom like
@@ -9046,7 +9047,14 @@ rate (120 Hz) was twice the video's own rate. Boxes are recomputed only when the
 whose identity NAME is one of the pair at that frame (per-frame track identity
 first, then the group's `identityId`; unlinked instances via
 `getIdentityIdForUnlinkedInstance`), one box around both (or the one visible),
-labelled "id_a ↔ id_b" in the identities' colours. The outline wears the
+labelled "id_a ↔ id_b" in the identities' colours. **The box encloses only the
+nodes the Tracking Wizard weights above 0** (`getNodeWeightArray` over the
+session skeleton), so with the tail nodes at 0 it frames the bodies and heads
+rather than a tail sweeping across the view. An instance none of whose weighted
+nodes is visible in a view falls back to ALL its nodes, so an animal is never
+dropped from the box; a skeleton weighted 0 throughout encloses every node. The
+weights are read on each recompute, and Settings Apply calls
+`refreshIdSwitchHighlight`, so a change shows on the frame already on screen. The outline wears the
 colour of the row's progress-bar SECTION the frame is in — orange over the
 lead-in and lead-out, red over the close spell — from `ID_SWITCH_SECTION_RGB`,
 which the bar (`ui/id-switch-modal.js` `progressHtml`) also reads, so the two
@@ -9055,16 +9063,18 @@ sized in SCREEN pixels (canvas width / (layout width × zoom)), so a small tile
 of a large video stays readable. Lazy projects: nothing for a non-resident frame.
 
 **Imports from project modules.** `ui/app-state.js` (`state`), `ui/overlays.js`
-(`makeVideoToCanvasTransform`).
+(`makeVideoToCanvasTransform`), `ui/settings.js` (`getNodeWeightArray`).
 
-**Imported by.** `ui/id-switch-modal.js`.
+**Imported by.** `ui/id-switch-modal.js`, `ui/settings-modal.js`
+(`refreshIdSwitchHighlight`, on Apply).
 
 **Coverage.** `tests/e2e/id-switch-highlight.mjs` (two real views: box around
 the pair and not the third animal, animates while paused, orange in the
 lead-in / red in the close spell / orange in the lead-out with the bar's
 sections matching, the bar's playhead and click / drag seeking, cleared past the
 interval and redrawn on return, a moved box leaves nothing behind, Clear stops
-it); `tests/e2e/_bench-playback.mjs` scenario `idswitch` (playback cost on a real
+it, a zero-weight node is left out — re-fit on Apply without a frame change — and
+the fallback for an instance showing only zero-weight nodes); `tests/e2e/_bench-playback.mjs` scenario `idswitch` (playback cost on a real
 project with a row selected over the whole run).
 
 ---
@@ -9546,7 +9556,8 @@ switch stored as `1`/`0` (`makeToggle`). Covered by
 state only (only editable bindings are tracked); nothing commits until **Apply**
 (`setDefaultTriangulationMethod` + `applyBindings` + `setNodeWeights` +
 `setCameraWeights` + `setTrackingThresholds`), which then repaints overlays +
-timeline so excluded views grey immediately. Cancel / close `×` / backdrop click
+timeline so excluded views grey immediately, and re-fits the ID-switch box
+(`refreshIdSwitchHighlight`), which encloses only nonzero-weight nodes. Cancel / close `×` / backdrop click
 / Escape discard. A
 capture-phase document keydown listener makes the modal fully capture the
 keyboard (background shortcuts don't fire while it's open) and is removed on
@@ -9557,7 +9568,8 @@ teardown.
 `getNodeWeight`, `setNodeWeights`, `getCameraWeight`, `setCameraWeights`,
 `getTrackingThresholdDefs`, `setTrackingThresholds`); `./app-state.js`
 (`getActiveSession`, `state`, `timeline`); `./rendering.js` (`drawAllOverlays`,
-for the post-Apply repaint).
+for the post-Apply repaint); `./modal-geometry.js` (`installModalGeometry`);
+`./id-switch-highlight.js` (`refreshIdSwitchHighlight`, on Apply).
 
 **Imported by.** `ui/ui-wiring.js`.
 
