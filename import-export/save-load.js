@@ -813,8 +813,15 @@ function restoreEditedStoreColumns(loader, kept) {
  * bytes, so this is cheap relative to the FIRST open — no Track All/
  * Triangulate All is redone, only the columnar store is reconstructed.
  */
-async function reopenSessionLazyLoader(session, sourceFileEntries, wasSharedStore) {
+async function reopenSessionLazyLoader(session, sourceFileEntries, wasSharedStore, nodeOrder) {
     var loader = new SioLazyLoader();
+    // The node order the session's stores were re-ordered into after loading
+    // (`SioLazyLoader.targetNodeOrder`: a later session of a multi-session
+    // load, or a skeleton adopted since — `pose/session-node-order.js`). The
+    // files hold their own order, and pass 1's skeleton names the session's,
+    // so the re-open has to repeat the re-order or every keypoint is written
+    // under another node's name.
+    if (nodeOrder) loader.setTargetNodeOrder(nodeOrder);
     if (wasSharedStore) {
         // Lazily-reopened single-file project: every camera's sourceFiles entry
         // is the SAME project `.slp`. Reopen through openProjectSlp so the ONE
@@ -860,7 +867,8 @@ export function beginMultiSessionSave() {
  * running counter, then EVICTS the session's heavy state (lazy loader,
  * `frameGroups`, `instanceGroups`) — safe because the small ref graph +
  * cheap `sourceFiles` handles are kept in `handle.pending`, plus, for a store
- * edited in memory, its frame + instance columns (`keepEditedStoreColumns`).
+ * edited in memory, its frame + instance columns (`keepEditedStoreColumns`),
+ * and the node order its stores were re-ordered into (`targetNodeOrder`).
  *
  * This is the piece that must be interleaved with each session's OWN
  * compute step for truly memory-bounded end-to-end processing of sessions
@@ -886,13 +894,14 @@ export async function commitSessionForMultiSessionSave(handle, session) {
     });
     var sourceFiles = Array.from(session.lazyLoader.sourceFiles.entries());
     var wasSharedStore = !!session.lazyLoader._sharedStore;
+    var nodeOrder = session.lazyLoader.targetNodeOrder ? session.lazyLoader.targetNodeOrder.slice() : null;
     var refGraph = await buildSessionRefGraph(session, sessViews, sessVideoFiles, handle.ctx);
     // A store edited in memory is not what pass 2 will read back from the
     // files: keep its frame + instance columns (`keepEditedStoreColumns`).
     var editedColumns = keepEditedStoreColumns(session.lazyLoader);
     handle.pending.push({
         session: session, sourceFiles: sourceFiles, refGraph: refGraph, sharedStore: wasSharedStore,
-        editedColumns: editedColumns,
+        editedColumns: editedColumns, nodeOrder: nodeOrder,
     });
 
     // Evict: this session's contribution now lives in `refGraph` (small — a
@@ -934,7 +943,7 @@ export async function finalizeMultiSessionSave(handle, opts) {
     try {
         for (var j = 0; j < handle.pending.length; j++) {
             var p = handle.pending[j];
-            await reopenSessionLazyLoader(p.session, p.sourceFiles, p.sharedStore);
+            await reopenSessionLazyLoader(p.session, p.sourceFiles, p.sharedStore, p.nodeOrder);
             if (p.editedColumns) restoreEditedStoreColumns(p.session.lazyLoader, p.editedColumns);
             streamSessionIntoWriter(writer, p.session, p.refGraph);
             p.session.lazyLoader.close();
