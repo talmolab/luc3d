@@ -35,8 +35,9 @@ export const STEP_CURSOR_IDLE_MS = 3000;
 /**
  * Frames decoded and kept per backward step (OnDemandVideoDecoder._decodeBackChunk):
  * a step back must decode from the keyframe anyway, so it keeps up to this many
- * frames ending at the target and the next steps back are cache hits. Must stay
- * well under the decoder's frame cache (60 in the app). `window.LUCID_STEP_BACK_CHUNK`
+ * frames ending at the target and the next steps back are cache hits. Capped at
+ * 40% of the decoder's frame cache (`_backChunkSize`), which the budget sets to
+ * FRAME_CACHE_MIN–FRAME_CACHE_MAX frames. `window.LUCID_STEP_BACK_CHUNK`
  * overrides it; 0 or 1 turns it off.
  */
 export const STEP_BACK_CHUNK = 24;
@@ -47,6 +48,46 @@ export const STEP_BACK_CHUNK = 24;
  * background so even the FIRST step back is a cache hit (OnDemandVideoDecoder._mbGetFrame).
  */
 export const STEP_BACK_WARM_MS = 250;
+
+/**
+ * Decoded-frame cache budget, in MB, shared by the views on screen
+ * (`VideoController._applyFrameCacheBudget`). Every decoder caches decoded
+ * frames as ImageBitmaps for paused stepping, and those are big: 8 MB each at
+ * 1680×1200. With 17 cameras at the old fixed 60 frames apiece that was ~8 GB
+ * alive at once, and Chrome then spent 62–69% of the main thread
+ * garbage-collecting — grid playback at ~5 redraws/s, steps at ~170 ms. Each
+ * decoder now gets `budget / (sum of the shown views' frame sizes)` frames,
+ * within [FRAME_CACHE_MIN, FRAME_CACHE_MAX]: 19 frames for those 17 cameras
+ * (2.6 GB), 60 for one solo'd camera or for 8 cameras at 1280×1024. Measured
+ * on that project, grid mode (sweep table in MODULES.md `loading/video.js`):
+ * stepping stops garbage-collecting below ~5 GB of cached frames, playback
+ * below ~3.3 GB, and under 12 frames held back-stepping falls off.
+ * `window.LUCID_FRAME_CACHE_MB` overrides it.
+ */
+export const FRAME_CACHE_BUDGET_MB = 2560;
+/** Most frames a decoder caches: the old fixed size, still what a few small views get. */
+export const FRAME_CACHE_MAX = 60;
+/**
+ * Fewest frames a decoder caches, budget or not: below this the backward
+ * chunk (40% of the cache, `_backChunkSize`) is too short to step back through
+ * without a keyframe decode every few frames.
+ */
+export const FRAME_CACHE_MIN = 12;
+
+/**
+ * Frames per decoder so that views of these frame sizes stay within
+ * `budgetMB` together, clamped to [FRAME_CACHE_MIN, FRAME_CACHE_MAX].
+ * @param {number} budgetMB
+ * @param {number[]} frameBytes - one decoded frame's bytes per view (w × h × 4)
+ * @returns {number}
+ */
+export function frameCacheFrames(budgetMB, frameBytes) {
+    var total = 0;
+    for (var i = 0; i < frameBytes.length; i++) total += frameBytes[i] > 0 ? frameBytes[i] : 0;
+    if (!(total > 0)) return FRAME_CACHE_MAX;
+    var n = Math.floor(budgetMB * 1024 * 1024 / total);
+    return Math.max(FRAME_CACHE_MIN, Math.min(FRAME_CACHE_MAX, n));
+}
 
 /** Index of the frame nearest timestamp `t` in the sorted `times` (within half a frame), or -1. */
 function frameNearTime(times, t) {
@@ -809,6 +850,45 @@ export class OnDemandVideoDecoder {
             if (entry[1] && typeof entry[1].close === 'function') entry[1].close();
         }
         this.cache.clear();
+    }
+
+    /**
+     * Change how many decoded frames this decoder keeps (the mediabunny
+     * backend's cache and the HTML5/WebCodecs one), evicting at once down to
+     * the new size: the backend cache's frames FARTHEST from the last stepped
+     * frame go first, as `_cacheNear` evicts. Set by
+     * `VideoController._applyFrameCacheBudget`; the backward chunk follows the
+     * size by itself (`_backChunkSize`).
+     * @param {number} n - frames, at least 1
+     */
+    setCacheSize(n) {
+        n = Math.max(1, Math.floor(n));
+        this.cacheSize = n;
+        while (this.cache.size > n) {
+            var oldest = this.cache.keys().next().value;
+            var old = this.cache.get(oldest);
+            if (old && typeof old.close === 'function') old.close();
+            this.cache.delete(oldest);
+        }
+        var be = this._mbBackend;
+        if (!be || !be.cache) return;
+        be.cacheSize = n;
+        var here = this._lastStepFrame;
+        while (be.cache.size > n) {
+            var far = null, farD = -1;
+            if (here == null) {
+                far = be.cache.keys().next().value;   // no stepped frame yet: the oldest entry
+            } else {
+                be.cache.forEach(function (_, k) {
+                    var d = Math.abs(k - here);
+                    if (d > farD) { farD = d; far = k; }
+                });
+            }
+            if (far == null) break;
+            var bm = be.cache.get(far);
+            if (bm && typeof bm.close === 'function') bm.close();
+            be.cache.delete(far);
+        }
     }
 
     /** Close just the forward-stepping stream (reopened at a jump, or idle). */
@@ -2093,22 +2173,60 @@ export class VideoController {
      * garbage-collecting so often that the one view still shown stutters.
      * Compared by decoder, not view object: decoders are pooled and reused
      * across session switches, and one still in use must keep its frames.
+     * Any change of the shown decoders also re-sizes every frame cache from
+     * the shared budget (`_applyFrameCacheBudget`).
      */
     _shownViews() {
         var all = this.state.views.filter(function (v) { return v.decoder; });
         var isShown = this.callbacks.isViewShown;
-        if (typeof isShown !== 'function') return all;
-        var shown = all.filter(function (v) { return isShown(v); });
+        var shown = typeof isShown === 'function' ? all.filter(function (v) { return isShown(v); }) : all;
         if (!shown.length) shown = all;
         var prev = this._lastShownDecoders;
         var now = new Set(shown.map(function (v) { return v.decoder; }));
         this._lastShownDecoders = now;
+        var changed = !prev || prev.size !== now.size;
         if (prev) {
             prev.forEach(function (d) {
-                if (!now.has(d) && typeof d.releaseFrames === 'function') d.releaseFrames();
+                if (now.has(d)) return;
+                changed = true;
+                if (typeof d.releaseFrames === 'function') d.releaseFrames();
             });
         }
+        if (changed) this._applyFrameCacheBudget(all, now);
         return shown;
+    }
+
+    /**
+     * Size every decoder's frame cache from the shared budget
+     * (`FRAME_CACHE_BUDGET_MB`, or `window.LUCID_FRAME_CACHE_MB`): a shown
+     * view gets `frameCacheFrames(budget, shown views' frame sizes)`, so the
+     * views on screen together stay within it — 60 frames for one solo'd
+     * camera, 19 each for 17 cameras at 1680×1200. A hidden view gets the
+     * share it would have with EVERY view shown: nothing steps it, but the
+     * overlay-export preview decodes every view, and that must not refill 17
+     * full caches either. Run whenever the set of shown decoders changes
+     * (`_shownViews`), including the first call after a load.
+     *
+     * @param {Array} all - views with a decoder
+     * @param {Set} shownDecoders
+     */
+    _applyFrameCacheBudget(all, shownDecoders) {
+        var budget = FRAME_CACHE_BUDGET_MB;
+        try {
+            if (typeof window !== 'undefined' && window.LUCID_FRAME_CACHE_MB > 0) budget = +window.LUCID_FRAME_CACHE_MB;
+        } catch (_) { /* ignore */ }
+        var bytes = function (v) { return (v.videoWidth || 0) * (v.videoHeight || 0) * 4; };
+        var shownBytes = [], allBytes = [];
+        for (var i = 0; i < all.length; i++) {
+            allBytes.push(bytes(all[i]));
+            if (shownDecoders.has(all[i].decoder)) shownBytes.push(bytes(all[i]));
+        }
+        var nShown = frameCacheFrames(budget, shownBytes);
+        var nAll = frameCacheFrames(budget, allBytes);
+        for (var j = 0; j < all.length; j++) {
+            var d = all[j].decoder;
+            if (typeof d.setCacheSize === 'function') d.setCacheSize(shownDecoders.has(d) ? nShown : nAll);
+        }
     }
 
     /**
@@ -2408,8 +2526,18 @@ export class VideoController {
 
         this.state.isPlaying = true;
         var self = this;
-        // playback decodes on its own; free the paused-stepping streams' decoders
-        this.state.views.forEach(function (v) { if (v.decoder && v.decoder.releaseStepCursor) v.decoder.releaseStepCursor(); });
+        // Playback decodes on its own: free the paused-stepping streams' decoders
+        // AND every cached decoded frame. Playback never reads the caches, and
+        // by the time it stops they hold frames from wherever stepping last
+        // was. Held through playback they are what made it garbage-collect
+        // most of the time: 17 cameras x 36 cached frames (4.9 GB) played at
+        // ~13 redraws/s with 64% of the main thread in GC, 24 frames at ~54/s.
+        this.state.views.forEach(function (v) {
+            var d = v.decoder;
+            if (!d) return;
+            if (typeof d.releaseFrames === 'function') d.releaseFrames();
+            else if (d.releaseStepCursor) d.releaseStepCursor();
+        });
 
         // ------------------------------------------------------------------
         // Buffered mediabunny playback (issue #115 follow-up) — OPT-IN.
