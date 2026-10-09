@@ -11,9 +11,12 @@
  *  1. Animals of different size: both checks find the swap; the ID Switches tab
  *     lists it ONCE, as "Both", and the timeline carries size (amber) and image (cyan) markers.
  *  2. Animals of IDENTICAL size: only the image check finds it ("Images" row).
- *  3. A cancellable progress dialog: Esc mid-run stops it, reports "cancelled"
- *     and adds no image markers.
- *  4. Without WebGPU the image check explains why it cannot run.
+ *  3. A cancellable progress dialog, with a playhead line, a percentage, the GPU
+ *     running the model with its live load, and a sample of the crops above
+ *     Cancel: Esc mid-run stops it, reports "cancelled" and adds no image markers.
+ *  4. Without a GPU the after-tracking image check (Tracking Wizard) still RUNS,
+ *     on the CPU, says so in the dialog, and finds the switch — it used to be
+ *     "skipped — needs WebGPU". (The real CPU embedder: tests/e2e/image-check-cpu.mjs.)
  *  5. The menu item exists, and the after-tracking image check defaults to OFF.
  *
  * Run: node tests/e2e/id-switch-image-check.mjs
@@ -41,7 +44,7 @@ try {
     await page.goto(`http://localhost:${PORT}/index.html`);
     await page.waitForFunction(() => window.__lucid && window.__lucid.state, { timeout: 20000 });
 
-    await page.evaluate(() => {
+    await page.evaluate(async () => {
         // Tracked fixture: 3 animals, 24 scheduled encounters, labels of one pair swapped after #16.
         window.__buildSwap = async (scales) => {
             const pd = await import('/pose/pose-data.js'); const AS = await import('/ui/app-state.js');
@@ -78,16 +81,31 @@ try {
             if (AS.timeline) { AS.timeline.setTotalFrames(T * STEP); AS.timeline.setData(session); } (await import('/ui/seekbar-markers.js')).setSeekbarSwitchMarkers([]);
             return { swapFrame, pair: events[SWAP].pair.map(k => 'id_' + k) };
         };
-        // Synthetic embedder: per-animal appearance vector + noise, 4 cameras; optional per-frame delay.
-        window.__fakeEmbedder = (delayMs) => async () => {
+        // Synthetic embedder: per-animal appearance vector + noise, 4 cameras; optional per-frame delay, and
+        // optionally a `device` to report (with busyMs = the time any request was in its delay, and
+        // sampleCrops = one uniform-grey crop per frame, 60 + 60 x the animal, from camera c<frame mod 4>).
+        const E = await import('/ui/image-embedder.js');
+        const greyCrop = (g) => { const t = new Float32Array(3 * E.INPUT * E.INPUT); E.writeInputTensor(new Uint8ClampedArray(E.CROP * E.CROP).fill(g), t, 0); return t; };
+        const CROPS = [0, 1, 2].map(k => greyCrop(60 + 60 * k));
+        window.__fakeEmbedder = (delayMs, device) => async () => {
             let seed = 11; const r = () => ((seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967296);
             const g = () => Math.sqrt(-2 * Math.log(r() + 1e-12)) * Math.cos(2 * Math.PI * r());
             const proto = [0, 1, 2].map(() => Float32Array.from({ length: 64 }, g));
             const cams = ['c0', 'c1', 'c2', 'c3'];
-            return { views: cams, getEmbeddings: async (frame, items) => {
+            let busy = 0, since = 0, active = 0, n = 0; const samples = [];
+            const e = { views: cams, getEmbeddings: async (frame, items) => {
+                const it = items[n++ % items.length];
+                // a cross of keypoints around the centre, so the overlay has something to draw (the fixture skeleton has no edges)
+                samples.push({ tensor: CROPS[it.group._animal], frame, camera: cams[frame % 4], identityId: it.group.identityId,
+                               points: Float32Array.from([112, 112, 150, 112, 74, 112, 112, 150, 112, 74]) });
+                if (samples.length > 12) samples.shift();
+                if (active++ === 0) since = performance.now();
                 if (delayMs) await new Promise(res => setTimeout(res, delayMs));
+                if (--active === 0) busy += performance.now() - since;
                 return items.map(it => cams.map(cam => ({ camera: cam, vector: Float32Array.from(proto[it.group._animal], v => v + 1.2 * g()) })));
             } };
+            if (device) { e.device = () => device; e.busyMs = () => busy + (active ? performance.now() - since : 0); e.sampleCrops = () => samples; }
+            return e;
         };
     });
     const rows = () => page.evaluate(() => Array.from(document.querySelectorAll('#idSwitchPanel .id-switch-row')).map(r => ({ frame: +r.dataset.frame, text: r.textContent, cls: r.className })));
@@ -96,7 +114,7 @@ try {
     let fx = await page.evaluate(async () => {
         const fx = await window.__buildSwap([1.0, 1.15, 0.85]);
         const M = await import('/ui/id-switch-modal.js');
-        window.__res = await M.runIdSwitchChecks({ size: true, image: true, inject: { createEmbedder: window.__fakeEmbedder(0), hasWebGPU: async () => true } });
+        window.__res = await M.runIdSwitchChecks({ size: true, image: true, inject: { createEmbedder: window.__fakeEmbedder(0) } });
         return fx;
     });
     let R = await rows();
@@ -106,12 +124,39 @@ try {
     const cues = await page.evaluate(async () => { return [...new Set((await import('/ui/seekbar-markers.js')).getSeekbarSwitchMarkers().map(m => m.cue))].sort(); });
     check(cues.join() === 'image,size', `the seekbar carries both checks' markers (${cues})`);
     check(!(await page.$('.id-switch-progress')), 'the progress dialog is gone when done');
+    {   // the overlay's keypoints land where cutCrop puts them: a dot in the image, cropped, vs cropPointsToInput
+        const off = await page.evaluate(async () => {
+            const E = await import('/ui/image-embedder.js'), out = [];
+            for (const [px, py, angle] of [[300, 200, 0], [330, 180, 0.7], [280, 230, -2.4], [310, 205, Math.PI / 2]]) {
+                const cv = new OffscreenCanvas(640, 480), cx = cv.getContext('2d');
+                cx.fillStyle = '#000'; cx.fillRect(0, 0, 640, 480); cx.fillStyle = '#fff'; cx.beginPath(); cx.arc(px, py, 2, 0, 7); cx.fill();
+                const g = { cx: 300, cy: 200, angle, scale: E.CROP / (1.3 * 80), L: 80, hull: [[200, 100], [400, 100], [400, 300], [200, 300]], pts: [px, py] };
+                const crop = E.cutCrop(await createImageBitmap(cv), g, []), t = new Float32Array(3 * E.INPUT * E.INPUT);
+                E.writeInputTensor(crop, t, 0);
+                const rgba = E.inputTensorToPixels(t, new Uint8ClampedArray(E.INPUT * E.INPUT * 4));
+                let sw = 0, sx = 0, sy = 0;   // brightness-weighted centre of the dot, at pixel centres
+                for (let y = 0; y < E.INPUT; y++) for (let x = 0; x < E.INPUT; x++) { const v = rgba[4 * (y * E.INPUT + x)]; if (v > 40) { sw += v; sx += v * (x + 0.5); sy += v * (y + 0.5); } }
+                const q = E.cropPointsToInput(g);
+                out.push(Math.hypot(sx / sw - q[0], sy / sw - q[1]));
+            }
+            return out;
+        });
+        check(off.every(d => d < 1), `the skeleton's keypoints land on the crop's pixels, at any rotation (off by ${off.map(d => d.toFixed(2)).join(', ')} px of 224)`);
+    }
+    {   // an embedder without sampleCrops (as injected here): no empty square
+        await page.evaluate(async () => { await window.__buildSwap([1, 1, 1]); const M = await import('/ui/id-switch-modal.js');
+            window.__done = M.runIdSwitchChecks({ image: true, inject: { createEmbedder: window.__fakeEmbedder(20) } }); });
+        await page.waitForFunction(() => /frame \d/.test(document.querySelector('.id-switch-progress-text')?.textContent || ''), null, { timeout: 10000 });
+        const hidden = await page.evaluate(() => document.querySelector('.id-switch-progress-crop').hidden);
+        await page.keyboard.press('Escape'); await page.evaluate(() => window.__done);
+        check(hidden, 'an embedder that offers no sample crops shows no square');
+    }
 
     // ---- 2. identical sizes: only the image check finds it
     fx = await page.evaluate(async () => {
         const fx = await window.__buildSwap([1, 1, 1]);
         const M = await import('/ui/id-switch-modal.js');
-        window.__res = await M.runIdSwitchChecks({ size: true, image: true, inject: { createEmbedder: window.__fakeEmbedder(0), hasWebGPU: async () => true } });
+        window.__res = await M.runIdSwitchChecks({ size: true, image: true, inject: { createEmbedder: window.__fakeEmbedder(0) } });
         return fx;
     });
     R = await rows();
@@ -124,10 +169,52 @@ try {
     await page.evaluate(async () => {
         await window.__buildSwap([1, 1, 1]);
         const M = await import('/ui/id-switch-modal.js');
-        window.__done = M.runIdSwitchChecks({ image: true, inject: { createEmbedder: window.__fakeEmbedder(40), hasWebGPU: async () => true } });
+        window.__done = M.runIdSwitchChecks({ image: true, inject: { createEmbedder: window.__fakeEmbedder(40,
+            { backend: 'webgpu', comparing: false, dtype: 'fp16', adapter: 'Test GPU', fallback: false }) } });
     });
     await page.waitForSelector('.id-switch-progress', { timeout: 10000 });
+    const gpuLine = () => page.evaluate(() => { const el = document.querySelector('.id-switch-progress-gpu');
+        return { text: el.textContent, warn: el.classList.contains('is-warn'), title: el.title }; });
+    const g0 = await gpuLine();
+    check(g0.text.startsWith('GPU: Test GPU (WebGPU, fp16)') && !g0.warn, `the dialog names the GPU running the model ("${g0.text}")`);
+    // the load appears once embedding has run for a moment, and refreshes every second
+    await page.waitForFunction(() => /· load \d+%$/.test(document.querySelector('.id-switch-progress-gpu').textContent), null, { timeout: 10000 });
+    const g1 = await gpuLine(), load = +g1.text.match(/load (\d+)%/)[1];
+    check(load > 0 && load <= 100 && /other apps/.test(g1.title), `…and its load while embedding, with a tooltip saying what that measures ("${g1.text}")`);
+    // the sample crop: what the embedder was given, drawn and captioned with the animal's CURRENT label and camera
+    const crop = await page.evaluate(async () => {
+        const AS = await import('/ui/app-state.js'), el = document.querySelector('.id-switch-progress-crop');
+        const seen = new Set(), ok = [];
+        for (let i = 0; i < 6; i++) {
+            await new Promise(r => setTimeout(r, 420));
+            const cap = el.querySelector('figcaption').textContent, px = el.querySelector('canvas').getContext('2d').getImageData(40, 40, 1, 1).data;
+            const [name, cam] = cap.split(' · '), id = (AS.state.session.identities.find(x => x.name === name) || {}).id;
+            // which animal carries that label at this point is not fixed (one pair swaps), so check the grey is one of the three
+            ok.push(!!id || id === 0 ? [60, 120, 180].includes(px[0]) && px[0] === px[1] && px[1] === px[2] && /^c[0-3]$/.test(cam) : false);
+            seen.add(cap);
+        }
+        // the skeleton is drawn in the animal's identity colour: the node at (150, 112) is coloured, not grey
+        const [name] = el.querySelector('figcaption').textContent.split(' · ');
+        const colour = (AS.state.session.identities.find(x => x.name === name) || {}).color;
+        const node = el.querySelector('canvas').getContext('2d').getImageData(150, 112, 1, 1).data;
+        const hex = '#' + [0, 1, 2].map(i => node[i].toString(16).padStart(2, '0')).join('');
+        return { hidden: el.hidden, has: el.classList.contains('has-crop'), ok, seen: [...seen], aria: el.querySelector('canvas').getAttribute('aria-label'), colour, hex };
+    });
+    check(crop.hex === crop.colour, `the skeleton is drawn over the crop in the animal's identity colour (${crop.hex} vs ${crop.colour})`);
+    check(!crop.hidden && crop.has && crop.ok.every(Boolean) && crop.seen.length >= 3 && /^Sample crop: id_\d · c\d$/.test(crop.aria),
+          `a sample crop above Cancel, changing every 0.4 s, drawn as given (${crop.seen.join(' | ')})`);
     await page.waitForFunction(() => /frame \d/.test(document.querySelector('.id-switch-progress-text').textContent), null, { timeout: 10000 });
+    // Embedding is the first 90% of the bar, so frame i of n reads round(90 i / n)%.
+    await page.waitForFunction(() => parseInt(document.querySelector('.id-switch-progress-pct').textContent, 10) > 0, null, { timeout: 10000 });
+    const pct = await page.evaluate(() => {
+        const q = (c) => document.querySelector('.id-switch-progress ' + c);
+        const t = q('.id-switch-progress-pct').textContent, w = q('.id-switch-progress-fill').style.width, h = q('.id-switch-phead').style.left;
+        const m = document.querySelector('.id-switch-progress-text').textContent.replace(/,/g, '').match(/frame (\d+) of (\d+)/);
+        return { t, n: parseInt(t, 10), w: parseFloat(w), h: parseFloat(h), want: m ? Math.round(90 * m[1] / m[2]) : NaN };
+    });
+    check(/^\d+%$/.test(pct.t) && pct.n === pct.want && pct.n === pct.w,
+          `a percentage under the bar matches the frame count and the fill ("${pct.t}", expected ${pct.want}%, width ${pct.w}%)`);
+    check(pct.h === pct.w, `the playhead line sits at the fill's leading edge (${pct.h}% vs ${pct.w}%)`);
     await page.keyboard.press('Escape');
     const cancelled = await page.evaluate(async () => { const r = await window.__done;
         return { reason: r && r.image && r.image.reason, status: document.getElementById('statusText').textContent,
@@ -136,13 +223,26 @@ try {
     check(cancelled.reason === 'cancelled' && /cancelled/.test(cancelled.status), `Esc cancels the image check ("${cancelled.status}")`);
     check(!cancelled.progress && !cancelled.rows && cancelled.markers === 0, 'nothing left behind: no progress dialog, no listed results, no image markers');
 
-    // ---- 4. no WebGPU
-    const noGpu = await page.evaluate(async () => {
+    // ---- 4. no GPU: the check still runs, on the CPU, to the end — as the Tracking Wizard's after-tracking
+    //         image check (`auto`, the way pose/tracker.js calls it), which used to report "skipped — needs WebGPU"
+    fx = await page.evaluate(async () => {
+        const fx = await window.__buildSwap([1, 1, 1]);
         const M = await import('/ui/id-switch-modal.js');
-        await M.runIdSwitchChecks({ image: true, inject: { createEmbedder: window.__fakeEmbedder(0), hasWebGPU: async () => false } });
-        return { status: document.getElementById('statusText').textContent, rows: document.querySelectorAll('#idSwitchPanel .id-switch-row').length };
+        window.__done = M.runIdSwitchChecks({ image: true, auto: true, statusPrefix: 'Assigned 3 identities', inject: { createEmbedder: window.__fakeEmbedder(10,
+            { backend: 'cpu', dtype: 'fp32', workers: 4, why: 'this browser has no WebGPU', adapter: '', fallback: false }) } });
+        return fx;
     });
-    check(/needs WebGPU/.test(noGpu.status) && !noGpu.rows, `without WebGPU it explains why ("${noGpu.status}")`);
+    await page.waitForFunction(() => /frame \d/.test(document.querySelector('.id-switch-progress-text')?.textContent || ''), null, { timeout: 10000 });
+    await page.waitForTimeout(1500);   // past the first load refresh: the CPU never shows a GPU load
+    const cpuLine = await gpuLine();
+    check(cpuLine.warn && cpuLine.text === 'No GPU: running on the CPU (4 workers) — slow' && /no WebGPU/.test(cpuLine.title),
+          `without a GPU the dialog says it runs on the CPU, in the warning colour ("${cpuLine.text}")`);
+    const noGpu = await page.evaluate(async () => { const r = await window.__done;
+        return { ok: r && r.image && r.image.ok, status: document.getElementById('statusText').textContent }; });
+    R = await rows();
+    const cpuRow = R.find(r => Math.abs(r.frame - fx.swapFrame) <= 60);
+    check(noGpu.ok && /^Assigned 3 identities · ID-switch check \(images\): 1 possible switch/.test(noGpu.status) && !!cpuRow,
+          `…and runs to the end and finds the switch at ${cpuRow && cpuRow.frame} (switch ${fx.swapFrame}) — "${noGpu.status}"`);
 
     // ---- 5. menu + default
     const ui = await page.evaluate(async () => ({ menu: !!document.getElementById('menuCheckImageSwitches'),

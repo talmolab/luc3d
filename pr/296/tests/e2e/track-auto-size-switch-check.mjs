@@ -98,6 +98,7 @@ try {
         (await import('/ui/seekbar-markers.js')).setSeekbarSwitchMarkers([{ frame: 100, nameA: 'x', nameB: 'y', score: -99 }], 1950);   // stale, from "an earlier run"
         const tr = await import('/pose/tracker.js'); tr.setTrackerNumAnimals(2);
         await tr.trackAll();
+        document.getElementById('trackSummaryClose').click();   // Track All's summary box
     });
     let st = await statusText();
     const markersA = await page.evaluate(async () => (await import('/ui/seekbar-markers.js')).getSeekbarSwitchMarkers().length);
@@ -151,6 +152,7 @@ try {
         await window.__buildTrackable('C');
         const tr = await import('/pose/tracker.js'); tr.setTrackerNumAnimals(2);
         await tr.trackAll();
+        document.getElementById('trackSummaryClose').click();   // Track All's summary box
         window.__stAll = document.getElementById('statusText').textContent;
         await tr.trackFrameRange(0, 299);
         window.__stRange = document.getElementById('statusText').textContent;
