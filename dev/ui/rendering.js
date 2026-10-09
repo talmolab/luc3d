@@ -6,27 +6,27 @@
 // - updateFrameCounters: status-bar frame counters (labeled / triangulated / instances),
 //   whole-project on a lazy project too (counting logic in ui/frame-counters.js).
 
-import { state, interactionManager, timeline, isViewDocked } from './app-state.js?v=f07cdee52f77';
-import { points3dNodeCount } from '../pose/pose-data.js?v=f07cdee52f77';
+import { state, interactionManager, timeline, isViewDocked } from './app-state.js?v=4223f1549329';
+import { points3dNodeCount } from '../pose/pose-data.js?v=4223f1549329';
 import {
     ensureLazyFrameData, ensureLazyTrailWindow, getInstanceGroupsForFrame,
     triangulateAndReproject, storeReprojectedInstances,
-} from '../pose/triangulation.js?v=f07cdee52f77';
-import { drawFrameOverlays } from './overlays.js?v=f07cdee52f77';
-import { syncViewLegends } from './view-legend.js?v=f07cdee52f77';
-import { isCameraTracked } from './settings.js?v=f07cdee52f77';
+} from '../pose/triangulation.js?v=4223f1549329';
+import { drawFrameOverlays } from './overlays.js?v=4223f1549329';
+import { syncViewLegends } from './view-legend.js?v=4223f1549329';
+import { isCameraTracked } from './settings.js?v=4223f1549329';
 // Plane placements draw on the same overlay canvas, so they must run AFTER
 // drawFrameOverlays (which opens with a clearRect). Circular import — safe
 // because the call site is inside drawAllOverlays' body.
-import { drawPlaneOverlays, applyPlaneModeToolbarLock } from './plane-definition.js?v=f07cdee52f77';
+import { drawPlaneOverlays, applyPlaneModeToolbarLock } from './plane-definition.js?v=4223f1549329';
 
 // Pass 3f: editGroupState + finishEditGroup moved to ui/identity-assignment.js.
-import { editGroupState, finishEditGroup } from './identity-assignment.js?v=f07cdee52f77';
-import { updateFrameInfo } from './info-panel.js?v=f07cdee52f77';
+import { editGroupState, finishEditGroup } from './identity-assignment.js?v=4223f1549329';
+import { updateFrameInfo } from './info-panel.js?v=4223f1549329';
 import {
     computeFrameCounterBaseline, computeLazyCameraBaseline, createFrameCounterBaselineBuilder,
     countFrameCounters, nonResidentCameraCounts, refreshCountedFrame,
-} from './frame-counters.js?v=f07cdee52f77';
+} from './frame-counters.js?v=4223f1549329';
 
 // ============================================
 // Reproj/Error visibility
@@ -466,10 +466,11 @@ export function drawAllOverlays(frameIdx, viewFrames) {
 
     // Update info panel with current frame stats + the timeline playhead.
     // During playback these are THROTTLED to ~10 Hz: `updateFrameInfo` rebuilds
-    // info-panel DOM and re-aggregates reprojection errors, and
-    // `timeline.setCurrentFrame` does a full timeline-canvas `redraw()` — both
-    // per frame. A human can't read either at playback speed, and doing them
-    // every frame is a major per-frame cost that caps buffered playback fps.
+    // info-panel DOM and re-aggregates reprojection errors per frame — a human
+    // can't read it at playback speed, and doing it every frame is a major
+    // per-frame cost that caps buffered playback fps. (`timeline.setCurrentFrame`
+    // only moves the playhead element now, ui/timeline.js, so it is cheap; it
+    // shares the throttle because it always has.)
     // The skeleton overlays + video above still update every frame, so tracking
     // stays smooth and frame-accurate; only these two auxiliary updates coalesce.
     // When paused (seek/step) they always run so the panel/playhead are exact.
@@ -477,8 +478,6 @@ export function drawAllOverlays(frameIdx, viewFrames) {
     if (!state.isPlaying || (_auxNow - _lastAuxUpdate) >= AUX_UPDATE_MS) {
         _lastAuxUpdate = _auxNow;
         updateFrameInfo(frameIdx, instanceGroups);
-        // While playing, only the playhead moves: let the timeline blit its
-        // cached track/marker layer instead of a full redraw (ui/timeline.js).
         if (timeline) timeline.setCurrentFrame(frameIdx, state.isPlaying ? { playback: true } : undefined);
     }
 }

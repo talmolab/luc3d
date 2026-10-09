@@ -8,9 +8,9 @@
  * ES module. Exports `Timeline`.
  */
 
-import { getTrackColor, NULL_ID_COLOR } from './overlays.js?v=f07cdee52f77';
-import { someValidPoint3d, points3dNodeCount, hasPoint3d } from '../pose/pose-data.js?v=f07cdee52f77';
-import { isCameraTracked } from './settings.js?v=f07cdee52f77';
+import { getTrackColor, NULL_ID_COLOR } from './overlays.js?v=4223f1549329';
+import { someValidPoint3d, points3dNodeCount, hasPoint3d } from '../pose/pose-data.js?v=4223f1549329';
+import { isCameraTracked } from './settings.js?v=4223f1549329';
 
 /**
  * Parse a `session.frameIdentityMap` key ("frameIdx:camName:trackIdx") into
@@ -79,11 +79,8 @@ export class Timeline {
         /** Current frame index (0-based) */
         this._currentFrame = 0;
 
-        /** Playback playhead fast path (see `setCurrentFrame`): while true,
-         *  `redraw()` snapshots the canvas minus the playhead into
-         *  `_staticCache`, which `setCurrentFrame` blits instead of redrawing. */
-        this._playbackMode = false;
-        this._staticCache = null;
+        /** Pending `requestAnimationFrame` id of a coalesced redraw (`_requestRedraw`). */
+        this._redrawRaf = 0;
 
         /** Horizontal zoom level (1 = all frames fit in view) */
         this._zoom = 1;
@@ -250,6 +247,63 @@ export class Timeline {
         /** @type {CanvasRenderingContext2D} */
         this._ctx = this._canvas.getContext('2d');
 
+        // --- Playhead element ------------------------------------------------
+        //
+        // The playhead is the ONLY frame-dependent thing on the timeline, so it
+        // is not painted into the canvas: it is this element, laid over the
+        // canvas inside the scroll wrapper (so it scrolls with the rows) and
+        // moved with a CSS transform. Changing frame repaints nothing.
+        //
+        // It used to be painted, and every frame step redrew the whole canvas
+        // to move it. On a 17-camera, 561-row project that canvas is
+        // 3,600 x 12,704 device pixels, and repainting it on every step of a
+        // held arrow key (30 ms key repeat) outran the GPU at a Retina scale
+        // factor: Chrome's 2D-canvas rate limiter then blocked the page for
+        // 230-450 ms every ~0.6 s, holding stepping to ~19 frames/s
+        // (`CanvasRenderingContext2D::FinalizeFrame` -> "GPU backpressure" in a
+        // trace). It also replaces the playback-only snapshot-and-blit path.
+        //
+        // Same geometry as the old painted playhead: a 2.5 px line from the top
+        // to the label area (`_positionPlayhead`), and a 10 x 6 px triangle
+        // standing on its foot. pointer-events:none, so the canvas keeps every
+        // click, drag and wheel.
+        /** @type {HTMLDivElement} */
+        this._playheadEl = document.createElement('div');
+        this._playheadEl.className = 'timeline-playhead';
+        var _phStyle = this._playheadEl.style;
+        _phStyle.position = 'absolute';
+        _phStyle.left = '0';
+        _phStyle.top = '0';
+        _phStyle.width = '0';
+        _phStyle.height = '0';
+        _phStyle.pointerEvents = 'none';
+        _phStyle.zIndex = '2';
+        _phStyle.willChange = 'transform';
+        _phStyle.display = 'none';
+        this._playheadLineEl = document.createElement('div');
+        var _plStyle = this._playheadLineEl.style;
+        _plStyle.position = 'absolute';
+        _plStyle.left = '-1.25px';
+        _plStyle.top = '0';
+        _plStyle.width = '2.5px';
+        _plStyle.height = '0';
+        _plStyle.background = this.PLAYHEAD_COLOR;
+        this._playheadHeadEl = document.createElement('div');
+        var _pfStyle = this._playheadHeadEl.style;
+        _pfStyle.position = 'absolute';
+        _pfStyle.left = '-5px';
+        _pfStyle.top = '0';
+        _pfStyle.width = '0';
+        _pfStyle.height = '0';
+        _pfStyle.borderLeft = '5px solid transparent';
+        _pfStyle.borderRight = '5px solid transparent';
+        _pfStyle.borderBottom = '6px solid ' + this.PLAYHEAD_COLOR;
+        this._playheadEl.appendChild(this._playheadLineEl);
+        this._playheadEl.appendChild(this._playheadHeadEl);
+        this._trackScrollEl.appendChild(this._playheadEl);
+        /** Line length the playhead element was last laid out for (css px), or null. */
+        this._playheadBottom = null;
+
         // --- Tooltip element -------------------------------------------------
 
         /** @type {HTMLDivElement} */
@@ -361,78 +415,76 @@ export class Timeline {
     /**
      * Update the current frame indicator.
      *
-     * `opts.playback` (passed by `ui/rendering.js` while video is playing)
-     * enables a fast path: the playhead is the ONLY frame-dependent thing
-     * `redraw()` paints, so instead of repainting every track bar, marker and
-     * label (~4.5 ms on a 175-track project, plus a forced style recalc from
-     * `ctx.font` — enough to make the video-frame callback drop frames), it
-     * restores a snapshot of everything below the playhead and draws just the
-     * playhead. The snapshot is (re)taken by `redraw()` itself while in playback
-     * mode, so it is always the last full redraw; a scroll of the visible window
-     * falls back to a full redraw. Any call WITHOUT `opts.playback` leaves
-     * playback mode, frees the snapshot and redraws in full.
+     * Only the playhead depends on the current frame, and it is a positioned
+     * element rather than part of the canvas (see the constructor), so this
+     * moves it and repaints nothing — unless following the frame scrolls the
+     * visible window (zoomed in, frame off screen), which moves the track bars
+     * and markers too and so redraws the canvas.
+     *
+     * `opts.playback` (passed by `ui/rendering.js` while video plays) is
+     * accepted and no longer changes anything: playback used to need its own
+     * snapshot-and-blit fast path because every call repainted the canvas.
      *
      * @param {number} frameIdx
      * @param {{playback?: boolean}} [opts]
      */
     setCurrentFrame(frameIdx, opts) {
-        var playback = !!(opts && opts.playback);
-        if (!playback && this._playbackMode) {
-            this._playbackMode = false;
-            this._staticCache = null;   // ~one canvas worth of backing store
-            // `stopPlayback`'s settle redraw usually lands on the frame already
-            // shown, so the early return below would skip it — redraw anyway.
-            if (this._clampFrame(frameIdx) === this._currentFrame) { this.redraw(); return; }
-        }
         frameIdx = this._clampFrame(frameIdx);
         if (frameIdx === this._currentFrame) return;
         this._currentFrame = frameIdx;
         var prevScroll = this._scrollFrame;
         this._ensureFrameVisible(frameIdx);
-        if (playback) {
-            if (this._playbackMode && this._scrollFrame === prevScroll && this._drawFromStaticCache()) return;
-            this._playbackMode = true;   // the redraw below takes the snapshot
-        }
-        this.redraw();
+        if (this._scrollFrame !== prevScroll) { this.redraw(); return; }
+        this._positionPlayhead();
     }
 
     /**
-     * Playback fast path for `setCurrentFrame`: blit the snapshot `redraw()`
-     * took just before its playhead, then draw the playhead. Returns false
-     * (caller does a full redraw) when there is no snapshot matching the
-     * current backing store.
-     * @returns {boolean}
+     * Lay the playhead element out at `_currentFrame`: a CSS transform for the
+     * position (compositor-only), and — only when the layout changed — the
+     * line's length and the triangle's top. Hidden when the frame is outside
+     * the visible window, exactly where the painted playhead used to be
+     * skipped. Called by `redraw()` (layout may have changed) and by
+     * `setCurrentFrame` (only the frame did).
      * @private
      */
-    _drawFromStaticCache() {
-        var cache = this._staticCache;
-        if (!cache || cache.width !== this._canvas.width || cache.height !== this._canvas.height) return false;
-        if (!this._cssWidth || !this._cssHeight) return false;
-        var ctx = this._ctx;
-        ctx.save();
-        ctx.setTransform(1, 0, 0, 1, 0, 0);
-        ctx.drawImage(cache, 0, 0);
-        ctx.restore();
-        this._drawPlayhead(ctx, this._cssHeight);
-        return true;
+    _positionPlayhead() {
+        var el = this._playheadEl;
+        if (!el) return;
+        var H = this._cssHeight || 0;
+        var x = this._frameToX(this._currentFrame + 0.5);
+        if (!H || !(x >= this.LEFT_MARGIN - 2) || x > this._cssWidth - this.RIGHT_PADDING + 2) {
+            if (el.style.display !== 'none') el.style.display = 'none';
+            return;
+        }
+        // Down to the top of the label area, or the bottom of the canvas when
+        // labels are hidden — the painted playhead's rule.
+        var layout = this._layout || { labelAreaTop: H - this.LABEL_AREA_HEIGHT, showLabels: true };
+        var lineBottom = layout.showLabels ? layout.labelAreaTop : H;
+        if (this._playheadBottom !== lineBottom) {
+            this._playheadBottom = lineBottom;
+            this._playheadLineEl.style.height = lineBottom + 'px';
+            this._playheadHeadEl.style.top = (lineBottom - 6) + 'px';
+        }
+        el.style.transform = 'translateX(' + x + 'px)';
+        if (el.style.display !== 'block') el.style.display = 'block';
     }
 
     /**
-     * Copy the canvas as it stands (everything but the playhead) into the
-     * playback snapshot. Only called from `redraw()` in playback mode.
+     * Redraw on the next animation frame, coalescing however many requests
+     * arrive before it. For a change to the timeline's data that is not itself
+     * followed by a redraw (`setFrameModified`): frame steps no longer repaint
+     * the canvas, so nothing else would show it. Synchronous where there is no
+     * `requestAnimationFrame` (Node test sandboxes).
      * @private
      */
-    _snapshotStatic() {
-        var src = this._canvas;
-        var cache = this._staticCache;
-        if (!cache) cache = this._staticCache = document.createElement('canvas');
-        if (cache.width !== src.width || cache.height !== src.height) {
-            cache.width = src.width;
-            cache.height = src.height;
-        }
-        var cctx = cache.getContext('2d');
-        cctx.clearRect(0, 0, cache.width, cache.height);
-        cctx.drawImage(src, 0, 0);
+    _requestRedraw() {
+        if (typeof requestAnimationFrame !== 'function') { this.redraw(); return; }
+        if (this._redrawRaf) return;
+        var self = this;
+        this._redrawRaf = requestAnimationFrame(function () {
+            self._redrawRaf = 0;
+            self.redraw();
+        });
     }
 
     /**
@@ -724,12 +776,8 @@ export class Timeline {
             ctx.fillRect(x0, 0, x1 - x0, H);
         }
 
-        // During playback, keep a copy of everything drawn so far so
-        // `setCurrentFrame` can move the playhead without a full redraw.
-        if (this._playbackMode) this._snapshotStatic();
-
-        // --- Current frame playhead ---
-        this._drawPlayhead(ctx, H);
+        // --- Current frame playhead: an element, not paint (see the constructor) ---
+        this._positionPlayhead();
 
         // --- Scrollbar ---
         this._updateScrollbar();
@@ -739,6 +787,8 @@ export class Timeline {
      * Destroy the timeline: remove event listeners, observer, and DOM elements.
      */
     destroy() {
+        if (this._redrawRaf && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(this._redrawRaf);
+        this._redrawRaf = 0;
         this._canvas.removeEventListener('mousedown', this._onMouseDown);
         this._canvas.removeEventListener('mousemove', this._onMouseMove);
         window.removeEventListener('mouseup', this._onMouseUp);
@@ -2388,41 +2438,6 @@ export class Timeline {
         ctx.textAlign = 'left';
     }
 
-    /**
-     * Draw the playhead (current frame indicator).
-     * @private
-     */
-    _drawPlayhead(ctx, H) {
-        const x = this._frameToX(this._currentFrame + 0.5);
-        if (x < this.LEFT_MARGIN - 2 || x > this._cssWidth - this.RIGHT_PADDING + 2) return;
-
-        // The playhead always extends down to the top of the label area
-        // (or to the bottom of the canvas when labels are hidden). It is
-        // drawn slightly bolder than the grouped-instance white bars so
-        // it stays clearly distinguishable.
-        const layout = this._layout || { labelAreaTop: H - this.LABEL_AREA_HEIGHT, showLabels: true };
-        const lineBottom = layout.showLabels ? layout.labelAreaTop : H;
-
-        ctx.strokeStyle = this.PLAYHEAD_COLOR;
-        ctx.lineWidth = 2.5;
-        ctx.beginPath();
-        ctx.moveTo(x, 0);
-        ctx.lineTo(x, lineBottom);
-        ctx.stroke();
-
-        // Triangle at bottom of the non-label area, pointing down.
-        const triH = 6;
-        const triW = 5;
-        const triY = lineBottom;
-        ctx.fillStyle = this.PLAYHEAD_COLOR;
-        ctx.beginPath();
-        ctx.moveTo(x, triY - triH);
-        ctx.lineTo(x - triW, triY);
-        ctx.lineTo(x + triW, triY);
-        ctx.closePath();
-        ctx.fill();
-    }
-
     // -----------------------------------------------------------------------
     // Coordinate conversion
     // -----------------------------------------------------------------------
@@ -2716,7 +2731,7 @@ export class Timeline {
                 this._currentFrame = frame;
                 this._emitFrameChange(frame);
                 if (this._onDragEnd) this._onDragEnd(frame);
-                this.redraw();
+                this._positionPlayhead();
             }
         }
     }
@@ -2838,7 +2853,7 @@ export class Timeline {
         const frame = this._clampFrame(this._xToFrame(x));
         this._currentFrame = frame;
         this._emitFrameChange(frame);
-        this.redraw();
+        this._positionPlayhead();
     }
 
     /**
@@ -2857,7 +2872,7 @@ export class Timeline {
         if (frame !== this._currentFrame) {
             this._currentFrame = frame;
             this._emitFrameChange(frame);
-            this.redraw();
+            this._positionPlayhead();
         }
     }
 
@@ -2919,15 +2934,23 @@ export class Timeline {
     setFrameModified(frameIdx, modified) {
         if (modified === undefined) modified = true;
         const marker = this._frameMarkers.get(frameIdx);
+        var changed;
         if (marker) {
+            changed = marker.modified !== modified;
             marker.modified = modified;
         } else {
+            changed = !!modified;
             this._frameMarkers.set(frameIdx, {
                 hasUser: false,
                 hasPredicted: false,
                 modified: modified,
             });
         }
+        // The white "modified" line is canvas paint. A frame step used to
+        // repaint the canvas, which is what made a flag set here appear; it no
+        // longer does (only the playhead element moves), so ask for a redraw —
+        // coalesced, since bulk operations set thousands of frames in a loop.
+        if (changed) this._requestRedraw();
     }
 
     /**
