@@ -1900,6 +1900,19 @@ the new IDs get the space back — there is no 3D pose to look at until Triangul
 All runs. A closed panel stays closed. Track Frame Range and Track Frame leave
 both as they were. Covered by `tests/e2e/track-all-closes-timeline-and-3d.mjs`.
 
+**Track All ends on a summary box.** After the automatic ID-switch checks,
+`runTrackingPass` (Track All only — a range is a targeted re-run inspected on the
+timeline) opens `showTrackSummaryModal` (`ui/track-summary-modal.js`) with
+`summarizeTrackedIdentities` and one `describeSwitchCheck` per cue
+(`ui/track-summary.js`). It reports how long tracking took — `trackStart` is taken
+AFTER the animal-count prompt, so the user's typing is not counted, and stops when
+the identity pass returns — with its speed (fps, and × real time from the
+recording rate `state.fps`, falling back to `session.fps`, as the ID-switch checks
+read it), and each check's own `elapsedMs` (stamped by `runIdSwitchChecks`). It exists because a check that found nothing used to end the
+run with no visible next step. The summary is wrapped in its own `try`: tracking
+has already succeeded, so a summary failure only logs. Covered by
+`tests/e2e/track-all-summary.mjs`.
+
 **Every tracking pass marks the project dirty.** Track Frame, Track Frame Range
 and Track All rewrite `session.instanceGroups`, `session.frameIdentityMap` and
 `session.identities`, so each calls `markDirty()` — `trackCurrentFrame` before it
@@ -2103,6 +2116,11 @@ drifts upward (e.g., 4 → 11 on the test fixture).
   per `autoImageSwitchCheck` (default off)) and awaits them, so the pass resolves
   after the checks. It also drops the session's earlier results and their
   markers (`clearIdSwitchResults(session)`) before clearing identities, for both paths.
+  Its return value (each result carries `elapsedMs`) feeds the Track All summary.
+- `../ui/track-summary.js` — `summarizeTrackedIdentities`, `describeSwitchCheck`
+  (the Track All summary's data).
+- `../ui/track-summary-modal.js` — `showTrackSummaryModal`: opened at the end of a
+  successful Track All (see above).
 - `../ui/timeline-controller.js` — `collapseTimeline`: a successful Track All
   (not a range) closes the Timeline if it is open.
 - `../ui/panel-visibility.js` — `collapseViewport3D`: the same, for the 3D viewer
@@ -3633,6 +3651,11 @@ Calibration and `envSkeleton` remain per-session.
 **Key exports.**
 - `state` — mutable application state (current frame, sessions, dirty
   flag, view list, color mode, etc.).
+  `state.trailLength` (node-trail frames) is an **accessor**, not a field: it
+  reads `trailFrames(state.trailSeconds, state.fps)` (`ui/trail-presets.js`), so
+  it follows the frame rate when a video loads or the FPS pill is edited, with
+  no caller recomputing it. Setting it (tests and benches pin a frame count)
+  stores `frames / fps` in `trailSeconds`. The pickers set `trailSeconds`.
 - `videoController`, `interactionManager`, `viewport3d`, `timeline`,
   `paneManager` — live `let` bindings.
 - `setVideoController`, `setInteractionManager`, `setViewport3D`,
@@ -3658,7 +3681,8 @@ Calibration and `envSkeleton` remain per-session.
   matching skeleton. Same lifetime model as the remembered skeleton (app session
   only). Filled/read by `copySelectedInstance`/`pasteInstance` in `ui-wiring.js`.
 
-**Imports from project modules.** None.
+**Imports from project modules.** `./trail-presets.js` (`trailFrames`,
+`trailRate`), itself import-free.
 
 **Imported by.** `pose/initialization.js`, `pose/triangulation.js`,
 `pose/tracker.js`, `import-export/save-load.js`,
@@ -6151,8 +6175,9 @@ palettes, and per-frame draw routines. Receives `frameGroup` and
   lookup), so an identity/color **switch shows as a color change along the trail**.
   `drawFrameOverlays` calls it right after the canvas clear (behind the live
   skeletons) when `options.trailLength > 0`. Length is chosen from the **Tracks ▸
-  Node Trails** submenu or the toolbar's **Trails** button (Off/10/50/100/250/500
-  → `state.trailLength`; see `ui/ui-wiring.js`).
+  Node Trails** submenu or the toolbar's **Trails** button (Off / ¼ s / ½ s / 1 s / 2 s
+  → `state.trailSeconds`, drawn as `state.trailLength` = seconds × fps frames;
+  see `ui/trail-presets.js` and `ui/ui-wiring.js`).
   **Performance (it runs per view, per playback redraw):**
   - `trailWindowFrames(frameGroups, frameIdx, trailLength)` (exported) finds the
     window by **walking back** from `frameIdx` — ~`trailLength` lookups — instead
@@ -8706,23 +8731,55 @@ markers on the seekbar — called after a check, from `updateInfoPanel` and from
 `clearIdSwitchResults(session?)` (called by `runTrackingPass` before it relabels);
 `ID_SWITCH_LEAD_IN_SECONDS`, `idSwitchLeadInFrame(marker, fps)`,
 `updateIdSwitchProgress(frame)`; back-compat
-`runSizeSwitchCheck`. `inject: {createEmbedder, hasWebGPU}` replaces the image
-model and the WebGPU probe — test-only (`tests/e2e/id-switch-image-check.mjs`).
+`runSizeSwitchCheck`. `inject: {createEmbedder}` replaces the image model —
+test-only (`tests/e2e/id-switch-image-check.mjs`).
 
 **Runs automatically after tracking.** `pose/tracker.js`'s `runTrackingPass` calls
 `runIdSwitchChecks({auto: true, statusPrefix, size, image})` after BOTH Track All
 and Track Frame Range: size when the Tracking Wizard's `autoSwitchCheck` is on
 (default), images when `autoImageSwitchCheck` is on (default OFF — minutes, needs
-the videos + WebGPU). Auto mode appends each check's result to the pass's status
+the videos; with no GPU it runs on the CPU, slower, rather than being skipped). Auto mode appends each check's result to the pass's status
 line ("Assigned N identities … · ID-switch check (body size): …; ID-switch check
 (images): …"), opens the ID Switches tab only when a possible switch is found, and reports
 a check that cannot run as "skipped — reason", never as a failure of the pass. It
-always analyses the WHOLE session's identities.
+always analyses the WHOLE session's identities. Each result it returns carries
+`elapsedMs`, the check's wall-clock time (model download and video decoding
+included), which the Track All summary box shows (`ui/track-summary.js`); it is
+not saved — `serializeIdSwitchReview` (`ui/id-switch-review.js`) picks its fields explicitly.
 
-**The image check.** Needs the session's videos and WebGPU (else it says why).
-Runs under its own cancellable progress dialog (Cancel / Esc -> "cancelled", no
+**The image check.** Needs the session's videos (else it says why). Not a GPU:
+without one the embedder runs the model on the CPU (`pickImageDevice` /
+`createCpuModelPool`, ui/image-embedder.js), ~15x slower, and the check runs as
+usual — from the menu and after tracking alike. It used to refuse ("needs WebGPU —
+on the CPU it would take hours"), which was the wrong call for a user who had
+opted in. `fmtDuration` therefore reaches hours ("about 2 h 5 min left"). Runs under its own cancellable progress dialog (Cancel / Esc -> "cancelled", no
 markers added): model download (first use), "Cropping and embedding N views:
-frame i of n — about X min left", then fitting. Reads `imageCheckHz` (default 2)
+frame i of n — about X min left", then fitting, with the overall percentage under
+the bar (the same rounded value as the bar's width; embedding is its first 90%) and
+the ID Switches rows' playhead line (`.id-switch-phead`) at the fill's leading edge.
+Under the percentage, the device line (`formatEmbedDevice`, ui/image-embedder.js):
+"GPU: Apple metal-3 (WebGPU, fp16) · load 87%", the load refreshed every second
+from the first embedded frame (`createLoadMeter` over `busyMs()`), so it falls to
+0% while fitting, which runs on the CPU; with no GPU, "No GPU: running on the CPU
+(4 workers) — slow" in the warning colour, why in its tooltip. An injected
+embedder without `device()` shows no line. **Beside them, above Cancel, a sample
+crop** (128 px, captioned "id_2 · cam5" with the animal's current label): exactly
+the model input — greyscale, nose right, masked — turned back into pixels by
+`inputTensorToPixels`, so bad keypoints show up as bad crops while the check runs —
+with **the skeleton drawn over it** (`drawCropSkeleton`) in the animal's identity
+colour over a dark outline, at the keypoints `cropPointsToInput` maps into the
+crop, because a masked, rotated greyscale crop on its own reads as abstract. The
+skeleton is on the dialog's canvas only; the model input is untouched.
+It changes every `CROP_PREVIEW_MS` (400 ms), cycling through the embedder's
+`sampleCrops()`, by TIME rather than every nth crop, since crops/s differs ~15x
+between a GPU and the CPU. A draw costs ~0.1 ms of main thread (measured: frame
+times 8.3 ms median with and without it at 4 Hz) and no GPU time — the tensor is
+already on the main thread before its batch is uploaded. An embedder without
+`sampleCrops` (the test fakes) shows no square. The dialog's `finally` also calls the
+embedder's `releaseFrames` (idempotent): `checkImageSwitches` does too, but not
+when it fails before its first frame, and the CPU workers hold ~600 MB each. On a
+CPU run "About these flags" says the model ran on the CPU, instead of the GPU-busy
+hint. Reads `imageCheckHz` (default 2)
 and `imageCheckThreshold` (default -25). Measured on a real 5-min, 3-animal,
 8-camera session in Chrome (HEVC from Google Drive), before streaming decode and
 view selection: 370 s, ~20 crops/s end to end. Its encounter scores matched the
@@ -8817,7 +8874,8 @@ rename them wrongly.
 `getActiveSession`), `import-export/save-load.js` (`setStatus`),
 `ui/loading-overlay.js` (`showLoadingProgress`, `hideLoading`, `yieldToPaint`),
 `ui/settings.js` (`getTrackingThreshold`), `pose/id-switch-check.js`,
-`ui/image-embedder.js` (`hasWebGPU`, `createImageEmbedder`),
+`ui/image-embedder.js` (`createImageEmbedder`, `IMAGE_MODEL_MB`, `formatEmbedTiming`,
+`createLoadMeter`, `formatEmbedDevice`),
 `ui/id-switch-review.js` (row keys, change-point helpers, `linkIdSwitchResults`,
 `idSwitchFixPlan`, `idSwitchFixFor`, `idSwitchRenameForFix`),
 `ui/id-switch-highlight.js` (`setIdSwitchHighlight`, `updateIdSwitchHighlight`,
@@ -8833,8 +8891,9 @@ ticks, Next unreviewed, persistence across the tab / a re-run / a session switch
 Clear, one scroller),
 `tests/e2e/track-auto-size-switch-check.mjs` (after Track All / Track Frame Range),
 `tests/e2e/id-switch-image-check.mjs` (images with an injected embedder: "Both"
-merge, identical-size animals found by images only, Esc cancel, no WebGPU, menu,
-default off), `tests/e2e/id-switch-fix.mjs` (Fix switch…: both start rules in the
+merge, identical-size animals found by images only, Esc cancel, the progress dialog's
+percentage / playhead / GPU line / sample crop and skeleton overlay, no GPU = runs on
+the CPU to the end, menu, default off), `tests/e2e/id-switch-fix.mjs` (Fix switch…: both start rules in the
 dialog, Esc / Cancel / shortcuts, the swap fixes exactly the crossed stretch, the
 row afterwards, the renamed follow-on, saved, Undo exact).
 
@@ -8960,7 +9019,38 @@ project with a row selected over the whole run).
 frame and the identities present, decode that frame in every camera
 (streamed, and moved to the nearest keyframe when keyframes are dense: see
 below), cut a masked, pose-aligned crop of each identity from
-its own 2D keypoints, and embed the crops with DINOv2-small on the GPU.
+its own 2D keypoints, and embed the crops with DINOv2-small — on the GPU, or
+without one on the CPU.
+
+**Where the model runs** (`pickImageDevice`, at `createImageEmbedder`): a HARDWARE
+WebGPU adapter, else the CPU — no WebGPU, no adapter, or only a software one.
+SwiftShader (headless Chromium with WebGPU on; what a VM with no GPU gets) ran
+the model at 0.27 crops/s, 10x slower than ONE CPU worker, so it is never used.
+**The CPU path** runs the fp32 model on WebAssembly in module workers
+(`createCpuModelPool`, `ui/image-model-worker.js`), each with its own model.
+Measured on a 12-core M2 Pro, in the browser:
+- **Same embeddings.** CPU fp32 vs WebGPU fp32: cosine 1.00000 on every crop
+  (vs WebGPU fp16: 0.9997–0.9999). The CPU runtime's DEFAULT model is int8, and
+  that is what "drifts from the calibrated embeddings" referred to — the dtype,
+  not the device.
+- **Off the main thread, or the page freezes.** On it, one run blocks the page for
+  its whole duration: 0.33 s for 1 crop, 2.6 s for 8 — the dialog and its Cancel
+  stall. onnxruntime's own `wasm.proxy` worker cannot start from the CDN bundle
+  ("worker not ready"), so LUCID runs its own. In workers the longest main-thread
+  gap was 51 ms.
+- **Several workers, because one thread each.** Without cross-origin isolation
+  (which GitHub Pages cannot turn on) WebAssembly gets ONE thread. Workers scale:
+  1 -> 2.8, 2 -> 5.1, 4 -> 9.7, 6 -> 13.8, 8 -> 14.6 crops/s (GPU: ~150). Each
+  costs ~600 MB of process memory (its own model + runtime), so
+  `cpuModelWorkerCount` takes half the cores beyond two, at most one per 2 GB of
+  `navigator.deviceMemory`, at most `CPU_MODEL_MAX_WORKERS` (4), at least 1.
+- The first worker downloads the model (88 MB, reported) and the rest load it from
+  the browser cache; a worker that fails to start is dropped. `run(data, n)`
+  splits a batch evenly over the workers, in order. `releaseFrames` terminates
+  them — they are not kept between runs (reloading is ~1 s from cache).
+WebNN is not tried on the CPU path (it is judged against WebGPU). The run
+summary says "model busy" and "CPU (N workers) fp32" instead of "GPU busy" /
+"WebGPU".
 
 **Speed.** `prepareFrames(frames)` opens one `streamingReader` per camera over the
 whole sorted frame list (mediabunny `samplesAtTimestamps`: decode forward once,
@@ -9002,6 +9092,21 @@ frames, 8 cameras, 8 in flight): RTX 2000 Ada PC 131 crops/s, GPU busy 92% at
 supply-bound. 16 in flight was tried and reverted: no change (PC 124, VM 160
 crops/s; decode is throughput-bound, so each frame just waited twice as long)
 while the PC's dedicated GPU memory climbed to 10.6 GB.
+**Live, in the progress dialog** (`device()` / `busyMs()` -> `formatEmbedDevice`
++ `createLoadMeter`): which GPU runs the model and how busy the check keeps it.
+`gpuAdapterInfo(device, adapter)` names it from the model's own
+`GPUDevice.adapterInfo` (onnxruntime's `env.webgpu.adapter` is undefined in this
+build; a fresh default adapter is the last resort) — "Apple metal-3" from vendor
++ architecture, since browsers usually withhold `description` — and reads
+`isFallbackAdapter`. That flag matters: a SOFTWARE adapter (SwiftShader) is
+WebGPU on the CPU, so `pickImageDevice` sends it to the CPU workers, and the line
+says "No GPU" in the warning colour instead of a load. The load is the share of the last `GPU_LOAD_WINDOW_MS`
+(5 s) spent in model runs, the one in flight included — `gpuBusyPct`, but recent.
+No browser API reports a GPU's total utilisation, so other apps' use is not in
+it, and its tooltip says so. Real model, M2 Pro, 8 views: 92 -> 99% while
+embedding (148 crops/s; whole-run `gpuBusyPct` 98%), then 86 / 63 / 43 / 24 / 4 /
+0% at 1 s steps once idle. WebNN is not called a GPU (the browser picks its
+device; it measured CPU-only on macOS).
 **Decode workers were tried and removed** (2026-10-04). The recordings are HEVC,
 P-frames only, a keyframe every 250 frames, so the check decodes essentially
 every frame of every camera (~2,000–2,700 decoded frames/s on the field
@@ -9093,17 +9198,36 @@ decode + crop ceiling rose from 145 to ~270 crops/s at 3 views (decoding alone:
 Numbers in `ui/id-switch-modal.js`.
 
 **Key exports.** `createImageEmbedder(session, {onStatus, maxViewsPerAnimal, webnn, keyframes})` ->
-`{getEmbeddings, prepareFrames, releaseFrames, backend, stats, inFlight, views}` (the provider
-`checkImageSwitches` needs; `releaseFrames` also terminates the crop pool and
-disposes a WebNN model);
-`loadImageModel(onStatus)` (once, cached promise); `hasWebGPU()`;
+`{getEmbeddings, prepareFrames, releaseFrames, backend, device, busyMs, stats, inFlight, views}` (the provider
+`checkImageSwitches` needs; `releaseFrames` also terminates the crop pool and the
+CPU model workers and disposes a WebNN model; `device()` -> `{backend: 'webgpu'|'webnn'|'cpu',
+comparing, dtype, adapter, fallback, workers, why}` and `busyMs()` feed the progress
+dialog's device line, `sampleCrops()` its sample crop: `[{tensor, frame, camera,
+identityId, points}]` (`points` from `cropPointsToInput`), one per frame rotating through its animals and cameras, the last
+`SAMPLE_CROPS` kept as REFERENCES (nothing is converted unless the dialog asks).
+Several rather than the latest because on the CPU frames arrive in bursts — 8 cut
+at once, then ~6 s of model time — and one latest crop sat still between them); `opts.device` ('auto' | 'webgpu' | 'cpu') and `opts.cpuWorkers`
+force a device / worker count (tests, benchmarking);
+`pickImageDevice()` -> `{kind: 'webgpu'|'cpu', adapter, why}`; `cpuModelWorkerCount(cores, memoryGB)`,
+`CPU_MODEL_MAX_WORKERS`; `createCpuModelPool(count, onStatus)` -> `{size, run(data, n) ->
+Promise<Float32Array[]>, terminate()}`;
+`loadImageModel(onStatus)` (WebGPU; once, cached promise);
 `selectViews(geos, maxViews)`; `EMBED_MAX_BATCH`, `EMBED_IN_FLIGHT`,
 `summarizeEmbedTiming(tm, backend, dtype)`, `formatEmbedTiming(t)`;
+`describeAdapter(info)`, `gpuAdapterInfo(device, adapter)` -> `{name, fallback}`,
+`createLoadMeter(windowMs)` -> `(now, busyMs) -> pct|null`, `GPU_LOAD_WINDOW_MS`,
+`formatEmbedDevice(device, load)` -> `{text, warn, title}`; `inputTensorToPixels(tensor, rgba)`
+(a model input back to grey RGBA, the inverse of `writeInputTensor`'s normalisation),
+`SAMPLE_CROPS` (12); `cropPointsToInput(g)` (`g.pts`, the keypoints `cropGeometry` now also
+records, NaN when missing, into model-input pixels: cutCrop's rotate-about-the-body-centre
+and scale, then x 224/160 — which is exact for an align_corners=false resize; pinned
+against `cutCrop` itself within 0.04 px, at any rotation);
 `keyframeIndices(decoder)` -> `Promise<Int32Array|null>` (cached per video);
 `summarizeKeyframePlans(plans)`; WebNN: `hasWebNN()`, `loadWebNNModel(onStatus)`,
 `chooseBackend(trial)`, `WEBNN_BATCH`, `WEBNN_TRIAL_FRAMES`; `createCropPool()` -> `{run(image, crops) ->
 Promise<Float32Array[]>, broken, terminate()}` or null; crop helpers
-`cropGeometry`, `cutCrop`, `convexHull`, `writeInputTensor`, `skeletonIndex(nodes)`,
+`cropGeometry` (now also `pts`: every keypoint, for the overlay — cutCrop ignores it), `cutCrop`,
+`convexHull`, `writeInputTensor`, `skeletonIndex(nodes)` (now also `n`, the node count),
 `frameCropGeometry(session, frame, items, cams, atFrames, sk)` -> `geo[view][item]`; constants
 `TRANSFORMERS_URL`, `IMAGE_MODEL_ID`, `IMAGE_MODEL_MB`, `CROP` (160), `INPUT` (224).
 
@@ -9177,6 +9301,37 @@ is worker-safe).
 **Spawned by.** `ui/image-embedder.js` (`createCropPool`).
 
 **Coverage.** `tests/e2e/image-crop-worker.mjs`.
+
+---
+
+### ui/image-model-worker.js
+
+**Purpose.** Module worker that runs the image ID-switch check's model on the CPU
+when there is no hardware GPU: DINOv2-small at **fp32** on WebAssembly (the
+default int8 is what drifts from the calibration; fp32 equals the WebGPU fp32
+model, cosine 1.00000). Off the main thread because there a run blocks the page
+for its whole duration (2.6 s for 8 crops); several run side by side because
+WebAssembly gets one thread without cross-origin isolation. See
+`ui/image-embedder.js` ("The CPU path") for the measurements.
+
+**Messages.** IN `{type: 'load'}` -> `{type: 'loaded'}` (while downloading:
+`{type: 'progress', loaded, total}`) or `{type: 'error', message}`; IN `{type:
+'run', id, data: Float32Array(n x 3 x 224 x 224) (transferred), n}` -> `{type:
+'result', id, cls: Float32Array(n x 384) (transferred), dim}` — each crop's CLS
+token, read exactly as the main thread's `clsVectors` does — or `{type: 'error',
+id, message}`.
+
+**Imports from project modules.** `ui/image-embedder.js` (`TRANSFORMERS_URL`,
+`IMAGE_MODEL_ID`, `INPUT` — so the pin stays in one place), then the runtime from
+`TRANSFORMERS_URL` (a dynamic cross-origin import, which a module worker may do).
+
+**Spawned by.** `ui/image-embedder.js` (`createCpuModelPool`).
+
+**Coverage.** `tests/e2e/image-check-cpu.mjs` (the real model in headless Chromium,
+which has no GPU: vectors bit-identical to the main thread's per animal and camera,
+a responsive page, worker teardown, and the real dialog — the after-tracking path —
+running instead of refusing); `tests/e2e/id-switch-image-check.mjs` §4 (the dialog
+with no GPU runs to the end and finds the switch).
 
 ---
 
@@ -9912,6 +10067,133 @@ the app-wide modal convention. On a successful run the viewer is parked on the
 
 ---
 
+### ui/trail-presets.js
+
+**Purpose.** Node-trail lengths, in SECONDS — the presets Off, ¼ s, ½ s, 1 s, 2 s, and
+any custom length typed into Tracks ▸ Node Trails ▸ Custom…, in seconds or in
+frames — and their
+conversion to the frames a trail draws. A fixed frame list (it was
+10/50/100/250/500) meant something different on every camera: 50 frames is ½ s of
+a 100 fps recording and nearly 2 s of a 30 fps one. DOM-free and import-free, so
+`ui/app-state.js` can import it and `tests/test-trail-presets.mjs` runs it in Node.
+
+**Key exports.**
+- `TRAIL_PRESETS` — `{key, seconds, name}` per preset; `key` names the Tracks ▸
+  Node Trails item ids (`menuTrails<key>`).
+- `trailFrames(seconds, fps)` — `round(seconds × fps)`, at least 1 for a trail
+  that is on, at most `MAX_TRAIL_FRAMES`; 0 when off. 15/30/60/120 at 60 fps,
+  25/50/100/200 at 100 fps.
+- `trailRate(fps)` — `fps`, or 30 while none is known (`state.fps` is 0 before a
+  video loads), so a trail is never silently 0 frames.
+- `trailPresetFor(seconds)` — the preset of exactly that length, or null (custom).
+- `trailSecondsName(seconds)` — the preset's name, or a custom length in seconds
+  to at most 3 decimals ("1.5 seconds").
+- `trailLabel(seconds, fps)` — "½ second (30 frames)", "1.5 seconds (90
+  frames)", or "Off". The menus, the button's tooltip and the status line all
+  use it.
+- `parseTrailSeconds(text)` — the Custom… Seconds field: a plain decimal above 0
+  (a decimal comma is accepted, since the field is text), else null.
+- `parseTrailFrames(text)` — the Custom… Frames field: a whole number of at
+  least 1, else null.
+- `formatTrailSeconds(seconds)` — how the Seconds field shows a length: at most
+  3 decimals, no trailing zeros ("0.167").
+- `trailSecondsForFrames(frames, fps)` — how a length typed in frames is stored:
+  `frames / fps`, EXACTLY (10 frames at 60 fps is 1/6 s, not 0.167), so it draws
+  the frames typed. The unit test round-trips 1–500 frames at 24–250 fps.
+- `MAX_TRAIL_FRAMES` (500) — `LAZY_KEEP_BEHIND` (512) must stay above the longest
+  trail, since trails draw resident frames only; without the cap a 2 s trail on a
+  300 fps recording would be 600 frames, so from 250 fps up 2 s draws 500. The test asserts the inequality.
+
+**Imports from project modules.** None.
+
+**Imported by.** `ui/app-state.js`, `ui/ui-wiring.js`.
+
+### ui/track-summary.js
+
+**Purpose.** What the Track All summary box says, DOM-free so the decision tree is
+unit-tested in Node (`tests/test-track-summary.mjs`). Track All used to end on a
+status line, plus the ID Switches tab when the automatic check found something;
+when it found nothing — or never ran — there was no visible next step, and the
+three cases read alike.
+
+**Key exports.**
+- `summarizeTrackedIdentities(session, {frames, animals, animalsAuto, elapsedMs, fps})`
+  — frames per identity, frames with any identity, frames with every animal, from
+  `session.instanceGroups` (never evicted on a lazy project, so the whole project).
+  An identity listed twice in one frame counts once.
+- `describeSwitchCheck(enabled, res, identities, whyNotRun)` — one check's outcome
+  as `{state, switches, encounters, reason, elapsedMs}`, state one of `found` /
+  `clear` / `skipped` / `failed` / `cancelled` / `off` / `na` (one identity).
+  Switches are `idSwitchOnsets` — the "possible switches" count the tab uses.
+- `planTrackSummary(summary, checks)` — the rows, the notes, the next step and the
+  buttons. Recommends **Review switches** when any check found one; **Triangulate
+  All** otherwise (with "Check by images…" / "Check by body size" offered when that
+  check did not run, and a caveat that body size cannot separate similar-sized
+  animals when only size came back clear); **Tracking Wizard…** when nothing was
+  matched. A skipped check never gets a "nothing found" headline. Notes flag more
+  (or fewer) identities than animals.
+- `formatShare(count, total)` — floored to one decimal, so only a full count reads
+  "100%". `formatDuration(ms)` — "0.4 s", "42 s", "3 min 5 s", "1 h 12 min".
+- `formatTrackingSpeed(frames, ms, recordingFps)` — the Tracking time row's detail:
+  frames tracked per wall-clock second ("300 fps") and, when the recording's rate
+  is known, how many times faster than real time ("10×" for 30 min of video
+  tracked in 3). The multiplier is the throughput over the recording fps, so the
+  two cannot disagree; with no rate only the fps is shown.
+- `MAX_IDENTITY_ROWS` (12) — identity rows listed before "and N more" (the modal
+  gets no inner scroller).
+
+**Notes / caveats.**
+- **A time is shown only for a check that spent real time** (found / clear /
+  failed / cancelled); a skip returns at its preflight.
+- **Long reasons are cut at their first parenthesis** (the skeleton skip lists 16
+  bone pairs); the row carries the whole reason as `full`, which the modal puts in
+  the row's tooltip.
+
+**Imports from project modules.** `ui/id-switch-review.js` (`idSwitchOnsets`,
+`idSwitchEncounterCount`), itself import-free.
+
+**Imported by.** `pose/tracker.js`, `ui/track-summary-modal.js`.
+
+### ui/track-summary-modal.js
+
+**Purpose.** The box that opens when Track All finishes: identities, frames
+tracked, frames with every animal, tracking time with its speed (fps, × real
+time), a bar per identity, each
+ID-switch check's result and time, and the **Next step** with its button focused.
+Renders `planTrackSummary` (`ui/track-summary.js`) and nothing else.
+
+**Key exports.** `showTrackSummaryModal(summary, checks)` — returns
+`{close, overlay}`, or null without a DOM (Node harnesses run Track All).
+
+**Notes / caveats.**
+- **A note, not a prompt.** Nothing changes until a button is pressed; Close,
+  `Esc` and a backdrop click dismiss it. Each action button clicks the existing
+  control — `#tbTriangulateAll`, `#menuCheckImageSwitches`,
+  `#menuCheckSizeSwitches`, `#menuTrackingWizard` — so it runs exactly what the
+  user would have run by hand (a disabled button, e.g. under Defining Plane Mode,
+  ignores it the same way). **Review switches** opens the ID Switches tab and
+  presses `#idSwitchNext`, landing on the first flagged switch.
+- **Keys stop at it** (capture-phase listener, as `openFixDialog` does), so the
+  app's shortcuts do not act under it; `Enter` / `Space` still press the focused
+  primary button.
+- **One at a time.** A second Track All closes the first box before opening its
+  own.
+- **No inner scroller.** The identity list is capped instead; the modal itself
+  caps its height at the viewport. It drops `.multi-frame-modal`'s 420px
+  `min-width` so it fits a narrow window.
+
+**Imports from project modules.** `ui/track-summary.js` (`planTrackSummary`),
+`ui/id-switch-modal.js` (`openIdSwitchPanel`).
+
+**Imported by.** `pose/tracker.js`. No cycle: neither import reaches back to the
+tracker.
+
+**Coverage.** `tests/e2e/track-all-summary.mjs` — the real Track All button, the
+rows and times, the key swallowing and `Esc`, `Enter` running Triangulate All,
+replacement on a second run, no box after Track Frame Range, the nothing-tracked
+case, and Review switches landing on the first switch. Tests that click the app
+after a Track All close the box first (`#trackSummaryClose`).
+
 ### ui/view-align-modal.js
 
 **Purpose.** The **Align Views to References** dialog (#226), opened from View ▸
@@ -10154,21 +10436,48 @@ stopping at the last frame; the step transport buttons/keys stop it first.
   `update3DViewport` (whose `getGroupColor` closure reads
   `state.colorByIdentity` live, so instances recolor instantly). The buttons
   use it, and so does the tracker after Track All (#242).
-- Node Trails (issue #102): two pickers for `state.trailLength` — the Tracks ▸
-  Node Trails submenu (`menuTrails*`) and the toolbar's **Trails** button
-  (`#tbTrails`, right of Tracks / Identity). One `trailPresets` list
-  (Off/10/50/100/250/500) builds the toolbar menu's items (`#trailsMenu`,
-  `data-trail-len`), and both pickers go through `setTrailLength`, whose
-  `updateTrailChecks` moves the checkmark in BOTH menus and rewrites the
-  button's tooltip ("Node trails: 50 frames"). The label stays a bare
+- Node Trails (issue #102): two pickers for `state.trailSeconds` — the Tracks ▸
+  Node Trails submenu (`#menuTrailsSubmenu`, items `menuTrailsOff` /
+  `menuTrailsQuarter` / `menuTrailsHalf` / `menuTrailsSecond` / `menuTrailsTwoSeconds`) and the toolbar's
+  **Trails** button (`#tbTrails`, right of Tracks / Identity). Both menus' items
+  are built from `TRAIL_PRESETS` (`ui/trail-presets.js`: Off, ¼ s, ½ s, 1 s, 2 s;
+  `data-trail-sec`) plus a last **Custom…** item (`data-trail-custom`,
+  `menuTrailsCustom`), and both go through `setTrailSeconds`. Custom… opens
+  `showCustomTrailModal` (`#trailCustomModal`): a **Seconds** and a **Frames**
+  field (`#trailCustomSeconds` / `#trailCustomFrames`), the same length at the
+  current rate. Typing in either rewrites the other; an invalid entry blanks the
+  other, disables Apply and says why in `.modal-error`. The field typed in LAST
+  is what Apply sets, and either way it is stored in seconds — so a custom
+  length follows the frame rate exactly like a preset, and a length typed in
+  frames is stored as `frames / fps` exactly and draws the frames typed. It
+  opens on the current length, kept exact (re-applying a 10-frame trail
+  untouched does not round it to its "0.167" display). A note under the fields
+  names the rate ("At 60 fps.") and adds "A trail draws at most 500 frames."
+  past the cap. Enter applies, Esc / Cancel change nothing. It is a dialog rather than a field in
+  the menu because both menus open on hover and would close under the user the
+  moment the pointer drifted. A length no preset matches checks Custom, whose
+  label then names it ("Custom: 1.5 seconds (90 frames)…") in both menus. A preset is a span of
+  TIME, so each item names its frame count at the current rate — "½ second (30
+  frames)" at 60 fps, "(50 frames)" at 100 — and `updateTrailChecks` re-reads
+  `state.fps` whenever either menu is entered (`mouseenter`/`focusin` on
+  `#trailsDropdown` and `#menuTrailsParent`), because the rate changes in many
+  places (video load, session switch, the FPS pill) and none of them is told
+  about trails. It also moves the checkmark in BOTH menus and rewrites the
+  button's tooltip ("Node trails: ½ second (30 frames)"), and gives the button
+  the toolbar's `.active` blue while any trail is on (preset or custom) — the
+  same look as 3D / Panel / Identity — so a trail being on reads at a glance
+  without hovering the button. Off removes it. The FPS pill's commit
+  redraws the overlays when trails are on, since the frame count just changed.
+  The label stays a bare
   "Trails ▾" on purpose, to save toolbar width: the toolbar needs ~1,380 px
-  with it (see the panel toggles below), and "Trails: 500" in the label would
+  with it (see the panel toggles below), and the value in the label would
   add ~25 px more. The button is a `.tri-dropdown`, so its menu opens on hover in
   pure CSS exactly like the Triangulate split buttons', and like theirs stays
   up after a pick until the pointer leaves; clicking the button itself does
   nothing. Display state, never saved; not in the Defining Plane Mode
   toolbar lock (it changes what is drawn, not what is annotated). Covered by
-  `tests/e2e/node-trails-toolbar.mjs`.
+  `tests/e2e/node-trails-toolbar.mjs` (including the frame counts following the
+  FPS pill) and `tests/test-trail-presets.mjs`.
 - Node Style: the four per-section Node Style button groups
   (`visUserNodeStyle` / `visPredNodeStyle` / `visReprojNodeStyle` /
   `vis3dNodeStyle`) reuse the `.line-style-btn` click handler (active toggle +
@@ -10457,6 +10766,10 @@ and the FPS pill),
 the scrub handlers and the tooltip snap to a tick within 5 px),
 `color-by.js` (`onColorByChange`, `setColorByIdentity` — the Tracks /
 Identity toggle, also flipped by the tracker after Track All — #242),
+`trail-presets.js` (`TRAIL_PRESETS`, `MAX_TRAIL_FRAMES`, `trailPresetFor`,
+`trailLabel`, `trailFrames`, `trailRate`, `formatTrailSeconds`,
+`trailSecondsForFrames`, `parseTrailSeconds`, `parseTrailFrames` — the Node
+Trails menus and their Custom… dialog),
 `video-filters.js` (`setSessionRotation`; `clampRotation` still comes in via
 `sessions-panes.js`, which re-exports it), `plane-definition.js`
 (`togglePlaneMode`).

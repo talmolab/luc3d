@@ -3,9 +3,9 @@
 Multi-view pose annotation GUI. No build system — pure vanilla JS served as static files.
 
 ## Architecture
-ES modules, vanilla JS (no build step). `index.html` loads `app.js` as `<script type="module">`; `app.js` is a 2-line entry point that imports from `pose/`. The 101 modules are grouped into four directories:
+ES modules, vanilla JS (no build step). `index.html` loads `app.js` as `<script type="module">`; `app.js` is a 2-line entry point that imports from `pose/`. The 105 modules are grouped into four directories:
 - `pose/` — data model, cross-view tracking, DLT triangulation (the pure math in `triangulation-core.js`, solved in parallel by `triangulation-pool.js` + `triangulation-worker.js`), plane annotation model (planes + the global plane-node pool), 3D mesh objects (groups of planes) and their derived geometry, plane/origin serialization, origin transform, whole-project origin re-base, cross-session calibration comparison, plane-to-plane angle, the least-squares plane fit, multi-view display alignment (`view-align.js`), the ID-switch checks by body size and images (`id-switch-check.js`), the lazy project's playback eviction (`lazy-residency.js`), app initialization (22 files)
-- `ui/` — UI state, canvas rendering, mouse/keyboard interaction, info panel (and its lazily-filled Track dropdown), modals, timeline, 3D viewport, panel visibility, video encoding, video display settings, keyboard-target arbitration, modal geometry, view legend, plane definition, 3D mesh objects, origin definition, origin re-base, cross-session calibration notice, plane angle, frame-range tracking, collapsible section state, info tooltips, plane visibility, browser-specific hints, the loading overlay + its progress bar, the Align Views to References dialog, the seekbar hover tooltip, the status bar's whole-project frame counters, the controls bar's time / frame readout, the Tracks / Identity coloring setting, the Check ID Switches runner + ID Switches panel tab (and its saved review checklist), its seekbar ticks and in-view highlight, its image embedder and crop worker, settings — the Define Planes panel is split across `plane-definition.js` (the hub) plus its three section modules and three helpers (57 files)
+- `ui/` — UI state, canvas rendering, mouse/keyboard interaction, info panel (and its lazily-filled Track dropdown), modals, timeline, 3D viewport, panel visibility, video encoding, video display settings, keyboard-target arbitration, modal geometry, view legend, plane definition, 3D mesh objects, origin definition, origin re-base, cross-session calibration notice, plane angle, frame-range tracking, collapsible section state, info tooltips, plane visibility, browser-specific hints, the loading overlay + its progress bar, the Align Views to References dialog, the seekbar hover tooltip, the status bar's whole-project frame counters, the controls bar's time / frame readout, the Tracks / Identity coloring setting, the node-trail lengths (`trail-presets.js` — presets or a custom value typed in seconds or frames, stored in seconds, drawn as `seconds × fps` frames), the Check ID Switches runner + ID Switches panel tab (and its saved review checklist), its seekbar ticks and in-view highlight, its image embedder and its crop and CPU-model workers, the Track All summary box (`track-summary.js` decides what it says, `track-summary-modal.js` renders it), settings — the Define Planes panel is split across `plane-definition.js` (the hub) plus its three section modules and three helpers (61 files)
 - `loading/` — video decoding, unplayable-codec diagnosis, session loading, SLP/package readers, per-camera SLP choice, calibration-file selection, video-file selection, the per-camera track-list union (`session.tracks` for a per-camera folder), the `.slp` skeleton reader + per-camera node-order remap (`slp-skeleton.js`), web workers (12 files)
 - `import-export/` — file I/O, save/load, SLP import/merge, visibility metadata, plane metadata, 3D mesh export (10 files)
 - `demo-data.js` — synthetic skeleton and camera data
@@ -206,7 +206,14 @@ terms require the notice be kept intact and mediabunny is MPL-2.0). dockview-cor
   either, or any change to the crop, needs a recalibration (see MODULES.md
   `pose/id-switch-check.js`). An opt-in (`imageCheckWebNN`) also tries the
   same model on WebNN and keeps it only if a trial shows it faster AND
-  consistent with WebGPU (see MODULES.md `ui/image-embedder.js`).
+  consistent with WebGPU (see MODULES.md `ui/image-embedder.js`). **Without a
+  hardware GPU it still runs**, on the CPU: the fp32 model (never the CPU
+  runtime's default int8, which is what drifts from the calibration) in module
+  workers, `ui/image-model-worker.js` — on the main thread one model run freezes
+  the page for seconds, and onnxruntime's own `wasm.proxy` worker cannot start
+  from the CDN bundle. ~15x slower than a GPU with 4 workers, ~600 MB each. A
+  software WebGPU adapter (SwiftShader) counts as no GPU: it is 10x slower than
+  one CPU worker. See MODULES.md `ui/image-embedder.js` "The CPU path".
 - **Video export = mediabunny, via `ui/video-encode.js` — the app's one encoding
   seam.** sleap-io.js has NO browser encoder (its `renderVideo()` shells out to a
   native `ffmpeg` and is Node-entry-only; its docs say "there is no encoder in the
