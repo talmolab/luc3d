@@ -25,7 +25,7 @@ import { editGroupState, finishEditGroup } from './identity-assignment.js';
 import { updateFrameInfo } from './info-panel.js';
 import {
     computeFrameCounterBaseline, computeLazyCameraBaseline, createFrameCounterBaselineBuilder,
-    countFrameCounters, nonResidentCameraCounts,
+    countFrameCounters, nonResidentCameraCounts, refreshCountedFrame,
 } from './frame-counters.js';
 
 // ============================================
@@ -503,11 +503,15 @@ function counterCamera() {
 
 /**
  * Give `baseline` a camera half for `cam` if it has none — synchronously, since
- * without it the count would be the resident window, the very number this
- * replaces. Once per view per session, or after a bulk change dropped it.
+ * without it a lazy count would be the resident window, the very number this
+ * replaces, and an eager one a walk of every frame on every step. Once per view
+ * per session, or after a rebuild dropped it. Not for a lazy loader that cannot
+ * enumerate rows: it has no camera half to build.
  */
 function ensureCameraHalf(session, baseline, cam) {
-    if (!cam || !session.lazyLoader || baseline.cams.has(cam)) return;
+    if (!cam || baseline.cams.has(cam)) return;
+    var loader = session.lazyLoader;
+    if (loader && typeof loader.forEachInstanceRow !== 'function') return;
     var half = computeLazyCameraBaseline(session, cam);
     if (half) baseline.cams.set(cam, half);
 }
@@ -555,7 +559,14 @@ function runCounterRebuild() {
         var prev = _counterBaselines.get(session);
         var next = builder.result;
         next.loader = session.lazyLoader;
-        if (prev && prev.loader === next.loader) {
+        if (prev && prev.loader === next.loader && next.eager) {
+            // Eager: the other views' halves are DROPPED, each rebuilt (one
+            // walk, ~10 ms on 36,000 frames x 17 cameras) when its view is next
+            // active. A rebuild follows an edit or a bulk change, and on an
+            // eager project nothing cheap can tell which: every frame is
+            // resident, so `nonResidentCameraCounts` says nothing.
+            next.lastFrame = prev.lastFrame;
+        } else if (prev && prev.loader === next.loader) {
             next.lastFrame = prev.lastFrame;
             // The other views' halves can only be behind on frames that changed
             // while NOT resident — a bulk operation. If this view's own
@@ -577,6 +588,7 @@ function runCounterRebuild() {
         _counterBaselines.set(session, next);
         var shownCam = counterCamera();   // the view may have changed mid-build
         ensureCameraHalf(session, next, shownCam);
+        refreshCountedFrame(session, next, state.currentFrame);   // an edit made mid-build
         renderFrameCounters(session, shownCam, next);
         if (_counterRebuild.again) requestCounterRebuild();
     };
@@ -590,8 +602,12 @@ function runCounterRebuild() {
  * On a lazy project most frames are not resident, so the count is the live
  * count of the resident frames plus a cached whole-project baseline for the
  * rest (`countFrameCounters`) — O(resident frames) per call, like the
- * resident-only count it replaced. Building the baseline is a walk of every
- * frame's groups (~100 ms on a 108,000-frame x 8-camera project), so:
+ * resident-only count it replaced. On an eager project every frame is resident,
+ * so that would be a walk of the whole project per step (~10 ms at 36,000
+ * frames x 17 cameras); there the count is the baseline alone, kept exact by
+ * re-counting the drawn frame into it each call (`refreshCountedFrame`) — O(1).
+ * Building the baseline is a walk of every frame's groups (~100 ms on a
+ * 108,000-frame x 8-camera project), so:
  *
  * - It is built SYNCHRONOUSLY only when there is none: the first update of a
  *   session (or after its lazy loader changes), and the first time a view
@@ -604,7 +620,8 @@ function runCounterRebuild() {
  *   dirty). A redraw on a NEW frame is navigation, which changes no data:
  *   stepping and scrubbing cost no whole-project work at all.
  * - An edit to the current frame needs no rebuild to show: the current frame is
- *   resident, and resident frames are always counted live.
+ *   resident, and resident frames are always counted live (on an eager
+ *   project, re-counted into the baseline).
  */
 export function updateFrameCounters() {
     var session = state.session;
@@ -624,6 +641,9 @@ export function updateFrameCounters() {
     } else {
         ensureCameraHalf(session, baseline, activeCam);
     }
+    // Eager: re-count the drawn frame into the baseline (O(1); a no-op on a
+    // lazy project, whose resident frames are counted live).
+    refreshCountedFrame(session, baseline, state.currentFrame);
     renderFrameCounters(session, activeCam, baseline);
 
     var sameFrame = baseline.lastFrame === state.currentFrame;
