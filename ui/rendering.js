@@ -6,7 +6,7 @@
 // - updateFrameCounters: status-bar frame counters (labeled / triangulated / instances),
 //   whole-project on a lazy project too (counting logic in ui/frame-counters.js).
 
-import { state, interactionManager, timeline } from './app-state.js';
+import { state, interactionManager, timeline, isViewDocked } from './app-state.js';
 import { points3dNodeCount } from '../pose/pose-data.js';
 import {
     ensureLazyFrameData, ensureLazyTrailWindow, getInstanceGroupsForFrame,
@@ -326,8 +326,16 @@ export function drawAllOverlays(frameIdx, viewFrames) {
     // frames), each needing the same lazy reprojection fill — done once each.
     var filledFrames = null;
 
+    // Views not on screen (another camera is solo'd, or the pane was closed)
+    // have detached overlay canvases: skip them. Docking one again creates a
+    // new canvas and redraws (`refreshPaneInteractions`), so nothing stale is
+    // ever shown. With NO view docked, draw them all — the same fallback as
+    // `VideoController._shownViews`.
+    const anyDocked = state.views.some(isViewDocked);
+
     for (const view of state.views) {
         if (!view.overlayCtx || !view.overlayCanvas) continue;
+        if (anyDocked && !isViewDocked(view)) continue;
 
         // This view's frame: during playback, the frame ITS canvas shows
         // (`viewFrames`); otherwise — or if that frame isn't hydrated in a lazy

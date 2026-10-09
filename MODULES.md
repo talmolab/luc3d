@@ -76,7 +76,8 @@ the old `app.js` entry point.
   times (`refreshReadoutTotals`), which are frame / fps.
 
 **Imports from project modules.**
-- `../ui/app-state.js` — `state`, controller singletons + setters, `VIEW_NAMES`.
+- `../ui/app-state.js` — `state`, controller singletons + setters, `VIEW_NAMES`,
+  `isViewDocked` (the video controller's `isViewShown`).
 - `./pose-data.js` — `Instance`, `UnlinkedInstance`, `points3dNodeCount`,
   `getPoint3d`, `groupDisplayName` (the group name in every interaction status
   line — `onInstanceConverted`, `onClonePredictedGroup`,
@@ -3666,6 +3667,18 @@ Calibration and `envSkeleton` remain per-session.
   controller. Frame navigation / playback branch on this, not on the
   controller's existence (used by `navigateToFrame`, the transport buttons, and
   the keyboard handler so play/pause + stepping work without video).
+- `isViewDocked(view)` — true when the view has a pane in the dock
+  (`paneManager.dockedViews`; a pane in an inactive tab counts), or when there
+  is no dock yet. Fed to `VideoController` as `callbacks.isViewShown` and read by
+  `drawAllOverlays`, so stepping, playback and overlay drawing skip the views
+  nobody can see — one camera solo'd, or panes closed. Measured on a 17-camera
+  1680×1200 HEVC 120 fps project with one camera solo'd (together with
+  `OnDemandVideoDecoder.releaseFrames` for the views that went off screen):
+  jumps 2.1 s → 0.1 s, single steps 168 → 18 ms, playback 11 → 119 new
+  pictures/s. Safe because
+  docking a view again builds a NEW canvas, whose renderer re-seeks the current
+  frame (`refreshPaneInteractions`), so a skipped view never shows a stale
+  picture. Covered by `tests/e2e/solo-view-decodes-shown-only.mjs`.
 - `VIEW_NAMES` — `['back', 'mid', 'side', 'top']`.
 - `getActiveSession()`, `setActiveSession(session)`.
 - `rememberSkeleton(skeleton)` / `buildRememberedSkeleton()` — in-memory cache of
@@ -6303,7 +6316,11 @@ data sources. Plus visibility-toggle helpers and frame counter updates.
   issue #95. (`drawReprojectedSkeleton`'s own primitive fallback stays `'x'`
   for direct callers; the user-facing default comes from here.)
 - `drawAllOverlays(frameIdx, viewFrames?)` — main per-frame redraw across every
-  view. Optional `viewFrames` (`{ viewName: frameIdx }`, passed by the
+  DOCKED view (`isViewDocked`: a view whose pane is closed, or that another
+  solo'd camera hides, has a detached overlay canvas and is skipped — docking it
+  again creates a new canvas and redraws, so nothing stale shows; with no view
+  docked at all, every view is drawn, as `VideoController._shownViews` falls
+  back). Optional `viewFrames` (`{ viewName: frameIdx }`, passed by the
   per-refresh playback loop in `loading/video.js`) draws each view's overlay at
   the frame ITS canvas shows (from that view's captured `VideoFrame`), so
   overlay and video agree per camera even when cameras are a frame or two
@@ -6443,7 +6460,7 @@ data sources. Plus visibility-toggle helpers and frame counter updates.
   the assertion would be vacuous).
 
 **Imports from project modules.**
-- `./app-state.js` — `state`, `interactionManager`, `timeline`.
+- `./app-state.js` — `state`, `interactionManager`, `timeline`, `isViewDocked`.
 - `../pose/triangulation.js` — `ensureLazyFrameData`,
   `getInstanceGroupsForFrame`, `triangulateAndReproject`,
   `storeReprojectedInstances`.
@@ -12047,7 +12064,8 @@ blank until the user manually re-ran Triangulate All. Covered by
 `tests/e2e/reopen-reprojection-panel-autopopulate.mjs`.
 
 **Imports from project modules.**
-- `../ui/app-state.js` (incl. `buildRememberedSkeleton`), `../pose/pose-data.js`,
+- `../ui/app-state.js` (incl. `buildRememberedSkeleton`, and `isViewDocked` as the
+  rebuilt video controller's `isViewShown`), `../pose/pose-data.js`,
   `../ui/browser-hints.js` (`fileSystemAccessHint` — Brave hint in the
   multi-session "needs a folder picker" message), `./video.js`, `../import-export/file-io.js`, `../pose/triangulation.js`
   (`shouldUseLazyH5`, `shouldUseLazySlp`, `LazyFrameLoader`),
@@ -13005,7 +13023,12 @@ a zoomed-in image keeps the same region centered instead of jumping.
 - `STEP_BACK_WARM_MS` (250) — pause after landing on a frame before warming the chunk behind it.
 - `OnDemandVideoDecoder` — class. Selected methods: `init(source)`,
   `getFrame(frameIndex)` (mediabunny: via `_mbGetFrame`, the open stepping
-  stream), `releaseStepCursor()`, `_initMediabunny(source)` /
+  stream), `releaseStepCursor()`, `releaseFrames()` (closes and drops every
+  cached decoded frame — mediabunny backend cache + HTML5/WebCodecs cache — and
+  the stepping streams, keeping the decoder open; called by
+  `VideoController._shownViews` for a view that went off screen, since 17
+  cameras' full 60-frame caches at 1680×1200 are ~8 GB of ImageBitmaps and keep
+  Chrome garbage-collecting), `_initMediabunny(source)` /
   `_mediabunnyEnabled()` (default-on frame-accurate backend, issue #115),
   `_mbCannotDecode(backend)` (null, or `{reason: 'codec', codec, codecString}`
   when WebCodecs cannot decode the track — the backend is then dropped and
@@ -13059,6 +13082,25 @@ a zoomed-in image keeps the same region centered instead of jumping.
   `setupSeekbar`, `setupKeyboardHandlers`, `initZoom`, `applyZoom`,
   `zoomVideo`, `resetZoom`, `zoomToRect`, `zoomAllVideos`,
   `resetAllZoom`, `setupZoomHandlers`.
+
+**Only the views on screen are decoded, played and captured** —
+`_shownViews()`: views with a decoder for which the optional
+`callbacks.isViewShown(view)` is true (the app passes `isViewDocked`, from
+`ui/app-state.js`), or every decoder view when there is no callback or none is
+shown. A decoder that was shown at the previous call and is not now gets
+`releaseFrames()` — once, on the transition, compared BY DECODER because
+decoders are pooled across session switches. Without it the hidden views' caches
+stayed full forever: after using the grid, solo playback was 68% GC and reached
+63 of 120 pictures/s with 43% dropped; with it, 115/s and none dropped.
+Returning to the grid then costs one keyframe decode per view. `seekToFrame` (so every step, jump and the `pausePlayback` re-decode)
+decodes only those; `startPlayback` seeks, plays and captures only those, and
+its loops RESTART playback when the shown set changes mid-play (a solo switch,
+a pane closed or docked) — a newly shown view's `<video>` is paused wherever it
+was left. Before this, solo'ing one camera of a 17-camera 120 fps project left
+every cost of the full grid in place (jumps ~2.1 s, steps ~170 ms, playback ~11
+new pictures/s), because the 16 hidden decoders still decoded every step and
+played. Covered by `tests/test-video-controller.js` ("Only shown views") and
+`tests/e2e/solo-view-decodes-shown-only.mjs`.
 
 **`setupZoomHandlers`'s wheel-to-zoom stands down while Alt is held.** Alt
 turns the wheel into the instance-rotation control (`ui/interaction.js`
