@@ -3638,6 +3638,25 @@ contacts) were real 5 of 5, image-only rows 5 of 7, size-only 1 of 8. The size
 check takes ~0.2 s per 10-min session and ~1.3 s for 30 min of 5 animals after
 the grid is built.
 
+**Out of sample (2026-10-11).** Confirmed on 16 proofread SLAP sessions of
+2022-10-07 that played no part in choosing the method or the threshold — every
+multi-animal one not used above: 131531, 132603, 133702, 134804, 135851, 140918,
+161055, 162233, 163346, 170913, 173152, 180149, 181300, 183527, 184618, 190807
+(2 h 49 min; 15 with two mice, including white/white 163346 and brown/brown
+173152, and 190807 with two brown and one white), with the same harness, truth
+and row rule. At -0.8: **9 of 11 relabels caught, 11 rows, 0 false**. Every real
+change scored below every one of the 348 clean contacts (per-contact AUC 1.000),
+so no threshold from -0.2 to -1.2 gave a false row; -0.5 and looser caught 10 of
+11. Missed: a swap inside the pair's first contact, which starts the session
+(183527 at 0:24 — there is no "before" to compare), and a swap between the two
+brown mice that scored -0.58 (190807 at 9:06). A variant that keeps the length of
+the window means (the mean of unit vectors, not renormalised), which had looked
+better on the 8 calibration runs (10 of 12 with no false rows at -0.5), gave the
+identical 9 of 11 with no false rows here — no gain, so not adopted. These
+sessions keep a second label file per camera
+(`*.predictions.static.externals.slp`), which a harness has to leave out of the
+folder pick.
+
 **Imports from project modules.** `pose/pose-data.js` (`readPoint3d`).
 
 **Imported by.** `ui/id-switch-modal.js`, `ui/image-embedder.js` (`planKeyframeSamples`, `KEYFRAME_GAP_TOLERANCE`).
