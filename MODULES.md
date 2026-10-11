@@ -3628,9 +3628,10 @@ fixture of `tests/e2e/id-switch-image-check.mjs`: 2 of 24 contacts at -1.02 and
 -1.15). Not renormalising the window means (the mean of unit vectors, its length
 kept) silences that exactly (all ~0.00) and gave the image check 10 of 12 with NO
 false rows at -0.5 — but on the real recordings it made size slightly worse (pooled
-AUC 0.867 vs 0.879; 10 false rows vs 7 at 6 caught), so both checks keep
-renormalised means; a candidate follow-up, to confirm on recordings not used here. Swept at -1: `metricDims` 2 is much worse (59 false at -0.8), 4 worse,
-8 equal to 16 one step looser; `windowSeconds` 20/30 and `minApartSeconds` 1.6
+AUC 0.867 vs 0.879; 10 false rows vs 7 at 6 caught), and on 16 new sessions it
+gained the image check nothing either (see "Out of sample"), so both checks keep
+renormalised means. Swept at -1: `metricDims` 2 is much worse (59 false at -0.8),
+4 worse, 8 equal to 16 one step looser; `windowSeconds` 20/30 and `minApartSeconds` 1.6
 change little, 6.4 loses 2 relabels. The five-mouse "false" rows at 1:01, 14:55,
 16:07, 26:41 were checked against the tail marks (both checks flag some of them).
 With both checks at their defaults, rows both flag ("Both", same pair, overlapping
@@ -3638,13 +3639,13 @@ contacts) were real 5 of 5, image-only rows 5 of 7, size-only 1 of 8. The size
 check takes ~0.2 s per 10-min session and ~1.3 s for 30 min of 5 animals after
 the grid is built.
 
-**Out of sample (2026-10-11).** Confirmed on 16 proofread SLAP sessions of
-2022-10-07 that played no part in choosing the method or the threshold — every
+**Out of sample (2026-10-11), both checks.** Confirmed on 16 proofread SLAP sessions of
+2022-10-07 that played no part in choosing the methods or the thresholds — every
 multi-animal one not used above: 131531, 132603, 133702, 134804, 135851, 140918,
 161055, 162233, 163346, 170913, 173152, 180149, 181300, 183527, 184618, 190807
 (2 h 49 min; 15 with two mice, including white/white 163346 and brown/brown
 173152, and 190807 with two brown and one white), with the same harness, truth
-and row rule. At -0.8: **9 of 11 relabels caught, 11 rows, 0 false**. Every real
+and row rule. Images at -0.8: **9 of 11 relabels caught, 11 rows, 0 false**. Every real
 change scored below every one of the 348 clean contacts (per-contact AUC 1.000),
 so no threshold from -0.2 to -1.2 gave a false row; -0.5 and looser caught 10 of
 11. Missed: a swap inside the pair's first contact, which starts the session
@@ -3652,7 +3653,11 @@ so no threshold from -0.2 to -1.2 gave a false row; -0.5 and looser caught 10 of
 brown mice that scored -0.58 (190807 at 9:06). A variant that keeps the length of
 the window means (the mean of unit vectors, not renormalised), which had looked
 better on the 8 calibration runs (10 of 12 with no false rows at -0.5), gave the
-identical 9 of 11 with no false rows here — no gain, so not adopted. These
+identical 9 of 11 with no false rows here — no gain, so not adopted. Size at -1:
+**2 of 11 caught, 2 rows, 0 false** (-0.8: 3 of 11, 5 rows, 2 false; per-contact
+AUC 0.902); the classifier it replaces, at its -50 default: 0 of 11 caught, 20 rows,
+all false. These mice are close in size, so size catches little here — but it no
+longer raises false rows. These
 sessions keep a second label file per camera
 (`*.predictions.static.externals.slp`), which a harness has to leave out of the
 folder pick.
