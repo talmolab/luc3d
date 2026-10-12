@@ -16,26 +16,26 @@ import {
     reprojectPoints,
     computeInstanceDistanceTo,
     hungarianAlgorithm
-} from './triangulation.js?v=53fc954be142';
-import { CrossViewTracker, Detection } from './cross-view-tracker.js?v=53fc954be142';
-import { singleCameraName, singleCameraTrackerConfig, trackSingleCamera, SINGLE_CAMERA_LAZY_REASON } from './single-camera-tracking.js?v=53fc954be142';
-import { InstanceGroup, points3dNodeCount, hasPoint3d, readPoint3d, pooledPoints3d } from './pose-data.js?v=53fc954be142';
+} from './triangulation.js?v=623c6b72d719';
+import { CrossViewTracker, Detection } from './cross-view-tracker.js?v=623c6b72d719';
+import { singleCameraName, singleCameraTrackerConfig, trackSingleCamera, SINGLE_CAMERA_LAZY_REASON } from './single-camera-tracking.js?v=623c6b72d719';
+import { InstanceGroup, points3dNodeCount, hasPoint3d, readPoint3d, pooledPoints3d } from './pose-data.js?v=623c6b72d719';
 
 // Pass 3i-1: tracker UI/integration (was in app.js)
-import { state, interactionManager, timeline, viewport3d, getActiveSession } from '../ui/app-state.js?v=53fc954be142';
-import { getNodeWeightArray, getTrackingThresholds, getTrackingThreshold, isCameraTracked } from '../ui/settings.js?v=53fc954be142';
-import { markDirty, setStatus, hideLoading } from '../import-export/save-load.js?v=53fc954be142';
-import { showLoadingProgress, createProgressPacer, yieldToPaint, setLoadingCpu } from '../ui/loading-overlay.js?v=53fc954be142';
-import { loadAllLazyFrames, sweepLazyFrameWindows } from './triangulation.js?v=53fc954be142';
-import { drawAllOverlays, showPredictedOnly, PREDICTED_ONLY_NOTE } from '../ui/rendering.js?v=53fc954be142';
-import { updateInfoPanel } from '../ui/info-panel.js?v=53fc954be142';
-import { setColorByIdentity } from '../ui/color-by.js?v=53fc954be142';
-import { setTrailSeconds, trailSecondsName, TRACK_ALL_TRAIL_SECONDS } from '../ui/trail-presets.js?v=53fc954be142';
-import { runIdSwitchChecks, clearIdSwitchResults } from '../ui/id-switch-modal.js?v=53fc954be142';
-import { summarizeTrackedIdentities, describeSwitchCheck } from '../ui/track-summary.js?v=53fc954be142';
-import { showTrackSummaryModal, rememberTrackSummary } from '../ui/track-summary-modal.js?v=53fc954be142';
-import { collapseTimeline } from '../ui/timeline-controller.js?v=53fc954be142';
-import { collapseViewport3D } from '../ui/panel-visibility.js?v=53fc954be142';
+import { state, interactionManager, timeline, viewport3d, getActiveSession } from '../ui/app-state.js?v=623c6b72d719';
+import { getNodeWeightArray, getTrackingThresholds, getTrackingThreshold, isCameraTracked } from '../ui/settings.js?v=623c6b72d719';
+import { markDirty, setStatus, hideLoading } from '../import-export/save-load.js?v=623c6b72d719';
+import { showLoadingProgress, createProgressPacer, yieldToPaint, setLoadingCpu } from '../ui/loading-overlay.js?v=623c6b72d719';
+import { loadAllLazyFrames, sweepLazyFrameWindows } from './triangulation.js?v=623c6b72d719';
+import { drawAllOverlays, showPredictedOnly, PREDICTED_ONLY_NOTE } from '../ui/rendering.js?v=623c6b72d719';
+import { updateInfoPanel } from '../ui/info-panel.js?v=623c6b72d719';
+import { setColorByIdentity } from '../ui/color-by.js?v=623c6b72d719';
+import { setTrailSeconds, trailSecondsName, TRACK_ALL_TRAIL_SECONDS } from '../ui/trail-presets.js?v=623c6b72d719';
+import { runIdSwitchChecks, clearIdSwitchResults } from '../ui/id-switch-modal.js?v=623c6b72d719';
+import { summarizeTrackedIdentities, describeSwitchCheck } from '../ui/track-summary.js?v=623c6b72d719';
+import { showTrackSummaryModal, rememberTrackSummary } from '../ui/track-summary-modal.js?v=623c6b72d719';
+import { collapseTimeline } from '../ui/timeline-controller.js?v=623c6b72d719';
+import { collapseViewport3D } from '../ui/panel-visibility.js?v=623c6b72d719';
 
 /**
  * A frame index as the USER sees it: 1-based.
@@ -1568,7 +1568,7 @@ async function runTrackingPass(range) {
                 };
                 // Kept on the session, so the ID Switches tab can reopen the box once it is closed
                 rememberTrackSummary(session, summaryOpts, summaryChecks, lres.numIdentities);
-                showTrackSummaryModal(summarizeTrackedIdentities(session, summaryOpts), summaryChecks);
+                showTrackSummaryModal(summarizeTrackedIdentities(session, summaryOpts), summaryChecks, { session: session });
             } catch (e) {
                 console.error('[' + label + '] summary failed:', e);
             }
