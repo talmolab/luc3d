@@ -13,7 +13,7 @@
  *     paint waits are what is left out, and nothing else.
  *  2. A real Track All (the BA rig fixture's 8 frames repeated, a windowed lazy
  *     project): the "Assigning identities: 12,345/60,000 frames" line has
- *     commas; a CPU line with its key and graph, no GPU series; one core's
+ *     commas; a CPU line with its key and graph (labelled axes), no GPU series; one core's
  *     share; a tooltip saying it runs on the main thread.
  *  3. When it ends the CPU row is hidden and cleared; the status line and the
  *     Track All summary box give the frame count with commas.
@@ -100,6 +100,11 @@ try {
     check(/^Assigning identities: \d{1,2},\d{3}\/60,000 frames \(\d+%\)…$/.test(run.status), `the progress line has commas ("${run.status}")`);
     const l2 = loadOf(run.text);
     check(run.shown && run.key && run.cpuD && !run.gpuD, `a CPU line with its key and graph, no GPU series ("${run.text}")`);
+    {   // its axes: "100%" / "50%" / "0%" level with what they label, "60 s ago" … "now" under it, each with a tick
+        // pointing out of the plot (fixtures/load-graph-axes.js)
+        const ax = await page.evaluate(async (sel) => (await import('/tests/e2e/fixtures/load-graph-axes.js')).loadGraphAxes(document.querySelector(sel)), '#loadingGraph');
+        check(ax.ok, `labelled axes with out ticks: ${ax.y.map(l => l.t + ' ' + l.off.toFixed(2) + ' px off').join(', ')}; ${ax.x.map(l => '"' + l.t + '"').join(' … ')} under the plot; ${ax.ticks.length} ticks` + (ax.ok ? '' : ' — ' + ax.why));
+    }
     check(Math.abs(l2 - oneCore) <= 1.5, `one core's share: ${l2}% vs ${oneCore.toFixed(1)}% — the tracker is single-threaded`);
     check(/kept busy over the last 5 s by Track All, which runs on the main thread: one core at most\./.test(run.title),
           `its tooltip says so ("${run.title}")`);

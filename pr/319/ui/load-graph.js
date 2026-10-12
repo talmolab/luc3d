@@ -108,15 +108,23 @@ export function loadGraphPath(samples, now, spanMs, w, h) {
     return d;
 }
 
-/** The graph, in CSS px: as tall as two 12 px lines of text. The series are plotted LOAD_GRAPH_PAD inside the
- *  top and bottom edges, so a load of 0% or 100% is not half clipped. */
-export const LOAD_GRAPH_W = 104, LOAD_GRAPH_H = 34, LOAD_GRAPH_PAD = 2;
+/** The plot, in CSS px: as tall as two 12 px lines of text, and narrow enough that with its y labels (~26 px)
+ *  the image check's "GPU: WebGPU, fp16 · load 100%" (205 px) still fits on one line beside it (540 px dialog). The
+ *  series are plotted LOAD_GRAPH_PAD inside the top and bottom edges, so a load of 0% or 100% is not half clipped. */
+export const LOAD_GRAPH_W = 84, LOAD_GRAPH_H = 34, LOAD_GRAPH_PAD = 2;
+/** The axis ticks' length (px), pointing OUT of the plot; a label sits 2 px beyond its tick. The plot's border
+ *  is 1 px (styles.css `.load-graph svg`), which the tick and label positions are measured from. */
+export const LOAD_GRAPH_TICK = 4;
+const BORDER = 1;
 
 /**
  * The load graph, built into `box` (which gets class `load-graph`): the last
  * LOAD_GRAPH_SPAN_MS of samples, newest at the right edge, 0-100% bottom to
  * top, a hairline at 50%, a CPU and a GPU series (styles.css: `--load-cpu`,
- * `--load-gpu`). It keeps its space while hidden (`show(false)` is visibility),
+ * `--load-gpu`). Labelled axes, as few as will do in the space: "100%", "50%"
+ * and "0%" to the left, each centred on the level it names, and "60 s ago" …
+ * "now" under the plot, each with a tick on the plot's edge pointing OUT
+ * (MATLAB's TickDir 'out'), so the data never runs into one. It keeps its space while hidden (`show(false)` is visibility),
  * so a dialog does not jump when it appears. Hovering shows a cursor, a dot per
  * series and a readout above the graph — "12 s ago · CPU 7% · GPU 80%" — for the
  * MEASURED sample nearest the pointer (the first tick's are not yet), kept
@@ -124,15 +132,33 @@ export const LOAD_GRAPH_W = 104, LOAD_GRAPH_H = 34, LOAD_GRAPH_PAD = 2;
  * @returns {{show: function(boolean), push: function(number, ?number, ?number), clear: function()}}
  */
 export function createLoadGraph(box) {
-    const W = LOAD_GRAPH_W, H = LOAD_GRAPH_H, plotH = H - 2 * LOAD_GRAPH_PAD;
+    const W = LOAD_GRAPH_W, H = LOAD_GRAPH_H, plotH = H - 2 * LOAD_GRAPH_PAD, T = LOAD_GRAPH_TICK;
+    const span = Math.round(LOAD_GRAPH_SPAN_MS / 1000);
     box.classList.add('load-graph');
-    box.innerHTML = '<svg width="' + W + '" height="' + H + '" viewBox="0 0 ' + W + ' ' + H + '" role="img" ' +
-        'aria-label="Load over the last ' + Math.round(LOAD_GRAPH_SPAN_MS / 1000) + ' s">' +
+    box.style.columnGap = (T + 2) + 'px';                 // the y labels clear their ticks by 2 px
+    // A tick: a 1 px line just outside the plot, placed in the plot wrapper's coordinates (the SVG's border box).
+    const tick = function (left, top, w, h) {
+        return '<span class="load-graph-tick" style="left:' + left + 'px;top:' + top + 'px;width:' + w + 'px;height:' + h + 'px"></span>';
+    };
+    // y: at each labelled level — where the series draws that load: inside the border, inset LOAD_GRAPH_PAD —
+    // running from the left border outward; x: under the left and right borders (60 s ago, now), running down.
+    const yTicks = [100, 50, 0].map(function (v) { return tick(-T, BORDER + LOAD_GRAPH_PAD + plotH * (1 - v / 100) - 0.5, T, 1); }).join('');
+    const xTicks = tick(0, H + 2 * BORDER, 1, T) + tick(W + BORDER, H + 2 * BORDER, 1, T);
+    // The y labels are zero-height boxes spread over the plot's 0-100% span, offset by the same inset, so each
+    // one's text centres on its level (and its tick). Labels and ticks are decoration for a screen reader,
+    // which reads the SVG's label instead.
+    box.innerHTML = '<div class="load-graph-y" aria-hidden="true" style="height:' + plotH + 'px;margin-top:' + (BORDER + LOAD_GRAPH_PAD) + 'px">' +
+        '<span>100%</span><span>50%</span><span>0%</span></div>' +
+        '<div class="load-graph-plot">' +
+        '<div class="load-graph-ticks" aria-hidden="true">' + yTicks + xTicks + '</div>' +
+        '<svg width="' + W + '" height="' + H + '" viewBox="0 0 ' + W + ' ' + H + '" role="img" ' +
+        'aria-label="Load from 0 to 100% over the last ' + span + ' s">' +
         '<line class="load-graph-grid" x1="0" x2="' + W + '" y1="' + H / 2 + '" y2="' + H / 2 + '"></line>' +
         '<line class="load-graph-cursor" y1="0" y2="' + H + '"></line>' +
         '<g transform="translate(0 ' + LOAD_GRAPH_PAD + ')">' +
         '<path class="load-graph-line is-cpu"></path><path class="load-graph-line is-gpu"></path>' +
         '<circle class="load-graph-dot is-cpu" r="2.5"></circle><circle class="load-graph-dot is-gpu" r="2.5"></circle></g></svg>' +
+        '<div class="load-graph-x" aria-hidden="true" style="margin-top:' + (T + 2) + 'px"><span>' + span + ' s ago</span><span>now</span></div></div>' +
         '<div class="load-graph-tip" hidden></div>';
     const svg = box.querySelector('svg'), tip = box.querySelector('.load-graph-tip'), cursor = svg.querySelector('.load-graph-cursor');
     const paths = { cpu: svg.querySelector('path.is-cpu'), gpu: svg.querySelector('path.is-gpu') };

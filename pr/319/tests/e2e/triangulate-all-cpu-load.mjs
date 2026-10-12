@@ -10,7 +10,8 @@
  * big enough that a Refined run lasts a few seconds. Asserted:
  *  1. Windowed (lazy) project, worker pool: a "CPU: N cores · load X%" line with
  *     the CPU legend key appears under the detail line, its graph to the right,
- *     with a CPU series and no GPU series, the newest point equal to the line;
+ *     with a CPU series and no GPU series, labelled axes (0/50/100%, "60 s ago" …
+ *     "now"), the newest point equal to the line;
  *     the load exceeds ONE core's share, so the workers are counted (the main
  *     thread alone could never read more); the tooltip names the workers.
  *  2. When the run ends it hides with the overlay, is cleared, and stays so.
@@ -126,6 +127,11 @@ try {
     check(r1.graphOn && r1.rightOfLine && r1.cpuD && !r1.gpuD && !r1.gpuLine,
           'the load graph sits to its right: a CPU series, no GPU series and no GPU line (triangulation does not use one)');
     check(r1.keyColour === r1.stroke, `the line's key is the series colour (${r1.keyColour})`);
+    {   // its axes: "100%" / "50%" / "0%" level with what they label, "60 s ago" … "now" under it, each with a tick
+        // pointing out of the plot (fixtures/load-graph-axes.js)
+        const ax = await page.evaluate(async (sel) => (await import('/tests/e2e/fixtures/load-graph-axes.js')).loadGraphAxes(document.querySelector(sel)), '#loadingGraph');
+        check(ax.ok, `labelled axes with out ticks: ${ax.y.map(l => l.t + ' ' + l.off.toFixed(2) + ' px off').join(', ')}; ${ax.x.map(l => '"' + l.t + '"').join(' … ')} under the plot; ${ax.ticks.length} ticks` + (ax.ok ? '' : ' — ' + ax.why));
+    }
     check(r1.newest && Math.abs(r1.newest.x - r1.width) < 0.05 && Math.abs(r1.newest.pct - l1) <= 1,
           `the graph's newest point, at its right edge, is the line's load (${r1.newest && r1.newest.pct.toFixed(1)}% vs ${l1}%)`);
 

@@ -8,8 +8,8 @@
  * Dependencies: mp4box.all.min.js (MP4Box)
  */
 
-import { shouldIgnoreShortcut } from '../ui/keyboard-target.js?v=4e40b58a10e6';
-import { diagnoseUnplayableVideo } from './video-codec-diagnosis.js?v=4e40b58a10e6';
+import { shouldIgnoreShortcut } from '../ui/keyboard-target.js?v=93925609fe19';
+import { diagnoseUnplayableVideo } from './video-codec-diagnosis.js?v=93925609fe19';
 
 // ---------------------------------------------------------------------------
 // Logging helper
@@ -2077,6 +2077,8 @@ export class VideoController {
         this._scrubPending = false;
         this._scrubTarget = null;
         this._isSeeking = false;
+        this._resume = null;           // a pending `resumeAfterScrub`, or null
+        this._scrubWaiters = [];       // resolved when the scrub queue drains
     }
 
     /**
@@ -2177,6 +2179,9 @@ export class VideoController {
         // stays consistent with reality (a stuck `isPlaying` makes the play
         // button no-op — issue #115 followup).
         if (this.state.isPlaying) this.stopPlayback();
+        // A new scrub cancels a pending resume: whoever scrubs next decides
+        // whether playback continues (the seekbar asks again on release).
+        this._resume = null;
 
         this._scrubTarget = frame;
 
@@ -2206,7 +2211,53 @@ export class VideoController {
         // If another scrub came in while we were seeking, process it
         if (this._scrubTarget !== null) {
             this._processScrub();
+            return;
         }
+        var waiters = this._scrubWaiters;
+        this._scrubWaiters = [];
+        for (var i = 0; i < waiters.length; i++) waiters[i]();
+    }
+
+    /** Resolves once no scrub is in flight or queued (immediately if none is). */
+    _scrubSettled() {
+        if (!this._isSeeking && this._scrubTarget === null) return Promise.resolve();
+        var self = this;
+        return new Promise(function (resolve) { self._scrubWaiters.push(resolve); });
+    }
+
+    /**
+     * Play again from wherever the current scrub lands — what the seekbar does
+     * on release when the video was playing before the click. A scrub always
+     * stops playback (two loops must not fight over the frame), so this waits
+     * for the scrub queue to drain, then for `prepare(frame)` if given (the app
+     * hydrates a lazy project's frames ahead, as the Play button does), then
+     * starts playback at `state.currentFrame`.
+     *
+     * Pending until playback starts. A later `scrubToFrame` or `stopPlayback`
+     * cancels it, so an arrow-key step or a session switch in that window
+     * leaves the video paused; `resumePending` lets the next seekbar press know
+     * the video still counts as playing.
+     */
+    resumeAfterScrub(prepare) {
+        var self = this;
+        var token = {};
+        this._resume = token;
+        this._scrubSettled().then(function () {
+            if (self._resume !== token) return;
+            return prepare ? prepare(self.state.currentFrame) : null;
+        }).then(function () {
+            if (self._resume !== token) return;
+            self._resume = null;
+            if (!self.state.isPlaying) self.startPlayback();
+        }).catch(function (e) {
+            if (self._resume === token) self._resume = null;
+            videoLog("Resume after scrub failed: " + (e && e.message), "error");
+        });
+    }
+
+    /** True while a `resumeAfterScrub` is waiting to start playback. */
+    get resumePending() {
+        return this._resume !== null;
     }
 
     /**
@@ -2830,6 +2881,7 @@ export class VideoController {
      */
     stopPlayback() {
         var wasPlaying = this.state.isPlaying;
+        this._resume = null;   // a stop also cancels a pending resumeAfterScrub
         // Cancel animation frame
         if (this._playRAF) {
             cancelAnimationFrame(this._playRAF);

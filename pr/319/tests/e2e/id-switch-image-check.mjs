@@ -14,8 +14,8 @@
  *     size check runs but cannot flag the switch.
  *  3. A cancellable progress dialog, with a playhead line, a percentage, the CPU
  *     line over the GPU running the model, each with its live load, a graph of
- *     both loads to their right (legend keys, its newest points equal to the
- *     lines, a hover readout), and a sample of the crops above Cancel: Esc
+ *     both loads to their right (legend keys, labelled axes, its newest points
+ *     equal to the lines, a hover readout), and a sample of the crops above Cancel: Esc
  *     mid-run stops it, reports "cancelled" and adds no image markers.
  *  4. Without a GPU the after-tracking image check (Tracking Wizard) still RUNS,
  *     on the CPU, says so in the dialog (and graphs the CPU alone), and finds the
@@ -194,6 +194,7 @@ try {
     check(load > 0 && load <= 100 && /other apps/.test(g1.title), `…and its load while embedding, with a tooltip saying what that measures ("${g1.text}")`);
     // the CPU line, ABOVE the GPU line, and the load graph to the right of both
     const hw = await page.evaluate(() => {
+        const WIDEST_GPU_LINE = 'GPU: WebGPU, fp16 · load 100%';
         const q = (c) => document.querySelector('.id-switch-progress ' + c), box = (el) => el.getBoundingClientRect();
         const cpu = q('.id-switch-progress-cpu'), gpu = q('.id-switch-progress-gpu'), graph = q('.id-switch-progress-graph'), svg = graph.querySelector('svg');
         const key = (el) => getComputedStyle(el, '::before').backgroundColor;
@@ -208,7 +209,11 @@ try {
                  keyColours: [key(cpu), key(gpu)], strokes: [stroke('cpu'), stroke('gpu')],
                  shown: getComputedStyle(graph).visibility, right: box(svg).left >= Math.max(box(cpu).right, box(gpu).right),
                  topAligned: Math.abs(box(svg).top - box(cpu).top) <= 3, leftOfCrop: box(svg).right <= box(q('.id-switch-progress-crop')).left,
-                 width: svg.viewBox.baseVal.width, newest: { cpu: newest('cpu'), gpu: newest('gpu') } };
+                 width: svg.viewBox.baseVal.width, newest: { cpu: newest('cpu'), gpu: newest('gpu') },
+                 gpuOneLine: (() => {   // the widest common line (no adapter name — a named one wraps after its key by design)
+                     const saved = gpu.textContent; gpu.textContent = WIDEST_GPU_LINE;
+                     const one = box(gpu).height < 1.5 * parseFloat(getComputedStyle(gpu).lineHeight);
+                     gpu.textContent = saved; return one; })() };
     });
     const cores = await page.evaluate(() => navigator.hardwareConcurrency);
     const cpuLoad = +((hw.cpuText.match(/load (\d+)%$/) || [])[1]);
@@ -216,6 +221,12 @@ try {
           `a CPU line ABOVE the GPU line, with the core count and its load ("${hw.cpuText}" over "${hw.gpuText}")`);
     check(/cores kept busy over the last 5 s by this check/.test(hw.cpuTitle) && /video decoding/.test(hw.cpuTitle), `…with a tooltip saying what it counts ("${hw.cpuTitle}")`);
     check(hw.shown === 'visible' && hw.right && hw.topAligned && hw.leftOfCrop, 'the load graph sits to the right of both lines, level with them, left of the sample crop');
+    check(hw.gpuOneLine, '…and "GPU: WebGPU, fp16 · load 100%" still fits on one line beside it');
+    {   // its axes: "100%" / "50%" / "0%" level with what they label, "60 s ago" … "now" under it, each with a tick
+        // pointing out of the plot (fixtures/load-graph-axes.js)
+        const ax = await page.evaluate(async (sel) => (await import('/tests/e2e/fixtures/load-graph-axes.js')).loadGraphAxes(document.querySelector(sel)), '.id-switch-progress-graph');
+        check(ax.ok, `labelled axes with out ticks: ${ax.y.map(l => l.t + ' ' + l.off.toFixed(2) + ' px off').join(', ')}; ${ax.x.map(l => '"' + l.t + '"').join(' … ')} under the plot; ${ax.ticks.length} ticks` + (ax.ok ? '' : ' — ' + ax.why));
+    }
     check(hw.keys.every(Boolean) && hw.keyColours[0] === hw.strokes[0] && hw.keyColours[1] === hw.strokes[1] && hw.strokes[0] !== hw.strokes[1],
           `each line wears its series colour as a legend key (CPU ${hw.keyColours[0]}, GPU ${hw.keyColours[1]})`);
     {   // the graph's newest points are the loads the lines show (same tick), at the right edge

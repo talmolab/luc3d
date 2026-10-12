@@ -6966,7 +6966,9 @@ details[open] > summary.origin-rebase-block-title::before {
 .id-switch-fix-tip { font-size: 12px !important; color: var(--text-muted) !important; }
 
 /* Image ID-switch check — progress dialog (ui/id-switch-modal.js) */
-.id-switch-progress { max-width: 520px; }
+/* A fixed width — room for "GPU: WebGPU, fp16 · load 100%" beside the load graph and its axes — so the
+   dialog does not change width as its progress text changes. */
+.id-switch-progress { width: 540px; max-width: calc(100vw - 32px); }
 .id-switch-progress-text { margin: 8px 0; font-size: 13px; min-height: 2.6em; }
 /* As .id-switch-pbar: the track clips the fill, the bar does not, so the playhead (.id-switch-phead) stands proud. */
 .id-switch-progress-bar { position: relative; height: 6px; }
@@ -6985,7 +6987,7 @@ details[open] > summary.origin-rebase-block-title::before {
 /* The CPU line over the GPU line (what runs the model), each with its load, and their load graph to the right
    (.load-line / .load-graph, ui/load-graph.js). The GPU line reserves its height so the dialog does not jump
    when it appears, and so does the graph (visibility, not display). */
-.id-switch-progress-hw { display: flex; align-items: flex-start; gap: 12px; margin-top: 2px; }
+.id-switch-progress-hw { display: flex; align-items: flex-start; gap: 10px; margin-top: 2px; }
 .id-switch-progress-lines { flex: 1; min-width: 0; }
 .id-switch-progress-cpu, .id-switch-progress-gpu { min-height: 1.4em; line-height: 1.4; font-size: 12px; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
 .id-switch-progress-cpu[hidden] { display: none; }
@@ -7003,11 +7005,11 @@ details[open] > summary.origin-rebase-block-title::before {
   vertical-align: middle; text-indent: 0; background: var(--load-gpu);
 }
 .load-line.is-cpu.has-series::before { background: var(--load-cpu); }
-.load-graph { position: relative; visibility: hidden; }
+.load-graph { position: relative; visibility: hidden; display: flex; align-items: flex-start; }   /* column gap: createLoadGraph */
 .load-graph.is-on { visibility: visible; }
 .load-graph svg {
-  display: block; overflow: hidden; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 4px;
-  box-sizing: content-box;
+  display: block; overflow: hidden; background: var(--bg-primary); border: 1px solid var(--border-color);
+  box-sizing: content-box;   /* square corners: an axes box, whose corner ticks continue its edges */
 }
 .load-graph-grid { stroke: rgba(255, 255, 255, 0.08); stroke-width: 1; }
 .load-graph-line { fill: none; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
@@ -7016,6 +7018,15 @@ details[open] > summary.origin-rebase-block-title::before {
 .load-graph-cursor { stroke: var(--text-muted); stroke-width: 1; visibility: hidden; }
 .load-graph-dot { fill: var(--bg-primary); stroke-width: 1.5; visibility: hidden; }
 .load-graph-cursor.is-on, .load-graph-dot.is-on { visibility: visible; }
+/* The axes, recessive: 0/50/100% left of the plot (zero-height boxes spread over the plot's 0-100% span by
+   createLoadGraph, so each label's text centres on its level) and "60 s ago" … "now" under it. */
+.load-graph-y, .load-graph-x { font-size: 9px; color: var(--text-muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.load-graph-y { display: flex; flex-direction: column; justify-content: space-between; align-items: flex-end; line-height: 0; }
+.load-graph-y span { display: block; height: 0; }
+.load-graph-x { display: flex; justify-content: space-between; line-height: 1; }   /* margin-top: createLoadGraph */
+/* The ticks, pointing out of the plot (MATLAB's TickDir 'out'), one per label; placed by createLoadGraph. */
+.load-graph-plot { position: relative; }
+.load-graph-tick { position: absolute; background: var(--text-muted); }
 /* The hover readout, above the graph and flush with its right edge. */
 .load-graph-tip {
   position: absolute; right: 0; bottom: calc(100% + 4px); z-index: 1; white-space: nowrap; pointer-events: none;

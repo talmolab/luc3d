@@ -24,7 +24,7 @@
 // graph of the last minute under the detail line: `setLoadingCpu`, built from
 // ui/load-graph.js like the image check's dialog.
 
-import { createLoadMeter, createBusyClock, createLoadGraph, formatCpuLoad, setLoadLine, cpuCores } from './load-graph.js?v=4e40b58a10e6';
+import { createLoadMeter, createBusyClock, createLoadGraph, formatCpuLoad, setLoadLine, cpuCores } from './load-graph.js?v=93925609fe19';
 
 /** Default pacer interval. Each yield waits for one paint (~one display frame),
  *  so this bounds the overhead at roughly frame-time / interval (a few %). The
