@@ -16,7 +16,8 @@
  *     ~0.3%. The test layout is chosen so that is true (it asserts so).
  *   - a half-device-pixel pan resamples even at the exact scale.
  *
- * Also covered: the badge (the zoom as a % of 1:1) and the menu tick, OFF
+ * Also covered: the badge (the zoom as a % of 1:1) and its hover menu of
+ * presets (50/100/150/200%, Fit; per pane), the View-menu tick, OFF
  * back to fit, the wheel snap
  * (from both sides, the hold that stops a fast spin, release after a rest,
  * a reversal is never held), the `+` key snap, the point under the cursor
@@ -110,7 +111,7 @@ async function loadProject(page, cams) {
         // Pane chrome drawn over the picture (the badge, the selection frame)
         // would read as mismatched pixels; the badge's text is still checked.
         const st = document.createElement('style');
-        st.textContent = '.video-cell .unzoom-btn, .video-cell .view-legend, #viewModeIndicator { visibility: hidden !important; }'
+        st.textContent = '.video-cell .zoom-badge, .video-cell .view-legend, #viewModeIndicator { visibility: hidden !important; }'
             + ' .video-cell::after { display: none !important; } .video-cell .canvas-wrapper { outline: none !important; }';
         document.head.appendChild(st);
     }, cams);
@@ -123,14 +124,14 @@ const zoomOf = (page, name) => page.evaluate(async (name) => {
     const v = AS.state.views.find(x => x.name === name);
     const nat = AS.videoController.nativeZoomScales(v);
     const cell = v.canvas.closest('.video-cell');
-    const badge = cell.querySelector('.unzoom-btn');
+    const badge = cell.querySelector('.zoom-badge');
     return {
         scale: v.zoom.scale, scaleY: v.zoom.scaleY, native: !!v.zoom.native,
         offsetX: v.zoom.offsetX, offsetY: v.zoom.offsetY,
         nat, boxW: parseFloat(v.canvas.style.width), boxH: parseFloat(v.canvas.style.height),
         vw: v.videoWidth, vh: v.videoHeight, dpr: window.devicePixelRatio,
         mode: AS.state.nativeResolution,
-        badge: badge && badge.style.display !== 'none' ? badge.textContent : null,
+        badge: badge && badge.style.display !== 'none' ? badge.querySelector('.zoom-badge-label').textContent : null,
         transform: v.wrapper.style.transform,
     };
 }, name);
@@ -349,25 +350,6 @@ try {
         z = await zoomOf(page, 'camA');
         check(!z.native && near(z.scale, z.nat.x * 1.1, 1e-9), `one more notch zooms to 1.1x 1:1 (${z.scale.toFixed(4)})`);
         check(!z.mode && z.badge === '110%', `native resolution is off again; the badge reads 110% of 1:1 (${z.badge})`);
-        // Hovered, the badge offers the action; leaving puts the read-out back.
-        const badgeBox = await page.evaluate(async () => {
-            const AS = await import('/ui/app-state.js');
-            const b = AS.state.views[0].canvas.closest('.video-cell').querySelector('.unzoom-btn');
-            b.style.setProperty('visibility', 'visible', 'important');
-            const r = b.getBoundingClientRect();
-            return [r.left + r.width / 2, r.top + r.height / 2];
-        });
-        await page.mouse.move(badgeBox[0], badgeBox[1]);
-        await page.waitForTimeout(80);
-        const hoverText = (await zoomOf(page, 'camA')).badge;
-        await page.mouse.move(cx, cy);
-        await page.waitForTimeout(80);
-        const leftText = (await zoomOf(page, 'camA')).badge;
-        check(hoverText === 'Unzoom' && leftText === '110%', `hover reads "${hoverText}", leaving restores "${leftText}"`);
-        await page.evaluate(async () => {
-            const AS = await import('/ui/app-state.js');
-            AS.state.views[0].canvas.closest('.video-cell').querySelector('.unzoom-btn').style.removeProperty('visibility');
-        });
 
         console.log('\n7. Zooming OUT through 1:1 stops on it too; a reversal is never held');
         await page.waitForTimeout(400);
@@ -397,6 +379,104 @@ try {
         check(z.badge === Math.round(100 * z.scale / z.nat.x) + '%',
             `the badge reads the zoom as a % of 1:1 (${z.badge} at ${z.scale.toFixed(3)} / ${z.nat.x.toFixed(3)})`);
         check(seen[seen.length - 1] !== '1:1', 'and the next + leaves it');
+
+        console.log('\n8b. Hovering the badge opens a menu of zoom presets');
+        const presetMenu = () => page.evaluate(async () => {
+            const AS = await import('/ui/app-state.js');
+            const cell = AS.state.views[0].canvas.closest('.video-cell');
+            const menu = cell.querySelector('.zoom-preset-menu');
+            return {
+                visible: getComputedStyle(menu).visibility === 'visible',
+                items: [...menu.querySelectorAll('.tri-dropdown-item')].map(el => ({
+                    text: el.textContent.replace('✓', '').replace('1:1', '').trim(),
+                    ticked: el.querySelector('.trail-check') ? el.querySelector('.trail-check').textContent === '✓' : false,
+                })),
+            };
+        });
+        const clickPreset = async (sel) => {
+            const r = await page.evaluate(async (sel) => {
+                const AS = await import('/ui/app-state.js');
+                const cell = AS.state.views[0].canvas.closest('.video-cell');
+                const b = cell.querySelector('.zoom-badge .unzoom-btn').getBoundingClientRect();
+                const it = cell.querySelector('.zoom-preset-menu ' + sel).getBoundingClientRect();
+                return { bx: b.left + b.width / 2, by: b.top + b.height / 2, ix: it.left + it.width / 2, iy: it.top + it.height / 2 };
+            }, sel);
+            // Hover the badge, then move straight down into the menu and click.
+            await page.mouse.move(r.bx, r.by);
+            await page.waitForTimeout(200);
+            await page.mouse.move(r.ix, r.iy, { steps: 4 });
+            await page.mouse.click(r.ix, r.iy);
+            await page.waitForTimeout(150);
+        };
+        // Let the badge be hovered (the capture stylesheet hides it).
+        await page.evaluate(async () => {
+            const AS = await import('/ui/app-state.js');
+            AS.state.views[0].canvas.closest('.video-cell').querySelector('.zoom-badge')
+                .style.setProperty('visibility', 'visible', 'important');
+        });
+        z = await zoomOf(page, 'camA');
+        check(z.badge === '120%', `zoomed: the badge reads ${z.badge}`);
+        let pm = await presetMenu();
+        check(!pm.visible, 'the menu is closed until the badge is hovered');
+        const bb = await page.evaluate(async () => {
+            const AS = await import('/ui/app-state.js');
+            const r = AS.state.views[0].canvas.closest('.video-cell').querySelector('.zoom-badge .unzoom-btn').getBoundingClientRect();
+            return [r.left + r.width / 2, r.top + r.height / 2];
+        });
+        await page.mouse.move(bb[0], bb[1]);
+        await page.waitForTimeout(250);
+        pm = await presetMenu();
+        check(pm.visible, 'hovering the badge opens the menu');
+        check(JSON.stringify(pm.items.map(i => i.text)) === JSON.stringify(['50%', '100%', '150%', '200%', 'Fit']),
+            `presets: ${pm.items.map(i => i.text).join(' / ')}`);
+        check(!pm.items.some(i => i.ticked), 'at 120% no preset is ticked');
+
+        await clickPreset('[data-zoom-pct="150"]');
+        z = await zoomOf(page, 'camA');
+        pm = await presetMenu();
+        check(!z.native && near(z.scale, 1.5 * z.nat.x, 1e-12) && z.badge === '150%',
+            `150% → 1.5 × the 1:1 scale (${z.scale.toFixed(4)}), badge ${z.badge}`);
+        check(pm.items.find(i => i.text === '150%').ticked && pm.items.filter(i => i.ticked).length === 1, '...and 150% is ticked');
+
+        await clickPreset('[data-zoom-pct="100"]');
+        z = await zoomOf(page, 'camA');
+        pm = await presetMenu();
+        check(z.native && z.scale === z.nat.x && z.scaleY === z.nat.y && z.mode && z.badge === '100%',
+            '100% → AT 1:1 (per-axis scale), and native resolution is on');
+        check(pm.items.find(i => i.text === '100%').ticked, '...and 100% is ticked');
+        await page.mouse.move(cx, cy);
+        await page.evaluate(async () => {
+            const AS = await import('/ui/app-state.js');
+            AS.state.views[0].canvas.closest('.video-cell').querySelector('.zoom-badge').style.removeProperty('visibility');
+        });
+        await page.waitForTimeout(450);
+        score = await exactness(page, 'camA');
+        check(score > 0.999, `the 100% preset is pixel-exact (${(score * 100).toFixed(2)}%)`);
+        await page.evaluate(async () => {
+            const AS = await import('/ui/app-state.js');
+            AS.state.views[0].canvas.closest('.video-cell').querySelector('.zoom-badge')
+                .style.setProperty('visibility', 'visible', 'important');
+        });
+
+        await clickPreset('[data-zoom-pct="50"]');
+        z = await zoomOf(page, 'camA');
+        check(!z.native && near(z.scale, 0.5 * z.nat.x, 1e-12) && z.scale < 1 && z.badge === '50%',
+            `50% is honoured below fit (scale ${z.scale.toFixed(4)} < 1), badge ${z.badge}`);
+        await page.mouse.move(cx, cy);
+        await page.waitForTimeout(300);
+        await page.mouse.wheel(0, -100);
+        await page.waitForTimeout(100);
+        z = await zoomOf(page, 'camA');
+        check(near(z.scale, 0.55 * z.nat.x, 1e-9), `a wheel notch from 50% goes to 55% (${z.badge}), not back up to fit`);
+
+        await clickPreset('[data-zoom-fit]');
+        z = await zoomOf(page, 'camA');
+        check(z.scale === 1 && !z.native && z.badge === null, 'Fit fits the view; the badge hides');
+        await page.evaluate(async () => {
+            const AS = await import('/ui/app-state.js');
+            AS.state.views[0].canvas.closest('.video-cell').querySelector('.zoom-badge').style.removeProperty('visibility');
+        });
+        await page.mouse.move(cx, cy);
 
         console.log('\n9. 1:1 survives a window resize');
         await page.keyboard.press('Shift+Digit0');
@@ -474,9 +554,25 @@ try {
         const page = await ctx.newPage();
         page.on('pageerror', e => errs.push('pageerror: ' + String(e).slice(0, 300)));
         await loadProject(page, [{ name: 'camA', w: 1680, h: 1200 }, { name: 'camB', w: 1288, h: 964 }]);
+        // A badge preset acts on its own pane only.
+        await page.evaluate(async () => {
+            const AS = await import('/ui/app-state.js');
+            const v = AS.state.views.find(x => x.name === 'camB');
+            v.canvas.closest('.video-cell').querySelector('[data-zoom-pct="200"]').click();
+        });
+        await page.waitForTimeout(150);
+        let a = await zoomOf(page, 'camA'), b = await zoomOf(page, 'camB');
+        check(b.badge === '200%' && near(b.scale, 2 * b.nat.x, 1e-12) && a.scale === 1 && a.badge === null,
+            `grid: camB's 200% preset zooms camB only (camB ${b.badge}, camA scale ${a.scale})`);
+        await page.evaluate(async () => {
+            const AS = await import('/ui/app-state.js');
+            const v = AS.state.views.find(x => x.name === 'camB');
+            v.canvas.closest('.video-cell').querySelector('[data-zoom-fit]').click();
+        });
+        await page.waitForTimeout(150);
         await page.keyboard.press('Shift+Digit0');
         await page.waitForTimeout(250);
-        let a = await zoomOf(page, 'camA'), b = await zoomOf(page, 'camB');
+        a = await zoomOf(page, 'camA'); b = await zoomOf(page, 'camB');
         check(a.native && b.native && a.mode, 'grid: Shift+0 puts BOTH views at 1:1');
         let score = await exactness(page, 'camA');
         check(score > 0.999, `grid: camA (1680x1200) exact (${(score * 100).toFixed(2)}%)`);

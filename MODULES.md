@@ -8869,11 +8869,19 @@ multi-video docking layout.
 
 **Key exports.**
 - `panelRenderers` — Map of panelId → VideoPaneRenderer. Each pane carries
-  the `.unzoom-btn` badge, shown while its view is zoomed or at native
-  resolution: the zoom as a percentage of 1:1 ("125%", "100%" — see
-  `zoomPercentLabel` in `loading/video.js`), "Unzoom" on hover, click to fit.
-  `applyZoom` writes the read-out to the button's `data-label`, and the
-  renderer's mouseleave restores it from there.
+  the zoom badge, `.zoom-badge.tri-dropdown`, shown while its view is zoomed or
+  at native resolution. Its `.unzoom-btn` reads the zoom as a percentage of 1:1
+  ("125% ▾", "100% ▾" — `applyZoom` writes `.zoom-badge-label` via
+  `zoomPercentLabel`, `loading/video.js`) and a click fits the view. Hovering
+  opens `.zoom-preset-menu` — the Triangulate split-button pattern, the same
+  pure-CSS hover `.tri-dropdown` — with `ZOOM_PRESET_PERCENTS` (50 / 100 / 150 /
+  200 %) and Fit, for THAT pane's view only (`setZoomPercent` / `resetZoom`).
+  The current preset is ticked, re-read on each hover; 100% is ticked only when
+  the view is AT 1:1 (`zoom.native`), never merely near it. Items carry
+  `data-zoom-pct` / `data-zoom-fit`. The badge stops `mousedown` so a click on it
+  never starts the cell's pan / box zoom. It hangs from the badge's right edge
+  above the view legend (z 8 vs 7); the cell clips it, so a very short pane
+  can cut the menu off.
 - `multiSelectViews`, `clearMultiSelect`.
 - `refreshPaneInteractions` — re-inits every view's zoom (`initZoom`), fits the
   canvases, then re-derives the 1:1 scale of every view `initZoom` flagged
@@ -13587,6 +13595,15 @@ How it behaves:
   Set by `applyZoom`, so it follows every zoom, resize and DPR change; the same
   call toggles `.video-cell.native-resolution`. Tabular figures, so it does
   not jitter while wheel-zooming.
+- **Hovering the badge offers presets** (`ZOOM_PRESET_PERCENTS`: 50 / 100 / 150
+  / 200 %, plus Fit; the menu is built in `ui/sessions-panes.js`). They act on
+  that pane's view only, about the cell centre: `setZoomPercent(view, 100)` is
+  `_enterNative` (exact, held, turns the mode on if it was the last view off
+  1:1); any other value is a plain uniform zoom of `pct/100 ×` the 1:1 scale.
+  A preset is NOT clamped to the wheel's range — 50% below fit is honoured —
+  and the wheel's range in turn stretches to wherever the view already is
+  (`lo = min(fit-min, 1:1, current)`, `hi = max(10, 1:1, current)`), so a notch
+  from 50% goes to 55% instead of jumping back up to fit.
 - Grid views are each put at their own 1:1, centred, like `+`/`-`/`0` acting
   on every view.
 
@@ -13600,6 +13617,7 @@ How it behaves:
   `NATIVE_SNAP_HOLD_MS` (250).
 - `zoomPercentLabel(scale, nativeScale, isNative)` → the pane badge's read-out
   ("125%", "100%", "≈100%", "Zoomed"; see **Native resolution** above).
+- `ZOOM_PRESET_PERCENTS` (`[50, 100, 150, 200]`) — the badge menu's presets.
 - `OnDemandVideoDecoder` — class. Selected methods: `init(source)`,
   `getFrame(frameIndex)` (mediabunny: via `_mbGetFrame`, the open stepping
   stream), `releaseStepCursor()`, `releaseFrames()` (closes and drops every
@@ -13663,7 +13681,8 @@ How it behaves:
   `zoomVideo` (returns true when the step snapped to 1:1), `resetZoom`,
   `zoomToRect`, `zoomAllVideos`, `nativeZoomScales(view)` (`{x, y}` or null
   while not laid out), `setNativeResolution(on)`, `toggleNativeResolution()`,
-  `nativeResolutionActive()`, `reapplyZoom`,
+  `nativeResolutionActive()`, `zoomPercent(view)` (% of 1:1, or null),
+  `setZoomPercent(view, pct)` (the badge presets), `reapplyZoom`,
   `resetAllZoom`, `setupZoomHandlers`.
 
 **Only the views on screen are decoded, played and captured** —

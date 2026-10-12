@@ -42,7 +42,7 @@ import {
     fitCanvasesToCells,
     updateTotalFrames,
 } from '../loading/session-loader.js';
-import { OnDemandVideoDecoder } from '../loading/video.js';
+import { OnDemandVideoDecoder, ZOOM_PRESET_PERCENTS } from '../loading/video.js';
 import { setStatus, showLoading, hideLoading, quickSave, markDirty } from '../import-export/save-load.js';
 import {
     CONTRAST_MIN, CONTRAST_MAX, clampContrast,
@@ -101,23 +101,70 @@ class VideoPaneRenderer {
 
         var self = this;
 
-        // Unzoom button (shown when view is zoomed)
+        // Zoom badge (shown while the view is zoomed or at 1:1). The button
+        // reads the zoom as a % of 1:1 (`applyZoom` writes the label) and a
+        // click fits the view; hovering opens a menu of presets — the
+        // Triangulate split-button pattern, the same pure-CSS `.tri-dropdown`.
+        var findView = function () {
+            return state.views.find(function (v) { return v.name === self.viewName; });
+        };
+        var badge = document.createElement('div');
+        badge.className = 'zoom-badge tri-dropdown';
+        badge.style.display = 'none';
+        // Clicks here are for the badge, not the cell's pan / box-zoom drag.
+        badge.addEventListener('mousedown', function (e) { e.stopPropagation(); });
         var unzoomBtn = document.createElement('button');
         unzoomBtn.className = 'unzoom-btn';
-        unzoomBtn.textContent = 'Zoomed';
+        unzoomBtn.setAttribute('aria-haspopup', 'menu');
+        unzoomBtn.innerHTML = '<span class="zoom-badge-label">Zoomed</span><span class="tri-caret">▾</span>';
         unzoomBtn.title = 'Click to reset zoom';
-        unzoomBtn.style.display = 'none';
-        unzoomBtn.addEventListener('mouseenter', function () { unzoomBtn.textContent = 'Unzoom'; });
-        // `applyZoom` keeps the zoom read-out ("125%", "100%") in data-label.
-        unzoomBtn.addEventListener('mouseleave', function () { unzoomBtn.textContent = unzoomBtn.dataset.label || 'Zoomed'; });
         unzoomBtn.addEventListener('click', function (e) {
             e.stopPropagation();
-            var view = state.views.find(function (v) { return v.name === self.viewName; });
+            var view = findView();
             if (view && videoController) {
                 videoController.resetZoom(view);
             }
         });
-        this.element.appendChild(unzoomBtn);
+        var menu = document.createElement('div');
+        menu.className = 'tri-dropdown-menu zoom-preset-menu';
+        menu.setAttribute('role', 'menu');
+        var presetItems = [];
+        var refreshPresetChecks = function () {
+            var view = findView();
+            var pct = view && videoController ? videoController.zoomPercent(view) : null;
+            presetItems.forEach(function (it) {
+                // 100% is ticked only when the view IS at 1:1 (on the pixel
+                // grid, per-axis scale), never merely near it.
+                var on = it.pct === 100
+                    ? !!(view && view.zoom && view.zoom.native)
+                    : pct !== null && Math.abs(pct - it.pct) < 0.05;
+                it.el.querySelector('.trail-check').textContent = on ? '✓' : '';
+                it.el.setAttribute('aria-checked', on ? 'true' : 'false');
+            });
+        };
+        ZOOM_PRESET_PERCENTS.concat([null]).forEach(function (pct) {
+            var item = document.createElement('div');
+            item.className = 'tri-dropdown-item';
+            item.setAttribute('role', pct ? 'menuitemradio' : 'menuitem');
+            if (pct) item.setAttribute('data-zoom-pct', String(pct));
+            else item.setAttribute('data-zoom-fit', '');
+            item.innerHTML = '<span><span class="trail-check"></span>' + (pct ? pct + '%' : 'Fit') + '</span>'
+                + (pct === 100 ? '<span class="tri-dropdown-hint">1:1</span>' : '');
+            item.addEventListener('click', function (e) {
+                e.stopPropagation();
+                var view = findView();
+                if (!view || !videoController) return;
+                if (pct) videoController.setZoomPercent(view, pct);
+                else videoController.resetZoom(view);
+                refreshPresetChecks();
+            });
+            menu.appendChild(item);
+            if (pct) presetItems.push({ pct: pct, el: item });
+        });
+        badge.addEventListener('mouseenter', refreshPresetChecks);
+        badge.appendChild(unzoomBtn);
+        badge.appendChild(menu);
+        this.element.appendChild(badge);
         this._unzoomBtn = unzoomBtn;
 
         // Canvas wrapper

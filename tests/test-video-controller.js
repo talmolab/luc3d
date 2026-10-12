@@ -460,6 +460,19 @@
             assertEqual(zoomPercentLabel(1.5, 1.5, false), '≈100%', 'the 1:1 scale, but not held at 1:1');
         });
 
+        it('the badge presets are 50 / 100 / 150 / 200 % of 1:1', function () {
+            assertEqual(JSON.stringify(ZOOM_PRESET_PERCENTS), JSON.stringify([50, 100, 150, 200]));
+        });
+
+        it('without layout, setZoomPercent does nothing and zoomPercent is null', function () {
+            var view = state.views[0];
+            ctrl.initZoom(view);
+            assertFalse(ctrl.setZoomPercent(view, 150), 'no 1:1 scale → no preset');
+            assertEqual(view.zoom.scale, 1.0, 'scale untouched');
+            assertNull(ctrl.zoomPercent(view));
+            assertFalse(ctrl.setZoomPercent(view, 0), 'a non-positive percentage is refused');
+        });
+
         it('nativeZoomScales is null for a canvas that is not laid out', function () {
             assertNull(ctrl.nativeZoomScales(state.views[0]), 'detached canvas');
             assertNull(ctrl.nativeZoomScales({ videoWidth: 640, videoHeight: 480 }), 'no canvas');
