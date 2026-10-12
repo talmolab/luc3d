@@ -16,7 +16,7 @@
 // because the binding is read INSIDE the function body, never at module top
 // level, where a circular import is still `undefined`.
 
-import { planeState } from './plane-definition.js?v=dbe138b9e624';
+import { planeState } from './plane-definition.js?v=0499948a6138';
 
 /**
  * The toolbar buttons Defining Plane Mode blocks.
@@ -33,7 +33,8 @@ import { planeState } from './plane-definition.js?v=dbe138b9e624';
  * The VISIBILITY controls are deliberately absent from this list, and so are
  * Sessions, Tracks / Identity and the Panel toggle. Those change what is DRAWN, not what is
  * annotated — turning Predictions off to see the plane you are placing is
- * exactly the kind of thing this mode is for.
+ * exactly the kind of thing this mode is for. So is the Track group's Animals
+ * field (`#tbNumAnimals`): a setting a run reads when it starts, not an action.
  *
  * @type {string[]}
  */

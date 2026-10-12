@@ -1239,7 +1239,28 @@ export class FrameGroup {
 
 var _identityIdCounter = 0;
 
+// Identity N takes entry N, so a project with N animals uses the first N.
+// The first 7 are the original neon set. Entries 7-19 were chosen one at a
+// time, each as far as possible (CIEDE2000) from every entry before it, so the
+// closest pair stays as wide as it can for each animal count: 18.0 at 8
+// animals, 16.4 at 9, 15.0 at 10, 13.7 at 12. The old entries 7-19 put id_7
+// (#88ff00) 6.0 from id_0 and the palette's closest pair at 1.4. Every entry
+// is also vivid and at least L* 55, so it reads on dark video, and kept clear
+// of Identity mode's muted track colors and the canvas's fixed colors. See
+// tests/test-track-identity-palette.mjs.
 export var IDENTITY_COLORS = [
+    '#00ff00', '#ff00ff', '#00ffff', '#ffff00', '#ff8800',
+    '#0088ff', '#ff0088', '#50ffbe', '#d7ffa0', '#ffcd0f',
+    '#a5d200', '#00afff', '#87fa8c', '#b4ff3c', '#f505b9',
+    '#fffa8c', '#ff6900', '#ff6eff', '#00f5d7', '#00d705',
+];
+
+// The palette before entries 7-19 were replaced. A saved project stores each
+// identity's color, and LUCID has no control for picking one, so a stored
+// color equal to this list's entry for its identity IS that old default: the
+// constructor upgrades it to the current one. Any other color (one from
+// another tool, say) is kept.
+var LEGACY_IDENTITY_COLORS = [
     '#00ff00', '#ff00ff', '#00ffff', '#ffff00', '#ff8800',
     '#0088ff', '#ff0088', '#88ff00', '#8800ff', '#00ff88',
     '#ff0000', '#0000ff', '#00ff44', '#ff4400', '#4400ff',
@@ -1250,7 +1271,9 @@ export class Identity {
     constructor(id, name, color) {
         this.id = id != null ? id : _identityIdCounter++;
         this.name = name || ('id_' + this.id);
-        this.color = color || IDENTITY_COLORS[this.id % IDENTITY_COLORS.length];
+        var slot = this.id % IDENTITY_COLORS.length;
+        if (typeof color === 'string' && color.toLowerCase() === LEGACY_IDENTITY_COLORS[slot]) color = null;
+        this.color = color || IDENTITY_COLORS[slot];
     }
 }
 
@@ -1538,6 +1561,18 @@ export class Session {
          * never stored.
          */
         this.videoRotation = {};
+        /**
+         * @type {number|'auto'|null} The number of animals every tracking run
+         * on this session caps identities at: a positive integer, `'auto'` to
+         * auto-detect it, or `null` when nobody has said yet — which is what
+         * makes Track Frame / Track All prompt for it. Per SESSION because a
+         * session is one recording, and two recordings in one project can hold
+         * different animals. Persisted as `metadata.lucid.numAnimals`
+         * (`import-export/visibility-metadata.js`); `null` is never written.
+         * Read and set through `pose/tracker.js` (`getTrackerNumAnimals` /
+         * `setTrackerNumAnimals`), which also marks the project dirty.
+         */
+        this.numAnimals = null;
         /** @type {LazyFrameLoader|null} Set when using lazy H5 loading */
         this.lazyLoader = null;
         /** @type {Map<string,{data:Uint8Array,nTracks:number,nFrames:number}>|null} Per-camera track occupancy for timeline */

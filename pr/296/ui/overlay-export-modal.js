@@ -26,12 +26,13 @@
 // import in ui/sessions-panes.js (see CLAUDE.md › Dependencies).
 import { DockviewComponent, themeDark } from 'https://cdn.jsdelivr.net/npm/dockview-core@6.6.1/+esm';
 
-import { state, videoController, getActiveSession } from './app-state.js?v=dbe138b9e624';
-import { Viewport3D } from './viewport3d.js?v=dbe138b9e624';
+import { state, videoController, getActiveSession } from './app-state.js?v=0499948a6138';
+import { Viewport3D } from './viewport3d.js?v=0499948a6138';
 import {
     drawFrameOverlays, drawLegend, drawViewNameLabel, getTrackColor, getGroupColor,
-} from './overlays.js?v=dbe138b9e624';
-import { getVisibilitySettings } from './rendering.js?v=dbe138b9e624';
+    TRAIL_SHADES, DEFAULT_TRAIL_SHADE, trailShadeFor,
+} from './overlays.js?v=0499948a6138';
+import { getVisibilitySettings } from './rendering.js?v=0499948a6138';
 import {
     getInstanceGroupsForFrame,
     ensureLazyFrameData,
@@ -39,9 +40,9 @@ import {
     triangulateAndReproject,
     storeReprojectedInstances,
     sessionHasCalibration,
-} from '../pose/triangulation.js?v=dbe138b9e624';
-import { points3dNodeCount } from '../pose/pose-data.js?v=dbe138b9e624';
-import { setStatus } from '../import-export/save-load.js?v=dbe138b9e624';
+} from '../pose/triangulation.js?v=0499948a6138';
+import { points3dNodeCount } from '../pose/pose-data.js?v=0499948a6138';
+import { setStatus } from '../import-export/save-load.js?v=0499948a6138';
 
 import {
     TILE_3D, RES_PRESETS, RES_CUSTOM, MAX_OUT_DIM,
@@ -51,16 +52,16 @@ import {
     defaultOverlayExportSettings, applyStoredSettings, saveOverlayExportSettings,
     overlayOptionsFrom, seedLayoutPlan,
     distributeAxisSizes, SASH_SHARE_FAR,
-} from './overlay-export-layout.js?v=dbe138b9e624';
-import { createMp4Writer, videoEncodingAvailable } from './video-encode.js?v=dbe138b9e624';
-import { fileSystemAccessHint } from './browser-hints.js?v=dbe138b9e624';
+} from './overlay-export-layout.js?v=0499948a6138';
+import { createMp4Writer, videoEncodingAvailable } from './video-encode.js?v=0499948a6138';
+import { fileSystemAccessHint } from './browser-hints.js?v=0499948a6138';
 // The main window's per-camera display settings. `ui/video-filters.js` imports NO
 // project modules, so this adds no cycle — and going through the SAME
 // `buildVideoFilter` the live canvases use is what stops the export drifting from
 // what the user sees (`applyVideoFilters` in ui/sessions-panes.js).
 import {
     buildVideoFilter, getSessionBrightness, getSessionContrast, getSessionRotation,
-} from './video-filters.js?v=dbe138b9e624';
+} from './video-filters.js?v=0499948a6138';
 
 // Re-exported so callers/tests have one import site for the feature.
 export { TILE_3D };
@@ -120,6 +121,7 @@ export function settingsFromVisibilityPanel() {
     s.layers.errors = !!vis.showErrors;
     s.layers.legend = !!vis.showLegend;
     s.trailLength = state.trailLength || 0;
+    s.trailShade = state.trailShade || DEFAULT_TRAIL_SHADE;
     s.colorBy = state.colorByIdentity ? 'identity' : 'track';
     function copy(dst, src, keys) {
         if (!src) return;
@@ -150,7 +152,10 @@ export function settingsFromVisibilityPanel() {
 }
 
 export function loadOverlayExportSettings() {
-    return applyStoredSettings(settingsFromVisibilityPanel());
+    var s = applyStoredSettings(settingsFromVisibilityPanel());
+    // A stored shade this build does not offer would leave the select blank.
+    if (!trailShadeFor(s.trailShade)) s.trailShade = DEFAULT_TRAIL_SHADE;
+    return s;
 }
 
 /**
@@ -1360,6 +1365,8 @@ export function showOverlayExportModal() {
         addSelect(gLayers.body, 'Color by', settings, 'colorBy',
             [['track', 'Track'], ['identity', 'Identity']], 'ovColorBy');
         addNumber(gLayers.body, 'Node trails (frames)', settings, 'trailLength', 0, 500, 10);
+        addSelect(gLayers.body, 'Trail shade', settings, 'trailShade',
+            TRAIL_SHADES.map(function (sh) { return [sh.key, sh.name]; }), 'ovTrailShade');
         addSelect(gLayers.body, 'Background', settings, 'background',
             [['video', 'video'], ['black', 'black'], ['white', 'white'], ['gray', 'gray']], 'ovBackground');
 
