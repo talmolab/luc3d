@@ -14,7 +14,15 @@
  * The image check is tested with SYNTHETIC embeddings (a fixed random
  * "appearance" vector per animal + noise, from 4 cameras) — no model, no GPU —
  * on animals of IDENTICAL size: the size check's blind spot, which the image check
- * exists for. Crop geometry helpers (ui/image-embedder.js) are checked too.
+ * exists for. It compares each animal's appearance before and after a contact,
+ * using no identity labels across it, so it is also tested where learning from
+ * the tracker's labels fails: a pair that swaps three times, starting at its very
+ * first encounter, so that the swapped labelling covers most of the session (the
+ * size check, which still learns from the labels, is the negative control); a
+ * pair that huddles; and a swap made only through a third animal (both from
+ * talmolab/luc3d#286). Its label-free appearance metric is tested on look-alike
+ * animals against raw cosine similarity. Crop geometry helpers
+ * (ui/image-embedder.js) are checked too.
  *
  * Run:  node tests/test-id-switch-check.mjs
  */
@@ -64,7 +72,8 @@ function pose(scale, cx, cy, heading, r) {
  * rate): animals idle at home spots 400 mm apart; at each scheduled encounter two
  * of them walk to a meeting point, stay within ~20 mm for a while, and walk back.
  * `swapAfter` = index of the encounter after which the two animals' identity
- * labels are exchanged for the rest of the session (null = clean).
+ * labels are exchanged for the rest of the session (null = clean), or an array
+ * of such indices, applied in turn (the same pair twice swaps it back).
  */
 function buildSession(swapAfter, fps = 60, scales = SCALES) {
     const r = rng(7);
@@ -76,7 +85,7 @@ function buildSession(swapAfter, fps = 60, scales = SCALES) {
     const session = new PD.Session([], new PD.Skeleton('m', NODES, []), [], 'synthetic');
     for (let i = 0; i < 3; i++) session.addIdentity('id_' + i);
     const encounterEnds = events.map(ev => ({ frame: Math.round((ev.t0 + 60) / 15 * fps), pair: ev.pair }));
-    const swapU = swapAfter != null ? events[swapAfter].t0 + 60 : Infinity;
+    const swaps = (Array.isArray(swapAfter) ? swapAfter : swapAfter != null ? [swapAfter] : []).map(e => ({ u: events[e].t0 + 60, pair: events[e].pair }));
     let gid = 1;
     for (let f = 0; f < nFrames; f++) {
         const u = f * 15 / fps;
@@ -93,7 +102,7 @@ function buildSession(swapAfter, fps = 60, scales = SCALES) {
             }
         }
         const label = [0, 1, 2];
-        if (u >= swapU) { const [a, b] = events[swapAfter].pair; [label[a], label[b]] = [label[b], label[a]]; }
+        for (const sw of swaps) if (u >= sw.u) { const [a, b] = sw.pair; [label[a], label[b]] = [label[b], label[a]]; }
         session.instanceGroups.set(f, [0, 1, 2].map(k => {
             const g = new PD.InstanceGroup(gid++, session.identities[label[k]].id);
             g.points3d = pose(scales[k], pos[k][0], pos[k][1], (u / 50 + k) % (2 * Math.PI), r);
@@ -216,6 +225,166 @@ group('Image check — catches a swap between animals of IDENTICAL size (the siz
     ok(stages.has('embed') && stages.has('fit'), 'progress reports both stages');
     const clean = await SC.checkImageSwitches(buildSession(null, 60, [1, 1, 1]).session, { fps: 60, getEmbeddings: syntheticEmbedder() });
     eq(clean.flags.length, 0, 'image check: clean labels → no flags');
+}
+
+/**
+ * Two contact scenarios from the 2026-10-07 ground-truth runs (talmolab/luc3d#286), where
+ * the time two animals spend apart right after touching holds no crop at all. Ten 60-s cycles at 30 fps, three equal-size animals (A=0, B=1, C=2), all
+ * facing the same way so centroid distances are exactly as laid out (close < ~56 mm):
+ *   'huddle' — A and B sit 24 mm apart for 26 s, separating for ONE grid sample at a
+ *     time (a sample between image samples, so it never carries a crop); C joins them
+ *     for 4 s, B walks off, then A and C part. A and B only spend time apart after a
+ *     contact with C, whose tracklets do not start together with the other's.
+ *   'triad'  — A and B both touch C (40 mm each) but never each other (80 mm): their
+ *     only contact is THROUGH C, so there is no A–B encounter at all.
+ * The A/B labels swap during cycle `swapCycle` (null = clean) and stay swapped.
+ */
+function buildContactSession(mode, swapCycle, fps = 30) {
+    const r = rng(11), CYCLE = 60, N = 10, step = Math.max(1, Math.round(fps / 15));
+    const lerp = (pts, t) => {             // piecewise-linear waypoints [t, x, y]
+        if (t <= pts[0][0]) return [pts[0][1], pts[0][2]];
+        for (let i = 1; i < pts.length; i++) if (t <= pts[i][0]) {
+            const [t0, x0, y0] = pts[i - 1], [t1, x1, y1] = pts[i], w = (t - t0) / (t1 - t0);
+            return [x0 + w * (x1 - x0), y0 + w * (y1 - y0)];
+        }
+        const L = pts[pts.length - 1]; return [L[1], L[2]];
+    };
+    const WP = mode === 'huddle' ? [
+        [[0, -12, 0], [32, -12, 0], [34, -300, 0], [57, -300, 0], [59.5, -12, 0], [60, -12, 0]],   // A
+        [[0, 12, 0], [26, 12, 0], [27.5, 300, 0], [57, 300, 0], [59.5, 12, 0], [60, 12, 0]],       // B
+        [[0, 0, 350], [20, 0, 350], [22, 0, 25], [32, 0, 25], [34, 0, 350], [60, 0, 350]],          // C
+    ] : [
+        [[0, -300, 0], [20, -300, 0], [22, -40, 0], [28, -40, 0], [30, -300, 0], [60, -300, 0]],
+        [[0, 300, 0], [20, 300, 0], [22, 40, 0], [28, 40, 0], [30, 300, 0], [60, 300, 0]],
+        [[0, 0, 350], [20, 0, 350], [22, 0, 0], [28, 0, 0], [30, 0, 350], [60, 0, 350]],
+    ];
+    const swapAt = swapCycle == null ? Infinity : swapCycle * CYCLE + (mode === 'huddle' ? 8 : 25);
+    // huddle: one-sample separations, on grid samples between image samples (i % 8 === 4)
+    const apart = new Set();
+    if (mode === 'huddle') for (let c = 0; c < N; c++) for (const t of [2, 6, 10, 14, 18]) {
+        let i = Math.floor(Math.round((c * CYCLE + t) * fps) / step); i += (12 - i % 8) % 8;
+        for (let f = i * step; f < (i + 1) * step; f++) apart.add(f);
+    }
+    const session = new PD.Session([], new PD.Skeleton('m', NODES, []), [], 'contacts');
+    for (let i = 0; i < 3; i++) session.addIdentity('id_' + i);
+    let gid = 1;
+    for (let f = 0; f < N * CYCLE * fps; f++) {
+        const sec = f / fps, t = sec % CYCLE;
+        const pos = WP.map(w => lerp(w, t));
+        if (apart.has(f)) { pos[0] = [-45, 0]; pos[1] = [45, 0]; }
+        const label = sec >= swapAt ? [1, 0, 2] : [0, 1, 2];
+        session.instanceGroups.set(f, [0, 1, 2].map(k => {
+            const g = new PD.InstanceGroup(gid++, session.identities[label[k]].id);
+            g.points3d = pose(1, pos[k][0], pos[k][1], 0, r);
+            g._animal = k;
+            return g;
+        }));
+    }
+    return { session, swapSec: swapAt };
+}
+
+group('Image check — a pair that swaps three times, from its FIRST encounter (the swapped labelling is the majority)');
+{
+    // id_0/id_1 swap at their 1st encounter (#0), back at #9, again at #15 to the end: swapped for ~72%
+    // of the session, and the only unswapped stretch before the first swap is the session's first 24 s.
+    // That is the CD1 recording of 2026-10-09 in miniature. The check must find all three, wherever the majority is.
+    const SW = [0, 9, 15], { session, events, encounterEnds } = buildSession(SW, 60, [1, 1, 1]);
+    const res = await SC.checkImageSwitches(session, { fps: 60, getEmbeddings: syntheticEmbedder() });
+    ok(res.ok, 'image check ran (' + (res.reason || 'ok') + ')');
+    const isAB = e => [e.nameA, e.nameB].sort().join() === 'id_0,id_1';
+    const rows = res.flags.filter(isAB);
+    eq(rows.length, 3, 'three id_0 ↔ id_1 change points');
+    SW.forEach((e, j) => {
+        const r = rows[j], at = encounterEnds[e].frame;
+        ok(r && r.startFrame <= at + 60 && r.frame >= at - 60 * 5, `change point ${j + 1} at encounter #${e} (frames ${r && r.startFrame}–${r && r.frame}, swap at ${at}, score ${r && r.score.toFixed(2)})`);
+    });
+    ok(rows[0] && rows[0].kind === 'onset' && rows[0].switchBackAt === (rows[1] && rows[1].frame), 'the first starts a swapped stretch that the second ends');
+    ok(rows[1] && rows[1].kind === 'end' && rows[1].switchedAt === rows[0].frame, 'the second ends it (switchedAt = the first)');
+    ok(rows[2] && rows[2].kind === 'onset' && rows[2].switchBackAt == null, 'the third runs to the end of the session');
+    eq(res.flags.filter(f => !isAB(f)).length, 0, 'no other pair is flagged');
+    ok(res.encounters.filter(e => !e.flagged).every(e => e.score > 0.5), `every other contact scores clearly positive (min ${Math.min(...res.encounters.filter(e => !e.flagged).map(e => e.score)).toFixed(2)})`);
+    // negative control: the size check learns from the same labels, so it reads the swapped labelling as right
+    const size = await SC.checkSizeSwitches(buildSession(SW, 60).session, { fps: 60 });
+    const sizeAB = size.flags.filter(f => !f.continues && isAB(f)).concat(size.changes.filter(isAB));
+    ok(!sizeAB.some(f => Math.abs(f.frame - encounterEnds[0].frame) <= 60 * 5),
+        `negative control: the size check, which learns from the tracker's labels, misses the first-encounter swap (its id_0 ↔ id_1 change points: ${sizeAB.map(f => f.frame).join(', ') || 'none'})`);
+}
+
+group('Image check — the appearance metric tells look-alike animals apart where raw cosine cannot');
+{
+    // 3 animals whose embeddings differ only slightly, in 4 dimensions, under pose/view variation 5x larger
+    // spread over 30 others, changing from sample to sample as the animal moves: a generic embedding.
+    const r = rng(21), D = 64, ID = [0, 1, 2].map(() => Float64Array.from({ length: 4 }, () => 0.6 * gauss(r)));
+    const make = (a, posture) => { const v = new Float64Array(D);
+        for (let d = 0; d < 4; d++) v[d] = ID[a][d] + 0.15 * gauss(r);
+        for (let d = 4; d < 34; d++) v[d] = posture[d - 4] + 0.15 * gauss(r);
+        for (let d = 34; d < D; d++) v[d] = 0.15 * gauss(r);
+        let n = 0; for (let d = 0; d < D; d++) n += v[d] * v[d]; n = Math.sqrt(n); for (let d = 0; d < D; d++) v[d] /= n;
+        return v; };
+    const rows = [], stretch = [], sample = [];
+    const posture = () => Float64Array.from({ length: 30 }, () => 3 * gauss(r));
+    for (let blk = 0; blk < 60; blk++) {                 // 60 stretches of 8 samples, all three animals each sample
+        for (let j = 0; j < 8; j++) for (let a = 0; a < 3; a++) { rows.push(make(a, posture())); stretch.push(blk * 3 + a); sample.push(blk * 8 + j); }
+    }
+    const n = rows.length, X = new Float64Array(n * D); rows.forEach((v, i) => X.set(v, i * D));
+    const m = SC.learnAppearanceMetric(X, n, D, Int32Array.from(stretch), Int32Array.from(sample), SC.IMAGE_CHECK_DEFAULTS);
+    // held-out, as the check compares them: the mean of 5 new crops of one animal against 5 more of the
+    // same animal and 5 of another, raw and in the metric
+    let rawOk = 0, metricOk = 0; const N = 300;
+    const cos = (x, y) => { let s = 0, a = 0, b = 0; for (let i = 0; i < x.length; i++) { s += x[i] * y[i]; a += x[i] * x[i]; b += y[i] * y[i]; } return s / Math.sqrt(a * b); };
+    const mean = (vs) => { const o = new Float64Array(vs[0].length); vs.forEach(v => v.forEach((x, i) => { o[i] += x; })); return o; };
+    const crops = (a) => Array.from({ length: 5 }, () => make(a, posture()));
+    for (let t = 0; t < N; t++) {
+        const a = t % 3, b = (a + 1) % 3, x = crops(a), same = crops(a), other = crops(b);
+        if (cos(mean(x), mean(same)) > cos(mean(x), mean(other))) rawOk++;
+        const pm = (vs) => mean(vs.map(v => m.project(v)));
+        if (cos(pm(x), pm(same)) > cos(pm(x), pm(other))) metricOk++;
+    }
+    console.log(`    same animal recognised: raw cosine ${(100 * rawOk / N).toFixed(0)}%, in the metric ${(100 * metricOk / N).toFixed(0)}%`);
+    ok(metricOk / N > 0.9, `in the metric, an animal looks more like itself than like another in ${(100 * metricOk / N).toFixed(0)}% of new postures (5-crop means)`);
+    ok(rawOk / N < 0.7, `negative control: raw cosine manages only ${(100 * rawOk / N).toFixed(0)}% (the postures dominate)`);
+    eq(m.dims, 16, 'projects to metricDims directions');
+}
+
+group('symmetricEigen — A v = λ v for a random symmetric matrix');
+{
+    const r = rng(5), n = 12, A = new Float64Array(n * n);
+    for (let i = 0; i < n; i++) for (let j = i; j < n; j++) { A[i * n + j] = A[j * n + i] = gauss(r); }
+    const { values, vectors } = SC.symmetricEigen(A, n);
+    let worst = 0;
+    for (let c = 0; c < n; c++) for (let i = 0; i < n; i++) {
+        let s = 0; for (let j = 0; j < n; j++) s += A[i * n + j] * vectors[j * n + c];
+        worst = Math.max(worst, Math.abs(s - values[c] * vectors[i * n + c]));
+    }
+    ok(worst < 1e-9, `residual ${worst.toExponential(1)}`);
+}
+
+group('markAppearanceChanges — alternating onsets and ends per pair, follow-ons within one event');
+{
+    const mk = (frame, a, b, score) => ({ frame, startFrame: frame - 30, identityA: a, identityB: b, nameA: 'id_' + a, nameB: 'id_' + b, score });
+    const sc = [mk(100, 0, 1, -2), mk(500, 0, 1, 1.5), mk(900, 0, 1, -1.9), mk(905, 1, 2, -1.2), mk(4000, 0, 1, -2.2)];
+    SC.markAppearanceChanges(sc, { threshold: -0.8, followSeconds: 5, fps: 30 });
+    ok(sc[0].kind === 'onset' && sc[0].switchBackAt === 900, '1st contact below threshold: onset, back at the 2nd');
+    ok(!sc[1].flagged, 'a positive score is no change');
+    ok(sc[2].kind === 'end' && sc[2].switchedAt === 100, '2nd: end of that stretch');
+    ok(sc[4].kind === 'onset' && sc[4].switchBackAt == null, '3rd: onset to the end');
+    ok(sc[3].kind === 'onset' && sc[3].followOf === 900, 'another pair sharing one identity in the same contact: a follow-on');
+}
+
+for (const mode of ['huddle', 'triad']) {
+    group(`Image check — a swap in a ${mode === 'huddle' ? 'huddling pair' : 'contact made only through a third animal'} (from #286)`);
+    const SWAP = 7, fps = 30;
+    const { session, swapSec } = buildContactSession(mode, SWAP, fps);
+    const isAB = e => [e.nameA, e.nameB].sort().join() === 'id_0,id_1';
+    const res = await SC.checkImageSwitches(session, { fps, getEmbeddings: syntheticEmbedder() });
+    ok(res.ok, 'image check ran (' + (res.reason || 'ok') + ')');
+    const ab = res.flags.filter(isAB), swapFrame = Math.round(swapSec * fps);
+    eq(ab.length, 1, 'one A–B change point');
+    ok(ab[0] && ab[0].startFrame <= swapFrame + 30 * fps && ab[0].frame >= swapFrame - 30 * fps && ab[0].switchBackAt == null,
+        `at the swap, running to the end (frames ${ab[0] && ab[0].startFrame}–${ab[0] && ab[0].frame}, swap at ${swapFrame}, score ${ab[0] && ab[0].score.toFixed(2)})`);
+    eq(res.flags.filter(f => !isAB(f)).length, 0, 'nothing else flagged');
+    const clean = await SC.checkImageSwitches(buildContactSession(mode, null, fps).session, { fps, getEmbeddings: syntheticEmbedder() });
+    eq(clean.flags.length, 0, 'clean labels → no change points');
 }
 
 group('Image check — several frames in flight (so a provider can batch them)');
