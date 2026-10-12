@@ -5507,11 +5507,29 @@ hardware, and each line's tooltip says other apps are not in it.
 - `LOAD_GRAPH_SPAN_MS` (60 s); `loadGraphPath(samples, now, spanMs, w, h)` -> SVG
   path data, placed by TIME (ticks are uneven: long work blocks the 1 s timer),
   broken at nulls, a lone point as a zero-length segment (a dot under the round cap).
-- `LOAD_GRAPH_W` / `LOAD_GRAPH_H` / `LOAD_GRAPH_PAD` (104 x 34 px, the series
-  inset 2 px so 0% and 100% are not half clipped).
+- `LOAD_GRAPH_W` / `LOAD_GRAPH_H` / `LOAD_GRAPH_PAD` (84 x 34 px plot, the series
+  inset 2 px so 0% and 100% are not half clipped). 84 rather than the first
+  cut's 104: with the y labels beside it, that is what keeps the image check's
+  "GPU: WebGPU, fp16 · load 100%" (205 px) on one line in its 540 px dialog.
+  `LOAD_GRAPH_TICK` (4 px): the axis ticks' length.
 - `createLoadGraph(box)` -> `{show(on), push(t, cpu, gpu), clear()}` — builds the
-  SVG into `box` (class `load-graph`): a 50% hairline, a CPU and a GPU series,
-  and on hover a cursor, a dot per series and a readout above the graph ("12 s
+  graph into `box` (class `load-graph`): a 50% hairline, a CPU and a GPU series,
+  and **labelled axes**, as few as fit — "100%", "50%", "0%" left of the plot and
+  "60 s ago" … "now" under it, 9 px in the muted text colour — **each with a tick
+  pointing OUT of the plot** (MATLAB's `TickDir 'out'`, which keeps the data clear
+  of them): a 4 px tick at each labelled level running left from the left edge,
+  and one under each bottom corner running down; a label sits 2 px beyond its
+  tick. The ticks are absolutely positioned spans in the plot's wrapper, placed
+  from the same constants as the series (the SVG must keep `overflow: hidden` —
+  points older than the span sit left of it — so they cannot be drawn in it), and
+  the plot's corners are square, an axes box whose corner ticks continue its
+  edges. The y labels are
+  ZERO-HEIGHT boxes (`line-height: 0`) spread by `space-between` over a column
+  as tall as the plot's 0-100% span and offset by its inset (`height` /
+  `margin-top` set inline from the constants), so each label's text centres on
+  the level it names — measured within 0.5 px. Both axes are `aria-hidden`; the
+  SVG's `aria-label` ("Load from 0 to 100% over the last 60 s") says the same.
+  On hover, a cursor, a dot per series and a readout above the graph ("12 s
   ago · CPU 7% · GPU 80%") for the nearest MEASURED sample (the first tick's are
   null), kept current as the graph moves under a still pointer. `show(false)` is
   `visibility`, so the space stays reserved.
@@ -5530,7 +5548,11 @@ against the plot's `#1a1a1a` (CVD dE 26.8).
 `ui/loading-overlay.js`, `pose/triangulation-pool.js`.
 
 **Coverage.** `tests/test-load-graph.mjs` (the clock, the meter, the CPU line,
-the path); the DOM half in `tests/e2e/id-switch-image-check.mjs` (CPU + GPU,
+the path); the axis labels' rendered text against the levels they name, and the
+five ticks (at those levels / under the corners, pointing out, labels clear of
+them), in all three places the graph appears, by
+`tests/e2e/fixtures/load-graph-axes.js` (a Range over each label — the boxes are
+zero-height); the DOM half in `tests/e2e/id-switch-image-check.mjs` (CPU + GPU,
 hover), `tests/e2e/triangulate-all-cpu-load.mjs` (CPU only, on the overlay) and
 `tests/e2e/track-all-cpu-load.mjs` (the overlay's main-thread clock, with the
 paint-wait control).
@@ -9265,8 +9287,10 @@ the load refreshed every second from the first embedded frame (`createLoadMeter`
 over `busyMs()`), so it falls to 0% while fitting, which the CPU line then shows;
 with no GPU, "No GPU: running on the CPU (4 workers) — slow" in the warning colour,
 why in its tooltip, and no load. **The graph** (`createLoadGraph`, `ui/load-graph.js`
-— the same one the loading overlay shows for Triangulate All; 104 x 34 px SVG,
-the lines inset 2 px so 0% and 100% are not half clipped): the last
+— the same one the loading overlay shows for Triangulate All and Track All; an
+84 x 34 px plot with 0/50/100% and "60 s ago" … "now" axis labels and outward ticks, the lines inset
+2 px so 0% and 100% are not half clipped; the dialog is a fixed 540 px so the GPU
+line fits beside it and the width does not follow the progress text): the last
 `LOAD_GRAPH_SPAN_MS` (60 s), newest at the right edge, 0-100% with a hairline at
 50%, one sample per tick of the same 1 s timer, so its newest points ARE the two
 lines' loads. Points are placed by TIME (`loadGraphPath`), not index — fitting
