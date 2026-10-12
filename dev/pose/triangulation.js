@@ -9,26 +9,26 @@
 
 import { mat3x3Multiply, Camera, FrameGroup, Instance, UnlinkedInstance, InstanceGroup,
          makePoints3d, points3dNodeCount, hasPoint3d, getPoint3d, readPoint3d,
-         setPoint3d, clearPoint3d, someValidPoint3d, countPoints3d, pooledPoints3d } from './pose-data.js?v=7eeed5ec2aee';
+         setPoint3d, clearPoint3d, someValidPoint3d, countPoints3d, pooledPoints3d } from './pose-data.js?v=9b0778ff677b';
 // The Jacobi eigensolver and the least-squares plane fit live in
 // `pose/plane-fit.js`, so `pose/plane-data.js` can reach the fit without
 // importing this module — and the whole UI with it. `fitPlaneToPoints3d` is
 // re-exported unchanged, because every existing caller and test reads it here.
-import { jacobiEigen, fitPlaneToPoints3d } from './plane-fit.js?v=7eeed5ec2aee';
+import { jacobiEigen, fitPlaneToPoints3d } from './plane-fit.js?v=9b0778ff677b';
 export { fitPlaneToPoints3d };
-import { state, timeline, viewport3d, interactionManager } from '../ui/app-state.js?v=7eeed5ec2aee';
+import { state, timeline, viewport3d, interactionManager } from '../ui/app-state.js?v=9b0778ff677b';
 // Pass 3i-2: triangulation orchestration moved out of app.js
-import { setReprojErrorVisible, showReprojectionsOnly, REPROJ_ONLY_NOTE, drawAllOverlays } from '../ui/rendering.js?v=7eeed5ec2aee';
-import { updateTriangulationBadge } from '../ui/info-panel.js?v=7eeed5ec2aee';
-import { isCameraTracked, getTrackingThreshold, getDefaultTriangulationMethod } from '../ui/settings.js?v=7eeed5ec2aee';
-import { markDirty, setStatus, showLoading, hideLoading } from '../import-export/save-load.js?v=7eeed5ec2aee';
-import { showLoadingProgress, createProgressPacer, yieldToPaint } from '../ui/loading-overlay.js?v=7eeed5ec2aee';
-import { createGroupSolver } from './triangulation-pool.js?v=7eeed5ec2aee';
-import { unionTrackNames, remapTrackIdx, isIdentityRemap } from '../loading/track-union.js?v=7eeed5ec2aee';
+import { setReprojErrorVisible, showReprojectionsOnly, REPROJ_ONLY_NOTE, drawAllOverlays } from '../ui/rendering.js?v=9b0778ff677b';
+import { updateTriangulationBadge } from '../ui/info-panel.js?v=9b0778ff677b';
+import { isCameraTracked, getTrackingThreshold, getDefaultTriangulationMethod } from '../ui/settings.js?v=9b0778ff677b';
+import { markDirty, setStatus, showLoading, hideLoading } from '../import-export/save-load.js?v=9b0778ff677b';
+import { showLoadingProgress, createProgressPacer, yieldToPaint } from '../ui/loading-overlay.js?v=9b0778ff677b';
+import { createGroupSolver } from './triangulation-pool.js?v=9b0778ff677b';
+import { unionTrackNames, remapTrackIdx, isIdentityRemap } from '../loading/track-union.js?v=9b0778ff677b';
 import { evictLazyFrameGroups, holdLazyResidency, releaseLazyResidency, releaseFrameMembers2d,
-         LAZY_RESIDENT_CAP, LAZY_KEEP_BEHIND } from './lazy-residency.js?v=7eeed5ec2aee';
+         LAZY_RESIDENT_CAP, LAZY_KEEP_BEHIND } from './lazy-residency.js?v=9b0778ff677b';
 // Pass 3i-3: update3DViewport moved to pose/initialization.js.
-import { update3DViewport } from './initialization.js?v=7eeed5ec2aee';
+import { update3DViewport } from './initialization.js?v=9b0778ff677b';
 // The pure math (DLT, refinement, reprojection, triangulateAndReproject) lives
 // in ./triangulation-core.js so a worker can load it; re-exported below so every
 // existing import of these names from this module keeps working.
@@ -45,7 +45,7 @@ import {
     computeReprojectionError, computeReprojectionErrors, computeMeanReprojectionError,
     invert3x3, triangulateAndReproject, __triangulationKernelsForTest,
     setTriangulationSettingsHooks,
-} from './triangulation-core.js?v=7eeed5ec2aee';
+} from './triangulation-core.js?v=9b0778ff677b';
 export {
     triangulatePointDLT, triangulatePoints, BA_ROBUST_SCALE_PX,
     triangulatePointBA, triangulatePointsBA,
@@ -1504,6 +1504,35 @@ export function storeReprojectedInstances(group, triangulationResult, allCameras
 }
 
 /**
+ * Give a bulk solve's `reprojections` an entry for EVERY calibrated camera, in
+ * place, and return it.
+ *
+ * The bulk sweeps solve each group from the cameras it has instances in
+ * (`groupCameras`), so `triangulateAndReproject` hands back reprojections for
+ * those cameras only. Every other path that gives a group reprojections covers
+ * every camera: single-frame Triangulate (`storeReprojectedInstances`), the
+ * windowed Triangulate All and the view right after Track All
+ * (`ui/rendering.js`'s lazy fill). The overlay draws whatever is stored, so a
+ * camera that simply had no detection of an animal on that frame lost its
+ * reprojection on exactly these paths — an animal hidden behind another in one
+ * side view, say. The lazy fill cannot catch it: it only fills a group whose
+ * reprojections are EMPTY.
+ *
+ * Only reprojections are added. The 3D, the per-camera errors and the mean are
+ * untouched: a camera with no instance has no observation to compare against.
+ */
+export function reprojectIntoEveryCamera(reprojections, points3d, cameras) {
+    if (!reprojections || !points3d || !cameras) return reprojections;
+    for (var i = 0; i < cameras.length; i++) {
+        var cam = cameras[i];
+        if (reprojections[cam.name] || !cam.projectionMatrix) continue;
+        // Native (distorted) pixel space, as storeReprojectedInstances does.
+        reprojections[cam.name] = reprojectPointsCamera(points3d, cam);
+    }
+    return reprojections;
+}
+
+/**
  * Get a group's reprojected Instance for `camName`, synthesizing one on
  * demand from the already-cached `group.reprojections[camName]` (raw points)
  * when `reprojectedInstances` was never eagerly built for this group.
@@ -2393,7 +2422,8 @@ export async function triangulateMultiFrameInstances(startFrame, endFrame, onPro
             if (!step) continue;
             var result = step.result;
 
-            group.reprojections = result.reprojections;
+            // The solve covered the group's own cameras; reproject into the rest.
+            group.reprojections = reprojectIntoEveryCamera(result.reprojections, result.points3d, cameras);
             // NOT storeReprojectedInstances here — this is a bulk sweep (the range
             // can span the entire project); eagerly building a full Instance (+ its
             // own `occluded` array) per camera per group here was a major memory
@@ -3413,7 +3443,8 @@ export async function triangulateAllFrames(method) {
         // because this path handles projects small enough to be fully
         // resident; the windowed sweep deliberately does NOT (~1.9 GB at
         // 531,799 groups) and lets `drawAllOverlays` recompute per frame.
-        group.reprojections = result.reprojections;
+        // The solve covered the group's own cameras; reproject into the rest.
+        group.reprojections = reprojectIntoEveryCamera(result.reprojections, result.points3d, cameras);
         // NOT storeReprojectedInstances here — "Triangulate All" sweeps
         // the WHOLE project; eagerly building a full Instance (+ its
         // own `occluded` array) per camera per group here was a major
