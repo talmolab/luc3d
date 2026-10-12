@@ -6374,7 +6374,16 @@ palettes, and per-frame draw routines. Receives `frameGroup` and
   tracks that have **vanished** from the current frame, so a trail lingers and
   fades out rather than disappearing the instant its instance is gone (unlinked
   matters too: identities are inspected BEFORE cross-view linking). Each node's
-  positions join into a polyline that toward the past thins and fades;
+  positions join into a polyline that toward the past thins and fades.
+  **Width:** the newest segment is exactly as thick as the skeleton edges of the
+  instance it traces — `options.lineWidth` (User ▸ Edge Weight) or
+  `options.predictedLineWidth` (Predictions ▸ Edge Weight), chosen per segment by
+  the instance at its older end — and tapers to `1/(W-1)` of that at the oldest,
+  floored at 0.8 px but never above the edge width (a sub-pixel export tile).
+  It used to start at TWICE the User edge weight whatever it traced, so a trail
+  of predictions began at 6 px beside 2 px edges. Covered by
+  `tests/test-node-trails.mjs` §13 and `tests/e2e/node-trail-width.mjs` (both
+  fail on the old rule);
   each segment is colored by the instance's color AT that frame (per-frame identity
   lookup), so an identity/color **switch shows as a color change along the trail**.
   **Shade.** That color is drawn in `options.trailShade` — a key of
@@ -6435,7 +6444,8 @@ palettes, and per-frame draw routines. Receives `frameGroup` and
   labels **predicted** instances with their identity name/color (step 3a), not
   just user instances — so the cross-view tracker's output (predicted) shows its
   IDs as text for proofreading. `options.trailLength` and `options.trailShade`
-  thread through to `drawNodeTrails`. Covered by `tests/test-node-trails.mjs`
+  thread through to `drawNodeTrails`, with `userOpts.lineWidth` /
+  `predictedOpts.lineWidth` as its two edge widths. Covered by `tests/test-node-trails.mjs`
   (§12: the shade scale on every palette color, and the drawn strokes) and
   `tests/e2e/node-trail-shade.mjs` (the menus and the real draw path).
   **Reprojection node color ignored the Visibility panel on the raw-fallback

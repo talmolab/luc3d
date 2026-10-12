@@ -266,5 +266,34 @@ const legacy = [1, 2].map(k => ov.adjustColorBrightness(trackHex, 0.55 + 0.45 * 
 ok(JSON.stringify(strokeColors({ trailShade: 'normal' })) === JSON.stringify(legacy),
    'Normal = the pre-shade trail colors ' + legacy.join(','));
 
+// 13. Trail WIDTH — the newest segment is exactly as thick as the skeleton
+// edges of the instance it traces (User or Predictions edge weight), thinning
+// toward the past; never thicker than those edges. Window W = 3 (frames
+// 8, 9, 10): the segment ending at frame 9 (k = 1) is the full edge width,
+// the one ending at frame 8 (k = 2) half of it.
+const widths = (session, opts) => {
+    const c = mockCtx();
+    ov.drawNodeTrails(c, 'camA', session, 10, Object.assign({ trailLength: 5 }, opts, GEO));
+    return c.calls.styled.map(s => s.w);
+};
+const typed = (type, x) => Object.assign(inst(7, x), { type });
+const fgTyped = (type, x) => ({ instances: new Map([['camA', [typed(type, x)]]]), getUnlinkedInstances() { return []; } });
+const sPred = sessionOf(new Map([[8, fgTyped('predicted', 100)], [9, fgTyped('predicted', 110)], [10, fgTyped('predicted', 120)]]));
+const sMixed = sessionOf(new Map([[8, fgTyped('user', 100)], [9, fgTyped('predicted', 110)], [10, fgTyped('user', 120)]]));
+ok(JSON.stringify(widths(sLinked, { lineWidth: 3 })) === '[3,3,1.5,1.5]',
+   'user trail: newest segment = the User edge weight (3), then thinner: ' + widths(sLinked, { lineWidth: 3 }));
+ok(JSON.stringify(widths(sLinked, {})) === '[2,2,1,1]', 'no width given: 2, like the edges\' default: ' + widths(sLinked, {}));
+ok(JSON.stringify(widths(sPred, { lineWidth: 3, predictedLineWidth: 2 })) === '[2,2,1,1]',
+   'predicted trail: the Predictions edge weight (2), not the User one: ' + widths(sPred, { lineWidth: 3, predictedLineWidth: 2 }));
+ok(JSON.stringify(widths(sMixed, { lineWidth: 3, predictedLineWidth: 2 })) === '[2,2,1.5,1.5]',
+   'mixed: each segment takes the edge weight of the instance at its older end: ' + widths(sMixed, { lineWidth: 3, predictedLineWidth: 2 }));
+ok(widths(sLinked, { lineWidth: 0.5 }).every(w => w <= 0.5),
+   'a sub-pixel edge (a small export tile): the trail is never thicker than it: ' + widths(sLinked, { lineWidth: 0.5 }));
+const longFG = new Map();
+for (let f = 0; f <= 60; f++) longFG.set(f, fgTyped('predicted', f));
+const longW = widths(sessionOf(longFG), { lineWidth: 5, predictedLineWidth: 4, trailLength: 50 });
+ok(longW[0] === 4 && longW.every(w => w <= 4 && w >= 0.8) && longW.every((w, i) => i === 0 || w <= longW[i - 1]),
+   '50-frame trail: starts at the edge width, only thins, floors at 0.8 px (' + longW[0] + ' → ' + longW[longW.length - 1] + ')');
+
 console.log(`\n${failed === 0 ? '✓ PASS' : '✗ FAIL'} — ${passed} passed, ${failed} failed`);
 if (failed > 0) { console.error('\nFailures:\n - ' + failures.join('\n - ')); process.exit(1); }

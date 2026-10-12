@@ -2123,8 +2123,11 @@ function trailViewInstances(fg, viewName) {
 // appears anywhere in the window — including tracks that have already VANISHED
 // from the current frame, so a track's trail lingers and fades out over the window
 // instead of disappearing the instant its instance is gone. Each node's positions
-// join into a polyline that, toward the past, thins and fades; each segment is
-// colored by the instance's color AT that frame, so an identity/color switch
+// join into a polyline that, toward the past, thins and fades. Its newest segment
+// is exactly as thick as the skeleton edges of the instance it traces — the User
+// or the Predictions edge weight (`options.lineWidth` /
+// `options.predictedLineWidth`) — so a trail never looks heavier than the
+// skeleton it belongs to. Each segment is colored by the instance's color AT that frame, so an identity/color switch
 // shows up as a color change along the trail. That color is drawn in
 // `options.trailShade` (a TRAIL_SHADES key, default DEFAULT_TRAIL_SHADE) and
 // moves further from the track's color with age — darker, or for a light shade
@@ -2157,19 +2160,20 @@ export function drawNodeTrails(ctx, viewName, session, frameIdx, options) {
     var toCanvas = makeVideoToCanvasTransform(
         options.videoWidth, options.videoHeight, options.canvasWidth, options.canvasHeight);
     var colorByIdentity = !!options.colorByIdentity;
-    // Trails are thicker than the skeleton edges by default so they read at a glance.
-    var baseWidth = (options.lineWidth != null ? options.lineWidth : 2) * 2;
+    var userWidth = options.lineWidth != null ? options.lineWidth : 2;
+    var predictedWidth = options.predictedLineWidth != null ? options.predictedLineWidth : userWidth;
 
     var shade = trailShadeFor(options.trailShade) || trailShadeFor(DEFAULT_TRAIL_SHADE);
 
     // Style ramp per window index (0 = current). Older → thinner, more
     // transparent, and further from the track's color (`trailColor`). `t` runs
-    // 1 (near) → ~0 (far).
-    var stepAlpha = [], stepWidth = [], stepAge = [];
+    // 1 (near) → ~0 (far). `stepTaper` scales the edge width: exactly 1 at the
+    // newest segment (k = 1), down to 1/(W-1) at the oldest.
+    var stepAlpha = [], stepTaper = [], stepAge = [];
     for (var k0 = 0; k0 < W; k0++) {
         var t0 = 1 - k0 / (W + 1);
         stepAlpha.push(Math.max(0.1, 0.9 * t0));
-        stepWidth.push(Math.max(0.8, baseWidth * t0));
+        stepTaper.push((W - k0) / (W - 1));
         stepAge.push(1 - t0);
     }
 
@@ -2178,8 +2182,11 @@ export function drawNodeTrails(ctx, viewName, session, frameIdx, options) {
     ctx.lineJoin = 'round';
     tracks.forEach(function (tk) {
         // Historical, shaded and aged color per window frame for this track
-        // (reused across nodes). null where the track is absent in that frame.
-        var colAtK = [];
+        // (reused across nodes), and the width of the segment ending there: the
+        // edge weight of that frame's instance, tapered with age. The floor
+        // keeps an old segment visible, but never above the edge width itself.
+        // null / 0 where the track is absent in that frame.
+        var colAtK = [], widthAtK = [];
         var sample = null;
         for (var k = 0; k < W; k++) {
             var inst = byFrame[k].get(tk);
@@ -2187,6 +2194,8 @@ export function drawNodeTrails(ctx, viewName, session, frameIdx, options) {
             colAtK.push(inst
                 ? shadeTrailHex(getInstanceColor(inst, session, viewName, colorByIdentity, windowIdx[k]), shade.amount, stepAge[k])
                 : null);
+            var edge = inst && inst.type === 'predicted' ? predictedWidth : userWidth;
+            widthAtK.push(inst ? Math.max(Math.min(0.8, edge), edge * stepTaper[k]) : 0);
         }
         if (!sample || sample.numNodes === 0) return;
         var N = sample.numNodes;
@@ -2226,7 +2235,7 @@ export function drawNodeTrails(ctx, viewName, session, frameIdx, options) {
             if (!started) continue;
             ctx.globalAlpha = stepAlpha[k2];
             ctx.strokeStyle = colAtK[k2];
-            ctx.lineWidth = stepWidth[k2];
+            ctx.lineWidth = widthAtK[k2];
             ctx.stroke();
         }
     });
@@ -2354,6 +2363,7 @@ export function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, ses
             canvasHeight: canvasH,
             nodeSize: (userOpts && userOpts.nodeSize) || 3,
             lineWidth: (userOpts && userOpts.lineWidth) || 2,
+            predictedLineWidth: (predictedOpts && predictedOpts.lineWidth) || 2,
         });
     }
 
