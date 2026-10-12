@@ -8,9 +8,9 @@
  * ES module. Exports `Timeline`.
  */
 
-import { getTrackColor, NULL_ID_COLOR } from './overlays.js?v=dbc17acecc6e';
-import { someValidPoint3d, points3dNodeCount, hasPoint3d } from '../pose/pose-data.js?v=dbc17acecc6e';
-import { isCameraTracked } from './settings.js?v=dbc17acecc6e';
+import { getTrackColor, NULL_ID_COLOR } from './overlays.js?v=73056653bb3b';
+import { someValidPoint3d, points3dNodeCount, hasPoint3d } from '../pose/pose-data.js?v=73056653bb3b';
+import { isCameraTracked } from './settings.js?v=73056653bb3b';
 
 /**
  * Parse a `session.frameIdentityMap` key ("frameIdx:camName:trackIdx") into
@@ -2752,7 +2752,7 @@ export class Timeline {
         if (x >= this.LEFT_MARGIN && x <= this._cssWidth - this.RIGHT_PADDING) {
             const frame = this._clampFrame(this._xToFrame(x));
             const marker = this._frameMarkers.get(frame);
-            let text = 'Frame ' + (frame + 1);
+            let text = 'Frame ' + (frame + 1).toLocaleString('en-US');
             if (marker) {
                 const parts = [];
                 if (marker.hasUser) parts.push('user');

@@ -26,13 +26,13 @@
 // import in ui/sessions-panes.js (see CLAUDE.md › Dependencies).
 import { DockviewComponent, themeDark } from 'https://cdn.jsdelivr.net/npm/dockview-core@6.6.1/+esm';
 
-import { state, videoController, getActiveSession } from './app-state.js?v=dbc17acecc6e';
-import { Viewport3D } from './viewport3d.js?v=dbc17acecc6e';
+import { state, videoController, getActiveSession } from './app-state.js?v=73056653bb3b';
+import { Viewport3D } from './viewport3d.js?v=73056653bb3b';
 import {
     drawFrameOverlays, drawLegend, drawViewNameLabel, getTrackColor, getGroupColor,
     TRAIL_SHADES, DEFAULT_TRAIL_SHADE, trailShadeFor,
-} from './overlays.js?v=dbc17acecc6e';
-import { getVisibilitySettings } from './rendering.js?v=dbc17acecc6e';
+} from './overlays.js?v=73056653bb3b';
+import { getVisibilitySettings } from './rendering.js?v=73056653bb3b';
 import {
     getInstanceGroupsForFrame,
     ensureLazyFrameData,
@@ -40,9 +40,9 @@ import {
     triangulateAndReproject,
     storeReprojectedInstances,
     sessionHasCalibration,
-} from '../pose/triangulation.js?v=dbc17acecc6e';
-import { points3dNodeCount } from '../pose/pose-data.js?v=dbc17acecc6e';
-import { setStatus } from '../import-export/save-load.js?v=dbc17acecc6e';
+} from '../pose/triangulation.js?v=73056653bb3b';
+import { points3dNodeCount } from '../pose/pose-data.js?v=73056653bb3b';
+import { setStatus } from '../import-export/save-load.js?v=73056653bb3b';
 
 import {
     TILE_3D, RES_PRESETS, RES_CUSTOM, MAX_OUT_DIM,
@@ -52,16 +52,16 @@ import {
     defaultOverlayExportSettings, applyStoredSettings, saveOverlayExportSettings,
     overlayOptionsFrom, seedLayoutPlan,
     distributeAxisSizes, SASH_SHARE_FAR,
-} from './overlay-export-layout.js?v=dbc17acecc6e';
-import { createMp4Writer, videoEncodingAvailable } from './video-encode.js?v=dbc17acecc6e';
-import { fileSystemAccessHint } from './browser-hints.js?v=dbc17acecc6e';
+} from './overlay-export-layout.js?v=73056653bb3b';
+import { createMp4Writer, videoEncodingAvailable } from './video-encode.js?v=73056653bb3b';
+import { fileSystemAccessHint } from './browser-hints.js?v=73056653bb3b';
 // The main window's per-camera display settings. `ui/video-filters.js` imports NO
 // project modules, so this adds no cycle — and going through the SAME
 // `buildVideoFilter` the live canvases use is what stops the export drifting from
 // what the user sees (`applyVideoFilters` in ui/sessions-panes.js).
 import {
     buildVideoFilter, getSessionBrightness, getSessionContrast, getSessionRotation,
-} from './video-filters.js?v=dbc17acecc6e';
+} from './video-filters.js?v=73056653bb3b';
 
 // Re-exported so callers/tests have one import site for the feature.
 export { TILE_3D };
@@ -1462,10 +1462,10 @@ export function showOverlayExportModal() {
         playhead.style.left = pctOf(previewFrame) + '%';
         if (startField) startField.value = rangeStart + 1;   // 1-based display
         if (endField) endField.value = rangeEnd + 1;
-        scrubVal.textContent = 'frame ' + (previewFrame + 1) + ' / ' + frameCount;
+        scrubVal.textContent = 'frame ' + (previewFrame + 1).toLocaleString('en-US') + ' / ' + frameCount.toLocaleString('en-US');
         var note = modal.querySelector('#ovRangeNote');
         if (note) {
-            note.textContent = selectedCount() + ' frames · ' +
+            note.textContent = selectedCount().toLocaleString('en-US') + ' frames · ' +
                 fmtDuration(selectedCount() / currentFps()) + ' @ ' + currentFps() + ' fps';
         }
         refreshSummary();
@@ -1497,7 +1497,7 @@ export function showOverlayExportModal() {
         if (f > lastIdx) f = lastIdx;
         previewFrame = f;
         playhead.style.left = pctOf(f) + '%';
-        scrubVal.textContent = 'frame ' + (f + 1) + ' / ' + frameCount;
+        scrubVal.textContent = 'frame ' + (f + 1).toLocaleString('en-US') + ' / ' + frameCount.toLocaleString('en-US');
         schedulePreview();
         syncViewer(f);
     }
@@ -1635,7 +1635,7 @@ export function showOverlayExportModal() {
             var bytes = estimatedBytes(size.width, size.height, fps, settings.quality, nFrames);
             summaryEl.textContent = n + ' tile' + (n === 1 ? '' : 's') + ' · ' + resTierLabel(size) +
                 ' · ' + size.width + '×' + size.height +
-                ' · ' + nFrames + ' frames · ~' + fmtBytes(bytes);
+                ' · ' + nFrames.toLocaleString('en-US') + ' frames · ~' + fmtBytes(bytes);
             if (outNote) {
                 outNote.textContent = 'One .mp4 laid out exactly as the composition (' +
                     size.width + '×' + size.height + ' at ' +
@@ -1652,7 +1652,7 @@ export function showOverlayExportModal() {
             var firstSize = individualSizeFor(layout.tiles[0]);
             syncOutFields(firstSize);
             summaryEl.textContent = n + ' file' + (n === 1 ? '' : 's') + ' · ' + resTierLabel(null) +
-                ' · ' + nFrames + ' frames · ~' + fmtBytes(total);
+                ' · ' + nFrames.toLocaleString('en-US') + ' frames · ~' + fmtBytes(total);
             if (outNote) {
                 // Quality is named here TOO. It used to appear only in the stitched
                 // branch, so in this mode the ONLY visible effect of changing
@@ -2013,7 +2013,7 @@ export function showOverlayExportModal() {
                 if (out % 5 === 0 || f === expEnd) {
                     var pct = Math.round(((out + 1) / nFrames) * 100);
                     progressFill.style.width = pct + '%';
-                    progressLabel.textContent = 'Encoding ' + (out + 1) + ' / ' + nFrames;
+                    progressLabel.textContent = 'Encoding ' + (out + 1).toLocaleString('en-US') + ' / ' + nFrames.toLocaleString('en-US');
                     await new Promise(function (r) { setTimeout(r, 0); });
                 }
             }
@@ -2030,11 +2030,11 @@ export function showOverlayExportModal() {
                     }
                 }
                 if (stitched) {
-                    setStatus('Overlay video exported: ' + specs[0].filename + ' (' + nFrames +
+                    setStatus('Overlay video exported: ' + specs[0].filename + ' (' + nFrames.toLocaleString('en-US') +
                         ' frames @ ' + fps + ' fps, ' + outW + '×' + outH + ')', 'success');
                 } else {
                     setStatus('Overlay videos exported: ' + specs.length + ' file' +
-                        (specs.length === 1 ? '' : 's') + ' (' + nFrames + ' frames @ ' +
+                        (specs.length === 1 ? '' : 's') + ' (' + nFrames.toLocaleString('en-US') + ' frames @ ' +
                         fps + ' fps)', 'success');
                 }
             } else {
