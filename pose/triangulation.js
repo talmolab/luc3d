@@ -1504,6 +1504,35 @@ export function storeReprojectedInstances(group, triangulationResult, allCameras
 }
 
 /**
+ * Give a bulk solve's `reprojections` an entry for EVERY calibrated camera, in
+ * place, and return it.
+ *
+ * The bulk sweeps solve each group from the cameras it has instances in
+ * (`groupCameras`), so `triangulateAndReproject` hands back reprojections for
+ * those cameras only. Every other path that gives a group reprojections covers
+ * every camera: single-frame Triangulate (`storeReprojectedInstances`), the
+ * windowed Triangulate All and the view right after Track All
+ * (`ui/rendering.js`'s lazy fill). The overlay draws whatever is stored, so a
+ * camera that simply had no detection of an animal on that frame lost its
+ * reprojection on exactly these paths — an animal hidden behind another in one
+ * side view, say. The lazy fill cannot catch it: it only fills a group whose
+ * reprojections are EMPTY.
+ *
+ * Only reprojections are added. The 3D, the per-camera errors and the mean are
+ * untouched: a camera with no instance has no observation to compare against.
+ */
+export function reprojectIntoEveryCamera(reprojections, points3d, cameras) {
+    if (!reprojections || !points3d || !cameras) return reprojections;
+    for (var i = 0; i < cameras.length; i++) {
+        var cam = cameras[i];
+        if (reprojections[cam.name] || !cam.projectionMatrix) continue;
+        // Native (distorted) pixel space, as storeReprojectedInstances does.
+        reprojections[cam.name] = reprojectPointsCamera(points3d, cam);
+    }
+    return reprojections;
+}
+
+/**
  * Get a group's reprojected Instance for `camName`, synthesizing one on
  * demand from the already-cached `group.reprojections[camName]` (raw points)
  * when `reprojectedInstances` was never eagerly built for this group.
@@ -2393,7 +2422,8 @@ export async function triangulateMultiFrameInstances(startFrame, endFrame, onPro
             if (!step) continue;
             var result = step.result;
 
-            group.reprojections = result.reprojections;
+            // The solve covered the group's own cameras; reproject into the rest.
+            group.reprojections = reprojectIntoEveryCamera(result.reprojections, result.points3d, cameras);
             // NOT storeReprojectedInstances here — this is a bulk sweep (the range
             // can span the entire project); eagerly building a full Instance (+ its
             // own `occluded` array) per camera per group here was a major memory
@@ -3430,7 +3460,8 @@ export async function triangulateAllFrames(method) {
         // because this path handles projects small enough to be fully
         // resident; the windowed sweep deliberately does NOT (~1.9 GB at
         // 531,799 groups) and lets `drawAllOverlays` recompute per frame.
-        group.reprojections = result.reprojections;
+        // The solve covered the group's own cameras; reproject into the rest.
+        group.reprojections = reprojectIntoEveryCamera(result.reprojections, result.points3d, cameras);
         // NOT storeReprojectedInstances here — "Triangulate All" sweeps
         // the WHOLE project; eagerly building a full Instance (+ its
         // own `occluded` array) per camera per group here was a major
