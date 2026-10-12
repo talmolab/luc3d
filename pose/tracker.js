@@ -1568,7 +1568,7 @@ async function runTrackingPass(range) {
                 };
                 // Kept on the session, so the ID Switches tab can reopen the box once it is closed
                 rememberTrackSummary(session, summaryOpts, summaryChecks, lres.numIdentities);
-                showTrackSummaryModal(summarizeTrackedIdentities(session, summaryOpts), summaryChecks);
+                showTrackSummaryModal(summarizeTrackedIdentities(session, summaryOpts), summaryChecks, { session: session });
             } catch (e) {
                 console.error('[' + label + '] summary failed:', e);
             }
