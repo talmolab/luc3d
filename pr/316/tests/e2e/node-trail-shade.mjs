@@ -7,20 +7,20 @@
  *  1. Both trail menus — the toolbar's Trails button and Tracks ▸ Node Trails —
  *     hold a Length group and, below it, a Shade group: Very dark / Dark /
  *     Normal / Light / Very light, darkest first, each with a sample swatch.
- *     Very dark is the default and is checked in both. The length items are
+ *     Dark is the default and is checked in both. The length items are
  *     unchanged.
- *  2. With Very dark, every trail segment the app strokes is exactly
- *     `trailColor(track color, 'veryDark', age)` — darker than its track.
+ *  2. With Dark, every trail segment the app strokes is exactly
+ *     `trailColor(track color, 'dark', age)` — darker than its track.
  *  3. Picking Light from the toolbar redraws at once in the lighter colors,
  *     moves the checkmark in BOTH menus and names it in the status bar; a pick
  *     from Tracks ▸ Node Trails does the same the other way round. A shade
  *     pick leaves the trail length alone, and a length pick leaves the shade.
  *  4. The shade is remembered across a reload (localStorage — display taste,
  *     never written to the .slp), and an unrecognised stored value falls back
- *     to Very dark.
+ *     to Dark.
  *  5. The overlay-video export starts from the app's shade, offers the same
  *     five in a "Trail shade" select, and a stored export shade this build
- *     does not offer falls back to Very dark rather than leaving the select blank.
+ *     does not offer falls back to Dark rather than leaving the select blank.
  *
  * Run: node tests/e2e/node-trail-shade.mjs   (SHOT_DIR=… saves the menu and a
  * comparison of the five shades over a dark and a light background)
@@ -97,9 +97,9 @@ try {
         check(JSON.stringify(g.lengths) === JSON.stringify(['Off', '¼ second (8 frames)', '½ second (15 frames)',
             '1 second (30 frames)', '2 seconds (60 frames)', 'Custom…']), `${which}: the length items are unchanged`, g.lengths);
     }
-    check(m.shade === 'veryDark', `the default shade is Very dark (state.trailShade = "${m.shade}")`);
+    check(m.shade === 'dark', `the default shade is Dark (state.trailShade = "${m.shade}")`);
     let cs = checkedShade(m);
-    check(JSON.stringify(cs) === '{"toolbar":["Very dark"],"menubar":["Very dark"]}', 'Very dark is checked in both menus', cs);
+    check(JSON.stringify(cs) === '{"toolbar":["Dark"],"menubar":["Dark"]}', 'Dark is checked in both menus', cs);
     check(m.toolbar.shades.every(s => s.aria === (s.on ? 'true' : 'false')), 'aria-checked follows the checkmark');
 
     if (SHOT_DIR) {
@@ -194,12 +194,12 @@ try {
         r.drawAllOverlays(window.__lucid.state.currentFrame);
     });
 
-    // ---- 2. Very dark (the default), drawn ----------------------------------------
+    // ---- 2. Dark, drawn -----------------------------------------------------------
     await redraw();
     let d = await drawn();
     check(d.tracks.length === 2, `two animals on the frame (${d.tracks.length})`);
-    check(JSON.stringify(d.got) === JSON.stringify(d.want), 'Very dark: every trail segment is trailColor(track, "veryDark", age)', d);
-    check(d.darker, 'Very dark: every trail segment is darker than both tracks\' own colors');
+    check(JSON.stringify(d.got) === JSON.stringify(d.want), 'Dark: every trail segment is trailColor(track, "dark", age)', d);
+    check(d.darker, 'Dark: every trail segment is darker than both tracks\' own colors');
 
     // ---- 3. picking a shade: toolbar, then Tracks ▸ Node Trails -------------------
     await page.hover('#tbTrails');
@@ -219,19 +219,19 @@ try {
 
     await page.click('.menu-item[data-menu="tracks"]');
     await page.hover('#menuTrailsParent');
-    await page.click('#menuTrailsShadeDark');
+    await page.click('#menuTrailsShadeVeryDark');
     m = await menus();
     cs = checkedShade(m);
-    check(m.shade === 'dark' && JSON.stringify(cs) === '{"toolbar":["Dark"],"menubar":["Dark"]}',
-        'Tracks ▸ Node Trails ▸ Dark sets it and moves the toolbar menu\'s checkmark', { shade: m.shade, cs });
+    check(m.shade === 'veryDark' && JSON.stringify(cs) === '{"toolbar":["Very dark"],"menubar":["Very dark"]}',
+        'Tracks ▸ Node Trails ▸ Very dark sets it and moves the toolbar menu\'s checkmark', { shade: m.shade, cs });
     d = await drawn();
-    check(JSON.stringify(d.got) === JSON.stringify(d.want) && d.darker, 'Dark: drawn as trailColor(track, "dark", age)', d);
+    check(JSON.stringify(d.got) === JSON.stringify(d.want) && d.darker, 'Very dark: drawn as trailColor(track, "veryDark", age)', d);
 
     await page.click('.menu-item[data-menu="tracks"]');
     await page.hover('#menuTrailsParent');
     await page.click('#menuTrailsSecond');
     m = await menus();
-    check(m.shade === 'dark' && m.sec === 1, `a length pick leaves the shade alone (${m.shade}, ${m.sec} s)`);
+    check(m.shade === 'veryDark' && m.sec === 1, `a length pick leaves the shade alone (${m.shade}, ${m.sec} s)`);
 
     // Off: picking a shade says the trails are off rather than appearing to do nothing.
     await page.click('.menu-item[data-menu="tracks"]');
@@ -250,7 +250,7 @@ try {
             const st = window.__lucid.state;
             st.trailLength = 20;
             const keys = ['veryDark', 'dark', 'normal', 'light', 'veryLight'];
-            const names = ['Very dark (default)', 'Dark', 'Normal', 'Light', 'Very light'];
+            const names = ['Very dark', 'Dark (default)', 'Normal', 'Light', 'Very light'];
             const box = document.createElement('div');
             box.id = 'shadeShot';
             box.style.cssText = 'position:fixed;left:0;top:0;z-index:99999;background:#1b1b1f;padding:12px;display:grid;' +
@@ -296,7 +296,7 @@ try {
     });
     check(ex.seeded === 'light', `the export starts from the app's shade (${ex.seeded})`);
     check(ex.stored === 'veryLight', `a shade stored by the export is remembered (${ex.stored})`);
-    check(ex.fallback === 'veryDark', `a stored export shade this build does not offer falls back to Very dark (${ex.fallback})`);
+    check(ex.fallback === 'dark', `a stored export shade this build does not offer falls back to Dark (${ex.fallback})`);
 
     await page.evaluate(async () => {
         const mod = await import('/ui/overlay-export-modal.js');
@@ -323,7 +323,7 @@ try {
     await page.reload();
     await page.waitForFunction(() => window.__lucid && window.__lucid.state, { timeout: 60000 });
     m = await menus();
-    check(m.shade === 'veryDark', `an unrecognised stored shade falls back to Very dark (${m.shade})`);
+    check(m.shade === 'dark', `an unrecognised stored shade falls back to Dark (${m.shade})`);
     await page.evaluate(() => localStorage.removeItem('nodeTrailShade'));
 
     check(errs.length === 0, 'no page errors', errs);

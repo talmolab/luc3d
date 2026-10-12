@@ -8,6 +8,7 @@
 
 // SLEAP default "alphabet" palette — 26 visually distinct colors (Green-Armytage)
 // Red entries removed: red is reserved exclusively for ReprojectedInstances.
+// Track mode's palette — see UNIDENTIFIED_TRACK_COLORS for Identity mode.
 export const TRACK_COLORS = [
     '#ff6b6b',  // red
     '#4ecdc4',  // teal
@@ -31,6 +32,33 @@ export const TRACK_COLORS = [
     '#98fb98',  // pale green
 ];
 
+// When coloring by Identity, a track color is NEVER an identity color. A track
+// is not an animal; an identity is. In that mode the two share the canvas — a
+// track with no identity on the frame falls back to its track color — and the
+// identity palette (`IDENTITY_COLORS`, pose/pose-data.js) is full-saturation
+// neon spanning the whole hue wheel, so the vivid palette above always lands
+// on some identity's hue (track_4's green read as id_0). Identity mode draws
+// tracks in MUTED EARTH TONES instead, separated from the neon by saturation
+// and lightness rather than hue. Every entry is >= ΔE2000 20 from every
+// identity color and >= 15 from the reprojection red, the ungrouped peach and
+// the no-ID gray; `tests/test-track-identity-palette.mjs` enforces it. None is
+// darker than L* 52: a name label's pill is translucent black, and over a
+// white mouse a darker muted color all but vanishes into it. Ordered
+// farthest-first, so the first few tracks are the most distinct.
+export const UNIDENTIFIED_TRACK_COLORS = [
+    '#a6766b',  // terracotta
+    '#539c9b',  // teal
+    '#908e51',  // olive
+    '#8f86b0',  // dusty violet
+    '#84aa87',  // sage
+    '#b890a1',  // mauve
+    '#b6ab87',  // khaki
+    '#95765d',  // brown
+    '#608a7b',  // pine
+    '#76875f',  // moss
+    '#ac926c',  // ochre
+];
+
 // Fixed color for all ReprojectedInstances
 export const REPROJECTION_COLOR = '#e53e3e';
 
@@ -42,7 +70,13 @@ export const UNGROUPED_USER_COLOR = '#F8B195';
 // Session.isExplicitNoIdentity.
 export const NULL_ID_COLOR = '#a7adba';
 
-export function getTrackColor(trackIdx) {
+/**
+ * A track's color: from TRACK_COLORS when coloring by Track, from
+ * UNIDENTIFIED_TRACK_COLORS when coloring by Identity (`colorByIdentity`
+ * truthy), so a track never wears an identity's color. Same index, same slot
+ * position in either palette.
+ */
+export function getTrackColor(trackIdx, colorByIdentity) {
     // Color is keyed on the RAW trackIdx, so the same index in different cameras
     // draws the same color. For per-camera prediction `.slp` files (lazy sessions)
     // track ids are independent across cameras, so same-color ≠ same animal — this
@@ -52,9 +86,10 @@ export function getTrackColor(trackIdx) {
     // Guard against null / negative / non-finite indices: JS `-1 % n === -1`,
     // and TRACK_COLORS[-1] is undefined, which would crash the color helpers
     // (hexToRgb). Normalize into a valid, in-range slot.
-    var n = TRACK_COLORS.length;
+    var palette = colorByIdentity ? UNIDENTIFIED_TRACK_COLORS : TRACK_COLORS;
+    var n = palette.length;
     var i = Number.isFinite(trackIdx) ? ((trackIdx % n) + n) % n : 0;
-    return TRACK_COLORS[i];
+    return palette[i];
 }
 
 /**
@@ -181,7 +216,7 @@ export function getGroupColor(group, session, useIdentity, frameIdx, cameraName)
     }
     // The "No ID" track is the null track → same gray as the ID panel.
     if (session && session.isNoIdTrack && session.isNoIdTrack(effectiveTrackIdx)) return NULL_ID_COLOR;
-    return getTrackColor(effectiveTrackIdx);
+    return getTrackColor(effectiveTrackIdx, useIdentity);
 }
 
 /**
@@ -212,7 +247,7 @@ export function getInstanceColor(instance, session, cameraName, useIdentity, fra
     if (instance.trackIdx == null) return UNGROUPED_USER_COLOR;
     // The "No ID" track is the null track → same gray as the ID panel.
     if (session && session.isNoIdTrack && session.isNoIdTrack(instance.trackIdx)) return NULL_ID_COLOR;
-    return getTrackColor(instance.trackIdx);
+    return getTrackColor(instance.trackIdx, useIdentity);
 }
 
 export function getLineDashPattern(style) {
@@ -2055,11 +2090,10 @@ export const TRAIL_SHADES = [
 
 /**
  * The shade a trail is drawn in until the user picks another — and for a
- * missing or unknown key. Very dark: at Normal the newest segment is the
- * track's own color, so it reads as part of the current skeleton, and the
- * further the trail is from that color the more the current frame stands out.
+ * missing or unknown key. Dark: at Normal the newest segment is the track's own
+ * color, so it reads as part of the current skeleton.
  */
-export const DEFAULT_TRAIL_SHADE = 'veryDark';
+export const DEFAULT_TRAIL_SHADE = 'dark';
 
 /** The TRAIL_SHADES entry named `key`, or null. */
 export function trailShadeFor(key) {
@@ -2621,6 +2655,7 @@ export function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, ses
     // 3. Linked predicted instances — drawn OVER reprojections so they're visible
     if (viewInstances && showPredicted) {
         var predictedInstances = [];
+        var predictedBaseColors = [];
         for (let i = 0; i < viewInstances.length; i++) {
             const inst = viewInstances[i];
             const instType = inst.type || 'user';
@@ -2642,6 +2677,7 @@ export function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, ses
             }));
 
             predictedInstances.push(inst);
+            predictedBaseColors.push(baseColor);
         }
 
         // 3a. ID overlays — label predicted instances with their identity in ID
@@ -2659,6 +2695,11 @@ export function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, ses
                 if (pIdentity) {
                     pNameByIdx[pl] = pIdentity.name;
                     pColorByIdx[pl] = pIdentity.color;
+                } else {
+                    // No identity: the label wears its skeleton's color (an
+                    // Identity-mode track color, or the no-ID gray), never
+                    // drawInstanceLabels' Track-mode fallback.
+                    pColorByIdx[pl] = predictedBaseColors[pl];
                 }
             }
             drawInstanceLabels(ctx, predictedInstances, skeleton, viewName, Object.assign({}, predictedRender, {
@@ -2683,6 +2724,7 @@ export function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, ses
     // 4. Linked user instances (front layer) + user labels
     if (viewInstances && showUser) {
         var userInstances = [];
+        var userBaseColors = [];
         for (let i = 0; i < viewInstances.length; i++) {
             const inst = viewInstances[i];
             const instType = inst.type || 'user';
@@ -2701,6 +2743,7 @@ export function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, ses
             }));
 
             userInstances.push(inst);
+            userBaseColors.push(baseColor);
         }
 
         // 4a. Draw track name labels (user instances only)
@@ -2720,6 +2763,8 @@ export function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, ses
                     if (lIdentity) {
                         nameByIdx[li] = lIdentity.name;
                         colorByIdx[li] = lIdentity.color;
+                    } else {
+                        colorByIdx[li] = userBaseColors[li];   // as for predictions above
                     }
                 }
             }

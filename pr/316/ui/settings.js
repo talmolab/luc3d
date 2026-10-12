@@ -17,7 +17,7 @@
 // add/update its entry here so the Settings panel stays complete and truthful.
 // (See CLAUDE.md.)
 
-import { shouldIgnoreShortcut } from './keyboard-target.js?v=cfdc68249355';
+import { shouldIgnoreShortcut } from './keyboard-target.js?v=f5e69a9aa3f3';
 
 const STORAGE_KEY = 'lucid.settings.v1';
 
@@ -90,6 +90,7 @@ const ACTION_CATALOG = [
     { id: 'zoomIn', label: 'Zoom in videos', category: 'View', binding: '+ / =', editable: false, dispatched: false },
     { id: 'zoomOut', label: 'Zoom out videos', category: 'View', binding: '− / _', editable: false, dispatched: false },
     { id: 'zoomReset', label: 'Reset video zoom', category: 'View', binding: '0', editable: false, dispatched: false },
+    { id: 'nativeResolution', label: 'Native video resolution (1:1) on / off', category: 'View', binding: 'Shift+0', editable: false, dispatched: false },
     { id: 'rotateVideo', label: 'Rotate active video (hold)', category: 'View', binding: 'Shift+R + ← / →', editable: false, dispatched: false },
     { id: 'toggleUser', label: 'Toggle User keypoints', category: 'View', binding: 'u', editable: true, dispatched: true },
     { id: 'togglePredicted', label: 'Toggle Predictions', category: 'View', binding: 'p', editable: true, dispatched: true },
