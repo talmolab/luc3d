@@ -2963,6 +2963,23 @@ subtitle is populated for loaded projects, not just freshly triangulated ones.
   fallback straight to `.reprojections[viewName]` (via `drawReprojectedSkeleton`,
   no Instance wrapper needed) — also unchanged. Covered by
   `tests/test-reprojection-lifecycle.js`'s "getOrComputeReprojectedInstance" block.
+  `reprojectIntoEveryCamera(reprojections, points3d, cameras)` — **a group's
+  reprojection must reach EVERY calibrated camera, including one where it has
+  no instance on that frame.** The bulk sweeps solve each group from its
+  `groupCameras`, so `triangulateAndReproject` hands back reprojections for
+  those cameras only. Three of them stored that as-is: `triangulateAllFrames`'
+  in-memory path, `triangulateMultiFrameInstances`, and Group by Track
+  (`ui/export-modals.js`). `ui/rendering.js`'s lazy fill only fills a group
+  whose reprojections are EMPTY, so it never added the missing camera. On a
+  real 8-camera recording, a mouse hidden behind another in one side view lost
+  its reprojection there after Triangulate All ▸ Refined, though it had shown
+  right after Track All. All three now pass their result through this helper,
+  which adds `reprojectPointsCamera(points3d, cam)` for each missing camera, in
+  place. It adds reprojections only: the 3D, the per-camera errors and the
+  mean are untouched, since a camera with no instance has nothing to measure
+  against. Covered by `tests/e2e/triangulate-all-reprojects-every-view.mjs`
+  (all three paths plus the windowed sweep, against single-frame Triangulate,
+  on a real overlay canvas; confirmed to fail on the pre-fix build).
   **Two robustness features:** (1) views excluded in the Tracking Wizard's Camera
   Views panel (`isCameraTracked`, or `options.includedCameras` override) never
   contribute to the 3D solve, but are still reprojected INTO — an excluded view
@@ -4422,7 +4439,9 @@ SLP all-sessions, JSON labels, points3d H5, reproj H5).
   `sessionHasCalibration`, `showCalibrationRequiredPopup`,
   `getInstanceGroupsForFrame`, `sweepLazyFrameWindows`,
   `resolveTriangulationMethod`, `findEquivalentPriorGroup`, `adoptPrior3d`,
-  `triangulationMethodLabel` (the last four for the adopt-don't-downgrade rule).
+  `triangulationMethodLabel` (the last four for the adopt-don't-downgrade rule),
+  `reprojectIntoEveryCamera` (Group by Track reprojects each solve into every
+  camera, not only the cameras it has instances in or the run's camera filter).
 - `./viewport3d.js` — `Viewport3D` (Export 3D Video modal).
 - `./overlays.js` — `getTrackColor`, `getGroupColor` (Export 3D Video modal).
 - `./rendering.js` — `drawAllOverlays`, `setReprojErrorVisible`,
