@@ -1642,6 +1642,43 @@ remembered — and three rules hold:
   is a dozen pixels across and anything solid over it hides the node's own
   colour. Covered by `tests/e2e/plane-node-selection.mjs`.
 
+**When coloring by Identity, a track color is never an identity color.** An
+identity is an animal; a track is not. In Identity mode a track with no
+identity on the frame falls back to its TRACK color, so both palettes share the
+canvas, and the identity palette (`IDENTITY_COLORS`, pose/pose-data.js) is
+full-saturation neon spanning the whole hue wheel. Track mode's vivid palette
+(`TRACK_COLORS`) therefore always lands on some identity's hue: after Track
+All, an unidentified `track_4` drew in nearly the green of `id_0` and read as
+that animal. So the palette follows the mode, through ONE function,
+`getTrackColor(trackIdx, colorByIdentity)` (`ui/overlays.js`):
+- **Track mode keeps the vivid `TRACK_COLORS`.** No identity color is on the
+  canvas there, and telling tracks apart is the whole job.
+- **Identity mode draws tracks in `UNIDENTIFIED_TRACK_COLORS`**, muted earth
+  tones separated from the neon by saturation and lightness rather than hue.
+- **Everything that shows a track's color follows the mode, not just the
+  skeleton**: the name label (an identity-less instance's label takes its
+  skeleton's color), the timeline's track rows and the Visibility tab's track
+  swatches. The Tracks / Identity change handler in `ui/ui-wiring.js` recolors
+  all of them. A new place that paints a track color must pass the mode to
+  `getTrackColor`, and anything that changes `state.colorByIdentity` must go
+  through `setColorByIdentity` (`ui/color-by.js`), or that handler never runs.
+
+The muted palette's four rules, measured in CIEDE2000 and enforced by
+`tests/test-track-identity-palette.mjs`. The test checks its own ΔE
+implementation against the published reference data, and shows the vivid
+palette failing the first rule:
+- every entry is **≥ 20** from every one of the 20 identity colors (the
+  reported pair was 12.2; the vivid palette's worst is 2.2);
+- **≥ 15** from the other fixed meanings on the canvas: `REPROJECTION_COLOR`,
+  `UNGROUPED_USER_COLOR` and `NULL_ID_COLOR`;
+- **≥ 9** from every other entry, so tracks still tell apart;
+- **no darker than L\* 52**. A name label sits on a translucent black pill, and
+  over a white mouse a darker muted color all but vanishes into it.
+Adding an identity color, or a fixed canvas color, means re-running that test.
+Change the palette if it fails; do not lower the thresholds. The mode switching
+itself (labels, timeline rows recolored in place, swatches) is covered by
+`tests/e2e/unidentified-track-palette.mjs`.
+
 **Modals must close on `Esc`** unless explicitly stated otherwise. When building
 or editing any modal/overlay dialog, wire a `keydown` listener that closes it on
 `Escape` (and removes the listener on close). For a modal mid-operation (e.g. an

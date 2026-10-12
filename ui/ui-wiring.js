@@ -896,8 +896,7 @@ export function setupMenus() {
         var res = session.propagateTracksToIdentities();
         // Mark tracks as trusted (persisted in project metadata) and show IDs.
         session.trustTracks = true;
-        state.colorByIdentity = true;
-        updateColorByToggle();
+        setColorByIdentity(state, true);
         drawAllOverlays(state.currentFrame);
         update3DViewport(state.currentFrame);  // recolor 3D instances instantly
         updateInfoPanel();
@@ -960,6 +959,10 @@ export function setupMenus() {
         updateColorByToggle();
         drawAllOverlays(state.currentFrame);
         update3DViewport(state.currentFrame);  // recolor 3D instances instantly
+        // Track colors change palette with the mode (getTrackColor), so the
+        // timeline's track rows and the Visibility tab's track swatches too.
+        if (timeline) timeline.recolorTracks();
+        populateTimelineVisibility(state.session);
     });
 
     colorByTracksBtn.addEventListener('click', function () {

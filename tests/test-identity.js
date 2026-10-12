@@ -788,7 +788,9 @@
         it('returns track color when session is null', function () {
             var inst = new Instance([[10, 20]], 0, 'predicted');
             var color = getInstanceColor(inst, null, 'CamA', true);
-            assertEqual(color, getTrackColor(0), 'should fall back to track color');
+            // Identity mode's track color, never Track mode's vivid one
+            // (tests/test-track-identity-palette.mjs).
+            assertEqual(color, getTrackColor(0, true), 'should fall back to track color');
         });
 
         it('changing identity changes color immediately', function () {

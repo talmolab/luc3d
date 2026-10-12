@@ -72,6 +72,8 @@ the old `app.js` entry point.
 - `setupTimeline()` — instantiates `Timeline` and wires its frame-change /
   range-select callbacks plus the display-mode button group. The frame-change /
   drag-end callbacks fall back to `navigateToFrame` when there's no video.
+  Passes `getColorByIdentity` (reads `state.colorByIdentity`) so the
+  timeline's track rows use the palette the canvas uses.
 - `updateFpsDisplay()` — refreshes the FPS readout, and the frame readout's
   times (`refreshReadoutTotals`), which are frame / fps.
 
@@ -1506,6 +1508,8 @@ session graph that holds them.
   `unlinkedInstances`, both keyed by camera name.
 - `Identity` — id + name + color (uses `IDENTITY_COLORS` palette).
 - `IDENTITY_COLORS` — 20-color palette for identity badges.
+  `UNIDENTIFIED_TRACK_COLORS` (`ui/overlays.js`) must stay ΔE2000 ≥ 20 from every entry
+  (`tests/test-track-identity-palette.mjs`), so a change here re-runs that test.
 - `InstanceGroup` — cross-view grouped instances + triangulated `points3d`
   + cached `reprojectedInstances`. `markDirty`/`markClean`. Also
   `triangulationMethod` (`'ba'`|`'dlt'`|undefined), recording WHICH SOLVER
@@ -3878,7 +3882,8 @@ ui-wiring (import loop; its Node tests stub UI modules). Dependency-free.
 **Key exports.** `setColorByIdentity(state, on)` -> `true` if it changed
 anything (the handler runs only on a change); `onColorByChange(fn)` —
 registers the single change handler (ui-wiring: button highlight +
-`drawAllOverlays` + `update3DViewport`). With no handler (Node tests) it only
+`drawAllOverlays` + `update3DViewport` + the timeline's track rows and the
+Visibility tab's track swatches). With no handler (Node tests) it only
 sets the state.
 
 **Imports from project modules.** None.
@@ -4954,10 +4959,13 @@ class="slider"></span></label>`) rather than a bare checkbox so the
 control matches the rest of the Visibility panel. Track AND identity
 rows both render a `.vis-color-swatch`: identity rows pull from
 `identity.color`, track rows compute their swatch via
-`getTrackColor(i)` (imported from `./overlays.js`) where `i` is the
-row's position in `session.tracks` — the same palette-index the
-timeline canvas itself uses for the bar color, so the swatch in the
-panel matches the bar the user sees on the timeline. Camera rows have
+`getTrackColor(i, state.colorByIdentity)` (imported from `./overlays.js`)
+where `i` is the row's position in `session.tracks` — the same palette-index
+AND palette the timeline canvas itself uses for the bar color (`NULL_ID_COLOR`
+for the No ID track), so the swatch in the panel matches the bar the user
+sees on the timeline. The Tracks / Identity change handler (`ui/ui-wiring.js`)
+re-runs `populateTimelineVisibility` so the swatches switch palette with the
+mode. Camera rows have
 no swatch (cameras have no intrinsic color in the data model).
 
 The change listener calls `toggle{Camera,Track,Identity}Visibility(session, name)`
@@ -6129,9 +6137,22 @@ palettes, and per-frame draw routines. Receives `frameGroup` and
   the overlay-video export sets them (SLEAP's "Show: ☑ Nodes ☑ Edges"); the live
   Visibility panel has no such toggle. They ride in on the per-type opts bags, so
   `drawFrameOverlays` forwards them without needing to know about them.
-- Color: `TRACK_COLORS`, `REPROJECTION_COLOR`, `UNGROUPED_USER_COLOR`,
+- Identity-mode name labels: `drawFrameOverlays` sections 3a (predicted) and
+  4a (user) give an instance with no resolved identity its SKELETON's base
+  color in `colorByIndex`. Left empty, `drawInstanceLabels` fell back to
+  `getTrackColor(trackIdx)` — Track mode's vivid palette — so the label of an
+  identity-less grouped instance drew in a color near an identity's while
+  its skeleton was muted. Covered by `tests/e2e/unidentified-track-palette.mjs`.
+- Color: `TRACK_COLORS` (Track mode's vivid palette),
+  `UNIDENTIFIED_TRACK_COLORS` (11 muted earth tones, Identity mode's: when
+  coloring by Identity a track color is never an identity color, see CLAUDE.md
+  UI Conventions, enforced by `tests/test-track-identity-palette.mjs`),
+  `REPROJECTION_COLOR`, `UNGROUPED_USER_COLOR`,
   `NULL_ID_COLOR` (space gray `#a7adba` for explicit-none instances when
-  coloring by identity), `getTrackColor`, `getGroupColor`,
+  coloring by identity), `getTrackColor(trackIdx, colorByIdentity?)` (picks
+  the palette by the mode; `getGroupColor` / `getInstanceColor` pass their
+  `useIdentity` through, so an identity-less track is muted in Identity mode),
+  `getGroupColor`,
   `getInstanceColor`, `adjustColorBrightness`, `errorColor`, `hexToRgb`,
   `brightenColor`, `desaturateColor`, `complementaryColor`.
   `getGroupColor`/`getInstanceColor` return `NULL_ID_COLOR` when
@@ -10033,10 +10054,21 @@ when the bar appears/disappears.
 - `Timeline` — class. Selected methods: `setData(session)`,
   `setCurrentFrame(frameIdx, opts?)`, `setTotalFrames(n)`, `setZoom(level)`,
   `scrollTo(frameIdx)`, `resize`, `redraw`, `destroy`,
-  `setDisplayMode(mode)`, `refreshTracks(session, opts?)`,
+  `setDisplayMode(mode)`, `refreshTracks(session, opts?)`, `recolorTracks()`,
   `setFrameModified(frameIdx, modified)`, `getPreferredHeight`,
   `getCameraGroups`, `getLabelLines`, `getRowCount`,
   `getTrackAreaElement`.
+
+**Track rows follow the Tracks / Identity coloring.** The constructor takes
+`options.getColorByIdentity` (`pose/initialization.js` passes a reader of
+`state.colorByIdentity`), and a track row's bar is `getTrackColor(trackIdx,
+colorByIdentity)`, so the bar wears the palette the canvas draws that track in.
+Rows whose color comes from a track index carry `_trackColored` (not the No ID
+track's gray, not the "+N more" or empty rows); `recolorTracks()` repaints just
+those in the current mode's palette and redraws. It does NOT rebuild: segments
+do not depend on the mode, and `_buildTrackSegments` walks every frame of every
+camera. The Tracks / Identity change handler (`ui/ui-wiring.js`) calls it.
+Covered by `tests/e2e/unidentified-track-palette.mjs`.
 
 **Possible-ID-switch markers** are no longer drawn here — they moved to the
 transport seekbar (`ui/seekbar-markers.js`); the timeline's marker layer, its
@@ -10344,7 +10376,7 @@ so it loads cleanly in the headless node test runner without dragging in
 - `get{Camera,Track,Identity}VisibilityList(session)` — `[{ name, visible }]`
   (identity rows also include `id` and `color`). Track-row swatch color
   is intentionally NOT set by this module — `ui/info-panel.js` decorates
-  each track entry with `getTrackColor(i)` after the list returns so this
+  each track entry with `getTrackColor(i, state.colorByIdentity)` after the list returns so this
   module can stay free of `./overlays.js` (and the wider import graph) and
   load cleanly in the headless node test sandbox.
 - `renameHiddenTrack(session, oldName, newName)` /
@@ -10900,8 +10932,12 @@ stopping at the last frame; the step transport buttons/keys stop it first.
   handler registered here via `onColorByChange`: update the active class,
   re-render the 2D overlays via `drawAllOverlays` AND the 3D viewer via
   `update3DViewport` (whose `getGroupColor` closure reads
-  `state.colorByIdentity` live, so instances recolor instantly). The buttons
-  use it, and so does the tracker after Track All (#242).
+  `state.colorByIdentity` live, so instances recolor instantly), and — since a
+  track's color changes palette with the mode (`getTrackColor`) — recolor the
+  timeline's track rows (`timeline.recolorTracks()`) and the Visibility tab's
+  track swatches (`populateTimelineVisibility`). The buttons use it, the
+  tracker after Track All (#242), and Tracks ▸ Propagate Tracks → IDs, which
+  used to set `state.colorByIdentity` directly and skip it.
 - Node Trails (issue #102): two pickers for `state.trailSeconds` — the Tracks ▸
   Node Trails submenu (`#menuTrailsSubmenu`, items `menuTrailsOff` /
   `menuTrailsQuarter` / `menuTrailsHalf` / `menuTrailsSecond` / `menuTrailsTwoSeconds`) and the toolbar's
