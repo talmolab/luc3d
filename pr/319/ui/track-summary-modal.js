@@ -14,8 +14,8 @@
 //
 // Depends on: ui/track-summary.js, ui/id-switch-modal.js (openIdSwitchPanel).
 
-import { planTrackSummary } from './track-summary.js?v=66b97f09b688';
-import { openIdSwitchPanel } from './id-switch-modal.js?v=66b97f09b688';
+import { planTrackSummary } from './track-summary.js?v=cb91193d2f3c';
+import { openIdSwitchPanel } from './id-switch-modal.js?v=cb91193d2f3c';
 
 /** Click an existing control by id (a disabled button ignores it, as it would a real click). */
 function clickById(id) {

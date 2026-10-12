@@ -1,12 +1,16 @@
-// ui/loading-overlay.js — the full-window loading overlay (#loadingOverlay) and
-// its determinate progress bar, shared by every long-running bulk operation
-// (Track All, Triangulate All, Group by Identity, …).
+// ui/loading-overlay.js — the loading overlay (#loadingOverlay) and its
+// determinate progress bar, shared by every long-running bulk operation
+// (Track All, Triangulate All, Group by Identity, …): an opaque card styled
+// like the image ID-switch check's dialog — optional title, message, bar with a
+// playhead, a large percentage — on a transparent layer that blocks the app
+// without greying it out.
 //
 // Two pieces:
 //   - `showLoading` / `showLoadingProgress` / `hideLoading` own the overlay DOM.
 //     `showLoading(msg)` is the indeterminate form (spinner + text) and hides
 //     the bar; `showLoadingProgress(label, done, total)` writes the standard
-//     "<label>: done/total frames (pct%)…" line and drives the bar.
+//     "<label>: done/total frames…" line, the percentage under the bar, and
+//     drives the bar.
 //   - `createProgressPacer()` decides WHEN a chunked main-thread loop should
 //     report and yield. It is time-based, not every-N-frames: a frame count is
 //     either too chatty on fast work (each yield waits for a paint) or too
@@ -24,7 +28,7 @@
 // graph of the last minute under the detail line: `setLoadingCpu`, built from
 // ui/load-graph.js like the image check's dialog.
 
-import { createLoadMeter, createBusyClock, createLoadGraph, formatCpuLoad, setLoadLine, cpuCores } from './load-graph.js?v=66b97f09b688';
+import { createLoadMeter, createBusyClock, createLoadGraph, formatCpuLoad, setLoadLine, cpuCores } from './load-graph.js?v=cb91193d2f3c';
 
 /** Default pacer interval. Each yield waits for one paint (~one display frame),
  *  so this bounds the overhead at roughly frame-time / interval (a few %). The
@@ -123,14 +127,38 @@ function _el(id) {
 function _setBarVisible(on) {
     var wrap = _el('loadingProgress');
     if (wrap) wrap.classList.toggle('hidden', !on);
+    var pct = _el('loadingPct');
+    if (pct) pct.classList.toggle('hidden', !on);
+    // the spinner says "working" only where there is no bar to say how far
+    var spinner = _el('loadingSpinner');
+    if (spinner) spinner.classList.toggle('hidden', on);
     var sub = _el('loadingSubstatus');
     if (sub && !on) { sub.textContent = ''; sub.classList.add('hidden'); }
     if (!on) { _setEta(''); _etaReset(); }
 }
 
-export function showLoading(msg) {
+/**
+ * The card's title (#loadingTitle) — the operation, e.g. "Triangulate All" —
+ * set by a call that passes `opts.title` and KEPT until `hideLoading` (or a
+ * call passing another; '' clears it), so the progress calls deep inside a
+ * run need not repeat it. Operations that never pass one show none.
+ */
+function _setTitle(opts) {
+    if (!opts || opts.title == null) return;
+    var el = _el('loadingTitle');
+    if (!el) return;
+    el.textContent = opts.title;
+    el.classList.toggle('hidden', !opts.title);
+}
+
+/**
+ * The card with a message and a spinner, no progress bar (an operation that
+ * cannot say how far along it is). `opts.title`: see `_setTitle`.
+ */
+export function showLoading(msg, opts) {
     var overlay = _el('loadingOverlay');
     if (overlay) overlay.classList.remove('hidden');
+    _setTitle(opts);
     var status = _el('loadingStatus');
     if (status) status.textContent = msg || 'Loading...';
     _setBarVisible(false);
@@ -139,6 +167,7 @@ export function showLoading(msg) {
 export function hideLoading() {
     var overlay = _el('loadingOverlay');
     if (overlay) overlay.classList.add('hidden');
+    _setTitle({ title: '' });
     _setBarVisible(false);
     _setFill(0, false);
     setLoadingCpu(null);
@@ -204,6 +233,12 @@ function _setFill(frac, animate) {
     fill.classList.toggle('no-anim', !animate);
     fill.style.transform = 'scaleX(' + frac + ')';
     fill.dataset.fraction = String(frac);
+    // the playhead at the fill's leading edge: its full-width wrapper translated by the same fraction
+    var head = _el('loadingProgressHead');
+    if (head) {
+        head.classList.toggle('no-anim', !animate);
+        head.style.transform = 'translateX(' + (100 * frac) + '%)';
+    }
     var wrap = _el('loadingProgress');
     if (wrap) wrap.setAttribute('aria-valuenow', String(Math.round(frac * 100)));
 }
@@ -219,9 +254,13 @@ function _setFill(frac, animate) {
  * @param {number} [opts.steps]  how many stages the operation has
  * @param {string} [opts.detail] extra context for the line under the bar
  *                               (method, counts) — kept off the main line so it
- *                               always reads "<label>: done/total frames (pct%)…"
+ *                               always reads "<label>: done/total frames…"
  * @param {string} [opts.unit]   default 'frames'
+ * @param {string} [opts.title]  the operation, as the card's title (kept until
+ *                               hideLoading — see `_setTitle`)
  *
+ * The percentage is the large number under the bar (#loadingPct), as in the
+ * image ID-switch check's dialog, so the main line does not repeat it.
  * A second text line (#loadingEta) estimates the time remaining in the CURRENT
  * stage (see `estimateRemainingMs`); in a multi-stage run it says so.
  */
@@ -231,11 +270,11 @@ export function showLoadingProgress(label, done, total, opts) {
     var pct = Math.floor(frac * 100);
     var overlay = _el('loadingOverlay');
     if (overlay) overlay.classList.remove('hidden');
+    _setTitle(opts);
     var status = _el('loadingStatus');
-    if (status) {
-        status.textContent = label + ': ' + _count(done) + '/' + _count(total) + ' ' +
-            (opts.unit || 'frames') + ' (' + pct + '%)…';
-    }
+    if (status) status.textContent = label + ': ' + _count(done) + '/' + _count(total) + ' ' + (opts.unit || 'frames') + '…';
+    var pctEl = _el('loadingPct');
+    if (pctEl) pctEl.textContent = pct + '%';
     var wrap = _el('loadingProgress');
     // A stage starting over (bar hidden, or moving backwards) snaps; otherwise animate.
     var fill = _el('loadingProgressFill');

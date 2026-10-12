@@ -28,19 +28,19 @@
  * import-export/save-load.js (setStatus).
  */
 
-import { state, getActiveSession } from './app-state.js?v=66b97f09b688';
-import { setSeekbarSwitchMarkers } from './seekbar-markers.js?v=66b97f09b688';
-import { setIdSwitchHighlight, updateIdSwitchHighlight, refreshIdSwitchHighlight, ID_SWITCH_SECTION_RGB } from './id-switch-highlight.js?v=66b97f09b688';
-import { setStatus, markDirty } from '../import-export/save-load.js?v=66b97f09b688';
-import { showLoading, hideLoading, yieldToPaint } from './loading-overlay.js?v=66b97f09b688';
-import { getTrackingThreshold } from './settings.js?v=66b97f09b688';
-import { checkSizeSwitches, checkImageSwitches } from '../pose/id-switch-check.js?v=66b97f09b688';
+import { state, getActiveSession } from './app-state.js?v=cb91193d2f3c';
+import { setSeekbarSwitchMarkers } from './seekbar-markers.js?v=cb91193d2f3c';
+import { setIdSwitchHighlight, updateIdSwitchHighlight, refreshIdSwitchHighlight, ID_SWITCH_SECTION_RGB } from './id-switch-highlight.js?v=cb91193d2f3c';
+import { setStatus, markDirty } from '../import-export/save-load.js?v=cb91193d2f3c';
+import { showLoading, hideLoading, yieldToPaint } from './loading-overlay.js?v=cb91193d2f3c';
+import { getTrackingThreshold } from './settings.js?v=cb91193d2f3c';
+import { checkSizeSwitches, checkImageSwitches } from '../pose/id-switch-check.js?v=cb91193d2f3c';
 import { createImageEmbedder, IMAGE_MODEL_MB, formatEmbedTiming, formatEmbedDevice, formatEmbedCpu,
-         inputTensorToPixels, INPUT } from './image-embedder.js?v=66b97f09b688';
-import { createLoadMeter, createLoadGraph, setLoadLine, cpuCores } from './load-graph.js?v=66b97f09b688';
+         inputTensorToPixels, INPUT } from './image-embedder.js?v=cb91193d2f3c';
+import { createLoadMeter, createLoadGraph, setLoadLine, cpuCores } from './load-graph.js?v=cb91193d2f3c';
 import { idSwitchRowKey as rowKey, idSwitchPrimary as primaryOf, idSwitchMarkers as markersOf, idSwitchOnsets as countOnsets,
          idSwitchEncounterCount as encounterCount, linkIdSwitchResults as tagAndLink,
-         idSwitchFixPlan, idSwitchFixFor, idSwitchRenameForFix } from './id-switch-review.js?v=66b97f09b688';
+         idSwitchFixPlan, idSwitchFixFor, idSwitchRenameForFix } from './id-switch-review.js?v=cb91193d2f3c';
 
 const CUE_LABEL = { size: 'body size', image: 'images' };
 
@@ -169,7 +169,7 @@ function drawCropSkeleton(ctx, pts, edges, color) {
 function openProgressDialog(title) {
     var ctl = new AbortController();
     var overlay = document.createElement('div');
-    overlay.className = 'multi-frame-modal-overlay';
+    overlay.className = 'multi-frame-modal-overlay id-switch-progress-overlay';   // no grey backdrop (styles.css)
     overlay.innerHTML = '<div class="multi-frame-modal id-switch-progress"><h3>' + escapeHtml(title) + '</h3>' +
         '<div class="id-switch-progress-text">Starting…</div>' +
         // the same playhead line as the ID Switches rows' bars, standing proud of an inner track that clips the fill
@@ -251,7 +251,7 @@ async function runSize(session, rate) {
     // The overlay's plain form (spinner + message), not a counter: the check is one uninterrupted block of
     // main-thread work (~0.2-1.5 s) whose only progress is 0 then 1 of one fitting step — which the counter
     // used to print as "0/1 frames (0%)", frozen until the overlay closed.
-    showLoading('Checking ID switches (body size)…');
+    showLoading('Comparing each animal\'s body size before and after its contacts…', { title: 'Checking ID switches (body size)' });
     await yieldToPaint();
     try {
         return await checkSizeSwitches(session, { fps: rate.fps });
@@ -335,6 +335,12 @@ async function runImage(session, rate, inject) {
         return res;
     } catch (e) {
         if (e && e.name === 'AbortError') return { ok: false, reason: 'cancelled', cancelled: true };
+        // A check that cannot run here — no network for the model's first download, no Nose/TTI —
+        // is a reason, like the gates above, not a failure (image-embedder.js `cannotRun`)
+        if (e && e.cannotRun) {
+            if (e.cause) console.warn('[id-switch-check:image] ' + e.message, e.cause);
+            return { ok: false, reason: e.message };
+        }
         throw e;
     } finally {
         clearInterval(ticker); clearInterval(cropTicker);
