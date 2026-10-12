@@ -5,9 +5,9 @@
  *
  * Asserted:
  *  1. A 30-minute, 60 fps recording gets a labelled ruler: times in order, one
- *     constant "nice" step, each label centred on its tick (the first
- *     left-aligned at the bar's start), no two labels touching, all within the
- *     bar.
+ *     constant "nice" step, each label centred on its tick — "00:00" too, which
+ *     hangs left of the bar but clear of the transport buttons — no two labels
+ *     touching, the rest within the bar.
  *  2. Layout: the ruler sits under the track, inside the controls bar.
  *  3. A click ON a label seeks to that time (the ruler is part of the
  *     seekbar), to within the half pixel a mouse position is rounded to; and
@@ -16,7 +16,7 @@
  *     and a bar resize re-lays the ruler by itself, with no frame update.
  *  5. Editing the FPS pill re-times it; fps 0 and an empty project clear it.
  *  6. Stepping frames never touches the ruler's DOM.
- *  7. It still fits at 640 px.
+ *  7. It still fits at 640 px, "00:00" still clear of the buttons.
  *
  * Run: node tests/e2e/seekbar-ticks.mjs     (SHOT_DIR=… to save screenshots)
  */
@@ -64,7 +64,7 @@ try {
             transport: box(q('.transport-controls')), fps: box(q('.fps-pill')),
             majors: [...document.querySelectorAll('.seekbar-tick.is-major')].map(e => { const b = box(e); return (b.left + b.right) / 2; }),
             minors: document.querySelectorAll('.seekbar-tick:not(.is-major)').length,
-            labels: [...document.querySelectorAll('.seekbar-tick-label')].map(e => ({ text: e.textContent, start: e.classList.contains('is-start'), ...box(e) })),
+            labels: [...document.querySelectorAll('.seekbar-tick-label')].map(e => ({ text: e.textContent, ...box(e) })),
         };
     });
     const stepOf = (labels) => labels.length > 1 ? parseLabel(labels[1].text) - parseLabel(labels[0].text) : 0;
@@ -78,8 +78,10 @@ try {
     let r = await ruler();
     const texts = r.labels.map(l => l.text);
     check(r.labels.length >= 4, `labels drawn: ${texts.join(' ')} (bar ${r.bar.width.toFixed(0)} px)`);
-    check(texts[0] === '00:00' && r.labels[0].start, 'the first label is 00:00, left-aligned');
-    check(Math.abs(r.labels[0].left - r.bar.left) < 0.5, '  at the bar\'s start');
+    check(texts[0] === '00:00', 'the first label is 00:00');
+    check(Math.abs((r.labels[0].left + r.labels[0].right) / 2 - r.bar.left) < 0.5, '  centred on the bar\'s start, like every other label on its tick');
+    check(r.labels[0].left >= r.transport.right + 2,
+        `  and clear of the transport buttons (${(r.labels[0].left - r.transport.right).toFixed(1)} px)`);
     const step = stepOf(r.labels);
     check([60, 120, 300, 600].includes(step), `a nice step: ${step} s`);
     check(r.labels.every((l, i) => Math.abs(parseLabel(l.text) - i * step) < 1e-9), '  the same step all along');
@@ -90,7 +92,7 @@ try {
         r.labels.forEach((l, i) => {
             const x = r.bar.left + parseLabel(l.text) * 60 / (108000 - 1) * r.bar.width;
             const tickX = r.majors[i];
-            const labelX = l.start ? l.left : (l.left + l.right) / 2;
+            const labelX = (l.left + l.right) / 2;
             worst = Math.max(worst, Math.abs(tickX - x), Math.abs(labelX - x));
         });
         check(worst < 1, `every label and its tick sit at the time's position (worst ${worst.toFixed(2)} px)`);
@@ -100,7 +102,7 @@ try {
         for (let i = 1; i < r.labels.length; i++) minGap = Math.min(minGap, r.labels[i].left - r.labels[i - 1].right);
         check(minGap >= 8, `no two labels touch (smallest gap ${minGap.toFixed(1)} px)`);
     }
-    check(r.labels.every(l => l.left >= r.bar.left - 0.5 && l.right <= r.bar.right + 0.5), 'every label is within the bar');
+    check(r.labels.slice(1).every(l => l.left >= r.bar.left - 0.5 && l.right <= r.bar.right + 0.5), 'every later label is within the bar');
 
     // ---- 2. layout ------------------------------------------------------------------
     check(r.ruler.top >= r.track.bottom, `the ruler is under the track (${r.track.bottom.toFixed(1)} -> ${r.ruler.top.toFixed(1)})`);
@@ -183,8 +185,10 @@ try {
     await page.waitForTimeout(150);
     r = await ruler();
     const lb = Math.max(...r.labels.map(l => l.bottom));
-    check(r.labels.length >= 2 && r.labels.every(l => l.left >= r.bar.left - 0.5 && l.right <= r.bar.right + 0.5),
+    check(r.labels.length >= 2 && r.labels.slice(1).every(l => l.left >= r.bar.left - 0.5 && l.right <= r.bar.right + 0.5),
         `640 px: ${r.labels.map(l => l.text).join(' ')} within a ${r.bar.width.toFixed(0)} px bar`);
+    check(r.labels[0].left >= r.transport.right + 2,
+        `  "00:00" clear of the transport buttons (${(r.labels[0].left - r.transport.right).toFixed(1)} px)`);
     check(lb <= r.controls.bottom && r.ruler.top >= r.controls.top, '  and inside the controls bar');
     check(r.bar.left >= r.transport.right && r.bar.right <= r.fps.left, '  between the transport buttons and the FPS pill');
     if (SHOT_DIR) await page.screenshot({ path: path.join(SHOT_DIR, 'seekbar-ticks-640.png'), clip: { x: 0, y: r.controls.top - 4, width: 640, height: r.controls.bottom - r.controls.top + 8 } });

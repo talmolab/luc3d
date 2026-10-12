@@ -46,8 +46,7 @@ for (const [args, why] of [
     eq(t.step, 300, '30 min on 700 px: a label every 5:00');
     eq(t.minorStep, 60, '  minor ticks every minute');
     eq(t.majors.map(m => m.label).join(' '), '00:00 05:00 10:00 15:00 20:00 25:00', '  labels');
-    eq(t.majors[0].align, 'start', '  the first label is left-aligned');
-    ok(t.majors.slice(1).every(m => m.align === 'center'), '  the rest are centred');
+    ok(t.majors[0].frac === 0 && t.majors[0].label === '00:00', '  the first label is 00:00, at the 0 tick');
     eq(t.minors.length, 24, '  four minors between each pair of majors, none on a major');
     // Same frame -> position mapping as the thumb: time × fps / (total − 1).
     ok(t.majors.every(m => Math.abs(m.frac - m.seconds * 60 / 107999) < 1e-12), '  positions are time × fps / (total − 1)');
@@ -87,7 +86,7 @@ for (const fps of [5, 25, 29.97, 30, 60, 150]) {
             ok(t.majors[t.majors.length - 1].seconds <= endSec + 1e-9 && t.majors[t.majors.length - 1].seconds + t.step > endSec,
                 `${where}: majors run to the end and not past it`);
             // A centred label never hangs off the right end; one that would is dropped.
-            ok(t.majors.every(m => !m.label || m.align === 'start' || m.frac * width + m.label.length * charPx / 2 <= width + 1e-9),
+            ok(t.majors.every((m, k) => !m.label || k === 0 || m.frac * width + m.label.length * charPx / 2 <= width + 1e-9),
                 `${where}: no label hangs off the right end`);
             if (t.minorStep) {
                 const ratio = t.step / t.minorStep;

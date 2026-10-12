@@ -8582,7 +8582,7 @@ minor ticks between them, so a moment can be found and clicked by eye without
 hovering for the tooltip.
 
 **Key exports.** `seekbarTimeTicks(totalFrames, fps, widthPx, {charPx}?)` ->
-`{step, minorStep, majors: [{frac, seconds, label, align}], minors: [frac]}`
+`{step, minorStep, majors: [{frac, seconds, label}], minors: [frac]}`
 (pure); `formatTickLabel(seconds, decimals)` (`mm:ss`, `h:mm:ss` from an hour
 up, rounded before splitting); `TICK_STEPS` and the spacing constants
 (`MIN_LABEL_SPACING_PX`, `LABEL_SPACING_WIDTHS`, `MIN_MINOR_SPACING_PX`,
@@ -8609,9 +8609,11 @@ up, rounded before splitting); `TICK_STEPS` and the spacing constants
   `#seekbar`, so a click or drag on a label scrubs and hovering one shows the
   seekbar tooltip. It hangs below the 24 px bar box; `.seekbar-container`'s
   `margin-bottom` reserves the room, so the controls bar centres bar + ruler
-  (34 px, the transport buttons' height) together. Painted under the ID-switch
-  marks and the thumb. The first label is left-aligned to the bar's start; a
-  centred label that would hang off the right end is dropped (its tick stays).
+  together. Painted under the ID-switch marks and the thumb. Every label is
+  centred on its tick, `00:00` included: that one hangs ~17 px (half a label)
+  left of the bar, into the room `.seekbar-container`'s `margin-left: 12px`
+  adds to the controls bar's gap, clear of the transport buttons at every
+  width. A label that would hang off the RIGHT end is dropped (its tick stays).
 - **Never re-rendered per frame.** `refreshSeekbarTicks` (called from
   `updateSeekbarVisual` on every frame, and from `refreshReadoutTotals` /
   `clearReadout`) compares the frame count, FPS and width with what is drawn
