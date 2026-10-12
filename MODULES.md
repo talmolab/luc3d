@@ -2485,6 +2485,30 @@ ingest (`normalizePoint` == `cv2.undistortPoints` with no `P`), and the
 `velocityThreshold` is in normalized image units (so the 2D term saturates and
 the 3D term dominates — hence `corr3dWeight` is the meaningful knob).
 
+**Score caches (2026-10-12) — the matching cost, computed once instead of per
+pair.** `_assign` scores every target against every detection of a view, and two
+of the inputs depend on only ONE side of the pair:
+- **`detectionRays(det, ext)`** — the detection back-projected to one ray per node
+  (`backProjectToRays`), cached on the `Detection` (`_rays`, `_raysExt`). It was
+  recast for every target: 4.9 s of a 67 s Track All with 5 mice.
+- **`targetProjection(target, ext)`** — the target's 3D projected into a camera, per
+  node, cached on the `Target` (`_proj = {p3, ext, pts}`), so once per (target,
+  view) instead of once per (target, detection).
+Both key on OBJECT IDENTITY, which is exactly when their inputs change:
+`target.points3d` is only ever REPLACED (`_retriangulate`; nothing edits it), and
+`Camera.setExtrinsics` replaces `extrinsicMatrix`. Within a frame every view is
+scored against the same `points3d` (the sync fix), which is what makes the
+per-view projection reusable. The arithmetic is unchanged, only how often it runs.
+Measured with `_diag-trackall-ab.mjs` (origin/main vs this) on 8 recordings —
+`05mice_flippers` (108,000 frames, 5 mice) 63.0 -> 55.0 s and 63.5 -> 54.8 s,
+HardFight 8.2 -> 7.4 s, and the six 3-4-mouse ground-truth sessions 6-13%
+faster — with identity groups identical on all 253,956 frames and the tracker's
+3D identical to the bit (max difference 0 mm); the harness's negative control
+(`matchGate` flipped on the new side) reports 744 of 18,058 frames differing.
+Pinned by `tests/test-cross-view-tracker.mjs` "Score caches": identical scores,
+and a moved camera / replaced `points3d` recomputed exactly — each confirmed to
+fail with its invalidation removed.
+
 **Exports.** `CrossViewTracker` (class: `trackFrame(detsByCam, camsOrder)`,
 maintains `.targets`), `Detection` (2D observation: `pointsNorm`/`pointsPixel` +
 `cam`/`frameIdx`/`slot`), `normalizePoint`.
