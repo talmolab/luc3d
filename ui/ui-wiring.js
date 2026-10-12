@@ -53,6 +53,8 @@ import { OnDemandVideoDecoder, VideoController } from '../loading/video.js';
 
 // Pass 3i-1: tracker functions moved out of app.js.
 import { trackCurrentFrame, trackAll, findMatchForSelected } from '../pose/tracker.js';
+// The toolbar's Animals field, beside Track Frame / Track All.
+import { wireAnimalCountField } from './animal-count-field.js';
 // Track Frame Range (#212): the Track Frame split button's dropdown entry.
 import { showTrackRangeModal } from './track-range-modal.js';
 import { showAlignViewsModal } from './view-align-modal.js';
@@ -2842,6 +2844,8 @@ export function setupUI() {
             showTrackRangeModal({ onTracked: navigateToFrame });
         });
     }
+
+    wireAnimalCountField();
 
     // Context menu for instance groups
     document.getElementById('ctxUnlinkGroup').addEventListener('click', function () {
