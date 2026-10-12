@@ -382,6 +382,8 @@ async function parseSlp(file) {
 
                     var points = [];
                     var occludedFlags = [];
+                    // The model's per-node scores (a prediction's only).
+                    var ptScores = (instType === 1 && pts.score) ? new Float64Array(numNodes).fill(NaN) : null;
                     for (var ki = ptStart; ki < ptEnd && ki < ptStart + numNodes; ki++) {
                         if (ki >= pts.x.length) { points.push(null); occludedFlags.push(false); continue; }
                         var px = Number(pts.x[ki]);
@@ -394,6 +396,7 @@ async function parseSlp(file) {
                             points.push(null);
                             occludedFlags.push(false);
                         }
+                        if (ptScores) ptScores[ki - ptStart] = Number(pts.score[ki]);
                     }
                     while (points.length < numNodes) { points.push(null); occludedFlags.push(false); }
 
@@ -403,6 +406,7 @@ async function parseSlp(file) {
                         type: instType === 1 ? 'predicted' : 'user',
                         points: points,
                         occluded: occludedFlags,
+                        pointScores: ptScores,
                     });
                 }
 
@@ -488,7 +492,7 @@ async function parseSlp(file) {
             postMessage({ type: 'result', data: resultData }, [
                 columnar.frameIdx.buffer, columnar.videoIdx.buffer, columnar.instOffsets.buffer,
                 columnar.trackIdx.buffer, columnar.score.buffer, columnar.type.buffer,
-                columnar.xy.buffer, columnar.occluded.buffer,
+                columnar.xy.buffer, columnar.occluded.buffer, columnar.pointScore.buffer,
             ]);
         } else {
             postMessage({ type: 'result', data: resultData });
@@ -998,6 +1002,9 @@ function closeLazy() {
  *   type[i]                            1 = predicted, 0 = user
  *   xy[(i*numNodes + k)*2 + 0|1]       node k's x,y — NaN,NaN when missing
  *   occluded[i*numNodes + k]           1 when the node has coords but visible=false
+ *   pointScore[i*numNodes + k]         a prediction's per-node model score
+ *                                      (`pred_points.score`); NaN for a user
+ *                                      instance or a node with no score
  *
  * WHY: the nested form is ~1.6M boxed `[x, y]` arrays + ~200k objects per
  * 36k-frame camera, and structured-cloning eight of those to the main thread was
@@ -1019,7 +1026,9 @@ function buildColumnarFrames(framesData, instancesData, pointsData, predPointsDa
     var type = new Uint8Array(nInstRows);
     var xy = new Float64Array(nInstRows * numNodes * 2);
     var occluded = new Uint8Array(nInstRows * numNodes);
+    var pointScore = new Float64Array(nInstRows * numNodes);
     xy.fill(NaN);
+    pointScore.fill(NaN);
     var nF = 0, nI = 0;
     for (var fi = 0; fi < nRows; fi++) {
         var instStart = Number(framesData.instance_id_start[fi]);
@@ -1033,6 +1042,7 @@ function buildColumnarFrames(framesData, instancesData, pointsData, predPointsDa
             var ptStart = Number(instancesData.point_id_start[ji]);
             var ptEnd = Number(instancesData.point_id_end[ji]);
             var base = nI * numNodes;
+            var scoreCol = instType === 1 ? pts.score : null;
             for (var ki = ptStart, k = 0; ki < ptEnd && k < numNodes; ki++, k++) {
                 if (ki >= pts.x.length) continue;          // stays NaN, not occluded
                 var px = Number(pts.x[ki]);
@@ -1042,6 +1052,7 @@ function buildColumnarFrames(framesData, instancesData, pointsData, predPointsDa
                     xy[(base + k) * 2 + 1] = py;
                     if (!pts.visible[ki]) occluded[base + k] = 1;
                 }
+                if (scoreCol) pointScore[base + k] = Number(scoreCol[ki]);
             }
             trackIdx[nI] = Number(instancesData.track[ji]);
             score[nI] = Number(instancesData.score[ji]);
@@ -1062,6 +1073,7 @@ function buildColumnarFrames(framesData, instancesData, pointsData, predPointsDa
         instOffsets: instOffsets.slice(0, nF + 1),
         trackIdx: trackIdx.slice(0, nI), score: score.slice(0, nI), type: type.slice(0, nI),
         xy: xy.slice(0, nI * numNodes * 2), occluded: occluded.slice(0, nI * numNodes),
+        pointScore: pointScore.slice(0, nI * numNodes),
     };
 }
 

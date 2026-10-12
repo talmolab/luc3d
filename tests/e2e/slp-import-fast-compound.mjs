@@ -89,8 +89,12 @@ try {
                         points.push(Number.isNaN(x) ? null : [x, y]);
                         occluded.push(c.occluded[i * c.numNodes + k] === 1);
                     }
+                    // A prediction's per-node scores; the nested frames carry
+                    // none for a user instance.
+                    const pointScores = c.type[i] === 1
+                        ? Float64Array.from(c.pointScore.subarray(i * c.numNodes, (i + 1) * c.numNodes)) : null;
                     instances.push({ trackIdx: c.trackIdx[i], score: c.score[i],
-                        type: c.type[i] === 1 ? 'predicted' : 'user', points, occluded });
+                        type: c.type[i] === 1 ? 'predicted' : 'user', points, occluded, pointScores });
                 }
                 out.push({ frameIdx: c.frameIdx[f], videoIdx: c.videoIdx[f], instances });
             }
@@ -138,6 +142,7 @@ try {
                     const ti = sl.resolveImportTrackIdx(sOld, rem, inst.type);
                     const I = new pd.Instance(inst.points || [], ti, inst.type, inst.score || 1.0);
                     if (inst.occluded) I.setOccludedFrom(inst.occluded);
+                    if (inst.pointScores) I.setPointScores(inst.pointScores);
                     fg.addInstance('cam', I);
                 }
             }
@@ -148,7 +153,9 @@ try {
                     for (const I of S.getFrameGroup(fi).instances.get('cam') || []) {
                         const occ = [];
                         for (let k = 0; k < I.numNodes; k++) occ.push(I.isOccluded(k));
-                        out.push({ fi, xy: Array.from(I._xy), occ, t: I.trackIdx, type: I.type, score: I.score });
+                        const ps = [];
+                        for (let k = 0; k < I.numNodes; k++) ps.push(I.pointScore(k));
+                        out.push({ fi, xy: Array.from(I._xy), occ, t: I.trackIdx, type: I.type, score: I.score, ps });
                     }
                 }
                 return out;
