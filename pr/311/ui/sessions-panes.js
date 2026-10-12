@@ -28,22 +28,22 @@ import {
     state,
     videoController, interactionManager, viewport3d, timeline, paneManager,
     setVideoController, setPaneManager,
-} from './app-state.js?v=ca00f458d485';
-import { FrameGroup, UnlinkedInstance, Camera, someValidPoint3d, pooledPoints3d } from '../pose/pose-data.js?v=ca00f458d485';
-import { hydrateFrameMembers2d, releaseFrameMembers2d } from '../pose/lazy-residency.js?v=ca00f458d485';
+} from './app-state.js?v=f2f9618dd634';
+import { FrameGroup, UnlinkedInstance, Camera, someValidPoint3d, pooledPoints3d } from '../pose/pose-data.js?v=f2f9618dd634';
+import { hydrateFrameMembers2d, releaseFrameMembers2d } from '../pose/lazy-residency.js?v=f2f9618dd634';
 import {
     triangulateAndReproject, storeReprojectedInstances, getInstanceGroupsForFrame,
     sessionHasCalibration, resolveTriangulationMethod,
-} from '../pose/triangulation.js?v=ca00f458d485';
+} from '../pose/triangulation.js?v=f2f9618dd634';
 import {
     cellResizeObserver,
     createViewForVideoFile,
     rebuildVideoController,
     fitCanvasesToCells,
     updateTotalFrames,
-} from '../loading/session-loader.js?v=ca00f458d485';
-import { OnDemandVideoDecoder } from '../loading/video.js?v=ca00f458d485';
-import { setStatus, showLoading, hideLoading, quickSave, markDirty } from '../import-export/save-load.js?v=ca00f458d485';
+} from '../loading/session-loader.js?v=f2f9618dd634';
+import { OnDemandVideoDecoder } from '../loading/video.js?v=f2f9618dd634';
+import { setStatus, showLoading, hideLoading, quickSave, markDirty } from '../import-export/save-load.js?v=f2f9618dd634';
 import {
     CONTRAST_MIN, CONTRAST_MAX, clampContrast,
     BRIGHTNESS_MIN, BRIGHTNESS_MAX, clampBrightness,
@@ -51,27 +51,27 @@ import {
     buildVideoFilter, getSessionContrast, setSessionContrast,
     getSessionBrightness, setSessionBrightness,
     getSessionRotation, setSessionRotation,
-} from './video-filters.js?v=ca00f458d485';
+} from './video-filters.js?v=f2f9618dd634';
 // `clampRotation` moved to the dependency-free `video-filters.js` so the test
 // runners can bridge it; re-exported here because `ui/ui-wiring.js` (and the
 // module map) have always imported it from this module.
 export { clampRotation };
-import { drawAllOverlays, setReprojErrorVisible } from './rendering.js?v=ca00f458d485';
+import { drawAllOverlays, setReprojErrorVisible } from './rendering.js?v=f2f9618dd634';
 // `ui/ui-wiring.js` imports this module, so this is a cycle — hoist-safe
 // because the only read is inside the view strip's click handler, which cannot
 // run during module evaluation.
-import { setSoloView } from './ui-wiring.js?v=ca00f458d485';
-import { clearReadout, refreshReadoutTotals } from './frame-readout.js?v=ca00f458d485';
-import { updateInfoPanel, populateTimelineVisibility } from './info-panel.js?v=ca00f458d485';
-import { refreshIdSwitchPanel } from './id-switch-modal.js?v=ca00f458d485';
+import { setSoloView } from './ui-wiring.js?v=f2f9618dd634';
+import { clearReadout, refreshReadoutTotals } from './frame-readout.js?v=f2f9618dd634';
+import { updateInfoPanel, populateTimelineVisibility } from './info-panel.js?v=f2f9618dd634';
+import { refreshIdSwitchPanel } from './id-switch-modal.js?v=f2f9618dd634';
 // `autoAssignState` is a mutable binding tracked via ESM live binding.
 // The cycle (identity-assignment imports panelRenderers from here) is
 // hoist-safe because both reads are inside function bodies.
-import { autoAssignState } from './identity-assignment.js?v=ca00f458d485';
+import { autoAssignState } from './identity-assignment.js?v=f2f9618dd634';
 
 // Pass 3i-3: setup3DViewport moved to pose/initialization.js.
-import { setup3DViewport } from '../pose/initialization.js?v=ca00f458d485';
-import { getLoadingProgressModal } from './loading-progress-modal.js?v=ca00f458d485';
+import { setup3DViewport } from '../pose/initialization.js?v=f2f9618dd634';
+import { getLoadingProgressModal } from './loading-progress-modal.js?v=f2f9618dd634';
 
 // ============================================
 // Dockview Pane Manager
