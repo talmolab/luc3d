@@ -76,7 +76,8 @@ the old `app.js` entry point.
   times (`refreshReadoutTotals`), which are frame / fps.
 
 **Imports from project modules.**
-- `../ui/app-state.js` — `state`, controller singletons + setters, `VIEW_NAMES`.
+- `../ui/app-state.js` — `state`, controller singletons + setters, `VIEW_NAMES`,
+  `isViewDocked` (the video controller's `isViewShown`).
 - `./pose-data.js` — `Instance`, `UnlinkedInstance`, `points3dNodeCount`,
   `getPoint3d`, `groupDisplayName` (the group name in every interaction status
   line — `onInstanceConverted`, `onClonePredictedGroup`,
@@ -3446,10 +3447,12 @@ results}` (points3d buffers transferred) or `{type:'error', id, message}`.
 **Purpose.** The analysis behind Tracks ▸ **Check ID Switches (Body Size)…** and
 **(Images)…**, which also run automatically after Track All / Track Frame Range
 (`ui/id-switch-modal.js`). Flags close encounters between two tracked identities
-where the animals leaving the encounter look more like each other's identity than
-their own — a possible identity switch. Two cues through ONE machinery: body size
-(3D bone lengths, cheap, no video) and appearance (embeddings of masked,
-pose-aligned crops, supplied by the caller — `ui/image-embedder.js` in the app).
+where the labels may have changed hands — a possible identity switch. Two cues,
+two methods: body size (3D bone lengths, cheap, no video) asks whether the animals
+leaving an encounter match the identities they now carry, by a classifier learned
+from the tracker's labels; appearance (embeddings of masked, pose-aligned crops,
+supplied by the caller — `ui/image-embedder.js` in the app) asks whether each
+animal looks like ITSELF across a contact, using no identity labels across it.
 Pure — no DOM, no app state — so both run headlessly (the image check with any
 embedding provider).
 
@@ -3460,7 +3463,11 @@ identities, sampledFrames, closeDistance, threshold, fps, step, sampleHz, cue}`
 `{ok:false, reason}`; `markChangePoints(scored, o)` (the change-point step,
 exported so calibration can re-apply thresholds to the same scores);
 `fitSoftmax(X, y, n, D, K, opts)` (L2 multinomial logistic regression, Adam);
-`fitPCA(X, n, D, k)` (randomized subspace iteration);
+`fitPCA(X, n, D, k)` (randomized subspace iteration); the image check's parts —
+`contactEpisodes(grid, gapSeconds)`, `learnAppearanceMetric(X, n, D, stretch,
+sample, o)`, `appearanceChangeScores(grid, feat, o, every)`,
+`markAppearanceChanges(scored, o)` (its change-point step, exported to re-apply a
+threshold) and `symmetricEigen(A, n)` (cyclic Jacobi);
 `KEYFRAME_GAP_TOLERANCE` (1.1);
 `planKeyframeSamples(frames, keyframes, hasFrame)` -> `{decode, snapped, spacing,
 keyframeGap, maxShift}` (which frame each image sample decodes in one camera — see
@@ -3468,28 +3475,64 @@ keyframeGap, maxShift}` (which frame each image sample decodes in one camera —
 `REFERENCE_HZ` (15); `SIZE_CHECK_DEFAULTS` (`fps` REQUIRED, `sampleHz` 15,
 `folds` 5, `gapSeconds` 10, `syncSeconds` 1, `threshold` -50, `continueBelow` 0,
 `followSeconds` 60, `minTrackedSeconds` 60, `sepFactor` 0.65, `signal`, ...);
-`IMAGE_CHECK_DEFAULTS` (+ `imageHz` 2, `threshold` -25, `pcaDims` 32,
+`IMAGE_CHECK_DEFAULTS` (+ `imageHz` 2, `threshold` -0.8, `episodeGapSeconds` 3,
+`minSamples` 6, `windowSeconds` 10, `maxSpanSeconds` 60, `followSeconds` 5,
+`metricPcaDims` 64, `metricDims` 16, `metricReg` 0.1, `maxTrainRows` 20000,
 `getEmbeddings` REQUIRED: `async (frame, items[{k, group}]) -> per item
 [{camera, vector}]`, STARTED in increasing frame order with up to `inFlight`
 (default 2; the image embedder asks for 8) in flight; optional `prepareFrames(frames)` (awaited once with the
 sorted frames it will ask for) and `releaseFrames()` (always called at the end) let
 the provider stream its video).
 
-**The shared method.** Every round(fps / `sampleHz`)-th frame is a grid sample.
+**The shared grid.** Every round(fps / `sampleHz`)-th frame is a grid sample.
 "Close" = body centroids within `sepFactor` x the median body extent (unit-free).
-Tracklet = a run where an identity is apart from every other; encounter = the last
+Tracklet = a run where an identity is apart from every other.
+
+**The size method.** Encounter = the last
 close sample of a close spell, scored when both identities' next tracklets start
 within `syncSeconds`. A softmax is trained on the tracker's OWN labels with blocked
-CV (each fold excludes `gapSeconds` either side) — on bone lengths (size), or per
-camera on PCA-reduced embeddings, averaged over cameras (images, sampled every
-round(sampleHz / imageHz)-th grid sample). Log-probabilities are normalised within
+CV (each fold excludes `gapSeconds` either side) on bone lengths. Log-probabilities are normalised within
 each frame across the identities present; an encounter's score = summed evidence
 for the claimed labelling minus the exchanged one over the two following
 tracklets. Each sample is weighted by `REFERENCE_HZ` / that cue's sample rate, so
 scores are evidence per unit TIME and thresholds hold at any frame rate (25-120
 fps tested within 0.4%). `opts.signal` cancels (AbortError).
 
-**Change points, not raw flags.** The model can tell that the labelling on the
+**The image method (2026-10-09).** Crops are embedded every round(sampleHz /
+imageHz)-th grid sample. Per camera the embeddings are centred, unit-normalised and
+projected into an appearance metric learned WITHOUT identity labels
+(`learnAppearanceMetric`): an LDA whose "same animal" pairs are crops of one
+identity within one tracklet (it is apart from all others, so its label cannot
+change hands there) and whose "different animals" pairs are two identities in the
+same frame — both true however wrong the tracking is. Contacts are #286's episodes
+(`contactEpisodes`: the two identities in one connected component of the close
+graph, so a swap through a third animal counts; runs < `episodeGapSeconds` apart
+merged), and episodes separated by fewer than `minSamples` usable crops of either
+animal are merged too, so a swap inside a long huddle is judged from the stretches
+either side of it. Each episode is scored (`appearanceChangeScores`) per camera
+from the mean appearance of each animal just before (aB, bB) and just after (aA,
+bA) it — up to `windowSeconds` of crops a side, within `maxSpanSeconds`, never past
+the pair's neighbouring episode, a crop being usable when the animal is not in
+contact with its partner (it may touch a third: the crop masks others out):
+S = cos(aB,aA) + cos(bB,bA) − cos(aB,bA) − cos(bB,aA), mean over cameras seeing
+both animals on both sides (episodes with none are dropped). Below `threshold`
+the labels changed hands there (`markAppearanceChanges`): taking the session's
+start as right, a pair's 1st, 3rd, … flagged contact is an `onset` whose
+`switchBackAt` is the next one (or null: to the end), its 2nd, 4th, … the `end`
+of that stretch (`switchedAt`), so fixing either row swaps the same stretch; all
+are in `flags` (`changes` is []), none is a repeat, and a change point of a pair
+sharing one identity within `followSeconds` of another is its `followOf` (a
+three-way relabel). **Why not the size method's classifier:** it learns whichever
+labelling covers more of the session, and when a pair swaps several times none
+does — on the CD1FSCR3_CSI recording (3 white CD1 mice, two in mesh jackets) the
+plain mouse wore id_0 for 36% and id_1 for 50% of 15 min, the classifier's
+per-sample evidence for id_0 vs id_1 was ±0.5, and the real 0:19 swap (at the
+pair's FIRST encounter, so the swapped stretch before it was never scored) was
+missed while 17 false change points were raised. **Why the metric:** on five
+white mice raw DINOv2 cosine separated real changes from clean contacts at AUC
+0.68; in the metric 0.78.
+
+**Change points, not raw flags (size).** The model can tell that the labelling on the
 two sides of an encounter disagrees, not which side is right (it learns whichever
 side covers more of the session). Per pair, a run of flagged encounters (starting
 below `threshold`, continuing FORWARD while below `continueBelow`) yields one
@@ -3518,6 +3561,9 @@ the similar-size, different-coat pairs (brown-black: size AUC 0.73, 5% caught at
 false-flag rate per clean encounter. When both checks flag an encounter it was a
 real swap 98% of the time (images alone 79%; none on the 5-mouse run with no
 switches). Images remain weak for animals that look alike (same coat).
+**Superseded for images by the 2026-10-09 calibration below**; the notes on views
+per animal, sampling rate and keyframes were measured with the old image scoring
+and are kept for what they say about the crops.
 **Views per animal** (`imageCheckMaxViews`, default 3; recalibrated 2026-10-04):
 embedding only each animal's 3 largest views matches all 8 — brown-black AUC
 0.925, 48% at -25, 0.8% false flags, "Both" 98% real; 5-mouse: real switch scored
@@ -3550,6 +3596,54 @@ blocked CV an encounter's tracklet rows are never in their own fold's training
 set, so swapping the two animals' labels after it turns its score S into exactly
 -S).
 
+**Calibration of the image method (2026-10-09).** Real model and crops, every
+view embedded at 2/s (3 largest replayed offline, exactly as the app selects them;
+the in-repo check reproduces the prototype's scores at every threshold), Track All
+with the app's defaults (match gate off, node weights 1), on 8 recordings, 1 h 45 min:
+the 6 proofread SLAP sessions of 2022-10-07, the 5-mouse tail-mark recording (truth:
+the tail-checked gate-on reference, id_1/id_2 swapped from 20:41.7; the top 5
+"false" rows were checked against the tail marks and are false) and the
+CD1FSCR3_CSI recording (truth: a plain-vs-jacket labelling of the same
+embeddings, margin median 0.41). Truth events = moments where identities change
+the animal they sit on (a swap and swap-back within 20 s with no net change is not
+counted); a row is right when both its identities change animals within its
+contact ± 3 s. At -0.8: **10 of 12 relabels caught, 12 rows, 2 false**; the old
+image scoring (tracklet, classifier, -25) 5 of 12 with 98 false rows, #286's
+episode scoring (classifier, -200) 8 of 12 with 15 false. -0.5: 10 of 12, 6 false;
+-1.2: 8 of 12, none false. The SLAP sessions and CD1 alone: 9 of 10, 0 false at
+-0.3 to -0.8, real changes -1.0 to -2.8, clean contacts no lower than -0.21 (white
+vs white). Five white mice are the hard case: 1 of 2 at -0.8 with 2 false rows
+(the 21:57 three-way relabel scores -0.19). Missed: a brown/black swap 14 s before
+the end of 143153 (-0.04, one side has 7 crops). Robust to the knobs — at -0.8,
+`metricDims` 32, `metricReg` 0.03/0.3, `windowSeconds` 5/20, `minSamples` 3,
+`episodeGapSeconds` 1, `metricPcaDims` 32 and all views give 9-10 of 12 with 0-2
+false rows (`metricDims` 8: 6 false); without the evidence-driven merge
+(`minSamples` 0) the 144215 huddle swap goes unscored, and with crops only from
+time apart from EVERY animal 17 of its 24 episodes have none. On the same 8 runs
+the size check (unchanged) gives 60 rows, 56 false; rows both checks flag ("Both")
+were real 4 of 4, image-only rows 6 of 8. Analysis after embedding: 3-7 s per
+10-min session, 21 s for 30 min of 5 animals. Harness: the session scratchpad of
+2026-10-09 (collect.mjs, evalall.mjs, ba.mjs) — not in the repo.
+
+**Out of sample (2026-10-11).** Confirmed on 16 proofread SLAP sessions of
+2022-10-07 that played no part in choosing the method or the threshold — every
+multi-animal one not used above: 131531, 132603, 133702, 134804, 135851, 140918,
+161055, 162233, 163346, 170913, 173152, 180149, 181300, 183527, 184618, 190807
+(2 h 49 min; 15 with two mice, including white/white 163346 and brown/brown
+173152, and 190807 with two brown and one white), with the same harness, truth
+and row rule. At -0.8: **9 of 11 relabels caught, 11 rows, 0 false**. Every real
+change scored below every one of the 348 clean contacts (per-contact AUC 1.000),
+so no threshold from -0.2 to -1.2 gave a false row; -0.5 and looser caught 10 of
+11. Missed: a swap inside the pair's first contact, which starts the session
+(183527 at 0:24 — there is no "before" to compare), and a swap between the two
+brown mice that scored -0.58 (190807 at 9:06). A variant that keeps the length of
+the window means (the mean of unit vectors, not renormalised), which had looked
+better on the 8 calibration runs (10 of 12 with no false rows at -0.5), gave the
+identical 9 of 11 with no false rows here — no gain, so not adopted. These
+sessions keep a second label file per camera
+(`*.predictions.static.externals.slp`), which a harness has to leave out of the
+folder pick.
+
 **Imports from project modules.** `pose/pose-data.js` (`readPoint3d`).
 
 **Imported by.** `ui/id-switch-modal.js`, `ui/image-embedder.js` (`planKeyframeSamples`, `KEYFRAME_GAP_TOLERANCE`).
@@ -3557,7 +3651,11 @@ set, so swapping the two animals' labels after it turns its score S into exactly
 **Coverage.** `tests/test-id-switch-check.mjs` (synthetic 3-animal sessions defined
 in time: clean -> no flags; minority / majority switch -> onset / end change point;
 25-120 fps invariance; images with synthetic embeddings catching a swap between
-animals of IDENTICAL size that size misses; cancellation; PCA; failure reasons;
+animals of IDENTICAL size that size misses; a pair swapping three times from its
+first encounter (all three found, onset/end/onset with the right fix edges; the
+size check as the negative control misses the first); #286's huddle and
+three-animal scenarios; the appearance metric on look-alike animals (98% vs raw
+cosine 52%); `symmetricEigen`; `markAppearanceChanges`; cancellation; PCA; failure reasons;
 crop geometry of `ui/image-embedder.js`; `planKeyframeSamples`: sparse/unknown
 keyframes move nothing, a keyframe every 30 frames moves every 32-frame sample
 <= 15 frames, strictly increasing, untracked keyframes skipped, gaps up to 1.1x
@@ -3666,6 +3764,18 @@ Calibration and `envSkeleton` remain per-session.
   controller. Frame navigation / playback branch on this, not on the
   controller's existence (used by `navigateToFrame`, the transport buttons, and
   the keyboard handler so play/pause + stepping work without video).
+- `isViewDocked(view)` — true when the view has a pane in the dock
+  (`paneManager.dockedViews`; a pane in an inactive tab counts), or when there
+  is no dock yet. Fed to `VideoController` as `callbacks.isViewShown` and read by
+  `drawAllOverlays`, so stepping, playback and overlay drawing skip the views
+  nobody can see — one camera solo'd, or panes closed. Measured on a 17-camera
+  1680×1200 HEVC 120 fps project with one camera solo'd (together with
+  `OnDemandVideoDecoder.releaseFrames` for the views that went off screen):
+  jumps 2.1 s → 0.1 s, single steps 168 → 18 ms, playback 11 → 119 new
+  pictures/s. Safe because
+  docking a view again builds a NEW canvas, whose renderer re-seeks the current
+  frame (`refreshPaneInteractions`), so a skipped view never shows a stale
+  picture. Covered by `tests/e2e/solo-view-decodes-shown-only.mjs`.
 - `VIEW_NAMES` — `['back', 'mid', 'side', 'top']`.
 - `getActiveSession()`, `setActiveSession(session)`.
 - `rememberSkeleton(skeleton)` / `buildRememberedSkeleton()` — in-memory cache of
@@ -3926,6 +4036,27 @@ O(resident) per call and exact whatever the resident set is — scrubbing,
 eviction and sweeps' window release need no rebuild. Only a change to frames
 that are NOT resident (a bulk operation) does.
 
+**An EAGER project counts from a baseline too — and re-counts only the drawn
+frame.** There every frame is resident, so "resident frames live" was a walk of
+the WHOLE project on every redraw, i.e. on every frame step: ~10 ms of each
+~18 ms step on a 36,000-frame × 17-camera project (the single largest cost of a
+step once #301 stopped decoding hidden cameras). The builder now gives an eager
+project (no lazy loader) a camera half built from the `FrameGroup`s with
+`residentFrameUserCount`, and marks the result `eager: true`;
+`countFrameCounters` then returns the baseline's totals with no walk at all,
+and `refreshCountedFrame(session, baseline, f)` — which `updateFrameCounters`
+calls for the drawn frame on every update — re-counts frame `f` into EVERY
+camera half held and into the 3D half, adjusting the totals: O(cameras). That
+keeps it exact through edits, which are always to the frame on screen and
+always followed by a redraw of it. A change to frames NOT on screen is a bulk
+operation, which ends with a same-frame redraw — and `updateFrameCounters`
+rebuilds the baseline after any same-frame redraw, exactly as on a lazy
+project; on an eager project that rebuild DROPS the other views' halves (every
+frame being resident, `nonResidentCameraCounts` cannot tell an edit from a bulk
+change), and each is rebuilt — one walk — when its view is next active.
+Side effect: Triangulated on an eager project now counts a frame with 3D but no
+2D `FrameGroup` too, as the lazy count always did; the walk never reached it.
+
 **Exports.**
 - `residentFrameUserCount(fg, cam)` -> `-1` if the frame is not labeled in
   `cam`, else its user-instance count (one number, so the per-frame loop
@@ -3937,16 +4068,22 @@ that are NOT resident (a bulk operation) does.
   avoids it), so the caller spreads it over short tasks. `step` does about
   `budget` frames / `instanceGroups` entries and returns true when done.
   `result` = `{tri: {byFrame: Uint8Array, total}, cams: Map<cam, {byFrame:
-  Int32Array, labeledTotal, usersTotal}>}`; the camera half is absent when the
-  project is not lazy or its loader cannot enumerate rows (the worker-backed
-  analysis-`.h5` loader — every frame with data is then resident). `tri: false`
+  Int32Array, labeledTotal, usersTotal}>, eager}`; on an eager project the
+  camera half comes from the `FrameGroup`s and `eager` is true; the camera half
+  is absent when the project is lazy but its loader cannot enumerate rows (the
+  worker-backed analysis-`.h5` loader — every frame with data is then
+  resident). `tri: false`
   skips the 3D half. The session is read live between steps; a change mid-build
   can leave the result stale, and the caller rebuilds after changes anyway.
 - `computeFrameCounterBaseline(session, cam)` / `computeLazyCameraBaseline(session, cam)`
   — the same, run to completion (whole baseline / camera half only).
 - `countFrameCounters(session, cam, baseline)` -> `{labeled, instances,
-  triangulated}`. With no baseline (or none for `cam`), Labeled / Instances are
-  the old resident-only count.
+  triangulated}`. With an eager baseline holding `cam`'s half (or no `cam`):
+  the baseline's totals, no walk. With no baseline (or none for `cam`),
+  Labeled / Instances are the old resident-only count.
+- `refreshCountedFrame(session, baseline, f)` — re-count frame `f` into an
+  EAGER baseline in place (every camera half + the 3D half, totals adjusted;
+  arrays grow for a frame past their end). A no-op on a lazy baseline.
 - `nonResidentCameraCounts(session, half)` -> `{labeled, instances}` — the part
   of a camera half that `countFrameCounters` actually uses. Two builds that
   differ here saw a change to non-resident frames (a bulk operation), which
@@ -3959,7 +4096,15 @@ that are NOT resident (a bulk operation) does.
 
 **Tests.** `tests/test-frame-counters.mjs` (lazy: counts equal a fully-hydrated
 count through the real `batchLoadLazyFrames`, with negative controls; residency
-changes need no rebuild; a bulk change does; sliced == one-shot build),
+changes need no rebuild; a bulk change does; sliced == one-shot build. Eager:
+baseline totals equal the full walk; counting and re-counting iterate no
+frames; an edit shows only once its frame is re-counted (the negative control
+proving the count is the baseline), across two cameras, un-labeling, 3D, a
+frame past the arrays' end; the 3D-only frame the walk missed),
+`tests/e2e/status-counters-eager.mjs` (the real `updateFrameCounters` and
+status-bar text on an eager project: 60 steps walk the frames 0 times — 60 on
+the pre-fix build — and the text stays exact through an on-screen edit, a
+two-camera edit, a bulk change off screen and camera switches),
 `tests/test-bottom-bar.js` (the rules, on eager sessions, against this module
 rather than a copy), and `tests/e2e/sequence-lazy-workflow.mjs`'s
 `checkCounters` (the real status bar on a lazily reopened project: at reopen,
@@ -3984,7 +4129,8 @@ duration}` (pure; `frameIdx` null = the empty "0 / 0" state), `NO_TIME`
 (`--:--.---`), and the DOM half: `showReadoutFrame(frameIdx)` (the per-frame
 path — writes `#currentFrame` / `#currentTime`), `refreshReadoutTotals()`
 (re-reads `state.totalFrames` / `state.fps`, writes `#totalFrames` /
-`#totalTime` and re-times the frame on screen) and `clearReadout()`.
+`#totalTime`, re-times the frame on screen and refreshes the seekbar's time
+ruler) and `clearReadout()` (which empties the ruler too).
 
 **Behaviour.**
 - **It speaks the seekbar tooltip's language**, on purpose: the same separator
@@ -4010,8 +4156,10 @@ path — writes `#currentFrame` / `#currentTime`), `refreshReadoutTotals()`
   row, both rows fit the 56 px controls bar at every width.
 
 **Imports from project modules.** `./app-state.js` (`state`),
-`./seekbar-tooltip.js` (`formatTimestamp`) — both import-free, so the text half
-runs in Node.
+`./seekbar-tooltip.js` (`formatTimestamp`), `./seekbar-ticks.js`
+(`refreshSeekbarTicks` — the ruler marks the same times, so it follows every
+totals / FPS change, including the FPS pill's, which moves no frame) — all
+import-free, so the text half runs in Node.
 
 **Imported by.** `ui/ui-wiring.js`, `ui/sessions-panes.js`,
 `pose/initialization.js`, `loading/session-loader.js`,
@@ -6303,7 +6451,11 @@ data sources. Plus visibility-toggle helpers and frame counter updates.
   issue #95. (`drawReprojectedSkeleton`'s own primitive fallback stays `'x'`
   for direct callers; the user-facing default comes from here.)
 - `drawAllOverlays(frameIdx, viewFrames?)` — main per-frame redraw across every
-  view. Optional `viewFrames` (`{ viewName: frameIdx }`, passed by the
+  DOCKED view (`isViewDocked`: a view whose pane is closed, or that another
+  solo'd camera hides, has a detached overlay canvas and is skipped — docking it
+  again creates a new canvas and redraws, so nothing stale shows; with no view
+  docked at all, every view is drawn, as `VideoController._shownViews` falls
+  back). Optional `viewFrames` (`{ viewName: frameIdx }`, passed by the
   per-refresh playback loop in `loading/video.js`) draws each view's overlay at
   the frame ITS canvas shows (from that view's captured `VideoFrame`), so
   overlay and video agree per camera even when cameras are a frame or two
@@ -6341,14 +6493,14 @@ data sources. Plus visibility-toggle helpers and frame counter updates.
   including the Visibility checkbox handler that already ends in a redraw. **Playback throttle (issue #115):** the
   skeleton overlays + video redraw every frame, but the two *auxiliary* updates —
   `updateFrameInfo` (info-panel DOM + reproj-error aggregation) and
-  `timeline.setCurrentFrame` (a full timeline-canvas `redraw()`) — are coalesced
-  to ~10 Hz (`AUX_UPDATE_MS`) while `state.isPlaying`, since neither is legible at
-  playback speed and both were a per-frame cost capping buffered-playback fps.
-  When paused (seek/step) they run every call; `VideoController.stopPlayback`
-  fires one final unthrottled `drawAllOverlays` so the panel/playhead settle to
-  the exact stop frame. While playing, the timeline call passes
-  `{ playback: true }` so the timeline only moves its playhead over a cached
-  snapshot instead of a full redraw (see `ui/timeline.js`).
+  `timeline.setCurrentFrame` — are coalesced to ~10 Hz (`AUX_UPDATE_MS`) while
+  `state.isPlaying`, since neither is legible at playback speed and the info
+  panel is a per-frame cost capping buffered-playback fps. When paused
+  (seek/step) they run every call; `VideoController.stopPlayback` fires one
+  final unthrottled `drawAllOverlays` so the panel/playhead settle to the exact
+  stop frame. `timeline.setCurrentFrame` only moves the timeline's playhead
+  element now (no canvas repaint, see `ui/timeline.js`), so it is cheap either
+  way; the `{ playback: true }` it is passed while playing changes nothing.
 
   **Lazy reprojection fill — honors the group's triangulation method.** A group
   with `points3d` but no `reprojections`/`reprojectedInstances` is re-solved here
@@ -6391,10 +6543,14 @@ data sources. Plus visibility-toggle helpers and frame counter updates.
   whole-project baseline live in `ui/frame-counters.js`; this function owns
   WHICH camera (`interactionManager.lastInteractedView`, else the first view),
   WHEN to (re)build the baseline, and the DOM. Per call it is
-  O(resident frames) — `countFrameCounters` counts resident frames live and
-  takes everything else from the cached baseline — the same work the old loop
-  did. Still skipped during playback (`updateStatusBarForFrame`,
-  `ui/info-panel.js`).
+  O(resident frames) on a lazy project — `countFrameCounters` counts resident
+  frames live and takes everything else from the cached baseline — and O(1) in
+  project size on an EAGER one, where every frame is resident: there it
+  re-counts the drawn frame into the baseline (`refreshCountedFrame`) and shows
+  the baseline's totals. (It walked all 36,000 frames x 17 cameras of an eager
+  project on every step before, ~10 ms per step.) A finished rebuild of an eager
+  baseline drops the other views' halves rather than comparing them. Still
+  skipped during playback (`updateStatusBarForFrame`, `ui/info-panel.js`).
 
   The baseline is cached per session in a `WeakMap` (so a closed project and
   its store are never retained by the status bar), with one camera half per
@@ -6443,7 +6599,7 @@ data sources. Plus visibility-toggle helpers and frame counter updates.
   the assertion would be vacuous).
 
 **Imports from project modules.**
-- `./app-state.js` — `state`, `interactionManager`, `timeline`.
+- `./app-state.js` — `state`, `interactionManager`, `timeline`, `isViewDocked`.
 - `../pose/triangulation.js` — `ensureLazyFrameData`,
   `getInstanceGroupsForFrame`, `triangulateAndReproject`,
   `storeReprojectedInstances`.
@@ -8418,19 +8574,105 @@ timeline, hover text, click snaps to the tick's frame, reviewed dimming).
 
 ---
 
+### ui/seekbar-ticks.js
+
+**Purpose.** A time ruler under the transport seekbar (`#seekbarRuler` inside
+`#seekbar`): labelled major ticks (`00:00  05:00  10:00 …`) with unlabelled
+minor ticks between them, so a moment can be found and clicked by eye without
+hovering for the tooltip.
+
+**Key exports.** `seekbarTimeTicks(totalFrames, fps, widthPx, {charPx}?)` ->
+`{step, minorStep, majors: [{frac, seconds, label, end}], minors: [frac]}`
+(pure; the last major is the end tick); `formatTickLabel(seconds, decimals)`
+(`mm:ss`, `h:mm:ss` from an hour up, rounded before splitting);
+`formatDurationLabel(seconds, decimals)` (the end tick's label: rounded to the
+millisecond like `formatTimestamp`, then TRUNCATED, so it is a prefix of the
+readout's total); `TICK_STEPS` and the spacing constants
+(`MIN_LABEL_SPACING_PX`, `LABEL_SPACING_WIDTHS`, `MIN_MINOR_SPACING_PX`,
+`MAX_MINOR_PER_MAJOR`, `DEFAULT_CHAR_PX`); the DOM half,
+`installSeekbarTicks(layerEl, {getTotalFrames, getFps})` and
+`refreshSeekbarTicks()`.
+
+**Behaviour.**
+- **The step follows the video and the bar.** The major step is the SMALLEST of
+  `TICK_STEPS` (1/2/5 below a minute, 1/2/5/10/15/30 min, then hours) whose
+  labels are at least `max(60 px, 1.75 label widths)` apart at the bar's
+  width — 5:00 for a 30-minute recording on a 700 px bar, 2:00 on 1200 px, 1 s
+  for a 10 s clip. The minor step is the smallest nice step that divides the
+  major into at most 6 parts and is still 8 px apart. Neither is shorter than one
+  frame. No ruler when `00:00` and the duration do not both fit, or without a
+  frame rate (fps 0 while a session has no video).
+- **The bar's end is always marked**: a tick at the last frame, labelled with
+  the duration — the readout's total, `totalFrames / fps`, truncated to the
+  ruler's precision (`14:23` for `14:23.617`, never `14:24`; a 29.97 fps
+  recording a hair under 30:00 reads `30:00`, as the readout does), in bold
+  (`.is-end`, weight 600 like the readout's current frame). It wins
+  every collision: a regular label closer to it than the spacing rule allows
+  loses its text (the tick stays), and a regular or minor tick within 8 px of
+  it is dropped, since it would read as a double tick.
+- **Same mapping and same clock as the rest of the bar.** A tick for time `t`
+  sits at `t·fps / (totalFrames − 1)` — the thumb's and the ID-switch ticks'
+  frame -> position mapping at the readout's frame-start time — so a click on
+  `05:00` lands on the frame the readout shows as `05:00.000` (to within the
+  pixel a click is rounded to). Labels are the readout's format without the
+  milliseconds; a decimal only for sub-second steps.
+- **Part of the seekbar, not a strip beside it.** The layer is a child of
+  `#seekbar`, so a click or drag on a label scrubs and hovering one shows the
+  seekbar tooltip. It hangs below the 24 px bar box; `.seekbar-container`'s
+  `margin-bottom` reserves the room, so the controls bar centres bar + ruler
+  together. Painted under the ID-switch marks and the thumb. Every label is
+  centred on its tick, the two ends included: `00:00` and the duration hang
+  half a label (~17 px; ~23 px for `1:23:45`) past the bar's ends, into the room
+  `.seekbar-container`'s side margins (12 px, 16 px at <= 640 px, where the
+  controls bar's gap halves) add to that gap — clear of the transport buttons
+  and the FPS pill at every width.
+- **Never re-rendered per frame.** `refreshSeekbarTicks` (called from
+  `updateSeekbarVisual` on every frame, and from `refreshReadoutTotals` /
+  `clearReadout`) compares the frame count, FPS and width with what is drawn
+  and returns; a `ResizeObserver` on the layer re-lays it when the bar's width
+  changes (window resize, the frame readout gaining a digit). Positions are
+  percentages, and an unchanged ruler writes nothing. The label font's
+  character width is measured once (a hidden probe), not per render.
+
+**Imports from project modules.** None (dependency-free, so the tick choice runs
+in Node).
+
+**Imported by.** `ui/ui-wiring.js` (installed in the seekbar-scrubbing IIFE in
+`setupUI`; refreshed by `updateSeekbarVisual`), `ui/frame-readout.js`
+(`refreshSeekbarTicks`).
+
+**Coverage.** `tests/test-seekbar-ticks.mjs` (label format; the step choice
+over a grid of frame rates × durations × widths: nice steps, at least a frame,
+labels far enough apart, the smallest step that fits, minors dividing majors
+and never on one, the end tick labelled with the duration and nothing on top of
+it, neighbouring labels — the end one included — far enough apart; the duration
+label a prefix of `formatTimestamp`; monotone in duration and width) and
+`tests/e2e/seekbar-ticks.mjs` (real app: labels centred on their ticks at the
+time's position, no overlap, inside the controls bar, the two end labels clear
+of the transport buttons and the FPS pill; the end label matches `#totalTime`
+and a click on it lands on the last frame; a click on a label seeks to that
+time and hovering it shows the tooltip; longer
+recordings get longer steps and a bar resize alone re-lays it; the FPS pill
+re-times it; fps 0 / no frames clear it; 200 frame steps make zero ruler DOM
+mutations; fits at 640 px).
+
+---
+
 ### ui/seekbar-tooltip.js
 
 **Purpose.** Hover tooltip on the transport seekbar (#142): "Frame 1,234 ·
 00:41.100" for the point under the cursor, so you can see where a click or
-drag will land before making it.
+drag will land before making it — and a hover line on the bar marking that
+frame.
 
 **Key exports.** `formatTimestamp(seconds)` (`mm:ss.mmm`, `h:mm:ss.mmm` from an
 hour up; rounds to the millisecond before splitting, so never `00:60.000`),
 `seekbarTooltipText(frameIdx, fps)`, `installSeekbarTooltip(seekbar,
-{frameAtFraction, getTotalFrames, getFps, markerAt?})` -> the tooltip element
-(`markerAt(frac, widthPx)` -> `{frame, text}` | null: a possible-ID-switch tick
-under the cursor — its frame replaces `frameAtFraction`'s, as the scrub handlers
-snap to it, and its text is appended)
+{frameAtFraction, getTotalFrames, getFps, markerAt?, hoverLine?})` -> the
+tooltip element (`markerAt(frac, widthPx)` -> `{frame, text}` | null: a
+possible-ID-switch tick under the cursor — its frame replaces
+`frameAtFraction`'s, as the scrub handlers snap to it, and its text is
+appended; `hoverLine`: the `#seekbarHoverLine` element, from `index.html`)
 (`#seekbarTooltip`, `.seekbar-tooltip`).
 
 **Behaviour.**
@@ -8445,6 +8687,19 @@ snap to it, and its text is appended)
   leave / release outside, and never shown when `totalFrames <= 1`. Centred on
   the cursor and clamped to the bar's extent; `pointer-events: none` so it
   cannot steal the hover.
+- **The hover line** (`#seekbarHoverLine`, `.seekbar-hover-line`) marks the same
+  frame ON the bar, at that frame's own position (`frame / (totalFrames − 1)`,
+  the thumb's mapping) rather than at the raw cursor — so it snaps onto an
+  ID-switch tick exactly as a click does, and is never clamped like the bubble.
+  In the ID Switches tab's playhead colours (`.id-switch-phead`:
+  `--text-primary`, a 1 px dark outline) but BIGGER than an ID-switch tick
+  (4 x 24 px, the bar's full height, against 3 x 16 px), so it reads clearly
+  among them.
+  Painted over the ID-switch ticks and under the thumb — its place in
+  `index.html`'s markup, at the ticks' z-index, is what orders it. Shown and
+  hidden with the tooltip, except during a drag, when the thumb already sits on
+  the frame: it hides on press and comes back on a release over the bar.
+  Positioned in px from the cached rect, so it adds writes and no layout reads.
 - **Layout-free while moving**, so hovering during playback adds no forced
   synchronous layout to the frame: the bar's rect is read on mouseenter / drag
   start and cached (a `ResizeObserver` and window `resize` drop it — the bar's
@@ -8463,7 +8718,9 @@ readout's time row reads exactly as this tooltip does).
 `tests/e2e/seekbar-tooltip.mjs` (real mouse events: follows the pointer,
 tooltip frame == the frame a click lands on, drag off the bar, edges clamped,
 drawn on top of the timeline, no timestamp at fps 0, and zero layout reads
-across a run of hover moves).
+across a run of hover moves; the hover line at the clicked frame's position and
+under the bubble, its colours compared against a live `.id-switch-phead` and
+its size against a live tick, its z-order, snapping onto a tick, hiding through a drag and on leave).
 
 ---
 
@@ -8754,7 +9011,8 @@ usual — from the menu and after tracking alike. It used to refuse ("needs WebG
 on the CPU it would take hours"), which was the wrong call for a user who had
 opted in. `fmtDuration` therefore reaches hours ("about 2 h 5 min left"). Runs under its own cancellable progress dialog (Cancel / Esc -> "cancelled", no
 markers added): model download (first use), "Cropping and embedding N views:
-frame i of n — about X min left", then fitting, with the overall percentage under
+frame i of n — about X min left", then "Learning what tells the animals apart
+(camera i of n)", with the overall percentage under
 the bar (the same rounded value as the bar's width; embedding is its first 90%) and
 the ID Switches rows' playhead line (`.id-switch-phead`) at the fill's leading edge.
 Under the percentage, the device line (`formatEmbedDevice`, ui/image-embedder.js):
@@ -8780,7 +9038,11 @@ embedder's `releaseFrames` (idempotent): `checkImageSwitches` does too, but not
 when it fails before its first frame, and the CPU workers hold ~600 MB each. On a
 CPU run "About these flags" says the model ran on the CPU, instead of the GPU-busy
 hint. Reads `imageCheckHz` (default 2)
-and `imageCheckThreshold` (default -25). Measured on a real 5-min, 3-animal,
+and `imageChangeThreshold` (default -0.8 — a new id, since 2026-10-09: the image
+score's scale changed, and an old `imageCheckThreshold` of -25 would have been
+clamped to -4). Image rows show their score to one decimal (`fmtScore`; size
+rows stay whole numbers), and an image 'end' row reads "labels change back here".
+"About these flags" describes each check that ran in its own terms. Measured on a real 5-min, 3-animal,
 8-camera session in Chrome (HEVC from Google Drive), before streaming decode and
 view selection: 370 s, ~20 crops/s end to end. Its encounter scores matched the
 offline-calibrated ones (correlation 0.999). Speed now (5-mouse, 8 cameras, local
@@ -8970,9 +9232,10 @@ before they come close -> 1 s after they separate — the row's progress-bar spa
 (`s..e` is the close spell); `updateIdSwitchHighlight(frame)` (every frame
 change, via `ui/id-switch-modal.js` `updateIdSwitchProgress`);
 `refreshIdSwitchHighlight()` (recompute the boxes at the current frame after the
-identities changed — a fix); `getIdSwitchHighlight()`; `ID_SWITCH_SECTION_RGB` (`{lead, close}` as `r, g, b`
+identities changed — a fix — or the node weights did, on Settings Apply); `getIdSwitchHighlight()`; `ID_SWITCH_SECTION_RGB` (`{lead, close}` as `r, g, b`
 strings — orange / red) and `idSwitchSection(target, frame)` (`'close'` over
-`[s, e]`, else `'lead'`).
+`[s, e]`, else `'lead'`); `idSwitchBoxNodeMask(nodeNames)` (`mask[k]` true for a
+node weighted above 0, or `null` = every node when none or all are weighted 0).
 
 **How.** Draws on its OWN canvas per view (`.id-switch-canvas`, appended to the
 view's `.canvas-wrapper`, `pointer-events: none`), backing size video × zoom like
@@ -8990,25 +9253,42 @@ rate (120 Hz) was twice the video's own rate. Boxes are recomputed only when the
 whose identity NAME is one of the pair at that frame (per-frame track identity
 first, then the group's `identityId`; unlinked instances via
 `getIdentityIdForUnlinkedInstance`), one box around both (or the one visible),
-labelled "id_a ↔ id_b" in the identities' colours. The outline wears the
+labelled "id_a ↔ id_b" in the identities' colours. **The box encloses only the
+nodes the Tracking Wizard weights above 0** (`getNodeWeightArray` over the
+session skeleton), so with the tail nodes at 0 it frames the bodies and heads
+rather than a tail sweeping across the view. An instance none of whose weighted
+nodes is visible in a view falls back to ALL its nodes, so an animal is never
+dropped from the box; a skeleton weighted 0 throughout encloses every node. The
+weights are read on each recompute, and Settings Apply calls
+`refreshIdSwitchHighlight`, so a change shows on the frame already on screen. The outline wears the
 colour of the row's progress-bar SECTION the frame is in — orange over the
 lead-in and lead-out, red over the close spell — from `ID_SWITCH_SECTION_RGB`,
 which the bar (`ui/id-switch-modal.js` `progressHtml`) also reads, so the two
 cannot drift. Lines, padding and text are
 sized in SCREEN pixels (canvas width / (layout width × zoom)), so a small tile
-of a large video stays readable. Lazy projects: nothing for a non-resident frame.
+of a large video stays readable. Lazy projects: nothing for a non-resident frame
+— and the box appears once that frame is hydrated. Selecting a row jumps to a
+frame that is usually not resident yet, and its hydration redraws the overlays
+without being a frame change, so while the frame is missing (`_waiting`) the
+animation loop checks `frameGroups.has(frame)` on each tick and recomputes when
+it lands. Before that, the box stayed empty until the frame next changed (i.e.
+until play was pressed).
 
 **Imports from project modules.** `ui/app-state.js` (`state`), `ui/overlays.js`
-(`makeVideoToCanvasTransform`).
+(`makeVideoToCanvasTransform`), `ui/settings.js` (`getNodeWeightArray`).
 
-**Imported by.** `ui/id-switch-modal.js`.
+**Imported by.** `ui/id-switch-modal.js`, `ui/settings-modal.js`
+(`refreshIdSwitchHighlight`, on Apply).
 
 **Coverage.** `tests/e2e/id-switch-highlight.mjs` (two real views: box around
 the pair and not the third animal, animates while paused, orange in the
 lead-in / red in the close spell / orange in the lead-out with the bar's
 sections matching, the bar's playhead and click / drag seeking, cleared past the
 interval and redrawn on return, a moved box leaves nothing behind, Clear stops
-it); `tests/e2e/_bench-playback.mjs` scenario `idswitch` (playback cost on a real
+it, a zero-weight node is left out — re-fit on Apply without a frame change —
+the fallback for an instance showing only zero-weight nodes, and a row whose
+landing frame is not resident gets its box when the frame is hydrated, with no
+frame change); `tests/e2e/_bench-playback.mjs` scenario `idswitch` (playback cost on a real
 project with a row selected over the whole run).
 
 ---
@@ -9391,7 +9671,7 @@ Shortcuts and the Hot Keys modal where people look for them.
   `stale`, `matchGate` (0/1 toggle for the CrossViewTracker match gate),
   `reprojErrorThreshold`, `autoSwitchCheck` — 0/1, run the body-size ID-switch
   check after Track All / Track Frame Range, default 1; `autoImageSwitchCheck` —
-  0/1, the image check likewise, default 0; `imageCheckThreshold` -25;
+  0/1, the image check likewise, default 0; `imageChangeThreshold` -0.8;
   `imageCheckHz` 2; `imageCheckMaxViews` 3; `imageCheckWebNN` — 0/1, try WebNN,
   default 0). The remaining catalog entries (`epipolarDecay`, `reprojSigma`, `epipolarWeight`,
   `reprojWeight`, `minMatchScore`, `prevIdentityBonus`, `reprojGate2/3/4`,
@@ -9490,7 +9770,8 @@ switch stored as `1`/`0` (`makeToggle`). Covered by
 state only (only editable bindings are tracked); nothing commits until **Apply**
 (`setDefaultTriangulationMethod` + `applyBindings` + `setNodeWeights` +
 `setCameraWeights` + `setTrackingThresholds`), which then repaints overlays +
-timeline so excluded views grey immediately. Cancel / close `×` / backdrop click
+timeline so excluded views grey immediately, and re-fits the ID-switch box
+(`refreshIdSwitchHighlight`), which encloses only nonzero-weight nodes. Cancel / close `×` / backdrop click
 / Escape discard. A
 capture-phase document keydown listener makes the modal fully capture the
 keyboard (background shortcuts don't fire while it's open) and is removed on
@@ -9501,7 +9782,8 @@ teardown.
 `getNodeWeight`, `setNodeWeights`, `getCameraWeight`, `setCameraWeights`,
 `getTrackingThresholdDefs`, `setTrackingThresholds`); `./app-state.js`
 (`getActiveSession`, `state`, `timeline`); `./rendering.js` (`drawAllOverlays`,
-for the post-Apply repaint).
+for the post-Apply repaint); `./modal-geometry.js` (`installModalGeometry`);
+`./id-switch-highlight.js` (`refreshIdSwitchHighlight`, on Apply).
 
 **Imported by.** `ui/ui-wiring.js`.
 
@@ -9523,28 +9805,81 @@ Rows whose camera is excluded from tracking in the Tracking Wizard
 both the gutter label and the occupancy bars — distinct from the
 per-session visibility filter (`_hiddenCameras`), which drops the row entirely.
 
-**Canvas backing-store cap.** `resize()` clamps the canvas backing store to
-`MAX_CANVAS` (32000px/side). A tall timeline (e.g. 8 views × their tracks/
-identities) makes `getPreferredHeight() * devicePixelRatio` exceed the browser's
-~32767px `<canvas>` limit, which fails to allocate and renders as the broken-
-canvas "sad face" over just the timeline region. When that would happen the
+**The canvas is a BAND of the content, not all of it.** Inside the scroll
+wrapper (`_trackScrollEl`), a spacer (`_spacerEl`) carries the timeline's full
+content height — `max(getPreferredHeight(), visible height)` — so the scroll
+range and native scrolling are what they always were. The canvas is absolutely
+positioned over only a band of that content (`_placeBand`): from one margin
+above the scroll position to one margin below the visible bottom (margin = the
+visible height, at least 256 px), clamped to the content, so at most
+visible + 2 margins tall. Drawing stays in CONTENT coordinates — the context
+transform carries `-_bandTop` — and whatever falls outside the band is simply
+clipped; `_drawTrackBars` also skips rows outside it. A scroll inside the band
+costs nothing (the canvas scrolls with the content); one that brings the
+visible rows within half a margin of the band's edge (`_handleTrackScroll`, on
+the wrapper's `scroll` event) moves the band and redraws. `_cssHeight` and
+`_layout` are still the CONTENT's, so the layout, the label area and the
+playhead element are unchanged; the hover tooltip is placed from the pointer's
+client position (canvas `offsetY` is now band-relative). The wrapper's
+background is the timeline's, so a band edge reached mid-fling reads as
+background for the frame before the redraw.
+
+The canvas used to be the full content height. On the 17-camera MultiCam_18
+project that is 561 rows, 3,600 × 12,704 device px (174 MB), every redraw
+rasterizing all of it while the wrapper showed about a sixth; as a band it is
+3,600 × 1,884 (26 MB), and a redraw including the GPU raster went from ~279 ms
+to ~28 ms (headless, forced readback; 126 → 29 ms on the 8-camera HardFight
+project). Screenshots of the timeline at the top, middle and bottom of its
+scroll range are pixel-identical to the full-height canvas's. A collapsed
+timeline (visible height 0) now keeps only a ~512 px band instead of a
+full-size canvas. Covered by `tests/test-timeline-visible-band.js` (the band's
+size and the spacer's scroll range; band pixels equal a full-height reference
+rendering at the same content rows, in the middle and at the bottom, labels
+included; no redraw for a scroll inside the band, one for a scroll past it; the
+playhead still spans the content; a content that fits is one band) and the
+backing-store clamp cases in `tests/test-timeline-height.js`.
+
+**Canvas backing-store cap.** `_placeBand` still clamps the backing store to
+`MAX_CANVAS` (32000px/side): a browser `<canvas>` larger than ~32767px per side
+fails to allocate and renders as the broken-canvas "sad face". The band is
+rarely near that now (width × dpr is the likelier case); when it would be, the
 effective device-pixel ratio is scaled down (CSS size + scroll unchanged; only
 backing resolution drops) so the canvas always allocates.
 
-**Playback playhead fast path.** `setCurrentFrame(frameIdx, { playback: true })`
-(passed by `ui/rendering.js` only while `state.isPlaying`) does not repaint the
-timeline: the playhead is the only frame-dependent layer, so `redraw()` — while
-`_playbackMode` is set — snapshots the canvas just before drawing the playhead
-into `_staticCache`, and later playback calls blit that snapshot and draw only
-the playhead (`_drawFromStaticCache`). A full redraw on the 175-track HardFight
-project cost ~4.5 ms plus a forced style recalc (`ctx.font`) inside the
-video-frame callback, enough to drop video frames (`tests/e2e/_bench-playback.mjs`).
-Falls back to a full redraw when the visible window scrolls or the backing store
-changed size; any other `redraw()` (hover, resize, data change) re-snapshots, so
-the cache is always the last full redraw. A call WITHOUT the flag leaves playback
-mode, frees the snapshot and redraws in full even on the same frame (the
-`stopPlayback` settle call). Pixel-parity guarded by
-`tests/test-timeline-playback-playhead.js`.
+**The playhead is an element, not canvas paint.** It is the only
+frame-dependent thing on the timeline, so `setCurrentFrame` moves a positioned
+`div.timeline-playhead` (inside `_trackScrollEl`, so it scrolls with the rows;
+`pointer-events: none`, so the canvas keeps every pointer event) with a CSS
+transform — `_positionPlayhead` — and repaints NOTHING. The canvas is redrawn
+only when what it shows changes: data, zoom, size, range selection, or a scroll
+of the visible window — including the scroll `setCurrentFrame` itself makes
+when it follows a frame out of a zoomed window. Same geometry as the painted
+playhead: a 2.5 px line from the top to the label area (to the bottom when
+labels are hidden), a 10 × 6 px triangle on its foot, hidden when the frame is
+outside the window. A click or touch on the timeline moves it the same way.
+
+It used to be painted, so every frame step repainted the WHOLE canvas to move
+it — and the canvas is the timeline's full content height, not the visible
+part: on the 17-camera MultiCam_18 project 561 rows, 3,600 × 12,704 device
+pixels (~46 MP). On each step of a held arrow key (30 ms repeat) that outran
+the GPU at a Retina scale factor, and Chrome's 2D-canvas rate limiter blocked
+the page for 230–450 ms every ~0.6 s (`CanvasRenderingContext2D::FinalizeFrame`
+→ `SharedContextRateLimiter` → "GPU backpressure via
+GL_COMMANDS_COMPLETED_CHROMIUM" in a trace), holding stepping to ~19 frames/s
+on a main thread that was two-thirds idle. With `redraw` stubbed out, or at a
+1x scale factor, the same held key ran at the full 33 frames/s. This also
+REPLACES the old playback-only fast path (`_playbackMode` / `_staticCache`
+snapshot-and-blit, added because a full redraw inside the video-frame callback
+dropped frames): `opts.playback` is still accepted and changes nothing.
+
+`setFrameModified` now asks for a repaint (`_requestRedraw`: coalesced to one
+`requestAnimationFrame`, synchronous without rAF) when the flag actually
+changes: the white "modified" line is canvas paint, and a frame step's full
+repaint used to be the only thing that made a flag set without a redraw
+appear. Covered by `tests/test-timeline-playback-playhead.js` (no repaint on a
+step, playback call, click, or step inside a zoomed window; no playhead in the
+canvas pixels; geometry; hidden off-window; resize; the coalesced repaint for
+`setFrameModified`).
 
 **Trackpad / wheel semantics.** `_handleWheel` maps wheel input as:
 horizontal-dominant scroll (`|deltaX| > |deltaY|`) pans `_scrollFrame`
@@ -10764,6 +11099,9 @@ and the FPS pill),
 `seekbar-markers.js` (`installSeekbarMarkers`, `seekbarMarkerAt`,
 `describeSwitchMarker`, `setSeekbarMarkerFrames` — the possible-ID-switch ticks:
 the scrub handlers and the tooltip snap to a tick within 5 px),
+`seekbar-ticks.js` (`installSeekbarTicks`, `refreshSeekbarTicks` — the time
+ruler under the seekbar; `updateSeekbarVisual` calls the refresh, a no-op
+unless the frame count or FPS changed),
 `color-by.js` (`onColorByChange`, `setColorByIdentity` — the Tracks /
 Identity toggle, also flipped by the tracker after Track All — #242),
 `trail-presets.js` (`TRAIL_PRESETS`, `MAX_TRAIL_FRAMES`, `trailPresetFor`,
@@ -12133,7 +12471,8 @@ blank until the user manually re-ran Triangulate All. Covered by
 `tests/e2e/reopen-reprojection-panel-autopopulate.mjs`.
 
 **Imports from project modules.**
-- `../ui/app-state.js` (incl. `buildRememberedSkeleton`), `../pose/pose-data.js`,
+- `../ui/app-state.js` (incl. `buildRememberedSkeleton`, and `isViewDocked` as the
+  rebuilt video controller's `isViewShown`), `../pose/pose-data.js`,
   `../ui/browser-hints.js` (`fileSystemAccessHint` — Brave hint in the
   multi-session "needs a folder picker" message), `./video.js`, `../import-export/file-io.js`, `../pose/triangulation.js`
   (`shouldUseLazyH5`, `shouldUseLazySlp`, `LazyFrameLoader`),
@@ -13124,7 +13463,12 @@ a zoomed-in image keeps the same region centered instead of jumping.
 - `STEP_BACK_WARM_MS` (250) — pause after landing on a frame before warming the chunk behind it.
 - `OnDemandVideoDecoder` — class. Selected methods: `init(source)`,
   `getFrame(frameIndex)` (mediabunny: via `_mbGetFrame`, the open stepping
-  stream), `releaseStepCursor()`, `_initMediabunny(source)` /
+  stream), `releaseStepCursor()`, `releaseFrames()` (closes and drops every
+  cached decoded frame — mediabunny backend cache + HTML5/WebCodecs cache — and
+  the stepping streams, keeping the decoder open; called by
+  `VideoController._shownViews` for a view that went off screen, since 17
+  cameras' full 60-frame caches at 1680×1200 are ~8 GB of ImageBitmaps and keep
+  Chrome garbage-collecting), `_initMediabunny(source)` /
   `_mediabunnyEnabled()` (default-on frame-accurate backend, issue #115),
   `_mbCannotDecode(backend)` (null, or `{reason: 'codec', codec, codecString}`
   when WebCodecs cannot decode the track — the backend is then dropped and
@@ -13178,6 +13522,25 @@ a zoomed-in image keeps the same region centered instead of jumping.
   `setupSeekbar`, `setupKeyboardHandlers`, `initZoom`, `applyZoom`,
   `zoomVideo`, `resetZoom`, `zoomToRect`, `zoomAllVideos`,
   `resetAllZoom`, `setupZoomHandlers`.
+
+**Only the views on screen are decoded, played and captured** —
+`_shownViews()`: views with a decoder for which the optional
+`callbacks.isViewShown(view)` is true (the app passes `isViewDocked`, from
+`ui/app-state.js`), or every decoder view when there is no callback or none is
+shown. A decoder that was shown at the previous call and is not now gets
+`releaseFrames()` — once, on the transition, compared BY DECODER because
+decoders are pooled across session switches. Without it the hidden views' caches
+stayed full forever: after using the grid, solo playback was 68% GC and reached
+63 of 120 pictures/s with 43% dropped; with it, 115/s and none dropped.
+Returning to the grid then costs one keyframe decode per view. `seekToFrame` (so every step, jump and the `pausePlayback` re-decode)
+decodes only those; `startPlayback` seeks, plays and captures only those, and
+its loops RESTART playback when the shown set changes mid-play (a solo switch,
+a pane closed or docked) — a newly shown view's `<video>` is paused wherever it
+was left. Before this, solo'ing one camera of a 17-camera 120 fps project left
+every cost of the full grid in place (jumps ~2.1 s, steps ~170 ms, playback ~11
+new pictures/s), because the 16 hidden decoders still decoded every step and
+played. Covered by `tests/test-video-controller.js` ("Only shown views") and
+`tests/e2e/solo-view-decodes-shown-only.mjs`.
 
 **`setupZoomHandlers`'s wheel-to-zoom stands down while Alt is held.** Alt
 turns the wheel into the instance-rotation control (`ui/interaction.js`
