@@ -27,18 +27,18 @@
  * import-export/save-load.js (setStatus).
  */
 
-import { state, getActiveSession } from './app-state.js?v=543022c392e1';
-import { setSeekbarSwitchMarkers } from './seekbar-markers.js?v=543022c392e1';
-import { setIdSwitchHighlight, updateIdSwitchHighlight, refreshIdSwitchHighlight, ID_SWITCH_SECTION_RGB } from './id-switch-highlight.js?v=543022c392e1';
-import { setStatus, markDirty } from '../import-export/save-load.js?v=543022c392e1';
-import { showLoadingProgress, hideLoading, yieldToPaint } from './loading-overlay.js?v=543022c392e1';
-import { getTrackingThreshold } from './settings.js?v=543022c392e1';
-import { checkSizeSwitches, checkImageSwitches } from '../pose/id-switch-check.js?v=543022c392e1';
+import { state, getActiveSession } from './app-state.js?v=1c81e1c6eb9b';
+import { setSeekbarSwitchMarkers } from './seekbar-markers.js?v=1c81e1c6eb9b';
+import { setIdSwitchHighlight, updateIdSwitchHighlight, refreshIdSwitchHighlight, ID_SWITCH_SECTION_RGB } from './id-switch-highlight.js?v=1c81e1c6eb9b';
+import { setStatus, markDirty } from '../import-export/save-load.js?v=1c81e1c6eb9b';
+import { showLoadingProgress, hideLoading, yieldToPaint } from './loading-overlay.js?v=1c81e1c6eb9b';
+import { getTrackingThreshold } from './settings.js?v=1c81e1c6eb9b';
+import { checkSizeSwitches, checkImageSwitches } from '../pose/id-switch-check.js?v=1c81e1c6eb9b';
 import { createImageEmbedder, IMAGE_MODEL_MB, formatEmbedTiming, createLoadMeter, formatEmbedDevice,
-         inputTensorToPixels, INPUT } from './image-embedder.js?v=543022c392e1';
+         inputTensorToPixels, INPUT } from './image-embedder.js?v=1c81e1c6eb9b';
 import { idSwitchRowKey as rowKey, idSwitchPrimary as primaryOf, idSwitchMarkers as markersOf, idSwitchOnsets as countOnsets,
          idSwitchEncounterCount as encounterCount, linkIdSwitchResults as tagAndLink,
-         idSwitchFixPlan, idSwitchFixFor, idSwitchRenameForFix } from './id-switch-review.js?v=543022c392e1';
+         idSwitchFixPlan, idSwitchFixFor, idSwitchRenameForFix } from './id-switch-review.js?v=1c81e1c6eb9b';
 
 const CUE_LABEL = { size: 'body size', image: 'images' };
 
@@ -107,6 +107,29 @@ var _refresh = null;
 
 /** Register the repaint run after a fix / undo changes identities (called once from ui/ui-wiring.js). */
 export function setIdSwitchRefresher(fn) { _refresh = fn; }
+
+// Reopens a session's last Track All summary (`reopenTrackSummary`), registered by
+// ui/track-summary-modal.js — which imports this module, so this one stays a leaf.
+var _openSummary = null;
+
+/** Register what the tab's "Show Track All summary" button runs (called once from ui/track-summary-modal.js). */
+export function setTrackSummaryOpener(fn) { _openSummary = fn; }
+
+/**
+ * Above "Possible ID switches": a button that reopens the session's Track All summary
+ * once its box was closed — the box offers the checks not run yet. Only after a Track All
+ * in this page: the summary is not saved with the project.
+ */
+function trackSummaryHtml(session) {
+    return session && session._trackSummary && _openSummary
+        ? '<div class="info-section id-switch-track-summary"><button class="panel-btn" id="idSwitchTrackSummary" ' +
+          'title="Reopen the box Track All showed when it finished">Show Track All summary</button></div>'
+        : '';
+}
+function wireTrackSummary(host, session) {
+    var b = host.querySelector('#idSwitchTrackSummary');
+    if (b) b.addEventListener('click', function () { if (_openSummary) _openSummary(session); });
+}
 
 /**
  * The recording's frame rate, and whether it was measured from the video. The
@@ -710,7 +733,7 @@ export function refreshIdSwitchPanel(session) {
     var st = session && session._idSwitch;
     var ran = st ? ['size', 'image'].filter(function (c) { return st.results[c] && st.results[c].ok; }) : [];
     if (!ran.length) {
-        host.innerHTML = '<div class="info-section"><h3>Possible ID switches</h3><p class="table-empty id-switch-empty">' +
+        host.innerHTML = trackSummaryHtml(session) + '<div class="info-section"><h3>Possible ID switches</h3><p class="table-empty id-switch-empty">' +
             (hasTrackedIdentities(session) ? 'No ID-switch check has run on this session yet.' : 'Run Track All first: the checks need tracked identities with 3D.') +
             '</p><div class="id-switch-run"><button class="panel-btn" data-run="menuCheckSizeSwitches">Check by body size</button>' +
             '<button class="panel-btn" data-run="menuCheckImageSwitches">Check by images…</button></div></div>';
@@ -718,12 +741,13 @@ export function refreshIdSwitchPanel(session) {
         host.querySelectorAll('[data-run]').forEach(function (b) {
             b.addEventListener('click', function () { var m = document.getElementById(b.dataset.run); if (m) m.click(); });
         });
+        wireTrackSummary(host, session);
         return;
     }
     var both = ran.length === 2, primary = listRows(st, false), all = listRows(st, true);
     var repeats = all.length - primary.length, done = primary.filter(function (m) { return isReviewed(st, m); }).length;
     var rows = st.showRepeats ? all : primary;
-    host.innerHTML =
+    host.innerHTML = trackSummaryHtml(session) +
         '<div class="info-section id-switch-head"><h3>Possible ID switches</h3>' +
         ran.map(function (c) {
             var r = st.results[c], n = countOnsets(r);
@@ -743,6 +767,7 @@ export function refreshIdSwitchPanel(session) {
         (rows.length ? rows.map(function (f) { return rowHtml(session, st, f, both); }).join('')
             : '<p class="table-empty">No encounter scored below the threshold.</p>') + '</div>';
     _progStale = true;                               // the list was rebuilt: re-find the selected row's bar
+    wireTrackSummary(host, session);
     highlightRow(rows.filter(function (f) { return rowKey(f) === st.current; })[0] || null);
     var nav = st.navigate || _navigate;
     // A row lands ID_SWITCH_LEAD_IN_SECONDS before the animals come close (data-go), so pressing play
