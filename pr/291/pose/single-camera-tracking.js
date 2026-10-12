@@ -31,7 +31,7 @@
  * DOM-free. Depends on: pose/sleap-tracker.js.
  */
 
-import { runSleapTrackerAsync } from './sleap-tracker.js?v=8ffc51b185aa';
+import { runSleapTrackerAsync } from './sleap-tracker.js?v=39509ddf3799';
 
 /** Why a lazy single-camera project is not tracked (shown in the status bar). */
 export const SINGLE_CAMERA_LAZY_REASON = 'single-camera tracking does not support a lazily loaded (> 150 MB) project yet';
@@ -231,60 +231,31 @@ export function candidateMoments(frames, out, inputTracks, ambiguous, look, fps)
 }
 
 /**
- * Where a run of flagged encounters ENDS in the image check on one camera
- * (`continueBelow`, pose/id-switch-check.js `markChangePoints`): only at an
- * encounter scoring above +|threshold| — the mirror of the score that starts a
- * run — instead of at any score above 0. One camera has more crowded contacts
- * than a multi-camera rig sees from any one view, and an encounter in a huddle,
- * where each animal is alone for a few seconds at most, scores near 0 either
- * way; ending the run there split one swap into two rows and left the stretch
- * between them unfixed. On the 5-mouse topC video a +24 split the id_3 / id_4
- * swap at 25:23.9 (median |score| 331), so its Fix stopped there; with this rule
- * Fixing the two rows makes the tracks 99.9% correct instead of 93.8%. On the 35
- * proofread SLAP videos (image check at -25): rows 96 -> 78 (false 71 -> 51),
- * 18 of 59 swaps caught instead of 17, and the real rows' Fixes add 66 accuracy
- * points instead of 54 — while +50 or +100 merges runs across real switch-backs
- * (15 caught). The brightness check keeps 0: its encounter scores are mostly
- * noise (hence its -800 threshold), and +800 cost it a caught swap.
- * @param {number} threshold  the image check's threshold (Tracking Wizard `imageCheckThreshold`)
- * @returns {number}
- */
-export function singleCameraImageContinueBelow(threshold) {
-    return Math.abs(threshold);
-}
-
-/**
- * The options every ID-switch check runs with on a single-camera session, on
- * top of its own (`ui/id-switch-modal.js` merges them in):
- *  - `skipEmpty`: runs of flagged encounters ignore encounters scoring exactly 0.
- *    Those had no samples on either side (the image check reads 2 per second, and
- *    one camera's animals are seldom alone for long), so they say nothing about the
- *    labels — yet counting them as "reads right" started a swapped stretch at the
- *    first encounter WITH evidence: a Fix from 0:04.2 for a swap running from
- *    0:00, or from 0:25.9 when all six of the pair's encounters before it were
- *    empty. On the 35 proofread SLAP videos 44.5% of the image check's encounters
- *    (24.4% of brightness's) score 0; skipping them: image rows 78 -> 68 (false
- *    51 -> 42) with the same 18 of 59 swaps caught, rows whose Fix has a wrong far
- *    edge 4 -> 2, and swaps fully undone 9 -> 11 rows (with the boundary set by
- *    the user); brightness rows 21 -> 18 (false 7 -> 4), 14 caught either way.
- *    Not measured for body size on one camera (sampled at 15 Hz, so rarely empty).
+ * The options the size and coat-brightness checks run with on a single-camera
+ * session, on top of their own (`ui/id-switch-modal.js` merges them in). Both
+ * act on runs of flagged encounters and their follow-ons
+ * (pose/id-switch-check.js `markChangePoints` / `linkFollowOns`), which the
+ * image check no longer has: since #309 it scores each contact label-free and
+ * takes none of them.
+ *  - `skipEmpty`: runs ignore encounters scoring exactly 0. Those had no samples
+ *    on either side (one camera's animals are seldom alone for long), so they say
+ *    nothing about the labels — yet counting them as "reads right" started a
+ *    swapped stretch at the first encounter WITH evidence: a Fix from 0:04.2 for
+ *    a swap running from 0:00. Measured on the 35 proofread SLAP videos with the
+ *    image check's previous scoring (44.5% of its encounters scored 0): rows
+ *    78 -> 68, false 51 -> 42, the same 18 of 59 swaps caught; brightness rows
+ *    21 -> 18 (false 7 -> 4), 14 caught either way.
  *  - `clearestEndLeads`: among encounter 'end' rows within 5 s of each other that
  *    share an animal, the one reading right again most clearly leads its
- *    follow-ons (pose/id-switch-check.js `linkFollowOns`). After an early swap the
- *    swapped animals' other pairs end a second or two BEFORE the swapped pair; on
- *    the SLAP videos one swap's row was a follow-on of such an echo (+69 leading
- *    the real +444). With it the swapped pair's row is the primary in 18 of 23
- *    swaps instead of 17; brightness and topC unchanged (3, 5 and 10 s alike).
- *  - image check only: `continueBelow` = `singleCameraImageContinueBelow(threshold)`.
- * Multi-camera checks run without any of them (not measured there).
- * @param {'size'|'image'|'brightness'} cue
- * @param {number} threshold  that check's threshold
- * @returns {{skipEmpty: boolean, clearestEndLeads: boolean, continueBelow?: number}}
+ *    follow-ons. After an early swap the swapped animals' other pairs end a
+ *    second or two BEFORE the swapped pair (+69 leading the real +444 on one
+ *    SLAP video).
+ * Multi-camera checks run without either (not measured there).
+ * @param {'size'|'brightness'} cue
+ * @returns {{skipEmpty: boolean, clearestEndLeads: boolean}}
  */
-export function singleCameraCheckOptions(cue, threshold) {
-    var o = { skipEmpty: true, clearestEndLeads: true };
-    if (cue === 'image') o.continueBelow = singleCameraImageContinueBelow(threshold);
-    return o;
+export function singleCameraCheckOptions(cue) {
+    return { skipEmpty: true, clearestEndLeads: true };
 }
 
 /**

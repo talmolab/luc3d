@@ -28,20 +28,20 @@
  * import-export/save-load.js (setStatus).
  */
 
-import { state, getActiveSession } from './app-state.js?v=8ffc51b185aa';
-import { setSeekbarSwitchMarkers } from './seekbar-markers.js?v=8ffc51b185aa';
-import { setIdSwitchHighlight, updateIdSwitchHighlight, refreshIdSwitchHighlight, ID_SWITCH_SECTION_RGB } from './id-switch-highlight.js?v=8ffc51b185aa';
-import { setStatus, markDirty } from '../import-export/save-load.js?v=8ffc51b185aa';
-import { showLoadingProgress, hideLoading, yieldToPaint } from './loading-overlay.js?v=8ffc51b185aa';
-import { getTrackingThreshold } from './settings.js?v=8ffc51b185aa';
-import { checkSizeSwitches, checkImageSwitches, checkBrightnessSwitches } from '../pose/id-switch-check.js?v=8ffc51b185aa';
-import { singleCameraName, singleCameraCheckSession, swapSingleCameraIdentities, singleCameraCheckOptions } from '../pose/single-camera-tracking.js?v=8ffc51b185aa';
+import { state, getActiveSession } from './app-state.js?v=39509ddf3799';
+import { setSeekbarSwitchMarkers } from './seekbar-markers.js?v=39509ddf3799';
+import { setIdSwitchHighlight, updateIdSwitchHighlight, refreshIdSwitchHighlight, ID_SWITCH_SECTION_RGB } from './id-switch-highlight.js?v=39509ddf3799';
+import { setStatus, markDirty } from '../import-export/save-load.js?v=39509ddf3799';
+import { showLoadingProgress, hideLoading, yieldToPaint } from './loading-overlay.js?v=39509ddf3799';
+import { getTrackingThreshold } from './settings.js?v=39509ddf3799';
+import { checkSizeSwitches, checkImageSwitches, checkBrightnessSwitches } from '../pose/id-switch-check.js?v=39509ddf3799';
+import { singleCameraName, singleCameraCheckSession, swapSingleCameraIdentities, singleCameraCheckOptions } from '../pose/single-camera-tracking.js?v=39509ddf3799';
 import { createImageEmbedder, IMAGE_MODEL_MB, formatEmbedTiming, createLoadMeter, formatEmbedDevice,
-         inputTensorToPixels, INPUT } from './image-embedder.js?v=8ffc51b185aa';
-import { createBrightnessSampler } from './brightness-sampler.js?v=8ffc51b185aa';
+         inputTensorToPixels, INPUT } from './image-embedder.js?v=39509ddf3799';
+import { createBrightnessSampler } from './brightness-sampler.js?v=39509ddf3799';
 import { idSwitchRowKey as rowKey, idSwitchPrimary as primaryOf, idSwitchMarkers as markersOf, idSwitchOnsets as countOnsets,
          idSwitchEncounterCount as encounterCount, linkIdSwitchResults as tagAndLink,
-         idSwitchFixPlan, idSwitchFixFor, idSwitchRenameForFix, ID_SWITCH_CUES, idSwitchIsSecondary } from './id-switch-review.js?v=8ffc51b185aa';
+         idSwitchFixPlan, idSwitchFixFor, idSwitchRenameForFix, ID_SWITCH_CUES, idSwitchIsSecondary } from './id-switch-review.js?v=39509ddf3799';
 
 const CUE_LABEL = { size: 'body size', image: 'images', brightness: 'coat brightness' };
 
@@ -270,9 +270,9 @@ async function runSize(session, rate, moments, single) {
     } finally { hideLoading(); }
 }
 
-async function runImage(session, rate, inject, moments, single) {
+async function runImage(session, rate, inject) {
     inject = inject || {};
-    var threshold = getTrackingThreshold('imageCheckThreshold');
+    var threshold = getTrackingThreshold('imageChangeThreshold');
     var views = (state.views || []).filter(function (v) { return v && v.decoder; });
     if (!views.length && !inject.createEmbedder) return { ok: false, reason: 'needs the session\'s videos to be loaded' };
     // No GPU is not a reason to skip: the embedder then runs on the CPU, slowly, and the dialog says so
@@ -311,7 +311,6 @@ async function runImage(session, rate, inject, moments, single) {
             fps: rate.fps,
             imageHz: getTrackingThreshold('imageCheckHz') || 2,
             threshold: threshold,
-            moments: moments,
             getEmbeddings: embedder.getEmbeddings,
             prepareFrames: embedder.prepareFrames,
             inFlight: embedder.inFlight || 2,
@@ -324,13 +323,11 @@ async function runImage(session, rate, inject, moments, single) {
                     prog.update('Cropping and embedding ' + embedder.views.length + ' views: frame ' + done.toLocaleString() +
                         ' of ' + total.toLocaleString() + (done > 3 ? ' — about ' + fmtDuration(left) + ' left' : ''), 0.9 * done / total);
                 } else {
-                    prog.update('Learning each animal\'s appearance (' + done + ' / ' + total + ')…', 0.9 + 0.1 * done / Math.max(1, total));
+                    prog.update('Learning what tells the animals apart (camera ' + Math.min(done + 1, total) + ' of ' + total + ')…', 0.9 + 0.1 * done / Math.max(1, total));
                 }
                 await yieldToPaint();
             },
         };
-        // On one camera: empty encounters are no evidence, and a run ends only at a clearly positive one.
-        if (single) Object.assign(opts, singleCameraCheckOptions('image', threshold));
         var res = await checkImageSwitches(session, opts);
         if (res && embedder.backend) res.model = embedder.backend();   // after releaseFrames: the final word
         if (res && embedder.stats) {
@@ -385,7 +382,7 @@ async function runBrightness(session, rate, inject, moments, single) {
                 await yieldToPaint();
             },
         };
-        if (single) Object.assign(opts, singleCameraCheckOptions('brightness', opts.threshold));
+        if (single) Object.assign(opts, singleCameraCheckOptions('brightness'));
         return await checkBrightnessSwitches(session, opts);
     } catch (e) {
         if (e && e.name === 'AbortError') return { ok: false, reason: 'cancelled', cancelled: true };
@@ -440,7 +437,7 @@ export async function runIdSwitchChecks(opts) {
         var res, t0 = performance.now();
         try {
             res = cue === 'size' ? await runSize(target, rate, moments, single)
-                : cue === 'image' ? await runImage(target, rate, opts.inject, moments, single)
+                : cue === 'image' ? await runImage(target, rate, opts.inject)
                 : await runBrightness(target, rate, opts.inject, moments, single);
         }
         catch (e) {
@@ -535,18 +532,20 @@ export function clearIdSwitchResults(session) {
 
 function aboutHtml(st, ran) {
     var r0 = st.results[ran[0]], im = st.results.image, br = st.results.brightness;
-    var how = ran.map(function (c) {
-        return c === 'size' ? (r0.singleCamera ? 'body size in the one camera view (2D, so it also changes with posture and distance from the camera)' : '3D body size')
-            : c === 'image' ? 'appearance in the videos (an image model)' : 'the brightness of their coats in the videos';
-    });
-    return '<p>Each close encounter between two identities is scored by whether the animals leaving it look like the ' +
-        'identities they now carry — by ' + how.join(' and/or by ') +
-        ', learned from the tracker\'s own labels. Flags are leads to review, not certainties: size cannot tell apart ' +
-        'animals of near-equal size, and appearance struggles with animals that look alike.' +
-        (r0.singleCamera ? ' On one camera the checks also test the moments where the tracker nearly chose the swap or the ' +
-            'input\'s own tracklets change animal, comparing the evidence before and after each.' : '') +
-        (st.results.size && st.results.size.ok && im && im.ok ? ' <b>Review "Both" rows first</b> — when size and images flag the same encounter it was a real swap ' +
-            'far more often (in calibration: 98% vs 79% for images alone, and none on a 30-min recording with no switches).' : '') + '</p>' +
+    var sz = st.results.size;
+    return '<p>' + (sz && sz.ok ? 'By <b>body size</b>, each close encounter between two identities is scored by whether the ' +
+            'animals leaving it match the ' + (r0.singleCamera ? '2D size in the one camera view (which also changes with posture and ' +
+            'distance from the camera)' : '3D size') + ' of the identities they now carry, learned from the tracker\'s own labels. ' : '') +
+        (im && im.ok ? 'By <b>images</b>, each contact is scored by whether each animal looks like itself just before and ' +
+            'just after it, so the check does not rely on the tracker\'s labels being mostly right. ' : '') +
+        (br && br.ok ? 'By <b>coat brightness</b>, each close encounter is scored by whether the animals leaving it have the coat ' +
+            'brightness of the identities they now carry, learned from the tracker\'s own labels. ' : '') +
+        'Flags are leads to review, not certainties: size cannot tell apart animals of near-equal size, and images and coat ' +
+        'brightness cannot tell apart animals that look alike.' +
+        (r0.singleCamera ? ' On one camera the body-size and coat-brightness checks also test the moments where the tracker ' +
+            'nearly chose the swap or the input\'s own tracklets change animal, comparing the evidence before and after each.' : '') +
+        (sz && sz.ok && im && im.ok ? ' <b>Review "Both" rows first</b> — when both checks flag the same contact it was a real swap ' +
+            'more often (on 8 proofread or tail-marked recordings: 4 of 4, against 6 of 8 for images alone).' : '') + '</p>' +
         '<p class="id-switch-rate">Analysed ' + r0.sampleHz.toFixed(1) + ' samples/s (every ' +
         (r0.step === 1 ? 'frame' : ordinal(r0.step) + ' frame') + ' at ' + r0.fps.toFixed(2).replace(/\.?0+$/, '') + ' fps' +
         (im && im.ok ? '; images at ' + im.imageHz.toFixed(1) + '/s, ' + im.crops.toLocaleString() + ' crops from ' + im.cameras.length + ' views' +
@@ -757,12 +756,17 @@ function idName(session, name) {
     return '<span class="id-switch-id"' + (col ? ' style="color:' + col + '"' : '') + '>' + escapeHtml(name) + '</span>';
 }
 
+/** A row's score: size scores are summed evidence (whole numbers), image scores a cosine contrast (-4..4). */
+function fmtScore(m) {
+    return m.cue === 'image' && Math.abs(m.score) < 100 ? (Math.round(m.score * 10) / 10).toFixed(1) : String(Math.round(m.score));
+}
+
 function rowHtml(session, st, f, both) {
     var cue = f.agree ? 'both' : f.cue, key = rowKey(f), rev = isReviewed(st, f);
-    var score = f.agree ? Math.round(f.score) + ' / ' + Math.round(f.agree.score) : Math.round(f.score);
+    var score = f.agree ? fmtScore(f) + ' / ' + fmtScore(f.agree) : fmtScore(f);
     var note = f.continues ? 'still swapped'
         : f.followOf != null ? 'follows the switch at ' + fmtTime(f.followOf)
-        : f.kind === 'end' ? 'labelling changes here; earlier encounters look swapped' : '';
+        : f.kind === 'end' ? (f.cue === 'image' ? 'labels change back here' : 'labelling changes here; earlier encounters look swapped') : '';
     if (f.look && f.look.length) {
         // a candidate moment, not an encounter: say why it was looked at, and which side looks swapped
         note = lookNote(f.look) + (f.kind === 'end' ? ' · the labels BEFORE it look swapped' : '') +

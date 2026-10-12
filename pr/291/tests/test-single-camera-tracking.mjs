@@ -18,11 +18,6 @@
  *     undoes it; with identities edited apart from their tracks it falls back
  *     to the identity layer and says so.
  *  4. Not single-camera / lazy: null / a reason, never a partial result.
- *  5. The image check's run-ending rule on one camera
- *     (`singleCameraImageContinueBelow`): a run of flagged encounters goes on
- *     through weak, near-zero scores and ends only at a clearly positive one —
- *     on the topC video's own scores, one row whose Fix reaches the end instead
- *     of two rows with the stretch between them unfixed.
  *  6. `singleCameraCheckOptions`: on one camera every check ignores encounters
  *     scoring exactly 0 (no samples) when finding runs — on a real video's own
  *     scores, a swap running from the session start is fixed from frame 0, not
@@ -222,39 +217,9 @@ group('4. Not single-camera, or lazy');
     eq(SCT.singleCameraCheckSession(lazy).fail, SCT.SINGLE_CAMERA_LAZY_REASON, '…and the checks say why');
 }
 
-group('5. The image check on one camera: a run ends only at a clearly positive encounter');
-{
-    eq(SCT.singleCameraImageContinueBelow(-25), 25, 'at the default image threshold (-25) a run ends above +25');
-    eq(SCT.singleCameraImageContinueBelow(-200), 200, '…and at -200 above +200 (the mirror of what starts one)');
-    // The topC video's id_3 / id_4 encounters from 23:16 on, at threshold -200: the +24 at 25:23.9 had a
-    // few seconds of evidence (a five-mouse huddle), and the pair flags again at 27:28.9 and stays flagged.
-    const scores = [300, 250, -230, -418, -33, -354, -65, 24, -183, 15, 66, -114, -157, -124, 31, -954, -918, -35];
-    const enc = () => scores.map((score, i) => ({ frame: 100 * (i + 1), startFrame: 100 * (i + 1) - 20, identityA: 3, identityB: 4,
-                                                  nameA: 'id_3', nameB: 'id_4', score }));
-    const O = { threshold: -200, followSeconds: 60, fps: 30 };
-    const rowsOf = (cb) => {
-        const sc = enc(), ch = CHK.markChangePoints(sc, Object.assign({ continueBelow: cb }, O));
-        return sc.filter(x => x.flagged && !x.continues).concat(ch).sort((a, b) => a.frame - b.frame);
-    };
-    const before = rowsOf(0);
-    ok(before.length === 3 && before[0].frame === 300 && before[0].switchBackAt === 800 && before[2].frame === 1600,
-        `ending at any score above 0: the +24 splits the swap into two stretches, 300..800 and 1600..end (${JSON.stringify(before.map(x => [x.frame, x.kind]))})`);
-    const after = rowsOf(SCT.singleCameraImageContinueBelow(-200));
-    ok(after.length === 1 && after[0].frame === 300 && after[0].switchBackAt === null,
-        `ending only above +200: one row, its swap running to the end (${JSON.stringify(after.map(x => [x.frame, x.kind, x.switchBackAt]))})`);
-    // …and a clear "labels look right again" still ends it
-    const back = enc().slice(0, 7).concat([450, 300, 280].map((score, i) => ({ frame: 800 + 100 * i, startFrame: 780 + 100 * i,
-        identityA: 3, identityB: 4, nameA: 'id_3', nameB: 'id_4', score })));
-    const ch = CHK.markChangePoints(back, Object.assign({ continueBelow: 200 }, O));
-    const on = back.find(x => x.kind === 'onset');
-    ok(on && on.frame === 300 && on.switchBackAt === 800 && ch.length === 1 && ch[0].frame === 800,
-        `a real switch back (+450) still ends the run there: onset 300, labels right again at ${on && on.switchBackAt}`);
-}
-
 group('6. On one camera, an encounter with no samples is no evidence');
 {
-    eq(JSON.stringify(SCT.singleCameraCheckOptions('image', -25)), '{"skipEmpty":true,"clearestEndLeads":true,"continueBelow":25}', 'image: empty encounters skipped, the clearest end leads, runs end above +25');
-    eq(JSON.stringify(SCT.singleCameraCheckOptions('brightness', -800)), '{"skipEmpty":true,"clearestEndLeads":true}', 'brightness: empty encounters skipped, the clearest end leads');
+    eq(JSON.stringify(SCT.singleCameraCheckOptions('brightness')), '{"skipEmpty":true,"clearestEndLeads":true}', 'brightness: empty encounters skipped, the clearest end leads');
     eq(JSON.stringify(SCT.singleCameraCheckOptions('size')), '{"skipEmpty":true,"clearestEndLeads":true}', 'size: empty encounters skipped, the clearest end leads');
     // 10072022143153-mid, id_0 / id_2: swapped from 0:00 to 2:16.7, but the pair's first encounter (0:03.9) had no samples
     const scores = [0, -46, -64, 0, -1, -11, 12, 41];
@@ -264,7 +229,7 @@ group('6. On one camera, an encounter with no samples is no evidence');
     let sc = enc(), ch = CHK.markChangePoints(sc, O);
     let rows = sc.filter(x => x.flagged && !x.continues).concat(ch);
     ok(rows.length === 2 && ch[0].switchedAt === 200, `without: the empty first encounter reads as "right", so the stretch starts at 200 (${JSON.stringify(rows.map(x => [x.frame, x.kind, x.switchedAt]))})`);
-    sc = enc(); ch = CHK.markChangePoints(sc, Object.assign({}, O, SCT.singleCameraCheckOptions('image', -25)));
+    sc = enc(); ch = CHK.markChangePoints(sc, Object.assign({}, O, SCT.singleCameraCheckOptions('brightness')));
     rows = sc.filter(x => x.flagged && !x.continues).concat(ch);
     ok(rows.length === 1 && rows[0].kind === 'end' && rows[0].frame === 800 && rows[0].switchedAt === null,
         `with: one 'end' row at 800, the stretch from the session start (${JSON.stringify(rows.map(x => [x.frame, x.kind, x.switchedAt]))})`);
@@ -286,7 +251,7 @@ group('7. On one camera, the clearest of a group of nearby \'end\' rows leads it
     const lead = ch => ch.filter(x => x.followOf == null).map(x => x.nameA + '/' + x.nameB + '@' + x.frame).join(', ');
     let ch = CHK.markChangePoints(enc(), O);
     ok(ch.length === 4 && lead(ch) === 'id_1/id_3@405', `in time order the first echo leads (${lead(ch)})`);
-    ch = CHK.markChangePoints(enc(), Object.assign({}, O, SCT.singleCameraCheckOptions('image', -25)));
+    ch = CHK.markChangePoints(enc(), Object.assign({}, O, SCT.singleCameraCheckOptions('brightness')));
     ok(lead(ch) === 'id_2/id_3@507' && ch.filter(x => x.followOf === 507).length === 3,
         `with clearestEndLeads the swapped pair's row (+444) leads and the three echoes follow it (${lead(ch)})`);
 }

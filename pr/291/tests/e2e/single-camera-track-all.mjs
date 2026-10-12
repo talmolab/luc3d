@@ -28,10 +28,10 @@
  *     Brightness) runs), with a stand-in sampler (the coats differ): a change point both it and
  *     the size check find is ONE "Both" row on the size result (violet + amber),
  *     and its ticks are on the seekbar.
- *  6. The image check (stand-in embedder) on one camera ends a run of flagged
- *     encounters only at a clearly positive one: `continueBelow` = +|threshold|
- *     (pose/single-camera-tracking.js `singleCameraImageContinueBelow`); and every
- *     check there skips encounters with no samples (`skipEmpty`).
+ *  6. The image check (stand-in embedder) runs on one camera with its own
+ *     label-free scoring and no single-camera options, while the size and
+ *     coat-brightness checks there skip encounters with no samples (`skipEmpty`)
+ *     and let the clearest of nearby 'end' rows lead (`clearestEndLeads`).
  *
  * Run: node tests/e2e/single-camera-track-all.mjs
  */
@@ -235,7 +235,7 @@ try {
     check(br.rows.filter(r => Math.abs(r.frame - 1800) <= 30).length === 1, '…listed once');
     check(br.marks.some(c => /cue-both-size-brightness/.test(c)), 'and its seekbar tick wears both colours');
 
-    console.log('\n6. The image check on one camera ends a run only at a clearly positive encounter');
+    console.log('\n6. The single-camera options: size and brightness take them, the label-free image check does not');
     const img = await page.evaluate(async () => {
         const S = window.__lucid.state.session, M = await import('/ui/id-switch-modal.js');
         const animalOf = new Map();
@@ -250,11 +250,11 @@ try {
                  lead: ['size', 'image', 'brightness'].map(c => S._idSwitch.results[c] && S._idSwitch.results[c].clearestEndLeads),
                  sizeSkip: S._idSwitch.results.size && S._idSwitch.results.size.skipEmpty, brSkip: S._idSwitch.results.brightness && S._idSwitch.results.brightness.skipEmpty };
     });
-    check(img.ok && img.threshold === -25 && img.continueBelow === 25,
-        `the image check ran at threshold ${img.threshold} with runs ending only above ${img.continueBelow} (want -25 / +25)`);
-    check(img.skipEmpty === true && img.sizeSkip === true && img.brSkip === true,
-        `every check on one camera skips encounters with no samples (image ${img.skipEmpty}, size ${img.sizeSkip}, brightness ${img.brSkip})`);
-    check(img.lead.every(x => x === true), `…and lets the clearest of nearby 'end' rows lead (size / image / brightness: ${img.lead})`);
+    check(img.ok && img.threshold === -0.8 && img.continueBelow === undefined && !img.skipEmpty,
+        `the image check ran label-free at its own threshold (${img.threshold}), with no single-camera options (continueBelow ${img.continueBelow}, skipEmpty ${img.skipEmpty})`);
+    check(img.sizeSkip === true && img.brSkip === true,
+        `size and coat brightness on one camera skip encounters with no samples (size ${img.sizeSkip}, brightness ${img.brSkip})`);
+    check(img.lead[0] === true && img.lead[2] === true, `…and let the clearest of nearby 'end' rows lead (size / image / brightness: ${img.lead})`);
 
     check(errs.length === 0, 'no page errors' + (errs.length ? ': ' + errs.join(' | ') : ''));
 } finally {
