@@ -53,6 +53,8 @@ import { OnDemandVideoDecoder, VideoController } from '../loading/video.js';
 
 // Pass 3i-1: tracker functions moved out of app.js.
 import { trackCurrentFrame, trackAll, findMatchForSelected } from '../pose/tracker.js';
+// The toolbar's Animals field, beside Track Frame / Track All.
+import { wireAnimalCountField } from './animal-count-field.js';
 // Track Frame Range (#212): the Track Frame split button's dropdown entry.
 import { showTrackRangeModal } from './track-range-modal.js';
 import { showAlignViewsModal } from './view-align-modal.js';
@@ -63,6 +65,7 @@ import { TRAIL_SHADES, TRACK_COLORS, trailShadeFor, trailColor } from './overlay
 import { installSeekbarTooltip } from './seekbar-tooltip.js';
 import { showReadoutFrame, refreshReadoutTotals } from './frame-readout.js';
 import { installSeekbarMarkers, seekbarMarkerAt, describeSwitchMarker, setSeekbarMarkerFrames } from './seekbar-markers.js';
+import { installSeekbarTicks, refreshSeekbarTicks } from './seekbar-ticks.js';
 // Pass 3i-2: triangulation orchestration moved out of app.js.
 import { triangulateCurrentFrame, triangulateAllFrames } from '../pose/triangulation.js';
 // User settings: default triangulation method + editable keyboard bindings.
@@ -1918,6 +1921,11 @@ export function setupUI() {
             return m ? m.frame : frameAtFraction(frac);
         };
         installSeekbarMarkers(document.getElementById('seekbarMarks'), state.totalFrames);
+        // The time ruler under the bar (ui/seekbar-ticks.js).
+        installSeekbarTicks(document.getElementById('seekbarRuler'), {
+            getTotalFrames: function () { return state.totalFrames; },
+            getFps: function () { return state.fps; },
+        });
 
         // Hover tooltip with the frame (and timestamp) under the cursor (#142).
         installSeekbarTooltip(seekbar, {
@@ -1928,6 +1936,7 @@ export function setupUI() {
                 var m = seekbarMarkerAt(frac, widthPx);
                 return m ? { frame: m.frame, text: describeSwitchMarker(m) } : null;
             },
+            hoverLine: document.getElementById('seekbarHoverLine'),
         });
 
         var _seekThrottle = { lastRender: 0, timer: null, pendingFrame: null };
@@ -2885,6 +2894,8 @@ export function setupUI() {
         });
     }
 
+    wireAnimalCountField();
+
     // Context menu for instance groups
     document.getElementById('ctxUnlinkGroup').addEventListener('click', function () {
         var menu = document.getElementById('groupContextMenu');
@@ -2962,6 +2973,7 @@ export function updateSeekbarVisual(frameIdx) {
     document.getElementById('seekbarThumb').style.left = pct + '%';
     showReadoutFrame(frameIdx);
     setSeekbarMarkerFrames(state.totalFrames);       // no-op unless the frame count changed
+    refreshSeekbarTicks();                           // no-op unless the frame count or FPS changed
     updateIdSwitchProgress(frameIdx);                // the ID Switches tab's selected-row bar (no-op without one)
 }
 

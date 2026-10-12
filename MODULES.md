@@ -1531,7 +1531,13 @@ session graph that holds them.
   a track (a pre-#273 `-1` is trackless). Used by the five group-naming status
   lines in `pose/initialization.js`. Tested by `tests/test-group-display-name.mjs`.
 - `Session` — top-level container: cameras, skeleton, tracks, identities,
-  frameGroups, instanceGroups. The `numFrames` getter returns
+  frameGroups, instanceGroups. **`numAnimals`** is the number of animals every
+  tracking run on the session caps identities at: a positive integer, `'auto'`
+  (an explicit auto-detect), or `null` while nobody has been asked, which is
+  what makes Track Frame / Track All prompt. Per session because a session is
+  one recording; saved as `metadata.lucid.numAnimals`
+  (`import-export/visibility-metadata.js`), read and set through
+  `pose/tracker.js`. The `numFrames` getter returns
   `lazyLoader.nFrames` on a lazy session (`frameGroups` there holds only the
   visited/resident window, badly understating the project) and `frameGroups.size`
   otherwise. **Tracks and identities are per-session.** The
@@ -2067,8 +2073,9 @@ no `points3d` are skipped) and show the total in the bottom-left status bar
 node weights change which instances get grouped (not which nodes triangulate),
 this is the headline metric for comparing weight settings.
 
-**Auto-cap.** When the user leaves the "Number of animals" prompt empty,
-`trackAll` / `trackCurrentFrame` resolve `numAnimals` via
+**Auto-cap.** When the animal count is blank (the prompt answered empty, or
+the toolbar's Animals field cleared), `trackAll` / `trackCurrentFrame` resolve
+`numAnimals` via
 `computeMaxInstancesPerView(session)` — the largest instance count seen
 in any (camera, frame) pair across the session — instead of leaving it
 null. Without the cap, leftover groups that survive reorder (after Fix
@@ -2084,6 +2091,23 @@ drifts upward (e.g., 4 → 11 on the test fixture).
   undefined `CrossViewTracker` — latent bug, see comment in source).
 - `trackAll()` — toolbar "Track All" handler — runs `matchFrameInstances`
   across every frame with temporal continuity signals.
+- `getTrackerNumAnimals()` / `setTrackerNumAnimals(n)` /
+  `onTrackerNumAnimalsChange(fn)` — the ACTIVE session's animal count
+  (`Session.numAnimals`; the getter returns `null` for auto-detect and for
+  never-asked alike). It lives on the session so it is saved with the project.
+  The native `promptNumAnimals()` fires only while the session has **no answer
+  at all** (`numAnimalsAnswered`: `numAnimals` is `null`), not while the count
+  reads null: a blank answer is stored as `'auto'`, and gating on null
+  re-prompted on every Track Frame / Track All after one. The prompt is
+  pre-filled with the session's count, else the last count given in any
+  session this page has seen (`_lastNumAnimals`), so a multi-session project of
+  the same animals answers each new session with one Enter.
+  `setTrackerNumAnimals` counts as an answer, null included; on a change it
+  calls `markDirty()` (it is project state now) and notifies the listeners —
+  that is how the toolbar's Animals field (`ui/animal-count-field.js`) follows
+  the prompt and the Track Frame Range dialog. With no session it is a no-op:
+  there is nothing to save the count with. Loading never goes through it — the
+  readers set `numAnimals` directly, so a reopened project is not dirty.
 
 **Imports from project modules.**
 - `./pose-data.js` — `InstanceGroup`, `points3dNodeCount`, `hasPoint3d`,
@@ -2275,7 +2299,8 @@ reversed; a non-integer endpoint is refused outright, because every comparison
 against `NaN` is false and it would otherwise sail past the ordering check and
 sweep nothing while reporting a `NaN` range. Like Track All, a range run does NOT propagate to tracks.
 `getTrackerNumAnimals` / `setTrackerNumAnimals` expose the animal count so the
-modal can collect it inline; `runTrackingPass` skips the native `promptNumAnimals()`
+modal can collect it inline (and the toolbar's Animals field then shows what it
+set); `runTrackingPass` skips the native `promptNumAnimals()`
 on the range path so a `prompt()` never stacks on top of the dialog.
 `runTrackingPass` **returns** `{ok, start, end, identities, frames}` — `ok:false`
 for every bail-out, and on success the CLAMPED, normalized span actually swept.
@@ -3446,108 +3471,95 @@ results}` (points3d buffers transferred) or `{type:'error', id, message}`.
 
 **Purpose.** The analysis behind Tracks ▸ **Check ID Switches (Body Size)…** and
 **(Images)…**, which also run automatically after Track All / Track Frame Range
-(`ui/id-switch-modal.js`). Flags close encounters between two tracked identities
-where the labels may have changed hands — a possible identity switch. Two cues,
-two methods: body size (3D bone lengths, cheap, no video) asks whether the animals
-leaving an encounter match the identities they now carry, by a classifier learned
-from the tracker's labels; appearance (embeddings of masked, pose-aligned crops,
-supplied by the caller — `ui/image-embedder.js` in the app) asks whether each
-animal looks like ITSELF across a contact, using no identity labels across it.
-Pure — no DOM, no app state — so both run headlessly (the image check with any
-embedding provider).
+(`ui/id-switch-modal.js`). Flags contacts between two tracked identities where the
+labels may have changed hands — a possible identity switch — by asking whether
+each animal looks like ITSELF across the contact, using no identity labels across
+it. Two cues through ONE pipeline (`scoreContacts`): body size (3D bone lengths,
+cheap, no video) and appearance (embeddings of masked, pose-aligned crops,
+supplied by the caller — `ui/image-embedder.js` in the app). Pure — no DOM, no app
+state — so both run headlessly (the image check with any embedding provider).
 
 **Key exports.** `checkSizeSwitches(session, opts)` and
-`checkImageSwitches(session, opts)` (async) -> `{ok, flags, changes, encounters,
-identities, sampledFrames, closeDistance, threshold, fps, step, sampleHz, cue}`
-(+ `bones` for size; + `imageHz`, `crops`, `cameras` for images) or
-`{ok:false, reason}`; `markChangePoints(scored, o)` (the change-point step,
-exported so calibration can re-apply thresholds to the same scores);
-`fitSoftmax(X, y, n, D, K, opts)` (L2 multinomial logistic regression, Adam);
-`fitPCA(X, n, D, k)` (randomized subspace iteration); the image check's parts —
-`contactEpisodes(grid, gapSeconds)`, `learnAppearanceMetric(X, n, D, stretch,
-sample, o)`, `appearanceChangeScores(grid, feat, o, every)`,
-`markAppearanceChanges(scored, o)` (its change-point step, exported to re-apply a
-threshold) and `symmetricEigen(A, n)` (cyclic Jacobi);
-`KEYFRAME_GAP_TOLERANCE` (1.1);
+`checkImageSwitches(session, opts)` (async) -> `{ok, flags, changes ([]),
+encounters (the scored contacts), identities, sampledFrames, closeDistance,
+threshold, fps, step, sampleHz, cue}` (+ `bones` for size; + `imageHz`, `crops`,
+`cameras` for images) or `{ok:false, reason}`; the pipeline's parts —
+`contactEpisodes(grid, gapSeconds)`, `learnIdentityMetric(X, n, D, stretch, sample,
+o)`, `contactChangeScores(grid, feat, o, every)`, `markContactChanges(scored, o)`
+(the change-point step, returning the change points; exported so a threshold can
+be re-applied to the same scores), `symmetricEigen(A, n)` (cyclic Jacobi) and
+`fitPCA(X, n, D, k)` (randomized subspace iteration); `KEYFRAME_GAP_TOLERANCE` (1.1);
 `planKeyframeSamples(frames, keyframes, hasFrame)` -> `{decode, snapped, spacing,
 keyframeGap, maxShift}` (which frame each image sample decodes in one camera — see
 "Keyframe sampling" under `ui/image-embedder.js`); `SIZE_BONES`;
-`REFERENCE_HZ` (15); `SIZE_CHECK_DEFAULTS` (`fps` REQUIRED, `sampleHz` 15,
-`folds` 5, `gapSeconds` 10, `syncSeconds` 1, `threshold` -50, `continueBelow` 0,
-`followSeconds` 60, `minTrackedSeconds` 60, `sepFactor` 0.65, `signal`, ...);
-`IMAGE_CHECK_DEFAULTS` (+ `imageHz` 2, `threshold` -0.8, `episodeGapSeconds` 3,
-`minSamples` 6, `windowSeconds` 10, `maxSpanSeconds` 60, `followSeconds` 5,
-`metricPcaDims` 64, `metricDims` 16, `metricReg` 0.1, `maxTrainRows` 20000,
-`getEmbeddings` REQUIRED: `async (frame, items[{k, group}]) -> per item
-[{camera, vector}]`, STARTED in increasing frame order with up to `inFlight`
-(default 2; the image embedder asks for 8) in flight; optional `prepareFrames(frames)` (awaited once with the
-sorted frames it will ask for) and `releaseFrames()` (always called at the end) let
-the provider stream its video).
+`SIZE_CHECK_DEFAULTS` (`fps` REQUIRED, `sampleHz` 15, `minTrackedSeconds` 60,
+`sepFactor` 0.65, `episodeGapSeconds` 3, `minApartSeconds` 3, `windowSeconds` 10,
+`maxSpanSeconds` 60, `followSeconds` 5, `metricPcaDims` 64, `metricDims` 16,
+`metricReg` 0.1, `signal`; `threshold` -1, `maxTrainRows` 200000);
+`IMAGE_CHECK_DEFAULTS` (the same shared ones; `threshold` -0.8, `maxTrainRows`
+20000, `imageHz` 2, `getEmbeddings` REQUIRED: `async (frame, items[{k, group}]) ->
+per item [{camera, vector}]`, STARTED in increasing frame order with up to
+`inFlight` (default 2; the image embedder asks for 8) in flight; optional
+`prepareFrames(frames)` (awaited once with the sorted frames it will ask for) and
+`releaseFrames()` (always called at the end) let the provider stream its video).
 
-**The shared grid.** Every round(fps / `sampleHz`)-th frame is a grid sample.
-"Close" = body centroids within `sepFactor` x the median body extent (unit-free).
-Tracklet = a run where an identity is apart from every other.
+**The grid.** Every round(fps / `sampleHz`)-th frame is a grid sample: per
+identity its InstanceGroup, body centroid and bone lengths. "Close" = body
+centroids within `sepFactor` x the median body extent (unit-free). Tracklet = a
+run where an identity is apart from every other.
 
-**The size method.** Encounter = the last
-close sample of a close spell, scored when both identities' next tracklets start
-within `syncSeconds`. A softmax is trained on the tracker's OWN labels with blocked
-CV (each fold excludes `gapSeconds` either side) on bone lengths. Log-probabilities are normalised within
-each frame across the identities present; an encounter's score = summed evidence
-for the claimed labelling minus the exchanged one over the two following
-tracklets. Each sample is weighted by `REFERENCE_HZ` / that cue's sample rate, so
-scores are evidence per unit TIME and thresholds hold at any frame rate (25-120
-fps tested within 0.4%). `opts.signal` cancels (AbortError).
+**The method (images 2026-10-09, size 2026-10-11).** Features per (sample,
+identity) come in VIEWS: the image check embeds crops every round(sampleHz /
+imageHz)-th grid sample, one view per camera; the size check's one view is the
+16 bone lengths of every grid sample, each standardised by its spread over the
+session. Per view the features are centred — embeddings also scaled to unit
+length, since an embedding's direction is what it encodes while a bone-length
+vector's size is the signal — and projected into a metric learned WITHOUT
+identity labels (`learnIdentityMetric`): an LDA whose "same animal" pairs are
+features of one identity within one tracklet (it is apart from all others, so its
+label cannot change hands there) and whose "different animals" pairs are two
+identities in the same frame — both true however wrong the tracking is. Contacts
+are #286's episodes (`contactEpisodes`: the two identities in one connected
+component of the close graph, so a swap through a third animal counts; runs <
+`episodeGapSeconds` apart merged), and episodes separated by less than
+`minApartSeconds` of usable samples of either animal are merged too, so a swap
+inside a long huddle is judged from the stretches either side of it. Each episode
+is scored (`contactChangeScores`) per view from the mean feature of each animal
+just before (aB, bB) and just after (aA, bA) it — up to `windowSeconds` a side,
+within `maxSpanSeconds`, never past the pair's neighbouring episode, a sample
+being usable when the animal is not in contact with its partner (it may touch a
+third: a crop masks others out): S = cos(aB,aA) + cos(bB,bA) − cos(aB,bA) −
+cos(bB,aA), mean over views seeing both animals on both sides (episodes with none
+are dropped). Below `threshold` the labels changed hands there
+(`markContactChanges`): taking the session's start as right, a pair's 1st, 3rd, …
+flagged contact is an `onset` whose `switchBackAt` is the next one (or null: to
+the end), its 2nd, 4th, … the `end` of that stretch (`switchedAt`), so fixing
+either row swaps the same stretch; all are in `flags` (`changes` is []), none is a
+repeat (`continues` is always false), and a change point of a pair sharing one
+identity within `followSeconds` of another is its `followOf` (a three-way
+relabel). A score is a difference of cosines between mean features, so no sample
+rate scales it (25-120 fps tested). `opts.signal` cancels (AbortError).
 
-**The image method (2026-10-09).** Crops are embedded every round(sampleHz /
-imageHz)-th grid sample. Per camera the embeddings are centred, unit-normalised and
-projected into an appearance metric learned WITHOUT identity labels
-(`learnAppearanceMetric`): an LDA whose "same animal" pairs are crops of one
-identity within one tracklet (it is apart from all others, so its label cannot
-change hands there) and whose "different animals" pairs are two identities in the
-same frame — both true however wrong the tracking is. Contacts are #286's episodes
-(`contactEpisodes`: the two identities in one connected component of the close
-graph, so a swap through a third animal counts; runs < `episodeGapSeconds` apart
-merged), and episodes separated by fewer than `minSamples` usable crops of either
-animal are merged too, so a swap inside a long huddle is judged from the stretches
-either side of it. Each episode is scored (`appearanceChangeScores`) per camera
-from the mean appearance of each animal just before (aB, bB) and just after (aA,
-bA) it — up to `windowSeconds` of crops a side, within `maxSpanSeconds`, never past
-the pair's neighbouring episode, a crop being usable when the animal is not in
-contact with its partner (it may touch a third: the crop masks others out):
-S = cos(aB,aA) + cos(bB,bA) − cos(aB,bA) − cos(bB,aA), mean over cameras seeing
-both animals on both sides (episodes with none are dropped). Below `threshold`
-the labels changed hands there (`markAppearanceChanges`): taking the session's
-start as right, a pair's 1st, 3rd, … flagged contact is an `onset` whose
-`switchBackAt` is the next one (or null: to the end), its 2nd, 4th, … the `end`
-of that stretch (`switchedAt`), so fixing either row swaps the same stretch; all
-are in `flags` (`changes` is []), none is a repeat, and a change point of a pair
-sharing one identity within `followSeconds` of another is its `followOf` (a
-three-way relabel). **Why not the size method's classifier:** it learns whichever
-labelling covers more of the session, and when a pair swaps several times none
-does — on the CD1FSCR3_CSI recording (3 white CD1 mice, two in mesh jackets) the
-plain mouse wore id_0 for 36% and id_1 for 50% of 15 min, the classifier's
-per-sample evidence for id_0 vs id_1 was ±0.5, and the real 0:19 swap (at the
-pair's FIRST encounter, so the swapped stretch before it was never scored) was
-missed while 17 false change points were raised. **Why the metric:** on five
-white mice raw DINOv2 cosine separated real changes from clean contacts at AUC
-0.68; in the metric 0.78.
+**Why not a classifier on the tracker's labels** — what both checks did before:
+a softmax trained on Track All's own labels with blocked cross-validation,
+flagging encounters whose aftermath it disagreed with, change points from runs of
+flagged encounters. It learns whichever labelling covers more of the session, and
+when a pair swaps several times none does — on the CD1FSCR3_CSI recording (3 white
+CD1 mice, two in mesh jackets) the plain mouse wore id_0 for 36% and id_1 for 50%
+of 15 min, the image classifier's per-sample evidence for id_0 vs id_1 was ±0.5,
+and the real 0:19 swap (at the pair's FIRST encounter, so the swapped stretch
+before it was never scored) was missed while 17 false change points were raised.
+**Why the metric:** on five white mice raw DINOv2 cosine separated real changes
+from clean contacts at AUC 0.68; in the metric 0.78. **Why cosine, not distance,
+for size:** a bone-length vector has essentially one direction (size), so the
+MIDDLE-sized animal sits near the average and its own before/after cosine is weak
+(a synthetic swap involving it scores -0.7, between the two extremes -1.4); the
+distance-based alternative — the dot product of the two animals' difference before
+and after, which is what comparing the two labellings by distance reduces to —
+was tried and scored worse on the real recordings (pooled AUC 0.86-0.87 vs 0.88,
+more false rows at every catch rate), its scale swinging per recording.
 
-**Change points, not raw flags (size).** The model can tell that the labelling on the
-two sides of an encounter disagrees, not which side is right (it learns whichever
-side covers more of the session). Per pair, a run of flagged encounters (starting
-below `threshold`, continuing FORWARD while below `continueBelow`) yields one
-change point: its start (`kind: 'onset'`) when it reaches the session end, else
-the first unflagged encounter after it (`kind: 'end'`, in `changes`) when it
-starts the session; both for a middle run of 2+. Other members are repeats
-(`continues`). Each change point also names the other edge of its swapped
-stretch, which is what fixing it swaps: an onset's `switchBackAt` (the pair's
-encounter after the run — for a lone middle flag that encounter is no change
-point of its own — or null when the run reaches the end) and an 'end''s
-`switchedAt` (the run's first encounter, or null when the run starts the
-session). A change point within `followSeconds` after another of a different
-pair sharing an identity is its follow-on (`followOf`).
-
-**Calibration (2026-10-03).** Size: on the 5-mouse tail-mark recording
+**Calibration of the classifier method (2026-10-03; both checks have since been replaced, see below).** Size: on the 5-mouse tail-mark recording
 (194366_05mice_flippers, 108k frames, 8 cameras) planted swaps AUC 0.95; the real
 gate-off switch (frame 74,544) is an onset; the verified run gets 7 false change
 points / 30 min. Images, calibrated with this code on DINOv2 embeddings of the
@@ -3561,9 +3573,9 @@ the similar-size, different-coat pairs (brown-black: size AUC 0.73, 5% caught at
 false-flag rate per clean encounter. When both checks flag an encounter it was a
 real swap 98% of the time (images alone 79%; none on the 5-mouse run with no
 switches). Images remain weak for animals that look alike (same coat).
-**Superseded for images by the 2026-10-09 calibration below**; the notes on views
-per animal, sampling rate and keyframes were measured with the old image scoring
-and are kept for what they say about the crops.
+**Superseded by the 2026-10-09/11 calibrations below**; the notes on views per
+animal, sampling rate and keyframes were measured with the old image scoring and
+are kept for what they say about the crops.
 **Views per animal** (`imageCheckMaxViews`, default 3; recalibrated 2026-10-04):
 embedding only each animal's 3 largest views matches all 8 — brown-black AUC
 0.925, 48% at -25, 0.8% false flags, "Both" 98% real; 5-mouse: real switch scored
@@ -3615,23 +3627,50 @@ episode scoring (classifier, -200) 8 of 12 with 15 false. -0.5: 10 of 12, 6 fals
 vs white). Five white mice are the hard case: 1 of 2 at -0.8 with 2 false rows
 (the 21:57 three-way relabel scores -0.19). Missed: a brown/black swap 14 s before
 the end of 143153 (-0.04, one side has 7 crops). Robust to the knobs — at -0.8,
-`metricDims` 32, `metricReg` 0.03/0.3, `windowSeconds` 5/20, `minSamples` 3,
+`metricDims` 32, `metricReg` 0.03/0.3, `windowSeconds` 5/20, `minApartSeconds` 1.6 (3 crops),
 `episodeGapSeconds` 1, `metricPcaDims` 32 and all views give 9-10 of 12 with 0-2
 false rows (`metricDims` 8: 6 false); without the evidence-driven merge
-(`minSamples` 0) the 144215 huddle swap goes unscored, and with crops only from
+(`minApartSeconds` 0) the 144215 huddle swap goes unscored, and with crops only from
 time apart from EVERY animal 17 of its 24 episodes have none. On the same 8 runs
-the size check (unchanged) gives 60 rows, 56 false; rows both checks flag ("Both")
-were real 4 of 4, image-only rows 6 of 8. Analysis after embedding: 3-7 s per
-10-min session, 21 s for 30 min of 5 animals. Harness: the session scratchpad of
-2026-10-09 (collect.mjs, evalall.mjs, ba.mjs) — not in the repo.
+the size check's classifier gave 60 rows, 56 false. Analysis after embedding: 3-7 s
+per 10-min session, 21 s for 30 min of 5 animals. Harness: the session scratchpad
+of 2026-10-09 (collect.mjs, evalall.mjs, ba.mjs) — not in the repo.
 
-**Out of sample (2026-10-11).** Confirmed on 16 proofread SLAP sessions of
-2022-10-07 that played no part in choosing the method or the threshold — every
+**Calibration of the size method (2026-10-11).** The same 8 runs, truth and row
+rule, from the tracker's 3D. NOTE: 142111 loaded alone gets scrambled node NAMES
+on main (its `back` camera's skeleton is nested under `nx_graph`; fixed on the
+unmerged branch `claude/dreamy-chatterjee-d480db`), so every bone length by name is
+wrong there — the numbers below use its standard node order, which every other
+session shares. At -1: **6 of 12 relabels caught, 13 rows, 7 false**, all 7 on the
+five white mice (the SLAP sessions and CD1: 5 of 10, 0 false); the classifier it
+replaces, at its -50 default: 4 of 12, 54 rows, 50 false (at -200: 3 of 12, 13
+rows, 10 false). -0.8: 7 of 12, 18 rows, 11 false; -1.2: 4 of 12, 9 rows, 5 false.
+Bone lengths cannot tell apart animals of one size (142111's white/black swap
+scores +0.5), but catch what images miss (143153's brown/black swap 14 s before the
+end, -1.1). **Limitation:** on animals of IDENTICAL size the windows are noise, and
+the cosine of noise-only means still dips just past -1 now and then (the synthetic
+fixture of `tests/e2e/id-switch-image-check.mjs`: 2 of 24 contacts at -1.02 and
+-1.15). Not renormalising the window means (the mean of unit vectors, its length
+kept) silences that exactly (all ~0.00) and gave the image check 10 of 12 with NO
+false rows at -0.5 — but on the real recordings it made size slightly worse (pooled
+AUC 0.867 vs 0.879; 10 false rows vs 7 at 6 caught), and on 16 new sessions it
+gained the image check nothing either (see "Out of sample"), so both checks keep
+renormalised means. Swept at -1: `metricDims` 2 is much worse (59 false at -0.8),
+4 worse, 8 equal to 16 one step looser; `windowSeconds` 20/30 and `minApartSeconds` 1.6
+change little, 6.4 loses 2 relabels. The five-mouse "false" rows at 1:01, 14:55,
+16:07, 26:41 were checked against the tail marks (both checks flag some of them).
+With both checks at their defaults, rows both flag ("Both", same pair, overlapping
+contacts) were real 5 of 5, image-only rows 5 of 7, size-only 1 of 8. The size
+check takes ~0.2 s per 10-min session and ~1.3 s for 30 min of 5 animals after
+the grid is built.
+
+**Out of sample (2026-10-11), both checks.** Confirmed on 16 proofread SLAP sessions of
+2022-10-07 that played no part in choosing the methods or the thresholds — every
 multi-animal one not used above: 131531, 132603, 133702, 134804, 135851, 140918,
 161055, 162233, 163346, 170913, 173152, 180149, 181300, 183527, 184618, 190807
 (2 h 49 min; 15 with two mice, including white/white 163346 and brown/brown
 173152, and 190807 with two brown and one white), with the same harness, truth
-and row rule. At -0.8: **9 of 11 relabels caught, 11 rows, 0 false**. Every real
+and row rule. Images at -0.8: **9 of 11 relabels caught, 11 rows, 0 false**. Every real
 change scored below every one of the 348 clean contacts (per-contact AUC 1.000),
 so no threshold from -0.2 to -1.2 gave a false row; -0.5 and looser caught 10 of
 11. Missed: a swap inside the pair's first contact, which starts the session
@@ -3639,7 +3678,11 @@ so no threshold from -0.2 to -1.2 gave a false row; -0.5 and looser caught 10 of
 brown mice that scored -0.58 (190807 at 9:06). A variant that keeps the length of
 the window means (the mean of unit vectors, not renormalised), which had looked
 better on the 8 calibration runs (10 of 12 with no false rows at -0.5), gave the
-identical 9 of 11 with no false rows here — no gain, so not adopted. These
+identical 9 of 11 with no false rows here — no gain, so not adopted. Size at -1:
+**2 of 11 caught, 2 rows, 0 false** (-0.8: 3 of 11, 5 rows, 2 false; per-contact
+AUC 0.902); the classifier it replaces, at its -50 default: 0 of 11 caught, 20 rows,
+all false. These mice are close in size, so size catches little here — but it no
+longer raises false rows. These
 sessions keep a second label file per camera
 (`*.predictions.static.externals.slp`), which a harness has to leave out of the
 folder pick.
@@ -3649,13 +3692,14 @@ folder pick.
 **Imported by.** `ui/id-switch-modal.js`, `ui/image-embedder.js` (`planKeyframeSamples`, `KEYFRAME_GAP_TOLERANCE`).
 
 **Coverage.** `tests/test-id-switch-check.mjs` (synthetic 3-animal sessions defined
-in time: clean -> no flags; minority / majority switch -> onset / end change point;
+in time: clean -> no flags; a switch late or early in the session (the swapped
+stretch the minority or the MAJORITY) -> one onset at the switch, nothing else;
 25-120 fps invariance; images with synthetic embeddings catching a swap between
 animals of IDENTICAL size that size misses; a pair swapping three times from its
-first encounter (all three found, onset/end/onset with the right fix edges; the
-size check as the negative control misses the first); #286's huddle and
-three-animal scenarios; the appearance metric on look-alike animals (98% vs raw
-cosine 52%); `symmetricEigen`; `markAppearanceChanges`; cancellation; PCA; failure reasons;
+first encounter (all three found by BOTH checks, onset/end/onset with the right
+fix edges); #286's huddle and three-animal scenarios; the identity metric on
+look-alike animals (98% vs raw cosine 52%); `symmetricEigen`; `markContactChanges`;
+cancellation; PCA; failure reasons; progress;
 crop geometry of `ui/image-embedder.js`; `planKeyframeSamples`: sparse/unknown
 keyframes move nothing, a keyframe every 30 frames moves every 32-frame sample
 <= 15 frames, strictly increasing, untracked keyframes skipped, gaps up to 1.1x
@@ -4132,7 +4176,8 @@ duration}` (pure; `frameIdx` null = the empty "0 / 0" state), `NO_TIME`
 (`--:--.---`), and the DOM half: `showReadoutFrame(frameIdx)` (the per-frame
 path — writes `#currentFrame` / `#currentTime`), `refreshReadoutTotals()`
 (re-reads `state.totalFrames` / `state.fps`, writes `#totalFrames` /
-`#totalTime` and re-times the frame on screen) and `clearReadout()`.
+`#totalTime`, re-times the frame on screen and refreshes the seekbar's time
+ruler) and `clearReadout()` (which empties the ruler too).
 
 **Behaviour.**
 - **It speaks the seekbar tooltip's language**, on purpose: the same separator
@@ -4158,8 +4203,10 @@ path — writes `#currentFrame` / `#currentTime`), `refreshReadoutTotals()`
   row, both rows fit the 56 px controls bar at every width.
 
 **Imports from project modules.** `./app-state.js` (`state`),
-`./seekbar-tooltip.js` (`formatTimestamp`) — both import-free, so the text half
-runs in Node.
+`./seekbar-tooltip.js` (`formatTimestamp`), `./seekbar-ticks.js`
+(`refreshSeekbarTicks` — the ruler marks the same times, so it follows every
+totals / FPS change, including the FPS pill's, which moves no frame) — all
+import-free, so the text half runs in Node.
 
 **Imported by.** `ui/ui-wiring.js`, `ui/sessions-panes.js`,
 `pose/initialization.js`, `loading/session-loader.js`,
@@ -6624,6 +6671,13 @@ data sources. Plus visibility-toggle helpers and frame counter updates.
   does reach that code (without a session `drawAllOverlays` returns early and
   the assertion would be vacuous).
 
+  **The toolbar's Animals field catches up with a session change here too.**
+  The count is per session and nothing announces a session change — the
+  session switch and every load path assign `state.session` themselves — but
+  every one of them ends in a draw, so `syncAnimalCountField()`
+  (`ui/animal-count-field.js`) is called right after the lock. Two comparisons
+  when the session and its count are the ones already shown.
+
 **Imports from project modules.**
 - `./app-state.js` — `state`, `interactionManager`, `timeline`, `isViewDocked`.
 - `../pose/triangulation.js` — `ensureLazyFrameData`,
@@ -6640,6 +6694,8 @@ data sources. Plus visibility-toggle helpers and frame counter updates.
 - `./plane-definition.js` — `drawPlaneOverlays`, `applyPlaneModeToolbarLock`.
   **Circular** (that module imports `drawAllOverlays` back); safe because both
   call sites are inside function bodies.
+- `./animal-count-field.js` — `syncAnimalCountField`. **Circular** through
+  `pose/tracker.js`, which imports this module; safe for the same reason.
 
 **Imported by.** `pose/triangulation.js`, `pose/tracker.js`,
 `pose/initialization.js`, `import-export/save-load.js`,
@@ -6676,6 +6732,60 @@ A **LEAF module**: it imports nothing.
 **Imported by** `ui/plane-definition.js` (which also re-exports it, so the name
 stays reachable at its original path), `ui/plane-nodes-panel.js`,
 `ui/plane-angle.js`, `ui/origin-definition.js`.
+
+### ui/animal-count-field.js
+
+**Purpose.** The toolbar's **Animals** field (`#tbNumAnimals`), first in the
+Track group: shows and edits the ACTIVE session's animal count, the number every
+tracking run caps identities at (`Session.numAnimals`, through
+`pose/tracker.js`). The count used to be visible only in the first-use
+`prompt()`, so a user who forgot what they typed had no way to find out. Blank is
+auto-detect (`placeholder="auto"`), as in the prompt and the Track Frame Range
+dialog.
+
+**Two ways the shown value goes stale, two refreshes.** A change to the count
+(the prompt, the Track Frame Range dialog, the field itself) repaints it through
+`onTrackerNumAnimalsChange`. A change of ACTIVE SESSION has no event — the
+session switch and every load path assign `state.session` themselves — so
+`syncAnimalCountField()` is called from `drawAllOverlays` (`ui/rendering.js`),
+which all of them end in, and costs two comparisons when nothing changed. The
+plane toolbar lock is re-asserted from there for the same reason. It never
+rewrites the field while it has focus.
+
+**Editing.** Commits on `change` (Enter or blur), so a half-typed "1" on the way
+to "12" is never the count; Enter blurs (handing the shortcuts back — a number
+field blocks them all while focused, `ui/keyboard-target.js`), Esc reverts and
+blurs. A bad entry — below 1, not a whole number, or text `value` reports as
+`''` (`validity.badInput`, a stray "e") — reverts with an error status rather
+than being read as blank, and changes nothing. With no session loaded it reverts
+too and says why: the count is saved with a session. A good one goes through
+`setTrackerNumAnimals`, which marks the project dirty.
+
+**Placement and width.** BEFORE Track Frame, not after Track All, where the
+label read as "Track All Animals". Not in Defining Plane Mode's toolbar lock: it
+changes no annotation. The toolbar must fit a 1440px window
+(`tests/e2e/toolbar-3d-toggle-button.mjs` §7), and before this field there were
+~50px to spare. Its ~72px came from the `.toolbar`'s 4px flex gap (a leftover
+of the removed `.toolbar-separator`, 24px), 2px less between the visibility
+checkboxes, and a compact field (11px label, 26px input). The Trails menu
+(`#trailsMenu`) now hangs from its button's RIGHT edge, because the button moved
+right and the closed menu ran 1px past the window as scroll overflow.
+
+**Key exports.**
+- `wireAnimalCountField()` — called once from `setupUI` (`ui/ui-wiring.js`).
+- `syncAnimalCountField()` — called from `drawAllOverlays`; O(1).
+
+**Imports from project modules.** `./app-state.js` (`state`),
+`../import-export/save-load.js` (`setStatus`), `../pose/tracker.js`
+(`getTrackerNumAnimals`, `setTrackerNumAnimals`, `onTrackerNumAnimalsChange`).
+
+**Imported by.** `ui/ui-wiring.js`, `ui/rendering.js`.
+
+Covered by `tests/e2e/toolbar-animal-count.mjs` (placement, the prompt, typed
+counts reaching Track All, bad entries, Esc, shortcuts, blank = answered, the
+range dialog, per-session switching, and a save → fresh page → Load Project
+reopen) and, for the file format, `tests/e2e/visibility-settings-roundtrip.mjs`
+and `tests/test-visibility-metadata.js`.
 
 ### ui/plane-toolbar-lock.js
 
@@ -8600,19 +8710,105 @@ timeline, hover text, click snaps to the tick's frame, reviewed dimming).
 
 ---
 
+### ui/seekbar-ticks.js
+
+**Purpose.** A time ruler under the transport seekbar (`#seekbarRuler` inside
+`#seekbar`): labelled major ticks (`00:00  05:00  10:00 …`) with unlabelled
+minor ticks between them, so a moment can be found and clicked by eye without
+hovering for the tooltip.
+
+**Key exports.** `seekbarTimeTicks(totalFrames, fps, widthPx, {charPx}?)` ->
+`{step, minorStep, majors: [{frac, seconds, label, end}], minors: [frac]}`
+(pure; the last major is the end tick); `formatTickLabel(seconds, decimals)`
+(`mm:ss`, `h:mm:ss` from an hour up, rounded before splitting);
+`formatDurationLabel(seconds, decimals)` (the end tick's label: rounded to the
+millisecond like `formatTimestamp`, then TRUNCATED, so it is a prefix of the
+readout's total); `TICK_STEPS` and the spacing constants
+(`MIN_LABEL_SPACING_PX`, `LABEL_SPACING_WIDTHS`, `MIN_MINOR_SPACING_PX`,
+`MAX_MINOR_PER_MAJOR`, `DEFAULT_CHAR_PX`); the DOM half,
+`installSeekbarTicks(layerEl, {getTotalFrames, getFps})` and
+`refreshSeekbarTicks()`.
+
+**Behaviour.**
+- **The step follows the video and the bar.** The major step is the SMALLEST of
+  `TICK_STEPS` (1/2/5 below a minute, 1/2/5/10/15/30 min, then hours) whose
+  labels are at least `max(60 px, 1.75 label widths)` apart at the bar's
+  width — 5:00 for a 30-minute recording on a 700 px bar, 2:00 on 1200 px, 1 s
+  for a 10 s clip. The minor step is the smallest nice step that divides the
+  major into at most 6 parts and is still 8 px apart. Neither is shorter than one
+  frame. No ruler when `00:00` and the duration do not both fit, or without a
+  frame rate (fps 0 while a session has no video).
+- **The bar's end is always marked**: a tick at the last frame, labelled with
+  the duration — the readout's total, `totalFrames / fps`, truncated to the
+  ruler's precision (`14:23` for `14:23.617`, never `14:24`; a 29.97 fps
+  recording a hair under 30:00 reads `30:00`, as the readout does), in bold
+  (`.is-end`, weight 600 like the readout's current frame). It wins
+  every collision: a regular label closer to it than the spacing rule allows
+  loses its text (the tick stays), and a regular or minor tick within 8 px of
+  it is dropped, since it would read as a double tick.
+- **Same mapping and same clock as the rest of the bar.** A tick for time `t`
+  sits at `t·fps / (totalFrames − 1)` — the thumb's and the ID-switch ticks'
+  frame -> position mapping at the readout's frame-start time — so a click on
+  `05:00` lands on the frame the readout shows as `05:00.000` (to within the
+  pixel a click is rounded to). Labels are the readout's format without the
+  milliseconds; a decimal only for sub-second steps.
+- **Part of the seekbar, not a strip beside it.** The layer is a child of
+  `#seekbar`, so a click or drag on a label scrubs and hovering one shows the
+  seekbar tooltip. It hangs below the 24 px bar box; `.seekbar-container`'s
+  `margin-bottom` reserves the room, so the controls bar centres bar + ruler
+  together. Painted under the ID-switch marks and the thumb. Every label is
+  centred on its tick, the two ends included: `00:00` and the duration hang
+  half a label (~17 px; ~23 px for `1:23:45`) past the bar's ends, into the room
+  `.seekbar-container`'s side margins (12 px, 16 px at <= 640 px, where the
+  controls bar's gap halves) add to that gap — clear of the transport buttons
+  and the FPS pill at every width.
+- **Never re-rendered per frame.** `refreshSeekbarTicks` (called from
+  `updateSeekbarVisual` on every frame, and from `refreshReadoutTotals` /
+  `clearReadout`) compares the frame count, FPS and width with what is drawn
+  and returns; a `ResizeObserver` on the layer re-lays it when the bar's width
+  changes (window resize, the frame readout gaining a digit). Positions are
+  percentages, and an unchanged ruler writes nothing. The label font's
+  character width is measured once (a hidden probe), not per render.
+
+**Imports from project modules.** None (dependency-free, so the tick choice runs
+in Node).
+
+**Imported by.** `ui/ui-wiring.js` (installed in the seekbar-scrubbing IIFE in
+`setupUI`; refreshed by `updateSeekbarVisual`), `ui/frame-readout.js`
+(`refreshSeekbarTicks`).
+
+**Coverage.** `tests/test-seekbar-ticks.mjs` (label format; the step choice
+over a grid of frame rates × durations × widths: nice steps, at least a frame,
+labels far enough apart, the smallest step that fits, minors dividing majors
+and never on one, the end tick labelled with the duration and nothing on top of
+it, neighbouring labels — the end one included — far enough apart; the duration
+label a prefix of `formatTimestamp`; monotone in duration and width) and
+`tests/e2e/seekbar-ticks.mjs` (real app: labels centred on their ticks at the
+time's position, no overlap, inside the controls bar, the two end labels clear
+of the transport buttons and the FPS pill; the end label matches `#totalTime`
+and a click on it lands on the last frame; a click on a label seeks to that
+time and hovering it shows the tooltip; longer
+recordings get longer steps and a bar resize alone re-lays it; the FPS pill
+re-times it; fps 0 / no frames clear it; 200 frame steps make zero ruler DOM
+mutations; fits at 640 px).
+
+---
+
 ### ui/seekbar-tooltip.js
 
 **Purpose.** Hover tooltip on the transport seekbar (#142): "Frame 1,234 ·
 00:41.100" for the point under the cursor, so you can see where a click or
-drag will land before making it.
+drag will land before making it — and a hover line on the bar marking that
+frame.
 
 **Key exports.** `formatTimestamp(seconds)` (`mm:ss.mmm`, `h:mm:ss.mmm` from an
 hour up; rounds to the millisecond before splitting, so never `00:60.000`),
 `seekbarTooltipText(frameIdx, fps)`, `installSeekbarTooltip(seekbar,
-{frameAtFraction, getTotalFrames, getFps, markerAt?})` -> the tooltip element
-(`markerAt(frac, widthPx)` -> `{frame, text}` | null: a possible-ID-switch tick
-under the cursor — its frame replaces `frameAtFraction`'s, as the scrub handlers
-snap to it, and its text is appended)
+{frameAtFraction, getTotalFrames, getFps, markerAt?, hoverLine?})` -> the
+tooltip element (`markerAt(frac, widthPx)` -> `{frame, text}` | null: a
+possible-ID-switch tick under the cursor — its frame replaces
+`frameAtFraction`'s, as the scrub handlers snap to it, and its text is
+appended; `hoverLine`: the `#seekbarHoverLine` element, from `index.html`)
 (`#seekbarTooltip`, `.seekbar-tooltip`).
 
 **Behaviour.**
@@ -8627,6 +8823,19 @@ snap to it, and its text is appended)
   leave / release outside, and never shown when `totalFrames <= 1`. Centred on
   the cursor and clamped to the bar's extent; `pointer-events: none` so it
   cannot steal the hover.
+- **The hover line** (`#seekbarHoverLine`, `.seekbar-hover-line`) marks the same
+  frame ON the bar, at that frame's own position (`frame / (totalFrames − 1)`,
+  the thumb's mapping) rather than at the raw cursor — so it snaps onto an
+  ID-switch tick exactly as a click does, and is never clamped like the bubble.
+  In the ID Switches tab's playhead colours (`.id-switch-phead`:
+  `--text-primary`, a 1 px dark outline) but BIGGER than an ID-switch tick
+  (4 x 24 px, the bar's full height, against 3 x 16 px), so it reads clearly
+  among them.
+  Painted over the ID-switch ticks and under the thumb — its place in
+  `index.html`'s markup, at the ticks' z-index, is what orders it. Shown and
+  hidden with the tooltip, except during a drag, when the thumb already sits on
+  the frame: it hides on press and comes back on a release over the bar.
+  Positioned in px from the cached rect, so it adds writes and no layout reads.
 - **Layout-free while moving**, so hovering during playback adds no forced
   synchronous layout to the frame: the bar's rect is read on mouseenter / drag
   start and cached (a `ResizeObserver` and window `resize` drop it — the bar's
@@ -8645,7 +8854,9 @@ readout's time row reads exactly as this tooltip does).
 `tests/e2e/seekbar-tooltip.mjs` (real mouse events: follows the pointer,
 tooltip frame == the frame a click lands on, drag off the bar, edges clamped,
 drawn on top of the timeline, no timestamp at fps 0, and zero layout reads
-across a run of hover moves).
+across a run of hover moves; the hover line at the clicked frame's position and
+under the bubble, its colours compared against a live `.id-switch-phead` and
+its size against a live tick, its z-order, snapping onto a tick, hiding through a drag and on leave).
 
 ---
 
@@ -8996,17 +9207,20 @@ or a new tracking pass. The tab shows a heading, per-check counts, "About these
 flags" (the method, calibration figures, sampling rate, frame-rate warning and
 the image backend note), a sticky toolbar ("N of M reviewed", **Next
 unreviewed ▸** — the next unticked row after the current one, wrapping —
-**Clear**, and "Show N later encounters that still look swapped"), then one row
+**Clear**, and "Show N later encounters that still look swapped" — only for
+results restored from files saved before 2026-10-11: the checks no longer make
+repeats), then one row
 per change point: a **reviewed** checkbox, time, `id_a ↔ id_b` (each name in its
 identity's colour, as in the overlays), score, the encounter's span ("close
 4:59.6–5:01.7 (frames 17,977–18,105)") with an **end ⇥** button, and
 "frame N · check · note" (Both / size / images; "follows the switch at m:ss";
-"labelling changes here; earlier encounters look swapped"; "still swapped"). A
-change point both checks found (same pair within 1 s) is ONE "Both" row (scores
-"size / image"). Clicking a row navigates there; ticking it dims the row and its
+"labels change back here" on an 'end'; "still swapped" on a restored repeat). The
+score is shown to one decimal (`fmtScore`; whole numbers for the summed-evidence
+scores of files saved before 2026-10-09). A change point both checks found (same
+pair, overlapping contacts) is ONE "Both" row (scores "size / image"). Clicking a row navigates there; ticking it dims the row and its
 seekbar tick (`reviewed`). **Where a row lands:** an encounter's frame is the
-LAST close sample (the labels are read from the tracklets AFTER it), so a swap
-happens before it, while the animals are close; clicking a row therefore lands
+LAST close sample (the labels are compared before and after the contact), so a
+swap happens before it, while the animals are close; clicking a row therefore lands
 `ID_SWITCH_LEAD_IN_SECONDS` (1 s) before the close spell STARTS
 (`idSwitchLeadInFrame`, from the flag's `startFrame`; its end frame when the start
 is unknown, e.g. a file saved before start frames were kept), so pressing play
@@ -9098,7 +9312,9 @@ ids, are what a reopened project still agrees on); `idSwitchPrimary(res)` (chang
 points), `idSwitchMarkers(res)` (+ repeats), `idSwitchOnsets(res)` (the
 "possible switches" count), `idSwitchEncounterCount(res)`;
 `linkIdSwitchResults(results)` (tag each marker's `cue`, link a size and an image
-change point of the same pair within 1 s as `agree` — "Both");
+change point of the same pair at the same contact as `agree` — "Both": their close
+spells overlap, give or take 1 s, since the two checks merge contacts by their own
+evidence; or, without start frames, they end within 1 s — the nearest one wins);
 `serializeIdSwitchReview(session)` -> payload or `null` (no check results -> no
 key, so untouched projects keep their bytes); `ingestIdSwitchReview(session,
 payload)` (rebuilds `session._idSwitch`, re-links "Both"; ignores anything
@@ -11029,6 +11245,8 @@ header for the full list. Notable ones: `app-state.js`,
 `sessions-panes.js`, `settings.js`, `settings-modal.js`,
 `track-range-modal.js` (`showTrackRangeModal`, wired to the Track Frame split
 button's `#tbTrackFrameRange` dropdown item — #212),
+`animal-count-field.js` (`wireAnimalCountField`, the Track group's Animals
+field),
 `view-align-modal.js` (`showAlignViewsModal`, wired to View ▸ "Align Views to
 References…" — #226),
 `seekbar-tooltip.js` (`installSeekbarTooltip`, the seekbar's hover tooltip —
@@ -11039,6 +11257,9 @@ and the FPS pill),
 `seekbar-markers.js` (`installSeekbarMarkers`, `seekbarMarkerAt`,
 `describeSwitchMarker`, `setSeekbarMarkerFrames` — the possible-ID-switch ticks:
 the scrub handlers and the tooltip snap to a tick within 5 px),
+`seekbar-ticks.js` (`installSeekbarTicks`, `refreshSeekbarTicks` — the time
+ruler under the seekbar; `updateSeekbarVisual` calls the refresh, a no-op
+unless the frame count or FPS changed),
 `color-by.js` (`onColorByChange`, `setColorByIdentity` — the Tracks /
 Identity toggle, also flipped by the tracker after Track All — #242),
 `trail-presets.js` (`TRAIL_PRESETS`, `MAX_TRAIL_FRAMES`, `trailPresetFor`,
@@ -11100,6 +11321,9 @@ imports the modal. The menu is revealed purely by `:hover`, which is
 worth knowing when driving it from a test: a modal opening over the toolbar
 drops hover, so a second click on the item has to re-hover the button first (see
 `tests/e2e/track-frame-range.mjs`).
+
+**The Animals field (`#tbNumAnimals`)** is wired by `wireAnimalCountField()`
+from `ui/animal-count-field.js`, which owns it (see that entry).
 
 **Track / Identity menu modals.** The `Tracks` menu's New / Rename / Delete
 actions for both tracks and identities open shared private modal helpers in
@@ -13395,10 +13619,21 @@ keyboard transport.
 ### import-export/visibility-metadata.js
 
 **Purpose.** The `metadata.lucid` ↔ `Session` mapping for the Visibility panel's
-SESSION-SCOPED settings — and for the other per-session panel state that belongs
-in the project file: the ID Switches tab's review checklist (`idSwitchReview`,
-`ui/id-switch-review.js`). One module owns the key list so a writer and a reader
-cannot drift: adding a setting means touching this file and nothing else.
+SESSION-SCOPED settings — and for the other per-session state that belongs in
+the project file: the ID Switches tab's review checklist (`idSwitchReview`,
+`ui/id-switch-review.js`) and the number of animals tracking uses
+(`numAnimals` ↔ `Session.numAnimals`, the toolbar's Animals field). One module
+owns the key list so a writer and a reader cannot drift: adding a setting means
+touching this file and nothing else.
+
+**`numAnimals`.** A positive integer or `"auto"`. A never-asked session
+(`null`) writes nothing, so it is asked again after a reopen exactly as a new
+session is, and anything else read back (0, 2.5, `"3"`, `"AUTO"`) is treated
+the same way. The read assigns unconditionally, so a file without the key
+leaves `null`, never a stale value. The two helpers (`serializeNumAnimals` /
+`ingestNumAnimals`) are private to this module rather than in
+`pose/tracker.js`, which this module cannot import: it is loaded in the Node
+test sandbox (`tests/run-node.js`).
 
 **What it covers, and what it deliberately does not.** The Visibility panel
 holds two kinds of state:
@@ -13416,7 +13651,7 @@ holds two kinds of state:
 **Key exports.**
 - `VISIBILITY_METADATA_KEYS` — every key this module may write
   (`videoBrightness`, `videoContrast`, `videoRotation`, `hiddenCameras`,
-  `hiddenTracks`, `hiddenIdentities`, `idSwitchReview`). Exported so tests can assert a default
+  `hiddenTracks`, `hiddenIdentities`, `idSwitchReview`, `numAnimals`). Exported so tests can assert a default
   project carries none of them without duplicating the list.
 - `writeVisibilityMetadata(lucid, session)` — mutate a `metadata.lucid` dict in
   place, adding only non-default settings; returns the same dict.
