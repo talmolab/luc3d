@@ -17,7 +17,7 @@
 // add/update its entry here so the Settings panel stays complete and truthful.
 // (See CLAUDE.md.)
 
-import { shouldIgnoreShortcut } from './keyboard-target.js?v=7a9cc3f751d2';
+import { shouldIgnoreShortcut } from './keyboard-target.js?v=dbe138b9e624';
 
 const STORAGE_KEY = 'lucid.settings.v1';
 
@@ -368,9 +368,11 @@ const TRACKING_THRESHOLDS = [
         desc: 'After Track All or Track Frame Range, also check close encounters by APPEARANCE: crops of each animal in every camera are embedded with an image model on the GPU (Tracks ▸ Check ID Switches (Images)). Catches animals of similar size that look different (e.g. coat colour), which the size check cannot. Slow — minutes for a long recording — and needs the videos loaded; the model (~44 MB) downloads on first use. Without a GPU (WebGPU) it still runs, on the CPU: about 15x slower, so a long recording can take hours.',
     },
     {
-        id: 'imageCheckThreshold', label: 'Image check: flag threshold', default: -25,
-        min: -500, max: 0, step: 5,
-        desc: 'An encounter starts a possible image switch when its score falls below this. Closer to 0 catches more swaps between similar-sized animals but flags more clean encounters: on a 30-min, 5-mouse recording, -25 gave 18 false marks and caught the real switch; 0 gave 42; -50 gave 15 and missed it. Marks that the size check also finds ("Both") were almost always real.',
+        // A new id, not 'imageCheckThreshold': the score's scale changed (2026-10-09, -4..+4 instead of summed
+        // log-probabilities), and an old saved -25 would otherwise be clamped to -4 and flag almost nothing.
+        id: 'imageChangeThreshold', label: 'Image check: flag threshold', default: -0.8,
+        min: -4, max: 0, step: 0.1,
+        desc: 'A contact is a possible switch when its score falls below this. The score compares how each animal looks just before and just after the contact: about +2 means each still looks like itself, about -2 that they look like each other, near 0 that they cannot be told apart there. Closer to 0 catches more but flags more clean contacts: over 8 proofread or tail-marked recordings (1 h 45 min), -0.8 caught 10 of 12 real relabels with 2 false marks; -0.5 caught the same with 6; -1.2 caught 8 with none.',
     },
     {
         id: 'imageCheckHz', label: 'Image check: crops per second', default: 2,
@@ -406,7 +408,7 @@ const WIZARD_THRESHOLD_IDS = new Set([
     'filterMinVisibleNodes', 'filterMinInstanceScore',
     'corr2dWeight', 'corr3dWeight', 'velocityThreshold', 'distanceThreshold', 'timePenalty',
     'stale', 'matchGate',
-    'autoSwitchCheck', 'autoImageSwitchCheck', 'imageCheckThreshold', 'imageCheckHz', 'imageCheckMaxViews', 'imageCheckWebNN',
+    'autoSwitchCheck', 'autoImageSwitchCheck', 'imageChangeThreshold', 'imageCheckHz', 'imageCheckMaxViews', 'imageCheckWebNN',
     'reprojErrorThreshold',
 ]);
 

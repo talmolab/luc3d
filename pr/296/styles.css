@@ -2682,11 +2682,18 @@ body {
   cursor: not-allowed;
 }
 
-/* Seekbar */
+/* Seekbar. The 24px box is the bar itself; the time ruler hangs below it
+   (.seekbar-ruler), and margin-bottom reserves that room so the controls bar
+   centres bar + ruler together. The side margins are room for the ruler's
+   first and last labels — "00:00" and the duration — which are centred on
+   the bar's ends and so hang half a label past them (~17px for "14:23",
+   ~23px for "1:23:45"): with the controls bar's gap (16px) they keep both
+   clear of the transport buttons and the FPS pill. */
 .seekbar-container {
   flex: 1;
   position: relative;
   height: 24px;
+  margin: 0 12px 11px;
   display: flex;
   align-items: center;
   cursor: pointer;
@@ -2735,6 +2742,27 @@ body {
   height: 8px;
 }
 
+/* Time ruler under the seekbar (ui/seekbar-ticks.js): ticks just below the
+   track, labels below the major ones. A child of #seekbar, so a click on a
+   label scrubs there and hovering it shows the tooltip; painted under the
+   ID-switch marks and the thumb. */
+.seekbar-ruler { position: absolute; left: 0; right: 0; top: 17px; height: 17px; }
+.seekbar-tick {
+  position: absolute; top: 0; width: 1px; height: 3px;
+  transform: translateX(-50%); background: var(--text-muted);
+}
+.seekbar-tick.is-major { height: 5px; background: var(--text-secondary); }
+.seekbar-tick-label {
+  position: absolute; top: 5px; transform: translateX(-50%);
+  font-family: "SF Mono", "Fira Code", "Cascadia Code", monospace;
+  font-size: 11px; line-height: 13px; font-variant-numeric: tabular-nums;
+  color: var(--text-secondary); white-space: nowrap;
+}
+/* The duration, at the bar's end: bold like the readout's current frame. A
+   monospace font keeps its advance width across weights, so the measured
+   character width still holds. */
+.seekbar-tick-label.is-end { font-weight: 600; }
+
 /* Possible-ID-switch ticks on the seekbar (ui/seekbar-markers.js): over the
    track, under the thumb; they never take the pointer (the seekbar's handlers
    snap to them instead). */
@@ -2748,6 +2776,18 @@ body {
 .seekbar-mark.is-follow { opacity: 0.7; height: 12px; }
 .seekbar-mark.is-repeat { opacity: 0.4; width: 2px; height: 10px; box-shadow: none; }
 .seekbar-mark.is-reviewed { opacity: 0.3; }
+
+/* The frame a click would land on, while hovering the seekbar
+   (ui/seekbar-tooltip.js): the ID Switches tab's playhead colours
+   (.id-switch-phead — white, dark outline), but BIGGER than an ID-switch mark
+   (3 x 16px) so it reads clearly among them: 4px wide, the bar's full 24px
+   tall. Over the marks, under the thumb; `left` is set in px. */
+.seekbar-hover-line {
+  position: absolute; top: 0; height: 24px; width: 4px; transform: translateX(-50%);
+  background: var(--text-primary); border-radius: 2px; box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.55);
+  pointer-events: none; z-index: 1;
+}
+.seekbar-hover-line[hidden] { display: none; }
 
 /* Seekbar hover tooltip (#142): frame + timestamp under the cursor. Sits
    above the bar, over the timeline; `left` is set in px by
@@ -3925,6 +3965,13 @@ kbd {
     width: 30px;
     height: 30px;
     font-size: 12px;
+  }
+
+  /* The controls bar's gap halves here, so the seekbar's side margins grow
+     to keep the ruler's end labels clear of their neighbours. */
+  .seekbar-container {
+    margin-left: 16px;
+    margin-right: 16px;
   }
 }
 
