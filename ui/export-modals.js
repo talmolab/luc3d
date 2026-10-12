@@ -23,6 +23,7 @@ import {
     findEquivalentPriorGroup,
     adoptPrior3d,
     triangulationMethodLabel,
+    reprojectIntoEveryCamera,
 } from '../pose/triangulation.js';
 import { Viewport3D } from './viewport3d.js';
 import { getTrackColor, getGroupColor } from './overlays.js';
@@ -740,7 +741,10 @@ async function groupByTrackAndTriangulateAll(selectedTrackIndices, selectedCamer
             group.triangulationMethod = result.method;
             if (result.method === 'ba') solvedBaT++; else solvedDltT++;
 
-            group.reprojections = result.reprojections;
+            // The solve covered the group's own cameras; reproject into every
+            // camera (`allCameras`, not the run's camera filter), as the live
+            // view does after any other triangulation.
+            group.reprojections = reprojectIntoEveryCamera(result.reprojections, result.points3d, allCameras);
             group.points3d = pooledPoints3d(result.points3d);   // slab-pooled (pose-data.js)
             // NOT storeReprojectedInstances here — "Group by Track" sweeps the
             // WHOLE project; eagerly building a full Instance (+ its own

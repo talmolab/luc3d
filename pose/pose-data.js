@@ -1538,6 +1538,18 @@ export class Session {
          * never stored.
          */
         this.videoRotation = {};
+        /**
+         * @type {number|'auto'|null} The number of animals every tracking run
+         * on this session caps identities at: a positive integer, `'auto'` to
+         * auto-detect it, or `null` when nobody has said yet — which is what
+         * makes Track Frame / Track All prompt for it. Per SESSION because a
+         * session is one recording, and two recordings in one project can hold
+         * different animals. Persisted as `metadata.lucid.numAnimals`
+         * (`import-export/visibility-metadata.js`); `null` is never written.
+         * Read and set through `pose/tracker.js` (`getTrackerNumAnimals` /
+         * `setTrackerNumAnimals`), which also marks the project dirty.
+         */
+        this.numAnimals = null;
         /** @type {LazyFrameLoader|null} Set when using lazy H5 loading */
         this.lazyLoader = null;
         /** @type {Map<string,{data:Uint8Array,nTracks:number,nFrames:number}>|null} Per-camera track occupancy for timeline */

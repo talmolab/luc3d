@@ -33,7 +33,8 @@ import { planeState } from './plane-definition.js';
  * The VISIBILITY controls are deliberately absent from this list, and so are
  * Sessions, Tracks / Identity and the Panel toggle. Those change what is DRAWN, not what is
  * annotated — turning Predictions off to see the plane you are placing is
- * exactly the kind of thing this mode is for.
+ * exactly the kind of thing this mode is for. So is the Track group's Animals
+ * field (`#tbNumAnimals`): a setting a run reads when it starts, not an action.
  *
  * @type {string[]}
  */
