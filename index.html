@@ -140,7 +140,7 @@
                     <div class="menu-dropdown-item has-submenu" id="menuTrailsParent">
                         <span>Node Trails</span>
                         <span class="submenu-arrow">▶</span>
-                        <!-- Items built from TRAIL_PRESETS in ui/ui-wiring.js, like the toolbar's Trails menu. -->
+                        <!-- Items built from TRAIL_PRESETS (Length) and TRAIL_SHADES (Shade) in ui/ui-wiring.js, like the toolbar's Trails menu. -->
                         <div class="menu-dropdown submenu" id="menuTrailsSubmenu" role="menu"></div>
                     </div>
                     <div class="menu-separator"></div>
@@ -156,6 +156,11 @@
                             class="shortcut-hint">Ctrl/Cmd+J</span></div>
                     <div class="menu-dropdown-item" id="menuToggleInfo">Toggle Info Panel <span
                             class="shortcut-hint">I</span></div>
+                    <div class="menu-separator"></div>
+                    <div class="menu-dropdown-item" id="menuNativeResolution"
+                        title="Show each video at one video pixel per screen pixel, with no scaling"><span><span
+                                class="trail-check"></span>Native Resolution (1:1)</span> <span
+                            class="shortcut-hint">Shift+0</span></div>
                     <div class="menu-separator"></div>
                     <div class="menu-dropdown-item" id="menuResetView">Reset 3D View</div>
                     <div class="menu-dropdown-item" id="menuFitScene">Fit 3D to Scene</div>
@@ -211,6 +216,16 @@
                 <span class="triangulation-badge" id="triangulationBadge" style="display:none"></span>
             </div>
             <div class="toolbar-group">
+                <!-- The animal count every tracking run uses. Before this it was
+                     visible only in the first-use prompt, so a user who forgot
+                     what they typed had no way to find out. Blank = auto-detect.
+                     Wired in ui/ui-wiring.js (wireAnimalCountField). FIRST in the
+                     group: the setting before the actions that use it, and
+                     after Track All it read as "Track All Animals". -->
+                <label class="toolbar-field" title="Number of animals to track. Leave blank to auto-detect it from the most instances seen in one view.">Animals
+                    <input type="number" id="tbNumAnimals" min="1" step="1" inputmode="numeric"
+                        placeholder="auto" autocomplete="off" aria-label="Number of animals">
+                </label>
                 <div class="tri-dropdown" id="trackFrameDropdown">
                     <button class="toolbar-btn" id="tbTrackFrame" title="Track current frame (Shift+T)">Track Frame <span class="tri-caret">▾</span></button>
                     <div class="tri-dropdown-menu">
@@ -229,8 +244,8 @@
                 <button class="toolbar-btn active" id="colorByTracks" title="Color instances by track">Tracks</button>
                 <button class="toolbar-btn" id="colorById" title="Color instances by identity">Identity</button>
             </div>
-            <!-- Node Trails (issue #102). Same presets and state as Tracks ▸ Node
-                 Trails; the items are built from that one list in ui/ui-wiring.js.
+            <!-- Node Trails (issue #102). Same lengths, shades and state as Tracks ▸
+                 Node Trails; the items are built from those lists in ui/ui-wiring.js.
                  Opens on hover, like the Triangulate menus. The label stays a bare
                  "Trails" (the value is the menu's checkmark and the tooltip) to
                  save toolbar width; the button turns blue (.active) while a

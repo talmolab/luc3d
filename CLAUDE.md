@@ -3,9 +3,9 @@
 Multi-view pose annotation GUI. No build system — pure vanilla JS served as static files.
 
 ## Architecture
-ES modules, vanilla JS (no build step). `index.html` loads `app.js` as `<script type="module">`; `app.js` is a 2-line entry point that imports from `pose/`. The 106 modules are grouped into four directories:
+ES modules, vanilla JS (no build step). `index.html` loads `app.js` as `<script type="module">`; `app.js` is a 2-line entry point that imports from `pose/`. The 107 modules are grouped into four directories:
 - `pose/` — data model, cross-view tracking, DLT triangulation (the pure math in `triangulation-core.js`, solved in parallel by `triangulation-pool.js` + `triangulation-worker.js`), plane annotation model (planes + the global plane-node pool), 3D mesh objects (groups of planes) and their derived geometry, plane/origin serialization, origin transform, whole-project origin re-base, cross-session calibration comparison, plane-to-plane angle, the least-squares plane fit, multi-view display alignment (`view-align.js`), the ID-switch checks by body size and images (`id-switch-check.js`), the lazy project's playback eviction (`lazy-residency.js`), app initialization (22 files)
-- `ui/` — UI state, canvas rendering, mouse/keyboard interaction, info panel (and its lazily-filled Track dropdown), modals, timeline, 3D viewport, panel visibility, video encoding, video display settings, keyboard-target arbitration, modal geometry, view legend, plane definition, 3D mesh objects, origin definition, origin re-base, cross-session calibration notice, plane angle, frame-range tracking, collapsible section state, info tooltips, plane visibility, browser-specific hints, the loading overlay + its progress bar, the Align Views to References dialog, the seekbar hover tooltip and the time ruler under it (`seekbar-ticks.js` — major/minor tick steps chosen from the video's length and the bar's width), the status bar's whole-project frame counters, the controls bar's time / frame readout, the Tracks / Identity coloring setting, the node-trail lengths (`trail-presets.js` — presets or a custom value typed in seconds or frames, stored in seconds, drawn as `seconds × fps` frames), the Check ID Switches runner + ID Switches panel tab (and its saved review checklist), its seekbar ticks and in-view highlight, its image embedder and its crop and CPU-model workers, the Track All summary box (`track-summary.js` decides what it says, `track-summary-modal.js` renders it), settings — the Define Planes panel is split across `plane-definition.js` (the hub) plus its three section modules and three helpers (62 files)
+- `ui/` — UI state, canvas rendering, mouse/keyboard interaction, info panel (and its lazily-filled Track dropdown), modals, timeline, 3D viewport, panel visibility, video encoding, video display settings, keyboard-target arbitration, modal geometry, view legend, plane definition, 3D mesh objects, origin definition, origin re-base, cross-session calibration notice, plane angle, frame-range tracking, collapsible section state, info tooltips, plane visibility, browser-specific hints, the loading overlay + its progress bar, the Align Views to References dialog, the seekbar hover tooltip and the time ruler under it (`seekbar-ticks.js` — major/minor tick steps chosen from the video's length and the bar's width), the status bar's whole-project frame counters, the controls bar's time / frame readout, the Tracks / Identity coloring setting, the node-trail lengths (`trail-presets.js` — presets or a custom value typed in seconds or frames, stored in seconds, drawn as `seconds × fps` frames) and their shade (`TRAIL_SHADES` in `ui/overlays.js`: Very dark … Very light, default Dark, remembered in `localStorage`), the Check ID Switches runner + ID Switches panel tab (and its saved review checklist), its seekbar ticks and in-view highlight, its image embedder and its crop and CPU-model workers, the Track All summary box (`track-summary.js` decides what it says, `track-summary-modal.js` renders it), the Track group's Animals field (`animal-count-field.js`), settings — the Define Planes panel is split across `plane-definition.js` (the hub) plus its three section modules and three helpers (63 files)
 - `loading/` — video decoding, unplayable-codec diagnosis, session loading, SLP/package readers, per-camera SLP choice, calibration-file selection, video-file selection, the per-camera track-list union (`session.tracks` for a per-camera folder), the `.slp` skeleton reader + per-camera node-order remap (`slp-skeleton.js`), web workers (12 files)
 - `import-export/` — file I/O, save/load, SLP import/merge, visibility metadata, plane metadata, 3D mesh export (10 files)
 - `demo-data.js` — synthetic skeleton and camera data
@@ -157,9 +157,12 @@ enough — transformers.js then fetches the `onnx-community/dinov2-small` **weig
 (44–88 MB) from huggingface.co** at runtime, so offline support means vendoring
 the model as well and setting `env.localModelPath`. It is lazily imported by that
 one opt-in command and nothing else touches it, so this degrades rather than
-breaking the app. Offline, the dynamic `import()` currently throws a raw
-"Failed to fetch dynamically imported module" instead of a reason string like
-`runImage`'s other preflight gates in `ui/id-switch-modal.js`.
+breaking the app. Offline it reports `MODEL_OFFLINE_REASON` as the reason it
+cannot run ("needs an internet connection to download the image model …"),
+like `runImage`'s other preflight gates in `ui/id-switch-modal.js`, instead of
+the browser's bare "Failed to fetch" — and a retry once the network is back
+works without a reload, which a plain re-`import()` of the same URL does not in
+Chrome (`importTransformers`). Covered by `tests/e2e/image-check-offline.mjs`.
 
 **Node-only `.mjs` is never rewritten** (`is_rewritable` in
 `scripts/offline_deps.py`, shared by `bundle` and `server.py --offline` so the zip
@@ -527,7 +530,11 @@ The Visibility panel's **session-scoped** state persists per session in the
 `hiddenCameras` / `hiddenTracks` / `hiddenIdentities` (sorted name arrays), plus
 the ID Switches tab's review checklist, `idSwitchReview` (`ui/id-switch-review.js`;
 absent unless a check left results on that session; it also records the switches
-fixed from the tab, whose identity swaps are in the session data itself).
+fixed from the tab, whose identity swaps are in the session data itself), plus
+the number of animals tracking uses, `numAnimals` (`Session.numAnimals`, the
+toolbar's Animals field: a count or `"auto"`; absent while nobody has been asked,
+so a reopened session is asked again exactly as a new one is). The count is
+project state, not display taste: changing it marks the project dirty.
 Everything goes through **one** module, `import-export/visibility-metadata.js`
 (`writeVisibilityMetadata` / `readVisibilityMetadata`, `VISIBILITY_METADATA_KEYS`),
 which the four writers and three readers all call — adding a setting means
@@ -1408,7 +1415,8 @@ do) or the container resizable — not scrollable twice.
 annotation, which in the mode is a selection the user can no longer see or
 change. The **visibility** controls (User / Predictions / Reprojections / Errors),
 Sessions, Tracks / Identity and the Panel toggle stay live: they change what is DRAWN, not what
-is annotated. Adding a button to that lock means adding its id to
+is annotated. So does the Track group's **Animals** field — a setting a run reads,
+not an action. Adding a button to that lock means adding its id to
 `PLANE_LOCKED_TOOLBAR_IDS`; if it opens a menu, its wrapper also needs
 `PLANE_LOCKED_DROPDOWN_IDS` (a `.tri-dropdown` menu opens on hover and its
 items are `div`s, so `disabled` on the button reaches neither).
@@ -1655,11 +1663,88 @@ remembered — and three rules hold:
   is a dozen pixels across and anything solid over it hides the node's own
   colour. Covered by `tests/e2e/plane-node-selection.mjs`.
 
+**When coloring by Identity, a track color is never an identity color.** An
+identity is an animal; a track is not. In Identity mode a track with no
+identity on the frame falls back to its TRACK color, so both palettes share the
+canvas, and the identity palette (`IDENTITY_COLORS`, pose/pose-data.js) is
+full-saturation neon spanning the whole hue wheel. Track mode's vivid palette
+(`TRACK_COLORS`) therefore always lands on some identity's hue: after Track
+All, an unidentified `track_4` drew in nearly the green of `id_0` and read as
+that animal. So the palette follows the mode, through ONE function,
+`getTrackColor(trackIdx, colorByIdentity)` (`ui/overlays.js`):
+- **Track mode keeps the vivid `TRACK_COLORS`.** No identity color is on the
+  canvas there, and telling tracks apart is the whole job.
+- **Identity mode draws tracks in `UNIDENTIFIED_TRACK_COLORS`**, muted earth
+  tones separated from the neon by saturation and lightness rather than hue.
+- **Everything that shows a track's color follows the mode, not just the
+  skeleton**: the name label (an identity-less instance's label takes its
+  skeleton's color), the timeline's track rows and the Visibility tab's track
+  swatches. The Tracks / Identity change handler in `ui/ui-wiring.js` recolors
+  all of them. A new place that paints a track color must pass the mode to
+  `getTrackColor`, and anything that changes `state.colorByIdentity` must go
+  through `setColorByIdentity` (`ui/color-by.js`), or that handler never runs.
+
+The muted palette's four rules, measured in CIEDE2000 and enforced by
+`tests/test-track-identity-palette.mjs`. The test checks its own ΔE
+implementation against the published reference data, and shows the vivid
+palette failing the first rule:
+- every entry is **≥ 20** from every one of the 20 identity colors (the
+  reported pair was 12.2; the vivid palette's worst is 2.2);
+- **≥ 15** from the other fixed meanings on the canvas: `REPROJECTION_COLOR`,
+  `UNGROUPED_USER_COLOR` and `NULL_ID_COLOR`;
+- **≥ 9** from every other entry, so tracks still tell apart;
+- **no darker than L\* 52**. A name label sits on a translucent black pill, and
+  over a white mouse a darker muted color all but vanishes into it.
+**The identity palette must also stay distinct from ITSELF as animals are
+added.** Identity N takes `IDENTITY_COLORS[N]`, so a project with N animals
+shows the first N. Entries 0-6 are the original neon set and must not change;
+7-19 were chosen farthest-first, so the closest pair stays at 18.0 for 8
+animals and 13.7 for 12. The old 7-19 put `id_7` 6.0 from `id_0`. Projects
+store identity colors, so the `Identity` constructor upgrades a stored color
+that equals the OLD default for its slot; a color from another tool is kept.
+Both are pinned by the same test (§8, §9).
+
+Adding an identity color, or a fixed canvas color, means re-running that test.
+Change the palette if it fails; do not lower the thresholds. The mode switching
+itself (labels, timeline rows recolored in place, swatches) is covered by
+`tests/e2e/unidentified-track-palette.mjs`.
+
 **Modals must close on `Esc`** unless explicitly stated otherwise. When building
 or editing any modal/overlay dialog, wire a `keydown` listener that closes it on
 `Escape` (and removes the listener on close). For a modal mid-operation (e.g. an
 in-progress export), `Esc` should cancel/stop that operation rather than tear the
 modal down. Example: `showExport3DVideoModal` in `ui/export-modals.js`.
+
+## Native resolution (1:1) — one video pixel per DEVICE pixel
+
+View ▸ Native Resolution / `Shift+0` (`VideoController.setNativeResolution`,
+`loading/video.js`) shows the video with no resampling. It is a zoom SCALE, not
+a second display path — the backing canvas is already the video's size; only
+the wrapper's CSS transform scales it — and a wheel or `+`/`-` step that passes
+through that scale stops on it (`snapZoomToNative`; the wheel also HOLDS there
+until it rests 250 ms). Measured against real screenshots of seeded noise, it
+is exact only while two rules hold, and breaking either is invisible in code
+review and obvious on screen:
+- **One scale per axis** (`zoom.scale` / `zoom.scaleY`). `fitCanvasesToCells`
+  floors the canvas box to whole CSS px, so the box aspect is a hair off the
+  video's; a uniform scale resamples the other axis by ~0.3% and blurs every
+  row. Anything that maps screen ↔ video through `zoom.scale` alone (the
+  rotated path of `canvasToVideo` was one) must read `zoom.scaleY` too.
+- **The pan on the device-pixel grid** (`_alignNativeOffsets` in `applyZoom`).
+  A half-pixel offset at the exact scale still averages neighbours.
+Exact at integer devicePixelRatio (and 1.25/1.5 headless); at e.g. 2.2 Chrome
+resamples regardless, so it is right-SIZED but not exact — say so, don't promise
+it. Whether it is on is DERIVED (`state.nativeResolution` = every shown view at
+1:1) so the menu tick cannot lie, and `initZoom` seeds from it so pane rebuilds
+keep 1:1. The pane badge reads the zoom as a percentage of 1:1
+(`zoomPercentLabel`), and only a view HELD at 1:1 may read exactly "100%" — a
+near miss is still resampled, so it reads "99.8%" / "≈100%". Hovering it offers
+presets (`ZOOM_PRESET_PERCENTS`, per pane, `setZoomPercent`); 100% there must go
+through `_enterNative`, never a plain `scale = 1:1`, or it skips both rules. The 1:1 scale depends on the box AND devicePixelRatio, so anything
+that moves either must end in `reapplyZoom` (`reapplyAllZoom` covers resize and
+the DPR watcher). Covered by `tests/e2e/native-resolution-zoom.mjs` (run it
+`HEADED=1` too: only a visible window shows the GPU compositor) and the
+"Native resolution" block of `tests/test-video-controller.js`.
 
 ## Tests
 There are **three** test populations, each with its own runner. Run all three —
