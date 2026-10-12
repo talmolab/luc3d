@@ -106,6 +106,19 @@
  *                            (Not `Runtime.queryObjects`: on Object.prototype
  *                            it materializes every object in the heap, which
  *                            crashed the renderer on the real project.)
+ *     DUMP_IDS=<file>        after Track All, write its identity for every
+ *                            detection (frameIdentityMap) to this JSON file,
+ *                            e.g. to score it against proofread labels
+ *     IDSWITCH=size,image    after prep, run Tracks ▸ Check ID Switches for each
+ *                            listed cue (image needs WebGPU and downloads the
+ *                            model) and record the ID Switches tab's rows to
+ *                            idswitch.json
+ *     THRESHOLDS=id=v,...    Tracking Wizard settings, applied at boot (so they reach
+ *                            Track All too), e.g. matchGate=0 or imageCheckHz=4
+ *     NODE_WEIGHTS=n=w,...   Tracking Wizard per-node weights, applied at boot,
+ *                            e.g. TailTip=0,Tail_0=0,Tail_1=0,Tail_2=0
+ *     DIAG_JS=<file>         after prep, run the file's code in the page (an async
+ *                            function body) and save its return value to diag.json
  *     GC_REPS=3              forced full GCs per measurement (median and min reported)
  *     STRIP=1                with HEAPPROBE: then DESTROY the graph one
  *                            structure at a time, timing a full GC after each,
@@ -152,6 +165,14 @@ const SCENARIOS = process.env.SCENARIOS === 'none' ? [] :
 const EXPORT_FRAMES = Number(process.env.EXPORT_FRAMES || 0);
 const EXPORT_START = Number(process.env.EXPORT_START || 20000);
 const HEAPPROBE = process.env.HEAPPROBE === '1';
+const DUMP_IDS = process.env.DUMP_IDS || '';
+const IDSWITCH = (process.env.IDSWITCH || '').split(',').map(s => s.trim()).filter(s => s === 'size' || s === 'image');
+const DIAG_JS = process.env.DIAG_JS || '';
+// "a=1,b=2" -> {a: 1, b: 2}
+const numberMap = (s) => Object.fromEntries((s || '').split(',').map(x => x.trim()).filter(Boolean)
+    .map(x => x.split('=')).map(([k, v]) => [k.trim(), Number(v)]));
+const THRESHOLDS = numberMap(process.env.THRESHOLDS);      // Tracking Wizard settings, e.g. matchGate=0
+const NODE_WEIGHTS = numberMap(process.env.NODE_WEIGHTS);  // Tracking Wizard node weights, e.g. TailTip=0
 const STRIP = process.env.STRIP === '1';
 const START = Number(process.env.START || 3000);
 // `name@frame` — a per-scenario start frame.
@@ -240,6 +261,24 @@ try {
 
     await page.goto(`http://localhost:${PORT}/index.html`);
     await page.waitForFunction(() => window.__lucid && window.__lucid.state, { timeout: 30000 });
+    if (Object.keys(THRESHOLDS).length) {
+        // before anything runs, so tracker settings (e.g. matchGate=0) reach Track All too
+        const applied = await page.evaluate(async (ov) => {
+            const st = await import('/ui/settings.js');
+            st.setTrackingThresholds({ ...st.getTrackingThresholds(), ...ov });
+            return Object.fromEntries(Object.keys(ov).map(k => [k, st.getTrackingThreshold(k)]));
+        }, THRESHOLDS);
+        log(`[${el()}] Tracking Wizard settings applied: ${JSON.stringify(applied)}`);
+    }
+    if (Object.keys(NODE_WEIGHTS).length) {
+        // the Tracking Wizard's per-node weights, as its Apply button commits them
+        const applied = await page.evaluate(async (w) => {
+            const st = await import('/ui/settings.js');
+            st.setNodeWeights({ ...st.getNodeWeights(), ...w });
+            return st.getNodeWeights();
+        }, NODE_WEIGHTS);
+        log(`[${el()}] node weights applied: ${JSON.stringify(applied)}`);
+    }
     summary.env = await page.evaluate(() => ({
         ua: navigator.userAgent, dpr: devicePixelRatio,
         inner: [innerWidth, innerHeight], screen: [screen.width, screen.height],
@@ -359,6 +398,26 @@ try {
         log(`[${el()}] Track All: ${JSON.stringify(r)}`);
         ps = await projState();
         log(`[${el()}] project: ${JSON.stringify(ps)}`);
+        if (DUMP_IDS) {
+            // Track All's per-detection result, for scoring against proofread
+            // labels: every frameIdentityMap entry as [frame, camIdx, trackIdx,
+            // identityId]. Track All does not propagate IDs to tracks, so
+            // trackIdx is still the loaded file's raw track (an index into
+            // session.tracks, the per-camera union of track names).
+            const d = await page.evaluate(() => {
+                const s = window.__lucid.state.session, rows = [];
+                const CAM = 2 ** 23, TRK = 2 ** 17;
+                for (const [k, v] of s.frameIdentityMap) {
+                    if (typeof k !== 'number') { rows.push(-1, -1, -1, v); continue; }
+                    const f = Math.floor(k / CAM), rem = k - f * CAM, c = Math.floor(rem / TRK);
+                    rows.push(f, c, (rem - c * TRK) - 1, v);
+                }
+                return { cameras: s.cameras.map(c => c.name), tracks: s.tracks.slice(),
+                    identities: s.identities.map(i => ({ id: i.id, name: i.name })), rows };
+            });
+            fs.writeFileSync(DUMP_IDS, JSON.stringify(d));
+            log(`[${el()}] identities dumped: ${d.rows.length / 4} detections -> ${DUMP_IDS}`);
+        }
     }
     // Track All triangulates, but caches reprojections only for the frame it
     // lands on — every other frame would hit drawAllOverlays' lazy re-solve
@@ -391,6 +450,59 @@ try {
     }
     summary.project = ps;
     if (ps.with3d === 0 && PREP !== 'none') log('  !! WARNING: still no 3D — reprojections will not be drawn; results will not reflect the user scenario');
+
+    // IDSWITCH: run Tracks ▸ Check ID Switches per cue, as the two menu items do
+    // (each its own run, so each is timed), then record the ID Switches tab's
+    // rows: every change point, with "Both" where the image row agrees with a
+    // size row (ui/id-switch-modal.js `listRows`).
+    if (IDSWITCH.length) {
+        log(`\n[${el()}] === ID-switch check: ${IDSWITCH.join(', ')} ===`);
+        const r = await page.evaluate(async (cues) => {
+            const m = await import('/ui/id-switch-modal.js'), rv = await import('/ui/id-switch-review.js');
+            const s = window.__lucid.state.session, runs = {};
+            for (const c of cues) {
+                const t = performance.now();
+                try { const res = await m.runIdSwitchChecks({ [c]: true }); const x = res && res[c];
+                    runs[c] = { ms: Math.round(performance.now() - t), ok: !!(x && x.ok), reason: x && !x.ok ? x.reason : undefined,
+                        encounters: x && x.encounters ? x.encounters.length : 0, model: x && x.model || null, timing: x && x.timing || null,
+                        fps: x && x.fps, threshold: x && x.threshold,
+                        // every scored encounter: the threshold can be re-applied offline (markChangePoints)
+                        all: x && x.encounters ? x.encounters.map(e => ({ frame: e.frame, startFrame: e.startFrame,
+                            identityA: e.identityA, identityB: e.identityB, nameA: e.nameA, nameB: e.nameB, score: e.score })) : [] };
+                } catch (e) { runs[c] = { err: String(e && e.stack || e).slice(0, 500) }; }
+            }
+            const st = s._idSwitch, rows = [];
+            for (const c of ['size', 'image']) {
+                const x = st && st.results[c]; if (!(x && x.ok)) continue;
+                for (const f of rv.idSwitchPrimary(x)) {
+                    if (c === 'image' && f.agree) continue;
+                    rows.push({ cue: f.agree ? 'both' : c, frame: f.frame, startFrame: f.startFrame, a: f.nameA, b: f.nameB,
+                        score: f.score, kind: f.kind || null, followOf: f.followOf ?? null,
+                        switchBackAt: f.switchBackAt ?? null, switchedAt: f.switchedAt ?? null });
+                }
+            }
+            rows.sort((p, q) => p.frame - q.frame);
+            return { runs, rows, statusText: (document.getElementById('statusText') || {}).textContent || '' };
+        }, IDSWITCH);
+        summary.idSwitch = r;
+        fs.writeFileSync(path.join(OUT_DIR, 'idswitch.json'), JSON.stringify(r, null, 1));
+        const fps = ps.fps || 30, t = (f) => `${Math.floor(f / fps / 60)}:${(f / fps % 60).toFixed(1).padStart(4, '0')}`;
+        for (const [c, x] of Object.entries(r.runs)) log(`  ${c.padEnd(5)}: ${JSON.stringify({ ...x, all: undefined }).slice(0, 400)}`);
+        for (const w of r.rows) log(`  row ${w.cue.padEnd(5)} ${t(w.frame)} (f${w.frame})  ${w.a} <-> ${w.b}  score ${Number(w.score).toFixed(1)}  ${w.kind || ''}${w.followOf != null ? ' follow-on' : ''}${w.switchBackAt != null ? ' back@' + t(w.switchBackAt) : ''}`);
+        log(`  status: ${r.statusText}`);
+    }
+
+    // DIAG_JS: run a file's code in the page (as an async function body) after
+    // prep, and save what it returns to diag.json — for one-off investigations.
+    if (DIAG_JS) {
+        const body = fs.readFileSync(DIAG_JS, 'utf8');
+        const r = await page.evaluate(async (body) => {
+            const AsyncFn = Object.getPrototypeOf(async function () {}).constructor;
+            try { return await new AsyncFn(body)(); } catch (e) { return { err: String(e && e.stack || e).slice(0, 800) }; }
+        }, body);
+        fs.writeFileSync(path.join(OUT_DIR, 'diag.json'), JSON.stringify(r));
+        log(`\n[${el()}] DIAG_JS ${path.basename(DIAG_JS)} -> ${path.join(OUT_DIR, 'diag.json')}${r && r.err ? '  ERROR ' + r.err : ''}`);
+    }
 
     // Make sure the Visibility state is the user's: everything on.
     await page.evaluate(() => {

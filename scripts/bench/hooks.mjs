@@ -39,7 +39,7 @@ const THRESHOLD_DEFAULTS = {
     scConnectBreaks: 1,
     autoSwitchCheck: 1,
     autoImageSwitchCheck: 0,
-    imageCheckThreshold: -25,
+    imageChangeThreshold: -0.8,
     imageCheckHz: 2,
     imageCheckMaxViews: 3,
     imageCheckWebNN: 0,

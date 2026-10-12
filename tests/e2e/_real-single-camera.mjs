@@ -20,7 +20,7 @@
  * File System Access pickers are gone) to that path, to check what SLEAP reads.
  *
  * THRESHOLDS=id=v,... sets Tracking Wizard values before Track All (e.g.
- * imageCheckThreshold=-200).
+ * imageChangeThreshold=-1.2).
  *
  * ROUTE_CHECK=<file> serves that file in place of pose/id-switch-check.js (to
  * measure an unmerged version of the checks on the same tracking).

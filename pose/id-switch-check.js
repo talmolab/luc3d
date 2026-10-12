@@ -4,24 +4,35 @@
  *
  * A tracker can only hand an identity to a different animal when two animals
  * come close (or one drops out). So instead of judging every frame, this looks
- * at each CLOSE ENCOUNTER between two identities and asks: do the two animals
- * that leave it look more like the identities they now carry, or like each
- * other's? Two kinds of evidence answer that question, through the SAME
- * machinery (sampling, tracklets, encounters, cross-validated classifier,
- * within-frame contrast, encounter score, change points):
+ * at each CLOSE ENCOUNTER between two identities. Two kinds of evidence:
  *
  *   - checkSizeSwitches  — 3D bone lengths read off each identity's
- *     triangulated skeleton. Cheap, no video.
+ *     triangulated skeleton. Cheap, no video. Asks: do the two animals that
+ *     leave an encounter look more like the identities they now carry, or like
+ *     each other's? (sampling, tracklets, encounters, cross-validated classifier,
+ *     within-frame contrast, encounter score, change points)
  *   - checkImageSwitches — embeddings of masked, pose-aligned crops of each
  *     identity in every camera (supplied by the caller's `getEmbeddings`; the app
  *     uses DINOv2-small in the browser, ui/image-embedder.js). Slow; catches
  *     animals of the same size that look different (coat colour, markings).
+ *     Asks a different question: does each animal look like ITSELF across the
+ *     contact, or like the other one did before it? (see `appearanceChangeScores`)
  *
- * Either model is learned from the tracker's OWN identity labels, so no ground
+ * The size model is learned from the tracker's OWN identity labels, so no ground
  * truth is needed. Each encounter is scored by a model trained only on samples
  * at least `gapSeconds` away (blocked cross-validation), so a stretch is never
  * judged by a model that has seen it — and a real switch, which poisons the
  * labels after it, is still a minority the model can disagree with.
+ *
+ * The image check used to work the same way and stopped there: when a pair
+ * swaps several times, no labelling is the majority (measured 2026-10-09 on a
+ * CD1 recording: the plain mouse wore id_0 for 36% of 15 minutes and id_1 for
+ * 50%), and a classifier trained on those labels learns nothing about which is
+ * which. So the image check uses NO identity labels across a contact: it learns
+ * what tells animals apart from two facts that hold however wrong the tracker
+ * is — an animal apart from the others cannot change identity, and two
+ * identities in the same frame are two animals (`learnAppearanceMetric`) — and
+ * compares each animal's appearance just before a contact with just after it.
  *
  * Validated offline (2026-10-03) on the 5-mouse tail-mark recording
  * (194366_05mice_flippers, 108,000 frames, 8 cameras), where tail marks give
@@ -36,9 +47,10 @@
  * are found on a ~`sampleHz` grid (every round(fps / sampleHz)-th frame); each
  * sample's evidence is weighted by REFERENCE_HZ / (that cue's actual sample
  * rate), so a score is evidence per unit TIME and thresholds mean the same at
- * any frame rate (the image check samples more sparsely, `imageHz`, on the same
- * grid). The size threshold (-50) was calibrated at 15 Hz on 60 fps video, where
- * every size weight is exactly 1.
+ * any frame rate. The size threshold (-50) was calibrated at 15 Hz on 60 fps
+ * video, where every size weight is exactly 1. The image check samples more
+ * sparsely (`imageHz`, on the same grid) and its score is a difference of
+ * cosine similarities between mean appearances, which no sample rate scales.
  *
  * Depends on: pose-data.js (readPoint3d). Pure — no DOM, no app state.
  */
@@ -86,15 +98,20 @@ export const SIZE_CHECK_DEFAULTS = {
                            // (calibrated 2026-10-07 on images, see MODULES.md: 13 of 59 real swaps, 0 false rows)
 };
 
-/** Image-check options on top of the shared ones. Threshold: see the calibration notes in MODULES.md. */
+/** Image-check options on top of the shared ones. Calibration: see MODULES.md (2026-10-09). */
 export const IMAGE_CHECK_DEFAULTS = Object.assign({}, SIZE_CHECK_DEFAULTS, {
-    imageHz: 2,         // crops per second per identity (on the encounter grid)
-    threshold: -25,     // image-score threshold, calibrated 2026-10-03 (see MODULES.md): on the 5-mouse
-                        // recording 18 false change points / 30 min (size at -50: 7) and the real switch
-                        // caught (image score -46); -50 misses it and still gives 15
-    pcaDims: 32,        // embeddings are reduced to this many dimensions per camera before the classifier
-    maxTrainRows: 6000,
-    iterations: 200,
+    imageHz: 2,             // crops per second per identity (on the encounter grid)
+    threshold: -0.8,        // a contact whose appearance-change score is below this is a possible switch
+                            // (scores run from about -4, swapped, to +4, unchanged; ~0 = can't tell)
+    episodeGapSeconds: 3,   // contacts of a pair less than this apart are one episode...
+    minSamples: 6,          // ...and so are episodes with fewer usable crops of either animal between them
+    windowSeconds: 10,      // each side of a contact, compare up to this much of each animal's time (in crops)...
+    maxSpanSeconds: 60,     // ...found no further than this from it
+    followSeconds: 5,       // change points of pairs sharing one identity this close together are one event
+    metricPcaDims: 64,      // the appearance metric (learnAppearanceMetric): embeddings reduced to this many
+    metricDims: 16,         // dimensions per camera, then to this many directions that tell animals apart,
+    metricReg: 0.1,         // with the within-animal scatter shrunk by this fraction of its mean variance
+    maxTrainRows: 20000,    // crops per camera the metric is learned from
     getEmbeddings: null,   // REQUIRED: async (frame, items[{k, group}]) -> per item [{camera, vector}];
                            // STARTED in increasing frame order, at most `inFlight` in flight
     inFlight: 2,           // requests kept in flight (ui/image-embedder.js asks for 8, to batch frames)
@@ -821,37 +838,335 @@ export function planKeyframeSamples(frames, keyframes, hasFrame) {
     return plan;
 }
 
+// ---------------------------------------------------------------------------
+// The image check: appearance before vs after each contact
+// ---------------------------------------------------------------------------
+
 /**
- * Image check: score every close encounter by appearance. On every
- * round(sampleHz / imageHz)-th grid sample, `opts.getEmbeddings(frame, items)` is
- * awaited for the identities present (`items` = [{k, group}]) and returns, per
- * item, the crops' embeddings as [{camera, vector}] (any length; [] = not
- * visible). A classifier per camera (PCA to `pcaDims`, then softmax) is trained
- * on the tracker's own labels with blocked CV; a sample's evidence is the mean of
- * its cameras' log-probabilities. Everything after that is shared with the size
- * check, with image samples weighted by REFERENCE_HZ / imageHz.
- *
- * `opts.onProgress(stage, done, total)` is awaited with stage 'embed' (per
- * sampled frame) and 'fit' (per fold). `opts.signal` cancels.
- *
- * @returns {Promise<object>} as checkSizeSwitches, plus {imageHz, crops, cameras}.
+ * Contact episodes per pair: runs of grid samples in which the two identities
+ * are in one connected component of the "close" graph — touching, or both
+ * touching a third animal (labels can change hands in a three-animal pile-up
+ * with no encounter between the two) — with runs less than `gapSeconds` apart
+ * merged. From the episode scoring of talmolab/luc3d#286.
+ * @returns {{comp: Int16Array, pairs: Array<{a: number, b: number, eps: number[][]}>}}
+ *   comp[i * K + k] = identity k's component at sample i (-1: no centroid); eps = [[first, last], …]
  */
-export async function checkImageSwitches(session, opts) {
-    return checkVectorSwitches(session, Object.assign({}, IMAGE_CHECK_DEFAULTS, opts || {}), 'image');
+export function contactEpisodes(grid, gapSeconds) {
+    var T = grid.T, K = grid.K, C = grid.C, sep = grid.sep;
+    var close = function (i, a, b) {
+        var x = C[(i * K + a) * 3] - C[(i * K + b) * 3], y = C[(i * K + a) * 3 + 1] - C[(i * K + b) * 3 + 1],
+            z = C[(i * K + a) * 3 + 2] - C[(i * K + b) * 3 + 2];
+        return Math.hypot(x, y, z) <= sep;
+    };
+    var comp = new Int16Array(T * K).fill(-1);
+    for (var i = 0; i < T; i++) {
+        var next = 0;
+        for (var k = 0; k < K; k++) {
+            if (!grid.hasCen(i, k) || comp[i * K + k] >= 0) continue;
+            var stack = [k]; comp[i * K + k] = next;
+            while (stack.length) {
+                var u = stack.pop();
+                for (var v = 0; v < K; v++) {
+                    if (v !== u && comp[i * K + v] < 0 && grid.hasCen(i, v) && close(i, u, v)) { comp[i * K + v] = next; stack.push(v); }
+                }
+            }
+            next++;
+        }
+    }
+    var gap = grid.secToSamples(gapSeconds), pairs = [];
+    for (var a = 0; a < K; a++) for (var b = a + 1; b < K; b++) {
+        var eps = [], s0 = -1;
+        for (var i2 = 0; i2 <= T; i2++) {
+            var together = i2 < T && comp[i2 * K + a] >= 0 && comp[i2 * K + a] === comp[i2 * K + b];
+            if (together && s0 < 0) s0 = i2;
+            if (!together && s0 >= 0) {
+                var last = eps[eps.length - 1];
+                if (last && s0 - last[1] <= gap) last[1] = i2 - 1; else eps.push([s0, i2 - 1]);
+                s0 = -1;
+            }
+        }
+        pairs.push({ a: a, b: b, eps: eps });
+    }
+    return { comp: comp, pairs: pairs };
 }
 
 /**
- * Coat-brightness check: the image check's machinery on a much cheaper vector —
+ * Eigen-decomposition of a symmetric n x n matrix (row-major), cyclic Jacobi.
+ * @returns {{values: Float64Array, vectors: Float64Array}} vectors in COLUMNS (row-major n x n)
+ */
+export function symmetricEigen(A, n) {
+    var a = Float64Array.from(A), v = new Float64Array(n * n);
+    for (var i = 0; i < n; i++) v[i * n + i] = 1;
+    for (var sweep = 0; sweep < 60; sweep++) {
+        var off = 0, diag = 0;
+        for (var p = 0; p < n; p++) { diag += a[p * n + p] * a[p * n + p]; for (var q = p + 1; q < n; q++) off += a[p * n + q] * a[p * n + q]; }
+        if (off <= 1e-24 * Math.max(diag, 1e-300)) break;
+        for (var p2 = 0; p2 < n; p2++) for (var q2 = p2 + 1; q2 < n; q2++) {
+            var apq = a[p2 * n + q2];
+            if (apq === 0) continue;
+            var th = (a[q2 * n + q2] - a[p2 * n + p2]) / (2 * apq);
+            var t = (th >= 0 ? 1 : -1) / (Math.abs(th) + Math.sqrt(th * th + 1)), c = 1 / Math.sqrt(t * t + 1), s = t * c;
+            for (var k = 0; k < n; k++) {
+                var akp = a[k * n + p2], akq = a[k * n + q2];
+                a[k * n + p2] = c * akp - s * akq; a[k * n + q2] = s * akp + c * akq;
+            }
+            for (var k2 = 0; k2 < n; k2++) {
+                var apk = a[p2 * n + k2], aqk = a[q2 * n + k2];
+                a[p2 * n + k2] = c * apk - s * aqk; a[q2 * n + k2] = s * apk + c * aqk;
+            }
+            for (var k3 = 0; k3 < n; k3++) {
+                var vkp = v[k3 * n + p2], vkq = v[k3 * n + q2];
+                v[k3 * n + p2] = c * vkp - s * vkq; v[k3 * n + q2] = s * vkp + c * vkq;
+            }
+        }
+    }
+    var values = new Float64Array(n);
+    for (var d = 0; d < n; d++) values[d] = a[d * n + d];
+    return { values: values, vectors: v };
+}
+
+/**
+ * An appearance metric for ONE camera, learned without identity labels (a
+ * linear discriminant analysis whose classes need no tracking to be right):
+ *   - within one animal: crops of one identity in one stretch apart from every
+ *     other animal (`stretch[r]`, -1 = none) — no label can change hands there;
+ *   - between animals: crops of two identities in the same frame (`sample[r]`) —
+ *     whatever the labels say, they are two animals.
+ * The directions in which two animals differ most relative to how much one
+ * animal varies (pose, view, lighting) are what tells these animals apart in
+ * this recording. A generic image embedding needs that on look-alike animals:
+ * on five white mice the raw cosine scored real swaps at AUC 0.68, with it 0.78.
+ * Rows are PCA-reduced to `o.metricPcaDims` first (so the scatter matrices are
+ * well conditioned and cheap), the within-animal scatter shrunk by `o.metricReg`.
+ * @param {Float64Array} X  n x D rows (centred, unit length)
+ * @returns {{dims: number, project: function(ArrayLike<number>): Float64Array}}  unit vectors;
+ *   PCA alone when there are too few stretches or simultaneous pairs to learn from
+ */
+export function learnAppearanceMetric(X, n, D, stretch, sample, o) {
+    var pca = fitPCA(X, n, D, o.metricPcaDims || 64), d = pca.dims;
+    var Y = new Float64Array(n * d);
+    for (var r = 0; r < n; r++) Y.set(pca.project(X.subarray(r * D, (r + 1) * D)), r * d);
+    var groups = function (key) {
+        var m = new Map();
+        for (var r2 = 0; r2 < n; r2++) { var g = key[r2]; if (g < 0) continue; if (!m.has(g)) m.set(g, []); m.get(g).push(r2); }
+        return m;
+    };
+    var Sw = new Float64Array(d * d), Sb = new Float64Array(d * d), nw = 0, nb = 0, mu = new Float64Array(d), dv = new Float64Array(d);
+    groups(stretch).forEach(function (rows) {
+        if (rows.length < 2) return;
+        mu.fill(0);
+        rows.forEach(function (r3) { for (var x = 0; x < d; x++) mu[x] += Y[r3 * d + x] / rows.length; });
+        rows.forEach(function (r3) {
+            for (var x = 0; x < d; x++) dv[x] = Y[r3 * d + x] - mu[x];
+            for (var x2 = 0; x2 < d; x2++) for (var y2 = 0; y2 < d; y2++) Sw[x2 * d + y2] += dv[x2] * dv[y2];
+            nw++;
+        });
+    });
+    groups(sample).forEach(function (rows) {
+        for (var p = 0; p < rows.length; p++) for (var q = p + 1; q < rows.length; q++) {
+            for (var x = 0; x < d; x++) dv[x] = Y[rows[p] * d + x] - Y[rows[q] * d + x];
+            for (var x2 = 0; x2 < d; x2++) for (var y2 = 0; y2 < d; y2++) Sb[x2 * d + y2] += dv[x2] * dv[y2];
+            nb++;
+        }
+    });
+    var unit = function (z) {
+        var nn = 0; for (var x = 0; x < z.length; x++) nn += z[x] * z[x];
+        nn = Math.sqrt(nn) || 1; for (var x2 = 0; x2 < z.length; x2++) z[x2] /= nn;
+        return z;
+    };
+    if (nw < 20 || nb < 20) return { dims: d, project: function (x) { return unit(pca.project(x)); } };
+    var tr = 0;
+    for (var x3 = 0; x3 < d; x3++) { for (var y3 = 0; y3 < d; y3++) { Sw[x3 * d + y3] /= nw; Sb[x3 * d + y3] /= nb; } tr += Sw[x3 * d + x3]; }
+    for (var x4 = 0; x4 < d; x4++) Sw[x4 * d + x4] += (o.metricReg != null ? o.metricReg : 0.1) * tr / d;
+    // whiten the within-animal scatter (W1 = E diag(1/sqrt(l))), then the top directions of the between-animal one
+    var ew = symmetricEigen(Sw, d), W1 = new Float64Array(d * d);
+    for (var x5 = 0; x5 < d; x5++) for (var c = 0; c < d; c++) W1[x5 * d + c] = ew.vectors[x5 * d + c] / Math.sqrt(Math.max(ew.values[c], 1e-12));
+    var T1 = new Float64Array(d * d), M = new Float64Array(d * d);
+    for (var x6 = 0; x6 < d; x6++) for (var c2 = 0; c2 < d; c2++) { var s = 0; for (var y6 = 0; y6 < d; y6++) s += Sb[x6 * d + y6] * W1[y6 * d + c2]; T1[x6 * d + c2] = s; }
+    for (var x7 = 0; x7 < d; x7++) for (var c3 = 0; c3 < d; c3++) { var s2 = 0; for (var y7 = 0; y7 < d; y7++) s2 += W1[y7 * d + x7] * T1[y7 * d + c3]; M[x7 * d + c3] = s2; }
+    var em = symmetricEigen(M, d);
+    var order = Array.from({ length: d }, function (_, i) { return i; })
+        .sort(function (p, q) { return em.values[q] - em.values[p]; }).slice(0, Math.min(o.metricDims || 16, d));
+    var Q = order.length, P = new Float64Array(d * Q);       // d x Q = W1 U
+    for (var x8 = 0; x8 < d; x8++) order.forEach(function (col, j) {
+        var s3 = 0; for (var y8 = 0; y8 < d; y8++) s3 += W1[x8 * d + y8] * em.vectors[y8 * d + col]; P[x8 * Q + j] = s3;
+    });
+    return {
+        dims: Q,
+        project: function (x) {
+            var y = pca.project(x), z = new Float64Array(Q);
+            for (var j = 0; j < Q; j++) { var s4 = 0; for (var x9 = 0; x9 < d; x9++) s4 += y[x9] * P[x9 * Q + j]; z[j] = s4; }
+            return unit(z);
+        },
+    };
+}
+
+/**
+ * Score every contact episode of every pair by whether each animal still looks
+ * like ITSELF across it. For identities a and b, per camera, the mean appearance
+ * (unit vectors in the camera's metric) of each animal just BEFORE the episode
+ * (aB, bB) and just AFTER it (aA, bA):
+ *
+ *     S = cos(aB, aA) + cos(bB, bA) - cos(aB, bA) - cos(bB, aA)        (mean over cameras)
+ *
+ * S > 0: each looks like itself; S < 0: each looks like the other did — the
+ * labels changed hands in the episode; ~0: the two can't be told apart here.
+ * No classifier and no identity label across the contact is involved, so it
+ * does not matter which labelling covers more of the session, nor how often the
+ * tracker swapped elsewhere.
+ *
+ * A "usable" crop of a is one where a is not in contact with b (it may be
+ * touching a third animal: the crop masks the others out), so huddling animals
+ * still get evidence. Each side reads up to `windowSeconds` of crops, at most
+ * `maxSpanSeconds` away and never past the pair's neighbouring episode. Episodes
+ * separated by fewer than `minSamples` usable crops of either animal are one:
+ * a swap inside a long huddle is judged from the stretches either side of it.
+ * Episodes with no camera seeing both animals on both sides are dropped.
+ *
+ * @param {object} grid  from buildGrid
+ * @param {function(number, number): ?Array<{c: number, u: Float64Array}>} feat  crops of identity k at sample i
+ * @param {object} o     options (IMAGE_CHECK_DEFAULTS)
+ * @param {number} every grid samples per image sample
+ * @returns {Array<{frame, startFrame, identityA, identityB, nameA, nameB, score, cameras}>} sorted by frame
+ */
+export function appearanceChangeScores(grid, feat, o, every) {
+    var T = grid.T, K = grid.K, frames = grid.frames, idents = grid.idents;
+    var ce = contactEpisodes(grid, o.episodeGapSeconds), comp = ce.comp;
+    var perSide = Math.max(1, Math.round(o.windowSeconds * grid.hz / every)), span = grid.secToSamples(o.maxSpanSeconds);
+    var minN = o.minSamples || 0;
+    var usable = function (i, k, p) {
+        return grid.hasCen(i, k) && !(comp[i * K + p] >= 0 && comp[i * K + p] === comp[i * K + k]) && !!feat(i, k);
+    };
+    var collect = function (k, p, from, dir, limit) {
+        var got = [];
+        for (var i = from, n = 0; i >= 0 && i < T && n <= span && (dir < 0 ? i >= limit : i <= limit); i += dir, n++) {
+            if (usable(i, k, p)) { got.push(feat(i, k)); if (got.length >= perSide) break; }
+        }
+        return got;
+    };
+    var meanByCam = function (rows) {
+        var m = new Map();
+        rows.forEach(function (list) {
+            list.forEach(function (e) {
+                var acc = m.get(e.c);
+                if (!acc) m.set(e.c, acc = new Float64Array(e.u.length));
+                for (var x = 0; x < acc.length; x++) acc[x] += e.u[x];
+            });
+        });
+        m.forEach(function (acc) { var nn = 0; for (var x = 0; x < acc.length; x++) nn += acc[x] * acc[x]; nn = Math.sqrt(nn) || 1; for (var x2 = 0; x2 < acc.length; x2++) acc[x2] /= nn; });
+        return m;
+    };
+    var dot = function (x, y) { var s = 0; for (var j = 0; j < x.length; j++) s += x[j] * y[j]; return s; };
+    var out = [];
+    ce.pairs.forEach(function (pr) {
+        var a = pr.a, b = pr.b, eps = [];
+        // evidence-driven episodes: merge across a gap with too few usable crops of either animal
+        var enough = function (lo, hi) {
+            var na = 0, nb = 0;
+            for (var i = lo; i <= hi && (na < minN || nb < minN); i++) { if (usable(i, a, b)) na++; if (usable(i, b, a)) nb++; }
+            return na >= minN && nb >= minN;
+        };
+        pr.eps.forEach(function (ep) {
+            var last = eps[eps.length - 1];
+            if (last && minN > 0 && !enough(last[1] + 1, ep[0] - 1)) last[1] = ep[1]; else eps.push(ep.slice());
+        });
+        for (var q = 0; q < eps.length; q++) {
+            var s = eps[q][0], e = eps[q][1];
+            var lo = q > 0 ? eps[q - 1][1] + 1 : 0, hi = q + 1 < eps.length ? eps[q + 1][0] - 1 : T - 1;
+            var m = [collect(a, b, s - 1, -1, lo), collect(b, a, s - 1, -1, lo), collect(a, b, e + 1, 1, hi), collect(b, a, e + 1, 1, hi)].map(meanByCam);
+            var S = 0, nc = 0;
+            m[0].forEach(function (aB, c) {
+                var bB = m[1].get(c), aA = m[2].get(c), bA = m[3].get(c);
+                if (!bB || !aA || !bA) return;
+                S += (dot(aB, aA) + dot(bB, bA)) - (dot(aB, bA) + dot(bB, aA)); nc++;
+            });
+            if (!nc) continue;
+            out.push({ frame: frames[e], startFrame: frames[s], identityA: idents[a].id, identityB: idents[b].id,
+                       nameA: idents[a].name, nameB: idents[b].name, score: S / nc, cameras: nc });
+        }
+    });
+    return out.sort(function (x, y) { return x.frame - y.frame; });
+}
+
+/**
+ * Change points from appearance-change scores (mutates them: `flagged`, `kind`,
+ * `switchBackAt` / `switchedAt`, `followOf`). Every contact scoring below
+ * `o.threshold` is where a pair's labels changed hands. Taking the session's
+ * start as right, a pair's 1st, 3rd, … such contact starts a swapped stretch
+ * (`kind: 'onset'`, `switchBackAt` = the next one's frame, or null to the end)
+ * and its 2nd, 4th, … ends it (`kind: 'end'`, `switchedAt` = the onset's frame)
+ * — so fixing either row swaps the same stretch. One that follows another of a
+ * different pair sharing one identity within `o.followSeconds` is part of the same
+ * event (a three-way relabel): `followOf`. Exported so the threshold can be
+ * re-applied to the same scores. Returns [] (kept for the shape of
+ * markChangePoints: every change point here is a flagged contact, in `flags`).
+ */
+export function markAppearanceChanges(scored, o) {
+    var byPair = new Map();
+    scored.forEach(function (sc) {
+        delete sc.kind; delete sc.followOf; delete sc.switchBackAt; delete sc.switchedAt;
+        sc.flagged = sc.score < o.threshold; sc.continues = false;
+        var key = sc.identityA + ':' + sc.identityB;
+        if (!byPair.has(key)) byPair.set(key, []);
+        if (sc.flagged) byPair.get(key).push(sc);
+    });
+    byPair.forEach(function (F) {
+        for (var j = 0; j < F.length; j += 2) {
+            F[j].kind = 'onset'; F[j].switchBackAt = j + 1 < F.length ? F[j + 1].frame : null;
+            if (j + 1 < F.length) { F[j + 1].kind = 'end'; F[j + 1].switchedAt = F[j].frame; }
+        }
+    });
+    var flagged = scored.filter(function (x) { return x.flagged; }).sort(function (x, y) { return x.frame - y.frame; });
+    for (var i = 0; i < flagged.length; i++) {
+        var cur = flagged[i];
+        for (var j2 = i - 1; j2 >= 0; j2--) {
+            var prev = flagged[j2];
+            if (cur.startFrame - prev.frame > o.followSeconds * o.fps) break;
+            if (prev.followOf != null) continue;
+            var shared = [prev.identityA, prev.identityB].filter(function (id) { return id === cur.identityA || id === cur.identityB; });
+            if (shared.length === 1) { cur.followOf = prev.frame; break; }
+        }
+    }
+    return [];
+}
+
+/**
+ * Image check: on every round(sampleHz / imageHz)-th grid sample,
+ * `opts.getEmbeddings(frame, items)` is awaited for the identities present
+ * (`items` = [{k, group}]) and returns, per item, the crops' embeddings as
+ * [{camera, vector}] (any length; [] = not visible). Per camera the embeddings
+ * are centred, and an appearance metric is learned without identity labels
+ * (`learnAppearanceMetric`); then every contact episode of every pair is scored
+ * by whether the two animals look like themselves across it
+ * (`appearanceChangeScores`) and the contacts below `opts.threshold` are the
+ * change points (`markAppearanceChanges`).
+ *
+ * `opts.onProgress(stage, done, total)` is awaited with stage 'embed' (per
+ * sampled frame) and 'fit' (per camera). `opts.signal` cancels.
+ *
+ * @returns {Promise<object>} {ok, flags, changes ([]), encounters (the scored
+ *   contact episodes: frame = their last close frame, startFrame = their first),
+ *   identities, sampledFrames, closeDistance, threshold, fps, step, sampleHz, cue,
+ *   imageHz, crops, cameras}, or {ok: false, reason}.
+ */
+export async function checkImageSwitches(session, opts) {
+    return checkAppearanceSwitches(session, Object.assign({}, IMAGE_CHECK_DEFAULTS, opts || {}));
+}
+
+/**
+ * Coat-brightness check: the image check's PREVIOUS scoring (a classifier fitted to
+ * the tracker's labels — checkClassifierSwitches) on a much cheaper vector —
  * the brightness of the coat at each animal's body keypoints
  * (ui/brightness-sampler.js: 10th / 50th / 90th percentile and mean of the grey
  * level in a small disc at each body keypoint, log-scaled). No model and no GPU,
- * only the decoded video. Same options as the image check (`getEmbeddings`
- * returns these vectors), with BRIGHTNESS_CHECK_DEFAULTS. Result `cue:
+ * only the decoded video. The same provider options as the image check (`getEmbeddings`
+ * returns these vectors), with BRIGHTNESS_CHECK_DEFAULTS. Unlike the image check it
+ * also tests candidate moments (`opts.moments`) and takes the single-camera options. Result `cue:
  * 'brightness'`; `imageHz` / `crops` / `cameras` are its sample rate, samples
  * and views.
  */
 export async function checkBrightnessSwitches(session, opts) {
-    return checkVectorSwitches(session, Object.assign({}, BRIGHTNESS_CHECK_DEFAULTS, opts || {}), 'brightness');
+    return checkClassifierSwitches(session, Object.assign({}, BRIGHTNESS_CHECK_DEFAULTS, opts || {}), 'brightness');
 }
 
 /**
@@ -863,14 +1178,117 @@ export async function checkBrightnessSwitches(session, opts) {
  * 3 real, 34 false; -800: 0 and 9), hence the strict encounter threshold. Not
  * calibrated on multi-camera data.
  */
-export const BRIGHTNESS_CHECK_DEFAULTS = Object.assign({}, IMAGE_CHECK_DEFAULTS, {
+export const BRIGHTNESS_CHECK_DEFAULTS = Object.assign({}, SIZE_CHECK_DEFAULTS, {
     imageHz: 4,         // samples per second per animal and view: no model, so it can sample densely
     threshold: -800,    // encounter rows: see above
     pcaDims: 8,         // the vectors are 4-dimensional; PCA keeps them whole
+    maxTrainRows: 6000,
+    iterations: 200,
+    getEmbeddings: null,   // REQUIRED: async (frame, items[{k, group}]) -> per item [{camera, vector}];
+                           // STARTED in increasing frame order, at most `inFlight` in flight
+    inFlight: 2,
+    prepareFrames: null,   // optional, as for the image check
+    releaseFrames: null,
 });
 
-/** The image / brightness checks: a vector per (sample, animal, view), one classifier per view. */
-async function checkVectorSwitches(session, o, cue) {
+/** The image check (#309): label-free — an appearance metric per camera, then every contact scored before vs after. */
+async function checkAppearanceSwitches(session, o) {
+    var cue = 'image';
+    if (typeof o.getEmbeddings !== 'function') return failure(cue === 'image' ? 'No image embedder available' : 'No brightness sampler available');
+    var grid = buildGrid(session, o, false);
+    if (grid.fail) return failure(grid.fail);
+    var T = grid.T, K = grid.K;
+    var every = Math.max(1, Math.round(grid.hz / o.imageHz)), imgHz = grid.hz / every;
+    var progress = o.onProgress || null;
+
+    // ---- embeddings at the image samples, grouped by camera
+    var perCam = new Map();   // camera -> {rows: [], vecs: []}
+    var crops = 0, jobs = [];
+    for (var i = 0; i < T; i += every) {
+        var items = [];
+        for (var k = 0; k < K; k++) if (grid.G[i * K + k] && grid.hasCen(i, k)) items.push({ k: k, group: grid.G[i * K + k] });
+        if (items.length >= 2) jobs.push({ i: i, frame: grid.frames[i], items: items });
+    }
+    // The provider may stream the frames in order instead of seeking to each one
+    // (`prepareFrames`), and up to `inFlight` requests (default 2) run ahead of the
+    // one being consumed — requests are STARTED in frame order, so a streaming
+    // provider still sees increasing frames — letting decode/crop of later frames
+    // overlap embedding (a provider can then batch several frames per model run).
+    if (typeof o.prepareFrames === 'function') await o.prepareFrames(jobs.map(function (j) { return j.frame; }));
+    try {
+        var ahead = Math.max(1, Math.floor(o.inFlight || 2));
+        var start = function (j) { var p = o.getEmbeddings(jobs[j].frame, jobs[j].items); p.catch(function () {}); return p; };   // surfaced when awaited
+        var pending = [], launched = 0;
+        var fill = function () { while (launched < jobs.length && pending.length < ahead) pending.push(start(launched++)); };
+        fill();
+        for (var ji = 0; ji < jobs.length; ji++) {
+            throwIfAborted(o.signal);
+            var embs = await pending.shift();
+            fill();
+            var job = jobs[ji];
+            for (var it = 0; it < job.items.length; it++) {
+                var list = (embs && embs[it]) || [];
+                for (var e = 0; e < list.length; e++) {
+                    var cam = list[e].camera;
+                    if (!perCam.has(cam)) perCam.set(cam, { rows: [], vecs: [] });
+                    perCam.get(cam).rows.push(job.i * K + job.items[it].k); perCam.get(cam).vecs.push(list[e].vector); crops++;
+                }
+            }
+            if (progress && (ji % 5 === 0 || ji === jobs.length - 1)) await progress('embed', ji + 1, jobs.length);
+        }
+    } finally {
+        if (typeof o.releaseFrames === 'function') o.releaseFrames();
+    }
+    if (!crops) return failure(cue === 'image' ? 'No crops could be embedded' : 'No coat brightness could be sampled');
+
+    // ---- per camera: centre, learn the appearance metric, project every crop into it
+    var stretchOf = new Int32Array(T * K).fill(-1);
+    grid.tl.forEach(function (t, ti) { for (var i2 = t.start; i2 <= t.end; i2++) stretchOf[i2 * K + t.k] = ti; });
+    var feats = new Map();    // row (sample * K + identity) -> [{c, u}]
+    var cams = Array.from(perCam.keys());
+    for (var ci = 0; ci < cams.length; ci++) {
+        throwIfAborted(o.signal);
+        if (progress) await progress('fit', ci, cams.length);
+        var data = perCam.get(cams[ci]), n = data.rows.length, D = data.vecs[0].length;
+        var X = new Float64Array(n * D), mean = new Float64Array(D);
+        data.vecs.forEach(function (v) { for (var x = 0; x < D; x++) mean[x] += v[x] / n; });
+        data.vecs.forEach(function (v, r) {
+            var nn = 0;
+            for (var x = 0; x < D; x++) { var t = v[x] - mean[x]; X[r * D + x] = t; nn += t * t; }
+            nn = Math.sqrt(nn) || 1; for (var x2 = 0; x2 < D; x2++) X[r * D + x2] /= nn;
+        });
+        var stride = Math.max(1, Math.ceil(n / o.maxTrainRows)), use = [];
+        for (var r = 0; r < n; r++) if (Math.floor(data.rows[r] / K / every) % stride === 0) use.push(r);   // whole samples
+        var Xt = new Float64Array(use.length * D), st = new Int32Array(use.length), sm = new Int32Array(use.length);
+        use.forEach(function (r2, j) {
+            Xt.set(X.subarray(r2 * D, (r2 + 1) * D), j * D);
+            st[j] = stretchOf[data.rows[r2]]; sm[j] = Math.floor(data.rows[r2] / K);
+        });
+        var metric = learnAppearanceMetric(Xt, use.length, D, st, sm, o);
+        for (var r3 = 0; r3 < n; r3++) {
+            var row = data.rows[r3];
+            if (!feats.has(row)) feats.set(row, []);
+            feats.get(row).push({ c: ci, u: metric.project(X.subarray(r3 * D, (r3 + 1) * D)) });
+        }
+    }
+    var scored = appearanceChangeScores(grid, function (i3, k3) { return feats.get(i3 * K + k3) || null; }, o, every);
+    var changes = markAppearanceChanges(scored, o);
+    if (progress) await progress('fit', cams.length, cams.length);
+    return {
+        ok: true, flags: scored.filter(function (s) { return s.flagged; }), changes: changes, encounters: scored,
+        identities: grid.idents.map(function (id) { return id.name; }),
+        sampledFrames: T, closeDistance: grid.sep, threshold: o.threshold,
+        fps: o.fps, step: grid.step, sampleHz: grid.hz, cue: 'image', imageHz: imgHz, crops: crops, cameras: cams,
+    };
+}
+
+/**
+ * The coat-brightness check's scoring — the image check's before #309: a vector per (sample, animal, view),
+ * one blocked-CV classifier per view fitted to the tracker's labels, then `finish` (encounters, change
+ * points, candidate moments tested on both sides). Brightness was calibrated on it (see
+ * BRIGHTNESS_CHECK_DEFAULTS); the image check now scores label-free (checkAppearanceSwitches).
+ */
+async function checkClassifierSwitches(session, o, cue) {
     if (typeof o.getEmbeddings !== 'function') return failure(cue === 'image' ? 'No image embedder available' : 'No brightness sampler available');
     var grid = buildGrid(session, o, false);
     if (grid.fail) return failure(grid.fail);

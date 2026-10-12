@@ -66,6 +66,19 @@ export function setVideoController(v) { videoController = v; }
 export function hasRealVideo() {
     return !!(videoController && state.views && state.views.some(function (v) { return v.decoder; }));
 }
+// True when `view` has a video pane in the dock, i.e. its canvas is on screen
+// (a pane in an inactive tab still counts). Every view keeps a decoder whether
+// or not it is docked, so frame stepping, playback and overlay drawing ask this
+// to skip the views nobody can see: with one camera solo'd out of 17, the other
+// 16 used to decode every step and play during playback all the same. A view
+// that is docked again gets a NEW canvas, and the pane's renderer then
+// re-seeks the current frame (`refreshPaneInteractions`), so skipping it
+// meanwhile never leaves a stale picture on screen. With no dock at all
+// (before the dock exists) every view counts as shown, as before.
+export function isViewDocked(view) {
+    if (!paneManager || !paneManager.dockedViews || !view) return true;
+    return paneManager.dockedViews.get(view.name) > 0;
+}
 export function setInteractionManager(v) { interactionManager = v; }
 export function setViewport3D(v) { viewport3d = v; }
 export function setTimeline(v) { timeline = v; }
