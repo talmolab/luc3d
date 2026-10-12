@@ -896,8 +896,7 @@ export function setupMenus() {
         var res = session.propagateTracksToIdentities();
         // Mark tracks as trusted (persisted in project metadata) and show IDs.
         session.trustTracks = true;
-        state.colorByIdentity = true;
-        updateColorByToggle();
+        setColorByIdentity(state, true);
         drawAllOverlays(state.currentFrame);
         update3DViewport(state.currentFrame);  // recolor 3D instances instantly
         updateInfoPanel();
@@ -960,6 +959,10 @@ export function setupMenus() {
         updateColorByToggle();
         drawAllOverlays(state.currentFrame);
         update3DViewport(state.currentFrame);  // recolor 3D instances instantly
+        // Track colors change palette with the mode (getTrackColor), so the
+        // timeline's track rows and the Visibility tab's track swatches too.
+        if (timeline) timeline.recolorTracks();
+        populateTimelineVisibility(state.session);
     });
 
     colorByTracksBtn.addEventListener('click', function () {
@@ -1381,6 +1384,22 @@ export function setupMenus() {
         closeMenus();
         toggleInfoPanel();
     });
+
+    // View ▸ Native Resolution (1:1). The tick is refreshed each time the menu
+    // opens rather than pushed on every zoom: whether it is on is derived from
+    // the views (a wheel zoom that snaps to 1:1 turns it on, one that leaves
+    // turns it off), so asking at open time cannot go stale.
+    document.getElementById('menuNativeResolution').addEventListener('click', function () {
+        closeMenus();
+        if (videoController) videoController.toggleNativeResolution();
+    });
+    var viewMenuEl = document.querySelector('.menu-item[data-menu="view"]');
+    if (viewMenuEl) {
+        viewMenuEl.addEventListener('click', function () {
+            var check = document.querySelector('#menuNativeResolution .trail-check');
+            if (check) check.textContent = (videoController && videoController.nativeResolutionActive()) ? '✓' : '';
+        });
+    }
 
     document.getElementById('menuResetView').addEventListener('click', function () {
         closeMenus();
@@ -2088,6 +2107,15 @@ export function setupUI() {
                 case 'End': e.preventDefault(); stopNoVideoPlayback(); navigateToFrame(state.totalFrames - 1); break;
                 case ' ': e.preventDefault(); toggleNoVideoPlayback(); break;
             }
+            return;
+        }
+
+        // Shift+0: View ▸ Native Resolution (1:1) on / off — the `0` that
+        // resets zoom, shifted. Matched by physical key: Shift+0 is ')' on a
+        // US layout and something else elsewhere.
+        if (e.code === 'Digit0' && e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
+            e.preventDefault();
+            videoController.toggleNativeResolution();
             return;
         }
 
@@ -3257,7 +3285,7 @@ export function setGridMode() {
         for (var zi = 0; zi < state.views.length; zi++) {
             var zv = state.views[zi];
             if (zv.zoom) {
-                savedZoom[zv.name] = { scale: zv.zoom.scale, offsetX: zv.zoom.offsetX, offsetY: zv.zoom.offsetY };
+                savedZoom[zv.name] = { scale: zv.zoom.scale, offsetX: zv.zoom.offsetX, offsetY: zv.zoom.offsetY, native: !!zv.zoom.native };
             }
         }
         paneManager.clearAll();
@@ -3275,7 +3303,14 @@ export function setGridMode() {
                 rv.zoom.scale = savedZoom[rv.name].scale;
                 rv.zoom.offsetX = savedZoom[rv.name].offsetX;
                 rv.zoom.offsetY = savedZoom[rv.name].offsetY;
-                if (videoController) videoController.applyZoom(rv);
+                // A 1:1 scale belongs to the OLD canvas box: re-derive it. Keep
+                // the flag `initZoom` set from View ▸ Native Resolution, too.
+                rv.zoom.native = savedZoom[rv.name].native || !!rv.zoom.native;
+                rv.zoom.scaleY = undefined;
+                if (videoController) {
+                    if (rv.zoom.native) videoController.reapplyZoom(rv);
+                    else videoController.applyZoom(rv);
+                }
             }
         }
     } else {
@@ -3291,7 +3326,7 @@ export function updateVideoGridDisplay() {
     for (var zi = 0; zi < state.views.length; zi++) {
         var zv = state.views[zi];
         if (zv.zoom) {
-            savedZoom[zv.name] = { scale: zv.zoom.scale, offsetX: zv.zoom.offsetX, offsetY: zv.zoom.offsetY };
+            savedZoom[zv.name] = { scale: zv.zoom.scale, offsetX: zv.zoom.offsetX, offsetY: zv.zoom.offsetY, native: !!zv.zoom.native };
         }
     }
     if (state.viewMode === 'single') {
@@ -3315,7 +3350,14 @@ export function updateVideoGridDisplay() {
             rv.zoom.scale = savedZoom[rv.name].scale;
             rv.zoom.offsetX = savedZoom[rv.name].offsetX;
             rv.zoom.offsetY = savedZoom[rv.name].offsetY;
-            if (videoController) videoController.applyZoom(rv);
+            // A 1:1 scale belongs to the OLD canvas box: re-derive it. Keep
+            // the flag `initZoom` set from View ▸ Native Resolution, too.
+            rv.zoom.native = savedZoom[rv.name].native || !!rv.zoom.native;
+            rv.zoom.scaleY = undefined;
+            if (videoController) {
+                if (rv.zoom.native) videoController.reapplyZoom(rv);
+                else videoController.applyZoom(rv);
+            }
         }
     }
 }

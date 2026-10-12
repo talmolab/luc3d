@@ -1677,11 +1677,88 @@ remembered — and three rules hold:
   is a dozen pixels across and anything solid over it hides the node's own
   colour. Covered by `tests/e2e/plane-node-selection.mjs`.
 
+**When coloring by Identity, a track color is never an identity color.** An
+identity is an animal; a track is not. In Identity mode a track with no
+identity on the frame falls back to its TRACK color, so both palettes share the
+canvas, and the identity palette (`IDENTITY_COLORS`, pose/pose-data.js) is
+full-saturation neon spanning the whole hue wheel. Track mode's vivid palette
+(`TRACK_COLORS`) therefore always lands on some identity's hue: after Track
+All, an unidentified `track_4` drew in nearly the green of `id_0` and read as
+that animal. So the palette follows the mode, through ONE function,
+`getTrackColor(trackIdx, colorByIdentity)` (`ui/overlays.js`):
+- **Track mode keeps the vivid `TRACK_COLORS`.** No identity color is on the
+  canvas there, and telling tracks apart is the whole job.
+- **Identity mode draws tracks in `UNIDENTIFIED_TRACK_COLORS`**, muted earth
+  tones separated from the neon by saturation and lightness rather than hue.
+- **Everything that shows a track's color follows the mode, not just the
+  skeleton**: the name label (an identity-less instance's label takes its
+  skeleton's color), the timeline's track rows and the Visibility tab's track
+  swatches. The Tracks / Identity change handler in `ui/ui-wiring.js` recolors
+  all of them. A new place that paints a track color must pass the mode to
+  `getTrackColor`, and anything that changes `state.colorByIdentity` must go
+  through `setColorByIdentity` (`ui/color-by.js`), or that handler never runs.
+
+The muted palette's four rules, measured in CIEDE2000 and enforced by
+`tests/test-track-identity-palette.mjs`. The test checks its own ΔE
+implementation against the published reference data, and shows the vivid
+palette failing the first rule:
+- every entry is **≥ 20** from every one of the 20 identity colors (the
+  reported pair was 12.2; the vivid palette's worst is 2.2);
+- **≥ 15** from the other fixed meanings on the canvas: `REPROJECTION_COLOR`,
+  `UNGROUPED_USER_COLOR` and `NULL_ID_COLOR`;
+- **≥ 9** from every other entry, so tracks still tell apart;
+- **no darker than L\* 52**. A name label sits on a translucent black pill, and
+  over a white mouse a darker muted color all but vanishes into it.
+**The identity palette must also stay distinct from ITSELF as animals are
+added.** Identity N takes `IDENTITY_COLORS[N]`, so a project with N animals
+shows the first N. Entries 0-6 are the original neon set and must not change;
+7-19 were chosen farthest-first, so the closest pair stays at 18.0 for 8
+animals and 13.7 for 12. The old 7-19 put `id_7` 6.0 from `id_0`. Projects
+store identity colors, so the `Identity` constructor upgrades a stored color
+that equals the OLD default for its slot; a color from another tool is kept.
+Both are pinned by the same test (§8, §9).
+
+Adding an identity color, or a fixed canvas color, means re-running that test.
+Change the palette if it fails; do not lower the thresholds. The mode switching
+itself (labels, timeline rows recolored in place, swatches) is covered by
+`tests/e2e/unidentified-track-palette.mjs`.
+
 **Modals must close on `Esc`** unless explicitly stated otherwise. When building
 or editing any modal/overlay dialog, wire a `keydown` listener that closes it on
 `Escape` (and removes the listener on close). For a modal mid-operation (e.g. an
 in-progress export), `Esc` should cancel/stop that operation rather than tear the
 modal down. Example: `showExport3DVideoModal` in `ui/export-modals.js`.
+
+## Native resolution (1:1) — one video pixel per DEVICE pixel
+
+View ▸ Native Resolution / `Shift+0` (`VideoController.setNativeResolution`,
+`loading/video.js`) shows the video with no resampling. It is a zoom SCALE, not
+a second display path — the backing canvas is already the video's size; only
+the wrapper's CSS transform scales it — and a wheel or `+`/`-` step that passes
+through that scale stops on it (`snapZoomToNative`; the wheel also HOLDS there
+until it rests 250 ms). Measured against real screenshots of seeded noise, it
+is exact only while two rules hold, and breaking either is invisible in code
+review and obvious on screen:
+- **One scale per axis** (`zoom.scale` / `zoom.scaleY`). `fitCanvasesToCells`
+  floors the canvas box to whole CSS px, so the box aspect is a hair off the
+  video's; a uniform scale resamples the other axis by ~0.3% and blurs every
+  row. Anything that maps screen ↔ video through `zoom.scale` alone (the
+  rotated path of `canvasToVideo` was one) must read `zoom.scaleY` too.
+- **The pan on the device-pixel grid** (`_alignNativeOffsets` in `applyZoom`).
+  A half-pixel offset at the exact scale still averages neighbours.
+Exact at integer devicePixelRatio (and 1.25/1.5 headless); at e.g. 2.2 Chrome
+resamples regardless, so it is right-SIZED but not exact — say so, don't promise
+it. Whether it is on is DERIVED (`state.nativeResolution` = every shown view at
+1:1) so the menu tick cannot lie, and `initZoom` seeds from it so pane rebuilds
+keep 1:1. The pane badge reads the zoom as a percentage of 1:1
+(`zoomPercentLabel`), and only a view HELD at 1:1 may read exactly "100%" — a
+near miss is still resampled, so it reads "99.8%" / "≈100%". Hovering it offers
+presets (`ZOOM_PRESET_PERCENTS`, per pane, `setZoomPercent`); 100% there must go
+through `_enterNative`, never a plain `scale = 1:1`, or it skips both rules. The 1:1 scale depends on the box AND devicePixelRatio, so anything
+that moves either must end in `reapplyZoom` (`reapplyAllZoom` covers resize and
+the DPR watcher). Covered by `tests/e2e/native-resolution-zoom.mjs` (run it
+`HEADED=1` too: only a visible window shows the GPU compositor) and the
+"Native resolution" block of `tests/test-video-controller.js`.
 
 ## Tests
 There are **three** test populations, each with its own runner. Run all three —
