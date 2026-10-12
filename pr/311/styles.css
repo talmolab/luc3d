@@ -2684,16 +2684,16 @@ body {
 
 /* Seekbar. The 24px box is the bar itself; the time ruler hangs below it
    (.seekbar-ruler), and margin-bottom reserves that room so the controls bar
-   centres bar + ruler together. margin-left is room for the ruler's "00:00",
-   which is centred on the bar's first pixel and so hangs half a label (~17px)
-   left of it: with the controls bar's gap (16px, 8px at <= 640px) it keeps
-   the label clear of the transport buttons. */
+   centres bar + ruler together. The side margins are room for the ruler's
+   first and last labels — "00:00" and the duration — which are centred on
+   the bar's ends and so hang half a label past them (~17px for "14:23",
+   ~23px for "1:23:45"): with the controls bar's gap (16px) they keep both
+   clear of the transport buttons and the FPS pill. */
 .seekbar-container {
   flex: 1;
   position: relative;
   height: 24px;
-  margin-left: 12px;
-  margin-bottom: 11px;
+  margin: 0 12px 11px;
   display: flex;
   align-items: center;
   cursor: pointer;
@@ -3949,6 +3949,13 @@ kbd {
     width: 30px;
     height: 30px;
     font-size: 12px;
+  }
+
+  /* The controls bar's gap halves here, so the seekbar's side margins grow
+     to keep the ruler's end labels clear of their neighbours. */
+  .seekbar-container {
+    margin-left: 16px;
+    margin-right: 16px;
   }
 }
 

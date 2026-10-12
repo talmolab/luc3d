@@ -10,7 +10,8 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const T = await import(pathToFileURL(path.join(HERE, '..', 'ui', 'seekbar-ticks.js')).href);
-const { formatTickLabel, seekbarTimeTicks, TICK_STEPS, MIN_LABEL_SPACING_PX, MIN_MINOR_SPACING_PX, MAX_MINOR_PER_MAJOR, DEFAULT_CHAR_PX } = T;
+const { formatTickLabel, formatDurationLabel, seekbarTimeTicks, TICK_STEPS, MIN_LABEL_SPACING_PX, LABEL_SPACING_WIDTHS, MIN_MINOR_SPACING_PX, MAX_MINOR_PER_MAJOR, DEFAULT_CHAR_PX } = T;
+const { formatTimestamp } = await import(pathToFileURL(path.join(HERE, '..', 'ui', 'seekbar-tooltip.js')).href);
 
 let passed = 0, failed = 0; const failures = [];
 function ok(c, m) {
@@ -29,6 +30,20 @@ eq(formatTickLabel(3600, 0), '1:00:00', 'hours are unpadded, like the readout');
 eq(formatTickLabel(5400, 0), '1:30:00', 'an hour and a half');
 eq(formatTickLabel(-1, 0), '00:00', 'negative clamps to zero');
 
+// ---- formatDurationLabel: a PREFIX of the readout's total -------------------------
+eq(formatDurationLabel(863.617, 0), '14:23', 'truncated, not rounded (14:23.617 -> 14:23, not 14:24)');
+eq(formatDurationLabel(1800, 0), '30:00', 'a whole duration');
+eq(formatDurationLabel(53946 / 29.97, 0), '30:00', '29.97 fps: frames/fps a hair under 30:00 reads 30:00, as the readout does');
+eq(formatDurationLabel(1.0333, 1), '00:01.0', 'tenths, truncated');
+eq(formatDurationLabel(0.3, 1), '00:00.3', 'no float drift');
+eq(formatDurationLabel(3 * 3600 + 0.5, 0), '3:00:00', 'hours');
+for (const sec of [0.1, 0.3, 1.0333, 59.9996, 863.617, 1799.9999, 3599.9996, 10800.25]) {
+    for (const d of [0, 1]) {
+        const ts = formatTimestamp(sec), lbl = formatDurationLabel(sec, d);
+        ok(ts.startsWith(lbl + (d ? '' : '.')), `${sec} s: "${lbl}" is a prefix of the readout's "${ts}"`);
+    }
+}
+
 // ---- nothing to draw -----------------------------------------------------------------
 for (const [args, why] of [
     [[0, 30, 700], 'no frames'], [[1, 30, 700], 'one frame'],
@@ -45,11 +60,14 @@ for (const [args, why] of [
     const t = seekbarTimeTicks(108000, 60, 700);
     eq(t.step, 300, '30 min on 700 px: a label every 5:00');
     eq(t.minorStep, 60, '  minor ticks every minute');
-    eq(t.majors.map(m => m.label).join(' '), '00:00 05:00 10:00 15:00 20:00 25:00', '  labels');
+    eq(t.majors.map(m => m.label).join(' '), '00:00 05:00 10:00 15:00 20:00 25:00 30:00', '  labels, ending on the duration');
     ok(t.majors[0].frac === 0 && t.majors[0].label === '00:00', '  the first label is 00:00, at the 0 tick');
+    const end = t.majors[t.majors.length - 1];
+    ok(end.end && end.frac === 1 && end.seconds === 1800, '  the last is the END tick: at the last frame, the 30:00 duration');
+    ok(t.majors.slice(0, -1).every(m => !m.end), '  and the only one');
     eq(t.minors.length, 24, '  four minors between each pair of majors, none on a major');
     // Same frame -> position mapping as the thumb: time × fps / (total − 1).
-    ok(t.majors.every(m => Math.abs(m.frac - m.seconds * 60 / 107999) < 1e-12), '  positions are time × fps / (total − 1)');
+    ok(t.majors.filter(m => !m.end).every(m => Math.abs(m.frac - m.seconds * 60 / 107999) < 1e-12), '  positions are time × fps / (total − 1)');
 }
 
 // ---- the properties, over a grid of recordings and widths ---------------------------
@@ -68,10 +86,10 @@ for (const fps of [5, 25, 29.97, 30, 60, 150]) {
             const pxPerSec = width / endSec;
             ok(isStep(t.step), `${where}: step ${t.step} is a nice step`);
             ok(t.step >= 1 / fps - 1e-9, `${where}: the step is at least one frame`);
-            const labelled = t.majors.filter(m => m.label);
+            const labelled = t.majors.filter(m => m.label && !m.end);
             const widest = Math.max(...labelled.map(m => m.label.length)) * charPx;
-            ok(labelled.length < 2 || t.step * pxPerSec >= Math.max(MIN_LABEL_SPACING_PX, widest * 1.75) - 1e-6,
-                `${where}: labels are far enough apart`);
+            ok(labelled.length < 2 || t.step * pxPerSec >= Math.max(MIN_LABEL_SPACING_PX, widest * LABEL_SPACING_WIDTHS) - 1e-6,
+                `${where}: the step keeps regular labels far enough apart`);
             // The CHOSEN step is the smallest that fits: the next smaller one (at
             // least a frame long) would have crowded the labels.
             const i = TICK_STEPS.indexOf(t.step);
@@ -81,13 +99,20 @@ for (const fps of [5, 25, 29.97, 30, 60, 150]) {
                 ok(smaller * pxPerSec < Math.max(MIN_LABEL_SPACING_PX, 1.75 * lastLabel.length * charPx),
                     `${where}: the step ${t.step} is the smallest that fits`);
             }
-            ok(t.majors.every((m, k) => Math.abs(m.seconds - k * t.step) < 1e-9 && m.frac >= 0 && m.frac <= 1),
-                `${where}: majors every ${t.step} s from 0, within the bar`);
-            ok(t.majors[t.majors.length - 1].seconds <= endSec + 1e-9 && t.majors[t.majors.length - 1].seconds + t.step > endSec,
-                `${where}: majors run to the end and not past it`);
-            // A centred label never hangs off the right end; one that would is dropped.
-            ok(t.majors.every((m, k) => !m.label || k === 0 || m.frac * width + m.label.length * charPx / 2 <= width + 1e-9),
-                `${where}: no label hangs off the right end`);
+            const regular = t.majors.slice(0, -1), end = t.majors[t.majors.length - 1];
+            ok(regular.every((m, k) => Math.abs(m.seconds - k * t.step) < 1e-9 && m.frac >= 0 && m.frac < 1 && !m.end),
+                `${where}: regular majors every ${t.step} s from 0, within the bar`);
+            ok(regular[regular.length - 1].seconds <= endSec + 1e-9 && regular[regular.length - 1].seconds + 2 * t.step > endSec,
+                `${where}: regular majors run (nearly) to the end and not past it`);
+            ok(end.end && end.frac === 1 && end.label === formatDurationLabel(total / fps, t.step >= 1 ? 0 : 1),
+                `${where}: the END tick is at the last frame, labelled with the duration ("${end.label}")`);
+            ok(regular.every(m => (1 - m.frac) * width >= MIN_MINOR_SPACING_PX) && t.minors.every(f => (1 - f) * width >= MIN_MINOR_SPACING_PX),
+                `${where}: no tick sits on top of the end tick`);
+            // Any two neighbouring labels, the end one included, keep the spacing rule.
+            const shown = t.majors.filter(m => m.label);
+            ok(shown.every((m, k) => k === 0 || (m.frac - shown[k - 1].frac) * width >=
+                    Math.max(MIN_LABEL_SPACING_PX, LABEL_SPACING_WIDTHS * Math.max(m.label.length, shown[k - 1].label.length) * charPx) - 1e-6),
+                `${where}: neighbouring labels are far enough apart (${shown.map(m => m.label).join(' ')})`);
             if (t.minorStep) {
                 const ratio = t.step / t.minorStep;
                 ok(isStep(t.minorStep) && Math.abs(ratio - Math.round(ratio)) < 1e-6 && Math.round(ratio) <= MAX_MINOR_PER_MAJOR,
