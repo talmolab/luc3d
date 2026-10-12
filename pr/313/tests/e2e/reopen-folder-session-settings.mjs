@@ -199,6 +199,10 @@ try {
         window.TimelineVisibility.toggleCameraVisibility(s, 'camB');
         window.TimelineVisibility.toggleTrackVisibility(s, 't1');
         window.TimelineVisibility.toggleIdentityVisibility(s, 'mouseB');
+        // The animal count rides the same module once `numAnimals` is a
+        // declared key (talmolab/luc3d#312). Until then nothing writes it, and
+        // the checks below compare only the keys the module declares.
+        s.numAnimals = 3;
 
         // ---- the ID Switches checklist (shapes as in pose/id-switch-check.js) ----
         const pt = (frame, a, b, score, extra) => Object.assign(
