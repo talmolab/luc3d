@@ -3182,9 +3182,9 @@ export class VideoController {
             offsetY: 0,
             baseW: 0,   // wrapper base display size the offsets are valid for;
             baseH: 0,   // set by applyZoom, used by reapplyZoom to anchor on resize
-            // Held at native resolution (1:1). A pane rebuild re-inits every
-            // view, so a view comes back at 1:1 while the mode is on; its scale
-            // is computed by the next reapplyZoom, once the canvas is laid out.
+            // Held at native resolution (1:1). A view's first zoom state
+            // starts there while the mode is on; its scale is computed by the
+            // next reapplyZoom, once the canvas is laid out.
             native: !!(this.state && this.state.nativeResolution),
             scaleY: undefined, // vertical scale, set only while `native` (see nativeZoomScales)
         };
@@ -3398,8 +3398,9 @@ export class VideoController {
      * Native resolution is ON exactly when every shown view is at 1:1. Derived
      * rather than latched, so the menu tick cannot disagree with the screen: a
      * wheel zoom that snaps the solo view to 1:1 turns it on, one that leaves
-     * turns it off. It is also what `initZoom` reads, so a pane rebuild
-     * (switching the solo camera, grid ↔ solo) keeps every view at 1:1.
+     * turns it off. A pane rebuild (switching the solo camera, grid ↔ solo)
+     * reads it too: while it is on, a view coming on screen joins it at 1:1
+     * (`refreshPaneInteractions`, which then re-derives it).
      */
     _syncNativeMode() {
         var views = this._zoomableViews();
@@ -3442,10 +3443,10 @@ export class VideoController {
      * @returns {boolean} whether native resolution is now on
      */
     setNativeResolution(on) {
-        // Every view, shown or not: a pane rebuild restores the zoom of views
-        // that were hidden (`updateVideoGridDisplay`), so a hidden view left
-        // flagged would come back at 1:1 after OFF, and one left unflagged
-        // would come back fitted while ON. Hidden views get their scale from
+        // Every view, shown or not: a hidden view keeps its zoom through a
+        // pane rebuild (`refreshPaneInteractions`), so one left flagged would
+        // come back at 1:1 after OFF. ON flags them too, so they are already
+        // 1:1 when they come back. Hidden views get their scale from
         // `reapplyZoom` once they are laid out again.
         var shown = this._zoomableViews();
         for (var i = 0; i < this.state.views.length; i++) {
