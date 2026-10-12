@@ -23,6 +23,10 @@
  *   - no darker than L* 52, or a name label vanishes into its translucent
  *     black pill wherever the pill sits over a white mouse.
  *
+ * §8-9 hold the identity palette to the same standard against itself: N
+ * animals show its first N entries, so the closest pair among them must stay
+ * wide as N grows, and a project saved with an old default gets the new one.
+ *
  * Both modules are import-free, so they load directly under Node.
  */
 import { pathToFileURL } from 'url';
@@ -220,6 +224,73 @@ console.log('\n6. Coloring by Identity: an identity-less track draws in a track 
     check(getGroupColor(group, session, false, 0, 'cam') === TRACK_COLORS[4], 'and so is the grouped one');
     check(getGroupColor(named, session, false, 0, 'cam') === TRACK_COLORS[0],
         'a track with an identity is drawn by its track, too');
+}
+
+console.log('\n8. The identity palette stays distinct from itself as animals are added');
+{
+    // Identity N takes entry N, so a project with N animals shows the first N.
+    // The first 7 are the original set and must not change; 7-19 replaced
+    // entries that put id_7 6.0 from id_0 and the closest pair at 1.4.
+    const ORIGINAL_7 = ['#00ff00', '#ff00ff', '#00ffff', '#ffff00', '#ff8800', '#0088ff', '#ff0088'];
+    const LEGACY = ['#00ff00', '#ff00ff', '#00ffff', '#ffff00', '#ff8800', '#0088ff', '#ff0088',
+        '#88ff00', '#8800ff', '#00ff88', '#ff0000', '#0000ff', '#00ff44', '#ff4400', '#4400ff',
+        '#44ff00', '#ff0044', '#0044ff', '#ffaa00', '#aa00ff'];
+    check(IDENTITY_COLORS.length === 20, `20 identity colors (${IDENTITY_COLORS.length})`);
+    check(ORIGINAL_7.every((c, i) => IDENTITY_COLORS[i] === c), 'id_0..id_6 are the original seven');
+
+    const closestOfFirst = (pal, n) => {
+        let worst = Infinity, pair = '';
+        for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) {
+            const d = dE(pal[i], pal[j]);
+            if (d < worst) { worst = d; pair = `id_${i} ${pal[i]} / id_${j} ${pal[j]}`; }
+        }
+        return { worst, pair };
+    };
+    // Floors per animal count, each a little under what the palette achieves.
+    const FLOORS = [[7, 18], [8, 17.5], [9, 16], [10, 14.5], [12, 13.5], [20, 8.5]];
+    for (const [n, floor] of FLOORS) {
+        const r = closestOfFirst(IDENTITY_COLORS, n);
+        check(r.worst >= floor, `${n} animals: closest pair ${r.pair} at ${r.worst.toFixed(1)} >= ${floor}`);
+    }
+    const old8 = closestOfFirst(LEGACY, 8);
+    check(old8.worst < 17.5, `negative control: the old palette at 8 animals is ${old8.worst.toFixed(1)} (${old8.pair}), so it fails`);
+
+    // Vivid and visible: what keeps an identity from reading as a muted track
+    // (section 2 checks the distance itself) and from vanishing on dark video.
+    let dimmest = Infinity, dullest = Infinity, dW = '', cW = '';
+    for (const c of IDENTITY_COLORS) {
+        const [L, a, b] = hexToLab(c), C = Math.hypot(a, b);
+        if (L < dimmest) { dimmest = L; dW = c; }
+        if (C < dullest) { dullest = C; cW = c; }
+    }
+    check(Math.round(dimmest) >= 55, `no identity color darker than L* 55 (dimmest ${dW} at ${dimmest.toFixed(1)})`);
+    check(Math.round(dullest) >= 50, `every identity color is vivid, chroma >= 50 (dullest ${cW} at ${dullest.toFixed(1)})`);
+
+    // The canvas's other fixed meanings, and white, the selection color.
+    const fixed = { REPROJECTION_COLOR, UNGROUPED_USER_COLOR, NULL_ID_COLOR, selection: '#ffffff' };
+    for (const [name, hex] of Object.entries(fixed)) {
+        let worst = Infinity, which = '';
+        for (let i = 7; i < IDENTITY_COLORS.length; i++) {
+            const d = dE(IDENTITY_COLORS[i], hex);
+            if (d < worst) { worst = d; which = IDENTITY_COLORS[i]; }
+        }
+        check(worst >= MIN_FROM_FIXED, `${name} ${hex}: closest new identity color ${which} at ${worst.toFixed(1)}`);
+    }
+}
+
+console.log('\n9. A saved old default is upgraded on load; any other color is kept');
+{
+    // Every load path builds identities with `new Identity(id, name, color)`.
+    const Id = pd.Identity;
+    check(new Id(7, 'id_7', '#88ff00').color === IDENTITY_COLORS[7],
+        `id_7 saved as the old default #88ff00 loads as ${IDENTITY_COLORS[7]}`);
+    check(new Id(19, 'id_19', '#AA00FF').color === IDENTITY_COLORS[19], 'matched case-insensitively');
+    check(new Id(27, 'id_27', '#88ff00').color === IDENTITY_COLORS[7], 'and by slot, id % 20');
+    check(new Id(8, 'id_8', '#88ff00').color === '#88ff00',
+        'an old default stored on a DIFFERENT identity is not a default there, so it is kept');
+    check(new Id(7, 'id_7', '#123456').color === '#123456', 'a color from another tool is kept');
+    check(new Id(0, 'id_0', '#00ff00').color === '#00ff00', 'the original seven are unchanged');
+    check(new Id(7, 'id_7').color === IDENTITY_COLORS[7], 'no color: the current default');
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);
