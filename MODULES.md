@@ -8582,9 +8582,12 @@ minor ticks between them, so a moment can be found and clicked by eye without
 hovering for the tooltip.
 
 **Key exports.** `seekbarTimeTicks(totalFrames, fps, widthPx, {charPx}?)` ->
-`{step, minorStep, majors: [{frac, seconds, label}], minors: [frac]}`
-(pure); `formatTickLabel(seconds, decimals)` (`mm:ss`, `h:mm:ss` from an hour
-up, rounded before splitting); `TICK_STEPS` and the spacing constants
+`{step, minorStep, majors: [{frac, seconds, label, end}], minors: [frac]}`
+(pure; the last major is the end tick); `formatTickLabel(seconds, decimals)`
+(`mm:ss`, `h:mm:ss` from an hour up, rounded before splitting);
+`formatDurationLabel(seconds, decimals)` (the end tick's label: rounded to the
+millisecond like `formatTimestamp`, then TRUNCATED, so it is a prefix of the
+readout's total); `TICK_STEPS` and the spacing constants
 (`MIN_LABEL_SPACING_PX`, `LABEL_SPACING_WIDTHS`, `MIN_MINOR_SPACING_PX`,
 `MAX_MINOR_PER_MAJOR`, `DEFAULT_CHAR_PX`); the DOM half,
 `installSeekbarTicks(layerEl, {getTotalFrames, getFps})` and
@@ -8597,8 +8600,15 @@ up, rounded before splitting); `TICK_STEPS` and the spacing constants
   width — 5:00 for a 30-minute recording on a 700 px bar, 2:00 on 1200 px, 1 s
   for a 10 s clip. The minor step is the smallest nice step that divides the
   major into at most 6 parts and is still 8 px apart. Neither is shorter than one
-  frame. No ruler when no label after `00:00` fits, or without a frame rate
-  (fps 0 while a session has no video).
+  frame. No ruler when `00:00` and the duration do not both fit, or without a
+  frame rate (fps 0 while a session has no video).
+- **The bar's end is always marked**: a tick at the last frame, labelled with
+  the duration — the readout's total, `totalFrames / fps`, truncated to the
+  ruler's precision (`14:23` for `14:23.617`, never `14:24`; a 29.97 fps
+  recording a hair under 30:00 reads `30:00`, as the readout does). It wins
+  every collision: a regular label closer to it than the spacing rule allows
+  loses its text (the tick stays), and a regular or minor tick within 8 px of
+  it is dropped, since it would read as a double tick.
 - **Same mapping and same clock as the rest of the bar.** A tick for time `t`
   sits at `t·fps / (totalFrames − 1)` — the thumb's and the ID-switch ticks'
   frame -> position mapping at the readout's frame-start time — so a click on
@@ -8610,10 +8620,11 @@ up, rounded before splitting); `TICK_STEPS` and the spacing constants
   seekbar tooltip. It hangs below the 24 px bar box; `.seekbar-container`'s
   `margin-bottom` reserves the room, so the controls bar centres bar + ruler
   together. Painted under the ID-switch marks and the thumb. Every label is
-  centred on its tick, `00:00` included: that one hangs ~17 px (half a label)
-  left of the bar, into the room `.seekbar-container`'s `margin-left: 12px`
-  adds to the controls bar's gap, clear of the transport buttons at every
-  width. A label that would hang off the RIGHT end is dropped (its tick stays).
+  centred on its tick, the two ends included: `00:00` and the duration hang
+  half a label (~17 px; ~23 px for `1:23:45`) past the bar's ends, into the room
+  `.seekbar-container`'s side margins (12 px, 16 px at <= 640 px, where the
+  controls bar's gap halves) add to that gap — clear of the transport buttons
+  and the FPS pill at every width.
 - **Never re-rendered per frame.** `refreshSeekbarTicks` (called from
   `updateSeekbarVisual` on every frame, and from `refreshReadoutTotals` /
   `clearReadout`) compares the frame count, FPS and width with what is drawn
@@ -8632,10 +8643,14 @@ in Node).
 **Coverage.** `tests/test-seekbar-ticks.mjs` (label format; the step choice
 over a grid of frame rates × durations × widths: nice steps, at least a frame,
 labels far enough apart, the smallest step that fits, minors dividing majors
-and never on one, nothing hanging off the end; monotone in duration and width)
-and `tests/e2e/seekbar-ticks.mjs` (real app: labels centred on their ticks at
-the time's position, no overlap, inside the bar and the controls bar; a click
-on a label seeks to that time and hovering it shows the tooltip; longer
+and never on one, the end tick labelled with the duration and nothing on top of
+it, neighbouring labels — the end one included — far enough apart; the duration
+label a prefix of `formatTimestamp`; monotone in duration and width) and
+`tests/e2e/seekbar-ticks.mjs` (real app: labels centred on their ticks at the
+time's position, no overlap, inside the controls bar, the two end labels clear
+of the transport buttons and the FPS pill; the end label matches `#totalTime`
+and a click on it lands on the last frame; a click on a label seeks to that
+time and hovering it shows the tooltip; longer
 recordings get longer steps and a bar resize alone re-lays it; the FPS pill
 re-times it; fps 0 / no frames clear it; 200 frame steps make zero ruler DOM
 mutations; fits at 640 px).

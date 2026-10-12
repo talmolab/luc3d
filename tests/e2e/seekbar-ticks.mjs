@@ -8,6 +8,10 @@
  *     constant "nice" step, each label centred on its tick — "00:00" too, which
  *     hangs left of the bar but clear of the transport buttons — no two labels
  *     touching, the rest within the bar.
+ *  1b. The END of the bar: a tick at the last frame, labelled with the
+ *     duration — a prefix of the readout's total (`14:23` for `14:23.617`) —
+ *     centred on the bar's end and clear of the FPS pill; a click on it lands
+ *     on the last frame.
  *  2. Layout: the ruler sits under the track, inside the controls bar.
  *  3. A click ON a label seeks to that time (the ruler is part of the
  *     seekbar), to within the half pixel a mouse position is rounded to; and
@@ -16,7 +20,8 @@
  *     and a bar resize re-lays the ruler by itself, with no frame update.
  *  5. Editing the FPS pill re-times it; fps 0 and an empty project clear it.
  *  6. Stepping frames never touches the ruler's DOM.
- *  7. It still fits at 640 px, "00:00" still clear of the buttons.
+ *  7. It still fits at 640 px, "00:00" and the duration still clear of their
+ *     neighbours.
  *
  * Run: node tests/e2e/seekbar-ticks.mjs     (SHOT_DIR=… to save screenshots)
  */
@@ -68,6 +73,18 @@ try {
         };
     });
     const stepOf = (labels) => labels.length > 1 ? parseLabel(labels[1].text) - parseLabel(labels[0].text) : 0;
+    const centre = (l) => (l.left + l.right) / 2;
+    const totalTime = () => page.evaluate(() => document.getElementById('totalTime').textContent);
+    // The end label: centred on the bar's right end, clear of the FPS pill,
+    // and a prefix of the readout's duration.
+    const endChecks = async (r, what) => {
+        const end = r.labels[r.labels.length - 1], total = await totalTime();
+        check(total.startsWith(end.text + (end.text.includes('.') ? '' : '.')),
+            `${what}: the last label "${end.text}" is the duration the readout shows ("${total}")`);
+        check(Math.abs(centre(end) - r.bar.right) < 0.5 && r.majors.some(x => Math.abs(x - r.bar.right) < 0.5),
+            `${what}:   centred on a tick at the bar's end`);
+        check(end.right <= r.fps.left - 2, `${what}:   and clear of the FPS pill (${(r.fps.left - end.right).toFixed(1)} px)`);
+    };
     const setBarWidth = (minWidthPx) => page.evaluate(async (w) => {
         document.querySelector('.frame-display').style.minWidth = w ? w + 'px' : '';
         await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));   // let the ResizeObserver deliver
@@ -83,26 +100,47 @@ try {
     check(r.labels[0].left >= r.transport.right + 2,
         `  and clear of the transport buttons (${(r.labels[0].left - r.transport.right).toFixed(1)} px)`);
     const step = stepOf(r.labels);
+    const regular = r.labels.slice(0, -1);
     check([60, 120, 300, 600].includes(step), `a nice step: ${step} s`);
-    check(r.labels.every((l, i) => Math.abs(parseLabel(l.text) - i * step) < 1e-9), '  the same step all along');
+    check(regular.every((l, i) => Math.abs(parseLabel(l.text) - i * step) < 1e-9), '  the same step all along');
     check(r.majors.length >= r.labels.length && r.minors > 0, `${r.majors.length} major ticks, ${r.minors} minor ticks`);
     {
-        // Each label at the position its time maps to: time * fps / (total - 1).
+        // Each label at the position its time maps to — time * fps / (total - 1) —
+        // with a major tick under it. (The end label is checked below.)
         let worst = 0;
-        r.labels.forEach((l, i) => {
+        regular.forEach((l) => {
             const x = r.bar.left + parseLabel(l.text) * 60 / (108000 - 1) * r.bar.width;
-            const tickX = r.majors[i];
-            const labelX = (l.left + l.right) / 2;
-            worst = Math.max(worst, Math.abs(tickX - x), Math.abs(labelX - x));
+            const tickX = r.majors.reduce((best, t) => Math.abs(t - x) < Math.abs(best - x) ? t : best, Infinity);
+            worst = Math.max(worst, Math.abs(tickX - x), Math.abs(centre(l) - x));
         });
         check(worst < 1, `every label and its tick sit at the time's position (worst ${worst.toFixed(2)} px)`);
     }
+    await endChecks(r, '30:00');
     {
         let minGap = Infinity;
         for (let i = 1; i < r.labels.length; i++) minGap = Math.min(minGap, r.labels[i].left - r.labels[i - 1].right);
         check(minGap >= 8, `no two labels touch (smallest gap ${minGap.toFixed(1)} px)`);
     }
-    check(r.labels.slice(1).every(l => l.left >= r.bar.left - 0.5 && l.right <= r.bar.right + 0.5), 'every later label is within the bar');
+    check(r.labels.slice(1, -1).every(l => l.left >= r.bar.left - 0.5 && l.right <= r.bar.right + 0.5), 'every label between the two ends is within the bar');
+
+    // ---- 1b. the end of a recording that does not end on a step -----------------------
+    await setProject(51817, 60);   // 863.617 s: the readout's total is 14:23.617
+    {
+        const e = await ruler();
+        await endChecks(e, '14:23.617');
+        const end = e.labels[e.labels.length - 1];
+        check(end.text === '14:23', `  truncated, not rounded: "${end.text}"`);
+        let minGap = Infinity;
+        for (let i = 1; i < e.labels.length; i++) minGap = Math.min(minGap, e.labels[i].left - e.labels[i - 1].right);
+        check(minGap >= 8, `  no label crowds it (smallest gap ${minGap.toFixed(1)} px: ${e.labels.map(l => l.text).join(' ')})`);
+        // Its right half is past the bar's end, which a click clamps to the last frame.
+        await page.mouse.move(Math.ceil(centre(end)) + 4, Math.round((end.top + end.bottom) / 2));
+        await page.mouse.down(); await page.mouse.up();
+        const frame = await page.evaluate(() => document.getElementById('currentFrame').textContent);
+        check(frame === '51,817', `  clicking it lands on the last frame (${frame} of 51,817)`);
+        await page.mouse.move(10, 10);
+    }
+    await setProject(108000, 60);
 
     // ---- 2. layout ------------------------------------------------------------------
     check(r.ruler.top >= r.track.bottom, `the ruler is under the track (${r.track.bottom.toFixed(1)} -> ${r.ruler.top.toFixed(1)})`);
@@ -140,6 +178,7 @@ try {
         `10 s / 20 min / 30 min / 3 h step ${steps.join(' / ')} s — longer videos, longer steps`);
     const longest = await ruler();
     check(longest.labels.some(l => /^\d:\d\d:\d\d$/.test(l.text)), `hours read h:mm:ss: ${longest.labels.map(l => l.text).join(' ')}`);
+    await endChecks(longest, '3 h');
 
     await setProject(108000, 60);
     const wide = await ruler();
@@ -148,7 +187,8 @@ try {
     check(narrow.bar.width < wide.bar.width - 300, `precondition: the bar shrank (${wide.bar.width.toFixed(0)} -> ${narrow.bar.width.toFixed(0)} px)`);
     check(stepOf(narrow.labels) > stepOf(wide.labels),
         `a resize alone re-lays the ruler: step ${stepOf(wide.labels)} -> ${stepOf(narrow.labels)} s`);
-    check(narrow.labels.every(l => l.right <= narrow.bar.right + 0.5), '  and keeps every label within the bar');
+    check(narrow.labels.slice(0, -1).every(l => l.right <= narrow.bar.right + 0.5), '  and keeps every label but the end one within the bar');
+    await endChecks(narrow, 'narrow bar');
     await setBarWidth(0);
 
     // ---- 5. FPS pill re-times it; fps 0 and no frames clear it -----------------------
@@ -185,8 +225,9 @@ try {
     await page.waitForTimeout(150);
     r = await ruler();
     const lb = Math.max(...r.labels.map(l => l.bottom));
-    check(r.labels.length >= 2 && r.labels.slice(1).every(l => l.left >= r.bar.left - 0.5 && l.right <= r.bar.right + 0.5),
-        `640 px: ${r.labels.map(l => l.text).join(' ')} within a ${r.bar.width.toFixed(0)} px bar`);
+    check(r.labels.length >= 2 && r.labels.slice(1, -1).every(l => l.left >= r.bar.left - 0.5 && l.right <= r.bar.right + 0.5),
+        `640 px: ${r.labels.map(l => l.text).join(' ')} on a ${r.bar.width.toFixed(0)} px bar`);
+    await endChecks(r, '640 px');
     check(r.labels[0].left >= r.transport.right + 2,
         `  "00:00" clear of the transport buttons (${(r.labels[0].left - r.transport.right).toFixed(1)} px)`);
     check(lb <= r.controls.bottom && r.ruler.top >= r.controls.top, '  and inside the controls bar');

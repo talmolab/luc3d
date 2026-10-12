@@ -21,6 +21,13 @@
 // the step is under a second. Without a frame rate (fps 0 — set while a
 // session has no video yet) there are no times to mark, so no ruler.
 //
+// The bar's END is always marked: a tick at the last frame, labelled with the
+// recording's duration — the readout's total (`totalFrames / fps`), truncated
+// to the ruler's precision so the label is always a prefix of it (`14:23` for
+// `14:23.617`, never `14:24`). That label wins every collision: a regular label
+// too close to it loses its text, and a regular tick within
+// `MIN_MINOR_SPACING_PX` of it would read as a double tick, so it goes.
+//
 // The ruler is part of the seekbar (a child of `#seekbar`): a click or drag on
 // it scrubs and hovering it shows the tooltip, which makes the labels a bigger
 // target rather than a dead strip. It never re-renders per frame — the
@@ -59,8 +66,24 @@ function stepDecimals(step) { return step >= 1 ? 0 : 1; }
  */
 export function formatTickLabel(seconds, decimals) {
     var d = decimals > 0 ? decimals : 0;
+    return formatUnits(Math.round(Math.max(0, seconds) * Math.pow(10, d)), d);
+}
+
+/**
+ * The end tick's label: the duration as the readout shows it (rounded to the
+ * millisecond, as `formatTimestamp` does), then TRUNCATED to `decimals` — so
+ * it is always a prefix of the readout's total: `14:23.617` -> `14:23`, and a
+ * 29.97 fps recording whose frames/fps lands a hair under 30:00 still reads
+ * `30:00`, as the readout does.
+ */
+export function formatDurationLabel(seconds, decimals) {
+    var d = decimals > 0 ? decimals : 0;
+    return formatUnits(Math.floor(Math.round(Math.max(0, seconds) * 1000) / Math.pow(10, 3 - d)), d);
+}
+
+/** `q` units of 10^-d seconds as `mm:ss[.d]` / `h:mm:ss[.d]`. */
+function formatUnits(q, d) {
     var unit = Math.pow(10, d);
-    var q = Math.round(Math.max(0, seconds) * unit);
     var whole = Math.floor(q / unit), frac = q - whole * unit;
     var pad = function (n, w) { var t = String(n); while (t.length < w) t = '0' + t; return t; };
     var h = Math.floor(whole / 3600), m = Math.floor((whole % 3600) / 60), s = whole % 60;
@@ -76,14 +99,16 @@ export function formatTickLabel(seconds, decimals) {
  * @param {number} widthPx     the bar's width
  * @param {{charPx?: number}} [opts]  width of one label character (monospace)
  * @returns {{step: number, minorStep: number,
- *            majors: Array<{frac: number, seconds: number, label: string|null}>,
+ *            majors: Array<{frac: number, seconds: number, label: string|null, end: boolean}>,
  *            minors: number[]}}
  *   `step`/`minorStep` are 0 when there is nothing to draw — including when
- *   no label after "00:00" fits. `frac` is 0..1 along the bar. A major's
- *   `label` is null when, centred, it would hang off the right end (the tick
- *   is still drawn). Every label is centred on its tick — `00:00` too, which
- *   therefore hangs half a label left of the bar, into the room the
- *   seekbar's `margin-left` keeps for it.
+ *   `00:00` and the duration do not both fit. `frac` is 0..1 along the bar.
+ *   The last major is the END tick (`end: true`, `frac` 1 — the last frame —
+ *   `seconds` the duration, label from `formatDurationLabel`). A regular
+ *   major's `label` is null when it would sit closer to the end label than
+ *   any two labels may. Every label is centred on its tick, so `00:00` and the
+ *   end label hang half a label past the bar's ends, into the room the
+ *   seekbar's side margins keep for them.
  */
 export function seekbarTimeTicks(totalFrames, fps, widthPx, opts) {
     var none = { step: 0, minorStep: 0, majors: [], minors: [] };
@@ -118,24 +143,36 @@ export function seekbarTimeTicks(totalFrames, fps, widthPx, opts) {
     }
 
     var dec = stepDecimals(step);
+    // Two labels' centres must be this far apart — the rule the step was
+    // chosen by, applied to the end label and its neighbours too.
+    var apart = function (a, b) {
+        return Math.max(MIN_LABEL_SPACING_PX, LABEL_SPACING_WIDTHS * Math.max(a.length, b.length) * charPx);
+    };
+    var duration = totalFrames / fps;
+    var endLabel = formatDurationLabel(duration, dec);
     var majors = [];
     for (var k = 0, n = count(step); k <= n; k++) {
         var sec = k * step;
         var frac = Math.min(1, sec / endSec);
+        var toEnd = (1 - frac) * widthPx;
+        if (k > 0 && toEnd < MIN_MINOR_SPACING_PX) continue;   // would double the end tick
         var label = formatTickLabel(sec, dec);
-        var half = label.length * charPx / 2;
-        if (k > 0 && frac * widthPx + half > widthPx) label = null;
-        majors.push({ frac: frac, seconds: sec, label: label });
+        if (toEnd < apart(label, endLabel)) {
+            // A scale is read off two labels; with no room for "00:00" AND the
+            // duration (a bar a few dozen px wide) the ruler is only noise.
+            if (k === 0) return none;
+            label = null;
+        }
+        majors.push({ frac: frac, seconds: sec, label: label, end: false });
     }
-    // A scale is read off two labels; "00:00" alone (a bar too narrow for a
-    // second one) is only noise.
-    if (!majors.some(function (m, k) { return k > 0 && m.label; })) return none;
+    majors.push({ frac: 1, seconds: duration, label: endLabel, end: true });
 
     var minors = [];
     if (minorStep) {
         var per = Math.round(step / minorStep);
         for (var q = 1, nq = Math.floor(endSec / minorStep + EPS); q <= nq; q++) {
-            if (q % per) minors.push(Math.min(1, q * minorStep / endSec));
+            var f = Math.min(1, q * minorStep / endSec);
+            if (q % per && (1 - f) * widthPx >= MIN_MINOR_SPACING_PX) minors.push(f);
         }
     }
     return { step: step, minorStep: minorStep, majors: majors, minors: minors };
