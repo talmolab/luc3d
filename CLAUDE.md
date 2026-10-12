@@ -1642,6 +1642,15 @@ remembered — and three rules hold:
   is a dozen pixels across and anything solid over it hides the node's own
   colour. Covered by `tests/e2e/plane-node-selection.mjs`.
 
+**A long operation's progress popup is ONE card style**: the image ID-switch
+check's dialog. The shared loading overlay (`ui/loading-overlay.js` — Track All,
+Triangulate All, the body-size check, loading, exports) renders the same opaque
+card — optional title (`opts.title`, kept until `hideLoading`), message, the bar
+with its playhead, the percentage under it, the detail line, the CPU line
+left-justified with its graph to the right — and neither popup greys the app out:
+the full-window layer under the card is transparent but still blocks clicks.
+`tests/e2e/fixtures/progress-card.js` pins it in all four.
+
 **Frame numbers and counts carry thousands commas** wherever the user reads
 them — status bar, progress overlay, dialogs, tooltips: "Triangulating:
 2,000,000/2,000,000 frames", "frame 1,234". Format with

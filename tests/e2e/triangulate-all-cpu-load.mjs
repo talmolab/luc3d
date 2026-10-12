@@ -20,6 +20,9 @@
  *     never waits on a worker, so the load is exactly one core's share; the
  *     tooltip says so.
  *  5. Another operation's progress (no CPU source) shows no CPU line.
+ *  6. The popup is the image check's card (fixtures/progress-card.js): titled
+ *     "Triangulate All", opaque, the app behind it not greyed out, the CPU line
+ *     left-justified, the percentage under the bar.
  *
  * Run: node tests/e2e/triangulate-all-cpu-load.mjs
  */
@@ -127,6 +130,17 @@ try {
     check(r1.graphOn && r1.rightOfLine && r1.cpuD && !r1.gpuD && !r1.gpuLine,
           'the load graph sits to its right: a CPU series, no GPU series and no GPU line (triangulation does not use one)');
     check(r1.keyColour === r1.stroke, `the line's key is the series colour (${r1.keyColour})`);
+    {   // the image check's card style: titled, opaque, the app not greyed out, the CPU line left-justified
+        const st = await page.evaluate(async () => {
+            const { progressCardStyle } = await import('/tests/e2e/fixtures/progress-card.js');
+            const t = document.getElementById('loadingTitle');
+            return Object.assign(progressCardStyle(document.querySelector('.loading-card'), document.getElementById('loadingOverlay'), document.getElementById('loadingCpu')),
+                { title: t.classList.contains('hidden') ? null : t.textContent, pct: document.getElementById('loadingPct').textContent,
+                  spinner: !document.getElementById('loadingSpinner').classList.contains('hidden') });
+        });
+        check(st.ok && st.title === 'Triangulate All' && /^\d+%$/.test(st.pct) && !st.spinner,
+              `the image check's card: "${st.title}", opaque, the app not greyed out, the CPU line left-justified, "${st.pct}" under the bar, no spinner` + (st.ok ? '' : ' — ' + st.why));
+    }
     {   // its axes: "100%" / "50%" / "0%" level with what they label, "60 s ago" … "now" under it, each with a tick
         // pointing out of the plot (fixtures/load-graph-axes.js)
         const ax = await page.evaluate(async (sel) => (await import('/tests/e2e/fixtures/load-graph-axes.js')).loadGraphAxes(document.querySelector(sel)), '#loadingGraph');

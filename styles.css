@@ -3919,24 +3919,49 @@ input[type="range"]::-moz-range-track {
    Loading Overlay
    -------------------------------------------------------------------------- */
 
+/* The progress popup of every long operation (Track All, Triangulate All, the
+   body-size ID-switch check, loading, exports): an opaque card styled exactly
+   like the image ID-switch check's dialog (.id-switch-progress, below — the
+   shared values are written once, in rules naming both), on a TRANSPARENT
+   layer: the app stays visible, not greyed, but cannot be clicked while the
+   operation runs (Triangulate All resolves its settings once and relies on
+   that). `overflow: hidden` keeps the playhead's transformed wrapper (see
+   .loading-progress-head) from adding scrollable area. */
 .loading-overlay {
   position: fixed;
   inset: 0;
   display: flex;
-  flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 16px;
-  background: rgba(26, 26, 26, 0.88);
+  background: transparent;
+  overflow: hidden;
   z-index: 1000;
-  color: var(--text-secondary);
-  font-size: 14px;
 }
 
+.loading-card {
+  width: 540px;
+  max-width: calc(100vw - 32px);
+  box-sizing: border-box;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 24px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  color: var(--text-primary);
+  text-align: left;
+}
+.loading-title { margin: 0 0 16px 0; font-size: 15px; font-weight: 600; }
+
+/* The message, with a small spinner before it only when there is no bar to
+   show progress (showLoading); a determinate run hides it. */
+.loading-line { display: flex; align-items: center; gap: 8px; }
+#loadingStatus { font-size: 13px; overflow-wrap: anywhere; }
+
 .spinner {
-  width: 40px;
-  height: 40px;
-  border: 3px solid var(--border-color);
+  flex: none;
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--border-color);
   border-top-color: var(--accent);
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
@@ -3948,67 +3973,81 @@ input[type="range"]::-moz-range-track {
   }
 }
 
-/* Determinate progress bar under #loadingStatus (ui/loading-overlay.js).
-   The fill is scaled with `transform`, not `width`: a transform transition runs
-   on the compositor thread, so the bar keeps gliding between the pacer's
-   ~250 ms updates even while the main thread is busy with the next chunk. The
-   transition length matches PROGRESS_INTERVAL_MS. The overlay's `gap: 16px`
-   would push the bar too far from its label, hence the negative margins. */
-.loading-progress {
-  width: min(360px, 70vw);
-  height: 6px;
-  margin-top: -6px;
-  border-radius: 3px;
-  background: var(--border-color);
-  overflow: hidden;
-}
-
-.loading-progress-fill {
-  width: 100%;
-  height: 100%;
-  background: var(--accent);
-  transform-origin: left center;
-  transform: scaleX(0);
-  transition: transform 250ms linear;
-  will-change: transform;
-}
-
-.loading-progress-fill.no-anim {
-  transition: none;
-}
-
-/* Second text line: estimated time remaining (ui/loading-overlay.js). Tucked
-   up against #loadingStatus so the two read as one block of text. */
+/* Second text line: estimated time remaining (ui/loading-overlay.js). */
 .loading-eta {
-  margin-top: -12px;
+  margin-top: 2px;
   font-size: 13px;
   color: var(--text-secondary);
   font-variant-numeric: tabular-nums;
 }
 
+/* Determinate progress bar (ui/loading-overlay.js), the image check's bar: a
+   track that clips the fill, and a playhead line at the fill's leading edge
+   standing proud of it. Both move with `transform`, not `width` / `left`: a
+   transform transition runs on the compositor thread, so the bar keeps gliding
+   between the pacer's ~250 ms updates even while the main thread is busy with
+   the next chunk. The transition length matches PROGRESS_INTERVAL_MS. The
+   playhead is a full-width wrapper translated by the fraction (a percentage
+   translate is of its own width, i.e. the bar's), its line at its left edge. */
+.loading-progress { position: relative; height: 6px; margin: 12px 0 0; }
+.loading-progress-track { position: absolute; inset: 0; border-radius: 3px; background: rgba(255, 255, 255, 0.12); overflow: hidden; }
+.loading-progress-fill {
+  width: 100%;
+  height: 100%;
+  background: #4cc9f0;
+  transform-origin: left center;
+  transform: scaleX(0);
+  transition: transform 250ms linear;
+  will-change: transform;
+}
+.loading-progress-head {
+  position: absolute; top: -4px; bottom: -4px; left: 0; width: 100%;
+  transform: translateX(0); transition: transform 250ms linear; will-change: transform; pointer-events: none;
+}
+.loading-progress-head::before {
+  content: ''; position: absolute; top: 0; bottom: 0; left: 0; width: 2px; transform: translateX(-50%);
+  background: var(--text-primary); border-radius: 1px; box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.55);
+}
+.loading-progress-fill.no-anim, .loading-progress-head.no-anim {
+  transition: none;
+}
+
+/* The percentage under the bar — the same rule as the image check's. */
+.loading-pct, .id-switch-progress-pct { margin-top: 8px; font-size: 24px; opacity: 0.75; font-variant-numeric: tabular-nums; }
+
 .loading-substatus {
-  margin-top: -8px;
+  margin-top: 2px;
   font-size: 12px;
   color: var(--text-muted, var(--text-secondary));
 }
 
-/* The CPU line and its load graph, under the detail line, while an operation
-   reports its CPU time (ui/loading-overlay.js setLoadingCpu: Triangulate All).
-   CPU only — what uses it never touches the GPU. Same parts as the image
-   check's dialog (.load-line / .load-graph, ui/load-graph.js). */
+/* The CPU line, left-justified, and its load graph to its right, under the
+   detail line while an operation reports its CPU time (setLoadingCpu:
+   Triangulate All, Track All). CPU only — what uses it never touches the GPU.
+   Laid out like the image check's CPU/GPU lines (.load-line / .load-graph,
+   ui/load-graph.js). */
 .loading-hw {
   display: flex;
-  align-items: center;
-  gap: 12px;
-  margin-top: -4px;
+  align-items: flex-start;
+  gap: 10px;
+  margin-top: 6px;
 }
 .loading-hw.hidden { display: none; }
 .loading-hw .load-line {
+  flex: 1;
+  min-width: 0;
+  min-height: 1.4em;
+  line-height: 1.4;
   font-size: 12px;
   color: var(--text-secondary);
   font-variant-numeric: tabular-nums;
-  white-space: nowrap;
 }
+.loading-hw .load-graph { flex: none; }
+
+/* Dismiss (a startup error, pose/initialization.js) — right-aligned, as the
+   image check's Cancel. */
+.loading-actions { display: flex; justify-content: flex-end; }
+.loading-actions #loadingDismiss { margin-top: 16px; }
 
 /* --------------------------------------------------------------------------
    Keyboard Key
@@ -7023,6 +7062,8 @@ details[open] > summary.origin-rebase-block-title::before {
 .id-switch-fix-tip { font-size: 12px !important; color: var(--text-muted) !important; }
 
 /* Image ID-switch check — progress dialog (ui/id-switch-modal.js) */
+/* Its backdrop does not grey the app out — as the loading overlay's does not — but still blocks it. */
+.multi-frame-modal-overlay.id-switch-progress-overlay { background: transparent; }
 /* A fixed width — room for "GPU: WebGPU, fp16 · load 100%" beside the load graph and its axes — so the
    dialog does not change width as its progress text changes. */
 .id-switch-progress { width: 540px; max-width: calc(100vw - 32px); }
@@ -7032,7 +7073,7 @@ details[open] > summary.origin-rebase-block-title::before {
 .id-switch-progress-track { position: absolute; inset: 0; border-radius: 3px; background: rgba(255,255,255,0.12); overflow: hidden; }
 .id-switch-progress-fill { height: 100%; width: 0; background: #4cc9f0; transition: width 0.2s; }
 .id-switch-progress-bar .id-switch-phead { left: 0; transition: left 0.2s; }   /* keep pace with the fill */
-.id-switch-progress-pct { margin-top: 8px; font-size: 24px; opacity: 0.75; font-variant-numeric: tabular-nums; }
+/* .id-switch-progress-pct: one rule with .loading-pct (Loading Overlay, above). */
 /* The percentage and device line on the left, a sample crop on the right, above Cancel. */
 .id-switch-progress-row { display: flex; align-items: flex-start; gap: 16px; }
 .id-switch-progress-info { flex: 1; min-width: 0; }

@@ -169,7 +169,7 @@ function drawCropSkeleton(ctx, pts, edges, color) {
 function openProgressDialog(title) {
     var ctl = new AbortController();
     var overlay = document.createElement('div');
-    overlay.className = 'multi-frame-modal-overlay';
+    overlay.className = 'multi-frame-modal-overlay id-switch-progress-overlay';   // no grey backdrop (styles.css)
     overlay.innerHTML = '<div class="multi-frame-modal id-switch-progress"><h3>' + escapeHtml(title) + '</h3>' +
         '<div class="id-switch-progress-text">Starting…</div>' +
         // the same playhead line as the ID Switches rows' bars, standing proud of an inner track that clips the fill
@@ -251,7 +251,7 @@ async function runSize(session, rate) {
     // The overlay's plain form (spinner + message), not a counter: the check is one uninterrupted block of
     // main-thread work (~0.2-1.5 s) whose only progress is 0 then 1 of one fitting step — which the counter
     // used to print as "0/1 frames (0%)", frozen until the overlay closed.
-    showLoading('Checking ID switches (body size)…');
+    showLoading('Comparing each animal\'s body size before and after its contacts…', { title: 'Checking ID switches (body size)' });
     await yieldToPaint();
     try {
         return await checkSizeSwitches(session, { fps: rate.fps });

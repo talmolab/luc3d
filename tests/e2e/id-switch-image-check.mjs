@@ -222,6 +222,15 @@ try {
     check(/cores kept busy over the last 5 s by this check/.test(hw.cpuTitle) && /video decoding/.test(hw.cpuTitle), `…with a tooltip saying what it counts ("${hw.cpuTitle}")`);
     check(hw.shown === 'visible' && hw.right && hw.topAligned && hw.leftOfCrop, 'the load graph sits to the right of both lines, level with them, left of the sample crop');
     check(hw.gpuOneLine, '…and "GPU: WebGPU, fp16 · load 100%" still fits on one line beside it');
+    {   // the card every progress popup now shares: opaque, the app not greyed out, the CPU line left-justified
+        const st = await page.evaluate(async () => {
+            const { progressCardStyle } = await import('/tests/e2e/fixtures/progress-card.js');
+            const card = document.querySelector('.id-switch-progress');
+            return progressCardStyle(card, card.parentElement, card.querySelector('.id-switch-progress-cpu'));
+        });
+        check(st.ok, 'the dialog is opaque, its backdrop does not grey the app out (but still blocks it), the CPU line is left-justified' +
+              (st.ok ? '' : ' — ' + st.why));
+    }
     {   // its axes: "100%" / "50%" / "0%" level with what they label, "60 s ago" … "now" under it, each with a tick
         // pointing out of the plot (fixtures/load-graph-axes.js)
         const ax = await page.evaluate(async (sel) => (await import('/tests/e2e/fixtures/load-graph-axes.js')).loadGraphAxes(document.querySelector(sel)), '.id-switch-progress-graph');

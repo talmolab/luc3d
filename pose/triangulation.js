@@ -3401,7 +3401,7 @@ export async function triangulateAllFrames(method) {
     if (triWindowed) {
         markDirty();
         showLoadingProgress('Triangulating', 0, triLoader.nFrames,
-            { detail: triangulationMethodLabel(method) });
+            { detail: triangulationMethodLabel(method), title: 'Triangulate All' });   // the card's title, kept to hideLoading
         var swept = await sweepTriangulateAllFrames(state.session, cameras, method);
         setReprojErrorVisible(true, { checkBoxes: false });
         var reprojOnly = showReprojectionsOnly();   // #243: proofreading comes next
@@ -3435,7 +3435,8 @@ export async function triangulateAllFrames(method) {
     markDirty();
     var methodLabel = triangulationMethodLabel(method);
     var stageOpts = function (detail) { return { detail: detail }; };
-    showLoadingProgress('Triangulating', 0, frameIndices.length, stageOpts(methodLabel));
+    showLoadingProgress('Triangulating', 0, frameIndices.length,
+        Object.assign({ title: 'Triangulate All' }, stageOpts(methodLabel)));   // the card's title, kept to hideLoading
     // Paint the 0% overlay before the first chunk starts.
     await yieldToPaint();
     var pacer = createProgressPacer();

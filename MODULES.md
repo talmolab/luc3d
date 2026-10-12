@@ -5438,13 +5438,40 @@ determinate progress bar — the ONE progress component shared by Track All,
 Triangulate All (all three routes), Group by Identity/Track, and anything else
 that runs a chunked main-thread loop behind the overlay.
 
+**It is a card in the image ID-switch check's dialog style**
+(`ui/id-switch-modal.js`): an opaque `.loading-card` (540 px, `--bg-secondary`,
+border, 8 px radius, 24 px padding, shadow) with an optional title
+(`#loadingTitle`), the message, the ETA, the image check's bar — a track that
+clips a cyan fill, and a playhead line (`#loadingProgressHead`) standing proud
+of it — and the large percentage under the bar (`#loadingPct`; shared rule with
+`.id-switch-progress-pct`), then the detail line and the CPU row, all
+left-aligned. The full-window `.loading-overlay` under it is TRANSPARENT: the
+app stays visible, not greyed out, but cannot be clicked while an operation
+runs (Triangulate All resolves its settings once and relies on that). The image
+check's own backdrop is transparent too (`.id-switch-progress-overlay`). The
+spinner (now 14 px, before the message) shows only for a message with no bar.
+Every caller of the overlay gets the card — loading, exports, Group by — but
+only Track All / Track Frame Range, Triangulate All and the body-size check
+give it a title. Pinned in all four by `tests/e2e/fixtures/progress-card.js`
+(opaque card, transparent but blocking backdrop, left-aligned, the CPU line at
+the card's content edge).
+
 **Key exports.**
-- `showLoading(msg)` — indeterminate form (spinner + text); hides the bar.
-- `showLoadingProgress(label, done, total, { step, steps, detail, unit })` —
-  writes the standard `"<label>: done/total frames (pct%)…"` line — the counts
-  with thousands commas, "Triangulating: 2,000,000/2,000,000 frames (100%)…"
+- `showLoading(msg, { title })` — indeterminate form (spinner + text); hides the
+  bar and the percentage.
+- **The title** (`opts.title` on either call) names the operation — "Track All",
+  "Triangulate All", "Checking ID switches (body size)" — and is KEPT until
+  `hideLoading` (or a call passing another; `''` clears it), so the progress
+  calls deep inside a run, and a message mid-run, need not repeat it; each
+  operation passes it on its first call only. An operation that passes none
+  shows none.
+- `showLoadingProgress(label, done, total, { step, steps, detail, unit, title })` —
+  writes the standard `"<label>: done/total frames…"` line — the counts
+  with thousands commas, "Triangulating: 2,000,000/2,000,000 frames…"
   (`toLocaleString('en-US')`, so the separator does not depend on the browser's
-  locale) — and drives the
+  locale), the floored percentage under the bar instead of in the line (the
+  image check's layout), moves the playhead with the fill (both by `transform`,
+  so both glide on the compositor), and drives the
   bar (`#loadingProgress` / `#loadingProgressFill`, `role="progressbar"`). The
   line under the bar (`#loadingSubstatus`) carries `Step k of n` (only when
   `steps > 1`) and `detail` (method, group counts), so the main line keeps one
@@ -9566,7 +9593,8 @@ rename them wrongly.
 **Imports from project modules.** `ui/app-state.js` (`state`, `timeline`,
 `getActiveSession`), `import-export/save-load.js` (`setStatus`),
 `ui/loading-overlay.js` (`showLoading`, `hideLoading`, `yieldToPaint` — the body-size
-check shows the overlay's plain "Checking ID switches (body size)…" form, not a counter:
+check shows the overlay's card titled "Checking ID switches (body size)", a spinner and
+"Comparing each animal's body size before and after its contacts…", not a counter:
 it is one uninterrupted ~0.2-1.5 s block whose only progress is 0 then 1 of one fitting
 step, which the counter printed as a frozen "0/1 frames (0%)"),
 `ui/settings.js` (`getTrackingThreshold`), `pose/id-switch-check.js`,

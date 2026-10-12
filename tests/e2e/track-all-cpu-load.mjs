@@ -15,6 +15,8 @@
  *     project): the "Assigning identities: 12,345/60,000 frames" line has
  *     commas; a CPU line with its key and graph (labelled axes), no GPU series; one core's
  *     share; a tooltip saying it runs on the main thread.
+ *     The popup is the image check's card (fixtures/progress-card.js): titled
+ *     "Track All", opaque, the app not greyed out, the CPU line left-justified.
  *  3. When it ends the CPU row is hidden and cleared; the status line and the
  *     Track All summary box give the frame count with commas.
  *
@@ -97,7 +99,18 @@ try {
                  key: line.classList.contains('has-series'), shown: !document.getElementById('loadingHardware').classList.contains('hidden'),
                  cpuD: svg.querySelector('path.is-cpu').getAttribute('d') || '', gpuD: svg.querySelector('path.is-gpu').getAttribute('d') || '' };
     });
-    check(/^Assigning identities: \d{1,2},\d{3}\/60,000 frames \(\d+%\)…$/.test(run.status), `the progress line has commas ("${run.status}")`);
+    check(/^Assigning identities: \d{1,2},\d{3}\/60,000 frames…$/.test(run.status), `the progress line has commas ("${run.status}")`);
+    {   // the image check's card style: titled, opaque, the app not greyed out, the CPU line left-justified
+        const st = await page.evaluate(async () => {
+            const { progressCardStyle } = await import('/tests/e2e/fixtures/progress-card.js');
+            const t = document.getElementById('loadingTitle');
+            return Object.assign(progressCardStyle(document.querySelector('.loading-card'), document.getElementById('loadingOverlay'), document.getElementById('loadingCpu')),
+                { title: t.classList.contains('hidden') ? null : t.textContent, pct: document.getElementById('loadingPct').textContent,
+                  spinner: !document.getElementById('loadingSpinner').classList.contains('hidden') });
+        });
+        check(st.ok && st.title === 'Track All' && /^\d+%$/.test(st.pct) && !st.spinner,
+              `the image check's card: "${st.title}", opaque, the app not greyed out, the CPU line left-justified, "${st.pct}" under the bar, no spinner` + (st.ok ? '' : ' — ' + st.why));
+    }
     const l2 = loadOf(run.text);
     check(run.shown && run.key && run.cpuD && !run.gpuD, `a CPU line with its key and graph, no GPU series ("${run.text}")`);
     {   // its axes: "100%" / "50%" / "0%" level with what they label, "60 s ago" … "now" under it, each with a tick
