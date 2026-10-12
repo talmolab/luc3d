@@ -23,8 +23,8 @@
 //
 // One module owns the key list so a writer and a reader cannot drift — adding a
 // setting means touching `writeVisibilityMetadata` / `readVisibilityMetadata`
-// here and nothing else. The six call sites (four writers, three readers, one
-// of which is shared) each pass the `metadata.lucid` dict straight through.
+// here and nothing else. Every call site — four writers, four readers — passes
+// the `metadata.lucid` dict straight through.
 //
 // Three invariants the callers depend on:
 //
