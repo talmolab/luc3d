@@ -295,5 +295,113 @@ const longW = widths(sessionOf(longFG), { lineWidth: 5, predictedLineWidth: 4, t
 ok(longW[0] === 4 && longW.every(w => w <= 4 && w >= 0.8) && longW.every((w, i) => i === 0 || w <= longW[i - 1]),
    '50-frame trail: starts at the edge width, only thins, floors at 0.8 px (' + longW[0] + ' → ' + longW[longW.length - 1] + ')');
 
+// 14. Trails per displayed LAYER — they attach to the nodes on screen. The 2D
+// trail follows the displayed User / Predicted instances (one trail per track
+// across both types); Reprojections get their own trails. Segments here are
+// recorded with their coordinates, so "which nodes does the trail run through"
+// is asserted directly.
+function recCtx() {
+    const segs = [];
+    let at = null, pending = [];
+    return {
+        segs, globalAlpha: 1, strokeStyle: '', lineWidth: 1, lineCap: '', lineJoin: '',
+        save() {}, restore() {}, beginPath() { pending = []; },
+        moveTo(x, y) { at = [x, y]; }, lineTo(x, y) { pending.push([at[0], at[1], x, y]); },
+        stroke() { for (const p of pending) segs.push({ x0: p[0], x1: p[2], c: this.strokeStyle, w: this.lineWidth }); },
+    };
+}
+const draw14 = (session, opts) => {
+    const c = recCtx();
+    ov.drawNodeTrails(c, 'camA', session, 10, Object.assign({ trailLength: 5 }, opts, GEO));
+    return c.segs;
+};
+const xs = (segs) => segs.map(s => s.x0).sort((a, b) => a - b);
+
+// 14a. 2D gating by type.
+ok(draw14(sLinked, { trailUser: false }).length === 0, 'User hidden: no trail on user instances');
+ok(draw14(sLinked, { trailPredicted: false }).length === 4, 'Predictions hidden: user trails stay');
+ok(draw14(sPred, { trailPredicted: false }).length === 0, 'Predictions hidden: no trail on predictions');
+ok(draw14(sPred, { trailUser: false }).length === 4, 'User hidden: prediction trails stay');
+// A prediction corrected into a user instance on frame 9 does not break the
+// track's trail while both types are shown; with one type hidden the frames of
+// the other are gaps (8 user, 9 predicted, 10 user).
+ok(draw14(sMixed, {}).length === 4, 'both shown: one continuous trail across user and predicted frames');
+ok(draw14(sMixed, { trailUser: false }).length === 0 && draw14(sMixed, { trailPredicted: false }).length === 0,
+   'one type hidden: its frames are gaps, so no segment joins across them');
+// Both types on ONE frame for one track: the user instance (drawn on top) is followed.
+const both9 = { instances: new Map([['camA', [typed('predicted', 500), typed('user', 110)]]]), getUnlinkedInstances() { return []; } };
+const sBoth = sessionOf(new Map([[8, fgTyped('user', 100)], [9, both9], [10, fgTyped('user', 120)]]));
+ok(xs(draw14(sBoth, {})).join() === '110,111,120,121', 'a user and a predicted instance on one frame: the trail runs through the user one');
+ok(xs(draw14(sBoth, { trailUser: false })).length === 0, '…and with User hidden, the prediction alone has no neighbours to join');
+
+// 14b. Reprojection trails. Frames 8..10 each hold a group whose member on
+// camA is track 7 at x, reprojected to x + 1000; the predicted instances are at x.
+function grp(trackIdx, x, extra) {
+    return Object.assign({
+        instances: new Map([['camA', typed('predicted', x)]].map(([c, i]) => [c, Object.assign(i, { trackIdx })])),
+        identityId: null,
+        reprojectedInstances: new Map(),
+        reprojections: { camA: [[x + 1000, 10], [x + 1001, 12]] },
+        points3d: null,
+    }, extra || {});
+}
+function sessionWithGroups(groupsByFrame, extra) {
+    const frames = new Map();
+    for (const f of groupsByFrame.keys()) frames.set(f, fgTyped('predicted', 100 + 10 * (f - 8)));
+    return Object.assign(sessionOf(frames), { instanceGroups: groupsByFrame, cameras: [] }, extra || {});
+}
+const sR = sessionWithGroups(new Map([[8, [grp(7, 100)]], [9, [grp(7, 110)]], [10, [grp(7, 120)]]]));
+const onlyR = { trailUser: false, trailPredicted: false };
+let r = draw14(sR, onlyR);
+ok(xs(r).join() === '1110,1111,1120,1121', 'Reprojections only: the trail runs through the REPROJECTED nodes (' + xs(r).join() + ')');
+r = draw14(sR, { trailReprojected: false });
+ok(xs(r).join() === '110,111,120,121', 'Predictions only: through the predicted nodes, no reprojection trail');
+r = draw14(sR, {});
+ok(r.length === 8 && xs(r).join() === '110,111,120,121,1110,1111,1120,1121', 'both shown: both sets of trails');
+ok(draw14(sR, { trailUser: false, trailPredicted: false, trailReprojected: false }).length === 0, 'nothing shown: no trails');
+// Width and color: the reprojection edge weight; the reprojection's own color
+// (dimmed by its brightness, like its skeleton) in the trail shade.
+r = draw14(sR, Object.assign({ reprojLineWidth: 3, reprojBrightness: 0.5 }, onlyR));
+const groupHex = ov.getGroupColor(sR.instanceGroups.get(9)[0], sR, false, 9, 'camA');
+const newestR = r.filter(s => s.x0 >= 1120);
+ok(newestR.length === 2 && newestR.every(s => s.w === 3), 'newest reprojection segment = the Reprojections edge weight (3): ' + newestR.map(s => s.w));
+ok(newestR.every(s => s.c === ov.trailColor(ov.adjustColorBrightness(groupHex, 0.5), ov.DEFAULT_TRAIL_SHADE, 1 / 4)),
+   'colored as the reprojection skeleton (×0.5 brightness), then shaded: ' + newestR.map(s => s.c));
+// The reprojected-Instance cache is preferred over the raw one, as the skeleton does.
+const riAt = (x) => ({ size: 1, get: () => typed('predicted', x) });
+const sRI = sessionWithGroups(new Map([8, 9, 10].map(f => {
+    const g = grp(7, 100 + 10 * (f - 8));
+    g.reprojectedInstances = riAt(2000 + f); g.getReprojectedInstance = (cam) => g.reprojectedInstances.get(cam);
+    return [f, [g]];
+})));
+ok(xs(draw14(sRI, onlyR)).join() === '2009,2010,2010,2011', 'a cached reprojected Instance wins over the raw reprojection');
+
+// 14c. No cached reprojection (dropped by Triangulate All's sweep, or evicted):
+// the group's 3D points are projected through the view's camera, with its lens
+// distortion — and the caches are NOT written.
+const cam = { name: 'camA', project: (p) => [p[0] * 10, p[1] * 10], distortPoint: (uv) => [uv[0] + 0.5, uv[1]] };
+const g3 = (f) => grp(7, 0, { reprojections: undefined, points3d: new Float64Array([f, 1, 5, f + 0.1, 1.2, 5]) });
+const groups3 = new Map([[8, [g3(8)]], [9, [g3(9)]], [10, [g3(10)]]]);
+const s3 = sessionWithGroups(groups3, { cameras: [cam] });
+ok(xs(draw14(s3, onlyR)).join() === '90.5,91.5,100.5,101.5',
+   'no cache: the 3D points projected and distorted through the camera (' + xs(draw14(s3, onlyR)).join() + ')');
+ok([8, 9, 10].every(f => groups3.get(f)[0].reprojections === undefined), '…without writing the reprojection caches');
+ok(draw14(sessionWithGroups(groups3, { cameras: [] }), onlyR).length === 0, 'no camera for the view: nothing projected, no trail');
+const gNaN = grp(7, 0, { reprojections: undefined, points3d: new Float64Array([NaN, NaN, NaN, NaN, NaN, NaN]) });
+ok(ov.groupReprojection(gNaN, 'camA', cam) === null, 'an untriangulated group has no reprojection');
+
+// 14d. A reprojection trail follows the ANIMAL: frames hold different group
+// objects, linked by identity — even when the member's track changes.
+const trackFor = { 8: 3, 9: 3, 10: 7 };
+const sId = (withIds) => sessionWithGroups(new Map([8, 9, 10].map(f => [f, [grp(trackFor[f], 100 + 10 * (f - 8))]])),
+    { getIdentityForTrack: () => (withIds ? { id: 5, color: '#00ff00' } : null) });
+ok(draw14(sId(true), onlyR).length === 4, 'same identity across a track change: one continuous reprojection trail');
+ok(draw14(sId(false), onlyR).length === 2, 'no identity: linked by the member\'s track, so the change breaks it');
+const gk = (g, s, f) => ov.groupTrailKey(g, s, 'camA', f);
+ok(gk(grp(7, 0), { getIdentityForTrack: () => ({ id: 2 }) }, 0) === 'i2', 'groupTrailKey: the per-frame identity first');
+ok(gk(grp(7, 0, { identityId: 4 }), { getIdentityForTrack: () => null }, 0) === 'i4', '…then the group\'s assigned identity');
+ok(gk(grp(7, 0), {}, 0) === 'tcamA:7', '…then the member\'s track on this view');
+ok(gk(grp(7, 0, { instances: new Map() }), {}, 0) === null, '…and null with neither');
+
 console.log(`\n${failed === 0 ? '✓ PASS' : '✗ FAIL'} — ${passed} passed, ${failed} failed`);
 if (failed > 0) { console.error('\nFailures:\n - ' + failures.join('\n - ')); process.exit(1); }

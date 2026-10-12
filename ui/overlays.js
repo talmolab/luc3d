@@ -2119,16 +2119,33 @@ function trailViewInstances(fg, viewName) {
 // already in `session.frameGroups` (no lazy-H5 fetch — the perf concern in #102).
 // On a lazy project the window ends at the first frame that is not resident
 // (see `trailWindowFrames`); the draw path hydrates it beforehand.
-// Trails are drawn for EVERY track (linked+unlinked, by per-view `trackIdx`) that
-// appears anywhere in the window — including tracks that have already VANISHED
-// from the current frame, so a track's trail lingers and fades out over the window
-// instead of disappearing the instant its instance is gone. Each node's positions
-// join into a polyline that, toward the past, thins and fades. Its newest segment
-// is exactly as thick as the skeleton edges of the instance it traces — the User
-// or the Predictions edge weight (`options.lineWidth` /
-// `options.predictedLineWidth`) — so a trail never looks heavier than the
-// skeleton it belongs to. Each segment is colored by the instance's color AT that frame, so an identity/color switch
-// shows up as a color change along the trail. That color is drawn in
+//
+// Trails attach to the nodes the user is looking at: only displayed layers get
+// them — User instances (`options.trailUser`), Predictions
+// (`options.trailPredicted`), Reprojections (`options.trailReprojected`);
+// `drawFrameOverlays` passes the toolbar's visibility for each, and an omitted
+// one is on. There are two sets, drawn back to front like the skeletons:
+//  - 2D trails follow a per-view `trackIdx` through the displayed User and
+//    Predicted instances, linked and unlinked alike (identities are inspected
+//    BEFORE cross-view linking, so pre-link detections need trails too). One
+//    trail per track across both types, so a prediction corrected into a user
+//    instance does not break it; where a frame has both, the user instance —
+//    drawn on top — is the one followed.
+//  - Reprojection trails follow a 3D group across frames by its identity
+//    (`groupTrailKey`), through its reprojection into this view: the cached one
+//    when there is one, else the group's 3D points projected through the
+//    view's camera (`groupReprojection`) — never a re-triangulation.
+// Every track/animal that appears anywhere in the window gets a trail —
+// including ones that have VANISHED from the current frame, so a trail lingers
+// and fades out instead of disappearing the instant its instance is gone.
+// Each node's positions join into a polyline that, toward the past, thins and
+// fades. Its newest segment is exactly as thick as that layer's skeleton edges
+// (`options.lineWidth` / `predictedLineWidth` / `reprojLineWidth`), so a trail
+// never looks heavier than the skeleton it belongs to. Each segment is colored
+// by its track's color AT that frame, so an identity/color switch shows up as a
+// color change along the trail — for reprojections the reprojection's own color
+// (dimmed by `options.reprojBrightness`, like its skeleton), which also keeps
+// the two sets apart when both are shown. That color is drawn in
 // `options.trailShade` (a TRAIL_SHADES key, default DEFAULT_TRAIL_SHADE) and
 // moves further from the track's color with age — darker, or for a light shade
 // lighter (`trailColor`).
@@ -2136,66 +2153,109 @@ export function drawNodeTrails(ctx, viewName, session, frameIdx, options) {
     options = options || {};
     var trailLength = options.trailLength || 0;
     if (trailLength <= 0 || !session || frameIdx == null || !session.frameGroups) return;
+    var showUser = options.trailUser !== false;
+    var showPredicted = options.trailPredicted !== false;
+    var showReproj = options.trailReprojected !== false;
+    if (!showUser && !showPredicted && !showReproj) return;
 
     var windowIdx = trailWindowFrames(session.frameGroups, frameIdx, trailLength, !!session.lazyLoader);
     if (windowIdx.length < 2) return;                 // need at least one segment
     var W = windowIdx.length;
 
-    // Per window frame (index 0 = current): trackIdx -> instance (linked+unlinked).
-    var byFrame = windowIdx.map(function (idx) {
-        var m = new Map();
-        var insts = trailViewInstances(session.frameGroups.get(idx), viewName);
-        for (var k = 0; k < insts.length; k++) {
-            if (insts[k].trackIdx != null) m.set(insts[k].trackIdx, insts[k]);
-        }
-        return m;
-    });
-
-    // Union of every track present anywhere in the window (so vanished tracks keep
-    // a trail until they age out).
-    var tracks = new Set();
-    byFrame.forEach(function (m) { m.forEach(function (_v, tk) { tracks.add(tk); }); });
-    if (tracks.size === 0) return;
-
-    var toCanvas = makeVideoToCanvasTransform(
-        options.videoWidth, options.videoHeight, options.canvasWidth, options.canvasHeight);
     var colorByIdentity = !!options.colorByIdentity;
     var userWidth = options.lineWidth != null ? options.lineWidth : 2;
     var predictedWidth = options.predictedLineWidth != null ? options.predictedLineWidth : userWidth;
+    var reprojWidth = options.reprojLineWidth != null ? options.reprojLineWidth : userWidth;
+    var reprojBrightness = options.reprojBrightness != null ? options.reprojBrightness : 0.5;
 
+    // Per set and window frame (index 0 = current): key -> { inst, color,
+    // width }, where `inst` is anything with numNodes / hasPoint / getX / getY.
+    var reprojByFrame = [], twoDByFrame = [];
+    var cams = null;
+    if (showReproj && session.cameras) {
+        cams = new Map();
+        for (var ci = 0; ci < session.cameras.length; ci++) cams.set(session.cameras[ci].name, session.cameras[ci]);
+    }
+    for (var w = 0; w < W; w++) {
+        var idx = windowIdx[w];
+        var tm = new Map(), rm = new Map();
+        if (showUser || showPredicted) {
+            var insts = trailViewInstances(session.frameGroups.get(idx), viewName);
+            for (var k = 0; k < insts.length; k++) {
+                var inst = insts[k];
+                if (inst.trackIdx == null) continue;
+                var isPred = inst.type === 'predicted';
+                if (isPred ? !showPredicted : !showUser) continue;
+                var had = tm.get(inst.trackIdx);
+                if (isPred && had && had.inst.type !== 'predicted') continue;   // the user instance wins
+                tm.set(inst.trackIdx, {
+                    inst: inst,
+                    color: getInstanceColor(inst, session, viewName, colorByIdentity, idx),
+                    width: isPred ? predictedWidth : userWidth,
+                });
+            }
+        }
+        if (showReproj && session.instanceGroups) {
+            var groups = session.instanceGroups.get(idx);
+            if (groups) for (var g = 0; g < groups.length; g++) {
+                var group = groups[g];
+                var key = groupTrailKey(group, session, viewName, idx);
+                if (key == null) continue;
+                var rp = groupReprojection(group, viewName, cams ? cams.get(viewName) : null);
+                if (!rp) continue;
+                var base = getGroupColor(group, session, colorByIdentity, idx, viewName);
+                rm.set(key, {
+                    inst: rp,
+                    color: reprojBrightness < 1 ? adjustColorBrightness(base, reprojBrightness) : base,
+                    width: reprojWidth,
+                });
+            }
+        }
+        twoDByFrame.push(tm); reprojByFrame.push(rm);
+    }
+
+    var toCanvas = makeVideoToCanvasTransform(
+        options.videoWidth, options.videoHeight, options.canvasWidth, options.canvasHeight);
     var shade = trailShadeFor(options.trailShade) || trailShadeFor(DEFAULT_TRAIL_SHADE);
 
     // Style ramp per window index (0 = current). Older → thinner, more
     // transparent, and further from the track's color (`trailColor`). `t` runs
-    // 1 (near) → ~0 (far). `stepTaper` scales the edge width: exactly 1 at the
+    // 1 (near) → ~0 (far). `ramp.taper` scales the edge width: exactly 1 at the
     // newest segment (k = 1), down to 1/(W-1) at the oldest.
-    var stepAlpha = [], stepTaper = [], stepAge = [];
+    var ramp = { alpha: [], taper: [], age: [] };
     for (var k0 = 0; k0 < W; k0++) {
         var t0 = 1 - k0 / (W + 1);
-        stepAlpha.push(Math.max(0.1, 0.9 * t0));
-        stepTaper.push((W - k0) / (W - 1));
-        stepAge.push(1 - t0);
+        ramp.alpha.push(Math.max(0.1, 0.9 * t0));
+        ramp.taper.push((W - k0) / (W - 1));
+        ramp.age.push(1 - t0);
     }
 
     ctx.save();
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
-    tracks.forEach(function (tk) {
-        // Historical, shaded and aged color per window frame for this track
-        // (reused across nodes), and the width of the segment ending there: the
-        // edge weight of that frame's instance, tapered with age. The floor
-        // keeps an old segment visible, but never above the edge width itself.
-        // null / 0 where the track is absent in that frame.
+    if (showReproj) drawTrailLayer(ctx, reprojByFrame, W, toCanvas, ramp, shade.amount);
+    if (showUser || showPredicted) drawTrailLayer(ctx, twoDByFrame, W, toCanvas, ramp, shade.amount);
+    ctx.restore();
+}
+
+// One set of trails (2D or reprojections). `byFrame[k]` maps a track/animal key
+// to its entry at window frame k (0 = current).
+function drawTrailLayer(ctx, byFrame, W, toCanvas, ramp, shadeAmount) {
+    var keys = new Set();
+    byFrame.forEach(function (m) { m.forEach(function (_v, key) { keys.add(key); }); });
+    keys.forEach(function (key) {
+        // Historical, shaded and aged color per window frame for this key
+        // (reused across nodes), and the width of the segment ending there: its
+        // layer's edge weight, tapered with age. The floor keeps an old segment
+        // visible, but never above the edge width itself. null / 0 where the
+        // key is absent in that frame.
         var colAtK = [], widthAtK = [];
         var sample = null;
         for (var k = 0; k < W; k++) {
-            var inst = byFrame[k].get(tk);
-            if (inst && !sample) sample = inst;
-            colAtK.push(inst
-                ? shadeTrailHex(getInstanceColor(inst, session, viewName, colorByIdentity, windowIdx[k]), shade.amount, stepAge[k])
-                : null);
-            var edge = inst && inst.type === 'predicted' ? predictedWidth : userWidth;
-            widthAtK.push(inst ? Math.max(Math.min(0.8, edge), edge * stepTaper[k]) : 0);
+            var e = byFrame[k].get(key);
+            if (e && !sample) sample = e.inst;
+            colAtK.push(e ? shadeTrailHex(e.color, shadeAmount, ramp.age[k]) : null);
+            widthAtK.push(e ? Math.max(Math.min(0.8, e.width), e.width * ramp.taper[k]) : 0);
         }
         if (!sample || sample.numNodes === 0) return;
         var N = sample.numNodes;
@@ -2204,10 +2264,11 @@ export function drawNodeTrails(ctx, viewName, session, frameIdx, options) {
         // each point is transformed once rather than once per segment end.
         var pts = new Float64Array(W * N * 2);
         for (var kp = 0; kp < W; kp++) {
-            var ik = byFrame[kp].get(tk);
+            var ek = byFrame[kp].get(key);
+            var ik = ek ? ek.inst : null;
             for (var np = 0; np < N; np++) {
                 var o = (kp * N + np) * 2;
-                if (ik && ik.hasPoint(np)) {
+                if (ik && np < ik.numNodes && ik.hasPoint(np)) {
                     var c = toCanvas(ik.getX(np), ik.getY(np));
                     pts[o] = c.x; pts[o + 1] = c.y;
                 } else {
@@ -2233,13 +2294,90 @@ export function drawNodeTrails(ctx, viewName, session, frameIdx, options) {
                 ctx.lineTo(pts[b], pts[b + 1]);
             }
             if (!started) continue;
-            ctx.globalAlpha = stepAlpha[k2];
+            ctx.globalAlpha = ramp.alpha[k2];
             ctx.strokeStyle = colAtK[k2];
             ctx.lineWidth = widthAtK[k2];
             ctx.stroke();
         }
     });
-    ctx.restore();
+}
+
+/**
+ * Which 3D animal an InstanceGroup is, so its reprojection trail can follow it
+ * from frame to frame (each frame has its own group objects). Its per-frame
+ * identity, resolved the way `getGroupColor` does — this view's member first,
+ * else every member — then the identity assigned to the group; failing both
+ * (never tracked), a member's track on this view, else on another. null when
+ * the group has no member with a track and no identity.
+ */
+export function groupTrailKey(group, session, viewName, frameIdx) {
+    var cands = [];
+    if (group.instances && group.instances.has(viewName)) {
+        var own = group.instances.get(viewName);
+        if (own && own.trackIdx != null) cands.push([viewName, own.trackIdx]);
+    } else if (group.instances) {
+        for (var [cam, inst] of group.instances) {
+            if (inst && inst.trackIdx != null) cands.push([cam, inst.trackIdx]);
+        }
+    }
+    if (session && session.getIdentityForTrack) {
+        for (var i = 0; i < cands.length; i++) {
+            var ident = session.getIdentityForTrack(cands[i][1], cands[i][0], frameIdx);
+            if (ident && ident.id != null) return 'i' + ident.id;
+        }
+    }
+    if (group.identityId != null && group.identityId >= 0) return 'i' + group.identityId;
+    return cands.length ? 't' + cands[0][0] + ':' + cands[0][1] : null;
+}
+
+/**
+ * A group's reprojection into `viewName`, as the reprojection skeleton draws
+ * it: the cached reprojected Instance, else the cached raw reprojection
+ * (`group.reprojections`), else — on a frame nothing has drawn since its caches
+ * were dropped (Triangulate All's sweep, lazy eviction) — its 3D points
+ * projected through `camera` with the lens distortion, which is what
+ * `reprojectPointsCamera` (pose/triangulation-core.js) computes. Read-only: it
+ * never writes those caches, which other code reads as "this frame was
+ * triangulated" (the info panel, the error vectors). null when there is
+ * nothing to project.
+ * @returns {{numNodes:number, hasPoint:function, getX:function, getY:function}|null}
+ */
+export function groupReprojection(group, viewName, camera) {
+    if (group.reprojectedInstances && group.reprojectedInstances.size > 0 && group.getReprojectedInstance) {
+        var ri = group.getReprojectedInstance(viewName);
+        if (ri) return ri;
+    }
+    var xy;
+    var raw = group.reprojections ? group.reprojections[viewName] : null;
+    if (raw && raw.length) {
+        xy = new Float64Array(raw.length * 2);
+        for (var i = 0; i < raw.length; i++) {
+            var p = raw[i];
+            xy[2 * i] = p ? p[0] : NaN;
+            xy[2 * i + 1] = p ? p[1] : NaN;
+        }
+    } else {
+        var p3 = group.points3d;
+        var n = p3 ? (p3.length / 3) | 0 : 0;
+        if (!n || !camera || !camera.project) return null;
+        xy = new Float64Array(n * 2);
+        var any = false, q = [0, 0, 0];
+        for (var j = 0; j < n; j++) {
+            q[0] = p3[3 * j]; q[1] = p3[3 * j + 1]; q[2] = p3[3 * j + 2];
+            if (!(isFinite(q[0]) && isFinite(q[1]) && isFinite(q[2]))) { xy[2 * j] = NaN; xy[2 * j + 1] = NaN; continue; }
+            var uv = camera.project(q);
+            if (camera.distortPoint) uv = camera.distortPoint(uv);
+            xy[2 * j] = uv[0]; xy[2 * j + 1] = uv[1];
+            any = true;
+        }
+        if (!any) return null;
+    }
+    return {
+        numNodes: xy.length >> 1,
+        hasPoint: function (k) { return xy[2 * k] === xy[2 * k] && xy[2 * k + 1] === xy[2 * k + 1]; },
+        getX: function (k) { return xy[2 * k]; },
+        getY: function (k) { return xy[2 * k + 1]; },
+    };
 }
 
 /**
@@ -2351,11 +2489,16 @@ export function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, ses
     ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
 
     // 1b. Node trails (issue #102) — behind everything, so live skeletons draw
-    // on top. Uses the real `session.frameGroups` to walk loaded history.
+    // on top. Uses the real `session.frameGroups` to walk loaded history. Each
+    // displayed layer has trails — User, Predictions, Reprojections — and only a
+    // displayed one, so a trail always ends on a skeleton that is on screen.
     if (options.trailLength > 0 && session) {
         drawNodeTrails(ctx, viewName, session, _frameIdx, {
             trailLength: options.trailLength,
             trailShade: options.trailShade,
+            trailUser: showUser,
+            trailPredicted: showPredicted,
+            trailReprojected: showReprojected,
             colorByIdentity: colorByIdentity,
             videoWidth: videoW,
             videoHeight: videoH,
@@ -2364,6 +2507,8 @@ export function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, ses
             nodeSize: (userOpts && userOpts.nodeSize) || 3,
             lineWidth: (userOpts && userOpts.lineWidth) || 2,
             predictedLineWidth: (predictedOpts && predictedOpts.lineWidth) || 2,
+            reprojLineWidth: (reprojOpts && reprojOpts.lineWidth) || 2,
+            reprojBrightness: reprojOpts && reprojOpts.brightness != null ? reprojOpts.brightness : 0.5,
         });
     }
 
