@@ -59,6 +59,7 @@ import { showAlignViewsModal } from './view-align-modal.js';
 import { onColorByChange, setColorByIdentity } from './color-by.js';
 import { TRAIL_PRESETS, MAX_TRAIL_FRAMES, trailPresetFor, trailLabel, trailFrames, trailRate,
          formatTrailSeconds, trailSecondsForFrames, parseTrailSeconds, parseTrailFrames } from './trail-presets.js';
+import { TRAIL_SHADES, TRACK_COLORS, trailShadeFor, trailColor } from './overlays.js';
 import { installSeekbarTooltip } from './seekbar-tooltip.js';
 import { showReadoutFrame, refreshReadoutTotals } from './frame-readout.js';
 import { installSeekbarMarkers, seekbarMarkerAt, describeSwitchMarker, setSeekbarMarkerFrames } from './seekbar-markers.js';
@@ -981,12 +982,24 @@ export function setupMenus() {
     // buttons), so the only wiring it needs is its items. That is also why a
     // custom length is typed into a dialog rather than into the menu: a field
     // in a hover menu closes under the user the moment the pointer drifts.
+    // Both menus also carry the trail's SHADE (TRAIL_SHADES, ui/overlays.js), a
+    // second choice below the lengths: how much darker or lighter than its
+    // track a trail is drawn, so the skeleton on the current frame stands out
+    // from the history behind it. Unlike the length it is remembered in
+    // localStorage — display taste, like the Visibility panel's appearance
+    // prefs, so it never reaches the .slp.
     var trailsBtn = document.getElementById('tbTrails');
     var trailsDropdown = document.getElementById('trailsDropdown');
     var trailsMenu = document.getElementById('trailsMenu');
     var trailsParent = document.getElementById('menuTrailsParent');
     var trailsSubmenu = document.getElementById('menuTrailsSubmenu');
     var trailItems = [];    // { preset, el } for both menus; preset null = Custom…
+    var shadeItems = [];    // { shade, el } for both menus
+    var TRAIL_SHADE_STORAGE_KEY = 'nodeTrailShade';
+    try {
+        var storedShade = localStorage.getItem(TRAIL_SHADE_STORAGE_KEY);
+        if (trailShadeFor(storedShade)) state.trailShade = storedShade;
+    } catch (e) { /* storage unavailable: keep the default */ }
     function updateTrailChecks() {
         // A length no preset matches is custom — typed, or set in frames
         // (state.trailLength = n).
@@ -997,6 +1010,11 @@ export function setupMenus() {
             it.el.querySelector('.trail-label').textContent = it.preset
                 ? trailLabel(it.preset.seconds, state.fps)
                 : (custom ? 'Custom: ' + trailLabel(state.trailSeconds, state.fps) + '…' : 'Custom…');
+            it.el.setAttribute('aria-checked', on ? 'true' : 'false');
+        });
+        shadeItems.forEach(function (it) {
+            var on = state.trailShade === it.shade.key;
+            it.el.querySelector('.trail-check').textContent = on ? '✓' : '';
             it.el.setAttribute('aria-checked', on ? 'true' : 'false');
         });
         // The label is a bare "Trails ▾" to save toolbar width; the current
@@ -1015,8 +1033,31 @@ export function setupMenus() {
         drawAllOverlays(state.currentFrame);
         setStatus(seconds > 0 ? ('Node trails: ' + trailLabel(seconds, state.fps)) : 'Node trails off', 'success');
     }
+    function setTrailShade(key) {
+        state.trailShade = key;
+        try { localStorage.setItem(TRAIL_SHADE_STORAGE_KEY, key); } catch (e) { /* not remembered */ }
+        updateTrailChecks();
+        drawAllOverlays(state.currentFrame);
+        setStatus('Node trail shade: ' + trailShadeFor(key).name +
+            (state.trailSeconds > 0 ? '' : ' (trails are off)'), 'success');
+    }
+    // A titled radio group: "Length" or "Shade". The heading is a label, not
+    // an item — the group's aria-label carries it for assistive tech.
+    function addTrailGroup(menu, heading, ariaLabel) {
+        var h = document.createElement('div');
+        h.className = 'trail-menu-heading';
+        h.setAttribute('aria-hidden', 'true');
+        h.textContent = heading;
+        menu.appendChild(h);
+        var group = document.createElement('div');
+        group.setAttribute('role', 'group');
+        group.setAttribute('aria-label', ariaLabel);
+        menu.appendChild(group);
+        return group;
+    }
     function addTrailItems(menu, className, idPrefix, onPick) {
         if (!menu) return;
+        var lengths = addTrailGroup(menu, 'Length', 'Trail length');
         TRAIL_PRESETS.concat([null]).forEach(function (p) {
             var item = document.createElement('div');
             item.className = className;
@@ -1030,8 +1071,36 @@ export function setupMenus() {
                 if (p) setTrailSeconds(p.seconds);
                 else showCustomTrailModal();
             });
-            menu.appendChild(item);
+            lengths.appendChild(item);
             trailItems.push({ preset: p, el: item });
+        });
+        var sep = document.createElement('div');
+        sep.className = 'menu-separator';
+        sep.setAttribute('role', 'separator');
+        menu.appendChild(sep);
+        // Each shade shows a sample: a stretch of track color (the skeleton on
+        // the current frame) running into the trail drawn in that shade, from
+        // its newest segment to its oldest — the contrast this choice is about.
+        var sample = TRACK_COLORS[0];
+        var shades = addTrailGroup(menu, 'Shade', 'Trail shade');
+        TRAIL_SHADES.forEach(function (shade) {
+            var item = document.createElement('div');
+            item.className = className;
+            if (idPrefix) item.id = idPrefix + 'Shade' + shade.key.charAt(0).toUpperCase() + shade.key.slice(1);
+            item.setAttribute('role', 'menuitemradio');
+            item.setAttribute('data-trail-shade', shade.key);
+            item.innerHTML = '<span><span class="trail-check"></span><span class="trail-label"></span></span>' +
+                '<span class="trail-shade-swatch" aria-hidden="true"></span>';
+            item.querySelector('.trail-label').textContent = shade.name;
+            item.querySelector('.trail-shade-swatch').style.background =
+                'linear-gradient(to right, ' + sample + ' 30%, ' + trailColor(sample, shade.key, 0) +
+                ' 30%, ' + trailColor(sample, shade.key, 1) + ')';
+            item.addEventListener('click', function () {
+                onPick();
+                setTrailShade(shade.key);
+            });
+            shades.appendChild(item);
+            shadeItems.push({ shade: shade, el: item });
         });
     }
     addTrailItems(trailsMenu, 'tri-dropdown-item', '', function () {});

@@ -2035,6 +2035,64 @@ export function drawUnlinkedInstances(ctx, unlinkedInstances, skeleton, options)
  * @param {number[]}    [options.assignmentSelectedIds]  - IDs of unlinked instances selected for assignment
  * @param {boolean}     [options.assignmentMode]         - Whether assignment mode is active
  */
+/**
+ * Node-trail shades — how far a trail's color departs from its track's, so the
+ * skeleton on the current frame stands apart from the history behind it (SLEAP
+ * 1.4's View ▸ Trail Shade: Dark ×0.6 / Normal / Light). Picked from the Tracks
+ * ▸ Node Trails submenu or the toolbar's Trails button, and in the overlay-video
+ * export. `amount` < 0 darkens (the RGB channels are scaled by 1 + amount,
+ * SLEAP's multiply), > 0 lightens by blending toward white — SLEAP's ×1.25 does
+ * nothing to a channel already at 255, which is most of TRACK_COLORS. 'normal'
+ * is the track's own color, the look trails had before shades existed.
+ */
+export const TRAIL_SHADES = [
+    { key: 'veryDark', name: 'Very dark', amount: -0.65 },
+    { key: 'dark', name: 'Dark', amount: -0.4 },
+    { key: 'normal', name: 'Normal', amount: 0 },
+    { key: 'light', name: 'Light', amount: 0.4 },
+    { key: 'veryLight', name: 'Very light', amount: 0.7 },
+];
+
+/**
+ * The shade a trail is drawn in until the user picks another — and for a
+ * missing or unknown key. Dark: at Normal the newest segment is the track's own
+ * color, so it reads as part of the current skeleton.
+ */
+export const DEFAULT_TRAIL_SHADE = 'dark';
+
+/** The TRAIL_SHADES entry named `key`, or null. */
+export function trailShadeFor(key) {
+    for (var i = 0; i < TRAIL_SHADES.length; i++) {
+        if (TRAIL_SHADES[i].key === key) return TRAIL_SHADES[i];
+    }
+    return null;
+}
+
+// How much further an old trail segment moves than the newest one: at the far
+// end, a dark or normal trail is darkened by up to this much more and a light
+// one blended this much further toward white.
+var TRAIL_AGE_SHIFT = 0.45;
+
+function shadeTrailHex(hex, amount, age) {
+    if (amount > 0) return brightenColor(hex, amount + (1 - amount) * TRAIL_AGE_SHIFT * age);
+    return adjustColorBrightness(hex, (1 + amount) * (1 - TRAIL_AGE_SHIFT * age));
+}
+
+/**
+ * A trail segment's color: the track color `hex` in shade `shadeKey`, moved
+ * further the same way with `age` (0 = the newest segment, toward 1 = the
+ * oldest), so a trail never fades back toward the track's own color. An
+ * unknown `shadeKey` is DEFAULT_TRAIL_SHADE.
+ * @param {string} hex - '#rrggbb'
+ * @param {string} shadeKey - a TRAIL_SHADES key
+ * @param {number} [age] - 0..1, default 0
+ * @returns {string} '#rrggbb'
+ */
+export function trailColor(hex, shadeKey, age) {
+    var shade = trailShadeFor(shadeKey) || trailShadeFor(DEFAULT_TRAIL_SHADE);
+    return shadeTrailHex(hex, shade.amount, age || 0);
+}
+
 // All instances visible in `viewName` at a frame, LINKED and UNLINKED. Trails must
 // cover unlinked instances: identities are inspected BEFORE cross-view linking, so
 // pre-link (ungrouped) detections need trails too. Unlinked entries wrap the real
@@ -2064,9 +2122,12 @@ function trailViewInstances(fg, viewName) {
 // appears anywhere in the window — including tracks that have already VANISHED
 // from the current frame, so a track's trail lingers and fades out over the window
 // instead of disappearing the instant its instance is gone. Each node's positions
-// join into a polyline that, toward the past, thins, fades, and darkens; each
-// segment is colored by the instance's color AT that frame, so an identity/color
-// switch shows up as a color change along the trail.
+// join into a polyline that, toward the past, thins and fades; each segment is
+// colored by the instance's color AT that frame, so an identity/color switch
+// shows up as a color change along the trail. That color is drawn in
+// `options.trailShade` (a TRAIL_SHADES key, default DEFAULT_TRAIL_SHADE) and
+// moves further from the track's color with age — darker, or for a light shade
+// lighter (`trailColor`).
 export function drawNodeTrails(ctx, viewName, session, frameIdx, options) {
     options = options || {};
     var trailLength = options.trailLength || 0;
@@ -2098,29 +2159,32 @@ export function drawNodeTrails(ctx, viewName, session, frameIdx, options) {
     // Trails are thicker than the skeleton edges by default so they read at a glance.
     var baseWidth = (options.lineWidth != null ? options.lineWidth : 2) * 2;
 
+    var shade = trailShadeFor(options.trailShade) || trailShadeFor(DEFAULT_TRAIL_SHADE);
+
     // Style ramp per window index (0 = current). Older → thinner, more
-    // transparent, slightly darker. `t` runs 1 (near) → ~0 (far).
-    var stepAlpha = [], stepWidth = [], stepBright = [];
+    // transparent, and further from the track's color (`trailColor`). `t` runs
+    // 1 (near) → ~0 (far).
+    var stepAlpha = [], stepWidth = [], stepAge = [];
     for (var k0 = 0; k0 < W; k0++) {
         var t0 = 1 - k0 / (W + 1);
         stepAlpha.push(Math.max(0.1, 0.9 * t0));
         stepWidth.push(Math.max(0.8, baseWidth * t0));
-        stepBright.push(0.55 + 0.45 * t0);   // 1.0 near → 0.55 far (V in HSV)
+        stepAge.push(1 - t0);
     }
 
     ctx.save();
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
     tracks.forEach(function (tk) {
-        // Historical, age-darkened color per window frame for this track (reused
-        // across nodes). null where the track is absent in that frame.
+        // Historical, shaded and aged color per window frame for this track
+        // (reused across nodes). null where the track is absent in that frame.
         var colAtK = [];
         var sample = null;
         for (var k = 0; k < W; k++) {
             var inst = byFrame[k].get(tk);
             if (inst && !sample) sample = inst;
             colAtK.push(inst
-                ? adjustColorBrightness(getInstanceColor(inst, session, viewName, colorByIdentity, windowIdx[k]), stepBright[k])
+                ? shadeTrailHex(getInstanceColor(inst, session, viewName, colorByIdentity, windowIdx[k]), shade.amount, stepAge[k])
                 : null);
         }
         if (!sample || sample.numNodes === 0) return;
@@ -2281,6 +2345,7 @@ export function drawFrameOverlays(ctx, viewName, frameGroup, instanceGroups, ses
     if (options.trailLength > 0 && session) {
         drawNodeTrails(ctx, viewName, session, _frameIdx, {
             trailLength: options.trailLength,
+            trailShade: options.trailShade,
             colorByIdentity: colorByIdentity,
             videoWidth: videoW,
             videoHeight: videoH,

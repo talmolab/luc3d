@@ -10,7 +10,10 @@
  * PRESENT frames (sparse-aware, not contiguous frameIdx-1..N); past instances are
  * matched by trackIdx; one polyline segment per node per available past frame;
  * missing history / null trackIdx draw nothing without crashing; on a LAZY
- * project a non-resident frame ends the window instead of being skipped.
+ * project a non-resident frame ends the window instead of being skipped; the
+ * trail SHADE orders Very dark < Dark < Normal < Light < Very light on every
+ * palette color, drawn strokes follow it (Dark when none is given), and Normal
+ * is the pre-shade look.
  *
  * Segments are counted as moveTo/lineTo pairs, NOT stroke() calls: segments of
  * the same age share one path and one stroke (one per track per age step), so
@@ -197,6 +200,71 @@ ok(ctx.segments === 0, 'lazy: no trail segment joins the frame to the pre-jump w
 ctx = mockCtx();
 ov.drawNodeTrails(ctx, 'camA', sessionOf(jumpFG), 3000, Object.assign({ trailLength: 10 }, GEO));
 ok(ctx.segments === 4, 'eager (sparse) project still joins the last present frames, got ' + ctx.segments);
+
+// 12. Trail SHADE — how much darker or lighter than its track a trail is drawn,
+// so the skeleton on the current frame stands apart from its history (SLEAP's
+// View ▸ Trail Shade). Default Dark.
+const lum = (hex) => {
+    const n = parseInt(hex.slice(1), 16);
+    return 0.2126 * (n >> 16) + 0.7152 * ((n >> 8) & 255) + 0.0722 * (n & 255);
+};
+const keys = ov.TRAIL_SHADES.map(s => s.key);
+ok(JSON.stringify(keys) === '["veryDark","dark","normal","light","veryLight"]',
+   'five shades, darkest first: ' + keys.join(', '));
+ok(ov.TRAIL_SHADES.every((s, i, a) => i === 0 || s.amount > a[i - 1].amount), 'ordered dark → light');
+ok(ov.DEFAULT_TRAIL_SHADE === 'dark' && ov.trailShadeFor('dark').name === 'Dark', 'the default is Dark');
+ok(ov.trailShadeFor('nope') === null && ov.trailShadeFor(undefined) === null, 'trailShadeFor is strict');
+ok(ov.trailColor('#ff6b6b', 'normal', 0) === '#ff6b6b', 'Normal, newest segment = the track color');
+ok(ov.trailColor('#ff6b6b', 'dark', 0) === '#994040', 'Dark = SLEAP\'s ×0.6 (got ' + ov.trailColor('#ff6b6b', 'dark', 0) + ')');
+ok(ov.trailColor('#ff6b6b', 'light', 0) === '#ffa6a6',
+   'Light blends toward white — a ×1.25 would leave the 255 channel, and a saturated color, as is (got ' + ov.trailColor('#ff6b6b', 'light', 0) + ')');
+ok(ov.trailColor('#ff6b6b', 'nope', 0) === ov.trailColor('#ff6b6b', 'dark', 0) &&
+   ov.trailColor('#ff6b6b', undefined, 0) === ov.trailColor('#ff6b6b', 'dark', 0), 'an unknown or missing shade is Dark');
+// For EVERY palette color, at both ends of a trail: each step of the scale is
+// strictly brighter than the last, the dark shades are darker than the track
+// and the light ones lighter — and age moves further the same way, never
+// back toward the track's own color.
+let ordered = true, sided = true, aged = true;
+const orderFails = [];
+for (const c of ov.TRACK_COLORS) {
+    for (const age of [0, 0.5, 0.95]) {
+        const ls = keys.map(k => lum(ov.trailColor(c, k, age)));
+        if (!ls.every((v, i) => i === 0 || v > ls[i - 1])) { ordered = false; orderFails.push(c + '@' + age); }
+    }
+    for (const s of ov.TRAIL_SHADES) {
+        const near = lum(ov.trailColor(c, s.key, 0)), far = lum(ov.trailColor(c, s.key, 0.95));
+        if (s.amount < 0 && !(near < lum(c))) sided = false;
+        if (s.amount > 0 && !(near > lum(c))) sided = false;
+        if (s.amount > 0 ? !(far > near) : !(far < near)) aged = false;
+    }
+}
+ok(ordered, 'every palette color: Very dark < Dark < Normal < Light < Very light' + (orderFails.length ? ' (fails ' + orderFails.join(', ') + ')' : ''));
+ok(sided, 'every palette color: dark shades below the track color, light shades above it');
+ok(aged, 'every palette color: older segments move further from the track color, in the shade\'s direction');
+
+// drawNodeTrails strokes in the shade it is given, Dark when it is given none.
+// Track 7 over frames 8..10 → two age steps; window W = 3.
+const trackHex = ov.getTrackColor(7);
+const strokeColors = (shadeOpt) => {
+    const c = mockCtx();
+    ov.drawNodeTrails(c, 'camA', sLinked, 10, Object.assign({ trailLength: 5 }, shadeOpt, GEO));
+    return c.calls.colors.map(x => x.toLowerCase());
+};
+const ages = [1 / 4, 2 / 4];   // k / (W + 1) for the two age steps k = 1, 2
+const expect = (key) => ages.map(a => ov.trailColor(trackHex, key, a));
+ok(JSON.stringify(strokeColors({})) === JSON.stringify(expect('dark')),
+   'no trailShade → Dark: ' + strokeColors({}).join(',') + ' vs ' + expect('dark').join(','));
+for (const key of keys) {
+    ok(JSON.stringify(strokeColors({ trailShade: key })) === JSON.stringify(expect(key)),
+       'trailShade "' + key + '" strokes ' + expect(key).join(','));
+}
+ok(strokeColors({ trailShade: 'light' }).every(h => lum(h) > lum(trackHex)) &&
+   strokeColors({ trailShade: 'dark' }).every(h => lum(h) < lum(trackHex)),
+   'drawn: a Light trail is lighter than its track, a Dark one darker');
+// Normal reproduces the look trails had before shades: V scaled 1.0 → 0.55.
+const legacy = [1, 2].map(k => ov.adjustColorBrightness(trackHex, 0.55 + 0.45 * (1 - k / 4)));
+ok(JSON.stringify(strokeColors({ trailShade: 'normal' })) === JSON.stringify(legacy),
+   'Normal = the pre-shade trail colors ' + legacy.join(','));
 
 console.log(`\n${failed === 0 ? '✓ PASS' : '✗ FAIL'} — ${passed} passed, ${failed} failed`);
 if (failed > 0) { console.error('\nFailures:\n - ' + failures.join('\n - ')); process.exit(1); }
