@@ -1390,7 +1390,8 @@ do) or the container resizable — not scrollable twice.
 annotation, which in the mode is a selection the user can no longer see or
 change. The **visibility** controls (User / Predictions / Reprojections / Errors),
 Sessions, Tracks / Identity and the Panel toggle stay live: they change what is DRAWN, not what
-is annotated. Adding a button to that lock means adding its id to
+is annotated. So does the Track group's **Animals** field — a setting a run reads,
+not an action. Adding a button to that lock means adding its id to
 `PLANE_LOCKED_TOOLBAR_IDS`; if it opens a menu, its wrapper also needs
 `PLANE_LOCKED_DROPDOWN_IDS` (a `.tri-dropdown` menu opens on hover and its
 items are `div`s, so `disabled` on the button reaches neither).

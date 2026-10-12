@@ -1015,7 +1015,6 @@ body {
 .toolbar {
   display: flex;
   align-items: center;
-  gap: 4px;
   height: var(--toolbar-height);
   padding: 0 8px;
   background: var(--bg-secondary);
@@ -1029,7 +1028,10 @@ body {
 /* Each group's right border is the ONE divider between groups. There used to
    be a `.toolbar-separator` line beside it as well, which drew every boundary
    twice and cost ~13px apiece — enough to push the panel toggles off a 1440px
-   window once the labels were spelled out. */
+   window once the labels were spelled out. The `.toolbar`'s 4px flex gap was
+   that separator's spacing and outlived it, setting every divider 4px off
+   centre; it is gone too, so the padding below is the whole space either side
+   of a divider (and the 24px went to the Track group's Animals field). */
 .toolbar-group {
   display: flex;
   align-items: center;
@@ -1079,6 +1081,42 @@ body {
 .toolbar-btn.active {
   background: var(--accent-dim);
   color: var(--accent);
+}
+
+/* A labelled value in the toolbar — the Track group's Animals field. Sized to
+   the checkbox labels' 11px and kept narrow: the whole toolbar has to fit a
+   1440px window (tests/e2e/toolbar-3d-toggle-button.mjs §7), and one or two
+   digits or the "auto" placeholder is all it ever holds. */
+.toolbar-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.toolbar-field input {
+  width: 26px;
+  height: 22px;
+  padding: 0 1px;
+  border: 1px solid var(--border-light);
+  border-radius: 4px;
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 11px;
+  text-align: center;
+}
+
+.toolbar-field input::placeholder {
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+.toolbar-field input:focus {
+  outline: none;
+  border-color: var(--accent);
 }
 
 /* The two panel-visibility toggles (3D viewer + info panel) sit together at
@@ -1232,9 +1270,14 @@ body {
 }
 
 /* The toolbar's Trails menu (ui/ui-wiring.js): narrower, with a checkmark
-   column like Tracks ▸ Node Trails. */
+   column like Tracks ▸ Node Trails. Hung from the button's RIGHT edge: Trails
+   is the last control before the panel toggles, and a menu opening rightwards
+   from it ran past the window edge at 1440px — even closed, as scroll overflow
+   on the toolbar. */
 #trailsMenu {
   min-width: 120px;
+  left: auto;
+  right: 0;
 }
 
 .tri-dropdown-item .trail-check {
@@ -3949,7 +3992,7 @@ kbd {
 /* Toolbar checkboxes */
 .toolbar-checkboxes {
     font-size: 11px;
-    gap: 8px;
+    gap: 6px;
     color: var(--text-secondary);
     align-items: center;
 }

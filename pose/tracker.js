@@ -788,8 +788,15 @@ function setNullNodesStatus(n) {
     }
 }
 
-// Tracker state: number of animals (null = unconstrained)
+// Tracker state: number of animals (null = auto-detect)
 var trackerNumAnimals = null;
+// Whether the user has given an answer at all. A blank answer (auto-detect) is
+// one too, so it must not bring the prompt back on every run — the toolbar's
+// Animals field shows "auto" and is where it gets changed afterwards.
+var trackerNumAnimalsAnswered = false;
+// Told when the count changes, so the toolbar field follows the prompt and the
+// Track Frame Range dialog. A listener that throws must not stop the others.
+var _numAnimalsListeners = [];
 
 // Auto-detect cap: the largest instance count seen in any (camera, frame)
 // pair across the session. Without a cap, leftover groups that survive
@@ -827,7 +834,7 @@ function computeMaxInstancesPerView(session) {
         console.warn('[tracker] auto-detected ' + max + ' animals per view from ' +
             resident.toLocaleString() + ' resident frame(s) of ' + total.toLocaleString() +
             '. If that is lower than the real animal count, set it explicitly ' +
-            '(Track ▸ number of animals) before running Track All.');
+            '(the Animals field beside Track All) before running Track All.');
     }
     return max;
 }
@@ -837,33 +844,50 @@ function promptNumAnimals() {
     if (input === null) return false;  // cancelled
     input = input.trim();
     if (input === '') {
-        trackerNumAnimals = null;
+        setTrackerNumAnimals(null);
     } else {
         var n = parseInt(input);
         if (isNaN(n) || n < 1) {
             setStatus('Invalid number', 'error');
             return false;
         }
-        trackerNumAnimals = n;
+        setTrackerNumAnimals(n);
     }
     return true;
 }
 
 /**
  * The user's animal count, or null for "auto-detect from the resident sample".
- * Exported so the Track Frame Range modal can show the current value and set it
- * inline instead of stacking a native `prompt()` on top of a modal dialog.
+ * Read by the toolbar's Animals field and the Track Frame Range modal, which
+ * show the current value and set it inline — the modal so a native `prompt()`
+ * never stacks on top of it.
  * @returns {number|null}
  */
 export function getTrackerNumAnimals() { return trackerNumAnimals; }
 
 /**
  * Set the animal count used as `maxTargets` by every tracking entry point.
+ * Counts as the user's answer, so Track Frame / Track All stop prompting —
+ * including for null, which is an explicit auto-detect.
  * @param {number|null} n  A positive integer, or null/NaN for auto-detect.
  */
 export function setTrackerNumAnimals(n) {
+    var prev = trackerNumAnimals;
     trackerNumAnimals = (typeof n === 'number' && isFinite(n) && n >= 1)
         ? Math.floor(n) : null;
+    trackerNumAnimalsAnswered = true;
+    if (trackerNumAnimals === prev) return;
+    for (var i = 0; i < _numAnimalsListeners.length; i++) {
+        try { _numAnimalsListeners[i](trackerNumAnimals); } catch (e) { /* ignore */ }
+    }
+}
+
+/**
+ * Call `fn(count)` whenever the animal count changes (`count` null = auto).
+ * @param {(count: number|null) => void} fn
+ */
+export function onTrackerNumAnimalsChange(fn) {
+    if (typeof fn === 'function') _numAnimalsListeners.push(fn);
 }
 
 // ============================================
@@ -1115,7 +1139,7 @@ export function trackCurrentFrame() {
     }
 
     // Prompt for number of animals on first use
-    if (trackerNumAnimals == null) {
+    if (!trackerNumAnimalsAnswered) {
         if (!promptNumAnimals()) return;
     }
 
@@ -1323,7 +1347,7 @@ async function runTrackingPass(range) {
     // Prompt for number of animals. Track Frame Range collects it in its own
     // modal (blank there is an explicit "auto-detect"), so it never stacks a
     // native prompt() on top of the dialog the user just filled in.
-    if (!isRange && trackerNumAnimals == null) {
+    if (!isRange && !trackerNumAnimalsAnswered) {
         if (!promptNumAnimals()) return bail;
     }
 

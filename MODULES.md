@@ -2067,8 +2067,9 @@ no `points3d` are skipped) and show the total in the bottom-left status bar
 node weights change which instances get grouped (not which nodes triangulate),
 this is the headline metric for comparing weight settings.
 
-**Auto-cap.** When the user leaves the "Number of animals" prompt empty,
-`trackAll` / `trackCurrentFrame` resolve `numAnimals` via
+**Auto-cap.** When the animal count is blank (the prompt answered empty, or
+the toolbar's Animals field cleared), `trackAll` / `trackCurrentFrame` resolve
+`numAnimals` via
 `computeMaxInstancesPerView(session)` — the largest instance count seen
 in any (camera, frame) pair across the session — instead of leaving it
 null. Without the cap, leftover groups that survive reorder (after Fix
@@ -2084,6 +2085,16 @@ drifts upward (e.g., 4 → 11 on the test fixture).
   undefined `CrossViewTracker` — latent bug, see comment in source).
 - `trackAll()` — toolbar "Track All" handler — runs `matchFrameInstances`
   across every frame with temporal continuity signals.
+- `getTrackerNumAnimals()` / `setTrackerNumAnimals(n)` /
+  `onTrackerNumAnimalsChange(fn)` — the animal count every tracking run uses
+  (`null` = auto-detect). Not saved in the project, so a reload clears it. The
+  native `promptNumAnimals()` fires only while the user has given **no answer
+  at all** (`trackerNumAnimalsAnswered`), not while the count is null: a blank
+  answer is an explicit auto-detect, and gating on null re-prompted on every
+  Track Frame / Track All after one. `setTrackerNumAnimals` counts as an
+  answer, null included, and notifies the listeners when the value changes —
+  that is how the toolbar's Animals field (`ui/ui-wiring.js`) follows the
+  prompt and the Track Frame Range dialog.
 
 **Imports from project modules.**
 - `./pose-data.js` — `InstanceGroup`, `points3dNodeCount`, `hasPoint3d`,
@@ -2275,7 +2286,8 @@ reversed; a non-integer endpoint is refused outright, because every comparison
 against `NaN` is false and it would otherwise sail past the ordering check and
 sweep nothing while reporting a `NaN` range. Like Track All, a range run does NOT propagate to tracks.
 `getTrackerNumAnimals` / `setTrackerNumAnimals` expose the animal count so the
-modal can collect it inline; `runTrackingPass` skips the native `promptNumAnimals()`
+modal can collect it inline (and the toolbar's Animals field then shows what it
+set); `runTrackingPass` skips the native `promptNumAnimals()`
 on the range path so a `prompt()` never stacks on top of the dialog.
 `runTrackingPass` **returns** `{ok, start, end, identities, frames}` — `ok:false`
 for every bail-out, and on success the CLAMPED, normalized span actually swept.
@@ -11054,6 +11066,28 @@ imports the modal. The menu is revealed purely by `:hover`, which is
 worth knowing when driving it from a test: a modal opening over the toolbar
 drops hover, so a second click on the item has to re-hover the button first (see
 `tests/e2e/track-frame-range.mjs`).
+
+**The Animals field (`#tbNumAnimals`, `wireAnimalCountField`).** The animal
+count every tracking run uses, first in the Track group. It used to be visible
+only in `pose/tracker.js`'s first-use `prompt()`, so a user who forgot what they
+typed had no way to find out. Blank is auto-detect (`placeholder="auto"`), as in
+the prompt and the Track Frame Range dialog; it follows the count through
+`onTrackerNumAnimalsChange` whichever of those set it. It commits on `change`
+(Enter or blur), so a half-typed "1" on the way to "12" is never the count;
+Enter blurs (handing the shortcuts back — a number field blocks them all while
+focused, `ui/keyboard-target.js`), Esc reverts and blurs. A bad entry — below 1,
+not a whole number, or text `value` reports as `''` (`validity.badInput`, a
+stray "e") — reverts with an error status rather than being read as blank. It
+sits BEFORE Track Frame, not after Track All, where the label read as "Track All
+Animals". It is not in Defining Plane Mode's toolbar lock: it changes no
+annotation. **Width:** the toolbar must fit a 1440px window
+(`tests/e2e/toolbar-3d-toggle-button.mjs` §7), and before this field there were
+~50px to spare. Its ~72px came from the `.toolbar`'s 4px flex gap (a leftover
+of the removed `.toolbar-separator`, 24px), 2px less between the visibility
+checkboxes, and a compact field (11px label, 26px input). The Trails menu
+(`#trailsMenu`) now hangs from its button's RIGHT edge, because the button moved
+right and the closed menu ran 1px past the window as scroll overflow. Covered by
+`tests/e2e/toolbar-animal-count.mjs`.
 
 **Track / Identity menu modals.** The `Tracks` menu's New / Rename / Delete
 actions for both tracks and identities open shared private modal helpers in
