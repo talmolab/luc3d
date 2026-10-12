@@ -9,7 +9,8 @@
  * animals 0 and 1 meet every 10 s. Asserted:
  *  1. The Track All button runs SLEAP's tracker (one track per animal across all
  *     the input's tracklet breaks), says so, colours by ID, marks the project
- *     dirty, and says the automatic body-size check is not run on one camera
+ *     dirty, turns node trails on at ¼ s (as after a multi-camera Track All),
+ *     and says the automatic body-size check is not run on one camera
  *     (2D size is unreliable there; the menu still runs it — see 3).
  *  2. Track Frame and Track Frame Range refuse on one camera, saying why, and
  *     change nothing.
@@ -101,6 +102,8 @@ try {
     const st1 = await status();
     check(/^Tracked 3 animals across 2,250 frames with SLEAP's tracker/.test(st1) && /now coloring by ID/.test(st1),
         'status names SLEAP\'s tracker and the switch to Color: ID: ' + st1.slice(0, 90));
+    const trails = await page.evaluate(() => window.__lucid.state.trailSeconds);
+    check(trails === 0.25 && /node trails on \(¼ second\)/.test(st1), `node trails turned on at ¼ s, as after a multi-camera Track All (${trails}), and the status says so`);
     check(/ID-switch check \(body size\): not run on one camera/.test(st1) && !/possible switch/.test(st1),
         'the automatic body-size check is not run on one camera, and the status says so');
     check(/ID-switch check \(coat brightness\): skipped — needs the session's videos to be loaded/.test(st1),

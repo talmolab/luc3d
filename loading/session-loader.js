@@ -1168,19 +1168,42 @@ export function fitCanvasesToCells() {
     if (viewport3d) viewport3d.resize();
 }
 
+/**
+ * Re-derive every view's zoom against its current canvas box and
+ * devicePixelRatio: preserves the scale (re-constraining the pan), except that
+ * a view at native resolution gets its 1:1 scale recomputed.
+ */
+export function reapplyAllZoom() {
+    if (!videoController) return;
+    for (var i = 0; i < state.views.length; i++) {
+        videoController.reapplyZoom(state.views[i]);
+    }
+}
+
 export var cellResizeObserver = new ResizeObserver(function (entries) {
     requestAnimationFrame(function () {
         fitCanvasesToCells();
-        // Reapply zoom for all views (preserve scale, re-constrain offsets)
-        if (videoController) {
-            for (var i = 0; i < state.views.length; i++) {
-                videoController.reapplyZoom(state.views[i]);
-            }
-        }
+        reapplyAllZoom();
     });
 });
 
 window.addEventListener('resize', fitCanvasesToCells);
+
+// A view at native resolution shows one video pixel per DEVICE pixel, so its
+// scale depends on devicePixelRatio. Dragging the window to a display with
+// another DPR changes it without resizing anything, so no ResizeObserver
+// fires; re-derive every view's zoom when it changes. (Browser zoom changes
+// DPR too, but that one also resizes the cells.)
+(function watchDevicePixelRatio() {
+    if (typeof window.matchMedia !== 'function') return;
+    var mq = window.matchMedia('(resolution: ' + window.devicePixelRatio + 'dppx)');
+    if (!mq || typeof mq.addEventListener !== 'function') return;
+    mq.addEventListener('change', function onDprChange() {
+        mq.removeEventListener('change', onDprChange);
+        reapplyAllZoom();
+        watchDevicePixelRatio();
+    });
+})();
 
 export function rebuildVideoController() {
     // Detach old interaction handlers

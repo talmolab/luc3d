@@ -30,6 +30,7 @@ import { loadAllLazyFrames, sweepLazyFrameWindows } from './triangulation.js';
 import { drawAllOverlays, showPredictedOnly, PREDICTED_ONLY_NOTE } from '../ui/rendering.js';
 import { updateInfoPanel } from '../ui/info-panel.js';
 import { setColorByIdentity } from '../ui/color-by.js';
+import { setTrailSeconds, trailSecondsName, TRACK_ALL_TRAIL_SECONDS } from '../ui/trail-presets.js';
 import { runIdSwitchChecks, clearIdSwitchResults } from '../ui/id-switch-modal.js';
 import { summarizeTrackedIdentities, describeSwitchCheck } from '../ui/track-summary.js';
 import { showTrackSummaryModal } from '../ui/track-summary-modal.js';
@@ -1504,6 +1505,13 @@ async function runTrackingPass(range) {
         var switchedToIds = lres.numIdentities > 0 && setColorByIdentity(state, true);
         // ...and only the predictions (User, Reproj, Errors off), the layer tracking produced.
         var predOnly = lres.numIdentities > 0 && showPredictedOnly();
+        // ...and, after Track All, node trails at ¼ s if they are off: each
+        // animal's recent path is where an identity switch shows. A length the
+        // user already picked is left alone, and so is a range (a targeted
+        // re-run, inspected on the timeline). Through ui-wiring's handler, so
+        // the Trails menus and button follow.
+        var trailsOn = !isRange && lres.numIdentities > 0 && !(state.trailSeconds > 0) &&
+            setTrailSeconds(state, TRACK_ALL_TRAIL_SECONDS);
         drawAllOverlays(state.currentFrame);
         updateInfoPanel();
         if (timeline) timeline.refreshTracks(state.session, { cap: true });
@@ -1521,6 +1529,7 @@ async function runTrackingPass(range) {
             totalFrameCount + ' frames' +
             (isRange ? ' (' + displayFrame(lo) + '–' + displayFrame(hi) + ')' : '') +
             (switchedToIds ? ', now coloring by Identity' : '') +
+            (trailsOn ? ', node trails on (' + trailSecondsName(TRACK_ALL_TRAIL_SECONDS) + ')' : '') +
             ' — use Tracks ▸ Propagate IDs → Tracks to apply' + (predOnly ? PREDICTED_ONLY_NOTE : '');
         setStatus(doneMsg, 'success');
         // Then check the result for identity switches (ui/id-switch-modal.js): by body
@@ -1634,6 +1643,8 @@ async function runSingleCameraTrackAll(session, bail) {
         session._idSwitchCandidates = res.moments;
         var switchedToIds = res.numIdentities > 0 && setColorByIdentity(state, true);
         var predOnly = res.numIdentities > 0 && showPredictedOnly();
+        // ...and node trails at ¼ s if they are off, as after a multi-camera Track All (runTrackingPass).
+        var trailsOn = res.numIdentities > 0 && !(state.trailSeconds > 0) && setTrailSeconds(state, TRACK_ALL_TRAIL_SECONDS);
         drawAllOverlays(state.currentFrame);
         updateInfoPanel();
         if (timeline) timeline.refreshTracks(state.session, { cap: true });
@@ -1644,7 +1655,8 @@ async function runSingleCameraTrackAll(session, bail) {
             res.frames.toLocaleString() + ' frames with SLEAP\'s tracker (one track per animal)' +
             (res.untracked ? ', ' + res.untracked.toLocaleString() + ' detection' + (res.untracked === 1 ? '' : 's') +
                 ' over the animal count left without a track' : '') +
-            (switchedToIds ? ', now coloring by ID' : '') + (predOnly ? PREDICTED_ONLY_NOTE : '');
+            (switchedToIds ? ', now coloring by ID' : '') +
+            (trailsOn ? ', node trails on (' + trailSecondsName(TRACK_ALL_TRAIL_SECONDS) + ')' : '') + (predOnly ? PREDICTED_ONLY_NOTE : '');
         // The automatic body-size check is NOT run on one camera: a 2D bone length changes with posture
         // and distance from the camera, and on 35 proofread SLAP videos it caught 2 of 59 real swaps at its
         // threshold (encounter AUC 0.55) for 6 false rows. The menu still runs it; images run as usual.
