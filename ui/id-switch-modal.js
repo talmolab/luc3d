@@ -335,6 +335,12 @@ async function runImage(session, rate, inject) {
         return res;
     } catch (e) {
         if (e && e.name === 'AbortError') return { ok: false, reason: 'cancelled', cancelled: true };
+        // A check that cannot run here — no network for the model's first download, no Nose/TTI —
+        // is a reason, like the gates above, not a failure (image-embedder.js `cannotRun`)
+        if (e && e.cannotRun) {
+            if (e.cause) console.warn('[id-switch-check:image] ' + e.message, e.cause);
+            return { ok: false, reason: e.message };
+        }
         throw e;
     } finally {
         clearInterval(ticker); clearInterval(cropTicker);

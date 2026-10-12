@@ -5926,6 +5926,15 @@ kbd {
   display: none;
 }
 
+/* The node tooltip (ui/node-tooltip.js) reuses the ⓘ tip's look. Its text is
+   SLEAP's two lines — the node name, then "(score: 0.94)" — split on "\n".
+   The left stripe is the hovered instance's drawn color (`--node-tip-color`,
+   set per tip), which is what tells overlapping skeletons apart. */
+.node-tip {
+  white-space: pre-line;
+  border-left: 5px solid var(--node-tip-color, var(--border-light));
+}
+
 /* The two ⓘ buttons: the Pinned column's, in the header where the word "Pin"
    used to be, and a major section's, beside its heading.
 
