@@ -25,6 +25,9 @@
  * (ui/image-model-worker.js, `createCpuModelPool`), ~15x slower with 4 workers on
  * an M2 Pro (9.7 vs ~150 crops/s), and the same embeddings (cosine 1.00000 vs the
  * WebGPU fp32 model; the CPU runtime's default int8 model is what drifted).
+ * Without the network on that first use (offline, or either host blocked) the
+ * check reports MODEL_OFFLINE_REASON as the reason it cannot run, instead of the
+ * browser's bare "Failed to fetch" (`asModelDownloadFailure`).
  *
  * Decoding: the frames are STREAMED per camera (`prepareFrames`), and on
  * recordings whose keyframes are about as dense as the samples (e.g. one every
@@ -36,9 +39,9 @@
  * spawns ui/image-crop-worker.js and ui/image-model-worker.js.
  */
 
-import { state } from './app-state.js?v=c86fc596f2f3';
-import { planKeyframeSamples, KEYFRAME_GAP_TOLERANCE } from '../pose/id-switch-check.js?v=c86fc596f2f3';
-import { hydrateFrameMembers2d, releaseFrameMembers2d } from '../pose/lazy-residency.js?v=c86fc596f2f3';
+import { state } from './app-state.js?v=4bed43725c4e';
+import { planKeyframeSamples, KEYFRAME_GAP_TOLERANCE } from '../pose/id-switch-check.js?v=4bed43725c4e';
+import { hydrateFrameMembers2d, releaseFrameMembers2d } from '../pose/lazy-residency.js?v=4bed43725c4e';
 
 export const TRANSFORMERS_URL = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.0/+esm';
 export const IMAGE_MODEL_ID = 'onnx-community/dinov2-small';
@@ -48,6 +51,46 @@ export const IMAGE_MODEL_MB = 44;
 export const CROP = 160, INPUT = 224;
 const MEAN = [0.485, 0.456, 0.406], STD = [0.229, 0.224, 0.225];
 const NOSE = 'Nose', TTI = 'TTI';
+
+/**
+ * An Error meaning the check cannot run here, whose message is the reason it
+ * reports: `runImage` (ui/id-switch-modal.js) returns it as a skip, like its own
+ * preflight gates, rather than as a failure. `cause` keeps the original error.
+ */
+export function cannotRun(reason, cause) {
+    const e = new Error(reason, cause !== undefined ? { cause: cause } : undefined);
+    e.cannotRun = true;
+    return e;
+}
+
+/** What the check says when the runtime or the model cannot be downloaded. */
+export const MODEL_OFFLINE_REASON = 'needs an internet connection to download the image model (huggingface.co and cdn.jsdelivr.net; cached after the first run)';
+// A failed fetch or module import, as Chrome / Firefox / Safari word it. Both downloads fail
+// with a bare TypeError that names no cause: "Failed to fetch dynamically imported module:
+// <url>" for the runtime and "Failed to fetch" for the weights (Chrome, measured).
+const NETWORK_FAILURE = /failed to fetch|networkerror|load failed|importing a module script failed|error loading dynamically imported module/i;
+
+/** `err` as MODEL_OFFLINE_REASON (a `cannotRun` error) when it is a failed download; else `err` unchanged. */
+export function asModelDownloadFailure(err) {
+    if (!err || err.cannotRun || !NETWORK_FAILURE.test(String(err.message || err))) return err;
+    return cannotRun(MODEL_OFFLINE_REASON, err);
+}
+
+let _transformers = null, _importFailures = 0;
+/**
+ * The transformers.js module, imported once. Chrome keeps a failed dynamic import
+ * failed for the page's lifetime — importing the same URL again rejects even once
+ * the network is back (measured) — so a retry imports it under a new FRAGMENT: the
+ * same request (a fragment is never sent), but a new module-map entry. Workers each
+ * have their own module map.
+ */
+export function importTransformers() {
+    if (!_transformers) {
+        _transformers = import(_importFailures ? TRANSFORMERS_URL + '#retry' + _importFailures : TRANSFORMERS_URL);
+        _transformers.catch(function () { _transformers = null; _importFailures++; });
+    }
+    return _transformers;
+}
 
 
 /**
@@ -69,7 +112,7 @@ export function loadImageModel(onStatus) {
     _modelPromise = (async function () {
         const dtype = await gpuDtype();
         if (onStatus) onStatus('Loading the image model (' + (dtype === 'fp16' ? IMAGE_MODEL_MB : 2 * IMAGE_MODEL_MB) + ' MB on first use, cached afterwards)…');
-        const T = await import(TRANSFORMERS_URL);
+        const T = await importTransformers();
         const model = await T.AutoModel.from_pretrained(IMAGE_MODEL_ID, {
             device: 'webgpu', dtype: dtype,
             // Keep the output ON THE GPU: the model's only output is last_hidden_state [n, 257, 384]
@@ -85,7 +128,7 @@ export function loadImageModel(onStatus) {
         try { device = await T.env.backends.onnx.webgpu.device; } catch (e) { /* clsFromGpu falls back to a full read */ }
         try { ortAdapter = await T.env.backends.onnx.webgpu.adapter; } catch (e) { /* gpuAdapterInfo asks for one */ }
         return { T: T, model: model, dtype: dtype, device: device, adapter: await gpuAdapterInfo(device, ortAdapter) };
-    })();
+    })().catch(function (e) { throw asModelDownloadFailure(e); });
     _modelPromise.catch(function () { _modelPromise = null; });   // allow a retry after a failure
     return _modelPromise;
 }
@@ -184,7 +227,7 @@ export async function createCpuModelPool(count, onStatus) {
                 try { slot.w.terminate(); } catch (e) { /* ignore */ }
                 reject(err);                                     // no-op once started
             };
-            try { slot.w = new Worker(new URL('./image-model-worker.js?v=c86fc596f2f3', import.meta.url), { type: 'module' }); }
+            try { slot.w = new Worker(new URL('./image-model-worker.js?v=4bed43725c4e', import.meta.url), { type: 'module' }); }
             catch (e) { reject(e); return; }
             slot.w.onerror = function (e) {
                 if (e && e.preventDefault) e.preventDefault();
@@ -195,7 +238,7 @@ export async function createCpuModelPool(count, onStatus) {
                 if (m.type === 'progress') {
                     if (reportProgress && onStatus) onStatus('Downloading the image model: ' + Math.round(100 * m.loaded / m.total) + '% (first use only)');
                 } else if (m.type === 'loaded') resolve(slot);
-                else if (m.id == null) fail(new Error(m.message));
+                else if (m.id == null) fail(m.cannotRun ? cannotRun(m.message) : new Error(m.message));   // the worker classified it
                 else {
                     const p = slot.pending.get(m.id);
                     if (!p) return;
@@ -258,7 +301,7 @@ export const WEBNN_TRIAL_FRAMES = 6;
  */
 export async function loadWebNNModel(onStatus) {
     if (onStatus) onStatus('Compiling the image model for WebNN (experimental)…');
-    const T = await import(TRANSFORMERS_URL);
+    const T = await importTransformers();
     const model = await T.AutoModel.from_pretrained(IMAGE_MODEL_ID, {
         device: 'webnn-gpu', dtype: 'fp16',
         session_options: { freeDimensionOverrides: { batch_size: WEBNN_BATCH, num_channels: 3, height: INPUT, width: INPUT } },
@@ -776,7 +819,7 @@ export function createCropPool() {
     };
     try {
         for (let i = 0; i < n; i++) {
-            const w = { worker: new Worker(new URL('./image-crop-worker.js?v=c86fc596f2f3', import.meta.url), { type: 'module' }), load: 0 };
+            const w = { worker: new Worker(new URL('./image-crop-worker.js?v=4bed43725c4e', import.meta.url), { type: 'module' }), load: 0 };
             w.worker.onmessage = function (e) {
                 const p = pending.get(e.data.id); if (!p) return;
                 pending.delete(e.data.id); w.load--;
@@ -816,9 +859,9 @@ export function createCropPool() {
 export async function createImageEmbedder(session, opts) {
     opts = opts || {};
     const views = (state.views || []).filter(function (v) { return v && v.decoder && typeof v.decoder.getFrame === 'function'; });
-    if (!views.length) throw new Error('needs the session\'s videos to be loaded');
+    if (!views.length) throw cannotRun('needs the session\'s videos to be loaded');
     const sk = skeletonIndex((session.skeleton && session.skeleton.nodes) || []);
-    if (sk.nose < 0 || sk.tti < 0) throw new Error('needs Nose and TTI nodes in the skeleton to align crops');
+    if (sk.nose < 0 || sk.tti < 0) throw cannotRun('needs Nose and TTI nodes in the skeleton to align crops');
     // A hardware GPU through WebGPU, else the CPU workers (pickImageDevice)
     const where = opts.device === 'cpu' ? { kind: 'cpu', adapter: null, why: 'the CPU was requested' }
         : opts.device === 'webgpu' ? { kind: 'webgpu' } : await pickImageDevice();

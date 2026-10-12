@@ -27,18 +27,18 @@
  * import-export/save-load.js (setStatus).
  */
 
-import { state, getActiveSession } from './app-state.js?v=c86fc596f2f3';
-import { setSeekbarSwitchMarkers } from './seekbar-markers.js?v=c86fc596f2f3';
-import { setIdSwitchHighlight, updateIdSwitchHighlight, refreshIdSwitchHighlight, ID_SWITCH_SECTION_RGB } from './id-switch-highlight.js?v=c86fc596f2f3';
-import { setStatus, markDirty } from '../import-export/save-load.js?v=c86fc596f2f3';
-import { showLoadingProgress, hideLoading, yieldToPaint } from './loading-overlay.js?v=c86fc596f2f3';
-import { getTrackingThreshold } from './settings.js?v=c86fc596f2f3';
-import { checkSizeSwitches, checkImageSwitches } from '../pose/id-switch-check.js?v=c86fc596f2f3';
+import { state, getActiveSession } from './app-state.js?v=4bed43725c4e';
+import { setSeekbarSwitchMarkers } from './seekbar-markers.js?v=4bed43725c4e';
+import { setIdSwitchHighlight, updateIdSwitchHighlight, refreshIdSwitchHighlight, ID_SWITCH_SECTION_RGB } from './id-switch-highlight.js?v=4bed43725c4e';
+import { setStatus, markDirty } from '../import-export/save-load.js?v=4bed43725c4e';
+import { showLoadingProgress, hideLoading, yieldToPaint } from './loading-overlay.js?v=4bed43725c4e';
+import { getTrackingThreshold } from './settings.js?v=4bed43725c4e';
+import { checkSizeSwitches, checkImageSwitches } from '../pose/id-switch-check.js?v=4bed43725c4e';
 import { createImageEmbedder, IMAGE_MODEL_MB, formatEmbedTiming, createLoadMeter, formatEmbedDevice,
-         inputTensorToPixels, INPUT } from './image-embedder.js?v=c86fc596f2f3';
+         inputTensorToPixels, INPUT } from './image-embedder.js?v=4bed43725c4e';
 import { idSwitchRowKey as rowKey, idSwitchPrimary as primaryOf, idSwitchMarkers as markersOf, idSwitchOnsets as countOnsets,
          idSwitchEncounterCount as encounterCount, linkIdSwitchResults as tagAndLink,
-         idSwitchFixPlan, idSwitchFixFor, idSwitchRenameForFix } from './id-switch-review.js?v=c86fc596f2f3';
+         idSwitchFixPlan, idSwitchFixFor, idSwitchRenameForFix } from './id-switch-review.js?v=4bed43725c4e';
 
 const CUE_LABEL = { size: 'body size', image: 'images' };
 
@@ -310,6 +310,12 @@ async function runImage(session, rate, inject) {
         return res;
     } catch (e) {
         if (e && e.name === 'AbortError') return { ok: false, reason: 'cancelled', cancelled: true };
+        // A check that cannot run here — no network for the model's first download, no Nose/TTI —
+        // is a reason, like the gates above, not a failure (image-embedder.js `cannotRun`)
+        if (e && e.cannotRun) {
+            if (e.cause) console.warn('[id-switch-check:image] ' + e.message, e.cause);
+            return { ok: false, reason: e.message };
+        }
         throw e;
     } finally {
         clearInterval(ticker); clearInterval(cropTicker);
