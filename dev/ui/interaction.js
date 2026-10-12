@@ -14,10 +14,10 @@
  * ES module. Exports `InteractionManager` and `isInteractiveClickTarget`.
  */
 
-import { Instance } from '../pose/pose-data.js?v=9923e1380f54';
-import { getOrComputeReprojectedInstance } from '../pose/triangulation.js?v=9923e1380f54';
-import { shouldIgnoreShortcut } from './keyboard-target.js?v=9923e1380f54';
-import { deleteTargetsFromStore, groupMemberTargets, unlinkedTarget } from './custom-delete-ops.js?v=9923e1380f54';
+import { Instance } from '../pose/pose-data.js?v=2dc7a6061c7b';
+import { getOrComputeReprojectedInstance } from '../pose/triangulation.js?v=2dc7a6061c7b';
+import { shouldIgnoreShortcut } from './keyboard-target.js?v=2dc7a6061c7b';
+import { deleteTargetsFromStore, groupMemberTargets, unlinkedTarget } from './custom-delete-ops.js?v=2dc7a6061c7b';
 
 // ============================================
 // Alt + wheel instance rotation
