@@ -2682,11 +2682,14 @@ body {
   cursor: not-allowed;
 }
 
-/* Seekbar */
+/* Seekbar. The 24px box is the bar itself; the time ruler hangs below it
+   (.seekbar-ruler), and margin-bottom reserves that room so the controls bar
+   centres bar + ruler together (34px, the transport buttons' height). */
 .seekbar-container {
   flex: 1;
   position: relative;
   height: 24px;
+  margin-bottom: 10px;
   display: flex;
   align-items: center;
   cursor: pointer;
@@ -2734,6 +2737,24 @@ body {
 .seekbar-container:hover .seekbar-track {
   height: 8px;
 }
+
+/* Time ruler under the seekbar (ui/seekbar-ticks.js): ticks just below the
+   track, labels below the major ones. A child of #seekbar, so a click on a
+   label scrubs there and hovering it shows the tooltip; painted under the
+   ID-switch marks and the thumb. */
+.seekbar-ruler { position: absolute; left: 0; right: 0; top: 17px; height: 17px; }
+.seekbar-tick {
+  position: absolute; top: 0; width: 1px; height: 3px;
+  transform: translateX(-50%); background: var(--text-muted);
+}
+.seekbar-tick.is-major { height: 5px; background: var(--text-secondary); }
+.seekbar-tick-label {
+  position: absolute; top: 5px; transform: translateX(-50%);
+  font-family: "SF Mono", "Fira Code", "Cascadia Code", monospace;
+  font-size: 10px; line-height: 12px; font-variant-numeric: tabular-nums;
+  color: var(--text-secondary); white-space: nowrap;
+}
+.seekbar-tick-label.is-start { transform: none; }
 
 /* Possible-ID-switch ticks on the seekbar (ui/seekbar-markers.js): over the
    track, under the thumb; they never take the pointer (the seekbar's handlers

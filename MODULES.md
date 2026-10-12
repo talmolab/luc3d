@@ -4129,7 +4129,8 @@ duration}` (pure; `frameIdx` null = the empty "0 / 0" state), `NO_TIME`
 (`--:--.---`), and the DOM half: `showReadoutFrame(frameIdx)` (the per-frame
 path — writes `#currentFrame` / `#currentTime`), `refreshReadoutTotals()`
 (re-reads `state.totalFrames` / `state.fps`, writes `#totalFrames` /
-`#totalTime` and re-times the frame on screen) and `clearReadout()`.
+`#totalTime`, re-times the frame on screen and refreshes the seekbar's time
+ruler) and `clearReadout()` (which empties the ruler too).
 
 **Behaviour.**
 - **It speaks the seekbar tooltip's language**, on purpose: the same separator
@@ -4155,8 +4156,10 @@ path — writes `#currentFrame` / `#currentTime`), `refreshReadoutTotals()`
   row, both rows fit the 56 px controls bar at every width.
 
 **Imports from project modules.** `./app-state.js` (`state`),
-`./seekbar-tooltip.js` (`formatTimestamp`) — both import-free, so the text half
-runs in Node.
+`./seekbar-tooltip.js` (`formatTimestamp`), `./seekbar-ticks.js`
+(`refreshSeekbarTicks` — the ruler marks the same times, so it follows every
+totals / FPS change, including the FPS pill's, which moves no frame) — all
+import-free, so the text half runs in Node.
 
 **Imported by.** `ui/ui-wiring.js`, `ui/sessions-panes.js`,
 `pose/initialization.js`, `loading/session-loader.js`,
@@ -8571,6 +8574,72 @@ timeline, hover text, click snaps to the tick's frame, reviewed dimming).
 
 ---
 
+### ui/seekbar-ticks.js
+
+**Purpose.** A time ruler under the transport seekbar (`#seekbarRuler` inside
+`#seekbar`): labelled major ticks (`00:00  05:00  10:00 …`) with unlabelled
+minor ticks between them, so a moment can be found and clicked by eye without
+hovering for the tooltip.
+
+**Key exports.** `seekbarTimeTicks(totalFrames, fps, widthPx, {charPx}?)` ->
+`{step, minorStep, majors: [{frac, seconds, label, align}], minors: [frac]}`
+(pure); `formatTickLabel(seconds, decimals)` (`mm:ss`, `h:mm:ss` from an hour
+up, rounded before splitting); `TICK_STEPS` and the spacing constants
+(`MIN_LABEL_SPACING_PX`, `LABEL_SPACING_WIDTHS`, `MIN_MINOR_SPACING_PX`,
+`MAX_MINOR_PER_MAJOR`, `DEFAULT_CHAR_PX`); the DOM half,
+`installSeekbarTicks(layerEl, {getTotalFrames, getFps})` and
+`refreshSeekbarTicks()`.
+
+**Behaviour.**
+- **The step follows the video and the bar.** The major step is the SMALLEST of
+  `TICK_STEPS` (1/2/5 below a minute, 1/2/5/10/15/30 min, then hours) whose
+  labels are at least `max(60 px, 1.75 label widths)` apart at the bar's
+  width — 5:00 for a 30-minute recording on a 700 px bar, 2:00 on 1200 px, 1 s
+  for a 10 s clip. The minor step is the smallest nice step that divides the
+  major into at most 6 parts and is still 8 px apart. Neither is shorter than one
+  frame. No ruler when no label after `00:00` fits, or without a frame rate
+  (fps 0 while a session has no video).
+- **Same mapping and same clock as the rest of the bar.** A tick for time `t`
+  sits at `t·fps / (totalFrames − 1)` — the thumb's and the ID-switch ticks'
+  frame -> position mapping at the readout's frame-start time — so a click on
+  `05:00` lands on the frame the readout shows as `05:00.000` (to within the
+  pixel a click is rounded to). Labels are the readout's format without the
+  milliseconds; a decimal only for sub-second steps.
+- **Part of the seekbar, not a strip beside it.** The layer is a child of
+  `#seekbar`, so a click or drag on a label scrubs and hovering one shows the
+  seekbar tooltip. It hangs below the 24 px bar box; `.seekbar-container`'s
+  `margin-bottom` reserves the room, so the controls bar centres bar + ruler
+  (34 px, the transport buttons' height) together. Painted under the ID-switch
+  marks and the thumb. The first label is left-aligned to the bar's start; a
+  centred label that would hang off the right end is dropped (its tick stays).
+- **Never re-rendered per frame.** `refreshSeekbarTicks` (called from
+  `updateSeekbarVisual` on every frame, and from `refreshReadoutTotals` /
+  `clearReadout`) compares the frame count, FPS and width with what is drawn
+  and returns; a `ResizeObserver` on the layer re-lays it when the bar's width
+  changes (window resize, the frame readout gaining a digit). Positions are
+  percentages, and an unchanged ruler writes nothing. The label font's
+  character width is measured once (a hidden probe), not per render.
+
+**Imports from project modules.** None (dependency-free, so the tick choice runs
+in Node).
+
+**Imported by.** `ui/ui-wiring.js` (installed in the seekbar-scrubbing IIFE in
+`setupUI`; refreshed by `updateSeekbarVisual`), `ui/frame-readout.js`
+(`refreshSeekbarTicks`).
+
+**Coverage.** `tests/test-seekbar-ticks.mjs` (label format; the step choice
+over a grid of frame rates × durations × widths: nice steps, at least a frame,
+labels far enough apart, the smallest step that fits, minors dividing majors
+and never on one, nothing hanging off the end; monotone in duration and width)
+and `tests/e2e/seekbar-ticks.mjs` (real app: labels centred on their ticks at
+the time's position, no overlap, inside the bar and the controls bar; a click
+on a label seeks to that time and hovering it shows the tooltip; longer
+recordings get longer steps and a bar resize alone re-lays it; the FPS pill
+re-times it; fps 0 / no frames clear it; 200 frame steps make zero ruler DOM
+mutations; fits at 640 px).
+
+---
+
 ### ui/seekbar-tooltip.js
 
 **Purpose.** Hover tooltip on the transport seekbar (#142): "Frame 1,234 ·
@@ -10995,6 +11064,9 @@ and the FPS pill),
 `seekbar-markers.js` (`installSeekbarMarkers`, `seekbarMarkerAt`,
 `describeSwitchMarker`, `setSeekbarMarkerFrames` — the possible-ID-switch ticks:
 the scrub handlers and the tooltip snap to a tick within 5 px),
+`seekbar-ticks.js` (`installSeekbarTicks`, `refreshSeekbarTicks` — the time
+ruler under the seekbar; `updateSeekbarVisual` calls the refresh, a no-op
+unless the frame count or FPS changed),
 `color-by.js` (`onColorByChange`, `setColorByIdentity` — the Tracks /
 Identity toggle, also flipped by the tracker after Track All — #242),
 `trail-presets.js` (`TRAIL_PRESETS`, `MAX_TRAIL_FRAMES`, `trailPresetFor`,
