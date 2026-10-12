@@ -17,7 +17,7 @@
 // add/update its entry here so the Settings panel stays complete and truthful.
 // (See CLAUDE.md.)
 
-import { shouldIgnoreShortcut } from './keyboard-target.js?v=ec3c8976db29';
+import { shouldIgnoreShortcut } from './keyboard-target.js?v=7eeed5ec2aee';
 
 const STORAGE_KEY = 'lucid.settings.v1';
 
@@ -360,7 +360,7 @@ const TRACKING_THRESHOLDS = [
     {
         id: 'autoSwitchCheck', label: 'Check ID switches after tracking (body size)', default: 1,
         min: 0, max: 1, step: 1, kind: 'toggle',     // an on/off switch in the wizard (stored as 1 / 0)
-        desc: 'After Track All or Track Frame Range, flag close encounters where the animals leaving it match each other\'s body size better than their own (Tracks ▸ Check ID Switches; pose/id-switch-check.js). Checks every tracked frame in the session (needs at least 60 s of tracking). Results are marked on the seekbar and listed in the ID Switches tab, which opens only when a possible switch is found.',
+        desc: 'After Track All or Track Frame Range, flag contacts after which each animal\'s body size matches the other\'s before better than its own (Tracks ▸ Check ID Switches; pose/id-switch-check.js). Checks every tracked frame in the session (needs at least 60 s of tracking). Results are marked on the seekbar and listed in the ID Switches tab, which opens only when a possible switch is found.',
     },
     {
         id: 'autoImageSwitchCheck', label: 'Check ID switches after tracking (image detection)', default: 0,
