@@ -22,75 +22,75 @@ import {
     state, videoController, interactionManager, viewport3d, timeline, paneManager,
     setVideoController, VIEW_NAMES, buildRememberedSkeleton, setProjectSkeleton,
     isViewDocked,
-} from '../ui/app-state.js?v=2650fe2314b9';
+} from '../ui/app-state.js?v=ec8baa2436da';
 
 import {
     Session, Skeleton, Camera, Instance, UnlinkedInstance, FrameGroup, Identity,
-} from '../pose/pose-data.js?v=2650fe2314b9';
+} from '../pose/pose-data.js?v=ec8baa2436da';
 
-import { OnDemandVideoDecoder, VideoController } from './video.js?v=2650fe2314b9';
-import { videoLoadFailureText } from './video-codec-diagnosis.js?v=2650fe2314b9';
-import { fileSystemAccessHint } from '../ui/browser-hints.js?v=2650fe2314b9';
+import { OnDemandVideoDecoder, VideoController } from './video.js?v=ec8baa2436da';
+import { videoLoadFailureText } from './video-codec-diagnosis.js?v=ec8baa2436da';
+import { fileSystemAccessHint } from '../ui/browser-hints.js?v=ec8baa2436da';
 
 import {
     pickFiles, pickFolder, pickVideoFiles,
     parseCalibrationTOML, parseCalibrationJSON, parseSlpH5, parseSlpViaSleapIO,
     loadCalibrationFile,
-} from '../import-export/file-io.js?v=2650fe2314b9';
+} from '../import-export/file-io.js?v=ec8baa2436da';
 
-import { resolveImportTrackIdx, nulledNodesFromOcclusion } from '../import-export/import-track-resolve.js?v=2650fe2314b9';
+import { resolveImportTrackIdx, nulledNodesFromOcclusion } from '../import-export/import-track-resolve.js?v=ec8baa2436da';
 // Pure `.slp`-per-camera selection rule. Extracted so it can be bridged into
 // the browser test runner (session-loader itself pulls app.js) — same reason
 // and same shape as `resolveImportTrackIdx` above.
-import { chooseCameraSlp } from './percam-slp-choice.js?v=2650fe2314b9';
+import { chooseCameraSlp } from './percam-slp-choice.js?v=ec8baa2436da';
 // Shared SLP grouped-reconstruction (identities + InstanceGroups + nulledNodes/
 // occlusion + 3D points). Circular ESM import (slp-import imports back
 // recomputeUploadedCameras); only invoked inside a function body.
-import { restoreGroupingAndUnlink, reconstructInstanceGroupsFromSessionLazy } from '../import-export/slp-import.js?v=2650fe2314b9';
-import { REBASED_CALIBRATION_NAME, pickCalibrationFile } from './calibration-pick.js?v=2650fe2314b9';
+import { restoreGroupingAndUnlink, reconstructInstanceGroupsFromSessionLazy } from '../import-export/slp-import.js?v=ec8baa2436da';
+import { REBASED_CALIBRATION_NAME, pickCalibrationFile } from './calibration-pick.js?v=ec8baa2436da';
 import {
     isCalibrationImagesVideo, preferNonCalibrationVideos, matchVideoToCamera,
-} from './video-file-pick.js?v=2650fe2314b9';
+} from './video-file-pick.js?v=ec8baa2436da';
 
 import {
     LazyFrameLoader, shouldUseLazyH5, shouldUseLazySlp, getInstanceGroupsForFrame,
     ensureLazyFrameData,
-} from '../pose/triangulation.js?v=2650fe2314b9';
-import { SioLazyLoader } from './sio-lazy-loader.js?v=2650fe2314b9';
-import { unionTrackNames, remapTrackIdx } from './track-union.js?v=2650fe2314b9';
+} from '../pose/triangulation.js?v=ec8baa2436da';
+import { SioLazyLoader } from './sio-lazy-loader.js?v=ec8baa2436da';
+import { unionTrackNames, remapTrackIdx } from './track-union.js?v=ec8baa2436da';
 
 // Status UI moved to import-export/save-load.js in Pass 3c-1.
 import {
     setStatus, showLoading, hideLoading, ensureNo3dImportBlockingLoad,
-} from '../import-export/save-load.js?v=2650fe2314b9';
-import { showLoadingProgress, createProgressPacer, yieldToPaint } from '../ui/loading-overlay.js?v=2650fe2314b9';
+} from '../import-export/save-load.js?v=ec8baa2436da';
+import { showLoadingProgress, createProgressPacer, yieldToPaint } from '../ui/loading-overlay.js?v=ec8baa2436da';
 
 // Circular import — these are still defined in app.js for now. See module
 // header note. They are only invoked inside function bodies, never at
 // module-init time, so live-binding lookup keeps them functional.
-import { drawAllOverlays, setReprojErrorVisible } from '../ui/rendering.js?v=2650fe2314b9';
-import { updateInfoPanel, promptImportSkeletonForAllSessions } from '../ui/info-panel.js?v=2650fe2314b9';
-import { noteSessionCalibrationDivergence } from '../ui/calibration-notice.js?v=2650fe2314b9';
-import { refreshReadoutTotals } from '../ui/frame-readout.js?v=2650fe2314b9';
-import { parseSkeletonJSON } from '../import-export/skeleton-json.js?v=2650fe2314b9';
+import { drawAllOverlays, setReprojErrorVisible } from '../ui/rendering.js?v=ec8baa2436da';
+import { updateInfoPanel, promptImportSkeletonForAllSessions } from '../ui/info-panel.js?v=ec8baa2436da';
+import { noteSessionCalibrationDivergence } from '../ui/calibration-notice.js?v=ec8baa2436da';
+import { refreshReadoutTotals } from '../ui/frame-readout.js?v=ec8baa2436da';
+import { parseSkeletonJSON } from '../import-export/skeleton-json.js?v=ec8baa2436da';
 // Pass 3i-3: setupInteraction / setup3DViewport / setupTimeline / updateFpsDisplay /
 // hideWelcomeOverlay moved to pose/initialization.js.
 import {
     setupInteraction, setup3DViewport, setupTimeline,
     updateFpsDisplay,
     hideWelcomeOverlay,
-} from '../pose/initialization.js?v=2650fe2314b9';
+} from '../pose/initialization.js?v=ec8baa2436da';
 // Pass 3h: populateViewStrip / populateSessionStrip / switchSession moved to sessions-panes.js.
 import {
     populateViewStrip, populateSessionStrip, switchSession, multiSelectViews,
-} from '../ui/sessions-panes.js?v=2650fe2314b9';
+} from '../ui/sessions-panes.js?v=ec8baa2436da';
 // Pass 3e-1: updateSeekbar / fitTimelineToData / onPlaybackStateChange moved to ui-wiring.js.
 import {
     updateSeekbar, fitTimelineToData, onPlaybackStateChange, updateVideoGridDisplay,
-} from '../ui/ui-wiring.js?v=2650fe2314b9';
-import { getLoadingProgressModal } from '../ui/loading-progress-modal.js?v=2650fe2314b9';
-import { readVisibilityMetadata } from '../import-export/visibility-metadata.js?v=2650fe2314b9';
-import { readPlaneMetadata, resetPlaneState } from '../import-export/plane-metadata.js?v=2650fe2314b9';
+} from '../ui/ui-wiring.js?v=ec8baa2436da';
+import { getLoadingProgressModal } from '../ui/loading-progress-modal.js?v=ec8baa2436da';
+import { readVisibilityMetadata } from '../import-export/visibility-metadata.js?v=ec8baa2436da';
+import { readPlaneMetadata, resetPlaneState } from '../import-export/plane-metadata.js?v=ec8baa2436da';
 
 // Module-private debounce timer for the zoom-redraw callback in
 // rebuildVideoController(). app.js's setupEmptyVideoController() has its own
@@ -2074,6 +2074,7 @@ export async function handleLoadSessionFolderSingleSlp() {
                 var resolvedTrackIdx = resolveImportTrackIdx(session, instData.trackIdx, instData.type);
                 var inst = new Instance(instData.points, resolvedTrackIdx, instData.type || 'user', instData.score || 0);
                 if (instData.occluded) inst.setOccludedFrom(instData.occluded);
+                if (instData.pointScores) inst.setPointScores(instData.pointScores);
                 // Restore the occlusion flag for an unlinked user label (its
                 // occluded node was saved finite-xy + not-visible; the
                 // nulledNodes flag itself isn't persisted for ungrouped
@@ -2652,6 +2653,7 @@ export function addColumnarFramesToSession(session, camName, col, trackRemap) {
             var instance = new Instance(col.xy.slice(i * stride, (i + 1) * stride),
                 trackIdx, instType, col.score[i] || 1.0);
             instance.setOccludedFrom(col.occluded.subarray(i * nn, (i + 1) * nn));
+            if (col.pointScore && instType === 'predicted') instance.setPointScores(col.pointScore, i * nn);
             fg.addInstance(camName, instance);
         }
     }
@@ -3159,6 +3161,7 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
                             var trackIdx = resolveImportTrackIdx(state.session, remappedTrackIdx, instType);
                             var instance = new Instance(inst.points || [], trackIdx, instType, inst.score || 1.0);
                             if (inst.occluded) instance.setOccludedFrom(inst.occluded);
+                            if (inst.pointScores) instance.setPointScores(inst.pointScores);
                             fg.addInstance(camName, instance);
                         }
                     }

@@ -29,20 +29,20 @@
  * import-export/save-load.js (setStatus).
  */
 
-import { state, getActiveSession } from './app-state.js?v=2650fe2314b9';
-import { setSeekbarSwitchMarkers } from './seekbar-markers.js?v=2650fe2314b9';
-import { setIdSwitchHighlight, updateIdSwitchHighlight, refreshIdSwitchHighlight, ID_SWITCH_SECTION_RGB } from './id-switch-highlight.js?v=2650fe2314b9';
-import { setStatus, markDirty } from '../import-export/save-load.js?v=2650fe2314b9';
-import { showLoadingProgress, hideLoading, yieldToPaint } from './loading-overlay.js?v=2650fe2314b9';
-import { getTrackingThreshold } from './settings.js?v=2650fe2314b9';
-import { checkSizeSwitches, checkImageSwitches, checkBrightnessSwitches } from '../pose/id-switch-check.js?v=2650fe2314b9';
-import { singleCameraName, singleCameraCheckSession, swapSingleCameraIdentities, singleCameraCheckOptions } from '../pose/single-camera-tracking.js?v=2650fe2314b9';
+import { state, getActiveSession } from './app-state.js?v=ec8baa2436da';
+import { setSeekbarSwitchMarkers } from './seekbar-markers.js?v=ec8baa2436da';
+import { setIdSwitchHighlight, updateIdSwitchHighlight, refreshIdSwitchHighlight, ID_SWITCH_SECTION_RGB } from './id-switch-highlight.js?v=ec8baa2436da';
+import { setStatus, markDirty } from '../import-export/save-load.js?v=ec8baa2436da';
+import { showLoadingProgress, hideLoading, yieldToPaint } from './loading-overlay.js?v=ec8baa2436da';
+import { getTrackingThreshold } from './settings.js?v=ec8baa2436da';
+import { checkSizeSwitches, checkImageSwitches, checkBrightnessSwitches } from '../pose/id-switch-check.js?v=ec8baa2436da';
+import { singleCameraName, singleCameraCheckSession, swapSingleCameraIdentities, singleCameraCheckOptions } from '../pose/single-camera-tracking.js?v=ec8baa2436da';
 import { createImageEmbedder, IMAGE_MODEL_MB, formatEmbedTiming, createLoadMeter, formatEmbedDevice,
-         inputTensorToPixels, INPUT } from './image-embedder.js?v=2650fe2314b9';
-import { createBrightnessSampler } from './brightness-sampler.js?v=2650fe2314b9';
+         inputTensorToPixels, INPUT } from './image-embedder.js?v=ec8baa2436da';
+import { createBrightnessSampler } from './brightness-sampler.js?v=ec8baa2436da';
 import { idSwitchRowKey as rowKey, idSwitchPrimary as primaryOf, idSwitchMarkers as markersOf, idSwitchOnsets as countOnsets,
          idSwitchEncounterCount as encounterCount, linkIdSwitchResults as tagAndLink,
-         idSwitchFixPlan, idSwitchFixFor, idSwitchRenameForFix, ID_SWITCH_CUES, idSwitchIsSecondary } from './id-switch-review.js?v=2650fe2314b9';
+         idSwitchFixPlan, idSwitchFixFor, idSwitchRenameForFix, ID_SWITCH_CUES, idSwitchIsSecondary } from './id-switch-review.js?v=ec8baa2436da';
 
 const CUE_LABEL = { size: 'body size', image: 'images', brightness: 'coat brightness' };
 
@@ -335,6 +335,12 @@ async function runImage(session, rate, inject) {
         return res;
     } catch (e) {
         if (e && e.name === 'AbortError') return { ok: false, reason: 'cancelled', cancelled: true };
+        // A check that cannot run here — no network for the model's first download, no Nose/TTI —
+        // is a reason, like the gates above, not a failure (image-embedder.js `cannotRun`)
+        if (e && e.cannotRun) {
+            if (e.cause) console.warn('[id-switch-check:image] ' + e.message, e.cause);
+            return { ok: false, reason: e.message };
+        }
         throw e;
     } finally {
         clearInterval(ticker); clearInterval(cropTicker);

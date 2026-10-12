@@ -14,10 +14,12 @@
  * ES module. Exports `InteractionManager` and `isInteractiveClickTarget`.
  */
 
-import { Instance } from '../pose/pose-data.js?v=2650fe2314b9';
-import { getOrComputeReprojectedInstance } from '../pose/triangulation.js?v=2650fe2314b9';
-import { shouldIgnoreShortcut } from './keyboard-target.js?v=2650fe2314b9';
-import { deleteTargetsFromStore, groupMemberTargets, unlinkedTarget } from './custom-delete-ops.js?v=2650fe2314b9';
+import { Instance } from '../pose/pose-data.js?v=ec8baa2436da';
+import { getOrComputeReprojectedInstance } from '../pose/triangulation.js?v=ec8baa2436da';
+import { shouldIgnoreShortcut } from './keyboard-target.js?v=ec8baa2436da';
+import { deleteTargetsFromStore, groupMemberTargets, unlinkedTarget } from './custom-delete-ops.js?v=ec8baa2436da';
+import { nodeTooltipText, setNodeTooltipTarget, hideNodeTooltip } from './node-tooltip.js?v=ec8baa2436da';
+import { getGroupColor, unlinkedDupIndices, unlinkedBaseColor } from './overlays.js?v=ec8baa2436da';
 
 // ============================================
 // Alt + wheel instance rotation
@@ -1471,10 +1473,16 @@ export class InteractionManager {
 
         // Also check unlinked instances for cursor feedback
         var hoverUnlinked = false;
+        var ulHit = null;
         if (!this.hoveredNode && !planeHover) {
-            var ulHit = this.findNearestUnlinkedNode(vx, vy, viewName, frameIdx);
+            ulHit = this.findNearestUnlinkedNode(vx, vy, viewName, frameIdx);
             if (ulHit) hoverUnlinked = true;
         }
+
+        // The node's name, and a prediction's per-node score, as SLEAP's
+        // tooltip shows them (ui/node-tooltip.js).
+        setNodeTooltipTarget(this._nodeTooltipTarget(state, viewName, frameIdx, hit, ulHit),
+            e.clientX, e.clientY);
 
         // Update cursor style on the overlay canvas
         var anyHover = this.hoveredNode || hoverUnlinked || planeHover;
@@ -1492,6 +1500,60 @@ export class InteractionManager {
         if (hoverChanged || planeHoverChanged) {
             this._requestRedraw();
         }
+    }
+
+    /**
+     * What the node tooltip says about this hover, or null when it says
+     * nothing: on an edge (SLEAP's tooltips are on nodes), a plane node, or
+     * empty space. The score is the node's own, and only a prediction has one
+     * (`Session.predictedNodeScore`); a reprojection is named without one.
+     *
+     * `color` is the color the hovered instance is drawn FROM — its group's,
+     * or for an ungrouped one its track's, darkened when it shares a track
+     * number with another ungrouped instance in the view — taken from the same
+     * functions the renderer uses (`ui/overlays.js`), in the current Tracks /
+     * Identity mode. Where skeletons overlap, that is what says which one the
+     * tip is about.
+     *
+     * @param {Object} state
+     * @param {string} viewName
+     * @param {number} frameIdx
+     * @param {Object|null} hit - `findNearestNode`'s result
+     * @param {Object|null} ulHit - `findNearestUnlinkedNode`'s result
+     * @returns {{key: string, text: string, frameIdx: number, color: string|null}|null}
+     * @private
+     */
+    _nodeTooltipTarget(state, viewName, frameIdx, hit, ulHit) {
+        const session = state.session;
+        if (!session || !session.skeleton || !session.skeleton.nodes) return null;
+        const byIdentity = !!state.colorByIdentity;
+        let inst = null, nodeIdx = -1, who = '', color = null;
+        if (hit) {
+            nodeIdx = hit.nodeIdx;
+            who = 'g' + hit.instanceGroupIdx + (hit.hitReprojected ? 'r' : '');
+            if (!hit.hitReprojected) inst = hit.instanceGroup.getInstance(viewName);
+            if (nodeIdx >= 0) color = getGroupColor(hit.instanceGroup, session, byIdentity, frameIdx, viewName);
+        } else if (ulHit) {
+            nodeIdx = ulHit.nodeIdx;
+            who = 'u' + ulHit.unlinked.id;
+            inst = ulHit.unlinked.instance;
+            if (nodeIdx >= 0) {
+                // Duplicates are counted per type, as the renderer draws
+                // ungrouped predictions and user instances in separate passes.
+                const fg = session.getFrameGroup(frameIdx);
+                const list = fg ? fg.getUnlinkedInstances(viewName) : [];
+                const dup = unlinkedDupIndices(list, inst.type || 'user').get(inst) || 0;
+                color = unlinkedBaseColor(inst, dup, session, ulHit.unlinked.cameraName, byIdentity, frameIdx);
+            }
+        }
+        const name = nodeIdx >= 0 ? session.skeleton.nodes[nodeIdx] : undefined;
+        if (name == null) return null;
+        return {
+            key: viewName + '|' + frameIdx + '|' + who + '|' + nodeIdx,
+            text: nodeTooltipText(name, session.predictedNodeScore(viewName, frameIdx, inst, nodeIdx)),
+            frameIdx: frameIdx,
+            color: color || null,
+        };
     }
 
     /**
@@ -1620,6 +1682,7 @@ export class InteractionManager {
         if (this.lastInteractedView === viewName) {
             this.lastCursorPos = null;
         }
+        hideNodeTooltip();
         var hadPlaneHover = false;
         if (this.hoveredPlaneNode && this.hoveredPlaneNode.viewName === viewName) {
             this.hoveredPlaneNode = null;
