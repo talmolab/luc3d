@@ -11,6 +11,9 @@
  *  2. Several views in flight at once come back to the right callers.
  *  3. A bad job rejects (with the worker's message) without breaking the pool.
  *  4. `LUCID_CROP_WORKERS = 0` turns the pool off (the caller crops inline).
+ *  5. The pool's busy clock (`createBusyClock`, the progress dialog's CPU load):
+ *     while jobs are in flight it grows at least as fast as the wall clock and at
+ *     most workers x as fast, and it stops when they are done and on terminate.
  *
  * Run: node tests/e2e/image-crop-worker.mjs
  */
@@ -59,7 +62,7 @@ try {
         const nonBlank = inline.every(t => new Set(t).size > 200 && t.some(v => v < -2) && t.some(v => v > 0));
 
         window.LUCID_CROP_WORKERS = 3;
-        const pool = E.createCropPool();
+        const clock = (await import('/ui/load-graph.js')).createBusyClock(), pool = E.createCropPool(clock);
         const fromFrame = await pool.run(vf0.clone(), crops);
         // an ImageBitmap source (the getFrame fallback's cached frames) against inline crops of the same bitmap
         const bm = await createImageBitmap(vf0);
@@ -67,19 +70,25 @@ try {
         const fromBitmap = await pool.run(await createImageBitmap(bm), crops);
         // several in flight: each a different subset, so a mix-up shows
         const subsets = [[0], [1, 2], [2], [0, 1, 2], [1]];
+        const busy0 = clock.ms(), t0 = performance.now();
         const many = await Promise.all(subsets.map(ix => pool.run(vf0.clone(), ix.map(i => crops[i]))));
+        const manyWall = performance.now() - t0, manyBusy = clock.ms() - busy0;
         const manyOk = many.every((ts, k) => same(ts, subsets[k].map(i => inline[i])));
         let badMsg = null;
         try { await pool.run(vf0.clone(), [{ g: null, others: [] }]); } catch (e) { badMsg = e.message; }
         const afterBad = await pool.run(vf0.clone(), crops);
         const broken = pool.broken;
+        const idle0 = clock.ms(); await new Promise(res => setTimeout(res, 60)); const idleGrew = clock.ms() - idle0;
+        pool.run(vf0.clone(), crops).catch(() => {});      // in flight when the pool is terminated
+        await new Promise(res => setTimeout(res, 0));
         pool.terminate();
+        const closed0 = clock.ms(); await new Promise(res => setTimeout(res, 60)); const closedGrew = clock.ms() - closed0;
         window.LUCID_CROP_WORKERS = 0;
         const off = E.createCropPool();
         delete window.LUCID_CROP_WORKERS;
         vf0.close();
         return { nonBlank, frameOk: same(fromFrame, inline), bitmapOk: same(fromBitmap, inlineBm), manyOk,
-                 badMsg, afterBadOk: same(afterBad, inline), broken, off };
+                 badMsg, afterBadOk: same(afterBad, inline), broken, off, manyWall, manyBusy, idleGrew, closedGrew };
     });
     check(r.nonBlank, 'fixture crops have real content (masking/resampling are exercised)');
     check(r.frameOk, 'worker crops from a transferred VideoFrame are bit-identical to inline crops');
@@ -87,6 +96,9 @@ try {
     check(r.manyOk, 'five views in flight at once each come back to their caller');
     check(r.badMsg && r.afterBadOk && !r.broken, `a bad job rejects ("${r.badMsg}") and the pool keeps working`);
     check(r.off === null, 'LUCID_CROP_WORKERS = 0 → no pool (inline cropping)');
+    check(r.manyBusy >= 0.5 * r.manyWall && r.manyBusy <= 3 * r.manyWall + 1,
+          `busy clock: ${r.manyBusy.toFixed(1)} thread-ms over ${r.manyWall.toFixed(1)} ms of five jobs on 3 workers (at least ~1x, at most 3x)`);
+    check(r.idleGrew === 0 && r.closedGrew === 0, `…and it stops when the workers are idle (+${r.idleGrew}) and once terminated mid-job (+${r.closedGrew})`);
     check(errs.length === 0, 'no page errors' + (errs.length ? ': ' + errs.join(' | ') : ''));
 } catch (e) {
     console.error(e); fails++;

@@ -798,7 +798,7 @@ function restoreEditedStoreColumns(loader, kept) {
             ((store.predPointsData && store.predPointsData.x) || []).length);
         if (nNow !== nKept || (nPoints > 0 && maxPoint > nPoints)) {
             throw new Error('multi-session save: the file for camera "' + camName + '" no longer matches the ' +
-                'loaded data (' + nNow + ' frame rows vs ' + nKept + ' when loaded) — it changed on disk after ' +
+                'loaded data (' + nNow.toLocaleString('en-US') + ' frame rows vs ' + nKept.toLocaleString('en-US') + ' when loaded) — it changed on disk after ' +
                 'loading. Not writing its edited instances against the wrong rows.');
         }
         store.framesData = cols.framesData;
@@ -1702,7 +1702,7 @@ export async function handleLoadProject(prePickedFile) {
 
         hideLoading();
 
-        var statusParts = [cameras.length + ' cameras', state.session.numFrames + ' labeled frames'];
+        var statusParts = [cameras.length + ' cameras', state.session.numFrames.toLocaleString('en-US') + ' labeled frames'];
         if (state.views.length > 0) {
             statusParts.push(state.views.length + ' views');
         }

@@ -2606,11 +2606,11 @@ export async function handleLoadProjectSlpLazy(slpFile) {
         }
         updateInfoPanel();
         if (videosAttached) {
-            setStatus('Reopened ' + slpFile.name + ' — ' + session.instanceGroups.size
+            setStatus('Reopened ' + slpFile.name + ' — ' + session.instanceGroups.size.toLocaleString('en-US')
                 + ' grouped frames, ' + state.views.length + ' videos', 'success');
         } else {
-            setStatus('Reopened ' + slpFile.name + ' — ' + session.instanceGroups.size
-                + ' grouped frames, ' + loader.nFrames + ' frames. File → Load Videos to show images.', 'success');
+            setStatus('Reopened ' + slpFile.name + ' — ' + session.instanceGroups.size.toLocaleString('en-US')
+                + ' grouped frames, ' + loader.nFrames.toLocaleString('en-US') + ' frames. File → Load Videos to show images.', 'success');
         }
     } catch (err) {
         console.error('[load-project-lazy] Error:', err);
