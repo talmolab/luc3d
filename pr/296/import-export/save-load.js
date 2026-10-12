@@ -9,45 +9,45 @@ import {
     Skeleton, Camera, Instance, UnlinkedInstance, FrameGroup, Identity,
     InstanceGroup, Session,
     toBoxedPoints3d, someValidPoint3d, pooledPoints3d,
-} from '../pose/pose-data.js?v=9f0a81feabc1';
+} from '../pose/pose-data.js?v=c440035dd16a';
 import {
     getInstanceGroupsForFrame, storeReprojectedInstances, reprojectPoints,
-} from '../pose/triangulation.js?v=9f0a81feabc1';
-import { OnDemandVideoDecoder } from '../loading/video.js?v=9f0a81feabc1';
-import { createDemoSkeleton } from '../demo-data.js?v=9f0a81feabc1';
+} from '../pose/triangulation.js?v=c440035dd16a';
+import { OnDemandVideoDecoder } from '../loading/video.js?v=c440035dd16a';
+import { createDemoSkeleton } from '../demo-data.js?v=c440035dd16a';
 import {
     pickFiles, parseCalibrationJSON, buildSlpLabelsAllViews,
-} from './file-io.js?v=9f0a81feabc1';
+} from './file-io.js?v=c440035dd16a';
 import {
     state,
     videoController, interactionManager, viewport3d, timeline, paneManager,
     setVideoController, setInteractionManager,
-} from '../ui/app-state.js?v=9f0a81feabc1';
+} from '../ui/app-state.js?v=c440035dd16a';
 import {
     autoAssignVideosToCameras, forceVideoSelection, showParentDirMatchSummary,
     forceVideoSelectionWithFolder, createViewForVideoFile, updateTotalFrames,
     rebuildVideoController, fitCanvasesToCells,
-} from '../loading/session-loader.js?v=9f0a81feabc1';
-import { drawAllOverlays, setReprojErrorVisible } from '../ui/rendering.js?v=9f0a81feabc1';
-import { updateInfoPanel } from '../ui/info-panel.js?v=9f0a81feabc1';
+} from '../loading/session-loader.js?v=c440035dd16a';
+import { drawAllOverlays, setReprojErrorVisible } from '../ui/rendering.js?v=c440035dd16a';
+import { updateInfoPanel } from '../ui/info-panel.js?v=c440035dd16a';
 // Pass 3i-3: setupInteraction / setup3DViewport / hideWelcomeOverlay moved to pose/initialization.js.
 import {
     setupInteraction, setup3DViewport, hideWelcomeOverlay,
-} from '../pose/initialization.js?v=9f0a81feabc1';
+} from '../pose/initialization.js?v=c440035dd16a';
 // Pass 3h: populateViewStrip / populateSessionStrip moved to sessions-panes.js.
-import { populateViewStrip, populateSessionStrip } from '../ui/sessions-panes.js?v=9f0a81feabc1';
-import { handleLoadSlpFile } from './slp-import.js?v=9f0a81feabc1';
+import { populateViewStrip, populateSessionStrip } from '../ui/sessions-panes.js?v=c440035dd16a';
+import { handleLoadSlpFile } from './slp-import.js?v=c440035dd16a';
 import {
     buildSessionSlpBytesStreaming, createProjectWriterContext, buildSessionRefGraph,
     openProjectWriter, streamSessionIntoWriter, finalizeProjectWriter,
-} from './slp-streaming-write.js?v=9f0a81feabc1';
-import { SioLazyLoader } from '../loading/sio-lazy-loader.js?v=9f0a81feabc1';
-import { getLoadingProgressModal } from '../ui/loading-progress-modal.js?v=9f0a81feabc1';
-import { showLoading, hideLoading } from '../ui/loading-overlay.js?v=9f0a81feabc1';
-import { clearReadout } from '../ui/frame-readout.js?v=9f0a81feabc1';
-import { writeVisibilityMetadata, readVisibilityMetadata } from './visibility-metadata.js?v=9f0a81feabc1';
-import { writePlaneMetadata, readPlaneMetadata, resetPlaneState } from './plane-metadata.js?v=9f0a81feabc1';
-import { fileSystemAccessHint } from '../ui/browser-hints.js?v=9f0a81feabc1';
+} from './slp-streaming-write.js?v=c440035dd16a';
+import { SioLazyLoader } from '../loading/sio-lazy-loader.js?v=c440035dd16a';
+import { getLoadingProgressModal } from '../ui/loading-progress-modal.js?v=c440035dd16a';
+import { showLoading, hideLoading } from '../ui/loading-overlay.js?v=c440035dd16a';
+import { clearReadout } from '../ui/frame-readout.js?v=c440035dd16a';
+import { writeVisibilityMetadata, readVisibilityMetadata } from './visibility-metadata.js?v=c440035dd16a';
+import { writePlaneMetadata, readPlaneMetadata, resetPlaneState } from './plane-metadata.js?v=c440035dd16a';
+import { fileSystemAccessHint } from '../ui/browser-hints.js?v=c440035dd16a';
 
 /**
  * Confirmation modal shown when the user starts loading a real session while
@@ -351,7 +351,7 @@ function serializeSessionFrames(session) {
 
 async function ensureSleapIO() {
     if (window.SleapIO) return window.SleapIO;
-    var mod = await import('./lib/sleap-io/index.browser.js?v=9f0a81feabc1');
+    var mod = await import('./lib/sleap-io/index.browser.js?v=c440035dd16a');
     window.SleapIO = mod;
     return mod;
 }
@@ -798,7 +798,7 @@ function restoreEditedStoreColumns(loader, kept) {
             ((store.predPointsData && store.predPointsData.x) || []).length);
         if (nNow !== nKept || (nPoints > 0 && maxPoint > nPoints)) {
             throw new Error('multi-session save: the file for camera "' + camName + '" no longer matches the ' +
-                'loaded data (' + nNow + ' frame rows vs ' + nKept + ' when loaded) — it changed on disk after ' +
+                'loaded data (' + nNow.toLocaleString('en-US') + ' frame rows vs ' + nKept.toLocaleString('en-US') + ' when loaded) — it changed on disk after ' +
                 'loading. Not writing its edited instances against the wrong rows.');
         }
         store.framesData = cols.framesData;
@@ -1339,7 +1339,7 @@ export async function handleLoadProject(prePickedFile) {
             var LARGE_SLP_BYTES = 200 * 1024 * 1024;
             if (ext === 'slp' && file.size > LARGE_SLP_BYTES) {
                 // Dynamic import avoids a session-loader ↔ save-load import cycle.
-                var _sl = await import('../loading/session-loader.js?v=9f0a81feabc1');
+                var _sl = await import('../loading/session-loader.js?v=c440035dd16a');
                 if (_sl && typeof _sl.handleLoadProjectSlpLazy === 'function') {
                     return _sl.handleLoadProjectSlpLazy(file);
                 }
@@ -1702,7 +1702,7 @@ export async function handleLoadProject(prePickedFile) {
 
         hideLoading();
 
-        var statusParts = [cameras.length + ' cameras', state.session.numFrames + ' labeled frames'];
+        var statusParts = [cameras.length + ' cameras', state.session.numFrames.toLocaleString('en-US') + ' labeled frames'];
         if (state.views.length > 0) {
             statusParts.push(state.views.length + ' views');
         }
