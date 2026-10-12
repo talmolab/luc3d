@@ -717,8 +717,14 @@ the animal count, connect single breaks). Rules:
   candidate moments** since #309 / #310 made them label-free (each contact scored
   before vs after). This branch's single-camera image rule (a run ending only
   above +|threshold|, measured on the previous scoring: topC 93.8% -> 99.9% after
-  both Fixes) went with the old scoring; the new image check is not yet measured
-  on single-camera data. The options below apply to coat brightness only.
+  both Fixes) went with the old scoring. Measured on one camera (2026-10-12, top
+  and mid views of all 22 proofread SLAP sessions + topC; MODULES.md
+  `pose/id-switch-check.js` "On one camera"), the new image check is quiet rather
+  than thorough: 91 rows on 87 views, 2 false, none at all on the 39 views Track
+  All gets right (the classifier: 20 false on the original six alone), but 82 of
+  276 swaps found — 113 of them are one track changing animal alone, which no
+  contact check can see. topC: both swaps, 3 false rows. The options below apply
+  to coat brightness only.
 - **Two more single-camera choices in the ID Switches tab, both measured on the
   35 SLAP videos.** A candidate moment's row is never a follow-on, and it
   outranks other pairs' encounter rows up to 3 s before it (they follow it);

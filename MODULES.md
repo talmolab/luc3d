@@ -2639,8 +2639,10 @@ have no runs of encounters, so this branch's single-camera image rule — a run
 ending only above +|threshold| (`singleCameraImageContinueBelow`, removed in the
 #309 merge) — went, and the options below apply to the coat-brightness check
 only. That rule was measured on the image check's previous scoring (SLAP top/mid
-false rows 71 -> 51; topC 93.8% -> 99.9% after both Fixes); the new image check is
-not yet measured on single-camera data, and neither tests candidate moments.
+false rows 71 -> 51; topC 93.8% -> 99.9% after both Fixes). Neither tests candidate
+moments. The new image check on one camera is measured under `pose/id-switch-check.js`
+("On one camera"): on the top and mid views of the 22 proofread SLAP sessions 91 rows,
+2 false, 82 of 276 swaps found; on topC 5 rows, 3 false, both swaps found.
 
 **Empty encounters are no evidence.** The coat-brightness check on one
 camera runs with `skipEmpty` (`singleCameraCheckOptions`): runs ignore encounters scoring exactly
@@ -4045,8 +4047,38 @@ AUC 0.902); the classifier it replaces, at its -50 default: 0 of 11 caught, 20 r
 all false. These mice are close in size, so size catches little here — but it no
 longer raises false rows. These
 sessions keep a second label file per camera
-(`*.predictions.static.externals.slp`), which a harness has to leave out of the
-folder pick.
+(`*.predictions.static.externals.slp`, one instance per frame), which a harness has
+to leave out of the folder pick.
+
+**On one camera (2026-10-12), images.** After single-camera Track All
+(`pose/single-camera-tracking.js`), at -0.8, on the top and mid views of all 22
+proofread SLAP sessions — 87 views, 15 h; each view tracked and checked on its own —
+and the 5-mouse topC. A swap is a lasting change of the animal a track follows (runs
+of 0.5 s or more, changes within 3 s one event); a row is real when its pair swapped
+within 3 s. "Helpful" fixes are the rows whose Fix alone makes the tracks better, as a
+reviewer would keep them.
+- Original six (23 views): 16 rows — 14 real, 2 naming the wrong pair, 0 false — and
+  14 of 44 swaps found. Fixing the helpful rows takes the tracks from 92.6% to 95.7%
+  correct, fixing every row to 95.8%. The classifier this replaced, with the
+  single-camera rules and candidate moments, gave 35 rows (20 false) and found 15:
+  96.7% / 93.7%.
+- Held-out 16 (64 views): 75 rows — 59 real, 14 wrong pair, 2 false (both in 183527,
+  one marking a real swap 13 s late) — and 68 of 232 found: 86.1% -> 93.4% / 94.2%
+  (fixing every row does better because some swaps come in chains whose rows only help
+  together). The 39 views Track All gets 99.9% or more right have no row at all.
+- topC: 5 rows (2 real, 3 false), both swaps found: 86.1% -> 99.8% / 84.3% — the false
+  row at 16:13 alone costs 13.9 points. The classifier: 18 rows (17 false), 1 found.
+Most misses are invisible to a contact check: 113 of the 276 swaps are one track
+changing animal alone (usually while the other animal is undetected), and of the 148
+two-animal swaps 30 had no contact of the pair and 29 a contact that reads unchanged
+(78 caught, 11 between -0.8 and 0). They gather in seven held-out sessions where
+single-camera Track All is itself poor (41-86% per view), white/white 163346 and the
+two brown mice of 190807 among them. -0.4 finds 91 instead of 82 on SLAP but gives
+topC 7 false rows; stricter thresholds only lose swaps, so -0.8 stands. About 70 s
+per 10-min view (three runs in parallel), 200 s for topC (28 min at 60 fps, 5 mice).
+Measured just before the #310 merge, which restated the merge rule in seconds (3 s =
+the same 6 crops at 2/s). Harness: `tests/e2e/_real-single-camera.mjs` with `IMAGE=1`
+per view, scored in the session scratchpad (`sc/eval_newimage.mjs`) — not in the repo.
 
 **Imports from project modules.** `pose/pose-data.js` (`readPoint3d`).
 
