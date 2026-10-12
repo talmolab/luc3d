@@ -31,7 +31,7 @@
  * (`loading/track-union.js`) — see `_unifyTracks`.
  */
 
-import { unionTrackNames } from './track-union.js?v=2dc7a6061c7b';
+import { unionTrackNames } from './track-union.js?v=543022c392e1';
 
 /**
  * `deleteInstanceRows` moves surviving rows with one `copyWithin` per run when
@@ -168,7 +168,7 @@ export class SioLazyLoader {
         }
         // Point the reader's internal I/O worker at LUCID's local vendored h5wasm
         // IIFE (document.baseURI keeps this correct on sub-path deployments).
-        var h5wasmUrl = new URL('lib/h5wasm/h5wasm.iife.js?v=2dc7a6061c7b', document.baseURI).href;
+        var h5wasmUrl = new URL('lib/h5wasm/h5wasm.iife.js?v=543022c392e1', document.baseURI).href;
         var labels = await SIO.readSlpStreaming(file, {
             lazy: true,
             openVideos: false,
@@ -398,7 +398,7 @@ export class SioLazyLoader {
         if (!SIO || typeof SIO.readSlpStreaming !== 'function') {
             throw new Error('sleap-io.js readSlpStreaming not available on window.SleapIO');
         }
-        var h5wasmUrl = new URL('lib/h5wasm/h5wasm.iife.js?v=2dc7a6061c7b', document.baseURI).href;
+        var h5wasmUrl = new URL('lib/h5wasm/h5wasm.iife.js?v=543022c392e1', document.baseURI).href;
         var labels = await SIO.readSlpStreaming(file, {
             lazy: true,
             openVideos: false,
@@ -840,6 +840,51 @@ export class SioLazyLoader {
             predicted[k] = Number(rawType == null ? 0 : rawType) === 0 ? 0 : 1;
         }
         return { count: n, trackIdx: trackIdx, predicted: predicted };
+    }
+
+    /**
+     * The model's score for one node of the store's prediction at in-frame
+     * offset `offsetInFrame` (the value `Instance._rawInstIndex` carries), read
+     * straight from `pred_points.score` — the lazy half of
+     * `Session.predictedNodeScore`. Nothing is materialized and nothing is kept
+     * on the instance, so a re-hydrated frame costs no more than before.
+     *
+     * The node is named, not indexed: the store keeps the skeleton it was read
+     * with, while a skeleton edit after loading re-indexes the resident
+     * instances, so an index could pair a node with its neighbour's score. A
+     * name the store's skeleton lacks (an added or renamed node) has no score.
+     *
+     * @param {string} camName
+     * @param {number} frameIdx - video frame index
+     * @param {number} offsetInFrame
+     * @param {string} nodeName
+     * @returns {number} NaN when the row is not a prediction, or has no score
+     */
+    predictedPointScore(camName, frameIdx, offsetInFrame, nodeName) {
+        var labels = this.labelsByCam.get(camName);
+        var rowMap = this.frameRowByCam.get(camName);
+        var store = labels && labels._lazyDataStore;
+        if (!store || !rowMap) return NaN;
+        var row = rowMap.get(frameIdx);
+        if (row === undefined) return NaN;
+        var fd = store.framesData || {};
+        var idn = store.instancesData || {};
+        var iStart = Number(fd.instance_id_start ? fd.instance_id_start[row] : 0) || 0;
+        var iEnd = Number(fd.instance_id_end ? fd.instance_id_end[row] : 0) || 0;
+        var j = iStart + offsetInFrame;
+        if (!Number.isInteger(offsetInFrame) || offsetInFrame < 0 || j >= iEnd) return NaN;
+        // Same rule as `materializeFrame`: type 0 is a user instance.
+        var rawType = idn.instance_type ? idn.instance_type[j] : undefined;
+        if (Number(rawType == null ? 0 : rawType) === 0) return NaN;
+        var skeletons = store.skeletons || [];
+        var skel = skeletons[Number(idn.skeleton ? idn.skeleton[j] : 0)] || skeletons[0];
+        var k = skel && skel.nodeNames ? skel.nodeNames.indexOf(nodeName) : -1;
+        var pStart = Number(idn.point_id_start ? idn.point_id_start[j] : NaN);
+        var pEnd = Number(idn.point_id_end ? idn.point_id_end[j] : NaN);
+        if (k < 0 || !(pStart + k < pEnd)) return NaN;
+        var scores = store.predPointsData && store.predPointsData.score;
+        var s = scores ? Number(scores[pStart + k]) : NaN;
+        return Number.isFinite(s) ? s : NaN;
     }
 
     /**
