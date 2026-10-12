@@ -25,7 +25,7 @@
  * the test runner.
  */
 
-import { state } from './app-state.js?v=e773ac15c348';
+import { state } from './app-state.js?v=a5894bbfeaca';
 
 // ----------------------------------------------------------------------------
 // Module-level state

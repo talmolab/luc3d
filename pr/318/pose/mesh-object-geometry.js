@@ -60,8 +60,8 @@
 
 import {
     planeCycleOrderIds, convexHullOrder3d,
-} from './plane-data.js?v=e773ac15c348';
-import { applyOriginFrame } from './origin-frame.js?v=e773ac15c348';
+} from './plane-data.js?v=a5894bbfeaca';
+import { applyOriginFrame } from './origin-frame.js?v=a5894bbfeaca';
 
 /** Fraction of the bounding-box diagonal two distinct nodes must be within to
  * be reported as suspiciously coincident. */
@@ -115,8 +115,8 @@ function edgeKey(a, b) {
  * no 3D has no position to contribute, and leaving a gap in the ring is exactly
  * what the viewport already does.
  *
- * @param {import('./plane-data.js?v=e773ac15c348').PlaneSkeleton} plane
- * @param {import('./plane-nodes.js?v=e773ac15c348').PlaneNodePool} pool
+ * @param {import('./plane-data.js?v=a5894bbfeaca').PlaneSkeleton} plane
+ * @param {import('./plane-nodes.js?v=a5894bbfeaca').PlaneNodePool} pool
  * @returns {number[]} Node IDs, in ring order. Possibly shorter than the plane.
  */
 export function faceRingNodeIds(plane, pool) {
@@ -621,8 +621,8 @@ export function coincidentNodeReport(nodeIds, vertices, eps) {
  * orientation is defined on the final coordinates and the volume test on the
  * final triangles.
  *
- * @param {import('./mesh-object-3d.js?v=e773ac15c348').MeshObject3D} obj
- * @param {import('./plane-data.js?v=e773ac15c348').PlaneModel} model
+ * @param {import('./mesh-object-3d.js?v=a5894bbfeaca').MeshObject3D} obj
+ * @param {import('./plane-data.js?v=a5894bbfeaca').PlaneModel} model
  * @param {{frame?:Object|null, scale?:number, eps?:number}} [opts]
  *   `frame` - an origin frame from `buildOriginFrame`; applied when present, so
  *             the object comes out in the frame the user established.

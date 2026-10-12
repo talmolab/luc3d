@@ -8,8 +8,8 @@
  * Dependencies: mp4box.all.min.js (MP4Box)
  */
 
-import { shouldIgnoreShortcut } from '../ui/keyboard-target.js?v=e773ac15c348';
-import { diagnoseUnplayableVideo } from './video-codec-diagnosis.js?v=e773ac15c348';
+import { shouldIgnoreShortcut } from '../ui/keyboard-target.js?v=a5894bbfeaca';
+import { diagnoseUnplayableVideo } from './video-codec-diagnosis.js?v=a5894bbfeaca';
 
 // ---------------------------------------------------------------------------
 // Logging helper
@@ -2092,6 +2092,12 @@ export function snapZoomToNative(oldScale, newScale, nativeScale) {
 }
 
 /**
+ * The pane badge's hover-menu presets, in % of native resolution (1:1). 100
+ * is the exact 1:1 path (`setZoomPercent` → `_enterNative`).
+ */
+export const ZOOM_PRESET_PERCENTS = [50, 100, 150, 200];
+
+/**
  * The pane badge's zoom read-out, as a percentage of native resolution: 100%
  * is one video pixel per device pixel, 200% two, 50% half. Only a view that IS
  * held at 1:1 reads exactly "100%": one a hair off it (or at the scale but off
@@ -2140,6 +2146,8 @@ export class VideoController {
         this._scrubPending = false;
         this._scrubTarget = null;
         this._isSeeking = false;
+        this._resume = null;           // a pending `resumeAfterScrub`, or null
+        this._scrubWaiters = [];       // resolved when the scrub queue drains
     }
 
     /**
@@ -2240,6 +2248,9 @@ export class VideoController {
         // stays consistent with reality (a stuck `isPlaying` makes the play
         // button no-op — issue #115 followup).
         if (this.state.isPlaying) this.stopPlayback();
+        // A new scrub cancels a pending resume: whoever scrubs next decides
+        // whether playback continues (the seekbar asks again on release).
+        this._resume = null;
 
         this._scrubTarget = frame;
 
@@ -2269,7 +2280,53 @@ export class VideoController {
         // If another scrub came in while we were seeking, process it
         if (this._scrubTarget !== null) {
             this._processScrub();
+            return;
         }
+        var waiters = this._scrubWaiters;
+        this._scrubWaiters = [];
+        for (var i = 0; i < waiters.length; i++) waiters[i]();
+    }
+
+    /** Resolves once no scrub is in flight or queued (immediately if none is). */
+    _scrubSettled() {
+        if (!this._isSeeking && this._scrubTarget === null) return Promise.resolve();
+        var self = this;
+        return new Promise(function (resolve) { self._scrubWaiters.push(resolve); });
+    }
+
+    /**
+     * Play again from wherever the current scrub lands — what the seekbar does
+     * on release when the video was playing before the click. A scrub always
+     * stops playback (two loops must not fight over the frame), so this waits
+     * for the scrub queue to drain, then for `prepare(frame)` if given (the app
+     * hydrates a lazy project's frames ahead, as the Play button does), then
+     * starts playback at `state.currentFrame`.
+     *
+     * Pending until playback starts. A later `scrubToFrame` or `stopPlayback`
+     * cancels it, so an arrow-key step or a session switch in that window
+     * leaves the video paused; `resumePending` lets the next seekbar press know
+     * the video still counts as playing.
+     */
+    resumeAfterScrub(prepare) {
+        var self = this;
+        var token = {};
+        this._resume = token;
+        this._scrubSettled().then(function () {
+            if (self._resume !== token) return;
+            return prepare ? prepare(self.state.currentFrame) : null;
+        }).then(function () {
+            if (self._resume !== token) return;
+            self._resume = null;
+            if (!self.state.isPlaying) self.startPlayback();
+        }).catch(function (e) {
+            if (self._resume === token) self._resume = null;
+            videoLog("Resume after scrub failed: " + (e && e.message), "error");
+        });
+    }
+
+    /** True while a `resumeAfterScrub` is waiting to start playback. */
+    get resumePending() {
+        return this._resume !== null;
     }
 
     /**
@@ -2893,6 +2950,7 @@ export class VideoController {
      */
     stopPlayback() {
         var wasPlaying = this.state.isPlaying;
+        this._resume = null;   // a stop also cancels a pending resumeAfterScrub
         // Cancel animation frame
         if (this._playRAF) {
             cancelAnimationFrame(this._playRAF);
@@ -3168,18 +3226,21 @@ export class VideoController {
             var isZoomed = Math.abs(z.scale - 1.0) > 0.01 || !!z.native;
             cell.classList.toggle('zoomed', isZoomed);
             cell.classList.toggle('native-resolution', !!z.native);
+            // The badge is `.zoom-badge` (the button plus its hover menu of
+            // zoom presets, ui/sessions-panes.js); a bare `.unzoom-btn` is
+            // still handled for any pane built without the wrapper.
             var unzoomBtn = cell.querySelector('.unzoom-btn');
             if (unzoomBtn) {
-                unzoomBtn.style.display = isZoomed ? '' : 'none';
+                var badge = unzoomBtn.closest('.zoom-badge') || unzoomBtn;
+                badge.style.display = isZoomed ? '' : 'none';
                 var nat = isZoomed ? this.nativeZoomScales(view) : null;
                 var label = zoomPercentLabel(sx, nat ? nat.x : null, !!z.native);
-                // Hovered, it reads "Unzoom"; the pane restores this on leave.
-                unzoomBtn.dataset.label = label;
-                if (!unzoomBtn.matches(':hover')) unzoomBtn.textContent = label;
+                var labelEl = unzoomBtn.querySelector('.zoom-badge-label') || unzoomBtn;
+                labelEl.textContent = label;
                 unzoomBtn.title = (z.native
                     ? 'Native resolution: one video pixel per screen pixel (Shift+0).'
-                    : 'Zoom relative to native resolution (100% = one video pixel per screen pixel, Shift+0).')
-                    + ' Click to fit.';
+                    : 'Zoom relative to native resolution (100% = one video pixel per screen pixel).')
+                    + ' Hover for presets; click to fit.';
             }
         }
 
@@ -3368,6 +3429,47 @@ export class VideoController {
     }
 
     /**
+     * `view`'s zoom as a percentage of 1:1 (`100 × scale / nativeScale`), or
+     * null while its canvas is not laid out. What the pane badge reads.
+     */
+    zoomPercent(view) {
+        if (!view || !view.zoom) return null;
+        var nat = this.nativeZoomScales(view);
+        return nat ? 100 * view.zoom.scale / nat.x : null;
+    }
+
+    /**
+     * The pane badge's presets: zoom `view` — this view only — to `pct` % of
+     * 1:1, keeping the video point at the cell centre where it is. 100 puts it
+     * AT 1:1 (per-axis scale, on the pixel grid, held through resizes) exactly
+     * like Shift+0 does for every view; any other value is a plain zoom of
+     * `pct/100 × ` the 1:1 scale. A preset is not clamped to the wheel's range:
+     * picking 50% on a video whose fit is 80% gets 50%.
+     * @returns {boolean} false when the view has no 1:1 scale yet
+     */
+    setZoomPercent(view, pct) {
+        if (!view || !(pct > 0)) return false;
+        if (!view.zoom) this.initZoom(view);
+        var nat = this.nativeZoomScales(view);
+        if (!nat) return false;
+        var z = view.zoom;
+        if (pct === 100) {
+            this._enterNative(view);
+        } else {
+            var s = nat.x * pct / 100;
+            var q = this._cellCentre(view);
+            this._zoomAbout(view, s, s, q[0], q[1]);
+            z.native = false;
+            z.scaleY = undefined;
+            this._constrainOffsets(z, view);
+            this.applyZoom(view);
+        }
+        this._syncNativeMode();
+        if (this.callbacks.onZoomChange) this.callbacks.onZoomChange();
+        return true;
+    }
+
+    /**
      * Compute the axis-aligned bounding box of the wrapper after the
      * `translate(cX,cY) rotate(rot) translate(-cX,-cY) scale(s)` CSS
      * transform used by `applyZoom` (without the outer pan translation).
@@ -3530,8 +3632,11 @@ export class VideoController {
         var oldScale = z.scale;
         var minScale = this._getMinScale(view);
         var nat = this.nativeZoomScales(view);
-        var lo = nat ? Math.min(minScale, nat.x) : minScale;
-        var hi = nat ? Math.max(10, nat.x) : 10;
+        // The range also stretches to wherever the view already is — a badge
+        // preset (`setZoomPercent`) is not clamped — so a wheel step from 50%
+        // below fit moves on from 50% instead of jumping back up to fit.
+        var lo = Math.min(minScale, nat ? nat.x : Infinity, oldScale);
+        var hi = Math.max(10, nat ? nat.x : 0, oldScale);
         var newScale = Math.max(lo, Math.min(hi, oldScale * factor));
         if (newScale === oldScale) return false; // pinned at a limit: nothing moves
 
