@@ -114,5 +114,25 @@ state.trailLength = 0;
 eq(state.trailSeconds, 0, 'setting 0 frames turns trails off');
 state.fps = fps0;
 
+// ---- setTrailSeconds: the one setter, for the menus and Track All -----------------
+const T = await import(ui('trail-presets.js'));
+const calls = [];
+const st = { trailSeconds: 0 };
+eq(T.setTrailSeconds(st, 0.25), true, 'a change returns true');
+eq(st.trailSeconds, 0.25, '…and sets the state');
+T.onTrailSecondsChange(s => calls.push(s));
+eq(T.setTrailSeconds(st, 0.25), false, 'the current value is no change');
+eq(calls.length, 0, '…and runs no handler');
+eq(T.setTrailSeconds(st, 1), true, 'a new value is a change');
+eq(JSON.stringify(calls), '[1]', '…and runs the handler with it');
+T.onTrailSecondsChange(() => { throw new Error('boom'); });
+const ce = console.error; console.error = () => {};
+eq(T.setTrailSeconds(st, 2), true, 'a throwing handler does not undo the change');
+console.error = ce;
+eq(st.trailSeconds, 2, '…the state is set');
+T.onTrailSecondsChange(null);
+eq(T.TRACK_ALL_TRAIL_SECONDS, 0.25, 'Track All turns trails on at ¼ s');
+ok(T.trailPresetFor(T.TRACK_ALL_TRAIL_SECONDS) !== null, '…which is a preset, so the menus check it rather than "Custom"');
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed) { failures.forEach(f => console.error('  ✗ ' + f)); process.exit(1); }

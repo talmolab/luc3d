@@ -8,8 +8,8 @@
  * Dependencies: mp4box.all.min.js (MP4Box)
  */
 
-import { shouldIgnoreShortcut } from '../ui/keyboard-target.js?v=b7ecc7115c45';
-import { diagnoseUnplayableVideo } from './video-codec-diagnosis.js?v=b7ecc7115c45';
+import { shouldIgnoreShortcut } from '../ui/keyboard-target.js?v=2650fe2314b9';
+import { diagnoseUnplayableVideo } from './video-codec-diagnosis.js?v=2650fe2314b9';
 
 // ---------------------------------------------------------------------------
 // Logging helper
@@ -2054,6 +2054,82 @@ export class CoalescedFrameClock {
 }
 
 // ---------------------------------------------------------------------------
+// Native resolution (1:1) — one video pixel per device pixel
+// ---------------------------------------------------------------------------
+
+/**
+ * A zoom step that ends within this fraction of a view's native (1:1) scale
+ * lands exactly on it (`snapZoomToNative`).
+ */
+export const NATIVE_SNAP_TOL = 0.02;
+
+/**
+ * After a wheel step snaps a view to 1:1, further wheel input in the SAME
+ * direction is swallowed until the wheel has rested this long. A fast spin or
+ * a trackpad's momentum would otherwise carry straight through 1:1 in the next
+ * event; a fresh gesture goes on past it.
+ */
+export const NATIVE_SNAP_HOLD_MS = 250;
+
+/**
+ * Where a zoom step from `oldScale` to `newScale` lands, given the view's
+ * native scale: a step that crosses `nativeScale`, or ends within
+ * `NATIVE_SNAP_TOL` of it, lands exactly on it. A step that STARTS on it is
+ * leaving 1:1 and is not snapped back (the product below is zero).
+ *
+ * @param {number} oldScale
+ * @param {number} newScale
+ * @param {number} nativeScale - the view's 1:1 scale (`VideoController.nativeZoomScales(view).x`)
+ * @returns {{scale: number, snapped: boolean}}
+ */
+export function snapZoomToNative(oldScale, newScale, nativeScale) {
+    if (!(nativeScale > 0) || newScale === oldScale || oldScale === nativeScale) {
+        return { scale: newScale, snapped: false };
+    }
+    var crossed = (oldScale - nativeScale) * (newScale - nativeScale) < 0;
+    var near = Math.abs(newScale / nativeScale - 1) <= NATIVE_SNAP_TOL;
+    return (crossed || near) ? { scale: nativeScale, snapped: true } : { scale: newScale, snapped: false };
+}
+
+/**
+ * The pane badge's hover-menu presets, in % of native resolution (1:1). 100
+ * is the exact 1:1 path (`setZoomPercent` → `_enterNative`).
+ */
+export const ZOOM_PRESET_PERCENTS = [50, 100, 150, 200];
+
+/**
+ * A zoom percentage as SCREEN pixels : VIDEO pixels, in lowest terms — the
+ * badge menu's hint beside each preset: 50 → "1:2", 100 → "1:1",
+ * 150 → "3:2", 200 → "2:1".
+ */
+export function zoomRatioLabel(pct) {
+    var a = Math.round(pct), x = a, y = 100;
+    while (y) { var t = x % y; x = y; y = t; } // x = gcd(a, 100)
+    return (a / x) + ':' + (100 / x);
+}
+
+/**
+ * The pane badge's zoom read-out, as a percentage of native resolution: 100%
+ * is one video pixel per device pixel, 200% two, 50% half. Only a view that IS
+ * held at 1:1 reads exactly "100%": one a hair off it (or at the scale but off
+ * the pixel grid) is still resampled, so it reads "99.8%" or "≈100%" rather
+ * than rounding into a claim it does not meet.
+ *
+ * @param {number} scale - the view's zoom scale
+ * @param {number|null} nativeScale - its 1:1 scale, or null when unknown
+ * @param {boolean} isNative - the view is held at 1:1
+ * @returns {string} e.g. "100%", "125%", "99.8%", "≈100%"; "Zoomed" without a 1:1 scale
+ */
+export function zoomPercentLabel(scale, nativeScale, isNative) {
+    if (isNative) return '100%';
+    if (!(nativeScale > 0) || !(scale > 0)) return 'Zoomed';
+    var pct = 100 * scale / nativeScale;
+    if (Math.round(pct) !== 100) return Math.round(pct) + '%';
+    var tenth = Math.round(pct * 10) / 10;
+    return tenth === 100 ? '≈100%' : tenth.toFixed(1) + '%';
+}
+
+// ---------------------------------------------------------------------------
 // VideoController - Synchronized multi-view playback with overlay support
 // ---------------------------------------------------------------------------
 export class VideoController {
@@ -2065,11 +2141,15 @@ export class VideoController {
      *   state.fps: number
      *   state.isPlaying: boolean
      *   state.playInterval: number|null
+     *   state.nativeResolution: boolean — written here: every shown view is at
+     *     1:1 (`setNativeResolution`, `_syncNativeMode`)
      * @param {Object} callbacks
      *   callbacks.updateSeekbar: (frameIndex) => void
      *   callbacks.drawOverlays: (frameIndex) => void
      *   callbacks.onPlaybackStateChange: (isPlaying) => void
      *   callbacks.log: (msg, level) => void
+     *   callbacks.isViewShown: (view) => boolean
+     *   callbacks.onZoomChange: () => void
      */
     constructor(state, callbacks) {
         this.state = state;
@@ -2077,6 +2157,8 @@ export class VideoController {
         this._scrubPending = false;
         this._scrubTarget = null;
         this._isSeeking = false;
+        this._resume = null;           // a pending `resumeAfterScrub`, or null
+        this._scrubWaiters = [];       // resolved when the scrub queue drains
     }
 
     /**
@@ -2177,6 +2259,9 @@ export class VideoController {
         // stays consistent with reality (a stuck `isPlaying` makes the play
         // button no-op — issue #115 followup).
         if (this.state.isPlaying) this.stopPlayback();
+        // A new scrub cancels a pending resume: whoever scrubs next decides
+        // whether playback continues (the seekbar asks again on release).
+        this._resume = null;
 
         this._scrubTarget = frame;
 
@@ -2206,7 +2291,53 @@ export class VideoController {
         // If another scrub came in while we were seeking, process it
         if (this._scrubTarget !== null) {
             this._processScrub();
+            return;
         }
+        var waiters = this._scrubWaiters;
+        this._scrubWaiters = [];
+        for (var i = 0; i < waiters.length; i++) waiters[i]();
+    }
+
+    /** Resolves once no scrub is in flight or queued (immediately if none is). */
+    _scrubSettled() {
+        if (!this._isSeeking && this._scrubTarget === null) return Promise.resolve();
+        var self = this;
+        return new Promise(function (resolve) { self._scrubWaiters.push(resolve); });
+    }
+
+    /**
+     * Play again from wherever the current scrub lands — what the seekbar does
+     * on release when the video was playing before the click. A scrub always
+     * stops playback (two loops must not fight over the frame), so this waits
+     * for the scrub queue to drain, then for `prepare(frame)` if given (the app
+     * hydrates a lazy project's frames ahead, as the Play button does), then
+     * starts playback at `state.currentFrame`.
+     *
+     * Pending until playback starts. A later `scrubToFrame` or `stopPlayback`
+     * cancels it, so an arrow-key step or a session switch in that window
+     * leaves the video paused; `resumePending` lets the next seekbar press know
+     * the video still counts as playing.
+     */
+    resumeAfterScrub(prepare) {
+        var self = this;
+        var token = {};
+        this._resume = token;
+        this._scrubSettled().then(function () {
+            if (self._resume !== token) return;
+            return prepare ? prepare(self.state.currentFrame) : null;
+        }).then(function () {
+            if (self._resume !== token) return;
+            self._resume = null;
+            if (!self.state.isPlaying) self.startPlayback();
+        }).catch(function (e) {
+            if (self._resume === token) self._resume = null;
+            videoLog("Resume after scrub failed: " + (e && e.message), "error");
+        });
+    }
+
+    /** True while a `resumeAfterScrub` is waiting to start playback. */
+    get resumePending() {
+        return this._resume !== null;
     }
 
     /**
@@ -2830,6 +2961,7 @@ export class VideoController {
      */
     stopPlayback() {
         var wasPlaying = this.state.isPlaying;
+        this._resume = null;   // a stop also cancels a pending resumeAfterScrub
         // Cancel animation frame
         if (this._playRAF) {
             cancelAnimationFrame(this._playRAF);
@@ -3050,7 +3182,17 @@ export class VideoController {
             offsetY: 0,
             baseW: 0,   // wrapper base display size the offsets are valid for;
             baseH: 0,   // set by applyZoom, used by reapplyZoom to anchor on resize
+            // Held at native resolution (1:1). A pane rebuild re-inits every
+            // view, so a view comes back at 1:1 while the mode is on; its scale
+            // is computed by the next reapplyZoom, once the canvas is laid out.
+            native: !!(this.state && this.state.nativeResolution),
+            scaleY: undefined, // vertical scale, set only while `native` (see nativeZoomScales)
         };
+    }
+
+    /** Vertical zoom scale: differs from `z.scale` only at native resolution. */
+    _scaleY(z) {
+        return (z.native && z.scaleY > 0) ? z.scaleY : z.scale;
     }
 
     applyZoom(view) {
@@ -3058,14 +3200,18 @@ export class VideoController {
 
         var z = view.zoom;
         var rot = view.rotation || 0;
+        var sx = z.scale, sy = this._scaleY(z);
+        var scaleCss = sy === sx ? "scale(" + sx + ")" : "scale(" + sx + ", " + sy + ")";
         var transform;
         if (rot === 0) {
-            transform = "translate(" + z.offsetX + "px, " + z.offsetY + "px) scale(" + z.scale + ")";
+            if (z.native) this._alignNativeOffsets(z, 0, 0, 0);
+            transform = "translate(" + z.offsetX + "px, " + z.offsetY + "px) " + scaleCss;
         } else {
             // Rotate around wrapper center using cached CSS dimensions (avoids reflow)
             var cX = view.canvas ? parseFloat(view.canvas.style.width) / 2 || 0 : 0;
             var cY = view.canvas ? parseFloat(view.canvas.style.height) / 2 || 0 : 0;
-            transform = "translate(" + z.offsetX + "px, " + z.offsetY + "px) translate(" + cX + "px, " + cY + "px) rotate(" + rot + "deg) translate(" + (-cX) + "px, " + (-cY) + "px) scale(" + z.scale + ")";
+            if (z.native) this._alignNativeOffsets(z, rot, cX, cY);
+            transform = "translate(" + z.offsetX + "px, " + z.offsetY + "px) translate(" + cX + "px, " + cY + "px) rotate(" + rot + "deg) translate(" + (-cX) + "px, " + (-cY) + "px) " + scaleCss;
         }
 
         var wrapper = view.wrapper || (view.canvas ? view.canvas.parentElement : null);
@@ -3085,10 +3231,28 @@ export class VideoController {
 
         var cell = view.canvas ? view.canvas.closest('.video-cell') : null;
         if (cell) {
-            var isZoomed = Math.abs(z.scale - 1.0) > 0.01;
+            // The badge reads the zoom as a percentage of 1:1 (`zoomPercentLabel`).
+            // It shows at 1:1 even when 1:1 happens to be the fit: "100%" is
+            // the only on-screen sign that a wheel zoom snapped there.
+            var isZoomed = Math.abs(z.scale - 1.0) > 0.01 || !!z.native;
             cell.classList.toggle('zoomed', isZoomed);
+            cell.classList.toggle('native-resolution', !!z.native);
+            // The badge is `.zoom-badge` (the button plus its hover menu of
+            // zoom presets, ui/sessions-panes.js); a bare `.unzoom-btn` is
+            // still handled for any pane built without the wrapper.
             var unzoomBtn = cell.querySelector('.unzoom-btn');
-            if (unzoomBtn) unzoomBtn.style.display = isZoomed ? '' : 'none';
+            if (unzoomBtn) {
+                var badge = unzoomBtn.closest('.zoom-badge') || unzoomBtn;
+                badge.style.display = isZoomed ? '' : 'none';
+                var nat = isZoomed ? this.nativeZoomScales(view) : null;
+                var label = zoomPercentLabel(sx, nat ? nat.x : null, !!z.native);
+                var labelEl = unzoomBtn.querySelector('.zoom-badge-label') || unzoomBtn;
+                labelEl.textContent = label;
+                unzoomBtn.title = (z.native
+                    ? 'Native resolution: one video pixel per screen pixel (Shift+0).'
+                    : 'Zoom relative to native resolution (100% = one video pixel per screen pixel).')
+                    + ' Hover for presets; click to fit.';
+            }
         }
 
         // Record the base display size the current offsets are valid for, so the
@@ -3100,6 +3264,220 @@ export class VideoController {
             var bh = wrapper.offsetHeight;
             if (bw > 0 && bh > 0) { z.baseW = bw; z.baseH = bh; }
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Native resolution (1:1)
+    // -----------------------------------------------------------------------
+
+    /**
+     * The zoom at which `view` shows one video pixel per DEVICE pixel, per
+     * axis — `{x, y}` — or null while its canvas is not laid out.
+     *
+     * Per axis because `fitCanvasesToCells` floors the canvas box to whole CSS
+     * px, so the box's aspect is a hair off the video's (561x400 for
+     * 1680x1200). One uniform scale leaves the other axis resampled by up to
+     * ~0.3%, which blurs every row of the picture — exactly what 1:1 is for.
+     * Device pixels, not CSS px: on a Retina display a CSS px is two, and 1:1
+     * in CSS px would still upscale the video twofold.
+     */
+    nativeZoomScales(view) {
+        var canvas = view && view.canvas;
+        if (!canvas || !canvas.style || !(view.videoWidth > 0) || !(view.videoHeight > 0)) return null;
+        var boxW = parseFloat(canvas.style.width) || canvas.offsetWidth;
+        var boxH = parseFloat(canvas.style.height) || canvas.offsetHeight;
+        if (!(boxW > 0) || !(boxH > 0)) return null;
+        var dpr = (typeof window !== 'undefined' && window.devicePixelRatio) || 1;
+        return { x: view.videoWidth / (boxW * dpr), y: view.videoHeight / (boxH * dpr) };
+    }
+
+    /**
+     * Nudge a 1:1 view's pan so the video's pixel grid lands ON the device
+     * pixel grid. At 1:1 a half-pixel offset still resamples: every screen
+     * pixel becomes the average of two video pixels. Chrome snaps the
+     * wrapper's own layout position to whole device pixels before applying a
+     * non-translation transform, so what is left to align is where the
+     * transform puts the canvas's top-left corner — `off + c − R·c` for a
+     * rotation R about the wrapper centre c (just `off` unrotated). R maps the
+     * device grid onto itself for the 90° steps the UI offers.
+     */
+    _alignNativeOffsets(z, rot, cX, cY) {
+        var dpr = (typeof window !== 'undefined' && window.devicePixelRatio) || 1;
+        var px = z.offsetX, py = z.offsetY;
+        if (rot) {
+            var a = rot * Math.PI / 180, ca = Math.cos(a), sa = Math.sin(a);
+            px += cX - (ca * cX - sa * cY);
+            py += cY - (sa * cX + ca * cY);
+        }
+        z.offsetX += (Math.round(px * dpr) - px * dpr) / dpr;
+        z.offsetY += (Math.round(py * dpr) - py * dpr) / dpr;
+    }
+
+    /**
+     * Rescale `view` to (sx, sy), keeping the video point under container
+     * point (qx, qy) — CSS px from the cell's top-left — exactly where it is.
+     * Accounts for the wrapper's flex-centring offset and its rotation about
+     * its own centre, i.e. the whole `applyZoom` transform: a point u of the
+     * canvas box is drawn at `flex + off + c + R·(u∘s − c)`. Without a laid-out
+     * cell both terms are zero and this is the plain `q − (q − off)·s/s0`.
+     * Sets `z.scale` (and `z.scaleY`); the caller constrains and applies.
+     */
+    _zoomAbout(view, sx, sy, qx, qy) {
+        var z = view.zoom;
+        var canvas = view.canvas;
+        var container = canvas && canvas.closest ? canvas.closest('.video-cell') : null;
+        var wW = 0, wH = 0, fx = 0, fy = 0;
+        if (container) {
+            wW = parseFloat(canvas.style.width) || canvas.offsetWidth || 0;
+            wH = parseFloat(canvas.style.height) || canvas.offsetHeight || 0;
+            fx = (container.clientWidth - wW) / 2;
+            fy = (container.clientHeight - wH) / 2;
+        }
+        var cX = wW / 2, cY = wH / 2;
+        var a = (view.rotation || 0) * Math.PI / 180, ca = Math.cos(a), sa = Math.sin(a);
+        var osx = z.scale, osy = this._scaleY(z);
+        // The box point under q, through the inverse of the current transform.
+        var dx = qx - fx - z.offsetX - cX, dy = qy - fy - z.offsetY - cY;
+        var ux = (ca * dx + sa * dy + cX) / osx;
+        var uy = (-sa * dx + ca * dy + cY) / osy;
+        // ...and the pan that draws it at q under the new scale.
+        var vx = ux * sx - cX, vy = uy * sy - cY;
+        z.offsetX = qx - fx - cX - (ca * vx - sa * vy);
+        z.offsetY = qy - fy - cY - (sa * vx + ca * vy);
+        z.scale = sx;
+        z.scaleY = sy;
+    }
+
+    /** Container-centre point of `view`'s cell, in cell CSS px. */
+    _cellCentre(view) {
+        var cell = view.canvas && view.canvas.closest ? view.canvas.closest('.video-cell') : null;
+        return cell ? [cell.clientWidth / 2, cell.clientHeight / 2] : [0, 0];
+    }
+
+    /**
+     * The views a zoom-everything command acts on: laid out in a cell and on
+     * screen (`callbacks.isViewShown`, the app's `isViewDocked`).
+     */
+    _zoomableViews() {
+        var isShown = this.callbacks.isViewShown;
+        return this.state.views.filter(function (v) {
+            if (!v.canvas || !v.canvas.closest || !v.canvas.closest('.video-cell')) return false;
+            return typeof isShown !== 'function' || isShown(v);
+        });
+    }
+
+    /**
+     * Native resolution is ON exactly when every shown view is at 1:1. Derived
+     * rather than latched, so the menu tick cannot disagree with the screen: a
+     * wheel zoom that snaps the solo view to 1:1 turns it on, one that leaves
+     * turns it off. It is also what `initZoom` reads, so a pane rebuild
+     * (switching the solo camera, grid ↔ solo) keeps every view at 1:1.
+     */
+    _syncNativeMode() {
+        var views = this._zoomableViews();
+        this.state.nativeResolution = views.length > 0 && views.every(function (v) {
+            return !!(v.zoom && v.zoom.native);
+        });
+        return this.state.nativeResolution;
+    }
+
+    /** Whether native resolution is on (see `_syncNativeMode`). */
+    nativeResolutionActive() {
+        return this._syncNativeMode();
+    }
+
+    /**
+     * Put `view` at 1:1, keeping the video point at the cell centre where it
+     * is. A view not laid out yet keeps the flag and is scaled by the next
+     * `reapplyZoom`.
+     */
+    _enterNative(view) {
+        if (!view.zoom) this.initZoom(view);
+        var z = view.zoom;
+        var nat = this.nativeZoomScales(view);
+        if (!nat) { z.native = true; return; }
+        var q = this._cellCentre(view);
+        this._zoomAbout(view, nat.x, nat.y, q[0], q[1]);
+        z.native = true;
+        this._constrainOffsets(z, view);
+        this.applyZoom(view);
+    }
+
+    /**
+     * View ▸ Native Resolution / Shift+0. ON puts every shown view at one
+     * video pixel per device pixel and holds it there through resizes, pane
+     * rebuilds and devicePixelRatio changes (`reapplyZoom`); OFF fits them
+     * back into their panes. Pixel-exact at an integer devicePixelRatio. At
+     * some fractional ones (2.2 — 110% browser zoom on a Retina display) the
+     * video is shown at its native size, but Chrome's compositor resamples it
+     * whatever the transform says.
+     * @returns {boolean} whether native resolution is now on
+     */
+    setNativeResolution(on) {
+        // Every view, shown or not: a pane rebuild restores the zoom of views
+        // that were hidden (`updateVideoGridDisplay`), so a hidden view left
+        // flagged would come back at 1:1 after OFF, and one left unflagged
+        // would come back fitted while ON. Hidden views get their scale from
+        // `reapplyZoom` once they are laid out again.
+        var shown = this._zoomableViews();
+        for (var i = 0; i < this.state.views.length; i++) {
+            var view = this.state.views[i];
+            if (on) {
+                if (shown.indexOf(view) >= 0) this._enterNative(view);
+                else { if (!view.zoom) this.initZoom(view); view.zoom.native = true; }
+            } else if (view.zoom && view.zoom.native) {
+                this._clearZoom(view);
+            }
+        }
+        this._syncNativeMode();
+        if (this.callbacks.onZoomChange) this.callbacks.onZoomChange();
+        return this.state.nativeResolution;
+    }
+
+    /** Flip native resolution (see `setNativeResolution`). */
+    toggleNativeResolution() {
+        return this.setNativeResolution(!this._syncNativeMode());
+    }
+
+    /**
+     * `view`'s zoom as a percentage of 1:1 (`100 × scale / nativeScale`), or
+     * null while its canvas is not laid out. What the pane badge reads.
+     */
+    zoomPercent(view) {
+        if (!view || !view.zoom) return null;
+        var nat = this.nativeZoomScales(view);
+        return nat ? 100 * view.zoom.scale / nat.x : null;
+    }
+
+    /**
+     * The pane badge's presets: zoom `view` — this view only — to `pct` % of
+     * 1:1, keeping the video point at the cell centre where it is. 100 puts it
+     * AT 1:1 (per-axis scale, on the pixel grid, held through resizes) exactly
+     * like Shift+0 does for every view; any other value is a plain zoom of
+     * `pct/100 × ` the 1:1 scale. A preset is not clamped to the wheel's range:
+     * picking 50% on a video whose fit is 80% gets 50%.
+     * @returns {boolean} false when the view has no 1:1 scale yet
+     */
+    setZoomPercent(view, pct) {
+        if (!view || !(pct > 0)) return false;
+        if (!view.zoom) this.initZoom(view);
+        var nat = this.nativeZoomScales(view);
+        if (!nat) return false;
+        var z = view.zoom;
+        if (pct === 100) {
+            this._enterNative(view);
+        } else {
+            var s = nat.x * pct / 100;
+            var q = this._cellCentre(view);
+            this._zoomAbout(view, s, s, q[0], q[1]);
+            z.native = false;
+            z.scaleY = undefined;
+            this._constrainOffsets(z, view);
+            this.applyZoom(view);
+        }
+        this._syncNativeMode();
+        if (this.callbacks.onZoomChange) this.callbacks.onZoomChange();
+        return true;
     }
 
     /**
@@ -3118,38 +3496,41 @@ export class VideoController {
      *
      * @param {number} wW - wrapper CSS width (px)
      * @param {number} wH - wrapper CSS height (px)
-     * @param {number} scale - zoom scale
+     * @param {number} scale - zoom scale (horizontal, when `scaleY` is given)
      * @param {number} rot - rotation in degrees
+     * @param {number} [scaleY] - vertical zoom scale; defaults to `scale`
+     *   (they differ only at native resolution, see `nativeZoomScales`)
      * @returns {{width:number, height:number, left:number, top:number}}
      */
-    _rotatedBBox(wW, wH, scale, rot) {
+    _rotatedBBox(wW, wH, scale, rot, scaleY) {
         var r = ((rot || 0) % 360 + 360) % 360;
         var s = scale;
+        var t = scaleY > 0 ? scaleY : scale;
         var cX = wW / 2, cY = wH / 2;
 
         // Fast paths for the four cardinal rotations (the only ones the
         // UI exposes today). Formulas derived from applying the CSS
         // transform to the wrapper's four corners and taking min/max.
         if (r === 0) {
-            return { width: wW * s, height: wH * s, left: 0, top: 0 };
+            return { width: wW * s, height: wH * t, left: 0, top: 0 };
         }
         if (r === 90) {
             return {
-                width: wH * s, height: wW * s,
-                left: cX + cY - wH * s,
+                width: wH * t, height: wW * s,
+                left: cX + cY - wH * t,
                 top: cY - cX,
             };
         }
         if (r === 180) {
             return {
-                width: wW * s, height: wH * s,
+                width: wW * s, height: wH * t,
                 left: 2 * cX - wW * s,
-                top: 2 * cY - wH * s,
+                top: 2 * cY - wH * t,
             };
         }
         if (r === 270) {
             return {
-                width: wH * s, height: wW * s,
+                width: wH * t, height: wW * s,
                 left: cX - cY,
                 top: cX + cY - wW * s,
             };
@@ -3158,7 +3539,7 @@ export class VideoController {
         var a = r * Math.PI / 180;
         var ca = Math.cos(a), sa = Math.sin(a);
         var corners = [[-cX, -cY], [wW * s - cX, -cY],
-                       [wW * s - cX, wH * s - cY], [-cX, wH * s - cY]];
+                       [wW * s - cX, wH * t - cY], [-cX, wH * t - cY]];
         var minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
         for (var i = 0; i < 4; i++) {
             var rx = ca * corners[i][0] - sa * corners[i][1];
@@ -3225,7 +3606,7 @@ export class VideoController {
         // On-screen bbox (excluding the outer offset translation):
         //   bbox_left = flexOffX + bbox.left + z.offsetX
         //   bbox_top  = flexOffY + bbox.top  + z.offsetY
-        var bbox = this._rotatedBBox(wW, wH, z.scale, view.rotation || 0);
+        var bbox = this._rotatedBBox(wW, wH, z.scale, view.rotation || 0, this._scaleY(z));
         var bboxLeft0 = flexOffX + bbox.left;
         var bboxTop0 = flexOffY + bbox.top;
 
@@ -3247,33 +3628,69 @@ export class VideoController {
         }
     }
 
+    /**
+     * Zoom `view` by `factor`, about container point (cssX, cssY) when given.
+     * A step that passes through the view's native (1:1) scale stops on it
+     * (`snapZoomToNative`) and holds it there; a step from 1:1 leaves it. The
+     * usual [fit, 10x] range stretches to include 1:1, so a video smaller than
+     * its pane can be zoomed down to it and a tiny pane up to it.
+     * @returns {boolean} true when this step snapped to 1:1
+     */
     zoomVideo(view, factor, cssX, cssY) {
         if (!view.zoom) this.initZoom(view);
 
         var z = view.zoom;
         var oldScale = z.scale;
         var minScale = this._getMinScale(view);
-        var newScale = Math.max(minScale, Math.min(10, oldScale * factor));
+        var nat = this.nativeZoomScales(view);
+        // The range also stretches to wherever the view already is — a badge
+        // preset (`setZoomPercent`) is not clamped — so a wheel step from 50%
+        // below fit moves on from 50% instead of jumping back up to fit.
+        var lo = Math.min(minScale, nat ? nat.x : Infinity, oldScale);
+        var hi = Math.max(10, nat ? nat.x : 0, oldScale);
+        var newScale = Math.max(lo, Math.min(hi, oldScale * factor));
+        if (newScale === oldScale) return false; // pinned at a limit: nothing moves
+
+        var snapped = false;
+        if (nat && !z.native) {
+            var snap = snapZoomToNative(oldScale, newScale, nat.x);
+            newScale = snap.scale;
+            snapped = snap.snapped;
+        }
+        var newScaleY = snapped ? nat.y : newScale;
 
         if (cssX !== undefined && cssY !== undefined) {
-            var contentX = (cssX - z.offsetX) / oldScale;
-            var contentY = (cssY - z.offsetY) / oldScale;
-            z.offsetX = cssX - contentX * newScale;
-            z.offsetY = cssY - contentY * newScale;
+            // Through the whole transform, flex-centring and rotation included:
+            // the plain `q − (q − off)·s/s0` ignored the wrapper's letterbox
+            // offset, so the picture slid out from under the cursor along the
+            // letterboxed axis by that offset × 10% on every wheel notch.
+            this._zoomAbout(view, newScale, newScaleY, cssX, cssY);
         }
 
         z.scale = newScale;
+        z.native = snapped;
+        z.scaleY = snapped ? newScaleY : undefined;
         this._constrainOffsets(z, view);
         this.applyZoom(view);
+        this._syncNativeMode();
         if (this.callbacks.onZoomChange) this.callbacks.onZoomChange();
+        return snapped;
     }
 
-    resetZoom(view) {
+    /** Back to the fitted view, without the change callbacks. */
+    _clearZoom(view) {
         if (!view.zoom) this.initZoom(view);
         view.zoom.scale = 1.0;
         view.zoom.offsetX = 0;
         view.zoom.offsetY = 0;
+        view.zoom.native = false;
+        view.zoom.scaleY = undefined;
         this.applyZoom(view);
+    }
+
+    resetZoom(view) {
+        this._clearZoom(view);
+        this._syncNativeMode();
         if (this.callbacks.onZoomChange) this.callbacks.onZoomChange();
     }
 
@@ -3294,8 +3711,22 @@ export class VideoController {
                 z.offsetY *= newH / z.baseH;
             }
         }
+        // A view held at 1:1 has a scale that depends on the canvas box and on
+        // devicePixelRatio, so a resize — or the window moving to a display
+        // with another DPR — moves its 1:1 scale. Re-derive it, about the cell
+        // centre, so the picture stays 1:1 and the region in view stays put.
+        var nativeMoved = false;
+        if (z.native) {
+            var nat = this.nativeZoomScales(view);
+            if (nat && (nat.x !== z.scale || nat.y !== this._scaleY(z))) {
+                var q = this._cellCentre(view);
+                this._zoomAbout(view, nat.x, nat.y, q[0], q[1]);
+                nativeMoved = true;
+            }
+        }
         this._constrainOffsets(z, view);
         this.applyZoom(view);
+        if (nativeMoved && this.callbacks.onZoomChange) this.callbacks.onZoomChange();
     }
 
     zoomToRect(view, x1, y1, x2, y2, container) {
@@ -3309,10 +3740,11 @@ export class VideoController {
         var containerW = container.clientWidth;
         var containerH = container.clientHeight;
 
+        var scaleY = this._scaleY(z);
         var contentX1 = (Math.min(x1, x2) - z.offsetX) / z.scale;
-        var contentY1 = (Math.min(y1, y2) - z.offsetY) / z.scale;
+        var contentY1 = (Math.min(y1, y2) - z.offsetY) / scaleY;
         var contentX2 = (Math.max(x1, x2) - z.offsetX) / z.scale;
-        var contentY2 = (Math.max(y1, y2) - z.offsetY) / z.scale;
+        var contentY2 = (Math.max(y1, y2) - z.offsetY) / scaleY;
         var contentW = contentX2 - contentX1;
         var contentH = contentY2 - contentY1;
 
@@ -3325,9 +3757,12 @@ export class VideoController {
         z.offsetX = containerW / 2 - contentCenterX * clampedScale;
         z.offsetY = containerH / 2 - contentCenterY * clampedScale;
         z.scale = clampedScale;
+        z.native = false;
+        z.scaleY = undefined;
         this._constrainOffsets(z, view);
 
         this.applyZoom(view);
+        this._syncNativeMode();
         if (this.callbacks.onZoomChange) this.callbacks.onZoomChange();
     }
 
@@ -3375,11 +3810,28 @@ export class VideoController {
             // view out from under the skeleton being rotated. Releasing Option
             // brings zoom straight back.
             if (e.altKey) return;
-            var factor = e.deltaY < 0 ? 1.10 : 1 / 1.10;
+            var dir = e.deltaY < 0 ? 1 : -1;
+            // A step that snapped to 1:1 holds there: more wheel in the same
+            // direction is swallowed until it rests NATIVE_SNAP_HOLD_MS, so a
+            // fast spin or trackpad momentum stops at 1:1 instead of sailing
+            // past it in the next event. Each swallowed event extends the hold;
+            // reversing direction is never held.
+            var now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+            var hold = view._nativeSnapHold;
+            if (hold) {
+                if (dir === hold.dir && now - hold.last < NATIVE_SNAP_HOLD_MS) {
+                    hold.last = now;
+                    return;
+                }
+                view._nativeSnapHold = null;
+            }
+            var factor = dir > 0 ? 1.10 : 1 / 1.10;
             var rect = container.getBoundingClientRect();
             var cssX = e.clientX - rect.left;
             var cssY = e.clientY - rect.top;
-            self.zoomVideo(view, factor, cssX, cssY);
+            if (self.zoomVideo(view, factor, cssX, cssY)) {
+                view._nativeSnapHold = { dir: dir, last: now };
+            }
         }, { passive: false });
 
         // ---- Drag state for pan / box zoom ----

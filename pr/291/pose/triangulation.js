@@ -9,26 +9,26 @@
 
 import { mat3x3Multiply, Camera, FrameGroup, Instance, UnlinkedInstance, InstanceGroup,
          makePoints3d, points3dNodeCount, hasPoint3d, getPoint3d, readPoint3d,
-         setPoint3d, clearPoint3d, someValidPoint3d, countPoints3d, pooledPoints3d } from './pose-data.js?v=b7ecc7115c45';
+         setPoint3d, clearPoint3d, someValidPoint3d, countPoints3d, pooledPoints3d } from './pose-data.js?v=2650fe2314b9';
 // The Jacobi eigensolver and the least-squares plane fit live in
 // `pose/plane-fit.js`, so `pose/plane-data.js` can reach the fit without
 // importing this module — and the whole UI with it. `fitPlaneToPoints3d` is
 // re-exported unchanged, because every existing caller and test reads it here.
-import { jacobiEigen, fitPlaneToPoints3d } from './plane-fit.js?v=b7ecc7115c45';
+import { jacobiEigen, fitPlaneToPoints3d } from './plane-fit.js?v=2650fe2314b9';
 export { fitPlaneToPoints3d };
-import { state, timeline, viewport3d, interactionManager } from '../ui/app-state.js?v=b7ecc7115c45';
+import { state, timeline, viewport3d, interactionManager } from '../ui/app-state.js?v=2650fe2314b9';
 // Pass 3i-2: triangulation orchestration moved out of app.js
-import { setReprojErrorVisible, showReprojectionsOnly, REPROJ_ONLY_NOTE, drawAllOverlays } from '../ui/rendering.js?v=b7ecc7115c45';
-import { updateTriangulationBadge } from '../ui/info-panel.js?v=b7ecc7115c45';
-import { isCameraTracked, getTrackingThreshold, getDefaultTriangulationMethod } from '../ui/settings.js?v=b7ecc7115c45';
-import { markDirty, setStatus, showLoading, hideLoading } from '../import-export/save-load.js?v=b7ecc7115c45';
-import { showLoadingProgress, createProgressPacer, yieldToPaint } from '../ui/loading-overlay.js?v=b7ecc7115c45';
-import { createGroupSolver } from './triangulation-pool.js?v=b7ecc7115c45';
-import { unionTrackNames, remapTrackIdx, isIdentityRemap } from '../loading/track-union.js?v=b7ecc7115c45';
+import { setReprojErrorVisible, showReprojectionsOnly, REPROJ_ONLY_NOTE, drawAllOverlays } from '../ui/rendering.js?v=2650fe2314b9';
+import { updateTriangulationBadge } from '../ui/info-panel.js?v=2650fe2314b9';
+import { isCameraTracked, getTrackingThreshold, getDefaultTriangulationMethod } from '../ui/settings.js?v=2650fe2314b9';
+import { markDirty, setStatus, showLoading, hideLoading } from '../import-export/save-load.js?v=2650fe2314b9';
+import { showLoadingProgress, createProgressPacer, yieldToPaint } from '../ui/loading-overlay.js?v=2650fe2314b9';
+import { createGroupSolver } from './triangulation-pool.js?v=2650fe2314b9';
+import { unionTrackNames, remapTrackIdx, isIdentityRemap } from '../loading/track-union.js?v=2650fe2314b9';
 import { evictLazyFrameGroups, holdLazyResidency, releaseLazyResidency, releaseFrameMembers2d,
-         LAZY_RESIDENT_CAP, LAZY_KEEP_BEHIND } from './lazy-residency.js?v=b7ecc7115c45';
+         LAZY_RESIDENT_CAP, LAZY_KEEP_BEHIND } from './lazy-residency.js?v=2650fe2314b9';
 // Pass 3i-3: update3DViewport moved to pose/initialization.js.
-import { update3DViewport } from './initialization.js?v=b7ecc7115c45';
+import { update3DViewport } from './initialization.js?v=2650fe2314b9';
 // The pure math (DLT, refinement, reprojection, triangulateAndReproject) lives
 // in ./triangulation-core.js so a worker can load it; re-exported below so every
 // existing import of these names from this module keeps working.
@@ -45,7 +45,7 @@ import {
     computeReprojectionError, computeReprojectionErrors, computeMeanReprojectionError,
     invert3x3, triangulateAndReproject, __triangulationKernelsForTest,
     setTriangulationSettingsHooks,
-} from './triangulation-core.js?v=b7ecc7115c45';
+} from './triangulation-core.js?v=2650fe2314b9';
 export {
     triangulatePointDLT, triangulatePoints, BA_ROBUST_SCALE_PX,
     triangulatePointBA, triangulatePointsBA,
