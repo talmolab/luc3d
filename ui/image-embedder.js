@@ -35,13 +35,18 @@
  * frame — see `planKeyframeSamples` (pose/id-switch-check.js) and keyframeIndices.
  *
  * Depends on: ui/app-state.js (state.views), pose/id-switch-check.js
- * (planKeyframeSamples, KEYFRAME_GAP_TOLERANCE), mediabunny (EncodedPacketSink, imported lazily, for the keyframe index);
+ * (planKeyframeSamples, KEYFRAME_GAP_TOLERANCE), ui/load-graph.js (the busy clock, the
+ * load meter and the CPU line, for the progress dialog), mediabunny (EncodedPacketSink, imported lazily, for the keyframe index);
  * spawns ui/image-crop-worker.js and ui/image-model-worker.js.
  */
 
 import { state } from './app-state.js';
 import { planKeyframeSamples, KEYFRAME_GAP_TOLERANCE, findNode } from '../pose/id-switch-check.js';
 import { hydrateFrameMembers2d, releaseFrameMembers2d } from '../pose/lazy-residency.js';
+import { createLoadMeter, createBusyClock, formatCpuLoad, LOAD_WINDOW_MS } from './load-graph.js';
+
+// The load meter now lives in ui/load-graph.js (shared with the loading overlay); still exported from here.
+export { createLoadMeter };
 
 export const TRANSFORMERS_URL = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.0/+esm';
 export const IMAGE_MODEL_ID = 'onnx-community/dinov2-small';
@@ -212,9 +217,10 @@ export function cpuModelWorkerCount(cores, memoryGB) {
  * so it is fetched once. A worker that fails to start is dropped; if none starts,
  * this throws. `run(data, n)` splits the n crops evenly over the workers and
  * resolves to n CLS vectors in order; a worker that dies rejects its share.
+ * `clock` (createBusyClock, optional) is told while each worker has a run, for the CPU load.
  * @returns {Promise<{size: number, run: function(Float32Array, number): Promise<Float32Array[]>, terminate: function}>}
  */
-export async function createCpuModelPool(count, onStatus) {
+export async function createCpuModelPool(count, onStatus, clock) {
     const SZ = 3 * INPUT * INPUT, slots = [];
     let nextId = 0;
     const start = function (reportProgress) {
@@ -222,6 +228,7 @@ export async function createCpuModelPool(count, onStatus) {
             const slot = { w: null, pending: new Map(), dead: null };
             const fail = function (err) {                        // before 'loaded': a failed start; after: a crash
                 slot.dead = err;
+                if (clock) clock.close(slot);
                 slot.pending.forEach(function (p) { p.reject(err); });
                 slot.pending.clear();
                 try { slot.w.terminate(); } catch (e) { /* ignore */ }
@@ -243,6 +250,7 @@ export async function createCpuModelPool(count, onStatus) {
                     const p = slot.pending.get(m.id);
                     if (!p) return;
                     slot.pending.delete(m.id);
+                    if (clock) clock.end(slot);
                     if (m.type === 'result') p.resolve(m); else p.reject(new Error(m.message));
                 }
             };
@@ -259,6 +267,7 @@ export async function createCpuModelPool(count, onStatus) {
         return new Promise(function (resolve, reject) {
             const id = nextId++;
             slot.pending.set(id, { resolve: resolve, reject: reject });
+            if (clock) clock.begin(slot);
             slot.w.postMessage({ type: 'run', id: id, data: data, n: n }, [data.buffer]);
         });
     };
@@ -279,7 +288,10 @@ export async function createCpuModelPool(count, onStatus) {
             });
             return out;
         },
-        terminate: function () { slots.forEach(function (s) { try { s.w.terminate(); } catch (e) { /* ignore */ } }); slots.length = 0; },
+        terminate: function () {
+            slots.forEach(function (s) { if (clock) clock.close(s); try { s.w.terminate(); } catch (e) { /* ignore */ } });
+            slots.length = 0;
+        },
     };
 }
 
@@ -717,49 +729,47 @@ export function summarizeEmbedTiming(tm, backend, dtype) {
     };
 }
 
-/** How far back the progress dialog's GPU load looks (ms). */
-export const GPU_LOAD_WINDOW_MS = 5000;
-
-/**
- * A rolling GPU load for the progress dialog. Fed `(now, busyMs)` — the
- * embedder's cumulative model time, `busyMs()` — it returns the percentage of
- * the last `windowMs` spent running the model, or null until it has 0.5 s of
- * history. It is THIS check's share of the GPU's time (the run summary's
- * `gpuBusyPct`, but recent rather than whole-run): no browser API reports a
- * GPU's total utilisation, so other apps' use of it is not included.
- */
-export function createLoadMeter(windowMs) {
-    const w = windowMs > 0 ? windowMs : GPU_LOAD_WINDOW_MS, hist = [];
-    return function (now, busyMs) {
-        hist.push({ t: now, busy: busyMs });
-        while (hist.length > 2 && now - hist[1].t >= w) hist.shift();   // oldest sample still spanning the window
-        const dt = now - hist[0].t;
-        return dt >= 500 ? 100 * Math.min(1, Math.max(0, (busyMs - hist[0].busy) / dt)) : null;
-    };
-}
+/** How far back the progress dialog's GPU load — and its CPU load — looks (ms): ui/load-graph.js LOAD_WINDOW_MS.
+ *  The GPU load is THIS check's share of the GPU's time (the run summary's `gpuBusyPct`, but recent rather than
+ *  whole-run), fed to createLoadMeter from `busyMs()`: no browser API reports a GPU's total utilisation. */
+export const GPU_LOAD_WINDOW_MS = LOAD_WINDOW_MS;
 
 /**
  * The progress dialog's device line, from the embedder's `device()` and the
- * current load (null: not measured yet): `{text, warn, title}`.
+ * current load (null: not measured yet): `{text, warn, title, metered, load}`.
  * "GPU: Apple metal-3 (WebGPU, fp16) · load 87%". Without a GPU it says so in
  * the warning colour — the CPU workers, or a software adapter if WebGPU was forced
  * onto one — with no load; WebNN, whose device the browser picks, is not claimed
- * to be a GPU.
+ * to be a GPU. `metered`: the line carries a load (once measured), so it has a
+ * series in the load graph; `load` is the load it shows, null when none.
  */
 export function formatEmbedDevice(d, load) {
-    if (!d) return { text: '', warn: false, title: '' };
+    if (!d) return { text: '', warn: false, title: '', metered: false, load: null };
     if (d.backend === 'cpu') {
         return { text: 'No GPU: running on the CPU (' + d.workers + ' worker' + (d.workers === 1 ? '' : 's') + ') — slow', warn: true,
                  title: (d.why ? d.why.charAt(0).toUpperCase() + d.why.slice(1) + ', so the' : 'The') +
-                        ' image model runs on the CPU instead — the same model, much slower.' };
+                        ' image model runs on the CPU instead — the same model, much slower.', metered: false, load: null };
     }
-    const pct = function (label) { return load == null ? '' : ' · ' + label + ' ' + Math.round(load) + '%'; };
-    const title = load == null ? '' : 'The share of the last ' + Math.round(GPU_LOAD_WINDOW_MS / 1000) +
+    const shown = load == null ? null : load;
+    const pct = function (label) { return shown == null ? '' : ' · ' + label + ' ' + Math.round(shown) + '%'; };
+    const title = shown == null ? '' : 'The share of the last ' + Math.round(GPU_LOAD_WINDOW_MS / 1000) +
         ' s spent running the image model for this check. Browsers do not report the GPU\'s total load, so other apps are not included.';
-    if (d.backend === 'webnn') return { text: 'WebNN, fp16 (the browser picks the GPU or the CPU)' + pct('model busy'), warn: false, title: title };
-    if (d.fallback) return { text: 'No GPU: WebGPU is running on the CPU (software adapter) — very slow', warn: true, title: '' };
+    if (d.backend === 'webnn') return { text: 'WebNN, fp16 (the browser picks the GPU or the CPU)' + pct('model busy'), warn: false, title: title, metered: true, load: shown };
+    if (d.fallback) return { text: 'No GPU: WebGPU is running on the CPU (software adapter) — very slow', warn: true, title: '', metered: false, load: null };
     const how = 'WebGPU' + (d.dtype ? ', ' + d.dtype : '') + (d.comparing ? '; comparing with WebNN' : '');
-    return { text: 'GPU: ' + (d.adapter ? d.adapter + ' (' + how + ')' : how) + pct('load'), warn: false, title: title };
+    return { text: 'GPU: ' + (d.adapter ? d.adapter + ' (' + how + ')' : how) + pct('load'), warn: false, title: title, metered: true, load: shown };
+}
+
+/**
+ * The progress dialog's CPU line, above the device line: `{text, title, load}`
+ * (formatCpuLoad, ui/load-graph.js). "CPU: 12 cores · load 7%" — `load` (null: not
+ * measured yet) is the share of ALL the cores this check kept busy over the last
+ * GPU_LOAD_WINDOW_MS: its threads' busy time (`cpuBusyMs()`, plus the dialog's own
+ * timing of the fit) / cores through createLoadMeter, so one saturated thread on 12
+ * cores reads 8%. Video decoding is not in it, and the tooltip says so.
+ */
+export function formatEmbedCpu(cores, load) {
+    return formatCpuLoad(cores, load, 'this check: cropping, the image model when it runs on the CPU, and fitting (not video decoding)');
 }
 
 /**
@@ -789,8 +799,8 @@ export function formatEmbedTiming(t) {
 function formatKeyframes(k) {
     if (!k || !k.of) return '';
     if (k.cameras) return ' · decoded at keyframes in ' + k.cameras + '/' + k.of + ' cameras (' + Math.round(k.snappedPct) + '% of samples)';
-    return ' · every frame decoded' + (k.keyframeGap != null ? ' (keyframe every ' + Math.round(k.keyframeGap) + ' frames; a keyframe every 0.5 s — ' +
-        Math.floor(KEYFRAME_GAP_TOLERANCE * k.spacing) + ' frames or fewer — would decode only the samples)' : '');
+    return ' · every frame decoded' + (k.keyframeGap != null ? ' (keyframe every ' + Math.round(k.keyframeGap).toLocaleString('en-US') + ' frames; a keyframe every 0.5 s — ' +
+        Math.floor(KEYFRAME_GAP_TOLERANCE * k.spacing).toLocaleString('en-US') + ' frames or fewer — would decode only the samples)' : '');
 }
 
 /**
@@ -800,8 +810,9 @@ function formatKeyframes(k) {
  * per animal). `run(image, crops)` transfers the image (the worker closes it) and
  * resolves to one input tensor per crop; a failed worker rejects its job and
  * the pool stops taking new ones (`broken`), so the caller falls back inline.
+ * `clock` (createBusyClock, optional) is told while each worker holds a job, for the CPU load.
  */
-export function createCropPool() {
+export function createCropPool(clock) {
     const forced = typeof window !== 'undefined' ? window.LUCID_CROP_WORKERS : undefined;
     const hc = (typeof navigator !== 'undefined' && navigator.hardwareConcurrency) || 1;
     const n = forced != null ? Math.max(0, forced | 0) : Math.max(0, Math.min(hc - 1, 8));
@@ -814,19 +825,21 @@ export function createCropPool() {
             const w = workers.reduce(function (a, b) { return b.load < a.load ? b : a; });
             const id = nextId++;
             w.load++;
+            if (clock) clock.begin(w);
             return new Promise(function (resolve, reject) {
                 pending.set(id, { resolve: resolve, reject: reject, w: w });
                 w.worker.postMessage({ id: id, image: image, crops: crops }, [image]);
             });
         },
         terminate: function () {
-            workers.forEach(function (w) { w.worker.terminate(); });
+            workers.forEach(function (w) { if (clock) clock.close(w); w.worker.terminate(); });
             pending.forEach(function (p) { p.reject(new Error('crop pool closed')); });
             pending.clear();
         },
     };
     const fail = function (w, msg) {
         pool.broken = true;
+        if (clock) clock.close(w);
         pending.forEach(function (p, id) { if (p.w === w) { pending.delete(id); p.reject(new Error(msg)); } });
     };
     try {
@@ -835,6 +848,7 @@ export function createCropPool() {
             w.worker.onmessage = function (e) {
                 const p = pending.get(e.data.id); if (!p) return;
                 pending.delete(e.data.id); w.load--;
+                if (clock) clock.end(w);
                 if (e.data.error) p.reject(new Error(e.data.error)); else p.resolve(e.data.tensors);
             };
             w.worker.onerror = function (e) { e.preventDefault(); fail(w, 'crop worker failed: ' + (e.message || 'error')); };
@@ -866,7 +880,7 @@ export function createCropPool() {
  * @param {{onStatus?: function(string), maxViewsPerAnimal?: number, webnn?: boolean|'force',
  *          device?: 'auto'|'webgpu'|'cpu', cpuWorkers?: number}} [opts]
  * @returns {Promise<{getEmbeddings: function, prepareFrames: function, releaseFrames: function, backend: function,
- *          device: function, busyMs: function, sampleCrops: function, views: string[]}>}
+ *          device: function, busyMs: function, cpuBusyMs: function, sampleCrops: function, views: string[]}>}
  */
 export async function createImageEmbedder(session, opts) {
     opts = opts || {};
@@ -878,11 +892,13 @@ export async function createImageEmbedder(session, opts) {
     const where = opts.device === 'cpu' ? { kind: 'cpu', adapter: null, why: 'the CPU was requested' }
         : opts.device === 'webgpu' ? { kind: 'webgpu' } : await pickImageDevice();
     let T = null, model = null, device = null, dtype = 'fp32', adapter = where.adapter, cpu = null, cpuWorkers = 0;
+    // the CPU threads' busy time (cpuBusyMs): crop workers, CPU model workers, and crops cut on the main thread
+    const cpuClock = createBusyClock();
     if (where.kind === 'webgpu') ({ T, model, device, dtype, adapter } = await loadImageModel(opts.onStatus));
     else {
         if (opts.onStatus) opts.onStatus('No GPU (' + where.why + ') — loading the image model to run on the CPU (' + 2 * IMAGE_MODEL_MB + ' MB on first use, cached afterwards)…');
         const nav = typeof navigator !== 'undefined' ? navigator : {};
-        cpu = await createCpuModelPool(opts.cpuWorkers > 0 ? Math.floor(opts.cpuWorkers) : cpuModelWorkerCount(nav.hardwareConcurrency, nav.deviceMemory), opts.onStatus);
+        cpu = await createCpuModelPool(opts.cpuWorkers > 0 ? Math.floor(opts.cpuWorkers) : cpuModelWorkerCount(nav.hardwareConcurrency, nav.deviceMemory), opts.onStatus, cpuClock);
         cpuWorkers = cpu.size;
     }
     // WebNN (opt-in, experimental): embed the first frames on both backends, then keep the faster consistent one
@@ -1030,15 +1046,18 @@ export async function createImageEmbedder(session, opts) {
         const jobs = [];
         views.forEach(function (v, vi) { if (images[vi]) jobs.push(cropsFor(vi)); });
         const inline = function (job) {
-            return job.crops.map(function (c) {
-                const t = new Float32Array(SZ);
-                writeInputTensor(cutCrop(images[job.vi].img, c.g, c.others, canvas), t, 0);
-                return t;
-            });
+            cpuClock.begin('main');
+            try {
+                return job.crops.map(function (c) {
+                    const t = new Float32Array(SZ);
+                    writeInputTensor(cutCrop(images[job.vi].img, c.g, c.others, canvas), t, 0);
+                    return t;
+                });
+            } finally { cpuClock.end('main'); }
         };
         let tensors;
         try {
-            if (!pool && pool !== null) pool = createCropPool();
+            if (!pool && pool !== null) pool = createCropPool(cpuClock);
             tensors = await Promise.all(jobs.map(async function (job) {
                 if (!pool || pool.broken) return inline(job);
                 const im = images[job.vi];
@@ -1132,6 +1151,10 @@ export async function createImageEmbedder(session, opts) {
         sampleCrops: function () { return samples; },
         /** Milliseconds spent running the model so far, the run in flight included (feeds createLoadMeter). */
         busyMs: function () { return tm.runMs + tm.readMs + (tm.busySince ? performance.now() - tm.busySince : 0); },
+        /** Milliseconds of CPU thread time kept busy so far, SUMMED over threads (so it can grow up to cores x as fast
+         *  as the clock): crop workers, CPU model workers and inline crops, jobs in flight included. Per thread
+         *  it is the time the thread held work, waits inside it (a crop's readback) included. */
+        cpuBusyMs: function () { return cpuClock.ms(); },
         views: views.map(function (v) { return v.cameraName || v.name; }),
     };
 }

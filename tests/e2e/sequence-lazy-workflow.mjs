@@ -186,8 +186,8 @@ try {
         /** What the status bar shows right now. */
         window.__seqCountersShown = () => {
             const num = (id) => {
-                const m = ((document.getElementById(id) || {}).textContent || '').match(/-?\d+/);
-                return m ? Number(m[0]) : null;
+                const m = ((document.getElementById(id) || {}).textContent || '').match(/-?\d[\d,]*/);   // "Labeled Frames: 1,234"
+                return m ? Number(m[0].replace(/,/g, '')) : null;
             };
             return {
                 cam: ((document.getElementById('statusCamera') || {}).textContent || '').replace(/^Camera:\s*/, ''),

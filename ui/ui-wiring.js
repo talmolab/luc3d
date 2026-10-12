@@ -1196,7 +1196,7 @@ export function setupMenus() {
             applyBtn.disabled = seconds == null;
             noteEl.textContent = 'At ' + fpsText + '.' +
                 (seconds != null && seconds * rate > MAX_TRAIL_FRAMES + 0.5
-                    ? ' A trail draws at most ' + MAX_TRAIL_FRAMES + ' frames.' : '');
+                    ? ' A trail draws at most ' + MAX_TRAIL_FRAMES.toLocaleString('en-US') + ' frames.' : '');
         }
         function close() {
             document.removeEventListener('keydown', onKey, true);
@@ -1264,7 +1264,7 @@ export function setupMenus() {
 
         var count = swapTracks(a, b, frameStart, frameEnd);
         setStatus('Swapped ' + state.session.tracks[a] + ' ↔ ' + state.session.tracks[b] +
-            ' (' + count + ' instances, frames ' + (frameStart + 1) + '–' + (frameEnd + 1) + ')', 'success');
+            ' (' + count.toLocaleString('en-US') + ' instances, frames ' + (frameStart + 1).toLocaleString('en-US') + '–' + (frameEnd + 1).toLocaleString('en-US') + ')', 'success');
         drawAllOverlays(state.currentFrame);
         updateInfoPanel();
         if (timeline) timeline.refreshTracks(state.session);
@@ -1863,7 +1863,7 @@ function copySelectedInstance() {
         sourceView: viewName,
         sourceFrame: state.currentFrame
     });
-    setStatus('UserInstance copied in Video ' + viewName + ' Frame ' + (state.currentFrame + 1), 'success');
+    setStatus('UserInstance copied in Video ' + viewName + ' Frame ' + (state.currentFrame + 1).toLocaleString('en-US'), 'success');
 }
 
 // Paste the clipboard instance into the focused video at the current frame,
@@ -1894,7 +1894,7 @@ function pasteInstance() {
     // Reuse the smart-add path: targets lastInteractedView at the current frame,
     // creates a 'user' instance, fires onUserInstanceCreated, and redraws.
     interactionManager._addNewInstance(points);
-    setStatus('UserInstance pasted in Video ' + targetView + ' Frame ' + (state.currentFrame + 1), 'success');
+    setStatus('UserInstance pasted in Video ' + targetView + ' Frame ' + (state.currentFrame + 1).toLocaleString('en-US'), 'success');
 }
 
 export function setupUI() {
@@ -3519,7 +3519,7 @@ export function seekToLabeledFrame(direction) {
         if (timeline) timeline.setCurrentFrame(target);
         updateSeekbarVisual(target);
         videoController.scrubToFrame(target);
-        setStatus('Frame ' + (target + 1), 'info');
+        setStatus('Frame ' + (target + 1).toLocaleString('en-US'), 'info');
     }
 }
 
