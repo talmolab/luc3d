@@ -19,7 +19,8 @@
  * pair that huddles; and a swap made only through a third animal (both from
  * talmolab/luc3d#286). The label-free identity metric is tested on look-alike
  * animals against raw cosine similarity. Crop geometry helpers
- * (ui/image-embedder.js) are checked too.
+ * (ui/image-embedder.js) are checked too, and both checks find their nodes
+ * (Nose, TTI, the size bones) regardless of case.
  *
  * Run:  node tests/test-id-switch-check.mjs
  */
@@ -777,6 +778,29 @@ group('Failure reasons');
     for (const f of Array.from(short.instanceGroups.keys())) if (f >= 40 * 60) short.instanceGroups.delete(f);
     const r4 = await SC.checkSizeSwitches(short, { fps: 60 });
     ok(!r4.ok && /at least 60 s/.test(r4.reason) && /has 40 s/.test(r4.reason), 'under 60 s of tracking → refused, saying how much there is (' + r4.reason + ')');
+}
+
+group('Node names are matched regardless of case (SLEAP skeletons name nodes freely)');
+{
+    eq(SC.findNode(['nose', 'tti', 'Nose'], 'Nose'), 2, 'an exact match wins');
+    eq(SC.findNode(['ear_left', 'nose', 'TTI'], 'Nose'), 1, 'otherwise the first case-insensitive one');
+    eq(SC.findNode(['NOSE'], 'nose'), 0, 'either way round');
+    eq(SC.findNode(['snout', 'tail_base'], 'Nose'), -1, 'a different name is not matched (-1)');
+    // the same session, its skeleton named in lowercase: the size check must score it identically
+    const SWAP = 16, a = buildSession(SWAP), b = buildSession(SWAP);
+    b.session.skeleton = new PD.Skeleton('m', NODES.map(n => n.toLowerCase()), []);
+    const ra = await SC.checkSizeSwitches(a.session, { fps: 60 }), rb = await SC.checkSizeSwitches(b.session, { fps: 60 });
+    ok(rb.ok && JSON.stringify(rb.encounters.map(e => [e.frame, e.score])) === JSON.stringify(ra.encounters.map(e => [e.frame, e.score])) && rb.flags.length === ra.flags.length,
+        `size check: a lowercase skeleton scores every contact exactly as the standard names do (${rb.encounters.length} contacts, ${rb.flags.length} flag)`);
+    ok(rb.bones.includes('nose–tti') && rb.bones.length === ra.bones.length, `…reading the same ${rb.bones.length} bones, named as the skeleton names them (${rb.bones.slice(0, 3).join(', ')}, …)`);
+    globalThis.window = globalThis;
+    const E = await import(pathToFileURL(path.join(ROOT, 'ui', 'image-embedder.js')).href).catch(err => ({ __err: err }));
+    if (E.__err) ok(false, 'image-embedder imports headlessly: ' + E.__err.message);
+    else {
+        const lower = E.skeletonIndex(['tail_tip', 'ear_left', 'nose', 'tti', 'head']), std = E.skeletonIndex(['TailTip', 'Ear_L', 'Nose', 'TTI', 'Head']);
+        ok(lower.nose === 2 && lower.tti === 3 && JSON.stringify(lower.body) === JSON.stringify(std.body),
+            `image check: nose / tti found in a lowercase skeleton (${lower.nose}, ${lower.tti}), the same body nodes as the standard names`);
+    }
 }
 
 group('Progress callback — awaited before the work and at its end');

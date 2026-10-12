@@ -95,6 +95,23 @@ export const IMAGE_CHECK_DEFAULTS = Object.assign({}, SWITCH_CHECK_DEFAULTS, {
 
 const isTailNode = function (name) { return /^tail/i.test(name); };
 
+/**
+ * The index of node `name` in `names`, matched regardless of case — SLEAP
+ * skeletons name nodes freely (`nose`, `TTI`, `Nose`…), and the checks look
+ * nodes up by name. An exact match wins, then the first case-insensitive one;
+ * -1 when there is neither.
+ * @param {string[]} names  the skeleton's node names, in order
+ * @param {string} name
+ * @returns {number}
+ */
+export function findNode(names, name) {
+    var exact = names.indexOf(name);
+    if (exact >= 0) return exact;
+    var lower = String(name).toLowerCase();
+    for (var i = 0; i < names.length; i++) if (typeof names[i] === 'string' && names[i].toLowerCase() === lower) return i;
+    return -1;
+}
+
 function throwIfAborted(signal) {
     if (signal && signal.aborted) {
         var e = new Error('Cancelled'); e.name = 'AbortError'; throw e;
@@ -170,12 +187,15 @@ function buildGrid(session, o, needSize) {
     var secToSamples = function (sec) { return Math.max(1, Math.ceil(sec * hz)); };
     if (!session || !session.instanceGroups || !session.skeleton) return { fail: 'No tracked session' };
     var nodes = (session.skeleton.nodes || []).map(function (n) { return typeof n === 'string' ? n : n && n.name; });
-    var nodeIdx = new Map(nodes.map(function (n, i) { return [n, i]; }));
-    var bones = SIZE_BONES.filter(function (b) { return nodeIdx.has(b[0]) && nodeIdx.has(b[1]); });
+    // the size bones present, found by name regardless of case (findNode), and named as the skeleton names them
+    var boneIdx = [], bones = [];
+    SIZE_BONES.forEach(function (b) {
+        var i0 = findNode(nodes, b[0]), i1 = findNode(nodes, b[1]);
+        if (i0 >= 0 && i1 >= 0) { boneIdx.push([i0, i1]); bones.push([nodes[i0], nodes[i1]]); }
+    });
     if (needSize && bones.length < 4) return { fail: 'The skeleton has too few of the size nodes (need at least 4 of: ' +
-        SIZE_BONES.map(function (b) { return b.join('–'); }).join(', ') + ')' };
+        SIZE_BONES.map(function (b) { return b.join('–'); }).join(', ') + ', in any case)' };
     var B = bones.length;
-    var boneIdx = bones.map(function (b) { return [nodeIdx.get(b[0]), nodeIdx.get(b[1])]; });
     var bodyNodes = nodes.map(function (n, i) { return i; }).filter(function (i) { return nodes[i] && !isTailNode(nodes[i]); });
 
     var idents = session.identities || [];

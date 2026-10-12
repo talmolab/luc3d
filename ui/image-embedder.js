@@ -40,7 +40,7 @@
  */
 
 import { state } from './app-state.js';
-import { planKeyframeSamples, KEYFRAME_GAP_TOLERANCE } from '../pose/id-switch-check.js';
+import { planKeyframeSamples, KEYFRAME_GAP_TOLERANCE, findNode } from '../pose/id-switch-check.js';
 import { hydrateFrameMembers2d, releaseFrameMembers2d } from '../pose/lazy-residency.js';
 
 export const TRANSFORMERS_URL = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.0/+esm';
@@ -380,11 +380,11 @@ function cosine(a, b) {
     return ab / Math.sqrt(aa * bb);
 }
 
-/** Body-node indices of a skeleton (everything but the tail), plus Nose / TTI. */
+/** Body-node indices of a skeleton (everything but the tail), plus Nose / TTI — found regardless of case (`findNode`). */
 export function skeletonIndex(nodes) {
     const names = nodes.map(function (n) { return typeof n === 'string' ? n : n && n.name; });
     return {
-        nose: names.indexOf(NOSE), tti: names.indexOf(TTI),
+        nose: findNode(names, NOSE), tti: findNode(names, TTI),
         body: names.map(function (n, i) { return i; }).filter(function (i) { return names[i] && !/^tail/i.test(names[i]); }),
         n: names.length,
     };

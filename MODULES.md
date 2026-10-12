@@ -3824,7 +3824,10 @@ candidate moments tested on both sides — it was calibrated on that. Pure — n
 no app state — so all run headlessly (the image and brightness checks with any
 vector provider).
 
-**Key exports.** `checkSizeSwitches(session, opts)` and
+**Key exports.** `findNode(names, name)` (a node's index matched regardless of
+case: an exact match wins, then the first case-insensitive one, else -1 — the size
+bones here and Nose / TTI in `ui/image-embedder.js` `skeletonIndex`, since SLEAP
+skeletons name nodes freely: `nose`, `tti`, …); `checkSizeSwitches(session, opts)` and
 `checkImageSwitches(session, opts)` (async) -> `{ok, flags, changes ([]),
 encounters (the scored contacts), identities, sampledFrames, closeDistance,
 threshold, fps, step, sampleHz, cue}` (+ `bones` for size; + `imageHz`, `crops`,
@@ -3866,7 +3869,9 @@ per item [{camera, vector}]`, STARTED in increasing frame order with up to
 brightness" below).
 
 **The grid.** Every round(fps / `sampleHz`)-th frame is a grid sample: per
-identity its InstanceGroup, body centroid and bone lengths. "Close" = body
+identity its InstanceGroup, body centroid and bone lengths (the `SIZE_BONES` the
+skeleton has, found by name regardless of case and reported in `bones` as the
+skeleton names them). "Close" = body
 centroids within `sepFactor` x the median body extent (unit-free). Tracklet = a
 run where an identity is apart from every other.
 
@@ -10366,7 +10371,8 @@ against `cutCrop` itself within 0.04 px, at any rotation);
 `chooseBackend(trial)`, `WEBNN_BATCH`, `WEBNN_TRIAL_FRAMES`; `createCropPool()` -> `{run(image, crops) ->
 Promise<Float32Array[]>, broken, terminate()}` or null; crop helpers
 `cropGeometry` (now also `pts`: every keypoint, for the overlay — cutCrop ignores it), `cutCrop`,
-`convexHull`, `writeInputTensor`, `skeletonIndex(nodes)` (now also `n`, the node count),
+`convexHull`, `writeInputTensor`, `skeletonIndex(nodes)` (now also `n`, the node count; Nose and
+TTI are found regardless of case, through `pose/id-switch-check.js` `findNode`),
 `frameCropGeometry(session, frame, items, cams, atFrames, sk)` -> `geo[view][item]`, built on
 `mapFrameInstances(session, frame, items, cams, atFrames, fn)` (fn(instance) per view and item, on
 the frame each view decodes, hydrating a lazy project's frames around the read) and
