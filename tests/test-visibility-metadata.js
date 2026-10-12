@@ -368,6 +368,46 @@
             var lucid = fakeLucid();
             assertEqual(m.writeVisibilityMetadata(lucid, null), lucid, 'null session returns the dict');
         });
+
+        // The number of animals tracking uses (Session.numAnimals, the toolbar's
+        // Animals field): a count, an explicit 'auto', or null = never asked.
+        it('round-trips the animal count, and an explicit auto-detect', function () {
+            var m = M();
+            [3, 1, 12, 'auto'].forEach(function (v) {
+                var src = fakeSession('src');
+                src.numAnimals = v;
+                var lucid = m.writeVisibilityMetadata(fakeLucid(), src);
+                assertEqual(lucid.numAnimals, v, 'numAnimals ' + v + ' is written');
+                var dst = fakeSession('dst');
+                m.readVisibilityMetadata(dst, lucid);
+                assertEqual(dst.numAnimals, v, 'numAnimals ' + v + ' reads back');
+            });
+        });
+
+        it('a never-asked session writes no animal count, and reads back as never asked', function () {
+            var m = M();
+            var src = fakeSession();
+            src.numAnimals = null;
+            var lucid = m.writeVisibilityMetadata(fakeLucid(), src);
+            assertFalse('numAnimals' in lucid, 'null is the default and is not written');
+            var dst = fakeSession();
+            dst.numAnimals = 4;   // a stale value must not survive a read of a file without one
+            m.readVisibilityMetadata(dst, lucid);
+            assertNull(dst.numAnimals, 'absent reads back as null, so the next Track asks');
+        });
+
+        it('a bad animal count is neither written nor read', function () {
+            var m = M();
+            [0, -2, 2.5, '3', 'AUTO', true, NaN, {}].forEach(function (v) {
+                var src = fakeSession();
+                src.numAnimals = v;
+                var lucid = m.writeVisibilityMetadata(fakeLucid(), src);
+                assertFalse('numAnimals' in lucid, JSON.stringify(v) + ' is not written');
+                var dst = fakeSession();
+                m.readVisibilityMetadata(dst, { numAnimals: v });
+                assertNull(dst.numAnimals, JSON.stringify(v) + ' on disk reads back as never asked');
+            });
+        });
     });
 
     // ---- Session integration ----

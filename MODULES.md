@@ -1531,7 +1531,13 @@ session graph that holds them.
   a track (a pre-#273 `-1` is trackless). Used by the five group-naming status
   lines in `pose/initialization.js`. Tested by `tests/test-group-display-name.mjs`.
 - `Session` — top-level container: cameras, skeleton, tracks, identities,
-  frameGroups, instanceGroups. The `numFrames` getter returns
+  frameGroups, instanceGroups. **`numAnimals`** is the number of animals every
+  tracking run on the session caps identities at: a positive integer, `'auto'`
+  (an explicit auto-detect), or `null` while nobody has been asked, which is
+  what makes Track Frame / Track All prompt. Per session because a session is
+  one recording; saved as `metadata.lucid.numAnimals`
+  (`import-export/visibility-metadata.js`), read and set through
+  `pose/tracker.js`. The `numFrames` getter returns
   `lazyLoader.nFrames` on a lazy session (`frameGroups` there holds only the
   visited/resident window, badly understating the project) and `frameGroups.size`
   otherwise. **Tracks and identities are per-session.** The
@@ -1898,7 +1904,9 @@ identity propagation.
 predictions file opened with Load SLP) has nothing to match across views and no
 3D, so `runTrackingPass` hands Track All to `runSingleCameraTrackAll`, which
 runs sleap-nn's tracker (`pose/sleap-tracker.js`, via
-`pose/single-camera-tracking.js`) with the animal count as its track cap and the
+`pose/single-camera-tracking.js`) with the animal count as its track cap (the
+session's `numAnimals`, asked once and shown in the toolbar's Animals field, as for the
+multi-camera pass) and the
 Tracking Wizard's `scWindowSize` / `scOksStddev` / `scConnectBreaks`. It writes
 the TRACKS, as `sleap-nn track` does, plus one identity per track, then follows
 the multi-camera pass's contract: `markDirty()` after the last bail-out, the
@@ -2088,8 +2096,9 @@ no `points3d` are skipped) and show the total in the bottom-left status bar
 node weights change which instances get grouped (not which nodes triangulate),
 this is the headline metric for comparing weight settings.
 
-**Auto-cap.** When the user leaves the "Number of animals" prompt empty,
-`trackAll` / `trackCurrentFrame` resolve `numAnimals` via
+**Auto-cap.** When the animal count is blank (the prompt answered empty, or
+the toolbar's Animals field cleared), `trackAll` / `trackCurrentFrame` resolve
+`numAnimals` via
 `computeMaxInstancesPerView(session)` — the largest instance count seen
 in any (camera, frame) pair across the session — instead of leaving it
 null. Without the cap, leftover groups that survive reorder (after Fix
@@ -2105,6 +2114,23 @@ drifts upward (e.g., 4 → 11 on the test fixture).
   undefined `CrossViewTracker` — latent bug, see comment in source).
 - `trackAll()` — toolbar "Track All" handler — runs `matchFrameInstances`
   across every frame with temporal continuity signals.
+- `getTrackerNumAnimals()` / `setTrackerNumAnimals(n)` /
+  `onTrackerNumAnimalsChange(fn)` — the ACTIVE session's animal count
+  (`Session.numAnimals`; the getter returns `null` for auto-detect and for
+  never-asked alike). It lives on the session so it is saved with the project.
+  The native `promptNumAnimals()` fires only while the session has **no answer
+  at all** (`numAnimalsAnswered`: `numAnimals` is `null`), not while the count
+  reads null: a blank answer is stored as `'auto'`, and gating on null
+  re-prompted on every Track Frame / Track All after one. The prompt is
+  pre-filled with the session's count, else the last count given in any
+  session this page has seen (`_lastNumAnimals`), so a multi-session project of
+  the same animals answers each new session with one Enter.
+  `setTrackerNumAnimals` counts as an answer, null included; on a change it
+  calls `markDirty()` (it is project state now) and notifies the listeners —
+  that is how the toolbar's Animals field (`ui/animal-count-field.js`) follows
+  the prompt and the Track Frame Range dialog. With no session it is a no-op:
+  there is nothing to save the count with. Loading never goes through it — the
+  readers set `numAnimals` directly, so a reopened project is not dirty.
 
 **Imports from project modules.**
 - `./single-camera-tracking.js` — `singleCameraName`, `singleCameraTrackerConfig`,
@@ -2298,7 +2324,8 @@ reversed; a non-integer endpoint is refused outright, because every comparison
 against `NaN` is false and it would otherwise sail past the ordering check and
 sweep nothing while reporting a `NaN` range. Like Track All, a range run does NOT propagate to tracks.
 `getTrackerNumAnimals` / `setTrackerNumAnimals` expose the animal count so the
-modal can collect it inline; `runTrackingPass` skips the native `promptNumAnimals()`
+modal can collect it inline (and the toolbar's Animals field then shows what it
+set); `runTrackingPass` skips the native `promptNumAnimals()`
 on the range path so a `prompt()` never stacks on top of the dialog.
 `runTrackingPass` **returns** `{ok, start, end, identities, frames}` — `ok:false`
 for every bail-out, and on success the CLAMPED, normalized span actually swept.
@@ -6925,6 +6952,13 @@ data sources. Plus visibility-toggle helpers and frame counter updates.
   does reach that code (without a session `drawAllOverlays` returns early and
   the assertion would be vacuous).
 
+  **The toolbar's Animals field catches up with a session change here too.**
+  The count is per session and nothing announces a session change — the
+  session switch and every load path assign `state.session` themselves — but
+  every one of them ends in a draw, so `syncAnimalCountField()`
+  (`ui/animal-count-field.js`) is called right after the lock. Two comparisons
+  when the session and its count are the ones already shown.
+
 **Imports from project modules.**
 - `./app-state.js` — `state`, `interactionManager`, `timeline`, `isViewDocked`.
 - `../pose/triangulation.js` — `ensureLazyFrameData`,
@@ -6941,6 +6975,8 @@ data sources. Plus visibility-toggle helpers and frame counter updates.
 - `./plane-definition.js` — `drawPlaneOverlays`, `applyPlaneModeToolbarLock`.
   **Circular** (that module imports `drawAllOverlays` back); safe because both
   call sites are inside function bodies.
+- `./animal-count-field.js` — `syncAnimalCountField`. **Circular** through
+  `pose/tracker.js`, which imports this module; safe for the same reason.
 
 **Imported by.** `pose/triangulation.js`, `pose/tracker.js`,
 `pose/initialization.js`, `import-export/save-load.js`,
@@ -6977,6 +7013,60 @@ A **LEAF module**: it imports nothing.
 **Imported by** `ui/plane-definition.js` (which also re-exports it, so the name
 stays reachable at its original path), `ui/plane-nodes-panel.js`,
 `ui/plane-angle.js`, `ui/origin-definition.js`.
+
+### ui/animal-count-field.js
+
+**Purpose.** The toolbar's **Animals** field (`#tbNumAnimals`), first in the
+Track group: shows and edits the ACTIVE session's animal count, the number every
+tracking run caps identities at (`Session.numAnimals`, through
+`pose/tracker.js`). The count used to be visible only in the first-use
+`prompt()`, so a user who forgot what they typed had no way to find out. Blank is
+auto-detect (`placeholder="auto"`), as in the prompt and the Track Frame Range
+dialog.
+
+**Two ways the shown value goes stale, two refreshes.** A change to the count
+(the prompt, the Track Frame Range dialog, the field itself) repaints it through
+`onTrackerNumAnimalsChange`. A change of ACTIVE SESSION has no event — the
+session switch and every load path assign `state.session` themselves — so
+`syncAnimalCountField()` is called from `drawAllOverlays` (`ui/rendering.js`),
+which all of them end in, and costs two comparisons when nothing changed. The
+plane toolbar lock is re-asserted from there for the same reason. It never
+rewrites the field while it has focus.
+
+**Editing.** Commits on `change` (Enter or blur), so a half-typed "1" on the way
+to "12" is never the count; Enter blurs (handing the shortcuts back — a number
+field blocks them all while focused, `ui/keyboard-target.js`), Esc reverts and
+blurs. A bad entry — below 1, not a whole number, or text `value` reports as
+`''` (`validity.badInput`, a stray "e") — reverts with an error status rather
+than being read as blank, and changes nothing. With no session loaded it reverts
+too and says why: the count is saved with a session. A good one goes through
+`setTrackerNumAnimals`, which marks the project dirty.
+
+**Placement and width.** BEFORE Track Frame, not after Track All, where the
+label read as "Track All Animals". Not in Defining Plane Mode's toolbar lock: it
+changes no annotation. The toolbar must fit a 1440px window
+(`tests/e2e/toolbar-3d-toggle-button.mjs` §7), and before this field there were
+~50px to spare. Its ~72px came from the `.toolbar`'s 4px flex gap (a leftover
+of the removed `.toolbar-separator`, 24px), 2px less between the visibility
+checkboxes, and a compact field (11px label, 26px input). The Trails menu
+(`#trailsMenu`) now hangs from its button's RIGHT edge, because the button moved
+right and the closed menu ran 1px past the window as scroll overflow.
+
+**Key exports.**
+- `wireAnimalCountField()` — called once from `setupUI` (`ui/ui-wiring.js`).
+- `syncAnimalCountField()` — called from `drawAllOverlays`; O(1).
+
+**Imports from project modules.** `./app-state.js` (`state`),
+`../import-export/save-load.js` (`setStatus`), `../pose/tracker.js`
+(`getTrackerNumAnimals`, `setTrackerNumAnimals`, `onTrackerNumAnimalsChange`).
+
+**Imported by.** `ui/ui-wiring.js`, `ui/rendering.js`.
+
+Covered by `tests/e2e/toolbar-animal-count.mjs` (placement, the prompt, typed
+counts reaching Track All, bad entries, Esc, shortcuts, blank = answered, the
+range dialog, per-session switching, and a save → fresh page → Load Project
+reopen) and, for the file format, `tests/e2e/visibility-settings-roundtrip.mjs`
+and `tests/test-visibility-metadata.js`.
 
 ### ui/plane-toolbar-lock.js
 
@@ -11521,6 +11611,8 @@ header for the full list. Notable ones: `app-state.js`,
 `sessions-panes.js`, `settings.js`, `settings-modal.js`,
 `track-range-modal.js` (`showTrackRangeModal`, wired to the Track Frame split
 button's `#tbTrackFrameRange` dropdown item — #212),
+`animal-count-field.js` (`wireAnimalCountField`, the Track group's Animals
+field),
 `view-align-modal.js` (`showAlignViewsModal`, wired to View ▸ "Align Views to
 References…" — #226),
 `seekbar-tooltip.js` (`installSeekbarTooltip`, the seekbar's hover tooltip —
@@ -11593,6 +11685,9 @@ imports the modal. The menu is revealed purely by `:hover`, which is
 worth knowing when driving it from a test: a modal opening over the toolbar
 drops hover, so a second click on the item has to re-hover the button first (see
 `tests/e2e/track-frame-range.mjs`).
+
+**The Animals field (`#tbNumAnimals`)** is wired by `wireAnimalCountField()`
+from `ui/animal-count-field.js`, which owns it (see that entry).
 
 **Track / Identity menu modals.** The `Tracks` menu's New / Rename / Delete
 actions for both tracks and identities open shared private modal helpers in
@@ -13888,10 +13983,21 @@ keyboard transport.
 ### import-export/visibility-metadata.js
 
 **Purpose.** The `metadata.lucid` ↔ `Session` mapping for the Visibility panel's
-SESSION-SCOPED settings — and for the other per-session panel state that belongs
-in the project file: the ID Switches tab's review checklist (`idSwitchReview`,
-`ui/id-switch-review.js`). One module owns the key list so a writer and a reader
-cannot drift: adding a setting means touching this file and nothing else.
+SESSION-SCOPED settings — and for the other per-session state that belongs in
+the project file: the ID Switches tab's review checklist (`idSwitchReview`,
+`ui/id-switch-review.js`) and the number of animals tracking uses
+(`numAnimals` ↔ `Session.numAnimals`, the toolbar's Animals field). One module
+owns the key list so a writer and a reader cannot drift: adding a setting means
+touching this file and nothing else.
+
+**`numAnimals`.** A positive integer or `"auto"`. A never-asked session
+(`null`) writes nothing, so it is asked again after a reopen exactly as a new
+session is, and anything else read back (0, 2.5, `"3"`, `"AUTO"`) is treated
+the same way. The read assigns unconditionally, so a file without the key
+leaves `null`, never a stale value. The two helpers (`serializeNumAnimals` /
+`ingestNumAnimals`) are private to this module rather than in
+`pose/tracker.js`, which this module cannot import: it is loaded in the Node
+test sandbox (`tests/run-node.js`).
 
 **What it covers, and what it deliberately does not.** The Visibility panel
 holds two kinds of state:
@@ -13909,7 +14015,7 @@ holds two kinds of state:
 **Key exports.**
 - `VISIBILITY_METADATA_KEYS` — every key this module may write
   (`videoBrightness`, `videoContrast`, `videoRotation`, `hiddenCameras`,
-  `hiddenTracks`, `hiddenIdentities`, `idSwitchReview`). Exported so tests can assert a default
+  `hiddenTracks`, `hiddenIdentities`, `idSwitchReview`, `numAnimals`). Exported so tests can assert a default
   project carries none of them without duplicating the list.
 - `writeVisibilityMetadata(lucid, session)` — mutate a `metadata.lucid` dict in
   place, adding only non-default settings; returns the same dict.

@@ -212,6 +212,16 @@
                 <span class="triangulation-badge" id="triangulationBadge" style="display:none"></span>
             </div>
             <div class="toolbar-group">
+                <!-- The animal count every tracking run uses. Before this it was
+                     visible only in the first-use prompt, so a user who forgot
+                     what they typed had no way to find out. Blank = auto-detect.
+                     Wired in ui/ui-wiring.js (wireAnimalCountField). FIRST in the
+                     group: the setting before the actions that use it, and
+                     after Track All it read as "Track All Animals". -->
+                <label class="toolbar-field" title="Number of animals to track. Leave blank to auto-detect it from the most instances seen in one view.">Animals
+                    <input type="number" id="tbNumAnimals" min="1" step="1" inputmode="numeric"
+                        placeholder="auto" autocomplete="off" aria-label="Number of animals">
+                </label>
                 <div class="tri-dropdown" id="trackFrameDropdown">
                     <button class="toolbar-btn" id="tbTrackFrame" title="Track current frame (Shift+T)">Track Frame <span class="tri-caret">▾</span></button>
                     <div class="tri-dropdown-menu">

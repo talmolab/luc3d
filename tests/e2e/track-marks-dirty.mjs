@@ -228,6 +228,7 @@ try {
         // Track Frame, Track Frame Range, and Track All on a LAZY project — touch nothing…
         const solo = window.__mkSession(window.__mkCams().slice(0, 1));
         window.__install(solo);
+        tracker.setTrackerNumAnimals(2);        // the count is per session (#312): this one has to be told too
         window.__clean();
         tracker.trackCurrentFrame();
         out.oneCamFrame = { dirty: window.__dirty(), status: window.__status() };
