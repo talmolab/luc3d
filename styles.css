@@ -6934,6 +6934,9 @@ details[open] > summary.origin-rebase-block-title::before {
 .id-switch-next:not(:disabled) { border-color: var(--accent); color: var(--accent); }
 .id-switch-repeats { flex-basis: 100%; font-size: 11px; color: var(--text-secondary); }
 .id-switch-run { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+/* Above "Possible ID switches": reopens the last Track All summary (one full-width button) */
+.id-switch-track-summary { padding: 10px 16px; }
+.id-switch-track-summary .panel-btn { display: block; width: 100%; padding: 6px 8px; }
 .id-switch-row {
   display: flex; gap: 8px; align-items: flex-start; cursor: pointer;
   padding: 6px 16px 6px 13px; border-bottom: 1px solid var(--border-color);
