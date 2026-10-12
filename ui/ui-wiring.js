@@ -1865,6 +1865,7 @@ export function setupUI() {
                 var m = seekbarMarkerAt(frac, widthPx);
                 return m ? { frame: m.frame, text: describeSwitchMarker(m) } : null;
             },
+            hoverLine: document.getElementById('seekbarHoverLine'),
         });
 
         var _seekThrottle = { lastRender: 0, timer: null, pendingFrame: null };

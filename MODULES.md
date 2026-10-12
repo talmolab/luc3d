@@ -8662,15 +8662,17 @@ mutations; fits at 640 px).
 
 **Purpose.** Hover tooltip on the transport seekbar (#142): "Frame 1,234 ·
 00:41.100" for the point under the cursor, so you can see where a click or
-drag will land before making it.
+drag will land before making it — and a hover line on the bar marking that
+frame.
 
 **Key exports.** `formatTimestamp(seconds)` (`mm:ss.mmm`, `h:mm:ss.mmm` from an
 hour up; rounds to the millisecond before splitting, so never `00:60.000`),
 `seekbarTooltipText(frameIdx, fps)`, `installSeekbarTooltip(seekbar,
-{frameAtFraction, getTotalFrames, getFps, markerAt?})` -> the tooltip element
-(`markerAt(frac, widthPx)` -> `{frame, text}` | null: a possible-ID-switch tick
-under the cursor — its frame replaces `frameAtFraction`'s, as the scrub handlers
-snap to it, and its text is appended)
+{frameAtFraction, getTotalFrames, getFps, markerAt?, hoverLine?})` -> the
+tooltip element (`markerAt(frac, widthPx)` -> `{frame, text}` | null: a
+possible-ID-switch tick under the cursor — its frame replaces
+`frameAtFraction`'s, as the scrub handlers snap to it, and its text is
+appended; `hoverLine`: the `#seekbarHoverLine` element, from `index.html`)
 (`#seekbarTooltip`, `.seekbar-tooltip`).
 
 **Behaviour.**
@@ -8685,6 +8687,19 @@ snap to it, and its text is appended)
   leave / release outside, and never shown when `totalFrames <= 1`. Centred on
   the cursor and clamped to the bar's extent; `pointer-events: none` so it
   cannot steal the hover.
+- **The hover line** (`#seekbarHoverLine`, `.seekbar-hover-line`) marks the same
+  frame ON the bar, at that frame's own position (`frame / (totalFrames − 1)`,
+  the thumb's mapping) rather than at the raw cursor — so it snaps onto an
+  ID-switch tick exactly as a click does, and is never clamped like the bubble.
+  In the ID Switches tab's playhead colours (`.id-switch-phead`:
+  `--text-primary`, a 1 px dark outline) but BIGGER than an ID-switch tick
+  (4 x 24 px, the bar's full height, against 3 x 16 px), so it reads clearly
+  among them.
+  Painted over the ID-switch ticks and under the thumb — its place in
+  `index.html`'s markup, at the ticks' z-index, is what orders it. Shown and
+  hidden with the tooltip, except during a drag, when the thumb already sits on
+  the frame: it hides on press and comes back on a release over the bar.
+  Positioned in px from the cached rect, so it adds writes and no layout reads.
 - **Layout-free while moving**, so hovering during playback adds no forced
   synchronous layout to the frame: the bar's rect is read on mouseenter / drag
   start and cached (a `ResizeObserver` and window `resize` drop it — the bar's
@@ -8703,7 +8718,9 @@ readout's time row reads exactly as this tooltip does).
 `tests/e2e/seekbar-tooltip.mjs` (real mouse events: follows the pointer,
 tooltip frame == the frame a click lands on, drag off the bar, edges clamped,
 drawn on top of the timeline, no timestamp at fps 0, and zero layout reads
-across a run of hover moves).
+across a run of hover moves; the hover line at the clicked frame's position and
+under the bubble, its colours compared against a live `.id-switch-phead` and
+its size against a live tick, its z-order, snapping onto a tick, hiding through a drag and on leave).
 
 ---
 

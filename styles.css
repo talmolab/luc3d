@@ -2777,6 +2777,18 @@ body {
 .seekbar-mark.is-repeat { opacity: 0.4; width: 2px; height: 10px; box-shadow: none; }
 .seekbar-mark.is-reviewed { opacity: 0.3; }
 
+/* The frame a click would land on, while hovering the seekbar
+   (ui/seekbar-tooltip.js): the ID Switches tab's playhead colours
+   (.id-switch-phead — white, dark outline), but BIGGER than an ID-switch mark
+   (3 x 16px) so it reads clearly among them: 4px wide, the bar's full 24px
+   tall. Over the marks, under the thumb; `left` is set in px. */
+.seekbar-hover-line {
+  position: absolute; top: 0; height: 24px; width: 4px; transform: translateX(-50%);
+  background: var(--text-primary); border-radius: 2px; box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.55);
+  pointer-events: none; z-index: 1;
+}
+.seekbar-hover-line[hidden] { display: none; }
+
 /* Seekbar hover tooltip (#142): frame + timestamp under the cursor. Sits
    above the bar, over the timeline; `left` is set in px by
    ui/seekbar-tooltip.js and the bubble is centred on it. */
