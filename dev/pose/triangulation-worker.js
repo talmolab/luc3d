@@ -19,8 +19,8 @@
  *   { type: 'solved', id, results: [triangulateAndReproject result] }  (points3d transferred)
  *   { type: 'error', id, message }
  */
-import { Camera, Instance } from './pose-data.js?v=15ea85121c0d';
-import { triangulateAndReproject } from './triangulation-core.js?v=15ea85121c0d';
+import { Camera, Instance } from './pose-data.js?v=6b925fbe3077';
+import { triangulateAndReproject } from './triangulation-core.js?v=6b925fbe3077';
 
 let cameras = new Map();
 

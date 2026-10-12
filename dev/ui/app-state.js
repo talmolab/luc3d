@@ -15,7 +15,7 @@
  * surface.
  */
 
-import { trailFrames, trailRate } from './trail-presets.js?v=15ea85121c0d';
+import { trailFrames, trailRate } from './trail-presets.js?v=6b925fbe3077';
 
 export const state = {
     views: [],          // { name, decoder, canvas, ctx, overlayCanvas, overlayCtx, videoWidth, videoHeight }
@@ -38,6 +38,7 @@ export const state = {
     exportDirHandle: null,      // FileSystemDirectoryHandle from showDirectoryPicker(), retained across exports
     cameraDirMap: {},           // camName -> subdirectory name, cached from session folder load
     colorByIdentity: false,     // false = color by track, true = color by identity
+    nativeResolution: false,    // View ▸ Native Resolution (Shift+0): every shown view at one video px per device px. Derived by VideoController._syncNativeMode; initZoom reads it so pane rebuilds keep 1:1.
     trailSeconds: 0,            // node-trail length in SECONDS (0 = off; presets ¼/½/1/2 s or Custom…, ui/trail-presets.js). Set via Tracks menu / Trails button.
     // The trail in FRAMES, derived — never stored — so it follows `fps` when a
     // video loads or the FPS pill is edited. Setting it (tests and benches pin a

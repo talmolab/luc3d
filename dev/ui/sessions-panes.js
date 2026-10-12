@@ -28,22 +28,22 @@ import {
     state,
     videoController, interactionManager, viewport3d, timeline, paneManager,
     setVideoController, setPaneManager,
-} from './app-state.js?v=15ea85121c0d';
-import { FrameGroup, UnlinkedInstance, Camera, someValidPoint3d, pooledPoints3d } from '../pose/pose-data.js?v=15ea85121c0d';
-import { hydrateFrameMembers2d, releaseFrameMembers2d } from '../pose/lazy-residency.js?v=15ea85121c0d';
+} from './app-state.js?v=6b925fbe3077';
+import { FrameGroup, UnlinkedInstance, Camera, someValidPoint3d, pooledPoints3d } from '../pose/pose-data.js?v=6b925fbe3077';
+import { hydrateFrameMembers2d, releaseFrameMembers2d } from '../pose/lazy-residency.js?v=6b925fbe3077';
 import {
     triangulateAndReproject, storeReprojectedInstances, getInstanceGroupsForFrame,
     sessionHasCalibration, resolveTriangulationMethod,
-} from '../pose/triangulation.js?v=15ea85121c0d';
+} from '../pose/triangulation.js?v=6b925fbe3077';
 import {
     cellResizeObserver,
     createViewForVideoFile,
     rebuildVideoController,
     fitCanvasesToCells,
     updateTotalFrames,
-} from '../loading/session-loader.js?v=15ea85121c0d';
-import { OnDemandVideoDecoder } from '../loading/video.js?v=15ea85121c0d';
-import { setStatus, showLoading, hideLoading, quickSave, markDirty } from '../import-export/save-load.js?v=15ea85121c0d';
+} from '../loading/session-loader.js?v=6b925fbe3077';
+import { OnDemandVideoDecoder, ZOOM_PRESET_PERCENTS, zoomRatioLabel } from '../loading/video.js?v=6b925fbe3077';
+import { setStatus, showLoading, hideLoading, quickSave, markDirty } from '../import-export/save-load.js?v=6b925fbe3077';
 import {
     CONTRAST_MIN, CONTRAST_MAX, clampContrast,
     BRIGHTNESS_MIN, BRIGHTNESS_MAX, clampBrightness,
@@ -51,27 +51,27 @@ import {
     buildVideoFilter, getSessionContrast, setSessionContrast,
     getSessionBrightness, setSessionBrightness,
     getSessionRotation, setSessionRotation,
-} from './video-filters.js?v=15ea85121c0d';
+} from './video-filters.js?v=6b925fbe3077';
 // `clampRotation` moved to the dependency-free `video-filters.js` so the test
 // runners can bridge it; re-exported here because `ui/ui-wiring.js` (and the
 // module map) have always imported it from this module.
 export { clampRotation };
-import { drawAllOverlays, setReprojErrorVisible } from './rendering.js?v=15ea85121c0d';
+import { drawAllOverlays, setReprojErrorVisible } from './rendering.js?v=6b925fbe3077';
 // `ui/ui-wiring.js` imports this module, so this is a cycle — hoist-safe
 // because the only read is inside the view strip's click handler, which cannot
 // run during module evaluation.
-import { setSoloView } from './ui-wiring.js?v=15ea85121c0d';
-import { clearReadout, refreshReadoutTotals } from './frame-readout.js?v=15ea85121c0d';
-import { updateInfoPanel, populateTimelineVisibility } from './info-panel.js?v=15ea85121c0d';
-import { refreshIdSwitchPanel } from './id-switch-modal.js?v=15ea85121c0d';
+import { setSoloView } from './ui-wiring.js?v=6b925fbe3077';
+import { clearReadout, refreshReadoutTotals } from './frame-readout.js?v=6b925fbe3077';
+import { updateInfoPanel, populateTimelineVisibility } from './info-panel.js?v=6b925fbe3077';
+import { refreshIdSwitchPanel } from './id-switch-modal.js?v=6b925fbe3077';
 // `autoAssignState` is a mutable binding tracked via ESM live binding.
 // The cycle (identity-assignment imports panelRenderers from here) is
 // hoist-safe because both reads are inside function bodies.
-import { autoAssignState } from './identity-assignment.js?v=15ea85121c0d';
+import { autoAssignState } from './identity-assignment.js?v=6b925fbe3077';
 
 // Pass 3i-3: setup3DViewport moved to pose/initialization.js.
-import { setup3DViewport } from '../pose/initialization.js?v=15ea85121c0d';
-import { getLoadingProgressModal } from './loading-progress-modal.js?v=15ea85121c0d';
+import { setup3DViewport } from '../pose/initialization.js?v=6b925fbe3077';
+import { getLoadingProgressModal } from './loading-progress-modal.js?v=6b925fbe3077';
 
 // ============================================
 // Dockview Pane Manager
@@ -101,22 +101,70 @@ class VideoPaneRenderer {
 
         var self = this;
 
-        // Unzoom button (shown when view is zoomed)
+        // Zoom badge (shown while the view is zoomed or at 1:1). The button
+        // reads the zoom as a % of 1:1 (`applyZoom` writes the label) and a
+        // click fits the view; hovering opens a menu of presets — the
+        // Triangulate split-button pattern, the same pure-CSS `.tri-dropdown`.
+        var findView = function () {
+            return state.views.find(function (v) { return v.name === self.viewName; });
+        };
+        var badge = document.createElement('div');
+        badge.className = 'zoom-badge tri-dropdown';
+        badge.style.display = 'none';
+        // Clicks here are for the badge, not the cell's pan / box-zoom drag.
+        badge.addEventListener('mousedown', function (e) { e.stopPropagation(); });
         var unzoomBtn = document.createElement('button');
         unzoomBtn.className = 'unzoom-btn';
-        unzoomBtn.textContent = 'Zoomed';
+        unzoomBtn.setAttribute('aria-haspopup', 'menu');
+        unzoomBtn.innerHTML = '<span class="zoom-badge-label">Zoomed</span><span class="tri-caret">▾</span>';
         unzoomBtn.title = 'Click to reset zoom';
-        unzoomBtn.style.display = 'none';
-        unzoomBtn.addEventListener('mouseenter', function () { unzoomBtn.textContent = 'Unzoom'; });
-        unzoomBtn.addEventListener('mouseleave', function () { unzoomBtn.textContent = 'Zoomed'; });
         unzoomBtn.addEventListener('click', function (e) {
             e.stopPropagation();
-            var view = state.views.find(function (v) { return v.name === self.viewName; });
+            var view = findView();
             if (view && videoController) {
                 videoController.resetZoom(view);
             }
         });
-        this.element.appendChild(unzoomBtn);
+        var menu = document.createElement('div');
+        menu.className = 'tri-dropdown-menu zoom-preset-menu';
+        menu.setAttribute('role', 'menu');
+        var presetItems = [];
+        var refreshPresetChecks = function () {
+            var view = findView();
+            var pct = view && videoController ? videoController.zoomPercent(view) : null;
+            presetItems.forEach(function (it) {
+                // 100% is ticked only when the view IS at 1:1 (on the pixel
+                // grid, per-axis scale), never merely near it.
+                var on = it.pct === 100
+                    ? !!(view && view.zoom && view.zoom.native)
+                    : pct !== null && Math.abs(pct - it.pct) < 0.05;
+                it.el.querySelector('.trail-check').textContent = on ? '✓' : '';
+                it.el.setAttribute('aria-checked', on ? 'true' : 'false');
+            });
+        };
+        ZOOM_PRESET_PERCENTS.concat([null]).forEach(function (pct) {
+            var item = document.createElement('div');
+            item.className = 'tri-dropdown-item';
+            item.setAttribute('role', pct ? 'menuitemradio' : 'menuitem');
+            if (pct) item.setAttribute('data-zoom-pct', String(pct));
+            else item.setAttribute('data-zoom-fit', '');
+            item.innerHTML = '<span><span class="trail-check"></span>' + (pct ? pct + '%' : 'Fit') + '</span>'
+                + (pct ? '<span class="tri-dropdown-hint">' + zoomRatioLabel(pct) + '</span>' : '');
+            item.addEventListener('click', function (e) {
+                e.stopPropagation();
+                var view = findView();
+                if (!view || !videoController) return;
+                if (pct) videoController.setZoomPercent(view, pct);
+                else videoController.resetZoom(view);
+                refreshPresetChecks();
+            });
+            menu.appendChild(item);
+            if (pct) presetItems.push({ pct: pct, el: item });
+        });
+        badge.addEventListener('mouseenter', refreshPresetChecks);
+        badge.appendChild(unzoomBtn);
+        badge.appendChild(menu);
+        this.element.appendChild(badge);
         this._unzoomBtn = unzoomBtn;
 
         // Canvas wrapper
@@ -590,6 +638,13 @@ export function refreshPaneInteractions() {
     // Render current frame to newly created canvases and fit sizes
     fitCanvasesToCells();
     if (videoController) {
+        // `initZoom` above put every view back at fit — or, while View ▸
+        // Native Resolution is on, flagged it 1:1 with its scale still to be
+        // derived from the box `fitCanvasesToCells` just laid out.
+        for (var ni = 0; ni < state.views.length; ni++) {
+            var nv = state.views[ni];
+            if (nv.zoom && nv.zoom.native) videoController.reapplyZoom(nv);
+        }
         videoController.seekToFrame(state.currentFrame);
     }
     drawAllOverlays(state.currentFrame);
