@@ -157,9 +157,12 @@ enough — transformers.js then fetches the `onnx-community/dinov2-small` **weig
 (44–88 MB) from huggingface.co** at runtime, so offline support means vendoring
 the model as well and setting `env.localModelPath`. It is lazily imported by that
 one opt-in command and nothing else touches it, so this degrades rather than
-breaking the app. Offline, the dynamic `import()` currently throws a raw
-"Failed to fetch dynamically imported module" instead of a reason string like
-`runImage`'s other preflight gates in `ui/id-switch-modal.js`.
+breaking the app. Offline it reports `MODEL_OFFLINE_REASON` as the reason it
+cannot run ("needs an internet connection to download the image model …"),
+like `runImage`'s other preflight gates in `ui/id-switch-modal.js`, instead of
+the browser's bare "Failed to fetch" — and a retry once the network is back
+works without a reload, which a plain re-`import()` of the same URL does not in
+Chrome (`importTransformers`). Covered by `tests/e2e/image-check-offline.mjs`.
 
 **Node-only `.mjs` is never rewritten** (`is_rewritable` in
 `scripts/offline_deps.py`, shared by `bundle` and `server.py --offline` so the zip

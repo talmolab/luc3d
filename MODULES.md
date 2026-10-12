@@ -9004,7 +9004,14 @@ always analyses the WHOLE session's identities. Each result it returns carries
 included), which the Track All summary box shows (`ui/track-summary.js`); it is
 not saved — `serializeIdSwitchReview` (`ui/id-switch-review.js`) picks its fields explicitly.
 
-**The image check.** Needs the session's videos (else it says why). Not a GPU:
+**The image check.** Needs the session's videos (else it says why), and the
+network the first time, to download the model: offline, an error the embedder
+marks `cannotRun` (ui/image-embedder.js — a failed download, or no Nose/TTI) is
+returned as the reason rather than thrown as a failure, so the status reads
+"Check ID Switches (images): needs an internet connection to download the image
+model (…)" and, after tracking, "skipped — …" — where it used to be "failed —
+Failed to fetch dynamically imported module: https://cdn.jsdelivr.net/…" (the
+original goes to the console). Not a GPU:
 without one the embedder runs the model on the CPU (`pickImageDevice` /
 `createCpuModelPool`, ui/image-embedder.js), ~15x slower, and the check runs as
 usual — from the menu and after tracking alike. It used to refuse ("needs WebGPU —
@@ -9477,6 +9484,26 @@ decode + crop ceiling rose from 145 to ~270 crops/s at 3 views (decoding alone:
 7.9 s vs 8.3 s with cropping) — headroom for a GPU faster than ~145 crops/s.
 Numbers in `ui/id-switch-modal.js`.
 
+**Offline, or a host blocked (`asModelDownloadFailure`).** The runtime
+(cdn.jsdelivr.net) and the model (huggingface.co) download on first use, and
+without the network both reject with a bare TypeError that names no cause —
+"Failed to fetch dynamically imported module: <url>" and "Failed to fetch" in
+Chrome (measured), other wordings in Firefox and Safari — which the status line
+used to print verbatim ("failed — Failed to fetch"). Every such wording, from
+either download (and onnxruntime's own failed `.wasm` fetch, which it wraps in a
+plain Error), becomes `MODEL_OFFLINE_REASON` as a `cannotRun` error, which
+`runImage` (ui/id-switch-modal.js) reports as the reason the check cannot run —
+a skip after tracking — rather than a failure. Anything else is left alone. The
+CPU workers classify it themselves, where the error is still a real one, and post
+the flag across. **A retry needs no reload** (`importTransformers`): Chrome keeps
+a failed dynamic import of a URL failed for the page's lifetime — re-importing it
+rejects even once the network is back (measured) — so the runtime is imported
+once, and a retry after a failure imports it under a new FRAGMENT (`#retry1`):
+the same request, since a fragment is never sent, but a new module-map entry.
+`loadImageModel` and `loadWebNNModel` share it, so the page never holds two copies
+of the runtime. `createImageEmbedder`'s two preflight throws (no videos, no
+Nose/TTI) are `cannotRun` errors too.
+
 **Key exports.** `createImageEmbedder(session, {onStatus, maxViewsPerAnimal, webnn, keyframes})` ->
 `{getEmbeddings, prepareFrames, releaseFrames, backend, device, busyMs, stats, inFlight, views}` (the provider
 `checkImageSwitches` needs; `releaseFrames` also terminates the crop pool and the
@@ -9492,6 +9519,10 @@ force a device / worker count (tests, benchmarking);
 `CPU_MODEL_MAX_WORKERS`; `createCpuModelPool(count, onStatus)` -> `{size, run(data, n) ->
 Promise<Float32Array[]>, terminate()}`;
 `loadImageModel(onStatus)` (WebGPU; once, cached promise);
+`importTransformers()` (the runtime, imported once; re-imported under a new fragment
+after a failure); `cannotRun(reason, cause)` (an Error whose message is the reason
+the check cannot run, flagged `cannotRun`); `asModelDownloadFailure(err)` (a failed
+download as `MODEL_OFFLINE_REASON`, else `err` unchanged); `MODEL_OFFLINE_REASON`;
 `selectViews(geos, maxViews)`; `EMBED_MAX_BATCH`, `EMBED_IN_FLIGHT`,
 `summarizeEmbedTiming(tm, backend, dtype)`, `formatEmbedTiming(t)`;
 `describeAdapter(info)`, `gpuAdapterInfo(device, adapter)` -> `{name, fallback}`,
@@ -9555,7 +9586,12 @@ the keyframe line of `formatEmbedTiming` in
 the direct-read control that finds nothing) in `tests/test-lazy-residency.mjs`; the crop pool in `tests/e2e/image-crop-worker.mjs`;
 keyframe sampling on generated 60 fps H.264 and AV1 (keyframes every 30 frames vs one) in
 `tests/e2e/image-keyframe-sampling.mjs` (keyframe index, one decoded packet per
-sample, bit-identical planes, sparse video unchanged); accuracy on real data by
+sample, bit-identical planes, sparse video unchanged); a failed download in
+`tests/test-image-model-download.mjs` (every browser's wording becomes the reason,
+nothing else does; the summary row) and `tests/e2e/image-check-offline.mjs` (the
+real app with every off-localhost request aborted after boot: the runtime and the
+weights, on the GPU and CPU paths, a retry in the same page, after Track All, and
+two negative controls; confirmed to fail on the pre-fix build); accuracy on real data by
 `tests/e2e/_diag-image-keyframe-snap.mjs` (diagnostic, not in the suite);
 the full path on real data by a scratch harness (not in the suite: it needs the
 proofread videos and GPU) — see the image-check notes above.
@@ -9595,15 +9631,19 @@ WebAssembly gets one thread without cross-origin isolation. See
 `ui/image-embedder.js` ("The CPU path") for the measurements.
 
 **Messages.** IN `{type: 'load'}` -> `{type: 'loaded'}` (while downloading:
-`{type: 'progress', loaded, total}`) or `{type: 'error', message}`; IN `{type:
+`{type: 'progress', loaded, total}`) or `{type: 'error', message, cannotRun}`
+(`cannotRun`: a failed download, `message` then being `MODEL_OFFLINE_REASON` —
+classified here by `asModelDownloadFailure`, where the error is still a real
+one); IN `{type:
 'run', id, data: Float32Array(n x 3 x 224 x 224) (transferred), n}` -> `{type:
 'result', id, cls: Float32Array(n x 384) (transferred), dim}` — each crop's CLS
 token, read exactly as the main thread's `clsVectors` does — or `{type: 'error',
 id, message}`.
 
-**Imports from project modules.** `ui/image-embedder.js` (`TRANSFORMERS_URL`,
-`IMAGE_MODEL_ID`, `INPUT` — so the pin stays in one place), then the runtime from
-`TRANSFORMERS_URL` (a dynamic cross-origin import, which a module worker may do).
+**Imports from project modules.** `ui/image-embedder.js` (`importTransformers`,
+`asModelDownloadFailure`, `IMAGE_MODEL_ID`, `INPUT` — so the pin stays in one
+place), then the runtime through `importTransformers` (a dynamic cross-origin
+import of `TRANSFORMERS_URL`, which a module worker may do).
 
 **Spawned by.** `ui/image-embedder.js` (`createCpuModelPool`).
 
@@ -9611,7 +9651,8 @@ id, message}`.
 which has no GPU: vectors bit-identical to the main thread's per animal and camera,
 a responsive page, worker teardown, and the real dialog — the after-tracking path —
 running instead of refusing); `tests/e2e/id-switch-image-check.mjs` §4 (the dialog
-with no GPU runs to the end and finds the switch).
+with no GPU runs to the end and finds the switch); `tests/e2e/image-check-offline.mjs`
+(offline: the reason, not "Failed to fetch").
 
 ---
 
