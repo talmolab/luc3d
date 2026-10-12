@@ -32,7 +32,7 @@ import { state, getActiveSession } from './app-state.js';
 import { setSeekbarSwitchMarkers } from './seekbar-markers.js';
 import { setIdSwitchHighlight, updateIdSwitchHighlight, refreshIdSwitchHighlight, ID_SWITCH_SECTION_RGB } from './id-switch-highlight.js';
 import { setStatus, markDirty } from '../import-export/save-load.js';
-import { showLoadingProgress, hideLoading, yieldToPaint } from './loading-overlay.js';
+import { showLoading, hideLoading, yieldToPaint } from './loading-overlay.js';
 import { getTrackingThreshold } from './settings.js';
 import { checkSizeSwitches, checkImageSwitches } from '../pose/id-switch-check.js';
 import { createImageEmbedder, IMAGE_MODEL_MB, formatEmbedTiming, formatEmbedDevice, formatEmbedCpu,
@@ -248,14 +248,13 @@ function openProgressDialog(title) {
 // ---------------------------------------------------------------------------
 
 async function runSize(session, rate) {
-    var label = 'Checking ID switches (body size)';
-    showLoadingProgress(label, 0, 1);
+    // The overlay's plain form (spinner + message), not a counter: the check is one uninterrupted block of
+    // main-thread work (~0.2-1.5 s) whose only progress is 0 then 1 of one fitting step — which the counter
+    // used to print as "0/1 frames (0%)", frozen until the overlay closed.
+    showLoading('Checking ID switches (body size)…');
     await yieldToPaint();
     try {
-        return await checkSizeSwitches(session, {
-            fps: rate.fps,
-            onProgress: async function (done, total) { showLoadingProgress(label, done, total); await yieldToPaint(); },
-        });
+        return await checkSizeSwitches(session, { fps: rate.fps });
     } finally { hideLoading(); }
 }
 

@@ -5442,7 +5442,12 @@ that runs a chunked main-thread loop behind the overlay.
   `ui/load-graph.js`); the graph is built into `#loadingGraph` once and
   `clear()`ed per operation. Until `hideLoading()` or `setLoadingCpu(null)`; a
   source that throws stops it. An operation that never calls it shows no CPU
-  row (Group by Identity/Track, the body-size ID-switch check, loading).
+  row (Group by Identity/Track, the body-size ID-switch check, loading). The
+  body-size check is left out ON PURPOSE: it runs as one uninterrupted block of
+  main-thread work, 218 ms on 27k frames x 3 animals and 760 ms on 106k
+  (measured), and the line samples once a second after 0.5 s of history — so it
+  could only ever read "CPU: 12 cores", with no load. A CPU line is worth adding
+  to an operation that runs for several seconds AND yields while it does.
 - `createProgressPacer(intervalMs = PROGRESS_INTERVAL_MS)` → `{ due(), yield() }`.
   `due()` is true at most once per interval (a `performance.now()` check, cheap
   enough to call every iteration); `yield()` = `yieldToPaint()`, after which the
@@ -9420,7 +9425,10 @@ rename them wrongly.
 
 **Imports from project modules.** `ui/app-state.js` (`state`, `timeline`,
 `getActiveSession`), `import-export/save-load.js` (`setStatus`),
-`ui/loading-overlay.js` (`showLoadingProgress`, `hideLoading`, `yieldToPaint`),
+`ui/loading-overlay.js` (`showLoading`, `hideLoading`, `yieldToPaint` — the body-size
+check shows the overlay's plain "Checking ID switches (body size)…" form, not a counter:
+it is one uninterrupted ~0.2-1.5 s block whose only progress is 0 then 1 of one fitting
+step, which the counter printed as a frozen "0/1 frames (0%)"),
 `ui/settings.js` (`getTrackingThreshold`), `pose/id-switch-check.js`,
 `ui/image-embedder.js` (`createImageEmbedder`, `IMAGE_MODEL_MB`, `formatEmbedTiming`,
 `formatEmbedDevice`, `formatEmbedCpu`, `inputTensorToPixels`, `INPUT`),
