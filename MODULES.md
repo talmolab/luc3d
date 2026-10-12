@@ -10878,9 +10878,20 @@ three cases read alike.
   tracked in 3). The multiplier is the throughput over the recording fps, so the
   two cannot disagree; with no rate only the fps is shown.
 - `MAX_IDENTITY_ROWS` (12) — identity rows listed before "and N more" (the modal
-  gets no inner scroller).
+  gets no inner scroller). `CLEAR_NOTE` — a clear row's hover text.
 
 **Notes / caveats.**
+- **A clear check says "Nothing flagged in N close encounters", never "No possible
+  switches".** A check that raises nothing has not shown there is no switch — the
+  size check cannot see one between animals of the same size, the image check one
+  between look-alikes, and neither one inside a single contact with no "before" —
+  so the row states what the check did (raised no flag) rather than a conclusion
+  about the data, its text is the ordinary text colour rather than the success
+  green that read as a pass, and its tooltip (`CLEAR_NOTE`) says it can still miss
+  a switch. The same wording is used by the status line (`runIdSwitchChecks`) and
+  the ID Switches tab's header ("37 close encounters · nothing flagged";
+  ui/id-switch-modal.js); a non-zero count still reads "possible switches",
+  which is accurate about what WAS flagged.
 - **A time is shown only for a check that spent real time** (found / clear /
   failed / cancelled); a skip returns at its preflight.
 - **Long reasons are cut at their first parenthesis** (the skeleton skip lists 16

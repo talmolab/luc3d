@@ -167,7 +167,7 @@ try {
     // With every animal the same size the bone lengths carry no identity, so the size check cannot see the
     // switch; the cosine of noise-only window means can still dip just past its threshold elsewhere (two
     // contacts at -1.0 and -1.15 in this fixture), so its count is not asserted — only that it ran.
-    check(/Check ID Switches: (no possible switches|\d+ possible switch).*; Check ID Switches \(images\): 1 possible switch/.test(st2), `status reports each check ("${st2}")`);
+    check(/Check ID Switches: (nothing flagged|\d+ possible switch).*; Check ID Switches \(images\): 1 possible switch/.test(st2), `status reports each check ("${st2}")`);
     const sizeAtSwitch = await page.evaluate((f) => { const r = window.__res.size; return r.flags.filter(x => x.startFrame <= f + 60 && x.frame >= f - 60).length; }, fx.swapFrame);
     check(sizeAtSwitch === 0, `the size check does not flag the switch itself (${sizeAtSwitch})`);
 
