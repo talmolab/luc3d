@@ -16,24 +16,25 @@ import {
     reprojectPoints,
     computeInstanceDistanceTo,
     hungarianAlgorithm
-} from './triangulation.js?v=93925609fe19';
-import { CrossViewTracker, Detection } from './cross-view-tracker.js?v=93925609fe19';
-import { InstanceGroup, points3dNodeCount, hasPoint3d, readPoint3d, pooledPoints3d } from './pose-data.js?v=93925609fe19';
+} from './triangulation.js?v=66b97f09b688';
+import { CrossViewTracker, Detection } from './cross-view-tracker.js?v=66b97f09b688';
+import { InstanceGroup, points3dNodeCount, hasPoint3d, readPoint3d, pooledPoints3d } from './pose-data.js?v=66b97f09b688';
 
 // Pass 3i-1: tracker UI/integration (was in app.js)
-import { state, interactionManager, timeline, viewport3d, getActiveSession } from '../ui/app-state.js?v=93925609fe19';
-import { getNodeWeightArray, getTrackingThresholds, getTrackingThreshold, isCameraTracked } from '../ui/settings.js?v=93925609fe19';
-import { markDirty, setStatus, hideLoading } from '../import-export/save-load.js?v=93925609fe19';
-import { showLoadingProgress, createProgressPacer, yieldToPaint, setLoadingCpu } from '../ui/loading-overlay.js?v=93925609fe19';
-import { loadAllLazyFrames, sweepLazyFrameWindows } from './triangulation.js?v=93925609fe19';
-import { drawAllOverlays, showPredictedOnly, PREDICTED_ONLY_NOTE } from '../ui/rendering.js?v=93925609fe19';
-import { updateInfoPanel } from '../ui/info-panel.js?v=93925609fe19';
-import { setColorByIdentity } from '../ui/color-by.js?v=93925609fe19';
-import { runIdSwitchChecks, clearIdSwitchResults } from '../ui/id-switch-modal.js?v=93925609fe19';
-import { summarizeTrackedIdentities, describeSwitchCheck } from '../ui/track-summary.js?v=93925609fe19';
-import { showTrackSummaryModal } from '../ui/track-summary-modal.js?v=93925609fe19';
-import { collapseTimeline } from '../ui/timeline-controller.js?v=93925609fe19';
-import { collapseViewport3D } from '../ui/panel-visibility.js?v=93925609fe19';
+import { state, interactionManager, timeline, viewport3d, getActiveSession } from '../ui/app-state.js?v=66b97f09b688';
+import { getNodeWeightArray, getTrackingThresholds, getTrackingThreshold, isCameraTracked } from '../ui/settings.js?v=66b97f09b688';
+import { markDirty, setStatus, hideLoading } from '../import-export/save-load.js?v=66b97f09b688';
+import { showLoadingProgress, createProgressPacer, yieldToPaint, setLoadingCpu } from '../ui/loading-overlay.js?v=66b97f09b688';
+import { loadAllLazyFrames, sweepLazyFrameWindows } from './triangulation.js?v=66b97f09b688';
+import { drawAllOverlays, showPredictedOnly, PREDICTED_ONLY_NOTE } from '../ui/rendering.js?v=66b97f09b688';
+import { updateInfoPanel } from '../ui/info-panel.js?v=66b97f09b688';
+import { setColorByIdentity } from '../ui/color-by.js?v=66b97f09b688';
+import { setTrailSeconds, trailSecondsName, TRACK_ALL_TRAIL_SECONDS } from '../ui/trail-presets.js?v=66b97f09b688';
+import { runIdSwitchChecks, clearIdSwitchResults } from '../ui/id-switch-modal.js?v=66b97f09b688';
+import { summarizeTrackedIdentities, describeSwitchCheck } from '../ui/track-summary.js?v=66b97f09b688';
+import { showTrackSummaryModal } from '../ui/track-summary-modal.js?v=66b97f09b688';
+import { collapseTimeline } from '../ui/timeline-controller.js?v=66b97f09b688';
+import { collapseViewport3D } from '../ui/panel-visibility.js?v=66b97f09b688';
 
 /**
  * A frame index as the USER sees it: 1-based.
@@ -1492,6 +1493,13 @@ async function runTrackingPass(range) {
         var switchedToIds = lres.numIdentities > 0 && setColorByIdentity(state, true);
         // ...and only the predictions (User, Reproj, Errors off), the layer tracking produced.
         var predOnly = lres.numIdentities > 0 && showPredictedOnly();
+        // ...and, after Track All, node trails at ¼ s if they are off: each
+        // animal's recent path is where an identity switch shows. A length the
+        // user already picked is left alone, and so is a range (a targeted
+        // re-run, inspected on the timeline). Through ui-wiring's handler, so
+        // the Trails menus and button follow.
+        var trailsOn = !isRange && lres.numIdentities > 0 && !(state.trailSeconds > 0) &&
+            setTrailSeconds(state, TRACK_ALL_TRAIL_SECONDS);
         drawAllOverlays(state.currentFrame);
         updateInfoPanel();
         if (timeline) timeline.refreshTracks(state.session, { cap: true });
@@ -1509,6 +1517,7 @@ async function runTrackingPass(range) {
             totalFrameCount.toLocaleString('en-US') + ' frames' +
             (isRange ? ' (' + displayFrame(lo) + '–' + displayFrame(hi) + ')' : '') +
             (switchedToIds ? ', now coloring by Identity' : '') +
+            (trailsOn ? ', node trails on (' + trailSecondsName(TRACK_ALL_TRAIL_SECONDS) + ')' : '') +
             ' — use Tracks ▸ Propagate IDs → Tracks to apply' + (predOnly ? PREDICTED_ONLY_NOTE : '');
         setStatus(doneMsg, 'success');
         // Then check the result for identity switches (ui/id-switch-modal.js): by body

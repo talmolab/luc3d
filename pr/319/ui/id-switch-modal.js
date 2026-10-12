@@ -28,19 +28,19 @@
  * import-export/save-load.js (setStatus).
  */
 
-import { state, getActiveSession } from './app-state.js?v=93925609fe19';
-import { setSeekbarSwitchMarkers } from './seekbar-markers.js?v=93925609fe19';
-import { setIdSwitchHighlight, updateIdSwitchHighlight, refreshIdSwitchHighlight, ID_SWITCH_SECTION_RGB } from './id-switch-highlight.js?v=93925609fe19';
-import { setStatus, markDirty } from '../import-export/save-load.js?v=93925609fe19';
-import { showLoadingProgress, hideLoading, yieldToPaint } from './loading-overlay.js?v=93925609fe19';
-import { getTrackingThreshold } from './settings.js?v=93925609fe19';
-import { checkSizeSwitches, checkImageSwitches } from '../pose/id-switch-check.js?v=93925609fe19';
+import { state, getActiveSession } from './app-state.js?v=66b97f09b688';
+import { setSeekbarSwitchMarkers } from './seekbar-markers.js?v=66b97f09b688';
+import { setIdSwitchHighlight, updateIdSwitchHighlight, refreshIdSwitchHighlight, ID_SWITCH_SECTION_RGB } from './id-switch-highlight.js?v=66b97f09b688';
+import { setStatus, markDirty } from '../import-export/save-load.js?v=66b97f09b688';
+import { showLoading, hideLoading, yieldToPaint } from './loading-overlay.js?v=66b97f09b688';
+import { getTrackingThreshold } from './settings.js?v=66b97f09b688';
+import { checkSizeSwitches, checkImageSwitches } from '../pose/id-switch-check.js?v=66b97f09b688';
 import { createImageEmbedder, IMAGE_MODEL_MB, formatEmbedTiming, formatEmbedDevice, formatEmbedCpu,
-         inputTensorToPixels, INPUT } from './image-embedder.js?v=93925609fe19';
-import { createLoadMeter, createLoadGraph, setLoadLine, cpuCores } from './load-graph.js?v=93925609fe19';
+         inputTensorToPixels, INPUT } from './image-embedder.js?v=66b97f09b688';
+import { createLoadMeter, createLoadGraph, setLoadLine, cpuCores } from './load-graph.js?v=66b97f09b688';
 import { idSwitchRowKey as rowKey, idSwitchPrimary as primaryOf, idSwitchMarkers as markersOf, idSwitchOnsets as countOnsets,
          idSwitchEncounterCount as encounterCount, linkIdSwitchResults as tagAndLink,
-         idSwitchFixPlan, idSwitchFixFor, idSwitchRenameForFix } from './id-switch-review.js?v=93925609fe19';
+         idSwitchFixPlan, idSwitchFixFor, idSwitchRenameForFix } from './id-switch-review.js?v=66b97f09b688';
 
 const CUE_LABEL = { size: 'body size', image: 'images' };
 
@@ -248,14 +248,13 @@ function openProgressDialog(title) {
 // ---------------------------------------------------------------------------
 
 async function runSize(session, rate) {
-    var label = 'Checking ID switches (body size)';
-    showLoadingProgress(label, 0, 1);
+    // The overlay's plain form (spinner + message), not a counter: the check is one uninterrupted block of
+    // main-thread work (~0.2-1.5 s) whose only progress is 0 then 1 of one fitting step — which the counter
+    // used to print as "0/1 frames (0%)", frozen until the overlay closed.
+    showLoading('Checking ID switches (body size)…');
     await yieldToPaint();
     try {
-        return await checkSizeSwitches(session, {
-            fps: rate.fps,
-            onProgress: async function (done, total) { showLoadingProgress(label, done, total); await yieldToPaint(); },
-        });
+        return await checkSizeSwitches(session, { fps: rate.fps });
     } finally { hideLoading(); }
 }
 
