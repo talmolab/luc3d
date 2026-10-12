@@ -26,18 +26,18 @@
  * import-export/save-load.js (setStatus).
  */
 
-import { state, getActiveSession } from './app-state.js?v=c92e28a45028';
-import { setSeekbarSwitchMarkers } from './seekbar-markers.js?v=c92e28a45028';
-import { setIdSwitchHighlight, updateIdSwitchHighlight, refreshIdSwitchHighlight, ID_SWITCH_SECTION_RGB } from './id-switch-highlight.js?v=c92e28a45028';
-import { setStatus, markDirty } from '../import-export/save-load.js?v=c92e28a45028';
-import { showLoadingProgress, hideLoading, yieldToPaint } from './loading-overlay.js?v=c92e28a45028';
-import { getTrackingThreshold } from './settings.js?v=c92e28a45028';
-import { checkSizeSwitches, checkImageSwitches } from '../pose/id-switch-check.js?v=c92e28a45028';
+import { state, getActiveSession } from './app-state.js?v=8346e4241277';
+import { setSeekbarSwitchMarkers } from './seekbar-markers.js?v=8346e4241277';
+import { setIdSwitchHighlight, updateIdSwitchHighlight, refreshIdSwitchHighlight, ID_SWITCH_SECTION_RGB } from './id-switch-highlight.js?v=8346e4241277';
+import { setStatus, markDirty } from '../import-export/save-load.js?v=8346e4241277';
+import { showLoadingProgress, hideLoading, yieldToPaint } from './loading-overlay.js?v=8346e4241277';
+import { getTrackingThreshold } from './settings.js?v=8346e4241277';
+import { checkSizeSwitches, checkImageSwitches } from '../pose/id-switch-check.js?v=8346e4241277';
 import { createImageEmbedder, IMAGE_MODEL_MB, formatEmbedTiming, createLoadMeter, formatEmbedDevice,
-         inputTensorToPixels, INPUT } from './image-embedder.js?v=c92e28a45028';
+         inputTensorToPixels, INPUT } from './image-embedder.js?v=8346e4241277';
 import { idSwitchRowKey as rowKey, idSwitchPrimary as primaryOf, idSwitchMarkers as markersOf, idSwitchOnsets as countOnsets,
          idSwitchEncounterCount as encounterCount, linkIdSwitchResults as tagAndLink,
-         idSwitchFixPlan, idSwitchFixFor, idSwitchRenameForFix } from './id-switch-review.js?v=c92e28a45028';
+         idSwitchFixPlan, idSwitchFixFor, idSwitchRenameForFix } from './id-switch-review.js?v=8346e4241277';
 
 const CUE_LABEL = { size: 'body size', image: 'images' };
 
@@ -283,7 +283,7 @@ async function runImage(session, rate, inject) {
         var res = await checkImageSwitches(session, {
             fps: rate.fps,
             imageHz: getTrackingThreshold('imageCheckHz') || 2,
-            threshold: getTrackingThreshold('imageCheckThreshold'),
+            threshold: getTrackingThreshold('imageChangeThreshold'),
             getEmbeddings: embedder.getEmbeddings,
             prepareFrames: embedder.prepareFrames,
             inFlight: embedder.inFlight || 2,
@@ -296,7 +296,7 @@ async function runImage(session, rate, inject) {
                     prog.update('Cropping and embedding ' + embedder.views.length + ' views: frame ' + done.toLocaleString() +
                         ' of ' + total.toLocaleString() + (done > 3 ? ' — about ' + fmtDuration(left) + ' left' : ''), 0.9 * done / total);
                 } else {
-                    prog.update('Learning each animal\'s appearance (' + done + ' / ' + total + ')…', 0.9 + 0.1 * done / Math.max(1, total));
+                    prog.update('Learning what tells the animals apart (camera ' + Math.min(done + 1, total) + ' of ' + total + ')…', 0.9 + 0.1 * done / Math.max(1, total));
                 }
                 await yieldToPaint();
             },
@@ -441,12 +441,15 @@ export function clearIdSwitchResults(session) {
 
 function aboutHtml(st, ran) {
     var r0 = st.results[ran[0]], im = st.results.image;
-    return '<p>Each close encounter between two identities is scored by whether the animals leaving it look like the ' +
-        'identities they now carry — by 3D body size' + (im && im.ok ? ' and/or by appearance in the videos' : '') +
-        ', learned from the tracker\'s own labels. Flags are leads to review, not certainties: size cannot tell apart ' +
-        'animals of near-equal size, and images struggle with animals that look alike.' +
-        (ran.length === 2 ? ' <b>Review "Both" rows first</b> — when both checks flag the same encounter it was a real swap ' +
-            'far more often (in calibration: 98% vs 79% for images alone, and none on a 30-min recording with no switches).' : '') + '</p>' +
+    var sz = st.results.size;
+    return '<p>' + (sz && sz.ok ? 'By <b>body size</b>, each close encounter between two identities is scored by whether the ' +
+            'animals leaving it match the 3D size of the identities they now carry, learned from the tracker\'s own labels. ' : '') +
+        (im && im.ok ? 'By <b>images</b>, each contact is scored by whether each animal looks like itself just before and ' +
+            'just after it, so the check does not rely on the tracker\'s labels being mostly right. ' : '') +
+        'Flags are leads to review, not certainties: size cannot tell apart animals of near-equal size, and images ' +
+        'cannot tell apart animals that look alike.' +
+        (ran.length === 2 ? ' <b>Review "Both" rows first</b> — when both checks flag the same contact it was a real swap ' +
+            'more often (on 8 proofread or tail-marked recordings: 4 of 4, against 6 of 8 for images alone).' : '') + '</p>' +
         '<p class="id-switch-rate">Analysed ' + r0.sampleHz.toFixed(1) + ' samples/s (every ' +
         (r0.step === 1 ? 'frame' : ordinal(r0.step) + ' frame') + ' at ' + r0.fps.toFixed(2).replace(/\.?0+$/, '') + ' fps' +
         (im && im.ok ? '; images at ' + im.imageHz.toFixed(1) + '/s, ' + im.crops.toLocaleString() + ' crops from ' + im.cameras.length + ' views' +
@@ -638,12 +641,17 @@ function idName(session, name) {
     return '<span class="id-switch-id"' + (col ? ' style="color:' + col + '"' : '') + '>' + escapeHtml(name) + '</span>';
 }
 
+/** A row's score: size scores are summed evidence (whole numbers), image scores a cosine contrast (-4..4). */
+function fmtScore(m) {
+    return m.cue === 'image' && Math.abs(m.score) < 100 ? (Math.round(m.score * 10) / 10).toFixed(1) : String(Math.round(m.score));
+}
+
 function rowHtml(session, st, f, both) {
     var cue = f.agree ? 'both' : f.cue, key = rowKey(f), rev = isReviewed(st, f);
-    var score = f.agree ? Math.round(f.score) + ' / ' + Math.round(f.agree.score) : Math.round(f.score);
+    var score = f.agree ? fmtScore(f) + ' / ' + fmtScore(f.agree) : fmtScore(f);
     var note = f.continues ? 'still swapped'
         : f.followOf != null ? 'follows the switch at ' + fmtTime(f.followOf)
-        : f.kind === 'end' ? 'labelling changes here; earlier encounters look swapped' : '';
+        : f.kind === 'end' ? (f.cue === 'image' ? 'labels change back here' : 'labelling changes here; earlier encounters look swapped') : '';
     var fixed = idSwitchFixFor(st, f);
     return '<div class="id-switch-row cue-' + cue + (f.continues || f.followOf != null ? ' is-repeat' : '') + (rev ? ' is-reviewed' : '') +
         (fixed ? ' is-fixed' : '') +
