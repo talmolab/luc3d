@@ -15,7 +15,8 @@
  * surface.
  */
 
-import { trailFrames, trailRate } from './trail-presets.js?v=9dcd3983d129';
+import { trailFrames, trailRate } from './trail-presets.js?v=9923e1380f54';
+import { DEFAULT_TRAIL_SHADE } from './overlays.js?v=9923e1380f54';
 
 export const state = {
     views: [],          // { name, decoder, canvas, ctx, overlayCanvas, overlayCtx, videoWidth, videoHeight }
@@ -45,6 +46,7 @@ export const state = {
     // frame count) stores the same span in seconds at the current rate.
     get trailLength() { return trailFrames(this.trailSeconds, this.fps); },
     set trailLength(frames) { this.trailSeconds = frames > 0 ? frames / trailRate(this.fps) : 0; },
+    trailShade: DEFAULT_TRAIL_SHADE, // node-trail color vs the track's: a TRAIL_SHADES key (ui/overlays.js). Set via Tracks menu / Trails button; remembered in localStorage.
     decoderPool: [],            // Persistent OnDemandVideoDecoder instances, reused across session switches
     slpFileHandle: null,        // FileSystemFileHandle for quick save
     isDirty: false,             // true when unsaved annotation changes exist
