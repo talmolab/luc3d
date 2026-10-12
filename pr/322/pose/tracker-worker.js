@@ -13,9 +13,9 @@
  *   - real implementations of CrossViewTracker and Detection2D (currently
  *     missing from `./tracker.js`); and
  *   - explicit `import` statements here, e.g.:
- *       import { CrossViewTracker, Detection2D } from './tracker.js?v=4f7133de022a';
+ *       import { CrossViewTracker, Detection2D } from './tracker.js?v=c86fc596f2f3';
  *   - the spawn site (in app.js or wherever) updated to:
- *       new Worker(new URL('./pose/tracker-worker.js?v=4f7133de022a', import.meta.url),
+ *       new Worker(new URL('./pose/tracker-worker.js?v=c86fc596f2f3', import.meta.url),
  *                  { type: 'module' });
  */
 

@@ -20,7 +20,7 @@
  *   { type: 'error', message: string }
  */
 
-import * as h5wasm from '../lib/h5wasm/hdf5_hl.js?v=4f7133de022a';   // local vendored 0.10.3 ESM
+import * as h5wasm from '../lib/h5wasm/hdf5_hl.js?v=c86fc596f2f3';   // local vendored 0.10.3 ESM
 
 var h5wasmReady = false;
 var FS = null;
@@ -607,6 +607,19 @@ function parseAnalysisH5(f, filename) {
         }
 
         // --- Read point scores (optional) ---
+        // NOTE (future work): these are read and then NOT USED, so a node from
+        // an analysis .h5 shows its name in the node tooltip but no score —
+        // left that way deliberately (luc3d #322). To show them, give each
+        // instance built below a `pointScores` Float64Array(nNodes), indexed
+        // like `tracks` (expected [n_tracks, n_nodes, n_frames] when
+        // `transposed`, [n_frames, n_nodes, n_tracks] otherwise — check
+        // `pointScoresShape` against a real SLEAP export); the eager importers
+        // already keep a dict's `pointScores` (`Instance.setPointScores`). The
+        // LAZY .h5 path (`extractFrameInstances`) is the harder half: it must
+        // not copy them onto hydrated instances (frames re-hydrate on every
+        // visit), so it would need a lookup like
+        // `SioLazyLoader.predictedPointScore` for `Session.predictedNodeScore`
+        // to call — and these arrays live in this worker, not the main thread.
         var pointScores = null;
         var pointScoresShape = null;
         try {
@@ -934,6 +947,7 @@ function extractFrameInstances(frameIdx) {
             }
         }
         if (!hasAnyPoint) continue;
+        // No per-node scores here: see the NOTE in parseAnalysisH5.
         instances.push({ trackIdx: tr, score: 0, type: 'predicted', points: points });
     }
     return instances;

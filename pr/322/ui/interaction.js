@@ -14,11 +14,11 @@
  * ES module. Exports `InteractionManager` and `isInteractiveClickTarget`.
  */
 
-import { Instance } from '../pose/pose-data.js?v=4f7133de022a';
-import { getOrComputeReprojectedInstance } from '../pose/triangulation.js?v=4f7133de022a';
-import { shouldIgnoreShortcut } from './keyboard-target.js?v=4f7133de022a';
-import { deleteTargetsFromStore, groupMemberTargets, unlinkedTarget } from './custom-delete-ops.js?v=4f7133de022a';
-import { nodeTooltipText, setNodeTooltipTarget, hideNodeTooltip } from './node-tooltip.js?v=4f7133de022a';
+import { Instance } from '../pose/pose-data.js?v=c86fc596f2f3';
+import { getOrComputeReprojectedInstance } from '../pose/triangulation.js?v=c86fc596f2f3';
+import { shouldIgnoreShortcut } from './keyboard-target.js?v=c86fc596f2f3';
+import { deleteTargetsFromStore, groupMemberTargets, unlinkedTarget } from './custom-delete-ops.js?v=c86fc596f2f3';
+import { nodeTooltipText, setNodeTooltipTarget, hideNodeTooltip } from './node-tooltip.js?v=c86fc596f2f3';
 
 // ============================================
 // Alt + wheel instance rotation
