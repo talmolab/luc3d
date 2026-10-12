@@ -12,7 +12,7 @@
  * missing history / null trackIdx draw nothing without crashing; on a LAZY
  * project a non-resident frame ends the window instead of being skipped; the
  * trail SHADE orders Very dark < Dark < Normal < Light < Very light on every
- * palette color, drawn strokes follow it (Very dark when none is given), and Normal
+ * palette color, drawn strokes follow it (Dark when none is given), and Normal
  * is the pre-shade look.
  *
  * Segments are counted as moveTo/lineTo pairs, NOT stroke() calls: segments of
@@ -203,7 +203,7 @@ ok(ctx.segments === 4, 'eager (sparse) project still joins the last present fram
 
 // 12. Trail SHADE — how much darker or lighter than its track a trail is drawn,
 // so the skeleton on the current frame stands apart from its history (SLEAP's
-// View ▸ Trail Shade). Default Very dark.
+// View ▸ Trail Shade). Default Dark.
 const lum = (hex) => {
     const n = parseInt(hex.slice(1), 16);
     return 0.2126 * (n >> 16) + 0.7152 * ((n >> 8) & 255) + 0.0722 * (n & 255);
@@ -212,14 +212,14 @@ const keys = ov.TRAIL_SHADES.map(s => s.key);
 ok(JSON.stringify(keys) === '["veryDark","dark","normal","light","veryLight"]',
    'five shades, darkest first: ' + keys.join(', '));
 ok(ov.TRAIL_SHADES.every((s, i, a) => i === 0 || s.amount > a[i - 1].amount), 'ordered dark → light');
-ok(ov.DEFAULT_TRAIL_SHADE === 'veryDark' && ov.trailShadeFor('veryDark').name === 'Very dark', 'the default is Very dark');
+ok(ov.DEFAULT_TRAIL_SHADE === 'dark' && ov.trailShadeFor('dark').name === 'Dark', 'the default is Dark');
 ok(ov.trailShadeFor('nope') === null && ov.trailShadeFor(undefined) === null, 'trailShadeFor is strict');
 ok(ov.trailColor('#ff6b6b', 'normal', 0) === '#ff6b6b', 'Normal, newest segment = the track color');
 ok(ov.trailColor('#ff6b6b', 'dark', 0) === '#994040', 'Dark = SLEAP\'s ×0.6 (got ' + ov.trailColor('#ff6b6b', 'dark', 0) + ')');
 ok(ov.trailColor('#ff6b6b', 'light', 0) === '#ffa6a6',
    'Light blends toward white — a ×1.25 would leave the 255 channel, and a saturated color, as is (got ' + ov.trailColor('#ff6b6b', 'light', 0) + ')');
-ok(ov.trailColor('#ff6b6b', 'nope', 0) === ov.trailColor('#ff6b6b', 'veryDark', 0) &&
-   ov.trailColor('#ff6b6b', undefined, 0) === ov.trailColor('#ff6b6b', 'veryDark', 0), 'an unknown or missing shade is Very dark');
+ok(ov.trailColor('#ff6b6b', 'nope', 0) === ov.trailColor('#ff6b6b', 'dark', 0) &&
+   ov.trailColor('#ff6b6b', undefined, 0) === ov.trailColor('#ff6b6b', 'dark', 0), 'an unknown or missing shade is Dark');
 // For EVERY palette color, at both ends of a trail: each step of the scale is
 // strictly brighter than the last, the dark shades are darker than the track
 // and the light ones lighter — and age moves further the same way, never
@@ -242,7 +242,7 @@ ok(ordered, 'every palette color: Very dark < Dark < Normal < Light < Very light
 ok(sided, 'every palette color: dark shades below the track color, light shades above it');
 ok(aged, 'every palette color: older segments move further from the track color, in the shade\'s direction');
 
-// drawNodeTrails strokes in the shade it is given, Very dark when it is given none.
+// drawNodeTrails strokes in the shade it is given, Dark when it is given none.
 // Track 7 over frames 8..10 → two age steps; window W = 3.
 const trackHex = ov.getTrackColor(7);
 const strokeColors = (shadeOpt) => {
@@ -252,8 +252,8 @@ const strokeColors = (shadeOpt) => {
 };
 const ages = [1 / 4, 2 / 4];   // k / (W + 1) for the two age steps k = 1, 2
 const expect = (key) => ages.map(a => ov.trailColor(trackHex, key, a));
-ok(JSON.stringify(strokeColors({})) === JSON.stringify(expect('veryDark')),
-   'no trailShade → Very dark: ' + strokeColors({}).join(',') + ' vs ' + expect('veryDark').join(','));
+ok(JSON.stringify(strokeColors({})) === JSON.stringify(expect('dark')),
+   'no trailShade → Dark: ' + strokeColors({}).join(',') + ' vs ' + expect('dark').join(','));
 for (const key of keys) {
     ok(JSON.stringify(strokeColors({ trailShade: key })) === JSON.stringify(expect(key)),
        'trailShade "' + key + '" strokes ' + expect(key).join(','));

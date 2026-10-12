@@ -267,7 +267,7 @@ export function defaultOverlayExportSettings() {
         // A TRAIL_SHADES key. Must equal DEFAULT_TRAIL_SHADE in ui/overlays.js —
         // this module imports nothing, so the value is repeated here and a unit
         // test (tests/test-overlay-export-layout.js) holds the two together.
-        trailShade: 'veryDark',
+        trailShade: 'dark',
         colorBy: 'track',
         background: 'video',
         // `showLabels` is the node-name toggle, and it is the ONLY off switch:

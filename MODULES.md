@@ -3808,7 +3808,7 @@ Calibration and `envSkeleton` remain per-session.
   no caller recomputing it. Setting it (tests and benches pin a frame count)
   stores `frames / fps` in `trailSeconds`. The pickers set `trailSeconds`.
   `state.trailShade` — the node-trail shade, a `TRAIL_SHADES` key
-  (`ui/overlays.js`), starting at `DEFAULT_TRAIL_SHADE` ('veryDark'); `ui/ui-wiring.js`
+  (`ui/overlays.js`), starting at `DEFAULT_TRAIL_SHADE` ('dark'); `ui/ui-wiring.js`
   replaces it at startup with the one remembered in `localStorage`.
 - `videoController`, `interactionManager`, `viewport3d`, `timeline`,
   `paneManager` — live `let` bindings.
@@ -5645,7 +5645,7 @@ the classic-script unit runner and exercised without a browser dock.
 - `overlayOptionsFrom(settings, videoW, videoH, canvasW, canvasH)` — the
   settings → `drawFrameOverlays()` options translation (`trailShade` passes
   through as its key; `drawNodeTrails` resolves it). The default
-  `trailShade: 'veryDark'` repeats `DEFAULT_TRAIL_SHADE` because this module imports
+  `trailShade: 'dark'` repeats `DEFAULT_TRAIL_SHADE` because this module imports
   nothing; `tests/test-overlay-export-layout.js` holds the two together. Explicitly nulls ALL
   interaction state (selection / hover / drag / assignment): an export has no
   cursor, and a stray highlight would be burned into the video.
@@ -6428,8 +6428,8 @@ palettes, and per-frame draw routines. Receives `frameGroup` and
   **Shade.** That color is drawn in `options.trailShade` — a key of
   `TRAIL_SHADES` (Very dark / Dark / Normal / Light / Very light, `amount`
   −0.65 / −0.4 / 0 / 0.4 / 0.7), default and fallback `DEFAULT_TRAIL_SHADE`
-  ('veryDark') — so the skeleton on the current frame stands apart from its
-  history (SLEAP 1.4's View ▸ Trail Shade; Dark is SLEAP's same ×0.6). `trailColor(hex,
+  ('dark') — so the skeleton on the current frame stands apart from its history
+  (SLEAP 1.4's View ▸ Trail Shade, whose Dark is the same ×0.6). `trailColor(hex,
   shadeKey, age)` is the rule: a negative amount scales RGB by `1 + amount`, a
   positive one blends toward white (`brightenColor`; SLEAP's ×1.25 does nothing to
   a channel already at 255, which is most of `TRACK_COLORS`), and `age` (0 newest
@@ -11020,8 +11020,7 @@ stopping at the last frame; the step transport buttons/keys stop it first.
   first track color running into that shade's trail from newest to oldest, the
   contrast the choice is about. A pick goes through `setTrailShade`, which sets
   `state.trailShade`, moves the checkmark in both menus, redraws and names the
-  shade in the status bar ("… (trails are off)" while they are). Default Very
-  dark.
+  shade in the status bar ("… (trails are off)" while they are). Default Dark.
   Unlike the length, the shade is **remembered** in `localStorage`
   (`nodeTrailShade`, best-effort, read once at setup; an unknown value keeps the
   default): it is display taste, like the Visibility panel's appearance prefs,

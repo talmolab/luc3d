@@ -2055,11 +2055,10 @@ export const TRAIL_SHADES = [
 
 /**
  * The shade a trail is drawn in until the user picks another — and for a
- * missing or unknown key. Very dark: at Normal the newest segment is the
- * track's own color, so it reads as part of the current skeleton, and the
- * further the trail is from that color the more the current frame stands out.
+ * missing or unknown key. Dark: at Normal the newest segment is the track's own
+ * color, so it reads as part of the current skeleton.
  */
-export const DEFAULT_TRAIL_SHADE = 'veryDark';
+export const DEFAULT_TRAIL_SHADE = 'dark';
 
 /** The TRAIL_SHADES entry named `key`, or null. */
 export function trailShadeFor(key) {
