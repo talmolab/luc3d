@@ -9,7 +9,7 @@
 
 import { state, videoController, interactionManager, viewport3d, timeline, paneManager,
          setVideoController, setInteractionManager, setViewport3D, setTimeline, VIEW_NAMES,
-         getActiveSession, hasRealVideo, setInstanceClipboard, getInstanceClipboard } from './app-state.js?v=c5a30c31aaab';
+         getActiveSession, hasRealVideo, setInstanceClipboard, getInstanceClipboard } from './app-state.js?v=749f552c8115';
 // Block 1 (Prompt 4): the timeline collapse/fit/sync helpers and the
 // Ctrl/Cmd+J keyboard shortcut installer live in `timeline-controller.js`.
 // Import them explicitly so the local call sites in this file (menu
@@ -21,59 +21,59 @@ import {
     installTimelineShortcuts,
     getCachedTimelineHeight,
     setCachedTimelineHeight,
-} from './timeline-controller.js?v=c5a30c31aaab';
+} from './timeline-controller.js?v=749f552c8115';
 import { Skeleton, Camera, Instance, InstanceGroup, FrameGroup, UnlinkedInstance, Identity, Session,
-         someValidPoint3d } from '../pose/pose-data.js?v=c5a30c31aaab';
+         someValidPoint3d } from '../pose/pose-data.js?v=749f552c8115';
 import { ensureLazyFrameData, batchLoadLazyFrames, getInstanceGroupsForFrame, evictLazyFrames,
          loadAllLazyFrames, updateTimelineForFrame, triangulateAndReproject,
-         resolveTriangulationMethod } from '../pose/triangulation.js?v=c5a30c31aaab';
-import { LAZY_PLAYBACK_AHEAD } from '../pose/lazy-residency.js?v=c5a30c31aaab';
-import { drawAllOverlays, getVisibilitySettings, updateFrameCounters, setReprojErrorVisible } from './rendering.js?v=c5a30c31aaab';
+         resolveTriangulationMethod } from '../pose/triangulation.js?v=749f552c8115';
+import { LAZY_PLAYBACK_AHEAD } from '../pose/lazy-residency.js?v=749f552c8115';
+import { drawAllOverlays, getVisibilitySettings, updateFrameCounters, setReprojErrorVisible } from './rendering.js?v=749f552c8115';
 import { updateInfoPanel, updateFrameInfo, updateTriangulationBadge,
          populateVideosTable, populateCamerasTable, populateSkeletonTable,
          setupPanelTabs, setupSkeletonEditing, exportSkeletonJSON,
          ensureSession, populateSessionAssignTable, populateUnassignedVideos,
-         populateTimelineVisibility } from './info-panel.js?v=c5a30c31aaab';
-import { consumeInfoPanelStale, collapseViewport3D } from './panel-visibility.js?v=c5a30c31aaab';
+         populateTimelineVisibility } from './info-panel.js?v=749f552c8115';
+import { consumeInfoPanelStale, collapseViewport3D } from './panel-visibility.js?v=749f552c8115';
 // Block 2 (Prompt 4): rename migration for the per-session hidden-track
 // / hidden-identity Sets when the user renames an entity.
-import { renameHiddenTrack, renameHiddenIdentity } from './timeline-visibility.js?v=c5a30c31aaab';
+import { renameHiddenTrack, renameHiddenIdentity } from './timeline-visibility.js?v=749f552c8115';
 // View ▸ Define Planes — "Defining Plane Mode".
-import { togglePlaneMode, syncPlanes3D } from './plane-definition.js?v=c5a30c31aaab';
+import { togglePlaneMode, syncPlanes3D } from './plane-definition.js?v=749f552c8115';
 // The Visibility panel's `Planes` section — the four ids, named from the one
 // module that reads them so this file cannot drift from it.
-import { PLANE_VIS_IDS } from './plane-visibility.js?v=c5a30c31aaab';
+import { PLANE_VIS_IDS } from './plane-visibility.js?v=749f552c8115';
 import { newProject, markDirty, clearDirty, quickSave, saveAs, saveProjectSlp, saveProject,
-         handleLoadProject, showLoading, hideLoading, setStatus } from '../import-export/save-load.js?v=c5a30c31aaab';
-import { handleLoadSlpFile, handleAddSlp, handleLoadPoints3dH5 } from '../import-export/slp-import.js?v=c5a30c31aaab';
-import { pickFiles, parseCalibrationJSON, exportCalibrationTOML, downloadTOML, parseSlpH5 } from '../import-export/file-io.js?v=c5a30c31aaab';
+         handleLoadProject, showLoading, hideLoading, setStatus } from '../import-export/save-load.js?v=749f552c8115';
+import { handleLoadSlpFile, handleAddSlp, handleLoadPoints3dH5 } from '../import-export/slp-import.js?v=749f552c8115';
+import { pickFiles, parseCalibrationJSON, exportCalibrationTOML, downloadTOML, parseSlpH5 } from '../import-export/file-io.js?v=749f552c8115';
 import { handleLoadCalibration, handleLoadVideos, handleLoadMultiSession,
-         loadSingleSessionFromCache, handleEmptySession, showSessionModeModal, autoAssignVideosToCameras } from '../loading/session-loader.js?v=c5a30c31aaab';
-import { OnDemandVideoDecoder, VideoController } from '../loading/video.js?v=c5a30c31aaab';
+         loadSingleSessionFromCache, handleEmptySession, showSessionModeModal, autoAssignVideosToCameras } from '../loading/session-loader.js?v=749f552c8115';
+import { OnDemandVideoDecoder, VideoController } from '../loading/video.js?v=749f552c8115';
 
 // Pass 3i-1: tracker functions moved out of app.js.
-import { trackCurrentFrame, trackAll, findMatchForSelected } from '../pose/tracker.js?v=c5a30c31aaab';
+import { trackCurrentFrame, trackAll, findMatchForSelected } from '../pose/tracker.js?v=749f552c8115';
 // The toolbar's Animals field, beside Track Frame / Track All.
-import { wireAnimalCountField } from './animal-count-field.js?v=c5a30c31aaab';
+import { wireAnimalCountField } from './animal-count-field.js?v=749f552c8115';
 // Track Frame Range (#212): the Track Frame split button's dropdown entry.
-import { showTrackRangeModal } from './track-range-modal.js?v=c5a30c31aaab';
-import { showAlignViewsModal } from './view-align-modal.js?v=c5a30c31aaab';
-import { onColorByChange, setColorByIdentity } from './color-by.js?v=c5a30c31aaab';
+import { showTrackRangeModal } from './track-range-modal.js?v=749f552c8115';
+import { showAlignViewsModal } from './view-align-modal.js?v=749f552c8115';
+import { onColorByChange, setColorByIdentity } from './color-by.js?v=749f552c8115';
 import { TRAIL_PRESETS, MAX_TRAIL_FRAMES, trailPresetFor, trailLabel, trailFrames, trailRate,
-         formatTrailSeconds, trailSecondsForFrames, parseTrailSeconds, parseTrailFrames } from './trail-presets.js?v=c5a30c31aaab';
-import { installSeekbarTooltip } from './seekbar-tooltip.js?v=c5a30c31aaab';
-import { showReadoutFrame, refreshReadoutTotals } from './frame-readout.js?v=c5a30c31aaab';
-import { installSeekbarMarkers, seekbarMarkerAt, describeSwitchMarker, setSeekbarMarkerFrames } from './seekbar-markers.js?v=c5a30c31aaab';
-import { installSeekbarTicks, refreshSeekbarTicks } from './seekbar-ticks.js?v=c5a30c31aaab';
+         formatTrailSeconds, trailSecondsForFrames, parseTrailSeconds, parseTrailFrames } from './trail-presets.js?v=749f552c8115';
+import { installSeekbarTooltip } from './seekbar-tooltip.js?v=749f552c8115';
+import { showReadoutFrame, refreshReadoutTotals } from './frame-readout.js?v=749f552c8115';
+import { installSeekbarMarkers, seekbarMarkerAt, describeSwitchMarker, setSeekbarMarkerFrames } from './seekbar-markers.js?v=749f552c8115';
+import { installSeekbarTicks, refreshSeekbarTicks } from './seekbar-ticks.js?v=749f552c8115';
 // Pass 3i-2: triangulation orchestration moved out of app.js.
-import { triangulateCurrentFrame, triangulateAllFrames } from '../pose/triangulation.js?v=c5a30c31aaab';
+import { triangulateCurrentFrame, triangulateAllFrames } from '../pose/triangulation.js?v=749f552c8115';
 // User settings: default triangulation method + editable keyboard bindings.
-import { getDefaultTriangulationMethod, onDefaultTriangulationMethodChange, setHandler, dispatchEvent, getActions, formatBinding } from './settings.js?v=c5a30c31aaab';
-import { shouldIgnoreShortcut, installFocusRelease } from './keyboard-target.js?v=c5a30c31aaab';
-import { showSettingsModal } from './settings-modal.js?v=c5a30c31aaab';
+import { getDefaultTriangulationMethod, onDefaultTriangulationMethodChange, setHandler, dispatchEvent, getActions, formatBinding } from './settings.js?v=749f552c8115';
+import { shouldIgnoreShortcut, installFocusRelease } from './keyboard-target.js?v=749f552c8115';
+import { showSettingsModal } from './settings-modal.js?v=749f552c8115';
 // Pass 3i-3: addNewInstanceSmart and update3DViewport moved to pose/initialization.js.
-import { addNewInstanceSmart, update3DViewport, navigateToFrame } from '../pose/initialization.js?v=c5a30c31aaab';
-import { runIdSwitchChecks, setIdSwitchNavigator, setIdSwitchRefresher, updateIdSwitchProgress } from './id-switch-modal.js?v=c5a30c31aaab';
+import { addNewInstanceSmart, update3DViewport, navigateToFrame } from '../pose/initialization.js?v=749f552c8115';
+import { runIdSwitchChecks, setIdSwitchNavigator, setIdSwitchRefresher, updateIdSwitchProgress } from './id-switch-modal.js?v=749f552c8115';
 // Pass 3f / 3i-4: identity-assignment workflow symbols moved out of app.js.
 // (`swapTracks` joined this module in 3i-4; `seekToLabeledFrame` is now in-module.)
 import {
@@ -82,10 +82,10 @@ import {
     startManualAssignment, runSingleFrameTriangulation, showMultiFrameModal,
     purgeTriangulationDataForGroup,
     swapTracks,
-} from './identity-assignment.js?v=c5a30c31aaab';
+} from './identity-assignment.js?v=749f552c8115';
 // Custom Instance Delete: DOM-free matching/cascade/durability logic. Imports no
 // project modules itself, which is why it can also be unit tested in isolation.
-import { collectDeletionTargets, executeDeletion, deleteTargetsFromStore, groupMemberTargets } from './custom-delete-ops.js?v=c5a30c31aaab';
+import { collectDeletionTargets, executeDeletion, deleteTargetsFromStore, groupMemberTargets } from './custom-delete-ops.js?v=749f552c8115';
 // Pass 3g: export-modals workflow symbols moved out of app.js.
 import {
     exportLabels, exportPoints3dH5, exportReprojH5,
@@ -93,19 +93,19 @@ import {
     showSlpExportPerSessionModal,
     showTriangulateMultiFrameModal,
     showGroupByTrackModal, groupByIdentityAndTriangulateAll, showExport3DVideoModal,
-} from './export-modals.js?v=c5a30c31aaab';
-import { showOverlayExportModal } from './overlay-export-modal.js?v=c5a30c31aaab';
+} from './export-modals.js?v=749f552c8115';
+import { showOverlayExportModal } from './overlay-export-modal.js?v=749f552c8115';
 // Pass 3h: sessions-panes workflow symbols moved out of app.js.
 import {
     panelRenderers, multiSelectViews, activatePanelForView, scrollViewStripTo,
     refreshPaneInteractions, clearMultiSelect, clampRotation, syncRotationUI,
     populateViewStrip, populateSessionsPanel, populateSessionStrip,
     showMoveVideoModal, removeSession, switchSession,
-} from './sessions-panes.js?v=c5a30c31aaab';
+} from './sessions-panes.js?v=749f552c8115';
 import {
     nameExists, countNulledByCamera, deleteTrackAt, deleteIdentityAt,
-} from './track-identity-ops.js?v=c5a30c31aaab';
-import { setSessionRotation } from './video-filters.js?v=c5a30c31aaab';
+} from './track-identity-ops.js?v=749f552c8115';
+import { setSessionRotation } from './video-filters.js?v=749f552c8115';
 
 // ============================================
 // Rename Track / Identity modal
@@ -1385,6 +1385,22 @@ export function setupMenus() {
         toggleInfoPanel();
     });
 
+    // View ▸ Native Resolution (1:1). The tick is refreshed each time the menu
+    // opens rather than pushed on every zoom: whether it is on is derived from
+    // the views (a wheel zoom that snaps to 1:1 turns it on, one that leaves
+    // turns it off), so asking at open time cannot go stale.
+    document.getElementById('menuNativeResolution').addEventListener('click', function () {
+        closeMenus();
+        if (videoController) videoController.toggleNativeResolution();
+    });
+    var viewMenuEl = document.querySelector('.menu-item[data-menu="view"]');
+    if (viewMenuEl) {
+        viewMenuEl.addEventListener('click', function () {
+            var check = document.querySelector('#menuNativeResolution .trail-check');
+            if (check) check.textContent = (videoController && videoController.nativeResolutionActive()) ? '✓' : '';
+        });
+    }
+
     document.getElementById('menuResetView').addEventListener('click', function () {
         closeMenus();
         if (viewport3d) viewport3d.resetCamera();
@@ -1875,8 +1891,18 @@ export function setupUI() {
 
         var _seekThrottle = { lastRender: 0, timer: null, pendingFrame: null };
 
+        // A click or drag on the bar leaves the video playing or paused, as it
+        // was. A scrub always stops playback (the play loop and the scrub must
+        // not fight over the frame), so a press that began while playing plays
+        // on from the new position on release. `resumePending` counts too: a
+        // second click before the first one's resume has started is still a
+        // click on a playing video.
+        var resumeOnRelease = false;
+
         seekbar.addEventListener('mousedown', function (e) {
             isDragging = true;
+            resumeOnRelease = state.isPlaying || !!(videoController && videoController.resumePending);
+            if (!hasRealVideo() && state.isPlaying) stopNoVideoPlayback();
             var frame = getFrameFromEvent(e);
             updateSeekbarVisual(frame);
             _seekThrottle.lastRender = performance.now();
@@ -1914,6 +1940,16 @@ export function setupUI() {
                 if (_seekThrottle.pendingFrame !== null && videoController) {
                     videoController.scrubToFrame(_seekThrottle.pendingFrame);
                     _seekThrottle.pendingFrame = null;
+                }
+                if (resumeOnRelease) {
+                    resumeOnRelease = false;
+                    if (!hasRealVideo()) startNoVideoPlayback();
+                    else if (videoController) videoController.resumeAfterScrub(function (frame) {
+                        // A lazy project hydrates the frames ahead first, as Play does.
+                        if (state.session && state.session.lazyLoader) {
+                            return batchLoadLazyFrames(frame, LAZY_PLAYBACK_AHEAD);
+                        }
+                    });
                 }
             }
         });
@@ -2071,6 +2107,15 @@ export function setupUI() {
                 case 'End': e.preventDefault(); stopNoVideoPlayback(); navigateToFrame(state.totalFrames - 1); break;
                 case ' ': e.preventDefault(); toggleNoVideoPlayback(); break;
             }
+            return;
+        }
+
+        // Shift+0: View ▸ Native Resolution (1:1) on / off — the `0` that
+        // resets zoom, shifted. Matched by physical key: Shift+0 is ')' on a
+        // US layout and something else elsewhere.
+        if (e.code === 'Digit0' && e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
+            e.preventDefault();
+            videoController.toggleNativeResolution();
             return;
         }
 
@@ -3240,7 +3285,7 @@ export function setGridMode() {
         for (var zi = 0; zi < state.views.length; zi++) {
             var zv = state.views[zi];
             if (zv.zoom) {
-                savedZoom[zv.name] = { scale: zv.zoom.scale, offsetX: zv.zoom.offsetX, offsetY: zv.zoom.offsetY };
+                savedZoom[zv.name] = { scale: zv.zoom.scale, offsetX: zv.zoom.offsetX, offsetY: zv.zoom.offsetY, native: !!zv.zoom.native };
             }
         }
         paneManager.clearAll();
@@ -3258,7 +3303,14 @@ export function setGridMode() {
                 rv.zoom.scale = savedZoom[rv.name].scale;
                 rv.zoom.offsetX = savedZoom[rv.name].offsetX;
                 rv.zoom.offsetY = savedZoom[rv.name].offsetY;
-                if (videoController) videoController.applyZoom(rv);
+                // A 1:1 scale belongs to the OLD canvas box: re-derive it. Keep
+                // the flag `initZoom` set from View ▸ Native Resolution, too.
+                rv.zoom.native = savedZoom[rv.name].native || !!rv.zoom.native;
+                rv.zoom.scaleY = undefined;
+                if (videoController) {
+                    if (rv.zoom.native) videoController.reapplyZoom(rv);
+                    else videoController.applyZoom(rv);
+                }
             }
         }
     } else {
@@ -3274,7 +3326,7 @@ export function updateVideoGridDisplay() {
     for (var zi = 0; zi < state.views.length; zi++) {
         var zv = state.views[zi];
         if (zv.zoom) {
-            savedZoom[zv.name] = { scale: zv.zoom.scale, offsetX: zv.zoom.offsetX, offsetY: zv.zoom.offsetY };
+            savedZoom[zv.name] = { scale: zv.zoom.scale, offsetX: zv.zoom.offsetX, offsetY: zv.zoom.offsetY, native: !!zv.zoom.native };
         }
     }
     if (state.viewMode === 'single') {
@@ -3298,7 +3350,14 @@ export function updateVideoGridDisplay() {
             rv.zoom.scale = savedZoom[rv.name].scale;
             rv.zoom.offsetX = savedZoom[rv.name].offsetX;
             rv.zoom.offsetY = savedZoom[rv.name].offsetY;
-            if (videoController) videoController.applyZoom(rv);
+            // A 1:1 scale belongs to the OLD canvas box: re-derive it. Keep
+            // the flag `initZoom` set from View ▸ Native Resolution, too.
+            rv.zoom.native = savedZoom[rv.name].native || !!rv.zoom.native;
+            rv.zoom.scaleY = undefined;
+            if (videoController) {
+                if (rv.zoom.native) videoController.reapplyZoom(rv);
+                else videoController.applyZoom(rv);
+            }
         }
     }
 }

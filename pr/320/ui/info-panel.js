@@ -5,41 +5,41 @@
 
 import {
     Skeleton, Camera, Session,
-} from '../pose/pose-data.js?v=c5a30c31aaab';
-import { getInstanceGroupsForFrame } from '../pose/triangulation.js?v=c5a30c31aaab';
-import { REPROJECTION_COLOR, NULL_ID_COLOR, getTrackColor, getGroupColor } from './overlays.js?v=c5a30c31aaab';
-import { drawAllOverlays, updateFrameCounters } from './rendering.js?v=c5a30c31aaab';
-import { isInteractiveClickTarget } from './interaction.js?v=c5a30c31aaab';
-import { persistSectionState } from './section-state.js?v=c5a30c31aaab';
-import { buildLazySelect } from './lazy-select.js?v=c5a30c31aaab';
-import { refreshIdSwitchPanel } from './id-switch-modal.js?v=c5a30c31aaab';
-import { isInfoPanelVisible, markInfoPanelStale } from './panel-visibility.js?v=c5a30c31aaab';
+} from '../pose/pose-data.js?v=749f552c8115';
+import { getInstanceGroupsForFrame } from '../pose/triangulation.js?v=749f552c8115';
+import { REPROJECTION_COLOR, NULL_ID_COLOR, getTrackColor, getGroupColor } from './overlays.js?v=749f552c8115';
+import { drawAllOverlays, updateFrameCounters } from './rendering.js?v=749f552c8115';
+import { isInteractiveClickTarget } from './interaction.js?v=749f552c8115';
+import { persistSectionState } from './section-state.js?v=749f552c8115';
+import { buildLazySelect } from './lazy-select.js?v=749f552c8115';
+import { refreshIdSwitchPanel } from './id-switch-modal.js?v=749f552c8115';
+import { isInfoPanelVisible, markInfoPanelStale } from './panel-visibility.js?v=749f552c8115';
 import { state, timeline, interactionManager, rememberSkeleton, buildRememberedSkeleton,
-         setProjectSkeleton, getProjectSkeleton } from './app-state.js?v=c5a30c31aaab';
-import { setStatus, markDirty } from '../import-export/save-load.js?v=c5a30c31aaab';
-import { buildSkeletonJSON, parseSkeletonJSON } from '../import-export/skeleton-json.js?v=c5a30c31aaab';
+         setProjectSkeleton, getProjectSkeleton } from './app-state.js?v=749f552c8115';
+import { setStatus, markDirty } from '../import-export/save-load.js?v=749f552c8115';
+import { buildSkeletonJSON, parseSkeletonJSON } from '../import-export/skeleton-json.js?v=749f552c8115';
 import {
     handleLoadVideos, handleLoadCalibration, autoAssignVideosToCameras,
     createViewForVideoFile, rebuildVideoController, fitCanvasesToCells,
     loadSingleSessionFromCache, removeVideoFile,
-} from '../loading/session-loader.js?v=c5a30c31aaab';
+} from '../loading/session-loader.js?v=749f552c8115';
 
 // Circular import — these are still defined in app.js for now. They will be
 // retargeted as later passes land:
 // - swapAssignTrack, propagateIdentityForward, unlinkGroup, showGroupContextMenu
 //   → ui/identity-assignment.js (Pass 3f)
 // Pass 3e-1: unlinkGroup + showGroupContextMenu moved to ui-wiring.js.
-import { unlinkGroup, showGroupContextMenu } from './ui-wiring.js?v=c5a30c31aaab';
+import { unlinkGroup, showGroupContextMenu } from './ui-wiring.js?v=749f552c8115';
 // Pass 3f: swapAssignTrack + propagateIdentityForward moved to identity-assignment.js.
 // luc3d #172: every manual identity switch routes through applyIdentitySwitch,
 // which subsumes this file's former direct propagateIdentityForward calls.
 import {
     swapAssignTrack, applyIdentitySwitch, describeIdentitySwitch,
-} from './identity-assignment.js?v=c5a30c31aaab';
+} from './identity-assignment.js?v=749f552c8115';
 // Pass 3h: populateSessionsPanel / populateViewStrip / populateSessionStrip moved to sessions-panes.js.
 import {
     populateSessionsPanel, populateViewStrip, populateSessionStrip,
-} from './sessions-panes.js?v=c5a30c31aaab';
+} from './sessions-panes.js?v=749f552c8115';
 // Block 2 (Prompt 4): per-session timeline visibility toggles.
 import {
     toggleCameraVisibility,
@@ -48,7 +48,7 @@ import {
     getCameraVisibilityList,
     getTrackVisibilityList,
     getIdentityVisibilityList,
-} from './timeline-visibility.js?v=c5a30c31aaab';
+} from './timeline-visibility.js?v=749f552c8115';
 
 // ============================================
 // Inline name entry for "+ New Track" / "+ New Identity"

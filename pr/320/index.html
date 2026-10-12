@@ -6,7 +6,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Multi-View Pose Proofreader</title>
-    <link rel="stylesheet" href="styles.css?v=c5a30c31aaab">
+    <link rel="stylesheet" href="styles.css?v=749f552c8115">
     <!-- Pinned: dockview-core 7.x renamed api.onUnhandledDragOverEvent →
          onUnhandledDragOver, so the unpinned /+esm import broke pane docking
          whenever the CDN cache refreshed. Keep this pin in sync with the
@@ -18,17 +18,17 @@
     <script src="https://cdn.jsdelivr.net/npm/three@0.147.0/build/three.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/three@0.147.0/examples/js/controls/OrbitControls.js"></script>
     <!-- h5wasm for in-browser HDF5 read/write — local vendored 0.10.3 IIFE (global `h5wasm`); see lib/h5wasm/PROVENANCE.txt -->
-    <script src="./lib/h5wasm/h5wasm.iife.js?v=c5a30c31aaab"></script>
+    <script src="./lib/h5wasm/h5wasm.iife.js?v=749f552c8115"></script>
     <!-- Video encode AND decode both go through mediabunny (importmap below):
          export via ui/video-encode.js, decode via sleap-io.js's backend. -->
     <!-- Import map for sleap-io.js ESM dependencies -->
     <script type="importmap">
     {
         "imports": {
-            "h5wasm": "./lib/h5wasm/hdf5_hl.js?v=c5a30c31aaab",
+            "h5wasm": "./lib/h5wasm/hdf5_hl.js?v=749f552c8115",
             "yaml": "https://cdn.jsdelivr.net/npm/yaml@2.8.0/browser/index.js",
-            "mediabunny": "./lib/mediabunny/mediabunny.min.mjs?v=c5a30c31aaab",
-            "pako": "./lib/pako/pako.esm.mjs?v=c5a30c31aaab"
+            "mediabunny": "./lib/mediabunny/mediabunny.min.mjs?v=749f552c8115",
+            "pako": "./lib/pako/pako.esm.mjs?v=749f552c8115"
         }
     }
     </script>
@@ -156,6 +156,11 @@
                             class="shortcut-hint">Ctrl/Cmd+J</span></div>
                     <div class="menu-dropdown-item" id="menuToggleInfo">Toggle Info Panel <span
                             class="shortcut-hint">I</span></div>
+                    <div class="menu-separator"></div>
+                    <div class="menu-dropdown-item" id="menuNativeResolution"
+                        title="Show each video at one video pixel per screen pixel, with no scaling"><span><span
+                                class="trail-check"></span>Native Resolution (1:1)</span> <span
+                            class="shortcut-hint">Shift+0</span></div>
                     <div class="menu-separator"></div>
                     <div class="menu-dropdown-item" id="menuResetView">Reset 3D View</div>
                     <div class="menu-dropdown-item" id="menuFitScene">Fit 3D to Scene</div>
@@ -1395,7 +1400,7 @@
             InstanceGroup as SioInstanceGroup, FrameGroup as SioFrameGroup,
             Identity as SioIdentity, Instance3D, PredictedInstance3D,
             MediaBunnyVideoBackend
-        } from './lib/sleap-io/index.browser.js?v=c5a30c31aaab';
+        } from './lib/sleap-io/index.browser.js?v=749f552c8115';
         window.SleapIO = {
             Labels, LabeledFrame, Instance, PredictedInstance,
             Skeleton, Node, Edge, Video, Track, saveSlpToBytes,
@@ -1409,7 +1414,7 @@
         window.dispatchEvent(new Event('sleapio-ready'));
     </script>
 
-    <script type="module" src="app.js?v=c5a30c31aaab"></script>
+    <script type="module" src="app.js?v=749f552c8115"></script>
 </body>
 
 </html>

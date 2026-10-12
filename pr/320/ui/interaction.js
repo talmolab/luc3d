@@ -14,10 +14,10 @@
  * ES module. Exports `InteractionManager` and `isInteractiveClickTarget`.
  */
 
-import { Instance } from '../pose/pose-data.js?v=c5a30c31aaab';
-import { getOrComputeReprojectedInstance } from '../pose/triangulation.js?v=c5a30c31aaab';
-import { shouldIgnoreShortcut } from './keyboard-target.js?v=c5a30c31aaab';
-import { deleteTargetsFromStore, groupMemberTargets, unlinkedTarget } from './custom-delete-ops.js?v=c5a30c31aaab';
+import { Instance } from '../pose/pose-data.js?v=749f552c8115';
+import { getOrComputeReprojectedInstance } from '../pose/triangulation.js?v=749f552c8115';
+import { shouldIgnoreShortcut } from './keyboard-target.js?v=749f552c8115';
+import { deleteTargetsFromStore, groupMemberTargets, unlinkedTarget } from './custom-delete-ops.js?v=749f552c8115';
 
 // ============================================
 // Alt + wheel instance rotation
@@ -346,13 +346,16 @@ export class InteractionManager {
         const unrotX = dx * cosR - dy * sinR;
         const unrotY = dx * sinR + dy * cosR;
 
-        // The un-rotated canvas display size (CSS size * zoom scale)
+        // The un-rotated canvas display size (CSS size * zoom scale). At
+        // native resolution the vertical scale differs a hair from the
+        // horizontal one (`VideoController.nativeZoomScales`).
         const wrapper = canvas.closest('.canvas-wrapper');
         const zoom = view.zoom ? view.zoom.scale : 1;
+        const zoomY = (view.zoom && view.zoom.native && view.zoom.scaleY > 0) ? view.zoom.scaleY : zoom;
         const cssW = parseFloat(canvas.style.width) || canvas.offsetWidth;
         const cssH = parseFloat(canvas.style.height) || canvas.offsetHeight;
         const displayW = cssW * zoom;
-        const displayH = cssH * zoom;
+        const displayH = cssH * zoomY;
 
         // Position relative to the un-rotated canvas top-left
         const canvasX = unrotX + displayW / 2;
