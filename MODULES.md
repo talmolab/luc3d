@@ -1506,10 +1506,20 @@ session graph that holds them.
   `InstanceGroup`. Auto-incrementing `id`.
 - `FrameGroup` — per-frame container of linked `instances` and
   `unlinkedInstances`, both keyed by camera name.
-- `Identity` — id + name + color (uses `IDENTITY_COLORS` palette).
-- `IDENTITY_COLORS` — 20-color palette for identity badges.
-  `UNIDENTIFIED_TRACK_COLORS` (`ui/overlays.js`) must stay ΔE2000 ≥ 20 from every entry
-  (`tests/test-track-identity-palette.mjs`), so a change here re-runs that test.
+- `Identity` — id + name + color (uses `IDENTITY_COLORS` palette). A color
+  passed in that equals the OLD default for its slot (`id % 20`, private
+  `LEGACY_IDENTITY_COLORS`) is replaced by the current default: projects store
+  identity colors, LUCID has no control for picking one, so that color IS the
+  old default. Every load path builds identities through this constructor, so
+  this is the one upgrade point. Any other color is kept.
+- `IDENTITY_COLORS` — 20-color palette for identity badges; identity N takes
+  entry N, so N animals show the first N. Entries 0-6 are the original neon
+  set; 7-19 were chosen farthest-first (CIEDE2000) so the closest pair stays
+  as wide as possible per animal count (18.0 at 8 animals, 13.7 at 12; the old
+  7-19 gave 6.0 at 8). Every entry is L* >= 55 and vivid.
+  `UNIDENTIFIED_TRACK_COLORS` (`ui/overlays.js`) must stay ΔE2000 ≥ 20 from
+  every entry. All of it is pinned by `tests/test-track-identity-palette.mjs`
+  §2, §8 and §9, so a change here re-runs that test.
 - `InstanceGroup` — cross-view grouped instances + triangulated `points3d`
   + cached `reprojectedInstances`. `markDirty`/`markClean`. Also
   `triangulationMethod` (`'ba'`|`'dlt'`|undefined), recording WHICH SOLVER

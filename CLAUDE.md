@@ -1674,6 +1674,15 @@ palette failing the first rule:
 - **≥ 9** from every other entry, so tracks still tell apart;
 - **no darker than L\* 52**. A name label sits on a translucent black pill, and
   over a white mouse a darker muted color all but vanishes into it.
+**The identity palette must also stay distinct from ITSELF as animals are
+added.** Identity N takes `IDENTITY_COLORS[N]`, so a project with N animals
+shows the first N. Entries 0-6 are the original neon set and must not change;
+7-19 were chosen farthest-first, so the closest pair stays at 18.0 for 8
+animals and 13.7 for 12. The old 7-19 put `id_7` 6.0 from `id_0`. Projects
+store identity colors, so the `Identity` constructor upgrades a stored color
+that equals the OLD default for its slot; a color from another tool is kept.
+Both are pinned by the same test (§8, §9).
+
 Adding an identity color, or a fixed canvas color, means re-running that test.
 Change the palette if it fails; do not lower the thresholds. The mode switching
 itself (labels, timeline rows recolored in place, swatches) is covered by
