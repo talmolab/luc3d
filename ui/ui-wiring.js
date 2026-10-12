@@ -52,8 +52,9 @@ import { handleLoadCalibration, handleLoadVideos, handleLoadMultiSession,
 import { OnDemandVideoDecoder, VideoController } from '../loading/video.js';
 
 // Pass 3i-1: tracker functions moved out of app.js.
-import { trackCurrentFrame, trackAll, findMatchForSelected,
-         getTrackerNumAnimals, setTrackerNumAnimals, onTrackerNumAnimalsChange } from '../pose/tracker.js';
+import { trackCurrentFrame, trackAll, findMatchForSelected } from '../pose/tracker.js';
+// The toolbar's Animals field, beside Track Frame / Track All.
+import { wireAnimalCountField } from './animal-count-field.js';
 // Track Frame Range (#212): the Track Frame split button's dropdown entry.
 import { showTrackRangeModal } from './track-range-modal.js';
 import { showAlignViewsModal } from './view-align-modal.js';
@@ -1794,45 +1795,6 @@ function pasteInstance() {
     // creates a 'user' instance, fires onUserInstanceCreated, and redraws.
     interactionManager._addNewInstance(points);
     setStatus('UserInstance pasted in Video ' + targetView + ' Frame ' + (state.currentFrame + 1), 'success');
-}
-
-// The toolbar's Animals field (#tbNumAnimals): shows and edits the animal count
-// every tracking run uses. It used to be visible only in the first-use prompt,
-// so a user who forgot what they typed had no way to find out. Blank is
-// auto-detect, as it is in the prompt and the Track Frame Range dialog, and the
-// field follows the count whichever of those changed it. It commits on
-// `change` (Enter, or focus leaving), so a half-typed "1" on the way to "12" is
-// never the count.
-function wireAnimalCountField() {
-    var input = document.getElementById('tbNumAnimals');
-    if (!input) return;
-    function show(n) { input.value = n != null ? String(n) : ''; }
-    function commit() {
-        var raw = input.value.trim();
-        var n = raw === '' ? null : Number(raw);
-        // `badInput` is text that is not a number at all (a stray "e" or "-"),
-        // which `value` reports as '' — a typo, not a request for auto-detect.
-        if (input.validity.badInput || (n !== null && (!Number.isInteger(n) || n < 1))) {
-            show(getTrackerNumAnimals());
-            setStatus('Animals must be a whole number, 1 or more, or blank to auto-detect', 'error');
-            return;
-        }
-        setTrackerNumAnimals(n);
-    }
-    show(getTrackerNumAnimals());
-    onTrackerNumAnimalsChange(show);
-    input.addEventListener('change', commit);
-    input.addEventListener('keydown', function (e) {
-        if (e.key === 'Enter') {
-            e.preventDefault();
-            input.blur();   // commits through `change`, and hands the keys back
-        } else if (e.key === 'Escape') {
-            e.preventDefault();
-            e.stopPropagation();
-            show(getTrackerNumAnimals());
-            input.blur();
-        }
-    });
 }
 
 export function setupUI() {

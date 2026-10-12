@@ -788,12 +788,22 @@ function setNullNodesStatus(n) {
     }
 }
 
-// Tracker state: number of animals (null = auto-detect)
-var trackerNumAnimals = null;
-// Whether the user has given an answer at all. A blank answer (auto-detect) is
-// one too, so it must not bring the prompt back on every run — the toolbar's
-// Animals field shows "auto" and is where it gets changed afterwards.
-var trackerNumAnimalsAnswered = false;
+// The number of animals lives on the SESSION (`Session.numAnimals`: a count,
+// 'auto', or null = never answered) so it is saved with the project — see
+// pose/pose-data.js. These two read it.
+function sessionNumAnimals(session) {
+    return (session && typeof session.numAnimals === 'number') ? session.numAnimals : null;
+}
+// A blank answer (auto-detect) is an answer too, so it must not bring the
+// prompt back on every run — the toolbar's Animals field shows "auto" and is
+// where it gets changed afterwards.
+function numAnimalsAnswered(session) {
+    return !!session && session.numAnimals != null;
+}
+// The last count given in ANY session this page has seen. Pre-fills the prompt
+// for a session nobody has answered yet, which in a multi-session project of
+// the same animals makes each one a single Enter.
+var _lastNumAnimals = null;
 // Told when the count changes, so the toolbar field follows the prompt and the
 // Track Frame Range dialog. A listener that throws must not stop the others.
 var _numAnimalsListeners = [];
@@ -839,8 +849,9 @@ function computeMaxInstancesPerView(session) {
     return max;
 }
 
-function promptNumAnimals() {
-    var input = prompt('Number of animals (leave empty for auto-detect):', trackerNumAnimals || '');
+function promptNumAnimals(session) {
+    var input = prompt('Number of animals (leave empty for auto-detect):',
+        sessionNumAnimals(session) || _lastNumAnimals || '');
     if (input === null) return false;  // cancelled
     input = input.trim();
     if (input === '') {
@@ -857,28 +868,33 @@ function promptNumAnimals() {
 }
 
 /**
- * The user's animal count, or null for "auto-detect from the resident sample".
- * Read by the toolbar's Animals field and the Track Frame Range modal, which
- * show the current value and set it inline — the modal so a native `prompt()`
- * never stacks on top of it.
+ * The ACTIVE session's animal count, or null for "auto-detect from the resident
+ * sample" (also what a never-answered session reads as). Read by the toolbar's
+ * Animals field and the Track Frame Range modal, which show the current value
+ * and set it inline — the modal so a native `prompt()` never stacks on top of it.
  * @returns {number|null}
  */
-export function getTrackerNumAnimals() { return trackerNumAnimals; }
+export function getTrackerNumAnimals() { return sessionNumAnimals(getActiveSession()); }
 
 /**
- * Set the animal count used as `maxTargets` by every tracking entry point.
- * Counts as the user's answer, so Track Frame / Track All stop prompting —
- * including for null, which is an explicit auto-detect.
+ * Set the active session's animal count, used as `maxTargets` by every tracking
+ * entry point. Counts as the user's answer, so Track Frame / Track All stop
+ * prompting — including for null, which is an explicit auto-detect. It is
+ * project state (saved in the `.slp`), so a change marks the project dirty.
+ * A no-op with no session: there is nothing to save it with.
  * @param {number|null} n  A positive integer, or null/NaN for auto-detect.
  */
 export function setTrackerNumAnimals(n) {
-    var prev = trackerNumAnimals;
-    trackerNumAnimals = (typeof n === 'number' && isFinite(n) && n >= 1)
-        ? Math.floor(n) : null;
-    trackerNumAnimalsAnswered = true;
-    if (trackerNumAnimals === prev) return;
+    var session = getActiveSession();
+    if (!session) return;
+    var next = (typeof n === 'number' && isFinite(n) && n >= 1) ? Math.floor(n) : 'auto';
+    if (typeof next === 'number') _lastNumAnimals = next;
+    if (session.numAnimals === next) return;
+    session.numAnimals = next;
+    markDirty();
+    var count = sessionNumAnimals(session);
     for (var i = 0; i < _numAnimalsListeners.length; i++) {
-        try { _numAnimalsListeners[i](trackerNumAnimals); } catch (e) { /* ignore */ }
+        try { _numAnimalsListeners[i](count); } catch (e) { /* ignore */ }
     }
 }
 
@@ -1139,11 +1155,11 @@ export function trackCurrentFrame() {
     }
 
     // Prompt for number of animals on first use
-    if (!trackerNumAnimalsAnswered) {
-        if (!promptNumAnimals()) return;
+    if (!numAnimalsAnswered(session)) {
+        if (!promptNumAnimals(session)) return;
     }
 
-    var effectiveNumAnimals = trackerNumAnimals || computeMaxInstancesPerView(session);
+    var effectiveNumAnimals = sessionNumAnimals(session) || computeMaxInstancesPerView(session);
 
     // Honor per-view tracking inclusion from the Tracking Wizard: excluded views
     // are dropped from the association math entirely (still visible in the GUI).
@@ -1347,8 +1363,8 @@ async function runTrackingPass(range) {
     // Prompt for number of animals. Track Frame Range collects it in its own
     // modal (blank there is an explicit "auto-detect"), so it never stacks a
     // native prompt() on top of the dialog the user just filled in.
-    if (!isRange && !trackerNumAnimalsAnswered) {
-        if (!promptNumAnimals()) return bail;
+    if (!isRange && !numAnimalsAnswered(session)) {
+        if (!promptNumAnimals(session)) return bail;
     }
 
     // How long tracking took, for the summary box: from here (after the animal-count
@@ -1404,12 +1420,13 @@ async function runTrackingPass(range) {
         }
     }
 
-    var effectiveNumAnimals = trackerNumAnimals || computeMaxInstancesPerView(session);
+    var userNumAnimals = sessionNumAnimals(session);
+    var effectiveNumAnimals = userNumAnimals || computeMaxInstancesPerView(session);
     var totalFrameCount = windowed
         ? (isRange ? hi - lo + 1 : loader.nFrames)
         : frameIndices.length;
     console.log('[' + label + '] numAnimals:', effectiveNumAnimals,
-        trackerNumAnimals ? '(user-set)' : '(auto-detected from max instances per view)',
+        userNumAnimals ? '(user-set)' : '(auto-detected from max instances per view)',
         'frames:', totalFrameCount, windowed ? '(windowed)' : '',
         isRange ? '(range ' + lo + '–' + hi + ', 0-based)' : '');
     console.time('[' + label + '] total');
@@ -1513,7 +1530,7 @@ async function runTrackingPass(range) {
                 var noSkeletons = 'no tracked 3D skeletons';
                 showTrackSummaryModal(
                     summarizeTrackedIdentities(session, {
-                        frames: totalFrameCount, animals: effectiveNumAnimals, animalsAuto: trackerNumAnimals == null,
+                        frames: totalFrameCount, animals: effectiveNumAnimals, animalsAuto: userNumAnimals == null,
                         elapsedMs: trackMs,
                         // The recording's rate, as the ID-switch checks read it (measured
                         // from the video when one is loaded), for the real-time multiplier.
