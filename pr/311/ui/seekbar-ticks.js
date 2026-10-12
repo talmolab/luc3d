@@ -40,14 +40,14 @@ export const TICK_STEPS = [
 
 /** Labels are at least this far apart, centre to centre … */
 export const MIN_LABEL_SPACING_PX = 60;
-/** … and at least this many label widths (so the left-aligned first label still clears the second). */
+/** … and at least this many label widths (a gap of ¾ of a label between neighbours). */
 export const LABEL_SPACING_WIDTHS = 1.75;
 /** Minor ticks closer than this are noise rather than a scale. */
 export const MIN_MINOR_SPACING_PX = 8;
 /** At most this many minor intervals per major one. */
 export const MAX_MINOR_PER_MAJOR = 6;
-/** Width of one label character when nothing has been measured (10 px monospace). */
-export const DEFAULT_CHAR_PX = 6;
+/** Width of one label character when nothing has been measured (11 px monospace). */
+export const DEFAULT_CHAR_PX = 6.6;
 
 /** Decimals a label needs for a step: none from one second up, else one (the steps are tenths). */
 function stepDecimals(step) { return step >= 1 ? 0 : 1; }
@@ -76,12 +76,14 @@ export function formatTickLabel(seconds, decimals) {
  * @param {number} widthPx     the bar's width
  * @param {{charPx?: number}} [opts]  width of one label character (monospace)
  * @returns {{step: number, minorStep: number,
- *            majors: Array<{frac: number, seconds: number, label: string|null, align: 'start'|'center'}>,
+ *            majors: Array<{frac: number, seconds: number, label: string|null}>,
  *            minors: number[]}}
  *   `step`/`minorStep` are 0 when there is nothing to draw — including when
  *   no label after "00:00" fits. `frac` is 0..1 along the bar. A major's
  *   `label` is null when, centred, it would hang off the right end (the tick
- *   is still drawn); the label at 0 is left-aligned to the bar's start.
+ *   is still drawn). Every label is centred on its tick — `00:00` too, which
+ *   therefore hangs half a label left of the bar, into the room the
+ *   seekbar's `margin-left` keeps for it.
  */
 export function seekbarTimeTicks(totalFrames, fps, widthPx, opts) {
     var none = { step: 0, minorStep: 0, majors: [], minors: [] };
@@ -122,9 +124,8 @@ export function seekbarTimeTicks(totalFrames, fps, widthPx, opts) {
         var frac = Math.min(1, sec / endSec);
         var label = formatTickLabel(sec, dec);
         var half = label.length * charPx / 2;
-        var align = k === 0 ? 'start' : 'center';
-        if (align === 'center' && frac * widthPx + half > widthPx) label = null;
-        majors.push({ frac: frac, seconds: sec, label: label, align: align });
+        if (k > 0 && frac * widthPx + half > widthPx) label = null;
+        majors.push({ frac: frac, seconds: sec, label: label });
     }
     // A scale is read off two labels; "00:00" alone (a bar too narrow for a
     // second one) is only noise.
@@ -212,8 +213,7 @@ function render() {
             var m = t.majors[j];
             html += '<div class="seekbar-tick is-major" style="left:' + pct(m.frac) + '"></div>';
             if (m.label) {
-                html += '<span class="seekbar-tick-label' + (m.align === 'start' ? ' is-start' : '') +
-                    '" style="left:' + pct(m.frac) + '">' + m.label + '</span>';
+                html += '<span class="seekbar-tick-label" style="left:' + pct(m.frac) + '">' + m.label + '</span>';
             }
         }
     }

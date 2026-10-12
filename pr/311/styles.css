@@ -2684,12 +2684,16 @@ body {
 
 /* Seekbar. The 24px box is the bar itself; the time ruler hangs below it
    (.seekbar-ruler), and margin-bottom reserves that room so the controls bar
-   centres bar + ruler together (34px, the transport buttons' height). */
+   centres bar + ruler together. margin-left is room for the ruler's "00:00",
+   which is centred on the bar's first pixel and so hangs half a label (~17px)
+   left of it: with the controls bar's gap (16px, 8px at <= 640px) it keeps
+   the label clear of the transport buttons. */
 .seekbar-container {
   flex: 1;
   position: relative;
   height: 24px;
-  margin-bottom: 10px;
+  margin-left: 12px;
+  margin-bottom: 11px;
   display: flex;
   align-items: center;
   cursor: pointer;
@@ -2751,10 +2755,9 @@ body {
 .seekbar-tick-label {
   position: absolute; top: 5px; transform: translateX(-50%);
   font-family: "SF Mono", "Fira Code", "Cascadia Code", monospace;
-  font-size: 10px; line-height: 12px; font-variant-numeric: tabular-nums;
+  font-size: 11px; line-height: 13px; font-variant-numeric: tabular-nums;
   color: var(--text-secondary); white-space: nowrap;
 }
-.seekbar-tick-label.is-start { transform: none; }
 
 /* Possible-ID-switch ticks on the seekbar (ui/seekbar-markers.js): over the
    track, under the thumb; they never take the pointer (the seekbar's handlers
