@@ -24,7 +24,7 @@
 // The bar's END is always marked: a tick at the last frame, labelled with the
 // recording's duration — the readout's total (`totalFrames / fps`), truncated
 // to the ruler's precision so the label is always a prefix of it (`14:23` for
-// `14:23.617`, never `14:24`). That label wins every collision: a regular label
+// `14:23.617`, never `14:24`), in bold. That label wins every collision: a regular label
 // too close to it loses its text, and a regular tick within
 // `MIN_MINOR_SPACING_PX` of it would read as a double tick, so it goes.
 //
@@ -250,7 +250,7 @@ function render() {
             var m = t.majors[j];
             html += '<div class="seekbar-tick is-major" style="left:' + pct(m.frac) + '"></div>';
             if (m.label) {
-                html += '<span class="seekbar-tick-label" style="left:' + pct(m.frac) + '">' + m.label + '</span>';
+                html += '<span class="seekbar-tick-label' + (m.end ? ' is-end' : '') + '" style="left:' + pct(m.frac) + '">' + m.label + '</span>';
             }
         }
     }

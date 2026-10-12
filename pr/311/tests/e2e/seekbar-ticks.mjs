@@ -69,7 +69,7 @@ try {
             transport: box(q('.transport-controls')), fps: box(q('.fps-pill')),
             majors: [...document.querySelectorAll('.seekbar-tick.is-major')].map(e => { const b = box(e); return (b.left + b.right) / 2; }),
             minors: document.querySelectorAll('.seekbar-tick:not(.is-major)').length,
-            labels: [...document.querySelectorAll('.seekbar-tick-label')].map(e => ({ text: e.textContent, ...box(e) })),
+            labels: [...document.querySelectorAll('.seekbar-tick-label')].map(e => ({ text: e.textContent, weight: Number(getComputedStyle(e).fontWeight), ...box(e) })),
         };
     });
     const stepOf = (labels) => labels.length > 1 ? parseLabel(labels[1].text) - parseLabel(labels[0].text) : 0;
@@ -84,6 +84,8 @@ try {
         check(Math.abs(centre(end) - r.bar.right) < 0.5 && r.majors.some(x => Math.abs(x - r.bar.right) < 0.5),
             `${what}:   centred on a tick at the bar's end`);
         check(end.right <= r.fps.left - 2, `${what}:   and clear of the FPS pill (${(r.fps.left - end.right).toFixed(1)} px)`);
+        check(end.weight >= 600 && r.labels.slice(0, -1).every(l => l.weight < 600),
+            `${what}:   bold (${end.weight}), and the only bold label`);
     };
     const setBarWidth = (minWidthPx) => page.evaluate(async (w) => {
         document.querySelector('.frame-display').style.minWidth = w ? w + 'px' : '';

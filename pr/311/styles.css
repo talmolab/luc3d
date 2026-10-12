@@ -2758,6 +2758,10 @@ body {
   font-size: 11px; line-height: 13px; font-variant-numeric: tabular-nums;
   color: var(--text-secondary); white-space: nowrap;
 }
+/* The duration, at the bar's end: bold like the readout's current frame. A
+   monospace font keeps its advance width across weights, so the measured
+   character width still holds. */
+.seekbar-tick-label.is-end { font-weight: 600; }
 
 /* Possible-ID-switch ticks on the seekbar (ui/seekbar-markers.js): over the
    track, under the thumb; they never take the pointer (the seekbar's handlers

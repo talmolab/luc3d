@@ -19,19 +19,19 @@
 // a circular import is still `undefined`. That rule is what makes this feature's
 // existing cycles safe, and it applies here unchanged.
 
-import { state } from './app-state.js?v=f7e7f10c3cfb';
-import { setInfoTip } from './info-tip.js?v=f7e7f10c3cfb';
-import { showPlaneDialog } from './plane-dialog.js?v=f7e7f10c3cfb';
-import { setStatus, markDirty } from '../import-export/save-load.js?v=f7e7f10c3cfb';
-import { PIN_STATES } from '../pose/plane-nodes.js?v=f7e7f10c3cfb';
-import { nodeFreezeState } from '../pose/plane-data.js?v=f7e7f10c3cfb';
-import { reprojectPointCamera } from '../pose/triangulation.js?v=f7e7f10c3cfb';
-import { isOriginModeActive } from './origin-definition.js?v=f7e7f10c3cfb';
+import { state } from './app-state.js?v=ca00f458d485';
+import { setInfoTip } from './info-tip.js?v=ca00f458d485';
+import { showPlaneDialog } from './plane-dialog.js?v=ca00f458d485';
+import { setStatus, markDirty } from '../import-export/save-load.js?v=ca00f458d485';
+import { PIN_STATES } from '../pose/plane-nodes.js?v=ca00f458d485';
+import { nodeFreezeState } from '../pose/plane-data.js?v=ca00f458d485';
+import { reprojectPointCamera } from '../pose/triangulation.js?v=ca00f458d485';
+import { isOriginModeActive } from './origin-definition.js?v=ca00f458d485';
 import {
     ICON_PIN, ICON_INFO, makeDeleteButton, setEmptyState, redraw,
     planeModel, planePool, planeState, refreshPlanePanel,
     refreshTriangulationErrors, syncPlanes3D, syncSelectedNode3D,
-} from './plane-definition.js?v=f7e7f10c3cfb';
+} from './plane-definition.js?v=ca00f458d485';
 
 /**
  * User-facing names for the three pin states.
