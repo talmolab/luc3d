@@ -2197,7 +2197,8 @@ drifts upward (e.g., 4 → 11 on the test fixture).
 - `../ui/track-summary.js` — `summarizeTrackedIdentities`, `describeSwitchCheck`
   (the Track All summary's data).
 - `../ui/track-summary-modal.js` — `showTrackSummaryModal`: opened at the end of a
-  successful Track All (see above); `rememberTrackSummary`: keeps it for reopening.
+  successful Track All (see above), with the session so it shows the Identities
+  section (`ui/identity-gallery.js`); `rememberTrackSummary`: keeps it for reopening.
 - `../ui/timeline-controller.js` — `collapseTimeline`: a successful Track All
   (not a range) closes the Timeline if it is open.
 - `../ui/panel-visibility.js` — `collapseViewport3D`: the same, for the 3D viewer
@@ -11158,12 +11159,18 @@ three cases read alike.
 
 **Purpose.** The box that opens when Track All finishes: identities, frames
 tracked, frames with every animal, tracking time with its speed (fps, × real
-time), a bar per identity, each
+time), a bar per identity, the **Identities** section (`ui/identity-gallery.js` —
+five sample images and a path map per identity), each
 ID-switch check's result and time, and the **Next step** with its button focused.
-Renders `planTrackSummary` (`ui/track-summary.js`) and nothing else.
+Renders `planTrackSummary` (`ui/track-summary.js`) and the gallery, and nothing else.
 
-**Key exports.** `showTrackSummaryModal(summary, checks)` — returns
-`{close, overlay}`, or null without a DOM (Node harnesses run Track All);
+**Key exports.** `showTrackSummaryModal(summary, checks, {session})` — returns
+`{close, overlay, gallery}`, or null without a DOM (Node harnesses run Track All);
+with `session` it adds the Identities section, whose `gallery.done` settles once
+its images are drawn (`pose/tracker.js` and `reopenTrackSummary` pass it);
+`setTrackSummaryNavigator(fn)` (ui-wiring registers `navigateToFrame`, as it does
+for the ID Switches tab: a sample or a map point clicked closes the box and goes
+to that frame — the tracker that opens the box cannot import `pose/initialization.js`);
 `rememberTrackSummary(session, opts, checks, identities)` (Track All keeps what the
 box showed on `session._trackSummary` — in memory, not saved — and refreshes the
 ID Switches tab so its button appears); `reopenTrackSummary(session)` (the tab's
@@ -11195,14 +11202,17 @@ from the pass, because `runIdSwitchChecks` stores only results that ran.
   own.
 - **No inner scroller.** The identity list is capped instead; the modal itself
   caps its height at the viewport. It drops `.multi-frame-modal`'s 420px
-  `min-width` so it fits a narrow window.
+  `min-width` so it fits a narrow window. With the Identities section
+  (`.has-gallery`) it widens to 780px and its button row is STICKY at the
+  bottom, so the recommended step stays in view while the rows scroll.
 
 **Imports from project modules.** `ui/track-summary.js` (`planTrackSummary`,
 `summarizeTrackedIdentities`, `describeSwitchCheck`), `ui/id-switch-modal.js`
-(`openIdSwitchPanel`, `refreshIdSwitchPanel`, `setTrackSummaryOpener`).
+(`openIdSwitchPanel`, `refreshIdSwitchPanel`, `setTrackSummaryOpener`),
+`ui/identity-gallery.js` (`renderIdentityGallery`).
 
-**Imported by.** `pose/tracker.js`. No cycle: neither import reaches back to the
-tracker.
+**Imported by.** `pose/tracker.js`, `ui/ui-wiring.js` (`setTrackSummaryNavigator`).
+No cycle: none of its imports reaches back to the tracker.
 
 **Coverage.** `tests/e2e/track-all-summary.mjs` — the real Track All button, the
 rows and times, the key swallowing and `Esc`, `Enter` running Triangulate All,
@@ -11210,8 +11220,87 @@ replacement on a second run, no box after Track Frame Range, the nothing-tracked
 case, Review switches landing on the first switch, and §2b reopening from the ID
 Switches tab (the button's place above "Possible ID switches", the same box, a
 check run since reported rather than "Not run", Clear, and no button without a
-Track All). Tests that click the app
-after a Track All close the box first (`#trackSummaryClose`).
+Track All). The Identities section: `tests/e2e/identity-gallery.mjs`. Tests that
+click the app after a Track All close the box first (`#trackSummaryClose`).
+
+### ui/identity-gallery.js
+
+**Purpose.** The Track All summary's **Identities** section: one row per identity
+— its name, five sample images of that animal spread over the recording, each
+from the view that shows it best and rotating through the views, and a map of its
+path over one camera's view (the camera picked above the rows). An identity that
+switched between animals that look different shows up as a row whose images are
+not all the same animal, or a path that jumps across the cage — seen before
+either ID-switch check is run. On the real CD1 recording (plain vs jacketed
+mouse) the two rows swap coats after the first sample; on 2022-10-07/145420 one
+dark-mouse row opens on a white mouse.
+
+**How a row is chosen** (the planning half, DOM-free):
+- `identityTracks(session)` — every identity's tracked frames and 3D centroids,
+  from `session.instanceGroups` (resident in full even on a lazy project). A
+  frame where an identity has two groups is left out, as the image check does.
+- `pickSampleFrames` — the middles of five equal slots of the identity's tracked
+  span, each moved, when it has to be, to a frame where the animal is ISOLATED
+  (its nearest other identity more than 1.5 of its body sizes away), the
+  isolated frame nearest the middle winning. Maximising isolation instead pushed
+  every pick to a slot edge, two samples a few frames apart; and only the middle
+  60% of each slot is searched, so in a cage too crowded for any frame to be
+  isolated neighbouring samples still stay 40% of a slot apart.
+- `pickCamera` — among the views where the group has a 2D member: the largest
+  projection of its 3D (diagonal, with the camera's distortion) inside the image
+  is the best, and among the views good enough to use (inside the image, at
+  least 30% of the best's size and 40 px) the one this identity's samples used
+  LEAST wins, so the five rotate through the views. A view whose 2D detection is
+  poor (under half its keypoints, or spread 2.5x wider than the 3D) is passed
+  over while any other is not: scattered keypoints cut a huge crop with a speck
+  of animal in it — seen on 145420 before the rule.
+- `cropSquare` — full colour, upright, unmasked: a square of 1.4x the keypoints'
+  larger extent + 12 px. NOT the image check's masked, rotated greyscale crop,
+  which is the model's input, not something a person compares coats in. The
+  animal's own keypoints are drawn as small dots in its colour, which is what
+  says which animal the row means when two share an image.
+- `memberPointsByCamera` — the identity's 2D in every camera at one frame, read
+  with `hydrateFrameMembers2d` / `releaseFrameMembers2d` around it: on a lazy
+  project a member of a frame that is not resident holds only the shared
+  placeholder (see CLAUDE.md "A lazy project's resident frames are a WINDOW").
+- `projectTrack` — the path in a camera's pixels, thinned evenly to
+  `MAP_MAX_POINTS`, broken where frames are more than 2 s apart (the gap test
+  scales with the thinning) or a point does not project; `defaultMapCamera` — the
+  camera with the most 2D members over a thinned sample of the groups.
+
+**Drawing.** `renderIdentityGallery(host, session, {onPick})` builds the rows
+with placeholders at once and fills them AFTER the box paints: the maps first,
+then each row's images, one decoded frame per sample (`view.decoder.getFrame`,
+drawn immediately — a decoder's cached frame may be closed by the next decode).
+It stops as soon as the box is closed. Measured: 0.8–2.2 s for the 8-camera,
+54,000-frame CD1 recording, 4–5 s for a 10-camera 4-mouse session. Without a
+video a sample says "no video" and the maps still draw the paths on a dark
+ground. The map is a still frame of the chosen camera (the current frame),
+darkened, with the path coloured by TIME on a one-hue sequential ramp (dataviz
+reference blue, the early end the darker step) and a 0:00 → end key; hovering a
+map shows the time of the nearest point, and a click on one goes there. The
+chosen view is kept on `session._galleryView` (in memory), so reopening the
+summary keeps it. Rows are capped at `GALLERY_MAX_ROWS` (12), as the identity
+bars are.
+
+**Key exports.** `renderIdentityGallery`, `identityTracks`, `identityGroupAt`,
+`groupCentroid`, `pickSampleFrames`, `projectedBox`, `pickCamera`, `cropSquare`,
+`memberPointsByCamera`, `projectTrack`, `defaultMapCamera`, `timeColor`;
+`GALLERY_SAMPLES` (5), `GALLERY_MAX_ROWS`, `GALLERY_TILE` (88 px),
+`MAP_MAX_POINTS` (2,400).
+
+**Imports from project modules.** `ui/app-state.js` (`state`),
+`pose/lazy-residency.js` (`hydrateFrameMembers2d`, `releaseFrameMembers2d`).
+
+**Imported by.** `ui/track-summary-modal.js`.
+
+**Coverage.** `tests/test-identity-gallery.mjs` (the planning half, including a
+released lazy member read through hydration with the direct-read control) and
+`tests/e2e/identity-gallery.mjs` (the real Track All on stand-in videos that
+paint each animal its own colour: every image in a row shows that row's animal,
+spread over the recording and from more than one camera; the maps, the view
+selector and its time key; both clicks; no videos; and the negative control —
+identities swapped halfway, each row then showing BOTH animals).
 
 ### ui/view-align-modal.js
 
@@ -11441,7 +11530,8 @@ stopping at the last frame; the step transport buttons/keys stop it first.
   Switches (Images)…** (`menuCheckImageSwitches`) `runIdSwitchChecks({image: true,
   navigateToFrame})`, from `ui/id-switch-modal.js`; `setIdSwitchNavigator` and
   `setIdSwitchRefresher` (the repaint after the tab fixes a switch) are called
-  once at setup.
+  once at setup, as is `setTrackSummaryNavigator` (`ui/track-summary-modal.js`:
+  the Track All summary's Identities samples and maps go to a frame).
 - Color-by toggle: the Tracks / Identity control lives in the top
   toolbar (buttons `colorByTracks` / `colorById`, next to the Errors
   checkbox), not the Tracks menu. It has no visible "Color" label (the group
