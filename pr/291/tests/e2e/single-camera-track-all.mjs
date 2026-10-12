@@ -33,6 +33,9 @@
  *  6. The single-camera options (`skipEmpty`, `clearestEndLeads`) are the
  *     coat-brightness check's: the label-free size and image checks (stand-in
  *     embedder) take none of them.
+ *  7. Duplicate removal is offered in the Tracking Wizard, off by default (box
+ *     IoU 0.5, OKS 0.6); switched on, Track All leaves a planted partial copy of
+ *     an animal without a track and says so, and every animal keeps its track.
  *
  * Run: node tests/e2e/single-camera-track-all.mjs
  */
@@ -265,6 +268,37 @@ try {
         `coat brightness on one camera skips encounters with no samples; the label-free size check has no such rule (size ${img.sizeSkip}, brightness ${img.brSkip})`);
     check(img.lead[0] === undefined && img.lead[1] === undefined && img.lead[2] === true,
         `…and lets the clearest of nearby 'end' rows lead (size / image / brightness: ${img.lead})`);
+
+    console.log('\n7. Duplicate removal: opt-in in the Tracking Wizard, then a planted copy keeps no track');
+    await page.evaluate(async () => { const M = await import('/ui/settings-modal.js'); M.showSettingsModal('wizard'); });
+    const wiz = await page.evaluate(() => {
+        const q = l => document.querySelector(`.settings-overlay [aria-label="${l}"]`);
+        const t = q('Single camera: remove duplicate detections'), iou = q('Single camera: duplicate box IoU'), oks = q('Single camera: duplicate OKS');
+        return { toggle: t ? t.checked : null, iou: iou && Number(iou.value), oks: oks && Number(oks.value) };
+    });
+    check(wiz.toggle === false && wiz.iou === 0.5 && wiz.oks === 0.6,
+        `the wizard offers it, off by default, with box IoU 0.5 and OKS 0.6 (${JSON.stringify(wiz)})`);
+    await page.locator('.settings-overlay [aria-label="Single camera: remove duplicate detections"]').locator('xpath=..').scrollIntoViewIfNeeded();
+    await page.locator('.settings-overlay [aria-label="Single camera: remove duplicate detections"]').locator('xpath=..').click();   // the switch's label
+    await page.click('.settings-overlay .settings-btn-apply');
+    check(await page.evaluate(async () => (await import('/ui/settings.js')).getTrackingThreshold('scRemoveDuplicates')) === 1, 'switched on with Apply');
+    const dup = await page.evaluate(async () => {
+        const pd = await import('/pose/pose-data.js'), S = window.__lucid.state.session;
+        // SLEAP's second, partial instance on animal 0 at frame 300, a little weaker
+        const a0 = S.frameGroups.get(300).getUnlinkedInstances('mouse_video')[0].instance;
+        const pts = []; for (let k = 0; k < a0.numNodes; k++) pts.push(k % 4 === 0 ? null : [a0.getX(k) + 1, a0.getY(k) - 1]);
+        const copy = new pd.Instance(pts, null, 'predicted', 0.5);
+        S.addUnlinkedInstance(300, 'mouse_video', copy);
+        window.__copy = copy;
+    });
+    await page.evaluate(() => { document.getElementById('statusText').textContent = ''; document.getElementById('tbTrackAll').click(); });
+    await page.waitForFunction(() => /Tracked \d+ animal|Track All error/.test(document.getElementById('statusText').textContent), { timeout: 60000 });
+    const st7 = await status(), after = await page.evaluate(() => ({ copy: window.__copy.trackIdx, tr: window.__tracks() }));
+    check(/1 duplicate detection removed first \(left without a track\)/.test(st7), 'the status says one duplicate was removed: ' + st7.slice(0, 160));
+    check(after.copy === null, 'the copy keeps no track');
+    const per7 = [0, 1, 2].map(a => new Set(after.tr.map(r => r[a])));
+    check(per7.every(x => x.size === 1) && new Set(per7.map(x => [...x][0])).size === 3, 'each animal is still on one track throughout');
+    await page.evaluate(async () => (await import('/ui/settings.js')).setTrackingThresholds({ scRemoveDuplicates: 0 }));
 
     check(errs.length === 0, 'no page errors' + (errs.length ? ': ' + errs.join(' | ') : ''));
 } finally {

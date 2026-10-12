@@ -44,10 +44,10 @@
 // naively comes back as `[null, null, null]` and every `isFinite` check
 // downstream has to defend against it. A node with no 3D omits the key.
 
-import { PlaneNode, PlaneNodePool } from './plane-nodes.js?v=ec8baa2436da';
-import { PlaneSkeleton, PlaneInstance } from './plane-data.js?v=ec8baa2436da';
-import { MeshObject3D } from './mesh-object-3d.js?v=ec8baa2436da';
-import { buildOriginFrame } from './origin-frame.js?v=ec8baa2436da';
+import { PlaneNode, PlaneNodePool } from './plane-nodes.js?v=ef82617c4e28';
+import { PlaneSkeleton, PlaneInstance } from './plane-data.js?v=ef82617c4e28';
+import { MeshObject3D } from './mesh-object-3d.js?v=ef82617c4e28';
+import { buildOriginFrame } from './origin-frame.js?v=ef82617c4e28';
 
 /** Finite number, or `null`. @private */
 function num(v) {
@@ -412,7 +412,7 @@ export function restoreOriginFrame(data) {
  * forever. `restoreMeshObjects` drops unresolvable IDs instead, at the point
  * where the live plane set is actually known.
  *
- * @param {import('./mesh-object-3d.js?v=ec8baa2436da').MeshObjectSet} set
+ * @param {import('./mesh-object-3d.js?v=ef82617c4e28').MeshObjectSet} set
  * @returns {Object[]|null} null when there are no objects.
  */
 export function serializeMeshObjects(set) {
@@ -488,7 +488,7 @@ export function restoreMeshObjects(data, planeIds) {
  * so the bundle survives an empty pool; only a model with neither nodes nor
  * planes writes nothing.
  *
- * @param {import('./plane-data.js?v=ec8baa2436da').PlaneModel} model
+ * @param {import('./plane-data.js?v=ef82617c4e28').PlaneModel} model
  * @returns {{planeNodes:Object[]|undefined, planes:Object[]|undefined,
  *            meshObjects:Object[]|undefined}|null}
  *   null when there is no plane state at all.
@@ -519,7 +519,7 @@ export function serializePlaneProject(model) {
  * `PlaneModel.attachPlacements`, which re-seats them onto whatever pool is
  * live at the time.
  *
- * @param {import('./plane-data.js?v=ec8baa2436da').PlaneModel} model
+ * @param {import('./plane-data.js?v=ef82617c4e28').PlaneModel} model
  * @param {*} data - `{planeNodes, planes, meshObjects}`, or anything at all
  * @returns {{nodes:number, planes:number, objects:number}} how much was restored
  */
