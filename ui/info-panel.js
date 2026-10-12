@@ -7,7 +7,7 @@ import {
     Skeleton, Camera, Session,
 } from '../pose/pose-data.js';
 import { getInstanceGroupsForFrame } from '../pose/triangulation.js';
-import { REPROJECTION_COLOR, getTrackColor, getGroupColor } from './overlays.js';
+import { REPROJECTION_COLOR, NULL_ID_COLOR, getTrackColor, getGroupColor } from './overlays.js';
 import { drawAllOverlays, updateFrameCounters } from './rendering.js';
 import { isInteractiveClickTarget } from './interaction.js';
 import { persistSectionState } from './section-state.js';
@@ -374,9 +374,12 @@ export function populateTimelineVisibility(session) {
         // `getTrackVisibilityList` returns names in the same order as
         // `session.tracks`, so the list index is the trackIdx that
         // `getTrackColor` uses for its palette lookup. Mirrors what the
-        // timeline canvas itself paints next to each track row, and
-        // matches the swatch behavior already in place for identities.
-        trackList[i].color = getTrackColor(i);
+        // timeline canvas itself paints next to each track row — the No ID
+        // track's gray, and the palette of the current Tracks / Identity
+        // coloring — and matches the swatch behavior already in place for
+        // identities.
+        trackList[i].color = (session.isNoIdTrack && session.isNoIdTrack(i))
+            ? NULL_ID_COLOR : getTrackColor(i, state.colorByIdentity);
         hostTracks.appendChild(buildVisToggleRow(trackList[i], function (name) {
             toggleTrackVisibility(session, name);
             refreshAfterChange();

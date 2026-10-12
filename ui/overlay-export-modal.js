@@ -30,6 +30,7 @@ import { state, videoController, getActiveSession } from './app-state.js';
 import { Viewport3D } from './viewport3d.js';
 import {
     drawFrameOverlays, drawLegend, drawViewNameLabel, getTrackColor, getGroupColor,
+    TRAIL_SHADES, DEFAULT_TRAIL_SHADE, trailShadeFor,
 } from './overlays.js';
 import { getVisibilitySettings } from './rendering.js';
 import {
@@ -120,6 +121,7 @@ export function settingsFromVisibilityPanel() {
     s.layers.errors = !!vis.showErrors;
     s.layers.legend = !!vis.showLegend;
     s.trailLength = state.trailLength || 0;
+    s.trailShade = state.trailShade || DEFAULT_TRAIL_SHADE;
     s.colorBy = state.colorByIdentity ? 'identity' : 'track';
     function copy(dst, src, keys) {
         if (!src) return;
@@ -150,7 +152,10 @@ export function settingsFromVisibilityPanel() {
 }
 
 export function loadOverlayExportSettings() {
-    return applyStoredSettings(settingsFromVisibilityPanel());
+    var s = applyStoredSettings(settingsFromVisibilityPanel());
+    // A stored shade this build does not offer would leave the select blank.
+    if (!trailShadeFor(s.trailShade)) s.trailShade = DEFAULT_TRAIL_SHADE;
+    return s;
 }
 
 /**
@@ -1360,6 +1365,8 @@ export function showOverlayExportModal() {
         addSelect(gLayers.body, 'Color by', settings, 'colorBy',
             [['track', 'Track'], ['identity', 'Identity']], 'ovColorBy');
         addNumber(gLayers.body, 'Node trails (frames)', settings, 'trailLength', 0, 500, 10);
+        addSelect(gLayers.body, 'Trail shade', settings, 'trailShade',
+            TRAIL_SHADES.map(function (sh) { return [sh.key, sh.name]; }), 'ovTrailShade');
         addSelect(gLayers.body, 'Background', settings, 'background',
             [['video', 'video'], ['black', 'black'], ['white', 'white'], ['gray', 'gray']], 'ovBackground');
 
