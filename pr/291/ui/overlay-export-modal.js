@@ -26,13 +26,13 @@
 // import in ui/sessions-panes.js (see CLAUDE.md › Dependencies).
 import { DockviewComponent, themeDark } from 'https://cdn.jsdelivr.net/npm/dockview-core@6.6.1/+esm';
 
-import { state, videoController, getActiveSession } from './app-state.js?v=ef82617c4e28';
-import { Viewport3D } from './viewport3d.js?v=ef82617c4e28';
+import { state, videoController, getActiveSession } from './app-state.js?v=b674558e5430';
+import { Viewport3D } from './viewport3d.js?v=b674558e5430';
 import {
     drawFrameOverlays, drawLegend, drawViewNameLabel, getTrackColor, getGroupColor,
     TRAIL_SHADES, DEFAULT_TRAIL_SHADE, trailShadeFor,
-} from './overlays.js?v=ef82617c4e28';
-import { getVisibilitySettings } from './rendering.js?v=ef82617c4e28';
+} from './overlays.js?v=b674558e5430';
+import { getVisibilitySettings } from './rendering.js?v=b674558e5430';
 import {
     getInstanceGroupsForFrame,
     ensureLazyFrameData,
@@ -40,9 +40,9 @@ import {
     triangulateAndReproject,
     storeReprojectedInstances,
     sessionHasCalibration,
-} from '../pose/triangulation.js?v=ef82617c4e28';
-import { points3dNodeCount } from '../pose/pose-data.js?v=ef82617c4e28';
-import { setStatus } from '../import-export/save-load.js?v=ef82617c4e28';
+} from '../pose/triangulation.js?v=b674558e5430';
+import { points3dNodeCount } from '../pose/pose-data.js?v=b674558e5430';
+import { setStatus } from '../import-export/save-load.js?v=b674558e5430';
 
 import {
     TILE_3D, RES_PRESETS, RES_CUSTOM, MAX_OUT_DIM,
@@ -52,16 +52,16 @@ import {
     defaultOverlayExportSettings, applyStoredSettings, saveOverlayExportSettings,
     overlayOptionsFrom, seedLayoutPlan,
     distributeAxisSizes, SASH_SHARE_FAR,
-} from './overlay-export-layout.js?v=ef82617c4e28';
-import { createMp4Writer, videoEncodingAvailable } from './video-encode.js?v=ef82617c4e28';
-import { fileSystemAccessHint } from './browser-hints.js?v=ef82617c4e28';
+} from './overlay-export-layout.js?v=b674558e5430';
+import { createMp4Writer, videoEncodingAvailable } from './video-encode.js?v=b674558e5430';
+import { fileSystemAccessHint } from './browser-hints.js?v=b674558e5430';
 // The main window's per-camera display settings. `ui/video-filters.js` imports NO
 // project modules, so this adds no cycle — and going through the SAME
 // `buildVideoFilter` the live canvases use is what stops the export drifting from
 // what the user sees (`applyVideoFilters` in ui/sessions-panes.js).
 import {
     buildVideoFilter, getSessionBrightness, getSessionContrast, getSessionRotation,
-} from './video-filters.js?v=ef82617c4e28';
+} from './video-filters.js?v=b674558e5430';
 
 // Re-exported so callers/tests have one import site for the feature.
 export { TILE_3D };
