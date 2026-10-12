@@ -689,6 +689,21 @@ the animal count, connect single breaks). Rules:
   keypoints). On 35 proofread 10-min SLAP videos it took sleap-nn's known-count
   setup from 85.8% to 93.6% correct and 156 to 102 lasting swaps. Everything
   else is sleap-nn's default.
+- **Duplicate removal is opt-in and runs BEFORE the port, never inside it.**
+  The Tracking Wizard's `scRemoveDuplicates` (default off) has
+  `duplicateDetections` drop a detection that duplicates a stronger one in its
+  frame. It needs box IoU ≥ 0.5 AND OKS ≥ 0.6 (the weaker detection's nodes
+  against the stronger, scaled by the stronger's box). Neither alone: box
+  overlap alone also takes two touching animals, keypoints alone two look-alike
+  poses.
+  - On a SLEAP user's proofread two-mouse dataset, a lone animal hopped onto the track
+    of SLEAP's copy of itself in 2 of 6 sessions. Removal fixes both (96.95% ->
+    99.98%). sleap-nn's pre-cull never fires there: it needs more detections
+    than animals.
+  - On 87 SLAP top/mid views it is about neutral (88.52% -> 88.73%, 8 views
+    better, 8 worse): removing junk re-routes the tracker either way. That is
+    why it stays off by default.
+  - Removed detections keep no track and stay in the project.
 - **The ID-switch checks read a 2D stand-in** (`singleCameraCheckSession`:
   `points3d` = (x, y, 0)). They are unit-free, so this is sound, but body size
   in 2D is not a usable cue (2 of 59 real swaps caught, AUC 0.55), so Track All

@@ -25,6 +25,11 @@
  * costs nothing — but a 2D bone length also changes with posture and viewing
  * angle, which is why body size is a weak cue on one camera.
  *
+ * Opt-in, before the tracker sees them: DUPLICATE detections — a second
+ * instance SLEAP placed on an animal it already detected — can be left out
+ * (`duplicateDetections`, Tracking Wizard `scRemoveDuplicates`, off by
+ * default). The port itself is untouched.
+ *
  * Eager sessions only: a lazy (> 150 MB) single-camera project is refused with
  * a reason rather than tracked from its resident window.
  *
@@ -65,6 +70,102 @@ export function singleCameraTrackerConfig(numAnimals, s) {
     };
 }
 
+/**
+ * Duplicate removal, opt-in (Tracking Wizard `scRemoveDuplicates`, default off).
+ * SLEAP sometimes puts a SECOND instance on an animal it already detected —
+ * often partial, scoring 0.4–0.9. With the animal count as the track cap that
+ * copy takes a track, and a lone animal can hop onto it: on a proofread
+ * two-mouse single-camera dataset (6 sessions, 40 fps) the subject, alone
+ * before its partner entered, hopped tracks at its own duplicates in 2 of 6
+ * sessions, and the partner then entered on its old track (96.95% correct).
+ * sleap-nn's pre-cull cannot help: it acts only on a frame with MORE detections
+ * than the animal count, and a lone animal plus its copy is not.
+ *
+ * A detection is a duplicate of a stronger one (higher score) in the same frame
+ * when BOTH its box IoU with it is at least `iou` AND their OKS is at least
+ * `oks`: box overlap alone would also take two touching animals, keypoints
+ * alone two look-alike poses side by side. The OKS reads the WEAKER detection's
+ * nodes (a copy is often partial) against the stronger one, scaled by the
+ * stronger one's box (sleap-nn's `compute_oks`, cocoeval normalisation, stddev
+ * `oksStddev`). Measured 2026-10-12: on that dataset every IoU 0.3–0.7 × OKS
+ * 0.5–0.8 removes both hops (99.98%, no swaps; at the defaults 91 detections,
+ * none a real animal). On 87 proofread SLAP top/mid views (2–4 mice, 3.78M
+ * detections) it is about neutral: 88.52% -> 88.73% correct, swaps 276 -> 257,
+ * 8 views better and 8 worse — removing junk re-routes the tracker either way,
+ * which is why it is not on by default. It removed 1,231 detections there, 74
+ * of them a real second animal.
+ */
+export const DUPLICATE_DEFAULTS = {
+    iou: 0.5,        // box IoU with the stronger detection at least this...
+    oks: 0.6,        // ...AND OKS at least this
+    oksStddev: 0.1,  // the OKS keypoint spread (the single-camera tracker's default)
+    minNodes: 3,     // a detection with fewer present nodes is never called a duplicate
+};
+
+/** [xmin, ymin, xmax, ymax] over the present nodes of tracker points (x0, y0, x1, y1, …), or null. */
+function pointsBox(p) {
+    var x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (var k = 0; k < p.length; k += 2) {
+        var x = p[k], y = p[k + 1];
+        if (x !== x || y !== y) continue;
+        if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y;
+    }
+    return x0 <= x1 ? [x0, y0, x1, y1] : null;
+}
+
+/** Box IoU, +1 px per side as sleap-nn's `compute_iou` counts it. */
+export function boxIou(a, b) {
+    var ix = Math.max(0, Math.min(a[2], b[2]) - Math.max(a[0], b[0]) + 1);
+    var iy = Math.max(0, Math.min(a[3], b[3]) - Math.max(a[1], b[1]) + 1), inter = ix * iy;
+    return inter / ((a[2] - a[0] + 1) * (a[3] - a[1] + 1) + (b[2] - b[0] + 1) * (b[3] - b[1] + 1) - inter);
+}
+
+/**
+ * OKS of `weak`'s present nodes against `strong` (a node `strong` lacks scores 0),
+ * scaled by the area of `strong`'s box `sbox`; NaN when `weak` has fewer than
+ * `minNodes` present nodes.
+ */
+export function duplicateOks(strong, weak, sbox, stddev, minNodes) {
+    var norm = (2 * stddev) * (2 * stddev) * 2 * ((sbox[2] - sbox[0]) * (sbox[3] - sbox[1]) + 2.220446049250313e-16);
+    var sum = 0, n = 0;
+    for (var k = 0; k < weak.length; k += 2) {
+        var wx = weak[k], wy = weak[k + 1];
+        if (wx !== wx || wy !== wy) continue;
+        n++;
+        var sx = strong[k], sy = strong[k + 1];
+        if (sx !== sx || sy !== sy) continue;
+        var dx = wx - sx, dy = wy - sy;
+        sum += Math.exp(-(dx * dx + dy * dy) / norm);
+    }
+    return n >= (minNodes || 1) ? sum / n : NaN;
+}
+
+/**
+ * Which of one frame's detections are duplicates (see DUPLICATE_DEFAULTS).
+ * Greedy, strongest first (score; a missing score counts lowest; ties keep file
+ * order): a detection is dropped when it is a duplicate of one already kept. A
+ * user instance is never dropped, and is kept before any prediction.
+ * @param {Array<{points: Float64Array, score: number, isUser: boolean}>} dets  tracker detections
+ * @param {object} [o]  DUPLICATE_DEFAULTS overrides
+ * @returns {number[]} indices into `dets`, ascending
+ */
+export function duplicateDetections(dets, o) {
+    o = Object.assign({}, DUPLICATE_DEFAULTS, o || {});
+    if (dets.length < 2) return [];
+    var rank = function (d) { return d.isUser ? Infinity : (d.score === d.score ? d.score : -Infinity); };
+    var order = dets.map(function (d, i) { return i; }).sort(function (a, b) { return rank(dets[b]) - rank(dets[a]) || a - b; });
+    var boxes = dets.map(function (d) { return pointsBox(d.points); });
+    var kept = [], drop = [];
+    order.forEach(function (i) {
+        var d = dets[i], dup = !d.isUser && boxes[i] && kept.some(function (j) {
+            return boxes[j] && boxIou(boxes[j], boxes[i]) >= o.iou &&
+                duplicateOks(dets[j].points, d.points, boxes[j], o.oksStddev, o.minNodes) >= o.oks;
+        });
+        if (dup) drop.push(i); else kept.push(i);
+    });
+    return drop.sort(function (a, b) { return a - b; });
+}
+
 /** One camera's instances on a frame, in file order (grouped first, then unlinked); reprojections excluded. */
 function instancesOf(fg, cam) {
     var out = [], grouped = fg.instances.get(cam), unlinked = fg.unlinkedInstances.get(cam);
@@ -99,24 +200,37 @@ function trackerPoints(inst) {
  * @param {Session} session  eager, one camera
  * @param {object} cfg       from `singleCameraTrackerConfig`
  * @param {{onProgress?: function(number, number): (void|Promise), signal?: AbortSignal,
- *          fps?: number, look?: object}} [opts]  `look` overrides `CANDIDATE_DEFAULTS`
+ *          fps?: number, look?: object, duplicates?: object}} [opts]  `look` overrides
+ *          `CANDIDATE_DEFAULTS`; `duplicates` (DUPLICATE_DEFAULTS overrides, or null/absent
+ *          for off) leaves each frame's duplicate detections out of the tracking — they
+ *          keep no track, and stay in the session
  * @returns {Promise<{numIdentities: number, frames: number, tracked: number, untracked: number,
- *          moments: Array}>}
+ *          duplicates: number, moments: Array}>}  `untracked` excludes the `duplicates`
  */
 export async function trackSingleCamera(session, cfg, opts) {
     var cam = singleCameraName(session);
     if (!cam) throw new Error('not a single-camera session');
     if (session.lazyLoader) throw new Error(SINGLE_CAMERA_LAZY_REASON);
     var frameIdx = Array.from(session.frameGroups.keys()).sort(function (a, b) { return a - b; });
+    var dupOpts = opts && opts.duplicates ? opts.duplicates : null, removed = [];
     var frames = [], insts = [], inputTracks = [];
     for (var i = 0; i < frameIdx.length; i++) {
         var list = instancesOf(session.frameGroups.get(frameIdx[i]), cam);
         if (!list.length) continue;
+        var dets = list.map(function (inst) {
+            return { points: trackerPoints(inst), score: typeof inst.score === 'number' ? inst.score : NaN, isUser: inst.type === 'user' };
+        });
+        if (dupOpts && dets.length > 1) {
+            var drop = new Set(duplicateDetections(dets, dupOpts));
+            if (drop.size) {
+                list.forEach(function (inst, q) { if (drop.has(q)) removed.push(inst); });
+                list = list.filter(function (_, q) { return !drop.has(q); });
+                dets = dets.filter(function (_, q) { return !drop.has(q); });
+            }
+        }
         insts.push(list);
         inputTracks.push(list.map(function (inst) { return inst.trackIdx; }));   // the file's own tracklets, before they are rewritten
-        frames.push({ frameIdx: frameIdx[i], dets: list.map(function (inst) {
-            return { points: trackerPoints(inst), score: typeof inst.score === 'number' ? inst.score : NaN, isUser: inst.type === 'user' };
-        }) });
+        frames.push({ frameIdx: frameIdx[i], dets: dets });
     }
     var look = Object.assign({}, CANDIDATE_DEFAULTS, (opts && opts.look) || {});
     var ambiguous = [], posOf = new Map();
@@ -142,6 +256,8 @@ export async function trackSingleCamera(session, cfg, opts) {
             tracked++;
         }
     }
+    // Duplicates were not tracked: no track, no identity (they stay in the session, as the over-count ones do).
+    removed.forEach(function (inst) { inst.identityId = null; inst.trackIdx = null; });
     // A single-camera session normally has no groups; keep any it has in step with its member's track.
     for (var groups of session.instanceGroups.values()) {
         for (var g = 0; g < groups.length; g++) {
@@ -150,7 +266,8 @@ export async function trackSingleCamera(session, cfg, opts) {
         }
     }
     var moments = candidateMoments(frames, out, inputTracks, ambiguous, look, (opts && opts.fps) || session.fps || 30);
-    return { numIdentities: nTracks, frames: frames.length, tracked: tracked, untracked: untracked, moments: moments };
+    return { numIdentities: nTracks, frames: frames.length, tracked: tracked, untracked: untracked,
+             duplicates: removed.length, moments: moments };
 }
 
 /**

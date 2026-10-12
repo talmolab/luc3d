@@ -25,6 +25,11 @@
  *  7. `clearestEndLeads`: after an early swap, other pairs of a swapped animal
  *     "read right again" a second or two BEFORE the swapped pair; the clearest
  *     'end' row of such a group leads it (a real video's four 'end' rows).
+ *  8. Duplicate removal (opt-in): a detection is a duplicate only when box IoU
+ *     AND OKS both pass (touching animals, a reversed pose and a few exact nodes
+ *     are each kept by one of the two); user instances are never removed; and a
+ *     lone animal that hops onto the tracks of SLEAP's copies of it without
+ *     removal keeps one track with it, its partner entering on the other.
  *
  * Run:  node tests/test-single-camera-tracking.mjs
  */
@@ -254,6 +259,70 @@ group('7. On one camera, the clearest of a group of nearby \'end\' rows leads it
     ch = CHK.markChangePoints(enc(), Object.assign({}, O, SCT.singleCameraCheckOptions('brightness')));
     ok(lead(ch) === 'id_2/id_3@507' && ch.filter(x => x.followOf === 507).length === 3,
         `with clearestEndLeads the swapped pair's row (+444) leads and the three echoes follow it (${lead(ch)})`);
+}
+
+group('8. Duplicate removal (opt-in): box IoU AND OKS, before the tracker');
+{
+    const P = pts => Float64Array.from(pts.flatMap(p => p ? p : [NaN, NaN]));
+    const at = (cx, cy, k = 1, h = 0) => NODES.map(n => { const [x, y] = T[n], c = Math.cos(h), si = Math.sin(h); return [cx + k * (c * x - si * y), cy + k * (si * x + c * y)]; });
+    const det = (pts, score, isUser = false) => ({ points: P(pts), score, isUser });
+    const A = at(300, 200);
+    const partial = A.map((p, j) => j % 3 === 0 ? null : [p[0] + 2, p[1] - 1]);           // a copy with 10 of 15 nodes, 2 px off
+    eq(JSON.stringify(SCT.duplicateDetections([det(A, 0.9), det(partial, 0.7)])), '[1]', 'a partial copy of a stronger detection is a duplicate');
+    eq(JSON.stringify(SCT.duplicateDetections([det(partial, 0.95), det(A, 0.9)])), '[1]', 'the WEAKER of the two goes, whichever comes first in the file');
+    eq(JSON.stringify(SCT.duplicateDetections([det(A, 0.9), det(at(330, 210), 0.9)])), '[]',
+        'two animals touching (boxes overlapping, keypoints 30 px apart) are not duplicates: OKS fails');
+    eq(JSON.stringify(SCT.duplicateDetections([det(A, 0.9), det(at(300, 200, 1, Math.PI), 0.8)])), '[]',
+        'the same box with the animal facing the other way is not a duplicate: OKS fails though the boxes match');
+    const head = A.map((p, j) => ['Nose', 'Ear_R', 'Ear_L', 'Head'].includes(NODES[j]) ? p : null);
+    eq(JSON.stringify(SCT.duplicateDetections([det(A, 0.9), det(head, 0.6)])), '[]',
+        'a few nodes exactly on the animal (OKS 1) are not a duplicate when their box is a small part of its box: IoU fails');
+    ok(SCT.duplicateOks(P(A), P(head), [Math.min(...A.map(p => p[0])), Math.min(...A.map(p => p[1])), Math.max(...A.map(p => p[0])), Math.max(...A.map(p => p[1]))], 0.1, 3) > 0.99,
+        '…(their OKS alone would have called it one)');
+    eq(JSON.stringify(SCT.duplicateDetections([det(A, 0.5, true), det(partial, 0.99)])), '[1]', 'a user instance is kept first, and its predicted copy goes');
+    eq(JSON.stringify(SCT.duplicateDetections([det(partial, 0.99), det(A, 0.5, true)])), '[0]', '…in either order');
+    eq(JSON.stringify(SCT.duplicateDetections([det(A, 0.9, true), det(partial, 0.7, true)])), '[]', 'a user instance is never removed');
+    eq(JSON.stringify(SCT.duplicateDetections([det(A, NaN), det(partial, 0.3)])), '[0]', 'a detection with no score counts as the weakest');
+    eq(JSON.stringify(SCT.duplicateDetections([det(A, 0.9), det(partial, 0.7)], { oks: 0.999 })), '[]', 'the thresholds are the caller\'s (OKS 0.999: kept)');
+
+    // A lone animal and SLEAP's copies of it: on 12 frames before its partner enters, a weaker copy sits where the
+    // (fast-moving) animal will be one frame later, so the animal moves onto the copy's track — and the partner,
+    // when it enters, takes the animal's old one (the failure seen on a real two-mouse dataset).
+    const N = 900, ENTER = 600, walk = f => [600 + 300 * Math.sin(f / 30), 240 + 40 * Math.sin(f / 50)];
+    const lone = () => {
+        const c = new PD.Camera(CAM, [[600, 0, 320], [0, 600, 240], [0, 0, 1]], [0, 0, 0, 0, 0], [0, 0, 0], [0, 0, 0], [1280, 480]);
+        const S = new PD.Session([c], new PD.Skeleton('mouse', NODES, []), ['t0', 't1'], 'lone'), dups = [];
+        for (let f = 0; f < N; f++) {
+            const [x, y] = walk(f);
+            S.addUnlinkedInstance(f, CAM, new PD.Instance(at(x, y), 0, 'predicted', 0.9));
+            if (f >= ENTER) S.addUnlinkedInstance(f, CAM, new PD.Instance(at(1150, 400 - 0.2 * (f - ENTER), 1, Math.PI), 1, 'predicted', 0.9));
+            else if (f % 50 === 25) {
+                const [nx, ny] = walk(f + 1), copy = new PD.Instance(at(nx, ny), null, 'predicted', 0.7);
+                S.addUnlinkedInstance(f, CAM, copy); dups.push(copy);
+            }
+        }
+        S.identities = []; S.frameIdentityMap = new Map();
+        return { S, dups };
+    };
+    const cfg2 = SCT.singleCameraTrackerConfig(2, {});
+    const tracksOfAnimal = S => { const t = new Set(); for (let f = 0; f < N; f++) t.add(S.frameGroups.get(f).getUnlinkedInstances(CAM)[0].instance.trackIdx); return t; };
+    let L = lone();
+    const plain = await SCT.trackSingleCamera(L.S, cfg2);
+    ok(tracksOfAnimal(L.S).size > 1 && plain.duplicates === 0,
+        `without removal the lone animal hops onto its copies' tracks (tracks ${[...tracksOfAnimal(L.S)]}) — the fixture reproduces the failure`);
+    L = lone();
+    const fixed = await SCT.trackSingleCamera(L.S, cfg2, { duplicates: {} });
+    ok(tracksOfAnimal(L.S).size === 1, `with removal it keeps ONE track (${[...tracksOfAnimal(L.S)]})`);
+    const partnerTracks = new Set(); for (let f = ENTER; f < N; f++) partnerTracks.add(L.S.frameGroups.get(f).getUnlinkedInstances(CAM)[1].instance.trackIdx);
+    ok(partnerTracks.size === 1 && !partnerTracks.has([...tracksOfAnimal(L.S)][0]), '…and the partner enters on the other one');
+    eq(fixed.duplicates, L.dups.length, `every copy removed (${fixed.duplicates})`);
+    ok(L.dups.every(d => d.trackIdx === null && d.identityId == null), 'removed copies keep no track and no identity');
+    let inSession = 0; for (let f = 0; f < ENTER; f++) for (const u of L.S.frameGroups.get(f).getUnlinkedInstances(CAM)) if (L.dups.includes(u.instance)) inSession++;
+    ok(inSession === L.dups.length && fixed.untracked === 0,
+        `…and stay in the session (${inSession}); untracked (${fixed.untracked}) counts only detections over the animal count`);
+    L = lone();
+    const off = await SCT.trackSingleCamera(L.S, cfg2, { duplicates: null });
+    eq(off.duplicates, 0, 'duplicates: null is off');
 }
 
 console.log(`\n${failed === 0 ? '✓ PASS' : '✗ FAIL'} — ${passed} passed, ${failed} failed`);

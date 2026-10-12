@@ -1953,7 +1953,9 @@ runs sleap-nn's tracker (`pose/sleap-tracker.js`, via
 `pose/single-camera-tracking.js`) with the animal count as its track cap (the
 session's `numAnimals`, asked once and shown in the toolbar's Animals field, as for the
 multi-camera pass) and the
-Tracking Wizard's `scWindowSize` / `scOksStddev` / `scConnectBreaks`. It writes
+Tracking Wizard's `scWindowSize` / `scOksStddev` / `scConnectBreaks`, and with
+`scRemoveDuplicates` on (default off) leaves each frame's duplicate detections
+out first (`scDuplicateIou` / `scDuplicateOks`; the status line says how many). It writes
 the TRACKS, as `sleap-nn track` does, plus one identity per track, then follows
 the multi-camera pass's contract: `markDirty()` after the last bail-out, the
 previous identities and ID-switch results cleared, Color: ID, predictions only,
@@ -2645,6 +2647,39 @@ at 0.025 every pose more than ~1.5 body lengths from a track scores exactly 0,
 so after a fast move or a gap the assignment is decided by tie-breaking.
 Window 10 was about the same as 5 (88.4% at 0.025), 30 much worse.
 
+**Duplicate removal, opt-in** (Tracking Wizard `scRemoveDuplicates`, default
+off; `scDuplicateIou` 0.5, `scDuplicateOks` 0.6 → `trackSingleCamera`'s
+`opts.duplicates`). SLEAP sometimes puts a second instance on an animal it
+already detected, often partial and scoring 0.4–0.9. With the animal count as
+the track cap that copy takes a track, and a lone animal can hop onto it. On a
+SLEAP user's proofread two-mouse dataset (6 top-camera sessions, 40 fps) the subject, alone before its partner entered, hopped tracks at
+its own duplicates in 2 of 6 sessions, and the partner then entered on its old
+track (96.95% correct). sleap-nn's pre-cull cannot help: it acts only on a
+frame with MORE detections than the animal count. `duplicateDetections(dets, o)`
+leaves out, per frame and before the tracker (the port is untouched), every
+detection that duplicates a stronger one (higher score; a user instance is never
+removed and is kept first): box IoU (`boxIou`, +1 px as sleap-nn counts it) at
+least `iou` AND OKS at least `oks`. Box overlap alone would also take two
+touching animals, and keypoints alone two look-alike poses side by side. The OKS
+(`duplicateOks`) reads the WEAKER detection's nodes, since a copy is often
+partial, against the stronger one, scaled by the stronger one's box (sleap-nn's
+`compute_oks` cocoeval normalisation, stddev 0.1; fewer than 3 nodes is never a
+duplicate). Removed detections keep no track or identity and stay in the
+session; Track All reports how many (`duplicates`, kept apart from `untracked`).
+Measured 2026-10-12, offline through this function and then in the app:
+- That dataset: every IoU 0.3–0.7 × OKS 0.5–0.8 removes both hops (99.98%,
+  no swaps). At the defaults it removes 91 detections, none a real animal.
+- 87 proofread SLAP top/mid views (2–4 mice, 3.78M detections): about neutral,
+  88.52% -> 88.73% correct and swaps 276 -> 257, with 8 views better and 8
+  worse. It removes 1,231 detections, 74 of them a real second animal.
+- The swings are the tracker re-routing when junk is removed, not mistakes of
+  the rule: removing only the detections the proofreader also deleted swings
+  the same way. Hence off by default.
+- Rules tried and not adopted: true IoU is stricter than sleap-nn's own
+  "overlap / the weaker box" (used by `pre_cull_iou_threshold`), but scored
+  better on SLAP at the same OKS. A keypoint-distance-only rule (median < 10 px)
+  removed more, including more real animals: 88.03%, 16 views worse.
+
 **The ID-switch checks read a stand-in** (`singleCameraCheckSession`): one
 InstanceGroup-shaped object per identified detection, its 2D as `points3d`
 (x, y, 0), the detection under `instances` (what the image check crops). The
@@ -2723,7 +2758,12 @@ out, inputTracks, ambiguous, look, fps)`; `CANDIDATE_DEFAULTS` (`ambiguityMargin
 -> stand-in | null | `{fail}`; `swapSingleCameraIdentities(session, from, to, idA, idB)`
 -> `{frames, tracks: boolean}` | null; `singleCameraCheckOptions(cue)` -> the options
 the coat-brightness check runs with on one camera (`{skipEmpty: true,
-clearestEndLeads: true}`); `SINGLE_CAMERA_LAZY_REASON`.
+clearestEndLeads: true}`); `DUPLICATE_DEFAULTS` (`iou` 0.5, `oks` 0.6, `oksStddev`
+0.1, `minNodes` 3); `duplicateDetections(dets, o)` -> the indices of one frame's
+duplicate detections; `boxIou(a, b)`; `duplicateOks(strong, weak, strongBox,
+stddev, minNodes)`; `SINGLE_CAMERA_LAZY_REASON`. `trackSingleCamera` also takes
+`opts.duplicates` (DUPLICATE_DEFAULTS overrides; absent or null = off) and returns
+`duplicates` (how many were left out).
 
 **Imports from project modules.** `pose/sleap-tracker.js`.
 
@@ -10536,14 +10576,17 @@ KEY (`e.code === 'Digit0'`) in `ui/ui-wiring.js`'s transport handler beside
   Track All (SLEAP's tracker, `pose/single-camera-tracking.js`): `scWindowSize`
   (sleap-nn `--tracking_window_size`, default 5), `scOksStddev` (`--oks_stddev`,
   default **0.1**, not sleap-nn's 0.025 — see that module) and `scConnectBreaks`
-  (0/1, `--post_connect_single_breaks`, default 1). `getTrackingThresholdDefs` returns the
+  (0/1, `--post_connect_single_breaks`, default 1), plus opt-in duplicate removal:
+  `scRemoveDuplicates` (0/1, default 0), `scDuplicateIou` (0.5) and `scDuplicateOks`
+  (0.6) — see `pose/single-camera-tracking.js` "Duplicate removal". `getTrackingThresholdDefs` returns the
   wizard's render catalog `[{ id, label, default, value, min, max, step, desc, kind }]`
   (`kind`: `'toggle'` for on/off settings, drawn as a switch; else `'number'`),
   **filtered to `WIZARD_THRESHOLD_IDS`** — the CrossViewTracker's free parameters
   only (`filterMinVisibleNodes`, `filterMinInstanceScore`, `corr2dWeight`,
   `corr3dWeight`, `velocityThreshold`, `distanceThreshold`, `timePenalty`,
   `stale`, `matchGate` (0/1 toggle for the CrossViewTracker match gate),
-  `scWindowSize`, `scOksStddev`, `scConnectBreaks` (single camera),
+  `scWindowSize`, `scOksStddev`, `scConnectBreaks`, `scRemoveDuplicates`,
+  `scDuplicateIou`, `scDuplicateOks` (single camera),
   `reprojErrorThreshold`, `autoSwitchCheck` — 0/1, run the body-size ID-switch
   check after Track All / Track Frame Range, default 1; `autoImageSwitchCheck` —
   0/1, the image check likewise, default 0; `imageChangeThreshold` -0.8;

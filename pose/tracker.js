@@ -1619,8 +1619,11 @@ async function runSingleCameraTrackAll(session, bail) {
         oksStddev: getTrackingThreshold('scOksStddev'),
         connectBreaks: getTrackingThreshold('scConnectBreaks') > 0,
     });
+    // Opt-in: leave each frame's duplicate detections out (pose/single-camera-tracking.js DUPLICATE_DEFAULTS).
+    var duplicates = getTrackingThreshold('scRemoveDuplicates') > 0
+        ? { iou: getTrackingThreshold('scDuplicateIou'), oks: getTrackingThreshold('scDuplicateOks') } : null;
     console.log('[TrackAll] single camera (' + session.cameras[0].name + '): SLEAP tracker', cfg,
-        userCount ? '(animal count user-set)' : '(animal count auto-detected)');
+        userCount ? '(animal count user-set)' : '(animal count auto-detected)', duplicates ? { duplicates: duplicates } : '');
     console.time('[TrackAll] total');
 
     // Every bail-out is above (see runTrackingPass for why this is unconditional).
@@ -1636,6 +1639,7 @@ async function runSingleCameraTrackAll(session, bail) {
         await yieldToPaint();
         var res = await trackSingleCamera(session, cfg, {
             fps: state.fps,
+            duplicates: duplicates,
             onProgress: async function (done, n) { showLoadingProgress('Tracking (SLEAP tracker)', done, n); await yieldToPaint(); },
         });
         hideLoading();
@@ -1655,6 +1659,8 @@ async function runSingleCameraTrackAll(session, bail) {
             res.frames.toLocaleString() + ' frames with SLEAP\'s tracker (one track per animal)' +
             (res.untracked ? ', ' + res.untracked.toLocaleString() + ' detection' + (res.untracked === 1 ? '' : 's') +
                 ' over the animal count left without a track' : '') +
+            (res.duplicates ? ', ' + res.duplicates.toLocaleString() + ' duplicate detection' + (res.duplicates === 1 ? '' : 's') +
+                ' removed first (left without a track)' : '') +
             (switchedToIds ? ', now coloring by ID' : '') +
             (trailsOn ? ', node trails on (' + trailSecondsName(TRACK_ALL_TRAIL_SECONDS) + ')' : '') + (predOnly ? PREDICTED_ONLY_NOTE : '');
         // The automatic body-size check is NOT run on one camera: a 2D bone length changes with posture

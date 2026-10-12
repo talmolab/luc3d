@@ -375,6 +375,21 @@ const TRACKING_THRESHOLDS = [
         desc: 'sleap-nn --post_connect_single_breaks: after tracking, where exactly one animal\'s track ends and exactly one new track starts on the same frame, join them.',
     },
     {
+        id: 'scRemoveDuplicates', label: 'Single camera: remove duplicate detections', default: 0,
+        min: 0, max: 1, step: 1, kind: 'toggle',     // an on/off switch in the wizard (stored as 1 / 0)
+        desc: 'Before tracking, leave out a detection that duplicates a stronger one in the same frame — box IoU and OKS both at least the two values below. SLEAP sometimes puts a second instance on an animal it already detected; that copy takes a track, and a lone animal can hop onto it. Removed detections keep no track and stay in the project. On a proofread two-mouse dataset where a lone animal hopped tracks at its duplicates, this fixed both hops (96.95% -> 99.98% correct); on 87 proofread SLAP videos it was about neutral (88.52% -> 88.73%, fewer swaps but some videos worse), hence off by default.',
+    },
+    {
+        id: 'scDuplicateIou', label: 'Single camera: duplicate box IoU', default: 0.5,
+        min: 0.05, max: 1, step: 0.05,
+        desc: 'With duplicate removal on: a detection is a duplicate only if its bounding box overlaps the stronger one\'s by at least this IoU (and their OKS is at least the value below). Box overlap alone would also take two touching animals.',
+    },
+    {
+        id: 'scDuplicateOks', label: 'Single camera: duplicate OKS', default: 0.6,
+        min: 0.05, max: 1, step: 0.05,
+        desc: 'With duplicate removal on: a detection is a duplicate only if its keypoints match the stronger detection\'s with at least this OKS (its own nodes, scaled by the stronger one\'s size, so a partial copy counts) — and the box IoU above holds too. Keypoints alone would also take two look-alike poses side by side.',
+    },
+    {
         id: 'autoSwitchCheck', label: 'Check ID switches after tracking (body size)', default: 1,
         min: 0, max: 1, step: 1, kind: 'toggle',     // an on/off switch in the wizard (stored as 1 / 0)
         desc: 'After Track All or Track Frame Range, flag contacts after which each animal\'s body size matches the other\'s before better than its own (Tracks ▸ Check ID Switches; pose/id-switch-check.js). Checks every tracked frame in the session (needs at least 60 s of tracking). Results are marked on the seekbar and listed in the ID Switches tab, which opens only when a possible switch is found.',
@@ -440,7 +455,7 @@ const WIZARD_THRESHOLD_IDS = new Set([
     'filterMinVisibleNodes', 'filterMinInstanceScore',
     'corr2dWeight', 'corr3dWeight', 'velocityThreshold', 'distanceThreshold', 'timePenalty',
     'stale', 'matchGate',
-    'scWindowSize', 'scOksStddev', 'scConnectBreaks',
+    'scWindowSize', 'scOksStddev', 'scConnectBreaks', 'scRemoveDuplicates', 'scDuplicateIou', 'scDuplicateOks',
     'autoSwitchCheck', 'autoImageSwitchCheck', 'imageChangeThreshold', 'imageCheckHz', 'imageCheckMaxViews', 'imageCheckWebNN',
     'autoBrightnessSwitchCheck', 'brightnessCheckThreshold', 'brightnessCheckHz',
     'reprojErrorThreshold',
