@@ -29,6 +29,7 @@ import { loadAllLazyFrames, sweepLazyFrameWindows } from './triangulation.js';
 import { drawAllOverlays, showPredictedOnly, PREDICTED_ONLY_NOTE } from '../ui/rendering.js';
 import { updateInfoPanel } from '../ui/info-panel.js';
 import { setColorByIdentity } from '../ui/color-by.js';
+import { setTrailSeconds, trailSecondsName, TRACK_ALL_TRAIL_SECONDS } from '../ui/trail-presets.js';
 import { runIdSwitchChecks, clearIdSwitchResults } from '../ui/id-switch-modal.js';
 import { summarizeTrackedIdentities, describeSwitchCheck } from '../ui/track-summary.js';
 import { showTrackSummaryModal } from '../ui/track-summary-modal.js';
@@ -1489,6 +1490,13 @@ async function runTrackingPass(range) {
         var switchedToIds = lres.numIdentities > 0 && setColorByIdentity(state, true);
         // ...and only the predictions (User, Reproj, Errors off), the layer tracking produced.
         var predOnly = lres.numIdentities > 0 && showPredictedOnly();
+        // ...and, after Track All, node trails at ¼ s if they are off: each
+        // animal's recent path is where an identity switch shows. A length the
+        // user already picked is left alone, and so is a range (a targeted
+        // re-run, inspected on the timeline). Through ui-wiring's handler, so
+        // the Trails menus and button follow.
+        var trailsOn = !isRange && lres.numIdentities > 0 && !(state.trailSeconds > 0) &&
+            setTrailSeconds(state, TRACK_ALL_TRAIL_SECONDS);
         drawAllOverlays(state.currentFrame);
         updateInfoPanel();
         if (timeline) timeline.refreshTracks(state.session, { cap: true });
@@ -1506,6 +1514,7 @@ async function runTrackingPass(range) {
             totalFrameCount + ' frames' +
             (isRange ? ' (' + displayFrame(lo) + '–' + displayFrame(hi) + ')' : '') +
             (switchedToIds ? ', now coloring by Identity' : '') +
+            (trailsOn ? ', node trails on (' + trailSecondsName(TRACK_ALL_TRAIL_SECONDS) + ')' : '') +
             ' — use Tracks ▸ Propagate IDs → Tracks to apply' + (predOnly ? PREDICTED_ONLY_NOTE : '');
         setStatus(doneMsg, 'success');
         // Then check the result for identity switches (ui/id-switch-modal.js): by body

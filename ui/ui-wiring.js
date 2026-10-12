@@ -60,7 +60,8 @@ import { showTrackRangeModal } from './track-range-modal.js';
 import { showAlignViewsModal } from './view-align-modal.js';
 import { onColorByChange, setColorByIdentity } from './color-by.js';
 import { TRAIL_PRESETS, MAX_TRAIL_FRAMES, trailPresetFor, trailLabel, trailFrames, trailRate,
-         formatTrailSeconds, trailSecondsForFrames, parseTrailSeconds, parseTrailFrames } from './trail-presets.js';
+         formatTrailSeconds, trailSecondsForFrames, parseTrailSeconds, parseTrailFrames,
+         setTrailSeconds, onTrailSecondsChange } from './trail-presets.js';
 import { TRAIL_SHADES, TRACK_COLORS, trailShadeFor, trailColor } from './overlays.js';
 import { installSeekbarTooltip } from './seekbar-tooltip.js';
 import { showReadoutFrame, refreshReadoutTotals } from './frame-readout.js';
@@ -976,8 +977,11 @@ export function setupMenus() {
     // Node Trails presets — issue #102. A single active length, picked from
     // the Tracks ▸ Node Trails submenu or the toolbar's Trails button; both are
     // built from TRAIL_PRESETS (ui/trail-presets.js) plus a "Custom…" item, and
-    // go through setTrailSeconds, so their checkmarks and the button's tooltip
-    // always show state.trailSeconds. A length is a span of TIME: its frame
+    // go through pickTrailSeconds, so their checkmarks and the button's tooltip
+    // always show state.trailSeconds. Track All also turns trails on when it
+    // finishes (pose/tracker.js): it goes through the same `setTrailSeconds`
+    // (ui/trail-presets.js), whose change handler, registered below, is what
+    // syncs the menus and redraws. A length is a span of TIME: its frame
     // count, state.trailLength, is derived from state.fps, and the labels
     // re-read it each time a menu opens — the rate changes when a video loads
     // or the FPS pill is edited, and nothing here is told.
@@ -1030,10 +1034,12 @@ export function setupMenus() {
             trailsBtn.classList.toggle('active', state.trailSeconds > 0);
         }
     }
-    function setTrailSeconds(seconds) {
-        state.trailSeconds = seconds;
+    onTrailSecondsChange(function () {
         updateTrailChecks();
         drawAllOverlays(state.currentFrame);
+    });
+    function pickTrailSeconds(seconds) {
+        setTrailSeconds(state, seconds);
         setStatus(seconds > 0 ? ('Node trails: ' + trailLabel(seconds, state.fps)) : 'Node trails off', 'success');
     }
     function setTrailShade(key) {
@@ -1071,7 +1077,7 @@ export function setupMenus() {
             item.innerHTML = '<span><span class="trail-check"></span><span class="trail-label"></span></span>';
             item.addEventListener('click', function () {
                 onPick();
-                if (p) setTrailSeconds(p.seconds);
+                if (p) pickTrailSeconds(p.seconds);
                 else showCustomTrailModal();
             });
             lengths.appendChild(item);
@@ -1192,7 +1198,7 @@ export function setupMenus() {
             if (seconds == null) return;
             var sec = seconds;
             close();
-            setTrailSeconds(sec);
+            pickTrailSeconds(sec);
         }
         function onKey(e) {
             if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(); }
