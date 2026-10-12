@@ -99,6 +99,8 @@ the old `app.js` entry point.
 - `../ui/info-tip.js` — `installInfoTips`, called FIRST in `init()`, before any
   panel renders: the listeners are delegated, so they must be in place before
   the first `[data-infotip]` element exists.
+- `../ui/node-tooltip.js` — `installNodeTooltip`, right after it (the listeners
+  that put the node tooltip away on a press, key, wheel, scroll or resize).
 - `../ui/info-panel.js` — `setupPanelTabs`, `setupSkeletonEditing`,
   `setupVideosTab` (the Videos tab's Load/Remove buttons, wired once here
   because `updateInfoPanel`'s no-session early return used to leave them dead on
@@ -1478,6 +1480,25 @@ One behavior change, unavoidable in the representation: a boxed row could
 previously hold `[NaN, NaN]` and count as *present*; NaN-x now means absent. No
 producer emits such a row (every construction site writes `null`).
 
+**Per-node model scores live in ONE pool, not on each instance.** A prediction
+read from an `.slp` carries the model's confidence in each node
+(`pred_points.score`) — what the node tooltip shows (`ui/node-tooltip.js`) and
+what the writers put back. `Instance.setPointScores(src, start)` copies them into
+module-private `Float32Array` chunks (`storePointScores`; the first chunk starts
+at 4,096 scores and doubles to 1M, later chunks are 1M, a segment never straddles
+two) and the instance keeps only `_ps`, the integer offset of its first node
+(-1 = none, set in the constructor so every Instance keeps one shape). Measured in
+V8: a `Float32Array(15)` per instance is ~320 B of heap plus an ArrayBuffer for
+every GC to sweep, the integer ~8 B — and an EAGER per-camera folder can hold
+millions of predictions. Segments are written once and never edited, so
+`adoptPointScoresFrom` may share one and `insertNodeAt`/`removeNodeAt` write a new
+segment (`splicePointScores`) rather than touching the old; nothing is freed (a
+deleted instance leaves its floats behind, bounded by what was loaded, and a
+project load reloads the page). `pointScore(k)` is NaN for no score and for any
+`k` that is not an integer in range — `null >= 0` is true in JS and read node 0
+before that guard. **A lazy project does not use the pool**: frames re-hydrate on
+every revisit and would refill it, so its scores stay in the store (below).
+
 **Purpose.** Pure data-model classes — no DOM, no I/O. The single source of
 truth for skeletons, cameras, instances, frame groups, identities, and the
 session graph that holds them.
@@ -1501,7 +1522,10 @@ session graph that holds them.
   and `identityId` (null unless this is a TRACKLESS UNLINKED instance whose
   disbanded group's identity was retained on it by `unlinkGroup` — luc3d
   #201; consumed/cleared when the instance joins a group; not persisted).
-  Methods `toggleOccluded`, `setPointVisible`, `backupPoints`, `restorePoints`.
+  Methods `toggleOccluded`, `setPointVisible`, `backupPoints`, `restorePoints`,
+  and the per-node model scores `setPointScores(src, start)`,
+  `adoptPointScoresFrom(other)`, `hasPointScores()`, `pointScore(k)` (see the
+  score pool above).
 - `UnlinkedInstance` — wrapper around an `Instance` not yet placed in an
   `InstanceGroup`. Auto-incrementing `id`.
 - `FrameGroup` — per-frame container of linked `instances` and
@@ -1545,7 +1569,15 @@ session graph that holds them.
   a track (a pre-#273 `-1` is trackless). Used by the five group-naming status
   lines in `pose/initialization.js`. Tested by `tests/test-group-display-name.mjs`.
 - `Session` — top-level container: cameras, skeleton, tracks, identities,
-  frameGroups, instanceGroups. **`numAnimals`** is the number of animals every
+  frameGroups, instanceGroups. **`predictedNodeScore(cameraName, frameIdx,
+  inst, k)`** is the one answer to "what did the model score this node?" — the
+  node tooltip and the streaming writer's overlay both ask it. NaN unless `inst`
+  is `'predicted'` (an edit makes an instance `'user'`, and its positions are then
+  not what was scored; a reprojection was never scored). An eager prediction
+  answers from its own scores; a lazy one from the store row it was hydrated
+  from (`_rawInstIndex`, which must be an integer — `null` is not row 0), via
+  `lazyLoader.predictedPointScore` and by node NAME, so a skeleton edit after
+  loading cannot pair a node with another node's score. **`numAnimals`** is the number of animals every
   tracking run on the session caps identities at: a positive integer, `'auto'`
   (an explicit auto-detect), or `null` while nobody has been asked, which is
   what makes Track Frame / Track All prompt. Per session because a session is
@@ -5224,8 +5256,24 @@ session has no store, so it deletes exactly as before. Covered by
 - `./keyboard-target.js` — `shouldIgnoreShortcut`.
 - `./custom-delete-ops.js` — `deleteTargetsFromStore`, `groupMemberTargets`,
   `unlinkedTarget` (import-free itself, so this adds no cycle).
+- `./node-tooltip.js` — `nodeTooltipText`, `setNodeTooltipTarget`,
+  `hideNodeTooltip`.
+- `./overlays.js` — `getGroupColor`, `unlinkedDupIndices`, `unlinkedBaseColor`
+  (the node tooltip's color; `overlays.js` imports nothing, so no cycle).
 
 **Imported by.** `pose/initialization.js`, `ui/info-panel.js`.
+
+**The node tooltip is fed from the hover.** `onMouseMove` hands
+`_nodeTooltipTarget(state, view, frame, hit, ulHit)` to
+`setNodeTooltipTarget` on every move: the node under the pointer (linked or
+unlinked), named from the skeleton, with `Session.predictedNodeScore` as the
+score — none on an edge, a plane node or empty canvas, and no score on a
+reprojection — and the color the hovered instance is drawn from
+(`getGroupColor` for a group's member or reprojection, `unlinkedBaseColor` for
+an ungrouped one, in the current Tracks / Identity mode). It reports the
+instance the hit test picked — the one a click would select: where a grouped and
+an ungrouped skeleton overlap, grouped wins. `onMouseLeave` hides it. See
+`ui/node-tooltip.js`.
 
 **User-facing features.** Click-to-select skeleton nodes, drag to move
 keypoints, Alt+drag to move a whole instance, Alt+wheel to rotate one about a
@@ -6198,6 +6246,14 @@ palettes, and per-frame draw routines. Receives `frameGroup` and
   `getGroupColor`,
   `getInstanceColor`, `adjustColorBrightness`, `errorColor`, `hexToRgb`,
   `brightenColor`, `desaturateColor`, `complementaryColor`.
+  **`unlinkedDupIndices(unlinkedInstances, typeFilter)`** and
+  **`unlinkedBaseColor(instance, dupIdx, session, cameraName, useIdentity,
+  frameIdx)`** are the rule `drawUnlinkedInstances` colors an ungrouped
+  instance by — `getInstanceColor`, darkened by `max(0.35, 1 − 0.22·k)` for the
+  k-th later instance of the same type sharing a raw `trackIdx` — pulled out so
+  the node tooltip's stripe (`ui/interaction.js` → `ui/node-tooltip.js`) is
+  computed by the same function and cannot name a different color from the one
+  drawn. Behaviour unchanged (`tests/e2e/unlinked-instance-color-collision.mjs`).
   `getGroupColor`/`getInstanceColor` return `NULL_ID_COLOR` when
   `useIdentity` and `session.isExplicitNoIdentity(...)` is true, and also —
   when coloring by track — for any instance/group on the "No ID" track
@@ -6584,7 +6640,9 @@ palettes, and per-frame draw routines. Receives `frameGroup` and
 **Imported by.** `pose/initialization.js`, `ui/timeline.js`,
 `ui/rendering.js`, `ui/info-panel.js`, `ui/app-state.js` (`DEFAULT_TRAIL_SHADE`),
 `ui/ui-wiring.js` (`TRAIL_SHADES`, `TRACK_COLORS`, `trailShadeFor`,
-`trailColor` — the trail menus), `ui/overlay-export-modal.js`.
+`trailColor` — the trail menus), `ui/overlay-export-modal.js`,
+`ui/interaction.js` (`getGroupColor`, `unlinkedDupIndices`, `unlinkedBaseColor`
+— the node tooltip's color).
 
 **User-facing features.** All on-canvas pose drawing — colored skeletons,
 reprojection error vectors, drag preview, selection highlight, instance
@@ -6808,6 +6866,9 @@ data sources. Plus visibility-toggle helpers and frame counter updates.
   call sites are inside function bodies.
 - `./animal-count-field.js` — `syncAnimalCountField`. **Circular** through
   `pose/tracker.js`, which imports this module; safe for the same reason.
+- `./node-tooltip.js` — `syncNodeTooltipFrame`, first thing in
+  `drawAllOverlays`: a node tooltip about another frame names a node that has
+  moved out from under the pointer.
 
 **Imported by.** `pose/triangulation.js`, `pose/tracker.js`,
 `pose/initialization.js`, `import-export/save-load.js`,
@@ -9278,7 +9339,14 @@ always analyses the WHOLE session's identities. Each result it returns carries
 included), which the Track All summary box shows (`ui/track-summary.js`); it is
 not saved — `serializeIdSwitchReview` (`ui/id-switch-review.js`) picks its fields explicitly.
 
-**The image check.** Needs the session's videos (else it says why). Not a GPU:
+**The image check.** Needs the session's videos (else it says why), and the
+network the first time, to download the model: offline, an error the embedder
+marks `cannotRun` (ui/image-embedder.js — a failed download, or no Nose/TTI) is
+returned as the reason rather than thrown as a failure, so the status reads
+"Check ID Switches (images): needs an internet connection to download the image
+model (…)" and, after tracking, "skipped — …" — where it used to be "failed —
+Failed to fetch dynamically imported module: https://cdn.jsdelivr.net/…" (the
+original goes to the console). Not a GPU:
 without one the embedder runs the model on the CPU (`pickImageDevice` /
 `createCpuModelPool`, ui/image-embedder.js), ~15x slower, and the check runs as
 usual — from the menu and after tracking alike. It used to refuse ("needs WebGPU —
@@ -9757,6 +9825,26 @@ decode + crop ceiling rose from 145 to ~270 crops/s at 3 views (decoding alone:
 7.9 s vs 8.3 s with cropping) — headroom for a GPU faster than ~145 crops/s.
 Numbers in `ui/id-switch-modal.js`.
 
+**Offline, or a host blocked (`asModelDownloadFailure`).** The runtime
+(cdn.jsdelivr.net) and the model (huggingface.co) download on first use, and
+without the network both reject with a bare TypeError that names no cause —
+"Failed to fetch dynamically imported module: <url>" and "Failed to fetch" in
+Chrome (measured), other wordings in Firefox and Safari — which the status line
+used to print verbatim ("failed — Failed to fetch"). Every such wording, from
+either download (and onnxruntime's own failed `.wasm` fetch, which it wraps in a
+plain Error), becomes `MODEL_OFFLINE_REASON` as a `cannotRun` error, which
+`runImage` (ui/id-switch-modal.js) reports as the reason the check cannot run —
+a skip after tracking — rather than a failure. Anything else is left alone. The
+CPU workers classify it themselves, where the error is still a real one, and post
+the flag across. **A retry needs no reload** (`importTransformers`): Chrome keeps
+a failed dynamic import of a URL failed for the page's lifetime — re-importing it
+rejects even once the network is back (measured) — so the runtime is imported
+once, and a retry after a failure imports it under a new FRAGMENT (`#retry1`):
+the same request, since a fragment is never sent, but a new module-map entry.
+`loadImageModel` and `loadWebNNModel` share it, so the page never holds two copies
+of the runtime. `createImageEmbedder`'s two preflight throws (no videos, no
+Nose/TTI) are `cannotRun` errors too.
+
 **Key exports.** `createImageEmbedder(session, {onStatus, maxViewsPerAnimal, webnn, keyframes})` ->
 `{getEmbeddings, prepareFrames, releaseFrames, backend, device, busyMs, stats, inFlight, views}` (the provider
 `checkImageSwitches` needs; `releaseFrames` also terminates the crop pool and the
@@ -9772,6 +9860,10 @@ force a device / worker count (tests, benchmarking);
 `CPU_MODEL_MAX_WORKERS`; `createCpuModelPool(count, onStatus)` -> `{size, run(data, n) ->
 Promise<Float32Array[]>, terminate()}`;
 `loadImageModel(onStatus)` (WebGPU; once, cached promise);
+`importTransformers()` (the runtime, imported once; re-imported under a new fragment
+after a failure); `cannotRun(reason, cause)` (an Error whose message is the reason
+the check cannot run, flagged `cannotRun`); `asModelDownloadFailure(err)` (a failed
+download as `MODEL_OFFLINE_REASON`, else `err` unchanged); `MODEL_OFFLINE_REASON`;
 `selectViews(geos, maxViews)`; `EMBED_MAX_BATCH`, `EMBED_IN_FLIGHT`,
 `summarizeEmbedTiming(tm, backend, dtype)`, `formatEmbedTiming(t)`;
 `describeAdapter(info)`, `gpuAdapterInfo(device, adapter)` -> `{name, fallback}`,
@@ -9835,7 +9927,12 @@ the keyframe line of `formatEmbedTiming` in
 the direct-read control that finds nothing) in `tests/test-lazy-residency.mjs`; the crop pool in `tests/e2e/image-crop-worker.mjs`;
 keyframe sampling on generated 60 fps H.264 and AV1 (keyframes every 30 frames vs one) in
 `tests/e2e/image-keyframe-sampling.mjs` (keyframe index, one decoded packet per
-sample, bit-identical planes, sparse video unchanged); accuracy on real data by
+sample, bit-identical planes, sparse video unchanged); a failed download in
+`tests/test-image-model-download.mjs` (every browser's wording becomes the reason,
+nothing else does; the summary row) and `tests/e2e/image-check-offline.mjs` (the
+real app with every off-localhost request aborted after boot: the runtime and the
+weights, on the GPU and CPU paths, a retry in the same page, after Track All, and
+two negative controls; confirmed to fail on the pre-fix build); accuracy on real data by
 `tests/e2e/_diag-image-keyframe-snap.mjs` (diagnostic, not in the suite);
 the full path on real data by a scratch harness (not in the suite: it needs the
 proofread videos and GPU) — see the image-check notes above.
@@ -9875,15 +9972,19 @@ WebAssembly gets one thread without cross-origin isolation. See
 `ui/image-embedder.js` ("The CPU path") for the measurements.
 
 **Messages.** IN `{type: 'load'}` -> `{type: 'loaded'}` (while downloading:
-`{type: 'progress', loaded, total}`) or `{type: 'error', message}`; IN `{type:
+`{type: 'progress', loaded, total}`) or `{type: 'error', message, cannotRun}`
+(`cannotRun`: a failed download, `message` then being `MODEL_OFFLINE_REASON` —
+classified here by `asModelDownloadFailure`, where the error is still a real
+one); IN `{type:
 'run', id, data: Float32Array(n x 3 x 224 x 224) (transferred), n}` -> `{type:
 'result', id, cls: Float32Array(n x 384) (transferred), dim}` — each crop's CLS
 token, read exactly as the main thread's `clsVectors` does — or `{type: 'error',
 id, message}`.
 
-**Imports from project modules.** `ui/image-embedder.js` (`TRANSFORMERS_URL`,
-`IMAGE_MODEL_ID`, `INPUT` — so the pin stays in one place), then the runtime from
-`TRANSFORMERS_URL` (a dynamic cross-origin import, which a module worker may do).
+**Imports from project modules.** `ui/image-embedder.js` (`importTransformers`,
+`asModelDownloadFailure`, `IMAGE_MODEL_ID`, `INPUT` — so the pin stays in one
+place), then the runtime through `importTransformers` (a dynamic cross-origin
+import of `TRANSFORMERS_URL`, which a module worker may do).
 
 **Spawned by.** `ui/image-embedder.js` (`createCpuModelPool`).
 
@@ -9891,7 +9992,8 @@ id, message}`.
 which has no GPU: vectors bit-identical to the main thread's per animal and camera,
 a responsive page, worker teardown, and the real dialog — the after-tracking path —
 running instead of refusing); `tests/e2e/id-switch-image-check.mjs` §4 (the dialog
-with no GPU runs to the end and finds the switch).
+with no GPU runs to the end and finds the switch); `tests/e2e/image-check-offline.mjs`
+(offline: the reason, not "Failed to fetch").
 
 ---
 
@@ -12105,6 +12207,10 @@ a caller, and several of those already import each other.
   (`pose/initialization.js`, before any panel renders). Further calls are
   no-ops, so a second caller cannot double every handler.
 - `hideInfoTip()` — put it away.
+- `placeTipNear(el, x, y)` — the placement rule below (beside the pointer,
+  flipped at the viewport edges), for any `position: fixed` popover. Shared with
+  the node tooltip (`ui/node-tooltip.js`) so the app has one rule for where a tip
+  goes.
 
 **Delegation, not per-element wiring.** One `#infoTip` element and one set of
 listeners on `document`, matching `[data-infotip]`. The plane panel rebuilds its
@@ -12155,13 +12261,80 @@ Leaving the icon, clicking elsewhere, `Esc`, blur, a scroll or a resize all
 dismiss.
 
 **Imported by.** `ui/plane-definition.js` (the Pinned column's ⓘ and the four
-major sections' ⓘ), `pose/initialization.js` (`installInfoTips`).
+major sections' ⓘ), `pose/initialization.js` (`installInfoTips`),
+`ui/node-tooltip.js` (`placeTipNear`).
 
 Coverage: `tests/e2e/info-tip.mjs` — placement beside the cursor, the viewport
 clamp and the flip, hover/click/Esc/outside-click dismissal, that `title` is
 gone while `aria-label` is not, that the status bar is left untouched (the
 regression), and the delegation case above. `tests/e2e/plane-section-info.mjs`
 covers the section headings' ⓘ and the no-fold rule.
+
+### ui/node-tooltip.js
+
+**Purpose.** Rest the pointer on a pose node and its name appears beside it —
+and on a prediction, the model's score for THAT node on a second line:
+`trunk` / `(score: 0.94)`. SLEAP 1.6.5's node tooltip (`QtNode.setToolTip`,
+`sleap/gui/widgets/video.py`), same text: `f"{name}\n(score: {score:.2f})"`, the
+name alone for a user node.
+
+**Key exports.** `nodeTooltipText(nodeName, score)` (pure; NaN score → the name
+alone), `setNodeTooltipTarget(target, clientX, clientY)` (`target` =
+`{key, text, frameIdx, color}` or null; called by `ui/interaction.js` on every mousemove
+over a view), `syncNodeTooltipFrame(frameIdx)` (called by `drawAllOverlays` in
+`ui/rendering.js`), `hideNodeTooltip()`, `installNodeTooltip()` (once, at
+startup), `NODE_TIP_DELAY_MS` (700), `NODE_TIP_AWAKE_MS` (2000).
+
+**Who decides what.** `InteractionManager._nodeTooltipTarget` turns the hover's
+hit (`findNearestNode` / `findNearestUnlinkedNode`) into the target: an edge hit,
+a plane node and empty canvas give none (SLEAP's tooltips are on nodes), a
+reprojection is named without a score, and the score is
+`Session.predictedNodeScore` — so the tooltip never decides whether a number is a
+prediction's. This module only times, places and hides it.
+
+**Timing is Qt's.** The first tip waits `NODE_TIP_DELAY_MS`; while one is
+showing, and for `NODE_TIP_AWAKE_MS` after it hides, the next node's shows at
+once — the pointer crosses dozens of nodes while annotating, and an instant tip
+would flicker over the points being placed. A press, a key or the wheel hides it
+and restores the delay. A shown tip stays where it appeared, as Qt's does.
+
+**It never outlives what it describes.** A tip is about one node on one frame. A
+new frame moves the node from under a still pointer, so `drawAllOverlays` calls
+`syncNodeTooltipFrame` (a redraw naming no frame — `ui/plane-angle.js` calls
+`drawAllOverlays()` bare — is not a frame change). Leaving the view, a press,
+a key, the wheel, a scroll, a resize and window blur hide it too. It holds
+strings and numbers only, never an Instance, so it cannot keep a lazy frame alive.
+
+**The color says WHICH skeleton.** Where skeletons overlap, `trunk (score:
+0.42)` does not say whose trunk, so the tip's left edge is a 5 px stripe in the
+color the hovered instance is drawn FROM (`target.color` →
+`--node-tip-color`): its track's, or its identity's in Identity mode, darkened
+like the skeleton for a second ungrouped instance on one track. The base color,
+not a selection's white or a prediction's desaturated tint — it identifies the
+animal. The interaction manager takes it from the renderer's own functions
+(`ui/overlays.js`), so it cannot name a color that is not on screen.
+
+It reuses the ⓘ tip's look (`.info-tip.node-tip`; `.node-tip` adds
+`white-space: pre-line` for the two lines, and the stripe) and its placement (`placeTipNear`),
+and is `pointer-events: none` — a tip that took the hover would make the view see
+a `mouseleave` and hide it.
+
+**Top-level names are prefixed (`nodeTip…`)** because `tests/run-node.js` loads
+this module and `ui/info-tip.js` into ONE vm global scope, where two `tipEl`s
+would be the same variable.
+
+**Imports from project modules.** `./info-tip.js` — `placeTipNear`.
+
+**Imported by.** `ui/interaction.js`, `ui/rendering.js`, `pose/initialization.js`.
+
+Coverage: `tests/test-node-scores.mjs` (the text) and
+`tests/e2e/node-score-tooltip.mjs` (real mouse: the delay and the awake window,
+a prediction's per-node score, a user node's bare name, none on an edge or empty
+canvas, placement beside but not over the pointer, hidden on a new frame and on a
+press; the stripe for two crossing tracks whose tips read identically, a
+darkened duplicate track, a group in Tracks vs Identity mode, and an overlap
+where the grouped skeleton wins; plus the score data behind it on every load
+path and both writers).
 
 ### ui/section-state.js
 
@@ -12707,8 +12880,10 @@ before the worker's fast compound reads and columnar transfer — see
 `loading/slp-import-worker.js`). Step 2 builds each camera's Instances straight
 from the worker's columnar result via the exported
 **`addColumnarFramesToSession(session, camName, columnar, trackRemap)`** —
-the same track remap / `resolveImportTrackIdx` / `score || 1.0` / occlusion as
-the nested-`frames` loop it replaced (kept for results without `columnar`), with
+the same track remap / `resolveImportTrackIdx` / `score || 1.0` / occlusion /
+per-node model scores (`columnar.pointScore` → `Instance.setPointScores`, a
+prediction's only) as the nested-`frames` loop it replaced (kept for results
+without `columnar`, which takes each instance's `pointScores`), with
 each Instance given its own `Float64Array` `slice` (not a `subarray` view, which
 would pin the whole camera buffer and make any structured clone of the instance
 copy all of it). A digest of the loaded session (every frame, camera,
@@ -13189,6 +13364,21 @@ null for a camera this loader does not back. The playback eviction
 (`pose/lazy-residency.js`) proves a resident frame rebuildable against it;
 `tests/e2e/lazy-playback-eviction.mjs` pins it to the real materializer.
 
+**`predictedPointScore(camName, frameIdx, offsetInFrame, nodeName)`** — the
+model's score for one node of the store's prediction at that in-frame offset
+(an `Instance._rawInstIndex`), read straight from `pred_points.score` through
+`point_id_start`: the lazy half of `Session.predictedNodeScore`, which the node
+tooltip and the streaming writer's overlay ask. Nothing is materialized and
+nothing is kept on the instance, so a re-hydrated frame costs exactly what it did.
+The node is NAMED and looked up in the row's store skeleton — the store keeps
+the skeleton it was read with, while a skeleton edit after loading re-indexes
+the resident instances, so an index could pair a node with its neighbour's
+score; an added or renamed node simply has none. NaN for a user row (type 0, as
+`materializeFrame` reads it), an offset that is not an integer inside the
+frame's rows, a frame or camera with no row, or a NaN score. Pinned against a
+hand-built store by `tests/test-node-scores.mjs` and against the real one by
+`tests/e2e/node-score-tooltip.mjs`.
+
 **Imports.** `./track-union.js` (`unionTrackNames`);
 `window.SleapIO.readSlpStreaming` / `window.SleapIO.Track` (via the index.html
 bridge) and the local vendored `lib/h5wasm/h5wasm.iife.js` (passed as
@@ -13197,7 +13387,8 @@ bridge) and the local vendored `lib/h5wasm/h5wasm.iife.js` (passed as
 **Imported by.** `loading/session-loader.js`
 (`handleLoadSessionFolderPerCamera` routing, `handleLoadProjectSlpLazy`) and
 `import-export/save-load.js` (`reopenSessionLazyLoader`). `describeStoreFrame` is
-called duck-typed from `pose/lazy-residency.js`.
+called duck-typed from `pose/lazy-residency.js`, `predictedPointScore` from
+`Session.predictedNodeScore` (`pose/pose-data.js`).
 
 **User-facing features.** Lets a session folder of large multi-camera prediction
 `.slp` files — and a large saved project `.slp` (Load Project) — load and render
@@ -13269,12 +13460,22 @@ cloning eight of them to the main thread was most of what remained of the
 session-folder load once the reads were fast (~2 s of ~5 s). With
 `columnar: true` the worker instead returns `data.columnar` = `{ numNodes,
 nFrames, nInstances, frameIdx, videoIdx, instOffsets (nFrames+1), trackIdx,
-score, type (1 = predicted), xy (NaN = missing), occluded }` — the same
+score, type (1 = predicted), xy (NaN = missing), occluded, pointScore }` — the same
 frames/instances kept and the same values, as typed arrays whose buffers are
 TRANSFERRED (zero-copy) in the `postMessage`. Only `parseSlpH5(file, null,
 { columnar: true })` from `handleLoadSessionFolderPerCamera` asks for it; every
 other caller still gets `data.frames`. The equivalence test also requires the
 columnar result to expand back to exactly the nested `frames`.
+
+**A prediction's per-node scores (`pred_points.score`)** ride along both ways:
+each nested instance carries `pointScores` (a `Float64Array(numNodes)`, NaN where
+a node has none; null for a user instance or a prediction read from `points`),
+and the columnar result a flat `pointScore` (`[i*numNodes + k]`, NaN for user
+instances), transferred with the rest. They are what the node tooltip shows; the
+importers keep them with `Instance.setPointScores`. **Not for analysis `.h5`
+files**, deliberately: `parseAnalysisH5` reads `point_scores` and drops them, and
+the NOTE there says what showing them would take (the lazy `.h5` path being the
+hard part).
 
 **Imports from project modules.** None.
 
@@ -14361,7 +14562,16 @@ exports via the eager path; partially-resident refuses and says so).
   `buildSlpLabelsMultiSession`, `serializeSkeleton`, `_buildSioPoints`
   (per-node `[x,y,visible,complete]` builder — nulled/occluded/optional
   per-point score; also reused by `slp-streaming-write.js` for edited-frame
-  overlays).
+  overlays). **A point's score is its node's OWN model score** when it has one
+  (`Instance.pointScore`, or the caller's `nodeScore(k)` — the streaming writer
+  passes one that reads the lazy store), and the `perPointScore` the writer
+  passes (the instance score) only for a node with none; with `nodeOrder` the
+  canonical node gets its LOCAL node's score. All three writers pass a
+  `perPointScore` for a prediction — `buildSlpLabelsAllViews`, the project Save,
+  passed none and so stored 0 for every node, and the others stamped the instance
+  score on all of them: either way a reopened project's node tooltip showed one
+  number for every node. Pinned by `tests/test-node-score-export.js` and, end to
+  end through save + reopen, `tests/e2e/node-score-tooltip.mjs`.
   (PR 5.2 deleted `convertSlpToV06Compatible` — export is now raw
   `saveSlpToBytes`; SLEAP >= 1.6 / sleap-io >= 0.7 reads the flat-matrix
   `field_names` layout natively.) On 2D export both `buildSlpLabels` and
@@ -14436,7 +14646,9 @@ exports via the eager path; partially-resident refuses and says so).
   drives `window.SleapIO.readSlpStreaming(file, {rawSessions:true})` (PR #196)
   and adapts the typed `Labels` into the `slpData` shape via the private
   `_typedInstanceToSlpData` pose transform (columnar `_xy`/`_visible` →
-  `points[]` + parallel `occluded[]`, NOT `numpy()`). Each `sessions[]` entry is
+  `points[]` + parallel `occluded[]`, NOT `numpy()`; a prediction's per-node
+  scores as `pointScores`, the typed instance's own `_score` column by reference,
+  null for a user instance — the importers copy it with `Instance.setPointScores`). Each `sessions[]` entry is
   the verbatim on-disk dict (for the direct calibration/video-map/metadata reads)
   PLUS a `_typedSession` ref (the typed RecordingSession) used by
   `reconstructInstanceGroupsFromSession` for grouping — which reads LUCID's legacy
@@ -14646,10 +14858,14 @@ camera-frame to its overlay (instance position by object identity, then
 `track`) or otherwise to the shifted store row. Only edited camera-frames are
 materialized (minimal at prediction scale); every other frame streams from the
 columnar store. An overlaid frame's untouched predicted siblings are
-re-materialized too (the store row is skipped wholesale); they carry the
-instance-level score as a per-point score (the frameGroup keeps no per-point
-scores) so SLEAP's GUI doesn't hide them — mirrors the eager `buildSlpLabels`
-reproj export. **Scope:** predictions + full grouping (identities + 3D) + 2D
+re-materialized too (the store row is skipped wholesale); each node carries
+its OWN model score, read back from the row being replaced
+(`Session.predictedNodeScore` → `SioLazyLoader.predictedPointScore`, by the
+sibling's `_rawInstIndex`), and the instance score only where it has none — a
+point with no score is one SLEAP's GUI hides. Stamping the instance score on
+every node was what this used to do, and after a save it was all a reopened
+project's node tooltip had to show. Mirrors the eager `buildSlpLabels` reproj
+export. **Scope:** predictions + full grouping (identities + 3D) + 2D
 corrections.
 
 **Imports.** `window.SleapIO` (streaming writer API); `_buildSioPoints`
@@ -14963,6 +15179,11 @@ onto the first track label (e.g. `global_0`) after an export/reload round-trip.
   (falling back to the raw dict's `identity_idx` for legacy files). Reads both LUCID's legacy and
   the new canonical `sessions_json`. Same pass-1 dedup + trackless/identity-less
   handling as the dict version. Returns `{ restoredGroups, restoredWith3d }`.
+  **Per-node model scores:** a prediction's come from the typed instance's
+  `_score` here, and from the `pointScores` of the raw-SLP instance a group
+  member REPLACES in the dict version (the group dict has none of its own —
+  `adoptPointScoresFrom`); pass 1 keeps each instance's `pointScores`. They are
+  what the node tooltip shows (`Session.predictedNodeScore`).
 - `parseSlpForImport(file, onProgress)` (private) — dispatches `.slp` →
   `parseSlpViaSleapIO`, else / on error → `parseSlpH5`.
 
@@ -15075,6 +15296,8 @@ compatibility check, track merging, frame merging, group rebuild.
 - `mergeSlpFramesIntoSession(session, slpData, videoIdxToCameraName,
   cameras, trackRemap, nodeReorderMap)` — trackless instances (track=-1/null),
   user OR predicted, keep `trackIdx = null` (no longer coerce predictions to 0).
+  A prediction keeps its per-node model scores (`pointScores`), re-ordered by
+  `nodeReorderMap` exactly as its points are.
 - `rebuildInstanceGroupsForFrames(session, frameIndices)` — groups by `trackIdx`;
   trackless instances of any type are skipped (not bucketed into track 0).
 
