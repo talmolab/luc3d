@@ -398,7 +398,7 @@ export function describeIdentitySwitch(session, result, identityName) {
         if (oldIdent) oldName = oldIdent.name;
         // Name the actual scope — a single-view correction must not claim "all
         // views", which is the kind of plausible-but-wrong report that hid #172.
-        msg += ' (swapped ' + result.frames + ' frames to end of timeline, ' +
+        msg += ' (swapped ' + result.frames.toLocaleString('en-US') + ' frames to end of timeline, ' +
             (result.camera ? result.camera + ' only' : 'all views') +
             (oldName ? ' — was ' + oldName : '') + ')';
     } else if (result.mode === 'frame') {
@@ -539,7 +539,7 @@ export function startManualAssignment() {
     var toast = document.createElement('div');
     toast.className = 'auto-assign-toast';
     toast.innerHTML =
-        '<span id="manualAssignToastText">Frame ' + state.currentFrame +
+        '<span id="manualAssignToastText">Frame ' + state.currentFrame.toLocaleString('en-US') +
         '. Select instances for manual Identity Assignment. Instances Selected: 0/' +
         totalUnlinked + '</span>' +
         '<button id="manualAssignCancel">Cancel</button>' +
@@ -1364,7 +1364,7 @@ export function showMultiFrameModal() {
 export function startViewSelectionForFrames(startFrame, endFrame, isSingleFrame) {
     var fg = state.session.getFrameGroup(startFrame);
     if (!fg) {
-        setStatus('No instances on frame ' + (startFrame + 1), 'warning');
+        setStatus('No instances on frame ' + (startFrame + 1).toLocaleString('en-US'), 'warning');
         return;
     }
 
@@ -1379,7 +1379,7 @@ export function startViewSelectionForFrames(startFrame, endFrame, isSingleFrame)
     var toast = document.createElement('div');
     toast.className = 'auto-assign-toast';
     toast.innerHTML =
-        '<span id="autoAssignToastText">Frame ' + startFrame +
+        '<span id="autoAssignToastText">Frame ' + startFrame.toLocaleString('en-US') +
         '. Select views for automatic Identity Assignment. Views Selected: 0/' +
         totalViews + '</span>' +
         '<button id="autoAssignCancel">Cancel</button>' +
@@ -1409,7 +1409,7 @@ export function startViewSelectionForFrames(startFrame, endFrame, isSingleFrame)
             // Update view count in toast
             var textEl = document.getElementById('autoAssignToastText');
             if (textEl) {
-                textEl.textContent = 'Frame ' + (startFrame + 1) +
+                textEl.textContent = 'Frame ' + (startFrame + 1).toLocaleString('en-US') +
                     '. Select views for automatic Identity Assignment. Views Selected: ' +
                     autoAssignState.selectedViews.size + '/' + totalViews;
             }
@@ -1462,12 +1462,12 @@ export function showMultiFrameProgressModal(startFrame, endFrame, viewNames) {
     viewsList += '</ul>';
 
     modal.innerHTML =
-        '<h3>Identity Assignment — Frames ' + startFrame + ' to ' + endFrame + '</h3>' +
+        '<h3>Identity Assignment — Frames ' + startFrame.toLocaleString('en-US') + ' to ' + endFrame.toLocaleString('en-US') + '</h3>' +
         '<div class="modal-views-section">' +
         '  <label>Views</label>' + viewsList +
         '</div>' +
         '<div class="multi-frame-progress" id="mfProgress">' +
-        '  <div class="progress-label" id="mfProgressLabel">0 / ' + totalFrames + ' frames</div>' +
+        '  <div class="progress-label" id="mfProgressLabel">0 / ' + totalFrames.toLocaleString('en-US') + ' frames</div>' +
         '  <div class="progress-bar-track"><div class="progress-bar-fill" id="mfProgressFill" style="width:0%"></div></div>' +
         '</div>' +
         '<div class="modal-actions" id="mfActions" style="display:none;"></div>';
@@ -1514,7 +1514,7 @@ export async function runMultiFrameAssignment(startFrame, endFrame, viewNames, o
 
         completed++;
         var pct = Math.round((completed / totalFrames) * 100);
-        if (progressLabel) progressLabel.textContent = completed + ' / ' + totalFrames + ' frames';
+        if (progressLabel) progressLabel.textContent = completed.toLocaleString('en-US') + ' / ' + totalFrames.toLocaleString('en-US') + ' frames';
         if (progressFill) progressFill.style.width = pct + '%';
 
         // Yield to UI for progress bar updates
@@ -1523,7 +1523,7 @@ export async function runMultiFrameAssignment(startFrame, endFrame, viewNames, o
 
     // Done — show summary and close button
     if (progressLabel) {
-        progressLabel.textContent = 'Done — assigned identities on ' + assigned + ' of ' + totalFrames + ' frames';
+        progressLabel.textContent = 'Done — assigned identities on ' + assigned.toLocaleString('en-US') + ' of ' + totalFrames.toLocaleString('en-US') + ' frames';
     }
 
     // Replace progress with close button
@@ -1536,7 +1536,7 @@ export async function runMultiFrameAssignment(startFrame, endFrame, viewNames, o
         });
     }
 
-    setStatus('Multi-frame assignment complete: ' + assigned + '/' + totalFrames + ' frames assigned', 'success');
+    setStatus('Multi-frame assignment complete: ' + assigned.toLocaleString('en-US') + '/' + totalFrames.toLocaleString('en-US') + ' frames assigned', 'success');
 
     // Update timeline: mark frames with grouped UserInstances, refresh track
     // bars, and re-apply the 30% cap (a bulk assignment can add many rows).
