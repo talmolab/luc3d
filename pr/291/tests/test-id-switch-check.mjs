@@ -19,7 +19,8 @@
  * pair that huddles; and a swap made only through a third animal (both from
  * talmolab/luc3d#286). The label-free identity metric is tested on look-alike
  * animals against raw cosine similarity. Crop geometry helpers
- * (ui/image-embedder.js) are checked too.
+ * (ui/image-embedder.js) are checked too, and both checks find their nodes
+ * (Nose, TTI, the size bones) regardless of case.
  *
  * Run:  node tests/test-id-switch-check.mjs
  */
@@ -576,6 +577,31 @@ group('Image check — which device runs the model, and its load (ui/image-embed
     ok(l.text === 'No GPU: running on the CPU (4 workers) — slow' && l.warn && l.title === 'This browser has no WebGPU, so the image model runs on the CPU instead — the same model, much slower.',
         'CPU: warned, the worker count, no load, and why in the tooltip ("' + l.text + '" / "' + l.title + '")');
     eq(E.formatEmbedDevice({ backend: 'cpu', workers: 1, why: '' }, null).text, 'No GPU: running on the CPU (1 worker) — slow', 'one worker, singular');
+
+    // which device lines have a series in the load graph, and the load each one plots
+    l = E.formatEmbedDevice(gpu, 86.6);
+    ok(l.metered && l.load === 86.6, 'a GPU line is metered and plots the load it shows');
+    l = E.formatEmbedDevice(gpu, null);
+    ok(l.metered && l.load === null, '…before the load is measured: still metered, nothing to plot yet');
+    ok(E.formatEmbedDevice({ backend: 'webnn', dtype: 'fp16' }, 70).metered, 'WebNN\'s "model busy" is plotted too');
+    l = E.formatEmbedDevice({ backend: 'cpu', workers: 4, why: '' }, 90);
+    ok(!l.metered && l.load === null, 'no GPU: no GPU series, whatever load is passed');
+    l = E.formatEmbedDevice(Object.assign({}, gpu, { fallback: true }), 95);
+    ok(!l.metered && l.load === null, 'a software adapter: no GPU series either');
+    ok(!E.formatEmbedDevice(null, 50).metered, 'no embedder device → no series');
+
+    // the CPU line, above the device line
+    let c = E.formatEmbedCpu(12, null);
+    ok(c.text === 'CPU: 12 cores' && c.title === '' && c.load === null, 'CPU line before the load is measured ("' + c.text + '")');
+    c = E.formatEmbedCpu(12, 7.4);
+    ok(c.text === 'CPU: 12 cores · load 7%' && c.load === 7.4, 'CPU line with its load ("' + c.text + '")');
+    ok(/12 cores/.test(c.title) && /last 5 s/.test(c.title) && /cropping/.test(c.title) && /fitting/.test(c.title) && /video decoding/.test(c.title) && /other apps/.test(c.title),
+       'its tooltip says what it counts and what it cannot ("' + c.title + '")');
+    eq(E.formatEmbedCpu(1, 50).text, 'CPU: 1 core · load 50%', 'one core, singular');
+    eq(E.formatEmbedCpu(0, 50).text, 'CPU · load 50%', 'unknown core count → no count claimed');
+    eq(E.formatEmbedCpu(undefined, null).text, 'CPU', '…nor before the load');
+
+    // (the busy clock, the CPU line's general form and the load graph: tests/test-load-graph.mjs)
     const tc = E.formatEmbedTiming(Object.assign(E.summarizeEmbedTiming({ frames: 10, crops: 100, batches: 5, t0: 0, t1: 10000, decodeMs: 0, cropMs: 0, queueMs: 0, runMs: 9000, readMs: 0, maxBatch: 20 }, 'cpu', 'fp32'), { workers: 4 }));
     ok(/^10 crops\/s over 10 s · model busy 90% /.test(tc) && / · CPU \(4 workers\) fp32$/.test(tc), 'CPU run summary: "model busy", not "GPU busy", and the workers ("' + tc + '")');
 
@@ -777,6 +803,29 @@ group('Failure reasons');
     for (const f of Array.from(short.instanceGroups.keys())) if (f >= 40 * 60) short.instanceGroups.delete(f);
     const r4 = await SC.checkSizeSwitches(short, { fps: 60 });
     ok(!r4.ok && /at least 60 s/.test(r4.reason) && /has 40 s/.test(r4.reason), 'under 60 s of tracking → refused, saying how much there is (' + r4.reason + ')');
+}
+
+group('Node names are matched regardless of case (SLEAP skeletons name nodes freely)');
+{
+    eq(SC.findNode(['nose', 'tti', 'Nose'], 'Nose'), 2, 'an exact match wins');
+    eq(SC.findNode(['ear_left', 'nose', 'TTI'], 'Nose'), 1, 'otherwise the first case-insensitive one');
+    eq(SC.findNode(['NOSE'], 'nose'), 0, 'either way round');
+    eq(SC.findNode(['snout', 'tail_base'], 'Nose'), -1, 'a different name is not matched (-1)');
+    // the same session, its skeleton named in lowercase: the size check must score it identically
+    const SWAP = 16, a = buildSession(SWAP), b = buildSession(SWAP);
+    b.session.skeleton = new PD.Skeleton('m', NODES.map(n => n.toLowerCase()), []);
+    const ra = await SC.checkSizeSwitches(a.session, { fps: 60 }), rb = await SC.checkSizeSwitches(b.session, { fps: 60 });
+    ok(rb.ok && JSON.stringify(rb.encounters.map(e => [e.frame, e.score])) === JSON.stringify(ra.encounters.map(e => [e.frame, e.score])) && rb.flags.length === ra.flags.length,
+        `size check: a lowercase skeleton scores every contact exactly as the standard names do (${rb.encounters.length} contacts, ${rb.flags.length} flag)`);
+    ok(rb.bones.includes('nose–tti') && rb.bones.length === ra.bones.length, `…reading the same ${rb.bones.length} bones, named as the skeleton names them (${rb.bones.slice(0, 3).join(', ')}, …)`);
+    globalThis.window = globalThis;
+    const E = await import(pathToFileURL(path.join(ROOT, 'ui', 'image-embedder.js')).href).catch(err => ({ __err: err }));
+    if (E.__err) ok(false, 'image-embedder imports headlessly: ' + E.__err.message);
+    else {
+        const lower = E.skeletonIndex(['tail_tip', 'ear_left', 'nose', 'tti', 'head']), std = E.skeletonIndex(['TailTip', 'Ear_L', 'Nose', 'TTI', 'Head']);
+        ok(lower.nose === 2 && lower.tti === 3 && JSON.stringify(lower.body) === JSON.stringify(std.body),
+            `image check: nose / tti found in a lowercase skeleton (${lower.nose}, ${lower.tti}), the same body nodes as the standard names`);
+    }
 }
 
 group('Progress callback — awaited before the work and at its end');
