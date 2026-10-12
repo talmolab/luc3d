@@ -20,18 +20,18 @@
  *     landing frame, progress bar and where Fix takes the current frame as the
  *     boundary) reaches 2 s either side of the close spell on one camera.
  *  4. Where to look: Track All leaves candidate moments on the session, and the
- *     checks test them. A swap planted while the two animals are far apart,
- *     with a candidate moment there, gets a row AT the moment, saying why it was
- *     looked at — which survives the saved checklist (metadata.lucid.idSwitchReview)
- *     — on top of the encounter rows, which are what they were without it.
- *  5. The coat-brightness check (what Tracks ▸ Check ID Switches (Coat
- *     Brightness) runs), with a stand-in sampler (the coats differ): a change point both it and
- *     the size check find is ONE "Both" row on the size result (violet + amber),
- *     and its ticks are on the seekbar.
- *  6. The image check (stand-in embedder) runs on one camera with its own
- *     label-free scoring and no single-camera options, while the size and
- *     coat-brightness checks there skip encounters with no samples (`skipEmpty`)
- *     and let the clearest of nearby 'end' rows lead (`clearestEndLeads`).
+ *     coat-brightness check (what Tracks ▸ Check ID Switches (Coat Brightness)
+ *     runs; here with a stand-in sampler — the coats differ) tests them. A swap
+ *     planted while the two animals are far apart, with a candidate moment
+ *     there, gets a row AT the moment, saying why it was looked at — which
+ *     survives the saved checklist (metadata.lucid.idSwitchReview) — on top of
+ *     the encounter rows, which are what they were without it.
+ *  5. A swap planted at a contact, which both the (label-free) size check and the
+ *     coat-brightness check find, is ONE "Both" row on the size result (violet +
+ *     amber), and its ticks are on the seekbar.
+ *  6. The single-camera options (`skipEmpty`, `clearestEndLeads`) are the
+ *     coat-brightness check's: the label-free size and image checks (stand-in
+ *     embedder) take none of them.
  *
  * Run: node tests/e2e/single-camera-track-all.mjs
  */
@@ -169,7 +169,21 @@ try {
     const cand = await page.evaluate(() => Array.isArray(window.__lucid.state.session._idSwitchCandidates));
     check(cand, 'Track All left the candidate moments on the session');
     const row4 = await page.evaluate(async ([t0, t1, tr]) => {
-        const S = window.__lucid.state.session;
+        const S = window.__lucid.state.session, B = await import('/ui/brightness-sampler.js'), Set_ = await import('/ui/settings.js'), M0 = await import('/ui/id-switch-modal.js');
+        // a stand-in for the video: each animal's coat is the brightness of its size (animals 0 / 1 / 2 by how they
+        // were added), with noise re-seeded per run so two runs see the same vectors
+        const coatOf = new Map();
+        for (const fg of S.frameGroups.values()) fg.getUnlinkedInstances('mouse_video').forEach((u, a) => coatOf.set(u.instance, [40, 120, 210][a]));
+        window.__fakeBright = (session) => {
+            let seed = 9; const r = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+            return { views: ['mouse_video'], inFlight: 2, prepareFrames: async () => {}, releaseFrames: () => {},
+                getEmbeddings: async (frame, items) => items.map(it => {
+                    const inst = it.group.instances.get('mouse_video');
+                    return [{ camera: 'mouse_video', vector: B.brightnessFeatures(Array.from({ length: 11 }, () => coatOf.get(inst) * (0.85 + 0.3 * r()))) }];
+                }) };
+        };
+        Set_.setTrackingThresholds({ brightnessCheckThreshold: -50 });   // encounter rows too (the default -800 is for real coats)
+        M0.clearIdSwitchResults(S);                                     // 3's size rows are about other tracks
         // back to the clean tracks, then swap animals 0 and 1 from frame 1800 (the last 20%), where they are 280 px apart
         for (let f = 0; f < 2250; f++) S.frameGroups.get(f).getUnlinkedInstances('mouse_video').forEach((u, a) => {
             u.instance.trackIdx = f >= 1800 && a < 2 ? tr[f][1 - a] : tr[f][a];
@@ -178,17 +192,18 @@ try {
         const M = await import('/ui/id-switch-modal.js');
         const cands = S._idSwitchCandidates;
         S._idSwitchCandidates = null;
-        await M.runIdSwitchChecks({ size: true });
+        const run = () => M.runIdSwitchChecks({ brightness: true, inject: { createBrightnessSampler: window.__fakeBright } });
+        await run();
         const without = Array.from(document.querySelectorAll('#idSwitchPanel .id-switch-row')).map(r => ({ frame: Number(r.dataset.frame), key: r.dataset.key }));
         S._idSwitchCandidates = cands;
-        await M.runIdSwitchChecks({ size: true });
+        await run();
         const rows = Array.from(document.querySelectorAll('#idSwitchPanel .id-switch-row')).map(r => ({ frame: Number(r.dataset.frame), key: r.dataset.key, text: r.textContent }));
-        const repeats = S._idSwitch.results.size.flags.filter(m => m.continues).map(m => m.frame);
+        const repeats = S._idSwitch.results.brightness.flags.filter(m => m.continues).map(m => m.frame);
         const R = await import('/ui/id-switch-review.js');
         const saved = JSON.parse(JSON.stringify(R.serializeIdSwitchReview(S)));
         const copy = { _idSwitch: null };
         R.ingestIdSwitchReview(copy, saved);
-        const back = copy._idSwitch ? copy._idSwitch.results.size.flags.filter(m => m.look) : [];
+        const back = copy._idSwitch ? copy._idSwitch.results.brightness.flags.filter(m => m.look) : [];
         return { rows, without, repeats, back: back.map(m => [m.frame, m.look]) };
     }, [t0, t1, tr]);
     const mrow = row4.rows.find(r => Math.abs(r.frame - 1800) <= 2);
@@ -206,36 +221,27 @@ try {
         'the row says why it was looked at, and does not call it a close encounter: ' + (mrow || {}).text);
     check(row4.back.length === 1 && JSON.stringify(row4.back[0][1]) === '["tracklet"]', 'the cue survives the saved checklist: ' + JSON.stringify(row4.back));
 
-    console.log('\n5. Coat brightness, and "Both" with the size check');
-    const br = await page.evaluate(async () => {
-        const S = window.__lucid.state.session, M = await import('/ui/id-switch-modal.js'), B = await import('/ui/brightness-sampler.js');
-        // a stand-in for the video: each animal's coat is the brightness of its size (animals 0 / 1 / 2 by how they were added)
-        const coatOf = new Map();
-        for (const fg of S.frameGroups.values()) fg.getUnlinkedInstances('mouse_video').forEach((u, a) => coatOf.set(u.instance, [40, 120, 210][a]));
-        let seed = 9; const r = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
-        const fake = (session) => ({
-            views: ['mouse_video'], inFlight: 2,
-            prepareFrames: async () => {}, releaseFrames: () => {},
-            getEmbeddings: async (frame, items) => items.map(it => {
-                const inst = it.group.instances.get('mouse_video');
-                return [{ camera: 'mouse_video', vector: B.brightnessFeatures(Array.from({ length: 11 }, () => coatOf.get(inst) * (0.85 + 0.3 * r()))) }];
-            }),
-        });
-        await M.runIdSwitchChecks({ size: true, brightness: true, inject: { createBrightnessSampler: fake } });
+    console.log('\n5. "Both": a swap at a contact, found by the size and coat-brightness checks');
+    const br = await page.evaluate(async (planted) => {
+        const S = window.__lucid.state.session, M = await import('/ui/id-switch-modal.js');
+        // the planted swap of 3 (animals 0 and 1 exchanged at their encounter, frame 1655 on)
+        for (let f = 0; f < 2250; f++) S.frameGroups.get(f).getUnlinkedInstances('mouse_video').forEach((u, a) => { u.instance.trackIdx = planted[f][a]; });
+        S._idSwitchCandidates = null;
+        await M.runIdSwitchChecks({ size: true, brightness: true, inject: { createBrightnessSampler: window.__fakeBright } });
         const rows = Array.from(document.querySelectorAll('#idSwitchPanel .id-switch-row')).map(r => ({ frame: Number(r.dataset.frame), cls: r.className, text: r.textContent }));
         const st = S._idSwitch;
         return { status: document.getElementById('statusText').textContent, rows,
                  brOk: !!(st.results.brightness && st.results.brightness.ok),
                  marks: Array.from(document.querySelectorAll('#seekbarMarks .seekbar-mark')).map(m => m.className) };
-    });
+    }, planted);
     check(br.brOk && /Check ID Switches \(coat brightness\): \d+ possible switch/.test(br.status), 'the brightness check ran: ' + br.status.slice(0, 120));
-    const bothRow = br.rows.find(r => Math.abs(r.frame - 1800) <= 30 && /cue-both/.test(r.cls));
+    const bothRow = br.rows.find(r => Math.abs(r.frame - 1650) <= 60 && /cue-both/.test(r.cls));
     check(bothRow && /cue-both-size-brightness/.test(bothRow.cls) && /Both/.test(bothRow.text),
         'the switch both checks find is one "Both" row (size + brightness): ' + JSON.stringify(br.rows.map(r => [r.frame, r.cls.replace('id-switch-row ', '')])));
-    check(br.rows.filter(r => Math.abs(r.frame - 1800) <= 30).length === 1, '…listed once');
+    check(br.rows.filter(r => Math.abs(r.frame - 1650) <= 60).length === 1, '…listed once');
     check(br.marks.some(c => /cue-both-size-brightness/.test(c)), 'and its seekbar tick wears both colours');
 
-    console.log('\n6. The single-camera options: size and brightness take them, the label-free image check does not');
+    console.log('\n6. The single-camera options: coat brightness takes them, the label-free size and image checks do not');
     const img = await page.evaluate(async () => {
         const S = window.__lucid.state.session, M = await import('/ui/id-switch-modal.js');
         const animalOf = new Map();
@@ -252,9 +258,10 @@ try {
     });
     check(img.ok && img.threshold === -0.8 && img.continueBelow === undefined && !img.skipEmpty,
         `the image check ran label-free at its own threshold (${img.threshold}), with no single-camera options (continueBelow ${img.continueBelow}, skipEmpty ${img.skipEmpty})`);
-    check(img.sizeSkip === true && img.brSkip === true,
-        `size and coat brightness on one camera skip encounters with no samples (size ${img.sizeSkip}, brightness ${img.brSkip})`);
-    check(img.lead[0] === true && img.lead[2] === true, `…and let the clearest of nearby 'end' rows lead (size / image / brightness: ${img.lead})`);
+    check(img.brSkip === true && img.sizeSkip === undefined,
+        `coat brightness on one camera skips encounters with no samples; the label-free size check has no such rule (size ${img.sizeSkip}, brightness ${img.brSkip})`);
+    check(img.lead[0] === undefined && img.lead[1] === undefined && img.lead[2] === true,
+        `…and lets the clearest of nearby 'end' rows lead (size / image / brightness: ${img.lead})`);
 
     check(errs.length === 0, 'no page errors' + (errs.length ? ': ' + errs.join(' | ') : ''));
 } finally {
