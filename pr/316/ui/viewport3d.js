@@ -17,7 +17,7 @@
  * requires the shared accessors rather than array indexing.
  */
 
-import { points3dNodeCount, getPoint3d } from '../pose/pose-data.js?v=ebf03347596c';
+import { points3dNodeCount, getPoint3d } from '../pose/pose-data.js?v=055708412603';
 
 // ============================================
 // Deferred work (hidden viewport)
