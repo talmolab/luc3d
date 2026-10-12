@@ -8,8 +8,8 @@
  * Dependencies: mp4box.all.min.js (MP4Box)
  */
 
-import { shouldIgnoreShortcut } from '../ui/keyboard-target.js?v=a5894bbfeaca';
-import { diagnoseUnplayableVideo } from './video-codec-diagnosis.js?v=a5894bbfeaca';
+import { shouldIgnoreShortcut } from '../ui/keyboard-target.js?v=5fadd5f8654a';
+import { diagnoseUnplayableVideo } from './video-codec-diagnosis.js?v=5fadd5f8654a';
 
 // ---------------------------------------------------------------------------
 // Logging helper
@@ -2096,6 +2096,17 @@ export function snapZoomToNative(oldScale, newScale, nativeScale) {
  * is the exact 1:1 path (`setZoomPercent` → `_enterNative`).
  */
 export const ZOOM_PRESET_PERCENTS = [50, 100, 150, 200];
+
+/**
+ * A zoom percentage as SCREEN pixels : VIDEO pixels, in lowest terms — the
+ * badge menu's hint beside each preset: 50 → "1:2", 100 → "1:1",
+ * 150 → "3:2", 200 → "2:1".
+ */
+export function zoomRatioLabel(pct) {
+    var a = Math.round(pct), x = a, y = 100;
+    while (y) { var t = x % y; x = y; y = t; } // x = gcd(a, 100)
+    return (a / x) + ':' + (100 / x);
+}
 
 /**
  * The pane badge's zoom read-out, as a percentage of native resolution: 100%

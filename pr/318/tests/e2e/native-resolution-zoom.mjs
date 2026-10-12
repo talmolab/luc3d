@@ -388,7 +388,8 @@ try {
             return {
                 visible: getComputedStyle(menu).visibility === 'visible',
                 items: [...menu.querySelectorAll('.tri-dropdown-item')].map(el => ({
-                    text: el.textContent.replace('✓', '').replace('1:1', '').trim(),
+                    text: el.firstElementChild.textContent.replace('✓', '').trim(),
+                    hint: el.querySelector('.tri-dropdown-hint') ? el.querySelector('.tri-dropdown-hint').textContent : '',
                     ticked: el.querySelector('.trail-check') ? el.querySelector('.trail-check').textContent === '✓' : false,
                 })),
             };
@@ -429,6 +430,8 @@ try {
         check(pm.visible, 'hovering the badge opens the menu');
         check(JSON.stringify(pm.items.map(i => i.text)) === JSON.stringify(['50%', '100%', '150%', '200%', 'Fit']),
             `presets: ${pm.items.map(i => i.text).join(' / ')}`);
+        check(JSON.stringify(pm.items.map(i => i.hint)) === JSON.stringify(['1:2', '1:1', '3:2', '2:1', '']),
+            `each preset names its screen:video pixel ratio (${pm.items.map(i => i.hint || '-').join(' / ')})`);
         check(!pm.items.some(i => i.ticked), 'at 120% no preset is ticked');
 
         await clickPreset('[data-zoom-pct="150"]');
