@@ -13285,7 +13285,10 @@ each nested instance carries `pointScores` (a `Float64Array(numNodes)`, NaN wher
 a node has none; null for a user instance or a prediction read from `points`),
 and the columnar result a flat `pointScore` (`[i*numNodes + k]`, NaN for user
 instances), transferred with the rest. They are what the node tooltip shows; the
-importers keep them with `Instance.setPointScores`.
+importers keep them with `Instance.setPointScores`. **Not for analysis `.h5`
+files**, deliberately: `parseAnalysisH5` reads `point_scores` and drops them, and
+the NOTE there says what showing them would take (the lazy `.h5` path being the
+hard part).
 
 **Imports from project modules.** None.
 

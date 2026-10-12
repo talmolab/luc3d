@@ -691,6 +691,11 @@ worker; save + reopen through `handleLoadSlpFile`; a lazy project and an edited
 camera-frame on the streaming writer). `tests/e2e/slp-import-fast-compound.mjs`
 pins the worker's scores against a Python-written SLEAP file.
 
+**Not covered, deliberately: SLEAP analysis `.h5` files.** Their `point_scores`
+are read and dropped, so their nodes show a name and no score. What adding them
+would take — and why the lazy `.h5` path is the hard part — is in the NOTE in
+`loading/slp-import-worker.js` `parseAnalysisH5`.
+
 ## Triangulation must not depend on where the origin is
 
 `triangulatePointDLT` (in `pose/triangulation-core.js`, re-exported from
