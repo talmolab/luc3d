@@ -945,6 +945,7 @@ body {
   font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.8px;
+  font-variant-numeric: tabular-nums; /* the zoom % read-out, steady while wheel-zooming */
   border: 1px solid var(--accent);
   border-radius: 3px;
   cursor: pointer;
@@ -3695,6 +3696,12 @@ input[type="range"]::-moz-range-track {
   padding: 1px 4px;
   border-radius: 3px;
   border: 1px solid var(--border-color);
+}
+
+/* The widest menu item sets the menu's width, and its hint would otherwise
+   sit flush against its label. */
+.menu-dropdown-item .shortcut-hint {
+  margin-left: 16px;
 }
 
 /* --------------------------------------------------------------------------

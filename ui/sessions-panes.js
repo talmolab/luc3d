@@ -108,7 +108,8 @@ class VideoPaneRenderer {
         unzoomBtn.title = 'Click to reset zoom';
         unzoomBtn.style.display = 'none';
         unzoomBtn.addEventListener('mouseenter', function () { unzoomBtn.textContent = 'Unzoom'; });
-        unzoomBtn.addEventListener('mouseleave', function () { unzoomBtn.textContent = 'Zoomed'; });
+        // `applyZoom` keeps the zoom read-out ("125%", "100%") in data-label.
+        unzoomBtn.addEventListener('mouseleave', function () { unzoomBtn.textContent = unzoomBtn.dataset.label || 'Zoomed'; });
         unzoomBtn.addEventListener('click', function (e) {
             e.stopPropagation();
             var view = state.views.find(function (v) { return v.name === self.viewName; });
@@ -590,6 +591,13 @@ export function refreshPaneInteractions() {
     // Render current frame to newly created canvases and fit sizes
     fitCanvasesToCells();
     if (videoController) {
+        // `initZoom` above put every view back at fit — or, while View ▸
+        // Native Resolution is on, flagged it 1:1 with its scale still to be
+        // derived from the box `fitCanvasesToCells` just laid out.
+        for (var ni = 0; ni < state.views.length; ni++) {
+            var nv = state.views[ni];
+            if (nv.zoom && nv.zoom.native) videoController.reapplyZoom(nv);
+        }
         videoController.seekToFrame(state.currentFrame);
     }
     drawAllOverlays(state.currentFrame);

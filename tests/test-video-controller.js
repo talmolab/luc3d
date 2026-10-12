@@ -8,7 +8,7 @@
 
 (function () {
     const { describe, it, beforeEach, assertEqual, assertNotNull,
-        assertTrue, assertFalse, assertGreaterThan } = TestFramework;
+        assertTrue, assertFalse, assertGreaterThan, assertNull } = TestFramework;
 
     // Mock decoder - simulates OnDemandVideoDecoder without real video
     function createMockDecoder(width, height, totalFrames) {
@@ -398,6 +398,100 @@
             // At 2x: offset should be 100 - 100*2 = -100
             assertEqual(view.zoom.offsetX, -100);
             assertEqual(view.zoom.offsetY, -100);
+        });
+    });
+
+    // View ▸ Native Resolution (Shift+0) and the snap to it. The pixel-exact
+    // behaviour needs real layout and a real compositor, so it is pinned by
+    // tests/e2e/native-resolution-zoom.mjs; these cover the pure rule and the
+    // no-layout fallbacks.
+    describe('VideoController - Native resolution (1:1)', function () {
+        var state, ctrl;
+
+        beforeEach(function () {
+            state = createTestState(2, 100);
+            ctrl = new VideoController(state, {});
+        });
+
+        it('snapZoomToNative lands a step that crosses 1:1 on it, from either side', function () {
+            var up = snapZoomToNative(1.40, 1.54, 1.5);
+            assertTrue(up.snapped, 'zoom in through 1:1 snaps');
+            assertEqual(up.scale, 1.5);
+            var down = snapZoomToNative(1.60, 1.45, 1.5);
+            assertTrue(down.snapped, 'zoom out through 1:1 snaps');
+            assertEqual(down.scale, 1.5);
+        });
+
+        it('snapZoomToNative lands a step that ends just short of 1:1 on it', function () {
+            var s = snapZoomToNative(1.30, 1.5 * (1 - NATIVE_SNAP_TOL / 2), 1.5);
+            assertTrue(s.snapped, 'within the tolerance');
+            assertEqual(s.scale, 1.5);
+        });
+
+        it('snapZoomToNative leaves other steps alone', function () {
+            var s = snapZoomToNative(1.0, 1.1, 1.5);
+            assertFalse(s.snapped);
+            assertEqual(s.scale, 1.1);
+            var n = snapZoomToNative(1.0, 1.1, null);
+            assertFalse(n.snapped, 'no 1:1 scale known → no snap');
+            assertEqual(n.scale, 1.1);
+        });
+
+        it('snapZoomToNative does not pull a step that STARTS on 1:1 back to it', function () {
+            var s = snapZoomToNative(1.5, 1.5 * 1.1, 1.5);
+            assertFalse(s.snapped, 'leaving 1:1 is not a crossing');
+            assertEqual(s.scale, 1.5 * 1.1);
+            var t = snapZoomToNative(1.5, 1.5 * 1.01, 1.5);
+            assertFalse(t.snapped, 'not even a small step');
+        });
+
+        it('zoomPercentLabel reads the zoom as a percentage of 1:1', function () {
+            assertEqual(zoomPercentLabel(1.5, 1.5, true), '100%', 'at 1:1');
+            assertEqual(zoomPercentLabel(1.875, 1.5, false), '125%');
+            assertEqual(zoomPercentLabel(0.75, 1.5, false), '50%');
+            assertEqual(zoomPercentLabel(15, 1.5, false), '1000%');
+            assertEqual(zoomPercentLabel(2, null, false), 'Zoomed', 'no 1:1 scale known');
+        });
+
+        it('zoomPercentLabel never reads "100%" for a view that is not exactly at 1:1', function () {
+            assertEqual(zoomPercentLabel(1.497, 1.5, false), '99.8%', 'just under');
+            assertEqual(zoomPercentLabel(1.5 * 1.003, 1.5, false), '100.3%', 'just over');
+            assertEqual(zoomPercentLabel(1.5 * 0.9999, 1.5, false), '≈100%', 'a hair under');
+            assertEqual(zoomPercentLabel(1.5, 1.5, false), '≈100%', 'the 1:1 scale, but not held at 1:1');
+        });
+
+        it('nativeZoomScales is null for a canvas that is not laid out', function () {
+            assertNull(ctrl.nativeZoomScales(state.views[0]), 'detached canvas');
+            assertNull(ctrl.nativeZoomScales({ videoWidth: 640, videoHeight: 480 }), 'no canvas');
+        });
+
+        it('without layout, zoomVideo never snaps and setNativeResolution is a no-op', function () {
+            var view = state.views[0];
+            ctrl.initZoom(view);
+            assertFalse(ctrl.zoomVideo(view, 2.0), 'no snap');
+            assertFalse(!!view.zoom.native);
+            assertFalse(ctrl.setNativeResolution(true), 'no laid-out view → not on');
+            assertFalse(!!state.nativeResolution);
+        });
+
+        it('initZoom seeds the 1:1 flag from state.nativeResolution', function () {
+            state.nativeResolution = true;
+            ctrl.initZoom(state.views[0]);
+            assertTrue(state.views[0].zoom.native, 'a pane rebuild keeps 1:1');
+            state.nativeResolution = false;
+            ctrl.initZoom(state.views[1]);
+            assertFalse(state.views[1].zoom.native);
+        });
+
+        it('_rotatedBBox takes a separate vertical scale (90° swaps it into the width)', function () {
+            var b0 = ctrl._rotatedBBox(100, 50, 2, 0, 3);
+            assertEqual(b0.width, 200);
+            assertEqual(b0.height, 150);
+            var b90 = ctrl._rotatedBBox(100, 50, 2, 90, 3);
+            assertEqual(b90.width, 150, 'height × scaleY becomes the width');
+            assertEqual(b90.height, 200);
+            var same = ctrl._rotatedBBox(100, 50, 2, 90);
+            assertEqual(same.width, 100, 'scaleY defaults to scale');
         });
     });
 

@@ -3754,6 +3754,11 @@ Calibration and `envSkeleton` remain per-session.
   it follows the frame rate when a video loads or the FPS pill is edited, with
   no caller recomputing it. Setting it (tests and benches pin a frame count)
   stores `frames / fps` in `trailSeconds`. The pickers set `trailSeconds`.
+  `state.nativeResolution` is View ▸ Native Resolution (Shift+0): true exactly
+  when every shown view is at one video pixel per device pixel. Written only by
+  `VideoController._syncNativeMode` (derived from the views, never latched), and
+  read by `VideoController.initZoom` so a pane rebuild keeps every view at 1:1
+  (see `loading/video.js`).
 - `videoController`, `interactionManager`, `viewport3d`, `timeline`,
   `paneManager` — live `let` bindings.
 - `setVideoController`, `setInteractionManager`, `setViewport3D`,
@@ -4936,6 +4941,11 @@ edit-group mode, keyboard shortcuts.
   `onMouseLeave`/`onWheel`, `onKeyDown`, `_addNewInstance` (used by smart-add;
   lays out a new skeleton via an inline BFS fan-out from the highest-degree
   root, with a vertical-line fallback when there are no edges).
+  `canvasToVideo(clientX, clientY, viewName)` maps a pointer to video pixels;
+  on a ROTATED view it rebuilds the display size from `cssW × zoom.scale` and
+  `cssH × zoom.scaleY` — the vertical scale differs a hair from the horizontal
+  one at native resolution (`VideoController.nativeZoomScales`), and using
+  `zoom.scale` for both put a click up to ~0.3% of the frame height off there.
 - `isInteractiveClickTarget(target)` — used by other UI to skip
   click-through on form controls.
 
@@ -8732,9 +8742,19 @@ add/remove/switch, and view-strip thumbnails. Owns the on-screen
 multi-video docking layout.
 
 **Key exports.**
-- `panelRenderers` — Map of panelId → VideoPaneRenderer.
+- `panelRenderers` — Map of panelId → VideoPaneRenderer. Each pane carries
+  the `.unzoom-btn` badge, shown while its view is zoomed or at native
+  resolution: the zoom as a percentage of 1:1 ("125%", "100%" — see
+  `zoomPercentLabel` in `loading/video.js`), "Unzoom" on hover, click to fit.
+  `applyZoom` writes the read-out to the button's `data-label`, and the
+  renderer's mouseleave restores it from there.
 - `multiSelectViews`, `clearMultiSelect`.
-- `refreshPaneInteractions`.
+- `refreshPaneInteractions` — re-inits every view's zoom (`initZoom`), fits the
+  canvases, then re-derives the 1:1 scale of every view `initZoom` flagged
+  native (View ▸ Native Resolution on), since that scale depends on the box
+  `fitCanvasesToCells` just laid out. A pane's `init` schedules a second call
+  one frame later, which re-inits zoom AGAIN — so after any pane rebuild every
+  view is either fitted or, with the mode on, at 1:1.
 - `scrollViewStripTo(viewName)` — scroll that view's strip item into sight.
   `.view-strip-list` is `overflow-y: auto`, so on a project with more cameras
   than fit the column, arrow-cycling the solo view would otherwise move the
@@ -9640,7 +9660,10 @@ handler elsewhere and listed for reference only. The two **mouse gestures** on
 an instance — `moveInstance` (`Alt+Drag`) and `rotateInstance` (`Alt+Wheel`,
 issue #198) — are in the catalog for the same reason: they have no key to
 rebind, so they are reference-only, but they belong in Settings ▸ Keyboard
-Shortcuts and the Hot Keys modal where people look for them.
+Shortcuts and the Hot Keys modal where people look for them. So is
+`nativeResolution` (`Shift+0`, View ▸ Native Resolution): matched BY PHYSICAL
+KEY (`e.code === 'Digit0'`) in `ui/ui-wiring.js`'s transport handler beside
+`+` / `-` / `0`, since Shift+0 types `)` on a US layout.
 
 **Key exports.**
 - `getDefaultTriangulationMethod()` / `setDefaultTriangulationMethod(method)` —
@@ -10888,6 +10911,15 @@ stopping at the last frame; the step transport buttons/keys stop it first.
   `setGridMode`, `updateVideoGridDisplay`, `showViewIndicator`. See
   **Single-view ("solo") mode** below.
 - Playback: `applyPlaybackRate`, `seekToLabeledFrame`.
+- View ▸ **Native Resolution (1:1)** (`menuNativeResolution`) and **`Shift+0`**
+  (matched by `e.code === 'Digit0'` in the transport keydown handler, beside
+  `+` / `-` / `0`, so only while real video is loaded) both call
+  `videoController.toggleNativeResolution()` (`loading/video.js`). The menu
+  tick (`.trail-check`) is refreshed when the View menu is clicked open, from
+  `nativeResolutionActive()` — whether it is on is derived from the views, so
+  asking at open time cannot go stale. `updateVideoGridDisplay` and the
+  `setGridMode` layout restore carry each view's `zoom.native` across the pane
+  rebuild (a restored 1:1 view gets `reapplyZoom`, not the old box's scale).
 - View ▸ **Define Planes** (`menuDefinePlanes`) → `togglePlaneMode()`
   (`ui/plane-definition.js`) — enters/leaves "Defining Plane Mode". A mode, not
   a modal, so it has no Esc binding; the banner's Exit button is the way out.
@@ -11232,7 +11264,7 @@ single source of truth for the Settings panel). The remaining shortcuts keep
 their own dedicated handlers and appear as **fixed** reference entries (not
 rebindable): `Mod+S` Save (works while typing), transport (`←/→`, `Space`,
 `Home`/`End`, `Opt+←/→`), the `1–9` identity / `Shift+1–9` track digit ranges,
-zoom (`+`/`-`/`0`), `Shift+R`+rotate, `Delete` plus the legacy `c`
+zoom (`+`/`-`/`0`, and `Shift+0` native resolution), `Shift+R`+rotate, `Delete` plus the legacy `c`
 confirm-group alias (`groupConfirmLegacy`, canvas-context ops in
 `interaction.js`), and `Mod+J`/`Mod+Shift+J` (timeline-controller).
 `Enter`/`Escape` remain hard-coded modal-button special cases.
@@ -12150,7 +12182,15 @@ filesystem enumeration, decoder rebuild.
   `attachVideosForLazyReopen` and the SLP import.
 - View/grid: `createViewForVideoFile`, `removeVideoFile`, `updateGridLayout`,
   `createVideoPromptCell`, `fitCanvasesToCells`, `cellResizeObserver`,
-  `rebuildVideoController`, `updateTotalFrames`.
+  `reapplyAllZoom`, `rebuildVideoController`, `updateTotalFrames`.
+  `reapplyAllZoom()` runs `videoController.reapplyZoom` on every view — what
+  `cellResizeObserver` does after `fitCanvasesToCells`, and what a
+  devicePixelRatio change does: a module-level `matchMedia('(resolution: Ndppx)')`
+  watcher (re-armed on each change) calls it, because a view at native
+  resolution is scaled in DEVICE pixels and dragging the window to a display
+  with another DPR resizes nothing, so no ResizeObserver fires. Headless DPR
+  emulation fires neither that event nor a resize, which is why
+  `tests/e2e/native-resolution-zoom.mjs` calls `reapplyAllZoom` itself.
   `removeVideoFile(videoFile)` is `createViewForVideoFile`'s inverse and the
   whole of the Videos tab's **Remove Video** (luc3d #216): it closes the dock
   pane (`paneManager.removeVideoPanel`), drops the view from `state.views` —
@@ -13337,11 +13377,93 @@ records as `zoom.baseW/baseH`. When a cell is resized, `reapplyZoom` rescales th
 offset by the base-size ratio (`offset *= newBase/oldBase`) before re-clamping, so
 a zoomed-in image keeps the same region centered instead of jumping.
 
+**Wheel zoom stays under the cursor — through the WHOLE transform.**
+`zoomVideo(view, factor, cssX, cssY)` anchors through `_zoomAbout`, which
+inverts `applyZoom`'s full transform: a canvas-box point u is drawn at
+`flex + off + c + R·(u∘s − c)` (the wrapper's flex-centring offset in its cell,
+then its rotation R about its own centre c). The old `q − (q − off)·s/s0`
+dropped the flex term, so in a letterboxed axis the picture slid out from under
+the cursor by 10% of that offset per notch (14 video px per notch, measured).
+An axis whose picture still FITS its pane is re-centred by `_constrainOffsets`
+on every step regardless — anchoring can only hold along an overflowing axis.
+
+**Native resolution (1:1).** View ▸ Native Resolution / `Shift+0`
+(`setNativeResolution`, `toggleNativeResolution`) shows a view at ONE VIDEO
+PIXEL PER DEVICE PIXEL, so the picture is not resampled at all. It is a zoom
+scale, not a second display path: the backing canvas is already the video's
+native size (`canvas.width = videoWidth`), only the wrapper's CSS transform
+scales it. Measured with seeded noise against real screenshots
+(`tests/e2e/native-resolution-zoom.mjs`), two things are needed and each alone
+breaks it:
+- **A scale PER AXIS** (`nativeZoomScales` → `{x, y}`, stored as `zoom.scale` /
+  `zoom.scaleY`, written `scale(sx, sy)`). `fitCanvasesToCells` floors the canvas
+  box to whole CSS px, so its aspect is a hair off the video's (561×400 for
+  1680×1200); one uniform scale left the vertical axis resampled by ~0.3% and
+  1.6% of pixels exact. A fractional CSS height does NOT fix it — Chrome lays out
+  in 1/64 px and still came out 0.03 px short. `zoom.scaleY` exists only while
+  `zoom.native` (`_scaleY(z)` reads it), so every other zoom is unchanged.
+  `_rotatedBBox` / `_constrainOffsets` / `zoomToRect` and the rotated-view path of
+  `InteractionManager.canvasToVideo` read it.
+- **A pan on the device-pixel grid** (`_alignNativeOffsets`, run by
+  `applyZoom` while native). Chrome snaps the wrapper's own layout position to
+  whole device pixels before a non-translation transform, so what remains to
+  align is where the transform puts the canvas's top-left — `off + c − R·c`. A
+  half-device-pixel pan scored 2.4% exact.
+Exact at an integer devicePixelRatio — dpr 1 and 2, headless AND a headed,
+GPU-composited window on a Retina Mac — and, headless, at 1.25 and 1.5 too. At
+dpr 2.2 (110% browser zoom on Retina) no pan or box correction gets below a
+smooth error curve: Chrome resamples the canvas whatever the transform says, so
+the video is shown at its native SIZE but not pixel-exact. The test asserts
+only the size at fractional DPRs and prints the exact share.
+
+How it behaves:
+- **Derived, not latched.** `state.nativeResolution` is true exactly when every
+  shown view (`_zoomableViews`: laid out and `isViewShown`) has `zoom.native`;
+  `_syncNativeMode` recomputes it after every zoom change, so the menu tick
+  cannot disagree with the screen. A wheel snap that puts the solo view at 1:1
+  turns it on; zooming away turns it off.
+- **Held across everything that moves the 1:1 scale** — it depends on the box
+  and on devicePixelRatio. `reapplyZoom` re-derives it about the cell centre
+  for a native view (cell resize, `reapplyAllZoom` on a DPR change). A pane
+  rebuild re-inits every view: `initZoom` seeds `zoom.native` from
+  `state.nativeResolution`, and `refreshPaneInteractions` then re-derives the
+  scale for the new box — so cycling the solo camera keeps 1:1.
+- **OFF clears every view**, shown or hidden: a pane rebuild restores hidden
+  views' saved zoom (`updateVideoGridDisplay`), and a stale flag would bring one
+  back at 1:1. ON flags hidden views for the same reason.
+- **The snap.** `zoomVideo` passes each step through `snapZoomToNative`: a step
+  that crosses the view's 1:1 scale, or ends within `NATIVE_SNAP_TOL` (2%) of
+  it, lands exactly on it (`zoom.native` set) and returns true; a step from 1:1
+  leaves it. The `[fit, 10x]` range stretches to include 1:1 — a video smaller
+  than its pane can be zoomed OUT to 1:1, which is then the floor. The wheel
+  handler adds a HOLD: after a snap, same-direction wheel events are swallowed
+  until the wheel rests `NATIVE_SNAP_HOLD_MS` (250 ms), each swallowed event
+  extending it, so a fast spin or trackpad momentum stops at 1:1 and a fresh
+  gesture goes on past it; a reversal is never held. `+` / `-` snap on the way
+  with no hold (each press is discrete). Box zoom never snaps.
+- **The pane badge reads the zoom as a percentage of 1:1** — `zoomPercentLabel`
+  (exported, pure): 100% is one video pixel per device pixel, 125% is zoomed
+  in past it, 65% shows less. Only a view HELD at 1:1 reads exactly "100%"; one
+  within rounding of it but not held (off the pixel grid, or a hair off the
+  scale — so still resampled) reads "99.8%" or "≈100%" instead. "Zoomed" when
+  no 1:1 scale is known (canvas not laid out). It shows at 1:1 even when 1:1
+  happens to equal the fit, being the only sign a wheel zoom snapped there.
+  Set by `applyZoom`, so it follows every zoom, resize and DPR change; the same
+  call toggles `.video-cell.native-resolution`. Tabular figures, so it does
+  not jitter while wheel-zooming.
+- Grid views are each put at their own 1:1, centred, like `+`/`-`/`0` acting
+  on every view.
+
 **Key exports.**
 - `videoLog(msg, level)` — namespaced logger.
 - `STEP_CURSOR_IDLE_MS` (3000) — idle time before a paused-stepping stream closes.
 - `STEP_BACK_CHUNK` (24) — frames decoded and cached per backward step.
 - `STEP_BACK_WARM_MS` (250) — pause after landing on a frame before warming the chunk behind it.
+- `snapZoomToNative(oldScale, newScale, nativeScale)` → `{scale, snapped}` — the
+  pure snap rule (see **Native resolution** above). `NATIVE_SNAP_TOL` (0.02),
+  `NATIVE_SNAP_HOLD_MS` (250).
+- `zoomPercentLabel(scale, nativeScale, isNative)` → the pane badge's read-out
+  ("125%", "100%", "≈100%", "Zoomed"; see **Native resolution** above).
 - `OnDemandVideoDecoder` — class. Selected methods: `init(source)`,
   `getFrame(frameIndex)` (mediabunny: via `_mbGetFrame`, the open stepping
   stream), `releaseStepCursor()`, `releaseFrames()` (closes and drops every
@@ -13400,8 +13522,12 @@ a zoomed-in image keeps the same region centered instead of jumping.
   since its stepping moved to mid-frame seeks, see `_html5Moved` above),
   `_startBufferedPlayback` / `_bufferedPlaybackEnabled` (buffered
   video-led mediabunny playback, issue #115),
-  `setupSeekbar`, `setupKeyboardHandlers`, `initZoom`, `applyZoom`,
-  `zoomVideo`, `resetZoom`, `zoomToRect`, `zoomAllVideos`,
+  `setupSeekbar`, `setupKeyboardHandlers` (NOT called by the app — the live
+  transport and zoom keys, `Shift+0` included, are in `ui/ui-wiring.js`), `initZoom`, `applyZoom`,
+  `zoomVideo` (returns true when the step snapped to 1:1), `resetZoom`,
+  `zoomToRect`, `zoomAllVideos`, `nativeZoomScales(view)` (`{x, y}` or null
+  while not laid out), `setNativeResolution(on)`, `toggleNativeResolution()`,
+  `nativeResolutionActive()`, `reapplyZoom`,
   `resetAllZoom`, `setupZoomHandlers`.
 
 **Only the views on screen are decoded, played and captured** —
