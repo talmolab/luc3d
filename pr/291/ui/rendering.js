@@ -6,27 +6,31 @@
 // - updateFrameCounters: status-bar frame counters (labeled / triangulated / instances),
 //   whole-project on a lazy project too (counting logic in ui/frame-counters.js).
 
-import { state, interactionManager, timeline, isViewDocked } from './app-state.js?v=b1899cf7a7fd';
-import { points3dNodeCount } from '../pose/pose-data.js?v=b1899cf7a7fd';
+import { state, interactionManager, timeline, isViewDocked } from './app-state.js?v=4c9ac04711d3';
+import { points3dNodeCount } from '../pose/pose-data.js?v=4c9ac04711d3';
 import {
     ensureLazyFrameData, ensureLazyTrailWindow, getInstanceGroupsForFrame,
     triangulateAndReproject, storeReprojectedInstances,
-} from '../pose/triangulation.js?v=b1899cf7a7fd';
-import { drawFrameOverlays } from './overlays.js?v=b1899cf7a7fd';
-import { syncViewLegends } from './view-legend.js?v=b1899cf7a7fd';
-import { isCameraTracked } from './settings.js?v=b1899cf7a7fd';
+} from '../pose/triangulation.js?v=4c9ac04711d3';
+import { drawFrameOverlays } from './overlays.js?v=4c9ac04711d3';
+import { syncViewLegends } from './view-legend.js?v=4c9ac04711d3';
+import { isCameraTracked } from './settings.js?v=4c9ac04711d3';
 // Plane placements draw on the same overlay canvas, so they must run AFTER
 // drawFrameOverlays (which opens with a clearRect). Circular import — safe
 // because the call site is inside drawAllOverlays' body.
-import { drawPlaneOverlays, applyPlaneModeToolbarLock } from './plane-definition.js?v=b1899cf7a7fd';
+import { drawPlaneOverlays, applyPlaneModeToolbarLock } from './plane-definition.js?v=4c9ac04711d3';
+// The toolbar's Animals field shows the ACTIVE session's count. Circular
+// (it reaches pose/tracker.js, which imports this module) — safe for the same
+// reason: the call site is inside drawAllOverlays' body.
+import { syncAnimalCountField } from './animal-count-field.js?v=4c9ac04711d3';
 
 // Pass 3f: editGroupState + finishEditGroup moved to ui/identity-assignment.js.
-import { editGroupState, finishEditGroup } from './identity-assignment.js?v=b1899cf7a7fd';
-import { updateFrameInfo } from './info-panel.js?v=b1899cf7a7fd';
+import { editGroupState, finishEditGroup } from './identity-assignment.js?v=4c9ac04711d3';
+import { updateFrameInfo } from './info-panel.js?v=4c9ac04711d3';
 import {
     computeFrameCounterBaseline, computeLazyCameraBaseline, createFrameCounterBaselineBuilder,
     countFrameCounters, nonResidentCameraCounts, refreshCountedFrame,
-} from './frame-counters.js?v=b1899cf7a7fd';
+} from './frame-counters.js?v=4c9ac04711d3';
 
 // ============================================
 // Reproj/Error visibility
@@ -319,6 +323,11 @@ export function drawAllOverlays(frameIdx, viewFrames) {
     // here rather than only at `enterPlaneMode`, where it would survive until
     // the first mouse move. A no-op when the mode is off.
     applyPlaneModeToolbarLock();
+    // Nothing announces a session change (each load path and the session
+    // switch assign `state.session` themselves), and every one of them ends in
+    // a draw — so the per-session Animals field catches up here. O(1) when the
+    // session and its count are the ones already shown.
+    syncAnimalCountField();
 
     var editGroupTarget = interactionManager ? interactionManager.editGroupTarget : null;
 
