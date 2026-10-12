@@ -10,7 +10,8 @@
  * after one encounter, as in tests/e2e/size-switch-check.mjs. Asserted:
  *  1. Animals of different size: both checks find the swap; the ID Switches tab
  *     lists it ONCE, as "Both", and the timeline carries size (amber) and image (cyan) markers.
- *  2. Animals of IDENTICAL size: only the image check finds it ("Images" row).
+ *  2. Animals of IDENTICAL size: only the image check finds it ("Images" row); the
+ *     size check runs but cannot flag the switch.
  *  3. A cancellable progress dialog, with a playhead line, a percentage, the GPU
  *     running the model with its live load, and a sample of the crops above
  *     Cancel: Esc mid-run stops it, reports "cancelled" and adds no image markers.
@@ -163,7 +164,12 @@ try {
     const imgRow = R.find(r => Math.abs(r.frame - fx.swapFrame) <= 60);
     check(!!imgRow && /· images/.test(imgRow.text) && !/Both/.test(imgRow.text), `identical sizes: found by images only ("${imgRow && imgRow.text}")`);
     const st2 = await page.evaluate(() => document.getElementById('statusText').textContent);
-    check(/Check ID Switches: no possible switches.*; Check ID Switches \(images\): 1 possible switch/.test(st2), `status reports each check ("${st2}")`);
+    // With every animal the same size the bone lengths carry no identity, so the size check cannot see the
+    // switch; the cosine of noise-only window means can still dip just past its threshold elsewhere (two
+    // contacts at -1.0 and -1.15 in this fixture), so its count is not asserted — only that it ran.
+    check(/Check ID Switches: (no possible switches|\d+ possible switch).*; Check ID Switches \(images\): 1 possible switch/.test(st2), `status reports each check ("${st2}")`);
+    const sizeAtSwitch = await page.evaluate((f) => { const r = window.__res.size; return r.flags.filter(x => x.startFrame <= f + 60 && x.frame >= f - 60).length; }, fx.swapFrame);
+    check(sizeAtSwitch === 0, `the size check does not flag the switch itself (${sizeAtSwitch})`);
 
     // ---- 3. cancel mid-run with Esc
     await page.evaluate(async () => {

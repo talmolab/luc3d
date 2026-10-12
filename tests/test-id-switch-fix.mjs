@@ -1,16 +1,16 @@
 /**
  * test-id-switch-fix.mjs — fixing a flagged ID switch from the ID Switches tab.
  *
- *  1. `markChangePoints` names the other edge of every change point's swapped
- *     stretch: an onset's `switchBackAt` (the pair's encounter after the run, or
- *     null at the session end), an 'end''s `switchedAt` (the run's first
- *     encounter, or null when the run starts the session) — including a LONE
- *     middle flag, whose switch-back encounter is not itself a change point.
+ *  1. `markContactChanges` names the other edge of every change point's swapped
+ *     stretch: a pair's 1st, 3rd, … flagged contact is an onset whose
+ *     `switchBackAt` is the next one (or null: the session end), its 2nd, 4th, …
+ *     an 'end' whose `switchedAt` is that onset.
  *  2. `idSwitchFixPlan` turns a row into frames: the boundary is the current frame
  *     anywhere in the row's window (lead-in .. 1 s after), else e+1; an onset reaches its switch-back
  *     encounter's last close frame or the last frame; an 'end' covers the stretch
- *     before it. Partner rows are paired. Results restored from an older file
- *     (no link) fall back to the nearest change point of the same pair.
+ *     before it (from the session start when restored from an older file whose
+ *     'end' had no onset). Partner rows are paired. Results restored from an older
+ *     file (no link) fall back to the nearest change point of the same pair.
  *  3. `Session.swapIdentitiesInRange` swaps both structures inside the range and
  *     nothing outside it, is its own inverse, and `swapIdentitiesForward` (the
  *     1-9 keys) still reaches the end of the project.
@@ -33,51 +33,46 @@ const RV = await import(pathToFileURL(path.join(ROOT, 'ui', 'id-switch-review.js
 let passed = 0, failed = 0;
 function ok(c, m) { if (c) { passed++; console.log('  ✓ ' + m); } else { failed++; console.error('  ✗ ' + m); } }
 
-const O = { threshold: -50, continueBelow: 0, followSeconds: 60, fps: 30 };
-// One pair (ids 0/1) meeting at frames 100, 200, … ; `bad` = indices scored as swapped.
+const O = { threshold: -1, followSeconds: 5, fps: 30 };
+// One pair (ids 0/1) in contact at frames 100, 200, … ; `bad` = indices scored as where the labels changed hands.
 function encounters(n, bad, pair = [0, 1], names = ['a', 'b']) {
     return Array.from({ length: n }, (_, i) => ({
         frame: 100 * (i + 1), startFrame: 100 * (i + 1) - 20, identityA: pair[0], identityB: pair[1],
-        nameA: names[0], nameB: names[1], score: bad.includes(i) ? -80 : 30,
+        nameA: names[0], nameB: names[1], score: bad.includes(i) ? -2 : 2,
     }));
 }
 function resultOf(scored) {
-    const changes = SC.markChangePoints(scored, O);
-    return { ok: true, flags: scored.filter(s => s.flagged), changes, encounters: scored, fps: 30, sampleHz: 15, step: 2 };
+    SC.markContactChanges(scored, O);
+    return { ok: true, flags: scored.filter(s => s.flagged), changes: [], encounters: scored, fps: 30, sampleHz: 15, step: 2 };
 }
 
 // ---- 1. links -------------------------------------------------------------------------------
-console.log('1. markChangePoints links each change point to the other edge of its stretch');
+console.log('1. markContactChanges links each change point to the other edge of its stretch');
 {
-    let r = resultOf(encounters(6, [3, 4, 5]));                     // run reaches the end
+    let r = resultOf(encounters(6, [3]));                           // one change: swapped to the end
     let on = r.flags.find(f => f.kind === 'onset');
-    ok(on && on.frame === 400 && on.switchBackAt === null, `onset to the session end: switchBackAt null (${on && on.switchBackAt})`);
+    ok(on && on.frame === 400 && on.switchBackAt === null && r.flags.length === 1, `one change: an onset to the session end (switchBackAt ${on && on.switchBackAt})`);
 
-    r = resultOf(encounters(6, [0, 1]));                            // run starts the session
-    let end = r.changes[0];
-    ok(end && end.kind === 'end' && end.frame === 300 && end.switchedAt === null, `'end' from the session start: switchedAt null`);
+    r = resultOf(encounters(6, [2, 4]));                            // swapped, then back
+    on = r.flags.find(f => f.kind === 'onset'); let end = r.flags.find(f => f.kind === 'end');
+    ok(on.frame === 300 && on.switchBackAt === 500, `two changes: onset 300 switches back at 500 (${on.switchBackAt})`);
+    ok(end.frame === 500 && end.switchedAt === 300, `two changes: 'end' 500 was switched at 300 (${end.switchedAt})`);
 
-    r = resultOf(encounters(6, [2, 3]));                            // middle run of 2
-    on = r.flags.find(f => f.kind === 'onset'); end = r.changes[0];
-    ok(on.frame === 300 && on.switchBackAt === 500, `middle run: onset 300 switches back at 500 (${on.switchBackAt})`);
-    ok(end.frame === 500 && end.switchedAt === 300, `middle run: 'end' 500 was switched at 300 (${end.switchedAt})`);
+    r = resultOf(encounters(6, [0, 2, 4]));                         // swapped from the first contact, back, again
+    ok(r.flags.map(f => f.kind + f.frame + ':' + (f.kind === 'end' ? f.switchedAt : f.switchBackAt)).join(' ') === 'onset100:300 end300:100 onset500:null',
+        `three changes: onset / end / onset (${r.flags.map(f => f.kind + f.frame).join(' ')})`);
 
-    r = resultOf(encounters(6, [2]));                               // a lone middle flag
-    on = r.flags.find(f => f.kind === 'onset');
-    ok(on.frame === 300 && on.switchBackAt === 400 && r.changes.length === 0,
-        `lone middle flag: switches back at the next encounter (400), which is no change point (${on.switchBackAt})`);
-
-    const again = encounters(6, [2]); SC.markChangePoints(again, O); again.forEach(s => { s.score = 30; });
-    SC.markChangePoints(again, O);
-    ok(again.every(s => s.switchBackAt === undefined), 're-applying a threshold clears stale links');
+    const again = encounters(6, [2]); SC.markContactChanges(again, O); again.forEach(s => { s.score = 2; });
+    SC.markContactChanges(again, O);
+    ok(again.every(s => s.switchBackAt === undefined && !s.flagged), 're-applying a threshold clears stale links');
 }
 
 // ---- 2. plans -------------------------------------------------------------------------------
 console.log('2. idSwitchFixPlan');
 {
-    const r = resultOf(encounters(6, [2, 3]));                      // onset 300 (close 280..300), end 500 (480..500)
+    const r = resultOf(encounters(6, [2, 4]));                      // onset 300 (close 280..300), end 500 (480..500)
     RV.linkIdSwitchResults({ size: r });
-    const on = r.flags.find(f => f.kind === 'onset'), end = r.changes[0];
+    const on = r.flags.find(f => f.kind === 'onset'), end = r.flags.find(f => f.kind === 'end');
     const W = [250, 330], WE = [450, 530];                         // each row's window: 1 s (30 fr) either side
     const plan = (m, cur, window) => RV.idSwitchFixPlan(m, r, { currentFrame: cur, totalFrames: 1000, window });
     let p = plan(on, 50, W);
@@ -101,13 +96,14 @@ console.log('2. idSwitchFixPlan');
     p = plan(end, 460, WE);
     ok(p.to === 459, `'end', current frame 460 in its lead-in: ends just before it (${p.to})`);
 
-    const toEnd = resultOf(encounters(6, [4, 5]));
+    const toEnd = resultOf(encounters(6, [4]));
     const on2 = toEnd.flags.find(f => f.kind === 'onset');
     p = RV.idSwitchFixPlan(on2, toEnd, { currentFrame: 0, totalFrames: 1000 });
     ok(p.from === 501 && p.to === 999 && p.partnerKey === '', `onset reaching the end: 501..last frame 999 (${p.from}..${p.to})`);
 
-    const fromStart = resultOf(encounters(6, [0, 1]));
-    p = RV.idSwitchFixPlan(fromStart.changes[0], fromStart, { currentFrame: 0, totalFrames: 1000 });
+    // an 'end' whose stretch starts the session — what the encounter classifier of older files could flag
+    const startEnd = { frame: 300, startFrame: 280, nameA: 'a', nameB: 'b', score: 30, kind: 'end', switchedAt: null };
+    p = RV.idSwitchFixPlan(startEnd, { flags: [startEnd], changes: [] }, { currentFrame: 0, totalFrames: 1000 });
     ok(p.from === 0 && p.to === 300, `'end' from the session start: 0..300 (${p.from}..${p.to})`);
 
     // restored from an older file: no links -> nearest change point of the same pair
@@ -191,7 +187,7 @@ console.log('4. idSwitchRenameForFix');
 // ---- 5. persistence ---------------------------------------------------------------------------
 console.log('5. serialize / ingest');
 {
-    const r = resultOf(encounters(6, [2, 3]));
+    const r = resultOf(encounters(6, [2, 4]));
     const session = { _idSwitch: { results: { size: r }, reviewed: new Set(['size:300:a:b']), current: null,
         fixes: [{ key: 'size:300:a:b', partnerKey: 'size:500:a:b', nameA: 'a', nameB: 'b', from: 301, to: 500, idA: 0, idB: 1 }] } };
     RV.linkIdSwitchResults(session._idSwitch.results);

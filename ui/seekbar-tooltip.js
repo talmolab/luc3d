@@ -11,6 +11,11 @@
 // caller passes its own `frameAtFraction`, the same mapping the mousedown /
 // drag handlers use — and is shown 1-based, like the `#currentFrame` readout
 // and every other frame number on screen (indices stay 0-based inside).
+//
+// A hover line (`#seekbarHoverLine`) marks that frame ON the bar: a white
+// line with a dark outline, the ID Switches tab's playhead colours, bigger
+// than an ID-switch tick so it reads among them, at the frame's own position — so it snaps onto an ID-switch tick exactly as a
+// click does. It hides during a drag, when the thumb is already there.
 
 /**
  * Format a time in seconds as `mm:ss.mmm`, or `h:mm:ss.mmm` from one hour up.
@@ -67,6 +72,8 @@ export function seekbarTooltipText(frameIdx, fps) {
  *                                            // a marker under the cursor (ui/seekbar-markers.js):
  *                                            // its frame replaces frameAtFraction's (the scrub
  *                                            // handlers snap to it too) and its text is appended
+ *   hoverLine?: HTMLElement,                 // the line marking that frame on the bar; positioned
+ *                                            // in px from the cached rect, so moving stays layout-free
  * }} opts
  * @returns {HTMLElement} the tooltip element
  */
@@ -78,6 +85,7 @@ export function installSeekbarTooltip(seekbar, opts) {
     tip.hidden = true;
     seekbar.appendChild(tip);
 
+    var line = opts.hoverLine || null;
     var hovering = false, dragging = false;
     var rect = null;                      // cached seekbar rect (left, width)
     var measuredLen = -1, halfWidth = 0;  // cached bubble half-width, by text length
@@ -93,12 +101,19 @@ export function installSeekbarTooltip(seekbar, opts) {
     }
 
     function show(e) {
-        if (!(opts.getTotalFrames() > 1)) { tip.hidden = true; return; }
+        var total = opts.getTotalFrames();
+        if (!(total > 1)) { hide(); return; }
         if (!rect) cacheRect();
         var x = Math.max(0, Math.min(rect.width, e.clientX - rect.left));
         var frac = rect.width > 0 ? x / rect.width : 0;
         var hit = opts.markerAt ? opts.markerAt(frac, rect.width) : null;
-        var text = seekbarTooltipText(hit ? hit.frame : opts.frameAtFraction(frac), opts.getFps()) + (hit ? ' — ' + hit.text : '');
+        var frame = hit ? hit.frame : opts.frameAtFraction(frac);
+        if (line) {
+            // At the frame's own position, the thumb's mapping — on the tick when snapped.
+            line.style.left = (frame / (total - 1) * rect.width) + 'px';
+            line.hidden = dragging;
+        }
+        var text = seekbarTooltipText(frame, opts.getFps()) + (hit ? ' — ' + hit.text : '');
         tip.textContent = text;
         tip.hidden = false;
         if (text.length !== measuredLen) {
@@ -109,7 +124,7 @@ export function installSeekbarTooltip(seekbar, opts) {
         // instead of hanging off either end.
         tip.style.left = Math.max(halfWidth, Math.min(rect.width - halfWidth, x)) + 'px';
     }
-    function hide() { tip.hidden = true; }
+    function hide() { tip.hidden = true; if (line) line.hidden = true; }
 
     seekbar.addEventListener('mouseenter', function (e) { hovering = true; rect = null; show(e); });
     seekbar.addEventListener('mousemove', function (e) { if (!dragging) show(e); });
@@ -122,6 +137,7 @@ export function installSeekbarTooltip(seekbar, opts) {
         if (!dragging) return;
         dragging = false;
         if (!hovering) hide();
+        else if (line && !tip.hidden) line.hidden = false;   // back from under the thumb, where the drag left it
     });
     return tip;
 }

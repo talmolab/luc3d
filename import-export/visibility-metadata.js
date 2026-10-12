@@ -1,7 +1,9 @@
 // import-export/visibility-metadata.js — the `metadata.lucid` <-> Session
 // mapping for the Visibility panel's SESSION-SCOPED settings, and for the other
-// per-session panel state that belongs in the project file: the ID Switches
-// tab's review checklist (`idSwitchReview`, ui/id-switch-review.js).
+// per-session state that belongs in the project file: the ID Switches tab's
+// review checklist (`idSwitchReview`, ui/id-switch-review.js) and the number of
+// animals tracking uses (`numAnimals`, `Session.numAnimals`, the toolbar's
+// Animals field).
 //
 // ## What this covers, and what it deliberately does not
 //
@@ -68,7 +70,24 @@ export const VISIBILITY_METADATA_KEYS = [
     'hiddenTracks',
     'hiddenIdentities',
     'idSwitchReview',
+    'numAnimals',
 ];
+
+// `Session.numAnimals` <-> `metadata.lucid.numAnimals`: a positive integer, or
+// "auto" for an explicit auto-detect. A session nobody has asked (`null`, the
+// default) writes nothing — so it is asked again on the next Track Frame /
+// Track All, exactly as before the count was saved — and anything else read
+// back is treated the same way. Kept here rather than in pose/tracker.js,
+// which this module cannot import (it is loaded in the Node test sandbox).
+function serializeNumAnimals(session) {
+    var n = session.numAnimals;
+    if (n === 'auto') return n;
+    return (Number.isInteger(n) && n >= 1) ? n : null;
+}
+
+function ingestNumAnimals(session, raw) {
+    session.numAnimals = (raw === 'auto' || (Number.isInteger(raw) && raw >= 1)) ? raw : null;
+}
 
 /**
  * Write a session's Visibility-panel state into a `metadata.lucid` dict.
@@ -105,6 +124,9 @@ export function writeVisibilityMetadata(lucid, session) {
     var review = serializeIdSwitchReview(session);
     if (review) lucid.idSwitchReview = review;
 
+    var numAnimals = serializeNumAnimals(session);
+    if (numAnimals != null) lucid.numAnimals = numAnimals;
+
     return lucid;
 }
 
@@ -125,5 +147,6 @@ export function readVisibilityMetadata(session, lucid) {
     ingestVideoRotation(session, src.videoRotation);
     ingestHiddenSets(session, src);
     ingestIdSwitchReview(session, src.idSwitchReview);
+    ingestNumAnimals(session, src.numAnimals);
     return session;
 }
