@@ -250,6 +250,57 @@ export function getInstanceColor(instance, session, cameraName, useIdentity, fra
     return getTrackColor(instance.trackIdx, useIdentity);
 }
 
+/**
+ * Which occurrence of its raw `trackIdx` each UNLINKED instance is among those
+ * drawn together — the same type (`typeFilter`; null = all), with a track and
+ * at least one node. 0 = the first. See the same-trackIdx note in
+ * `drawUnlinkedInstances`, the one place this decides a color; exported so the
+ * node tooltip (`ui/interaction.js`) names the color actually drawn.
+ *
+ * @param {UnlinkedInstance[]} unlinkedInstances - in draw order
+ * @param {string|null} typeFilter
+ * @returns {Map<Instance, number>}
+ */
+export function unlinkedDupIndices(unlinkedInstances, typeFilter) {
+    var dupIndexByInstance = new Map();
+    var seenCount = new Map();  // trackIdx -> count so far
+    for (let u = 0; u < unlinkedInstances.length; u++) {
+        const inst = unlinkedInstances[u].instance;
+        if (!inst || inst.numNodes === 0) continue;
+        const type = inst.type || 'user';
+        if (typeFilter && type !== typeFilter) continue;
+        if (inst.trackIdx == null) continue;
+        const count = seenCount.get(inst.trackIdx) || 0;
+        dupIndexByInstance.set(inst, count);
+        seenCount.set(inst.trackIdx, count + 1);
+    }
+    return dupIndexByInstance;
+}
+
+/**
+ * The color an UNLINKED instance is drawn FROM — its track (or identity)
+ * color, darkened for the 2nd+ instance sharing a `trackIdx` in the same draw
+ * (`unlinkedDupIndices`) — before a prediction's desaturation or a selection
+ * override. `drawUnlinkedInstances` and the node tooltip both take it from
+ * here, so the two cannot disagree about which skeleton a color means.
+ *
+ * @param {Instance} instance
+ * @param {number} dupIdx - from `unlinkedDupIndices` (0 = first)
+ * @returns {string} hex color
+ */
+export function unlinkedBaseColor(instance, dupIdx, session, cameraName, useIdentity, frameIdx) {
+    var color = getInstanceColor(instance, session, cameraName, useIdentity, frameIdx) ||
+        (instance.type === 'predicted' ? '#888888' : UNGROUPED_USER_COLOR);
+    if (dupIdx > 0) {
+        // adjustColorBrightness clamps each RGB channel at 255, so a
+        // factor > 1 has little/no visible effect on already-saturated
+        // palette colors — darken monotonically instead, floored so
+        // several duplicates never converge to pure black.
+        color = adjustColorBrightness(color, Math.max(0.35, 1 - 0.22 * dupIdx));
+    }
+    return color;
+}
+
 export function getLineDashPattern(style) {
     if (style === 'dotted') return [2, 3];
     if (style === 'dashed') return [6, 4];
@@ -1801,21 +1852,8 @@ export function drawUnlinkedInstances(ctx, unlinkedInstances, skeleton, options)
     // first a brightness-shifted variant of the shared base color so they
     // stay visually distinct — computed over the type-filtered set actually
     // drawn together in this call, not the whole unfiltered array.
-    var dupIndexByInstance = new Map();  // Instance -> occurrence index (0 = first)
-    (function computeDupIndices() {
-        var seenCount = new Map();  // trackIdx -> count so far
-        for (let u2 = 0; u2 < unlinkedInstances.length; u2++) {
-            const ul2 = unlinkedInstances[u2];
-            const inst2 = ul2.instance;
-            if (!inst2 || inst2.numNodes === 0) continue;
-            const type2 = inst2.type || 'user';
-            if (typeFilter && type2 !== typeFilter) continue;
-            if (inst2.trackIdx == null) continue;
-            const count = seenCount.get(inst2.trackIdx) || 0;
-            dupIndexByInstance.set(inst2, count);
-            seenCount.set(inst2.trackIdx, count + 1);
-        }
-    })();
+    // (`unlinkedDupIndices` / `unlinkedBaseColor`, shared with the node tooltip.)
+    var dupIndexByInstance = unlinkedDupIndices(unlinkedInstances, typeFilter);
 
     for (let u = 0; u < unlinkedInstances.length; u++) {
         const ul = unlinkedInstances[u];
@@ -1837,15 +1875,8 @@ export function drawUnlinkedInstances(ctx, unlinkedInstances, skeleton, options)
 
         const isAssignSelected = assignmentSelectedIds.indexOf(ul.id) >= 0;
         const isSelected = isAssignSelected;
-        var baseTrackColor = getInstanceColor(instance, ulSession, ul.cameraName, ulColorByIdentity, ulFrameIdx) || (isPredicted ? '#888888' : UNGROUPED_USER_COLOR);
-        var dupIdx = dupIndexByInstance.get(instance) || 0;
-        if (dupIdx > 0) {
-            // adjustColorBrightness clamps each RGB channel at 255, so a
-            // factor > 1 has little/no visible effect on already-saturated
-            // palette colors — darken monotonically instead, floored so
-            // several duplicates never converge to pure black.
-            baseTrackColor = adjustColorBrightness(baseTrackColor, Math.max(0.35, 1 - 0.22 * dupIdx));
-        }
+        var baseTrackColor = unlinkedBaseColor(instance, dupIndexByInstance.get(instance) || 0,
+            ulSession, ul.cameraName, ulColorByIdentity, ulFrameIdx);
         const color = isAssignSelected ? assignmentColor : (isPredicted ? desaturateColor(baseTrackColor, 0.15) : baseTrackColor);
         const ulEdgeColor = isPredicted && !isAssignSelected ? desaturateColor(baseTrackColor, 0.3) : color;
         const alpha = isSelected ? 0.95 : (isPredicted ? 0.8 : 0.5);
