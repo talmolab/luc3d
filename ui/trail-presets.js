@@ -105,7 +105,7 @@ export function trailSecondsForFrames(frames, fps) {
 export function trailLabel(seconds, fps) {
     if (!(seconds > 0)) return 'Off';
     var n = trailFrames(seconds, fps);
-    return trailSecondsName(seconds) + ' (' + n + (n === 1 ? ' frame)' : ' frames)');
+    return trailSecondsName(seconds) + ' (' + n.toLocaleString('en-US') + (n === 1 ? ' frame)' : ' frames)');
 }
 
 /**

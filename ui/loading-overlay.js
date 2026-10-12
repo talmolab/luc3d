@@ -18,6 +18,13 @@
 // Transform transitions run on the compositor thread, so the bar keeps gliding
 // while the main thread is busy computing the next chunk — the same reason the
 // spinner keeps spinning.
+//
+// An operation that can clock its CPU time (Triangulate All's worker pool) — or
+// that runs on the main thread alone (Track All) — also gets a CPU line and a
+// graph of the last minute under the detail line: `setLoadingCpu`, built from
+// ui/load-graph.js like the image check's dialog.
+
+import { createLoadMeter, createBusyClock, createLoadGraph, formatCpuLoad, setLoadLine, cpuCores } from './load-graph.js';
 
 /** Default pacer interval. Each yield waits for one paint (~one display frame),
  *  so this bounds the overhead at roughly frame-time / interval (a few %). The
@@ -103,6 +110,11 @@ function _setEta(text, ms) {
     }
 }
 
+/** A count with thousands separators, as every frame count in the app is shown: 2000000 -> "2,000,000". */
+function _count(n) {
+    return typeof n === 'number' ? n.toLocaleString('en-US') : String(n);
+}
+
 function _el(id) {
     return (typeof document !== 'undefined' && document.getElementById)
         ? document.getElementById(id) : null;
@@ -129,6 +141,59 @@ export function hideLoading() {
     if (overlay) overlay.classList.add('hidden');
     _setBarVisible(false);
     _setFill(0, false);
+    setLoadingCpu(null);
+}
+
+/** How often the overlay's CPU line and graph refresh (ms). */
+export var CPU_SAMPLE_MS = 1000;
+
+var _cpuTimer = null, _cpuGraph = null;
+// `{mainThread: true}`: the main thread's busy clock, and how many `yieldToPaint`s it is waiting in
+var _mainClock = null, _mainYields = 0;
+
+/**
+ * Show how busy the running operation keeps the CPU, under the detail line:
+ * "CPU: 12 cores · load 92%" and a graph of the last minute, sampled every
+ * CPU_SAMPLE_MS as a share of all the cores. `source` is either
+ *   - `{cpuBusyMs, counts}`: busy thread-ms so far, summed over threads (e.g. a
+ *     pose/triangulation-pool.js solver's), or
+ *   - `{mainThread: true, counts}`: an operation that runs on the main thread
+ *     alone (Track All). The overlay clocks it itself: busy from this call on,
+ *     except while it waits in `yieldToPaint` for a paint (its pacer's ~4
+ *     yields/s) — one core's share while it computes.
+ * `counts` finishes the tooltip's "kept busy … by". Until `hideLoading()` or
+ * `setLoadingCpu(null)`; a source that throws stops it. CPU only: no GPU series
+ * — the operations that report here do not use one.
+ */
+export function setLoadingCpu(source) {
+    if (_cpuTimer) clearInterval(_cpuTimer);
+    _cpuTimer = null;
+    if (_mainClock) _mainClock.close();
+    _mainClock = null; _mainYields = 0;
+    var box = _el('loadingHardware'), line = _el('loadingCpu'), gbox = _el('loadingGraph');
+    if (box) box.classList.add('hidden');
+    if (line) setLoadLine(line, '', '', false);          // nothing of the last operation's left behind
+    if (!source || !box || !line || !gbox) return;
+    var busyMs = source.cpuBusyMs;
+    if (source.mainThread) {
+        var main = _mainClock = createBusyClock(function () { return _clock(); });
+        main.begin('main');
+        busyMs = function () { return main.ms(); };
+    }
+    _cpuGraph = _cpuGraph || createLoadGraph(gbox);       // built once: the overlay's DOM is static
+    _cpuGraph.clear();
+    _cpuGraph.show(true);
+    var meter = createLoadMeter(), cores = cpuCores();
+    var tick = function () {
+        var now = _clock(), c;
+        try { c = formatCpuLoad(cores, meter(now, busyMs() / Math.max(1, cores)), source.counts || 'this operation'); }
+        catch (e) { setLoadingCpu(null); return; }
+        setLoadLine(line, c.text, c.title, true);
+        _cpuGraph.push(now, c.load, null);
+    };
+    tick();
+    box.classList.remove('hidden');
+    _cpuTimer = setInterval(tick, CPU_SAMPLE_MS);
 }
 
 function _setFill(frac, animate) {
@@ -168,7 +233,7 @@ export function showLoadingProgress(label, done, total, opts) {
     if (overlay) overlay.classList.remove('hidden');
     var status = _el('loadingStatus');
     if (status) {
-        status.textContent = label + ': ' + done + '/' + total + ' ' +
+        status.textContent = label + ': ' + _count(done) + '/' + _count(total) + ' ' +
             (opts.unit || 'frames') + ' (' + pct + '%)…';
     }
     var wrap = _el('loadingProgress');
@@ -221,11 +286,22 @@ function _updateEta(label, done, total, opts) {
  * (occluded window) from stalling the operation. A hidden tab needs no paint,
  * so it yields through a MessageChannel, which — unlike chained timers — is not
  * throttled to 1/s in background tabs.
+ *
+ * While a main-thread operation's CPU line is up (`setLoadingCpu({mainThread})`),
+ * the wait is not its CPU time: the main thread's lane closes for it (counted, so
+ * overlapping yields reopen it once, when the last one ends).
  */
 export function yieldToPaint() {
+    var mc = _mainClock;
+    if (mc && _mainYields++ === 0) mc.close('main');
     return new Promise(function (resolve) {
         var settled = false;
-        function go() { if (!settled) { settled = true; resolve(); } }
+        function go() {
+            if (settled) return;
+            settled = true;
+            if (mc && _mainClock === mc && --_mainYields === 0) mc.begin('main');
+            resolve();
+        }
         var visible = typeof document !== 'undefined' && document.visibilityState === 'visible';
         if (visible && typeof requestAnimationFrame === 'function') {
             requestAnimationFrame(function () { setTimeout(go, 0); });

@@ -720,7 +720,7 @@ export function setupInteraction() {
             var textEl = document.getElementById('manualAssignToastText');
             if (textEl) {
                 var totalUnlinked = getTotalUnlinkedCount();
-                textEl.textContent = 'Frame ' + (state.currentFrame + 1) +
+                textEl.textContent = 'Frame ' + (state.currentFrame + 1).toLocaleString('en-US') +
                     '. Select instances for manual Identity Assignment. Instances Selected: ' +
                     count + '/' + totalUnlinked;
             }
@@ -1087,7 +1087,7 @@ export function setupTimeline() {
             else navigateToFrame(frameIdx);
         },
         onRangeSelect: function (startFrame, endFrame) {
-            setStatus('Selected range: ' + startFrame + '-' + endFrame);
+            setStatus('Selected range: ' + startFrame.toLocaleString('en-US') + '–' + endFrame.toLocaleString('en-US'));
         },
     }));
 

@@ -528,9 +528,9 @@ function renderFrameCounters(session, activeCam, baseline) {
     var labeledEl = document.getElementById('statusLabeledFrames');
     var triangulatedEl = document.getElementById('statusTriangulatedFrames');
     var instancesEl = document.getElementById('statusInstances');
-    if (labeledEl) labeledEl.textContent = 'Labeled Frames: ' + c.labeled;
-    if (instancesEl) instancesEl.textContent = 'Instances: ' + c.instances;
-    if (triangulatedEl) triangulatedEl.textContent = 'Triangulated: ' + c.triangulated;
+    if (labeledEl) labeledEl.textContent = 'Labeled Frames: ' + c.labeled.toLocaleString('en-US');
+    if (instancesEl) instancesEl.textContent = 'Instances: ' + c.instances.toLocaleString('en-US');
+    if (triangulatedEl) triangulatedEl.textContent = 'Triangulated: ' + c.triangulated.toLocaleString('en-US');
 }
 
 function requestCounterRebuild() {

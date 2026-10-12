@@ -3892,6 +3892,24 @@ input[type="range"]::-moz-range-track {
   color: var(--text-muted, var(--text-secondary));
 }
 
+/* The CPU line and its load graph, under the detail line, while an operation
+   reports its CPU time (ui/loading-overlay.js setLoadingCpu: Triangulate All).
+   CPU only — what uses it never touches the GPU. Same parts as the image
+   check's dialog (.load-line / .load-graph, ui/load-graph.js). */
+.loading-hw {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: -4px;
+}
+.loading-hw.hidden { display: none; }
+.loading-hw .load-line {
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
 /* --------------------------------------------------------------------------
    Keyboard Key
    -------------------------------------------------------------------------- */
@@ -6921,9 +6939,47 @@ details[open] > summary.origin-rebase-block-title::before {
 .id-switch-progress-crop canvas { display: block; width: 128px; height: 128px; border-radius: 4px; background: #000; border: 1px solid var(--border-color); }
 .id-switch-progress-crop figcaption { margin-top: 4px; font-size: 11px; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .id-switch-progress-crop:not(.has-crop) figcaption { color: var(--text-muted); font-style: italic; }
-/* What runs the model, and its load: reserves its line so the dialog does not jump when it appears. */
-.id-switch-progress-gpu { margin-top: 2px; min-height: 1.4em; font-size: 12px; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+/* The CPU line over the GPU line (what runs the model), each with its load, and their load graph to the right
+   (.load-line / .load-graph, ui/load-graph.js). The GPU line reserves its height so the dialog does not jump
+   when it appears, and so does the graph (visibility, not display). */
+.id-switch-progress-hw { display: flex; align-items: flex-start; gap: 12px; margin-top: 2px; }
+.id-switch-progress-lines { flex: 1; min-width: 0; }
+.id-switch-progress-cpu, .id-switch-progress-gpu { min-height: 1.4em; line-height: 1.4; font-size: 12px; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+.id-switch-progress-cpu[hidden] { display: none; }
 .id-switch-progress-gpu.is-warn { color: var(--warning-color); }
+.id-switch-progress-graph { flex: none; }
+
+/* Load lines and graph (ui/load-graph.js) — the image check's progress dialog and the loading overlay.
+   The series colours are the first two slots of a CVD-validated categorical palette (dark steps; checked
+   against --bg-primary, the plot's background); text stays in text colours, and a line that has a series
+   wears its colour as a short legend key, with a hanging indent so a wrapped line continues after it. */
+:root { --load-cpu: #3987e5; --load-gpu: #d95926; }
+.load-line.has-series { padding-left: 16px; text-indent: -16px; }
+.load-line.has-series::before {
+  content: ''; display: inline-block; width: 10px; height: 2px; margin: 0 6px 0 0; border-radius: 1px;
+  vertical-align: middle; text-indent: 0; background: var(--load-gpu);
+}
+.load-line.is-cpu.has-series::before { background: var(--load-cpu); }
+.load-graph { position: relative; visibility: hidden; }
+.load-graph.is-on { visibility: visible; }
+.load-graph svg {
+  display: block; overflow: hidden; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 4px;
+  box-sizing: content-box;
+}
+.load-graph-grid { stroke: rgba(255, 255, 255, 0.08); stroke-width: 1; }
+.load-graph-line { fill: none; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+.load-graph-line.is-cpu, .load-graph-dot.is-cpu { stroke: var(--load-cpu); }
+.load-graph-line.is-gpu, .load-graph-dot.is-gpu { stroke: var(--load-gpu); }
+.load-graph-cursor { stroke: var(--text-muted); stroke-width: 1; visibility: hidden; }
+.load-graph-dot { fill: var(--bg-primary); stroke-width: 1.5; visibility: hidden; }
+.load-graph-cursor.is-on, .load-graph-dot.is-on { visibility: visible; }
+/* The hover readout, above the graph and flush with its right edge. */
+.load-graph-tip {
+  position: absolute; right: 0; bottom: calc(100% + 4px); z-index: 1; white-space: nowrap; pointer-events: none;
+  padding: 3px 7px; border: 1px solid var(--border-light); border-radius: 4px; background: var(--bg-tertiary);
+  color: var(--text-primary); font-size: 11px; font-variant-numeric: tabular-nums; box-shadow: 0 4px 14px rgba(0, 0, 0, 0.5);
+}
+.load-graph-tip[hidden] { display: none; }
 
 /* Track All summary (ui/track-summary-modal.js). One column of label / value
    rows; no inner scroller — the identity list is capped instead

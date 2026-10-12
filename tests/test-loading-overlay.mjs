@@ -5,7 +5,8 @@
  *
  * Pins:
  *   - `showLoadingProgress` writes "<label>: done/total frames (pct%)…" (the
- *     format Track All always used, now shared by Triangulate All), sets the bar
+ *     format Track All always used, now shared by Triangulate All; the counts
+ *     with thousands commas, "2,000,000/2,000,000"), sets the bar
  *     fraction, and puts "Step k of n" / detail on the line under the bar;
  *   - a new stage SNAPS the bar (no transition) instead of animating backwards;
  *   - `showLoading` / `hideLoading` hide the bar again;
@@ -79,8 +80,8 @@ const snapped = () => els.loadingProgressFill.classList.contains('no-anim');
 group('showLoadingProgress — text, bar, step line');
 {
     showLoadingProgress('Assigning identities', 9000, 36000);
-    eq(els.loadingStatus.textContent, 'Assigning identities: 9000/36000 frames (25%)…',
-        'Track All keeps its exact text');
+    eq(els.loadingStatus.textContent, 'Assigning identities: 9,000/36,000 frames (25%)…',
+        'Track All keeps its exact text, the counts with thousands commas');
     ok(!hidden('loadingOverlay'), 'overlay shown');
     ok(!hidden('loadingProgress'), 'bar shown');
     eq(frac(), 0.25, 'bar fraction = done/total');
@@ -89,9 +90,13 @@ group('showLoadingProgress — text, bar, step line');
     ok(hidden('loadingSubstatus'), 'no step/detail line for a single-stage run with no detail');
 
     showLoadingProgress('Triangulating', 12000, 36000, { detail: 'Refined · 36,000 groups' });
-    eq(els.loadingStatus.textContent, 'Triangulating: 12000/36000 frames (33%)…',
+    eq(els.loadingStatus.textContent, 'Triangulating: 12,000/36,000 frames (33%)…',
         'Triangulate All uses the same format');
     eq(els.loadingSubstatus.textContent, 'Refined · 36,000 groups', 'detail goes under the bar');
+    showLoadingProgress('Triangulating', 2000000, 2000000);
+    eq(els.loadingStatus.textContent, 'Triangulating: 2,000,000/2,000,000 frames (100%)…', 'a comma every three digits, however big');
+    showLoadingProgress('Triangulating', 999, 1000);
+    eq(els.loadingStatus.textContent, 'Triangulating: 999/1,000 frames (99%)…', '…and none below a thousand');
 
     showLoadingProgress('Assigning identities', 1, 2, { step: 2, steps: 2 });
     eq(els.loadingSubstatus.textContent, 'Step 2 of 2', 'multi-stage runs label the step');
@@ -99,7 +104,7 @@ group('showLoadingProgress — text, bar, step line');
     ok(hidden('loadingSubstatus'), '"Step 1 of 1" is never shown');
 
     showLoadingProgress('X', 35999, 36000);
-    eq(els.loadingStatus.textContent, 'X: 35999/36000 frames (99%)…', 'percentage is floored — 100% only when done');
+    eq(els.loadingStatus.textContent, 'X: 35,999/36,000 frames (99%)…', 'percentage is floored — 100% only when done');
     showLoadingProgress('X', 5, 0);
     eq(frac(), 0, 'total 0 does not divide by zero');
 }

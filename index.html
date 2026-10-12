@@ -47,6 +47,11 @@
                 <div class="loading-progress-fill" id="loadingProgressFill"></div>
             </div>
             <div class="loading-substatus hidden" id="loadingSubstatus"></div>
+            <!-- How busy the operation keeps the CPU: a line + a graph (ui/loading-overlay.js setLoadingCpu) -->
+            <div class="loading-hw hidden" id="loadingHardware">
+                <div class="load-line is-cpu" id="loadingCpu"></div>
+                <div id="loadingGraph"></div>
+            </div>
             <button class="btn" id="loadingDismiss" data-dismiss="true" style="display:none;margin-top:12px;">Dismiss</button>
         </div>
 

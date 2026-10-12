@@ -720,7 +720,7 @@ export async function restoreGroupingAndUnlink(session, slpData, slpSessIdx, opt
             }
             ulFgCount++;
             if (ulFgCount % BATCH === 0) {
-                onProgress('Preparing unlinked instances (' + ulFgCount + '/' + session.frameGroups.size + ')...');
+                onProgress('Preparing unlinked instances (' + ulFgCount.toLocaleString('en-US') + '/' + session.frameGroups.size.toLocaleString('en-US') + ')...');
                 await new Promise(function (r) { setTimeout(r, 0); });
             }
         }
@@ -1101,7 +1101,7 @@ export async function handleLoadSlpFile(slpFile) {
                 fg.addInstance(camName, inst);
             }
             if (fi > 0 && fi % BATCH === 0) {
-                showLoading('Building session (' + fi + '/' + totalFrames + ')...');
+                showLoading('Building session (' + fi.toLocaleString('en-US') + '/' + totalFrames.toLocaleString('en-US') + ')...');
                 await new Promise(function (r) { setTimeout(r, 0); });
             }
         }
@@ -1645,7 +1645,7 @@ export async function handleLoadSlpFile(slpFile) {
         clearDirty();
         hideLoading();
         var statusParts = [state.sessions.length + ' session(s)', skeleton.nodes.length + ' nodes'];
-        if (state.session) statusParts.push(state.session.numFrames + ' labeled frames');
+        if (state.session) statusParts.push(state.session.numFrames.toLocaleString('en-US') + ' labeled frames');
         if (state.views.length > 0) statusParts.push(state.views.length + ' views');
         setStatus('SLP loaded (' + statusParts.join(', ') + ')', 'success');
 
@@ -2073,7 +2073,7 @@ export async function handleAddSlp() {
         hideLoading();
         var dockPanelCount = paneManager.api ? paneManager.api.panels.length : 0;
         console.log('[add-slp] Done. Dock panels: ' + dockPanelCount + ', Views: ' + state.views.length);
-        setStatus('Added SLP: ' + cameras.length + ' camera(s), ' + affectedFrames.length + ' frames merged. Panels: ' + dockPanelCount, 'success');
+        setStatus('Added SLP: ' + cameras.length + ' camera(s), ' + affectedFrames.length.toLocaleString('en-US') + ' frames merged. Panels: ' + dockPanelCount, 'success');
     } catch (err) {
         console.error('[add-slp] FATAL:', err);
         hideLoading();
@@ -2201,8 +2201,8 @@ export async function handleLoadPoints3dH5() {
         updateSeekbar(state.currentFrame);
 
         hideLoading();
-        setStatus('3D points loaded: ' + framesUpdated + ' frames (duration ' +
-            state.totalFrames + '), ' + ptsData.trackNames.length + ' tracks', 'success');
+        setStatus('3D points loaded: ' + framesUpdated.toLocaleString('en-US') + ' frames (duration ' +
+            state.totalFrames.toLocaleString('en-US') + '), ' + ptsData.trackNames.length + ' tracks', 'success');
     } catch (err) {
         console.error('Failed to load 3D points:', err);
         hideLoading();

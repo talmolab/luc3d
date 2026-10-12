@@ -2743,7 +2743,7 @@ export class Timeline {
         if (x >= this.LEFT_MARGIN && x <= this._cssWidth - this.RIGHT_PADDING) {
             const frame = this._clampFrame(this._xToFrame(x));
             const marker = this._frameMarkers.get(frame);
-            let text = 'Frame ' + (frame + 1);
+            let text = 'Frame ' + (frame + 1).toLocaleString('en-US');
             if (marker) {
                 const parts = [];
                 if (marker.hasUser) parts.push('user');

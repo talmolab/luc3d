@@ -11,12 +11,15 @@
  *  1. Animals of different size: both checks find the swap; the ID Switches tab
  *     lists it ONCE, as "Both", and the timeline carries size (amber) and image (cyan) markers.
  *  2. Animals of IDENTICAL size: only the image check finds it ("Images" row).
- *  3. A cancellable progress dialog, with a playhead line, a percentage, the GPU
- *     running the model with its live load, and a sample of the crops above
- *     Cancel: Esc mid-run stops it, reports "cancelled" and adds no image markers.
+ *  3. A cancellable progress dialog, with a playhead line, a percentage, the CPU
+ *     line over the GPU running the model, each with its live load, a graph of
+ *     both loads to their right (legend keys, its newest points equal to the
+ *     lines, a hover readout), and a sample of the crops above Cancel: Esc
+ *     mid-run stops it, reports "cancelled" and adds no image markers.
  *  4. Without a GPU the after-tracking image check (Tracking Wizard) still RUNS,
- *     on the CPU, says so in the dialog, and finds the switch — it used to be
- *     "skipped — needs WebGPU". (The real CPU embedder: tests/e2e/image-check-cpu.mjs.)
+ *     on the CPU, says so in the dialog (and graphs the CPU alone), and finds the
+ *     switch — it used to be "skipped — needs WebGPU". (The real CPU embedder:
+ *     tests/e2e/image-check-cpu.mjs.)
  *  5. The menu item exists, and the after-tracking image check defaults to OFF.
  *
  * Run: node tests/e2e/id-switch-image-check.mjs
@@ -82,8 +85,9 @@ try {
             return { swapFrame, pair: events[SWAP].pair.map(k => 'id_' + k) };
         };
         // Synthetic embedder: per-animal appearance vector + noise, 4 cameras; optional per-frame delay, and
-        // optionally a `device` to report (with busyMs = the time any request was in its delay, and
-        // sampleCrops = one uniform-grey crop per frame, 60 + 60 x the animal, from camera c<frame mod 4>).
+        // optionally a `device` to report (with busyMs = the time any request was in its delay, cpuBusyMs = two
+        // threads busy for that time, and sampleCrops = one uniform-grey crop per frame, 60 + 60 x the animal,
+        // from camera c<frame mod 4>).
         const E = await import('/ui/image-embedder.js');
         const greyCrop = (g) => { const t = new Float32Array(3 * E.INPUT * E.INPUT); E.writeInputTensor(new Uint8ClampedArray(E.CROP * E.CROP).fill(g), t, 0); return t; };
         const CROPS = [0, 1, 2].map(k => greyCrop(60 + 60 * k));
@@ -104,7 +108,8 @@ try {
                 if (--active === 0) busy += performance.now() - since;
                 return items.map(it => cams.map(cam => ({ camera: cam, vector: Float32Array.from(proto[it.group._animal], v => v + 1.2 * g()) })));
             } };
-            if (device) { e.device = () => device; e.busyMs = () => busy + (active ? performance.now() - since : 0); e.sampleCrops = () => samples; }
+            if (device) { e.device = () => device; e.busyMs = () => busy + (active ? performance.now() - since : 0); e.sampleCrops = () => samples;
+                          e.cpuBusyMs = () => 2 * e.busyMs(); }
             return e;
         };
     });
@@ -181,6 +186,50 @@ try {
     await page.waitForFunction(() => /· load \d+%$/.test(document.querySelector('.id-switch-progress-gpu').textContent), null, { timeout: 10000 });
     const g1 = await gpuLine(), load = +g1.text.match(/load (\d+)%/)[1];
     check(load > 0 && load <= 100 && /other apps/.test(g1.title), `…and its load while embedding, with a tooltip saying what that measures ("${g1.text}")`);
+    // the CPU line, ABOVE the GPU line, and the load graph to the right of both
+    const hw = await page.evaluate(() => {
+        const q = (c) => document.querySelector('.id-switch-progress ' + c), box = (el) => el.getBoundingClientRect();
+        const cpu = q('.id-switch-progress-cpu'), gpu = q('.id-switch-progress-gpu'), graph = q('.id-switch-progress-graph'), svg = graph.querySelector('svg');
+        const key = (el) => getComputedStyle(el, '::before').backgroundColor;
+        const stroke = (k) => getComputedStyle(svg.querySelector('path.is-' + k)).stroke;
+        // the newest point of each series: the path's last coordinates, in the plot (the <g>'s translate is the inset)
+        const g = svg.querySelector('g'), pad = +g.getAttribute('transform').match(/translate\(0 ([\d.]+)\)/)[1];
+        const plotH = svg.viewBox.baseVal.height - 2 * pad;
+        const newest = (k) => { const m = svg.querySelector('path.is-' + k).getAttribute('d').match(/([\d.]+) ([\d.]+)$/);
+            return m ? { x: +m[1], pct: 100 * (plotH - m[2]) / plotH } : null; };
+        return { cpuText: cpu.textContent, cpuTitle: cpu.title, gpuText: gpu.textContent, cpuHidden: cpu.hidden,
+                 cpuAbove: box(cpu).bottom <= box(gpu).top + 0.5, keys: [cpu.classList.contains('has-series'), gpu.classList.contains('has-series')],
+                 keyColours: [key(cpu), key(gpu)], strokes: [stroke('cpu'), stroke('gpu')],
+                 shown: getComputedStyle(graph).visibility, right: box(svg).left >= Math.max(box(cpu).right, box(gpu).right),
+                 topAligned: Math.abs(box(svg).top - box(cpu).top) <= 3, leftOfCrop: box(svg).right <= box(q('.id-switch-progress-crop')).left,
+                 width: svg.viewBox.baseVal.width, newest: { cpu: newest('cpu'), gpu: newest('gpu') } };
+    });
+    const cores = await page.evaluate(() => navigator.hardwareConcurrency);
+    const cpuLoad = +((hw.cpuText.match(/load (\d+)%$/) || [])[1]);
+    check(!hw.cpuHidden && hw.cpuAbove && new RegExp('^CPU: ' + cores + ' cores? · load \\d+%$').test(hw.cpuText) && cpuLoad >= 0 && cpuLoad <= 100,
+          `a CPU line ABOVE the GPU line, with the core count and its load ("${hw.cpuText}" over "${hw.gpuText}")`);
+    check(/cores kept busy over the last 5 s by this check/.test(hw.cpuTitle) && /video decoding/.test(hw.cpuTitle), `…with a tooltip saying what it counts ("${hw.cpuTitle}")`);
+    check(hw.shown === 'visible' && hw.right && hw.topAligned && hw.leftOfCrop, 'the load graph sits to the right of both lines, level with them, left of the sample crop');
+    check(hw.keys.every(Boolean) && hw.keyColours[0] === hw.strokes[0] && hw.keyColours[1] === hw.strokes[1] && hw.strokes[0] !== hw.strokes[1],
+          `each line wears its series colour as a legend key (CPU ${hw.keyColours[0]}, GPU ${hw.keyColours[1]})`);
+    {   // the graph's newest points are the loads the lines show (same tick), at the right edge
+        const n = hw.newest, gl = +hw.gpuText.match(/load (\d+)%/)[1];
+        check(n.cpu && n.gpu && Math.abs(n.cpu.x - hw.width) < 0.05 && Math.abs(n.gpu.x - hw.width) < 0.05 &&
+              Math.abs(n.cpu.pct - cpuLoad) <= 1 && Math.abs(n.gpu.pct - gl) <= 1,
+              `the graph's newest points, at its right edge, are the lines' loads (CPU ${n.cpu && n.cpu.pct.toFixed(1)}% vs ${cpuLoad}%, GPU ${n.gpu && n.gpu.pct.toFixed(1)}% vs ${gl}%)`);
+    }
+    {   // hovering: a readout of the sample under the pointer; leaving hides it
+        const r = await page.evaluate(() => { const b = document.querySelector('.id-switch-progress-graph svg').getBoundingClientRect(); return { x: b.right - 2, y: b.top + b.height / 2 }; });
+        await page.mouse.move(r.x, r.y);
+        const tip = await page.evaluate(() => { const t = document.querySelector('.load-graph-tip');
+            return { hidden: t.hidden, text: t.textContent, cursor: document.querySelector('.load-graph-cursor').classList.contains('is-on'),
+                     dots: document.querySelectorAll('.load-graph-dot.is-on').length }; });
+        check(!tip.hidden && /^(now|\d+ s ago) · CPU \d+% · GPU \d+%$/.test(tip.text) && tip.cursor && tip.dots === 2,
+              `hovering the graph reads out the sample under the pointer ("${tip.text}"), with a cursor and a dot per series`);
+        await page.mouse.move(5, 5);
+        check(await page.evaluate(() => document.querySelector('.load-graph-tip').hidden && !document.querySelector('.load-graph-cursor.is-on')),
+              '…and leaving it hides the readout and the cursor');
+    }
     // the sample crop: what the embedder was given, drawn and captioned with the animal's CURRENT label and camera
     const crop = await page.evaluate(async () => {
         const AS = await import('/ui/app-state.js'), el = document.querySelector('.id-switch-progress-crop');
@@ -237,6 +286,13 @@ try {
     const cpuLine = await gpuLine();
     check(cpuLine.warn && cpuLine.text === 'No GPU: running on the CPU (4 workers) — slow' && /no WebGPU/.test(cpuLine.title),
           `without a GPU the dialog says it runs on the CPU, in the warning colour ("${cpuLine.text}")`);
+    const noGpuGraph = await page.evaluate(() => ({ cpu: document.querySelector('.id-switch-progress-cpu').textContent,
+        cpuKey: document.querySelector('.id-switch-progress-cpu').classList.contains('has-series'),
+        gpuKey: document.querySelector('.id-switch-progress-gpu').classList.contains('has-series'),
+        cpuPath: document.querySelector('.id-switch-progress-graph path.is-cpu').getAttribute('d') || '',
+        gpuPath: document.querySelector('.id-switch-progress-graph path.is-gpu').getAttribute('d') || '' }));
+    check(/· load \d+%$/.test(noGpuGraph.cpu) && noGpuGraph.cpuKey && !noGpuGraph.gpuKey && noGpuGraph.cpuPath && !noGpuGraph.gpuPath,
+          `…and graphs the CPU alone: no GPU series, no key on the warning line ("${noGpuGraph.cpu}")`);
     const noGpu = await page.evaluate(async () => { const r = await window.__done;
         return { ok: r && r.image && r.image.ok, status: document.getElementById('statusText').textContent }; });
     R = await rows();

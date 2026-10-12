@@ -24,7 +24,7 @@ import { InstanceGroup, points3dNodeCount, hasPoint3d, readPoint3d, pooledPoints
 import { state, interactionManager, timeline, viewport3d, getActiveSession } from '../ui/app-state.js';
 import { getNodeWeightArray, getTrackingThresholds, getTrackingThreshold, isCameraTracked } from '../ui/settings.js';
 import { markDirty, setStatus, hideLoading } from '../import-export/save-load.js';
-import { showLoadingProgress, createProgressPacer, yieldToPaint } from '../ui/loading-overlay.js';
+import { showLoadingProgress, createProgressPacer, yieldToPaint, setLoadingCpu } from '../ui/loading-overlay.js';
 import { loadAllLazyFrames, sweepLazyFrameWindows } from './triangulation.js';
 import { drawAllOverlays, showPredictedOnly, PREDICTED_ONLY_NOTE } from '../ui/rendering.js';
 import { updateInfoPanel } from '../ui/info-panel.js';
@@ -1418,6 +1418,9 @@ async function runTrackingPass(range) {
 
     var stageOpts = { step: STEPS, steps: STEPS };
     showLoadingProgress('Assigning identities', 0, totalFrameCount, stageOpts);
+    // ...with its CPU line and graph (ui/loading-overlay.js; hideLoading stops it). The tracker steps the
+    // frames in order on the main thread — no workers — so this reads one core's share while it runs.
+    setLoadingCpu({ mainThread: true, counts: human + ', which runs on the main thread: one core at most' });
 
     // Drive the CrossViewTracker across the frames and populate IDENTITIES +
     // per-frame identity map + InstanceGroups only. Deliberately does NOT propagate
@@ -1462,7 +1465,7 @@ async function runTrackingPass(range) {
         }
         console.timeEnd('[' + label + '] total');
         var doneMsg = 'Assigned ' + lres.numIdentities + ' identities across ' +
-            totalFrameCount + ' frames' +
+            totalFrameCount.toLocaleString('en-US') + ' frames' +
             (isRange ? ' (' + displayFrame(lo) + '–' + displayFrame(hi) + ')' : '') +
             (switchedToIds ? ', now coloring by Identity' : '') +
             ' — use Tracks ▸ Propagate IDs → Tracks to apply' + (predOnly ? PREDICTED_ONLY_NOTE : '');

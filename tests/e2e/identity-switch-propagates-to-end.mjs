@@ -370,9 +370,9 @@ try {
         s1.lastGroups.length > 0 && s1.lastGroups.every(g => g.identityId === (g.animal ^ 1)),
         { lastGroups: s1.lastGroups });
     // The user-visible count must not overstate what changed.
-    const reported = act.status && /\((?:propagated|swapped)[^\d]*(\d+)/.exec(act.status);
+    const reported = act.status && /\((?:propagated|swapped)[^\d]*(\d[\d,]*)/.exec(act.status);   // "swapped 2,700 frames"
     if (reported) {
-        const n = Number(reported[1]);
+        const n = Number(reported[1].replace(/,/g, ''));
         log(`  reported count = ${n}`);
         check('the reported count is not an overstatement',
             n <= s1.fim + s1.igFrames * ANIMALS, { reported: n });

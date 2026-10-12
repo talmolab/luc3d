@@ -2102,7 +2102,12 @@ drifts upward (e.g., 4 → 11 on the test fixture).
 - `../import-export/save-load.js` — `markDirty` (every tracking pass, once its
   bail-outs are behind it — see above), `setStatus`, `hideLoading`.
 - `../ui/loading-overlay.js` — `showLoadingProgress`, `createProgressPacer`,
-  `yieldToPaint`.
+  `yieldToPaint`, and `setLoadingCpu({mainThread: true})` as the identity pass
+  starts: the overlay's CPU line and graph, clocking the main thread minus its
+  paint waits — one core's share, since the tracker steps frames in order with no
+  workers (tooltip: "…by Track All, which runs on the main thread: one core at
+  most"). Covered by `tests/e2e/track-all-cpu-load.mjs`, which also pins the
+  progress line's, status line's and summary box's thousands commas.
 - `../ui/rendering.js` — `drawAllOverlays`, `showPredictedOnly`,
   `PREDICTED_ONLY_NOTE`: Track Frame (when it found targets), Track Frame Range
   and Track All (when they assigned identities) end showing ONLY the Predicted
@@ -3169,7 +3174,12 @@ subtitle is populated for loaded projects, not just freshly triangulated ones.
 - `../import-export/save-load.js` — `markDirty`, `setStatus`,
   `showLoading`, `hideLoading`.
 - `../ui/loading-overlay.js` — `showLoadingProgress`, `createProgressPacer`,
-  `yieldToPaint` (Triangulate All's eager loop and `sweepLazyFrameWindows`).
+  `yieldToPaint` (Triangulate All's eager loop and `sweepLazyFrameWindows`), and
+  `setLoadingCpu`: both Triangulate All paths hand the overlay their solver's
+  `cpuBusyMs()` right after creating it (`showSolverCpu`), so the overlay shows a
+  CPU line and a CPU-only load graph — triangulation never touches the GPU — whose
+  tooltip names the workers, or "solving on the main thread" when inline.
+  `hideLoading` stops it.
 - `./triangulation-core.js` — the pure math (re-exported) and
   `setTriangulationSettingsHooks`.
 - `./triangulation-pool.js` — `createGroupSolver` (Triangulate All's parallel solve).
@@ -3387,7 +3397,7 @@ cores busy).
 
 **Key exports.** `createGroupSolver(cameras, { method, triangulateOnly,
 expectedGroups })` -> `{ submit(group, groupCameras, cb), mark(cb), throttle(),
-finish(), cancel(), parallel, workers }`; `MIN_GROUPS_FOR_WORKERS` (2000).
+finish(), cancel(), cpuBusyMs(), parallel, workers }`; `MIN_GROUPS_FOR_WORKERS` (2000).
 
 **Contract.**
 - **Callbacks run in submission order** (jobs and `mark`s interleaved as
@@ -3407,11 +3417,24 @@ finish(), cancel(), parallel, workers }`; `MIN_GROUPS_FOR_WORKERS` (2000).
   and are terminated after 30 s idle. One solver owns the pool at a time (a
   concurrent second run solves inline). Every call site passes `method:
   method` explicitly (`tests/test-triangulation-method-propagation.mjs`).
+- **`cpuBusyMs()`** — the run's CPU time so far, thread-ms summed over threads,
+  for the loading overlay's CPU line (`createBusyClock`, `ui/load-graph.js`, one
+  per solver). A lane per worker slot from `postMessage` to its reply (one batch
+  per slot at a time); and `'main'`, open from `createGroupSolver` to `finish` /
+  `cancel` EXCEPT while the main thread waits on the workers in `throttle` /
+  `finish` (`waitOn`) — it prepares and applies batches the rest of the time. A
+  reply is handled during such a wait, so `onWorkerMessage` reopens `'main'` for
+  its duration (nested, so a reply handled while `'main'` is already open is not
+  counted twice). The caller's paint waits (`pacer.yield`) still count as busy: at
+  most a frame per ~250 ms chunk. Inline, `'main'` never closes: exactly one core.
+  Measured on a 12-core M2 Pro, Refined, 11 workers: 92-95% — the 11 workers are
+  91.7% on their own, so the main thread mostly waits on them.
 
 **Imports from project modules.** `./triangulation-core.js`
 (`triangulateAndReproject`), `./pose-data.js` (`Instance`), `../ui/settings.js`
 (`isCameraTracked`, `getTrackingThreshold` — `typeof`-guarded for the flat test
-sandbox).
+sandbox), `../ui/load-graph.js` (`createBusyClock`; only called inside
+`createGroupSolver`, which the flat test sandbox never runs).
 
 **Imported by.** `pose/triangulation.js` (`triangulateAllFrames`,
 `sweepTriangulateAllFrames`), `ui/export-modals.js`
@@ -3421,7 +3444,9 @@ sandbox).
 All route (eager, windowed with windows released mid-flight, group-by-identity
 DLT) run inline and on a forced 4-worker pool must hash identically, with a
 reprojection threshold and an excluded camera in effect (and a control proving
-those settings change the result).
+those settings change the result). `tests/e2e/triangulate-all-cpu-load.mjs` —
+`cpuBusyMs()` through the overlay: more than one core's share on the pool (so
+the workers are counted), exactly one core's inline.
 
 ---
 
@@ -5313,7 +5338,10 @@ that runs a chunked main-thread loop behind the overlay.
 **Key exports.**
 - `showLoading(msg)` — indeterminate form (spinner + text); hides the bar.
 - `showLoadingProgress(label, done, total, { step, steps, detail, unit })` —
-  writes the standard `"<label>: done/total frames (pct%)…"` line and drives the
+  writes the standard `"<label>: done/total frames (pct%)…"` line — the counts
+  with thousands commas, "Triangulating: 2,000,000/2,000,000 frames (100%)…"
+  (`toLocaleString('en-US')`, so the separator does not depend on the browser's
+  locale) — and drives the
   bar (`#loadingProgress` / `#loadingProgressFill`, `role="progressbar"`). The
   line under the bar (`#loadingSubstatus`) carries `Step k of n` (only when
   `steps > 1`) and `detail` (method, group counts), so the main line keeps one
@@ -5330,22 +5358,45 @@ that runs a chunked main-thread loop behind the overlay.
   done, total)` and `formatRemaining(ms)` are exported for tests, as is the
   clock hook `__setLoadingOverlayClock(fn)`. The raw estimate is exposed as
   `#loadingEta[data-ms]`, which the bench reads to score accuracy.
-- `hideLoading()` — hides the overlay and resets the bar.
+- `hideLoading()` — hides the overlay and resets the bar (and stops `setLoadingCpu`).
+- `setLoadingCpu(source)` — while an operation that can clock its CPU time runs,
+  a CPU line and a graph of the last minute under the detail line
+  (`#loadingHardware` = `#loadingCpu` + `#loadingGraph`): "CPU: 12 cores · load
+  92%", sampled every `CPU_SAMPLE_MS` (1 s) as busy thread-ms / cores through
+  `createLoadMeter`, its tooltip ending "kept busy over the last 5 s by " +
+  `source.counts`. Two kinds of source: `{cpuBusyMs, counts}` — Triangulate All,
+  its solver's clock over the workers and the main thread — or `{mainThread:
+  true, counts}` — Track All / Track Frame Range, whose tracker steps the frames
+  in order on the main thread with no workers. For that one the overlay clocks
+  the main thread itself (`createBusyClock`): busy from the call on, EXCEPT while
+  it waits in `yieldToPaint` — which closes the `'main'` lane for the wait,
+  counting overlapping yields so the lane reopens once, when the last one ends.
+  So it reads one core's share (8% on 12 cores): the honest picture of a
+  single-threaded pass on a many-core machine. Its other waits — the windowed
+  sweep's 50 ms GC hint every 5 windows — still count; negligible. CPU only: the
+  operations that report here never use the GPU. The same parts as the image
+  check's dialog (`createLoadGraph`, `formatCpuLoad`, `setLoadLine`,
+  `ui/load-graph.js`); the graph is built into `#loadingGraph` once and
+  `clear()`ed per operation. Until `hideLoading()` or `setLoadingCpu(null)`; a
+  source that throws stops it. An operation that never calls it shows no CPU
+  row (Group by Identity/Track, the body-size ID-switch check, loading).
 - `createProgressPacer(intervalMs = PROGRESS_INTERVAL_MS)` → `{ due(), yield() }`.
   `due()` is true at most once per interval (a `performance.now()` check, cheap
   enough to call every iteration); `yield()` = `yieldToPaint()`, after which the
   interval restarts (so it measures WORK time between yields).
-- `yieldToPaint()` — resolves after the browser has painted: rAF then a task
+- `yieldToPaint()` — (also the wait a `{mainThread}` CPU line leaves out) resolves after the browser has painted: rAF then a task
   queued after it (a bare `setTimeout(0)` can fire before the next display frame,
   leaving the overlay unpainted for another whole chunk), with a 100 ms timer
   fallback for throttled rAF. A hidden tab yields through a `MessageChannel`
   instead — no paint needed, and unlike chained timers it is not throttled to
   1/s in background tabs.
-- `PROGRESS_INTERVAL_MS` (250).
+- `PROGRESS_INTERVAL_MS` (250), `CPU_SAMPLE_MS` (1000).
 
-**Imports from project modules.** None (safe under the Node test stubs: every
-DOM access is null-guarded, and with no `requestAnimationFrame` it yields via
-`MessageChannel`).
+**Imports from project modules.** `./load-graph.js` (`createLoadMeter`,
+`createLoadGraph`, `formatCpuLoad`, `setLoadLine`, `cpuCores` — itself import-free
+and DOM-free at load). Safe under the Node test stubs: every DOM access is
+null-guarded (no `#loadingHardware` → `setLoadingCpu` does nothing), and with no
+`requestAnimationFrame` it yields via `MessageChannel`.
 
 **Imported by.** `import-export/save-load.js` (re-exports `showLoading`/
 `hideLoading`), `pose/tracker.js`, `pose/triangulation.js`, `ui/export-modals.js`,
@@ -5363,6 +5414,63 @@ DOM access is null-guarded, and with no `requestAnimationFrame` it yields via
   measures run time, update cadence and paints/s on a real project.
 - Not to be confused with `ui/loading-progress-modal.js`, the per-camera,
   multi-row panel used for video loading.
+
+---
+
+### ui/load-graph.js
+
+**Purpose.** How busy a long operation keeps the CPU (and the GPU), for its
+progress UI: the busy clock its threads report to, the rolling load meter, the
+"CPU: 12 cores · load 7%" line, and a small graph of the last minute. Shared by
+the image check's progress dialog (`ui/id-switch-modal.js`: CPU and GPU lines,
+both series) and the loading overlay (`ui/loading-overlay.js` `setLoadingCpu`:
+the CPU alone — Triangulate All and Track All). No browser API reports the CPU's or a GPU's
+utilisation, so every load is the operation's OWN busy time as a share of the
+hardware, and each line's tooltip says other apps are not in it.
+
+**Key exports.**
+- `LOAD_WINDOW_MS` (5000); `createLoadMeter(windowMs)` -> `(now, busyMs) ->
+  pct|null` (moved here from `ui/image-embedder.js`, which re-exports it) — the
+  share of the window spent busy; for the CPU, feed thread-ms / cores.
+- `createBusyClock(now?)` -> `{begin(lane), end(lane), close(lane?), ms()}` —
+  busy time summed over lanes (threads); nested per lane (a crop worker holds
+  several queued jobs; a pool's `'main'` is reopened by a reply handled while it
+  waits); open spans count up to now; `close()` with no argument closes every lane.
+- `formatCpuLoad(cores, load, counts)` -> `{text, title, load}` — "CPU: 12 cores ·
+  load 7%" (`cores` = `navigator.hardwareConcurrency`, logical processors; one
+  saturated thread on 12 cores reads 8%); the tooltip is "The share of the CPU's
+  12 cores kept busy over the last 5 s by " + `counts` + ". Browsers do not report
+  the CPU's total load, so other apps are not included." `cpuCores()`.
+- `LOAD_GRAPH_SPAN_MS` (60 s); `loadGraphPath(samples, now, spanMs, w, h)` -> SVG
+  path data, placed by TIME (ticks are uneven: long work blocks the 1 s timer),
+  broken at nulls, a lone point as a zero-length segment (a dot under the round cap).
+- `LOAD_GRAPH_W` / `LOAD_GRAPH_H` / `LOAD_GRAPH_PAD` (104 x 34 px, the series
+  inset 2 px so 0% and 100% are not half clipped).
+- `createLoadGraph(box)` -> `{show(on), push(t, cpu, gpu), clear()}` — builds the
+  SVG into `box` (class `load-graph`): a 50% hairline, a CPU and a GPU series,
+  and on hover a cursor, a dot per series and a readout above the graph ("12 s
+  ago · CPU 7% · GPU 80%") for the nearest MEASURED sample (the first tick's are
+  null), kept current as the graph moves under a still pointer. `show(false)` is
+  `visibility`, so the space stays reserved.
+- `setLoadLine(el, text, title, series)` — a line's text and tooltip, and its
+  legend key (`.load-line.has-series::before`, in `.is-cpu` / `.is-gpu` colour).
+
+**Styles.** `styles.css` `.load-line` / `.load-graph*`; the series colours are
+`:root` `--load-cpu` `#3987e5` and `--load-gpu` `#d95926`, the first two slots
+of the dataviz skill's validated categorical palette (dark steps), checked
+against the plot's `#1a1a1a` (CVD dE 26.8).
+
+**Imports from project modules.** None, and no DOM at load time:
+`ui/image-embedder.js` imports it and is also loaded by the crop and model workers.
+
+**Imported by.** `ui/image-embedder.js`, `ui/id-switch-modal.js`,
+`ui/loading-overlay.js`, `pose/triangulation-pool.js`.
+
+**Coverage.** `tests/test-load-graph.mjs` (the clock, the meter, the CPU line,
+the path); the DOM half in `tests/e2e/id-switch-image-check.mjs` (CPU + GPU,
+hover), `tests/e2e/triangulate-all-cpu-load.mjs` (CPU only, on the overlay) and
+`tests/e2e/track-all-cpu-load.mjs` (the overlay's main-thread clock, with the
+paint-wait control).
 
 ---
 
@@ -9015,11 +9123,36 @@ frame i of n — about X min left", then "Learning what tells the animals apart
 (camera i of n)", with the overall percentage under
 the bar (the same rounded value as the bar's width; embedding is its first 90%) and
 the ID Switches rows' playhead line (`.id-switch-phead`) at the fill's leading edge.
-Under the percentage, the device line (`formatEmbedDevice`, ui/image-embedder.js):
-"GPU: Apple metal-3 (WebGPU, fp16) · load 87%", the load refreshed every second
-from the first embedded frame (`createLoadMeter` over `busyMs()`), so it falls to
-0% while fitting, which runs on the CPU; with no GPU, "No GPU: running on the CPU
-(4 workers) — slow" in the warning colour, why in its tooltip. An injected
+Under the percentage, **the CPU line over the device line**, and **a graph of both
+loads to their right** (`hardware(cpu, gpu)` / `sample(cpu, gpu)` on the dialog).
+The CPU line (`formatEmbedCpu`, ui/image-embedder.js): "CPU: 12 cores · load 7%" —
+the share of ALL `navigator.hardwareConcurrency` cores the check kept busy over the
+last 5 s, i.e. `createLoadMeter` over (`cpuBusyMs()` + the fit's main-thread time) /
+cores, so one saturated thread on 12 cores reads 8%. The fit is timed HERE, in the
+progress callback: it runs synchronously between `progress('fit', …)` calls, so the
+time from the end of one callback's `yieldToPaint` to the start of the next is
+main-thread fitting (`fitMs`); the first camera's interval is not counted (it is the
+wait for the last embeddings). Video decoding and the page's other main-thread work
+are not in it — no browser API reports a thread's or the CPU's load — and its
+tooltip says so. The device line: "GPU: Apple metal-3 (WebGPU, fp16) · load 87%",
+the load refreshed every second from the first embedded frame (`createLoadMeter`
+over `busyMs()`), so it falls to 0% while fitting, which the CPU line then shows;
+with no GPU, "No GPU: running on the CPU (4 workers) — slow" in the warning colour,
+why in its tooltip, and no load. **The graph** (`createLoadGraph`, `ui/load-graph.js`
+— the same one the loading overlay shows for Triangulate All; 104 x 34 px SVG,
+the lines inset 2 px so 0% and 100% are not half clipped): the last
+`LOAD_GRAPH_SPAN_MS` (60 s), newest at the right edge, 0-100% with a hairline at
+50%, one sample per tick of the same 1 s timer, so its newest points ARE the two
+lines' loads. Points are placed by TIME (`loadGraphPath`), not index — fitting
+blocks the main thread for seconds, so ticks are uneven. A line with a series wears
+its colour as a legend key (`.has-series::before`, with a hanging indent so a long
+GPU name wraps after it); the "No GPU" line has no series and no key. Colours are
+the first two slots of the dataviz skill's validated categorical palette (dark
+steps), CPU `#3987e5`, GPU `#d95926` — validated against the plot's `#1a1a1a`
+(CVD dE 26.8). Hovering shows a cursor, a dot per series and a readout above the
+graph ("12 s ago · CPU 7% · GPU 80%") for the nearest MEASURED sample (the first
+tick's are null). The graph and both lines keep their space before they appear
+(`visibility`, `min-height`), so the dialog does not jump. An injected
 embedder without `device()` shows no line. **Beside them, above Cancel, a sample
 crop** (128 px, captioned "id_2 · cam5" with the animal's current label): exactly
 the model input — greyscale, nose right, masked — turned back into pixels by
@@ -9137,7 +9270,8 @@ rename them wrongly.
 `ui/loading-overlay.js` (`showLoadingProgress`, `hideLoading`, `yieldToPaint`),
 `ui/settings.js` (`getTrackingThreshold`), `pose/id-switch-check.js`,
 `ui/image-embedder.js` (`createImageEmbedder`, `IMAGE_MODEL_MB`, `formatEmbedTiming`,
-`createLoadMeter`, `formatEmbedDevice`),
+`formatEmbedDevice`, `formatEmbedCpu`, `inputTensorToPixels`, `INPUT`),
+`ui/load-graph.js` (`createLoadMeter`, `createLoadGraph`, `setLoadLine`, `cpuCores`),
 `ui/id-switch-review.js` (row keys, change-point helpers, `linkIdSwitchResults`,
 `idSwitchFixPlan`, `idSwitchFixFor`, `idSwitchRenameForFix`),
 `ui/id-switch-highlight.js` (`setIdSwitchHighlight`, `updateIdSwitchHighlight`,
@@ -9154,8 +9288,11 @@ Clear, one scroller),
 `tests/e2e/track-auto-size-switch-check.mjs` (after Track All / Track Frame Range),
 `tests/e2e/id-switch-image-check.mjs` (images with an injected embedder: "Both"
 merge, identical-size animals found by images only, Esc cancel, the progress dialog's
-percentage / playhead / GPU line / sample crop and skeleton overlay, no GPU = runs on
-the CPU to the end, menu, default off), `tests/e2e/id-switch-fix.mjs` (Fix switch…: both start rules in the
+percentage / playhead / CPU line above the GPU line / load graph (placement, legend
+keys, newest points = the lines' loads, hover readout) / sample crop and skeleton
+overlay, no GPU = runs on the CPU to the end and graphs the CPU alone, menu, default
+off), `tests/e2e/image-check-cpu.mjs` (the real dialog's measured CPU line and
+CPU-only graph), `tests/e2e/id-switch-fix.mjs` (Fix switch…: both start rules in the
 dialog, Esc / Cancel / shortcuts, the swap fixes exactly the crossed stretch, the
 row afterwards, the renamed follow-on, saved, Undo exact).
 
@@ -9373,7 +9510,14 @@ supply-bound. 16 in flight was tried and reverted: no change (PC 124, VM 160
 crops/s; decode is throughput-bound, so each frame just waited twice as long)
 while the PC's dedicated GPU memory climbed to 10.6 GB.
 **Live, in the progress dialog** (`device()` / `busyMs()` -> `formatEmbedDevice`
-+ `createLoadMeter`): which GPU runs the model and how busy the check keeps it.
++ `createLoadMeter`; `cpuBusyMs()` -> `formatEmbedCpu`): which GPU runs the model,
+how busy the check keeps it, and how busy it keeps the CPU. `cpuBusyMs()` is one
+`createBusyClock` (`ui/load-graph.js`) shared by the crop pool, the CPU model pool and inline (main-
+thread) crops: a lane per worker, busy while it HOLDS a job (queued in it or
+running — waits inside a job, such as a crop's GPU readback, count), summed over
+lanes, open spans counted up to now so a seconds-long CPU model run shows while it
+runs. The clock outlives the pools (the crop pool is re-made after `releaseFrames`),
+and a pool's `terminate` / failed worker closes its lanes.
 `gpuAdapterInfo(device, adapter)` names it from the model's own
 `GPUDevice.adapterInfo` (onnxruntime's `env.webgpu.adapter` is undefined in this
 build; a fresh default adapter is the last resort) — "Apple metal-3" from vendor
@@ -9478,7 +9622,7 @@ decode + crop ceiling rose from 145 to ~270 crops/s at 3 views (decoding alone:
 Numbers in `ui/id-switch-modal.js`.
 
 **Key exports.** `createImageEmbedder(session, {onStatus, maxViewsPerAnimal, webnn, keyframes})` ->
-`{getEmbeddings, prepareFrames, releaseFrames, backend, device, busyMs, stats, inFlight, views}` (the provider
+`{getEmbeddings, prepareFrames, releaseFrames, backend, device, busyMs, cpuBusyMs, stats, inFlight, views}` (the provider
 `checkImageSwitches` needs; `releaseFrames` also terminates the crop pool and the
 CPU model workers and disposes a WebNN model; `device()` -> `{backend: 'webgpu'|'webnn'|'cpu',
 comparing, dtype, adapter, fallback, workers, why}` and `busyMs()` feed the progress
@@ -9489,14 +9633,19 @@ Several rather than the latest because on the CPU frames arrive in bursts — 8 
 at once, then ~6 s of model time — and one latest crop sat still between them); `opts.device` ('auto' | 'webgpu' | 'cpu') and `opts.cpuWorkers`
 force a device / worker count (tests, benchmarking);
 `pickImageDevice()` -> `{kind: 'webgpu'|'cpu', adapter, why}`; `cpuModelWorkerCount(cores, memoryGB)`,
-`CPU_MODEL_MAX_WORKERS`; `createCpuModelPool(count, onStatus)` -> `{size, run(data, n) ->
-Promise<Float32Array[]>, terminate()}`;
+`CPU_MODEL_MAX_WORKERS`; `createCpuModelPool(count, onStatus, clock?)` -> `{size, run(data, n) ->
+Promise<Float32Array[]>, terminate()}`; `createCropPool(clock?)` -> `{broken, run(image, crops), terminate()}` | null
+(`clock`: a `createBusyClock`, ui/load-graph.js);
 `loadImageModel(onStatus)` (WebGPU; once, cached promise);
 `selectViews(geos, maxViews)`; `EMBED_MAX_BATCH`, `EMBED_IN_FLIGHT`,
 `summarizeEmbedTiming(tm, backend, dtype)`, `formatEmbedTiming(t)`;
 `describeAdapter(info)`, `gpuAdapterInfo(device, adapter)` -> `{name, fallback}`,
-`createLoadMeter(windowMs)` -> `(now, busyMs) -> pct|null`, `GPU_LOAD_WINDOW_MS`,
-`formatEmbedDevice(device, load)` -> `{text, warn, title}`; `inputTensorToPixels(tensor, rgba)`
+`createLoadMeter` (re-exported from ui/load-graph.js, where it now lives), `GPU_LOAD_WINDOW_MS` (=
+`LOAD_WINDOW_MS`; the CPU line's window too),
+`formatEmbedDevice(device, load)` -> `{text, warn, title, metered, load}` (`metered`: the line has a series in
+the load graph — not for the CPU workers or a software adapter; `load`: what it shows, null when none),
+`formatEmbedCpu(cores, load)` -> `{text, title, load}` (`formatCpuLoad` with this check's "counts": cropping,
+the CPU model, fitting — not video decoding); `inputTensorToPixels(tensor, rgba)`
 (a model input back to grey RGBA, the inverse of `writeInputTensor`'s normalisation),
 `SAMPLE_CROPS` (12); `cropPointsToInput(g)` (`g.pts`, the keypoints `cropGeometry` now also
 records, NaN when missing, into model-input pixels: cutCrop's rotate-about-the-body-centre
@@ -9550,9 +9699,12 @@ importmap). Spawns `ui/image-crop-worker.js`.
 **Imported by.** `ui/id-switch-modal.js`, `ui/image-crop-worker.js`.
 
 **Coverage.** Crop geometry, `selectViews`, `chooseBackend`, the resize table and
-the keyframe line of `formatEmbedTiming` in
-`tests/test-id-switch-check.mjs`; `frameCropGeometry` on a released member (with
-the direct-read control that finds nothing) in `tests/test-lazy-residency.mjs`; the crop pool in `tests/e2e/image-crop-worker.mjs`;
+the keyframe line of `formatEmbedTiming`, and the dialog's lines (`formatEmbedCpu`,
+`formatEmbedDevice`'s `metered`/`load`) in
+`tests/test-id-switch-check.mjs` (the shared load helpers: `tests/test-load-graph.mjs`); `frameCropGeometry` on a released member (with
+the direct-read control that finds nothing) in `tests/test-lazy-residency.mjs`; the crop pool, and its busy clock against
+real workers, in `tests/e2e/image-crop-worker.mjs`; `cpuBusyMs()` over the real CPU model workers in
+`tests/e2e/image-check-cpu.mjs`;
 keyframe sampling on generated 60 fps H.264 and AV1 (keyframes every 30 frames vs one) in
 `tests/e2e/image-keyframe-sampling.mjs` (keyframe index, one decoded packet per
 sample, bit-identical planes, sparse video unchanged); accuracy on real data by
