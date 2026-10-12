@@ -428,11 +428,15 @@ export async function buildSessionRefGraph(session, views, videoFiles, ctx) {
     // Build one overlay SIO instance, resolving its track into the GLOBAL
     // header list (this camera's tracks start at `trackBase`). Carry a
     // per-point score on predicted siblings (SLEAP's GUI hides low-score
-    // predicted points) so they don't visually vanish.
-    function buildOverlayInstance(inst, trackBase) {
+    // predicted points) so they don't visually vanish — each node's OWN score
+    // where the store has one (the sibling was hydrated from a store row, which
+    // this overlay replaces in the file), else the instance score.
+    function buildOverlayInstance(inst, trackBase, camName, frameIdx) {
         var isPredicted = inst.type !== 'user';
         var perPointScore = isPredicted ? (inst.score != null ? inst.score : 1.0) : undefined;
-        var pts = _buildSioPoints(inst, numNodes, perPointScore);
+        var pts = _buildSioPoints(inst, numNodes, perPointScore, null, function (k) {
+            return session.predictedNodeScore(camName, frameIdx, inst, k);
+        });
         var track = null;
         if (inst.trackIdx != null && inst.trackIdx >= 0) {
             var combinedIdx = trackBase + inst.trackIdx;
@@ -459,7 +463,7 @@ export async function buildSessionRefGraph(session, views, videoFiles, ctx) {
             var byTrack = new Map();
             for (var lii = 0; lii < lucidInsts.length; lii++) {
                 var linst = lucidInsts[lii];
-                sioInsts.push(buildOverlayInstance(linst, ocInfo.trackBase));
+                sioInsts.push(buildOverlayInstance(linst, ocInfo.trackBase, ocInfo.name, fgIdx));
                 byInst.set(linst, lii);
                 var lt = (linst.trackIdx != null && linst.trackIdx >= 0) ? linst.trackIdx : -1;
                 if (lt >= 0 && !byTrack.has(lt)) byTrack.set(lt, lii);

@@ -222,6 +222,9 @@ export async function reconstructInstanceGroupsFromDicts(session, fgDicts, camKe
                 if (_dupCamInsts && _dupCamInsts.length > 0) {
                     for (var _dpi = 0; _dpi < _dupCamInsts.length; _dpi++) {
                         if (instanceMatchesPoints(_dupCamInsts[_dpi], points)) {
+                            // The group dict has no per-node scores; the raw
+                            // row it replaces does.
+                            inst.adoptPointScoresFrom(_dupCamInsts[_dpi]);
                             _dupCamInsts.splice(_dpi, 1);
                             break;
                         }
@@ -405,6 +408,7 @@ export async function reconstructInstanceGroupsFromSession(session, typedSession
 
                 var inst = new Instance(points, instTrackIdx, instType, instScore);
                 inst.setOccludedFrom(occluded);
+                if (instType === 'predicted' && _isPred && typedInst._score) inst.setPointScores(typedInst._score);
                 inst.modified = instMeta.modified || false;
                 if (instMeta.nulledNodes) {
                     inst.nulledNodes = new Set(instMeta.nulledNodes);
@@ -1090,6 +1094,7 @@ export async function handleLoadSlpFile(slpFile) {
                     instData.score || 0
                 );
                 if (instData.occluded) inst.setOccludedFrom(instData.occluded);
+                if (instData.pointScores) inst.setPointScores(instData.pointScores);
                 // Rebuild the occlusion flag for a user label whose occluded
                 // node was saved as finite-xy + not-visible. Grouped instances
                 // get their explicit nulledNodes back from metadata below (and

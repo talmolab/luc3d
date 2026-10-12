@@ -23,6 +23,7 @@ import { resetPlaneState } from '../import-export/plane-metadata.js';
 import { createDemoSession } from '../demo-data.js';
 import { setupUI, setupMenus, updateSeekbar, onPlaybackStateChange, fitTimelineToData } from '../ui/ui-wiring.js';
 import { installInfoTips } from '../ui/info-tip.js';
+import { installNodeTooltip } from '../ui/node-tooltip.js';
 import { refreshReadoutTotals } from '../ui/frame-readout.js';
 import { installTimelineShortcuts } from '../ui/timeline-controller.js';
 import { setupPanelTabs, setupSkeletonEditing, setupVideosTab, updateInfoPanel } from '../ui/info-panel.js';
@@ -64,6 +65,7 @@ async function init() {
         // ⓘ in the app, so a panel that rebuilds its rows does not have to
         // re-wire them (and cannot forget to).
         installInfoTips();
+        installNodeTooltip();
         setupEmptyVideoController();
         setupUI();
         setupPanelTabs();

@@ -121,12 +121,16 @@ export function mergeSlpFramesIntoSession(session, slpData, videoIdxToCameraName
 
             // Reorder points if node ordering differs between incoming and existing skeleton
             var points = instData.points;
+            var pointScores = instData.pointScores || null;
             if (nodeReorderMap) {
                 var reorderedPoints = new Array(nodeReorderMap.length);
+                var reorderedScores = pointScores ? new Array(nodeReorderMap.length).fill(NaN) : null;
                 for (var ri = 0; ri < nodeReorderMap.length; ri++) {
                     reorderedPoints[nodeReorderMap[ri]] = points[ri] || null;
+                    if (reorderedScores && ri < pointScores.length) reorderedScores[nodeReorderMap[ri]] = pointScores[ri];
                 }
                 points = reorderedPoints;
+                pointScores = reorderedScores;
             }
 
             var inst = new Instance(
@@ -135,6 +139,7 @@ export function mergeSlpFramesIntoSession(session, slpData, videoIdxToCameraName
                 instData.type || 'predicted',
                 instData.score || 1.0
             );
+            if (pointScores) inst.setPointScores(pointScores);
             fg.addInstance(camName, inst);
         }
         affectedFrames.add(fd.frameIdx);

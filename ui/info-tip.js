@@ -75,7 +75,9 @@ function ensureTip() {
 }
 
 /**
- * Place the popover near (x, y), clamped so the whole of it stays on screen.
+ * Place a `position: fixed` popover near (x, y), clamped so the whole of it
+ * stays on screen. Shared with the node tooltip (`ui/node-tooltip.js`), so the
+ * app has one rule for where a tip goes.
  *
  * Flipping to the other side of the pointer rather than merely clamping: an
  * icon in the right-hand panel — which is where nearly all of them are — sits
@@ -83,10 +85,11 @@ function ensureTip() {
  * icon under it, and a tip you cannot see past is worse than one on the other
  * side. Measured AFTER the text is in and the element is visible, because a
  * hidden element has no size to read.
- * @private
+ * @param {HTMLElement} el
+ * @param {number} x - Viewport coordinate.
+ * @param {number} y - Viewport coordinate.
  */
-function placeAt(x, y) {
-    const el = ensureTip();
+export function placeTipNear(el, x, y) {
     const r = el.getBoundingClientRect();
     const vw = window.innerWidth;
     const vh = window.innerHeight;
@@ -101,6 +104,11 @@ function placeAt(x, y) {
 
     el.style.left = Math.round(left) + 'px';
     el.style.top = Math.round(top) + 'px';
+}
+
+/** Place this module's popover near (x, y). @private */
+function placeAt(x, y) {
+    placeTipNear(ensureTip(), x, y);
 }
 
 /**

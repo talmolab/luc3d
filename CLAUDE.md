@@ -3,9 +3,9 @@
 Multi-view pose annotation GUI. No build system — pure vanilla JS served as static files.
 
 ## Architecture
-ES modules, vanilla JS (no build step). `index.html` loads `app.js` as `<script type="module">`; `app.js` is a 2-line entry point that imports from `pose/`. The 107 modules are grouped into four directories:
+ES modules, vanilla JS (no build step). `index.html` loads `app.js` as `<script type="module">`; `app.js` is a 2-line entry point that imports from `pose/`. The 108 modules are grouped into four directories:
 - `pose/` — data model, cross-view tracking, DLT triangulation (the pure math in `triangulation-core.js`, solved in parallel by `triangulation-pool.js` + `triangulation-worker.js`), plane annotation model (planes + the global plane-node pool), 3D mesh objects (groups of planes) and their derived geometry, plane/origin serialization, origin transform, whole-project origin re-base, cross-session calibration comparison, plane-to-plane angle, the least-squares plane fit, multi-view display alignment (`view-align.js`), the ID-switch checks by body size and images (`id-switch-check.js`), the lazy project's playback eviction (`lazy-residency.js`), app initialization (22 files)
-- `ui/` — UI state, canvas rendering, mouse/keyboard interaction, info panel (and its lazily-filled Track dropdown), modals, timeline, 3D viewport, panel visibility, video encoding, video display settings, keyboard-target arbitration, modal geometry, view legend, plane definition, 3D mesh objects, origin definition, origin re-base, cross-session calibration notice, plane angle, frame-range tracking, collapsible section state, info tooltips, plane visibility, browser-specific hints, the loading overlay + its progress bar, the Align Views to References dialog, the seekbar hover tooltip and the time ruler under it (`seekbar-ticks.js` — major/minor tick steps chosen from the video's length and the bar's width), the status bar's whole-project frame counters, the controls bar's time / frame readout, the Tracks / Identity coloring setting, the node-trail lengths (`trail-presets.js` — presets or a custom value typed in seconds or frames, stored in seconds, drawn as `seconds × fps` frames) and their shade (`TRAIL_SHADES` in `ui/overlays.js`: Very dark … Very light, default Dark, remembered in `localStorage`), the Check ID Switches runner + ID Switches panel tab (and its saved review checklist), its seekbar ticks and in-view highlight, its image embedder and its crop and CPU-model workers, the Track All summary box (`track-summary.js` decides what it says, `track-summary-modal.js` renders it), the Track group's Animals field (`animal-count-field.js`), the CPU / GPU load lines and last-minute graph shown by the image check's dialog and by the loading overlay during Triangulate All and Track All (`load-graph.js`), settings — the Define Planes panel is split across `plane-definition.js` (the hub) plus its three section modules and three helpers (64 files)
+- `ui/` — UI state, canvas rendering, mouse/keyboard interaction, info panel (and its lazily-filled Track dropdown), modals, timeline, 3D viewport, panel visibility, video encoding, video display settings, keyboard-target arbitration, modal geometry, view legend, plane definition, 3D mesh objects, origin definition, origin re-base, cross-session calibration notice, plane angle, frame-range tracking, collapsible section state, info tooltips, the node tooltip on hover (`node-tooltip.js` — a node's name and a prediction's per-node score, as SLEAP shows them), plane visibility, browser-specific hints, the loading overlay + its progress bar, the Align Views to References dialog, the seekbar hover tooltip and the time ruler under it (`seekbar-ticks.js` — major/minor tick steps chosen from the video's length and the bar's width), the status bar's whole-project frame counters, the controls bar's time / frame readout, the Tracks / Identity coloring setting, the node-trail lengths (`trail-presets.js` — presets or a custom value typed in seconds or frames, stored in seconds, drawn as `seconds × fps` frames) and their shade (`TRAIL_SHADES` in `ui/overlays.js`: Very dark … Very light, default Dark, remembered in `localStorage`), the Check ID Switches runner + ID Switches panel tab (and its saved review checklist), its seekbar ticks and in-view highlight, its image embedder and its crop and CPU-model workers, the Track All summary box (`track-summary.js` decides what it says, `track-summary-modal.js` renders it), the Track group's Animals field (`animal-count-field.js`), the CPU / GPU load lines and last-minute graph shown by the image check's dialog and by the loading overlay during Triangulate All and Track All (`load-graph.js`), settings — the Define Planes panel is split across `plane-definition.js` (the hub) plus its three section modules and three helpers (65 files)
 - `loading/` — video decoding, unplayable-codec diagnosis, session loading, SLP/package readers, per-camera SLP choice, calibration-file selection, video-file selection, the per-camera track-list union (`session.tracks` for a per-camera folder), web workers (11 files)
 - `import-export/` — file I/O, save/load, SLP import/merge, visibility metadata, plane metadata, 3D mesh export (10 files)
 - `demo-data.js` — synthetic skeleton and camera data
@@ -157,9 +157,12 @@ enough — transformers.js then fetches the `onnx-community/dinov2-small` **weig
 (44–88 MB) from huggingface.co** at runtime, so offline support means vendoring
 the model as well and setting `env.localModelPath`. It is lazily imported by that
 one opt-in command and nothing else touches it, so this degrades rather than
-breaking the app. Offline, the dynamic `import()` currently throws a raw
-"Failed to fetch dynamically imported module" instead of a reason string like
-`runImage`'s other preflight gates in `ui/id-switch-modal.js`.
+breaking the app. Offline it reports `MODEL_OFFLINE_REASON` as the reason it
+cannot run ("needs an internet connection to download the image model …"),
+like `runImage`'s other preflight gates in `ui/id-switch-modal.js`, instead of
+the browser's bare "Failed to fetch" — and a retry once the network is back
+works without a reload, which a plain re-`import()` of the same URL does not in
+Chrome (`importTransformers`). Covered by `tests/e2e/image-check-offline.mjs`.
 
 **Node-only `.mjs` is never rewritten** (`is_rewritable` in
 `scripts/offline_deps.py`, shared by `bundle` and `server.py --offline` so the zip
@@ -655,6 +658,49 @@ post-Track-All playback degrading run over run. Three more rules:
   with `hydrateFrameMembers2d` / `releaseFrameMembers2d`. The image ID-switch
   check was the one such reader (`frameCropGeometry`, `ui/image-embedder.js`);
   reading the members directly found no keypoints on every such frame.
+
+## A prediction's per-node scores: kept, shown, and saved
+
+Resting the pointer on a node shows its name and, on a prediction, the model's
+score for THAT node (`ui/node-tooltip.js`, SLEAP 1.6.5's tooltip and text), with
+a stripe in the color that skeleton is drawn from — where skeletons overlap the
+text alone does not say whose node it is. The stripe comes from the renderer's
+own color functions (`getGroupColor`, `unlinkedBaseColor` in `ui/overlays.js`);
+never compute it separately. The scores are `pred_points.score`, which LUCID
+used to drop at load and overwrite at save. Four rules:
+
+- **Eager: one pool, an integer per instance.** `Instance.setPointScores` copies
+  them into shared `Float32Array` chunks in `pose/pose-data.js`; the instance
+  keeps only `_ps`. A `Float32Array` per instance measured ~320 B of heap and one
+  more ArrayBuffer per instance — and an eager per-camera folder can hold
+  millions of predictions. Do not "simplify" it into an array per instance.
+- **Lazy: the store is the only copy.** Nothing goes on a lazy instance;
+  `SioLazyLoader.predictedPointScore` reads `pred_points.score` by
+  `_rawInstIndex`, and by node NAME (a skeleton edit re-indexes resident
+  instances but not the store). Copying scores onto hydrated instances would
+  refill a pool on every revisit, or put an ArrayBuffer per resident instance
+  back into playback's GC.
+- **One question, one answer: `Session.predictedNodeScore`.** NaN unless the
+  instance is `'predicted'` — an edit makes it `'user'` and its positions are no
+  longer what was scored. The tooltip and the streaming writer both ask it.
+- **Every writer writes each node's OWN score**, the instance score only for a
+  node with none (`_buildSioPoints`). The project Save (`buildSlpLabelsAllViews`)
+  wrote no score at all — stored as 0 — and the other two the instance score on
+  every node, so a reopened project's tooltip showed one number per instance.
+  `save-golden-digest.mjs` does not move: it builds its file with sleap-io
+  directly.
+
+Coverage: `tests/test-node-scores.mjs` (the pool, the lookup, the text),
+`tests/test-node-score-export.js` (the per-point rule, incl. `nodeOrder`) and
+`tests/e2e/node-score-tooltip.mjs` (real mouse; every load path incl. the raw
+worker; save + reopen through `handleLoadSlpFile`; a lazy project and an edited
+camera-frame on the streaming writer). `tests/e2e/slp-import-fast-compound.mjs`
+pins the worker's scores against a Python-written SLEAP file.
+
+**Not covered, deliberately: SLEAP analysis `.h5` files.** Their `point_scores`
+are read and dropped, so their nodes show a name and no score. What adding them
+would take — and why the lazy `.h5` path is the hard part — is in the NOTE in
+`loading/slp-import-worker.js` `parseAnalysisH5`.
 
 ## Triangulation must not depend on where the origin is
 
