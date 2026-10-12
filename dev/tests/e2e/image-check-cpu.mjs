@@ -13,10 +13,13 @@
  *     main thread, per animal AND camera (so the split across workers keeps order).
  *  3. The page stays responsive while the workers compute (on the main thread one
  *     run blocks it: 2.6 s for 8 crops).
- *  4. `releaseFrames` terminates the workers (~600 MB each).
+ *  4. `releaseFrames` terminates the workers (~600 MB each). `cpuBusyMs()` (the
+ *     dialog's CPU load) counts the model workers' runs, in parallel, so it is at
+ *     least the model's own busy time and at most every worker busy throughout.
  *  5. The real dialog, with nothing injected — the path the Tracking Wizard's
  *     after-tracking check takes — runs instead of refusing, says it is on the CPU,
- *     embeds frames, shows a real sample crop, and cancels. (The sample crops are
+ *     embeds frames, shows a real sample crop and a measured CPU line with the CPU
+ *     alone in the load graph, and cancels. (The sample crops are
  *     also checked bit for bit against the inputs embedded, under 2-4.)
  *
  * Run: node tests/e2e/image-check-cpu.mjs   (downloads the ~88 MB fp32 model)
@@ -123,7 +126,7 @@ try {
         const out = await Promise.all(frames.map(f => e.getEmbeddings(f, itemsAt(f))));
         const seconds = (performance.now() - t0) / 1000;
         clearInterval(tick);
-        const busy = e.busyMs(), stats = e.stats();
+        const busy = e.busyMs(), cpuBusy = e.cpuBusyMs(), stats = e.stats();
         // the dialog's sample crops are the very inputs embedded: re-cut each one and compare bit for bit
         const sk0 = E.skeletonIndex(session.skeleton.nodes), cv0 = new OffscreenCanvas(E.CROP, E.CROP);
         const recut = (f, id, cam) => { const its = itemsAt(f), ii = its.findIndex(it => it.group.identityId === id), vi = cams.indexOf(cam);
@@ -161,7 +164,8 @@ try {
         let diff = 0; for (let d = 0; d < dim; d++) diff = Math.max(diff, Math.abs(a0[d] - a1[d]));
         e.releaseFrames();
         let after = null; try { await e.getEmbeddings(16, itemsAt(16)); after = 'ran'; } catch (err) { after = err.message; }
-        return { device, line, statuses, samples, crops: out.reduce((n, o) => n + o.reduce((m, l) => m + l.length, 0), 0), seconds, worst, busy,
+        return { device, line, statuses, samples, crops: out.reduce((n, o) => n + o.reduce((m, l) => m + l.length, 0), 0), seconds, worst, busy, cpuBusy,
+                 threads: 2 + Math.max(0, Math.min((navigator.hardwareConcurrency || 1) - 1, 8)),
                  timing: E.formatEmbedTiming(stats), keys: keys.length, matched, minCos, maxAbs, diff, after };
     });
     check(emb.device.backend === 'cpu' && emb.device.workers === 2 && emb.device.dtype === 'fp32', `the embedder runs on the CPU: ${JSON.stringify(emb.device)}`);
@@ -174,6 +178,8 @@ try {
     check(emb.worst < 300, `the page stays responsive while the workers compute (longest main-thread gap ${Math.round(emb.worst)} ms)`);
     check(emb.busy > 0 && / · CPU \(2 workers\) fp32/.test(emb.timing) && /model busy/.test(emb.timing), `run summary: "${emb.timing}"`);
     check(/no CPU model worker is running/.test(emb.after), `releaseFrames terminates the workers ("${emb.after}")`);
+    check(emb.cpuBusy >= 0.95 * emb.busy && emb.cpuBusy <= emb.threads * emb.seconds * 1000 + 1,
+          `CPU busy time counts the model workers' runs: ${(emb.cpuBusy / 1000).toFixed(1)} thread-s vs the model's ${(emb.busy / 1000).toFixed(1)} s, over ${emb.seconds.toFixed(1)} s with ${emb.threads} worker threads`);
     check(emb.samples.every(c => c.pts), 'each sample crop carries its animal\'s keypoints in crop pixels, for the skeleton overlay');
     check(emb.samples.length === 4 && emb.samples.every(c => c.same) && new Set(emb.samples.map(c => c.id + c.camera)).size === 4,
           `one sample crop per frame, each bit-identical to the input embedded, rotating animal/camera (${emb.samples.map(c => 'f' + c.frame + ' id' + c.id + ' ' + c.camera).join(', ')})`);
@@ -192,12 +198,19 @@ try {
         for (let i = 0; i < px.length; i += 4) { greys.add(px[i]); if (px[i] > 0) lit++; if (px[i] !== px[i + 1] || px[i + 1] !== px[i + 2]) coloured++; }
         return { text: document.querySelector('.id-switch-progress-text').textContent, caption: document.querySelector('.id-switch-progress-crop figcaption').textContent,
             gpu: document.querySelector('.id-switch-progress-gpu').textContent, warn: document.querySelector('.id-switch-progress-gpu').classList.contains('is-warn'),
+            cpu: document.querySelector('.id-switch-progress-cpu').textContent,
+            cpuPath: document.querySelector('.id-switch-progress-graph path.is-cpu').getAttribute('d') || '',
+            gpuPath: document.querySelector('.id-switch-progress-graph path.is-gpu').getAttribute('d') || '',
             greys: greys.size, litPct: 100 * lit / (px.length / 4), coloured }; });
     check(/^No GPU: running on the CPU \(\d workers?\) — slow$/.test(dlg.gpu) && dlg.warn && /frame \d/.test(dlg.text),
           `the after-tracking check runs on the CPU: "${dlg.text}" / "${dlg.gpu}"`);
     check(/^id_\d · cam[ABC]$/.test(dlg.caption) && dlg.greys > 20 && dlg.litPct > 5 && dlg.litPct < 95,
           `…showing a real sample crop, "${dlg.caption}" (${dlg.greys} grey levels, ${dlg.litPct.toFixed(0)}% inside the mask)`);
     check(dlg.coloured > 50, `…with the skeleton drawn over it (${dlg.coloured} coloured pixels on the grey crop)`);
+    {
+        const load = +((dlg.cpu.match(/^CPU: \d+ cores? · load (\d+)%$/) || [])[1]);
+        check(load > 0 && dlg.cpuPath && !dlg.gpuPath, `…a measured CPU line ("${dlg.cpu}"), the CPU alone in the load graph`);
+    }
     await page.keyboard.press('Escape');
     const done = await page.evaluate(async () => { const r = await window.__done;
         return { reason: r && r.image && r.image.reason, status: document.getElementById('statusText').textContent, dialog: !!document.querySelector('.id-switch-progress') }; });

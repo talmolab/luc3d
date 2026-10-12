@@ -20,7 +20,7 @@
  *   { type: 'error', message: string }
  */
 
-import * as h5wasm from '../lib/h5wasm/hdf5_hl.js?v=1c81e1c6eb9b';   // local vendored 0.10.3 ESM
+import * as h5wasm from '../lib/h5wasm/hdf5_hl.js?v=1950420f994a';   // local vendored 0.10.3 ESM
 
 var h5wasmReady = false;
 var FS = null;
@@ -303,7 +303,7 @@ async function parseSlp(file) {
         progress('pointsData: ' + (pointsData ? 'OK (' + pointsData.x.length + ' rows)' : 'NULL'));
         progress('predPointsData: ' + (predPointsData ? 'OK (' + predPointsData.x.length + ' rows)' : 'NULL'));
 
-        progress('Frames: ' + (framesData ? framesData.frame_id.length : 0) +
+        progress('Frames: ' + (framesData ? framesData.frame_id.length : 0).toLocaleString('en-US') +
             ', Points: ' + (pointsData ? pointsData.x.length : 0) +
             ', PredPoints: ' + (predPointsData ? predPointsData.x.length : 0));
 
@@ -416,7 +416,7 @@ async function parseSlp(file) {
             }
         }
 
-        progress('Built ' + (columnar ? columnar.nFrames : frames.length) + ' frames with pose data' +
+        progress('Built ' + (columnar ? columnar.nFrames : frames.length).toLocaleString('en-US') + ' frames with pose data' +
             (columnar ? ' (columnar)' : ''));
 
         // --- Sessions JSON ---
@@ -715,7 +715,7 @@ function parseAnalysisH5(f, filename) {
             }
         }
 
-        progress('Built ' + frames.length + ' frames with pose data');
+        progress('Built ' + frames.length.toLocaleString('en-US') + ' frames with pose data');
 
         // --- Build video entry from filename ---
         // Strip .analysis.h5 or .h5 to get a base name
@@ -892,7 +892,7 @@ function openH5Lazy(file) {
             dataset: null,
         }];
 
-        progress('Lazy H5 ready: ' + lazyNFrames + ' frames, ' + lazyNTracks + ' tracks, ' + lazyNNodes + ' nodes');
+        progress('Lazy H5 ready: ' + lazyNFrames.toLocaleString('en-US') + ' frames, ' + lazyNTracks + ' tracks, ' + lazyNNodes + ' nodes');
 
         postMessage({
             type: 'metadata',

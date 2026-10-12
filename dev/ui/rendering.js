@@ -6,32 +6,32 @@
 // - updateFrameCounters: status-bar frame counters (labeled / triangulated / instances),
 //   whole-project on a lazy project too (counting logic in ui/frame-counters.js).
 
-import { state, interactionManager, timeline, isViewDocked } from './app-state.js?v=1c81e1c6eb9b';
-import { points3dNodeCount } from '../pose/pose-data.js?v=1c81e1c6eb9b';
+import { state, interactionManager, timeline, isViewDocked } from './app-state.js?v=1950420f994a';
+import { points3dNodeCount } from '../pose/pose-data.js?v=1950420f994a';
 import {
     ensureLazyFrameData, ensureLazyTrailWindow, getInstanceGroupsForFrame,
     triangulateAndReproject, storeReprojectedInstances,
-} from '../pose/triangulation.js?v=1c81e1c6eb9b';
-import { drawFrameOverlays } from './overlays.js?v=1c81e1c6eb9b';
-import { syncViewLegends } from './view-legend.js?v=1c81e1c6eb9b';
-import { isCameraTracked } from './settings.js?v=1c81e1c6eb9b';
+} from '../pose/triangulation.js?v=1950420f994a';
+import { drawFrameOverlays } from './overlays.js?v=1950420f994a';
+import { syncViewLegends } from './view-legend.js?v=1950420f994a';
+import { isCameraTracked } from './settings.js?v=1950420f994a';
 // Plane placements draw on the same overlay canvas, so they must run AFTER
 // drawFrameOverlays (which opens with a clearRect). Circular import — safe
 // because the call site is inside drawAllOverlays' body.
-import { drawPlaneOverlays, applyPlaneModeToolbarLock } from './plane-definition.js?v=1c81e1c6eb9b';
+import { drawPlaneOverlays, applyPlaneModeToolbarLock } from './plane-definition.js?v=1950420f994a';
 // The toolbar's Animals field shows the ACTIVE session's count. Circular
 // (it reaches pose/tracker.js, which imports this module) — safe for the same
 // reason: the call site is inside drawAllOverlays' body.
-import { syncAnimalCountField } from './animal-count-field.js?v=1c81e1c6eb9b';
-import { syncNodeTooltipFrame } from './node-tooltip.js?v=1c81e1c6eb9b';
+import { syncAnimalCountField } from './animal-count-field.js?v=1950420f994a';
+import { syncNodeTooltipFrame } from './node-tooltip.js?v=1950420f994a';
 
 // Pass 3f: editGroupState + finishEditGroup moved to ui/identity-assignment.js.
-import { editGroupState, finishEditGroup } from './identity-assignment.js?v=1c81e1c6eb9b';
-import { updateFrameInfo } from './info-panel.js?v=1c81e1c6eb9b';
+import { editGroupState, finishEditGroup } from './identity-assignment.js?v=1950420f994a';
+import { updateFrameInfo } from './info-panel.js?v=1950420f994a';
 import {
     computeFrameCounterBaseline, computeLazyCameraBaseline, createFrameCounterBaselineBuilder,
     countFrameCounters, nonResidentCameraCounts, refreshCountedFrame,
-} from './frame-counters.js?v=1c81e1c6eb9b';
+} from './frame-counters.js?v=1950420f994a';
 
 // ============================================
 // Reproj/Error visibility
@@ -543,9 +543,9 @@ function renderFrameCounters(session, activeCam, baseline) {
     var labeledEl = document.getElementById('statusLabeledFrames');
     var triangulatedEl = document.getElementById('statusTriangulatedFrames');
     var instancesEl = document.getElementById('statusInstances');
-    if (labeledEl) labeledEl.textContent = 'Labeled Frames: ' + c.labeled;
-    if (instancesEl) instancesEl.textContent = 'Instances: ' + c.instances;
-    if (triangulatedEl) triangulatedEl.textContent = 'Triangulated: ' + c.triangulated;
+    if (labeledEl) labeledEl.textContent = 'Labeled Frames: ' + c.labeled.toLocaleString('en-US');
+    if (instancesEl) instancesEl.textContent = 'Instances: ' + c.instances.toLocaleString('en-US');
+    if (triangulatedEl) triangulatedEl.textContent = 'Triangulated: ' + c.triangulated.toLocaleString('en-US');
 }
 
 function requestCounterRebuild() {

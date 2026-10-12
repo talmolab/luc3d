@@ -73,17 +73,17 @@
 //
 // The handle is remembered for the page session, so the picker appears once.
 
-import { state, viewport3d } from './app-state.js?v=1c81e1c6eb9b';
-import { setStatus, markDirty, quickSave } from '../import-export/save-load.js?v=1c81e1c6eb9b';
-import { exportCalibrationTOML, downloadTOML } from '../import-export/file-io.js?v=1c81e1c6eb9b';
-import { REBASED_CALIBRATION_NAME } from '../loading/calibration-pick.js?v=1c81e1c6eb9b';
-import { countRebaseTargets, subsetRebaseTally, planOriginRebase, applyOriginRebase } from '../pose/origin-rebase.js?v=1c81e1c6eb9b';
+import { state, viewport3d } from './app-state.js?v=1950420f994a';
+import { setStatus, markDirty, quickSave } from '../import-export/save-load.js?v=1950420f994a';
+import { exportCalibrationTOML, downloadTOML } from '../import-export/file-io.js?v=1950420f994a';
+import { REBASED_CALIBRATION_NAME } from '../loading/calibration-pick.js?v=1950420f994a';
+import { countRebaseTargets, subsetRebaseTally, planOriginRebase, applyOriginRebase } from '../pose/origin-rebase.js?v=1950420f994a';
 // Both circular by design and used only inside function bodies, the same rule
 // the rest of this directory's cycles follow.
-import { originState, renderOriginResult } from './origin-definition.js?v=1c81e1c6eb9b';
-import { planeModel, syncPlanes3D, refreshPlanePanel } from './plane-definition.js?v=1c81e1c6eb9b';
-import { drawAllOverlays } from './rendering.js?v=1c81e1c6eb9b';
-import { update3DViewport } from '../pose/initialization.js?v=1c81e1c6eb9b';
+import { originState, renderOriginResult } from './origin-definition.js?v=1950420f994a';
+import { planeModel, syncPlanes3D, refreshPlanePanel } from './plane-definition.js?v=1950420f994a';
+import { drawAllOverlays } from './rendering.js?v=1950420f994a';
+import { update3DViewport } from '../pose/initialization.js?v=1950420f994a';
 
 /**
  * @type {FileSystemFileHandle|null} Where `calibration.toml` lives, once the

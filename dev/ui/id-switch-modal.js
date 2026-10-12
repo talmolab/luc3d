@@ -17,28 +17,31 @@
  * image check decodes video and embeds crops on the GPU (ui/image-embedder.js) —
  * or, with no GPU, on the CPU, ~15x slower but still run: minutes to hours. It
  * needs the session's videos, and runs under its own cancellable progress dialog
- * (Cancel / Esc) that says which device is doing the work.
+ * (Cancel / Esc) that says which device is doing the work, how busy the check
+ * keeps the CPU and the GPU, and graphs both over the last minute.
  *
  * Kept a leaf: `navigateToFrame` is registered by ui-wiring
  * (setIdSwitchNavigator), so this module never imports pose/initialization.js.
  *
- * Depends on: pose/id-switch-check.js, ui/image-embedder.js, ui/app-state.js,
+ * Depends on: pose/id-switch-check.js, ui/image-embedder.js, ui/load-graph.js, ui/browser-hints.js, ui/app-state.js,
  * ui/loading-overlay.js, ui/settings.js (getTrackingThreshold),
  * import-export/save-load.js (setStatus).
  */
 
-import { state, getActiveSession } from './app-state.js?v=1c81e1c6eb9b';
-import { setSeekbarSwitchMarkers } from './seekbar-markers.js?v=1c81e1c6eb9b';
-import { setIdSwitchHighlight, updateIdSwitchHighlight, refreshIdSwitchHighlight, ID_SWITCH_SECTION_RGB } from './id-switch-highlight.js?v=1c81e1c6eb9b';
-import { setStatus, markDirty } from '../import-export/save-load.js?v=1c81e1c6eb9b';
-import { showLoadingProgress, hideLoading, yieldToPaint } from './loading-overlay.js?v=1c81e1c6eb9b';
-import { getTrackingThreshold } from './settings.js?v=1c81e1c6eb9b';
-import { checkSizeSwitches, checkImageSwitches } from '../pose/id-switch-check.js?v=1c81e1c6eb9b';
-import { createImageEmbedder, IMAGE_MODEL_MB, formatEmbedTiming, createLoadMeter, formatEmbedDevice,
-         inputTensorToPixels, INPUT } from './image-embedder.js?v=1c81e1c6eb9b';
+import { state, getActiveSession } from './app-state.js?v=1950420f994a';
+import { setSeekbarSwitchMarkers } from './seekbar-markers.js?v=1950420f994a';
+import { setIdSwitchHighlight, updateIdSwitchHighlight, refreshIdSwitchHighlight, ID_SWITCH_SECTION_RGB } from './id-switch-highlight.js?v=1950420f994a';
+import { setStatus, markDirty } from '../import-export/save-load.js?v=1950420f994a';
+import { showLoading, hideLoading, yieldToPaint } from './loading-overlay.js?v=1950420f994a';
+import { getTrackingThreshold } from './settings.js?v=1950420f994a';
+import { checkSizeSwitches, checkImageSwitches } from '../pose/id-switch-check.js?v=1950420f994a';
+import { createImageEmbedder, IMAGE_MODEL_MB, formatEmbedTiming, formatEmbedDevice, formatEmbedCpu,
+         inputTensorToPixels, INPUT } from './image-embedder.js?v=1950420f994a';
+import { createLoadMeter, createLoadGraph, setLoadLine, cpuCores } from './load-graph.js?v=1950420f994a';
+import { renderBraveFingerprintingHint } from './browser-hints.js?v=1950420f994a';
 import { idSwitchRowKey as rowKey, idSwitchPrimary as primaryOf, idSwitchMarkers as markersOf, idSwitchOnsets as countOnsets,
          idSwitchEncounterCount as encounterCount, linkIdSwitchResults as tagAndLink,
-         idSwitchFixPlan, idSwitchFixFor, idSwitchRenameForFix } from './id-switch-review.js?v=1c81e1c6eb9b';
+         idSwitchFixPlan, idSwitchFixFor, idSwitchRenameForFix } from './id-switch-review.js?v=1950420f994a';
 
 const CUE_LABEL = { size: 'body size', image: 'images' };
 
@@ -190,23 +193,30 @@ function drawCropSkeleton(ctx, pts, edges, color) {
 function openProgressDialog(title) {
     var ctl = new AbortController();
     var overlay = document.createElement('div');
-    overlay.className = 'multi-frame-modal-overlay';
+    overlay.className = 'multi-frame-modal-overlay id-switch-progress-overlay';   // no grey backdrop (styles.css)
     overlay.innerHTML = '<div class="multi-frame-modal id-switch-progress"><h3>' + escapeHtml(title) + '</h3>' +
         '<div class="id-switch-progress-text">Starting…</div>' +
         // the same playhead line as the ID Switches rows' bars, standing proud of an inner track that clips the fill
         '<div class="id-switch-progress-bar"><div class="id-switch-progress-track"><div class="id-switch-progress-fill"></div></div>' +
         '<div class="id-switch-phead"></div></div>' +
-        // the percentage and the device line, beside a sample of the crops being embedded (above Cancel)
+        // the percentage, then the CPU and GPU lines with their load graph to the right — all beside a sample of
+        // the crops being embedded (above Cancel)
         '<div class="id-switch-progress-row"><div class="id-switch-progress-info">' +
         '<div class="id-switch-progress-pct">0%</div>' +
-        '<div class="id-switch-progress-gpu"></div></div>' +
+        '<div class="id-switch-progress-hw"><div class="id-switch-progress-lines">' +
+        '<div class="id-switch-progress-cpu load-line is-cpu" hidden></div><div class="id-switch-progress-gpu load-line is-gpu"></div></div>' +
+        '<div class="id-switch-progress-graph"></div></div></div>' +
         '<figure class="id-switch-progress-crop"><canvas width="' + INPUT + '" height="' + INPUT + '" role="img" aria-label="Sample crop"></canvas>' +
         '<figcaption>First crop…</figcaption></figure></div>' +
+        // Brave hiding the real core count (and adding noise to canvas reads): what to do (ui/browser-hints.js)
+        '<div class="progress-hint" hidden></div>' +
         '<div class="modal-actions"><button id="idSwitchCancel">Cancel</button></div></div>';
     document.body.appendChild(overlay);
     var textEl = overlay.querySelector('.id-switch-progress-text'), fill = overlay.querySelector('.id-switch-progress-fill'),
         head = overlay.querySelector('.id-switch-phead'), pctEl = overlay.querySelector('.id-switch-progress-pct'),
         gpuEl = overlay.querySelector('.id-switch-progress-gpu'), cropEl = overlay.querySelector('.id-switch-progress-crop'),
+        cpuEl = overlay.querySelector('.id-switch-progress-cpu'), graph = createLoadGraph(overlay.querySelector('.id-switch-progress-graph')),
+        hintEl = overlay.querySelector('.progress-hint'),
         cropCanvas = cropEl.querySelector('canvas'), cropCaption = cropEl.querySelector('figcaption'), cropPixels = null;
     var cancel = function () { if (!ctl.signal.aborted) { ctl.abort(); textEl.textContent = 'Cancelling…'; } };
     var onKey = function (e) { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); cancel(); } };
@@ -223,13 +233,23 @@ function openProgressDialog(title) {
                 pctEl.textContent = pct;
             }
         },
-        /** The device line: `{text, warn, title}` from formatEmbedDevice (ui/image-embedder.js). */
-        device: function (d) {
+        /**
+         * The CPU line (`{text, title}` from formatEmbedCpu; null: none) and the device line under it (`{text,
+         * warn, title, metered}` from formatEmbedDevice, ui/image-embedder.js). A line with a series in the
+         * graph wears its colour as a legend key; the graph shows once either line has one.
+         */
+        hardware: function (c, d) {
             if (ctl.signal.aborted) return;
-            gpuEl.textContent = d.text;
+            cpuEl.hidden = !c;
+            if (c) setLoadLine(cpuEl, c.text, c.title, true);
+            setLoadLine(gpuEl, d.text, d.title, !!d.metered);
             gpuEl.classList.toggle('is-warn', !!d.warn);
-            if (d.title) gpuEl.title = d.title; else gpuEl.removeAttribute('title');
+            graph.show(!!c || !!d.metered);
         },
+        /** In Brave with its fingerprinting protection on: the note on its random core count (`cores`, as reported). */
+        braveHint: function (cores) { if (!ctl.signal.aborted) renderBraveFingerprintingHint(hintEl, cores); },
+        /** One point of the load graph, in percent (null: not measured, or no such series). */
+        sample: function (cpuLoad, gpuLoad) { if (!ctl.signal.aborted) graph.push(performance.now(), cpuLoad, gpuLoad); },
         /**
          * Show a model input (`inputTensorToPixels`) captioned `label`, with `skeleton` — `{points, edges,
          * color}`, points in input pixels (cropPointsToInput) — drawn over it; null hides the square.
@@ -257,14 +277,13 @@ function openProgressDialog(title) {
 // ---------------------------------------------------------------------------
 
 async function runSize(session, rate) {
-    var label = 'Checking ID switches (body size)';
-    showLoadingProgress(label, 0, 1);
+    // The overlay's plain form (spinner + message), not a counter: the check is one uninterrupted block of
+    // main-thread work (~0.2-1.5 s) whose only progress is 0 then 1 of one fitting step — which the counter
+    // used to print as "0/1 frames (0%)", frozen until the overlay closed.
+    showLoading('Comparing each animal\'s body size before and after its contacts…', { title: 'Checking ID switches (body size)' });
     await yieldToPaint();
     try {
-        return await checkSizeSwitches(session, {
-            fps: rate.fps,
-            onProgress: async function (done, total) { showLoadingProgress(label, done, total); await yieldToPaint(); },
-        });
+        return await checkSizeSwitches(session, { fps: rate.fps });
     } finally { hideLoading(); }
 }
 
@@ -279,12 +298,22 @@ async function runImage(session, rate, inject) {
         embedder = await (inject.createEmbedder || createImageEmbedder)(session, { onStatus: function (t) { prog.update(t, 0); },
             maxViewsPerAnimal: getTrackingThreshold('imageCheckMaxViews'),
             webnn: getTrackingThreshold('imageCheckWebNN') > 0 });
-        // What runs the model, and — once embedding starts, every second — how busy it keeps the GPU
-        var meter = createLoadMeter();
+        // What runs the model, and — once embedding starts, every second — how busy the check keeps the CPU and
+        // the GPU, as two lines and a graph. The CPU's busy time is the embedder's threads plus the fit, which runs
+        // on the main thread between progress calls (fitMs, timed below); it is shared by all the cores.
+        var meter = createLoadMeter(), cpuMeter = createLoadMeter(), fitMs = 0, fitFrom = 0;
+        var cores = cpuCores();
+        var hasCpu = typeof embedder.cpuBusyMs === 'function';
+        if (hasCpu) prog.braveHint(cores);
         var showDevice = function () {
-            if (typeof embedder.device !== 'function') return;
-            var load = ticker && typeof embedder.busyMs === 'function' ? meter(performance.now(), embedder.busyMs()) : null;
-            prog.device(formatEmbedDevice(embedder.device(), load));
+            if (typeof embedder.device !== 'function' && !hasCpu) return;
+            var now = performance.now();
+            var load = ticker && typeof embedder.busyMs === 'function' ? meter(now, embedder.busyMs()) : null;
+            var cpuLoad = ticker && hasCpu ? cpuMeter(now, (embedder.cpuBusyMs() + fitMs) / Math.max(1, cores)) : null;
+            var cpu = hasCpu ? formatEmbedCpu(cores, cpuLoad) : null;
+            var gpu = formatEmbedDevice(typeof embedder.device === 'function' ? embedder.device() : null, load);
+            prog.hardware(cpu, gpu);
+            if (ticker) prog.sample(cpu && cpu.load, gpu.load);
         };
         showDevice();
         // A sample of what the model is given, every CROP_PREVIEW_MS, cycling through the embedder's recent
@@ -320,9 +349,12 @@ async function runImage(session, rate, inject) {
                     prog.update('Cropping and embedding ' + embedder.views.length + ' views: frame ' + done.toLocaleString() +
                         ' of ' + total.toLocaleString() + (done > 3 ? ' — about ' + fmtDuration(left) + ' left' : ''), 0.9 * done / total);
                 } else {
+                    if (fitFrom) fitMs += performance.now() - fitFrom;   // the fit since the last yield: main-thread CPU
+                    fitFrom = 0;
                     prog.update('Learning what tells the animals apart (camera ' + Math.min(done + 1, total) + ' of ' + total + ')…', 0.9 + 0.1 * done / Math.max(1, total));
                 }
                 await yieldToPaint();
+                if (stage !== 'embed') fitFrom = performance.now();
             },
         });
         if (res && embedder.backend) res.model = embedder.backend();   // after releaseFrames: the final word
