@@ -26,9 +26,12 @@
 // An operation that can clock its CPU time (Triangulate All's worker pool) — or
 // that runs on the main thread alone (Track All) — also gets a CPU line and a
 // graph of the last minute under the detail line: `setLoadingCpu`, built from
-// ui/load-graph.js like the image check's dialog.
+// ui/load-graph.js like the image check's dialog. In Brave with its
+// fingerprinting protection on, a note under it explains that the core count is
+// a random one and how to stop that (ui/browser-hints.js).
 
 import { createLoadMeter, createBusyClock, createLoadGraph, formatCpuLoad, setLoadLine, cpuCores } from './load-graph.js';
+import { renderBraveFingerprintingHint } from './browser-hints.js';
 
 /** Default pacer interval. Each yield waits for one paint (~one display frame),
  *  so this bounds the overhead at roughly frame-time / interval (a few %). The
@@ -199,9 +202,10 @@ export function setLoadingCpu(source) {
     _cpuTimer = null;
     if (_mainClock) _mainClock.close();
     _mainClock = null; _mainYields = 0;
-    var box = _el('loadingHardware'), line = _el('loadingCpu'), gbox = _el('loadingGraph');
+    var box = _el('loadingHardware'), line = _el('loadingCpu'), gbox = _el('loadingGraph'), hint = _el('loadingBraveHint');
     if (box) box.classList.add('hidden');
     if (line) setLoadLine(line, '', '', false);          // nothing of the last operation's left behind
+    if (hint) hint.hidden = true;
     if (!source || !box || !line || !gbox) return;
     var busyMs = source.cpuBusyMs;
     if (source.mainThread) {
@@ -222,6 +226,8 @@ export function setLoadingCpu(source) {
     };
     tick();
     box.classList.remove('hidden');
+    // In Brave with its fingerprinting protection on, the core count above is a random one: say so, and how to fix it
+    renderBraveFingerprintingHint(hint, cores);
     _cpuTimer = setInterval(tick, CPU_SAMPLE_MS);
 }
 

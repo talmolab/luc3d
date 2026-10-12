@@ -23,7 +23,7 @@
  * Kept a leaf: `navigateToFrame` is registered by ui-wiring
  * (setIdSwitchNavigator), so this module never imports pose/initialization.js.
  *
- * Depends on: pose/id-switch-check.js, ui/image-embedder.js, ui/load-graph.js, ui/app-state.js,
+ * Depends on: pose/id-switch-check.js, ui/image-embedder.js, ui/load-graph.js, ui/browser-hints.js, ui/app-state.js,
  * ui/loading-overlay.js, ui/settings.js (getTrackingThreshold),
  * import-export/save-load.js (setStatus).
  */
@@ -38,6 +38,7 @@ import { checkSizeSwitches, checkImageSwitches } from '../pose/id-switch-check.j
 import { createImageEmbedder, IMAGE_MODEL_MB, formatEmbedTiming, formatEmbedDevice, formatEmbedCpu,
          inputTensorToPixels, INPUT } from './image-embedder.js';
 import { createLoadMeter, createLoadGraph, setLoadLine, cpuCores } from './load-graph.js';
+import { renderBraveFingerprintingHint } from './browser-hints.js';
 import { idSwitchRowKey as rowKey, idSwitchPrimary as primaryOf, idSwitchMarkers as markersOf, idSwitchOnsets as countOnsets,
          idSwitchEncounterCount as encounterCount, linkIdSwitchResults as tagAndLink,
          idSwitchFixPlan, idSwitchFixFor, idSwitchRenameForFix } from './id-switch-review.js';
@@ -184,12 +185,15 @@ function openProgressDialog(title) {
         '<div class="id-switch-progress-graph"></div></div></div>' +
         '<figure class="id-switch-progress-crop"><canvas width="' + INPUT + '" height="' + INPUT + '" role="img" aria-label="Sample crop"></canvas>' +
         '<figcaption>First crop…</figcaption></figure></div>' +
+        // Brave hiding the real core count (and adding noise to canvas reads): what to do (ui/browser-hints.js)
+        '<div class="progress-hint" hidden></div>' +
         '<div class="modal-actions"><button id="idSwitchCancel">Cancel</button></div></div>';
     document.body.appendChild(overlay);
     var textEl = overlay.querySelector('.id-switch-progress-text'), fill = overlay.querySelector('.id-switch-progress-fill'),
         head = overlay.querySelector('.id-switch-phead'), pctEl = overlay.querySelector('.id-switch-progress-pct'),
         gpuEl = overlay.querySelector('.id-switch-progress-gpu'), cropEl = overlay.querySelector('.id-switch-progress-crop'),
         cpuEl = overlay.querySelector('.id-switch-progress-cpu'), graph = createLoadGraph(overlay.querySelector('.id-switch-progress-graph')),
+        hintEl = overlay.querySelector('.progress-hint'),
         cropCanvas = cropEl.querySelector('canvas'), cropCaption = cropEl.querySelector('figcaption'), cropPixels = null;
     var cancel = function () { if (!ctl.signal.aborted) { ctl.abort(); textEl.textContent = 'Cancelling…'; } };
     var onKey = function (e) { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); cancel(); } };
@@ -219,6 +223,8 @@ function openProgressDialog(title) {
             gpuEl.classList.toggle('is-warn', !!d.warn);
             graph.show(!!c || !!d.metered);
         },
+        /** In Brave with its fingerprinting protection on: the note on its random core count (`cores`, as reported). */
+        braveHint: function (cores) { if (!ctl.signal.aborted) renderBraveFingerprintingHint(hintEl, cores); },
         /** One point of the load graph, in percent (null: not measured, or no such series). */
         sample: function (cpuLoad, gpuLoad) { if (!ctl.signal.aborted) graph.push(performance.now(), cpuLoad, gpuLoad); },
         /**
@@ -275,6 +281,7 @@ async function runImage(session, rate, inject) {
         var meter = createLoadMeter(), cpuMeter = createLoadMeter(), fitMs = 0, fitFrom = 0;
         var cores = cpuCores();
         var hasCpu = typeof embedder.cpuBusyMs === 'function';
+        if (hasCpu) prog.braveHint(cores);
         var showDevice = function () {
             if (typeof embedder.device !== 'function' && !hasCpu) return;
             var now = performance.now();

@@ -3994,22 +3994,66 @@ buffered in memory, and multi-session loading refuses. Measured on Brave 1.96
 `brave://flags/#file-system-access-api` ("File System Access API"). Safari and
 Firefox can't enable the API, so they get no hint (existing messages stand).
 
+**Brave's fingerprinting protection ("farbling").** With Shields at their
+default, Brave reports a RANDOM core count to each site
+(`navigator.hardwareConcurrency`, between 2 and the true count, fixed per site
+for a session) and adds noise to canvas pixel reads. Measured with Brave 1.97
+(Chromium 155) on a 12-core M2 Pro, fresh profiles: 4, 6, 7, 8, 9, 10, 11, 12
+cores across sessions; a 64 x 64 pattern written and read back came back with
+230-280 of 16,384 values off by 1 (0 in Chromium). A per-site exception
+(Shields > Advanced controls > Allow fingerprinting) stops both: 12 cores every
+session, 0 values changed. It matters because the worker pools are sized from
+the core count — Triangulate All on 60,000 frames took 3.0 s with 12 reported,
+4.7 s with 4 and 16 s at Brave's floor of 2 (above ~6 the main thread feeding
+the workers is the limit, so a middling draw costs little) — the CPU line
+divides by it, and the image ID-switch check reads its crops from a canvas. The
+app cannot learn the true count, so it tells the user how to give it: a note
+under the CPU line of the progress popups. Detection is the canvas read, not
+the count: a draw can land on the true count (it did, in the e2e run) and the
+noise is still there.
+
 **Key exports.**
 - `isBrave()` — `navigator.brave.isBrave` present.
 - `hasFileSystemAccess()` — save + directory pickers available.
 - `fileSystemAccessHint()` — how to enable the API (paste
   `brave://flags/#file-system-access-api`, set Enabled, relaunch — or use
   Chrome/Edge); `''` unless Brave with the API off, so callers can append it.
+- `canvasReadsPerturbed()` — a known 64 x 64 pattern written with
+  `putImageData` and read straight back comes back changed. Checked once per
+  page and cached (~7 ms in Brave): it cannot change without a reload, which is
+  what changing Shields does. `__setCanvasProbe(fn)` replaces it for tests.
+- `braveFingerprintingActive()` — Brave AND canvas reads perturbed.
+- `braveFingerprintingHint(cores)` -> `{lead, why, steps, after}` | null —
+  "Brave reports a random number of CPU cores to this site (this session: N)"
+  ("random", not "wrong": the draw can be the true count), what that does here,
+  three steps — save first (changing Shields reloads the page); click the
+  Shields icon (the lion) at the right end of the address bar; open Advanced
+  controls and choose Allow fingerprinting (older versions: switch off Block
+  fingerprinting), reload if Brave does not — and "This note goes away once it
+  has worked." The labels are Brave 1.97's own, read out of its `locale.pak`.
+  null unless `braveFingerprintingActive()`.
+- `renderBraveFingerprintingHint(el, cores)` — fills `el` (a `.progress-hint`)
+  with the bold lead, a numbered list and the after-note, built from text
+  nodes, and shows it; hides and empties it when there is no hint.
 
-**Imports from project modules.** None.
+**Imports from project modules.** None. No DOM at load (the canvas probe runs
+on first use, on the main thread), so it is safe to import anywhere.
 
 **Imported by.** `loading/session-loader.js` (multi-session load message),
 `import-export/save-load.js` (`saveProjectSlp` download fallback status),
 `ui/export-modals.js` (3D video + JSON export in-memory confirms),
-`ui/overlay-export-modal.js` (overlay video in-memory confirm).
+`ui/overlay-export-modal.js` (overlay video in-memory confirm),
+`ui/loading-overlay.js` (`setLoadingCpu`: the note under the loading card's CPU
+line, `#loadingBraveHint`), `ui/id-switch-modal.js` (the image check's dialog,
+under its CPU and GPU lines).
 
 **Tests.** `tests/test-browser-hints.js`; verified end to end in real Brave
 (default profile vs `--enable-features=FileSystemAccessAPI`).
+`tests/e2e/brave-fingerprinting-hint.mjs` drives REAL Brave (fresh headless
+profiles; skips when Brave is not installed, `BRAVE=` overrides the path): the
+note in both popups with default Shields, not on a popup without a CPU line,
+gone with the popup; none with the per-site exception (which also gives the
+true core count); none in Chromium.
 
 ### ui/custom-delete-ops.js
 
@@ -5555,7 +5599,10 @@ the card's content edge).
   operations that report here never use the GPU. The same parts as the image
   check's dialog (`createLoadGraph`, `formatCpuLoad`, `setLoadLine`,
   `ui/load-graph.js`); the graph is built into `#loadingGraph` once and
-  `clear()`ed per operation. Until `hideLoading()` or `setLoadingCpu(null)`; a
+  `clear()`ed per operation. In Brave with its fingerprinting protection on,
+  a note under it (`#loadingBraveHint`, `renderBraveFingerprintingHint`,
+  `ui/browser-hints.js`) says the core count is a random one and how to stop
+  that. Until `hideLoading()` or `setLoadingCpu(null)`; a
   source that throws stops it. An operation that never calls it shows no CPU
   row (Group by Identity/Track, the body-size ID-switch check, loading). The
   body-size check is left out ON PURPOSE: it runs as one uninterrupted block of
@@ -5576,8 +5623,9 @@ the card's content edge).
 - `PROGRESS_INTERVAL_MS` (250), `CPU_SAMPLE_MS` (1000).
 
 **Imports from project modules.** `./load-graph.js` (`createLoadMeter`,
-`createLoadGraph`, `formatCpuLoad`, `setLoadLine`, `cpuCores` — itself import-free
-and DOM-free at load). Safe under the Node test stubs: every DOM access is
+`createBusyClock`, `createLoadGraph`, `formatCpuLoad`, `setLoadLine`, `cpuCores` —
+itself import-free and DOM-free at load), `./browser-hints.js`
+(`renderBraveFingerprintingHint`; also import-free and DOM-free at load). Safe under the Node test stubs: every DOM access is
 null-guarded (no `#loadingHardware` → `setLoadingCpu` does nothing), and with no
 `requestAnimationFrame` it yields via `MessageChannel`.
 
@@ -9669,6 +9717,8 @@ step, which the counter printed as a frozen "0/1 frames (0%)"),
 `ui/image-embedder.js` (`createImageEmbedder`, `IMAGE_MODEL_MB`, `formatEmbedTiming`,
 `formatEmbedDevice`, `formatEmbedCpu`, `inputTensorToPixels`, `INPUT`),
 `ui/load-graph.js` (`createLoadMeter`, `createLoadGraph`, `setLoadLine`, `cpuCores`),
+`ui/browser-hints.js` (`renderBraveFingerprintingHint`: in Brave with its fingerprinting
+protection on, the note under the CPU and GPU lines — `prog.braveHint(cores)`),
 `ui/id-switch-review.js` (row keys, change-point helpers, `linkIdSwitchResults`,
 `idSwitchFixPlan`, `idSwitchFixFor`, `idSwitchRenameForFix`),
 `ui/id-switch-highlight.js` (`setIdSwitchHighlight`, `updateIdSwitchHighlight`,
