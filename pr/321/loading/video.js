@@ -8,8 +8,8 @@
  * Dependencies: mp4box.all.min.js (MP4Box)
  */
 
-import { shouldIgnoreShortcut } from '../ui/keyboard-target.js?v=008428f2d27f';
-import { diagnoseUnplayableVideo } from './video-codec-diagnosis.js?v=008428f2d27f';
+import { shouldIgnoreShortcut } from '../ui/keyboard-target.js?v=f0e0bfe56748';
+import { diagnoseUnplayableVideo } from './video-codec-diagnosis.js?v=f0e0bfe56748';
 
 // ---------------------------------------------------------------------------
 // Logging helper
