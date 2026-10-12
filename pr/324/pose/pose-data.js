@@ -779,6 +779,13 @@ export class Instance {
         this._originalXY = null;
         /** @type {number|Uint32Array|null} Backup of original occlusion */
         this._originalOcc = null;
+        /**
+         * @type {number} The model's per-node scores, as a handle into the
+         * shared score pool (see `storePointScores`); -1 = none. Set only on
+         * predictions read from an EAGER load — a lazy project's stay in its
+         * store (`Session.predictedNodeScore`).
+         */
+        this._ps = -1;
     }
 
     /** Number of skeleton nodes this instance covers. @returns {number} */
@@ -949,6 +956,37 @@ export class Instance {
     }
 
     /**
+     * Keep the model's per-node scores — one per node, read from
+     * `src[start ..]` (NaN or null = no score for that node). Null clears them.
+     * @param {ArrayLike<number>|null} src
+     * @param {number} [start=0]
+     */
+    setPointScores(src, start) {
+        this._ps = storePointScores(src, start || 0, this.numNodes);
+    }
+
+    /** Share another instance's per-node scores (they are never edited in place). */
+    adoptPointScoresFrom(other) {
+        this._ps = other ? other._ps : -1;
+    }
+
+    /** Does this instance carry the model's per-node scores? @returns {boolean} */
+    hasPointScores() { return this._ps >= 0; }
+
+    /**
+     * The model's score for node `k`, NaN when there is none. Only a
+     * prediction's score means anything — once the user edits an instance it
+     * is no longer what the model scored (and becomes `'user'`) — so callers
+     * check the type; `Session.predictedNodeScore` does.
+     * @param {number} k @returns {number}
+     */
+    pointScore(k) {
+        // Integer only: `null >= 0` is true, and would read node 0.
+        if (!Number.isInteger(k) || k < 0 || k >= this.numNodes) return NaN;
+        return readPointScore(this._ps, k);
+    }
+
+    /**
      * Toggle the occluded state of a node.
      * Only works if the point has valid coordinates.
      * @param {number} nodeIdx
@@ -1010,6 +1048,7 @@ export class Instance {
     insertNodeAt(idx) {
         const n = this.numNodes;
         if (idx < 0 || idx > n) return;
+        this._ps = splicePointScores(this._ps, n, idx, 0);
         this._xy = spliceXY(this._xy, idx, 0);
         this._occ = spliceOcc(this._occ, n, idx, 0);
         if (this._originalXY) {
@@ -1025,6 +1064,7 @@ export class Instance {
     removeNodeAt(idx) {
         const n = this.numNodes;
         if (idx < 0 || idx >= n) return;
+        this._ps = splicePointScores(this._ps, n, idx, 1);
         this._xy = spliceXY(this._xy, idx, 1);
         this._occ = spliceOcc(this._occ, n, idx, 1);
         if (this._originalXY) {
@@ -1142,6 +1182,101 @@ function spliceOcc(occ, n, idx, del) {
         w++;
     }
     return out;
+}
+
+/*
+ * ---------------------------------------------------------------------------
+ * Per-node model scores — ONE pool for the whole project
+ * ---------------------------------------------------------------------------
+ * A predicted instance read from an `.slp` carries the model's confidence in
+ * each node (`pred_points.score`), which the node tooltip shows and the save
+ * writes back. They are kept here, in shared `Float32Array` chunks, and an
+ * Instance holds only the integer offset of its first node (`Instance._ps`).
+ *
+ * WHY a pool and not an array per instance: measured in V8, a
+ * `Float32Array(15)` per instance costs ~320 B of heap and one more ArrayBuffer
+ * for every GC to sweep, against ~8 B for the integer — and an EAGER per-camera
+ * folder can hold millions of predicted instances (each camera up to the 150 MB
+ * lazy threshold). The same reasoning as `lazyPlaceholderXY` above.
+ *
+ * Segments are written once and never changed, so two instances may share one
+ * (`adoptPointScoresFrom`), and a node insert/remove writes a new segment
+ * rather than editing the old. Nothing is ever freed: a deleted instance leaves
+ * its few floats behind, which is bounded by what was loaded, and loading a
+ * project reloads the page.
+ *
+ * A lazy project does NOT use this: its scores stay in the columnar store and
+ * are read from there on demand (`Session.predictedNodeScore`), since frames
+ * are re-hydrated on every revisit and would refill the pool each time.
+ *
+ * Float32 because the scores are only ever displayed to 2 decimals and LUCID
+ * writes `pred_points` as float32 anyway.
+ */
+
+/** Scores per chunk. A segment never straddles two chunks. */
+const SCORE_CHUNK = 1 << 20;
+/** The first chunk starts small and doubles up to `SCORE_CHUNK`. */
+const SCORE_FIRST_CHUNK = 4096;
+const _scoreChunks = [];
+let _scoreFill = 0;
+
+/**
+ * Copy `n` scores from `src[start ..]` into the pool.
+ * @param {ArrayLike<number>} src
+ * @param {number} start
+ * @param {number} n
+ * @returns {number} the handle (offset of the first score), or -1 for none
+ */
+function storePointScores(src, start, n) {
+    if (src == null || !(n > 0) || n > SCORE_CHUNK) return -1;
+    let c = _scoreChunks.length - 1;
+    let buf = c >= 0 ? _scoreChunks[c] : null;
+    if (!buf || _scoreFill + n > buf.length) {
+        if (buf && buf.length < SCORE_CHUNK) {
+            // Grow the last chunk in place: its handles stay valid, because
+            // readers always look the chunk up by index.
+            let len = buf.length * 2;
+            while (len < _scoreFill + n) len *= 2;
+            const grown = new Float32Array(Math.min(len, SCORE_CHUNK));
+            grown.set(buf);
+            _scoreChunks[c] = buf = grown;
+        }
+        if (!buf || _scoreFill + n > buf.length) {
+            buf = new Float32Array(c < 0 ? Math.max(SCORE_FIRST_CHUNK, n) : SCORE_CHUNK);
+            _scoreChunks.push(buf);
+            c++;
+            _scoreFill = 0;
+        }
+    }
+    const o = _scoreFill;
+    for (let k = 0; k < n; k++) {
+        const v = src[start + k];
+        buf[o + k] = v == null ? NaN : v;
+    }
+    _scoreFill += n;
+    return c * SCORE_CHUNK + o;
+}
+
+/** Score `k` of the segment at `handle` (NaN for -1). */
+function readPointScore(handle, k) {
+    if (handle < 0) return NaN;
+    return _scoreChunks[Math.floor(handle / SCORE_CHUNK)][handle % SCORE_CHUNK + k];
+}
+
+/**
+ * Insert (`del`=0, a NaN score) or delete (`del`=1) one node slot in the
+ * `n`-node segment at `handle`. Writes a NEW segment — segments may be shared.
+ * @returns {number} the new handle (-1 stays -1)
+ */
+function splicePointScores(handle, n, idx, del) {
+    if (handle < 0) return -1;
+    const out = new Array(n + (del ? -1 : 1)).fill(NaN);
+    for (let k = 0, w = 0; k < n; k++) {
+        if (del && k === idx) continue;
+        if (!del && k === idx) w++;           // the inserted node has no score
+        out[w++] = readPointScore(handle, k);
+    }
+    return storePointScores(out, 0, out.length);
 }
 
 
@@ -2782,6 +2917,35 @@ export class Session {
      */
     getFrameGroup(frameIdx) {
         return this.frameGroups.get(frameIdx);
+    }
+
+    /**
+     * The model's score for node `k` of a predicted instance — what the node
+     * tooltip shows and what the save writes back as `pred_points.score`.
+     *
+     * Only a `'predicted'` instance has one: an edit makes an instance `'user'`
+     * (its positions are then no longer what the model scored), and a
+     * reprojection was never scored. An eagerly loaded prediction carries its
+     * scores (`Instance.pointScore`); a lazy project's are read from the store
+     * row the instance was hydrated from (`_rawInstIndex`), by node NAME, so a
+     * skeleton edit made after loading can never pair a node with another
+     * node's score (`SioLazyLoader.predictedPointScore`).
+     *
+     * @param {string} cameraName
+     * @param {number} frameIdx
+     * @param {Instance} inst
+     * @param {number} k - node index in `this.skeleton`
+     * @returns {number} NaN when there is no score
+     */
+    predictedNodeScore(cameraName, frameIdx, inst, k) {
+        if (!inst || inst.type !== 'predicted' || !Number.isInteger(k) || k < 0 || k >= inst.numNodes) return NaN;
+        if (inst.hasPointScores()) return inst.pointScore(k);
+        const loader = this.lazyLoader;
+        if (!loader || typeof loader.predictedPointScore !== 'function' ||
+            !Number.isInteger(inst._rawInstIndex) || inst._rawInstIndex < 0) return NaN;
+        const name = this.skeleton && this.skeleton.nodes ? this.skeleton.nodes[k] : undefined;
+        if (name == null) return NaN;
+        return loader.predictedPointScore(cameraName, frameIdx, inst._rawInstIndex, name);
     }
 
     /**
