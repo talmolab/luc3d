@@ -12,10 +12,16 @@
 // existing menu item or toolbar button, so it runs exactly what the user would
 // have run by hand.
 //
-// Depends on: ui/track-summary.js, ui/id-switch-modal.js (openIdSwitchPanel).
+// Closing it is not the end of it: Track All keeps what it showed on the session
+// (`rememberTrackSummary`), and the ID Switches tab reopens it
+// (`reopenTrackSummary`) — with each check's CURRENT result, so a check run after
+// the box was closed is reported rather than still "Not run".
+//
+// Depends on: ui/track-summary.js, ui/id-switch-modal.js (openIdSwitchPanel,
+// refreshIdSwitchPanel, setTrackSummaryOpener).
 
-import { planTrackSummary } from './track-summary.js';
-import { openIdSwitchPanel } from './id-switch-modal.js';
+import { planTrackSummary, summarizeTrackedIdentities, describeSwitchCheck } from './track-summary.js';
+import { openIdSwitchPanel, refreshIdSwitchPanel, setTrackSummaryOpener } from './id-switch-modal.js';
 
 /** Click an existing control by id (a disabled button ignores it, as it would a real click). */
 function clickById(id) {
@@ -182,3 +188,44 @@ export function showTrackSummaryModal(summary, checks) {
     primary.focus();
     return { close: close, overlay: overlay };
 }
+
+/**
+ * Keep a finished Track All's summary on its session, for `reopenTrackSummary`.
+ * In memory only — not saved with the project. Replaces the session's previous one.
+ *
+ * @param {Session} session
+ * @param {Object} opts  `summarizeTrackedIdentities`'s options for the pass
+ * @param {{size: object, image: object}} checks  what the box showed, from `describeSwitchCheck`
+ * @param {number} identities  identities the pass assigned
+ */
+export function rememberTrackSummary(session, opts, checks, identities) {
+    if (!session) return;
+    session._trackSummary = { opts: opts, checks: checks, identities: identities };
+    refreshIdSwitchPanel(session);                       // the tab's reopen button appears
+}
+
+/**
+ * Reopen the session's last Track All summary. The numbers are re-counted from the
+ * session as it is now (a fixed switch moves the shares), the time is the pass's own,
+ * and each check shows its current result: a check run since replaces the pass's
+ * "Not run" / "Skipped", and one whose results were cleared reads "Not run" again.
+ * A skip or a failure is not kept by the check itself, so it comes from the pass.
+ *
+ * @returns {{close: function, overlay: HTMLElement}|null}  null when there is none
+ */
+export function reopenTrackSummary(session) {
+    var saved = session && session._trackSummary;
+    if (!saved) return null;
+    var results = (session._idSwitch && session._idSwitch.results) || {};
+    var checks = {};
+    ['size', 'image'].forEach(function (cue) {
+        var now = results[cue], then = saved.checks[cue];
+        if (now && now.ok) checks[cue] = describeSwitchCheck(true, now, saved.identities);
+        else if (then && (then.state === 'found' || then.state === 'clear')) checks[cue] = describeSwitchCheck(false, null, saved.identities);
+        else checks[cue] = then;
+    });
+    return showTrackSummaryModal(summarizeTrackedIdentities(session, saved.opts), checks);
+}
+
+// The ID Switches tab's "Show Track All summary" (ui/id-switch-modal.js stays a leaf: it is handed this)
+setTrackSummaryOpener(reopenTrackSummary);

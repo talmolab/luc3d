@@ -33,7 +33,7 @@ import { setColorByIdentity } from '../ui/color-by.js';
 import { setTrailSeconds, trailSecondsName, TRACK_ALL_TRAIL_SECONDS } from '../ui/trail-presets.js';
 import { runIdSwitchChecks, clearIdSwitchResults } from '../ui/id-switch-modal.js';
 import { summarizeTrackedIdentities, describeSwitchCheck } from '../ui/track-summary.js';
-import { showTrackSummaryModal } from '../ui/track-summary-modal.js';
+import { showTrackSummaryModal, rememberTrackSummary } from '../ui/track-summary-modal.js';
 import { collapseTimeline } from '../ui/timeline-controller.js';
 import { collapseViewport3D } from '../ui/panel-visibility.js';
 
@@ -1552,18 +1552,20 @@ async function runTrackingPass(range) {
             try {
                 // `runIdSwitchChecks` returns null only when there were no tracked 3D skeletons to check.
                 var noSkeletons = 'no tracked 3D skeletons';
-                showTrackSummaryModal(
-                    summarizeTrackedIdentities(session, {
-                        frames: totalFrameCount, animals: effectiveNumAnimals, animalsAuto: userNumAnimals == null,
-                        elapsedMs: trackMs,
-                        // The recording's rate, as the ID-switch checks read it (measured
-                        // from the video when one is loaded), for the real-time multiplier.
-                        fps: state.fps > 0 ? state.fps : (session.fps > 0 ? session.fps : 0),
-                    }),
-                    {
-                        size: describeSwitchCheck(autoSize, checkRes && checkRes.size, lres.numIdentities, noSkeletons),
-                        image: describeSwitchCheck(autoImage, checkRes && checkRes.image, lres.numIdentities, noSkeletons),
-                    });
+                var summaryOpts = {
+                    frames: totalFrameCount, animals: effectiveNumAnimals, animalsAuto: userNumAnimals == null,
+                    elapsedMs: trackMs,
+                    // The recording's rate, as the ID-switch checks read it (measured
+                    // from the video when one is loaded), for the real-time multiplier.
+                    fps: state.fps > 0 ? state.fps : (session.fps > 0 ? session.fps : 0),
+                };
+                var summaryChecks = {
+                    size: describeSwitchCheck(autoSize, checkRes && checkRes.size, lres.numIdentities, noSkeletons),
+                    image: describeSwitchCheck(autoImage, checkRes && checkRes.image, lres.numIdentities, noSkeletons),
+                };
+                // Kept on the session, so the ID Switches tab can reopen the box once it is closed
+                rememberTrackSummary(session, summaryOpts, summaryChecks, lres.numIdentities);
+                showTrackSummaryModal(summarizeTrackedIdentities(session, summaryOpts), summaryChecks);
             } catch (e) {
                 console.error('[' + label + '] summary failed:', e);
             }

@@ -1982,7 +1982,8 @@ both as they were. Covered by `tests/e2e/track-all-closes-timeline-and-3d.mjs`.
 `runTrackingPass` (Track All only — a range is a targeted re-run inspected on the
 timeline) opens `showTrackSummaryModal` (`ui/track-summary-modal.js`) with
 `summarizeTrackedIdentities` and one `describeSwitchCheck` per cue
-(`ui/track-summary.js`). It reports how long tracking took — `trackStart` is taken
+(`ui/track-summary.js`), after keeping both on the session with
+`rememberTrackSummary`, so the ID Switches tab can reopen the box once it is closed. It reports how long tracking took — `trackStart` is taken
 AFTER the animal-count prompt, so the user's typing is not counted, and stops when
 the identity pass returns — with its speed (fps, and × real time from the
 recording rate `state.fps`, falling back to `session.fps`, as the ID-switch checks
@@ -2218,7 +2219,7 @@ drifts upward (e.g., 4 → 11 on the test fixture).
 - `../ui/track-summary.js` — `summarizeTrackedIdentities`, `describeSwitchCheck`
   (the Track All summary's data).
 - `../ui/track-summary-modal.js` — `showTrackSummaryModal`: opened at the end of a
-  successful Track All (see above).
+  successful Track All (see above); `rememberTrackSummary`: keeps it for reopening.
 - `../ui/timeline-controller.js` — `collapseTimeline`: a successful Track All
   (not a range) closes the Timeline if it is open.
 - `../ui/panel-visibility.js` — `collapseViewport3D`: the same, for the 3D viewer
@@ -9745,7 +9746,13 @@ change point and repeat on the transport seekbar (`setSeekbarSwitchMarkers`, `ui
 navigateToFrame?, inject?})`; `setIdSwitchNavigator(fn)` (ui-wiring registers
 `navigateToFrame` once, so rows stay clickable when the tracker started the
 check); `setIdSwitchRefresher(fn)` (ui-wiring registers the repaint run after a
-fix / undo — overlays, 3D, info panel, timeline — keeping this module a leaf); `refreshIdSwitchPanel(session?)` (render the tab and put that session's
+fix / undo — overlays, 3D, info panel, timeline — keeping this module a leaf);
+`setTrackSummaryOpener(fn)` (ui/track-summary-modal.js registers `reopenTrackSummary`
+for the tab's **Show Track All summary** button — the first thing in the tab, above
+"Possible ID switches", in both the results and the empty state, shown only when the
+session has a summary from a Track All in this page, since it is not saved; it is
+how a box closed without running the image check is got back, to run it);
+`refreshIdSwitchPanel(session?)` (render the tab and put that session's
 markers on the seekbar — called after a check, from `updateInfoPanel` and from
 `switchSession`); `openIdSwitchPanel()` (show the panel, if hidden, on the tab);
 `clearIdSwitchResults(session?)` (called by `runTrackingPass` before it relabels);
@@ -9965,7 +9972,8 @@ rename them wrongly.
 **Imported by.** `ui/ui-wiring.js` (`#menuCheckSizeSwitches`,
 `#menuCheckImageSwitches`, `setIdSwitchNavigator`, `setIdSwitchRefresher`, `updateIdSwitchProgress`), `pose/tracker.js` (the
 automatic run, `clearIdSwitchResults`), `ui/info-panel.js` and
-`ui/sessions-panes.js` (`refreshIdSwitchPanel`).
+`ui/sessions-panes.js` (`refreshIdSwitchPanel`), `ui/track-summary-modal.js`
+(`openIdSwitchPanel`, `refreshIdSwitchPanel`, `setTrackSummaryOpener`).
 
 **Coverage.** `tests/e2e/size-switch-check.mjs` (size, menu path, the checklist:
 ticks, Next unreviewed, persistence across the tab / a re-run / a session switch,
@@ -11437,7 +11445,22 @@ ID-switch check's result and time, and the **Next step** with its button focused
 Renders `planTrackSummary` (`ui/track-summary.js`) and nothing else.
 
 **Key exports.** `showTrackSummaryModal(summary, checks)` — returns
-`{close, overlay}`, or null without a DOM (Node harnesses run Track All).
+`{close, overlay}`, or null without a DOM (Node harnesses run Track All);
+`rememberTrackSummary(session, opts, checks, identities)` (Track All keeps what the
+box showed on `session._trackSummary` — in memory, not saved — and refreshes the
+ID Switches tab so its button appears); `reopenTrackSummary(session)` (the tab's
+**Show Track All summary**).
+
+**Reopening.** Closing the box used to be final, which stranded a user who had not
+turned on the image check before Track All: the box is what offers it. The ID
+Switches tab's button (`setTrackSummaryOpener`, registered at module load — this
+module imports `ui/id-switch-modal.js`, so that one stays a leaf) reopens it. The
+counts are re-taken from the session as it is now (`summarizeTrackedIdentities`
+with the pass's options — a fixed switch moves the shares); the tracking time is
+the pass's own. Each check shows its CURRENT result: a check run since the box
+closed replaces the pass's "Not run" / "Skipped" (and is no longer offered), and a
+check whose results were cleared reads "Not run" again. A skip or failure is kept
+from the pass, because `runIdSwitchChecks` stores only results that ran.
 
 **Notes / caveats.**
 - **A note, not a prompt.** Nothing changes until a button is pressed; Close,
@@ -11456,8 +11479,9 @@ Renders `planTrackSummary` (`ui/track-summary.js`) and nothing else.
   caps its height at the viewport. It drops `.multi-frame-modal`'s 420px
   `min-width` so it fits a narrow window.
 
-**Imports from project modules.** `ui/track-summary.js` (`planTrackSummary`),
-`ui/id-switch-modal.js` (`openIdSwitchPanel`).
+**Imports from project modules.** `ui/track-summary.js` (`planTrackSummary`,
+`summarizeTrackedIdentities`, `describeSwitchCheck`), `ui/id-switch-modal.js`
+(`openIdSwitchPanel`, `refreshIdSwitchPanel`, `setTrackSummaryOpener`).
 
 **Imported by.** `pose/tracker.js`. No cycle: neither import reaches back to the
 tracker.
@@ -11465,7 +11489,10 @@ tracker.
 **Coverage.** `tests/e2e/track-all-summary.mjs` — the real Track All button, the
 rows and times, the key swallowing and `Esc`, `Enter` running Triangulate All,
 replacement on a second run, no box after Track Frame Range, the nothing-tracked
-case, and Review switches landing on the first switch. Tests that click the app
+case, Review switches landing on the first switch, and §2b reopening from the ID
+Switches tab (the button's place above "Possible ID switches", the same box, a
+check run since reported rather than "Not run", Clear, and no button without a
+Track All). Tests that click the app
 after a Track All close the box first (`#trackSummaryClose`).
 
 ### ui/view-align-modal.js
