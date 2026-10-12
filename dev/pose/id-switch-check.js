@@ -55,7 +55,7 @@
  * Depends on: pose-data.js (readPoint3d). Pure — no DOM, no app state.
  */
 
-import { readPoint3d } from './pose-data.js?v=bf3ade1c429b';
+import { readPoint3d } from './pose-data.js?v=ec3c8976db29';
 
 /** Bone (node-pair) lengths used as the size signature. Pairs whose nodes the
  *  session skeleton lacks are skipped. */
