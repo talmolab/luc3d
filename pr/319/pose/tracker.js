@@ -16,25 +16,25 @@ import {
     reprojectPoints,
     computeInstanceDistanceTo,
     hungarianAlgorithm
-} from './triangulation.js?v=cb91193d2f3c';
-import { CrossViewTracker, Detection } from './cross-view-tracker.js?v=cb91193d2f3c';
-import { InstanceGroup, points3dNodeCount, hasPoint3d, readPoint3d, pooledPoints3d } from './pose-data.js?v=cb91193d2f3c';
+} from './triangulation.js?v=d7c651d92c9d';
+import { CrossViewTracker, Detection } from './cross-view-tracker.js?v=d7c651d92c9d';
+import { InstanceGroup, points3dNodeCount, hasPoint3d, readPoint3d, pooledPoints3d } from './pose-data.js?v=d7c651d92c9d';
 
 // Pass 3i-1: tracker UI/integration (was in app.js)
-import { state, interactionManager, timeline, viewport3d, getActiveSession } from '../ui/app-state.js?v=cb91193d2f3c';
-import { getNodeWeightArray, getTrackingThresholds, getTrackingThreshold, isCameraTracked } from '../ui/settings.js?v=cb91193d2f3c';
-import { markDirty, setStatus, hideLoading } from '../import-export/save-load.js?v=cb91193d2f3c';
-import { showLoadingProgress, createProgressPacer, yieldToPaint, setLoadingCpu } from '../ui/loading-overlay.js?v=cb91193d2f3c';
-import { loadAllLazyFrames, sweepLazyFrameWindows } from './triangulation.js?v=cb91193d2f3c';
-import { drawAllOverlays, showPredictedOnly, PREDICTED_ONLY_NOTE } from '../ui/rendering.js?v=cb91193d2f3c';
-import { updateInfoPanel } from '../ui/info-panel.js?v=cb91193d2f3c';
-import { setColorByIdentity } from '../ui/color-by.js?v=cb91193d2f3c';
-import { setTrailSeconds, trailSecondsName, TRACK_ALL_TRAIL_SECONDS } from '../ui/trail-presets.js?v=cb91193d2f3c';
-import { runIdSwitchChecks, clearIdSwitchResults } from '../ui/id-switch-modal.js?v=cb91193d2f3c';
-import { summarizeTrackedIdentities, describeSwitchCheck } from '../ui/track-summary.js?v=cb91193d2f3c';
-import { showTrackSummaryModal } from '../ui/track-summary-modal.js?v=cb91193d2f3c';
-import { collapseTimeline } from '../ui/timeline-controller.js?v=cb91193d2f3c';
-import { collapseViewport3D } from '../ui/panel-visibility.js?v=cb91193d2f3c';
+import { state, interactionManager, timeline, viewport3d, getActiveSession } from '../ui/app-state.js?v=d7c651d92c9d';
+import { getNodeWeightArray, getTrackingThresholds, getTrackingThreshold, isCameraTracked } from '../ui/settings.js?v=d7c651d92c9d';
+import { markDirty, setStatus, hideLoading } from '../import-export/save-load.js?v=d7c651d92c9d';
+import { showLoadingProgress, createProgressPacer, yieldToPaint, setLoadingCpu } from '../ui/loading-overlay.js?v=d7c651d92c9d';
+import { loadAllLazyFrames, sweepLazyFrameWindows } from './triangulation.js?v=d7c651d92c9d';
+import { drawAllOverlays, showPredictedOnly, PREDICTED_ONLY_NOTE } from '../ui/rendering.js?v=d7c651d92c9d';
+import { updateInfoPanel } from '../ui/info-panel.js?v=d7c651d92c9d';
+import { setColorByIdentity } from '../ui/color-by.js?v=d7c651d92c9d';
+import { setTrailSeconds, trailSecondsName, TRACK_ALL_TRAIL_SECONDS } from '../ui/trail-presets.js?v=d7c651d92c9d';
+import { runIdSwitchChecks, clearIdSwitchResults } from '../ui/id-switch-modal.js?v=d7c651d92c9d';
+import { summarizeTrackedIdentities, describeSwitchCheck } from '../ui/track-summary.js?v=d7c651d92c9d';
+import { showTrackSummaryModal, rememberTrackSummary } from '../ui/track-summary-modal.js?v=d7c651d92c9d';
+import { collapseTimeline } from '../ui/timeline-controller.js?v=d7c651d92c9d';
+import { collapseViewport3D } from '../ui/panel-visibility.js?v=d7c651d92c9d';
 
 /**
  * A frame index as the USER sees it: 1-based.
@@ -1540,18 +1540,20 @@ async function runTrackingPass(range) {
             try {
                 // `runIdSwitchChecks` returns null only when there were no tracked 3D skeletons to check.
                 var noSkeletons = 'no tracked 3D skeletons';
-                showTrackSummaryModal(
-                    summarizeTrackedIdentities(session, {
-                        frames: totalFrameCount, animals: effectiveNumAnimals, animalsAuto: userNumAnimals == null,
-                        elapsedMs: trackMs,
-                        // The recording's rate, as the ID-switch checks read it (measured
-                        // from the video when one is loaded), for the real-time multiplier.
-                        fps: state.fps > 0 ? state.fps : (session.fps > 0 ? session.fps : 0),
-                    }),
-                    {
-                        size: describeSwitchCheck(autoSize, checkRes && checkRes.size, lres.numIdentities, noSkeletons),
-                        image: describeSwitchCheck(autoImage, checkRes && checkRes.image, lres.numIdentities, noSkeletons),
-                    });
+                var summaryOpts = {
+                    frames: totalFrameCount, animals: effectiveNumAnimals, animalsAuto: userNumAnimals == null,
+                    elapsedMs: trackMs,
+                    // The recording's rate, as the ID-switch checks read it (measured
+                    // from the video when one is loaded), for the real-time multiplier.
+                    fps: state.fps > 0 ? state.fps : (session.fps > 0 ? session.fps : 0),
+                };
+                var summaryChecks = {
+                    size: describeSwitchCheck(autoSize, checkRes && checkRes.size, lres.numIdentities, noSkeletons),
+                    image: describeSwitchCheck(autoImage, checkRes && checkRes.image, lres.numIdentities, noSkeletons),
+                };
+                // Kept on the session, so the ID Switches tab can reopen the box once it is closed
+                rememberTrackSummary(session, summaryOpts, summaryChecks, lres.numIdentities);
+                showTrackSummaryModal(summarizeTrackedIdentities(session, summaryOpts), summaryChecks);
             } catch (e) {
                 console.error('[' + label + '] summary failed:', e);
             }

@@ -75,8 +75,8 @@
 // `usablePlaneFit`) and passes it in, and everything here treats a derived fit
 // and a stored one identically.
 
-import { normalize3, cross3, dot3, rotationAboutAxis, mulMat3Vec3 } from './origin-frame.js?v=cb91193d2f3c';
-import { points3dForPlane } from './plane-data.js?v=cb91193d2f3c';
+import { normalize3, cross3, dot3, rotationAboutAxis, mulMat3Vec3 } from './origin-frame.js?v=d7c651d92c9d';
+import { points3dForPlane } from './plane-data.js?v=d7c651d92c9d';
 
 /** Angles closer than this to the target count as reached. @type {number} */
 export const ANGLE_TOL_DEG = 1e-6;

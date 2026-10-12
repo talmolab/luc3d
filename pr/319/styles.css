@@ -4044,6 +4044,25 @@ input[type="range"]::-moz-range-track {
 }
 .loading-hw .load-graph { flex: none; }
 
+/* A note under the CPU line in both progress popups (ui/browser-hints.js):
+   Brave's fingerprinting protection hides the real core count — what to do.
+   Advice, not an error: muted text, a warning-coloured edge to catch the eye. */
+.progress-hint {
+  margin-top: 14px;
+  padding: 8px 10px 8px 12px;
+  border-left: 3px solid var(--warning-color);
+  border-radius: 3px;
+  background: var(--bg-primary);
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+.progress-hint[hidden] { display: none; }
+.progress-hint p { margin: 0; font-size: inherit; color: inherit; line-height: inherit; }   /* not .multi-frame-modal p's */
+.progress-hint strong { color: var(--text-primary); font-weight: 600; }
+.progress-hint ol { margin: 6px 0; padding-left: 18px; }
+.progress-hint li + li { margin-top: 2px; }
+
 /* Dismiss (a startup error, pose/initialization.js) — right-aligned, as the
    image check's Cancel. */
 .loading-actions { display: flex; justify-content: flex-end; }
@@ -7000,6 +7019,9 @@ details[open] > summary.origin-rebase-block-title::before {
 .id-switch-next:not(:disabled) { border-color: var(--accent); color: var(--accent); }
 .id-switch-repeats { flex-basis: 100%; font-size: 11px; color: var(--text-secondary); }
 .id-switch-run { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+/* Above "Possible ID switches": reopens the last Track All summary (one full-width button) */
+.id-switch-track-summary { padding: 10px 16px; }
+.id-switch-track-summary .panel-btn { display: block; width: 100%; padding: 6px 8px; }
 .id-switch-row {
   display: flex; gap: 8px; align-items: flex-start; cursor: pointer;
   padding: 6px 16px 6px 13px; border-bottom: 1px solid var(--border-color);
