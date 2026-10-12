@@ -2633,17 +2633,17 @@ output, never from the observer.
 Frame and Track Frame Range are refused on one camera (the tracker is temporal,
 and a range would need its new tracks mapped onto the old ones).
 
-**The image check takes none of the single-camera options (since #309).** It
-scores each contact label-free, before vs after (`checkAppearanceSwitches`), and
-has no runs of encounters, so this branch's single-camera image rule — a run
+**The image and size checks take none of the single-camera options (since #309 /
+#310).** They score each contact label-free, before vs after (`scoreContacts`), and
+have no runs of encounters, so this branch's single-camera image rule — a run
 ending only above +|threshold| (`singleCameraImageContinueBelow`, removed in the
-merge) — and the options below apply to the size and coat-brightness checks
+#309 merge) — went, and the options below apply to the coat-brightness check
 only. That rule was measured on the image check's previous scoring (SLAP top/mid
 false rows 71 -> 51; topC 93.8% -> 99.9% after both Fixes); the new image check is
-not yet measured on single-camera data, and it tests no candidate moments.
+not yet measured on single-camera data, and neither tests candidate moments.
 
-**Empty encounters are no evidence.** The size and coat-brightness checks on one
-camera run with `skipEmpty` (`singleCameraCheckOptions`): runs ignore encounters scoring exactly
+**Empty encounters are no evidence.** The coat-brightness check on one
+camera runs with `skipEmpty` (`singleCameraCheckOptions`): runs ignore encounters scoring exactly
 0, which had no samples on either side — 44.5% of the image check's encounters
 on the 35 SLAP videos (2 samples a second; one camera's animals are seldom alone
 for long), 24.4% of brightness's. Counted as "reads right", they started a
@@ -2652,8 +2652,7 @@ swap from 0:00, or from 0:25.9 when the pair's six encounters before it were all
 empty. Skipping them: image rows 78 -> 68 (false 51 -> 42), 18 of 59 swaps caught
 either way, rows whose Fix has a wrong far edge 4 -> 2, rows fully undone (with
 the boundary set by the user) 9 -> 11; brightness rows 21 -> 18 (false 7 -> 4),
-14 caught either way. Body size on one camera is unmeasured (15 Hz, rarely
-empty). The two far edges left are chained swaps — a pair's stretch starting
+14 caught either way. The two far edges left are chained swaps — a pair's stretch starting
 where ANOTHER pair swapped, or a three-animal rotation — which one pair's rows
 cannot see.
 
@@ -2665,7 +2664,7 @@ out, inputTracks, ambiguous, look, fps)`; `CANDIDATE_DEFAULTS` (`ambiguityMargin
 0.1, `trackletGapFrames` 5, `clusterSeconds` 3); `singleCameraCheckSession(session)`
 -> stand-in | null | `{fail}`; `swapSingleCameraIdentities(session, from, to, idA, idB)`
 -> `{frames, tracks: boolean}` | null; `singleCameraCheckOptions(cue)` -> the options
-the size and coat-brightness checks run with on one camera (`{skipEmpty: true,
+the coat-brightness check runs with on one camera (`{skipEmpty: true,
 clearestEndLeads: true}`); `SINGLE_CAMERA_LAZY_REASON`.
 
 **Imports from project modules.** `pose/sleap-tracker.js`.
@@ -2675,13 +2674,15 @@ checks and the fix).
 
 **Coverage.** `tests/test-single-camera-tracking.mjs` (one track per animal
 across 18 input tracklet breaks, the spurious detection and the user frame, the
-stand-in and a planted swap found by the real size check, the track swap and
-its fallback, the refusals, and §5 the image check's run-ending rule on topC's
-own scores) and `tests/e2e/single-camera-track-all.mjs` (the real buttons, the
-refusals, a planted swap found, fixed and undone through the ID Switches tab,
-and §6 the rule applied by the app; `tests/e2e/id-switch-image-check.mjs` pins
-that several cameras keep 0). `tests/e2e/_real-single-camera.mjs` runs the whole thing
-on a real SLEAP file through File ▸ Load SLP.
+candidate moments, the stand-in and a planted swap found by the real size check,
+the track swap and its fallback, the refusals, and §6/§7 `skipEmpty` and
+`clearestEndLeads` on the classifier's change points) and
+`tests/e2e/single-camera-track-all.mjs` (the real buttons, the refusals, a planted
+swap found, fixed and undone through the ID Switches tab, a swap away from every
+contact found by the coat-brightness check at a candidate moment, a "Both" row of
+size and brightness, and §6 which checks take the single-camera options).
+`tests/e2e/_real-single-camera.mjs` runs the whole thing on a real SLEAP file
+through File ▸ Load SLP.
 
 ---
 
@@ -3693,102 +3694,119 @@ results}` (points3d buffers transferred) or `{type:'error', id, message}`.
 
 **Purpose.** The analysis behind Tracks ▸ **Check ID Switches (Body Size)…**,
 **(Images)…** and **(Coat Brightness)…**, which also run automatically after Track
-All / Track Frame Range (`ui/id-switch-modal.js`). Flags close encounters between
-two tracked identities where the labels may have changed hands — a possible
-identity switch. Three cues, two methods: body size (3D bone lengths, cheap, no
-video) and coat brightness (the grey level at each animal's body keypoints —
-`ui/brightness-sampler.js`, a 4-number vector) ask whether the animals leaving an
-encounter match the identities they now carry, by a classifier learned from the
-tracker's labels (brightness through `checkClassifierSwitches`, the image check's
-scoring before #309); appearance (embeddings of masked, pose-aligned crops,
-supplied by the caller — `ui/image-embedder.js` in the app) asks whether each
-animal looks like ITSELF across a contact, using no identity labels across it
-(`checkAppearanceSwitches`). Pure — no DOM, no app state — so all run headlessly
-(the image and brightness checks with any vector provider).
+All / Track Frame Range (`ui/id-switch-modal.js`). Flags contacts between two
+tracked identities where the labels may have changed hands — a possible identity
+switch. Body size (3D bone lengths, cheap, no video) and appearance (embeddings of
+masked, pose-aligned crops, supplied by the caller — `ui/image-embedder.js` in the
+app) go through ONE pipeline (`scoreContacts`) that asks whether each animal looks
+like ITSELF across the contact, using no identity labels across it. Coat brightness
+(the grey level at each animal's body keypoints — `ui/brightness-sampler.js`, a
+4-number vector; single camera) keeps the method both used before #309 / #310
+(`checkClassifierSwitches`): whether the animals leaving an encounter match the
+identities they now carry, by a classifier learned from the tracker's labels, plus
+candidate moments tested on both sides — it was calibrated on that. Pure — no DOM,
+no app state — so all run headlessly (the image and brightness checks with any
+vector provider).
 
 **Key exports.** `checkSizeSwitches(session, opts)` and
-`checkImageSwitches(session, opts)` and `checkBrightnessSwitches(session, opts)` (async) -> `{ok, flags, changes, encounters, moments,
-identities, sampledFrames, closeDistance, threshold, continueBelow, skipEmpty, clearestEndLeads, fps, step, sampleHz, cue}`
-(+ `bones` for size; + `imageHz`, `crops`, `cameras` for images) or
-`{ok:false, reason}`; `markChangePoints(scored, o)` (the change-point step,
-exported so calibration can re-apply thresholds to the same scores);
-`momentChangePoints(moments, scored, changes, o)` (merges tested candidate
-moments into those change points — see below; exported for the tests);
+`checkImageSwitches(session, opts)` (async) -> `{ok, flags, changes ([]),
+encounters (the scored contacts), identities, sampledFrames, closeDistance,
+threshold, fps, step, sampleHz, cue}` (+ `bones` for size; + `imageHz`, `crops`,
+`cameras` for images) or `{ok:false, reason}`; `checkBrightnessSwitches(session,
+opts)` (async) -> the classifier's `{ok, flags, changes, encounters, moments,
+identities, sampledFrames, closeDistance, threshold, continueBelow, skipEmpty,
+clearestEndLeads, fps, step, sampleHz, cue: 'brightness', imageHz, crops, cameras}`;
+the pipeline's parts —
+`contactEpisodes(grid, gapSeconds)`, `learnIdentityMetric(X, n, D, stretch, sample,
+o)`, `contactChangeScores(grid, feat, o, every)`, `markContactChanges(scored, o)`
+(the change-point step, returning the change points; exported so a threshold can
+be re-applied to the same scores), `symmetricEigen(A, n)` (cyclic Jacobi) and
+`fitPCA(X, n, D, k)` (randomized subspace iteration); the classifier's —
+`markChangePoints(scored, o)` (its change-point step, exported likewise),
+`momentChangePoints(moments, scored, changes, o)` (merges tested candidate moments
+into those change points — see below; exported for the tests) and
 `fitSoftmax(X, y, n, D, K, opts)` (L2 multinomial logistic regression, Adam);
-`fitPCA(X, n, D, k)` (randomized subspace iteration); the image check's parts —
-`contactEpisodes(grid, gapSeconds)`, `learnAppearanceMetric(X, n, D, stretch,
-sample, o)`, `appearanceChangeScores(grid, feat, o, every)`,
-`markAppearanceChanges(scored, o)` (its change-point step, exported to re-apply a
-threshold) and `symmetricEigen(A, n)` (cyclic Jacobi);
 `KEYFRAME_GAP_TOLERANCE` (1.1);
 `planKeyframeSamples(frames, keyframes, hasFrame)` -> `{decode, snapped, spacing,
 keyframeGap, maxShift}` (which frame each image sample decodes in one camera — see
 "Keyframe sampling" under `ui/image-embedder.js`); `SIZE_BONES`;
-`REFERENCE_HZ` (15); `SIZE_CHECK_DEFAULTS` (`fps` REQUIRED, `sampleHz` 15,
-`folds` 5, `gapSeconds` 10, `syncSeconds` 1, `threshold` -50, `continueBelow` 0,
-`followSeconds` 60, `minTrackedSeconds` 60, `sepFactor` 0.65, `signal`, `moments` null,
-`momentSeconds` 15, `momentThreshold` -200, ...); `BRIGHTNESS_CHECK_DEFAULTS` (the size
-defaults + `imageHz` 4, `threshold` -800, `pcaDims` 8, `maxTrainRows` 6000, `iterations`
-200 and the provider options — see "Coat brightness" below; it no longer inherits the image
-defaults, whose threshold and follow window changed scale in #309);
-`IMAGE_CHECK_DEFAULTS` (+ `imageHz` 2, `threshold` -0.8, `episodeGapSeconds` 3,
-`minSamples` 6, `windowSeconds` 10, `maxSpanSeconds` 60, `followSeconds` 5,
-`metricPcaDims` 64, `metricDims` 16, `metricReg` 0.1, `maxTrainRows` 20000,
-`getEmbeddings` REQUIRED: `async (frame, items[{k, group}]) -> per item
-[{camera, vector}]`, STARTED in increasing frame order with up to `inFlight`
-(default 2; the image embedder asks for 8) in flight; optional `prepareFrames(frames)` (awaited once with the
-sorted frames it will ask for) and `releaseFrames()` (always called at the end) let
-the provider stream its video).
+`SIZE_CHECK_DEFAULTS` (`fps` REQUIRED, `sampleHz` 15, `minTrackedSeconds` 60,
+`sepFactor` 0.65, `episodeGapSeconds` 3, `minApartSeconds` 3, `windowSeconds` 10,
+`maxSpanSeconds` 60, `followSeconds` 5, `metricPcaDims` 64, `metricDims` 16,
+`metricReg` 0.1, `signal`; `threshold` -1, `maxTrainRows` 200000);
+`IMAGE_CHECK_DEFAULTS` (the same shared ones; `threshold` -0.8, `maxTrainRows`
+20000, `imageHz` 2, `getEmbeddings` REQUIRED: `async (frame, items[{k, group}]) ->
+per item [{camera, vector}]`, STARTED in increasing frame order with up to
+`inFlight` (default 2; the image embedder asks for 8) in flight; optional
+`prepareFrames(frames)` (awaited once with the sorted frames it will ask for) and
+`releaseFrames()` (always called at the end) let the provider stream its video);
+`REFERENCE_HZ` (15); `CLASSIFIER_CHECK_DEFAULTS` (the size check's defaults before
+#310: `fps` REQUIRED, `sampleHz` 15, `folds` 5, `gapSeconds` 10, `syncSeconds` 1,
+`threshold` -50, `continueBelow` 0, `followSeconds` 60, `skipEmpty` false,
+`clearestEndLeads` false, `minTrackedSeconds` 60, `sepFactor` 0.65, `signal`,
+`moments` null, `momentSeconds` 15, `momentThreshold` -200, ...);
+`BRIGHTNESS_CHECK_DEFAULTS` (those + `imageHz` 4, `threshold` -800, `pcaDims` 8,
+`maxTrainRows` 6000, `iterations` 200 and the provider options — see "Coat
+brightness" below).
 
-**The shared grid.** Every round(fps / `sampleHz`)-th frame is a grid sample.
-"Close" = body centroids within `sepFactor` x the median body extent (unit-free).
-Tracklet = a run where an identity is apart from every other.
+**The grid.** Every round(fps / `sampleHz`)-th frame is a grid sample: per
+identity its InstanceGroup, body centroid and bone lengths. "Close" = body
+centroids within `sepFactor` x the median body extent (unit-free). Tracklet = a
+run where an identity is apart from every other.
 
-**The size method.** Encounter = the last
-close sample of a close spell, scored when both identities' next tracklets start
-within `syncSeconds`. A softmax is trained on the tracker's OWN labels with blocked
-CV (each fold excludes `gapSeconds` either side) on bone lengths. Log-probabilities are normalised within
-each frame across the identities present; an encounter's score = summed evidence
-for the claimed labelling minus the exchanged one over the two following
-tracklets. Each sample is weighted by `REFERENCE_HZ` / that cue's sample rate, so
-scores are evidence per unit TIME and thresholds hold at any frame rate (25-120
-fps tested within 0.4%). `opts.signal` cancels (AbortError).
+**The method (images 2026-10-09, size 2026-10-11).** Features per (sample,
+identity) come in VIEWS: the image check embeds crops every round(sampleHz /
+imageHz)-th grid sample, one view per camera; the size check's one view is the
+16 bone lengths of every grid sample, each standardised by its spread over the
+session. Per view the features are centred — embeddings also scaled to unit
+length, since an embedding's direction is what it encodes while a bone-length
+vector's size is the signal — and projected into a metric learned WITHOUT
+identity labels (`learnIdentityMetric`): an LDA whose "same animal" pairs are
+features of one identity within one tracklet (it is apart from all others, so its
+label cannot change hands there) and whose "different animals" pairs are two
+identities in the same frame — both true however wrong the tracking is. Contacts
+are #286's episodes (`contactEpisodes`: the two identities in one connected
+component of the close graph, so a swap through a third animal counts; runs <
+`episodeGapSeconds` apart merged), and episodes separated by less than
+`minApartSeconds` of usable samples of either animal are merged too, so a swap
+inside a long huddle is judged from the stretches either side of it. Each episode
+is scored (`contactChangeScores`) per view from the mean feature of each animal
+just before (aB, bB) and just after (aA, bA) it — up to `windowSeconds` a side,
+within `maxSpanSeconds`, never past the pair's neighbouring episode, a sample
+being usable when the animal is not in contact with its partner (it may touch a
+third: a crop masks others out): S = cos(aB,aA) + cos(bB,bA) − cos(aB,bA) −
+cos(bB,aA), mean over views seeing both animals on both sides (episodes with none
+are dropped). Below `threshold` the labels changed hands there
+(`markContactChanges`): taking the session's start as right, a pair's 1st, 3rd, …
+flagged contact is an `onset` whose `switchBackAt` is the next one (or null: to
+the end), its 2nd, 4th, … the `end` of that stretch (`switchedAt`), so fixing
+either row swaps the same stretch; all are in `flags` (`changes` is []), none is a
+repeat (`continues` is always false), and a change point of a pair sharing one
+identity within `followSeconds` of another is its `followOf` (a three-way
+relabel). A score is a difference of cosines between mean features, so no sample
+rate scales it (25-120 fps tested). `opts.signal` cancels (AbortError).
 
-**The image method (2026-10-09).** Crops are embedded every round(sampleHz /
-imageHz)-th grid sample. Per camera the embeddings are centred, unit-normalised and
-projected into an appearance metric learned WITHOUT identity labels
-(`learnAppearanceMetric`): an LDA whose "same animal" pairs are crops of one
-identity within one tracklet (it is apart from all others, so its label cannot
-change hands there) and whose "different animals" pairs are two identities in the
-same frame — both true however wrong the tracking is. Contacts are #286's episodes
-(`contactEpisodes`: the two identities in one connected component of the close
-graph, so a swap through a third animal counts; runs < `episodeGapSeconds` apart
-merged), and episodes separated by fewer than `minSamples` usable crops of either
-animal are merged too, so a swap inside a long huddle is judged from the stretches
-either side of it. Each episode is scored (`appearanceChangeScores`) per camera
-from the mean appearance of each animal just before (aB, bB) and just after (aA,
-bA) it — up to `windowSeconds` of crops a side, within `maxSpanSeconds`, never past
-the pair's neighbouring episode, a crop being usable when the animal is not in
-contact with its partner (it may touch a third: the crop masks others out):
-S = cos(aB,aA) + cos(bB,bA) − cos(aB,bA) − cos(bB,aA), mean over cameras seeing
-both animals on both sides (episodes with none are dropped). Below `threshold`
-the labels changed hands there (`markAppearanceChanges`): taking the session's
-start as right, a pair's 1st, 3rd, … flagged contact is an `onset` whose
-`switchBackAt` is the next one (or null: to the end), its 2nd, 4th, … the `end`
-of that stretch (`switchedAt`), so fixing either row swaps the same stretch; all
-are in `flags` (`changes` is []), none is a repeat, and a change point of a pair
-sharing one identity within `followSeconds` of another is its `followOf` (a
-three-way relabel). **Why not the size method's classifier:** it learns whichever
-labelling covers more of the session, and when a pair swaps several times none
-does — on the CD1FSCR3_CSI recording (3 white CD1 mice, two in mesh jackets) the
-plain mouse wore id_0 for 36% and id_1 for 50% of 15 min, the classifier's
-per-sample evidence for id_0 vs id_1 was ±0.5, and the real 0:19 swap (at the
-pair's FIRST encounter, so the swapped stretch before it was never scored) was
-missed while 17 false change points were raised. **Why the metric:** on five
-white mice raw DINOv2 cosine separated real changes from clean contacts at AUC
-0.68; in the metric 0.78.
+**Why not a classifier on the tracker's labels** — what both checks did before:
+a softmax trained on Track All's own labels with blocked cross-validation,
+flagging encounters whose aftermath it disagreed with, change points from runs of
+flagged encounters. It learns whichever labelling covers more of the session, and
+when a pair swaps several times none does — on the CD1FSCR3_CSI recording (3 white
+CD1 mice, two in mesh jackets) the plain mouse wore id_0 for 36% and id_1 for 50%
+of 15 min, the image classifier's per-sample evidence for id_0 vs id_1 was ±0.5,
+and the real 0:19 swap (at the pair's FIRST encounter, so the swapped stretch
+before it was never scored) was missed while 17 false change points were raised.
+**Why the metric:** on five white mice raw DINOv2 cosine separated real changes
+from clean contacts at AUC 0.68; in the metric 0.78. **Why cosine, not distance,
+for size:** a bone-length vector has essentially one direction (size), so the
+MIDDLE-sized animal sits near the average and its own before/after cosine is weak
+(a synthetic swap involving it scores -0.7, between the two extremes -1.4); the
+distance-based alternative — the dot product of the two animals' difference before
+and after, which is what comparing the two labellings by distance reduces to —
+was tried and scored worse on the real recordings (pooled AUC 0.86-0.87 vs 0.88,
+more false rows at every catch rate), its scale swinging per recording.
 
-**Change points, not raw flags (size).** The model can tell that the labelling on the
+**The classifier's change points (coat brightness; size and images before #310 /
+#309).** The model can tell that the labelling on the
 two sides of an encounter disagrees, not which side is right (it learns whichever
 side covers more of the session). Per pair, a run of flagged encounters (starting
 below `threshold`, continuing FORWARD while below `continueBelow`) yields one
@@ -3818,13 +3836,13 @@ among encounter 'end' change points within 5 s of each other sharing an animal,
 the one reading right again most clearly (highest score) leads: after an early
 swap the swapped animals' other pairs also read right again, a second or two
 BEFORE the swapped pair (windows running past the swap). On the SLAP videos,
-image check: the swapped pair's row is the primary in 18 of 23 swaps (11 with
+image check (its scoring before #309): the swapped pair's row is the primary in 18 of 23 swaps (11 with
 plain time order, 13 with the 3-s rule alone), real swaps hidden as follow-ons
 5 -> 1, Fixing the primaries fully undoes 9 instead of 8, false primaries
 29 -> 28; brightness 12 of 15 instead of 10; topC unchanged. Ranking every row of
 a 60-s cluster by score instead was worse (4 undone): a strong false row a
-minute away then claims the real one. Without moments or the option (every
-multi-camera check) the order is plain time.
+minute away then claims the real one. Without moments or the option (a
+multi-camera brightness check) the order is plain time.
 
 **Candidate moments (`opts.moments`, single camera).** Places a switch may have
 happened OUTSIDE a close encounter — `[{frame, startFrame, identityA, identityB,
@@ -3887,7 +3905,8 @@ in the app and re-scored offline):
 
 **Coat brightness (2026-10-08).** `checkBrightnessSwitches` runs the image check's
 scoring from before #309 (`checkClassifierSwitches`: one classifier per view fitted to
-the tracker's labels, the same encounters and candidate moments as the size check) on a 4-number vector per animal and view — the 10th / 50th /
+the tracker's labels, with the encounters and candidate moments the size check had
+before #310 — `trackletEncounters`, `testMoments`) on a 4-number vector per animal and view — the 10th / 50th /
 90th percentile and the mean of the grey level at its body keypoints, log-scaled
 (`ui/brightness-sampler.js`). Calibrated on the 35 proofread single-camera SLAP
 videos, offline through this code and then in the app: its candidate-moment rows
@@ -3901,6 +3920,7 @@ slightly better (14 vs 12; the median alone 11). Not calibrated on multi-camera
 data.
 
 **Calibration (2026-10-03).** Size: on the 5-mouse tail-mark recording
+**Calibration of the classifier method (2026-10-03; both checks have since been replaced, see below).** Size: on the 5-mouse tail-mark recording
 (194366_05mice_flippers, 108k frames, 8 cameras) planted swaps AUC 0.95; the real
 gate-off switch (frame 74,544) is an onset; the verified run gets 7 false change
 points / 30 min. Images, calibrated with this code on DINOv2 embeddings of the
@@ -3914,9 +3934,9 @@ the similar-size, different-coat pairs (brown-black: size AUC 0.73, 5% caught at
 false-flag rate per clean encounter. When both checks flag an encounter it was a
 real swap 98% of the time (images alone 79%; none on the 5-mouse run with no
 switches). Images remain weak for animals that look alike (same coat).
-**Superseded for images by the 2026-10-09 calibration below**; the notes on views
-per animal, sampling rate and keyframes were measured with the old image scoring
-and are kept for what they say about the crops.
+**Superseded by the 2026-10-09/11 calibrations below**; the notes on views per
+animal, sampling rate and keyframes were measured with the old image scoring and
+are kept for what they say about the crops.
 **Views per animal** (`imageCheckMaxViews`, default 3; recalibrated 2026-10-04):
 embedding only each animal's 3 largest views matches all 8 — brown-black AUC
 0.925, 48% at -25, 0.8% false flags, "Both" 98% real; 5-mouse: real switch scored
@@ -3968,23 +3988,50 @@ episode scoring (classifier, -200) 8 of 12 with 15 false. -0.5: 10 of 12, 6 fals
 vs white). Five white mice are the hard case: 1 of 2 at -0.8 with 2 false rows
 (the 21:57 three-way relabel scores -0.19). Missed: a brown/black swap 14 s before
 the end of 143153 (-0.04, one side has 7 crops). Robust to the knobs — at -0.8,
-`metricDims` 32, `metricReg` 0.03/0.3, `windowSeconds` 5/20, `minSamples` 3,
+`metricDims` 32, `metricReg` 0.03/0.3, `windowSeconds` 5/20, `minApartSeconds` 1.6 (3 crops),
 `episodeGapSeconds` 1, `metricPcaDims` 32 and all views give 9-10 of 12 with 0-2
 false rows (`metricDims` 8: 6 false); without the evidence-driven merge
-(`minSamples` 0) the 144215 huddle swap goes unscored, and with crops only from
+(`minApartSeconds` 0) the 144215 huddle swap goes unscored, and with crops only from
 time apart from EVERY animal 17 of its 24 episodes have none. On the same 8 runs
-the size check (unchanged) gives 60 rows, 56 false; rows both checks flag ("Both")
-were real 4 of 4, image-only rows 6 of 8. Analysis after embedding: 3-7 s per
-10-min session, 21 s for 30 min of 5 animals. Harness: the session scratchpad of
-2026-10-09 (collect.mjs, evalall.mjs, ba.mjs) — not in the repo.
+the size check's classifier gave 60 rows, 56 false. Analysis after embedding: 3-7 s
+per 10-min session, 21 s for 30 min of 5 animals. Harness: the session scratchpad
+of 2026-10-09 (collect.mjs, evalall.mjs, ba.mjs) — not in the repo.
 
-**Out of sample (2026-10-11).** Confirmed on 16 proofread SLAP sessions of
-2022-10-07 that played no part in choosing the method or the threshold — every
+**Calibration of the size method (2026-10-11).** The same 8 runs, truth and row
+rule, from the tracker's 3D. NOTE: 142111 loaded alone gets scrambled node NAMES
+on main (its `back` camera's skeleton is nested under `nx_graph`; fixed on the
+unmerged branch `claude/dreamy-chatterjee-d480db`), so every bone length by name is
+wrong there — the numbers below use its standard node order, which every other
+session shares. At -1: **6 of 12 relabels caught, 13 rows, 7 false**, all 7 on the
+five white mice (the SLAP sessions and CD1: 5 of 10, 0 false); the classifier it
+replaces, at its -50 default: 4 of 12, 54 rows, 50 false (at -200: 3 of 12, 13
+rows, 10 false). -0.8: 7 of 12, 18 rows, 11 false; -1.2: 4 of 12, 9 rows, 5 false.
+Bone lengths cannot tell apart animals of one size (142111's white/black swap
+scores +0.5), but catch what images miss (143153's brown/black swap 14 s before the
+end, -1.1). **Limitation:** on animals of IDENTICAL size the windows are noise, and
+the cosine of noise-only means still dips just past -1 now and then (the synthetic
+fixture of `tests/e2e/id-switch-image-check.mjs`: 2 of 24 contacts at -1.02 and
+-1.15). Not renormalising the window means (the mean of unit vectors, its length
+kept) silences that exactly (all ~0.00) and gave the image check 10 of 12 with NO
+false rows at -0.5 — but on the real recordings it made size slightly worse (pooled
+AUC 0.867 vs 0.879; 10 false rows vs 7 at 6 caught), and on 16 new sessions it
+gained the image check nothing either (see "Out of sample"), so both checks keep
+renormalised means. Swept at -1: `metricDims` 2 is much worse (59 false at -0.8),
+4 worse, 8 equal to 16 one step looser; `windowSeconds` 20/30 and `minApartSeconds` 1.6
+change little, 6.4 loses 2 relabels. The five-mouse "false" rows at 1:01, 14:55,
+16:07, 26:41 were checked against the tail marks (both checks flag some of them).
+With both checks at their defaults, rows both flag ("Both", same pair, overlapping
+contacts) were real 5 of 5, image-only rows 5 of 7, size-only 1 of 8. The size
+check takes ~0.2 s per 10-min session and ~1.3 s for 30 min of 5 animals after
+the grid is built.
+
+**Out of sample (2026-10-11), both checks.** Confirmed on 16 proofread SLAP sessions of
+2022-10-07 that played no part in choosing the methods or the thresholds — every
 multi-animal one not used above: 131531, 132603, 133702, 134804, 135851, 140918,
 161055, 162233, 163346, 170913, 173152, 180149, 181300, 183527, 184618, 190807
 (2 h 49 min; 15 with two mice, including white/white 163346 and brown/brown
 173152, and 190807 with two brown and one white), with the same harness, truth
-and row rule. At -0.8: **9 of 11 relabels caught, 11 rows, 0 false**. Every real
+and row rule. Images at -0.8: **9 of 11 relabels caught, 11 rows, 0 false**. Every real
 change scored below every one of the 348 clean contacts (per-contact AUC 1.000),
 so no threshold from -0.2 to -1.2 gave a false row; -0.5 and looser caught 10 of
 11. Missed: a swap inside the pair's first contact, which starts the session
@@ -3992,7 +4039,11 @@ so no threshold from -0.2 to -1.2 gave a false row; -0.5 and looser caught 10 of
 brown mice that scored -0.58 (190807 at 9:06). A variant that keeps the length of
 the window means (the mean of unit vectors, not renormalised), which had looked
 better on the 8 calibration runs (10 of 12 with no false rows at -0.5), gave the
-identical 9 of 11 with no false rows here — no gain, so not adopted. These
+identical 9 of 11 with no false rows here — no gain, so not adopted. Size at -1:
+**2 of 11 caught, 2 rows, 0 false** (-0.8: 3 of 11, 5 rows, 2 false; per-contact
+AUC 0.902); the classifier it replaces, at its -50 default: 0 of 11 caught, 20 rows,
+all false. These mice are close in size, so size catches little here — but it no
+longer raises false rows. These
 sessions keep a second label file per camera
 (`*.predictions.static.externals.slp`), which a harness has to leave out of the
 folder pick.
@@ -4003,13 +4054,14 @@ folder pick.
 `ui/brightness-sampler.js` (`planKeyframeSamples`).
 
 **Coverage.** `tests/test-id-switch-check.mjs` (synthetic 3-animal sessions defined
-in time: clean -> no flags; minority / majority switch -> onset / end change point;
+in time: clean -> no flags; a switch late or early in the session (the swapped
+stretch the minority or the MAJORITY) -> one onset at the switch, nothing else;
 25-120 fps invariance; images with synthetic embeddings catching a swap between
 animals of IDENTICAL size that size misses; a pair swapping three times from its
-first encounter (all three found, onset/end/onset with the right fix edges; the
-size check as the negative control misses the first); #286's huddle and
-three-animal scenarios; the appearance metric on look-alike animals (98% vs raw
-cosine 52%); `symmetricEigen`; `markAppearanceChanges`; cancellation; PCA; failure reasons;
+first encounter (all three found by BOTH checks, onset/end/onset with the right
+fix edges); #286's huddle and three-animal scenarios; the identity metric on
+look-alike animals (98% vs raw cosine 52%); `symmetricEigen`; `markContactChanges`;
+cancellation; PCA; failure reasons; progress;
 crop geometry of `ui/image-embedder.js`; `planKeyframeSamples`: sparse/unknown
 keyframes move nothing, a keyframe every 30 frames moves every 32-frame sample
 <= 15 frames, strictly increasing, untracked keyframes skipped, gaps up to 1.1x
@@ -9524,18 +9576,23 @@ or a new tracking pass. The tab shows a heading, per-check counts, "About these
 flags" (the method, calibration figures, sampling rate, frame-rate warning and
 the image backend note), a sticky toolbar ("N of M reviewed", **Next
 unreviewed ▸** — the next unticked row after the current one, wrapping —
-**Clear**, and "Show N later encounters that still look swapped"), then one row
+**Clear**, and "Show N later encounters that still look swapped" — only for
+results restored from files saved before 2026-10-11: the checks no longer make
+repeats), then one row
 per change point: a **reviewed** checkbox, time, `id_a ↔ id_b` (each name in its
 identity's colour, as in the overlays), score, the encounter's span ("close
 4:59.6–5:01.7 (frames 17,977–18,105)") with an **end ⇥** button, and
 "frame N · check · note" (Both / size / images; "follows the switch at m:ss";
-"labelling changes here; earlier encounters look swapped"; "still swapped"). A
-change point two checks found (same pair within 1 s) is ONE "Both" row on the
-earlier check's result (size, then images, then coat brightness; scores "first /
-second", the two checks named in its tooltip). Clicking a row navigates there; ticking it dims the row and its
+"labels change back here" on an image or size 'end'; "labelling changes here;
+earlier encounters look swapped" on a coat-brightness one; "still swapped" on a
+repeat). The score is shown to one decimal (`fmtScore`; whole numbers for the
+summed-evidence scores of coat brightness and of files saved before 2026-10-09). A
+change point two checks found (same pair, overlapping contacts) is ONE "Both" row
+on the earlier check's result (size, then images, then coat brightness; scores
+"first / second", the two checks named in its tooltip). Clicking a row navigates there; ticking it dims the row and its
 seekbar tick (`reviewed`). **Where a row lands:** an encounter's frame is the
-LAST close sample (the labels are read from the tracklets AFTER it), so a swap
-happens before it, while the animals are close; clicking a row therefore lands
+LAST close sample (the labels are compared before and after the contact), so a
+swap happens before it, while the animals are close; clicking a row therefore lands
 `ID_SWITCH_LEAD_IN_SECONDS` (1 s) before the close spell STARTS — 2 s on a
 single-camera session (`idSwitchLeadSeconds`), where the whole row window (landing
 frame, progress bar, highlight, and where a Fix takes the current frame as its
@@ -9635,10 +9692,12 @@ ids, are what a reopened project still agrees on); `idSwitchPrimary(res)` (chang
 points), `idSwitchMarkers(res)` (+ repeats), `idSwitchOnsets(res)` (the
 "possible switches" count), `idSwitchEncounterCount(res)`;
 `linkIdSwitchResults(results)` (tag each marker's `cue`; link each change point of
-a later check to the first unlinked change point of an earlier one, same pair
-within 1 s, as `agree` — "Both"); `ID_SWITCH_CUES` (`['size', 'image',
-'brightness']`, the order of precedence); `idSwitchIsSecondary(m)` (the later half
-of a "Both" pair — listed and drawn through its partner);
+a later check to the nearest unlinked change point of an earlier one of the same
+pair at the same contact, as `agree` — "Both": their close spells overlap, give or
+take 1 s, since the checks merge contacts by their own evidence; or, without start
+frames, they end within 1 s); `ID_SWITCH_CUES` (`['size', 'image', 'brightness']`,
+the order of precedence); `idSwitchIsSecondary(m)` (the later half of a "Both" pair
+— listed and drawn through its partner);
 `serializeIdSwitchReview(session)` -> payload or `null` (no check results -> no
 key, so untouched projects keep their bytes); `ingestIdSwitchReview(session,
 payload)` (rebuilds `session._idSwitch`, re-links "Both"; ignores anything
@@ -10070,8 +10129,9 @@ stats}` (throws without loaded videos or with fewer than 4 body nodes);
 
 **Coverage.** `tests/test-id-switch-check.mjs` (the pure helpers, and the check on
 synthetic coats catching a swap between equal-sized animals that the size check
-misses) and `tests/e2e/single-camera-track-all.mjs` §5 (the check in the real tab,
-with a stand-in sampler); on real data by `tests/e2e/_real-single-camera.mjs`.
+misses, and the candidate moments it tests) and `tests/e2e/single-camera-track-all.mjs`
+§4/§5 (the check in the real tab, with a stand-in sampler: a moment's row, and a
+"Both" row with the size check); on real data by `tests/e2e/_real-single-camera.mjs`.
 
 ---
 

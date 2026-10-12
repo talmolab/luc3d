@@ -78,8 +78,11 @@ export function idSwitchIsSecondary(m) {
 }
 
 /**
- * Tag every marker with its check, and link change points two checks found (same
- * pair, within 1 s) as `agree`: each change point of a later check to the first
+ * Tag every marker with its check, and link change points two checks found as
+ * `agree`: the same pair, at the same contact — their close spells overlap, give
+ * or take 1 s (the checks merge contacts by their own evidence, so one may span a
+ * longer stretch than another) — or, for results restored without a start,
+ * ending within 1 s. Each change point of a later check is linked to the nearest
  * unlinked one of an earlier check (size before images before brightness).
  */
 export function linkIdSwitchResults(results) {
@@ -87,10 +90,17 @@ export function linkIdSwitchResults(results) {
     ran.forEach(function (cue) { idSwitchMarkers(results[cue]).forEach(function (m) { m.cue = cue; delete m.agree; }); });
     if (ran.length < 2) return;
     var tol = Math.max(1, Math.round(results[ran[0]].fps || 30));
+    var sameContact = function (x, m) {
+        if (Math.abs(x.frame - m.frame) <= tol) return true;
+        return x.startFrame != null && m.startFrame != null && x.startFrame <= m.frame + tol && m.startFrame <= x.frame + tol;
+    };
     ran.forEach(function (cue, i) {
         idSwitchPrimary(results[cue]).forEach(function (m) {
             for (var j = 0; j < i && !m.agree; j++) {
-                var hit = idSwitchPrimary(results[ran[j]]).find(function (x) { return !x.agree && samePair(x, m) && Math.abs(x.frame - m.frame) <= tol; });
+                var hit = null;
+                idSwitchPrimary(results[ran[j]]).forEach(function (x) {
+                    if (!x.agree && samePair(x, m) && sameContact(x, m) && (!hit || Math.abs(x.frame - m.frame) < Math.abs(hit.frame - m.frame))) hit = x;
+                });
                 if (hit) { m.agree = hit; hit.agree = m; }
             }
         });

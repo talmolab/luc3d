@@ -21,9 +21,9 @@
  * 3D skeleton. `singleCameraCheckSession` builds a read-only stand-in from the
  * one camera's 2D: one group per identified detection, `points3d` = (x, y, 0).
  * The checks only ever compare distances relative to the median body size and
- * fit a classifier to standardised features, so the unit change (pixels, not
- * millimetres) costs nothing — but a 2D bone length also changes with posture
- * and viewing angle, which is why body size is a weak cue on one camera.
+ * standardise their features, so the unit change (pixels, not millimetres)
+ * costs nothing — but a 2D bone length also changes with posture and viewing
+ * angle, which is why body size is a weak cue on one camera.
  *
  * Eager sessions only: a lazy (> 150 MB) single-camera project is refused with
  * a reason rather than tracked from its resident window.
@@ -231,12 +231,12 @@ export function candidateMoments(frames, out, inputTracks, ambiguous, look, fps)
 }
 
 /**
- * The options the size and coat-brightness checks run with on a single-camera
- * session, on top of their own (`ui/id-switch-modal.js` merges them in). Both
- * act on runs of flagged encounters and their follow-ons
- * (pose/id-switch-check.js `markChangePoints` / `linkFollowOns`), which the
- * image check no longer has: since #309 it scores each contact label-free and
- * takes none of them.
+ * The options the coat-brightness check runs with on a single-camera session,
+ * on top of its own (`ui/id-switch-modal.js` merges them in). They act on runs
+ * of flagged encounters and their follow-ons (pose/id-switch-check.js
+ * `markChangePoints` / `linkFollowOns`), which the image and size checks no
+ * longer have: since #309 / #310 they score each contact label-free and take
+ * none of them.
  *  - `skipEmpty`: runs ignore encounters scoring exactly 0. Those had no samples
  *    on either side (one camera's animals are seldom alone for long), so they say
  *    nothing about the labels — yet counting them as "reads right" started a
@@ -251,7 +251,7 @@ export function candidateMoments(frames, out, inputTracks, ambiguous, look, fps)
  *    second or two BEFORE the swapped pair (+69 leading the real +444 on one
  *    SLAP video).
  * Multi-camera checks run without either (not measured there).
- * @param {'size'|'brightness'} cue
+ * @param {'brightness'} cue
  * @returns {{skipEmpty: boolean, clearestEndLeads: boolean}}
  */
 export function singleCameraCheckOptions(cue) {

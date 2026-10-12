@@ -696,9 +696,9 @@ the animal count, connect single breaks). Rules:
   tracker nearly chose the exchange — read through `SleapTracker`'s read-only
   observer — or the input file's own tracklet changes animal), and the checks
   test each one by comparing the evidence BEFORE and AFTER it
-  (`pose/id-switch-check.js` `testMoments`, 15 s each side, -200) — the size and
-  coat-brightness checks, which keep the classifier these need; the image check
-  no longer does (#309). Reading only
+  (`pose/id-switch-check.js` `testMoments`, 15 s each side, -200) — the
+  coat-brightness check, which keeps the classifier these need; the image and
+  size checks no longer do (#309, #310). Reading only
   after a moment caught 1 more real swap of 59: the classifier is fit to the
   tracker's own labels, and a swap covering most of the video is what it
   learns. Encounters score and flag exactly as without moments; a moment's row
@@ -713,12 +713,12 @@ the animal count, connect single breaks). Rules:
   false rows (the image check's: 13, 12 shared); its encounter rows were noise,
   hence its strict -800 encounter threshold. Uncalibrated on multi-camera data,
   so it is not run automatically there.
-- **The image check takes no single-camera options and tests no candidate
-  moments** since #309 made it label-free (each contact scored before vs
-  after). This branch's single-camera image rule (a run ending only above
-  +|threshold|, measured on the previous scoring: topC 93.8% -> 99.9% after both
-  Fixes) went with the old scoring; the new image check is not yet measured on
-  single-camera data. The options below apply to size and coat brightness.
+- **The image and size checks take no single-camera options and test no
+  candidate moments** since #309 / #310 made them label-free (each contact scored
+  before vs after). This branch's single-camera image rule (a run ending only
+  above +|threshold|, measured on the previous scoring: topC 93.8% -> 99.9% after
+  both Fixes) went with the old scoring; the new image check is not yet measured
+  on single-camera data. The options below apply to coat brightness only.
 - **Two more single-camera choices in the ID Switches tab, both measured on the
   35 SLAP videos.** A candidate moment's row is never a follow-on, and it
   outranks other pairs' encounter rows up to 3 s before it (they follow it);
@@ -729,8 +729,8 @@ the animal count, connect single breaks). Rules:
   frame, progress bar, the range where a Fix takes the current frame as its
   boundary — is ±2 s, not ±1 s (`idSwitchLeadSeconds`), because one view places
   the close spell less exactly. Multi-camera keeps 1 s.
-- **On one camera an encounter scoring exactly 0 is no evidence** for the size
-  and coat-brightness checks (`skipEmpty`, `singleCameraCheckOptions`). It had no
+- **On one camera an encounter scoring exactly 0 is no evidence** for the
+  coat-brightness check (`skipEmpty`, `singleCameraCheckOptions`). It had no
   samples on either side — 44.5% of the image check's encounters on the SLAP
   videos under its previous scoring — and counting it as "reads
   right" started swapped stretches late (a Fix from 0:04.2 for a swap from

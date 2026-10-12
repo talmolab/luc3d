@@ -466,7 +466,7 @@ try {
                     runs[c] = { ms: Math.round(performance.now() - t), ok: !!(x && x.ok), reason: x && !x.ok ? x.reason : undefined,
                         encounters: x && x.encounters ? x.encounters.length : 0, model: x && x.model || null, timing: x && x.timing || null,
                         fps: x && x.fps, threshold: x && x.threshold,
-                        // every scored encounter: the threshold can be re-applied offline (markChangePoints)
+                        // every scored contact: the threshold can be re-applied offline (markContactChanges)
                         all: x && x.encounters ? x.encounters.map(e => ({ frame: e.frame, startFrame: e.startFrame,
                             identityA: e.identityA, identityB: e.identityB, nameA: e.nameA, nameB: e.nameB, score: e.score })) : [] };
                 } catch (e) { runs[c] = { err: String(e && e.stack || e).slice(0, 500) }; }

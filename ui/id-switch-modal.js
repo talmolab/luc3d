@@ -8,9 +8,10 @@
  * the CHANGE POINTS in the right panel's "ID Switches" tab as a checklist —
  * click a row to jump there, tick it once reviewed, "Next unreviewed" walks the
  * list. Results (and what was reviewed) are kept per session until the check
- * runs again or "Clear". A change point both checks found (same pair, within
- * 1 s) is shown once as "Both". Repeats (other encounters of a pair that is
- * still swapped) are counted and can be shown.
+ * runs again or "Clear". A change point both checks found (same pair, same
+ * contact) is shown once as "Both". Repeats (other encounters of a pair that is
+ * still swapped) are counted and can be shown — only results restored from files
+ * saved before 2026-10-11 have any.
  *
  * The size check only reads the tracker's 3D skeletons (seconds, no video) — on a
  * single-camera session, the one view's 2D poses instead (pose/single-camera-tracking.js
@@ -255,18 +256,15 @@ function openProgressDialog(title) {
 // Running the checks
 // ---------------------------------------------------------------------------
 
-async function runSize(session, rate, moments, single) {
+async function runSize(session, rate) {
     var label = 'Checking ID switches (body size)';
     showLoadingProgress(label, 0, 1);
     await yieldToPaint();
     try {
-        var opts = {
+        return await checkSizeSwitches(session, {
             fps: rate.fps,
-            moments: moments,
             onProgress: async function (done, total) { showLoadingProgress(label, done, total); await yieldToPaint(); },
-        };
-        if (single) Object.assign(opts, singleCameraCheckOptions('size'));    // see pose/single-camera-tracking.js
-        return await checkSizeSwitches(session, opts);
+        });
     } finally { hideLoading(); }
 }
 
@@ -430,13 +428,14 @@ export async function runIdSwitchChecks(opts) {
         }
     }
     // Single-camera Track All also leaves the moments where a switch could have happened outside an encounter
-    // (pose/single-camera-tracking.js `candidateMoments`); the checks score those too.
+    // (pose/single-camera-tracking.js `candidateMoments`); the coat-brightness check scores those too (the
+    // size and image checks score every contact without the tracker's labels, so they take no moments).
     var moments = single && session._idSwitchCandidates ? session._idSwitchCandidates : null;
     var rate = recordingFps(session), results = {}, parts = [], level = 'success';
     for (var cue of cues) {
         var res, t0 = performance.now();
         try {
-            res = cue === 'size' ? await runSize(target, rate, moments, single)
+            res = cue === 'size' ? await runSize(target, rate)
                 : cue === 'image' ? await runImage(target, rate, opts.inject)
                 : await runBrightness(target, rate, opts.inject, moments, single);
         }
@@ -532,20 +531,20 @@ export function clearIdSwitchResults(session) {
 
 function aboutHtml(st, ran) {
     var r0 = st.results[ran[0]], im = st.results.image, br = st.results.brightness;
-    var sz = st.results.size;
-    return '<p>' + (sz && sz.ok ? 'By <b>body size</b>, each close encounter between two identities is scored by whether the ' +
-            'animals leaving it match the ' + (r0.singleCamera ? '2D size in the one camera view (which also changes with posture and ' +
-            'distance from the camera)' : '3D size') + ' of the identities they now carry, learned from the tracker\'s own labels. ' : '') +
-        (im && im.ok ? 'By <b>images</b>, each contact is scored by whether each animal looks like itself just before and ' +
-            'just after it, so the check does not rely on the tracker\'s labels being mostly right. ' : '') +
+    var sz = st.results.size, by = [sz && sz.ok ? (r0.singleCamera ? 'body size in the one camera view (which also changes with ' +
+        'posture and distance from the camera)' : '3D body size') : '', im && im.ok ? 'appearance in the videos' : ''].filter(Boolean);
+    return '<p>' + (by.length ? 'Each contact between two identities is scored by whether each animal still looks like itself ' +
+            'just before and just after it — by ' + by.join(' and by ') + ' — so ' + (by.length > 1 ? 'these checks do' : 'this check does') +
+            ' not rely on the tracker\'s labels being mostly right. ' : '') +
         (br && br.ok ? 'By <b>coat brightness</b>, each close encounter is scored by whether the animals leaving it have the coat ' +
             'brightness of the identities they now carry, learned from the tracker\'s own labels. ' : '') +
         'Flags are leads to review, not certainties: size cannot tell apart animals of near-equal size, and images and coat ' +
         'brightness cannot tell apart animals that look alike.' +
-        (r0.singleCamera ? ' On one camera the body-size and coat-brightness checks also test the moments where the tracker ' +
+        (r0.singleCamera && br && br.ok ? ' On one camera the coat-brightness check also tests the moments where the tracker ' +
             'nearly chose the swap or the input\'s own tracklets change animal, comparing the evidence before and after each.' : '') +
         (sz && sz.ok && im && im.ok ? ' <b>Review "Both" rows first</b> — when both checks flag the same contact it was a real swap ' +
-            'more often (on 8 proofread or tail-marked recordings: 4 of 4, against 6 of 8 for images alone).' : '') + '</p>' +
+            'more often (on 8 proofread or tail-marked recordings: 5 of 5, against 5 of 7 for images alone and 1 of 8 ' +
+            'for size alone).' : '') + '</p>' +
         '<p class="id-switch-rate">Analysed ' + r0.sampleHz.toFixed(1) + ' samples/s (every ' +
         (r0.step === 1 ? 'frame' : ordinal(r0.step) + ' frame') + ' at ' + r0.fps.toFixed(2).replace(/\.?0+$/, '') + ' fps' +
         (im && im.ok ? '; images at ' + im.imageHz.toFixed(1) + '/s, ' + im.crops.toLocaleString() + ' crops from ' + im.cameras.length + ' views' +
@@ -554,7 +553,7 @@ function aboutHtml(st, ran) {
             br.cameras.length + ' view' + (br.cameras.length === 1 ? '' : 's') : '') +
         (r0.fpsFromVideo ? ', measured from the video)'
             : ') — <b>no video is loaded, so this frame rate was not measured</b>. If the recording ran at a ' +
-              'different rate, set it in the fps box and run the check again: scores are evidence per second.') + '</p>' +
+              'different rate, set it in the fps box and run the check again: its time windows are set in seconds.') + '</p>' +
         (im && im.ok && im.timing && im.timing.crops ? '<p class="id-switch-rate">Image check speed on this machine: ' +
             escapeHtml(formatEmbedTiming(im.timing)) + (im.timing.backend === 'cpu'
                 ? '. There was no GPU, so the image model ran on the CPU — the same model, much slower.</p>'
@@ -756,9 +755,9 @@ function idName(session, name) {
     return '<span class="id-switch-id"' + (col ? ' style="color:' + col + '"' : '') + '>' + escapeHtml(name) + '</span>';
 }
 
-/** A row's score: size scores are summed evidence (whole numbers), image scores a cosine contrast (-4..4). */
+/** A row's score: a cosine contrast (-4..4), to one decimal; coat-brightness scores, and results restored from older files, are summed evidence (whole numbers). */
 function fmtScore(m) {
-    return m.cue === 'image' && Math.abs(m.score) < 100 ? (Math.round(m.score * 10) / 10).toFixed(1) : String(Math.round(m.score));
+    return Math.abs(m.score) < 10 ? (Math.round(m.score * 10) / 10).toFixed(1) : String(Math.round(m.score));
 }
 
 function rowHtml(session, st, f, both) {
@@ -766,7 +765,7 @@ function rowHtml(session, st, f, both) {
     var score = f.agree ? fmtScore(f) + ' / ' + fmtScore(f.agree) : fmtScore(f);
     var note = f.continues ? 'still swapped'
         : f.followOf != null ? 'follows the switch at ' + fmtTime(f.followOf)
-        : f.kind === 'end' ? (f.cue === 'image' ? 'labels change back here' : 'labelling changes here; earlier encounters look swapped') : '';
+        : f.kind === 'end' ? (f.cue === 'brightness' ? 'labelling changes here; earlier encounters look swapped' : 'labels change back here') : '';
     if (f.look && f.look.length) {
         // a candidate moment, not an encounter: say why it was looked at, and which side looks swapped
         note = lookNote(f.look) + (f.kind === 'end' ? ' · the labels BEFORE it look swapped' : '') +

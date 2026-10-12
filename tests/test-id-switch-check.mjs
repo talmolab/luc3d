@@ -5,22 +5,19 @@
  * Three animals of clearly different size (x1.00, x1.15, x0.85 of a mouse-sized
  * template, 1.5 mm keypoint noise) live apart and meet at scheduled close
  * encounters; the scenario is defined in time, so it can be recorded at any
- * frame rate — the check's scores must not depend on it. Clean labels must produce no flags; labels that swap after one
- * specific encounter must flag exactly that encounter as the onset, and mark the
- * pair's later encounters as repeats (`continues`) — the signature of a switch
- * that persists. Plus the failure reasons and the softmax classifier itself.
- *
+ * frame rate — the check's scores must not depend on it. Clean labels must produce
+ * no flags; labels that swap at one encounter must flag exactly that encounter,
+ * whichever side of it covers more of the session. Plus the failure reasons.
  *
  * The image check is tested with SYNTHETIC embeddings (a fixed random
  * "appearance" vector per animal + noise, from 4 cameras) — no model, no GPU —
  * on animals of IDENTICAL size: the size check's blind spot, which the image check
- * exists for. It compares each animal's appearance before and after a contact,
- * using no identity labels across it, so it is also tested where learning from
- * the tracker's labels fails: a pair that swaps three times, starting at its very
- * first encounter, so that the swapped labelling covers most of the session (the
- * size check, which still learns from the labels, is the negative control); a
+ * exists for. Both checks compare each animal before and after a contact, using
+ * no identity labels across it, so both are tested where learning from the
+ * tracker's labels fails: a pair that swaps three times, starting at its very
+ * first encounter, so that the swapped labelling covers most of the session; a
  * pair that huddles; and a swap made only through a third animal (both from
- * talmolab/luc3d#286). Its label-free appearance metric is tested on look-alike
+ * talmolab/luc3d#286). The label-free identity metric is tested on look-alike
  * animals against raw cosine similarity. Crop geometry helpers
  * (ui/image-embedder.js) are checked too.
  *
@@ -117,29 +114,17 @@ function buildSession(swapAfter, fps = 60, scales = SCALES, opts = {}) {
 }
 
 // ===========================================================================
-group('fitSoftmax — separable 2-class data is classified correctly');
-{
-    const n = 400, D = 2, X = new Float64Array(n * D), y = new Int32Array(n), r = rng(3);
-    for (let i = 0; i < n; i++) { y[i] = i % 2; X[i * 2] = (y[i] ? 3 : -3) + gauss(r); X[i * 2 + 1] = gauss(r); }
-    const m = SC.fitSoftmax(X, y, n, D, 2, { iterations: 200 });
-    let correct = 0;
-    for (let i = 0; i < n; i++) { const lp = m.logProba(X.subarray(i * 2, i * 2 + 2)); if ((lp[1] > lp[0] ? 1 : 0) === y[i]) correct++; }
-    ok(correct / n > 0.97, `accuracy ${correct / n} > 0.97`);
-    const lp = m.logProba(new Float64Array([0, 0]));
-    ok(Math.abs(Math.exp(lp[0]) + Math.exp(lp[1]) - 1) < 1e-9, 'log-probabilities normalise');
-}
-
 group('Clean labels — no possible switches flagged');
 {
     const { session } = buildSession(null);
     const res = await SC.checkSizeSwitches(session, { fps: 60 });
     ok(res.ok, 'check ran (' + (res.reason || 'ok') + ')');
     ok(res.encounters.length >= 20, `found the scheduled encounters (${res.encounters.length} of 24)`);
-    eq(res.flags.length, 0, 'no encounter flagged');
-    ok(res.encounters.every(e => e.score > 0), 'every encounter favours the tracker\'s own labels');
+    eq(res.flags.length, 0, 'no contact flagged');
+    ok(res.encounters.every(e => e.score > 0), `every contact scores positive: each animal keeps its size across it (min ${Math.min(...res.encounters.map(e => e.score)).toFixed(2)})`);
 }
 
-async function switchCase(SWAP, expectKind) {
+async function switchCase(SWAP) {
     const { session, events, encounterEnds } = buildSession(SWAP);
     const res = await SC.checkSizeSwitches(session, { fps: 60 });
     ok(res.ok, 'check ran');
@@ -147,47 +132,45 @@ async function switchCase(SWAP, expectKind) {
     const [a, b] = events[SWAP].pair;
     const pairKey = ['id_' + a, 'id_' + b].sort().join();
     const isPair = (e) => [e.nameA, e.nameB].sort().join() === pairKey;
-    const primary = res.flags.filter(f => !f.continues && isPair(f)).concat(res.changes.filter(isPair));
-    eq(primary.length, 1, 'exactly one change point for the swapped pair');
-    const p = primary[0] || {};
-    eq(p.kind, expectKind, 'change point kind');
-    ok(Math.abs(p.frame - swapEnd.frame) <= 40, `at the swap encounter (expected frame ~${swapEnd.frame}, got ${p.frame})`);
+    eq(res.flags.length, 1, 'exactly one change point');
+    const p = res.flags[0] || {};
     ok(isPair(p), `names the swapped pair (id_${a} ↔ id_${b})`);
-    const minoritySide = expectKind === 'onset'
-        ? res.encounters.filter(e => isPair(e) && e.frame > swapEnd.frame + 40)
-        : res.encounters.filter(e => isPair(e) && e.frame < swapEnd.frame - 40);
-    ok(minoritySide.length >= 2 && minoritySide.every(e => e.flagged && e.continues),
-        `the ${minoritySide.length} encounters on the minority side are flagged repeats`);
-    // Other pairs may be flagged too, but only where one of the swapped identities carries the
-    // label the session's majority disagrees with: on the minority side of the switch.
-    const swapped = new Set(['id_' + a, 'id_' + b]);
-    const onMinority = (e) => expectKind === 'onset' ? e.frame > swapEnd.frame + 40 : e.frame < swapEnd.frame - 40;
-    const strays = res.flags.filter(e => !(swapped.has(e.nameA) || swapped.has(e.nameB)) || !onMinority(e) && !isPair(e));
-    eq(strays.length, 0, 'every flag involves a swapped identity on the minority side');
+    ok(p.startFrame <= swapEnd.frame + 60 && p.frame >= swapEnd.frame - 60, `at the swap encounter (frames ${p.startFrame}–${p.frame}, swap at ${swapEnd.frame}, score ${p.score && p.score.toFixed(2)})`);
+    ok(p.kind === 'onset' && p.switchBackAt == null, 'an onset whose fix runs to the end of the session');
+    ok(res.encounters.filter(e => isPair(e) && e.frame > swapEnd.frame + 60).every(e => !e.flagged && e.score > 0),
+        'the pair\'s later contacts are not flagged: the labels stay swapped, but nothing changes hands there');
 }
 
-group('A switch late in the session (swapped stretch is the minority) — onset at the switch');
-await switchCase(16, 'onset');
+group('A switch late in the session (the swapped stretch is the minority) — one change point, at the switch');
+await switchCase(16);
 
-group('A switch early in the session (swapped stretch is the MAJORITY) — change point still at the switch');
-await switchCase(7, 'end');
+group('A switch early in the session (the swapped stretch is the MAJORITY) — the same: one change point, at the switch');
+await switchCase(7);
 
-group('Moments — a switch AWAY from every encounter is found at the moment it happened');
+group('Moments (coat brightness) — a switch AWAY from every encounter is found at the moment it happened');
 {
+    // Candidate moments are tested by the classifier, which only the coat-brightness check still runs (#310 made the
+    // size check label-free). Coats 30 / 90 / 200 grey, with noise a pure function of (frame, animal, view), so two
+    // runs see the same vectors.
+    const B = await import(pathToFileURL(path.join(ROOT, 'ui', 'brightness-sampler.js')).href);
+    const COAT = [30, 90, 200], hash = (...v) => { let h = 2166136261; for (const x of v) h = Math.imul(h ^ x, 16777619) >>> 0; return h / 4294967296; };
+    const coats = async (frame, items) => items.map(it => [0, 1].map(ci => ({ camera: 'c' + ci,
+        vector: B.brightnessFeatures(Array.from({ length: 11 }, (_, j) => COAT[it.group._animal] * (0.8 + 0.4 * hash(frame, it.group._animal, ci, j)))) })));
+    const check = (session, fps, extra) => SC.checkBrightnessSwitches(session, Object.assign({ fps, threshold: -50, getEmbeddings: coats }, extra || {}));
     // animals 0 and 1 exchange labels at home, 400 mm apart, between their encounters 18 and 21
     const FPS = 60, sig = r => JSON.stringify(r.encounters.map(e => [e.frame, e.nameA, e.nameB, e.score, !!e.flagged]));
     const isPair01 = e => [e.nameA, e.nameB].sort().join() === 'id_0,id_1';
     const late = 300 + 18 * 260 + 160, lateFrame = Math.round(late / 15 * FPS);
     const { session, events } = buildSession(null, FPS, SCALES, { swapAtU: late, swapPair: [0, 1] });
     const ids = session.identities;
-    const plain = await SC.checkSizeSwitches(session, { fps: FPS });
+    const plain = await check(session, FPS);
     const prevEnc = Math.round((events[18].t0 + 60) / 15 * FPS);
     const p0 = plain.flags.filter(f => !f.continues && isPair01(f)).concat(plain.changes.filter(isPair01));
     ok(p0.length === 1 && Math.abs(p0[0].frame - prevEnc) < FPS,
         `without moments it is put on the pair's PREVIOUS encounter, whose time apart runs across it (${p0.map(x => x.frame)} vs switch ${lateFrame})`);
     const moment = { frame: lateFrame, startFrame: lateFrame - 10, identityA: ids[0].id, identityB: ids[1].id, cues: ['tracklet'] };
     const decoys = [0.3, 0.55].map(q => ({ frame: Math.round(q * lateFrame), startFrame: Math.round(q * lateFrame), identityA: ids[0].id, identityB: ids[2].id, cues: ['ambiguity'] }));
-    const withM = await SC.checkSizeSwitches(session, { fps: FPS, moments: [moment].concat(decoys) });
+    const withM = await check(session, FPS, { moments: [moment].concat(decoys) });
     eq(sig(withM), sig(plain), 'every encounter scores and flags exactly as without moments');
     const mrow = withM.flags.concat(withM.changes).filter(x => x.look);
     ok(mrow.length === 1 && Math.abs(mrow[0].frame - lateFrame) <= 4 && mrow[0].kind === 'onset' && mrow[0].side === 'after',
@@ -203,7 +186,7 @@ group('Moments — a switch AWAY from every encounter is found at the moment it 
     // a switch EARLY, so the swapped labelling is the session's majority: the stretch BEFORE the moment is the odd one
     const early = 300 + 2 * 260 + 160, earlyFrame = Math.round(early / 15 * FPS);
     const E = buildSession(null, FPS, SCALES, { swapAtU: early, swapPair: [0, 1] }).session;
-    const eM = await SC.checkSizeSwitches(E, { fps: FPS, moments: [{ frame: earlyFrame, startFrame: earlyFrame, identityA: E.identities[0].id, identityB: E.identities[1].id, cues: ['ambiguity'] }] });
+    const eM = await check(E, FPS, { moments: [{ frame: earlyFrame, startFrame: earlyFrame, identityA: E.identities[0].id, identityB: E.identities[1].id, cues: ['ambiguity'] }] });
     const er = eM.flags.concat(eM.changes).filter(x => x.look);
     ok(er.length === 1 && er[0].kind === 'end' && er[0].side === 'before' && er[0].switchedAt === null && eM.changes.includes(er[0]),
         `a majority swap: the moment is an 'end' (fix the stretch before it, from the session start): ${JSON.stringify(er.map(x => [x.frame, x.kind, x.switchedAt]))}`);
@@ -214,7 +197,7 @@ group('Moments — a switch AWAY from every encounter is found at the moment it 
     // a moment at one of the pair's encounter change points yields to it (one row, the encounter's)
     const { session: S3, encounterEnds } = buildSession(19);
     const onsetF = encounterEnds[19].frame;
-    const r3 = await SC.checkSizeSwitches(S3, { fps: 60, moments: [{ frame: onsetF + 30, startFrame: onsetF, identityA: S3.identities[1].id, identityB: S3.identities[2].id, cues: ['ambiguity'] }] });
+    const r3 = await check(S3, 60, { moments: [{ frame: onsetF + 30, startFrame: onsetF, identityA: S3.identities[1].id, identityB: S3.identities[2].id, cues: ['ambiguity'] }] });
     ok(r3.moments.length === 1 && r3.moments[0].score < -200, 'the moment at an encounter switch is tested and disagrees');
     eq(r3.flags.concat(r3.changes).filter(x => x.look).length, 0, '…but adds no row: the encounter\'s change point within 3 s stands');
 }
@@ -228,17 +211,17 @@ group('Frame-rate independence — the same scenario recorded at 25, 30, 60 and 
         const { session, events, encounterEnds } = buildSession(SWAP, fps);
         const res = await SC.checkSizeSwitches(session, { fps });
         const pairKey = events[SWAP].pair.map(k => 'id_' + k).sort().join();
-        const onset = res.flags.find(f => !f.continues && [f.nameA, f.nameB].sort().join() === pairKey);
+        const onset = res.flags.find(f => [f.nameA, f.nameB].sort().join() === pairKey);
         out[fps] = { clean: clean ? clean.flags.length : null, onset, hz: res.sampleHz, step: res.step, swapFrame: encounterEnds[SWAP].frame };
     }
     for (const fps of [25, 30, 60, 120]) {
         const o = out[fps];
         ok(Math.abs(o.hz - 15) <= 2.5, `${fps} fps: sampled at ~15 Hz (${o.hz.toFixed(2)} Hz, every ${o.step} frame(s))`);
         if (o.clean != null) eq(o.clean, 0, `${fps} fps: clean session has no flags`);
-        console.log(`    ${String(fps).padStart(3)} fps: every ${o.step} frame(s) = ${o.hz.toFixed(2)} Hz | onset frame ${o.onset && o.onset.frame} (switch ${o.swapFrame}) | score ${o.onset && o.onset.score.toFixed(0)}` + (o.clean != null ? ` | clean flags ${o.clean}` : ''));
-        ok(o.onset && Math.abs(o.onset.frame - o.swapFrame) <= fps, `${fps} fps: onset within 1 s of the switch (frame ${o.onset && o.onset.frame}, switch ${o.swapFrame})`);
+        console.log(`    ${String(fps).padStart(3)} fps: every ${o.step} frame(s) = ${o.hz.toFixed(2)} Hz | onset frame ${o.onset && o.onset.frame} (switch ${o.swapFrame}) | score ${o.onset && o.onset.score.toFixed(2)}` + (o.clean != null ? ` | clean flags ${o.clean}` : ''));
+        ok(o.onset && o.onset.startFrame <= o.swapFrame + fps && o.onset.frame >= o.swapFrame - fps, `${fps} fps: onset at the switch (frames ${o.onset && o.onset.startFrame}–${o.onset && o.onset.frame}, switch ${o.swapFrame})`);
         const ratio = o.onset && out[60].onset ? o.onset.score / out[60].onset.score : NaN;
-        ok(ratio > 0.7 && ratio < 1.3, `${fps} fps: onset score ${o.onset && o.onset.score.toFixed(0)} within 30% of the 60 fps score ${out[60].onset && out[60].onset.score.toFixed(0)} (ratio ${ratio.toFixed(2)})`);
+        ok(ratio > 0.7 && ratio < 1.3, `${fps} fps: onset score ${o.onset && o.onset.score.toFixed(2)} within 30% of the 60 fps score ${out[60].onset && out[60].onset.score.toFixed(2)} (ratio ${ratio.toFixed(2)})`);
     }
 }
 
@@ -264,8 +247,7 @@ group('Image check — catches a swap between animals of IDENTICAL size (the siz
     ok(size.ok && img.ok, 'both checks ran (' + (img.reason || 'ok') + ')');
     const pairKey = events[SWAP].pair.map(k => 'id_' + k).sort().join();
     const isPair = e => [e.nameA, e.nameB].sort().join() === pairKey;
-    const sizeHit = size.flags.concat(size.changes).some(f => isPair(f) && Math.abs(f.frame - encounterEnds[SWAP].frame) <= 60);
-    ok(!sizeHit, 'size check misses it (equal sizes — its blind spot)');
+    ok(size.flags.length === 0, `size check flags nothing (equal sizes — its blind spot; ${size.flags.length} flags)`);
     const onset = img.flags.find(f => !f.continues && isPair(f));
     ok(onset && Math.abs(onset.frame - encounterEnds[SWAP].frame) <= 60,
         `image check: onset at the switch (frame ${onset && onset.frame}, switch ${encounterEnds[SWAP].frame}, score ${onset && onset.score.toFixed(0)})`);
@@ -394,7 +376,7 @@ function buildContactSession(mode, swapCycle, fps = 30) {
     return { session, swapSec: swapAt };
 }
 
-group('Image check — a pair that swaps three times, from its FIRST encounter (the swapped labelling is the majority)');
+group('Both checks — a pair that swaps three times, from its FIRST encounter (the swapped labelling is the majority)');
 {
     // id_0/id_1 swap at their 1st encounter (#0), back at #9, again at #15 to the end: swapped for ~72%
     // of the session, and the only unswapped stretch before the first swap is the session's first 24 s.
@@ -414,14 +396,17 @@ group('Image check — a pair that swaps three times, from its FIRST encounter (
     ok(rows[2] && rows[2].kind === 'onset' && rows[2].switchBackAt == null, 'the third runs to the end of the session');
     eq(res.flags.filter(f => !isAB(f)).length, 0, 'no other pair is flagged');
     ok(res.encounters.filter(e => !e.flagged).every(e => e.score > 0.5), `every other contact scores clearly positive (min ${Math.min(...res.encounters.filter(e => !e.flagged).map(e => e.score)).toFixed(2)})`);
-    // negative control: the size check learns from the same labels, so it reads the swapped labelling as right
-    const size = await SC.checkSizeSwitches(buildSession(SW, 60).session, { fps: 60 });
-    const sizeAB = size.flags.filter(f => !f.continues && isAB(f)).concat(size.changes.filter(isAB));
-    ok(!sizeAB.some(f => Math.abs(f.frame - encounterEnds[0].frame) <= 60 * 5),
-        `negative control: the size check, which learns from the tracker's labels, misses the first-encounter swap (its id_0 ↔ id_1 change points: ${sizeAB.map(f => f.frame).join(', ') || 'none'})`);
+    // the size check, on animals of different size, the same way. The swapped pair are the largest and the
+    // smallest animal: a bone-length vector has essentially one direction (size), so the MIDDLE animal sits
+    // near the average and its before/after comparison is weak (here -0.7, against -1.4 for the extremes).
+    const size = await SC.checkSizeSwitches(buildSession(SW, 60, [1.15, 0.85, 1.0]).session, { fps: 60 });
+    const sizeAB = size.flags.filter(isAB);
+    ok(sizeAB.length === 3 && SW.every((e, j) => sizeAB[j].startFrame <= encounterEnds[e].frame + 60 && sizeAB[j].frame >= encounterEnds[e].frame - 60 * 5)
+        && size.flags.length === 3 && sizeAB.map(f => f.kind).join() === 'onset,end,onset',
+        `size check: the same three change points, onset / end / onset (${sizeAB.map(f => f.kind + '@' + f.frame).join(', ') || 'none'})`);
 }
 
-group('Image check — the appearance metric tells look-alike animals apart where raw cosine cannot');
+group('The identity metric tells look-alike animals apart where raw cosine cannot');
 {
     // 3 animals whose embeddings differ only slightly, in 4 dimensions, under pose/view variation 5x larger
     // spread over 30 others, changing from sample to sample as the animal moves: a generic embedding.
@@ -438,7 +423,7 @@ group('Image check — the appearance metric tells look-alike animals apart wher
         for (let j = 0; j < 8; j++) for (let a = 0; a < 3; a++) { rows.push(make(a, posture())); stretch.push(blk * 3 + a); sample.push(blk * 8 + j); }
     }
     const n = rows.length, X = new Float64Array(n * D); rows.forEach((v, i) => X.set(v, i * D));
-    const m = SC.learnAppearanceMetric(X, n, D, Int32Array.from(stretch), Int32Array.from(sample), SC.IMAGE_CHECK_DEFAULTS);
+    const m = SC.learnIdentityMetric(X, n, D, Int32Array.from(stretch), Int32Array.from(sample), SC.IMAGE_CHECK_DEFAULTS);
     // held-out, as the check compares them: the mean of 5 new crops of one animal against 5 more of the
     // same animal and 5 of another, raw and in the metric
     let rawOk = 0, metricOk = 0; const N = 300;
@@ -470,16 +455,17 @@ group('symmetricEigen — A v = λ v for a random symmetric matrix');
     ok(worst < 1e-9, `residual ${worst.toExponential(1)}`);
 }
 
-group('markAppearanceChanges — alternating onsets and ends per pair, follow-ons within one event');
+group('markContactChanges — alternating onsets and ends per pair, follow-ons within one event');
 {
     const mk = (frame, a, b, score) => ({ frame, startFrame: frame - 30, identityA: a, identityB: b, nameA: 'id_' + a, nameB: 'id_' + b, score });
     const sc = [mk(100, 0, 1, -2), mk(500, 0, 1, 1.5), mk(900, 0, 1, -1.9), mk(905, 1, 2, -1.2), mk(4000, 0, 1, -2.2)];
-    SC.markAppearanceChanges(sc, { threshold: -0.8, followSeconds: 5, fps: 30 });
+    const pts = SC.markContactChanges(sc, { threshold: -0.8, followSeconds: 5, fps: 30 });
     ok(sc[0].kind === 'onset' && sc[0].switchBackAt === 900, '1st contact below threshold: onset, back at the 2nd');
     ok(!sc[1].flagged, 'a positive score is no change');
     ok(sc[2].kind === 'end' && sc[2].switchedAt === 100, '2nd: end of that stretch');
     ok(sc[4].kind === 'onset' && sc[4].switchBackAt == null, '3rd: onset to the end');
     ok(sc[3].kind === 'onset' && sc[3].followOf === 900, 'another pair sharing one identity in the same contact: a follow-on');
+    ok(pts.map(x => x.frame).join() === '100,900,905,4000', 'returns the change points, by frame');
 }
 
 for (const mode of ['huddle', 'triad']) {
@@ -793,12 +779,12 @@ group('Failure reasons');
     ok(!r4.ok && /at least 60 s/.test(r4.reason) && /has 40 s/.test(r4.reason), 'under 60 s of tracking → refused, saying how much there is (' + r4.reason + ')');
 }
 
-group('Progress callback — awaited between folds, ends at total');
+group('Progress callback — awaited before the work and at its end');
 {
     const { session } = buildSession(null);
     const seen = [];
     await SC.checkSizeSwitches(session, { fps: 60, onProgress: async (d, t) => { seen.push([d, t]); } });
-    ok(seen.length >= 2 && seen[seen.length - 1][0] === seen[seen.length - 1][1], `progress reported (${seen.length} calls, last ${seen[seen.length - 1]})`);
+    ok(seen.length === 2 && seen[0].join() === '0,1' && seen[1].join() === '1,1', `progress reported (${JSON.stringify(seen)})`);
 }
 
 group('Keyframe sampling plan — samples move to keyframes only when keyframes are dense enough');
