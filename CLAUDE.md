@@ -1648,6 +1648,37 @@ or editing any modal/overlay dialog, wire a `keydown` listener that closes it on
 in-progress export), `Esc` should cancel/stop that operation rather than tear the
 modal down. Example: `showExport3DVideoModal` in `ui/export-modals.js`.
 
+## Native resolution (1:1) — one video pixel per DEVICE pixel
+
+View ▸ Native Resolution / `Shift+0` (`VideoController.setNativeResolution`,
+`loading/video.js`) shows the video with no resampling. It is a zoom SCALE, not
+a second display path — the backing canvas is already the video's size; only
+the wrapper's CSS transform scales it — and a wheel or `+`/`-` step that passes
+through that scale stops on it (`snapZoomToNative`; the wheel also HOLDS there
+until it rests 250 ms). Measured against real screenshots of seeded noise, it
+is exact only while two rules hold, and breaking either is invisible in code
+review and obvious on screen:
+- **One scale per axis** (`zoom.scale` / `zoom.scaleY`). `fitCanvasesToCells`
+  floors the canvas box to whole CSS px, so the box aspect is a hair off the
+  video's; a uniform scale resamples the other axis by ~0.3% and blurs every
+  row. Anything that maps screen ↔ video through `zoom.scale` alone (the
+  rotated path of `canvasToVideo` was one) must read `zoom.scaleY` too.
+- **The pan on the device-pixel grid** (`_alignNativeOffsets` in `applyZoom`).
+  A half-pixel offset at the exact scale still averages neighbours.
+Exact at integer devicePixelRatio (and 1.25/1.5 headless); at e.g. 2.2 Chrome
+resamples regardless, so it is right-SIZED but not exact — say so, don't promise
+it. Whether it is on is DERIVED (`state.nativeResolution` = every shown view at
+1:1) so the menu tick cannot lie, and `initZoom` seeds from it so pane rebuilds
+keep 1:1. The pane badge reads the zoom as a percentage of 1:1
+(`zoomPercentLabel`), and only a view HELD at 1:1 may read exactly "100%" — a
+near miss is still resampled, so it reads "99.8%" / "≈100%". Hovering it offers
+presets (`ZOOM_PRESET_PERCENTS`, per pane, `setZoomPercent`); 100% there must go
+through `_enterNative`, never a plain `scale = 1:1`, or it skips both rules. The 1:1 scale depends on the box AND devicePixelRatio, so anything
+that moves either must end in `reapplyZoom` (`reapplyAllZoom` covers resize and
+the DPR watcher). Covered by `tests/e2e/native-resolution-zoom.mjs` (run it
+`HEADED=1` too: only a visible window shows the GPU compositor) and the
+"Native resolution" block of `tests/test-video-controller.js`.
+
 ## Tests
 There are **three** test populations, each with its own runner. Run all three —
 they cover disjoint code, and a green run of one says nothing about the others.

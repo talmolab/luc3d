@@ -1457,6 +1457,22 @@ export function setupMenus() {
         toggleInfoPanel();
     });
 
+    // View ▸ Native Resolution (1:1). The tick is refreshed each time the menu
+    // opens rather than pushed on every zoom: whether it is on is derived from
+    // the views (a wheel zoom that snaps to 1:1 turns it on, one that leaves
+    // turns it off), so asking at open time cannot go stale.
+    document.getElementById('menuNativeResolution').addEventListener('click', function () {
+        closeMenus();
+        if (videoController) videoController.toggleNativeResolution();
+    });
+    var viewMenuEl = document.querySelector('.menu-item[data-menu="view"]');
+    if (viewMenuEl) {
+        viewMenuEl.addEventListener('click', function () {
+            var check = document.querySelector('#menuNativeResolution .trail-check');
+            if (check) check.textContent = (videoController && videoController.nativeResolutionActive()) ? '✓' : '';
+        });
+    }
+
     document.getElementById('menuResetView').addEventListener('click', function () {
         closeMenus();
         if (viewport3d) viewport3d.resetCamera();
@@ -1947,8 +1963,18 @@ export function setupUI() {
 
         var _seekThrottle = { lastRender: 0, timer: null, pendingFrame: null };
 
+        // A click or drag on the bar leaves the video playing or paused, as it
+        // was. A scrub always stops playback (the play loop and the scrub must
+        // not fight over the frame), so a press that began while playing plays
+        // on from the new position on release. `resumePending` counts too: a
+        // second click before the first one's resume has started is still a
+        // click on a playing video.
+        var resumeOnRelease = false;
+
         seekbar.addEventListener('mousedown', function (e) {
             isDragging = true;
+            resumeOnRelease = state.isPlaying || !!(videoController && videoController.resumePending);
+            if (!hasRealVideo() && state.isPlaying) stopNoVideoPlayback();
             var frame = getFrameFromEvent(e);
             updateSeekbarVisual(frame);
             _seekThrottle.lastRender = performance.now();
@@ -1986,6 +2012,16 @@ export function setupUI() {
                 if (_seekThrottle.pendingFrame !== null && videoController) {
                     videoController.scrubToFrame(_seekThrottle.pendingFrame);
                     _seekThrottle.pendingFrame = null;
+                }
+                if (resumeOnRelease) {
+                    resumeOnRelease = false;
+                    if (!hasRealVideo()) startNoVideoPlayback();
+                    else if (videoController) videoController.resumeAfterScrub(function (frame) {
+                        // A lazy project hydrates the frames ahead first, as Play does.
+                        if (state.session && state.session.lazyLoader) {
+                            return batchLoadLazyFrames(frame, LAZY_PLAYBACK_AHEAD);
+                        }
+                    });
                 }
             }
         });
@@ -2143,6 +2179,15 @@ export function setupUI() {
                 case 'End': e.preventDefault(); stopNoVideoPlayback(); navigateToFrame(state.totalFrames - 1); break;
                 case ' ': e.preventDefault(); toggleNoVideoPlayback(); break;
             }
+            return;
+        }
+
+        // Shift+0: View ▸ Native Resolution (1:1) on / off — the `0` that
+        // resets zoom, shifted. Matched by physical key: Shift+0 is ')' on a
+        // US layout and something else elsewhere.
+        if (e.code === 'Digit0' && e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
+            e.preventDefault();
+            videoController.toggleNativeResolution();
             return;
         }
 
@@ -3312,7 +3357,7 @@ export function setGridMode() {
         for (var zi = 0; zi < state.views.length; zi++) {
             var zv = state.views[zi];
             if (zv.zoom) {
-                savedZoom[zv.name] = { scale: zv.zoom.scale, offsetX: zv.zoom.offsetX, offsetY: zv.zoom.offsetY };
+                savedZoom[zv.name] = { scale: zv.zoom.scale, offsetX: zv.zoom.offsetX, offsetY: zv.zoom.offsetY, native: !!zv.zoom.native };
             }
         }
         paneManager.clearAll();
@@ -3330,7 +3375,14 @@ export function setGridMode() {
                 rv.zoom.scale = savedZoom[rv.name].scale;
                 rv.zoom.offsetX = savedZoom[rv.name].offsetX;
                 rv.zoom.offsetY = savedZoom[rv.name].offsetY;
-                if (videoController) videoController.applyZoom(rv);
+                // A 1:1 scale belongs to the OLD canvas box: re-derive it. Keep
+                // the flag `initZoom` set from View ▸ Native Resolution, too.
+                rv.zoom.native = savedZoom[rv.name].native || !!rv.zoom.native;
+                rv.zoom.scaleY = undefined;
+                if (videoController) {
+                    if (rv.zoom.native) videoController.reapplyZoom(rv);
+                    else videoController.applyZoom(rv);
+                }
             }
         }
     } else {
@@ -3346,7 +3398,7 @@ export function updateVideoGridDisplay() {
     for (var zi = 0; zi < state.views.length; zi++) {
         var zv = state.views[zi];
         if (zv.zoom) {
-            savedZoom[zv.name] = { scale: zv.zoom.scale, offsetX: zv.zoom.offsetX, offsetY: zv.zoom.offsetY };
+            savedZoom[zv.name] = { scale: zv.zoom.scale, offsetX: zv.zoom.offsetX, offsetY: zv.zoom.offsetY, native: !!zv.zoom.native };
         }
     }
     if (state.viewMode === 'single') {
@@ -3370,7 +3422,14 @@ export function updateVideoGridDisplay() {
             rv.zoom.scale = savedZoom[rv.name].scale;
             rv.zoom.offsetX = savedZoom[rv.name].offsetX;
             rv.zoom.offsetY = savedZoom[rv.name].offsetY;
-            if (videoController) videoController.applyZoom(rv);
+            // A 1:1 scale belongs to the OLD canvas box: re-derive it. Keep
+            // the flag `initZoom` set from View ▸ Native Resolution, too.
+            rv.zoom.native = savedZoom[rv.name].native || !!rv.zoom.native;
+            rv.zoom.scaleY = undefined;
+            if (videoController) {
+                if (rv.zoom.native) videoController.reapplyZoom(rv);
+                else videoController.applyZoom(rv);
+            }
         }
     }
 }
