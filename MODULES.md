@@ -10876,10 +10876,19 @@ stopping at the last frame; the step transport buttons/keys stop it first.
   background `lazyPlaybackLoader`: it keeps `LAZY_PLAYBACK_AHEAD` (600) frames
   hydrated ahead of the playhead and calls `evictLazyFrames(cur)` after each
   top-up, so what playback leaves behind is dropped (`pose/lazy-residency.js`).
-  The Play button and Space preload the same window before starting. It was
+  The Play button, Space and the seekbar's resume preload the same window
+  before starting. It was
   5000 frames with no eviction, which kept every played frame resident; the
   lookahead and the eviction's protected ahead-window are one constant, so they
   cannot drift apart.
+  **A click or drag on the seekbar keeps the video playing or paused, as it
+  was.** The scrub pauses (`scrubToFrame` always stops playback); a press that
+  began while playing — or while a previous press's resume was still pending
+  (`videoController.resumePending`) — calls `videoController.resumeAfterScrub`
+  on release, which plays on from wherever the scrub lands. It used to leave the
+  video paused at the clicked frame. A video-less project does the same with
+  its timer (`stopNoVideoPlayback` on the press, `startNoVideoPlayback` on the
+  release). Covered by `tests/e2e/seekbar-click-keeps-playback.mjs`.
 - Toggles: `toggleInfoPanel`, `refreshInfoPanelAfterShow`,
   `updateInfoPanelToggleBtn`, `toggle3DViewport`,
   `update3DViewportToggleBtn`, `toggleTimeline`,
@@ -13190,6 +13199,19 @@ in `tests/test-video-controller.js` (rapid relative `"+1"` steps against an
 artificially slow decoder decode fewer frames than requests) and
 `tests/e2e/arrow-key-coalesced-stepping.mjs` (drives the REAL keydown
 handler, proves every ArrowRight press routes through `scrubToFrame`).
+
+**`resumeAfterScrub(prepare)` — play on from where a scrub lands.** A scrub
+stops playback, so the seekbar (on release of a press that began while
+playing) asks for it back. It waits for the scrub queue to drain
+(`_scrubSettled`, resolved by `_processScrub` once no target is in flight or
+queued), then for the optional `prepare(frame)` promise (the app hydrates a
+lazy project's frames ahead, as Play does), then `startPlayback()` at
+`state.currentFrame`. Starting before the scrub drains would let a queued seek
+paint over the playing video. It stays pending (`resumePending`) until playback
+starts, and any later `scrubToFrame` or `stopPlayback` cancels it — so an arrow
+step in that window leaves the video paused, while a second seekbar click reads
+`resumePending` as "still playing". Covered by
+`tests/e2e/seekbar-click-keeps-playback.mjs`.
 
 **Playback overlay/video sync — native default + per-frame throttling
 (issue #115 follow-up).** During playback the pose overlay drifted a few

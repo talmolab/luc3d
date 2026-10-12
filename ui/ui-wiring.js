@@ -1870,8 +1870,18 @@ export function setupUI() {
 
         var _seekThrottle = { lastRender: 0, timer: null, pendingFrame: null };
 
+        // A click or drag on the bar leaves the video playing or paused, as it
+        // was. A scrub always stops playback (the play loop and the scrub must
+        // not fight over the frame), so a press that began while playing plays
+        // on from the new position on release. `resumePending` counts too: a
+        // second click before the first one's resume has started is still a
+        // click on a playing video.
+        var resumeOnRelease = false;
+
         seekbar.addEventListener('mousedown', function (e) {
             isDragging = true;
+            resumeOnRelease = state.isPlaying || !!(videoController && videoController.resumePending);
+            if (!hasRealVideo() && state.isPlaying) stopNoVideoPlayback();
             var frame = getFrameFromEvent(e);
             updateSeekbarVisual(frame);
             _seekThrottle.lastRender = performance.now();
@@ -1909,6 +1919,16 @@ export function setupUI() {
                 if (_seekThrottle.pendingFrame !== null && videoController) {
                     videoController.scrubToFrame(_seekThrottle.pendingFrame);
                     _seekThrottle.pendingFrame = null;
+                }
+                if (resumeOnRelease) {
+                    resumeOnRelease = false;
+                    if (!hasRealVideo()) startNoVideoPlayback();
+                    else if (videoController) videoController.resumeAfterScrub(function (frame) {
+                        // A lazy project hydrates the frames ahead first, as Play does.
+                        if (state.session && state.session.lazyLoader) {
+                            return batchLoadLazyFrames(frame, LAZY_PLAYBACK_AHEAD);
+                        }
+                    });
                 }
             }
         });
