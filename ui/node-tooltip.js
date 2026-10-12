@@ -9,6 +9,16 @@
  * the pointer is on and what it says (`setNodeTooltipTarget`, on every
  * mousemove over a view); the score comes from `Session.predictedNodeScore`.
  *
+ * ## The color says WHICH skeleton
+ *
+ * The text names a node, but where skeletons overlap the pointer can sit on
+ * two of them at once, and "trunk (score: 0.42)" does not say whose trunk.
+ * The tip's left edge is a stripe in the color that instance is drawn from —
+ * its track's, or its identity's in Identity mode, as the renderer chose it
+ * (`target.color`, from `ui/overlays.js` via the interaction manager). It is
+ * the base color, not a selection's white or a prediction's desaturated tint:
+ * it identifies the animal, not the instance's state.
+ *
  * ## Timing is Qt's
  *
  * A node is a few pixels across and the pointer crosses dozens of them while
@@ -83,6 +93,8 @@ function showNodeTip() {
     if (!nodeTipTarget) return;
     const el = ensureNodeTip();
     el.textContent = nodeTipTarget.text;
+    if (nodeTipTarget.color) el.style.setProperty('--node-tip-color', nodeTipTarget.color);
+    else el.style.removeProperty('--node-tip-color');
     el.hidden = false;
     placeTipNear(el, nodeTipX, nodeTipY);
     nodeTipShown = true;
@@ -112,9 +124,10 @@ export function hideNodeTooltip() {
  * The node the pointer is on, or null when it is on none. Called on every
  * mousemove over a view.
  *
- * @param {{key: string, text: string, frameIdx: number}|null} target - `key`
- *   names the node (view, frame, instance, node); the same key again leaves a
- *   showing tip where it is.
+ * @param {{key: string, text: string, frameIdx: number, color: (string|null)}|null} target
+ *   `key` names the node (view, frame, instance, node); the same key again
+ *   leaves a showing tip where it is. `color` is the instance's drawn color,
+ *   shown as the tip's left stripe (null: the plain border).
  * @param {number} clientX
  * @param {number} clientY
  */

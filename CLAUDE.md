@@ -659,9 +659,12 @@ post-Track-All playback degrading run over run. Three more rules:
 ## A prediction's per-node scores: kept, shown, and saved
 
 Resting the pointer on a node shows its name and, on a prediction, the model's
-score for THAT node (`ui/node-tooltip.js`, SLEAP 1.6.5's tooltip and text). The
-scores are `pred_points.score`, which LUCID used to drop at load and overwrite at
-save. Four rules:
+score for THAT node (`ui/node-tooltip.js`, SLEAP 1.6.5's tooltip and text), with
+a stripe in the color that skeleton is drawn from — where skeletons overlap the
+text alone does not say whose node it is. The stripe comes from the renderer's
+own color functions (`getGroupColor`, `unlinkedBaseColor` in `ui/overlays.js`);
+never compute it separately. The scores are `pred_points.score`, which LUCID
+used to drop at load and overwrite at save. Four rules:
 
 - **Eager: one pool, an integer per instance.** `Instance.setPointScores` copies
   them into shared `Float32Array` chunks in `pose/pose-data.js`; the instance

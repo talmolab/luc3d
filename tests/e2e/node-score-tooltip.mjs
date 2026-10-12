@@ -423,6 +423,97 @@ try {
         check(stream.copied.length === 2 && stream.copied.every(same), 'and a frame copied from the store keeps them too', stream.copied);
     }
 
+    // =====================================================================
+    // 5. The color says which skeleton the tip is about
+    // =====================================================================
+    // Three predictions on one frame whose tips read IDENTICALLY ("trunk",
+    // score 0.50): A (track t0) and B (track t1) cross, and C is a second
+    // instance on track t0 — raw predictions do that, and the renderer darkens
+    // it. Only the stripe tells them apart, and it must be the color each is
+    // drawn in.
+    const XA = [[100, 100], [200, 100], [300, 100]];
+    const XB = [[150, 40], [200, 108], [250, 176]];     // trunk 8 px from A's
+    const XC = [[100, 300], [200, 300], [300, 300]];
+    await page.evaluate(async ([NODES, XA, XB, XC]) => {
+        const SIO = window.SleapIO;
+        const skeleton = new SIO.Skeleton({ name: 'sk', nodes: NODES, edges: [[0, 1], [1, 2]] });
+        const video = new SIO.Video({ filename: 'camA.mp4', shape: [2, 480, 640, 1] });
+        const t0 = new SIO.Track('t0'), t1 = new SIO.Track('t1');
+        const pred = (P, track) => new SIO.PredictedInstance({
+            points: P.map(p => ({ xy: p, visible: true, complete: true, score: 0.5 })), skeleton, track, score: 0.5 });
+        const lfs = [0, 1].map(f => new SIO.LabeledFrame({ video, frameIdx: f, instances: [pred(XA, t0), pred(XB, t1), pred(XC, t0)] }));
+        window.__colorBytes = await SIO.saveSlpToBytes(new SIO.Labels({ skeletons: [skeleton], videos: [video], tracks: [t0, t1], labeledFrames: lfs }));
+    }, [NODES, XA, XB, XC]);
+    check((await loadThroughApp('__colorBytes', 'crossing.slp')) === true, 'colors: the crossing fixture loads');
+    await showViews(['camA'], 0, 2);
+
+    /** The tip's stripe as an rgb() string, and the expected colors, from the renderer's own palette. */
+    const stripe = () => page.evaluate(() => {
+        const el = document.getElementById('nodeTip');
+        return el && !el.hidden ? getComputedStyle(el).borderLeftColor : null;
+    });
+    const expected = await page.evaluate(async () => {
+        const O = await import('/ui/overlays.js');
+        const s = window.__lucid.state.session;
+        const rgb = (hex) => { const n = parseInt(hex.slice(1), 16); return `rgb(${n >> 16}, ${(n >> 8) & 255}, ${n & 255})`; };
+        const t0 = O.getTrackColor(s.tracks.indexOf('t0'), false), t1 = O.getTrackColor(s.tracks.indexOf('t1'), false);
+        // The renderer darkens the 2nd instance on a track by 0.78.
+        return { A: rgb(t0), B: rgb(t1), C: rgb(O.adjustColorBrightness(t0, 0.78)), t0, t1 };
+    });
+    check(expected.A !== expected.B && expected.A !== expected.C, 'the fixture\'s three colors differ', expected);
+
+    const tipOn = async (pt, waitMs) => { await hover('camA', pt); await page.waitForTimeout(waitMs); return { t: await tip(), c: await stripe() }; };
+    await hover('camA', [560, 40]);
+    await page.waitForTimeout(2300);
+    let a = await tipOn(XA[1], 1000);
+    let b = await tipOn(XB[1], 100);
+    let c = await tipOn(XC[1], 100);
+    check(a.t.text === 'trunk\n(score: 0.50)' && b.t.text === a.t.text && c.t.text === a.t.text,
+        'the three tips read the same', [a.t.text, b.t.text, c.t.text]);
+    check(a.c === expected.A, `A (t0): stripe in t0's color (${a.c})`, expected.A);
+    check(b.c === expected.B, `B (t1), crossing A 8 px away: stripe in t1's color (${b.c})`, expected.B);
+    check(c.c === expected.C, `C (a 2nd t0 instance): the darkened t0 the renderer draws it in (${c.c})`, expected.C);
+
+    // Grouped, with an identity: Tracks mode shows the track's color, Identity
+    // mode the identity's — the mode the skeleton is drawn in.
+    const identityColor = await page.evaluate(async (XA) => {
+        const s = window.__lucid.state.session;
+        const ul = s.getFrameGroup(0).getUnlinkedInstances('camA').find(u => Math.abs(u.instance.getX(0) - XA[0][0]) < 1e-6);
+        const id = s.addIdentity('mouseA', '#3366ff');
+        s.createGroupFromUnlinked(0, [ul], id.id);
+        (await import('/ui/rendering.js')).drawAllOverlays(0);
+        return id.color;
+    }, XA);
+    await hover('camA', [560, 40]);
+    await page.waitForTimeout(2300);
+    a = await tipOn(XA[1], 1000);
+    check(a.t.shown && a.c === expected.A, `grouped, Tracks mode: still t0's color (${a.c})`, expected.A);
+    await page.evaluate(async () => {
+        (await import('/ui/color-by.js')).setColorByIdentity(window.__lucid.state, true);
+        (await import('/ui/rendering.js')).drawAllOverlays(0);
+    });
+    await hover('camA', [560, 40]);
+    await page.waitForTimeout(2300);
+    a = await tipOn(XA[1], 1000);
+    check(a.t.shown && a.c === 'rgb(51, 102, 255)', `grouped, Identity mode: the identity's color (${a.c})`, identityColor);
+    // Where they overlap, the grouped A wins the hit test (grouped instances are
+    // tested first — the one a click would pick), and the stripe says so.
+    b = await tipOn(XB[1], 100);
+    check(b.c === 'rgb(51, 102, 255)',
+        `on B's trunk, 8 px from grouped A's: the tip is A's, and its stripe says so (${b.c})`);
+    b = await tipOn(XB[0], 100);
+    const bIdentityMode = await page.evaluate(async (t1) => {
+        const O = await import('/ui/overlays.js');
+        const s = window.__lucid.state.session;
+        const hex = O.getTrackColor(s.tracks.indexOf('t1'), true);
+        const n = parseInt(hex.slice(1), 16);
+        return `rgb(${n >> 16}, ${(n >> 8) & 255}, ${n & 255})`;
+    }, expected.t1);
+    check(b.t.text === 'head\n(score: 0.50)' && b.c === bIdentityMode && b.c !== expected.B,
+        `ungrouped B (its head, clear of A) in Identity mode: the muted unidentified-track color it is drawn in (${b.c})`, bIdentityMode);
+    await page.evaluate(async () => { (await import('/ui/color-by.js')).setColorByIdentity(window.__lucid.state, false); });
+    await hover('camA', [560, 40]);
+
     check(errs.length === 0, 'no page errors', errs);
 } finally {
     if (browser) await browser.close();

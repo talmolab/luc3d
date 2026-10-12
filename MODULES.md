@@ -5256,6 +5256,8 @@ session has no store, so it deletes exactly as before. Covered by
   `unlinkedTarget` (import-free itself, so this adds no cycle).
 - `./node-tooltip.js` — `nodeTooltipText`, `setNodeTooltipTarget`,
   `hideNodeTooltip`.
+- `./overlays.js` — `getGroupColor`, `unlinkedDupIndices`, `unlinkedBaseColor`
+  (the node tooltip's color; `overlays.js` imports nothing, so no cycle).
 
 **Imported by.** `pose/initialization.js`, `ui/info-panel.js`.
 
@@ -5264,7 +5266,12 @@ session has no store, so it deletes exactly as before. Covered by
 `setNodeTooltipTarget` on every move: the node under the pointer (linked or
 unlinked), named from the skeleton, with `Session.predictedNodeScore` as the
 score — none on an edge, a plane node or empty canvas, and no score on a
-reprojection. `onMouseLeave` hides it. See `ui/node-tooltip.js`.
+reprojection — and the color the hovered instance is drawn from
+(`getGroupColor` for a group's member or reprojection, `unlinkedBaseColor` for
+an ungrouped one, in the current Tracks / Identity mode). It reports the
+instance the hit test picked — the one a click would select: where a grouped and
+an ungrouped skeleton overlap, grouped wins. `onMouseLeave` hides it. See
+`ui/node-tooltip.js`.
 
 **User-facing features.** Click-to-select skeleton nodes, drag to move
 keypoints, Alt+drag to move a whole instance, Alt+wheel to rotate one about a
@@ -6237,6 +6244,14 @@ palettes, and per-frame draw routines. Receives `frameGroup` and
   `getGroupColor`,
   `getInstanceColor`, `adjustColorBrightness`, `errorColor`, `hexToRgb`,
   `brightenColor`, `desaturateColor`, `complementaryColor`.
+  **`unlinkedDupIndices(unlinkedInstances, typeFilter)`** and
+  **`unlinkedBaseColor(instance, dupIdx, session, cameraName, useIdentity,
+  frameIdx)`** are the rule `drawUnlinkedInstances` colors an ungrouped
+  instance by — `getInstanceColor`, darkened by `max(0.35, 1 − 0.22·k)` for the
+  k-th later instance of the same type sharing a raw `trackIdx` — pulled out so
+  the node tooltip's stripe (`ui/interaction.js` → `ui/node-tooltip.js`) is
+  computed by the same function and cannot name a different color from the one
+  drawn. Behaviour unchanged (`tests/e2e/unlinked-instance-color-collision.mjs`).
   `getGroupColor`/`getInstanceColor` return `NULL_ID_COLOR` when
   `useIdentity` and `session.isExplicitNoIdentity(...)` is true, and also —
   when coloring by track — for any instance/group on the "No ID" track
@@ -6623,7 +6638,9 @@ palettes, and per-frame draw routines. Receives `frameGroup` and
 **Imported by.** `pose/initialization.js`, `ui/timeline.js`,
 `ui/rendering.js`, `ui/info-panel.js`, `ui/app-state.js` (`DEFAULT_TRAIL_SHADE`),
 `ui/ui-wiring.js` (`TRAIL_SHADES`, `TRACK_COLORS`, `trailShadeFor`,
-`trailColor` — the trail menus), `ui/overlay-export-modal.js`.
+`trailColor` — the trail menus), `ui/overlay-export-modal.js`,
+`ui/interaction.js` (`getGroupColor`, `unlinkedDupIndices`, `unlinkedBaseColor`
+— the node tooltip's color).
 
 **User-facing features.** All on-canvas pose drawing — colored skeletons,
 reprojection error vectors, drag preview, selection highlight, instance
@@ -12105,7 +12122,7 @@ name alone for a user node.
 
 **Key exports.** `nodeTooltipText(nodeName, score)` (pure; NaN score → the name
 alone), `setNodeTooltipTarget(target, clientX, clientY)` (`target` =
-`{key, text, frameIdx}` or null; called by `ui/interaction.js` on every mousemove
+`{key, text, frameIdx, color}` or null; called by `ui/interaction.js` on every mousemove
 over a view), `syncNodeTooltipFrame(frameIdx)` (called by `drawAllOverlays` in
 `ui/rendering.js`), `hideNodeTooltip()`, `installNodeTooltip()` (once, at
 startup), `NODE_TIP_DELAY_MS` (700), `NODE_TIP_AWAKE_MS` (2000).
@@ -12130,8 +12147,17 @@ new frame moves the node from under a still pointer, so `drawAllOverlays` calls
 a key, the wheel, a scroll, a resize and window blur hide it too. It holds
 strings and numbers only, never an Instance, so it cannot keep a lazy frame alive.
 
+**The color says WHICH skeleton.** Where skeletons overlap, `trunk (score:
+0.42)` does not say whose trunk, so the tip's left edge is a 5 px stripe in the
+color the hovered instance is drawn FROM (`target.color` →
+`--node-tip-color`): its track's, or its identity's in Identity mode, darkened
+like the skeleton for a second ungrouped instance on one track. The base color,
+not a selection's white or a prediction's desaturated tint — it identifies the
+animal. The interaction manager takes it from the renderer's own functions
+(`ui/overlays.js`), so it cannot name a color that is not on screen.
+
 It reuses the ⓘ tip's look (`.info-tip.node-tip`; `.node-tip` adds
-`white-space: pre-line` for the two lines) and its placement (`placeTipNear`),
+`white-space: pre-line` for the two lines, and the stripe) and its placement (`placeTipNear`),
 and is `pointer-events: none` — a tip that took the hover would make the view see
 a `mouseleave` and hide it.
 
@@ -12147,7 +12173,10 @@ Coverage: `tests/test-node-scores.mjs` (the text) and
 `tests/e2e/node-score-tooltip.mjs` (real mouse: the delay and the awake window,
 a prediction's per-node score, a user node's bare name, none on an edge or empty
 canvas, placement beside but not over the pointer, hidden on a new frame and on a
-press; plus the score data behind it on every load path and both writers).
+press; the stripe for two crossing tracks whose tips read identically, a
+darkened duplicate track, a group in Tracks vs Identity mode, and an overlap
+where the grouped skeleton wins; plus the score data behind it on every load
+path and both writers).
 
 ### ui/section-state.js
 
