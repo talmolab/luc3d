@@ -1,0 +1,106 @@
+Third-party licenses for everything under lib/
+==============================================
+
+LUCID itself is BSD-3-Clause (see the repository LICENSE). This file covers the
+dependencies distributed alongside it, whether committed here or fetched by
+scripts/offline_deps.py. It is included in the offline bundle, because that bundle
+is a redistribution of all of them.
+
+Each package's own LICENSE file, where upstream ships one, sits next to it in its
+directory. The one exception is noted below.
+
+
+Committed under lib/
+--------------------
+
+h5wasm 0.10.3                                       NIST public-service license
+    WebAssembly HDF5, reads and writes .slp / .h5 in the browser.
+    https://github.com/usnistgov/h5wasm
+    NIST-developed software provided as a public service. Use, copy, distribute
+    and modify are permitted PROVIDED THE NOTICE IS KEPT INTACT; modified works
+    should say they were changed and when; NIST should be acknowledged as the
+    source. Provided "AS IS" with no warranty of any kind. LUCID does not modify
+    h5wasm. Full text: lib/h5wasm/LICENSE.txt
+
+sleap-io.js 0.5.5                                             BSD-3-Clause
+    SLP read/write and the MediaBunnyVideoBackend.
+    https://github.com/talmolab/sleap-io.js
+    *** MODIFIED BY LUCID. *** lib/sleap-io/chunk-*.js carry local patches for
+    issues #115, #185, #189, #190, #191, #193 and sleap-io.js#231, each marked in
+    the source with a "LUCID local patch" comment. See CLAUDE.md for what each one
+    changes and why. Full text: lib/sleap-io/LICENSE
+
+mediabunny 1.30.0                                             MPL-2.0
+    Video decode (via sleap-io.js) and video encode (via ui/video-encode.js).
+    https://github.com/Vanilagy/mediabunny
+    Mozilla Public License 2.0 -- file-level copyleft. LUCID ships the unmodified
+    minified browser bundle and has made no changes to it. The corresponding
+    source for this version is available from the project above and from
+    https://www.npmjs.com/package/mediabunny/v/1.30.0 . Full text:
+    lib/mediabunny/LICENSE
+
+pako 2.2.0                                                    MIT AND Zlib
+    zlib deflate/inflate; a static import of sleap-io.js's SLP writer.
+    https://github.com/nodeca/pako
+    Full text: lib/pako/LICENSE
+
+
+Fetched by scripts/offline_deps.py (not committed)
+--------------------------------------------------
+
+three 0.147.0                                                 MIT
+    3D viewport, plus examples/js/controls/OrbitControls.js.
+    https://github.com/mrdoob/three.js
+    Copyright 2010-2022 three.js authors. Full text: lib/three/LICENSE
+    (OrbitControls.js carries no header of its own; it is part of the same
+    MIT-licensed distribution.)
+
+mp4box 0.5.2                                                  BSD-3-Clause
+    MP4 demux for the HTML5/WebCodecs decode path.
+    https://github.com/gpac/mp4box.js
+    Copyright 2012-2013 Telecom ParisTech/TSI/MM/GPAC, Cyril Concolato.
+    Full text: lib/mp4box/LICENSE
+
+dockview-core 6.6.1                                           MIT
+    Pane docking.
+    https://github.com/mathuo/dockview
+    *** The 6.6.1 npm tarball ships NO LICENSE FILE. *** MIT is declared in its
+    package.json; copyright mathuo (github.com/mathuo). The MIT text is reproduced
+    below so this distribution carries the notice the license requires.
+
+yaml 2.8.0                                                    ISC
+    Resolves sleap-io.js's static `import YAML from "yaml"`.
+    https://github.com/eemeli/yaml
+    Copyright Eemeli Aro. Full text: lib/yaml/LICENSE
+
+
+MIT License (for dockview-core 6.6.1, which ships no LICENSE file)
+------------------------------------------------------------------
+
+Copyright (c) mathuo
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of
+this software and associated documentation files (the "Software"), to deal in the
+Software without restriction, including without limitation the rights to use,
+copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the
+Software, and to permit persons to whom the Software is furnished to do so,
+subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN
+AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
+WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+
+Not bundled, deliberately
+-------------------------
+
+LUCID exports MP4 video through the browser's own WebCodecs H.264 encoder. No
+H.264 encoder or ffmpeg binary is distributed here, so no patent-encumbered or
+GPL-licensed codec enters this tree. Keep it that way: bundling ffmpeg would
+import a licensing problem the current design avoids for free.
