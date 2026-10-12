@@ -2098,6 +2098,17 @@ export function snapZoomToNative(oldScale, newScale, nativeScale) {
 export const ZOOM_PRESET_PERCENTS = [50, 100, 150, 200];
 
 /**
+ * A zoom percentage as SCREEN pixels : VIDEO pixels, in lowest terms — the
+ * badge menu's hint beside each preset: 50 → "1:2", 100 → "1:1",
+ * 150 → "3:2", 200 → "2:1".
+ */
+export function zoomRatioLabel(pct) {
+    var a = Math.round(pct), x = a, y = 100;
+    while (y) { var t = x % y; x = y; y = t; } // x = gcd(a, 100)
+    return (a / x) + ':' + (100 / x);
+}
+
+/**
  * The pane badge's zoom read-out, as a percentage of native resolution: 100%
  * is one video pixel per device pixel, 200% two, 50% half. Only a view that IS
  * held at 1:1 reads exactly "100%": one a hair off it (or at the scale but off

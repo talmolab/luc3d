@@ -8875,7 +8875,9 @@ multi-video docking layout.
   `zoomPercentLabel`, `loading/video.js`) and a click fits the view. Hovering
   opens `.zoom-preset-menu` — the Triangulate split-button pattern, the same
   pure-CSS hover `.tri-dropdown` — with `ZOOM_PRESET_PERCENTS` (50 / 100 / 150 /
-  200 %) and Fit, for THAT pane's view only (`setZoomPercent` / `resetZoom`).
+  200 %, each hinted with its screen:video pixel ratio from `zoomRatioLabel`:
+  1:2 / 1:1 / 3:2 / 2:1) and Fit, for THAT pane's view only (`setZoomPercent` /
+  `resetZoom`).
   The current preset is ticked, re-read on each hover; 100% is ticked only when
   the view is AT 1:1 (`zoom.native`), never merely near it. Items carry
   `data-zoom-pct` / `data-zoom-fit`. The badge stops `mousedown` so a click on it
@@ -13618,6 +13620,8 @@ How it behaves:
 - `zoomPercentLabel(scale, nativeScale, isNative)` → the pane badge's read-out
   ("125%", "100%", "≈100%", "Zoomed"; see **Native resolution** above).
 - `ZOOM_PRESET_PERCENTS` (`[50, 100, 150, 200]`) — the badge menu's presets.
+- `zoomRatioLabel(pct)` — a percentage as screen:video pixels in lowest terms
+  (`200` → `"2:1"`, `150` → `"3:2"`), the hint beside each preset.
 - `OnDemandVideoDecoder` — class. Selected methods: `init(source)`,
   `getFrame(frameIndex)` (mediabunny: via `_mbGetFrame`, the open stepping
   stream), `releaseStepCursor()`, `releaseFrames()` (closes and drops every

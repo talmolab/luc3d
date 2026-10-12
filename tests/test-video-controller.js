@@ -464,6 +464,15 @@
             assertEqual(JSON.stringify(ZOOM_PRESET_PERCENTS), JSON.stringify([50, 100, 150, 200]));
         });
 
+        it('zoomRatioLabel gives screen:video pixels in lowest terms', function () {
+            assertEqual(zoomRatioLabel(50), '1:2');
+            assertEqual(zoomRatioLabel(100), '1:1');
+            assertEqual(zoomRatioLabel(150), '3:2');
+            assertEqual(zoomRatioLabel(200), '2:1');
+            assertEqual(zoomRatioLabel(125), '5:4');
+            assertEqual(zoomRatioLabel(300), '3:1');
+        });
+
         it('without layout, setZoomPercent does nothing and zoomPercent is null', function () {
             var view = state.views[0];
             ctrl.initZoom(view);

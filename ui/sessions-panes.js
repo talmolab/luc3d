@@ -42,7 +42,7 @@ import {
     fitCanvasesToCells,
     updateTotalFrames,
 } from '../loading/session-loader.js';
-import { OnDemandVideoDecoder, ZOOM_PRESET_PERCENTS } from '../loading/video.js';
+import { OnDemandVideoDecoder, ZOOM_PRESET_PERCENTS, zoomRatioLabel } from '../loading/video.js';
 import { setStatus, showLoading, hideLoading, quickSave, markDirty } from '../import-export/save-load.js';
 import {
     CONTRAST_MIN, CONTRAST_MAX, clampContrast,
@@ -149,7 +149,7 @@ class VideoPaneRenderer {
             if (pct) item.setAttribute('data-zoom-pct', String(pct));
             else item.setAttribute('data-zoom-fit', '');
             item.innerHTML = '<span><span class="trail-check"></span>' + (pct ? pct + '%' : 'Fit') + '</span>'
-                + (pct === 100 ? '<span class="tri-dropdown-hint">1:1</span>' : '');
+                + (pct ? '<span class="tri-dropdown-hint">' + zoomRatioLabel(pct) + '</span>' : '');
             item.addEventListener('click', function (e) {
                 e.stopPropagation();
                 var view = findView();
