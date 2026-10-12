@@ -62,6 +62,7 @@ import { TRAIL_PRESETS, MAX_TRAIL_FRAMES, trailPresetFor, trailLabel, trailFrame
 import { installSeekbarTooltip } from './seekbar-tooltip.js';
 import { showReadoutFrame, refreshReadoutTotals } from './frame-readout.js';
 import { installSeekbarMarkers, seekbarMarkerAt, describeSwitchMarker, setSeekbarMarkerFrames } from './seekbar-markers.js';
+import { installSeekbarTicks, refreshSeekbarTicks } from './seekbar-ticks.js';
 // Pass 3i-2: triangulation orchestration moved out of app.js.
 import { triangulateCurrentFrame, triangulateAllFrames } from '../pose/triangulation.js';
 // User settings: default triangulation method + editable keyboard bindings.
@@ -1854,6 +1855,11 @@ export function setupUI() {
             return m ? m.frame : frameAtFraction(frac);
         };
         installSeekbarMarkers(document.getElementById('seekbarMarks'), state.totalFrames);
+        // The time ruler under the bar (ui/seekbar-ticks.js).
+        installSeekbarTicks(document.getElementById('seekbarRuler'), {
+            getTotalFrames: function () { return state.totalFrames; },
+            getFps: function () { return state.fps; },
+        });
 
         // Hover tooltip with the frame (and timestamp) under the cursor (#142).
         installSeekbarTooltip(seekbar, {
@@ -1864,6 +1870,7 @@ export function setupUI() {
                 var m = seekbarMarkerAt(frac, widthPx);
                 return m ? { frame: m.frame, text: describeSwitchMarker(m) } : null;
             },
+            hoverLine: document.getElementById('seekbarHoverLine'),
         });
 
         var _seekThrottle = { lastRender: 0, timer: null, pendingFrame: null };
@@ -2898,6 +2905,7 @@ export function updateSeekbarVisual(frameIdx) {
     document.getElementById('seekbarThumb').style.left = pct + '%';
     showReadoutFrame(frameIdx);
     setSeekbarMarkerFrames(state.totalFrames);       // no-op unless the frame count changed
+    refreshSeekbarTicks();                           // no-op unless the frame count or FPS changed
     updateIdSwitchProgress(frameIdx);                // the ID Switches tab's selected-row bar (no-op without one)
 }
 
