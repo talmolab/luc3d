@@ -8605,7 +8605,8 @@ readout's total); `TICK_STEPS` and the spacing constants
 - **The bar's end is always marked**: a tick at the last frame, labelled with
   the duration — the readout's total, `totalFrames / fps`, truncated to the
   ruler's precision (`14:23` for `14:23.617`, never `14:24`; a 29.97 fps
-  recording a hair under 30:00 reads `30:00`, as the readout does). It wins
+  recording a hair under 30:00 reads `30:00`, as the readout does), in bold
+  (`.is-end`, weight 600 like the readout's current frame). It wins
   every collision: a regular label closer to it than the spacing rule allows
   loses its text (the tick stays), and a regular or minor tick within 8 px of
   it is dropped, since it would read as a double tick.
