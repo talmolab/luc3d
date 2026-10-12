@@ -2202,6 +2202,15 @@ drifts upward (e.g., 4 → 11 on the test fixture).
 - `../ui/color-by.js` — `setColorByIdentity`: a successful Track All / Track
   Frame Range that assigned identities switches Color from Tracks to ID
   (#242) and says so in the status line. Track Frame (one frame) does not.
+- `../ui/trail-presets.js` — `setTrailSeconds`, `trailSecondsName`,
+  `TRACK_ALL_TRAIL_SECONDS`: a successful Track All that assigned identities
+  turns node trails on at ¼ s **if they are off** (each animal's recent path is
+  where an identity switch shows) and says so in the status line ("node trails
+  on (¼ second)"). A length the user already picked is kept; Track Frame and
+  Track Frame Range (a targeted re-run) leave trails alone. Through the shared
+  setter, so ui-wiring's handler moves the menus' checkmarks and the button's
+  blue. Covered by `tests/test-tracker-gui.mjs` and
+  `tests/e2e/track-all-turns-on-trails.mjs`.
 
 **Imported by.** `ui/ui-wiring.js`.
 
@@ -3861,6 +3870,9 @@ Calibration and `envSkeleton` remain per-session.
   it follows the frame rate when a video loads or the FPS pill is edited, with
   no caller recomputing it. Setting it (tests and benches pin a frame count)
   stores `frames / fps` in `trailSeconds`. The pickers set `trailSeconds`.
+  `state.trailShade` — the node-trail shade, a `TRAIL_SHADES` key
+  (`ui/overlays.js`), starting at `DEFAULT_TRAIL_SHADE` ('dark'); `ui/ui-wiring.js`
+  replaces it at startup with the one remembered in `localStorage`.
   `state.nativeResolution` is View ▸ Native Resolution (Shift+0): true exactly
   when every shown view is at one video pixel per device pixel. Written only by
   `VideoController._syncNativeMode` (derived from the views, never latched), and
@@ -3904,7 +3916,7 @@ Calibration and `envSkeleton` remain per-session.
   only). Filled/read by `copySelectedInstance`/`pasteInstance` in `ui-wiring.js`.
 
 **Imports from project modules.** `./trail-presets.js` (`trailFrames`,
-`trailRate`), itself import-free.
+`trailRate`) and `./overlays.js` (`DEFAULT_TRAIL_SHADE`), both import-free.
 
 **Imported by.** `pose/initialization.js`, `pose/triangulation.js`,
 `pose/tracker.js`, `import-export/save-load.js`,
@@ -5719,7 +5731,10 @@ the classic-script unit runner and exercised without a browser dock.
   likes overlays to look, not how big the file will be. Note it is the **read** that
   resets, not the write; `tests/e2e/overlay-export-modal.mjs` asserts both halves.
 - `overlayOptionsFrom(settings, videoW, videoH, canvasW, canvasH)` — the
-  settings → `drawFrameOverlays()` options translation. Explicitly nulls ALL
+  settings → `drawFrameOverlays()` options translation (`trailShade` passes
+  through as its key; `drawNodeTrails` resolves it). The default
+  `trailShade: 'dark'` repeats `DEFAULT_TRAIL_SHADE` because this module imports
+  nothing; `tests/test-overlay-export-layout.js` holds the two together. Explicitly nulls ALL
   interaction state (selection / hover / drag / assignment): an export has no
   cursor, and a stray highlight would be burned into the video.
   **Node labels are gated by `showLabels`, never by their size** (issue #223).
@@ -5761,6 +5776,11 @@ composition and its user / predicted / reprojected overlay layers.
 
 **Key exports.** `showOverlayExportModal()`, `settingsFromVisibilityPanel()`,
 `loadOverlayExportSettings()`, and a re-export of `TILE_3D`.
+The node-trail shade is seeded from `state.trailShade` and offered as the Layers
+group's **Trail shade** select (`#ovTrailShade`, the five `TRAIL_SHADES`), right
+under Node trails; like the trail length it is then remembered with the export's
+own settings. `loadOverlayExportSettings` replaces a stored shade this build does
+not offer with `DEFAULT_TRAIL_SHADE`, which would otherwise leave the select blank.
 
 **Layout.** `[views strip] [composition dock] [settings panel]`. The strip lists
 the **3D grid FIRST**, then one thumbnail per video; drag or double-click to dock.
@@ -6062,7 +6082,8 @@ exported but the amber `?` editing prompt is not.
 - `./browser-hints.js` — `fileSystemAccessHint` (appended to the in-memory
   export confirm in Brave).
 - `./viewport3d.js` — `Viewport3D`.
-- `./overlays.js` — `drawFrameOverlays`, `getTrackColor`, `getGroupColor`.
+- `./overlays.js` — `drawFrameOverlays`, `getTrackColor`, `getGroupColor`,
+  `TRAIL_SHADES`, `DEFAULT_TRAIL_SHADE`, `trailShadeFor`.
 - `./rendering.js` — `getVisibilitySettings` (the seed).
 - `./overlay-export-layout.js` — the pure helpers above.
 - `./video-encode.js` — `createMp4Writer`, `videoEncodingAvailable`.
@@ -6457,15 +6478,67 @@ palettes, and per-frame draw routines. Receives `frameGroup` and
   `options.trailLength`+1 **present** frames up to and including `frameIdx`
   (sparse-aware, like SLEAP's `labels.find(video,
   range(0,frame_idx+1))[-trail_length:]`; only reads frames already in
-  `session.frameGroups`, so no lazy-H5 fetch — the perf concern in #102). Draws a
-  trail for **every track that appears anywhere in the window** (linked AND
-  unlinked via `trailViewInstances`, matched by per-view `trackIdx`) — including
-  tracks that have **vanished** from the current frame, so a trail lingers and
-  fades out rather than disappearing the instant its instance is gone (unlinked
-  matters too: identities are inspected BEFORE cross-view linking). Each node's
-  positions join into a polyline that toward the past thins, fades, and darkens;
+  `session.frameGroups`, so no lazy-H5 fetch — the perf concern in #102).
+  **Trails attach to what is DISPLAYED.** Only a shown layer gets trails —
+  `options.trailUser` / `trailPredicted` / `trailReprojected`, which
+  `drawFrameOverlays` sets from the toolbar's User / Predictions / Reprojections
+  boxes (omitted = on) — so with both Predictions and Reprojections on, both sets
+  are drawn, back to front like the skeletons (`drawTrailLayer` once per set):
+  - **2D trails** follow a per-view `trackIdx` through the displayed User and
+    Predicted instances, linked AND unlinked (`trailViewInstances`; unlinked
+    matters: identities are inspected BEFORE cross-view linking). ONE trail per
+    track across both types, so a prediction corrected into a user instance does
+    not break it; where a frame holds both for one track, the user instance (drawn
+    on top) is followed. With one type hidden its frames are gaps.
+  - **Reprojection trails** follow a 3D group through its reprojection into the
+    view. Each frame has its own group objects, so `groupTrailKey(group, session,
+    viewName, frameIdx)` links them: the per-frame identity (resolved like
+    `getGroupColor` — this view's member, else every member), else the group's
+    `identityId`, else a member's track. `groupReprojection(group, viewName,
+    camera)` gives the positions exactly as the reprojection skeleton has them:
+    the cached reprojected `Instance`, else `group.reprojections`, else — the
+    usual case for a frame behind the playhead, since Triangulate All's sweep and
+    lazy eviction drop those caches — the group's 3D points through
+    `camera.project` + `distortPoint` (what `reprojectPointsCamera` computes).
+    **Read-only:** it never writes those caches, which the info panel and the
+    error vectors read as "this frame was triangulated", and it never
+    re-triangulates. Colored like the reprojection skeleton —
+    `getGroupColor` dimmed by `options.reprojBrightness` — which also keeps the two
+    sets apart when both are shown. Worst case (every past frame projected) is
+    ~1.2 ms per view per redraw at 100 frames × 5 animals × 17 nodes, vs ~0.1 ms
+    for the 2D trails.
+  Every track/animal that appears anywhere in the window gets a trail — including
+  ones that have **vanished** from the current frame, so a trail lingers and
+  fades out rather than disappearing the instant its instance is gone. Each node's
+  positions join into a polyline that toward the past thins and fades.
+  **Width:** the newest segment is exactly as thick as its layer's skeleton edges
+  — `options.lineWidth` (User ▸ Edge Weight), `options.predictedLineWidth`
+  (Predictions) or `options.reprojLineWidth` (Reprojections), chosen per segment by
+  the instance at its older end — and tapers to `1/(W-1)` of that at the oldest,
+  floored at 0.8 px but never above the edge width (a sub-pixel export tile).
+  It used to start at TWICE the User edge weight whatever it traced, so a trail
+  of predictions began at 6 px beside 2 px edges. Covered by
+  `tests/test-node-trails.mjs` §13 and `tests/e2e/node-trail-width.mjs` (both
+  fail on the old rule). The layers are covered by §14 and
+  `tests/e2e/trails-per-layer.mjs` (real Track All + Triangulate All, every
+  trail segment matched to the predicted or reprojected nodes it joins; on the
+  old code Reprojections-only drew 72 segments per view on the hidden
+  predictions);
   each segment is colored by the instance's color AT that frame (per-frame identity
   lookup), so an identity/color **switch shows as a color change along the trail**.
+  **Shade.** That color is drawn in `options.trailShade` — a key of
+  `TRAIL_SHADES` (Very dark / Dark / Normal / Light / Very light, `amount`
+  −0.65 / −0.4 / 0 / 0.4 / 0.7), default and fallback `DEFAULT_TRAIL_SHADE`
+  ('dark') — so the skeleton on the current frame stands apart from its history
+  (SLEAP 1.4's View ▸ Trail Shade, whose Dark is the same ×0.6). `trailColor(hex,
+  shadeKey, age)` is the rule: a negative amount scales RGB by `1 + amount`, a
+  positive one blends toward white (`brightenColor`; SLEAP's ×1.25 does nothing to
+  a channel already at 255, which is most of `TRACK_COLORS`), and `age` (0 newest
+  → ~1 oldest, `k / (W + 1)`) moves the color further the SAME way — darker by up
+  to 45% more, or that much further toward white — so a trail never fades back
+  toward its track's color. **Normal reproduces the pre-shade colors exactly**
+  (V scaled 1.0 → 0.55). `trailShadeFor(key)` returns the entry or null (strict;
+  the callers that need a fallback apply it).
   `drawFrameOverlays` calls it right after the canvas clear (behind the live
   skeletons) when `options.trailLength > 0`. Length is chosen from the **Tracks ▸
   Node Trails** submenu or the toolbar's **Trails** button (Off / ¼ s / ½ s / 1 s / 2 s
@@ -6510,8 +6583,12 @@ palettes, and per-frame draw routines. Receives `frameGroup` and
   **ID overlays:** in identity color mode (`options.colorByIdentity`) it now
   labels **predicted** instances with their identity name/color (step 3a), not
   just user instances — so the cross-view tracker's output (predicted) shows its
-  IDs as text for proofreading. `options.trailLength` threads through to
-  `drawNodeTrails`. Covered by `tests/test-node-trails.mjs`.
+  IDs as text for proofreading. `options.trailLength` and `options.trailShade`
+  thread through to `drawNodeTrails`, with `showUser` / `showPredicted` /
+  `showReprojected` as its layer switches, `userOpts` / `predictedOpts` /
+  `reprojOpts.lineWidth` as its edge widths and `reprojOpts.brightness`. Covered by `tests/test-node-trails.mjs`
+  (§12: the shade scale on every palette color, and the drawn strokes) and
+  `tests/e2e/node-trail-shade.mjs` (the menus and the real draw path).
   **Reprojection node color ignored the Visibility panel on the raw-fallback
   path (luc3d #209).** Step 2 has two ways to draw a group's reprojection:
   a materialized `reprojectedInstances` `Instance` (built by
@@ -6544,7 +6621,9 @@ palettes, and per-frame draw routines. Receives `frameGroup` and
 **Imports from project modules.** None.
 
 **Imported by.** `pose/initialization.js`, `ui/timeline.js`,
-`ui/rendering.js`, `ui/info-panel.js`.
+`ui/rendering.js`, `ui/info-panel.js`, `ui/app-state.js` (`DEFAULT_TRAIL_SHADE`),
+`ui/ui-wiring.js` (`TRAIL_SHADES`, `TRACK_COLORS`, `trailShadeFor`,
+`trailColor` — the trail menus), `ui/overlay-export-modal.js`.
 
 **User-facing features.** All on-canvas pose drawing — colored skeletons,
 reprojection error vectors, drag preview, selection highlight, instance
@@ -6609,8 +6688,8 @@ data sources. Plus visibility-toggle helpers and frame counter updates.
   view's frame. The lazy reprojection fill is the private
   `fillLazyReprojections(fi, groups)`, run for `frameIdx` and once for each
   other per-view frame. Threads
-  `state.colorByIdentity` and `state.trailLength` (node-trail length, issue #102)
-  into each `drawFrameOverlays` call. With trails on in a lazy project it first
+  `state.colorByIdentity`, `state.trailLength` (node-trail length, issue #102)
+  and `state.trailShade` into each `drawFrameOverlays` call. With trails on in a lazy project it first
   calls `ensureLazyTrailWindow(frameIdx, state.trailLength)`
   (`pose/triangulation.js`), so the trail drawn right after a seek has the
   frames BEHIND the target, which the seek's own hydration does not load; a
@@ -10688,10 +10767,18 @@ a 100 fps recording and nearly 2 s of a 30 fps one. DOM-free and import-free, so
 - `MAX_TRAIL_FRAMES` (500) — `LAZY_KEEP_BEHIND` (512) must stay above the longest
   trail, since trails draw resident frames only; without the cap a 2 s trail on a
   300 fps recording would be 600 frames, so from 250 fps up 2 s draws 500. The test asserts the inequality.
+- `setTrailSeconds(state, seconds)` / `onTrailSecondsChange(fn)` — THE setter for
+  `state.trailSeconds`, the `ui/color-by.js` pattern: it sets the state and, only
+  on a change (it returns whether there was one), runs the ONE handler ui-wiring
+  registers — both menus' checkmarks, the Trails button's blue and tooltip, a
+  redraw. The menus go through it, and so does Track All (`pose/tracker.js`),
+  which cannot import ui-wiring. A throwing handler is logged, never re-raised.
+- `TRACK_ALL_TRAIL_SECONDS` (0.25) — the length Track All turns trails on at;
+  a preset, so the menus check "¼ second" rather than "Custom".
 
 **Imports from project modules.** None.
 
-**Imported by.** `ui/app-state.js`, `ui/ui-wiring.js`.
+**Imported by.** `ui/app-state.js`, `ui/ui-wiring.js`, `pose/tracker.js`.
 
 ### ui/track-summary.js
 
@@ -11067,6 +11154,21 @@ stopping at the last frame; the step transport buttons/keys stop it first.
   toolbar lock (it changes what is drawn, not what is annotated). Covered by
   `tests/e2e/node-trails-toolbar.mjs` (including the frame counts following the
   FPS pill) and `tests/test-trail-presets.mjs`.
+  **Trail shade.** Both menus hold two radio groups under small headings
+  (`.trail-menu-heading`, each group a `role="group"`): **Length** (the items
+  above) and, after a separator, **Shade** — one item per `TRAIL_SHADES` entry
+  (`ui/overlays.js`; `data-trail-shade`, menubar ids `menuTrailsShade<Key>`, e.g.
+  `menuTrailsShadeVeryDark`), each with a swatch (`.trail-shade-swatch`): the
+  first track color running into that shade's trail from newest to oldest, the
+  contrast the choice is about. A pick goes through `setTrailShade`, which sets
+  `state.trailShade`, moves the checkmark in both menus, redraws and names the
+  shade in the status bar ("… (trails are off)" while they are). Default Dark.
+  Unlike the length, the shade is **remembered** in `localStorage`
+  (`nodeTrailShade`, best-effort, read once at setup; an unknown value keeps the
+  default): it is display taste, like the Visibility panel's appearance prefs,
+  and loading a project reloads the page. It never reaches the `.slp`. The
+  button's tooltip still names only the length. Covered by
+  `tests/e2e/node-trail-shade.mjs`.
 - Node Style: the four per-section Node Style button groups
   (`visUserNodeStyle` / `visPredNodeStyle` / `visReprojNodeStyle` /
   `vis3dNodeStyle`) reuse the `.line-style-btn` click handler (active toggle +
@@ -11380,8 +11482,12 @@ unless the frame count or FPS changed),
 Identity toggle, also flipped by the tracker after Track All — #242),
 `trail-presets.js` (`TRAIL_PRESETS`, `MAX_TRAIL_FRAMES`, `trailPresetFor`,
 `trailLabel`, `trailFrames`, `trailRate`, `formatTrailSeconds`,
-`trailSecondsForFrames`, `parseTrailSeconds`, `parseTrailFrames` — the Node
-Trails menus and their Custom… dialog),
+`trailSecondsForFrames`, `parseTrailSeconds`, `parseTrailFrames`,
+`setTrailSeconds`, `onTrailSecondsChange` — the Node Trails menus and their
+Custom… dialog; the change handler is registered here, so a length set by Track
+All syncs the menus too),
+`overlays.js` (`TRAIL_SHADES`, `TRACK_COLORS`, `trailShadeFor`, `trailColor` —
+the menus' Shade group and its swatches),
 `video-filters.js` (`setSessionRotation`; `clampRotation` still comes in via
 `sessions-panes.js`, which re-exports it), `plane-definition.js`
 (`togglePlaneMode`).

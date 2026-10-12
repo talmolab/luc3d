@@ -140,7 +140,7 @@
                     <div class="menu-dropdown-item has-submenu" id="menuTrailsParent">
                         <span>Node Trails</span>
                         <span class="submenu-arrow">▶</span>
-                        <!-- Items built from TRAIL_PRESETS in ui/ui-wiring.js, like the toolbar's Trails menu. -->
+                        <!-- Items built from TRAIL_PRESETS (Length) and TRAIL_SHADES (Shade) in ui/ui-wiring.js, like the toolbar's Trails menu. -->
                         <div class="menu-dropdown submenu" id="menuTrailsSubmenu" role="menu"></div>
                     </div>
                     <div class="menu-separator"></div>
@@ -244,8 +244,8 @@
                 <button class="toolbar-btn active" id="colorByTracks" title="Color instances by track">Tracks</button>
                 <button class="toolbar-btn" id="colorById" title="Color instances by identity">Identity</button>
             </div>
-            <!-- Node Trails (issue #102). Same presets and state as Tracks ▸ Node
-                 Trails; the items are built from that one list in ui/ui-wiring.js.
+            <!-- Node Trails (issue #102). Same lengths, shades and state as Tracks ▸
+                 Node Trails; the items are built from those lists in ui/ui-wiring.js.
                  Opens on hover, like the Triangulate menus. The label stays a bare
                  "Trails" (the value is the menu's checkmark and the tooltip) to
                  save toolbar width; the button turns blue (.active) while a

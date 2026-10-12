@@ -1311,6 +1311,33 @@ body {
   font-weight: bold;
 }
 
+/* Both trail menus hold two radio groups, Length and Shade, each under a small
+   heading. The heading lines up with the checkmark column. */
+.trail-menu-heading {
+  padding: 4px 12px 2px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  cursor: default;
+}
+
+.menu-dropdown .trail-menu-heading {
+  padding-left: 16px;
+  padding-right: 16px;
+}
+
+/* A shade's sample: track color running into the trail in that shade. */
+.trail-shade-swatch {
+  flex: none;
+  align-self: center;
+  width: 30px;
+  height: 6px;
+  margin-left: 12px;
+  border-radius: 3px;
+}
+
 .tri-dropdown-item {
   display: flex;
   align-items: baseline;
