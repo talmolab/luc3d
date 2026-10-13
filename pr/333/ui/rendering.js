@@ -6,32 +6,32 @@
 // - updateFrameCounters: status-bar frame counters (labeled / triangulated / instances),
 //   whole-project on a lazy project too (counting logic in ui/frame-counters.js).
 
-import { state, interactionManager, timeline, isViewDocked } from './app-state.js?v=b7388ade1911';
-import { points3dNodeCount } from '../pose/pose-data.js?v=b7388ade1911';
+import { state, interactionManager, timeline, isViewDocked } from './app-state.js?v=ab7ffbe4e52c';
+import { points3dNodeCount } from '../pose/pose-data.js?v=ab7ffbe4e52c';
 import {
     ensureLazyFrameData, ensureLazyTrailWindow, getInstanceGroupsForFrame,
     triangulateAndReproject, storeReprojectedInstances,
-} from '../pose/triangulation.js?v=b7388ade1911';
-import { drawFrameOverlays } from './overlays.js?v=b7388ade1911';
-import { syncViewLegends } from './view-legend.js?v=b7388ade1911';
-import { isCameraTracked } from './settings.js?v=b7388ade1911';
+} from '../pose/triangulation.js?v=ab7ffbe4e52c';
+import { drawFrameOverlays } from './overlays.js?v=ab7ffbe4e52c';
+import { syncViewLegends } from './view-legend.js?v=ab7ffbe4e52c';
+import { isCameraTracked } from './settings.js?v=ab7ffbe4e52c';
 // Plane placements draw on the same overlay canvas, so they must run AFTER
 // drawFrameOverlays (which opens with a clearRect). Circular import — safe
 // because the call site is inside drawAllOverlays' body.
-import { drawPlaneOverlays, applyPlaneModeToolbarLock } from './plane-definition.js?v=b7388ade1911';
+import { drawPlaneOverlays, applyPlaneModeToolbarLock } from './plane-definition.js?v=ab7ffbe4e52c';
 // The toolbar's Animals field shows the ACTIVE session's count. Circular
 // (it reaches pose/tracker.js, which imports this module) — safe for the same
 // reason: the call site is inside drawAllOverlays' body.
-import { syncAnimalCountField } from './animal-count-field.js?v=b7388ade1911';
-import { syncNodeTooltipFrame } from './node-tooltip.js?v=b7388ade1911';
+import { syncAnimalCountField } from './animal-count-field.js?v=ab7ffbe4e52c';
+import { syncNodeTooltipFrame } from './node-tooltip.js?v=ab7ffbe4e52c';
 
 // Pass 3f: editGroupState + finishEditGroup moved to ui/identity-assignment.js.
-import { editGroupState, finishEditGroup } from './identity-assignment.js?v=b7388ade1911';
-import { updateFrameInfo } from './info-panel.js?v=b7388ade1911';
+import { editGroupState, finishEditGroup } from './identity-assignment.js?v=ab7ffbe4e52c';
+import { updateFrameInfo } from './info-panel.js?v=ab7ffbe4e52c';
 import {
     computeFrameCounterBaseline, computeLazyCameraBaseline, createFrameCounterBaselineBuilder,
     countFrameCounters, nonResidentCameraCounts, refreshCountedFrame,
-} from './frame-counters.js?v=b7388ade1911';
+} from './frame-counters.js?v=ab7ffbe4e52c';
 
 // ============================================
 // Reproj/Error visibility

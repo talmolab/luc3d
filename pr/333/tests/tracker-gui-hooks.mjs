@@ -19,6 +19,7 @@ export function setNodeWeights(map) {
     _nodeWeights = Object.assign({}, map);
     globalThis.__GUI.nodeWeightsSet = (globalThis.__GUI.nodeWeightsSet || 0) + 1;
 }
+export function updateNodeWeights(map) { setNodeWeights(Object.assign(getNodeWeights(), map)); }
 export function getNodeWeightArray(nodeNames) {
     if (!Array.isArray(nodeNames)) return null;
     const arr = nodeNames.map(getNodeWeight);

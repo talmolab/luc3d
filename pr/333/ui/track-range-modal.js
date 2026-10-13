@@ -11,18 +11,25 @@
  * Collects the animal count too. `pose/tracker.js` otherwise asks for it in its
  * first-use dialog (`ui/track-setup-modal.js`), which would pop up ON TOP of
  * this one the first time anyone used it; here a blank field is an explicit
- * "auto-detect" and that dialog never opens. It does not show the node weights:
- * this dialog is for re-running after changing them in the Tracking Wizard.
+ * "auto-detect" and that dialog never opens.
+ *
+ * Shows the node weights too, editable (`buildNodeWeightFields`, the same grid
+ * as that dialog): re-running a window under different weights is the commonest
+ * reason to be here, and this way it needs no trip to the Tracking Wizard.
+ * Continue writes them to the Wizard's setting (`updateNodeWeights`) before the
+ * run reads them; Cancel writes nothing.
  *
  * Depends on: pose/tracker.js (the run itself), ui/app-state.js, save-load.js.
  */
 
-import { state, getActiveSession } from './app-state.js?v=b7388ade1911';
-import { setStatus } from '../import-export/save-load.js?v=b7388ade1911';
+import { state, getActiveSession } from './app-state.js?v=ab7ffbe4e52c';
+import { setStatus } from '../import-export/save-load.js?v=ab7ffbe4e52c';
+import { getNodeWeight, updateNodeWeights } from './settings.js?v=ab7ffbe4e52c';
+import { buildNodeWeightFields } from './track-setup-modal.js?v=ab7ffbe4e52c';
 import {
     trackFrameRange, trackableFrameBounds,
     getTrackerNumAnimals, setTrackerNumAnimals,
-} from '../pose/tracker.js?v=b7388ade1911';
+} from '../pose/tracker.js?v=ab7ffbe4e52c';
 
 // Frames pre-filled into the End field, measured from the current frame. The
 // feature is for narrow windows around a suspected switch, so the default is a
@@ -80,11 +87,15 @@ export function showTrackRangeModal(opts) {
     var defStart = cur;
     var defEnd = Math.min(bounds.max, cur + DEFAULT_RANGE_LENGTH - 1);
     var animals = getTrackerNumAnimals();
+    var nodeNames = (session.skeleton && Array.isArray(session.skeleton.nodes)) ? session.skeleton.nodes : [];
+    var weights = buildNodeWeightFields(nodeNames.map(function (n) {
+        return { name: n, weight: getNodeWeight(n) };
+    }));
 
     var overlay = document.createElement('div');
     overlay.className = 'multi-frame-modal-overlay';
     var modal = document.createElement('div');
-    modal.className = 'multi-frame-modal';
+    modal.className = 'multi-frame-modal track-range-modal';
     modal.innerHTML =
         '<h3>Track Frame Range</h3>' +
         '<p>Assign identities across a contiguous span of frames. Tracking ' +
@@ -130,6 +141,10 @@ export function showTrackRangeModal(opts) {
         '<button id="trackRangeCancel">Cancel</button>' +
         '<button class="primary" id="trackRangeContinue">Continue</button>' +
         '</div>';
+    // The weights go under the fields, above the summary and error lines.
+    if (weights.element) {
+        modal.insertBefore(weights.element, modal.querySelector('#trackRangeSummary'));
+    }
     overlay.appendChild(modal);
     document.body.appendChild(overlay);
 
@@ -167,7 +182,9 @@ export function showTrackRangeModal(opts) {
             n = parseInt(raw, 10);
             if (!isFinite(n) || n < 1) return { error: 'Animals must be 1 or more, or blank for auto-detect.' };
         }
-        return { start: s, end: e, animals: n, error: null };
+        var w = weights.read();
+        if (w.error) return { error: w.error };
+        return { start: s, end: e, animals: n, nodeWeights: w.nodeWeights, error: null };
     }
 
     function plural(n, word) {
@@ -192,6 +209,7 @@ export function showTrackRangeModal(opts) {
         var f = readForm();
         errorEl.textContent = f.error || '';
         continueBtn.disabled = !!f.error;
+        weights.refresh();
         summaryEl.textContent = f.error
             ? ''
             : plural(f.end - f.start + 1, 'frame') + ' · ' +
@@ -239,6 +257,7 @@ export function showTrackRangeModal(opts) {
         // either way — otherwise clearing the field would silently keep the
         // previously-set count.
         setTrackerNumAnimals(f.animals);
+        updateNodeWeights(f.nodeWeights);
         close();
         // trackFrameRange owns the loading overlay and reports its own outcome
         // through setStatus, exactly as the Track All button does.
@@ -259,6 +278,7 @@ export function showTrackRangeModal(opts) {
     document.addEventListener('keydown', onKey);
 
     animalsInput.addEventListener('input', refresh);
+    if (weights.element) weights.element.addEventListener('input', refresh);
     [startInput, endInput].forEach(function (el) {
         el.addEventListener('input', syncSlidersFromInputs);
     });

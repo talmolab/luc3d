@@ -77,45 +77,8 @@ export function showTrackSetupModal(opts) {
         modal.appendChild(animalsRow);
 
         // --- Node weights ------------------------------------------------------
-        // The Tracking Wizard's own row markup and classes, so the two editors of
-        // one setting look the same; the grid is narrower here (styles.css).
-        var weightInputs = [];
-        if (nodes.length) {
-            var wTitle = document.createElement('div');
-            wTitle.className = 'track-setup-section-title';
-            wTitle.textContent = 'Node weights';
-            modal.appendChild(wTitle);
-            var wHint = document.createElement('p');
-            wHint.className = 'track-setup-note';
-            wHint.textContent = 'How much each node counts when matching animals: ' +
-                '1 = full weight, 0 = ignored.';
-            modal.appendChild(wHint);
-
-            var list = document.createElement('div');
-            list.className = 'settings-node-weight-list track-setup-weights';
-            nodes.forEach(function (node) {
-                var row = document.createElement('div');
-                row.className = 'settings-node-weight-row';
-                var label = document.createElement('div');
-                label.className = 'settings-kbd-label';
-                label.textContent = node.name;
-                label.title = node.name;
-                var input = document.createElement('input');
-                input.type = 'number';
-                input.className = 'settings-num-input';
-                input.min = '0';
-                input.max = '1';
-                input.step = '0.01';
-                input.value = String(node.weight);
-                input.dataset.node = node.name;
-                input.setAttribute('aria-label', 'Weight for node ' + node.name);
-                row.appendChild(label);
-                row.appendChild(input);
-                list.appendChild(row);
-                weightInputs.push({ name: node.name, input: input, row: row });
-            });
-            modal.appendChild(list);
-        }
+        var weights = buildNodeWeightFields(nodes);
+        if (weights.element) modal.appendChild(weights.element);
 
         var note = document.createElement('p');
         note.className = 'track-setup-note track-setup-later';
@@ -153,27 +116,16 @@ export function showTrackSetupModal(opts) {
             if (animalsInput.validity.badInput || (n !== null && (!Number.isInteger(n) || n < 1))) {
                 return { error: 'Number of animals must be a whole number, 1 or more, or blank to auto-detect.' };
             }
-            var weights = {};
-            for (var i = 0; i < weightInputs.length; i++) {
-                var wi = weightInputs[i];
-                var v = wi.input.value.trim() === '' ? NaN : Number(wi.input.value);
-                if (wi.input.validity.badInput || !isFinite(v) || v < 0 || v > 1) {
-                    return { error: 'The weight for ' + wi.name + ' must be between 0 and 1.' };
-                }
-                weights[wi.name] = v;
-            }
-            return { animals: n, nodeWeights: weights, error: null };
+            var w = weights.read();
+            if (w.error) return { error: w.error };
+            return { animals: n, nodeWeights: w.nodeWeights, error: null };
         }
 
         function refresh() {
             var f = readForm();
             errorEl.textContent = f.error || '';
             continueBtn.disabled = !!f.error;
-            // Grey a dropped node out, as the Tracking Wizard does.
-            weightInputs.forEach(function (wi) {
-                wi.row.classList.toggle('settings-view-excluded', Number(wi.input.value) === 0 &&
-                    wi.input.value.trim() !== '');
-            });
+            weights.refresh();
         }
 
         var done = false;
@@ -214,4 +166,87 @@ export function showTrackSetupModal(opts) {
         animalsInput.focus();
         animalsInput.select();
     });
+}
+
+/**
+ * The node-weight editor both tracking dialogs show: a title, one sentence,
+ * and one row per node in the Tracking Wizard's own markup and classes, so the
+ * editors of one setting look the same (the grid is narrower here, styles.css).
+ * Used by this dialog and by Track Frame Range (`ui/track-range-modal.js`).
+ * Commits nothing.
+ *
+ * @param {Array<{name: string, weight: number}>} nodes  in skeleton order
+ * @returns {{element: ?HTMLElement,
+ *            read: () => ({nodeWeights: Object<string, number>} | {error: string}),
+ *            refresh: () => void}}
+ *   `element` is null for no nodes. `read` refuses a weight outside [0, 1] —
+ *   never clamps it — with an error naming the node. `refresh` greys the rows
+ *   weighted 0; call it on every input.
+ */
+export function buildNodeWeightFields(nodes) {
+    nodes = Array.isArray(nodes) ? nodes : [];
+    var fields = [];
+    var element = null;
+    if (nodes.length) {
+        element = document.createElement('div');
+        element.className = 'track-weights-block';
+        var title = document.createElement('div');
+        title.className = 'track-setup-section-title';
+        title.textContent = 'Node weights';
+        element.appendChild(title);
+        var hint = document.createElement('p');
+        hint.className = 'track-setup-note';
+        hint.textContent = 'How much each node counts when matching animals: ' +
+            '1 = full weight, 0 = ignored.';
+        element.appendChild(hint);
+
+        var list = document.createElement('div');
+        list.className = 'settings-node-weight-list track-setup-weights';
+        nodes.forEach(function (node) {
+            var row = document.createElement('div');
+            row.className = 'settings-node-weight-row';
+            var label = document.createElement('div');
+            label.className = 'settings-kbd-label';
+            label.textContent = node.name;
+            label.title = node.name;
+            var input = document.createElement('input');
+            input.type = 'number';
+            input.className = 'settings-num-input';
+            input.min = '0';
+            input.max = '1';
+            input.step = '0.01';
+            input.value = String(node.weight);
+            input.dataset.node = node.name;
+            input.setAttribute('aria-label', 'Weight for node ' + node.name);
+            row.appendChild(label);
+            row.appendChild(input);
+            list.appendChild(row);
+            fields.push({ name: node.name, input: input, row: row });
+        });
+        element.appendChild(list);
+    }
+
+    function read() {
+        var out = {};
+        for (var i = 0; i < fields.length; i++) {
+            var f = fields[i];
+            var v = f.input.value.trim() === '' ? NaN : Number(f.input.value);
+            if (f.input.validity.badInput || !isFinite(v) || v < 0 || v > 1) {
+                return { error: 'The weight for ' + f.name + ' must be between 0 and 1.' };
+            }
+            out[f.name] = v;
+        }
+        return { nodeWeights: out };
+    }
+
+    // Grey a dropped node out, as the Tracking Wizard does.
+    function refresh() {
+        fields.forEach(function (f) {
+            f.row.classList.toggle('settings-view-excluded',
+                f.input.value.trim() !== '' && Number(f.input.value) === 0);
+        });
+    }
+
+    refresh();
+    return { element: element, read: read, refresh: refresh };
 }

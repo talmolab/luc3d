@@ -1594,13 +1594,15 @@ body {
   min-height: 14px;
 }
 
-/* Track All / Track Frame's first-use dialog (ui/track-setup-modal.js): the
-   animal count, then the node weights in the Tracking Wizard's own rows,
+/* Track All / Track Frame's first-use dialog (ui/track-setup-modal.js), and
+   Track Frame Range (ui/track-range-modal.js), which shows the same weight grid:
+   the animal count, then the node weights in the Tracking Wizard's own rows,
    narrower here so a typical skeleton fits in three columns with its names
    whole ("RightForepaw" was cut off at 560px). The card is the
    ONE scroller, for a long skeleton on a short window; the weight grid never
    scrolls by itself (no scroll-within-scroll). */
-.multi-frame-modal.track-setup-modal {
+.multi-frame-modal.track-setup-modal,
+.multi-frame-modal.track-range-modal {
   max-width: 620px;
   max-height: calc(100vh - 48px);
   overflow-y: auto;

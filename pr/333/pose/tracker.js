@@ -16,30 +16,30 @@ import {
     reprojectPoints,
     computeInstanceDistanceTo,
     hungarianAlgorithm
-} from './triangulation.js?v=b7388ade1911';
-import { CrossViewTracker, Detection } from './cross-view-tracker.js?v=b7388ade1911';
-import { InstanceGroup, points3dNodeCount, hasPoint3d, readPoint3d, pooledPoints3d } from './pose-data.js?v=b7388ade1911';
+} from './triangulation.js?v=ab7ffbe4e52c';
+import { CrossViewTracker, Detection } from './cross-view-tracker.js?v=ab7ffbe4e52c';
+import { InstanceGroup, points3dNodeCount, hasPoint3d, readPoint3d, pooledPoints3d } from './pose-data.js?v=ab7ffbe4e52c';
 
 // Pass 3i-1: tracker UI/integration (was in app.js)
-import { state, interactionManager, timeline, viewport3d, getActiveSession } from '../ui/app-state.js?v=b7388ade1911';
+import { state, interactionManager, timeline, viewport3d, getActiveSession } from '../ui/app-state.js?v=ab7ffbe4e52c';
 import {
-    getNodeWeightArray, getNodeWeight, getNodeWeights, setNodeWeights,
+    getNodeWeightArray, getNodeWeight, updateNodeWeights,
     getTrackingThresholds, getTrackingThreshold, isCameraTracked,
-} from '../ui/settings.js?v=b7388ade1911';
-import { showTrackSetupModal } from '../ui/track-setup-modal.js?v=b7388ade1911';
-import { markDirty, setStatus, hideLoading } from '../import-export/save-load.js?v=b7388ade1911';
-import { showLoadingProgress, createProgressPacer, yieldToPaint, setLoadingCpu, idleWhile, busyDuring } from '../ui/loading-overlay.js?v=b7388ade1911';
-import { startTrackerWorker } from './tracker-pool.js?v=b7388ade1911';
-import { loadAllLazyFrames, sweepLazyFrameWindows } from './triangulation.js?v=b7388ade1911';
-import { drawAllOverlays, showPredictedOnly, PREDICTED_ONLY_NOTE } from '../ui/rendering.js?v=b7388ade1911';
-import { updateInfoPanel } from '../ui/info-panel.js?v=b7388ade1911';
-import { setColorByIdentity } from '../ui/color-by.js?v=b7388ade1911';
-import { setTrailSeconds, trailSecondsName, TRACK_ALL_TRAIL_SECONDS } from '../ui/trail-presets.js?v=b7388ade1911';
-import { runIdSwitchChecks, clearIdSwitchResults } from '../ui/id-switch-modal.js?v=b7388ade1911';
-import { summarizeTrackedIdentities, describeSwitchCheck } from '../ui/track-summary.js?v=b7388ade1911';
-import { showTrackSummaryModal, rememberTrackSummary } from '../ui/track-summary-modal.js?v=b7388ade1911';
-import { collapseTimeline } from '../ui/timeline-controller.js?v=b7388ade1911';
-import { collapseViewport3D } from '../ui/panel-visibility.js?v=b7388ade1911';
+} from '../ui/settings.js?v=ab7ffbe4e52c';
+import { showTrackSetupModal } from '../ui/track-setup-modal.js?v=ab7ffbe4e52c';
+import { markDirty, setStatus, hideLoading } from '../import-export/save-load.js?v=ab7ffbe4e52c';
+import { showLoadingProgress, createProgressPacer, yieldToPaint, setLoadingCpu, idleWhile, busyDuring } from '../ui/loading-overlay.js?v=ab7ffbe4e52c';
+import { startTrackerWorker } from './tracker-pool.js?v=ab7ffbe4e52c';
+import { loadAllLazyFrames, sweepLazyFrameWindows } from './triangulation.js?v=ab7ffbe4e52c';
+import { drawAllOverlays, showPredictedOnly, PREDICTED_ONLY_NOTE } from '../ui/rendering.js?v=ab7ffbe4e52c';
+import { updateInfoPanel } from '../ui/info-panel.js?v=ab7ffbe4e52c';
+import { setColorByIdentity } from '../ui/color-by.js?v=ab7ffbe4e52c';
+import { setTrailSeconds, trailSecondsName, TRACK_ALL_TRAIL_SECONDS } from '../ui/trail-presets.js?v=ab7ffbe4e52c';
+import { runIdSwitchChecks, clearIdSwitchResults } from '../ui/id-switch-modal.js?v=ab7ffbe4e52c';
+import { summarizeTrackedIdentities, describeSwitchCheck } from '../ui/track-summary.js?v=ab7ffbe4e52c';
+import { showTrackSummaryModal, rememberTrackSummary } from '../ui/track-summary-modal.js?v=ab7ffbe4e52c';
+import { collapseTimeline } from '../ui/timeline-controller.js?v=ab7ffbe4e52c';
+import { collapseViewport3D } from '../ui/panel-visibility.js?v=ab7ffbe4e52c';
 
 /**
  * A frame index as the USER sees it: 1-based.
@@ -859,9 +859,8 @@ function computeMaxInstancesPerView(session) {
 // The first-use question (ui/track-setup-modal.js): the animal count, with the
 // node weights laid out under it for review. Resolves false on Cancel, and
 // then nothing is written. On Continue both are written before the run reads
-// them (`createTrackerRun` snapshots the weights). The weights are merged into
-// the stored overrides rather than replacing them: they are keyed by node name
-// per browser, and another skeleton's must survive.
+// them (`createTrackerRun` snapshots the weights). `updateNodeWeights` keeps
+// the stored overrides of nodes not shown — another skeleton's.
 async function askTrackSetup(session, title) {
     var names = (session.skeleton && Array.isArray(session.skeleton.nodes)) ? session.skeleton.nodes : [];
     var answer = await showTrackSetupModal({
@@ -870,7 +869,7 @@ async function askTrackSetup(session, title) {
         nodes: names.map(function (n) { return { name: n, weight: getNodeWeight(n) }; }),
     });
     if (!answer) return false;  // cancelled
-    setNodeWeights(Object.assign(getNodeWeights(), answer.nodeWeights));
+    updateNodeWeights(answer.nodeWeights);
     setTrackerNumAnimals(answer.animals);
     return true;
 }

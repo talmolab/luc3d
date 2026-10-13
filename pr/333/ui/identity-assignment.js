@@ -6,24 +6,24 @@
 // Plus purgeTriangulationDataForGroup, the detach-reprojection helper
 // every grouping workflow needs after unlinking/removing a group.
 
-import { state, videoController, interactionManager, viewport3d, timeline, paneManager } from './app-state.js?v=b7388ade1911';
-import { InstanceGroup, UnlinkedInstance, someValidPoint3d } from '../pose/pose-data.js?v=b7388ade1911';
+import { state, videoController, interactionManager, viewport3d, timeline, paneManager } from './app-state.js?v=ab7ffbe4e52c';
+import { InstanceGroup, UnlinkedInstance, someValidPoint3d } from '../pose/pose-data.js?v=ab7ffbe4e52c';
 import {
     frameHasGroupedUserInstances, getInstanceGroupsForFrame,
     triangulateAndReproject, storeReprojectedInstances, resolveTriangulationMethod,
     reprojectPointsCamera, computeInstanceDistanceTo, hungarianAlgorithm,
     updateTimelineForFrame,
     triangulateCurrentFrame,
-} from '../pose/triangulation.js?v=b7388ade1911';
-import { getDefaultTriangulationMethod } from './settings.js?v=b7388ade1911';
-import { drawAllOverlays, setReprojErrorVisible } from './rendering.js?v=b7388ade1911';
-import { updateInfoPanel } from './info-panel.js?v=b7388ade1911';
-import { markDirty, setStatus } from '../import-export/save-load.js?v=b7388ade1911';
+} from '../pose/triangulation.js?v=ab7ffbe4e52c';
+import { getDefaultTriangulationMethod } from './settings.js?v=ab7ffbe4e52c';
+import { drawAllOverlays, setReprojErrorVisible } from './rendering.js?v=ab7ffbe4e52c';
+import { updateInfoPanel } from './info-panel.js?v=ab7ffbe4e52c';
+import { markDirty, setStatus } from '../import-export/save-load.js?v=ab7ffbe4e52c';
 
 // Pass 3i-3: update3DViewport moved to pose/initialization.js.
-import { update3DViewport } from '../pose/initialization.js?v=b7388ade1911';
+import { update3DViewport } from '../pose/initialization.js?v=ab7ffbe4e52c';
 // Pass 3h: dockview panel registry now lives in sessions-panes.js.
-import { panelRenderers } from './sessions-panes.js?v=b7388ade1911';
+import { panelRenderers } from './sessions-panes.js?v=ab7ffbe4e52c';
 
 // ============================================
 // Track/Identity helpers (top-level so all code can access)

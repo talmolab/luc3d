@@ -61,6 +61,7 @@ export function getNodeWeights() {
     return Object.assign({}, (globalThis.__BENCH && globalThis.__BENCH.nodeWeights) || {});
 }
 export function setNodeWeights() {}
+export function updateNodeWeights() {}
 
 export function getTrackingThreshold(id) {
     const ov = (globalThis.__BENCH && globalThis.__BENCH.thresholds) || {};

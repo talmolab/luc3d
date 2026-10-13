@@ -22,9 +22,9 @@
 // all import-free, so `frameReadoutText` is unit-tested in Node
 // (`tests/test-frame-readout.mjs`).
 
-import { state } from './app-state.js?v=b7388ade1911';
-import { formatTimestamp } from './seekbar-tooltip.js?v=b7388ade1911';
-import { refreshSeekbarTicks } from './seekbar-ticks.js?v=b7388ade1911';
+import { state } from './app-state.js?v=ab7ffbe4e52c';
+import { formatTimestamp } from './seekbar-tooltip.js?v=ab7ffbe4e52c';
+import { refreshSeekbarTicks } from './seekbar-ticks.js?v=ab7ffbe4e52c';
 
 // One formatter, built once: this runs on every frame of playback.
 const NUMBER = new Intl.NumberFormat('en-US');
