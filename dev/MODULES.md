@@ -11448,11 +11448,28 @@ chosen view is kept on `session._galleryView` (in memory), so reopening the
 summary keeps it. Rows are capped at `GALLERY_MAX_ROWS` (12), as the identity
 bars are.
 
+**Hover to enlarge.** Resting the pointer on a sample shows it at
+`GALLERY_ZOOM` (320 px) beside the tile — right of it if that fits, else left,
+always inside the window — captioned with the identity, time and camera. Two
+things about it are deliberate:
+- **The preview is a second copy of the crop, cut when the tile is drawn**, at up
+  to 320 px × devicePixelRatio but never more than the crop's own video pixels.
+  Scaling the 88 px tile up would only show a blurrier tile, and re-decoding on
+  hover cannot be done: the decoder's frame may already be closed, and a seek per
+  hover is slow. ~60 crops of at most 320² px is a few tens of MB at worst.
+- **It lives in the summary's overlay, not the modal.** The modal scrolls and
+  would clip it; the overlay is fixed and full-window, and closing the box
+  removes the preview with it. It takes no pointer events, scrolling the box
+  hides it (the tile moves out from under a still pointer), and a drawn sample
+  drops its native `title`, which would otherwise surface a second later on top
+  of the preview saying the same thing. A sample with no image ("no video",
+  "no keypoints") has nothing to enlarge and shows none.
+
 **Key exports.** `renderIdentityGallery`, `identityTracks`, `identityGroupAt`,
 `groupCentroid`, `pickSampleFrames`, `projectedBox`, `pickCamera`, `cropSquare`,
 `memberPointsByCamera`, `projectTrack`, `defaultMapCamera`, `timeColor`;
 `GALLERY_SAMPLES` (5), `GALLERY_MAX_ROWS`, `GALLERY_TILE` (88 px),
-`MAP_MAX_POINTS` (2,400).
+`GALLERY_ZOOM` (320 px), `MAP_MAX_POINTS` (2,400).
 
 **Imports from project modules.** `ui/app-state.js` (`state`),
 `pose/lazy-residency.js` (`hydrateFrameMembers2d`, `releaseFrameMembers2d`).
@@ -11464,7 +11481,9 @@ released lazy member read through hydration with the direct-read control) and
 `tests/e2e/identity-gallery.mjs` (the real Track All on stand-in videos that
 paint each animal its own colour: every image in a row shows that row's animal,
 spread over the recording and from more than one camera; the maps, the view
-selector and its time key; both clicks; no videos; and the negative control —
+selector and its time key; the hover preview — size, placement, the same
+sample and animal, its caption, hiding on leave and with the box, none on a
+"no video" tile; both clicks; no videos; and the negative control —
 identities swapped halfway, each row then showing BOTH animals).
 
 ### ui/view-align-modal.js

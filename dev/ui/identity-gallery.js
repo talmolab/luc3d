@@ -12,13 +12,16 @@
 // lazy project's members for the read), and the projected path. The
 // drawing half decodes one frame per sample (`view.decoder.getFrame`) AFTER the
 // box is on screen, row by row, so the summary never waits on video, and stops
-// when the box closes.
+// when the box closes. Resting the pointer on a sample shows it enlarged beside
+// the tile: the crop is copied at up to the enlarged size when it is drawn (a
+// decoder's frame may be closed by the next decode), so the preview is a sharper
+// image, not the 88 px tile scaled up.
 //
 // Depends on: ui/app-state.js (state), pose/lazy-residency.js
 // (hydrateFrameMembers2d, releaseFrameMembers2d).
 
-import { state } from './app-state.js?v=3ca18b7ffe88';
-import { hydrateFrameMembers2d, releaseFrameMembers2d } from '../pose/lazy-residency.js?v=3ca18b7ffe88';
+import { state } from './app-state.js?v=7494a5ae1163';
+import { hydrateFrameMembers2d, releaseFrameMembers2d } from '../pose/lazy-residency.js?v=7494a5ae1163';
 
 /** Sample images per identity. */
 export const GALLERY_SAMPLES = 5;
@@ -26,6 +29,8 @@ export const GALLERY_SAMPLES = 5;
 export const GALLERY_MAX_ROWS = 12;
 /** A sample image's side and a map's height, in CSS pixels. */
 export const GALLERY_TILE = 88;
+/** A sample's side when enlarged on hover, in CSS pixels. */
+export const GALLERY_ZOOM = 320;
 /** Points drawn per path, at most (thinned evenly in time). */
 export const MAP_MAX_POINTS = 2400;
 
@@ -375,9 +380,13 @@ function safeColor(c) {
     return typeof c === 'string' && /^#[0-9a-f]{3,8}$|^rgba?\([\d\s.,%]+\)$/i.test(c) ? c : null;
 }
 
+function pixelRatio() {
+    return Math.max(1, Math.min(3, (typeof window !== 'undefined' && window.devicePixelRatio) || 1));
+}
+
 /** A canvas sized for the screen's pixel density; draw in CSS pixels. */
 function hiDpiCanvas(w, h, className) {
-    var c = el('canvas', className), dpr = Math.max(1, Math.min(3, (typeof window !== 'undefined' && window.devicePixelRatio) || 1));
+    var c = el('canvas', className), dpr = pixelRatio();
     c.width = Math.round(w * dpr); c.height = Math.round(h * dpr);
     c.style.width = w + 'px'; c.style.height = h + 'px';
     c.getContext('2d').setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -412,6 +421,59 @@ export function memberPointsByCamera(session, frame, identityId) {
     } finally {
         if (hydrated) releaseFrameMembers2d(session, frame);
     }
+}
+
+/** One identity's keypoints, as dots in its colour, over a crop drawn `size` px square. */
+function drawSampleDots(ctx, pts, box, size, color, radius) {
+    var scale = size / box.side;
+    ctx.fillStyle = color || '#fff'; ctx.strokeStyle = 'rgba(0, 0, 0, 0.6)'; ctx.lineWidth = 1;
+    pts.forEach(function (p) {
+        if (!p || !isFinite(p[0]) || !isFinite(p[1])) return;
+        ctx.beginPath(); ctx.arc((p[0] - box.x) * scale, (p[1] - box.y) * scale, radius, 0, 2 * Math.PI); ctx.fill(); ctx.stroke();
+    });
+}
+
+/**
+ * The hover preview: one floating element per section, shown beside the tile
+ * under the pointer. It lives in the summary's overlay (fixed, full-window), not
+ * in the modal, which scrolls and would clip it; closing the box removes it.
+ */
+function makeZoom(section) {
+    var box = null, canvas = null, cap = null, tile = null;
+    var hide = function () { tile = null; if (box) box.style.display = 'none'; };
+    var show = function (fig) {
+        var z = fig._zoom;
+        if (!z || !section.isConnected) return;
+        if (!box) {
+            box = el('div', 'identity-gallery-zoom');
+            box.id = 'identityGalleryZoom';
+            canvas = hiDpiCanvas(GALLERY_ZOOM, GALLERY_ZOOM, 'identity-gallery-zoom-img');
+            cap = el('div', 'identity-gallery-zoom-caption');
+            box.appendChild(canvas);
+            box.appendChild(cap);
+        }
+        var host = section.closest('.multi-frame-modal-overlay') || document.body;
+        if (box.parentNode !== host) host.appendChild(box);
+        tile = fig;
+        var ctx = canvas.getContext('2d');
+        ctx.fillStyle = '#000'; ctx.fillRect(0, 0, GALLERY_ZOOM, GALLERY_ZOOM);
+        ctx.imageSmoothingQuality = 'high';
+        ctx.drawImage(z.src, 0, 0, GALLERY_ZOOM, GALLERY_ZOOM);
+        drawSampleDots(ctx, z.pts, z.box, GALLERY_ZOOM, z.color, 3);
+        canvas.style.borderColor = z.color || '';
+        cap.textContent = z.label;
+        box.setAttribute('data-frame', fig.getAttribute('data-frame') || '');
+        box.style.display = 'block';
+        // beside the tile — right if it fits, else left — and inside the window
+        var r = fig.getBoundingClientRect(), bw = box.offsetWidth, bh = box.offsetHeight, gap = 10;
+        var vw = window.innerWidth, vh = window.innerHeight;
+        var left = r.right + gap + bw <= vw - 8 ? r.right + gap : r.left - gap - bw;
+        left = Math.max(8, Math.min(vw - bw - 8, left));
+        var top = Math.max(8, Math.min(vh - bh - 8, r.top + r.height / 2 - bh / 2));
+        box.style.left = left + 'px';
+        box.style.top = top + 'px';
+    };
+    return { show: show, hide: hide, tile: function () { return tile; } };
 }
 
 /**
@@ -489,6 +551,9 @@ export function renderIdentityGallery(host, session, opts) {
 
     var alive = function () { return section.isConnected; };
     var pickFrame = function (frame) { if (opts.onPick) opts.onPick(frame); };
+    var zoom = makeZoom(section);
+    // the tile moves under a still pointer when the box scrolls: drop the preview
+    host.addEventListener('scroll', zoom.hide, { passive: true });
 
     // ---- maps --------------------------------------------------------------
     var mapToken = 0;
@@ -599,13 +664,23 @@ export function renderIdentityGallery(host, session, opts) {
                 fig.querySelector('.identity-gallery-blank').textContent = 'no frame';
                 continue;
             }
+            // the crop again at up to the enlarged size, for the hover preview — no
+            // larger than the video's own pixels, which would only be scaled up
+            var bigSide = Math.max(GALLERY_TILE, Math.min(Math.ceil(box.side), Math.round(GALLERY_ZOOM * pixelRatio())));
+            var big = el('canvas');
+            big.width = big.height = bigSide;
+            var bctx = big.getContext('2d');
+            bctx.fillStyle = '#000'; bctx.fillRect(0, 0, bigSide, bigSide);
+            try { bctx.drawImage(img, box.x, box.y, box.side, box.side, 0, 0, bigSide, bigSide); } catch (e) { big = null; }
             // this animal's keypoints as small dots in its colour: which one the row means when two share a crop
-            var scale = GALLERY_TILE / box.side;
-            ctx.fillStyle = r.color || '#fff'; ctx.strokeStyle = 'rgba(0, 0, 0, 0.6)'; ctx.lineWidth = 1;
-            pts.forEach(function (p) {
-                if (!p || !isFinite(p[0]) || !isFinite(p[1])) return;
-                ctx.beginPath(); ctx.arc((p[0] - box.x) * scale, (p[1] - box.y) * scale, 1.6, 0, 2 * Math.PI); ctx.fill(); ctx.stroke();
-            });
+            drawSampleDots(ctx, pts, box, GALLERY_TILE, r.color, 1.6);
+            if (big) {
+                fig._zoom = { src: big, pts: pts, box: box, color: r.color,
+                    label: r.id.name + ' · ' + fmtTime(frame) + ' · ' + cam + ' — click to go to this frame' };
+                fig.removeAttribute('title');   // the preview says it; a native tooltip would cover it
+                fig.addEventListener('mouseenter', zoom.show.bind(null, fig));
+                fig.addEventListener('mouseleave', zoom.hide);
+            }
             var sz = imageSize(img);
             c.setAttribute('data-source', sz[0] + 'x' + sz[1]);
             fig.replaceChild(c, fig.querySelector('.identity-gallery-blank'));
