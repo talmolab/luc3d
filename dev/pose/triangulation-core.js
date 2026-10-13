@@ -16,8 +16,8 @@
  * `options.reprojErrorThreshold` instead.
  */
 
-import { makePoints3d, points3dNodeCount, hasPoint3d, getPoint3d, readPoint3d, setPoint3d, clearPoint3d, mat3x3Multiply } from './pose-data.js?v=eab1cfac07f0';
-import { jacobiEigen } from './plane-fit.js?v=eab1cfac07f0';
+import { makePoints3d, points3dNodeCount, hasPoint3d, getPoint3d, readPoint3d, setPoint3d, clearPoint3d, mat3x3Multiply } from './pose-data.js?v=2e9fa6e85881';
+import { jacobiEigen } from './plane-fit.js?v=2e9fa6e85881';
 export { jacobiEigen };
 
 // Settings readers for `triangulateAndReproject` (see the header). Unset means
@@ -1244,8 +1244,8 @@ export function triangulateAndReproject(instanceGroup, cameras, options) {
     // own error without ever influencing the geometry. `included[c]` gates only the
     // observation collection; reprojection/error steps still cover every camera.
     // Source: `options.includedCameras` (explicit list, for tests) else the live
-    // Camera Views setting. `typeof` guard keeps this safe under the flat-script
-    // test harness where the ES import isn't resolved.
+    // Camera Views setting, reached through a hook — unset in a worker, where
+    // every view is included (the pool passes `includedCameras` explicitly).
     const included = cameraNames.map(function (n) {
         if (options && options.includedCameras) return options.includedCameras.indexOf(n) >= 0;
         return _settingsHooks.isCameraTracked ? _settingsHooks.isCameraTracked(n) : true;

@@ -30,24 +30,20 @@
     const { describe, it, assertEqual, assertNull, assertNotNull,
         assertTrue, assertFalse, assertDeepEqual } = TestFramework;
 
-    // Dual-runner resolution, with one extra hop beyond test-video-contrast.js.
+    // Name resolution, with one extra hop beyond test-video-contrast.js.
     //
     // `ui/video-filters.js` is SPREAD onto `window` by the browser runner, so
     // its exports resolve as bare globals. `ui/timeline-visibility.js` and
     // `import-export/visibility-metadata.js` are instead NAMESPACED there
     // (`window.__TimelineVisibility` / `window.__VisibilityMetadata`) because
-    // names like `ensureHiddenSets` are too generic to own a global. The `vm`
-    // sandbox has no such distinction — it strips `export` and leaves every
-    // declaration on its own global. Check the namespaces after the bare name so
-    // one lookup path serves both runners.
+    // names like `ensureHiddenSets` are too generic to own a global. Check the
+    // namespaces after the bare name.
     var NAMESPACES = ['__VisibilityMetadata', '__TimelineVisibility'];
 
     function pick(name) {
-        var g = (typeof window !== 'undefined') ? window
-            : (typeof globalThis !== 'undefined') ? globalThis : null;
-        if (g && g[name] !== undefined) return g[name];
-        if (typeof globalThis !== 'undefined' && globalThis[name] !== undefined) return globalThis[name];
-        for (var i = 0; g && i < NAMESPACES.length; i++) {
+        var g = window;
+        if (g[name] !== undefined) return g[name];
+        for (var i = 0; i < NAMESPACES.length; i++) {
             var ns = g[NAMESPACES[i]];
             if (ns && ns[name] !== undefined) return ns[name];
         }

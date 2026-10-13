@@ -51,9 +51,9 @@ import {
     serializeVideoContrast, ingestVideoContrast,
     serializeVideoBrightness, ingestVideoBrightness,
     serializeVideoRotation, ingestVideoRotation,
-} from '../ui/video-filters.js?v=eab1cfac07f0';
-import { serializeHiddenSets, ingestHiddenSets } from '../ui/timeline-visibility.js?v=eab1cfac07f0';
-import { serializeIdSwitchReview, ingestIdSwitchReview } from '../ui/id-switch-review.js?v=eab1cfac07f0';
+} from '../ui/video-filters.js?v=2e9fa6e85881';
+import { serializeHiddenSets, ingestHiddenSets } from '../ui/timeline-visibility.js?v=2e9fa6e85881';
+import { serializeIdSwitchReview, ingestIdSwitchReview } from '../ui/id-switch-review.js?v=2e9fa6e85881';
 
 /**
  * Every `metadata.lucid` key this module may write. Exported so tests (and the
@@ -78,7 +78,8 @@ export const VISIBILITY_METADATA_KEYS = [
 // default) writes nothing — so it is asked again on the next Track Frame /
 // Track All, exactly as before the count was saved — and anything else read
 // back is treated the same way. Kept here rather than in pose/tracker.js,
-// which this module cannot import (it is loaded in the Node test sandbox).
+// which this module cannot import: tracker.js pulls in the whole UI, and this
+// module is bridged into tests/test-runner.html, which must not load the app.
 function serializeNumAnimals(session) {
     var n = session.numAnimals;
     if (n === 'auto') return n;

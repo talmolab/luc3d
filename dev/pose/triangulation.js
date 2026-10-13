@@ -9,26 +9,26 @@
 
 import { mat3x3Multiply, Camera, FrameGroup, Instance, UnlinkedInstance, InstanceGroup,
          makePoints3d, points3dNodeCount, hasPoint3d, getPoint3d, readPoint3d,
-         setPoint3d, clearPoint3d, someValidPoint3d, countPoints3d, pooledPoints3d } from './pose-data.js?v=eab1cfac07f0';
+         setPoint3d, clearPoint3d, someValidPoint3d, countPoints3d, pooledPoints3d } from './pose-data.js?v=2e9fa6e85881';
 // The Jacobi eigensolver and the least-squares plane fit live in
 // `pose/plane-fit.js`, so `pose/plane-data.js` can reach the fit without
 // importing this module — and the whole UI with it. `fitPlaneToPoints3d` is
 // re-exported unchanged, because every existing caller and test reads it here.
-import { jacobiEigen, fitPlaneToPoints3d } from './plane-fit.js?v=eab1cfac07f0';
+import { jacobiEigen, fitPlaneToPoints3d } from './plane-fit.js?v=2e9fa6e85881';
 export { fitPlaneToPoints3d };
-import { state, timeline, viewport3d, interactionManager } from '../ui/app-state.js?v=eab1cfac07f0';
+import { state, timeline, viewport3d, interactionManager } from '../ui/app-state.js?v=2e9fa6e85881';
 // Pass 3i-2: triangulation orchestration moved out of app.js
-import { setReprojErrorVisible, showReprojectionsOnly, REPROJ_ONLY_NOTE, drawAllOverlays } from '../ui/rendering.js?v=eab1cfac07f0';
-import { updateTriangulationBadge } from '../ui/info-panel.js?v=eab1cfac07f0';
-import { isCameraTracked, getTrackingThreshold, getDefaultTriangulationMethod } from '../ui/settings.js?v=eab1cfac07f0';
-import { markDirty, setStatus, showLoading, hideLoading } from '../import-export/save-load.js?v=eab1cfac07f0';
-import { showLoadingProgress, createProgressPacer, yieldToPaint, setLoadingCpu } from '../ui/loading-overlay.js?v=eab1cfac07f0';
-import { createGroupSolver } from './triangulation-pool.js?v=eab1cfac07f0';
-import { unionTrackNames, remapTrackIdx, isIdentityRemap } from '../loading/track-union.js?v=eab1cfac07f0';
+import { setReprojErrorVisible, showReprojectionsOnly, REPROJ_ONLY_NOTE, drawAllOverlays } from '../ui/rendering.js?v=2e9fa6e85881';
+import { updateTriangulationBadge } from '../ui/info-panel.js?v=2e9fa6e85881';
+import { isCameraTracked, getTrackingThreshold, getDefaultTriangulationMethod } from '../ui/settings.js?v=2e9fa6e85881';
+import { markDirty, setStatus, showLoading, hideLoading } from '../import-export/save-load.js?v=2e9fa6e85881';
+import { showLoadingProgress, createProgressPacer, yieldToPaint, setLoadingCpu } from '../ui/loading-overlay.js?v=2e9fa6e85881';
+import { createGroupSolver } from './triangulation-pool.js?v=2e9fa6e85881';
+import { unionTrackNames, remapTrackIdx, isIdentityRemap } from '../loading/track-union.js?v=2e9fa6e85881';
 import { evictLazyFrameGroups, holdLazyResidency, releaseLazyResidency, releaseFrameMembers2d,
-         LAZY_RESIDENT_CAP, LAZY_KEEP_BEHIND } from './lazy-residency.js?v=eab1cfac07f0';
+         LAZY_RESIDENT_CAP, LAZY_KEEP_BEHIND } from './lazy-residency.js?v=2e9fa6e85881';
 // Pass 3i-3: update3DViewport moved to pose/initialization.js.
-import { update3DViewport } from './initialization.js?v=eab1cfac07f0';
+import { update3DViewport } from './initialization.js?v=2e9fa6e85881';
 // The pure math (DLT, refinement, reprojection, triangulateAndReproject) lives
 // in ./triangulation-core.js so a worker can load it; re-exported below so every
 // existing import of these names from this module keeps working.
@@ -48,7 +48,7 @@ import {
     hungarianAlgorithm, cameraCenter, backProjectToRay, backProjectToRays,
     pointToRayDistance, pointsToRayDistances,
     computeFundamentalMatrix, epipolarError, epipolarErrorMatrix,
-} from './triangulation-core.js?v=eab1cfac07f0';
+} from './triangulation-core.js?v=2e9fa6e85881';
 export {
     triangulatePointDLT, triangulatePoints, BA_ROBUST_SCALE_PX,
     triangulatePointBA, triangulatePointsBA,
@@ -62,8 +62,8 @@ export {
     computeFundamentalMatrix, epipolarError, epipolarErrorMatrix,
 };
 // The core reads these two settings through hooks (it cannot import ui/settings.js
-// and stay worker-loadable). `typeof` keeps the flat-script test sandbox working,
-// where ui/settings.js is not loaded.
+// and stay worker-loadable). The `typeof` checks date from a since-retired
+// flat-script test sandbox that did not load ui/settings.js; both are always true here.
 setTriangulationSettingsHooks({
     isCameraTracked: typeof isCameraTracked === 'function' ? isCameraTracked : null,
     getTrackingThreshold: typeof getTrackingThreshold === 'function' ? getTrackingThreshold : null,
@@ -1278,8 +1278,8 @@ export class LazyFrameLoader {
             // Resolve worker URL relative to the document base so this works on
             // sub-path deployments (e.g. GitHub Pages /luc3d/, /luc3d/pr/N/) as well
             // as localhost. We use document.baseURI rather than `new URL(..., import.meta.url)`
-            // because triangulation.js is loaded via vm.Script in tests/run-node.js
-            // (classic-script context, where `import.meta` is a parse error). See ISSUES.md I-8.
+            // (first because a since-retired vm test runner could not parse `import.meta`).
+            // See ISSUES.md I-8.
             var workerUrl = new URL('loading/slp-import-worker.js?v=' + Date.now(), document.baseURI);
             var worker = new Worker(workerUrl, { type: 'module' });
             worker.onmessage = function (e) {
@@ -2051,9 +2051,9 @@ export async function triangulateMultiFrameInstances(startFrame, endFrame, onPro
  *      which is what an explicit user action on a brand-new group should honor.
  *      Never a bare `'dlt'` literal.
  *
- * `typeof` guard on the settings getter for the flat-script test harness
- * (`tests/run-node.js`), which does not resolve the ES import — same pattern as
- * `isCameraTracked` / `getTrackingThreshold` above.
+ * The `typeof` guard on the settings getter dates from a since-retired
+ * flat-script test harness that did not resolve the ES import, like the ones on
+ * `isCameraTracked` / `getTrackingThreshold` above; it is always true now.
  *
  * NOT used by `ui/rendering.js`'s lazy reprojection fill, deliberately. That
  * path re-derives reprojections for 3D it does NOT own and does not write back,
