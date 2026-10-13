@@ -15,8 +15,8 @@
  * surface.
  */
 
-import { trailFrames, trailRate } from './trail-presets.js?v=5fcbb970a4d5';
-import { DEFAULT_TRAIL_SHADE } from './overlays.js?v=5fcbb970a4d5';
+import { trailFrames, trailRate } from './trail-presets.js?v=24a304a0e936';
+import { DEFAULT_TRAIL_SHADE } from './overlays.js?v=24a304a0e936';
 
 export const state = {
     views: [],          // { name, decoder, canvas, ctx, overlayCanvas, overlayCtx, videoWidth, videoHeight }
