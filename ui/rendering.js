@@ -23,6 +23,7 @@ import { drawPlaneOverlays, applyPlaneModeToolbarLock } from './plane-definition
 // (it reaches pose/tracker.js, which imports this module) — safe for the same
 // reason: the call site is inside drawAllOverlays' body.
 import { syncAnimalCountField } from './animal-count-field.js';
+import { syncNodeTooltipFrame } from './node-tooltip.js';
 
 // Pass 3f: editGroupState + finishEditGroup moved to ui/identity-assignment.js.
 import { editGroupState, finishEditGroup } from './identity-assignment.js';
@@ -241,6 +242,10 @@ function fillLazyReprojections(fi, instanceGroups) {
 export function drawAllOverlays(frameIdx, viewFrames) {
     if (!state.session) return;
 
+    // A node tooltip names a node on the frame it was hovered on; on any other
+    // frame that node has moved out from under the pointer.
+    syncNodeTooltipFrame(frameIdx);
+
     // Lazy H5: fetch frame data on demand if not yet loaded
     if (state.session.lazyLoader && !state.session.frameGroups.has(frameIdx)) {
         ensureLazyFrameData(frameIdx).then(function () {
@@ -425,6 +430,7 @@ export function drawAllOverlays(frameIdx, viewFrames) {
         drawFrameOverlays(view.overlayCtx, view.name, overlayFrameGroup, vGroups, state.session, {
             colorByIdentity: state.colorByIdentity,
             trailLength: state.trailLength,
+            trailShade: state.trailShade,
             // NOT vis.showLegend: the live legend is pane chrome now
             // (`syncViewLegends`, below), because anything painted on this
             // canvas rotates with the view. `drawFrameOverlays` keeps the
@@ -537,9 +543,9 @@ function renderFrameCounters(session, activeCam, baseline) {
     var labeledEl = document.getElementById('statusLabeledFrames');
     var triangulatedEl = document.getElementById('statusTriangulatedFrames');
     var instancesEl = document.getElementById('statusInstances');
-    if (labeledEl) labeledEl.textContent = 'Labeled Frames: ' + c.labeled;
-    if (instancesEl) instancesEl.textContent = 'Instances: ' + c.instances;
-    if (triangulatedEl) triangulatedEl.textContent = 'Triangulated: ' + c.triangulated;
+    if (labeledEl) labeledEl.textContent = 'Labeled Frames: ' + c.labeled.toLocaleString('en-US');
+    if (instancesEl) instancesEl.textContent = 'Instances: ' + c.instances.toLocaleString('en-US');
+    if (triangulatedEl) triangulatedEl.textContent = 'Triangulated: ' + c.triangulated.toLocaleString('en-US');
 }
 
 function requestCounterRebuild() {

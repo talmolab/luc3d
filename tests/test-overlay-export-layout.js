@@ -736,6 +736,28 @@
         });
     });
 
+    describe('overlay export — node-trail shade', () => {
+        it('defaults to the app\'s trail shade (the value is repeated, since the module imports nothing)', () => {
+            const d = __OverlayExportLayout.defaultOverlayExportSettings();
+            assertEqual(d.trailShade, DEFAULT_TRAIL_SHADE, 'export default = DEFAULT_TRAIL_SHADE (ui/overlays.js)');
+            assertTrue(trailShadeFor(d.trailShade) !== null, 'and it is a shade the export offers');
+        });
+
+        it('passes the chosen shade to the overlay draw', () => {
+            const s = __OverlayExportLayout.defaultOverlayExportSettings();
+            s.trailShade = 'light';
+            assertEqual(__OverlayExportLayout.overlayOptionsFrom(s, 640, 480, 640, 480).trailShade, 'light', 'trailShade');
+        });
+
+        it('remembers a stored shade like any other setting', () => {
+            const L = __OverlayExportLayout;
+            const s = L.mergeSettings(L.defaultOverlayExportSettings(), { trailShade: 'veryLight' });
+            assertEqual(s.trailShade, 'veryLight', 'stored shade restored');
+            const t = L.mergeSettings(L.defaultOverlayExportSettings(), { trailShade: 3 });
+            assertEqual(t.trailShade, DEFAULT_TRAIL_SHADE, 'a wrong-typed shade is ignored');
+        });
+    });
+
     describe('overlay export — overlayOptionsFrom', () => {
         it('carries no interaction state into an export', () => {
             const o = __OverlayExportLayout.overlayOptionsFrom(__OverlayExportLayout.defaultOverlayExportSettings(), 640, 480, 320, 240);

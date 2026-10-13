@@ -68,6 +68,13 @@ export class Timeline {
         /** @type {Function|null} */
         this._onFrameChange = options.onFrameChange || null;
 
+        /**
+         * Reads the toolbar's Tracks / Identity coloring (`state.colorByIdentity`)
+         * so track rows wear the same palette as the canvas (`getTrackColor`).
+         * @type {Function|null}
+         */
+        this._getColorByIdentity = options.getColorByIdentity || null;
+
         /** @type {Function|null} */
         this._onRangeSelect = options.onRangeSelect || null;
 
@@ -1157,8 +1164,8 @@ export class Timeline {
                 var trackName = session.tracks[ct] || ('track_' + ct);
                 // The "No ID" track is the null track → same gray the ID panel
                 // uses for its "No ID" row.
-                var color = (session.isNoIdTrack && session.isNoIdTrack(ct))
-                    ? NULL_ID_COLOR : getTrackColor(ct);
+                var noIdTrack = !!(session.isNoIdTrack && session.isNoIdTrack(ct));
+                var color = noIdTrack ? NULL_ID_COLOR : getTrackColor(ct, this._colorByIdentity());
 
                 this._trackSegments.push({
                     trackIdx: ct,
@@ -1168,6 +1175,7 @@ export class Timeline {
                     trackName: trackName,
                     treeRole: 'middle', // assigned in finalizeTreeRoles pass
                     _isTrack: true,     // marker for visibility filter (Block 2)
+                    _trackColored: !noIdTrack,   // recolored by recolorTracks()
                 });
                 this._trackNames.push(''); // placeholder, finalized below
             }
@@ -1363,11 +1371,12 @@ export class Timeline {
             this._trackSegments.push({
                 trackIdx: idv,
                 cameraName: CAM,
-                color: getTrackColor(idv),
+                color: getTrackColor(idv, this._colorByIdentity()),
                 segments: this._framesToSegments(idFrames[idv]),
                 trackName: name,
                 treeRole: 'middle',
                 _isIdentity: true,
+                _trackColored: true,
             });
             this._trackNames.push('');
         }
@@ -2743,7 +2752,7 @@ export class Timeline {
         if (x >= this.LEFT_MARGIN && x <= this._cssWidth - this.RIGHT_PADDING) {
             const frame = this._clampFrame(this._xToFrame(x));
             const marker = this._frameMarkers.get(frame);
-            let text = 'Frame ' + (frame + 1);
+            let text = 'Frame ' + (frame + 1).toLocaleString('en-US');
             if (marker) {
                 const parts = [];
                 if (marker.hasUser) parts.push('user');
@@ -3043,6 +3052,25 @@ export class Timeline {
         // longer does (only the playhead element moves), so ask for a redraw —
         // coalesced, since bulk operations set thousands of frames in a loop.
         if (changed) this._requestRedraw();
+    }
+
+    /** @private Whether the canvas is coloring by Identity right now. */
+    _colorByIdentity() {
+        return !!(this._getColorByIdentity && this._getColorByIdentity());
+    }
+
+    /**
+     * Repaint the track-colored rows in the palette of the current Tracks /
+     * Identity coloring, without rebuilding them: the segments do not depend
+     * on it, and a rebuild walks every frame of every camera.
+     */
+    recolorTracks() {
+        var on = this._colorByIdentity();
+        for (var i = 0; i < this._trackSegments.length; i++) {
+            var row = this._trackSegments[i];
+            if (row._trackColored) row.color = getTrackColor(row.trackIdx, on);
+        }
+        this.redraw();
     }
 
     /**

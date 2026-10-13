@@ -157,7 +157,7 @@ export function showGroupByTrackModal() {
             '<td><input type="checkbox" class="gbt-track-cb" data-idx="' + tIdx + '" checked></td>' +
             '<td>' + tName + '</td>' +
             '<td>' + stats.nodeCount + ' nodes</td>' +
-            '<td>' + stats.frames.size + '</td>' +
+            '<td>' + stats.frames.size.toLocaleString('en-US') + '</td>' +
             '<td>' + stats.cameras.size + '</td>' +
             '</tr>';
     }
@@ -553,7 +553,7 @@ export async function groupByIdentityAndTriangulateAll(explicitMethod) {
     // Name the 3D's provenance so a run that kept BA solutions can't be mistaken
     // for one that silently re-solved them with DLT.
     setStatus('Grouped ' + totalGrouped + ' identity groups, triangulated ' +
-        totalTriangulated + ' across ' + processedFrames + ' frames via ' +
+        totalTriangulated.toLocaleString('en-US') + ' across ' + processedFrames.toLocaleString('en-US') + ' frames via ' +
         triangulationMethodLabel(prefMethod) + ' (' +
         reused3d.toLocaleString() + ' kept existing 3D, ' +
         solvedBa.toLocaleString() + ' solved via Refined, ' +
@@ -803,7 +803,7 @@ async function groupByTrackAndTriangulateAll(selectedTrackIndices, selectedCamer
     // Name the 3D's provenance so a run that kept BA solutions can't be mistaken
     // for one that silently re-solved them with DLT. `avgError` covers only the
     // groups actually solved here — an adopted group's error is derived on demand.
-    setStatus('Grouped ' + totalGrouped + ' track-groups, triangulated ' + totalTriangulated +
+    setStatus('Grouped ' + totalGrouped + ' track-groups, triangulated ' + totalTriangulated.toLocaleString('en-US') +
         ' frames via ' + triangulationMethodLabel(prefMethodT) +
         ' (avg error: ' + avgError + 'px; ' + reused3dT.toLocaleString() +
         ' kept existing 3D, ' + solvedBaT.toLocaleString() + ' solved via Refined, ' +
@@ -2390,13 +2390,13 @@ function condenseMissingFrames(frames) {
         if (frames[i] === end + 1) {
             end = frames[i];
         } else {
-            ranges.push(start === end ? '' + start : start + '–' + end);
+            ranges.push(start === end ? start.toLocaleString('en-US') : start.toLocaleString('en-US') + '–' + end.toLocaleString('en-US'));
             start = frames[i];
             end = frames[i];
         }
     }
-    ranges.push(start === end ? '' + start : start + '–' + end);
-    return ranges.join(', ');
+    ranges.push(start === end ? start.toLocaleString('en-US') : start.toLocaleString('en-US') + '–' + end.toLocaleString('en-US'));
+    return ranges.join('; ');       // not ', ': the numbers carry thousands commas ("1,234–1,240; 2,000")
 }
 
 export function showTriangulateMultiFrameModal() {
@@ -2537,7 +2537,7 @@ export function showTriangulateMultiFrameModal() {
         if (missingFrames.length > 0) {
             var errorEl = document.getElementById('tfError');
             if (missingFrames.length === 1) {
-                errorEl.textContent = 'Frame ' + (missingFrames[0] + 1) + ' does not have identity assignment.';
+                errorEl.textContent = 'Frame ' + (missingFrames[0] + 1).toLocaleString('en-US') + ' does not have identity assignment.';
             } else {
                 errorEl.textContent = 'Frames [' + condenseMissingFrames(missingFrames.map(function(f) { return f + 1; })) + '] do not have identity assignment.';
             }
@@ -2565,7 +2565,7 @@ async function runMultiFrameTriangulation(startFrame, endFrame, overlayEl) {
 
     var result = await triangulateMultiFrameInstances(startFrame, endFrame, function (completed, total) {
         var pct = Math.round((completed / total) * 100);
-        if (progressLabel) progressLabel.textContent = completed + ' / ' + total + ' frames';
+        if (progressLabel) progressLabel.textContent = completed.toLocaleString('en-US') + ' / ' + total.toLocaleString('en-US') + ' frames';
         if (progressFill) progressFill.style.width = pct + '%';
     });
 
@@ -2580,7 +2580,7 @@ async function runMultiFrameTriangulation(startFrame, endFrame, overlayEl) {
 
     // Show summary and close button
     if (progressLabel) {
-        progressLabel.textContent = 'Done — triangulated ' + result.triangulated + ' frames (' + result.totalGroups + ' groups, avg error: ' + avgError + 'px)';
+        progressLabel.textContent = 'Done — triangulated ' + result.triangulated.toLocaleString('en-US') + ' frames (' + result.totalGroups.toLocaleString('en-US') + ' groups, avg error: ' + avgError + 'px)';
     }
 
     var actionsEl = document.getElementById('tfActions');
@@ -2592,7 +2592,7 @@ async function runMultiFrameTriangulation(startFrame, endFrame, overlayEl) {
         });
     }
 
-    setStatus('Multi-frame triangulation complete: ' + result.triangulated + '/' + totalFrames + ' frames, avg error: ' + avgError + 'px', 'success');
+    setStatus('Multi-frame triangulation complete: ' + result.triangulated.toLocaleString('en-US') + '/' + totalFrames.toLocaleString('en-US') + ' frames, avg error: ' + avgError + 'px', 'success');
 
     // Update timeline: mark frames with grouped UserInstances, refresh track bars
     if (timeline) {
@@ -2725,7 +2725,7 @@ export async function exportLabels() {
             nFrames++;
         }, {
             onProgress: function (done, tot) {
-                showLoading('Exporting labels... ' + done + '/' + tot + ' frames');
+                showLoading('Exporting labels... ' + done.toLocaleString('en-US') + '/' + tot.toLocaleString('en-US') + ' frames');
             },
         });
 
@@ -2917,7 +2917,7 @@ export function showExport3DVideoModal() {
         // output resolution is stated.
         '    <div style="font-size:12px;color:var(--text-secondary);">Output: <span id="v3dExportOutSize">—</span></div>' +
         '    <div style="font-size:12px;color:var(--text-secondary);">Duration: <span id="v3dExportDuration">0:00</span></div>' +
-        '    <div style="font-size:12px;color:var(--text-secondary);">Exported Frames: <span id="v3dExportSelCount">' + frameCount + '</span></div>' +
+        '    <div style="font-size:12px;color:var(--text-secondary);">Exported Frames: <span id="v3dExportSelCount">' + frameCount.toLocaleString('en-US') + '</span></div>' +
         '    <div style="font-size:12px;color:var(--text-secondary);">Estimated File Size: <span id="v3dExportSize">—</span></div>' +
         '  </div>' +
         '</div>' +
@@ -2943,7 +2943,7 @@ export function showExport3DVideoModal() {
         '    <div style="background:#333;border-radius:4px;height:8px;overflow:hidden;">' +
         '      <div id="v3dExportProgressFill" style="width:0%;height:100%;background:var(--accent,#4a9eff);transition:width 0.1s;"></div>' +
         '    </div>' +
-        '    <div id="v3dExportProgressLabel" style="font-size:11px;color:var(--text-secondary);margin-top:4px;">Encoding 0 / ' + frameCount + '</div>' +
+        '    <div id="v3dExportProgressLabel" style="font-size:11px;color:var(--text-secondary);margin-top:4px;">Encoding 0 / ' + frameCount.toLocaleString('en-US') + '</div>' +
         '  </div>' +
         '</div>' +
         '<div class="modal-actions" style="margin-top:14px;display:flex;justify-content:flex-end;gap:10px;">' +
@@ -3325,7 +3325,7 @@ export function showExport3DVideoModal() {
                 if (out % 5 === 0 || i === expEnd) {
                     var pct = Math.round(((out + 1) / nFrames) * 100);
                     progressFill.style.width = pct + '%';
-                    progressLabel.textContent = 'Encoding ' + (out + 1) + ' / ' + nFrames;
+                    progressLabel.textContent = 'Encoding ' + (out + 1).toLocaleString('en-US') + ' / ' + nFrames.toLocaleString('en-US');
                     await new Promise(function (r) { setTimeout(r, 0); });
                 }
             }
@@ -3334,7 +3334,7 @@ export function showExport3DVideoModal() {
                 progressLabel.textContent = 'Finalizing...';
                 var result = await writer.finish();
                 if (!result.streamed) downloadBlob(result.blob, fname);
-                setStatus('3D video exported: ' + fname + ' (' + nFrames + ' frames @ ' + fps +
+                setStatus('3D video exported: ' + fname + ' (' + nFrames.toLocaleString('en-US') + ' frames @ ' + fps +
                     ' fps, ' + W + '×' + H + ')', 'success');
             } else {
                 // A cancelled STREAMED export still commits what was written,
