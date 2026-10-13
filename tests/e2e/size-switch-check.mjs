@@ -32,6 +32,9 @@
  *  6. On an untracked session the action warns instead of running.
  *  7. The tab states the sampling it used and that, with no video loaded, the
  *     frame rate is the app's value rather than a measured one.
+ *  8. Its popup is the image check's card style (fixtures/progress-card.js): titled
+ *     "Checking ID switches (body size)", a spinner and a message — no counter —
+ *     opaque, the app behind it not greyed out.
  *
  * Run: node tests/e2e/size-switch-check.mjs     (SHOT=/path.png saves a seekbar screenshot, BAR_SHOT= the selected row,
  *      PANEL_SHOT=/path.png the ID Switches tab)
@@ -105,7 +108,23 @@ try {
         return { swapFrame, pair: events[SWAP].pair.map(k => 'id_' + k), totalFrames: T * STEP };
     });
 
-    // ---- 1. run it from the real menu item: the ID Switches tab opens
+    // ---- 1. run it from the real menu item: the ID Switches tab opens. The check is over in well under a
+    //         second, so its popup is captured the moment it appears (fixtures/progress-card.js).
+    await page.evaluate(async () => {
+        const { progressCardStyle } = await import('/tests/e2e/fixtures/progress-card.js');
+        const overlay = document.getElementById('loadingOverlay');
+        window.__sizeCard = null;
+        const mo = new MutationObserver(() => {
+            if (window.__sizeCard || overlay.classList.contains('hidden')) return;
+            const t = document.getElementById('loadingTitle');
+            window.__sizeCard = Object.assign(progressCardStyle(overlay.querySelector('.loading-card'), overlay), {
+                title: t.classList.contains('hidden') ? null : t.textContent, message: document.getElementById('loadingStatus').textContent,
+                spinner: !document.getElementById('loadingSpinner').classList.contains('hidden'),
+                bar: !document.getElementById('loadingProgress').classList.contains('hidden') });
+            mo.disconnect();
+        });
+        mo.observe(overlay, { attributes: true, subtree: true, childList: true, characterData: true });
+    });
     await page.evaluate(() => document.getElementById('menuCheckSizeSwitches').click());
     await page.waitForSelector('#tabIdSwitches.active .id-switch-row', { timeout: 60000 });
     const rowsNow = () => page.evaluate(() => Array.from(document.querySelectorAll('#idSwitchPanel .id-switch-row'))
@@ -119,6 +138,12 @@ try {
     // the labels changed hands is a change point — not the pair's later contacts, nor the swapped identities'
     // contacts with the third animal, where the labels are swapped but nothing changes.
     const row = ui.rows[0] || {};
+    {   // its popup: the image check's card, as a titled message with a spinner — no "0/1 frames" counter
+        const c = await page.evaluate(() => window.__sizeCard);
+        check(!!c && c.ok && c.title === 'Checking ID switches (body size)' && /body size before and after/.test(c.message) && c.spinner && !c.bar,
+              `its popup is the image check's card: "${c && c.title}", "${c && c.message}", a spinner and no counter, opaque, the app not greyed out` +
+              (c && !c.ok ? ' — ' + c.why : ''));
+    }
     check(ui.rows.length === 1, `one change point (${ui.rows.length})`);
     check(Math.abs(row.frame - fx.swapFrame) <= 40, `…at the switch encounter (frame ${row.frame}, switch at ${fx.swapFrame})`);
     check(fx.pair.every(n => (row.text || '').includes(n)), `…naming the swapped pair (${fx.pair.join(' ↔ ')}): "${row.text}"`);

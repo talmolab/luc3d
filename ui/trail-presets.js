@@ -11,6 +11,12 @@
  * `trailFrames(state.trailSeconds, state.fps)` (`ui/app-state.js`), so the frame
  * count follows a new video or an edited FPS without anyone having to recompute it.
  * Import-free: `ui/app-state.js` imports it.
+ *
+ * It is also where the length is SET (`setTrailSeconds`): from the menus, and from
+ * Track All (`pose/tracker.js`), which turns trails on when it finishes and cannot
+ * import `ui/ui-wiring.js` (an import loop, and its Node tests stub UI modules).
+ * Like `ui/color-by.js`, the setter changes the state and calls ONE change handler
+ * that ui-wiring registers (menu checkmarks, the button's blue, a redraw).
  */
 
 /** Off, then ¼ s, ½ s, 1 s and 2 s. `key` names the Tracks ▸ Node Trails item ids. */
@@ -21,6 +27,33 @@ export const TRAIL_PRESETS = [
     { key: 'Second', seconds: 1, name: '1 second' },
     { key: 'TwoSeconds', seconds: 2, name: '2 seconds' },
 ];
+
+/** The length Track All turns trails on at when it finishes, if they are off: ¼ s. */
+export const TRACK_ALL_TRAIL_SECONDS = 0.25;
+
+var _onChange = null;
+
+/** Register the handler run after the trail length changes (ui-wiring does this once). */
+export function onTrailSecondsChange(fn) {
+    _onChange = typeof fn === 'function' ? fn : null;
+}
+
+/**
+ * Set the node-trail length, `state.trailSeconds` (0 = off). Returns whether it
+ * changed; the handler runs only on a change. With no handler registered (Node
+ * tests) it just sets the state.
+ * @param {{trailSeconds: number}} state  the app state (`ui/app-state.js`)
+ * @param {number} seconds
+ * @returns {boolean}
+ */
+export function setTrailSeconds(state, seconds) {
+    if (!state || state.trailSeconds === seconds) return false;
+    state.trailSeconds = seconds;
+    if (_onChange) {
+        try { _onChange(seconds); } catch (e) { console.error('[trails] change handler failed:', e); }
+    }
+    return true;
+}
 
 /**
  * The longest trail drawn, in frames. `LAZY_KEEP_BEHIND` (512,
@@ -105,7 +138,7 @@ export function trailSecondsForFrames(frames, fps) {
 export function trailLabel(seconds, fps) {
     if (!(seconds > 0)) return 'Off';
     var n = trailFrames(seconds, fps);
-    return trailSecondsName(seconds) + ' (' + n + (n === 1 ? ' frame)' : ' frames)');
+    return trailSecondsName(seconds) + ' (' + n.toLocaleString('en-US') + (n === 1 ? ' frame)' : ' frames)');
 }
 
 /**

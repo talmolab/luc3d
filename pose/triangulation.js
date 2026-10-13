@@ -22,7 +22,7 @@ import { setReprojErrorVisible, showReprojectionsOnly, REPROJ_ONLY_NOTE, drawAll
 import { updateTriangulationBadge } from '../ui/info-panel.js';
 import { isCameraTracked, getTrackingThreshold, getDefaultTriangulationMethod } from '../ui/settings.js';
 import { markDirty, setStatus, showLoading, hideLoading } from '../import-export/save-load.js';
-import { showLoadingProgress, createProgressPacer, yieldToPaint } from '../ui/loading-overlay.js';
+import { showLoadingProgress, createProgressPacer, yieldToPaint, setLoadingCpu } from '../ui/loading-overlay.js';
 import { createGroupSolver } from './triangulation-pool.js';
 import { unionTrackNames, remapTrackIdx, isIdentityRemap } from '../loading/track-union.js';
 import { evictLazyFrameGroups, holdLazyResidency, releaseLazyResidency, releaseFrameMembers2d,
@@ -45,6 +45,9 @@ import {
     computeReprojectionError, computeReprojectionErrors, computeMeanReprojectionError,
     invert3x3, triangulateAndReproject, __triangulationKernelsForTest,
     setTriangulationSettingsHooks,
+    hungarianAlgorithm, cameraCenter, backProjectToRay, backProjectToRays,
+    pointToRayDistance, pointsToRayDistances,
+    computeFundamentalMatrix, epipolarError, epipolarErrorMatrix,
 } from './triangulation-core.js';
 export {
     triangulatePointDLT, triangulatePoints, BA_ROBUST_SCALE_PX,
@@ -53,6 +56,10 @@ export {
     cameraDepth,
     computeReprojectionError, computeReprojectionErrors, computeMeanReprojectionError,
     invert3x3, triangulateAndReproject, __triangulationKernelsForTest,
+    // the cross-view tracker's geometry (moved to the core so the tracker runs in a worker)
+    hungarianAlgorithm, cameraCenter, backProjectToRay, backProjectToRays,
+    pointToRayDistance, pointsToRayDistances,
+    computeFundamentalMatrix, epipolarError, epipolarErrorMatrix,
 };
 // The core reads these two settings through hooks (it cannot import ui/settings.js
 // and stay worker-loadable). The `typeof` checks date from a since-retired
@@ -128,150 +135,8 @@ export function triangulationMethodLabel(method) {
     return method === 'ba' ? 'Refined' : 'DLT';
 }
 
-// ============================================
-// Hungarian Algorithm (Kuhn-Munkres)
-// ============================================
+// Hungarian Algorithm (Kuhn-Munkres): in ./triangulation-core.js (re-exported above), so the tracker's worker can load it.
 
-/**
- * Solve the assignment problem using the Hungarian algorithm.
- * Given an n x m cost matrix, returns the optimal assignment
- * that minimizes total cost.
- *
- * @param {number[][]} costMatrix - n x m cost matrix (n <= m)
- * @returns {number[]} assignment - assignment[i] = column assigned to row i (-1 if unassigned)
- */
-export function hungarianAlgorithm(costMatrix) {
-    var n = costMatrix.length;
-    if (n === 0) return [];
-    var m = costMatrix[0].length;
-    if (m === 0) return new Array(n).fill(-1);
-
-    // Clamp non-finite (Infinity / NaN) entries to a large finite sentinel.
-    // An all-Infinity cost matrix would otherwise leave delta/j1 unchanged
-    // inside the augmenting-path search (Infinity < Infinity === false),
-    // sending j0 to -1 and dereferencing cost[NaN] on the next iteration.
-    // Callers gate matches by a threshold (e.g., cost < 100) so spurious
-    // assignments at the sentinel value are naturally filtered out.
-    var SENTINEL = 1e15;
-    var hasFinite = false;
-    for (var ri = 0; ri < n; ri++) {
-        for (var ci = 0; ci < m; ci++) {
-            if (Number.isFinite(costMatrix[ri][ci])) { hasFinite = true; break; }
-        }
-        if (hasFinite) break;
-    }
-    if (!hasFinite) return new Array(n).fill(-1);
-
-    // Ensure n <= m (more columns than rows)
-    var transposed = false;
-    var C;
-    if (n > m) {
-        transposed = true;
-        C = [];
-        for (var j = 0; j < m; j++) {
-            C[j] = [];
-            for (var i = 0; i < n; i++) {
-                var v0 = costMatrix[i][j];
-                C[j][i] = Number.isFinite(v0) ? v0 : SENTINEL;
-            }
-        }
-        var tmp = n; n = m; m = tmp;
-    } else {
-        C = [];
-        for (var i2 = 0; i2 < n; i2++) {
-            C[i2] = new Array(m);
-            for (var c2 = 0; c2 < m; c2++) {
-                var v1 = costMatrix[i2][c2];
-                C[i2][c2] = Number.isFinite(v1) ? v1 : SENTINEL;
-            }
-        }
-    }
-
-    // Pad to square if needed
-    var sz = Math.max(n, m);
-    var cost = [];
-    for (var r = 0; r < sz; r++) {
-        cost[r] = [];
-        for (var c = 0; c < sz; c++) {
-            cost[r][c] = (r < n && c < m) ? C[r][c] : 0;
-        }
-    }
-
-    // u[i] and v[j] are potentials
-    var u = new Array(sz + 1).fill(0);
-    var v = new Array(sz + 1).fill(0);
-    var p = new Array(sz + 1).fill(0);   // p[j] = row assigned to col j
-    var way = new Array(sz + 1).fill(0); // way[j] = previous col in path
-
-    for (var i1 = 1; i1 <= sz; i1++) {
-        p[0] = i1;
-        var j0 = 0;
-        var minv = new Array(sz + 1).fill(Infinity);
-        var used = new Array(sz + 1).fill(false);
-
-        do {
-            used[j0] = true;
-            var i0 = p[j0];
-            var delta = Infinity;
-            var j1 = -1;
-
-            for (var j = 1; j <= sz; j++) {
-                if (used[j]) continue;
-                var cur = cost[i0 - 1][j - 1] - u[i0] - v[j];
-                if (cur < minv[j]) {
-                    minv[j] = cur;
-                    way[j] = j0;
-                }
-                if (minv[j] < delta) {
-                    delta = minv[j];
-                    j1 = j;
-                }
-            }
-
-            for (var j2 = 0; j2 <= sz; j2++) {
-                if (used[j2]) {
-                    u[p[j2]] += delta;
-                    v[j2] -= delta;
-                } else {
-                    minv[j2] -= delta;
-                }
-            }
-
-            j0 = j1;
-        } while (p[j0] !== 0);
-
-        do {
-            var j3 = way[j0];
-            p[j0] = p[j3];
-            j0 = j3;
-        } while (j0);
-    }
-
-    // Extract assignment
-    var result;
-    if (!transposed) {
-        result = new Array(n).fill(-1);
-        for (var j4 = 1; j4 <= sz; j4++) {
-            if (p[j4] > 0 && p[j4] <= n && j4 <= m) {
-                result[p[j4] - 1] = j4 - 1;
-            }
-        }
-    } else {
-        result = new Array(costMatrix.length).fill(-1);
-        for (var j5 = 1; j5 <= sz; j5++) {
-            if (p[j5] > 0 && p[j5] <= n && j5 <= m) {
-                // transposed: row in C = col in original, col in C = row in original
-                var origRow = j5 - 1;
-                var origCol = p[j5] - 1;
-                if (origRow < costMatrix.length && origCol < costMatrix[0].length) {
-                    result[origRow] = origCol;
-                }
-            }
-        }
-    }
-
-    return result;
-}
 
 
 // ============================================
@@ -1164,314 +1029,20 @@ export function planesInvalidatedByFit(movedNodeIds, planes, excludePlaneId) {
 }
 
 
-// ============================================
-// Back-projection and ray geometry
-// ============================================
-
-/**
- * Compute camera center from a 3x4 projection matrix P.
- * The camera center is the null space of P: P * C = 0.
- * We find it via the smallest eigenvector of P^T * P.
- *
- * @param {number[][]} P - 3x4 projection matrix
- * @returns {number[]} [X, Y, Z] camera center in world coordinates
- */
-export function cameraCenter(P) {
-    var hit = _pGeometry(P);
-    if (hit.center) return hit.center.slice();
-    var PT = matTranspose(P);      // 4x3
-    var PTP = matMul(PT, P);       // 4x4 symmetric
-    var v = solveSmallestEigenvector4x4(PTP);
-    var w = v[3];
-    hit.center = [v[0] / w, v[1] / w, v[2] / w];
-    return hit.center.slice();
-}
-
-// Per-projection-matrix memo for the geometry `cameraCenter` and
-// `backProjectToRay(s)` derive from P alone (its null vector, and the
-// pseudo-inverse Pᵀ(PPᵀ)⁻¹). Track All asks for both once per detection per
-// frame, and recomputing them — a 4x4 Jacobi eigen-solve plus four matMuls —
-// was ~6.8 s of a 17 s run on HardFight_1kModels. Keyed by the P array itself
-// (`Camera.projectionMatrix` is cached per camera) and VALIDATED on every hit
-// against a snapshot of its 12 entries, so a P mutated in place recomputes
-// rather than returning stale geometry. The cached values are produced by the
-// exact same code as before, so results are bit-identical.
-var _pGeomCache = new WeakMap();
-function _pGeometry(P) {
-    var e = _pGeomCache.get(P);
-    if (e) {
-        var snap = e.snap, same = true;
-        for (var r = 0, k = 0; r < 3 && same; r++) {
-            for (var c = 0; c < 4; c++, k++) {
-                if (!Object.is(P[r][c], snap[k])) { same = false; break; }
-            }
-        }
-        if (same) return e;
-    }
-    var snapNew = new Float64Array(12);
-    for (var r2 = 0, k2 = 0; r2 < 3; r2++) for (var c2 = 0; c2 < 4; c2++, k2++) snapNew[k2] = P[r2][c2];
-    e = { snap: snapNew, center: null, pinv: null };
-    _pGeomCache.set(P, e);
-    return e;
-}
-/** Pseudo-inverse Pᵀ(PPᵀ)⁻¹ (4x3) of P, memoized per P. Read-only. */
-function _pseudoInverse(P) {
-    var e = _pGeometry(P);
-    if (e.pinv) return e.pinv;
-    var PT = matTranspose(P);
-    var PPT = matMul(P, PT);
-    var PPTinv = invert3x3(PPT);
-    e.pinv = matMul(PT, PPTinv);
-    return e.pinv;
-}
+// Back-projection and ray geometry: in ./triangulation-core.js (re-exported above), so the tracker's worker can load it.
 
 
-/**
- * Back-project a 2D point to a 3D ray using a 3x4 projection matrix.
- *
- * @param {number[]} point2d - [u, v] pixel coordinates
- * @param {number[][]} P - 3x4 projection matrix
- * @returns {{origin: number[], direction: number[]}} Ray origin and unit direction
- */
-export function backProjectToRay(point2d, P) {
-    var origin = cameraCenter(P);
-
-    // Pseudo-inverse pinv(P) = P^T * inv(P * P^T), memoized per P.
-    var pinvP = _pseudoInverse(P); // 4x3
-
-    // Back-project: homogeneous 3D point = pinv(P) * [u, v, 1]^T
-    var u = point2d[0], v = point2d[1];
-    var hx = pinvP[0][0] * u + pinvP[0][1] * v + pinvP[0][2];
-    var hy = pinvP[1][0] * u + pinvP[1][1] * v + pinvP[1][2];
-    var hz = pinvP[2][0] * u + pinvP[2][1] * v + pinvP[2][2];
-    var hw = pinvP[3][0] * u + pinvP[3][1] * v + pinvP[3][2];
-
-    // Dehomogenize
-    var px = hx / hw;
-    var py = hy / hw;
-    var pz = hz / hw;
-
-    // Direction = backprojected point - origin, normalized
-    var dx = px - origin[0];
-    var dy = py - origin[1];
-    var dz = pz - origin[2];
-    var len = Math.sqrt(dx * dx + dy * dy + dz * dz);
-    if (len < 1e-15) {
-        return { origin: origin, direction: [0, 0, 1] };
-    }
-
-    return { origin: origin, direction: [dx / len, dy / len, dz / len] };
-}
-
-/**
- * Batch back-project multiple 2D points to 3D rays.
- * Computes camera center and pseudo-inverse once for efficiency.
- *
- * @param {(number[]|null)[]} points2d - Array of [u,v] or null
- * @param {number[][]} P - 3x4 projection matrix
- * @returns {{origin: number[], directions: (number[]|null)[]}} Ray origin and directions
- */
-export function backProjectToRays(points2d, P) {
-    var origin = cameraCenter(P);
-
-    // Pseudo-inverse, memoized per P (see `_pGeometry`).
-    var pinvP = _pseudoInverse(P);
-
-    var directions = [];
-    for (var i = 0; i < points2d.length; i++) {
-        if (points2d[i] == null) {
-            directions.push(null);
-            continue;
-        }
-        var u = points2d[i][0], v = points2d[i][1];
-        var hx = pinvP[0][0] * u + pinvP[0][1] * v + pinvP[0][2];
-        var hy = pinvP[1][0] * u + pinvP[1][1] * v + pinvP[1][2];
-        var hz = pinvP[2][0] * u + pinvP[2][1] * v + pinvP[2][2];
-        var hw = pinvP[3][0] * u + pinvP[3][1] * v + pinvP[3][2];
-
-        var px = hx / hw;
-        var py = hy / hw;
-        var pz = hz / hw;
-
-        var dx = px - origin[0];
-        var dy = py - origin[1];
-        var dz = pz - origin[2];
-        var len = Math.sqrt(dx * dx + dy * dy + dz * dz);
-        if (len < 1e-15) {
-            directions.push([0, 0, 1]);
-        } else {
-            directions.push([dx / len, dy / len, dz / len]);
-        }
-    }
-
-    return { origin: origin, directions: directions };
-}
-
-/**
- * Compute perpendicular distance from a 3D point to a ray.
- *
- * @param {number[]} point - [x, y, z]
- * @param {number[]} rayOrigin - [x, y, z]
- * @param {number[]} rayDir - [dx, dy, dz] unit direction
- * @returns {number} perpendicular distance
- */
-export function pointToRayDistance(point, rayOrigin, rayDir) {
-    // Vector from ray origin to point
-    var vx = point[0] - rayOrigin[0];
-    var vy = point[1] - rayOrigin[1];
-    var vz = point[2] - rayOrigin[2];
-
-    // Project onto ray direction
-    var proj = vx * rayDir[0] + vy * rayDir[1] + vz * rayDir[2];
-
-    // Closest point on ray
-    var cx = rayOrigin[0] + proj * rayDir[0];
-    var cy = rayOrigin[1] + proj * rayDir[1];
-    var cz = rayOrigin[2] + proj * rayDir[2];
-
-    // Distance
-    var dx = point[0] - cx;
-    var dy = point[1] - cy;
-    var dz = point[2] - cz;
-    return Math.sqrt(dx * dx + dy * dy + dz * dz);
-}
-
-/**
- * Batch compute point-to-ray distances for arrays of points and directions.
- * Handles null entries in either array.
- *
- * @param {Float64Array} points - Flat [x,y,z] per node (all-NaN = missing)
- * @param {number[]} rayOrigin - [x, y, z]
- * @param {(number[]|null)[]} rayDirs - Array of [dx,dy,dz] or null
- * @returns {(number|null)[]} distances, null where either input is missing
- */
-export function pointsToRayDistances(points, rayOrigin, rayDirs) {
-    var results = [];
-    var len = Math.min(points3dNodeCount(points), rayDirs.length);
-    var p = [0, 0, 0];
-    for (var i = 0; i < len; i++) {
-        if (rayDirs[i] == null || !readPoint3d(points, i, p)) {
-            results.push(null);
-        } else {
-            results.push(pointToRayDistance(p, rayOrigin, rayDirs[i]));
-        }
-    }
-    return results;
-}
 
 
-// ============================================
-// Epipolar geometry
-// ============================================
 
-/**
- * Compute the fundamental matrix from cam1 to cam2.
- * F = K2^{-T} * [t_rel]_x * R_rel * K1^{-1}
- *
- * This matches sleap-3d's compute_fundamental_matrix with normalized_points=False.
- *
- * @param {Camera} cam1 - First camera
- * @param {Camera} cam2 - Second camera
- * @returns {number[][]} 3x3 fundamental matrix
- */
-export function computeFundamentalMatrix(cam1, cam2) {
-    var R1 = cam1.rotationMatrix;
-    var R2 = cam2.rotationMatrix;
-    var t1 = cam1.tvec;
-    var t2 = cam2.tvec;
 
-    // Relative rotation: R_rel = R2 * R1^T
-    var R1T = matTranspose(R1);  // 3x3
-    var R_rel = mat3x3Multiply(R2, R1T);
 
-    // Relative translation: t_rel = t2 - R_rel * t1
-    var Rt1 = [
-        R_rel[0][0] * t1[0] + R_rel[0][1] * t1[1] + R_rel[0][2] * t1[2],
-        R_rel[1][0] * t1[0] + R_rel[1][1] * t1[1] + R_rel[1][2] * t1[2],
-        R_rel[2][0] * t1[0] + R_rel[2][1] * t1[1] + R_rel[2][2] * t1[2]
-    ];
-    var t_rel = [t2[0] - Rt1[0], t2[1] - Rt1[1], t2[2] - Rt1[2]];
 
-    // Skew-symmetric matrix [t_rel]_x
-    var tx = [
-        [0, -t_rel[2], t_rel[1]],
-        [t_rel[2], 0, -t_rel[0]],
-        [-t_rel[1], t_rel[0], 0]
-    ];
 
-    // Essential matrix: E = [t_rel]_x * R_rel
-    var E = mat3x3Multiply(tx, R_rel);
+// Epipolar geometry: in ./triangulation-core.js (re-exported above), so the tracker's worker can load it.
 
-    // Fundamental matrix: F = K2^{-T} * E * K1^{-1}
-    var K1inv = invert3x3(cam1.matrix);
-    var K2inv = invert3x3(cam2.matrix);
-    var K2invT = matTranspose(K2inv);
 
-    var temp = mat3x3Multiply(E, K1inv);
-    var F = mat3x3Multiply(K2invT, temp);
 
-    return F;
-}
-
-/**
- * Compute mean epipolar distance for a pair of keypoint arrays.
- * For each valid keypoint pair, computes the epiline from point1 using F,
- * then measures the distance of point2 to that epiline.
- *
- * @param {(number[]|null)[]} points1 - Keypoints in camera 1 (array of [x,y] or null)
- * @param {(number[]|null)[]} points2 - Keypoints in camera 2 (array of [x,y] or null)
- * @param {number[][]} F - 3x3 fundamental matrix (cam1 -> cam2)
- * @returns {number} Mean epipolar distance, or Infinity if no valid pairs
- */
-export function epipolarError(points1, points2, F) {
-    var totalError = 0;
-    var count = 0;
-    var len = Math.min(points1.length, points2.length);
-
-    for (var i = 0; i < len; i++) {
-        if (points1[i] == null || points2[i] == null) continue;
-
-        var x1 = points1[i][0], y1 = points1[i][1];
-        var x2 = points2[i][0], y2 = points2[i][1];
-
-        // Epiline in camera 2: l = F * [x1, y1, 1]^T
-        var la = F[0][0] * x1 + F[0][1] * y1 + F[0][2];
-        var lb = F[1][0] * x1 + F[1][1] * y1 + F[1][2];
-        var lc = F[2][0] * x1 + F[2][1] * y1 + F[2][2];
-
-        // Distance of point2 to epiline: |x2^T * l| / ||l[:2]||
-        var num = Math.abs(x2 * la + y2 * lb + lc);
-        var den = Math.sqrt(la * la + lb * lb);
-        if (den > 1e-15) {
-            totalError += num / den;
-            count++;
-        }
-    }
-
-    return count > 0 ? totalError / count : Infinity;
-}
-
-/**
- * Compute an n x m cost matrix of epipolar errors between two arrays of
- * keypoint arrays (detections).
- *
- * @param {(number[]|null)[][]} detections1 - Array of n keypoint arrays from camera 1
- * @param {(number[]|null)[][]} detections2 - Array of m keypoint arrays from camera 2
- * @param {number[][]} F - 3x3 fundamental matrix (cam1 -> cam2)
- * @returns {number[][]} n x m cost matrix
- */
-export function epipolarErrorMatrix(detections1, detections2, F) {
-    var n = detections1.length;
-    var m = detections2.length;
-    var matrix = [];
-    for (var i = 0; i < n; i++) {
-        matrix[i] = [];
-        for (var j = 0; j < m; j++) {
-            matrix[i][j] = epipolarError(detections1[i], detections2[j], F);
-        }
-    }
-    return matrix;
-}
 
 // ============================================
 // Reprojection storage utility
@@ -2290,11 +1861,11 @@ export async function loadAllLazyFrames(onStatus) {
     var totalLoaded = 0;
     for (var start = 0; start < loader.nFrames; start += BATCH) {
         // (msg, done, total): the counts let a caller drive a progress bar.
-        if (onStatus) onStatus('Loading frames ' + start + '/' + loader.nFrames + '...', start, loader.nFrames);
+        if (onStatus) onStatus('Loading frames ' + start.toLocaleString('en-US') + '/' + loader.nFrames.toLocaleString('en-US') + '...', start, loader.nFrames);
         var loaded = await batchLoadLazyFrames(start, BATCH);
         totalLoaded += loaded;
     }
-    if (onStatus) onStatus('Loading frames ' + loader.nFrames + '/' + loader.nFrames + '...', loader.nFrames, loader.nFrames);
+    if (onStatus) onStatus('Loading frames ' + loader.nFrames.toLocaleString('en-US') + '/' + loader.nFrames.toLocaleString('en-US') + '...', loader.nFrames, loader.nFrames);
     return totalLoaded;
 }
 
@@ -2783,7 +2354,7 @@ export function triangulateCurrentFrame(method) {
 
     if (!frameGroupsList || frameGroupsList.length === 0) {
         console.warn('[triangulate] No instanceGroups for frame', frameIdx);
-        setStatus('No instance groups on frame ' + (frameIdx + 1) + ' - assign instances to groups first (A key)', 'warning');
+        setStatus('No instance groups on frame ' + (frameIdx + 1).toLocaleString('en-US') + ' - assign instances to groups first (A key)', 'warning');
         updateTriangulationBadge('needs-triangulation', 'No groups');
         return;
     }
@@ -2939,15 +2510,15 @@ export function triangulateCurrentFrame(method) {
     if (frameResults.length > 0 && frameResults[0].meanError != null) {
         updateTriangulationBadge('triangulated',
             methodLabel + ' • Error: ' + frameResults[0].meanError.toFixed(2) + 'px');
-        setStatus('Triangulated frame ' + (frameIdx + 1) + ' via ' + methodLabel + ' (' +
+        setStatus('Triangulated frame ' + (frameIdx + 1).toLocaleString('en-US') + ' via ' + methodLabel + ' (' +
             frameResults.length + ' group(s), error: ' +
             frameResults[0].meanError.toFixed(2) + 'px)', 'success');
     } else if (frameResults.length > 0) {
         updateTriangulationBadge('triangulated', 'Triangulated');
-        setStatus('Triangulated frame ' + (frameIdx + 1) + ' (' + frameResults.length + ' group(s))', 'success');
+        setStatus('Triangulated frame ' + (frameIdx + 1).toLocaleString('en-US') + ' (' + frameResults.length + ' group(s))', 'success');
     } else {
         updateTriangulationBadge('needs-triangulation', 'No groups triangulated');
-        setStatus('No groups could be triangulated on frame ' + (frameIdx + 1) +
+        setStatus('No groups could be triangulated on frame ' + (frameIdx + 1).toLocaleString('en-US') +
             ' - check that instance groups have labels in 2+ camera views', 'warning');
     }
 
@@ -3145,11 +2716,20 @@ function _applyGroupStep(group, prep, result) {
  * `opts.onLoadProgress(done, total)` reports the up-front `loadAllLazyFrames`
  * stage of a non-windowed lazy session (the only path that has one).
  *
+ * RELEASE LAG (Track All's tracker worker, pose/tracker-pool.js): a window is
+ * normally released as soon as its frames have been visited. `opts.releaseLag`
+ * N keeps the last N windows resident and releases each only after the next N
+ * have been visited, awaiting `opts.beforeRelease(start, end)` first — so work
+ * `onFrame` handed elsewhere (a worker) can finish and be written back into
+ * frames that are still resident, while the sweep already hydrates the next
+ * window. Both omitted: exactly the old behaviour.
+ *
  * @param {Object} session                LUCID Session
  * @param {(frameIdx:number, fg:Object)=>void|Promise<void>} onFrame
  * @param {{window?:number, onProgress?:Function, onLoadProgress?:Function,
  *          onStatus?:Function, gcEveryWindows?:number, gcMB?:number,
- *          start?:number, end?:number}} [opts]
+ *          start?:number, end?:number, releaseLag?:number,
+ *          beforeRelease?:(start:number, end:number)=>Promise<void>}} [opts]
  * @returns {Promise<number>} frames processed
  */
 function _hasFrameData(session, frameIdx) {
@@ -3182,6 +2762,26 @@ async function _sweepLazyFrameWindowsHeld(session, onFrame, opts) {
         var to = opts.end != null ? Math.min(loader.nFrames - 1, opts.end) : loader.nFrames - 1;
         var total = Math.max(0, to - from + 1);
         var windowCount = 0;
+        var lag = opts.releaseLag > 0 ? Math.floor(opts.releaseLag) : 0, pendingWindows = [];
+        // Release the window. Keep the on-screen current frame and any
+        // user-edited frame; everything else is predicted-only and rebuildable.
+        // A released frame's group members give their 2D back to the store
+        // too (pose/lazy-residency.js) — or a Track All leaves every member
+        // of the project holding a private copy of its row (1.39 GB on the
+        // real 8-camera project).
+        var releaseWindow = async function (wStart, wEnd) {
+            if (opts.beforeRelease) await opts.beforeRelease(wStart, wEnd);
+            var heldRefs = _uiHeldObjects();
+            for (var rf = wStart; rf < wEnd; rf++) {
+                if (rf === state.currentFrame) continue;
+                var rfg = session.frameGroups.get(rf);
+                if (rfg && !_fgHasUserInstances(rfg)) session.frameGroups.delete(rf);
+                releaseFrameMembers2d(session, rf, { refs: heldRefs });
+            }
+            loader.releaseWindow(wStart, wEnd);
+            windowCount++;
+            if (windowCount % gcEvery === 0) await _encourageGC(gcMB);
+        };
         for (var start = from; start <= to; start += W) {
             var end = Math.min(start + W, to + 1);
             await batchLoadLazyFrames(start, end - start);
@@ -3201,23 +2801,10 @@ async function _sweepLazyFrameWindowsHeld(session, onFrame, opts) {
                     await pacer.yield();
                 }
             }
-            // Release the window. Keep the on-screen current frame and any
-            // user-edited frame; everything else is predicted-only and rebuildable.
-            // A released frame's group members give their 2D back to the store
-            // too (pose/lazy-residency.js) — or a Track All leaves every member
-            // of the project holding a private copy of its row (1.39 GB on the
-            // real 8-camera project).
-            var heldRefs = _uiHeldObjects();
-            for (var rf = start; rf < end; rf++) {
-                if (rf === state.currentFrame) continue;
-                var rfg = session.frameGroups.get(rf);
-                if (rfg && !_fgHasUserInstances(rfg)) session.frameGroups.delete(rf);
-                releaseFrameMembers2d(session, rf, { refs: heldRefs });
-            }
-            loader.releaseWindow(start, end);
-            windowCount++;
-            if (windowCount % gcEvery === 0) await _encourageGC(gcMB);
+            pendingWindows.push([start, end]);
+            while (pendingWindows.length > lag) { var w = pendingWindows.shift(); await releaseWindow(w[0], w[1]); }
         }
+        while (pendingWindows.length) { var wl = pendingWindows.shift(); await releaseWindow(wl[0], wl[1]); }
         if (opts.onProgress) await opts.onProgress(total, total);
         return processed;
     }
@@ -3298,6 +2885,21 @@ async function _sweepLazyFrameWindowsHeld(session, onFrame, opts) {
  * ensuring an interrupted or partly-untriangulatable sweep never leaves groups
  * with no 3D at all.
  */
+/**
+ * Put a Triangulate All solver's CPU time on the loading overlay (a CPU line and
+ * a graph, ui/loading-overlay.js `setLoadingCpu`; cleared by `hideLoading`). CPU
+ * only: triangulation is pure JS math (pose/triangulation-core.js) on the
+ * workers and the main thread, and never touches the GPU.
+ */
+function showSolverCpu(solver) {
+    setLoadingCpu({
+        cpuBusyMs: function () { return solver.cpuBusyMs(); },
+        counts: solver.parallel
+            ? 'Triangulate All: ' + solver.workers + ' workers solving, and the main thread preparing and applying their batches'
+            : 'Triangulate All, solving on the main thread',
+    });
+}
+
 async function sweepTriangulateAllFrames(session, cameras, method) {
     // Windowing/hydration/release all live in `sweepLazyFrameWindows`.
 
@@ -3319,6 +2921,7 @@ async function sweepTriangulateAllFrames(session, cameras, method) {
     var loader = session.lazyLoader;
     var solver = createGroupSolver(cameras, { method: method,
         expectedGroups: loader && loader.nFrames ? loader.nFrames : session.instanceGroups.size });
+    showSolverCpu(solver);
     function applyResult(group, prep, frameState, result) {
         _applyGroupStep(group, prep, result);
         group.markClean();
@@ -3385,7 +2988,7 @@ export async function triangulateAllFrames(method) {
     if (triWindowed) {
         markDirty();
         showLoadingProgress('Triangulating', 0, triLoader.nFrames,
-            { detail: triangulationMethodLabel(method) });
+            { detail: triangulationMethodLabel(method), title: 'Triangulate All' });   // the card's title, kept to hideLoading
         var swept = await sweepTriangulateAllFrames(state.session, cameras, method);
         setReprojErrorVisible(true, { checkBoxes: false });
         var reprojOnly = showReprojectionsOnly();   // #243: proofreading comes next
@@ -3419,7 +3022,8 @@ export async function triangulateAllFrames(method) {
     markDirty();
     var methodLabel = triangulationMethodLabel(method);
     var stageOpts = function (detail) { return { detail: detail }; };
-    showLoadingProgress('Triangulating', 0, frameIndices.length, stageOpts(methodLabel));
+    showLoadingProgress('Triangulating', 0, frameIndices.length,
+        Object.assign({ title: 'Triangulate All' }, stageOpts(methodLabel)));   // the card's title, kept to hideLoading
     // Paint the 0% overlay before the first chunk starts.
     await yieldToPaint();
     var pacer = createProgressPacer();
@@ -3435,6 +3039,7 @@ export async function triangulateAllFrames(method) {
     // same order as the old inline loop. Frame count is the size proxy for the
     // inline-vs-pool decision (every frame here has >= 1 group).
     var solver = createGroupSolver(cameras, { method: method, expectedGroups: frameIndices.length });
+    showSolverCpu(solver);
 
     // Per-group apply: the old loop body after `_triangulateGroupStep`.
     function applyGroupResult(group, prep, frameResults, result) {
@@ -3534,8 +3139,8 @@ export async function triangulateAllFrames(method) {
     var avgError = totalErrors.length > 0
         ? (totalErrors.reduce(function (a, b) { return a + b; }, 0) / totalErrors.length).toFixed(2)
         : 'N/A';
-    setStatus('Triangulated ' + totalTriangulated + ' frames via ' + triangulationMethodLabel(method) +
-        ' (' + totalGroups + ' groups, avg error: ' + avgError + 'px)' + (reprojOnly ? REPROJ_ONLY_NOTE : ''), 'success');
+    setStatus('Triangulated ' + totalTriangulated.toLocaleString('en-US') + ' frames via ' + triangulationMethodLabel(method) +
+        ' (' + totalGroups.toLocaleString('en-US') + ' groups, avg error: ' + avgError + 'px)' + (reprojOnly ? REPROJ_ONLY_NOTE : ''), 'success');
     console.log('[triangulate-all] Done:', totalTriangulated, 'frames,', totalGroups, 'groups, avg error:', avgError);
 
     // Update timeline: mark frames with grouped UserInstances, refresh track bars

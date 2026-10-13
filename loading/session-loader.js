@@ -1168,19 +1168,42 @@ export function fitCanvasesToCells() {
     if (viewport3d) viewport3d.resize();
 }
 
+/**
+ * Re-derive every view's zoom against its current canvas box and
+ * devicePixelRatio: preserves the scale (re-constraining the pan), except that
+ * a view at native resolution gets its 1:1 scale recomputed.
+ */
+export function reapplyAllZoom() {
+    if (!videoController) return;
+    for (var i = 0; i < state.views.length; i++) {
+        videoController.reapplyZoom(state.views[i]);
+    }
+}
+
 export var cellResizeObserver = new ResizeObserver(function (entries) {
     requestAnimationFrame(function () {
         fitCanvasesToCells();
-        // Reapply zoom for all views (preserve scale, re-constrain offsets)
-        if (videoController) {
-            for (var i = 0; i < state.views.length; i++) {
-                videoController.reapplyZoom(state.views[i]);
-            }
-        }
+        reapplyAllZoom();
     });
 });
 
 window.addEventListener('resize', fitCanvasesToCells);
+
+// A view at native resolution shows one video pixel per DEVICE pixel, so its
+// scale depends on devicePixelRatio. Dragging the window to a display with
+// another DPR changes it without resizing anything, so no ResizeObserver
+// fires; re-derive every view's zoom when it changes. (Browser zoom changes
+// DPR too, but that one also resizes the cells.)
+(function watchDevicePixelRatio() {
+    if (typeof window.matchMedia !== 'function') return;
+    var mq = window.matchMedia('(resolution: ' + window.devicePixelRatio + 'dppx)');
+    if (!mq || typeof mq.addEventListener !== 'function') return;
+    mq.addEventListener('change', function onDprChange() {
+        mq.removeEventListener('change', onDprChange);
+        reapplyAllZoom();
+        watchDevicePixelRatio();
+    });
+})();
 
 export function rebuildVideoController() {
     // Detach old interaction handlers
@@ -2051,6 +2074,7 @@ export async function handleLoadSessionFolderSingleSlp() {
                 var resolvedTrackIdx = resolveImportTrackIdx(session, instData.trackIdx, instData.type);
                 var inst = new Instance(instData.points, resolvedTrackIdx, instData.type || 'user', instData.score || 0);
                 if (instData.occluded) inst.setOccludedFrom(instData.occluded);
+                if (instData.pointScores) inst.setPointScores(instData.pointScores);
                 // Restore the occlusion flag for an unlinked user label (its
                 // occluded node was saved finite-xy + not-visible; the
                 // nulledNodes flag itself isn't persisted for ungrouped
@@ -2581,11 +2605,11 @@ export async function handleLoadProjectSlpLazy(slpFile) {
         }
         updateInfoPanel();
         if (videosAttached) {
-            setStatus('Reopened ' + slpFile.name + ' — ' + session.instanceGroups.size
+            setStatus('Reopened ' + slpFile.name + ' — ' + session.instanceGroups.size.toLocaleString('en-US')
                 + ' grouped frames, ' + state.views.length + ' videos', 'success');
         } else {
-            setStatus('Reopened ' + slpFile.name + ' — ' + session.instanceGroups.size
-                + ' grouped frames, ' + loader.nFrames + ' frames. File → Load Videos to show images.', 'success');
+            setStatus('Reopened ' + slpFile.name + ' — ' + session.instanceGroups.size.toLocaleString('en-US')
+                + ' grouped frames, ' + loader.nFrames.toLocaleString('en-US') + ' frames. File → Load Videos to show images.', 'success');
         }
     } catch (err) {
         console.error('[load-project-lazy] Error:', err);
@@ -2629,6 +2653,7 @@ export function addColumnarFramesToSession(session, camName, col, trackRemap) {
             var instance = new Instance(col.xy.slice(i * stride, (i + 1) * stride),
                 trackIdx, instType, col.score[i] || 1.0);
             instance.setOccludedFrom(col.occluded.subarray(i * nn, (i + 1) * nn));
+            if (col.pointScore && instType === 'predicted') instance.setPointScores(col.pointScore, i * nn);
             fg.addInstance(camName, instance);
         }
     }
@@ -3136,6 +3161,7 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
                             var trackIdx = resolveImportTrackIdx(state.session, remappedTrackIdx, instType);
                             var instance = new Instance(inst.points || [], trackIdx, instType, inst.score || 1.0);
                             if (inst.occluded) instance.setOccludedFrom(inst.occluded);
+                            if (inst.pointScores) instance.setPointScores(inst.pointScores);
                             fg.addInstance(camName, instance);
                         }
                     }

@@ -689,8 +689,8 @@ try {
     // Scrubbing the track is the only way to change frames, and it must drive
     // the real viewer so the app is left on the frame you stopped at.
     const playhead = () => page.evaluate(() => {
-        const m = /frame (\d+) \//.exec(document.getElementById('ovScrubVal').textContent);
-        return m ? Number(m[1]) - 1 : -1;          // displayed 1-based -> 0-based
+        const m = /frame ([\d,]+) \//.exec(document.getElementById('ovScrubVal').textContent);   // "frame 1,234 / 5,000"
+        return m ? Number(m[1].replace(/,/g, '')) - 1 : -1;          // displayed 1-based -> 0-based
     });
     const appFrame = () => page.evaluate(async () => (await import('/ui/app-state.js')).state.currentFrame);
 

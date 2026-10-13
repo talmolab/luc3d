@@ -297,9 +297,8 @@ export {
 };
 
 // ----------------------------------------------------------------------------
-// Browser/test-sandbox global mirroring. The headless node runner exposes
-// each script's top-level `var` declarations onto the sandbox global, but
-// the VAPI test specifically probes `window.toggleCameraVisibility` and
+// Global mirroring. The VAPI test (tests/test-timeline-visibility-list.js)
+// probes `window.toggleCameraVisibility` and
 // `globalThis.TimelineVisibility.toggleCameraVisibility`. Mirror both
 // shapes so resolution succeeds in either form. Guarded with `typeof` so
 // the module remains safe to import from pure-Node tooling.
