@@ -762,6 +762,14 @@ the animal count, connect single breaks). Rules:
   far edges 4 -> 2. Multi-camera checks still count them (not measured).
 - **Eager only.** A lazy (> 150 MB) single-camera project is refused with a
   reason, never tracked from its resident window — the resident-only bug class.
+- **Two ways in, one session.** File ▸ Load SLP (then Select Video Files), or
+  File ▸ Load Single Session Folder on a folder holding ONE camera directory
+  (`<session>/Camera0/{video, .slp}`, or the camera folder itself) and no
+  calibration. Both give the camera the same stand-in. A per-camera folder load
+  without calibration otherwise creates no camera, and Track All refuses such a
+  session ("No session with cameras loaded"). That stays right for 2+ cameras,
+  which are waiting for their calibration. Covered by
+  `tests/e2e/single-camera-folder-load.mjs`.
 
 ## A prediction's per-node scores: kept, shown, and saved
 

@@ -13873,6 +13873,26 @@ copy all of it). A digest of the loaded session (every frame, camera,
 instance, coordinate, occlusion bit, track, type, score) is identical to the
 pre-change loader's on HardFight (`_bench-progress-overlay.mjs DIGEST=1`).
 
+**One camera, no calibration = a single-camera session.** Without a calibration
+file `handleLoadSessionFolderPerCamera` loads every camera directory's video and
+poses but creates NO camera, so a multi-camera folder waits for File ▸ Load
+Calibration. With exactly ONE camera directory that is a single-camera session
+instead: a SLEAP predictions file and its video, which need no calibration.
+- **The stand-in camera:** the directory gets a camera named after it, the same
+  stand-in File ▸ Load SLP gives a one-video file. It is sized to the video by
+  the video step, or Load SLP's identity 640x480 one when there is no video or
+  videos are deferred. The view and the poses are on it, so single-camera Track
+  All (`pose/single-camera-tracking.js`) runs.
+- **The camera's own folder picked:** a picked folder with no camera
+  subdirectories but a video or `.slp` at its top IS one camera, named after
+  the folder. Videos under a `calibration_images/` subfolder
+  (`isCalibrationVideoFile`) are never a camera's video, here or in any camera
+  directory.
+- **Same tracks either way:** on a real 40 fps file the folder route gives the
+  same tracks as Load SLP, detection for detection.
+- **Coverage:** `tests/e2e/single-camera-folder-load.mjs`, including the
+  unchanged two-directory case. It fails 5 checks on the previous loader.
+
 **Per-camera `.slp` selection.** `handleLoadSessionFolderPerCamera` loads only
 **one** `.slp` per camera directory — the highest `_vN` version (first-wins on a
 tie / when unversioned). A camera dir accumulates successive exports
