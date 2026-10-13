@@ -10,8 +10,8 @@
  *  1. The Track All button runs SLEAP's tracker (one track per animal across all
  *     the input's tracklet breaks), says so, colours by ID, marks the project
  *     dirty, turns node trails on at ¼ s (as after a multi-camera Track All),
- *     and says the automatic body-size check is not run on one camera
- *     (2D size is unreliable there; the menu still runs it — see 3).
+ *     and says the body-size check is not run automatically on one camera
+ *     (it is optional there; the menu runs it — see 3).
  *  2. Track Frame and Track Frame Range refuse on one camera, saying why, and
  *     change nothing.
  *  3. A swap planted in the tracks (animals 0 and 1 exchanged for the last 26%)
@@ -111,7 +111,7 @@ try {
         'status names SLEAP\'s tracker and the switch to Color: ID: ' + st1.slice(0, 90));
     const trails = await page.evaluate(() => window.__lucid.state.trailSeconds);
     check(trails === 0.25 && /node trails on \(¼ second\)/.test(st1), `node trails turned on at ¼ s, as after a multi-camera Track All (${trails}), and the status says so`);
-    check(/ID-switch check \(body size\): not run on one camera/.test(st1) && !/possible switch/.test(st1),
+    check(/ID-switch check \(body size\): not run automatically on one camera \(optional/.test(st1) && !/possible switch/.test(st1),
         'the automatic body-size check is not run on one camera, and the status says so');
     check(/ID-switch check \(coat brightness\): skipped — needs the session's videos to be loaded/.test(st1),
         'the automatic coat-brightness check runs instead (here skipped: no video in this fixture)');
@@ -137,7 +137,7 @@ try {
     });
     check(!!box && /Track All finished/.test(box.text), 'the summary box opens after single-camera Track All');
     check(box && box.stats[0] === 'Tracks3for 3 animals' && box.ids === 3, `it counts the TRACKS, one per animal (${box && box.stats[0]}, ${box && box.ids} bars)`);
-    check(box && box.checks.join('|').startsWith('brightness:skipped:') && /^image:off:/.test(box.checks[1]) && /^size:off:not run on one camera/.test(box.checks[2]),
+    check(box && box.checks.join('|').startsWith('brightness:skipped:') && /^image:off:/.test(box.checks[1]) && /^size:off:not run automatically on one camera — optional/.test(box.checks[2]),
         'its checks: coat brightness (skipped here: no video), images (not run), body size (not run on one camera, the reason on hover)');
     check(box && !/Triangulate/.test(box.text) && box.primary === 'Save project' && /File ▸ Save/.test(box.text),
         `no Triangulate All on one camera: the next step is saving (primary "${box && box.primary}")`);

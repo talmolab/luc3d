@@ -2032,10 +2032,10 @@ Timeline and 3D viewer closed, and the automatic coat-brightness check
 (`autoImageSwitchCheck`) when they are on. It
 keeps Track All's candidate moments on the session (`session._idSwitchCandidates`,
 cleared at the start of the run) for the checks to test.
-The automatic body-size check is deliberately not run on one camera — the
-status line says so (`SINGLE_CAMERA_SIZE_SKIP_NOTE`) and the menu still runs
-it: in the app on 35 proofread SLAP videos it caught 2 of 59 real swaps at -50
-(encounter AUC 0.55) for 6 false rows. Track Frame and Track Frame Range refuse
+The body-size check is OPTIONAL on one camera (the user's choice, 2026-10-12):
+Track All does not run it, the status line and the summary box say so
+(`SINGLE_CAMERA_SIZE_SKIP_NOTE`), and the menu runs it. Its 2D accuracy is under
+`pose/single-camera-tracking.js`. Track Frame and Track Frame Range refuse
 on one camera, saying why, as does Track All on a lazy one-camera project.
 ~1 s for an 18,000-frame, 3-mouse video in the app.
 
@@ -2829,10 +2829,22 @@ InstanceGroup-shaped object per identified detection, its 2D as `points3d`
 (x, y, 0), the detection under `instances` (what the image check crops). The
 checks are relative to the median body size and standardise their features, so
 pixels instead of millimetres cost nothing; but a 2D bone length also changes
-with posture and distance from the camera, so body size is not a usable cue on
-one camera, and single-camera Track All does not run it automatically. Measured
-in the app on 35 proofread 10-min SLAP videos (59 real swaps after Track All):
-size caught 2 at -50 (encounter AUC 0.55, 6 false rows); the image check —
+with posture and distance from the camera, so body size is a weaker cue on one
+camera. It is OPTIONAL there: single-camera Track All does not run it (the
+user's choice, 2026-10-12) and the menu runs it.
+- **Measured offline 2026-10-12** (`checkSizeSwitches` on the stand-in after the
+  same Track All, its -1 default; label-free since #310):
+  - **87 proofread SLAP top/mid views:** per-contact AUC 0.912, 32 rows (22
+    real, 2 naming the wrong pair, 8 false), 27 of 276 swaps found. Fixing the
+    rows that help on their own: 88.52% -> 90.23%; fixing every row: 87.58%.
+  - **The six sessions' back views (12):** AUC 0.984, 3 rows, none false.
+  - **The 5-mouse topC:** 4 rows, all false, and both swaps missed (four
+    similar-sized mice).
+  - **A user's two-mouse dataset:** 1 row, a real error.
+  - **Thresholds:** -1.5 halves the false rows but finds 17 swaps instead of 27.
+- **History:** the classifier it replaced was why the check was first left off
+  on one camera. On 35 SLAP videos (59 real swaps after Track All) it caught 2
+  at -50 (encounter AUC 0.55, 6 false rows); the image check —
 with talmolab/luc3d#286's episode scoring, which was unmerged at the time —
 caught 19 at its -200 default for 15 false rows (0.4 per 10 min), 32 s per
 10-min, 3-mouse video. Most of the swaps it misses are not at an encounter it
@@ -10180,12 +10192,13 @@ detection rather than no 3D skeleton, and "About these flags" calls the size cue
 also the undo), so the saved `.slp` carries it; its dialog says "(their tracks)"
 instead of "in every camera view". Results are kept on the real session as
 usual. Single-camera Track All runs the coat-brightness check automatically, and
-the image check when `autoImageSwitchCheck` is on — never body size, which from
-one view is not a usable cue (see `pose/single-camera-tracking.js`). The size and
-coat-brightness checks there skip encounters with no samples (`skipEmpty`), let the
-clearest of nearby 'end' rows lead (`clearestEndLeads`) — both from
-`singleCameraCheckOptions`; results carry them — and test the candidate moments. The
-image check (label-free since #309) takes neither and tests no moments.
+the image check when `autoImageSwitchCheck` is on — not body size, which is
+optional on one camera (Tracks ▸ Check ID Switches runs it; see
+`pose/single-camera-tracking.js`). The coat-brightness check there skips encounters
+with no samples (`skipEmpty`), lets the clearest of nearby 'end' rows lead
+(`clearestEndLeads`) — both from `singleCameraCheckOptions`; results carry them —
+and tests the candidate moments. The image and size checks (label-free since #309 /
+#310) take neither and test no moments.
 On a real 10-min single-camera SLAP video in headless Chrome the image check
 took 32 s (one view, 3 mice, 2 crops/s).
 
@@ -11861,8 +11874,9 @@ three cases read alike.
     moments), Images, and Body size. Body size is "Not run" on one camera, with
     the reason on hover.
   - **Next step:** **Review switches** when one was flagged; otherwise **Save
-    project** (the tracks are what SLEAP reads back), with the image and
-    coat-brightness checks offered when they did not run. It never suggests
+    project** (the tracks are what SLEAP reads back), with each check that did
+    not run offered: images, coat brightness, and body size (optional on one
+    camera). It never suggests
     Triangulate All: there is no 3D.
   - **"Nothing flagged" carries a caveat** that the checks miss many swaps on one
     camera. On 87 proofread SLAP views the image check found 82 of 276, and 113

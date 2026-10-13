@@ -346,10 +346,11 @@ var ONE_CAMERA_CAVEAT = 'On one camera the checks miss many switches: most happe
  * The summary of a SINGLE-CAMERA Track All (`s.singleCamera`): SLEAP's tracker
  * wrote the TRACKS, one per animal, so the box speaks of tracks; its checks are
  * coat brightness (the automatic one on one camera, with the candidate moments
- * it tested), images and body size (not run automatically: 2D size is
- * unreliable); and the next step is reviewing switches or saving — there is no
- * 3D, so never Triangulate All. Same shape as `planTrackSummary`'s plan, plus
- * actions 'brightnessCheck' and 'save'.
+ * it tested), images and body size (optional on one camera: not run
+ * automatically); and the next step is reviewing switches or saving — there is
+ * no 3D, so never Triangulate All. Each check that did not run is offered, body
+ * size included. Same shape as `planTrackSummary`'s plan, plus actions
+ * 'brightnessCheck' and 'save'.
  */
 function planSingleCameraSummary(s, checks) {
     var nIds = s.identities.length, stats = [], notes = [];
@@ -435,6 +436,7 @@ function planSingleCameraSummary(s, checks) {
         primary = { action: 'save', label: 'Save project' };
         if (nIds > 1 && rerun(image)) secondary.push({ action: 'imageCheck', label: 'Check by images…' });
         if (nIds > 1 && rerun(brightness)) secondary.push({ action: 'brightnessCheck', label: 'Check by coat brightness…' });
+        if (nIds > 1 && rerun(size)) secondary.push({ action: 'sizeCheck', label: 'Check by body size' });
     }
     return {
         title: 'Track All finished',

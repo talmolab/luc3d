@@ -1726,7 +1726,7 @@ async function runTrackingPass(range) {
 }
 
 /** What the status line says instead of running the automatic body-size check on one camera. */
-export const SINGLE_CAMERA_SIZE_SKIP_NOTE = 'ID-switch check (body size): not run on one camera (2D size is unreliable; Tracks ▸ Check ID Switches runs it)';
+export const SINGLE_CAMERA_SIZE_SKIP_NOTE = 'ID-switch check (body size): not run automatically on one camera (optional: Tracks ▸ Check ID Switches runs it)';
 
 /**
  * Track All on a single-camera session: SLEAP's tracker (a port of `sleap-nn
@@ -1804,9 +1804,10 @@ async function runSingleCameraTrackAll(session, bail) {
                 ' removed first (left without a track)' : '') +
             (switchedToIds ? ', now coloring by ID' : '') +
             (trailsOn ? ', node trails on (' + trailSecondsName(TRACK_ALL_TRAIL_SECONDS) + ')' : '') + (predOnly ? PREDICTED_ONLY_NOTE : '');
-        // The automatic body-size check is NOT run on one camera: a 2D bone length changes with posture
-        // and distance from the camera, and on 35 proofread SLAP videos it caught 2 of 59 real swaps at its
-        // threshold (encounter AUC 0.55) for 6 false rows. The menu still runs it; images run as usual.
+        // The body-size check is OPTIONAL on one camera (the user's choice, 2026-10-12): not run here, and the
+        // menu runs it. It reads 2D bone lengths, which also change with posture and viewing angle; the
+        // label-free check (#310) measured 2026-10-12 on 87 proofread SLAP top/mid views: per-contact AUC 0.912,
+        // 32 rows at -1 (22 real, 8 false), 27 of 276 swaps found. Images run as usual.
         // ...and runs the coat-brightness check instead (`autoBrightnessSwitchCheck`, default on): no model, no GPU.
         var autoSize = getTrackingThreshold('autoSwitchCheck') > 0, autoImage = getTrackingThreshold('autoImageSwitchCheck') > 0;
         var autoBrightness = getTrackingThreshold('autoBrightnessSwitchCheck') > 0;
@@ -1828,7 +1829,7 @@ async function runSingleCameraTrackAll(session, bail) {
             var summaryChecks = {
                 brightness: describeSwitchCheck(autoBrightness, checkRes && checkRes.brightness, res.numIdentities),
                 image: describeSwitchCheck(autoImage, checkRes && checkRes.image, res.numIdentities),
-                size: res.numIdentities > 1 ? { state: 'off', reason: 'not run on one camera: 2D body size is unreliable (Tracks ▸ Check ID Switches runs it)' }
+                size: res.numIdentities > 1 ? { state: 'off', reason: 'not run automatically on one camera — optional: Tracks ▸ Check ID Switches (Body Size) runs it' }
                     : describeSwitchCheck(false, null, res.numIdentities),
             };
             rememberTrackSummary(session, summaryOpts, summaryChecks, res.numIdentities);

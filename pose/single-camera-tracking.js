@@ -23,7 +23,8 @@
  * The checks only ever compare distances relative to the median body size and
  * standardise their features, so the unit change (pixels, not millimetres)
  * costs nothing — but a 2D bone length also changes with posture and viewing
- * angle, which is why body size is a weak cue on one camera.
+ * angle, so body size is a weaker cue on one camera, and optional there (not
+ * run automatically after Track All).
  *
  * Opt-in, before the tracker sees them: DUPLICATE detections — a second
  * instance SLEAP placed on an animal it already detected — can be left out
