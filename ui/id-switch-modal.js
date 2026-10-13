@@ -518,7 +518,7 @@ export async function runIdSwitchChecks(opts) {
         var n = countOnsets(res);
         parts.push(head(cue) + ': ' + (n
             ? n + ' possible switch' + (n === 1 ? '' : 'es') + ' in ' + res.encounters.length + ' close encounters'
-            : 'no possible switches in ' + res.encounters.length + ' close encounters'));
+            : 'nothing flagged in ' + res.encounters.length + ' close encounters'));
         if (n) level = 'warning';
     }
     var ran = cues.filter(function (c) { return results[c] && results[c].ok; });
@@ -916,8 +916,8 @@ export function refreshIdSwitchPanel(session) {
             var r = st.results[c], n = countOnsets(r);
             var mo = r.moments && r.moments.length;
             return '<div class="id-switch-summary">' + (both ? '<b>' + { size: 'Body size', image: 'Images', brightness: 'Coat brightness' }[c] + ':</b> ' : '') +
-                encounterCount(r).toLocaleString() + ' close encounters' + (mo ? ' + ' + mo.toLocaleString() + ' moments' : '') +
-                ' · <b>' + n + '</b> possible switch' + (n === 1 ? '' : 'es') + '</div>';
+                encounterCount(r).toLocaleString() + ' close encounters' + (mo ? ' + ' + mo.toLocaleString() + ' moments' : '') + ' · ' +
+                (n ? '<b>' + n + '</b> possible switch' + (n === 1 ? '' : 'es') : 'nothing flagged') + '</div>';
         }).join('') +
         '<details class="id-switch-about"><summary>About these flags</summary>' + aboutHtml(st, ran) + '</details>' +
         '</div>' +
