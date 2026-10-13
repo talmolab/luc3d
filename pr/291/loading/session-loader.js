@@ -22,75 +22,75 @@ import {
     state, videoController, interactionManager, viewport3d, timeline, paneManager,
     setVideoController, VIEW_NAMES, buildRememberedSkeleton, setProjectSkeleton,
     isViewDocked,
-} from '../ui/app-state.js?v=327d721ab189';
+} from '../ui/app-state.js?v=2cb411a749b7';
 
 import {
     Session, Skeleton, Camera, Instance, UnlinkedInstance, FrameGroup, Identity,
-} from '../pose/pose-data.js?v=327d721ab189';
+} from '../pose/pose-data.js?v=2cb411a749b7';
 
-import { OnDemandVideoDecoder, VideoController } from './video.js?v=327d721ab189';
-import { videoLoadFailureText } from './video-codec-diagnosis.js?v=327d721ab189';
-import { fileSystemAccessHint } from '../ui/browser-hints.js?v=327d721ab189';
+import { OnDemandVideoDecoder, VideoController } from './video.js?v=2cb411a749b7';
+import { videoLoadFailureText } from './video-codec-diagnosis.js?v=2cb411a749b7';
+import { fileSystemAccessHint } from '../ui/browser-hints.js?v=2cb411a749b7';
 
 import {
     pickFiles, pickFolder, pickVideoFiles,
     parseCalibrationTOML, parseCalibrationJSON, parseSlpH5, parseSlpViaSleapIO,
     loadCalibrationFile,
-} from '../import-export/file-io.js?v=327d721ab189';
+} from '../import-export/file-io.js?v=2cb411a749b7';
 
-import { resolveImportTrackIdx, nulledNodesFromOcclusion } from '../import-export/import-track-resolve.js?v=327d721ab189';
+import { resolveImportTrackIdx, nulledNodesFromOcclusion } from '../import-export/import-track-resolve.js?v=2cb411a749b7';
 // Pure `.slp`-per-camera selection rule. Extracted so it can be bridged into
 // the browser test runner (session-loader itself pulls app.js) — same reason
 // and same shape as `resolveImportTrackIdx` above.
-import { chooseCameraSlp } from './percam-slp-choice.js?v=327d721ab189';
+import { chooseCameraSlp } from './percam-slp-choice.js?v=2cb411a749b7';
 // Shared SLP grouped-reconstruction (identities + InstanceGroups + nulledNodes/
 // occlusion + 3D points). Circular ESM import (slp-import imports back
 // recomputeUploadedCameras); only invoked inside a function body.
-import { restoreGroupingAndUnlink, reconstructInstanceGroupsFromSessionLazy } from '../import-export/slp-import.js?v=327d721ab189';
-import { REBASED_CALIBRATION_NAME, pickCalibrationFile } from './calibration-pick.js?v=327d721ab189';
+import { restoreGroupingAndUnlink, reconstructInstanceGroupsFromSessionLazy } from '../import-export/slp-import.js?v=2cb411a749b7';
+import { REBASED_CALIBRATION_NAME, pickCalibrationFile } from './calibration-pick.js?v=2cb411a749b7';
 import {
     isCalibrationImagesVideo, preferNonCalibrationVideos, matchVideoToCamera,
-} from './video-file-pick.js?v=327d721ab189';
+} from './video-file-pick.js?v=2cb411a749b7';
 
 import {
     LazyFrameLoader, shouldUseLazyH5, shouldUseLazySlp, getInstanceGroupsForFrame,
     ensureLazyFrameData,
-} from '../pose/triangulation.js?v=327d721ab189';
-import { SioLazyLoader } from './sio-lazy-loader.js?v=327d721ab189';
-import { unionTrackNames, remapTrackIdx } from './track-union.js?v=327d721ab189';
+} from '../pose/triangulation.js?v=2cb411a749b7';
+import { SioLazyLoader } from './sio-lazy-loader.js?v=2cb411a749b7';
+import { unionTrackNames, remapTrackIdx } from './track-union.js?v=2cb411a749b7';
 
 // Status UI moved to import-export/save-load.js in Pass 3c-1.
 import {
     setStatus, showLoading, hideLoading, ensureNo3dImportBlockingLoad,
-} from '../import-export/save-load.js?v=327d721ab189';
-import { showLoadingProgress, createProgressPacer, yieldToPaint } from '../ui/loading-overlay.js?v=327d721ab189';
+} from '../import-export/save-load.js?v=2cb411a749b7';
+import { showLoadingProgress, createProgressPacer, yieldToPaint } from '../ui/loading-overlay.js?v=2cb411a749b7';
 
 // Circular import — these are still defined in app.js for now. See module
 // header note. They are only invoked inside function bodies, never at
 // module-init time, so live-binding lookup keeps them functional.
-import { drawAllOverlays, setReprojErrorVisible } from '../ui/rendering.js?v=327d721ab189';
-import { updateInfoPanel, promptImportSkeletonForAllSessions } from '../ui/info-panel.js?v=327d721ab189';
-import { noteSessionCalibrationDivergence } from '../ui/calibration-notice.js?v=327d721ab189';
-import { refreshReadoutTotals } from '../ui/frame-readout.js?v=327d721ab189';
-import { parseSkeletonJSON } from '../import-export/skeleton-json.js?v=327d721ab189';
+import { drawAllOverlays, setReprojErrorVisible } from '../ui/rendering.js?v=2cb411a749b7';
+import { updateInfoPanel, promptImportSkeletonForAllSessions } from '../ui/info-panel.js?v=2cb411a749b7';
+import { noteSessionCalibrationDivergence } from '../ui/calibration-notice.js?v=2cb411a749b7';
+import { refreshReadoutTotals } from '../ui/frame-readout.js?v=2cb411a749b7';
+import { parseSkeletonJSON } from '../import-export/skeleton-json.js?v=2cb411a749b7';
 // Pass 3i-3: setupInteraction / setup3DViewport / setupTimeline / updateFpsDisplay /
 // hideWelcomeOverlay moved to pose/initialization.js.
 import {
     setupInteraction, setup3DViewport, setupTimeline,
     updateFpsDisplay,
     hideWelcomeOverlay,
-} from '../pose/initialization.js?v=327d721ab189';
+} from '../pose/initialization.js?v=2cb411a749b7';
 // Pass 3h: populateViewStrip / populateSessionStrip / switchSession moved to sessions-panes.js.
 import {
     populateViewStrip, populateSessionStrip, switchSession, multiSelectViews,
-} from '../ui/sessions-panes.js?v=327d721ab189';
+} from '../ui/sessions-panes.js?v=2cb411a749b7';
 // Pass 3e-1: updateSeekbar / fitTimelineToData / onPlaybackStateChange moved to ui-wiring.js.
 import {
     updateSeekbar, fitTimelineToData, onPlaybackStateChange, updateVideoGridDisplay,
-} from '../ui/ui-wiring.js?v=327d721ab189';
-import { getLoadingProgressModal } from '../ui/loading-progress-modal.js?v=327d721ab189';
-import { readVisibilityMetadata } from '../import-export/visibility-metadata.js?v=327d721ab189';
-import { readPlaneMetadata, resetPlaneState } from '../import-export/plane-metadata.js?v=327d721ab189';
+} from '../ui/ui-wiring.js?v=2cb411a749b7';
+import { getLoadingProgressModal } from '../ui/loading-progress-modal.js?v=2cb411a749b7';
+import { readVisibilityMetadata } from '../import-export/visibility-metadata.js?v=2cb411a749b7';
+import { readPlaneMetadata, resetPlaneState } from '../import-export/plane-metadata.js?v=2cb411a749b7';
 
 // Module-private debounce timer for the zoom-redraw callback in
 // rebuildVideoController(). app.js's setupEmptyVideoController() has its own
@@ -2715,6 +2715,9 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
 
         // Build per-directory map
         var cameraDirs = {};  // dirName -> { videos: [File], slps: [File], envSlps: [File], dirNameLower: string }
+        // Videos / annotations directly in the picked folder: used only when it has no camera
+        // subdirectories, i.e. the user picked ONE camera's folder itself (see below).
+        var rootCamera = { videos: [], slps: [], envSlps: [] };
         for (var fi = 0; fi < allFiles.length; fi++) {
             var file = allFiles[fi];
             var relPath = file.webkitRelativePath || file.name;
@@ -2723,11 +2726,16 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
             // Root-level files (parts.length === 2)
             if (parts.length === 2) {
                 var fileNameLower = parts[1].toLowerCase();
+                var rootExt = fileNameLower.substring(fileNameLower.lastIndexOf('.'));
                 if ((fileNameLower.endsWith('.toml') || fileNameLower.endsWith('.json'))
                     && fileNameLower.indexOf('calib') >= 0) {
                     calibMatches.push(file);
                 } else if (fileNameLower.endsWith('.json') && fileNameLower.indexOf('skeleton') >= 0) {
                     skeletonFile = file;
+                } else if (videoExtensions.indexOf(rootExt) >= 0) {
+                    rootCamera.videos.push(file);
+                } else if (fileNameLower.endsWith('.slp') || fileNameLower.endsWith('.h5')) {
+                    (fileNameLower.indexOf('.externals.') >= 0 ? rootCamera.envSlps : rootCamera.slps).push(file);
                 }
                 continue;
             }
@@ -2744,6 +2752,9 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
 
                 var ext = fnLower.substring(fnLower.lastIndexOf('.'));
                 if (videoExtensions.indexOf(ext) >= 0) {
+                    // A calibration clip (`<camera>/calibration_images/…`) is never a camera's video —
+                    // reachable at this depth when the picked folder is one camera's own folder.
+                    if (isCalibrationVideoFile(file)) continue;
                     cameraDirs[dirName].videos.push(file);
                 } else if (fnLower.endsWith('.slp') || fnLower.endsWith('.h5')) {
                     // Separate environment files from main annotation files
@@ -2754,6 +2765,19 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
                     }
                 }
             }
+        }
+
+        // ONE camera's folder picked directly (its video and `.slp` at the top, no camera
+        // subdirectories): the folder itself is that camera, named after it.
+        var hasCameraDir = Object.keys(cameraDirs).some(function (d) {
+            return cameraDirs[d].videos.length > 0 || cameraDirs[d].slps.length > 0;
+        });
+        if (!hasCameraDir && (rootCamera.videos.length > 0 || rootCamera.slps.length > 0)) {
+            var rootCamName = folderName || 'Camera';
+            cameraDirs = {};
+            cameraDirs[rootCamName] = { videos: rootCamera.videos, slps: rootCamera.slps, envSlps: rootCamera.envSlps,
+                                        dirNameLower: rootCamName.toLowerCase() };
+            console.log('[session-folder] No camera subdirectories — "' + rootCamName + '" is one camera\'s folder');
         }
 
         // One camera directory is one camera, so the directory IS the group a
@@ -2792,6 +2816,7 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
         // 1. Load calibration if found
         var cameras = [];
         var hasCalibration = false;
+        var singleCamera = false;   // one camera directory and no calibration (see step 2)
         if (calibFile) {
             showLoading('Loading calibration...');
             var calibText = await calibFile.text();
@@ -2845,17 +2870,24 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
         } else {
             // No calibration — load videos from all directories but do NOT create cameras.
             // Videos can be viewed but camera assignments and 3D features require calibration.
-            for (var dirName in cameraDirs) {
-                if (cameraDirs[dirName].videos.length > 0 || cameraDirs[dirName].slps.length > 0) {
-                    matchedCameraDirs.push({
-                        dirName: dirName,
-                        camName: dirName,
-                        videos: cameraDirs[dirName].videos,
-                        slps: cameraDirs[dirName].slps,
-                        envSlps: cameraDirs[dirName].envSlps,
-                        noCalibration: true
-                    });
-                }
+            // Except with exactly ONE camera directory: that is a single-camera session (a SLEAP
+            // predictions file and its video), which needs no calibration. It gets the same
+            // stand-in camera File ▸ Load SLP gives a one-video file, named after the directory,
+            // so single-camera Track All and the ID-switch checks see one camera.
+            var withData = Object.keys(cameraDirs).filter(function (d) {
+                return cameraDirs[d].videos.length > 0 || cameraDirs[d].slps.length > 0;
+            });
+            singleCamera = withData.length === 1;
+            for (var wdi = 0; wdi < withData.length; wdi++) {
+                var dirName = withData[wdi];
+                matchedCameraDirs.push({
+                    dirName: dirName,
+                    camName: dirName,
+                    videos: cameraDirs[dirName].videos,
+                    slps: cameraDirs[dirName].slps,
+                    envSlps: cameraDirs[dirName].envSlps,
+                    noCalibration: !singleCamera
+                });
             }
         }
 
@@ -3398,6 +3430,14 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
             }
         }
 
+        // A single-camera session's stand-in camera. The video step above adds it, sized to the
+        // video, when a video loaded; with no video (or videos deferred to a session switch) add
+        // File ▸ Load SLP's identity stand-in here, so the session has its one camera either way.
+        if (singleCamera && state.session && state.session.cameras.length === 0) {
+            state.session.cameras.push(new Camera(matchedCameraDirs[0].camName, [[1, 0, 0], [0, 1, 0], [0, 0, 1]],
+                [0, 0, 0, 0, 0], [0, 0, 0], [0, 0, 0], [640, 480]));
+        }
+
         // 4. Apply skeleton from SLP if session has empty skeleton.
         // One skeleton per project: propagate to ALL sessions (shared reference).
         if (state.session && skeletonFromSlp && state.session.skeleton.nodes.length === 0) {
@@ -3532,7 +3572,8 @@ export async function handleLoadSessionFolderPerCamera(preloadedFiles, deferVide
         // failure, so an unreadable file downgrades this to a warning that
         // names the camera and the file.
         var statusMsg = 'Loaded ' + matchedCameraDirs.length + ' camera(s)';
-        if (!calibFile) statusMsg += ' (no calibration — load separately via File > Load Calibration)';
+        if (singleCamera) statusMsg = 'Loaded 1 camera (' + matchedCameraDirs[0].camName + ') — a single-camera session: no calibration needed, Track All runs SLEAP\'s tracker';
+        else if (!calibFile) statusMsg += ' (no calibration — load separately via File > Load Calibration)';
         var statusKind = 'success';
         if (slpFailures.length > 0) {
             statusMsg += ' — ' + slpFailures.length + ' annotation file(s) could not be read: '
