@@ -519,8 +519,17 @@ so a reopened session is asked again exactly as a new one is). The count is
 project state, not display taste: changing it marks the project dirty.
 Everything goes through **one** module, `import-export/visibility-metadata.js`
 (`writeVisibilityMetadata` / `readVisibilityMetadata`, `VISIBILITY_METADATA_KEYS`),
-which the four writers and three readers all call — adding a setting means
-touching that file and nothing else.
+which the four writers and four readers all call — adding a setting means
+touching that file and nothing else. The readers are `handleLoadSlpFile`
+(File ▸ Load SLP), `handleLoadProjectSlpLazy` (the lazy project reopen),
+`handleLoadSessionFolderSingleSlp` (File ▸ Load Single Session Folder in
+"single-slp" mode, also the Sessions list's "Add session folder") and the
+project-JSON reader in `save-load.js`. That folder loader builds its Session by
+hand, and until it called both readers a project reopened through it silently
+came back with every setting below — and every plane — at its default. The
+per-camera and multi-session folder loaders are NOT readers: they ignore a root
+`.slp` and read camera-folder `.slp` files as 2D only, restoring no
+`metadata.lucid` key at all.
 
 Three rules hold, and there are tests pinning each:
 - **Defaults are never written.** Every key is omitted at its default, so a
@@ -537,8 +546,10 @@ Planes / Display Legend / 3D Viewer) deliberately stay in
 `localStorage.visibilitySettings` — they are browser-local display taste, not
 project state. Do not move them into the `.slp`.
 
-Coverage: `tests/test-visibility-metadata.js` (unit) and
-`tests/e2e/visibility-settings-roundtrip.mjs` (real app, both writers);
+Coverage: `tests/test-visibility-metadata.js` (unit),
+`tests/e2e/visibility-settings-roundtrip.mjs` (real app, both writers) and
+`tests/e2e/reopen-folder-session-settings.mjs` (a real Save As reopened through
+the single-SLP folder loader);
 `tests/test-video-contrast.js` + `tests/e2e/contrast-slider-roundtrip.mjs` cover
 the contrast half.
 
@@ -560,7 +571,7 @@ the contrast half.
 The whole Define Planes pipeline persists per session in the `.slp` (and in the
 project JSON), under LUCID's own `metadata.lucid` dict, through **one** module —
 `import-export/plane-metadata.js` (`writePlaneMetadata` / `readPlaneMetadata` /
-`resetPlaneState`, `PLANE_METADATA_KEYS`), which the same four writers and three
+`resetPlaneState`, `PLANE_METADATA_KEYS`), which the same four writers and four
 readers as the Visibility settings all call. The mapping itself lives in the
 DOM-free `pose/plane-serialization.js`.
 
@@ -590,15 +601,26 @@ Rules, each with a test pinning it:
   only restores into an EMPTY model (that guard is what makes ingesting N
   sessions idempotent), so skipping the reset keeps the OLD project's planes and
   silently drops the new one's.
+- **A loader that ADDS a session does not reset — it checks.** The single-SLP
+  folder loader appends to whatever is open, so it resets only when no session
+  is open (it is then starting the project). With a project open, its planes
+  stay and the new session's 2D is seated on them BY NODE ID — and node IDs
+  restart at 1 in every project, so a folder from another project would put its
+  corners on this project's nodes. `planeMetadataConflict` gates it: the 2D is
+  read only if every node and plane the file lists is in the open model under
+  the same id AND name; otherwise it is dropped and the status bar says so.
 - **Every plane/node mutation calls `markDirty()`** — rename, re-colour, pin,
   place/un-place, membership, edges, fill, triangulate, fit, 2D/3D drags, origin
   apply/clear. Per mutation, not per repaint. The plane panel's node-size /
   edge-width / 3D-corner-size sliders are the deliberate exception: browser-local
   display taste, not written to the project, so they do not mark it dirty.
 
-Coverage: `tests/test-plane-serialization.mjs` (unit, the mapping) and
+Coverage: `tests/test-plane-serialization.mjs` (unit, the mapping),
 `tests/e2e/plane-persistence-roundtrip.mjs` (real app, both `.slp` writers, the
-dirty flag, the scope split, and both negative controls).
+dirty flag, the scope split, and both negative controls) and
+`tests/e2e/reopen-folder-session-settings.mjs` (the single-SLP folder loader:
+the reset when it starts a project, adding a session of the same project, and
+the `planeMetadataConflict` refusal with its negative control).
 
 ## A lazy project's resident frames are a WINDOW — and eviction must be lossless
 
@@ -1795,7 +1817,7 @@ There are **three** test populations, each with its own runner. Run all three �
 they cover disjoint code, and a green run of one says nothing about the others.
 
 ```bash
-node tests/e2e/run-unit-tests.mjs     # tests/*.js  (browser suite, headless) — 1678 assertions
+node tests/e2e/run-unit-tests.mjs     # tests/*.js  (browser suite, headless) — 1653 assertions
 node tests/run-mjs-tests.mjs          # tests/test-*.mjs  (native-ESM Node tests)
 node tests/e2e/<name>.mjs             # tests/e2e/*.mjs  (Playwright, one file per behavior)
 ```

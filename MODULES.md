@@ -9764,7 +9764,7 @@ It changes every `CROP_PREVIEW_MS` (400 ms), cycling through the embedder's
 between a GPU and the CPU. A draw costs ~0.1 ms of main thread (measured: frame
 times 8.3 ms median with and without it at 4 Hz) and no GPU time — the tensor is
 already on the main thread before its batch is uploaded. An embedder without
-`sampleCrops` (the test fakes) shows no square. The dialog's `finally` also calls the
+`sampleCrops` (the test's fake without a `device`) shows no square. The dialog's `finally` also calls the
 embedder's `releaseFrames` (idempotent): `checkImageSwitches` does too, but not
 when it fails before its first frame, and the CPU workers hold ~600 MB each. On a
 CPU run "About these flags" says the model ran on the CPU, instead of the GPU-busy
@@ -9897,7 +9897,8 @@ Clear, one scroller),
 `tests/e2e/id-switch-image-check.mjs` (images with an injected embedder: "Both"
 merge, identical-size animals found by images only, Esc cancel, the progress dialog's
 percentage / playhead / CPU line above the GPU line / load graph (placement, legend
-keys, newest points = the lines' loads, hover readout) / sample crop and skeleton
+keys, newest points = the lines' loads, hover readout) / sample crop (label and
+camera caption, a new one every 0.4 s from a list that sits still) and skeleton
 overlay, no GPU = runs on the CPU to the end and graphs the CPU alone, menu, default
 off), `tests/e2e/image-check-cpu.mjs` (the real dialog's measured CPU line and
 CPU-only graph), `tests/e2e/id-switch-fix.mjs` (Fix switch…: both start rules in the
@@ -12743,10 +12744,6 @@ It reuses the ⓘ tip's look (`.info-tip.node-tip`; `.node-tip` adds
 and is `pointer-events: none` — a tip that took the hover would make the view see
 a `mouseleave` and hide it.
 
-**Top-level names are prefixed (`nodeTip…`)** — chosen while the since-retired
-`tests/run-node.js` loaded this module and `ui/info-tip.js` into ONE vm global
-scope, where two `tipEl`s would have been the same variable.
-
 **Imports from project modules.** `./info-tip.js` — `placeTipNear`.
 
 **Imported by.** `ui/interaction.js`, `ui/rendering.js`, `pose/initialization.js`.
@@ -13169,7 +13166,22 @@ filesystem enumeration, decoder rebuild.
   `nulledNodes`/occlusion, identities, 3D points — via the shared
   `restoreGroupingAndUnlink` (`import-export/slp-import.js`), so loading a
   project `.slp` reflects the changes saved in THAT file. (Previously it used
-  the raw parser and rebuilt flat poses, dropping all of that.) Views are
+  the raw parser and rebuilt flat poses, dropping all of that.) The rest of the
+  session's `metadata.lucid` goes through the same two readers the other
+  project readers call: `readVisibilityMetadata` (brightness / contrast /
+  rotation, the hidden camera / track / identity sets, the ID Switches
+  checklist) and `readPlaneMetadata` (the Define Planes state). It used to call
+  neither, so a project reopened this way came back with all of it at defaults.
+  Unlike the other readers it **adds** a session rather than replacing the
+  project — it is also the Sessions list's "Add session folder" — so it calls
+  `resetPlaneState()` only when no session is open (it is then starting the
+  project, and `readPlaneMetadata` restores only into an empty model). When a
+  project is open its planes stay, and the new session's 2D is seated on them
+  by node ID only if `planeMetadataConflict` finds the file's nodes and planes
+  in the open model under the same IDs and names; otherwise the 2D is dropped
+  and the status bar says so, because plane-node IDs restart at 1 in every
+  project and another project's corners would land on this one's nodes.
+  Covered by `tests/e2e/reopen-folder-session-settings.mjs`. Views are
   ordered by **calibration camera index**, not folder file-enumeration order,
   so the 2D panes don't reshuffle on reload.
   `handleEmptySession()` creates a blank, video-less session and makes it
@@ -13467,8 +13479,10 @@ blank until the user manually re-ran Triangulate All. Covered by
   `yieldToPaint` — the per-camera folder load's step progress),
   `../import-export/import-track-resolve.js`,
   `../pose/initialization.js`, `../ui/sessions-panes.js`, `../ui/ui-wiring.js`,
-  `../import-export/visibility-metadata.js` (`readVisibilityMetadata`, for the
-  lazy-reopen read of the session-scoped Visibility settings).
+  `../import-export/visibility-metadata.js` (`readVisibilityMetadata`) and
+  `../import-export/plane-metadata.js` (`readPlaneMetadata`, `resetPlaneState`,
+  `planeMetadataConflict`) — the lazy reopen's and the single-SLP folder load's
+  reads of the session-scoped Visibility settings and the Define Planes state.
 
 **Imported by.** `pose/initialization.js`, `import-export/save-load.js`,
 `import-export/slp-import.js`, `ui/info-panel.js`,
@@ -14719,15 +14733,16 @@ bridges into the test runners without pulling `app.js` in.
 **Imported by.** The four writers — `import-export/file-io.js`
 (`buildSlpLabelsAllViews`), `import-export/slp-streaming-write.js`
 (`buildSessionRefGraph`), and `import-export/save-load.js` (`saveProject`, both
-the v2 and v3 project-JSON shapes) — and the three readers —
+the v2 and v3 project-JSON shapes) — and the four readers —
 `import-export/slp-import.js` (`handleLoadSlpFile`), `loading/session-loader.js`
-(`handleLoadProjectSlpLazy`), and `import-export/save-load.js`
-(`_restoreProjectV2`).
+(`handleLoadProjectSlpLazy` and `handleLoadSessionFolderSingleSlp`), and
+`import-export/save-load.js` (`_restoreProjectV2`).
 
 **Tests.** `tests/test-visibility-metadata.js` (unit; bridged as
 `window.__VisibilityMetadata`) and
 `tests/e2e/visibility-settings-roundtrip.mjs` (real app, both writers; includes
-the ID Switches checklist).
+the ID Switches checklist); `tests/e2e/reopen-folder-session-settings.mjs` reopens
+a real saved project through the single-SLP folder loader.
 
 ---
 
@@ -14839,8 +14854,16 @@ per SESSION, but the plane model is not:
   plane selection. **Every load path must call it**, because the corollary of the
   empty-model guard is that skipping it does not merge the two projects — it
   keeps the OLD one and silently discards the NEW one's planes. Called by
-  `newProject`, the JSON load, the eager `.slp` import, the lazy reopen and the
-  demo-session load.
+  `newProject`, the JSON load, the eager `.slp` import, the lazy reopen, the
+  demo-session load, and the single-SLP folder load when no session is open.
+- `planeMetadataConflict(lucid)` — why a `metadata.lucid` dict's plane state
+  cannot be read into the live model, or `null` when it can. For a loader that
+  ADDS a session to an open project (the single-SLP folder load) and so does not
+  reset: the open pool is kept and the file's 2D is seated on it by node ID, and
+  plane-node IDs restart at 1 in every project, so another project's corners
+  would land on this one's nodes with every point looking valid. `null` when the
+  model is empty, or when every node and plane the file lists is in the model
+  under the same id AND name; otherwise a short reason for the status bar.
 
 **What is deliberately NOT written.** The plane panel's node size, edge width and
 3D corner size are browser-local display taste — the same category as the
@@ -14859,16 +14882,19 @@ bindings resolve at call time.
 **Imported by.** The four writers — `import-export/file-io.js`
 (`buildSlpLabelsAllViews`), `import-export/slp-streaming-write.js`
 (`buildSessionRefGraph`), and `import-export/save-load.js` (`saveProject`, both
-the v2 and v3 project-JSON shapes) — and the three readers —
+the v2 and v3 project-JSON shapes) — and the four readers —
 `import-export/slp-import.js` (`handleLoadSlpFile`), `loading/session-loader.js`
-(`handleLoadProjectSlpLazy`), and `import-export/save-load.js`
-(`_restoreProjectV2`). Plus `pose/initialization.js` for `resetPlaneState` on the
+(`handleLoadProjectSlpLazy` and `handleLoadSessionFolderSingleSlp`), and
+`import-export/save-load.js` (`_restoreProjectV2`). Plus `pose/initialization.js` for `resetPlaneState` on the
 demo-session load.
 
 **Tests.** `tests/e2e/plane-persistence-roundtrip.mjs` (real app, both `.slp`
 writers, the dirty-flag half, the session-scope split, the untouched-project
 control and the replace-not-merge control) over
-`tests/test-plane-serialization.mjs` (the mapping itself).
+`tests/test-plane-serialization.mjs` (the mapping itself);
+`tests/e2e/reopen-folder-session-settings.mjs` (the single-SLP folder load: the
+reset when it starts a project, and `planeMetadataConflict` when it adds a
+session from another project).
 
 ---
 
@@ -15559,7 +15585,10 @@ onto the first track label (e.g. `global_0`) after an export/reload round-trip.
   loader** (`loading/session-loader.js#handleLoadSessionFolderSingleSlp`) share
   ONE implementation — that loader previously rebuilt the session flat (raw
   poses only) and silently dropped grouping, occlusion, and identities from the
-  saved project `.slp`.
+  saved project `.slp`. It does NOT read the Visibility or Define Planes keys:
+  each caller calls `readVisibilityMetadata` / `readPlaneMetadata` itself,
+  since only the caller knows whether the load replaces the project or adds a
+  session to it.
 - Occlusion of **unlinked** user labels is restored on load by
   `nulledNodesFromOcclusion` (lives in `import-export/import-track-resolve.js` so
   it's unit-testable; see that module). Called in the pass-1 raw-instance build

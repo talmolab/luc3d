@@ -16,8 +16,7 @@ import { fileURLToPath } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
-// Classic test files that are deliberately NOT run, and why
-// (`'test-x.js': 'reason'`). None at present.
+// Classic test files that are deliberately NOT run, and why.
 const UNREGISTERED = {};
 
 let passed = 0, failed = 0; const failures = [];
