@@ -28,20 +28,20 @@
  * import-export/save-load.js (setStatus).
  */
 
-import { state, getActiveSession } from './app-state.js?v=ae2354dd6de9';
-import { setSeekbarSwitchMarkers } from './seekbar-markers.js?v=ae2354dd6de9';
-import { setIdSwitchHighlight, updateIdSwitchHighlight, refreshIdSwitchHighlight, ID_SWITCH_SECTION_RGB } from './id-switch-highlight.js?v=ae2354dd6de9';
-import { setStatus, markDirty } from '../import-export/save-load.js?v=ae2354dd6de9';
-import { showLoading, hideLoading, yieldToPaint } from './loading-overlay.js?v=ae2354dd6de9';
-import { getTrackingThreshold } from './settings.js?v=ae2354dd6de9';
-import { checkSizeSwitches, checkImageSwitches } from '../pose/id-switch-check.js?v=ae2354dd6de9';
+import { state, getActiveSession } from './app-state.js?v=b2a3c858d994';
+import { setSeekbarSwitchMarkers } from './seekbar-markers.js?v=b2a3c858d994';
+import { setIdSwitchHighlight, updateIdSwitchHighlight, refreshIdSwitchHighlight, ID_SWITCH_SECTION_RGB } from './id-switch-highlight.js?v=b2a3c858d994';
+import { setStatus, markDirty } from '../import-export/save-load.js?v=b2a3c858d994';
+import { showLoading, hideLoading, yieldToPaint } from './loading-overlay.js?v=b2a3c858d994';
+import { getTrackingThreshold } from './settings.js?v=b2a3c858d994';
+import { checkSizeSwitches, checkImageSwitches } from '../pose/id-switch-check.js?v=b2a3c858d994';
 import { createImageEmbedder, IMAGE_MODEL_MB, formatEmbedTiming, formatEmbedDevice, formatEmbedCpu,
-         inputTensorToPixels, INPUT } from './image-embedder.js?v=ae2354dd6de9';
-import { createLoadMeter, createLoadGraph, setLoadLine, cpuCores } from './load-graph.js?v=ae2354dd6de9';
-import { renderBraveFingerprintingHint } from './browser-hints.js?v=ae2354dd6de9';
+         inputTensorToPixels, INPUT } from './image-embedder.js?v=b2a3c858d994';
+import { createLoadMeter, createLoadGraph, setLoadLine, cpuCores } from './load-graph.js?v=b2a3c858d994';
+import { renderBraveFingerprintingHint } from './browser-hints.js?v=b2a3c858d994';
 import { idSwitchRowKey as rowKey, idSwitchPrimary as primaryOf, idSwitchMarkers as markersOf, idSwitchOnsets as countOnsets,
          idSwitchEncounterCount as encounterCount, linkIdSwitchResults as tagAndLink,
-         idSwitchFixPlan, idSwitchFixFor, idSwitchRenameForFix } from './id-switch-review.js?v=ae2354dd6de9';
+         idSwitchFixPlan, idSwitchFixFor, idSwitchRenameForFix } from './id-switch-review.js?v=b2a3c858d994';
 
 const CUE_LABEL = { size: 'body size', image: 'images' };
 
@@ -429,7 +429,7 @@ export async function runIdSwitchChecks(opts) {
         var n = countOnsets(res);
         parts.push(head(cue) + ': ' + (n
             ? n + ' possible switch' + (n === 1 ? '' : 'es') + ' in ' + res.encounters.length + ' close encounters'
-            : 'no possible switches in ' + res.encounters.length + ' close encounters'));
+            : 'nothing flagged in ' + res.encounters.length + ' close encounters'));
         if (n) level = 'warning';
     }
     var ran = cues.filter(function (c) { return results[c] && results[c].ok; });
@@ -784,7 +784,8 @@ export function refreshIdSwitchPanel(session) {
         ran.map(function (c) {
             var r = st.results[c], n = countOnsets(r);
             return '<div class="id-switch-summary">' + (both ? '<b>' + (c === 'size' ? 'Body size' : 'Images') + ':</b> ' : '') +
-                encounterCount(r).toLocaleString() + ' close encounters · <b>' + n + '</b> possible switch' + (n === 1 ? '' : 'es') + '</div>';
+                encounterCount(r).toLocaleString() + ' close encounters · ' +
+                (n ? '<b>' + n + '</b> possible switch' + (n === 1 ? '' : 'es') : 'nothing flagged') + '</div>';
         }).join('') +
         '<details class="id-switch-about"><summary>About these flags</summary>' + aboutHtml(st, ran) + '</details>' +
         '</div>' +

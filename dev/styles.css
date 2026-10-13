@@ -7185,7 +7185,8 @@ details[open] > summary.origin-rebase-block-title::before {
 .multi-frame-modal p.track-summary-note { margin: 8px 0 0; font-size: 12px; color: var(--warning-color); }
 .track-summary-section-title { font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-secondary); margin: 14px 0 4px; }
 .track-summary-check.is-found .track-summary-check-text { color: var(--warning-color); }
-.track-summary-check.is-clear .track-summary-check-text { color: var(--success-color); }
+/* A clear check is neutral, not a pass: "nothing flagged" does not mean no switch */
+.track-summary-check.is-clear .track-summary-check-text { color: var(--text-primary); }
 .track-summary-check.is-failed .track-summary-check-text { color: var(--error-color); }
 .track-summary-check.is-off .track-summary-check-text,
 .track-summary-check.is-cancelled .track-summary-check-text,

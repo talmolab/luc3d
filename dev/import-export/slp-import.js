@@ -8,56 +8,56 @@ import {
     Skeleton, Camera, Instance, UnlinkedInstance, FrameGroup, Identity,
     InstanceGroup, Session,
     asPoints3d, points3dNodeCount, someValidPoint3d, lazyPlaceholderXY, pooledPoints3d,
-} from '../pose/pose-data.js?v=ae2354dd6de9';
+} from '../pose/pose-data.js?v=b2a3c858d994';
 import {
     reprojectPointsCamera, reprojectPoints, computeReprojectionErrors,
     storeReprojectedInstances, getInstanceGroupsForFrame,
-} from '../pose/triangulation.js?v=ae2354dd6de9';
+} from '../pose/triangulation.js?v=b2a3c858d994';
 import {
     parseSlpH5, parseSlpViaSleapIO, instanceMatchesPoints, parsePoints3dH5, pickFiles,
-} from './file-io.js?v=ae2354dd6de9';
+} from './file-io.js?v=b2a3c858d994';
 import {
     validateSkeletonCompatibility, mergeTracksIntoSession,
     mergeSlpFramesIntoSession, rebuildInstanceGroupsForFrames,
-} from './slp-merge.js?v=ae2354dd6de9';
-import { OnDemandVideoDecoder, EmbeddedVideoDecoder } from '../loading/video.js?v=ae2354dd6de9';
+} from './slp-merge.js?v=b2a3c858d994';
+import { OnDemandVideoDecoder, EmbeddedVideoDecoder } from '../loading/video.js?v=b2a3c858d994';
 import {
     state,
     videoController, interactionManager, viewport3d, timeline, paneManager,
     setVideoController,
-} from '../ui/app-state.js?v=ae2354dd6de9';
+} from '../ui/app-state.js?v=b2a3c858d994';
 import {
     autoAssignVideosToCameras, forceVideoSelection, forceVideoSelectionWithFolder,
     showParentDirMatchSummary, createViewForVideoFile, updateTotalFrames,
     updateGridLayout, createVideoPromptCell, fitCanvasesToCells,
     rebuildVideoController, resolveImportTrackIdx, isCalibrationVideoFile,
-} from '../loading/session-loader.js?v=ae2354dd6de9';
-import { preferNonCalibrationVideos } from '../loading/video-file-pick.js?v=ae2354dd6de9';
-import { remapGlobalTrackToSession, nulledNodesFromOcclusion } from './import-track-resolve.js?v=ae2354dd6de9';
+} from '../loading/session-loader.js?v=b2a3c858d994';
+import { preferNonCalibrationVideos } from '../loading/video-file-pick.js?v=b2a3c858d994';
+import { remapGlobalTrackToSession, nulledNodesFromOcclusion } from './import-track-resolve.js?v=b2a3c858d994';
 import {
     showLoading, hideLoading, setStatus, clearDirty, ensureNo3dImportBlockingLoad,
-} from './save-load.js?v=ae2354dd6de9';
+} from './save-load.js?v=b2a3c858d994';
 
 // Circular import — these are still defined in app.js for now. They are only
 // invoked inside function bodies, never at module-init time, so live-binding
 // lookup keeps them functional.
-import { drawAllOverlays, setReprojErrorVisible } from '../ui/rendering.js?v=ae2354dd6de9';
-import { updateInfoPanel, promptImportSkeletonForAllSessions } from '../ui/info-panel.js?v=ae2354dd6de9';
-import { noteSessionCalibrationDivergence } from '../ui/calibration-notice.js?v=ae2354dd6de9';
+import { drawAllOverlays, setReprojErrorVisible } from '../ui/rendering.js?v=b2a3c858d994';
+import { updateInfoPanel, promptImportSkeletonForAllSessions } from '../ui/info-panel.js?v=b2a3c858d994';
+import { noteSessionCalibrationDivergence } from '../ui/calibration-notice.js?v=b2a3c858d994';
 // Pass 3i-3: setup3DViewport moved to pose/initialization.js.
-import { setup3DViewport } from '../pose/initialization.js?v=ae2354dd6de9';
+import { setup3DViewport } from '../pose/initialization.js?v=b2a3c858d994';
 // Pass 3e-1: fitTimelineToData moved to ui-wiring.js.
-import { fitTimelineToData, updateSeekbar } from '../ui/ui-wiring.js?v=ae2354dd6de9';
-import { refreshReadoutTotals } from '../ui/frame-readout.js?v=ae2354dd6de9';
+import { fitTimelineToData, updateSeekbar } from '../ui/ui-wiring.js?v=b2a3c858d994';
+import { refreshReadoutTotals } from '../ui/frame-readout.js?v=b2a3c858d994';
 // Block 1 (Prompt 4): keep timeline._uploadedCameras in sync after SLP
 // load so the gutter filters to the cameras that actually have video
 // assignments rather than every calibration camera.
-import { recomputeUploadedCameras } from '../loading/session-loader.js?v=ae2354dd6de9';
+import { recomputeUploadedCameras } from '../loading/session-loader.js?v=b2a3c858d994';
 // Pass 3h: populateViewStrip / populateSessionStrip moved to sessions-panes.js.
-import { populateViewStrip, populateSessionStrip } from '../ui/sessions-panes.js?v=ae2354dd6de9';
-import { getLoadingProgressModal } from '../ui/loading-progress-modal.js?v=ae2354dd6de9';
-import { readVisibilityMetadata } from './visibility-metadata.js?v=ae2354dd6de9';
-import { readPlaneMetadata, resetPlaneState } from './plane-metadata.js?v=ae2354dd6de9';
+import { populateViewStrip, populateSessionStrip } from '../ui/sessions-panes.js?v=b2a3c858d994';
+import { getLoadingProgressModal } from '../ui/loading-progress-modal.js?v=b2a3c858d994';
+import { readVisibilityMetadata } from './visibility-metadata.js?v=b2a3c858d994';
+import { readPlaneMetadata, resetPlaneState } from './plane-metadata.js?v=b2a3c858d994';
 
 /**
  * SLP import parse dispatcher (PR 5.1). Routes real `.slp` files through
@@ -1235,7 +1235,7 @@ export async function handleLoadSlpFile(slpFile) {
             // --- Embedded videos: use frame-worker for on-demand extraction ---
             showLoading('Loading embedded video frames...');
 
-            var frameWorker = new Worker(new URL('../loading/frame-worker.js?v=ae2354dd6de9', import.meta.url), { type: 'module' });
+            var frameWorker = new Worker(new URL('../loading/frame-worker.js?v=b2a3c858d994', import.meta.url), { type: 'module' });
             var embeddedVideoInfos = await new Promise(function (resolve, reject) {
                 frameWorker.onmessage = function (e) {
                     var msg = e.data;
@@ -1846,7 +1846,7 @@ export async function handleAddSlp() {
         if (hasEmbedded) {
             showLoading('Loading embedded video frames...');
 
-            var frameWorker = new Worker(new URL('../loading/frame-worker.js?v=ae2354dd6de9', import.meta.url), { type: 'module' });
+            var frameWorker = new Worker(new URL('../loading/frame-worker.js?v=b2a3c858d994', import.meta.url), { type: 'module' });
             var embeddedVideoInfos = await new Promise(function (resolve, reject) {
                 frameWorker.onmessage = function (e) {
                     var msg = e.data;
