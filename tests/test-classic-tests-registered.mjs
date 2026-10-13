@@ -17,9 +17,7 @@ import { fileURLToPath } from 'node:url';
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
 // Classic test files that are deliberately NOT run, and why.
-const UNREGISTERED = {
-    'test-null-node.js': 'near-duplicate of test-2026-03-09-changes.js, which is registered',
-};
+const UNREGISTERED = {};
 
 let passed = 0, failed = 0; const failures = [];
 function check(ok, m) {
