@@ -25,7 +25,8 @@ import { InstanceGroup, points3dNodeCount, hasPoint3d, readPoint3d, pooledPoints
 import { state, interactionManager, timeline, viewport3d, getActiveSession } from '../ui/app-state.js';
 import { getNodeWeightArray, getTrackingThresholds, getTrackingThreshold, isCameraTracked } from '../ui/settings.js';
 import { markDirty, setStatus, hideLoading } from '../import-export/save-load.js';
-import { showLoadingProgress, createProgressPacer, yieldToPaint, setLoadingCpu } from '../ui/loading-overlay.js';
+import { showLoadingProgress, createProgressPacer, yieldToPaint, setLoadingCpu, idleWhile, busyDuring } from '../ui/loading-overlay.js';
+import { startTrackerWorker } from './tracker-pool.js';
 import { loadAllLazyFrames, sweepLazyFrameWindows } from './triangulation.js';
 import { drawAllOverlays, showPredictedOnly, PREDICTED_ONLY_NOTE } from '../ui/rendering.js';
 import { updateInfoPanel } from '../ui/info-panel.js';
@@ -1064,10 +1065,101 @@ function createTrackerRun(session, cameras, maxTargets, identityPool) {
     // (indexed to the session skeleton). null ⇒ every node weighted 1.
     hp.nodeWeights = getNodeWeightArray(session.skeleton && session.skeleton.nodes);
     return {
-        trk: new CrossViewTracker(hp), trackToIdentity: new Map(), cameras: cameras,
+        trk: new CrossViewTracker(hp), hp: hp, trackToIdentity: new Map(), cameras: cameras,
         // Identities to hand out before minting new ones — see commitTrackedFrame.
         identityPool: identityPool ? identityPool.slice() : null,
+        // The tracker worker (attachTrackerWorker), or null to track inline.
+        pool: null, pending: null, committedFi: -Infinity, liveTargets: 0,
     };
+}
+
+// ---------------------------------------------------------------------------
+// Track All on a worker (pose/tracker-pool.js + pose/tracker-worker.js)
+// ---------------------------------------------------------------------------
+// The tracker runs on ONE worker, in frame order, while this thread hydrates
+// frames, sends their 2D and commits the results as they come back. The worker
+// runs the same CrossViewTracker on the same inputs in the same order, so the
+// identities, groups and 3D are bit-identical to `stepTrackerFrame`'s
+// (tests/e2e/track-all-worker.mjs; tests/e2e/_diag-trackall-ab.mjs on real data).
+
+// The worker's input for one frame: buildTrackerDetections' filter and slot
+// order exactly, minus the Detection — per camera (run order), each passing
+// detection's flat 2D (the pool copies it on submit; `Detection` reads nothing
+// else of its Instance), and, kept here, what commit needs back for each slot.
+function buildTrackerInputs(frameGroup, cameras, frameIdx) {
+    var minVis = thr('filterMinVisibleNodes');
+    var minScore = thr('filterMinInstanceScore');
+    var xys = new Array(cameras.length), metas = new Array(cameras.length);
+    for (var ci = 0; ci < cameras.length; ci++) {
+        var cam = cameras[ci], xy = [], meta = [];
+        var linked = frameGroup.getInstances(cam.name);
+        if (linked) for (var i = 0; i < linked.length; i++) {
+            if (!passesDetectionFilter(linked[i], minVis, minScore)) continue;
+            xy.push(linked[i]._xy);
+            meta.push({ frameIdx: frameIdx, instance: linked[i], unlinkedId: null });
+        }
+        var unlinked = frameGroup.getUnlinkedInstances(cam.name);
+        if (unlinked) for (var j = 0; j < unlinked.length; j++) {
+            if (!passesDetectionFilter(unlinked[j].instance, minVis, minScore)) continue;
+            xy.push(unlinked[j].instance._xy);
+            meta.push({ frameIdx: frameIdx, instance: unlinked[j].instance, unlinkedId: unlinked[j].id });
+        }
+        xys[ci] = xy;
+        metas[ci] = meta;
+    }
+    return { xys: xys, metas: metas };
+}
+
+// Start the run's worker; false (track inline) when it cannot start. Its
+// results are committed from its message handler, in frame order, counted as
+// main-thread work for the CPU line.
+async function attachTrackerWorker(session, run) {
+    run.pending = new Map();
+    run.pool = await startTrackerWorker(run.cameras, run.hp, function (fi, targets, live) {
+        commitWorkerFrame(session, run, fi, targets);
+        run.liveTargets = live;
+    }, { busyDuring: busyDuring });
+    return !!run.pool;
+}
+
+// Send frame `fi` to the worker (a frame with no FrameGroup is skipped, as in
+// stepTrackerFrame). Returns a promise to await before the next frame when the
+// worker is too far behind, else undefined.
+function submitTrackerFrame(session, run, fi) {
+    var fg = session.getFrameGroup(fi);
+    if (!fg) return undefined;
+    var inp = buildTrackerInputs(fg, run.cameras, fi);
+    run.pending.set(fi, inp.metas);
+    run.pool.submit(fi, inp.xys);
+    return run.pool.saturated() ? idleWhile(run.pool.throttle()) : undefined;
+}
+
+// Commit one frame the worker tracked: `targets` as tracker-worker.js returns
+// them, rebuilt into the shape commitTrackedFrame reads off a CrossViewTracker
+// (targets in order; each one's this-frame members in its detsByCam order), so
+// the commit itself is the inline one, unchanged.
+function commitWorkerFrame(session, run, fi, targets) {
+    var metas = run.pending.get(fi);
+    run.pending.delete(fi);
+    var shim = new Array(targets.length);
+    for (var t = 0; t < targets.length; t++) {
+        var tg = targets[t], detsByCam = new Map();
+        for (var m = 0; m < tg.members.length; m += 2) {      // (camera index, slot) pairs
+            detsByCam.set(run.cameras[tg.members[m]].name, metas[tg.members[m]][tg.members[m + 1]]);
+        }
+        shim[t] = { trackId: tg.trackId, points3d: tg.points3d, detsByCam: detsByCam };
+    }
+    commitTrackedFrame(session, { targets: shim }, fi, run.trackToIdentity, run.identityPool);
+    run.committedFi = fi;
+}
+
+function closeTrackerWorker(run) {
+    if (run.pool) run.pool.close();
+}
+
+// What a tracking loop returns: identities assigned, and the tracker's live targets (the worker's, on one).
+function trackRunResult(session, run) {
+    return { numIdentities: session.identities.length, numTargets: run.pool ? run.liveTargets : run.trk.targets.length };
 }
 
 // Advance a run by one frame: build detections, associate, and commit.
@@ -1108,25 +1200,42 @@ export function runCrossViewTracker(session, cameras, frameIndices, propagate, m
 // before each yield and once at the end.
 export async function runCrossViewTrackerProgress(session, cameras, frameIndices, propagate, maxTargets, onProgress, identityPool) {
     var run = createTrackerRun(session, cameras, maxTargets, identityPool);
+    var res = await trackFrameListProgress(session, run, frameIndices, onProgress);
+    if (propagate) session.propagateIdentitiesToTracks();
+    return res;
+}
+
+// The loop of runCrossViewTrackerProgress, on a run made by the caller — on its
+// worker when `run.pool` is set (attachTrackerWorker), where progress reports
+// the frames COMMITTED, not the frames sent.
+async function trackFrameListProgress(session, run, frameIndices, onProgress) {
     var total = frameIndices.length;
     var pacer = createProgressPacer();
+    var pool = run.pool, done = 0;
     for (var f = 0; f < total; f++) {
-        stepTrackerFrame(session, run, frameIndices[f]);
+        if (pool) {
+            var wait = submitTrackerFrame(session, run, frameIndices[f]);
+            if (wait) await wait;
+        } else {
+            stepTrackerFrame(session, run, frameIndices[f]);
+        }
         if (onProgress && pacer.due()) {
-            await onProgress(f + 1, total);
+            // On the worker: the frames up to the last one committed (frameIndices is ascending).
+            if (pool) { while (done < f + 1 && frameIndices[done] <= run.committedFi) done++; }
+            await onProgress(pool ? done : f + 1, total);
             await pacer.yield();
         }
     }
+    if (pool) await idleWhile(pool.finish());
     if (onProgress) await onProgress(total, total);
-    if (propagate) session.propagateIdentitiesToTracks();
-    return { numIdentities: session.identities.length, numTargets: run.trk.targets.length };
+    return trackRunResult(session, run);
 }
 
-// `opts`: { window, start, end, identityPool }. `start`/`end` (inclusive) scope
-// the sweep to a frame range for Track Frame Range; omit both for Track All.
-async function sweepTrackAllFrames(session, cameras, maxTargets, onProgress, opts) {
+// `opts`: { window, start, end }. `start`/`end` (inclusive) scope the sweep to
+// a frame range for Track Frame Range; omit both for Track All. `run` is
+// createTrackerRun's, with its worker attached (attachTrackerWorker) or not.
+async function sweepTrackAllFrames(session, run, onProgress, opts) {
     opts = opts || {};
-    var run = createTrackerRun(session, cameras, maxTargets, opts.identityPool);
     var nFrames = session.lazyLoader.nFrames;
     var from = opts.start != null ? Math.max(0, opts.start) : 0;
     var to = opts.end != null ? Math.min(nFrames - 1, opts.end) : nFrames - 1;
@@ -1138,10 +1247,28 @@ async function sweepTrackAllFrames(session, cameras, maxTargets, onProgress, opt
     // user-edited frame) and GC cadence are the ones lifted from here. The
     // sweep also owns progress pacing, reporting (position, total) to
     // `onProgress` on its clock-based cadence.
+    var pool = run.pool;
+    if (!pool) {
+        await sweepLazyFrameWindows(session, function (fi) {
+            stepTrackerFrame(session, run, fi);
+        }, { window: opts.window || 2000, start: from, end: to, onProgress: onProgress });
+        return trackRunResult(session, run);
+    }
+    // On the worker: a window stays resident until its results are committed
+    // (they are written into its FrameGroups), so the sweep releases each one
+    // window late — hydrating the next while the worker finishes this one — and
+    // progress reports the frames committed, not the frames sent.
     await sweepLazyFrameWindows(session, function (fi) {
-        stepTrackerFrame(session, run, fi);
-    }, { window: opts.window || 2000, start: from, end: to, onProgress: onProgress });
-    return { numIdentities: session.identities.length, numTargets: run.trk.targets.length };
+        return submitTrackerFrame(session, run, fi);
+    }, {
+        window: opts.window || 2000, start: from, end: to, releaseLag: 1,
+        beforeRelease: function (wStart, wEnd) { return idleWhile(pool.committedThrough(wEnd - 1)); },
+        onProgress: onProgress && function (done, total) {
+            return onProgress(done >= total ? total : Math.max(0, Math.min(done, run.committedFi - from + 1)), total);
+        },
+    });
+    await idleWhile(pool.finish());
+    return trackRunResult(session, run);
 }
 
 export function trackCurrentFrame() {
@@ -1475,9 +1602,6 @@ async function runTrackingPass(range) {
 
     var stageOpts = { step: STEPS, steps: STEPS };
     showLoadingProgress('Assigning identities', 0, totalFrameCount, Object.assign({ title: human }, stageOpts));   // the card's title, kept to hideLoading
-    // ...with its CPU line and graph (ui/loading-overlay.js; hideLoading stops it). The tracker steps the
-    // frames in order on the main thread — no workers — so this reads one core's share while it runs.
-    setLoadingCpu({ mainThread: true, counts: human + ', which runs on the main thread: one core at most' });
 
     // Drive the CrossViewTracker across the frames and populate IDENTITIES +
     // per-frame identity map + InstanceGroups only. Deliberately does NOT propagate
@@ -1485,7 +1609,17 @@ async function runTrackingPass(range) {
     // when/which direction to propagate via Tracks ▸ Propagate IDs → Tracks (or
     // Tracks → IDs). Auto-rewriting Instance.trackIdx here would clobber the
     // imported track structure without consent.
+    var run = null;
     try {
+        // The tracker steps the frames in order — on one worker (pose/tracker-pool.js) while this thread
+        // hydrates frames and commits the results, or inline when the worker cannot start.
+        run = createTrackerRun(session, cameras, effectiveNumAnimals, identityPool);
+        var onWorker = await attachTrackerWorker(session, run);
+        // ...with its CPU line and graph (ui/loading-overlay.js; hideLoading stops it): the worker's busy
+        // time plus this thread's, or, inline, this thread alone — one core's share at most.
+        setLoadingCpu(onWorker
+            ? { mainThread: true, cpuBusyMs: run.pool.cpuBusyMs, counts: human + ': its tracker worker, and the main thread loading frames and writing back the results' }
+            : { mainThread: true, counts: human + ', which runs on the main thread: one core at most' });
         // Paint the 0% overlay before the run begins, then drive the async
         // progress variant: it paces its own yields (~4/s, clock-based — see
         // `createProgressPacer`) and calls back with (done, total) just before
@@ -1495,10 +1629,9 @@ async function runTrackingPass(range) {
             showLoadingProgress('Assigning identities', done, total, stageOpts);
         };
         var lres = windowed
-            ? await sweepTrackAllFrames(session, cameras, effectiveNumAnimals, onProgress,
-                { start: lo, end: hi, identityPool: identityPool })
-            : await runCrossViewTrackerProgress(session, cameras, frameIndices, false,
-                effectiveNumAnimals, onProgress, identityPool);
+            ? await sweepTrackAllFrames(session, run, onProgress, { start: lo, end: hi })
+            : await trackFrameListProgress(session, run, frameIndices, onProgress);
+        closeTrackerWorker(run);
         var trackMs = performance.now() - trackStart;
         hideLoading();
         // The run's product is identities, so show them (#242): switch Color
@@ -1584,6 +1717,7 @@ async function runTrackingPass(range) {
             frames: totalFrameCount,
         };
     } catch (e) {
+        if (run) closeTrackerWorker(run);
         hideLoading();
         console.error('[' + label + '] error:', e, e.stack);
         setStatus(human + ' error: ' + e.message, 'error');
