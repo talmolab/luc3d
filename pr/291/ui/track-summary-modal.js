@@ -22,12 +22,31 @@
 // animals that look different can be seen before anything else is run. Clicking
 // a sample or a point on a map closes the box and goes to that frame.
 //
+// A single-camera Track All (pose/single-camera-tracking.js) gets the same box,
+// planned for one camera (`planTrackSummary` with `singleCamera`): tracks, the
+// coat-brightness / image / size checks, and saving as the step after review.
+// Its counts and gallery read the stand-in session `singleCameraCheckSession`
+// builds, with a pixel camera so the gallery's crops and maps project.
+//
 // Depends on: ui/track-summary.js, ui/id-switch-modal.js (openIdSwitchPanel,
-// refreshIdSwitchPanel, setTrackSummaryOpener), ui/identity-gallery.js.
+// refreshIdSwitchPanel, setTrackSummaryOpener), ui/identity-gallery.js,
+// pose/single-camera-tracking.js (singleCameraName, singleCameraCheckSession).
 
-import { planTrackSummary, summarizeTrackedIdentities, describeSwitchCheck } from './track-summary.js?v=2cb411a749b7';
-import { openIdSwitchPanel, refreshIdSwitchPanel, setTrackSummaryOpener } from './id-switch-modal.js?v=2cb411a749b7';
-import { renderIdentityGallery } from './identity-gallery.js?v=2cb411a749b7';
+import { planTrackSummary, summarizeTrackedIdentities, describeSwitchCheck } from './track-summary.js?v=465df92c02e0';
+import { openIdSwitchPanel, refreshIdSwitchPanel, setTrackSummaryOpener } from './id-switch-modal.js?v=465df92c02e0';
+import { renderIdentityGallery } from './identity-gallery.js?v=465df92c02e0';
+import { singleCameraName, singleCameraCheckSession } from '../pose/single-camera-tracking.js?v=465df92c02e0';
+
+/**
+ * The session the summary counts and draws from: the session itself, or for a
+ * single-camera one its stand-in (one group per identified detection, a pixel
+ * camera). Null when the stand-in cannot be built (a lazy project).
+ */
+export function summarySession(session) {
+    if (!singleCameraName(session)) return session;
+    var s = singleCameraCheckSession(session, { pixelCamera: true });
+    return s && !s.fail ? s : null;
+}
 
 // The viewer's frame navigation, registered once by ui-wiring (as the ID Switches tab's is):
 // the tracker that opens this box cannot import pose/initialization.js.
@@ -53,6 +72,8 @@ var ACTIONS = {
     triangulate: function () { clickById('tbTriangulateAll'); },
     imageCheck: function () { clickById('menuCheckImageSwitches'); },
     sizeCheck: function () { clickById('menuCheckSizeSwitches'); },
+    brightnessCheck: function () { clickById('menuCheckBrightnessSwitches'); },
+    save: function () { clickById('menuSaveProject'); },
     wizard: function () { clickById('menuTrackingWizard'); },
 };
 
@@ -73,8 +94,8 @@ function safeColor(c) {
  * second run's numbers supersede the first's).
  *
  * @param {Object} summary  from `summarizeTrackedIdentities`
- * @param {{size: object, image: object}} checks  each from `describeSwitchCheck`
- * @param {{session?: Object}} [opts]  the tracked session: with it, the Identities section
+ * @param {{size: object, image: object, brightness?: object}} checks  each from `describeSwitchCheck`
+ * @param {{session?: Object}} [opts]  the session to draw the Identities section from (`summarySession`)
  * @returns {{close: function, overlay: HTMLElement, gallery: Object|null}|null}  null without a DOM;
  *   `gallery.done` settles once its images are drawn
  */
@@ -146,7 +167,7 @@ export function showTrackSummaryModal(summary, checks, opts) {
         checks2.appendChild(el('div', 'track-summary-section-title', 'ID-switch check'));
         plan.checks.forEach(function (c) {
             var row = el('div', 'track-summary-check is-' + c.state);
-            row.setAttribute('data-cue', c.label === 'Images' ? 'image' : 'size');
+            row.setAttribute('data-cue', c.cue);
             if (c.full) row.title = c.full;                 // the whole reason, which the row may shorten
             row.appendChild(el('span', 'track-summary-label', c.label));
             row.appendChild(el('span', 'track-summary-check-text', c.text));
@@ -238,13 +259,15 @@ export function reopenTrackSummary(session) {
     if (!saved) return null;
     var results = (session._idSwitch && session._idSwitch.results) || {};
     var checks = {};
-    ['size', 'image'].forEach(function (cue) {
+    Object.keys(saved.checks).forEach(function (cue) {
         var now = results[cue], then = saved.checks[cue];
         if (now && now.ok) checks[cue] = describeSwitchCheck(true, now, saved.identities);
         else if (then && (then.state === 'found' || then.state === 'clear')) checks[cue] = describeSwitchCheck(false, null, saved.identities);
         else checks[cue] = then;
     });
-    return showTrackSummaryModal(summarizeTrackedIdentities(session, saved.opts), checks, { session: session });
+    var counted = summarySession(session);
+    if (!counted) return null;
+    return showTrackSummaryModal(summarizeTrackedIdentities(counted, saved.opts), checks, { session: counted });
 }
 
 // The ID Switches tab's "Show Track All summary" (ui/id-switch-modal.js stays a leaf: it is handed this)

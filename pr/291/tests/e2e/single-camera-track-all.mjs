@@ -36,6 +36,10 @@
  *  7. Duplicate removal is offered in the Tracking Wizard, off by default (box
  *     IoU 0.5, OKS 0.6); switched on, Track All leaves a planted partial copy of
  *     an animal without a track and says so, and every animal keeps its track.
+ *  1b. Track All ends on the summary box, planned for one camera: it counts
+ *     tracks, lists coat brightness / images / body size, recommends saving and
+ *     never Triangulate All, has an Identities row per track, and the ID
+ *     Switches tab reopens it.
  *
  * Run: node tests/e2e/single-camera-track-all.mjs
  */
@@ -121,6 +125,34 @@ try {
     });
     check(info.tracks === 'track_0,track_1,track_2' && info.ids === 'id_0,id_1,id_2', `tracks and identities rewritten (${info.tracks} / ${info.ids})`);
     check(info.dirty === true, 'the project is marked dirty');
+
+    console.log('\n1b. Track All ends on the summary box, planned for one camera');
+    const box = await page.evaluate(() => {
+        const o = document.getElementById('trackSummaryOverlay');
+        if (!o) return null;
+        return { text: o.textContent, stats: [...o.querySelectorAll('.track-summary-stat')].map(r => r.textContent),
+                 checks: [...o.querySelectorAll('.track-summary-check')].map(r => r.getAttribute('data-cue') + ':' + r.className.replace(/.*\bis-/, '') + ':' + (r.title || '')),
+                 primary: (o.querySelector('#trackSummaryPrimary') || {}).textContent, ids: o.querySelectorAll('.track-summary-id').length,
+                 gallery: o.querySelectorAll('#identityGallery .identity-gallery-row').length };
+    });
+    check(!!box && /Track All finished/.test(box.text), 'the summary box opens after single-camera Track All');
+    check(box && box.stats[0] === 'Tracks3for 3 animals' && box.ids === 3, `it counts the TRACKS, one per animal (${box && box.stats[0]}, ${box && box.ids} bars)`);
+    check(box && box.checks.join('|').startsWith('brightness:skipped:') && /^image:off:/.test(box.checks[1]) && /^size:off:not run on one camera/.test(box.checks[2]),
+        'its checks: coat brightness (skipped here: no video), images (not run), body size (not run on one camera, the reason on hover)');
+    check(box && !/Triangulate/.test(box.text) && box.primary === 'Save project' && /File ▸ Save/.test(box.text),
+        `no Triangulate All on one camera: the next step is saving (primary "${box && box.primary}")`);
+    check(box && box.gallery === 3, `the Identities section has a row per track (${box && box.gallery}), from the single-camera stand-in`);
+    await page.click('#trackSummaryClose');
+    const re = await page.evaluate(async () => {
+        const b = document.getElementById('idSwitchTrackSummary');
+        if (!b) return { button: false };
+        b.click();
+        const o = document.getElementById('trackSummaryOverlay');
+        const out = { button: true, reopened: !!o, stats: o ? o.querySelector('.track-summary-stat').textContent : '' };
+        if (o) document.getElementById('trackSummaryClose').click();
+        return out;
+    });
+    check(re.button && re.reopened && re.stats === 'Tracks3for 3 animals', `the ID Switches tab reopens it (${JSON.stringify(re)})`);
 
     console.log('\n2. Track Frame and Track Frame Range refuse on one camera');
     await page.click('#tbTrackFrame');
@@ -298,6 +330,9 @@ try {
     check(after.copy === null, 'the copy keeps no track');
     const per7 = [0, 1, 2].map(a => new Set(after.tr.map(r => r[a])));
     check(per7.every(x => x.size === 1) && new Set(per7.map(x => [...x][0])).size === 3, 'each animal is still on one track throughout');
+    const box7 = await page.evaluate(() => { const o = document.getElementById('trackSummaryOverlay'); return o ? [...o.querySelectorAll('.track-summary-stat')].map(r => r.textContent) : null; });
+    check(box7 && box7.includes('Without a track1 detection1 duplicate removed first'), 'the summary box counts the removed duplicate: ' + JSON.stringify(box7 && box7.slice(-2)));
+    await page.evaluate(() => { const c = document.getElementById('trackSummaryClose'); if (c) c.click(); });
     await page.evaluate(async () => (await import('/ui/settings.js')).setTrackingThresholds({ scRemoveDuplicates: 0 }));
 
     check(errs.length === 0, 'no page errors' + (errs.length ? ': ' + errs.join(' | ') : ''));
