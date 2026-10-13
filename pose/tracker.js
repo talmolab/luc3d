@@ -25,8 +25,9 @@ import { state, interactionManager, timeline, viewport3d, getActiveSession } fro
 import {
     getNodeWeightArray, getNodeWeight, updateNodeWeights,
     getTrackingThresholds, getTrackingThreshold, isCameraTracked,
+    getTrackingThresholdDefs, updateTrackingThresholds,
 } from '../ui/settings.js';
-import { showTrackSetupModal } from '../ui/track-setup-modal.js';
+import { showTrackSetupModal, IMAGE_CHECK_IDS } from '../ui/track-setup-modal.js';
 import { markDirty, setStatus, hideLoading } from '../import-export/save-load.js';
 import { showLoadingProgress, createProgressPacer, yieldToPaint, setLoadingCpu, idleWhile, busyDuring } from '../ui/loading-overlay.js';
 import { startTrackerWorker } from './tracker-pool.js';
@@ -861,15 +862,22 @@ function computeMaxInstancesPerView(session) {
 // then nothing is written. On Continue both are written before the run reads
 // them (`createTrackerRun` snapshots the weights). `updateNodeWeights` keeps
 // the stored overrides of nodes not shown — another skeleton's.
-async function askTrackSetup(session, title) {
+// `withImageCheck` (Track All) also offers the image ID-switch check that runs
+// after the pass, with its options — the Tracking Wizard's own settings, read
+// when the pass ends, so an answer here applies to this run.
+async function askTrackSetup(session, title, withImageCheck) {
     var names = (session.skeleton && Array.isArray(session.skeleton.nodes)) ? session.skeleton.nodes : [];
     var answer = await showTrackSetupModal({
         title: title,
         animals: sessionNumAnimals(session) || _lastNumAnimals,
         nodes: names.map(function (n) { return { name: n, weight: getNodeWeight(n) }; }),
+        imageCheck: withImageCheck
+            ? getTrackingThresholdDefs().filter(function (d) { return IMAGE_CHECK_IDS.indexOf(d.id) >= 0; })
+            : null,
     });
     if (!answer) return false;  // cancelled
     updateNodeWeights(answer.nodeWeights);
+    if (answer.thresholds) updateTrackingThresholds(answer.thresholds);
     setTrackerNumAnimals(answer.animals);
     return true;
 }
@@ -1498,7 +1506,7 @@ async function runTrackingPass(range) {
     // explicit "auto-detect"), so it never stacks this dialog on top of the one
     // the user just filled in.
     if (!isRange && !numAnimalsAnswered(session)) {
-        if (!(await askTrackSetup(session, human))) return bail;
+        if (!(await askTrackSetup(session, human, true))) return bail;
     }
 
     // How long tracking took, for the summary box: from here (after the animal-count

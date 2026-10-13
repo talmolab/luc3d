@@ -2224,7 +2224,12 @@ drifts upward (e.g., 4 → 11 on the test fixture).
   `getNodeWeights()` so another skeleton's overrides survive — through
   `updateNodeWeights`) and then the
   count, both before `createTrackerRun` snapshots them; Cancel writes nothing
-  and the run bails. `trackCurrentFrame` is `async` for this (its callers
+  and the run bails. Track All's copy (`askTrackSetup(..., withImageCheck)`)
+  also offers the image ID-switch check that runs after the pass — its switch
+  and four options (`IMAGE_CHECK_IDS`, from `getTrackingThresholdDefs()`),
+  written through `updateTrackingThresholds`; the pass reads
+  `autoImageSwitchCheck` when it ends, so the answer applies to this run. Track
+  Frame's copy leaves it out. `trackCurrentFrame` is `async` for this (its callers
   ignore the return value). Track Frame Range never opens it: its own dialog
   collects the count.
   `setTrackerNumAnimals` counts as an answer, null included; on a change it
@@ -2245,7 +2250,8 @@ drifts upward (e.g., 4 → 11 on the test fixture).
 - `../ui/app-state.js` — `state`, `interactionManager`, `timeline`,
   `viewport3d`, `getActiveSession`.
 - `../ui/settings.js` — `getNodeWeightArray`, `getNodeWeight`,
-  `updateNodeWeights` (the first-use dialog's weights, above),
+  `updateNodeWeights`, `getTrackingThresholdDefs`, `updateTrackingThresholds`
+  (the first-use dialog's weights and image-check settings, above),
   `getTrackingThresholds`,
   `getTrackingThreshold`, `isCameraTracked` (both `trackAll`/`trackCurrentFrame`
   drop cameras where `isCameraTracked(name)` is false before tracking; abort with
@@ -2265,8 +2271,8 @@ drifts upward (e.g., 4 → 11 on the test fixture).
   thousands commas.
 - `./tracker-pool.js` — `startTrackerWorker` (see "Track All runs its tracker on
   a worker" below).
-- `../ui/track-setup-modal.js` — `showTrackSetupModal`: the first-use dialog
-  (`askTrackSetup`, above). A leaf, so no cycle.
+- `../ui/track-setup-modal.js` — `showTrackSetupModal`, `IMAGE_CHECK_IDS`: the
+  first-use dialog (`askTrackSetup`, above). A leaf, so no cycle.
 - `../ui/rendering.js` — `drawAllOverlays`, `showPredictedOnly`,
   `PREDICTED_ONLY_NOTE`: Track Frame (when it found targets), Track Frame Range
   and Track All (when they assigned identities) end showing ONLY the Predicted
@@ -10486,6 +10492,9 @@ KEY (`e.code === 'Digit0'`) in `ui/ui-wiring.js`'s transport handler beside
   persist). `isCameraTracked` is the boolean the tracker filters cameras by
   (`pose/tracker.js` `trackAll`/`trackCurrentFrame`); at least 2 views must stay
   included or tracking aborts with a warning.
+- `updateTrackingThresholds(map)` — commit SOME thresholds, keeping every other
+  stored override. Track All's first-use dialog writes the image ID-switch
+  check's settings through it (via `pose/tracker.js`).
 - `getTrackingThresholdDefs()` / `getTrackingThreshold(id)` /
   `getTrackingThresholds()` / `setTrackingThresholds(map)` — read/write the
   tracker's user-editable thresholds. `getTrackingThresholdDefs` returns the
@@ -11259,25 +11268,44 @@ saved per BROWSER, keyed by node name, so a weight left at 0 from another
 project silently dropped a node from this one's matching; this question is the
 one moment every user passes through before tracking a session.
 
+Track All's copy also carries the **image ID-switch check** that can follow the
+run: its switch (`autoImageSwitchCheck`, off by default) and, while on, its four
+options (flag threshold, crops per second, views per animal, try WebNN) — the
+Tracking Wizard's own settings. It is slow when on, so the moment a run is about
+to start is when to decide. Track Frame's copy leaves it out: a single frame is
+never checked.
+
 **Key exports.**
 - `buildNodeWeightFields(nodes)` → `{element, read, refresh}` — the node-weight
   editor both tracking dialogs show (title, one sentence, the grid). `element`
   is null for no nodes; `read()` returns `{nodeWeights}` or `{error}` (a weight
   outside `[0, 1]`, naming the node — never clamped); `refresh()` greys the
   rows weighted 0. Commits nothing. Also used by `ui/track-range-modal.js`.
-- `showTrackSetupModal({title, animals, nodes})` → `Promise<{animals,
-  nodeWeights} | null>`. `title` names the run ("Track All" / "Track Frame");
-  `animals` pre-fills the count (null = blank = auto-detect); `nodes` is
-  `[{name, weight}]` in skeleton order with each node's CURRENT effective
-  weight. Resolves `{animals: number|null, nodeWeights: {name: w}}` (every node
-  shown, edited or not) on Continue / Enter, and `null` on Cancel / Esc / a
-  backdrop click. A second call while one is open resolves `null` at once.
+- `showTrackSetupModal({title, animals, nodes, imageCheck})` →
+  `Promise<{animals, nodeWeights, thresholds} | null>`. `title` names the run
+  ("Track All" / "Track Frame"); `animals` pre-fills the count (null = blank =
+  auto-detect); `nodes` is `[{name, weight}]` in skeleton order with each
+  node's CURRENT effective weight; `imageCheck`, when given, is the image
+  check's `getTrackingThresholdDefs()` entries. Resolves
+  `{animals: number|null, nodeWeights: {name: w}, thresholds: {id: v}}` (every
+  node and setting shown, edited or not; `{}` thresholds when none were) on
+  Continue / Enter, and `null` on Cancel / Esc / a backdrop click. A second
+  call while one is open resolves `null` at once.
+- `IMAGE_CHECK_IDS` — the image check's settings in dialog order, the switch
+  first.
+- `buildImageCheckFields(defs)` → `{element, read, refresh}` — the image-check
+  section: the switch, a one-line caution, and the options in the weight
+  grid's compact markup, hidden while the switch is off. Labels are the
+  Wizard's less its "Image check: " prefix; the Wizard's long descriptions sit
+  in the labels' `title`. `read()` refuses a value outside its setting's range,
+  never clamps it. Commits nothing.
 
 **Imports from project modules.** None — a LEAF on purpose. It commits
 nothing: `pose/tracker.js` (`askTrackSetup`) writes the count through
-`setTrackerNumAnimals` and the weights through `setNodeWeights`, the same
-writers as the toolbar's Animals field and the Tracking Wizard, so there is no
-second path to either setting and no cycle with the tracker.
+`setTrackerNumAnimals`, the weights through `updateNodeWeights` and the image
+check through `updateTrackingThresholds` — the settings the toolbar's Animals
+field and the Tracking Wizard edit, so there is no second copy of any of them
+and no cycle with the tracker.
 
 **Imported by.** `pose/tracker.js`; `ui/track-range-modal.js`
 (`buildNodeWeightFields`).
@@ -11304,7 +11332,9 @@ Cancel, consumed in the capture phase so no app shortcut also sees them.
 
 Covered by `tests/e2e/track-setup-modal.mjs` (the dialog, both cancels, the
 validation, the write-through to the Wizard's setting, the merge, the
-per-session re-ask, the same grid in Track Frame Range, the one-scroller
+per-session re-ask, the image-check section (hidden options, a refused
+threshold, stored on Continue and attempted by that very run, absent from
+Track Frame's copy), the same grid in Track Frame Range, the one-scroller
 rule) and `tests/test-tracker-gui.mjs`
 (the run reads the dialog's weights; Cancel writes nothing).
 

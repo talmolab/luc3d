@@ -17,6 +17,12 @@
  * two writers as the toolbar's Animals field and the Tracking Wizard — so there
  * is no second path to either setting, and no import cycle with the tracker.
  *
+ * Track All's copy also carries the image ID-switch check that can follow the
+ * run (`autoImageSwitchCheck` and its four options, the Tracking Wizard's own
+ * settings): it is off by default and slow when on, so the moment a run is
+ * about to start is when to decide. Track Frame's copy leaves it out — a
+ * single frame is never checked.
+ *
  * When it opens is the tracker's business, unchanged from the prompt: only
  * while the session has never been asked (`numAnimalsAnswered`). Track Frame
  * Range collects the count in its own dialog and never reaches this one.
@@ -30,13 +36,18 @@
  * so a Track Frame clicked under an open Track All dialog does nothing.
  *
  * @param {{title?: string, animals?: ?number,
- *          nodes?: Array<{name: string, weight: number}>}} opts
+ *          nodes?: Array<{name: string, weight: number}>,
+ *          imageCheck?: Array<Object>}} opts
  *   `title` names the run ("Track All" / "Track Frame"); `animals` pre-fills
  *   the count (null/undefined = blank, auto-detect); `nodes` are the session's
- *   skeleton nodes in order, each with its CURRENT effective weight.
- * @returns {Promise<?{animals: ?number, nodeWeights: Object<string, number>}>}
+ *   skeleton nodes in order, each with its CURRENT effective weight;
+ *   `imageCheck`, when given, is the image check's settings as
+ *   `getTrackingThresholdDefs()` describes them (`IMAGE_CHECK_IDS`).
+ * @returns {Promise<?{animals: ?number, nodeWeights: Object<string, number>,
+ *                     thresholds: Object<string, number>}>}
  *   `animals` null = auto-detect; `nodeWeights` maps EVERY node shown to its
- *   weight in [0, 1], edited or not.
+ *   weight in [0, 1], edited or not; `thresholds` maps every image-check
+ *   setting shown to its value ({} when none were).
  */
 export function showTrackSetupModal(opts) {
     opts = opts || {};
@@ -80,10 +91,15 @@ export function showTrackSetupModal(opts) {
         var weights = buildNodeWeightFields(nodes);
         if (weights.element) modal.appendChild(weights.element);
 
+        // --- Image ID-switch check (Track All only) ---------------------------
+        var imageCheck = buildImageCheckFields(opts.imageCheck);
+        if (imageCheck.element) modal.appendChild(imageCheck.element);
+
         var note = document.createElement('p');
         note.className = 'track-setup-note track-setup-later';
         note.textContent = 'To change these later: the Animals field beside Track Frame, and ' +
-            'Tracks ▸ Tracking Wizard. Node weights are saved in this browser, for every project.';
+            'Tracks ▸ Tracking Wizard. Node weights' + (imageCheck.element ? ' and the image check' : '') +
+            ' are saved in this browser, for every project.';
         modal.appendChild(note);
 
         var errorEl = document.createElement('div');
@@ -118,7 +134,9 @@ export function showTrackSetupModal(opts) {
             }
             var w = weights.read();
             if (w.error) return { error: w.error };
-            return { animals: n, nodeWeights: w.nodeWeights, error: null };
+            var t = imageCheck.read();
+            if (t.error) return { error: t.error };
+            return { animals: n, nodeWeights: w.nodeWeights, thresholds: t.thresholds, error: null };
         }
 
         function refresh() {
@@ -126,6 +144,7 @@ export function showTrackSetupModal(opts) {
             errorEl.textContent = f.error || '';
             continueBtn.disabled = !!f.error;
             weights.refresh();
+            imageCheck.refresh();
         }
 
         var done = false;
@@ -140,7 +159,7 @@ export function showTrackSetupModal(opts) {
         function proceed() {
             var f = readForm();
             if (f.error) { refresh(); return; }
-            finish({ animals: f.animals, nodeWeights: f.nodeWeights });
+            finish({ animals: f.animals, nodeWeights: f.nodeWeights, thresholds: f.thresholds });
         }
 
         // Capture phase, and the keys are consumed: Esc and Enter belong to the
@@ -155,6 +174,7 @@ export function showTrackSetupModal(opts) {
         document.addEventListener('keydown', onKey, true);
 
         modal.addEventListener('input', refresh);
+        modal.addEventListener('change', refresh);   // the switch
         cancelBtn.addEventListener('click', function () { finish(null); });
         continueBtn.addEventListener('click', proceed);
         overlay.addEventListener('click', function (e) {
@@ -245,6 +265,133 @@ export function buildNodeWeightFields(nodes) {
             f.row.classList.toggle('settings-view-excluded',
                 f.input.value.trim() !== '' && Number(f.input.value) === 0);
         });
+    }
+
+    refresh();
+    return { element: element, read: read, refresh: refresh };
+}
+
+/**
+ * The Tracking Wizard settings of the image ID-switch check that runs after
+ * Track All, in the order the dialog shows them: the on/off switch first.
+ */
+export const IMAGE_CHECK_IDS = [
+    'autoImageSwitchCheck', 'imageChangeThreshold', 'imageCheckHz', 'imageCheckMaxViews', 'imageCheckWebNN',
+];
+
+/**
+ * The image ID-switch check's settings as the Track All dialog shows them: a
+ * switch for the check itself and, while it is on, its options in a compact
+ * grid. Labels are the Wizard's, less its "Image check: " prefix (the section
+ * says it); the Wizard's long description of each sits in its label's `title`
+ * rather than in the dialog. Commits nothing.
+ *
+ * @param {Array<Object>} [defs]  `getTrackingThresholdDefs()` entries
+ *   (`{id, label, value, min, max, step, desc, kind}`); only `IMAGE_CHECK_IDS`
+ *   are used, in that order.
+ * @returns {{element: ?HTMLElement,
+ *            read: () => ({thresholds: Object<string, number>} | {error: string}),
+ *            refresh: () => void}}
+ *   `element` is null when there is nothing to show. `read` refuses a value
+ *   outside its setting's range — never clamps it — naming the setting.
+ *   `refresh` shows the options only while the check is on.
+ */
+export function buildImageCheckFields(defs) {
+    var byId = {};
+    (Array.isArray(defs) ? defs : []).forEach(function (d) { byId[d.id] = d; });
+    var main = byId[IMAGE_CHECK_IDS[0]];
+    if (!main) return { element: null, read: function () { return { thresholds: {} }; }, refresh: function () {} };
+
+    var fields = [];   // {def, input, label}
+    function shortLabel(def) {
+        var t = def.label.replace(/^Image check:\s*/, '');
+        return t.charAt(0).toUpperCase() + t.slice(1);
+    }
+    function toggle(def, text) {
+        var wrap = document.createElement('label');
+        wrap.className = 'track-setup-switch-row';
+        wrap.title = def.desc || '';
+        var sw = document.createElement('span');
+        sw.className = 'toggle-switch toggle-switch-sm';
+        var box = document.createElement('input');
+        box.type = 'checkbox';
+        box.checked = def.value > 0;
+        box.dataset.setting = def.id;
+        box.setAttribute('role', 'switch');
+        var slider = document.createElement('span');
+        slider.className = 'slider';
+        sw.appendChild(box);
+        sw.appendChild(slider);
+        var span = document.createElement('span');
+        span.textContent = text;
+        wrap.appendChild(sw);
+        wrap.appendChild(span);
+        fields.push({ def: def, input: box });
+        return wrap;
+    }
+
+    var element = document.createElement('div');
+    element.className = 'track-image-check-block';
+    var title = document.createElement('div');
+    title.className = 'track-setup-section-title';
+    title.textContent = 'ID switch check (images)';
+    element.appendChild(title);
+    element.appendChild(toggle(main, 'Check for ID switches by image after Track All'));
+    var hint = document.createElement('p');
+    hint.className = 'track-setup-note';
+    hint.textContent = 'Slow: minutes for a long recording, and it needs the videos loaded.';
+    element.appendChild(hint);
+
+    var options = document.createElement('div');
+    options.className = 'settings-node-weight-list track-setup-options';
+    IMAGE_CHECK_IDS.slice(1).forEach(function (id) {
+        var def = byId[id];
+        if (!def) return;
+        if (def.kind === 'toggle') {
+            var row = document.createElement('div');
+            row.className = 'settings-node-weight-row';
+            row.appendChild(toggle(def, shortLabel(def)));
+            options.appendChild(row);
+            return;
+        }
+        var r = document.createElement('div');
+        r.className = 'settings-node-weight-row';
+        var label = document.createElement('div');
+        label.className = 'settings-kbd-label';
+        label.textContent = shortLabel(def);
+        label.title = def.desc || '';
+        var input = document.createElement('input');
+        input.type = 'number';
+        input.className = 'settings-num-input';
+        input.min = String(def.min);
+        input.max = String(def.max);
+        input.step = String(def.step);
+        input.value = String(def.value);
+        input.dataset.setting = def.id;
+        input.setAttribute('aria-label', def.label);
+        r.appendChild(label);
+        r.appendChild(input);
+        options.appendChild(r);
+        fields.push({ def: def, input: input });
+    });
+    element.appendChild(options);
+
+    function read() {
+        var out = {};
+        for (var i = 0; i < fields.length; i++) {
+            var f = fields[i];
+            if (f.input.type === 'checkbox') { out[f.def.id] = f.input.checked ? 1 : 0; continue; }
+            var v = f.input.value.trim() === '' ? NaN : Number(f.input.value);
+            if (f.input.validity.badInput || !isFinite(v) || v < f.def.min || v > f.def.max) {
+                return { error: shortLabel(f.def) + ' must be between ' + f.def.min + ' and ' + f.def.max + '.' };
+            }
+            out[f.def.id] = v;
+        }
+        return { thresholds: out };
+    }
+
+    function refresh() {
+        options.hidden = !fields[0].input.checked;
     }
 
     refresh();

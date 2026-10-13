@@ -34,6 +34,12 @@ export function getTrackingThreshold(id) {
     const v = ov[id];
     return (typeof v === 'number' && isFinite(v)) ? v : DEFAULTS[id];
 }
+export function getTrackingThresholdDefs() {
+    return ['autoImageSwitchCheck', 'imageChangeThreshold'].map(id => ({ id, label: id, value: getTrackingThreshold(id) }));
+}
+export function updateTrackingThresholds(map) {
+    globalThis.__GUI.thresholdsSet = Object.assign({}, map);
+}
 export function getTrackingThresholds() {
     const out = {}; for (const id in DEFAULTS) out[id] = getTrackingThreshold(id); return out;
 }
@@ -88,6 +94,7 @@ export function update3DViewport() { globalThis.__GUI.update3DViewport++; }
 // The first-use dialog (animal count + node weights). Records what it was
 // shown and answers with __GUI.trackSetupAnswer (null = Cancel).
 const TRACK_SETUP_STUB = `
+export const IMAGE_CHECK_IDS = ['autoImageSwitchCheck', 'imageChangeThreshold'];
 export function showTrackSetupModal(opts) {
     globalThis.__GUI.trackSetupShown.push(opts);
     const a = globalThis.__GUI.trackSetupAnswer;

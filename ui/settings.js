@@ -477,6 +477,12 @@ export function setTrackingThresholds(map) {
     persist();
 }
 
+// Commit SOME thresholds (Track All's first-use dialog: the image check's
+// settings), keeping every other stored override.
+export function updateTrackingThresholds(map) {
+    setTrackingThresholds(Object.assign({}, _settings.trackingThresholds, map || {}));
+}
+
 // --- Keyboard catalog ------------------------------------------------------
 
 // Effective binding string for an action (user override if present, else the
