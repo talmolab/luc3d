@@ -113,13 +113,8 @@ export function createGroupSolver(cameras, opts) {
     // The two settings `triangulateAndReproject` would read per group, resolved
     // the way it resolves them (see triangulation-core.js), once per run — the
     // loading overlay blocks the UI, so they cannot change mid-run.
-    // (The `typeof` guards date from a since-retired flat-script test sandbox
-    // that did not load ui/settings.js; the fallbacks are the defaults
-    // triangulation-core.js uses without its hooks.)
-    const reprojErrorThreshold = typeof getTrackingThreshold === 'function'
-        ? getTrackingThreshold('reprojErrorThreshold') : 0;
-    const tracked = new Set(cameras.filter((c) =>
-        typeof isCameraTracked === 'function' ? isCameraTracked(c.name) : true).map((c) => c.name));
+    const reprojErrorThreshold = getTrackingThreshold('reprojErrorThreshold');
+    const tracked = new Set(cameras.filter((c) => isCameraTracked(c.name)).map((c) => c.name));
 
     // An explicit LUCID_TRIANGULATION_WORKERS > 0 forces the pool even for a
     // small run (tests use it to compare pool vs inline on a synthetic project).

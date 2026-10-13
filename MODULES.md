@@ -3675,9 +3675,10 @@ finish(), cancel(), cpuBusyMs(), parallel, workers }`; `MIN_GROUPS_FOR_WORKERS` 
 
 **Imports from project modules.** `./triangulation-core.js`
 (`triangulateAndReproject`), `./pose-data.js` (`Instance`), `../ui/settings.js`
-(`isCameraTracked`, `getTrackingThreshold` — `typeof`-guarded for the flat test
-sandbox), `../ui/load-graph.js` (`createBusyClock`; only called inside
-`createGroupSolver`, which the flat test sandbox never runs).
+(`isCameraTracked`, `getTrackingThreshold`, read once per run in
+`createGroupSolver`), `../ui/load-graph.js` (`createBusyClock`). The pool runs on
+the main thread only — the worker loads `./triangulation-core.js`, never this
+module — so these ui/ imports do not reach the worker.
 
 **Imported by.** `pose/triangulation.js` (`triangulateAllFrames`,
 `sweepTriangulateAllFrames`), `ui/export-modals.js`
@@ -5654,13 +5655,10 @@ session switching and initial-load workflows. Auto-dismisses ~500 ms
 after all tasks complete; stays open on error.
 
 **Notes / caveats.**
-- `_rebuildRootSnapshot` no-ops in real browsers (guarded by
-  `this.root instanceof window.HTMLElement`). It only runs under a DOM stub
-  where `appendChild` does not reflect children into `root.innerHTML` — the
-  since-retired `tests/run-node.js` sandbox was the only such host. Running it
-  in a browser would replace the real DOM (including the progress-bar markup
-  `_renderRow` appends) with a simplified label-only snapshot — hiding every
-  bar.
+- `root` is the live DOM and the only rendering: rows and groups are built
+  with `createElement`/`appendChild` and updated in place. (A label-only
+  `innerHTML` snapshot for DOM stubs whose `appendChild` did not reflect
+  children, `_rebuildRootSnapshot`, was removed with the vm test runner.)
 - Long session names truncate with ellipsis at the modal max-width (380 px)
   rather than forcing horizontal expansion. CSS: `.lpm-group-label` is
   `flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden;

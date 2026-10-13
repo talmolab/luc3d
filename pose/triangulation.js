@@ -62,12 +62,8 @@ export {
     computeFundamentalMatrix, epipolarError, epipolarErrorMatrix,
 };
 // The core reads these two settings through hooks (it cannot import ui/settings.js
-// and stay worker-loadable). The `typeof` checks date from a since-retired
-// flat-script test sandbox that did not load ui/settings.js; both are always true here.
-setTriangulationSettingsHooks({
-    isCameraTracked: typeof isCameraTracked === 'function' ? isCameraTracked : null,
-    getTrackingThreshold: typeof getTrackingThreshold === 'function' ? getTrackingThreshold : null,
-});
+// and stay worker-loadable).
+setTriangulationSettingsHooks({ isCameraTracked, getTrackingThreshold });
 
 /**
  * Compute mean Euclidean distance between two sets of 2D keypoints.
@@ -2051,10 +2047,6 @@ export async function triangulateMultiFrameInstances(startFrame, endFrame, onPro
  *      which is what an explicit user action on a brand-new group should honor.
  *      Never a bare `'dlt'` literal.
  *
- * The `typeof` guard on the settings getter dates from a since-retired
- * flat-script test harness that did not resolve the ES import, like the ones on
- * `isCameraTracked` / `getTrackingThreshold` above; it is always true now.
- *
  * NOT used by `ui/rendering.js`'s lazy reprojection fill, deliberately. That
  * path re-derives reprojections for 3D it does NOT own and does not write back,
  * so it must REPRODUCE the existing solve (`=== 'ba' ? 'ba' : 'dlt'`); falling
@@ -2069,9 +2061,7 @@ export async function triangulateMultiFrameInstances(startFrame, endFrame, onPro
 export function resolveTriangulationMethod(group) {
     if (group && group.triangulationMethod === 'ba') return 'ba';
     if (group && group.triangulationMethod === 'dlt') return 'dlt';
-    var pref = (typeof getDefaultTriangulationMethod === 'function')
-        ? getDefaultTriangulationMethod() : 'dlt';
-    return pref === 'ba' ? 'ba' : 'dlt';
+    return getDefaultTriangulationMethod() === 'ba' ? 'ba' : 'dlt';
 }
 
 /**
