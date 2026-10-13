@@ -15,7 +15,8 @@
  * surface.
  */
 
-import { trailFrames, trailRate } from './trail-presets.js?v=f779d289d596';
+import { trailFrames, trailRate } from './trail-presets.js?v=8be1dbca2728';
+import { DEFAULT_TRAIL_SHADE } from './overlays.js?v=8be1dbca2728';
 
 export const state = {
     views: [],          // { name, decoder, canvas, ctx, overlayCanvas, overlayCtx, videoWidth, videoHeight }
@@ -38,12 +39,14 @@ export const state = {
     exportDirHandle: null,      // FileSystemDirectoryHandle from showDirectoryPicker(), retained across exports
     cameraDirMap: {},           // camName -> subdirectory name, cached from session folder load
     colorByIdentity: false,     // false = color by track, true = color by identity
+    nativeResolution: false,    // View ▸ Native Resolution (Shift+0): every shown view at one video px per device px. Derived by VideoController._syncNativeMode; initZoom reads it so pane rebuilds keep 1:1.
     trailSeconds: 0,            // node-trail length in SECONDS (0 = off; presets ¼/½/1/2 s or Custom…, ui/trail-presets.js). Set via Tracks menu / Trails button.
     // The trail in FRAMES, derived — never stored — so it follows `fps` when a
     // video loads or the FPS pill is edited. Setting it (tests and benches pin a
     // frame count) stores the same span in seconds at the current rate.
     get trailLength() { return trailFrames(this.trailSeconds, this.fps); },
     set trailLength(frames) { this.trailSeconds = frames > 0 ? frames / trailRate(this.fps) : 0; },
+    trailShade: DEFAULT_TRAIL_SHADE, // node-trail color vs the track's: a TRAIL_SHADES key (ui/overlays.js). Set via Tracks menu / Trails button; remembered in localStorage.
     decoderPool: [],            // Persistent OnDemandVideoDecoder instances, reused across session switches
     slpFileHandle: null,        // FileSystemFileHandle for quick save
     isDirty: false,             // true when unsaved annotation changes exist
@@ -65,6 +68,19 @@ export function setVideoController(v) { videoController = v; }
 // any view actually has a decoder, not on the controller's existence.
 export function hasRealVideo() {
     return !!(videoController && state.views && state.views.some(function (v) { return v.decoder; }));
+}
+// True when `view` has a video pane in the dock, i.e. its canvas is on screen
+// (a pane in an inactive tab still counts). Every view keeps a decoder whether
+// or not it is docked, so frame stepping, playback and overlay drawing ask this
+// to skip the views nobody can see: with one camera solo'd out of 17, the other
+// 16 used to decode every step and play during playback all the same. A view
+// that is docked again gets a NEW canvas, and the pane's renderer then
+// re-seeks the current frame (`refreshPaneInteractions`), so skipping it
+// meanwhile never leaves a stale picture on screen. With no dock at all
+// (before the dock exists) every view counts as shown, as before.
+export function isViewDocked(view) {
+    if (!paneManager || !paneManager.dockedViews || !view) return true;
+    return paneManager.dockedViews.get(view.name) > 0;
 }
 export function setInteractionManager(v) { interactionManager = v; }
 export function setViewport3D(v) { viewport3d = v; }

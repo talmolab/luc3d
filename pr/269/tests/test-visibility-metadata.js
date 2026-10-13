@@ -30,24 +30,20 @@
     const { describe, it, assertEqual, assertNull, assertNotNull,
         assertTrue, assertFalse, assertDeepEqual } = TestFramework;
 
-    // Dual-runner resolution, with one extra hop beyond test-video-contrast.js.
+    // Name resolution, with one extra hop beyond test-video-contrast.js.
     //
     // `ui/video-filters.js` is SPREAD onto `window` by the browser runner, so
     // its exports resolve as bare globals. `ui/timeline-visibility.js` and
     // `import-export/visibility-metadata.js` are instead NAMESPACED there
     // (`window.__TimelineVisibility` / `window.__VisibilityMetadata`) because
-    // names like `ensureHiddenSets` are too generic to own a global. The `vm`
-    // sandbox has no such distinction — it strips `export` and leaves every
-    // declaration on its own global. Check the namespaces after the bare name so
-    // one lookup path serves both runners.
+    // names like `ensureHiddenSets` are too generic to own a global. Check the
+    // namespaces after the bare name.
     var NAMESPACES = ['__VisibilityMetadata', '__TimelineVisibility'];
 
     function pick(name) {
-        var g = (typeof window !== 'undefined') ? window
-            : (typeof globalThis !== 'undefined') ? globalThis : null;
-        if (g && g[name] !== undefined) return g[name];
-        if (typeof globalThis !== 'undefined' && globalThis[name] !== undefined) return globalThis[name];
-        for (var i = 0; g && i < NAMESPACES.length; i++) {
+        var g = window;
+        if (g[name] !== undefined) return g[name];
+        for (var i = 0; i < NAMESPACES.length; i++) {
             var ns = g[NAMESPACES[i]];
             if (ns && ns[name] !== undefined) return ns[name];
         }
@@ -367,6 +363,46 @@
             assertNull(m.writeVisibilityMetadata(null, fakeSession()), 'null lucid returns null');
             var lucid = fakeLucid();
             assertEqual(m.writeVisibilityMetadata(lucid, null), lucid, 'null session returns the dict');
+        });
+
+        // The number of animals tracking uses (Session.numAnimals, the toolbar's
+        // Animals field): a count, an explicit 'auto', or null = never asked.
+        it('round-trips the animal count, and an explicit auto-detect', function () {
+            var m = M();
+            [3, 1, 12, 'auto'].forEach(function (v) {
+                var src = fakeSession('src');
+                src.numAnimals = v;
+                var lucid = m.writeVisibilityMetadata(fakeLucid(), src);
+                assertEqual(lucid.numAnimals, v, 'numAnimals ' + v + ' is written');
+                var dst = fakeSession('dst');
+                m.readVisibilityMetadata(dst, lucid);
+                assertEqual(dst.numAnimals, v, 'numAnimals ' + v + ' reads back');
+            });
+        });
+
+        it('a never-asked session writes no animal count, and reads back as never asked', function () {
+            var m = M();
+            var src = fakeSession();
+            src.numAnimals = null;
+            var lucid = m.writeVisibilityMetadata(fakeLucid(), src);
+            assertFalse('numAnimals' in lucid, 'null is the default and is not written');
+            var dst = fakeSession();
+            dst.numAnimals = 4;   // a stale value must not survive a read of a file without one
+            m.readVisibilityMetadata(dst, lucid);
+            assertNull(dst.numAnimals, 'absent reads back as null, so the next Track asks');
+        });
+
+        it('a bad animal count is neither written nor read', function () {
+            var m = M();
+            [0, -2, 2.5, '3', 'AUTO', true, NaN, {}].forEach(function (v) {
+                var src = fakeSession();
+                src.numAnimals = v;
+                var lucid = m.writeVisibilityMetadata(fakeLucid(), src);
+                assertFalse('numAnimals' in lucid, JSON.stringify(v) + ' is not written');
+                var dst = fakeSession();
+                m.readVisibilityMetadata(dst, { numAnimals: v });
+                assertNull(dst.numAnimals, JSON.stringify(v) + ' on disk reads back as never asked');
+            });
         });
     });
 

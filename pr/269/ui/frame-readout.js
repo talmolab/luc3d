@@ -15,11 +15,16 @@
 // Every writer of `#currentFrame` / `#totalFrames` goes through here — the
 // loaders, the session switch and reset, the inline frame editor, the FPS
 // pill — so the time line can never fall out of step with the frame line.
-// Imports only `app-state.js` and `seekbar-tooltip.js`, both import-free, so
-// `frameReadoutText` is unit-tested in Node (`tests/test-frame-readout.mjs`).
+// It also refreshes the seekbar's time ruler (ui/seekbar-ticks.js) whenever
+// the totals or FPS change: the ruler marks the same times, and the FPS pill
+// re-times both without moving the frame.
+// Imports only `app-state.js`, `seekbar-tooltip.js` and `seekbar-ticks.js`,
+// all import-free, so `frameReadoutText` is unit-tested in Node
+// (`tests/test-frame-readout.mjs`).
 
-import { state } from './app-state.js?v=f779d289d596';
-import { formatTimestamp } from './seekbar-tooltip.js?v=f779d289d596';
+import { state } from './app-state.js?v=8be1dbca2728';
+import { formatTimestamp } from './seekbar-tooltip.js?v=8be1dbca2728';
+import { refreshSeekbarTicks } from './seekbar-ticks.js?v=8be1dbca2728';
 
 // One formatter, built once: this runs on every frame of playback.
 const NUMBER = new Intl.NumberFormat('en-US');
@@ -76,6 +81,7 @@ export function refreshReadoutTotals() {
     setText('totalFrames', t.total);
     setText('totalTime', t.duration);
     setText('currentTime', t.time);
+    refreshSeekbarTicks();   // the ruler under the seekbar marks the same times
 }
 
 /** The empty state, for a project or session that has just been closed. */
@@ -86,4 +92,5 @@ export function clearReadout() {
     setText('totalFrames', t.total);
     setText('currentTime', t.time);
     setText('totalTime', t.duration);
+    refreshSeekbarTicks();   // the callers zero state.totalFrames first, so this empties the ruler
 }

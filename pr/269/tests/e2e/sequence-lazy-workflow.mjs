@@ -186,8 +186,8 @@ try {
         /** What the status bar shows right now. */
         window.__seqCountersShown = () => {
             const num = (id) => {
-                const m = ((document.getElementById(id) || {}).textContent || '').match(/-?\d+/);
-                return m ? Number(m[0]) : null;
+                const m = ((document.getElementById(id) || {}).textContent || '').match(/-?\d[\d,]*/);   // "Labeled Frames: 1,234"
+                return m ? Number(m[0].replace(/,/g, '')) : null;
             };
             return {
                 cam: ((document.getElementById('statusCamera') || {}).textContent || '').replace(/^Camera:\s*/, ''),
@@ -1044,11 +1044,14 @@ try {
     // the sweep only visited resident frames the project would come back nearly
     // empty — the original `trackAll` bug ("No frames to track"), one layer deeper.
     const trackRes = await runOp('TRACK ALL', async () => {
-        // `trackerNumAnimals` is module-private and only settable through
-        // `promptNumAnimals()`, so drive the real path with a stubbed prompt
-        // rather than reaching into module state.
+        // The animal count is saved with the session now, so answering it
+        // marks the project dirty by itself — set it BEFORE starting clean, or
+        // the prompt would hide a tracker that never marks the project. The
+        // stubbed prompt stays as a backstop: if it ever fires, it answers.
         const origPrompt = window.prompt;
         window.prompt = () => '2';
+        const tk = await import('/pose/tracker.js');
+        tk.setTrackerNumAnimals(2);
         // Start clean, so the dirty flag afterwards is Track All's own doing.
         // The automatic ID-switch checks that follow Track All are switched off
         // for this one run: when one runs it calls markDirty() itself, which
@@ -1060,7 +1063,6 @@ try {
             { autoSwitchCheck: 0, autoImageSwitchCheck: 0 }));
         saveLoad.clearDirty();
         try {
-            const tk = await import('/pose/tracker.js');
             const t = performance.now();
             const wasDirty = window.__lucid.state.isDirty;
             await tk.trackAll();
