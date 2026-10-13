@@ -93,7 +93,15 @@ export const IMAGE_CHECK_DEFAULTS = Object.assign({}, SWITCH_CHECK_DEFAULTS, {
     releaseFrames: null,   // optional: () — called when done (or cancelled)
 });
 
-const isTailNode = function (name) { return /^tail/i.test(name); };
+/**
+ * Whether a node is part of the tail, which the checks leave out of an animal's
+ * body (its centroid, its crop, its coat brightness): a name starting with
+ * "tail" (Tail_0, TailTip, tail_tip …), or `t` and a number (t0, t1, t2 — as some
+ * SLEAP skeletons name the tail's segments), in any case.
+ * @param {string} name
+ * @returns {boolean}
+ */
+export function isTailNode(name) { return /^tail/i.test(name) || /^t\d+$/i.test(name); }
 
 /**
  * The index of node `name` in `names`, matched regardless of case — SLEAP

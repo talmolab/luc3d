@@ -3850,7 +3850,10 @@ candidate moments tested on both sides — it was calibrated on that. Pure — n
 no app state — so all run headlessly (the image and brightness checks with any
 vector provider).
 
-**Key exports.** `findNode(names, name)` (a node's index matched regardless of
+**Key exports.** `isTailNode(name)` (a name starting with "tail", or `t` and a number —
+`t0`, `t1`, `t2`, as some SLEAP skeletons name the tail — in any case; tail nodes are
+left out of an animal's body: its centroid here, its crop and coat brightness in
+`ui/image-embedder.js` `skeletonIndex`); `findNode(names, name)` (a node's index matched regardless of
 case: an exact match wins, then the first case-insensitive one, else -1 — the size
 bones here and Nose / TTI in `ui/image-embedder.js` `skeletonIndex`, since SLEAP
 skeletons name nodes freely: `nose`, `tti`, …); `checkSizeSwitches(session, opts)` and
@@ -10632,7 +10635,8 @@ against `cutCrop` itself within 0.04 px, at any rotation);
 Promise<Float32Array[]>, broken, terminate()}` or null; crop helpers
 `cropGeometry` (now also `pts`: every keypoint, for the overlay — cutCrop ignores it), `cutCrop`,
 `convexHull`, `writeInputTensor`, `skeletonIndex(nodes)` (now also `n`, the node count; Nose and
-TTI are found regardless of case, through `pose/id-switch-check.js` `findNode`),
+TTI are found regardless of case, through `pose/id-switch-check.js` `findNode`, and the body is
+every node `isTailNode` does not call tail),
 `frameCropGeometry(session, frame, items, cams, atFrames, sk)` -> `geo[view][item]`, built on
 `mapFrameInstances(session, frame, items, cams, atFrames, fn)` (fn(instance) per view and item, on
 the frame each view decodes, hydrating a lazy project's frames around the read) and

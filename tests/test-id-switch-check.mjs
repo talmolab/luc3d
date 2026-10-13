@@ -811,6 +811,8 @@ group('Node names are matched regardless of case (SLEAP skeletons name nodes fre
     eq(SC.findNode(['ear_left', 'nose', 'TTI'], 'Nose'), 1, 'otherwise the first case-insensitive one');
     eq(SC.findNode(['NOSE'], 'nose'), 0, 'either way round');
     eq(SC.findNode(['snout', 'tail_base'], 'Nose'), -1, 'a different name is not matched (-1)');
+    ok(['Tail_0', 'TailTip', 'tail_tip', 't0', 'T1', 't2', 't12'].every(SC.isTailNode) && !['tti', 'trunk', 'TTI', 'head', 't', 'tx'].some(SC.isTailNode),
+        'tail nodes: a name starting with "tail", or t and a number (t0, t1, t2) — not tti, trunk, t or tx');
     // the same session, its skeleton named in lowercase: the size check must score it identically
     const SWAP = 16, a = buildSession(SWAP), b = buildSession(SWAP);
     b.session.skeleton = new PD.Skeleton('m', NODES.map(n => n.toLowerCase()), []);
@@ -823,6 +825,7 @@ group('Node names are matched regardless of case (SLEAP skeletons name nodes fre
     if (E.__err) ok(false, 'image-embedder imports headlessly: ' + E.__err.message);
     else {
         const lower = E.skeletonIndex(['tail_tip', 'ear_left', 'nose', 'tti', 'head']), std = E.skeletonIndex(['TailTip', 'Ear_L', 'Nose', 'TTI', 'Head']);
+        eq(JSON.stringify(E.skeletonIndex(['nose', 't0', 'tti', 't1', 't2', 'tail_tip', 'trunk']).body), '[0,2,6]', 'image check: t0 / t1 / t2 are tail, not body');
         ok(lower.nose === 2 && lower.tti === 3 && JSON.stringify(lower.body) === JSON.stringify(std.body),
             `image check: nose / tti found in a lowercase skeleton (${lower.nose}, ${lower.tti}), the same body nodes as the standard names`);
     }

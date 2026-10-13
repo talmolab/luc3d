@@ -41,7 +41,7 @@
  */
 
 import { state } from './app-state.js';
-import { planKeyframeSamples, KEYFRAME_GAP_TOLERANCE, findNode } from '../pose/id-switch-check.js';
+import { planKeyframeSamples, KEYFRAME_GAP_TOLERANCE, findNode, isTailNode } from '../pose/id-switch-check.js';
 import { hydrateFrameMembers2d, releaseFrameMembers2d } from '../pose/lazy-residency.js';
 import { createLoadMeter, createBusyClock, formatCpuLoad, LOAD_WINDOW_MS } from './load-graph.js';
 
@@ -397,7 +397,7 @@ export function skeletonIndex(nodes) {
     const names = nodes.map(function (n) { return typeof n === 'string' ? n : n && n.name; });
     return {
         nose: findNode(names, NOSE), tti: findNode(names, TTI),
-        body: names.map(function (n, i) { return i; }).filter(function (i) { return names[i] && !/^tail/i.test(names[i]); }),
+        body: names.map(function (n, i) { return i; }).filter(function (i) { return names[i] && !isTailNode(names[i]); }),
         n: names.length,
     };
 }
