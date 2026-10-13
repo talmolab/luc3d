@@ -1916,27 +1916,93 @@ bookkeeping, session save/load.
 
 ### pose/tracker-worker.js
 
-**Purpose.** Web Worker scaffold for batch cross-view tracking (currently
-dead code — see comment at top of file). No `new Worker(...)` spawn site
-exists in the codebase, and the worker references `CrossViewTracker` and
-`Detection2D` which are not defined anywhere.
+**Purpose.** Module worker that runs Track All's `CrossViewTracker` off the
+main thread, spawned by `pose/tracker-pool.js`. (It replaced a dead scaffold of
+the same name that referenced classes that no longer existed.) The tracker is
+sequential — each frame is matched against the targets the previous one left —
+so ONE worker runs it, frame by frame, in order; what moves off the main thread
+is the work itself, while the main thread keeps hydrating frames and committing
+the results.
 
-**Message protocol** (only what the worker handles, even though it can't
-run in its current state).
-- IN: `{type: 'start', data: {frames, cameras, hyperparameters}}`.
-- IN: `{type: 'cancel'}`.
-- OUT: `{type: 'progress', frame, total}` — every 100 frames.
-- OUT: `{type: 'cancelled', frame}`.
-- OUT: `{type: 'complete', results: {identityAssignments, numTargets}}`.
-- OUT: `{type: 'error', message}`.
+**Bit-identical by construction.** It runs the same code
+(`pose/cross-view-tracker.js`) on the same inputs in the same order:
+- cameras arrive with the main thread's own cached `_cachedR` / `_cachedRt` /
+  `_cachedP` installed, so no matrix is re-derived here;
+- each detection arrives as a copy of its instance's flat `_xy` — the only
+  thing `Detection` reads (`toPointsArray` → `getPoint`), and it snapshots that
+  at construction, so the tracker never reads an `Instance` again — in the same
+  per-camera slot order `buildTrackerDetections` uses (the detection filter is
+  applied on the main thread, by `buildTrackerInputs`).
+Pinned by `tests/e2e/track-all-worker.mjs`.
 
-**Imports from project modules.** None (originally used `importScripts`
-which was removed during the ESM migration).
+**Message protocol.** A batch travels as a handful of TYPED ARRAYS each way,
+never one object or buffer per detection — serializing ~2,400 small arrays per
+100-frame batch cost ~1 s of a 7 s Track All across the two threads
+(HardFight), which made the worker run 10% SLOWER than inline until it went.
+- IN `{type: 'init', hp, cameras: [{name, matrix, dist, rvec, tvec, size, R, Rt, P}]}`
+  → `{type: 'ready'}`. The arrays are rebuilt by push (`unboxed`): a structured
+  clone delivers V8's generic boxed-number arrays, and the tracker reads these
+  matrices in its innermost loops (worker tracking 7.7 → 7.5 s on HardFight).
+- IN `{type: 'frames', id, fis, counts, lens, xy}` — frame `i`'s camera `c` has
+  `counts[i*C + c]` detections, each one's `_xy` the next `lens[d]` values of
+  `xy` (frame, camera, slot order); a detection's `Instance` adopts its VIEW.
+  → `{type: 'tracked', id, r: {fis, nT, live, trackIds, nMem, mem, p3len, p3}}`
+  — per frame, what `commitTrackedFrame` reads, in tracker order: `nT[i]`
+  targets holding a detection from >= 2 cameras THIS frame, each with its
+  `trackId`, `nMem` (camera index, slot) pairs in `mem` in its `detsByCam` order,
+  and a copy of its 3D as the next `p3len` values of `p3` (-1: none); `live[i]`
+  = the tracker's target count after the frame (the run's `numTargets`). All
+  transferred.
+- Any throw → `{type: 'error', id, message}`.
 
-**Imported by.** Nothing.
+**Imports from project modules.** `./pose-data.js` (`Camera`, `Instance`),
+`./cross-view-tracker.js` (`CrossViewTracker`, `Detection`) — both worker-safe.
 
-**User-facing features.** None — dead code, intended to back a future
-"Track All in Worker" mode.
+**Imported by.** Spawned by `pose/tracker-pool.js` via
+`new Worker(new URL('pose/tracker-worker.js', document.baseURI), {type: 'module'})`.
+
+**User-facing features.** Track All / Track Frame Range run their tracker here.
+
+---
+
+### pose/tracker-pool.js
+
+**Purpose.** The main-thread side of Track All's tracker worker
+(`pose/tracker-worker.js`): `startTrackerWorker(cameras, hp, onFrame, opts)`
+spawns it, posts `init`, and resolves with a handle once it answers `ready` — or
+`null` (track inline) when workers are unavailable, `window.LUCID_TRACKER_WORKER
+=== 0` (`trackerWorkerWanted`; the kill switch and the A/B tests' inline side),
+or it fails to start. A worker that cannot start never costs a run.
+
+**Handle.** `submit(fi, cams)` queues one frame (per camera, in the run's
+order, each detection's flat 2D in slot order), COPYING it into the batch's one
+growing `Float64Array`, and posts the batch (transferred) every `TRACKER_BATCH`
+(100) frames. `saturated()` / `throttle()` hold the main
+thread to at most `TRACKER_MAX_IN_FLIGHT` (20) batches ahead — 2,000 frames, one
+sweep window, so the worker has a window's work queued while the main thread
+hydrates the next instead of idling through it. `committedThrough(fi)` resolves
+once every submitted frame up to `fi` is committed (flushing a partial batch);
+`finish()` once everything is. `cpuBusyMs()` is the worker's busy time (a
+`createBusyClock` lane open while it holds a batch) for the CPU line; `close()`
+terminates it.
+
+**Results commit IN ORDER, from the message handler.** `decode` turns a batch's
+`r` back into `onFrame(fi, targets, live)` calls — `targets`
+`[{trackId, points3d, members}]`, `members` a view of (camera index, slot) pairs
+and `points3d` a view to COPY (`pooledPoints3d` does), not keep — for each frame
+of each returned batch, wrapped in
+`opts.busyDuring` so the loading overlay counts it as main-thread work even
+inside an `idleWhile` wait. A frame must still be RESIDENT when its result
+arrives — the caller holds sweep windows until `committedThrough`. A commit that
+throws, or a worker that errors, sets `failure`: every later wait rejects with
+it, so a mid-run failure fails the pass (error status) rather than hanging.
+
+**Imports from project modules.** `../ui/load-graph.js` (`createBusyClock`).
+
+**Imported by.** `pose/tracker.js`.
+
+**User-facing features.** Track All / Track Frame Range speed, and their CPU
+line (the worker plus the main thread).
 
 ---
 
@@ -2173,12 +2239,18 @@ drifts upward (e.g., 4 → 11 on the test fixture).
 - `../import-export/save-load.js` — `markDirty` (every tracking pass, once its
   bail-outs are behind it — see above), `setStatus`, `hideLoading`.
 - `../ui/loading-overlay.js` — `showLoadingProgress`, `createProgressPacer`,
-  `yieldToPaint`, and `setLoadingCpu({mainThread: true})` as the identity pass
-  starts: the overlay's CPU line and graph, clocking the main thread minus its
-  paint waits — one core's share, since the tracker steps frames in order with no
-  workers (tooltip: "…by Track All, which runs on the main thread: one core at
-  most"). Covered by `tests/e2e/track-all-cpu-load.mjs`, which also pins the
-  progress line's, status line's and summary box's thousands commas.
+  `yieldToPaint`, `idleWhile` / `busyDuring` (the waits on the tracker worker
+  are idle time, its commits are not), and `setLoadingCpu` as the identity pass
+  starts: the overlay's CPU line and graph. On the worker it is
+  `{mainThread: true, cpuBusyMs: pool.cpuBusyMs}` — the worker's busy time plus
+  the main thread's minus its waits (tooltip: "…by Track All: its tracker worker,
+  and the main thread loading frames and writing back the results"); inline it
+  is `{mainThread: true}` alone — one core's share (tooltip: "…which runs on the
+  main thread: one core at most"). Covered by `tests/e2e/track-all-cpu-load.mjs`
+  (both), which also pins the progress line's, status line's and summary box's
+  thousands commas.
+- `./tracker-pool.js` — `startTrackerWorker` (see "Track All runs its tracker on
+  a worker" below).
 - `../ui/rendering.js` — `drawAllOverlays`, `showPredictedOnly`,
   `PREDICTED_ONLY_NOTE`: Track Frame (when it found targets), Track Frame Range
   and Track All (when they assigned identities) end showing ONLY the Predicted
@@ -2223,6 +2295,38 @@ drifts upward (e.g., 4 → 11 on the test fixture).
 
 **User-facing features.** "Track Frame" / "Track All" buttons, identity
 propagation across frames, find-match-for-selected.
+
+**Track All runs its tracker on a worker** (`pose/tracker-pool.js` +
+`pose/tracker-worker.js`). `runTrackingPass` makes the run
+(`createTrackerRun`, which now keeps `hp` on it) and `attachTrackerWorker`
+starts ONE worker with it; the tracker is sequential, so the parallelism is the
+main thread hydrating frames, building inputs and committing results WHILE the
+worker tracks. Per frame, `submitTrackerFrame` builds `buildTrackerInputs`
+(`buildTrackerDetections`' filter and slot order exactly; per camera, each
+passing detection's `_xy` — the pool copies it — plus a kept
+`{frameIdx, instance, unlinkedId}` per slot) and submits it; `commitWorkerFrame`
+turns the worker's targets back into the shape `commitTrackedFrame` reads off a
+`CrossViewTracker` (targets in order, each one's this-frame members in its
+`detsByCam` order, camera indices back to names) and calls it — the
+commit is the inline one, unchanged, so identities, `frameIdentityMap`, groups,
+promotions and 3D are bit-identical to the inline run
+(`tests/e2e/track-all-worker.mjs`, with a 1e-9 px negative control). Both
+loops take the run: `trackFrameListProgress` (the non-windowed one;
+`runCrossViewTrackerProgress` is now a wrapper over it, inline) and
+`sweepTrackAllFrames(session, run, onProgress, opts)`, which on the worker sweeps
+with `releaseLag: 1` and `beforeRelease → committedThrough(end - 1)`: a window
+stays resident until its results are written into its FrameGroups, while the
+next one hydrates. Progress reports the frames COMMITTED, not sent. If the
+worker cannot start, both run inline as before; `window.LUCID_TRACKER_WORKER =
+0` forces that. **Measured** (`tests/e2e/_diag-trackall-ab.mjs`, OLD = inline):
+05mice_flippers (lazy, 108,000 frames, 5 mice) 54.9 → 37.9 s; HardFight (eager,
+36,000 frames, 3 mice) 7.5 → 7.3 s; identical groups on every frame and
+bit-identical tracker 3D on both. The gain is what the main thread had besides
+tracking — a lazy project's hydration — so an eager project gains little: the
+tracker alone is ~90% of its run. `tests/e2e/_diag-trackall-worker-profile.mjs`
+traces both threads (per-thread busy time, `PROFILE=1` for V8 self time per
+function), which is how the messaging cost (see `pose/tracker-worker.js`) was
+found.
 
 **Tracker engine.** `trackCurrentFrame` / `trackAll` drive the
 `CrossViewTracker` (`pose/cross-view-tracker.js`) exclusively — it is the app's
@@ -2539,13 +2643,15 @@ nodes entirely (dropping them from matching). `null`/omitted ⇒ every node weig
 1 (faithful). Wired from `runCrossViewTracker` via the Tracking Wizard's Node
 Weights section (`getNodeWeightArray`).
 
-**Imports.** `pose/triangulation.js` (all geometry is coordinate-agnostic and
+**Imports.** `pose/triangulation-core.js` (all geometry is coordinate-agnostic and
 reused by passing the bare extrinsic + normalized points:
 `triangulatePoints`, `reprojectPoint`, `backProjectToRays`,
 `pointsToRayDistances`, `hungarianAlgorithm`, `computeFundamentalMatrix`,
-`epipolarErrorMatrix`).
+`epipolarErrorMatrix`). From the core, NOT `pose/triangulation.js` (which
+re-exports them): that module pulls in the whole UI, and this one must load in
+`pose/tracker-worker.js`. Keep every import of this module worker-safe.
 
-**Imported by.** `pose/tracker.js`.
+**Imported by.** `pose/tracker.js`, `pose/tracker-worker.js`.
 
 ---
 
@@ -2557,8 +2663,12 @@ hosts the lazy-H5 frame loader and the user-facing triangulation orchestration
 (single-frame, all-frames, multi-frame range).
 
 **The pure math now lives in `pose/triangulation-core.js`** (DLT,
-refinement, reprojection, errors, `triangulateAndReproject`, `invert3x3`) so the
-Triangulate All worker pool can load it; this module imports it and
+refinement, reprojection, errors, `triangulateAndReproject`, `invert3x3`, and —
+since the tracker moved to a worker — the tracker's geometry:
+`hungarianAlgorithm`, `cameraCenter`, `backProjectToRay(s)`,
+`pointToRayDistance`, `pointsToRayDistances`, `computeFundamentalMatrix`,
+`epipolarError`, `epipolarErrorMatrix`) so the Triangulate All worker pool and
+Track All's tracker worker can load it; this module imports it and
 **re-exports every public name**, so all existing imports keep working. It
 installs the core's two settings hooks (`setTriangulationSettingsHooks`) with
 `isCameraTracked` / `getTrackingThreshold`.
@@ -2613,7 +2723,12 @@ re-adopts every member's row, and Track All builds its groups from the
 instances it hydrated, so without this one sweep left every member of the
 project holding a private copy of its 2D (4,152,565 members / 1.39 GB on the
 real 8-camera project). Solver jobs capture their 2D at submit, so releasing a
-window whose solves are still in flight is safe. **Progress/yielding is clock-paced**
+window whose solves are still in flight is safe. **Release lag** (Track All's
+tracker worker): `opts.releaseLag` N keeps the last N visited windows resident
+and releases each only after the next N have been visited, awaiting
+`opts.beforeRelease(start, end)` first — the tracker's results are WRITTEN into
+the window's FrameGroups, so unlike a solve they must land before it goes.
+Both omitted: exactly the old behaviour. **Progress/yielding is clock-paced**
 (`createProgressPacer`, `ui/loading-overlay.js`): `opts.onProgress(done, total)`
 is awaited just before each ~250 ms yield and once at the end, where `done` is the
 sweep POSITION (frames passed, data or not), so it rises monotonically to `total`
@@ -3433,7 +3548,12 @@ reprojection (`reprojectPoint(s)`, `reprojectPointCamera(s)`, `cameraDepth` —
 the homogeneous `w`, POSITIVE in front of the camera, which any caller
 reprojecting into a camera it did not choose must gate on), errors
 (`computeReprojectionError(s)`, `computeMeanReprojectionError`), `invert3x3`,
-and the full per-group pipeline `triangulateAndReproject`.
+the full per-group pipeline `triangulateAndReproject`, and the cross-view
+tracker's geometry — `hungarianAlgorithm`, `cameraCenter`, `backProjectToRay`,
+`backProjectToRays` (with their `_pGeometry` / `_pseudoInverse` WeakMap memo),
+`pointToRayDistance`, `pointsToRayDistances`, `computeFundamentalMatrix`,
+`epipolarError`, `epipolarErrorMatrix` — moved here verbatim from
+`pose/triangulation.js` so `pose/tracker-worker.js` can load the tracker.
 
 **Key exports.** All of the above, plus `setTriangulationSettingsHooks({
 isCameraTracked, getTrackingThreshold })` — the only app state the pipeline
@@ -3498,7 +3618,7 @@ finds it, so the test injects noise deliberately.
 rows exactly — multiplying by 1 and adding 0 are exact in IEEE 754 — so the
 bit-identity `tests/test-triangulation-kernels.mjs` pins is unaffected.
 
-**Imports from project modules.** `./pose-data.js` (point3d helpers) and
+**Imports from project modules.** `./pose-data.js` (point3d helpers, and `mat3x3Multiply` for `computeFundamentalMatrix`) and
 `./plane-fit.js` for `jacobiEigen`, which is re-exported from here. That
 function has ONE home: `pose/plane-data.js` needs the least-squares plane fit
 built on it and must not import `pose/triangulation.js` (and the whole UI with
@@ -3506,7 +3626,8 @@ it), and `plane-fit.js` itself depends only on `./pose-data.js`, so a worker can
 still load this module.
 
 **Imported by.** `pose/triangulation.js` (re-exports), `pose/triangulation-pool.js`,
-`pose/triangulation-worker.js`. Loaded before `pose/triangulation.js` by
+`pose/triangulation-worker.js`, `pose/cross-view-tracker.js` (and so
+`pose/tracker-worker.js`). Loaded before `pose/triangulation.js` by
 `tests/run-node.js`.
 
 ---
@@ -5612,16 +5733,19 @@ the card's content edge).
   (`#loadingHardware` = `#loadingCpu` + `#loadingGraph`): "CPU: 12 cores · load
   92%", sampled every `CPU_SAMPLE_MS` (1 s) as busy thread-ms / cores through
   `createLoadMeter`, its tooltip ending "kept busy over the last 5 s by " +
-  `source.counts`. Two kinds of source: `{cpuBusyMs, counts}` — Triangulate All,
-  its solver's clock over the workers and the main thread — or `{mainThread:
-  true, counts}` — Track All / Track Frame Range, whose tracker steps the frames
-  in order on the main thread with no workers. For that one the overlay clocks
-  the main thread itself (`createBusyClock`): busy from the call on, EXCEPT while
-  it waits in `yieldToPaint` — which closes the `'main'` lane for the wait,
-  counting overlapping yields so the lane reopens once, when the last one ends.
-  So it reads one core's share (8% on 12 cores): the honest picture of a
-  single-threaded pass on a many-core machine. Its other waits — the windowed
-  sweep's 50 ms GC hint every 5 windows — still count; negligible. CPU only: the
+  `source.counts`. A source has `cpuBusyMs()` — Triangulate All, its solver's
+  clock over the workers and the main thread — and/or `mainThread: true`, for
+  which the overlay clocks the main thread itself (`createBusyClock`): busy from
+  the call on, EXCEPT while it waits in `yieldToPaint` or `idleWhile` — each
+  closes the `'main'` lane for the wait, counting overlapping waits so the lane
+  reopens once, when the last one ends. Both given, the line is their SUM: Track
+  All / Track Frame Range on the tracker worker (`pose/tracker-pool.js`) pass
+  `{mainThread: true, cpuBusyMs: pool.cpuBusyMs}`, the worker plus the main
+  thread hydrating and committing — between one and two cores' share. Inline
+  (no worker) they pass `{mainThread: true}` alone, which reads one core's share
+  (8% on 12 cores): the honest picture of a single-threaded pass on a many-core
+  machine. Its other waits — the windowed sweep's 50 ms GC hint every 5 windows
+  — still count; negligible. CPU only: the
   operations that report here never use the GPU. The same parts as the image
   check's dialog (`createLoadGraph`, `formatCpuLoad`, `setLoadLine`,
   `ui/load-graph.js`); the graph is built into `#loadingGraph` once and
@@ -5636,6 +5760,12 @@ the card's content edge).
   (measured), and the line samples once a second after 0.5 s of history — so it
   could only ever read "CPU: 12 cores", with no load. A CPU line is worth adding
   to an operation that runs for several seconds AND yields while it does.
+- `idleWhile(promise)` — awaits `promise` as main-thread IDLE time for a
+  `{mainThread}` CPU line (the main thread waiting on a worker is not using the
+  CPU), sharing `yieldToPaint`'s wait count. No line: just the promise.
+- `busyDuring(fn)` — runs `fn` counted as main-thread CPU time even inside an
+  `idleWhile` / `yieldToPaint` wait: the tracker worker's results are committed
+  from its message handler, which runs during exactly those waits.
 - `createProgressPacer(intervalMs = PROGRESS_INTERVAL_MS)` → `{ due(), yield() }`.
   `due()` is true at most once per interval (a `performance.now()` check, cheap
   enough to call every iteration); `yield()` = `yieldToPaint()`, after which the
