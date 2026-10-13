@@ -2221,7 +2221,8 @@ drifts upward (e.g., 4 → 11 on the test fixture).
   are saved per BROWSER, so a 0 left from another project used to drop a node
   from this one's matching with nothing on the way to the run saying so. On
   Continue `askTrackSetup` writes the weights (`setNodeWeights`, MERGED into
-  `getNodeWeights()` so another skeleton's overrides survive) and then the
+  `getNodeWeights()` so another skeleton's overrides survive — through
+  `updateNodeWeights`) and then the
   count, both before `createTrackerRun` snapshots them; Cancel writes nothing
   and the run bails. `trackCurrentFrame` is `async` for this (its callers
   ignore the return value). Track Frame Range never opens it: its own dialog
@@ -2244,7 +2245,7 @@ drifts upward (e.g., 4 → 11 on the test fixture).
 - `../ui/app-state.js` — `state`, `interactionManager`, `timeline`,
   `viewport3d`, `getActiveSession`.
 - `../ui/settings.js` — `getNodeWeightArray`, `getNodeWeight`,
-  `getNodeWeights`, `setNodeWeights` (the first-use dialog's weights, above),
+  `updateNodeWeights` (the first-use dialog's weights, above),
   `getTrackingThresholds`,
   `getTrackingThreshold`, `isCameraTracked` (both `trackAll`/`trackCurrentFrame`
   drop cameras where `isCameraTracked(name)` is false before tracking; abort with
@@ -10469,11 +10470,16 @@ KEY (`e.code === 'Digit0'`) in `ui/ui-wiring.js`'s transport handler beside
   `setNodeWeights(map)` — read/write per-node tracking weights (clamped to
   `[0,1]`; entries equal to the default `1` are dropped). `getNodeWeightArray`
   resolves a parallel weight array for an ordered node-name list — the form the
-  tracker consumes (indexed to match `Instance.points`). Two editors write them:
-  the Tracking Wizard (`ui/settings-modal.js`) and Track All / Track Frame's
-  first-use dialog (`ui/track-setup-modal.js`, through `pose/tracker.js`, which
-  merges its answer into `getNodeWeights()` since `setNodeWeights` replaces the
-  whole map).
+  tracker consumes (indexed to match `Instance.points`). Three editors write
+  them: the Tracking Wizard (`ui/settings-modal.js`, `setNodeWeights` — it
+  replaces the whole map), and, through `updateNodeWeights(map)`, Track All /
+  Track Frame's first-use dialog (`ui/track-setup-modal.js`, via
+  `pose/tracker.js`) and the Track Frame Range dialog
+  (`ui/track-range-modal.js`).
+- `updateNodeWeights(map)` — commit SOME nodes' weights, keeping every other
+  stored override (`setNodeWeights(Object.assign(getNodeWeights(), map))`):
+  weights are keyed by node name per browser, so another skeleton's must
+  survive an edit to this one's.
 - `getCameraWeight(name)` / `isCameraTracked(name)` / `getCameraWeights()` /
   `setCameraWeights(map)` — read/write per-camera tracking inclusion (coerced to
   `0|1`; entries equal to the default `1` are dropped so only excluded views
@@ -11162,7 +11168,9 @@ Wizard settings, instead of re-running a whole long recording.
 **Imports from project modules.** `ui/app-state.js` (`state`,
 `getActiveSession`), `import-export/save-load.js` (`setStatus`),
 `pose/tracker.js` (`trackFrameRange`, `trackableFrameBounds`,
-`getTrackerNumAnimals`, `setTrackerNumAnimals`).
+`getTrackerNumAnimals`, `setTrackerNumAnimals`), `ui/settings.js`
+(`getNodeWeight`, `updateNodeWeights`), `ui/track-setup-modal.js`
+(`buildNodeWeightFields`, a leaf).
 
 **Imported by.** `ui/ui-wiring.js` (wires `#tbTrackFrameRange`, the dropdown
 item; the `#tbTrackFrame` button itself stays wired to `trackCurrentFrame` in
@@ -11174,7 +11182,13 @@ which `ui-wiring.js` already imported directly — so it introduces no new cycle
 Frames for Triangulation"), two-way bound to Start frame (pre-filled with the
 current frame) and End frame (pre-filled to a 100-frame window, clamped to the
 project), plus **Animals** (pre-filled with the current count; blank =
-auto-detect). A live summary line reports the range size and the effective
+auto-detect), plus the skeleton's **node weights**, editable — the same grid
+as the first-use dialog (`buildNodeWeightFields`), since re-running a window
+under different weights is the commonest reason to be here. Continue writes
+them through `updateNodeWeights` before the run reads them; Cancel / Esc write
+nothing; a weight outside `[0, 1]` disables Continue. The card widens to
+620px for the grid and becomes the one scroller on a short window. A live
+summary line reports the range size and the effective
 animal count; a live error line explains an invalid range and disables Continue
 rather than closing on bad input. `Enter` is Continue and `Esc` is Cancel, per
 the app-wide modal convention. On a successful run the viewer is parked on the
@@ -11246,6 +11260,11 @@ project silently dropped a node from this one's matching; this question is the
 one moment every user passes through before tracking a session.
 
 **Key exports.**
+- `buildNodeWeightFields(nodes)` → `{element, read, refresh}` — the node-weight
+  editor both tracking dialogs show (title, one sentence, the grid). `element`
+  is null for no nodes; `read()` returns `{nodeWeights}` or `{error}` (a weight
+  outside `[0, 1]`, naming the node — never clamped); `refresh()` greys the
+  rows weighted 0. Commits nothing. Also used by `ui/track-range-modal.js`.
 - `showTrackSetupModal({title, animals, nodes})` → `Promise<{animals,
   nodeWeights} | null>`. `title` names the run ("Track All" / "Track Frame");
   `animals` pre-fills the count (null = blank = auto-detect); `nodes` is
@@ -11260,7 +11279,8 @@ nothing: `pose/tracker.js` (`askTrackSetup`) writes the count through
 writers as the toolbar's Animals field and the Tracking Wizard, so there is no
 second path to either setting and no cycle with the tracker.
 
-**Imported by.** `pose/tracker.js`.
+**Imported by.** `pose/tracker.js`; `ui/track-range-modal.js`
+(`buildNodeWeightFields`).
 
 **User-facing features.** The count field (focused, `placeholder="auto"`),
 then one row per skeleton node in the Tracking Wizard's own markup
@@ -11284,7 +11304,8 @@ Cancel, consumed in the capture phase so no app shortcut also sees them.
 
 Covered by `tests/e2e/track-setup-modal.mjs` (the dialog, both cancels, the
 validation, the write-through to the Wizard's setting, the merge, the
-per-session re-ask, the one-scroller rule) and `tests/test-tracker-gui.mjs`
+per-session re-ask, the same grid in Track Frame Range, the one-scroller
+rule) and `tests/test-tracker-gui.mjs`
 (the run reads the dialog's weights; Cancel writes nothing).
 
 ### ui/trail-presets.js

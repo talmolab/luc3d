@@ -26,7 +26,10 @@
  *  5. Answered once, it is not asked again: a second Track All runs at once.
  *  6. A second session is unanswered, so Track Frame asks — titled "Track
  *     Frame", pre-filled with the last count given.
- *  7. No scroll-within-scroll: with a 40-node skeleton in a short window the
+ *  7. Track Frame Range shows the same weight grid with the stored values:
+ *     a bad weight disables Continue, Esc writes nothing, and Continue writes
+ *     the edited weight (merged) before the range runs.
+ *  8. No scroll-within-scroll: with a 40-node skeleton in a short window the
  *     CARD scrolls, its weight grid never does, and Continue is reachable.
  *
  * That the run reads the weights given in the dialog (not the ones before it)
@@ -202,7 +205,9 @@ try {
     const wizard = await page.evaluate(async () => {
         (await import('/ui/settings-modal.js')).showSettingsModal('wizard');
         const v = document.querySelector('input[aria-label="Weight for node TailMid"]').value;
-        document.querySelector('.settings-overlay').remove();
+        // Close it properly: removing the overlay would leave its document-level
+        // keydown listener behind, swallowing every key after it.
+        document.querySelector('.settings-modal-close').click();
         return v;
     });
     check(wizard === '0.25', `the Tracking Wizard shows the same weight ("${wizard}")`);
@@ -227,8 +232,41 @@ try {
     s = await appState();
     check(!(await dialog()) && s.numAnimals === 2 && s.identities === 2, 'Enter tracks the frame with that count');
 
-    // ---------------------------------------- 7. one scroller, long skeleton
-    console.log('7. a long skeleton in a short window');
+    // ------------------------------------------------ 7. Track Frame Range
+    console.log('7. the Track Frame Range dialog');
+    const openRange = async () => {
+        await page.evaluate(() => document.getElementById('tbTrackFrameRange').click());
+        await page.waitForSelector('.track-range-modal', { timeout: 5000 });
+    };
+    const rangeRows = () => page.evaluate(() => [...document.querySelectorAll('.track-range-modal .settings-node-weight-row')]
+        .map(r => ({ name: r.querySelector('.settings-kbd-label').textContent, value: r.querySelector('input').value,
+            greyed: r.classList.contains('settings-view-excluded') })));
+    await openRange();
+    let rr = await rangeRows();
+    check(JSON.stringify(rr.map(r => r.name)) === JSON.stringify(NODES), 'it lists every skeleton node, in order');
+    check(JSON.stringify(rr.map(r => r.value)) === JSON.stringify(['1', '1', '1', '1', '1', '1', '0.25', '0']) && rr[7].greyed,
+        `with the stored weights, 0 greyed (${rr.map(r => r.value).join(', ')})`);
+    const rangeTail = '.track-range-modal input[data-node="TailTip"]';
+    await page.fill(rangeTail, '-1');
+    let rerr = await page.evaluate(() => ({ err: document.getElementById('trackRangeError').textContent,
+        disabled: document.getElementById('trackRangeContinue').disabled }));
+    check(rerr.disabled && /TailTip/.test(rerr.err), `a weight of -1 is refused: "${rerr.err}"`);
+    await page.fill(rangeTail, '0.75');
+    await page.keyboard.press('Escape');
+    s = await appState();
+    check(!(await page.$('.track-range-modal')) && s.weights.TailTip === 0, 'Esc closes it and writes nothing');
+    await openRange();
+    await page.fill(rangeTail, '0.75');
+    await page.click('#trackRangeContinue');
+    await page.waitForSelector('.track-range-modal', { state: 'detached' });
+    await page.waitForFunction(() => /identit/i.test(document.getElementById('statusText').textContent), null, { timeout: 30000 });
+    s = await appState();
+    check(JSON.stringify(s.weights) === JSON.stringify({ TailMid: 0.25, TailTip: 0.75, otherSkeletonNode: 0.3 }),
+        `Continue stores the edited weight, the rest kept (${JSON.stringify(s.weights)})`);
+    check(!(await dialog()), 'and the first-use dialog does not stack on top of it');
+
+    // ---------------------------------------- 8. one scroller, long skeleton
+    console.log('8. a long skeleton in a short window');
     await page.setViewportSize({ width: 1200, height: 560 });
     const LONG = Array.from({ length: 40 }, (_, k) => 'node_' + k);
     await page.evaluate((LONG) => window.__activate([window.__mkSession('SetupLong', LONG)], 0), LONG);

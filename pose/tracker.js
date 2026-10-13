@@ -23,7 +23,7 @@ import { InstanceGroup, points3dNodeCount, hasPoint3d, readPoint3d, pooledPoints
 // Pass 3i-1: tracker UI/integration (was in app.js)
 import { state, interactionManager, timeline, viewport3d, getActiveSession } from '../ui/app-state.js';
 import {
-    getNodeWeightArray, getNodeWeight, getNodeWeights, setNodeWeights,
+    getNodeWeightArray, getNodeWeight, updateNodeWeights,
     getTrackingThresholds, getTrackingThreshold, isCameraTracked,
 } from '../ui/settings.js';
 import { showTrackSetupModal } from '../ui/track-setup-modal.js';
@@ -859,9 +859,8 @@ function computeMaxInstancesPerView(session) {
 // The first-use question (ui/track-setup-modal.js): the animal count, with the
 // node weights laid out under it for review. Resolves false on Cancel, and
 // then nothing is written. On Continue both are written before the run reads
-// them (`createTrackerRun` snapshots the weights). The weights are merged into
-// the stored overrides rather than replacing them: they are keyed by node name
-// per browser, and another skeleton's must survive.
+// them (`createTrackerRun` snapshots the weights). `updateNodeWeights` keeps
+// the stored overrides of nodes not shown — another skeleton's.
 async function askTrackSetup(session, title) {
     var names = (session.skeleton && Array.isArray(session.skeleton.nodes)) ? session.skeleton.nodes : [];
     var answer = await showTrackSetupModal({
@@ -870,7 +869,7 @@ async function askTrackSetup(session, title) {
         nodes: names.map(function (n) { return { name: n, weight: getNodeWeight(n) }; }),
     });
     if (!answer) return false;  // cancelled
-    setNodeWeights(Object.assign(getNodeWeights(), answer.nodeWeights));
+    updateNodeWeights(answer.nodeWeights);
     setTrackerNumAnimals(answer.animals);
     return true;
 }

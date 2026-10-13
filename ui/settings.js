@@ -206,6 +206,13 @@ export function setNodeWeights(map) {
     persist();
 }
 
+// Commit SOME nodes' weights (Track All's first-use dialog, Track Frame Range),
+// keeping every other stored override: weights are keyed by node name per
+// browser, so another skeleton's must survive an edit to this one's.
+export function updateNodeWeights(map) {
+    setNodeWeights(Object.assign(getNodeWeights(), map || {}));
+}
+
 // --- Camera tracking inclusion ---------------------------------------------
 
 // Clamp an arbitrary value to a binary include/exclude weight (0 or 1), or null
