@@ -9766,7 +9766,7 @@ It changes every `CROP_PREVIEW_MS` (400 ms), cycling through the embedder's
 between a GPU and the CPU. A draw costs ~0.1 ms of main thread (measured: frame
 times 8.3 ms median with and without it at 4 Hz) and no GPU time — the tensor is
 already on the main thread before its batch is uploaded. An embedder without
-`sampleCrops` (the test fakes) shows no square. The dialog's `finally` also calls the
+`sampleCrops` (the test's fake without a `device`) shows no square. The dialog's `finally` also calls the
 embedder's `releaseFrames` (idempotent): `checkImageSwitches` does too, but not
 when it fails before its first frame, and the CPU workers hold ~600 MB each. On a
 CPU run "About these flags" says the model ran on the CPU, instead of the GPU-busy
@@ -9899,7 +9899,8 @@ Clear, one scroller),
 `tests/e2e/id-switch-image-check.mjs` (images with an injected embedder: "Both"
 merge, identical-size animals found by images only, Esc cancel, the progress dialog's
 percentage / playhead / CPU line above the GPU line / load graph (placement, legend
-keys, newest points = the lines' loads, hover readout) / sample crop and skeleton
+keys, newest points = the lines' loads, hover readout) / sample crop (label and
+camera caption, a new one every 0.4 s from a list that sits still) and skeleton
 overlay, no GPU = runs on the CPU to the end and graphs the CPU alone, menu, default
 off), `tests/e2e/image-check-cpu.mjs` (the real dialog's measured CPU line and
 CPU-only graph), `tests/e2e/id-switch-fix.mjs` (Fix switch…: both start rules in the
