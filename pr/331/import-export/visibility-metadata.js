@@ -25,8 +25,8 @@
 //
 // One module owns the key list so a writer and a reader cannot drift — adding a
 // setting means touching `writeVisibilityMetadata` / `readVisibilityMetadata`
-// here and nothing else. The six call sites (four writers, three readers, one
-// of which is shared) each pass the `metadata.lucid` dict straight through.
+// here and nothing else. Every call site — four writers, four readers — passes
+// the `metadata.lucid` dict straight through.
 //
 // Three invariants the callers depend on:
 //
@@ -51,9 +51,9 @@ import {
     serializeVideoContrast, ingestVideoContrast,
     serializeVideoBrightness, ingestVideoBrightness,
     serializeVideoRotation, ingestVideoRotation,
-} from '../ui/video-filters.js?v=47ef0098c7b3';
-import { serializeHiddenSets, ingestHiddenSets } from '../ui/timeline-visibility.js?v=47ef0098c7b3';
-import { serializeIdSwitchReview, ingestIdSwitchReview } from '../ui/id-switch-review.js?v=47ef0098c7b3';
+} from '../ui/video-filters.js?v=b9305e5aeb51';
+import { serializeHiddenSets, ingestHiddenSets } from '../ui/timeline-visibility.js?v=b9305e5aeb51';
+import { serializeIdSwitchReview, ingestIdSwitchReview } from '../ui/id-switch-review.js?v=b9305e5aeb51';
 
 /**
  * Every `metadata.lucid` key this module may write. Exported so tests (and the
