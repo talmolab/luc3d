@@ -23,7 +23,8 @@
  * The checks only ever compare distances relative to the median body size and
  * standardise their features, so the unit change (pixels, not millimetres)
  * costs nothing — but a 2D bone length also changes with posture and viewing
- * angle, which is why body size is a weak cue on one camera.
+ * angle, so body size is a weaker cue on one camera, and optional there (not
+ * run automatically after Track All).
  *
  * Opt-in, before the tracker sees them: DUPLICATE detections — a second
  * instance SLEAP placed on an animal it already detected — can be left out
@@ -36,7 +37,7 @@
  * DOM-free. Depends on: pose/sleap-tracker.js.
  */
 
-import { runSleapTrackerAsync } from './sleap-tracker.js?v=465df92c02e0';
+import { runSleapTrackerAsync } from './sleap-tracker.js?v=81505277b575';
 
 /** Why a lazy single-camera project is not tracked (shown in the status bar). */
 export const SINGLE_CAMERA_LAZY_REASON = 'single-camera tracking does not support a lazily loaded (> 150 MB) project yet';

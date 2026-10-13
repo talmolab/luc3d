@@ -252,7 +252,7 @@ eq(p.identities[0].share + '|' + p.identities[0].frac, '50.0%|0.5', 'identity sh
         identities: [{ id: 0, name: 'id_0', color: '#f00' }, { id: 1, name: 'id_1', color: '#0f0' }],
         instanceGroups: new Map([[0, [{ identityId: 0 }, { identityId: 1 }]], [1, [{ identityId: 0 }, { identityId: 1 }]]]),
     }, { frames: 2, animals: 2, elapsedMs: 210, fps: 40, singleCamera: 'Camera0', untracked: 3, duplicates: 2 });
-    const off = C('off', { reason: 'not run on one camera: 2D body size is unreliable' });
+    const off = C('off', { reason: 'not run automatically on one camera — optional' });
     const sc = (brightness, image) => planTrackSummary(one, { brightness, image, size: off });
     let q = sc(C('found', { switches: 1, encounters: 34, moments: 4 }), C('off'));
     eq(q.primary.action, 'review', 'one camera, a switch flagged: review it');
@@ -260,20 +260,20 @@ eq(p.identities[0].share + '|' + p.identities[0].frac, '50.0%|0.5', 'identity sh
     ok(q.next.steps.some(t => /File ▸ Save/.test(t) && /SLEAP/.test(t)), 'one camera: saving is the step after review (the tracks are what SLEAP reads)');
     eq(q.checks.map(c => c.label + ':' + c.cue).join(','), 'Coat brightness:brightness,Images:image,Body size:size', 'one camera: coat brightness first, then images and body size');
     eq(q.checks[0].text, '1 possible switch in 34 close encounters and 4 candidate moments', 'the coat-brightness row counts the candidate moments it tested');
-    eq(q.checks[2].text + '|' + q.checks[2].full, 'Not run|not run on one camera: 2D body size is unreliable', 'body size: not run, with the reason on hover');
+    eq(q.checks[2].text + '|' + q.checks[2].full, 'Not run|not run automatically on one camera — optional', 'body size: not run, with the reason on hover');
     eq(q.stats[0].label + '|' + q.stats[0].value, 'Tracks|2', 'one camera: the box counts TRACKS (SLEAP\'s tracker writes one per animal)');
     const wo = q.stats.find(x => x.label === 'Without a track');
     eq(wo && wo.value + '|' + wo.detail, '5 detections|3 over the animal count, 2 duplicates removed first', 'detections left without a track, and why');
     q = sc(C('clear', { switches: 0, encounters: 34, moments: 4 }), C('off'));
     eq(q.primary.action + '|' + q.primary.label, 'save|Save project', 'nothing flagged: the recommended step is saving');
     ok(/checks miss many switches/.test(q.next.caveat), 'nothing flagged on one camera: says how much the checks miss');
-    eq(q.secondary.map(x => x.action).join(','), 'imageCheck', 'and offers the image check, which was not run');
+    eq(q.secondary.map(x => x.action).join(','), 'imageCheck,sizeCheck', 'and offers the checks that were not run: images, and body size (optional on one camera)');
     eq(q.checks[0].text, 'Nothing flagged in 34 close encounters and 4 candidate moments', 'a clear coat-brightness row');
     q = sc(C('skipped', { reason: 'needs the session\'s videos to be loaded' }), C('off'));
     eq(q.next.headline, 'Tracks were not checked for switches.', 'no check ran: says so');
-    eq(q.secondary.map(x => x.action).join(','), 'imageCheck', 'a skipped check is not offered again (it would skip again); one not run is');
+    eq(q.secondary.map(x => x.action).join(','), 'imageCheck,sizeCheck', 'a skipped check is not offered again (it would skip again); one not run is');
     q = sc(C('off'), C('cancelled'));
-    eq(q.secondary.map(x => x.action).join(','), 'imageCheck,brightnessCheck', 'both checks offered when neither ran');
+    eq(q.secondary.map(x => x.action).join(','), 'imageCheck,brightnessCheck,sizeCheck', 'every check offered when none ran');
     const lone = summarizeTrackedIdentities({ identities: [{ id: 0, name: 'id_0' }], instanceGroups: new Map([[0, [{ identityId: 0 }]]]) },
         { frames: 1, animals: 2, singleCamera: 'Camera0' });
     q = planTrackSummary(lone, { brightness: C('na'), image: C('na'), size: C('na') });

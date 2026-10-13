@@ -16,27 +16,27 @@ import {
     reprojectPoints,
     computeInstanceDistanceTo,
     hungarianAlgorithm
-} from './triangulation.js?v=465df92c02e0';
-import { CrossViewTracker, Detection } from './cross-view-tracker.js?v=465df92c02e0';
-import { singleCameraName, singleCameraTrackerConfig, trackSingleCamera, SINGLE_CAMERA_LAZY_REASON } from './single-camera-tracking.js?v=465df92c02e0';
-import { InstanceGroup, points3dNodeCount, hasPoint3d, readPoint3d, pooledPoints3d } from './pose-data.js?v=465df92c02e0';
+} from './triangulation.js?v=81505277b575';
+import { CrossViewTracker, Detection } from './cross-view-tracker.js?v=81505277b575';
+import { singleCameraName, singleCameraTrackerConfig, trackSingleCamera, SINGLE_CAMERA_LAZY_REASON } from './single-camera-tracking.js?v=81505277b575';
+import { InstanceGroup, points3dNodeCount, hasPoint3d, readPoint3d, pooledPoints3d } from './pose-data.js?v=81505277b575';
 
 // Pass 3i-1: tracker UI/integration (was in app.js)
-import { state, interactionManager, timeline, viewport3d, getActiveSession } from '../ui/app-state.js?v=465df92c02e0';
-import { getNodeWeightArray, getTrackingThresholds, getTrackingThreshold, isCameraTracked } from '../ui/settings.js?v=465df92c02e0';
-import { markDirty, setStatus, hideLoading } from '../import-export/save-load.js?v=465df92c02e0';
-import { showLoadingProgress, createProgressPacer, yieldToPaint, setLoadingCpu, idleWhile, busyDuring } from '../ui/loading-overlay.js?v=465df92c02e0';
-import { startTrackerWorker } from './tracker-pool.js?v=465df92c02e0';
-import { loadAllLazyFrames, sweepLazyFrameWindows } from './triangulation.js?v=465df92c02e0';
-import { drawAllOverlays, showPredictedOnly, PREDICTED_ONLY_NOTE } from '../ui/rendering.js?v=465df92c02e0';
-import { updateInfoPanel } from '../ui/info-panel.js?v=465df92c02e0';
-import { setColorByIdentity } from '../ui/color-by.js?v=465df92c02e0';
-import { setTrailSeconds, trailSecondsName, TRACK_ALL_TRAIL_SECONDS } from '../ui/trail-presets.js?v=465df92c02e0';
-import { runIdSwitchChecks, clearIdSwitchResults } from '../ui/id-switch-modal.js?v=465df92c02e0';
-import { summarizeTrackedIdentities, describeSwitchCheck } from '../ui/track-summary.js?v=465df92c02e0';
-import { showTrackSummaryModal, rememberTrackSummary, summarySession } from '../ui/track-summary-modal.js?v=465df92c02e0';
-import { collapseTimeline } from '../ui/timeline-controller.js?v=465df92c02e0';
-import { collapseViewport3D } from '../ui/panel-visibility.js?v=465df92c02e0';
+import { state, interactionManager, timeline, viewport3d, getActiveSession } from '../ui/app-state.js?v=81505277b575';
+import { getNodeWeightArray, getTrackingThresholds, getTrackingThreshold, isCameraTracked } from '../ui/settings.js?v=81505277b575';
+import { markDirty, setStatus, hideLoading } from '../import-export/save-load.js?v=81505277b575';
+import { showLoadingProgress, createProgressPacer, yieldToPaint, setLoadingCpu, idleWhile, busyDuring } from '../ui/loading-overlay.js?v=81505277b575';
+import { startTrackerWorker } from './tracker-pool.js?v=81505277b575';
+import { loadAllLazyFrames, sweepLazyFrameWindows } from './triangulation.js?v=81505277b575';
+import { drawAllOverlays, showPredictedOnly, PREDICTED_ONLY_NOTE } from '../ui/rendering.js?v=81505277b575';
+import { updateInfoPanel } from '../ui/info-panel.js?v=81505277b575';
+import { setColorByIdentity } from '../ui/color-by.js?v=81505277b575';
+import { setTrailSeconds, trailSecondsName, TRACK_ALL_TRAIL_SECONDS } from '../ui/trail-presets.js?v=81505277b575';
+import { runIdSwitchChecks, clearIdSwitchResults } from '../ui/id-switch-modal.js?v=81505277b575';
+import { summarizeTrackedIdentities, describeSwitchCheck } from '../ui/track-summary.js?v=81505277b575';
+import { showTrackSummaryModal, rememberTrackSummary, summarySession } from '../ui/track-summary-modal.js?v=81505277b575';
+import { collapseTimeline } from '../ui/timeline-controller.js?v=81505277b575';
+import { collapseViewport3D } from '../ui/panel-visibility.js?v=81505277b575';
 
 /**
  * A frame index as the USER sees it: 1-based.
@@ -1726,7 +1726,7 @@ async function runTrackingPass(range) {
 }
 
 /** What the status line says instead of running the automatic body-size check on one camera. */
-export const SINGLE_CAMERA_SIZE_SKIP_NOTE = 'ID-switch check (body size): not run on one camera (2D size is unreliable; Tracks ▸ Check ID Switches runs it)';
+export const SINGLE_CAMERA_SIZE_SKIP_NOTE = 'ID-switch check (body size): not run automatically on one camera (optional: Tracks ▸ Check ID Switches runs it)';
 
 /**
  * Track All on a single-camera session: SLEAP's tracker (a port of `sleap-nn
@@ -1804,9 +1804,10 @@ async function runSingleCameraTrackAll(session, bail) {
                 ' removed first (left without a track)' : '') +
             (switchedToIds ? ', now coloring by ID' : '') +
             (trailsOn ? ', node trails on (' + trailSecondsName(TRACK_ALL_TRAIL_SECONDS) + ')' : '') + (predOnly ? PREDICTED_ONLY_NOTE : '');
-        // The automatic body-size check is NOT run on one camera: a 2D bone length changes with posture
-        // and distance from the camera, and on 35 proofread SLAP videos it caught 2 of 59 real swaps at its
-        // threshold (encounter AUC 0.55) for 6 false rows. The menu still runs it; images run as usual.
+        // The body-size check is OPTIONAL on one camera (the user's choice, 2026-10-12): not run here, and the
+        // menu runs it. It reads 2D bone lengths, which also change with posture and viewing angle; the
+        // label-free check (#310) measured 2026-10-12 on 87 proofread SLAP top/mid views: per-contact AUC 0.912,
+        // 32 rows at -1 (22 real, 8 false), 27 of 276 swaps found. Images run as usual.
         // ...and runs the coat-brightness check instead (`autoBrightnessSwitchCheck`, default on): no model, no GPU.
         var autoSize = getTrackingThreshold('autoSwitchCheck') > 0, autoImage = getTrackingThreshold('autoImageSwitchCheck') > 0;
         var autoBrightness = getTrackingThreshold('autoBrightnessSwitchCheck') > 0;
@@ -1828,7 +1829,7 @@ async function runSingleCameraTrackAll(session, bail) {
             var summaryChecks = {
                 brightness: describeSwitchCheck(autoBrightness, checkRes && checkRes.brightness, res.numIdentities),
                 image: describeSwitchCheck(autoImage, checkRes && checkRes.image, res.numIdentities),
-                size: res.numIdentities > 1 ? { state: 'off', reason: 'not run on one camera: 2D body size is unreliable (Tracks ▸ Check ID Switches runs it)' }
+                size: res.numIdentities > 1 ? { state: 'off', reason: 'not run automatically on one camera — optional: Tracks ▸ Check ID Switches (Body Size) runs it' }
                     : describeSwitchCheck(false, null, res.numIdentities),
             };
             rememberTrackSummary(session, summaryOpts, summaryChecks, res.numIdentities);
