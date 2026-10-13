@@ -38,7 +38,8 @@ name: Deploy to GitHub Pages
 # LUCID has no build system, so a "build" is just a copy of the repo at that
 # ref -- plus ONE rewrite of the staged copy, scripts/stamp-version.mjs, which
 # adds ?v=<commit> to every same-site code URL so Cloudflare's 4-hour cache can
-# never mix two deploys (see "Stage the site"). The app is already sub-path safe -- the importmap is relative (./lib/...)
+# never mix two deploys, and modulepreload links for the startup graph (see
+# "Stage the site"). The app is already sub-path safe -- the importmap is relative (./lib/...)
 # and the test harness resolves against document.baseURI -- which is what lets
 # the identical tree serve correctly from every one of these paths with no
 # rewriting. (This is the one big simplification over sleap-app's deploy.yml,
@@ -253,7 +254,11 @@ jobs:
           # code URL `?v=<commit>`, so a new index.html names new URLs all the way
           # down. It fails the deploy if any relative module reference is left
           # unstamped: a module reached under two URLs would load twice.
-          # Covered by tests/test-stamp-version.mjs + tests/e2e/stamped-build.mjs.
+          # The same command then lists index.html's whole startup module graph
+          # as <link rel="modulepreload"> (scripts/preload-modules.mjs), so a cold
+          # start fetches it at once instead of one import level at a time.
+          # Covered by tests/test-stamp-version.mjs, tests/test-preload-modules.mjs
+          # and tests/e2e/stamped-build.mjs.
           node scripts/stamp-version.mjs "$RUNNER_TEMP/site" "${GITHUB_SHA::12}"
 
       - name: Deploy to gh-pages
