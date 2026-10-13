@@ -58,6 +58,9 @@ eq(html(`<script src="https://cdn.jsdelivr.net/npm/three@0.147.0/build/three.min
    `<script src="https://cdn.jsdelivr.net/npm/three@0.147.0/build/three.min.js"></script>`, 'CDN script untouched');
 eq(html(`<script type="importmap">{ "imports": { "h5wasm": "./lib/h5wasm/hdf5_hl.js", "yaml": "https://cdn/yaml.js" } }</script>`),
    `<script type="importmap">{ "imports": { "h5wasm": "./lib/h5wasm/hdf5_hl.js?v=${V}", "yaml": "https://cdn/yaml.js" } }</script>`, 'importmap: relative entry stamped, CDN entry not');
+eq(html(`<link rel="modulepreload" href="./pose/x.js">`), `<link rel="modulepreload" href="./pose/x.js?v=${V}">`, 'modulepreload link (must name its module\'s stamped URL)');
+eq(html(`<link rel="modulepreload" href="https://cdn.jsdelivr.net/npm/yaml@2.8.0/+esm">`), `<link rel="modulepreload" href="https://cdn.jsdelivr.net/npm/yaml@2.8.0/+esm">`, 'CDN modulepreload untouched');
+eq(html(`<script defer src="./lib/h5wasm/h5wasm.iife.js"></script>`), `<script defer src="./lib/h5wasm/h5wasm.iife.js?v=${V}"></script>`, 'deferred classic script src');
 eq(html(`<script type="module">import { a } from './lib/x.js';</script>`),
    `<script type="module">import { a } from './lib/x.js?v=${V}';</script>`, 'inline module script imports');
 
@@ -66,6 +69,7 @@ ok(S.findUnstamped(once, false).length === 0, 'a fully stamped file has no unsta
 ok(S.findUnstamped(`import x from '/ui/abs.js';`, false).length === 1, 'scan catches a root-absolute import the rules do not stamp');
 ok(S.findUnstamped(`import x from './a.js';`, false).length === 1, 'scan catches an unstamped relative import');
 ok(S.findUnstamped(`<script src="app.js"></script>`, true).length === 1, 'scan catches an unstamped script tag');
+ok(S.findUnstamped(`<link rel="modulepreload" href="./ui/a.js">`, true).length === 1, 'scan catches an unstamped modulepreload');
 let threw = false; try { S.stampSite(ROOT, 'bad version!'); } catch (e) { threw = true; }
 ok(threw, 'a version with unsafe characters is refused before touching anything');
 
