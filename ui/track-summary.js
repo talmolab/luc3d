@@ -76,11 +76,16 @@ export function formatTrackingSpeed(frames, ms, recordingFps) {
  * the whole project and not the resident window.
  *
  * @param {Object} session
- * @param {{frames:number, animals:number, animalsAuto?:boolean, elapsedMs?:number, fps?:number}} opts
+ * @param {{frames:number, animals:number, animalsAuto?:boolean, elapsedMs?:number, fps?:number,
+ *          singleCamera?:string, untracked?:number, duplicates?:number}} opts
  *   `frames` — the frames the pass swept (the denominator); `animals` — the
  *   animal count it ran with; `animalsAuto` — whether that count was detected
  *   rather than entered; `elapsedMs` — how long tracking took; `fps` — the
  *   recording's frame rate, for the real-time multiplier (0/absent: none shown).
+ *   A single-camera Track All (pose/single-camera-tracking.js) also passes its
+ *   camera (`singleCamera`) and the detections it left without a track
+ *   (`untracked`: over the animal count; `duplicates`: removed before tracking),
+ *   and is counted on the stand-in session `singleCameraCheckSession` builds.
  */
 export function summarizeTrackedIdentities(session, opts) {
     opts = opts || {};
@@ -112,6 +117,9 @@ export function summarizeTrackedIdentities(session, opts) {
         animalsAuto: !!opts.animalsAuto,
         elapsedMs: opts.elapsedMs,
         fps: opts.fps > 0 ? opts.fps : 0,
+        singleCamera: opts.singleCamera || null,
+        untracked: opts.untracked || 0,
+        duplicates: opts.duplicates || 0,
         identities: ids.map(function (id, i) {
             return { id: id.id, name: id.name, color: id.color, frames: counts[i] };
         }),
@@ -125,9 +133,10 @@ export function summarizeTrackedIdentities(session, opts) {
  * @param {Object|null} res  that check's result from `runIdSwitchChecks`
  * @param {number} identities  identities the pass assigned
  * @param {string} [whyNotRun]  reason when the checks never started (no 3D)
- * @returns {{state:string, switches?:number, encounters?:number, reason?:string, elapsedMs?:number}}
+ * @returns {{state:string, switches?:number, encounters?:number, moments?:number, reason?:string, elapsedMs?:number}}
  *   state: 'found' | 'clear' | 'skipped' | 'failed' | 'cancelled' | 'off' | 'na';
- *   `elapsedMs` is the check's own wall-clock time (`runIdSwitchChecks` stamps it).
+ *   `elapsedMs` is the check's own wall-clock time (`runIdSwitchChecks` stamps it);
+ *   `moments`, the candidate moments it tested (single-camera coat brightness).
  */
 export function describeSwitchCheck(enabled, res, identities, whyNotRun) {
     if (!(identities > 1)) return { state: 'na' };
@@ -137,6 +146,7 @@ export function describeSwitchCheck(enabled, res, identities, whyNotRun) {
     if (res.ok) {
         var found = idSwitchOnsets(res);
         out = { state: found ? 'found' : 'clear', switches: found, encounters: idSwitchEncounterCount(res) };
+        if (res.moments && res.moments.length) out.moments = res.moments.length;
     } else if (res.cancelled) {
         out = { state: 'cancelled' };
     } else {
@@ -163,11 +173,12 @@ function shortReason(r) {
 
 /** What a check row says. */
 function checkText(c) {
+    var moments = c.moments ? ' and ' + plural(c.moments, 'candidate moment') : '';
     switch (c.state) {
         case 'found': return plural(c.switches, 'possible switch', 'possible switches') + ' in ' +
-            plural(c.encounters, 'close encounter');
+            plural(c.encounters, 'close encounter') + moments;
         // "flagged", not "no possible switches": a check that raises nothing has not shown there is no switch
-        case 'clear': return c.encounters ? 'Nothing flagged in ' + plural(c.encounters, 'close encounter')
+        case 'clear': return c.encounters || c.moments ? 'Nothing flagged in ' + plural(c.encounters, 'close encounter') + moments
             : 'No close encounters to check';
         case 'off': return 'Not run';
         case 'cancelled': return 'Cancelled';
@@ -200,9 +211,13 @@ export const MAX_IDENTITY_ROWS = 12;
  *   secondary: Array<{action:string, label:string}>,
  * }}
  *   Actions: 'review' (ID Switches tab), 'triangulate' (Triangulate All),
- *   'imageCheck' / 'sizeCheck' (run that check), 'wizard' (Tracking Wizard).
+ *   'imageCheck' / 'sizeCheck' / 'brightnessCheck' (run that check), 'wizard'
+ *   (Tracking Wizard), 'save' (File ▸ Save). A single-camera summary
+ *   (`s.singleCamera`) is planned by `planSingleCameraSummary`, with a
+ *   `brightness` check as well.
  */
 export function planTrackSummary(s, checks) {
+    if (s.singleCamera) return planSingleCameraSummary(s, checks);
     var nIds = s.identities.length;
     var stats = [], notes = [];
 
@@ -255,13 +270,13 @@ export function planTrackSummary(s, checks) {
     });
 
     var size = checks.size, image = checks.image;
-    var checkRow = function (label, c) {
-        return { label: label, text: checkText(c), state: c.state,
+    var checkRow = function (label, c, cue) {
+        return { label: label, cue: cue, text: checkText(c), state: c.state,
                  full: c.reason ? String(c.reason).replace(/^failed — /, '')
                      : c.state === 'clear' && c.encounters ? CLEAR_NOTE : '',
                  time: TIMED_STATES[c.state] ? formatDuration(c.elapsedMs) : '' };
     };
-    var checkRows = nIds > 1 ? [checkRow('Body size', size), checkRow('Images', image)] : [];
+    var checkRows = nIds > 1 ? [checkRow('Body size', size, 'size'), checkRow('Images', image, 'image')] : [];
 
     var TRIANGULATE = 'Run Triangulate All for 3D poses in every frame.';
     var PROPAGATE = 'Optional: Tracks ▸ Propagate IDs → Tracks stores the identities as tracks too.';
@@ -306,6 +321,121 @@ export function planTrackSummary(s, checks) {
         if (nIds > 1 && canImage) secondary.push({ action: 'imageCheck', label: 'Check by images…' });
     }
 
+    return {
+        title: 'Track All finished',
+        stats: stats,
+        identities: identities,
+        moreIdentities: Math.max(0, nIds - MAX_IDENTITY_ROWS),
+        notes: notes,
+        checks: checkRows,
+        next: next,
+        primary: primary,
+        secondary: secondary,
+    };
+}
+
+// Steps of a single-camera summary: the tracks ARE the result — what the saved .slp hands back to SLEAP.
+var SAVE_STEP = 'Save the project (File ▸ Save): the tracks are what SLEAP reads back from the .slp.';
+// What "nothing flagged" leaves out on one camera. Measured 2026-10-12 on 87 proofread SLAP views: the
+// image check found 82 of 276 swaps, and 113 of the 276 were one track changing animal alone — while
+// the other animal was undetected, with no contact between the two for any check to test.
+var ONE_CAMERA_CAVEAT = 'On one camera the checks miss many switches: most happen while an animal goes undetected, ' +
+    'with no contact to test. Spot-check by playing through the moments animals come close or one disappears.';
+
+/**
+ * The summary of a SINGLE-CAMERA Track All (`s.singleCamera`): SLEAP's tracker
+ * wrote the TRACKS, one per animal, so the box speaks of tracks; its checks are
+ * coat brightness (the automatic one on one camera, with the candidate moments
+ * it tested), images and body size (not run automatically: 2D size is
+ * unreliable); and the next step is reviewing switches or saving — there is no
+ * 3D, so never Triangulate All. Same shape as `planTrackSummary`'s plan, plus
+ * actions 'brightnessCheck' and 'save'.
+ */
+function planSingleCameraSummary(s, checks) {
+    var nIds = s.identities.length, stats = [], notes = [];
+    stats.push({
+        label: 'Tracks',
+        value: n(nIds),
+        detail: s.animals > 0 ? 'for ' + plural(s.animals, 'animal') + (s.animalsAuto ? ' (auto-detected)' : '') : '',
+        title: 'SLEAP\'s tracker (sleap-nn) on ' + s.singleCamera + ': one track per animal, each with its identity',
+    });
+    stats.push({
+        label: 'Frames tracked',
+        value: n(s.trackedFrames) + ' of ' + n(s.frames),
+        detail: formatShare(s.trackedFrames, s.frames),
+    });
+    if (nIds > 0 && s.animals > 1) {
+        stats.push({
+            label: 'All ' + n(s.animals) + ' animals',
+            value: plural(s.completeFrames, 'frame'),
+            detail: formatShare(s.completeFrames, s.frames),
+        });
+    }
+    var without = (s.untracked || 0) + (s.duplicates || 0);
+    if (without > 0) {
+        var why = [];
+        if (s.untracked) why.push(n(s.untracked) + ' over the animal count');
+        if (s.duplicates) why.push(n(s.duplicates) + ' duplicate' + (s.duplicates === 1 ? '' : 's') + ' removed first');
+        stats.push({ label: 'Without a track', value: plural(without, 'detection'), detail: why.join(', '),
+                     title: 'Detections Track All left without a track. They stay in the project.' });
+    }
+    var trackTime = formatDuration(s.elapsedMs);
+    if (trackTime) {
+        var speed = formatTrackingSpeed(s.frames, s.elapsedMs, s.fps);
+        stats.push({
+            label: 'Tracking time', value: trackTime,
+            detail: speed.fps + (speed.realtime ? ' · ' + speed.realtime : ''),
+            title: speed.fps ? 'Frames tracked per second' + (speed.realtime
+                ? ', and how many times faster than the recording plays at ' +
+                  (Math.round(s.fps * 100) / 100) + ' fps' : '') : '',
+        });
+    }
+    if (s.animals > 0 && nIds > 0 && nIds < s.animals) {
+        notes.push('Fewer tracks than animals: ' + (s.animals - nIds === 1 ? 'one animal was' : 'some animals were') +
+            ' never detected.');
+    }
+
+    var maxFrames = s.identities.reduce(function (m, id) { return Math.max(m, id.frames); }, 0);
+    var identities = s.identities.slice(0, MAX_IDENTITY_ROWS).map(function (id) {
+        return {
+            name: id.name, color: id.color, frames: id.frames,
+            share: formatShare(id.frames, s.frames),
+            frac: s.frames > 0 ? Math.min(1, id.frames / s.frames) : (maxFrames > 0 ? id.frames / maxFrames : 0),
+        };
+    });
+
+    var none = { state: 'off' };
+    var brightness = checks.brightness || none, image = checks.image || none, size = checks.size || none;
+    var checkRow = function (label, c, cue) {
+        return { label: label, cue: cue, text: checkText(c), state: c.state,
+                 full: c.reason ? String(c.reason).replace(/^failed — /, '')
+                     : c.state === 'clear' && (c.encounters || c.moments) ? CLEAR_NOTE : '',
+                 time: TIMED_STATES[c.state] ? formatDuration(c.elapsedMs) : '' };
+    };
+    var checkRows = nIds > 1 ? [checkRow('Coat brightness', brightness, 'brightness'), checkRow('Images', image, 'image'),
+                                checkRow('Body size', size, 'size')] : [];
+
+    var all = [brightness, image, size];
+    var rerun = function (c) { return c.state === 'off' || c.state === 'cancelled'; };
+    var next, primary, secondary = [];
+    if (nIds === 0) {
+        next = { headline: 'Nothing was tracked.', caveat: null,
+                 steps: ['The file has no detections to track. Check that it is the predictions file for this video.'] };
+        primary = { action: 'wizard', label: 'Tracking Wizard…' };
+    } else if (all.some(function (c) { return c.state === 'found'; })) {
+        next = { headline: 'Review the possible ID switches.', caveat: null,
+                 steps: ['Step through them in the ID Switches tab and fix the real ones: a fix swaps the two tracks.', SAVE_STEP] };
+        primary = { action: 'review', label: 'Review switches' };
+    } else {
+        var headline, caveat = null;
+        if (nIds === 1) headline = 'One track, so there is nothing to switch.';
+        else if (all.some(function (c) { return c.state === 'clear'; })) { headline = 'No ID switches were flagged.'; caveat = ONE_CAMERA_CAVEAT; }
+        else { headline = 'Tracks were not checked for switches.'; caveat = 'Spot-check them by playing through moments when animals come close.'; }
+        next = { headline: headline, caveat: caveat, steps: [SAVE_STEP] };
+        primary = { action: 'save', label: 'Save project' };
+        if (nIds > 1 && rerun(image)) secondary.push({ action: 'imageCheck', label: 'Check by images…' });
+        if (nIds > 1 && rerun(brightness)) secondary.push({ action: 'brightnessCheck', label: 'Check by coat brightness…' });
+    }
     return {
         title: 'Track All finished',
         stats: stats,

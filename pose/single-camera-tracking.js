@@ -381,8 +381,14 @@ export function singleCameraCheckOptions(cue) {
  * identified detection, with its 2D as `points3d` (x, y, 0) and the detection
  * itself under `instances` (what the image check crops). Returns null when the
  * session is not single-camera (use the session itself), or {fail: reason}.
+ *
+ * `opts.pixelCamera`: its one camera is a PIXEL camera — `project` maps a stand-in
+ * point (x, y, 0) back to (x, y), no size — for readers that project 3D into a
+ * view, i.e. the Track All summary's identity gallery (ui/identity-gallery.js:
+ * sample crops and path maps). The session's own stand-in camera (File ▸ Load
+ * SLP's identity camera) cannot: it would divide by z = 0.
  */
-export function singleCameraCheckSession(session) {
+export function singleCameraCheckSession(session, opts) {
     var cam = singleCameraName(session);
     if (!cam) return null;
     if (session.lazyLoader) return { fail: SINGLE_CAMERA_LAZY_REASON };
@@ -409,9 +415,12 @@ export function singleCameraCheckSession(session) {
         if (!L) groups.set(rows[r].f, L = []);
         L.push({ identityId: rows[r].id, points3d: p, instances: new Map([[cam, inst]]) });
     }
+    var cameras = opts && opts.pixelCamera
+        ? [{ name: cam, size: null, project: function (p) { return [p[0], p[1]]; } }]
+        : session.cameras;
     return {
         skeleton: session.skeleton, identities: session.identities, instanceGroups: groups,
-        cameras: session.cameras, fps: session.fps, singleCamera: cam,
+        cameras: cameras, fps: session.fps, singleCamera: cam,
     };
 }
 

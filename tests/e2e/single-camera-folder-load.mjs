@@ -97,6 +97,7 @@ try {
     await page.waitForFunction(() => /Tracked \d+ animal|Track All error|No session/.test(document.getElementById('statusText').textContent), { timeout: 60000 });
     const st = await page.evaluate(() => document.getElementById('statusText').textContent);
     check(/^Tracked 2 animals across 30 frames with SLEAP's tracker/.test(st), 'Track All runs SLEAP\'s tracker on it: ' + st.slice(0, 90));
+    await page.evaluate(() => { const c = document.getElementById('trackSummaryClose'); if (c) c.click(); });   // its summary box
 
     console.log('\n2. The camera\'s own folder picked, with a calibration clip below it');
     const r2 = await page.evaluate(() => { const { mp4, file, SLP } = window.__fx;

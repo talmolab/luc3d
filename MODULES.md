@@ -2019,7 +2019,9 @@ runs sleap-nn's tracker (`pose/sleap-tracker.js`, via
 `pose/single-camera-tracking.js`) with the animal count as its track cap (the
 session's `numAnimals`, asked once and shown in the toolbar's Animals field, as for the
 multi-camera pass) and the
-Tracking Wizard's `scWindowSize` / `scOksStddev` / `scConnectBreaks`, and with
+Tracking Wizard's `scWindowSize` / `scOksStddev` / `scConnectBreaks`, ends on the
+Track All summary box planned for one camera (`ui/track-summary-modal.js`; timed
+from the tracker call, counted on the single-camera stand-in), and with
 `scRemoveDuplicates` on (default off) leaves each frame's duplicate detections
 out first (`scDuplicateIou` / `scDuplicateOks`; the status line says how many). It writes
 the TRACKS, as `sleap-nn track` does, plus one identity per track, then follows
@@ -2816,6 +2818,11 @@ Measured 2026-10-12, offline through this function and then in the app:
   "overlap / the weaker box" (used by `pre_cull_iou_threshold`), but scored
   better on SLAP at the same OKS. A keypoint-distance-only rule (median < 10 px)
   removed more, including more real animals: 88.03%, 16 views worse.
+
+**The summary box's gallery reads the same stand-in with a pixel camera**
+(`singleCameraCheckSession(session, {pixelCamera: true})`): its one camera's
+`project` maps (x, y, 0) back to (x, y) and claims no size, which is what
+`ui/identity-gallery.js` needs to cut samples and draw paths.
 
 **The ID-switch checks read a stand-in** (`singleCameraCheckSession`): one
 InstanceGroup-shaped object per identified detection, its 2D as `points3d`
@@ -11826,12 +11833,16 @@ when it found nothing — or never ran — there was no visible next step, and t
 three cases read alike.
 
 **Key exports.**
-- `summarizeTrackedIdentities(session, {frames, animals, animalsAuto, elapsedMs, fps})`
+- `summarizeTrackedIdentities(session, {frames, animals, animalsAuto, elapsedMs, fps,
+  singleCamera, untracked, duplicates})`
   — frames per identity, frames with any identity, frames with every animal, from
   `session.instanceGroups` (never evicted on a lazy project, so the whole project).
-  An identity listed twice in one frame counts once.
+  An identity listed twice in one frame counts once. A single-camera Track All
+  passes its camera and the detections it left trackless, and is counted on the
+  stand-in session (`pose/single-camera-tracking.js` `singleCameraCheckSession`).
 - `describeSwitchCheck(enabled, res, identities, whyNotRun)` — one check's outcome
-  as `{state, switches, encounters, reason, elapsedMs}`, state one of `found` /
+  as `{state, switches, encounters, moments, reason, elapsedMs}` (`moments`: the
+  candidate moments coat brightness tested on one camera), state one of `found` /
   `clear` / `skipped` / `failed` / `cancelled` / `off` / `na` (one identity).
   Switches are `idSwitchOnsets` — the "possible switches" count the tab uses.
 - `planTrackSummary(summary, checks)` — the rows, the notes, the next step and the
@@ -11841,6 +11852,22 @@ three cases read alike.
   animals when only size came back clear); **Tracking Wizard…** when nothing was
   matched. A skipped check never gets a "nothing found" headline. Notes flag more
   (or fewer) identities than animals.
+  **A single-camera summary** (`summary.singleCamera`) is planned apart, so the
+  multi-camera one is unchanged.
+  - **What it reports:** it counts **Tracks**, since SLEAP's tracker writes one per
+    animal, and adds a "Without a track" row for detections over the animal count
+    plus duplicates removed first.
+  - **Its checks:** Coat brightness (the automatic one, counting its candidate
+    moments), Images, and Body size. Body size is "Not run" on one camera, with
+    the reason on hover.
+  - **Next step:** **Review switches** when one was flagged; otherwise **Save
+    project** (the tracks are what SLEAP reads back), with the image and
+    coat-brightness checks offered when they did not run. It never suggests
+    Triangulate All: there is no 3D.
+  - **"Nothing flagged" carries a caveat** that the checks miss many swaps on one
+    camera. On 87 proofread SLAP views the image check found 82 of 276, and 113
+    of those 276 were one track changing animal while the other was undetected,
+    so no contact was there to test.
 - `formatShare(count, total)` — floored to one decimal, so only a full count reads
   "100%". `formatDuration(ms)` — "0.4 s", "42 s", "3 min 5 s", "1 h 12 min".
 - `formatTrackingSpeed(frames, ms, recordingFps)` — the Tracking time row's detail:
@@ -11893,7 +11920,20 @@ to that frame — the tracker that opens the box cannot import `pose/initializat
 `rememberTrackSummary(session, opts, checks, identities)` (Track All keeps what the
 box showed on `session._trackSummary` — in memory, not saved — and refreshes the
 ID Switches tab so its button appears); `reopenTrackSummary(session)` (the tab's
-**Show Track All summary**).
+**Show Track All summary**); `summarySession(session)` (what the box counts and
+draws from: the session itself, or for a single-camera one its stand-in from
+`pose/single-camera-tracking.js` `singleCameraCheckSession(session, {pixelCamera:
+true})` — one group per identified detection, and a PIXEL camera whose `project`
+maps (x, y, 0) to (x, y), so the gallery's crops and path maps work unchanged; the
+session's own stand-in camera would divide by z = 0. Null on a lazy project).
+
+**One camera.** Single-camera Track All (`pose/tracker.js`
+`runSingleCameraTrackAll`) opens the same box, planned for one camera
+(`planTrackSummary` with `singleCamera`): tracks instead of identities, the
+coat-brightness / image / size check rows, and review or **Save project**
+(`#menuSaveProject`) as the next step. Reopening it re-counts on `summarySession`
+and re-reads every check the pass reported, coat brightness included. The
+Identities section has a row per track, cut from the one view.
 
 **Reopening.** Closing the box used to be final, which stranded a user who had not
 turned on the image check before Track All: the box is what offers it. The ID
@@ -11910,7 +11950,8 @@ from the pass, because `runIdSwitchChecks` stores only results that ran.
 - **A note, not a prompt.** Nothing changes until a button is pressed; Close,
   `Esc` and a backdrop click dismiss it. Each action button clicks the existing
   control — `#tbTriangulateAll`, `#menuCheckImageSwitches`,
-  `#menuCheckSizeSwitches`, `#menuTrackingWizard` — so it runs exactly what the
+  `#menuCheckSizeSwitches`, `#menuCheckBrightnessSwitches`, `#menuSaveProject`,
+  `#menuTrackingWizard` — so it runs exactly what the
   user would have run by hand (a disabled button, e.g. under Defining Plane Mode,
   ignores it the same way). **Review switches** opens the ID Switches tab and
   presses `#idSwitchNext`, landing on the first flagged switch.

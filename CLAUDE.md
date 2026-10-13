@@ -762,6 +762,13 @@ the animal count, connect single breaks). Rules:
   far edges 4 -> 2. Multi-camera checks still count them (not measured).
 - **Eager only.** A lazy (> 150 MB) single-camera project is refused with a
   reason, never tracked from its resident window — the resident-only bug class.
+- **It ends on the Track All summary box, planned for one camera.** That means
+  tracks instead of identities, and the coat-brightness, image and size check
+  rows. The next step is review or **Save project**, never Triangulate All.
+  "Nothing flagged" comes with a caveat that the checks miss many switches on
+  one camera. The box counts on the single-camera stand-in, and its Identities
+  gallery uses a PIXEL camera (`singleCameraCheckSession(…, {pixelCamera:
+  true})`): the session's own stand-in camera cannot project z = 0.
 - **Two ways in, one session.** File ▸ Load SLP (then Select Video Files), or
   File ▸ Load Single Session Folder on a folder holding ONE camera directory
   (`<session>/Camera0/{video, .slp}`, or the camera folder itself) and no

@@ -181,6 +181,17 @@ group('2. The check view, and the size check on it');
         `the planted swap is found as an onset at its encounter (${onsets.map(o => o.frame).join(',') || 'none'})`);
 }
 
+group('2b. The stand-in with a pixel camera (the Track All summary\'s identity gallery)');
+{
+    const v = SCT.singleCameraCheckSession(s, { pixelCamera: true });
+    const cam = v.cameras[0], g = v.instanceGroups.get(10)[0];
+    eq(v.cameras.length + ':' + cam.name, '1:' + CAM, 'one camera, the session\'s');
+    const P = Array.from(g.points3d.subarray(0, 3)), uv = cam.project(P);
+    ok(uv[0] === P[0] && uv[1] === P[1] && P[2] === 0, `it projects a stand-in point (x, y, 0) back to its pixel (${uv.map(x => x.toFixed(1))})`);
+    eq(cam.size, null, 'and claims no image size (Load SLP\'s stand-in reports 640x480 whatever the video)');
+    ok(SCT.singleCameraCheckSession(s).cameras === s.cameras, 'without the option: the session\'s own camera, as before');
+}
+
 group('3. A fix swaps the TRACKS; the same call undoes it; else the identity layer');
 {
     const before = []; for (let f = 0; f < FRAMES; f++) before.push(instancesAt(s, f).map(i => i.trackIdx));

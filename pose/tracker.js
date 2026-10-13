@@ -34,7 +34,7 @@ import { setColorByIdentity } from '../ui/color-by.js';
 import { setTrailSeconds, trailSecondsName, TRACK_ALL_TRAIL_SECONDS } from '../ui/trail-presets.js';
 import { runIdSwitchChecks, clearIdSwitchResults } from '../ui/id-switch-modal.js';
 import { summarizeTrackedIdentities, describeSwitchCheck } from '../ui/track-summary.js';
-import { showTrackSummaryModal, rememberTrackSummary } from '../ui/track-summary-modal.js';
+import { showTrackSummaryModal, rememberTrackSummary, summarySession } from '../ui/track-summary-modal.js';
 import { collapseTimeline } from '../ui/timeline-controller.js';
 import { collapseViewport3D } from '../ui/panel-visibility.js';
 
@@ -1776,11 +1776,13 @@ async function runSingleCameraTrackAll(session, bail) {
     showLoadingProgress('Tracking (SLEAP tracker)', 0, total);
     try {
         await yieldToPaint();
+        var trackT0 = performance.now();
         var res = await trackSingleCamera(session, cfg, {
             fps: state.fps,
             duplicates: duplicates,
             onProgress: async function (done, n) { showLoadingProgress('Tracking (SLEAP tracker)', done, n); await yieldToPaint(); },
         });
+        var trackMs = performance.now() - trackT0;
         hideLoading();
         // Where else a switch could be (not saved: the input tracklets they come from are rewritten).
         session._idSwitchCandidates = res.moments;
@@ -1810,8 +1812,30 @@ async function runSingleCameraTrackAll(session, bail) {
         var autoBrightness = getTrackingThreshold('autoBrightnessSwitchCheck') > 0;
         if (autoSize && res.numIdentities > 1) doneMsg += ' · ' + SINGLE_CAMERA_SIZE_SKIP_NOTE;
         setStatus(doneMsg, 'success');
+        var checkRes = null;
         if (res.numIdentities > 1 && (autoImage || autoBrightness)) {
-            await runIdSwitchChecks({ auto: true, statusPrefix: doneMsg, size: false, image: autoImage, brightness: autoBrightness });
+            checkRes = await runIdSwitchChecks({ auto: true, statusPrefix: doneMsg, size: false, image: autoImage, brightness: autoBrightness });
+        }
+        // The summary box, as after a multi-camera Track All, planned for one camera (ui/track-summary.js
+        // `singleCamera`): tracks, the coat-brightness / image / size checks, and review or save as the next
+        // step — never Triangulate All. Counted on the single-camera stand-in session. Only logs if it fails.
+        try {
+            var summaryOpts = {
+                frames: res.frames, animals: numAnimals, animalsAuto: !userCount, elapsedMs: trackMs,
+                fps: state.fps > 0 ? state.fps : (session.fps > 0 ? session.fps : 0),
+                singleCamera: session.cameras[0].name, untracked: res.untracked, duplicates: res.duplicates,
+            };
+            var summaryChecks = {
+                brightness: describeSwitchCheck(autoBrightness, checkRes && checkRes.brightness, res.numIdentities),
+                image: describeSwitchCheck(autoImage, checkRes && checkRes.image, res.numIdentities),
+                size: res.numIdentities > 1 ? { state: 'off', reason: 'not run on one camera: 2D body size is unreliable (Tracks ▸ Check ID Switches runs it)' }
+                    : describeSwitchCheck(false, null, res.numIdentities),
+            };
+            rememberTrackSummary(session, summaryOpts, summaryChecks, res.numIdentities);
+            var counted = summarySession(session);
+            if (counted) showTrackSummaryModal(summarizeTrackedIdentities(counted, summaryOpts), summaryChecks, { session: counted });
+        } catch (sumErr) {
+            console.error('[TrackAll] single camera summary failed:', sumErr);
         }
         var lo = Infinity, hi = -Infinity;
         for (var f of session.frameGroups.keys()) { if (f < lo) lo = f; if (f > hi) hi = f; }
