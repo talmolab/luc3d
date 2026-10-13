@@ -62,8 +62,8 @@ export {
     computeFundamentalMatrix, epipolarError, epipolarErrorMatrix,
 };
 // The core reads these two settings through hooks (it cannot import ui/settings.js
-// and stay worker-loadable). `typeof` keeps the flat-script test sandbox working,
-// where ui/settings.js is not loaded.
+// and stay worker-loadable). The `typeof` checks date from a since-retired
+// flat-script test sandbox that did not load ui/settings.js; both are always true here.
 setTriangulationSettingsHooks({
     isCameraTracked: typeof isCameraTracked === 'function' ? isCameraTracked : null,
     getTrackingThreshold: typeof getTrackingThreshold === 'function' ? getTrackingThreshold : null,
@@ -1278,8 +1278,8 @@ export class LazyFrameLoader {
             // Resolve worker URL relative to the document base so this works on
             // sub-path deployments (e.g. GitHub Pages /luc3d/, /luc3d/pr/N/) as well
             // as localhost. We use document.baseURI rather than `new URL(..., import.meta.url)`
-            // because triangulation.js is loaded via vm.Script in tests/run-node.js
-            // (classic-script context, where `import.meta` is a parse error). See ISSUES.md I-8.
+            // (first because a since-retired vm test runner could not parse `import.meta`).
+            // See ISSUES.md I-8.
             var workerUrl = new URL('loading/slp-import-worker.js?v=' + Date.now(), document.baseURI);
             var worker = new Worker(workerUrl, { type: 'module' });
             worker.onmessage = function (e) {
@@ -2051,9 +2051,9 @@ export async function triangulateMultiFrameInstances(startFrame, endFrame, onPro
  *      which is what an explicit user action on a brand-new group should honor.
  *      Never a bare `'dlt'` literal.
  *
- * `typeof` guard on the settings getter for the flat-script test harness
- * (`tests/run-node.js`), which does not resolve the ES import — same pattern as
- * `isCameraTracked` / `getTrackingThreshold` above.
+ * The `typeof` guard on the settings getter dates from a since-retired
+ * flat-script test harness that did not resolve the ES import, like the ones on
+ * `isCameraTracked` / `getTrackingThreshold` above; it is always true now.
  *
  * NOT used by `ui/rendering.js`'s lazy reprojection fill, deliberately. That
  * path re-derives reprojections for 3D it does NOT own and does not write back,

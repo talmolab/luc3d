@@ -1244,8 +1244,8 @@ export function triangulateAndReproject(instanceGroup, cameras, options) {
     // own error without ever influencing the geometry. `included[c]` gates only the
     // observation collection; reprojection/error steps still cover every camera.
     // Source: `options.includedCameras` (explicit list, for tests) else the live
-    // Camera Views setting. `typeof` guard keeps this safe under the flat-script
-    // test harness where the ES import isn't resolved.
+    // Camera Views setting, reached through a hook — unset in a worker, where
+    // every view is included (the pool passes `includedCameras` explicitly).
     const included = cameraNames.map(function (n) {
         if (options && options.includedCameras) return options.includedCameras.indexOf(n) >= 0;
         return _settingsHooks.isCameraTracked ? _settingsHooks.isCameraTracked(n) : true;

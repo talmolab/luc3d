@@ -15,8 +15,11 @@
  *  3. A cancellable progress dialog, with a playhead line, a percentage, the CPU
  *     line over the GPU running the model, each with its live load, a graph of
  *     both loads to their right (legend keys, labelled axes, its newest points
- *     equal to the lines, a hover readout), and a sample of the crops above Cancel: Esc
- *     mid-run stops it, reports "cancelled" and adds no image markers.
+ *     equal to the lines, a hover readout), and a sample of the crops above Cancel
+ *     (the model input as given, captioned with its animal's label and camera, a
+ *     new one every 0.4 s while the embedder's list sits still, as it does between
+ *     the CPU's bursts): Esc mid-run stops it, reports "cancelled" and adds no
+ *     image markers.
  *  4. Without a GPU the after-tracking image check (Tracking Wizard) still RUNS,
  *     on the CPU, says so in the dialog (and graphs the CPU alone), and finds the
  *     switch — it used to be "skipped — needs WebGPU". (The real CPU embedder:
@@ -87,8 +90,13 @@ try {
         };
         // Synthetic embedder: per-animal appearance vector + noise, 4 cameras; optional per-frame delay, and
         // optionally a `device` to report (with busyMs = the time any request was in its delay, cpuBusyMs = two
-        // threads busy for that time, and sampleCrops = one uniform-grey crop per frame, 60 + 60 x the animal,
-        // from camera c<frame mod 4>).
+        // threads busy for that time, and sampleCrops = one uniform-grey crop per frame, 60 + 60 x the animal).
+        // Sample k is animal k mod 3 from camera c<k mod 4>, so the first SAMPLE_CROPS (12) carry 12 different
+        // captions — and only those are kept: the list then sits still, as it does between the CPU's bursts, so
+        // the dialog's crop changes only because the dialog cycles through it. A list that kept rolling made the
+        // crop each 400 ms tick landed on depend on the embedding rate: at ~20 frames a tick the list moved 20
+        // while the dialog's index moved 1, and 21 is a multiple of 3 — the same animal on every tick. (Not
+        // c<frame mod 4>: every frame here is a multiple of 4, so that was always c0.)
         const E = await import('/ui/image-embedder.js');
         const greyCrop = (g) => { const t = new Float32Array(3 * E.INPUT * E.INPUT); E.writeInputTensor(new Uint8ClampedArray(E.CROP * E.CROP).fill(g), t, 0); return t; };
         const CROPS = [0, 1, 2].map(k => greyCrop(60 + 60 * k));
@@ -99,11 +107,11 @@ try {
             const cams = ['c0', 'c1', 'c2', 'c3'];
             let busy = 0, since = 0, active = 0, n = 0; const samples = [];
             const e = { views: cams, getEmbeddings: async (frame, items) => {
-                const it = items[n++ % items.length];
+                const k = n++, it = items[k % items.length];
                 // a cross of keypoints around the centre, so the overlay has something to draw (the fixture skeleton has no edges)
-                samples.push({ tensor: CROPS[it.group._animal], frame, camera: cams[frame % 4], identityId: it.group.identityId,
-                               points: Float32Array.from([112, 112, 150, 112, 74, 112, 112, 150, 112, 74]) });
-                if (samples.length > 12) samples.shift();
+                if (samples.length < E.SAMPLE_CROPS)
+                    samples.push({ tensor: CROPS[it.group._animal], frame, camera: cams[k % cams.length], identityId: it.group.identityId,
+                                   points: Float32Array.from([112, 112, 150, 112, 74, 112, 112, 150, 112, 74]) });
                 if (active++ === 0) since = performance.now();
                 if (delayMs) await new Promise(res => setTimeout(res, delayMs));
                 if (--active === 0) busy += performance.now() - since;
@@ -256,9 +264,13 @@ try {
         check(await page.evaluate(() => document.querySelector('.load-graph-tip').hidden && !document.querySelector('.load-graph-cursor.is-on')),
               '…and leaving it hides the readout and the cursor');
     }
-    // the sample crop: what the embedder was given, drawn and captioned with the animal's CURRENT label and camera
+    // the sample crop: what the embedder was given, drawn and captioned with the animal's CURRENT label and camera.
+    // Every draw rewrites the caption (assigning textContent replaces its text node even with the same text), so
+    // an observer on it times each new crop.
     const crop = await page.evaluate(async () => {
         const AS = await import('/ui/app-state.js'), el = document.querySelector('.id-switch-progress-crop');
+        const draws = [], mo = new MutationObserver(() => draws.push(performance.now()));
+        mo.observe(el.querySelector('figcaption'), { childList: true });
         const seen = new Set(), ok = [];
         for (let i = 0; i < 6; i++) {
             await new Promise(r => setTimeout(r, 420));
@@ -268,16 +280,23 @@ try {
             ok.push(!!id || id === 0 ? [60, 120, 180].includes(px[0]) && px[0] === px[1] && px[1] === px[2] && /^c[0-3]$/.test(cam) : false);
             seen.add(cap);
         }
+        mo.disconnect();
+        const gaps = draws.slice(1).map((t, i) => t - draws[i]).sort((a, b) => a - b);
         // the skeleton is drawn in the animal's identity colour: the node at (150, 112) is coloured, not grey
         const [name] = el.querySelector('figcaption').textContent.split(' · ');
         const colour = (AS.state.session.identities.find(x => x.name === name) || {}).color;
         const node = el.querySelector('canvas').getContext('2d').getImageData(150, 112, 1, 1).data;
         const hex = '#' + [0, 1, 2].map(i => node[i].toString(16).padStart(2, '0')).join('');
-        return { hidden: el.hidden, has: el.classList.contains('has-crop'), ok, seen: [...seen], aria: el.querySelector('canvas').getAttribute('aria-label'), colour, hex };
+        return { hidden: el.hidden, has: el.classList.contains('has-crop'), ok, seen: [...seen], aria: el.querySelector('canvas').getAttribute('aria-label'), colour, hex,
+                 draws: draws.length, gap: gaps.length ? gaps[gaps.length >> 1] : NaN };
     });
     check(crop.hex === crop.colour, `the skeleton is drawn over the crop in the animal's identity colour (${crop.hex} vs ${crop.colour})`);
-    check(!crop.hidden && crop.has && crop.ok.every(Boolean) && crop.seen.length >= 3 && /^Sample crop: id_\d · c\d$/.test(crop.aria),
-          `a sample crop above Cancel, changing every 0.4 s, drawn as given (${crop.seen.join(' | ')})`);
+    // 6 looks 420 ms apart at a list of 12 different captions: each look is a new one, unless a late tick repeats one
+    const seenCams = new Set(crop.seen.map(c => c.split(' · ')[1]));
+    check(!crop.hidden && crop.has && crop.ok.every(Boolean) && crop.seen.length >= 4 && seenCams.size >= 2 && /^Sample crop: id_\d · c\d$/.test(crop.aria),
+          `a sample crop above Cancel, drawn as given, captioned with its label and camera (${crop.seen.join(' | ')})`);
+    check(crop.draws >= 5 && crop.gap >= 300 && crop.gap <= 600,
+          `…changing every 0.4 s (${crop.draws} crops in 2.5 s, median ${Math.round(crop.gap)} ms apart)`);
     await page.waitForFunction(() => /frame \d/.test(document.querySelector('.id-switch-progress-text').textContent), null, { timeout: 10000 });
     // Embedding is the first 90% of the bar, so frame i of n reads round(90 i / n)%.
     await page.waitForFunction(() => parseInt(document.querySelector('.id-switch-progress-pct').textContent, 10) > 0, null, { timeout: 10000 });

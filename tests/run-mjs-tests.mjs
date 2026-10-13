@@ -5,8 +5,9 @@
  *
  * There were three test populations and only two runners:
  *
- *   tests/*.js         classic scripts  -> tests/run-node.js (vm sandbox) and
- *                                         tests/test-runner.html (browser)
+ *   tests/*.js         classic scripts  -> tests/test-runner.html (browser), and
+ *                                         tests/run-node.js (vm sandbox, since
+ *                                         retired — it had silently gone red)
  *   tests/e2e/*.mjs    Playwright       -> run individually
  *   tests/test-*.mjs   native ESM       -> NOTHING
  *
