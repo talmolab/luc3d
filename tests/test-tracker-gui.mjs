@@ -24,11 +24,12 @@ function eq(a, e, m) { ok(a === e, `${m} (expected ${e}, got ${a})`); }
 globalThis.__GUI = {
     thresholds: {}, drawOverlays: 0, updateInfoPanel: 0, refreshTracks: 0,
     update3DViewport: 0, markDirty: 0, lastStatus: null, lastDrawFrame: null,
+    // The first-use dialog (stubbed in tracker-gui-hooks.mjs): what it was shown,
+    // and the answer it gives (null = Cancel).
+    trackSetupShown: [], trackSetupAnswer: null,
 };
 globalThis.document = { getElementById: () => null };
 globalThis.window = globalThis;
-// trackCurrentFrame() prompts for the animal count on first use; answer "2".
-globalThis.prompt = () => '2';
 
 register(pathToFileURL(path.join(HERE, 'tracker-gui-hooks.mjs')).href);
 const { Camera, Instance, FrameGroup, Session } =
@@ -36,6 +37,7 @@ const { Camera, Instance, FrameGroup, Session } =
 const appState = await import(pathToFileURL(path.join(ROOT, 'ui', 'app-state.js')).href);
 const { trackCurrentFrame, trackAll, trackFrameRange } =
     await import(pathToFileURL(path.join(POSE_DIR, 'tracker.js')).href);
+const settings = await import(pathToFileURL(path.join(ROOT, 'ui', 'settings.js')).href);
 const colorBy = await import(pathToFileURL(path.join(ROOT, 'ui', 'color-by.js')).href);
 const trails = await import(pathToFileURL(path.join(ROOT, 'ui', 'trail-presets.js')).href);
 
@@ -60,9 +62,33 @@ session.addFrameGroup(fg);
 appState.state.session = session;
 appState.state.currentFrame = 0;
 
-console.log('• trackCurrentFrame() updates tracks/identities + GUI');
+// --- The first-use dialog: the animal count, with the node weights ----------
+console.log('• the first Track Frame asks for the animal count and shows the node weights');
+// A weight for a node of ANOTHER skeleton: weights are per browser, keyed by
+// name, so answering for this skeleton must not drop it.
+settings.setNodeWeights({ otherSkeletonNode: 0.3 });
 let dirtyBefore = globalThis.__GUI.markDirty;
-trackCurrentFrame();
+let setsBefore = globalThis.__GUI.nodeWeightsSet;
+await trackCurrentFrame();   // the stub answers null: Cancel
+eq(globalThis.__GUI.trackSetupShown.length, 1, 'the dialog opened');
+const shown = globalThis.__GUI.trackSetupShown[0] || {};
+eq(shown.title, 'Track Frame', 'titled after the run that asked');
+eq(shown.animals, null, 'with no count to pre-fill yet');
+eq(JSON.stringify(shown.nodes), JSON.stringify(NODES.map(name => ({ name, weight: 1 }))),
+    'listing every skeleton node, in order, with the weight a run would use');
+eq(session.identities.length, 0, 'Cancel: nothing was tracked');
+eq(session.numAnimals, null, 'Cancel: the session is still unanswered');
+eq(globalThis.__GUI.nodeWeightsSet, setsBefore, 'Cancel: no node weight was written');
+eq(globalThis.__GUI.markDirty, dirtyBefore, 'Cancel: the project is not marked dirty');
+
+console.log('• trackCurrentFrame() updates tracks/identities + GUI');
+globalThis.__GUI.trackSetupAnswer = { animals: 2, nodeWeights: Object.fromEntries(NODES.map((n, k) => [n, k === 5 ? 0 : 1])) };
+await trackCurrentFrame();
+eq(globalThis.__GUI.trackSetupShown.length, 2, 'Cancel left it unanswered, so the next run asks again');
+eq(session.numAnimals, 2, 'Continue sets the session\'s animal count');
+eq(JSON.stringify(globalThis.__GUI.lastNodeWeightArray), '[1,1,1,1,1,0]',
+    'the run used the weights given in the dialog (n5 = 0)');
+eq(settings.getNodeWeights().otherSkeletonNode, 0.3, 'another skeleton\'s stored weight survives');
 
 // Track/identity assignment happened.
 eq(session.identities.length, 2, 'two identities created on the session');
@@ -93,6 +119,7 @@ dirtyBefore = globalThis.__GUI.markDirty;
 let res = await trackAll();
 ok(res && res.ok, 'Track All succeeded');
 ok(globalThis.__GUI.markDirty > dirtyBefore, 'Track All marks the project dirty (markDirty called)');
+eq(globalThis.__GUI.trackSetupShown.length, 2, 'Track All does not ask again once the session has a count');
 eq(appState.state.colorByIdentity, true, 'coloring is now by Identity');
 eq(JSON.stringify(colorChanges), '[true]', 'the change handler ran once (buttons + 2D/3D recolor in the app)');
 ok(/now coloring by Identity/.test(globalThis.__GUI.lastStatus.msg), 'the status line says so: "' + globalThis.__GUI.lastStatus.msg + '"');

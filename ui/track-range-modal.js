@@ -8,10 +8,11 @@
  * changing node weights / camera views / the 3D correspondence weight in the
  * Tracking Wizard, without paying for a full pass over a long recording.
  *
- * Collects the animal count too. `pose/tracker.js` otherwise asks for it with a
- * native `prompt()`, which would pop up ON TOP of this dialog the first time
- * anyone used it; here a blank field is an explicit "auto-detect" and the
- * prompt never fires.
+ * Collects the animal count too. `pose/tracker.js` otherwise asks for it in its
+ * first-use dialog (`ui/track-setup-modal.js`), which would pop up ON TOP of
+ * this one the first time anyone used it; here a blank field is an explicit
+ * "auto-detect" and that dialog never opens. It does not show the node weights:
+ * this dialog is for re-running after changing them in the Tracking Wizard.
  *
  * Depends on: pose/tracker.js (the run itself), ui/app-state.js, save-load.js.
  */

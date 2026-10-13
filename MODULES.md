@@ -2025,7 +2025,7 @@ timeline) opens `showTrackSummaryModal` (`ui/track-summary-modal.js`) with
 `summarizeTrackedIdentities` and one `describeSwitchCheck` per cue
 (`ui/track-summary.js`), after keeping both on the session with
 `rememberTrackSummary`, so the ID Switches tab can reopen the box once it is closed. It reports how long tracking took — `trackStart` is taken
-AFTER the animal-count prompt, so the user's typing is not counted, and stops when
+AFTER the first-use dialog, so the user's typing is not counted, and stops when
 the identity pass returns — with its speed (fps, and × real time from the
 recording rate `state.fps`, falling back to `session.fps`, as the ID-switch checks
 read it), and each check's own `elapsedMs` (stamped by `runIdSwitchChecks`). It exists because a check that found nothing used to end the
@@ -2186,7 +2186,7 @@ no `points3d` are skipped) and show the total in the bottom-left status bar
 node weights change which instances get grouped (not which nodes triangulate),
 this is the headline metric for comparing weight settings.
 
-**Auto-cap.** When the animal count is blank (the prompt answered empty, or
+**Auto-cap.** When the animal count is blank (the first-use dialog answered empty, or
 the toolbar's Animals field cleared), `trackAll` / `trackCurrentFrame` resolve
 `numAnimals` via
 `computeMaxInstancesPerView(session)` — the largest instance count seen
@@ -2208,13 +2208,24 @@ drifts upward (e.g., 4 → 11 on the test fixture).
   `onTrackerNumAnimalsChange(fn)` — the ACTIVE session's animal count
   (`Session.numAnimals`; the getter returns `null` for auto-detect and for
   never-asked alike). It lives on the session so it is saved with the project.
-  The native `promptNumAnimals()` fires only while the session has **no answer
+  The first-use dialog (`askTrackSetup` → `ui/track-setup-modal.js`, which
+  replaced a native `prompt()`) opens only while the session has **no answer
   at all** (`numAnimalsAnswered`: `numAnimals` is `null`), not while the count
   reads null: a blank answer is stored as `'auto'`, and gating on null
-  re-prompted on every Track Frame / Track All after one. The prompt is
-  pre-filled with the session's count, else the last count given in any
+  re-prompted on every Track Frame / Track All after one. Its count is
+  pre-filled with the session's, else the last count given in any
   session this page has seen (`_lastNumAnimals`), so a multi-session project of
-  the same animals answers each new session with one Enter.
+  the same animals answers each new session with one Enter. Under the count it
+  lists the skeleton's **node weights** with the values the run will use,
+  editable: they reach the association cost but live in the Tracking Wizard and
+  are saved per BROWSER, so a 0 left from another project used to drop a node
+  from this one's matching with nothing on the way to the run saying so. On
+  Continue `askTrackSetup` writes the weights (`setNodeWeights`, MERGED into
+  `getNodeWeights()` so another skeleton's overrides survive) and then the
+  count, both before `createTrackerRun` snapshots them; Cancel writes nothing
+  and the run bails. `trackCurrentFrame` is `async` for this (its callers
+  ignore the return value). Track Frame Range never opens it: its own dialog
+  collects the count.
   `setTrackerNumAnimals` counts as an answer, null included; on a change it
   calls `markDirty()` (it is project state now) and notifies the listeners —
   that is how the toolbar's Animals field (`ui/animal-count-field.js`) follows
@@ -2232,7 +2243,9 @@ drifts upward (e.g., 4 → 11 on the test fixture).
   `computeInstanceDistance`, `hungarianAlgorithm`.
 - `../ui/app-state.js` — `state`, `interactionManager`, `timeline`,
   `viewport3d`, `getActiveSession`.
-- `../ui/settings.js` — `getNodeWeightArray`, `getTrackingThresholds`,
+- `../ui/settings.js` — `getNodeWeightArray`, `getNodeWeight`,
+  `getNodeWeights`, `setNodeWeights` (the first-use dialog's weights, above),
+  `getTrackingThresholds`,
   `getTrackingThreshold`, `isCameraTracked` (both `trackAll`/`trackCurrentFrame`
   drop cameras where `isCameraTracked(name)` is false before tracking; abort with
   a warning if fewer than 2 views remain included).
@@ -2251,6 +2264,8 @@ drifts upward (e.g., 4 → 11 on the test fixture).
   thousands commas.
 - `./tracker-pool.js` — `startTrackerWorker` (see "Track All runs its tracker on
   a worker" below).
+- `../ui/track-setup-modal.js` — `showTrackSetupModal`: the first-use dialog
+  (`askTrackSetup`, above). A leaf, so no cycle.
 - `../ui/rendering.js` — `drawAllOverlays`, `showPredictedOnly`,
   `PREDICTED_ONLY_NOTE`: Track Frame (when it found targets), Track Frame Range
   and Track All (when they assigned identities) end showing ONLY the Predicted
@@ -2466,8 +2481,8 @@ against `NaN` is false and it would otherwise sail past the ordering check and
 sweep nothing while reporting a `NaN` range. Like Track All, a range run does NOT propagate to tracks.
 `getTrackerNumAnimals` / `setTrackerNumAnimals` expose the animal count so the
 modal can collect it inline (and the toolbar's Animals field then shows what it
-set); `runTrackingPass` skips the native `promptNumAnimals()`
-on the range path so a `prompt()` never stacks on top of the dialog.
+set); `runTrackingPass` skips the first-use dialog (`askTrackSetup`)
+on the range path so it never stacks on top of the range dialog.
 `runTrackingPass` **returns** `{ok, start, end, identities, frames}` — `ok:false`
 for every bail-out, and on success the CLAMPED, normalized span actually swept.
 Callers cannot recompute that span (the request is clamped to the project extent
@@ -7277,11 +7292,11 @@ Track group: shows and edits the ACTIVE session's animal count, the number every
 tracking run caps identities at (`Session.numAnimals`, through
 `pose/tracker.js`). The count used to be visible only in the first-use
 `prompt()`, so a user who forgot what they typed had no way to find out. Blank is
-auto-detect (`placeholder="auto"`), as in the prompt and the Track Frame Range
-dialog.
+auto-detect (`placeholder="auto"`), as in the first-use dialog
+(`ui/track-setup-modal.js`) and the Track Frame Range dialog.
 
 **Two ways the shown value goes stale, two refreshes.** A change to the count
-(the prompt, the Track Frame Range dialog, the field itself) repaints it through
+(the first-use dialog, the Track Frame Range dialog, the field itself) repaints it through
 `onTrackerNumAnimalsChange`. A change of ACTIVE SESSION has no event — the
 session switch and every load path assign `state.session` themselves — so
 `syncAnimalCountField()` is called from `drawAllOverlays` (`ui/rendering.js`),
@@ -7318,7 +7333,7 @@ right and the closed menu ran 1px past the window as scroll overflow.
 
 **Imported by.** `ui/ui-wiring.js`, `ui/rendering.js`.
 
-Covered by `tests/e2e/toolbar-animal-count.mjs` (placement, the prompt, typed
+Covered by `tests/e2e/toolbar-animal-count.mjs` (placement, the first-use dialog, typed
 counts reaching Track All, bad entries, Esc, shortcuts, blank = answered, the
 range dialog, per-session switching, and a save → fresh page → Load Project
 reopen) and, for the file format, `tests/e2e/visibility-settings-roundtrip.mjs`
@@ -10454,7 +10469,11 @@ KEY (`e.code === 'Digit0'`) in `ui/ui-wiring.js`'s transport handler beside
   `setNodeWeights(map)` — read/write per-node tracking weights (clamped to
   `[0,1]`; entries equal to the default `1` are dropped). `getNodeWeightArray`
   resolves a parallel weight array for an ordered node-name list — the form the
-  tracker consumes (indexed to match `Instance.points`).
+  tracker consumes (indexed to match `Instance.points`). Two editors write them:
+  the Tracking Wizard (`ui/settings-modal.js`) and Track All / Track Frame's
+  first-use dialog (`ui/track-setup-modal.js`, through `pose/tracker.js`, which
+  merges its answer into `getNodeWeights()` since `setNodeWeights` replaces the
+  whole map).
 - `getCameraWeight(name)` / `isCameraTracked(name)` / `getCameraWeights()` /
   `setCameraWeights(map)` — read/write per-camera tracking inclusion (coerced to
   `0|1`; entries equal to the default `1` are dropped so only excluded views
@@ -11163,8 +11182,9 @@ the app-wide modal convention. On a successful run the viewer is parked on the
 
 **Notes / caveats.**
 - **It collects the animal count on purpose.** `pose/tracker.js` otherwise asks
-  with a native `prompt()`, which would pop up ON TOP of this dialog the first
-  time anyone used it. `runTrackingPass` skips that prompt on the range path, so
+  in its first-use dialog (`ui/track-setup-modal.js`), which would pop up ON TOP
+  of this one the first time anyone used it. `runTrackingPass` skips that dialog
+  on the range path, so
   a blank Animals field here is an explicit "auto-detect" — and the field is
   written through on every Continue, so clearing it really does turn
   auto-detect back on instead of silently keeping the old count.
@@ -11213,6 +11233,59 @@ the app-wide modal convention. On a successful run the viewer is parked on the
   behaviour).
 
 ---
+
+### ui/track-setup-modal.js
+
+**Purpose.** What Track All and Track Frame ask the first time they run on a
+session: the **number of animals**, with the skeleton's **node weights** laid
+out under it for review. It replaced a native `prompt()` that asked for the
+count alone. Node weights reach the tracker's association cost
+(`pose/cross-view-tracker.js`) but live in Tracks ▸ Tracking Wizard and are
+saved per BROWSER, keyed by node name, so a weight left at 0 from another
+project silently dropped a node from this one's matching; this question is the
+one moment every user passes through before tracking a session.
+
+**Key exports.**
+- `showTrackSetupModal({title, animals, nodes})` → `Promise<{animals,
+  nodeWeights} | null>`. `title` names the run ("Track All" / "Track Frame");
+  `animals` pre-fills the count (null = blank = auto-detect); `nodes` is
+  `[{name, weight}]` in skeleton order with each node's CURRENT effective
+  weight. Resolves `{animals: number|null, nodeWeights: {name: w}}` (every node
+  shown, edited or not) on Continue / Enter, and `null` on Cancel / Esc / a
+  backdrop click. A second call while one is open resolves `null` at once.
+
+**Imports from project modules.** None — a LEAF on purpose. It commits
+nothing: `pose/tracker.js` (`askTrackSetup`) writes the count through
+`setTrackerNumAnimals` and the weights through `setNodeWeights`, the same
+writers as the toolbar's Animals field and the Tracking Wizard, so there is no
+second path to either setting and no cycle with the tracker.
+
+**Imported by.** `pose/tracker.js`.
+
+**User-facing features.** The count field (focused, `placeholder="auto"`),
+then one row per skeleton node in the Tracking Wizard's own markup
+(`.settings-node-weight-row`, `.settings-num-input`; a weight of 0 greys its
+row, as there), then where to change both later. Enter is Continue and Esc is
+Cancel, consumed in the capture phase so no app shortcut also sees them.
+
+**Notes / caveats.**
+- **Bad input is refused, never clamped.** A count that is not a whole number
+  ≥ 1 (or text the field reports as `''`, `validity.badInput`) and a weight
+  outside `[0, 1]` show an inline error naming the node and disable Continue —
+  a typed 5 is a typo, not a request for 1. The Wizard clamps on blur instead.
+- **One scroller.** The card caps its height to the window and scrolls; the
+  weight grid never does (a 40-node skeleton in a 560px window is pinned).
+  The grid is narrower than the Wizard's (`minmax(160px, 1fr)`) so a typical
+  skeleton fits in three columns with its names whole.
+- **Tests answer it with `tests/e2e/fixtures/track-setup.js`**
+  (`answerTrackSetup(page, animals)`), which replaced
+  `page.on('dialog', d => d.accept('2'))`; `tests/tracker-gui-hooks.mjs` stubs
+  it for the Node GUI test.
+
+Covered by `tests/e2e/track-setup-modal.mjs` (the dialog, both cancels, the
+validation, the write-through to the Wizard's setting, the merge, the
+per-session re-ask, the one-scroller rule) and `tests/test-tracker-gui.mjs`
+(the run reads the dialog's weights; Cancel writes nothing).
 
 ### ui/trail-presets.js
 

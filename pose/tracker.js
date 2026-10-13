@@ -22,7 +22,11 @@ import { InstanceGroup, points3dNodeCount, hasPoint3d, readPoint3d, pooledPoints
 
 // Pass 3i-1: tracker UI/integration (was in app.js)
 import { state, interactionManager, timeline, viewport3d, getActiveSession } from '../ui/app-state.js';
-import { getNodeWeightArray, getTrackingThresholds, getTrackingThreshold, isCameraTracked } from '../ui/settings.js';
+import {
+    getNodeWeightArray, getNodeWeight, getNodeWeights, setNodeWeights,
+    getTrackingThresholds, getTrackingThreshold, isCameraTracked,
+} from '../ui/settings.js';
+import { showTrackSetupModal } from '../ui/track-setup-modal.js';
 import { markDirty, setStatus, hideLoading } from '../import-export/save-load.js';
 import { showLoadingProgress, createProgressPacer, yieldToPaint, setLoadingCpu, idleWhile, busyDuring } from '../ui/loading-overlay.js';
 import { startTrackerWorker } from './tracker-pool.js';
@@ -797,17 +801,18 @@ function sessionNumAnimals(session) {
     return (session && typeof session.numAnimals === 'number') ? session.numAnimals : null;
 }
 // A blank answer (auto-detect) is an answer too, so it must not bring the
-// prompt back on every run — the toolbar's Animals field shows "auto" and is
-// where it gets changed afterwards.
+// first-use dialog back on every run — the toolbar's Animals field shows
+// "auto" and is where it gets changed afterwards.
 function numAnimalsAnswered(session) {
     return !!session && session.numAnimals != null;
 }
-// The last count given in ANY session this page has seen. Pre-fills the prompt
+// The last count given in ANY session this page has seen. Pre-fills the dialog
 // for a session nobody has answered yet, which in a multi-session project of
 // the same animals makes each one a single Enter.
 var _lastNumAnimals = null;
-// Told when the count changes, so the toolbar field follows the prompt and the
-// Track Frame Range dialog. A listener that throws must not stop the others.
+// Told when the count changes, so the toolbar field follows the first-use
+// dialog and the Track Frame Range dialog. A listener that throws must not
+// stop the others.
 var _numAnimalsListeners = [];
 
 // Auto-detect cap: the largest instance count seen in any (camera, frame)
@@ -851,21 +856,22 @@ function computeMaxInstancesPerView(session) {
     return max;
 }
 
-function promptNumAnimals(session) {
-    var input = prompt('Number of animals (leave empty for auto-detect):',
-        sessionNumAnimals(session) || _lastNumAnimals || '');
-    if (input === null) return false;  // cancelled
-    input = input.trim();
-    if (input === '') {
-        setTrackerNumAnimals(null);
-    } else {
-        var n = parseInt(input);
-        if (isNaN(n) || n < 1) {
-            setStatus('Invalid number', 'error');
-            return false;
-        }
-        setTrackerNumAnimals(n);
-    }
+// The first-use question (ui/track-setup-modal.js): the animal count, with the
+// node weights laid out under it for review. Resolves false on Cancel, and
+// then nothing is written. On Continue both are written before the run reads
+// them (`createTrackerRun` snapshots the weights). The weights are merged into
+// the stored overrides rather than replacing them: they are keyed by node name
+// per browser, and another skeleton's must survive.
+async function askTrackSetup(session, title) {
+    var names = (session.skeleton && Array.isArray(session.skeleton.nodes)) ? session.skeleton.nodes : [];
+    var answer = await showTrackSetupModal({
+        title: title,
+        animals: sessionNumAnimals(session) || _lastNumAnimals,
+        nodes: names.map(function (n) { return { name: n, weight: getNodeWeight(n) }; }),
+    });
+    if (!answer) return false;  // cancelled
+    setNodeWeights(Object.assign(getNodeWeights(), answer.nodeWeights));
+    setTrackerNumAnimals(answer.animals);
     return true;
 }
 
@@ -873,7 +879,7 @@ function promptNumAnimals(session) {
  * The ACTIVE session's animal count, or null for "auto-detect from the resident
  * sample" (also what a never-answered session reads as). Read by the toolbar's
  * Animals field and the Track Frame Range modal, which show the current value
- * and set it inline — the modal so a native `prompt()` never stacks on top of it.
+ * and set it inline — the modal so the first-use dialog never stacks on top of it.
  * @returns {number|null}
  */
 export function getTrackerNumAnimals() { return sessionNumAnimals(getActiveSession()); }
@@ -881,7 +887,7 @@ export function getTrackerNumAnimals() { return sessionNumAnimals(getActiveSessi
 /**
  * Set the active session's animal count, used as `maxTargets` by every tracking
  * entry point. Counts as the user's answer, so Track Frame / Track All stop
- * prompting — including for null, which is an explicit auto-detect. It is
+ * asking — including for null, which is an explicit auto-detect. It is
  * project state (saved in the `.slp`), so a change marks the project dirty.
  * A no-op with no session: there is nothing to save it with.
  * @param {number|null} n  A positive integer, or null/NaN for auto-detect.
@@ -1270,7 +1276,7 @@ async function sweepTrackAllFrames(session, run, onProgress, opts) {
     return trackRunResult(session, run);
 }
 
-export function trackCurrentFrame() {
+export async function trackCurrentFrame() {
     var session = getActiveSession();
     if (!session || !session.cameras || session.cameras.length === 0) {
         setStatus('No session with cameras loaded', 'error');
@@ -1282,9 +1288,9 @@ export function trackCurrentFrame() {
         return;
     }
 
-    // Prompt for number of animals on first use
+    // Ask for the number of animals (and show the node weights) on first use
     if (!numAnimalsAnswered(session)) {
-        if (!promptNumAnimals(session)) return;
+        if (!(await askTrackSetup(session, 'Track Frame'))) return;
     }
 
     var effectiveNumAnimals = sessionNumAnimals(session) || computeMaxInstancesPerView(session);
@@ -1488,15 +1494,16 @@ async function runTrackingPass(range) {
         return bail;
     }
 
-    // Prompt for number of animals. Track Frame Range collects it in its own
-    // modal (blank there is an explicit "auto-detect"), so it never stacks a
-    // native prompt() on top of the dialog the user just filled in.
+    // Ask for the number of animals, with the node weights for review. Track
+    // Frame Range collects the count in its own modal (blank there is an
+    // explicit "auto-detect"), so it never stacks this dialog on top of the one
+    // the user just filled in.
     if (!isRange && !numAnimalsAnswered(session)) {
-        if (!promptNumAnimals(session)) return bail;
+        if (!(await askTrackSetup(session, human))) return bail;
     }
 
     // How long tracking took, for the summary box: from here (after the animal-count
-    // prompt, so the user's typing is not counted) to the end of the identity pass.
+    // dialog, so the user's typing is not counted) to the end of the identity pass.
     var trackStart = performance.now();
 
     // A non-windowed lazy session materializes every frame first, so the run

@@ -6,10 +6,24 @@
  * test can assert that trackCurrentFrame()/trackAll() update the GUI the same
  * way the app does (overlays + info panel + timeline tracks).
  */
+// Node weights are a real (in-memory) store, so the test can tell which
+// weights a run read: the run's array is recorded on __GUI.lastNodeWeightArray.
 const SETTINGS_STUB = `
+let _nodeWeights = {};
+export function getNodeWeight(name) {
+    const w = _nodeWeights[name];
+    return (typeof w === 'number' && isFinite(w)) ? w : 1;
+}
+export function getNodeWeights() { return Object.assign({}, _nodeWeights); }
+export function setNodeWeights(map) {
+    _nodeWeights = Object.assign({}, map);
+    globalThis.__GUI.nodeWeightsSet = (globalThis.__GUI.nodeWeightsSet || 0) + 1;
+}
 export function getNodeWeightArray(nodeNames) {
     if (!Array.isArray(nodeNames)) return null;
-    return nodeNames.map(() => 1);
+    const arr = nodeNames.map(getNodeWeight);
+    globalThis.__GUI.lastNodeWeightArray = arr;
+    return arr;
 }
 const DEFAULTS = { epipolarDecay:10, reprojSigma:20, epipolarWeight:0.4, reprojWeight:0.6,
     minMatchScore:0.05, prevIdentityBonus:0.3, reprojGate2:100, reprojGate3:140, reprojGate4:180,
@@ -70,8 +84,19 @@ const INITIALIZATION_STUB = `
 export function update3DViewport() { globalThis.__GUI.update3DViewport++; }
 `;
 
+// The first-use dialog (animal count + node weights). Records what it was
+// shown and answers with __GUI.trackSetupAnswer (null = Cancel).
+const TRACK_SETUP_STUB = `
+export function showTrackSetupModal(opts) {
+    globalThis.__GUI.trackSetupShown.push(opts);
+    const a = globalThis.__GUI.trackSetupAnswer;
+    return Promise.resolve(a == null ? null : JSON.parse(JSON.stringify(a)));
+}
+`;
+
 const STUBS = [
     ['/ui/settings.js', SETTINGS_STUB],
+    ['/ui/track-setup-modal.js', TRACK_SETUP_STUB],
     ['/ui/app-state.js', APP_STATE_STUB],
     ['/import-export/save-load.js', SAVE_LOAD_STUB],
     ['/ui/rendering.js', RENDERING_STUB],
