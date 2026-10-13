@@ -78,7 +78,8 @@ export const VISIBILITY_METADATA_KEYS = [
 // default) writes nothing — so it is asked again on the next Track Frame /
 // Track All, exactly as before the count was saved — and anything else read
 // back is treated the same way. Kept here rather than in pose/tracker.js,
-// which this module cannot import (it is loaded in the Node test sandbox).
+// which this module cannot import: tracker.js pulls in the whole UI, and this
+// module is bridged into tests/test-runner.html, which must not load the app.
 function serializeNumAnimals(session) {
     var n = session.numAnimals;
     if (n === 'auto') return n;

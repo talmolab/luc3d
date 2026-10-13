@@ -566,7 +566,7 @@ export class Timeline {
      * arrive before it. For a change to the timeline's data that is not itself
      * followed by a redraw (`setFrameModified`): frame steps no longer repaint
      * the canvas, so nothing else would show it. Synchronous where there is no
-     * `requestAnimationFrame` (Node test sandboxes).
+     * `requestAnimationFrame`.
      * @private
      */
     _requestRedraw() {

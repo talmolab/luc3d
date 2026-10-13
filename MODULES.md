@@ -3415,8 +3415,7 @@ it), and `plane-fit.js` itself depends only on `./pose-data.js`, so a worker can
 still load this module.
 
 **Imported by.** `pose/triangulation.js` (re-exports), `pose/triangulation-pool.js`,
-`pose/triangulation-worker.js`. Loaded before `pose/triangulation.js` by
-`tests/run-node.js`.
+`pose/triangulation-worker.js`.
 
 ---
 
@@ -4153,7 +4152,7 @@ Side effect: Triangulated on an eager project now counts a frame with 3D but no
 **Imports from project modules.** None.
 
 **Imported by.** `ui/rendering.js`; bridged as `window.__FrameCounters` by
-`tests/test-runner.html` and loaded as globals by `tests/run-node.js`.
+`tests/test-runner.html`.
 
 **Tests.** `tests/test-frame-counters.mjs` (lazy: counts equal a fully-hydrated
 count through the real `batchLoadLazyFrames`, with negative controls; residency
@@ -5352,11 +5351,12 @@ after all tasks complete; stays open on error.
 
 **Notes / caveats.**
 - `_rebuildRootSnapshot` no-ops in real browsers (guarded by
-  `this.root instanceof window.HTMLElement`). It only runs in headless Node
-  test sandboxes where `appendChild` does not reflect children into
-  `root.innerHTML`. Running it in a browser would replace the real DOM
-  (including the progress-bar markup `_renderRow` appends) with a simplified
-  label-only snapshot — hiding every bar.
+  `this.root instanceof window.HTMLElement`). It only runs under a DOM stub
+  where `appendChild` does not reflect children into `root.innerHTML` — the
+  since-retired `tests/run-node.js` sandbox was the only such host. Running it
+  in a browser would replace the real DOM (including the progress-bar markup
+  `_renderRow` appends) with a simplified label-only snapshot — hiding every
+  bar.
 - Long session names truncate with ellipsis at the modal max-width (380 px)
   rather than forcing horizontal expansion. CSS: `.lpm-group-label` is
   `flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden;
@@ -9341,8 +9341,7 @@ reviewed: [rowKey, …], fixes?: [[key, partnerKey, nameA, nameB, from, to], …
 draw; not the encounters or the fitted models. A restored check result has
 `restored: true` and `encounterCount` instead of `encounters`.
 
-**Imports from project modules.** None (loads in the node test sandbox; listed in
-`tests/run-node.js`).
+**Imports from project modules.** None.
 
 **Imported by.** `ui/id-switch-modal.js`, `import-export/visibility-metadata.js`.
 
@@ -10346,7 +10345,7 @@ so it loads cleanly in the headless node test runner without dragging in
   is intentionally NOT set by this module — `ui/info-panel.js` decorates
   each track entry with `getTrackColor(i)` after the list returns so this
   module can stay free of `./overlays.js` (and the wider import graph) and
-  load cleanly in the headless node test sandbox.
+  stay bridgeable by `tests/test-runner.html` without loading the app.
 - `renameHiddenTrack(session, oldName, newName)` /
   `renameHiddenIdentity(session, oldName, newName)` — migrate hidden-set
   membership when the user renames a track / identity, so the toggle stays
@@ -10768,9 +10767,9 @@ paint, and that `drawLegend` still works for the export.
 
 **Purpose.** Per-CAMERA video display settings — brightness, contrast (issue
 #149) and rotation. Pure and DOM-free: it imports NO project modules, so it can
-be bridged into `tests/test-runner.html` and the `vm` sandbox runner without
-dragging `app.js` in. `ui/sessions-panes.js` owns the DOM half (the
-Visibility-tab tables) and calls in here for the math and the per-session stores.
+be bridged into `tests/test-runner.html` without dragging `app.js` in.
+`ui/sessions-panes.js` owns the DOM half (the Visibility-tab tables) and calls
+in here for the math and the per-session stores.
 
 **One store shape, three settings.** All three are per-camera and live on the
 SESSION as a plain `{ cameraName: value }` map (`Session.videoBrightness` /
@@ -13627,8 +13626,9 @@ session is, and anything else read back (0, 2.5, `"3"`, `"AUTO"`) is treated
 the same way. The read assigns unconditionally, so a file without the key
 leaves `null`, never a stale value. The two helpers (`serializeNumAnimals` /
 `ingestNumAnimals`) are private to this module rather than in
-`pose/tracker.js`, which this module cannot import: it is loaded in the Node
-test sandbox (`tests/run-node.js`).
+`pose/tracker.js`, which this module cannot import: tracker.js pulls in the
+whole UI, and this module is bridged into `tests/test-runner.html`, which must
+not load the app.
 
 **What it covers, and what it deliberately does not.** The Visibility panel
 holds two kinds of state:

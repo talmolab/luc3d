@@ -2623,8 +2623,8 @@ export function parseSlpH5(file, onProgress, opts) {
         // Resolve worker URL relative to the document base so this works on
         // sub-path deployments (e.g. GitHub Pages /luc3d/, /luc3d/pr/N/) as well
         // as localhost. We use document.baseURI rather than `new URL(..., import.meta.url)`
-        // because file-io.js is loaded via vm.Script in tests/run-node.js (classic-script
-        // context, where `import.meta` is a parse error). See ISSUES.md I-8.
+        // (first because a since-retired vm test runner could not parse `import.meta`).
+        // See ISSUES.md I-8.
         var workerUrl = new URL('loading/slp-import-worker.js?v=' + Date.now(), document.baseURI);
         var worker = new Worker(workerUrl, { type: 'module' });
 

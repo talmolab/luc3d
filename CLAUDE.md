@@ -1653,14 +1653,23 @@ There are **three** test populations, each with its own runner. Run all three �
 they cover disjoint code, and a green run of one says nothing about the others.
 
 ```bash
-node tests/e2e/run-unit-tests.mjs     # tests/*.js  (browser suite, headless) — 1603 assertions
+node tests/e2e/run-unit-tests.mjs     # tests/*.js  (browser suite, headless) — 1653 assertions
 node tests/run-mjs-tests.mjs          # tests/test-*.mjs  (native-ESM Node tests)
 node tests/e2e/<name>.mjs             # tests/e2e/*.mjs  (Playwright, one file per behavior)
 ```
 
 - `tests/*.js` — classic scripts, run in the browser via `tests/test-runner.html`
-  (open directly) or headless via `tests/e2e/run-unit-tests.mjs`; also runnable in
-  a `vm` sandbox by `tests/run-node.js`.
+  (open directly) or headless via `tests/e2e/run-unit-tests.mjs`. **A file runs
+  only if `test-runner.html` has a `<script>` tag for it** — nothing discovers
+  it — so `tests/test-classic-tests-registered.mjs` fails on any untagged
+  `tests/test-*.js` not listed there with a reason. There is deliberately **no
+  Node runner** for these. `tests/run-node.js` used to load them in a `vm`
+  sandbox by regex-stripping `import`/`export` from a hand-ordered list of
+  modules, so every new cross-module import broke it: it was red from 2026-06-26
+  until it was removed (102 failures, 93 of them from four modules missing from
+  its list), exited 0 with no summary when handed the browser's full file list,
+  and was the only runner for four test files — one of which had tested nothing
+  since #189. Those four are tagged in `test-runner.html` now.
 - `tests/test-*.mjs` — native ES modules, run by **`tests/run-mjs-tests.mjs`**
   (one child process per file, since several install module-loader hooks). These
   were **orphaned for a long time**: no runner referenced them, so four had been
