@@ -30,22 +30,22 @@
  * import-export/save-load.js (setStatus).
  */
 
-import { state, getActiveSession } from './app-state.js?v=623c6b72d719';
-import { setSeekbarSwitchMarkers } from './seekbar-markers.js?v=623c6b72d719';
-import { setIdSwitchHighlight, updateIdSwitchHighlight, refreshIdSwitchHighlight, ID_SWITCH_SECTION_RGB } from './id-switch-highlight.js?v=623c6b72d719';
-import { setStatus, markDirty } from '../import-export/save-load.js?v=623c6b72d719';
-import { showLoading, hideLoading, yieldToPaint } from './loading-overlay.js?v=623c6b72d719';
-import { getTrackingThreshold } from './settings.js?v=623c6b72d719';
-import { checkSizeSwitches, checkImageSwitches, checkBrightnessSwitches } from '../pose/id-switch-check.js?v=623c6b72d719';
-import { singleCameraName, singleCameraCheckSession, swapSingleCameraIdentities, singleCameraCheckOptions } from '../pose/single-camera-tracking.js?v=623c6b72d719';
+import { state, getActiveSession } from './app-state.js?v=3f35f3858907';
+import { setSeekbarSwitchMarkers } from './seekbar-markers.js?v=3f35f3858907';
+import { setIdSwitchHighlight, updateIdSwitchHighlight, refreshIdSwitchHighlight, ID_SWITCH_SECTION_RGB } from './id-switch-highlight.js?v=3f35f3858907';
+import { setStatus, markDirty } from '../import-export/save-load.js?v=3f35f3858907';
+import { showLoading, hideLoading, yieldToPaint } from './loading-overlay.js?v=3f35f3858907';
+import { getTrackingThreshold } from './settings.js?v=3f35f3858907';
+import { checkSizeSwitches, checkImageSwitches, checkBrightnessSwitches } from '../pose/id-switch-check.js?v=3f35f3858907';
+import { singleCameraName, singleCameraCheckSession, swapSingleCameraIdentities, singleCameraCheckOptions } from '../pose/single-camera-tracking.js?v=3f35f3858907';
 import { createImageEmbedder, IMAGE_MODEL_MB, formatEmbedTiming, formatEmbedDevice, formatEmbedCpu,
-         inputTensorToPixels, INPUT } from './image-embedder.js?v=623c6b72d719';
-import { createLoadMeter, createLoadGraph, setLoadLine, cpuCores } from './load-graph.js?v=623c6b72d719';
-import { renderBraveFingerprintingHint } from './browser-hints.js?v=623c6b72d719';
-import { createBrightnessSampler } from './brightness-sampler.js?v=623c6b72d719';
+         inputTensorToPixels, INPUT } from './image-embedder.js?v=3f35f3858907';
+import { createLoadMeter, createLoadGraph, setLoadLine, cpuCores } from './load-graph.js?v=3f35f3858907';
+import { renderBraveFingerprintingHint } from './browser-hints.js?v=3f35f3858907';
+import { createBrightnessSampler } from './brightness-sampler.js?v=3f35f3858907';
 import { idSwitchRowKey as rowKey, idSwitchPrimary as primaryOf, idSwitchMarkers as markersOf, idSwitchOnsets as countOnsets,
          idSwitchEncounterCount as encounterCount, linkIdSwitchResults as tagAndLink,
-         idSwitchFixPlan, idSwitchFixFor, idSwitchRenameForFix, ID_SWITCH_CUES, idSwitchIsSecondary } from './id-switch-review.js?v=623c6b72d719';
+         idSwitchFixPlan, idSwitchFixFor, idSwitchRenameForFix, ID_SWITCH_CUES, idSwitchIsSecondary } from './id-switch-review.js?v=3f35f3858907';
 
 const CUE_LABEL = { size: 'body size', image: 'images', brightness: 'coat brightness' };
 
@@ -518,7 +518,7 @@ export async function runIdSwitchChecks(opts) {
         var n = countOnsets(res);
         parts.push(head(cue) + ': ' + (n
             ? n + ' possible switch' + (n === 1 ? '' : 'es') + ' in ' + res.encounters.length + ' close encounters'
-            : 'no possible switches in ' + res.encounters.length + ' close encounters'));
+            : 'nothing flagged in ' + res.encounters.length + ' close encounters'));
         if (n) level = 'warning';
     }
     var ran = cues.filter(function (c) { return results[c] && results[c].ok; });
@@ -916,8 +916,8 @@ export function refreshIdSwitchPanel(session) {
             var r = st.results[c], n = countOnsets(r);
             var mo = r.moments && r.moments.length;
             return '<div class="id-switch-summary">' + (both ? '<b>' + { size: 'Body size', image: 'Images', brightness: 'Coat brightness' }[c] + ':</b> ' : '') +
-                encounterCount(r).toLocaleString() + ' close encounters' + (mo ? ' + ' + mo.toLocaleString() + ' moments' : '') +
-                ' · <b>' + n + '</b> possible switch' + (n === 1 ? '' : 'es') + '</div>';
+                encounterCount(r).toLocaleString() + ' close encounters' + (mo ? ' + ' + mo.toLocaleString() + ' moments' : '') + ' · ' +
+                (n ? '<b>' + n + '</b> possible switch' + (n === 1 ? '' : 'es') : 'nothing flagged') + '</div>';
         }).join('') +
         '<details class="id-switch-about"><summary>About these flags</summary>' + aboutHtml(st, ran) + '</details>' +
         '</div>' +

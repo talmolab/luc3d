@@ -10,7 +10,7 @@
 //
 // Imports only `id-switch-review.js`, which is import-free.
 
-import { idSwitchOnsets, idSwitchEncounterCount } from './id-switch-review.js?v=623c6b72d719';
+import { idSwitchOnsets, idSwitchEncounterCount } from './id-switch-review.js?v=3f35f3858907';
 
 /** Thousands separators, as everywhere else frame counts are shown. */
 function n(v) {
@@ -166,7 +166,8 @@ function checkText(c) {
     switch (c.state) {
         case 'found': return plural(c.switches, 'possible switch', 'possible switches') + ' in ' +
             plural(c.encounters, 'close encounter');
-        case 'clear': return c.encounters ? 'No possible switches in ' + plural(c.encounters, 'close encounter')
+        // "flagged", not "no possible switches": a check that raises nothing has not shown there is no switch
+        case 'clear': return c.encounters ? 'Nothing flagged in ' + plural(c.encounters, 'close encounter')
             : 'No close encounters to check';
         case 'off': return 'Not run';
         case 'cancelled': return 'Cancelled';
@@ -175,6 +176,9 @@ function checkText(c) {
         default: return 'Not needed — only one identity';
     }
 }
+
+// A clear row's hover text: what "nothing flagged" does and does not say.
+export const CLEAR_NOTE = 'No close encounter scored past this check\'s threshold. It can still miss a switch.';
 
 // How many identity rows the box lists before folding the rest into "and N more".
 export const MAX_IDENTITY_ROWS = 12;
@@ -253,7 +257,8 @@ export function planTrackSummary(s, checks) {
     var size = checks.size, image = checks.image;
     var checkRow = function (label, c) {
         return { label: label, text: checkText(c), state: c.state,
-                 full: c.reason ? String(c.reason).replace(/^failed — /, '') : '',
+                 full: c.reason ? String(c.reason).replace(/^failed — /, '')
+                     : c.state === 'clear' && c.encounters ? CLEAR_NOTE : '',
                  time: TIMED_STATES[c.state] ? formatDuration(c.elapsedMs) : '' };
     };
     var checkRows = nIds > 1 ? [checkRow('Body size', size), checkRow('Images', image)] : [];

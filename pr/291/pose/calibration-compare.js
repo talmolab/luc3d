@@ -39,7 +39,7 @@
 // DOM-free, and its only import is the rotation maths it would otherwise
 // duplicate, so `tests/test-calibration-compare.mjs` can run it under Node.
 
-import { rotationAboutAxis, rotationMatrixToAxisAngle, normalize3 } from './origin-frame.js?v=623c6b72d719';
+import { rotationAboutAxis, rotationMatrixToAxisAngle, normalize3 } from './origin-frame.js?v=3f35f3858907';
 
 // "The same number", for values that came from parsing the same file twice, or
 // from one f64 round trip through a `.slp`. Deliberately not `===`: a TOML
