@@ -15,12 +15,17 @@
  *  3. A map per row: its path drawn, a view selector listing the three cameras
  *     with a time key; choosing another camera redraws the maps and is kept for
  *     the session.
+ *  3b. Resting the pointer on a sample shows it enlarged (320 px) beside the
+ *     tile, inside the window, with the same animal and a caption naming the
+ *     identity, time and camera; leaving hides it, and no native tooltip
+ *     doubles it. Closing the box takes the preview with it.
  *  4. Clicking a sample closes the box and goes to its frame; so does clicking a
  *     point on a map (to a frame on that identity's path).
  *  5. Negative control — the identities swapped for the second half of the
  *     recording (an ID switch): the reopened summary's rows each show BOTH
  *     animals. This is what the section is for.
- *  6. Without videos the images say "no video" and the maps still draw the paths.
+ *  6. Without videos the images say "no video" and the maps still draw the paths
+ *     — and resting on one shows no preview.
  *
  * Run: node tests/e2e/identity-gallery.mjs
  */
@@ -100,17 +105,27 @@ try {
             return FRAMES;
         };
         // What the section shows: per row, each image's frame, camera, caption and centre-pixel colour.
+        window.__colorAt = (c) => {
+            const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+            let red = 0, green = 0;
+            for (let i = 0; i < d.length; i += 4) { if (d[i] > 200 && d[i + 1] < 60 && d[i + 2] < 60) red++; else if (d[i + 1] > 200 && d[i] < 60 && d[i + 2] < 60) green++; }
+            const total = c.width * c.height;
+            return red > 0.05 * total && red > 3 * green ? "red" : green > 0.05 * total && green > 3 * red ? "green" : "other";
+        };
+        // The hover preview, if shown: where it is, what it shows, and the tile it is for.
+        window.__zoom = () => {
+            const z = document.getElementById('identityGalleryZoom');
+            if (!z || getComputedStyle(z).display === 'none') return null;
+            const r = z.getBoundingClientRect(), c = z.querySelector('canvas'), cr = c.getBoundingClientRect();
+            return { frame: +z.dataset.frame, caption: z.querySelector('.identity-gallery-zoom-caption').textContent,
+                inOverlay: !!z.closest('#trackSummaryOverlay'), size: Math.round(cr.width), color: window.__colorAt(c),
+                rect: { left: r.left, right: r.right, top: r.top, bottom: r.bottom }, vw: innerWidth, vh: innerHeight };
+        };
         window.__gallery = () => {
             const g = document.getElementById('identityGallery');
             if (!g) return null;
             // the disc colour covering most of the image (the keypoint dots are a few pixels)
-            const colorAt = (c) => {
-                const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
-                let red = 0, green = 0;
-                for (let i = 0; i < d.length; i += 4) { if (d[i] > 200 && d[i + 1] < 60 && d[i + 2] < 60) red++; else if (d[i + 1] > 200 && d[i] < 60 && d[i + 2] < 60) green++; }
-                const total = c.width * c.height;
-                return red > 0.05 * total && red > 3 * green ? "red" : green > 0.05 * total && green > 3 * red ? "green" : "other";
-            };
+            const colorAt = window.__colorAt;
             return {
                 view: (document.getElementById('identityGalleryView') || {}).value,
                 options: Array.from(document.querySelectorAll('#identityGalleryView option')).map(o => o.value),
@@ -160,6 +175,32 @@ try {
     check(true, `choosing ${other} redraws the maps`);
     check(await page.evaluate(() => window.__lucid.state.session._galleryView), `…and is kept for the session`);
 
+    // ---- 3b. resting on a sample enlarges it ---------------------------------------------------
+    const tileSel = (row, n) => `#identityGallery .identity-gallery-row[data-identity="${g.rows[row].id}"] .identity-gallery-tile:nth-of-type(${n})`;
+    check(await page.evaluate(() => Array.from(document.querySelectorAll('#identityGallery .identity-gallery-tile')).every(t => !t.title)),
+        'a drawn sample has no native tooltip (the preview says it)');
+    check(await page.evaluate(() => window.__zoom()) === null, 'no preview before the pointer rests on a sample');
+    await page.hover(tileSel(0, 2));
+    let z = await page.evaluate(() => window.__zoom());
+    const t02 = g.rows[0].tiles[1];
+    const tileBox = await page.$eval(tileSel(0, 2), e => { const r = e.getBoundingClientRect(); return { left: r.left, right: r.right, top: r.top, bottom: r.bottom }; });
+    check(z && z.inOverlay && z.size === 320, `resting on a sample shows it enlarged, 320 px, in the summary's overlay (${z && z.size})`);
+    check(z && z.frame === t02.frame && z.color === t02.color, `…the same sample: frame ${z && z.frame} (tile ${t02.frame}), animal ${z && z.color} (tile ${t02.color})`);
+    check(z && z.caption.includes(g.rows[0].name) && z.caption.includes(t02.caption) && z.caption.includes(t02.camera),
+        `…captioned with identity, time and camera ("${z && z.caption}")`);
+    check(z && (z.rect.left >= tileBox.right || z.rect.right <= tileBox.left) && z.rect.left >= 0 && z.rect.right <= z.vw && z.rect.top >= 0 && z.rect.bottom <= z.vh,
+        '…beside the tile, not over it, and inside the window');
+    await page.hover(tileSel(1, 5));
+    z = await page.evaluate(() => window.__zoom());
+    check(z && z.frame === g.rows[1].tiles[4].frame && z.color === g.rows[1].tiles[4].color, `moving to another sample shows that one (${z && z.frame})`);
+    await page.mouse.move(5, 5);
+    check(await page.evaluate(() => window.__zoom()) === null, 'leaving the sample hides the preview');
+    await page.hover(tileSel(0, 1));
+    await page.keyboard.press('Escape');
+    check(!(await page.$('#trackSummaryOverlay')) && !(await page.$('#identityGalleryZoom')), 'closing the box takes the preview with it');
+    await page.evaluate(async () => (await import('/ui/track-summary-modal.js')).reopenTrackSummary(window.__lucid.state.session));
+    await settled();
+
     // ---- 4. a click on a sample, and on a map point, goes there -----------------------------
     const target = g.rows[1].tiles[2].frame;
     await page.click(`#identityGallery .identity-gallery-row[data-identity="${g.rows[1].id}"] .identity-gallery-tile:nth-of-type(3)`);
@@ -202,6 +243,8 @@ try {
     g = await page.evaluate(() => window.__gallery());
     check(g.rows.length === 2 && g.rows.every(r => r.tiles.every(t => t.blank === 'no video' && !t.color)), 'without videos the images say "no video"');
     check(g.rows.every(r => r.mapPoints > 100), '…and the maps still draw the paths');
+    await page.hover('#identityGallery .identity-gallery-row .identity-gallery-tile:nth-of-type(2)');
+    check(await page.evaluate(() => window.__zoom()) === null, '…and resting on one shows no preview (nothing to enlarge)');
 
     check(errs.length === 0, 'no page errors' + (errs.length ? ': ' + errs.join(' | ') : ''));
 } finally {
