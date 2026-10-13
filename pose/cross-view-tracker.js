@@ -131,6 +131,8 @@
  * Settings "Refined" / `ba` method does NOT reach the tracker.
  */
 
+// From the core, not ./triangulation.js (which re-exports them): that module pulls in
+// the UI, and this one must load in a worker (pose/tracker-worker.js).
 import {
     triangulatePoints,
     reprojectPoint,
@@ -139,7 +141,7 @@ import {
     hungarianAlgorithm,
     computeFundamentalMatrix,
     epipolarErrorMatrix,
-} from './triangulation.js';
+} from './triangulation-core.js';
 import { points3dNodeCount, readPoint3d } from './pose-data.js';
 
 // ---------------------------------------------------------------------------
