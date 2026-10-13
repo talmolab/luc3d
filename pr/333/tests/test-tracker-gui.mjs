@@ -76,6 +76,7 @@ eq(shown.title, 'Track Frame', 'titled after the run that asked');
 eq(shown.animals, null, 'with no count to pre-fill yet');
 eq(JSON.stringify(shown.nodes), JSON.stringify(NODES.map(name => ({ name, weight: 1 }))),
     'listing every skeleton node, in order, with the weight a run would use');
+ok(!shown.imageCheck, 'Track Frame does not offer the image ID-switch check (it never runs after one frame)');
 eq(session.identities.length, 0, 'Cancel: nothing was tracked');
 eq(session.numAnimals, null, 'Cancel: the session is still unanswered');
 eq(globalThis.__GUI.nodeWeightsSet, setsBefore, 'Cancel: no node weight was written');

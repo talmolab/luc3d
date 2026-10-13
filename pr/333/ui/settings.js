@@ -17,7 +17,7 @@
 // add/update its entry here so the Settings panel stays complete and truthful.
 // (See CLAUDE.md.)
 
-import { shouldIgnoreShortcut } from './keyboard-target.js?v=ab7ffbe4e52c';
+import { shouldIgnoreShortcut } from './keyboard-target.js?v=fff917d38b16';
 
 const STORAGE_KEY = 'lucid.settings.v1';
 
@@ -475,6 +475,12 @@ export function setTrackingThresholds(map) {
     }
     _settings.trackingThresholds = next;
     persist();
+}
+
+// Commit SOME thresholds (Track All's first-use dialog: the image check's
+// settings), keeping every other stored override.
+export function updateTrackingThresholds(map) {
+    setTrackingThresholds(Object.assign({}, _settings.trackingThresholds, map || {}));
 }
 
 // --- Keyboard catalog ------------------------------------------------------

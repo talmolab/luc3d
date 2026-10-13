@@ -1658,6 +1658,36 @@ body {
   width: 56px;
 }
 
+/* Track All's image ID-switch check: its switch, then (while on) its options
+   in the same compact grid as the node weights. */
+.track-setup-switch-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-primary);
+  cursor: pointer;
+  margin-bottom: 4px;
+}
+
+.settings-node-weight-list.track-setup-options {
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  column-gap: 16px;
+}
+
+.track-setup-options[hidden] {
+  display: none;
+}
+
+.track-setup-options .settings-num-input {
+  width: 56px;
+}
+
+.track-setup-options .track-setup-switch-row {
+  margin: 0;
+  font-size: 12px;
+}
+
 /* Align Views to References modal (#226). The table grows with the camera
    count rather than scrolling inside the dialog (no scroll-within-scroll). */
 .align-views-modal {

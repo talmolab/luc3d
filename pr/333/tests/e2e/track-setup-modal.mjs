@@ -13,19 +13,24 @@
  *     "Track All", the count field focused, blank, "auto" placeholder; one row
  *     per skeleton node IN ORDER, each showing the weight a run would use (two
  *     stored overrides among them), a weight of 0 greyed as in the Wizard.
+ *     Under them, the image ID-switch check: its switch (off, the default) and
+ *     its options, hidden while it is off.
  *  2. Esc, and the Cancel button, close it with nothing changed: no run, no
- *     count, no weight written, the project not dirty — and the next Track
- *     All asks again.
+ *     count, no weight or image-check setting written, the project not dirty —
+ *     and the next Track All asks again.
  *  3. Bad input is refused inline, never clamped: a count of 0, a weight of
- *     1.5 (the error names the node), with Continue disabled and Enter not
- *     closing it.
- *  4. Continue (typed count + typed weight + Enter) runs Track All with that
- *     count; the weights are written to the SAME setting the Tracking Wizard
- *     edits (its field shows the new value) and merged into the stored ones —
- *     a weight kept for a node of ANOTHER skeleton survives.
+ *     1.5 (the error names the node), an image-check flag threshold of 5, with
+ *     Continue disabled and Enter not closing it.
+ *  4. Continue (typed count + typed weight + image check switched on with two
+ *     options changed + Enter) runs Track All with that count; the weights are
+ *     written to the SAME setting the Tracking Wizard edits (its field shows the
+ *     new value) and merged into the stored ones — a weight kept for a node of
+ *     ANOTHER skeleton survives; the image-check settings are stored, and the
+ *     run itself attempted the check (skipped here: no videos are loaded).
  *  5. Answered once, it is not asked again: a second Track All runs at once.
  *  6. A second session is unanswered, so Track Frame asks — titled "Track
- *     Frame", pre-filled with the last count given.
+ *     Frame", pre-filled with the last count given, and with no image-check
+ *     section (a single frame is never checked).
  *  7. Track Frame Range shows the same weight grid with the stored values:
  *     a bad weight disables Continue, Esc writes nothing, and Continue writes
  *     the edited weight (merged) before the range runs.
@@ -116,7 +121,11 @@ try {
             animals: a.value,
             placeholder: a.placeholder,
             focused: document.activeElement === a,
-            rows: [...m.querySelectorAll('.settings-node-weight-row')].map(r => ({
+            imageSwitch: (m.querySelector('input[data-setting="autoImageSwitchCheck"]') || {}).checked,
+            imageOptionsShown: !!m.querySelector('.track-setup-options') && !m.querySelector('.track-setup-options').hidden,
+            imageOptions: [...m.querySelectorAll('.track-setup-options .settings-kbd-label, .track-setup-options .track-setup-switch-row')]
+                .map(e => e.textContent.trim()),
+            rows: [...m.querySelectorAll('.track-setup-weights .settings-node-weight-row')].map(r => ({
                 name: r.querySelector('.settings-kbd-label').textContent,
                 value: r.querySelector('input').value,
                 greyed: r.classList.contains('settings-view-excluded'),
@@ -133,6 +142,9 @@ try {
             identities: s.session.identities.length,
             dirty: s.isDirty === true,
             weights: settings.getNodeWeights(),
+            image: ['autoImageSwitchCheck', 'imageChangeThreshold', 'imageCheckHz', 'imageCheckMaxViews', 'imageCheckWebNN']
+                .map(id => settings.getTrackingThreshold(id)),
+            status: document.getElementById('statusText').textContent,
             summary: !!document.getElementById('trackSummaryOverlay'),
         };
     });
@@ -153,6 +165,17 @@ try {
         `each shows the weight a run would use, stored ones included (${d.rows.map(r => r.value).join(', ')})`);
     check(JSON.stringify(d.rows.map(r => r.greyed)) === JSON.stringify([false, false, false, false, false, false, false, true]),
         'a node weighted 0 is greyed out, as in the Tracking Wizard');
+    check(d.imageSwitch === false && !d.imageOptionsShown,
+        'the image ID-switch check is offered, off (the default), its options hidden');
+    const IMAGE_DEFAULTS = JSON.stringify([0, -0.8, 2, 3, 0]);
+    // The switch's own <input> is visually hidden; a user clicks its label.
+    const imageSwitch = '.track-setup-modal .track-image-check-block > .track-setup-switch-row';
+    await page.click(imageSwitch);
+    d = await dialog();
+    check(d.imageSwitch === true && d.imageOptionsShown &&
+        JSON.stringify(d.imageOptions) === JSON.stringify(['Flag threshold', 'Crops per second', 'Views per animal', 'Try WebNN (experimental)']),
+        `switching it on shows its four options (${d.imageOptions.join(', ')})`);
+    await page.focus('#trackSetupAnimals');
 
     // ----------------------------------------------------------- 2. cancel
     console.log('2. Esc and Cancel change nothing');
@@ -163,6 +186,7 @@ try {
     check(s.numAnimals === null && s.identities === 0 && !s.summary,
         `no run and no count (numAnimals ${s.numAnimals}, ${s.identities} identities)`);
     check(JSON.stringify(s.weights) === STORED && !s.dirty, 'no weight written, project not dirty');
+    check(JSON.stringify(s.image) === IMAGE_DEFAULTS, `the image check stays off and unchanged (${s.image})`);
     await page.click('#tbTrackAll');
     await page.waitForSelector('.track-setup-modal', { timeout: 5000 });
     check(true, 'the next Track All asks again');
@@ -187,6 +211,14 @@ try {
     check(d.continueDisabled && /TailMid/.test(d.error) && /between 0 and 1/.test(d.error),
         `a weight of 1.5: "${d.error}"`);
     check(d.rows.find(r => r.name === 'TailMid').value === '1.5', 'the typed value is left as typed, not clamped');
+    await page.fill(tailMid, '0.5');
+    await page.click(imageSwitch);
+    const flagThr = '.track-setup-modal input[data-setting="imageChangeThreshold"]';
+    await page.fill(flagThr, '5');
+    d = await dialog();
+    check(d.continueDisabled && /Flag threshold must be between -4 and 0/.test(d.error), `a flag threshold of 5: "${d.error}"`);
+    await page.fill(flagThr, '-0.5');
+    await page.fill('.track-setup-modal input[data-setting="imageCheckHz"]', '3');
 
     // ---------------------------------------------------------- 4. continue
     console.log('4. Continue runs with the count, and writes the weights');
@@ -198,6 +230,10 @@ try {
     await page.waitForSelector('#trackSummaryOverlay', { timeout: 30000 });
     s = await appState();
     check(!(await dialog()), 'Enter closes it');
+    check(JSON.stringify(s.image) === JSON.stringify([1, -0.5, 3, 3, 0]),
+        `the image check is stored on, with the two edited options (${s.image})`);
+    check(/ID-switch check \(images\): skipped — needs the session's videos/.test(s.status),
+        'and this run attempted it (skipped: no videos are loaded)');
     check(s.numAnimals === 2 && s.identities === 2, `Track All ran with 2 animals (${s.identities} identities)`);
     check(JSON.stringify(s.weights) === JSON.stringify({ TailMid: 0.25, TailTip: 0, otherSkeletonNode: 0.3 }),
         `the edited weight is stored, the rest kept — another skeleton's too (${JSON.stringify(s.weights)})`);
@@ -226,6 +262,7 @@ try {
     await page.waitForSelector('.track-setup-modal', { timeout: 5000 });
     d = await dialog();
     check(d.title === 'Track Frame', `Track Frame asks, titled "${d.title}"`);
+    check(d.imageSwitch === undefined, 'with no image-check section');
     check(d.animals === '2', `pre-filled with the last count given ("${d.animals}")`);
     check(d.rows.find(r => r.name === 'TailMid').value === '0.25', 'and shows the weights as now stored');
     await page.keyboard.press('Enter');
@@ -283,7 +320,7 @@ try {
             listScrolls: list.scrollHeight > list.clientHeight || !/visible/.test(getComputedStyle(list).overflowY),
             inWindow: r.top >= 0 && r.bottom <= window.innerHeight,
             continueVisible: btn.top >= r.top && btn.bottom <= r.bottom,
-            rows: m.querySelectorAll('.settings-node-weight-row').length,
+            rows: m.querySelectorAll('.track-setup-weights .settings-node-weight-row').length,
         };
     });
     check(geo.rows === 40, `all 40 nodes are listed (${geo.rows})`);
