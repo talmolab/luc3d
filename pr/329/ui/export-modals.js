@@ -8,8 +8,8 @@
 //
 // Extracted from app.js per the consolidated Pass 3 plan, Module 13.
 
-import { state, viewport3d, timeline, getActiveSession } from './app-state.js?v=551bd36bafd1';
-import { InstanceGroup, UnlinkedInstance, pooledPoints3d } from '../pose/pose-data.js?v=551bd36bafd1';
+import { state, viewport3d, timeline, getActiveSession } from './app-state.js?v=508fd1613caa';
+import { InstanceGroup, UnlinkedInstance, pooledPoints3d } from '../pose/pose-data.js?v=508fd1613caa';
 import {
     triangulateAndReproject,
     frameHasGroupedUserInstances,
@@ -24,33 +24,33 @@ import {
     adoptPrior3d,
     triangulationMethodLabel,
     reprojectIntoEveryCamera,
-} from '../pose/triangulation.js?v=551bd36bafd1';
-import { Viewport3D } from './viewport3d.js?v=551bd36bafd1';
-import { getTrackColor, getGroupColor } from './overlays.js?v=551bd36bafd1';
-import { drawAllOverlays, setReprojErrorVisible, showReprojectionsOnly, REPROJ_ONLY_NOTE } from './rendering.js?v=551bd36bafd1';
-import { updateInfoPanel } from './info-panel.js?v=551bd36bafd1';
-import { showLoading, hideLoading, setStatus } from '../import-export/save-load.js?v=551bd36bafd1';
-import { showLoadingProgress, yieldToPaint } from './loading-overlay.js?v=551bd36bafd1';
-import { createGroupSolver } from '../pose/triangulation-pool.js?v=551bd36bafd1';
+} from '../pose/triangulation.js?v=508fd1613caa';
+import { Viewport3D } from './viewport3d.js?v=508fd1613caa';
+import { getTrackColor, getGroupColor } from './overlays.js?v=508fd1613caa';
+import { drawAllOverlays, setReprojErrorVisible, showReprojectionsOnly, REPROJ_ONLY_NOTE } from './rendering.js?v=508fd1613caa';
+import { updateInfoPanel } from './info-panel.js?v=508fd1613caa';
+import { showLoading, hideLoading, setStatus } from '../import-export/save-load.js?v=508fd1613caa';
+import { showLoadingProgress, yieldToPaint } from './loading-overlay.js?v=508fd1613caa';
+import { createGroupSolver } from '../pose/triangulation-pool.js?v=508fd1613caa';
 import {
     exportSlpClientSide,
     exportSlpMultiSession,
     findSkeletonMismatch,
     buildPoints3dH5,
     buildReprojH5,
-} from '../import-export/file-io.js?v=551bd36bafd1';
+} from '../import-export/file-io.js?v=508fd1613caa';
 
 // Pass 3i-3: update3DViewport moved to pose/initialization.js.
-import { update3DViewport } from '../pose/initialization.js?v=551bd36bafd1';
-import { createMp4Writer, videoEncodingAvailable } from './video-encode.js?v=551bd36bafd1';
-import { fileSystemAccessHint } from './browser-hints.js?v=551bd36bafd1';
+import { update3DViewport } from '../pose/initialization.js?v=508fd1613caa';
+import { createMp4Writer, videoEncodingAvailable } from './video-encode.js?v=508fd1613caa';
+import { fileSystemAccessHint } from './browser-hints.js?v=508fd1613caa';
 // The two video-export modals share ONE set of quality tiers, one bitrate
 // formula, one H.264 level table and one streaming threshold. They used to keep
 // private copies of all four and had silently drifted apart (a 2x bitrate floor
 // gap at the smallest tier, and two disagreeing level tables).
 import {
     RES_PRESETS, bitrateFor, estimatedBytes, h264CodecFor, shouldStreamToDisk,
-} from './overlay-export-layout.js?v=551bd36bafd1';
+} from './overlay-export-layout.js?v=508fd1613caa';
 
 // ============================================
 // Group by Track & Triangulate All
