@@ -119,12 +119,16 @@ Measured 2026-10-13 through the real Cloudflare path with
 0.66 s → 0.40 s (24 runs each), and 2.32 s → 0.64 s with 150 ms of emulated
 latency per request (8 each; roughly a VPN). An esbuild bundle of the app
 (111 files → 8) measured 0.38 s and 0.60 s on the same runs, so it was not
-adopted: the only case it wins is a per-REQUEST stall (simulated: one 5 s stall
-in every ~100 requests leaves the preloaded build waiting on one in most loads,
-while 8 requests rarely draw one). Real stragglers seen from the lab were
-TLS handshakes and even cache HITs stalling for seconds, also on other sites
-behind the same Cloudflare IPs, while GitHub Pages fetched directly stayed under
-0.2 s. That is the client↔edge leg, and code cannot remove it.
+adopted here: the only case it wins is a per-REQUEST stall (simulated: one 5 s
+stall in every ~100 requests leaves the preloaded build waiting on one in most
+loads, while 8 requests rarely draw one). Such stalls are real: in one 7 s
+window, four consecutive cold loads of both builds each had exactly ONE of 113
+requests take 1.4–2.4 s, at Cloudflare's edge rather than GitHub's (cache HITs
+and TLS handshakes stall too, on other sites behind the same Cloudflare IPs,
+while GitHub Pages fetched directly stayed under 0.2 s). modulepreload does not
+help with those; fewer requests (bundling) would. Whether that is worth a build
+step is an open decision. Measure it with `_bench-cold-start.mjs` on the
+connection that suffers, and count the loads with a request over 1 s.
 `h5wasm.iife.js` (~1 MB compressed, a page global read by several main-thread
 paths and e2e tests) is now the largest single item on the critical path.
 
