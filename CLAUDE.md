@@ -1920,6 +1920,51 @@ wrapped run. Headless runs do not take it. Covered by `tests/test-browser-lock.m
   survives a `sleap_io` load + re-save unchanged). Headless half of `lucid-e2e`
   Stage 4; run via `uv run python` from the SLEAP repo, or standalone with
   `uv run --with sleap-io --with numpy --with h5py python …`.
+- `scripts/sleap_backward.py` — Run a SLEAP top-down pair (centroid +
+  centered-instance) **backward**: skeleton(s) in, image out. Gradient descent on
+  the pixels against the models' own training loss (sleap-nn's target heatmaps,
+  sizematcher, scale, stride padding and centroid crops), so the image is what the
+  models take to be that pose. Loads `best.ckpt` and legacy `best_model.h5`
+  folders through sleap-nn's loader; poses come from an `.slp` frame or JSON.
+  By default each pose STARTS as the best-fitting other labeled animal of the same
+  video, cut out by skeleton territory and pasted onto the video's median
+  background; only pixels near the animals change; each model sees random
+  rotations/rescalings from its own training augmentation ranges; plain per-pixel
+  Adam over a pyramid whose finest octave is 2 px. Each of those was measured
+  (DPBox `subModels_top`, 5 mice, frame held out of training): per-octave Adam
+  stalled (instance heatmap error 0.59), starting from the empty arena reached
+  1.5 px but looks synthetic, exemplar start 1.2–1.5 px and looks real; the real
+  frame itself reads back at 1.9 px vs its hand labels. ~1 s/step on an M2 Pro for
+  650M + 780M-param models. Writes the image, a requested-vs-recovered overlay,
+  heatmaps, a progress strip, a report and a one-frame `.pkg.slp`.
+  Its round-trip check reproduces `sleap-nn track` **exactly** (0.000 px vs
+  `run_inference` on CPU) — it calls sleap-nn's own `crop_bboxes` and feeds
+  uint8, because both matter: sleap-nn 0.2.0 resizes uint8 before dividing by
+  255, and `crop_bboxes` reads the crop size off the first box in float32, so
+  ~12% of frames get 499 px crops instead of 500. The OPTIMIZATION must not call
+  `crop_bboxes`: its backward allocates every possible crop at once (1.2 TB).
+  Crop targets are relative to the box's half-pixel top-left corner, sleap-nn's
+  own label frame — NOT the integer crop start, which looks more principled and
+  is worse: on 5,493 hand-labeled nodes, the start frame is off by −0.66/−0.76 px,
+  the corner frame by −0.25/−0.34 px. Run with sleap-nn's Python
+  (`~/.local/share/uv/tools/sleap-nn/bin/python`) or `uv run`.
+- `scripts/sleap_negatives_compare.py` — Compare two or more CENTROID models for
+  hallucination, e.g. trained with vs without sleap-nn's `use_negative_frames`.
+  Per model, on one video: detections on empty images (median background, the
+  `.slp`'s `is_negative` frames, `--empty-frames` ranges); recall/precision on
+  labeled frames (frames in the model's own `labels_gt.train*.slp` reported
+  apart), because a model that never fires is hard to fool for free; and the
+  effort to FOOL it — `sleap_backward.py`'s machinery changes a disc around an
+  empty floor spot until sleap-nn's own centroid inference reports an animal
+  anywhere in the disc, recording the RMS grey-level change it took; a model that
+  holds out past `--max-change` gets a lower bound, not a pass. Every model gets
+  the same spots, start image, random views and step size. A 60-step budget was
+  tried first and was wrong: unfinished optimization read as "resisted". A
+  holdout whose confidence never rose above `FLAT_CONFIDENCE` (0.05) is reported
+  as "gave no gradient", never as resisted — a gradient probe cannot tell flat
+  from robust. Models may have different skeletons: each reads the labels in its
+  own node order. `--model NAME=DIR` splits at the first `=` whose right side is
+  a folder, because SLEAP folder names contain `=`.
 
 ## Maintenance
 **When modifying any module, always update the corresponding entry in `MODULES.md` to reflect the change — including exports, dependencies, and purpose.**
