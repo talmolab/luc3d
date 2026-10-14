@@ -1,8 +1,8 @@
 // ui/modal-geometry.js — remembered size and position for resizable modals.
 //
 // Dependency-free on purpose: it imports NO project modules, so it bridges into
-// the browser test runner (`tests/test-runner.html`) and the `vm` sandbox
-// runner, and `clampGeometry` unit-tests as the pure function it is.
+// the browser test runner (`tests/test-runner.html`), and `clampGeometry`
+// unit-tests as the pure function it is.
 //
 // ## What it does
 //

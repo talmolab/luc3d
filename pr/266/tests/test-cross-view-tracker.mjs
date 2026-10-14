@@ -230,5 +230,40 @@ group('Match gate — a LOST target still re-acquires its animal far from where 
     ok(dist3(centroidOf(tA.points3d), A2) < 1.0, 'and re-triangulated at A\'s new position');
 }
 
+group('Score caches — rays per detection, projection per target: same scores, recomputed when the inputs change');
+{
+    // Two animals born at frame 0, then scored against frame-1 detections in a camera of their own (so moving
+    // it touches nothing else). The caches change no arithmetic, only how often it runs — so every score must
+    // equal the one built from scratch: fresh Detections over the SAME pixel keypoints (re-projecting the 3D
+    // through a moved camera would change the inputs, not test the cache), and the targets' cache dropped.
+    const trk = new CrossViewTracker();
+    const A = [0, 0, 0], B = [9, 0, 0];
+    trk.trackFrame(frameDetections(0, [A, B]), CAMS);
+    const [tA, tB] = trk.targets;
+    const cam = makeCam('cx', [0, 0.2, 0.1], [-6, 2, 42]);
+    const mkDets = () => [A, B].map((c, i) => det(cam, 1, i, nodes3d([c[0] + 0.4, c[1] - 0.3, c[2]])));
+    const scores = (dets) => [tA, tB].map(t => dets.map(d => trk._adjacency(t, d, cam)));
+    const fresh = () => { tA._proj = null; tB._proj = null; return scores(dets.map(d => new Detection(d.instance, d.cam, d.frameIdx, d.slot))); };
+    const same = (x, y) => x.every((row, i) => row.every((v, j) => Object.is(v, y[i][j])));
+    const dets = mkDets();
+    const s1 = scores(dets), s2 = scores(dets);
+    ok(same(s1, s2) && same(s1, fresh()), 'scoring twice, and scoring from scratch, give identical numbers');
+    ok(dets.every(d => d._rays !== null) && tA._proj !== null, 'and the caches were filled (rays on each detection, projection on each target)');
+
+    // A moved camera (Camera.setExtrinsics replaces its extrinsic matrix) must recast the cached rays
+    const before = scores(dets);
+    cam.setExtrinsics([0, 0.25, 0.05], [-5, 1, 44]);
+    const moved = scores(dets);
+    ok(!same(before, moved), 'control: moving the camera changes the scores');
+    ok(same(moved, fresh()), 'the SAME detections, scored after the move, match freshly built ones exactly (rays recast, projection redone)');
+
+    // A replaced points3d (only _retriangulate assigns it, never edits it) must be re-projected
+    const p3 = scores(dets);
+    tA.points3d = Float64Array.from(tB.points3d);
+    const swapped = scores(dets);
+    ok(!same(p3, swapped), 'control: replacing a target\'s 3D changes its scores');
+    ok(same(swapped, fresh()), 'and the cached projection follows it exactly');
+}
+
 console.log(`\n${failed === 0 ? '✓ PASS' : '✗ FAIL'} — ${passed} passed, ${failed} failed`);
 if (failed > 0) { console.error('\nFailures:\n - ' + failures.join('\n - ')); process.exit(1); }

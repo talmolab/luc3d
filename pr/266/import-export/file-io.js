@@ -12,13 +12,13 @@
  */
 
 import { Camera, Skeleton, Instance, Identity,
-         toBoxedPoints3d, getPoint3d, points3dNodeCount } from '../pose/pose-data.js?v=a07978e22373';
-import { validateSkeletonCompatibility } from './slp-merge.js?v=a07978e22373';
-import { getOrComputeReprojectedInstance, sweepLazyFrameWindows } from '../pose/triangulation.js?v=a07978e22373';
+         toBoxedPoints3d, getPoint3d, points3dNodeCount } from '../pose/pose-data.js?v=01727cc78536';
+import { validateSkeletonCompatibility } from './slp-merge.js?v=01727cc78536';
+import { getOrComputeReprojectedInstance, sweepLazyFrameWindows } from '../pose/triangulation.js?v=01727cc78536';
 // Only pulls in the two dependency-free `ui/` leaf modules — safe for this
 // module's graph.
-import { writeVisibilityMetadata } from './visibility-metadata.js?v=a07978e22373';
-import { writePlaneMetadata } from './plane-metadata.js?v=a07978e22373';
+import { writeVisibilityMetadata } from './visibility-metadata.js?v=01727cc78536';
+import { writePlaneMetadata } from './plane-metadata.js?v=01727cc78536';
 
 // ============================================
 // Generic file picker
@@ -1367,9 +1367,14 @@ export function buildSlpLabels(session, cameraName, reprojAsUser, videoFileInfo,
  * Convert a LUCID instance's points to sleap-io.js Point array.
  * @param {Instance} inst
  * @param {number} numNodes
+ * @param {number} [perPointScore]
+ * @param {Array<number|null>} [nodeOrder]
+ * @param {(k: number) => number} [nodeScore] - the model's score for this
+ *   instance's node `k`, NaN when it has none. Defaults to the instance's own
+ *   (`Instance.pointScore`); the lazy writer passes one that reads the store.
  * @returns {Array} Point array
  */
-export function _buildSioPoints(inst, numNodes, perPointScore, nodeOrder) {
+export function _buildSioPoints(inst, numNodes, perPointScore, nodeOrder, nodeScore) {
     // nodeOrder: optional. When set, nodeOrder[canonicalIdx] = this instance's
     // local point index, so points stored in a session's own skeleton node
     // order are emitted in the canonical (first-session) order. Used by
@@ -1383,6 +1388,14 @@ export function _buildSioPoints(inst, numNodes, perPointScore, nodeOrder) {
     // file and disappear in the GUI even though the xy is valid.
     // sleap-io.js ignores the `score` field when serializing a plain
     // Instance (non-predicted), so attaching it unconditionally is safe.
+    // A node the model scored keeps ITS score (`nodeScore`) — writing the
+    // instance score onto every node threw away the per-node confidence a
+    // SLEAP prediction carries, so a reopened project showed one number for
+    // every node of an instance. `perPointScore` is the fallback for a node
+    // with no score of its own (a reprojection, a prediction built in LUCID).
+    if (!nodeScore && typeof inst.pointScore === 'function') {
+        nodeScore = function (k) { return inst.pointScore(k); };
+    }
     var pts = [];
     var nulledNodes = inst.nulledNodes || null;
     for (var n = 0; n < numNodes; n++) {
@@ -1406,7 +1419,10 @@ export function _buildSioPoints(inst, numNodes, perPointScore, nodeOrder) {
             var occ = inst.isOccluded(src);
             entry = { xy: [inst.getX(src), inst.getY(src)], visible: !occ, complete: true };
         }
-        if (perPointScore != null) entry.score = perPointScore;
+        if (perPointScore != null) {
+            var own = (nodeScore && src != null) ? nodeScore(src) : NaN;
+            entry.score = Number.isFinite(own) ? own : perPointScore;
+        }
         pts.push(entry);
     }
     return pts;
@@ -2188,7 +2204,12 @@ export function buildSlpLabelsAllViews(session, views, videoFiles) {
         function _getOrCreateSioInst(inst) {
             var existing = lucidToSio.get(inst);
             if (existing) return existing;
-            var pts = _buildSioPoints(inst, numNodes);
+            // A prediction's points carry a score — each node's own, else the
+            // instance score, as the other two writers do. Without one the
+            // file stored 0 for every node, so a reopened project's node
+            // tooltip said `(score: 0.00)` for every prediction.
+            var perPointScore = inst.type === 'user' ? undefined : (inst.score != null ? inst.score : 1.0);
+            var pts = _buildSioPoints(inst, numNodes, perPointScore);
             // `null >= 0` is true in JS; explicit guard prevents tracks[null]
             // = undefined leaking into SIO.Instance for trackless instances.
             var track = (inst.trackIdx != null && inst.trackIdx >= 0 && inst.trackIdx < tracks.length) ? tracks[inst.trackIdx] : null;
@@ -2623,8 +2644,8 @@ export function parseSlpH5(file, onProgress, opts) {
         // Resolve worker URL relative to the document base so this works on
         // sub-path deployments (e.g. GitHub Pages /luc3d/, /luc3d/pr/N/) as well
         // as localhost. We use document.baseURI rather than `new URL(..., import.meta.url)`
-        // because file-io.js is loaded via vm.Script in tests/run-node.js (classic-script
-        // context, where `import.meta` is a parse error). See ISSUES.md I-8.
+        // (first because a since-retired vm test runner could not parse `import.meta`).
+        // See ISSUES.md I-8.
         var workerUrl = new URL('loading/slp-import-worker.js?v=' + Date.now(), document.baseURI);
         var worker = new Worker(workerUrl, { type: 'module' });
 
@@ -2703,7 +2724,7 @@ export async function parseSlpViaSleapIO(file, onProgress) {
         // Point the reader's importScripts I/O worker at LUCID's LOCAL h5wasm IIFE
         // (0.10.3) so it doesn't fetch h5wasm from a CDN. document.baseURI keeps
         // this correct on sub-path deployments (GitHub Pages /luc3d/...).
-        h5wasmUrl: new URL('lib/h5wasm/h5wasm.iife.js?v=a07978e22373', document.baseURI).href,
+        h5wasmUrl: new URL('lib/h5wasm/h5wasm.iife.js?v=01727cc78536', document.baseURI).href,
         onProgress: function (n, total, message) {
             report((message || ('Reading SLP ' + n + '/' + total)) + '...');
         },
@@ -2808,7 +2829,10 @@ export async function parseSlpViaSleapIO(file, onProgress) {
  * @param {Array} typedTracks - labels.tracks (typed Track objects) for indexOf
  * @param {number} numNodes - skeleton node count (output point-array length)
  * @param {Function} PredictedInstance - the class, for the instanceof type test
- * @returns {{trackIdx:number, score:number, type:string, points:Array, occluded:boolean[]}}
+ * @returns {{trackIdx:number, score:number, type:string, points:Array, occluded:boolean[],
+ *   pointScores:(Float64Array|null)}} `pointScores` is the prediction's per-node
+ *   score column (the typed instance's own `_score`, by reference — the importer
+ *   copies it into `Instance.setPointScores`), null for a user instance.
  */
 function _typedInstanceToSlpData(inst, typedTracks, numNodes, PredictedInstance) {
     var isPred = PredictedInstance && (inst instanceof PredictedInstance);
@@ -2838,6 +2862,7 @@ function _typedInstanceToSlpData(inst, typedTracks, numNodes, PredictedInstance)
         type: isPred ? 'predicted' : 'user',
         points: points,
         occluded: occluded,
+        pointScores: isPred && inst._score ? inst._score : null,
     };
 }
 

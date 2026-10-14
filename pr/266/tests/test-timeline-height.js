@@ -435,12 +435,13 @@
                 'canvas backing width stays within the browser <canvas> limit');
             assertGreaterThan(tl._canvas.height, 0, 'canvas still has a positive height');
             assertGreaterThan(tl._canvas.width, 0, 'canvas still has a positive width');
-            // CSS height preserves the full logical content so scrolling works;
-            // only the backing store was reduced.
-            assertEqual(tl._canvas.style.height, '200000px',
-                'CSS height preserves the full content height (scroll intact)');
-            assertLessThan(tl._canvas.height, parseFloat(tl._canvas.style.height),
-                'backing height was reduced below the (over-limit) CSS height');
+            // The full logical content height lives on the spacer, so the
+            // scroll range is intact; the canvas is only the band around the
+            // visible rows, far under both the content and the cap.
+            assertEqual(tl._spacerEl.style.height, '200000px',
+                'the spacer carries the full content height (scroll intact)');
+            assertLessThan(parseFloat(tl._canvas.style.height), 200000,
+                'the canvas is a band, not the full (over-limit) content height');
             cleanup(tl, container);
         });
 

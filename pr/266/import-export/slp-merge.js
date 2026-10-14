@@ -5,7 +5,7 @@
  * Used by index.html for the additive merge path in handleAddSlp().
  */
 
-import { Skeleton, Camera, Instance, InstanceGroup, FrameGroup, Session } from '../pose/pose-data.js?v=a07978e22373';
+import { Skeleton, Camera, Instance, InstanceGroup, FrameGroup, Session } from '../pose/pose-data.js?v=01727cc78536';
 
 /**
  * Validate that incoming skeleton is compatible with existing session skeleton.
@@ -121,12 +121,16 @@ export function mergeSlpFramesIntoSession(session, slpData, videoIdxToCameraName
 
             // Reorder points if node ordering differs between incoming and existing skeleton
             var points = instData.points;
+            var pointScores = instData.pointScores || null;
             if (nodeReorderMap) {
                 var reorderedPoints = new Array(nodeReorderMap.length);
+                var reorderedScores = pointScores ? new Array(nodeReorderMap.length).fill(NaN) : null;
                 for (var ri = 0; ri < nodeReorderMap.length; ri++) {
                     reorderedPoints[nodeReorderMap[ri]] = points[ri] || null;
+                    if (reorderedScores && ri < pointScores.length) reorderedScores[nodeReorderMap[ri]] = pointScores[ri];
                 }
                 points = reorderedPoints;
+                pointScores = reorderedScores;
             }
 
             var inst = new Instance(
@@ -135,6 +139,7 @@ export function mergeSlpFramesIntoSession(session, slpData, videoIdxToCameraName
                 instData.type || 'predicted',
                 instData.score || 1.0
             );
+            if (pointScores) inst.setPointScores(pointScores);
             fg.addInstance(camName, inst);
         }
         affectedFrames.add(fd.frameIdx);

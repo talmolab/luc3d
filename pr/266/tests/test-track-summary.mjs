@@ -136,7 +136,8 @@ p = plan(two, C('clear', { switches: 0, encounters: 40 }), C('off'));
 eq(p.primary.action, 'triangulate', 'nothing flagged: the recommended step is Triangulate All');
 ok(/similar size/.test(p.next.caveat || ''), 'nothing flagged by size alone: says size cannot separate similar animals');
 eq(p.secondary.map(b => b.action).join(','), 'imageCheck', 'nothing flagged by size alone: offers the image check');
-eq(p.checks[0].text, 'No possible switches in 40 close encounters', 'check row: clear');
+eq(p.checks[0].text, 'Nothing flagged in 40 close encounters', 'check row: clear — "flagged", never "no possible switches"');
+ok(/can still miss a switch/.test(p.checks[0].full), 'check row: clear, its hover text says a check can still miss a switch');
 eq(p.checks[0].state, 'clear', 'check row carries its state (for colour)');
 eq(plan(two, C('clear', { switches: 0, encounters: 0 }), C('off')).checks[0].text, 'No close encounters to check',
     'nothing to score: says so rather than "0 close encounters"');

@@ -9,14 +9,16 @@
  * ("worker not ready"). Several of these run side by side, one model each,
  * because without cross-origin isolation WebAssembly gets ONE thread.
  *
- *   IN  {type: 'load'}  ->  {type: 'loaded'} | {type: 'error', message}
+ *   IN  {type: 'load'}  ->  {type: 'loaded'} | {type: 'error', message, cannotRun}
+ *       (`cannotRun`: a failed download, `message` then being image-embedder.js's
+ *       MODEL_OFFLINE_REASON — classified here, where the error is still a real one)
  *       (while downloading: {type: 'progress', loaded, total})
  *   IN  {type: 'run', id, data, n}   data: Float32Array(n x 3 x INPUT x INPUT), transferred
  *   OUT {type: 'result', id, cls: Float32Array(n x dim), dim} (transferred) | {type: 'error', id, message}
  * `cls` is each crop's CLS token, exactly as the main thread's `clsVectors` reads it.
  */
 
-import { TRANSFORMERS_URL, IMAGE_MODEL_ID, INPUT } from './image-embedder.js?v=a07978e22373';
+import { importTransformers, asModelDownloadFailure, IMAGE_MODEL_ID, INPUT } from './image-embedder.js?v=01727cc78536';
 
 let T = null, model = null;
 
@@ -24,7 +26,7 @@ self.onmessage = async function (e) {
     const m = e.data;
     try {
         if (m.type === 'load') {
-            T = await import(TRANSFORMERS_URL);
+            T = await importTransformers();
             // fp32: identical to the WebGPU fp32 model (cosine 1.00000), which matched the calibration;
             // the CPU runtime's default int8 model is what drifted from it
             model = await T.AutoModel.from_pretrained(IMAGE_MODEL_ID, {
@@ -41,6 +43,7 @@ self.onmessage = async function (e) {
             self.postMessage({ type: 'result', id: m.id, cls: cls, dim: dim }, [cls.buffer]);
         }
     } catch (err) {
-        self.postMessage({ type: 'error', id: m.id, message: String((err && err.message) || err) });
+        const e = m.type === 'load' ? asModelDownloadFailure(err) : err;
+        self.postMessage({ type: 'error', id: m.id, message: String((e && e.message) || e), cannotRun: !!(e && e.cannotRun) });
     }
 };

@@ -7,8 +7,9 @@
  *     is NOT in the label, which would cost toolbar width.
  *  2. It opens on HOVER, like the Triangulate split buttons, and closes once
  *     the pointer leaves. A click on the button does not latch it open.
- *  3. Its items are the Tracks ▸ Node Trails presets, in the same order:
+ *  3. Its length items are the Tracks ▸ Node Trails presets, in the same order:
  *     Off, ¼ s, ½ s, 1 s, 2 s, each naming its frame count at the current fps.
+ *     (Both menus also carry a Shade group below them — node-trail-shade.mjs.)
  *  4. Picking one sets `state.trailSeconds` (and so `state.trailLength`),
  *     updates the button's tooltip, and moves the checkmark in BOTH menus. And
  *     the other way round: a pick from the Tracks menu updates the tooltip and
@@ -70,8 +71,8 @@ try {
             label: document.getElementById('tbTrails').textContent.trim(),
             active: document.getElementById('tbTrails').classList.contains('active'),
             tip: document.getElementById('tbTrails').title,
-            toolbarChecked: checked('#trailsMenu .tri-dropdown-item'),
-            menubarChecked: checked('#menuTrailsSubmenu .menu-dropdown-item'),
+            toolbarChecked: checked('#trailsMenu .tri-dropdown-item:not([data-trail-shade])'),
+            menubarChecked: checked('#menuTrailsSubmenu .menu-dropdown-item:not([data-trail-shade])'),
         };
     });
 
@@ -107,8 +108,8 @@ try {
     const fps0 = await page.evaluate(() => window.__lucid.state.fps);
     check(fps0 === 30, `the rate is 30 fps at startup (got ${fps0})`);
     const labels = () => page.evaluate(() => ({
-        toolbar: [...document.querySelectorAll('#trailsMenu .tri-dropdown-item')].map(e => e.textContent.replace('✓', '').trim()),
-        menubar: [...document.querySelectorAll('#menuTrailsSubmenu .menu-dropdown-item')].map(e => e.textContent.replace('✓', '').trim()),
+        toolbar: [...document.querySelectorAll('#trailsMenu .tri-dropdown-item:not([data-trail-shade])')].map(e => e.textContent.replace('✓', '').trim()),
+        menubar: [...document.querySelectorAll('#menuTrailsSubmenu .menu-dropdown-item:not([data-trail-shade])')].map(e => e.textContent.replace('✓', '').trim()),
     }));
     let items = await labels();
     const at30 = ['Off', '¼ second (8 frames)', '½ second (15 frames)', '1 second (30 frames)', '2 seconds (60 frames)', 'Custom…'];
