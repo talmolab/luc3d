@@ -6373,11 +6373,19 @@ data sources. Plus visibility-toggle helpers and frame counter updates.
   cell-sized WINDOW onto it. At zoom 10 on a 1280×1024 view that allocated
   12800×10240 (524 MB) to display ~283×226, i.e. ~0.05% of the pixels were ever
   visible; the rest were allocated, cleared and rasterized behind
-  `overflow: hidden`. Measured in a real headed browser with canvas
-  acceleration off, that dropped a node drag from **120 fps to 73.5** (worst
-  frame 9 ms → 25 ms) — the slowdown issue #200 reports. It is invisible on a
-  GPU-accelerated canvas, which is why it did not show up in development.
-  Three rules:
+  `overflow: hidden`.
+
+  **It is per VIEW, and the `+` key zooms every view** (`zoomAllVideos`; only
+  the scroll wheel zooms one). So a real 8-camera session at zoom 10 allocated
+  ~**4.2 GB** of backing store, not 524 MB — which is the difference between
+  reproducing the issue and not. Measured headed on DEFAULT Chrome, GPU
+  acceleration ON, 8 cameras at 1280×1024 with every view zoomed, the pre-fix
+  build dragged a node at **120 fps → 18.5** (worst frame 9 ms → 292 ms, drag
+  wall 1351 ms → 9100 ms); after the fix it is 120 fps / 9 ms / ~1340 ms at
+  every zoom, with overlay RAM 4194 MB → 212 MB. A single zoomed view costs
+  only 524 MB, which an Apple-silicon GPU absorbs at a flat 120 fps — measuring
+  that one view is what first suggested, wrongly, that the slowdown needed
+  software canvas rasterization to appear at all. Three rules:
   - **`ss` is bounded by what the display can RESOLVE**, not by the zoom:
     `ss = clamp(OVERLAY_QUALITY * cssW * zs / videoW, 1, zs)`. The lower bound
     of 1 means an unzoomed view is byte-for-byte what it was before, so this

@@ -5,9 +5,10 @@
  * `ui/rendering.js` used to size the overlay canvas to `videoW * zoomScale`.
  * That held backing-pixels-per-screen-pixel constant, but grew the canvas as
  * zoom² while the cell still showed only a cell-sized window onto it — at zoom
- * 10 on a 1280x1024 view, 12800x10240 (524 MB) to display ~283x226. Off a
- * GPU-accelerated 2D canvas that cost 40% of the frame rate during a node drag,
- * and past Chrome's canvas limits it made the overlay go silently BLANK.
+ * 10 on a 1280x1024 view, 12800x10240 (524 MB) to display ~283x226 — and the
+ * app's `+` key zooms EVERY view, so a real 8-camera session allocated ~4.2 GB.
+ * On default (GPU-accelerated) Chrome that dropped a node drag from 120 fps to
+ * 18.5, and past Chrome's canvas limits it made the overlay go silently BLANK.
  *
  * Four things are pinned here, and §1 and §4 are the ones that would catch a
  * regression to the old formula:

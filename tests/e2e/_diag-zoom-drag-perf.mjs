@@ -10,20 +10,31 @@
  *   composites nothing, so it measures zero — and the JS time around
  *   `drawAllOverlays` is flat at ~2-4 ms at every zoom, so measuring there tells
  *   you nothing either.
- * - **`EXTRA_ARGS=--disable-gpu-rasterization,--disable-accelerated-2d-canvas`
- *   is how you see the bug at all.** On a GPU-accelerated 2D canvas an
- *   Apple-silicon machine holds 120 fps even at the pre-fix 524 MB backing
- *   store, which is why this never showed up in development. Off it, the pre-fix
- *   build measured 73.5 fps / 25 ms worst frame / 3701 ms drag wall at zoom 10
- *   against 120 / 9 ms / 1404 ms at zoom 1; after the fix it is 120 / 9 ms at
- *   every zoom.
+ * - **It must zoom EVERY view, because that is what the app's own `+` key
+ *   does** (`videoController.zoomAllVideos`; only the scroll wheel zooms one
+ *   view). This is the difference between seeing the bug and not. One zoomed
+ *   view at the pre-fix sizing is a 524 MB backing store, which an
+ *   Apple-silicon GPU absorbs at a flat 120 fps — zooming only view 0 is why
+ *   an earlier version of this harness concluded, wrongly, that the bug needed
+ *   `--disable-gpu-rasterization` to show up at all. EIGHT zoomed views is
+ *   ~4.2 GB, which it does not absorb. On DEFAULT Chrome (GPU on, no extra
+ *   args), 8 cameras at 1280x1024 all zoomed, the pre-fix build measured:
+ *
+ *       zoom  1   42 MB   120   fps    9 ms worst   1351 ms drag wall
+ *       zoom  4  671 MB    95.9 fps    9 ms worst   1695 ms
+ *       zoom  8 2684 MB    52.1 fps   25 ms worst   4090 ms
+ *       zoom 10 4194 MB    18.5 fps  292 ms worst   9100 ms
+ *
+ *   and after the fix, 120 fps / 9 ms / ~1340 ms at every zoom (212 MB at
+ *   zoom 10). `EXTRA_ARGS=--disable-gpu-rasterization,--disable-accelerated-2d-canvas`
+ *   remains useful for seeing the same effect with fewer views, since it takes
+ *   the GPU out of the picture — but it is not required.
  *
  * Per zoom level it drags one node with real mouse input at a fixed ~125 Hz and
  * records rAF frames presented (fps), main-thread long tasks, and how far the
- * node actually got. NOTE it zooms only view 0, so `overlay RAM` is that one
- * view plus three unzoomed ones.
+ * node actually got. `overlay RAM` is the sum over every view.
  *
- * Env: VIDEO=1280x1024 CAMS=4 ZOOMS=1,2,4,6,8,10 MOVES=80 EXTRA_ARGS=
+ * Env: VIDEO=1280x1024 CAMS=8 ZOOMS=1,2,4,6,8,10 MOVES=80 ZOOM_ALL=1 EXTRA_ARGS=
  *
  * Run: node tests/e2e/_diag-zoom-drag-perf.mjs
  */
@@ -36,9 +47,13 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = process.env.REPO || path.resolve(__dirname, '..', '..');
 const PORT = Number(process.env.PORT || 8311);
 const [VW, VH] = (process.env.VIDEO || '1280x1024').split('x').map(Number);
-const NCAM = Number(process.env.CAMS || 4);
+// 8 by default: the effect scales with how many views are zoomed at once, and
+// a real multi-camera session is where the issue was reported from.
+const NCAM = Number(process.env.CAMS || 8);
 const ZOOMS = (process.env.ZOOMS || '1,2,4,6,8,10').split(',').map(Number);
 const MOVES = Number(process.env.MOVES || 80);
+// ZOOM_ALL=0 zooms only view 0 (the scroll-wheel gesture) instead of every view.
+const ZOOM_ALL = process.env.ZOOM_ALL !== '0';
 const MOVE_HZ = 125;
 
 const server = spawn('python3', ['-m', 'http.server', String(PORT)], { cwd: repoRoot, stdio: 'ignore' });
@@ -115,7 +130,7 @@ try {
     });
 
     /** Zoom to `scale` and park the instance's node 0 at the centre of its cell. */
-    const setupZoom = (scale) => page.evaluate(async (scale) => {
+    const setupZoom = (scale) => page.evaluate(async ([scale, zoomAll]) => {
         const AS = await import('/ui/app-state.js');
         const R  = await import('/ui/rendering.js');
         const vc = window.__lucid.videoController;
@@ -131,8 +146,17 @@ try {
         // Scale first with no pan, then translate the node to the cell centre.
         // The wrapper transform is translate(offset) scale(s), origin 0 0, so
         // screen position is linear in offset with coefficient exactly 1.
-        if (!v.zoom) vc.initZoom(v);
-        v.zoom.scale = scale; v.zoom.offsetX = 0; v.zoom.offsetY = 0;
+        // Every view, as the `+` key does, unless ZOOM_ALL=0.
+        var targets = zoomAll ? AS.state.views : [v];
+        for (var ti = 0; ti < targets.length; ti++) {
+            var tv = targets[ti];
+            if (!tv.zoom) vc.initZoom(tv);
+            tv.zoom.scale = scale; tv.zoom.offsetX = 0; tv.zoom.offsetY = 0;
+            vc._constrainOffsets(tv.zoom, tv);
+            vc.applyZoom(tv);
+        }
+        // View 0 is the one dragged, so re-centre it from an unpanned state.
+        v.zoom.offsetX = 0; v.zoom.offsetY = 0;
         vc.applyZoom(v);
         await new Promise(r => requestAnimationFrame(r));
 
@@ -158,7 +182,7 @@ try {
             onScreen: screen[0] > cell2.left + 60 && screen[0] < cell2.right - 60 &&
                       screen[1] > cell2.top + 40 && screen[1] < cell2.bottom - 40,
         };
-    }, scale);
+    }, [scale, ZOOM_ALL]);
 
     const snapNode = () => page.evaluate(async () => {
         const AS = await import('/ui/app-state.js');
@@ -167,7 +191,9 @@ try {
         return [inst.getX(0), inst.getY(0)];
     });
 
-    console.log(`\nluc3d #200 repro — ${NCAM} cameras @ ${VW}x${VH}, drag ${MOVES} moves @ ~${MOVE_HZ}Hz, headed\n`);
+    console.log(`\nluc3d #200 repro — ${NCAM} cameras @ ${VW}x${VH}, ` +
+        `${ZOOM_ALL ? 'ALL views zoomed (the + key)' : 'view 0 only (the scroll wheel)'}, ` +
+        `drag ${MOVES} moves @ ~${MOVE_HZ}Hz, headed\n`);
     const rows = [];
 
     for (const z of ZOOMS) {
