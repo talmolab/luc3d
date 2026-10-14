@@ -31,9 +31,10 @@
  *  6. A second session is unanswered, so Track Frame asks — titled "Track
  *     Frame", pre-filled with the last count given, and with no image-check
  *     section (a single frame is never checked).
- *  7. Track Frame Range shows the same weight grid with the stored values:
- *     a bad weight disables Continue, Esc writes nothing, and Continue writes
- *     the edited weight (merged) before the range runs.
+ *  7. Track Frame Range shows the same weight grid and image-check section
+ *     with the stored values: a bad weight disables Continue, Esc writes
+ *     nothing, and Continue writes the edited weight (merged) and image-check
+ *     option before the range runs — and that range run attempts the check.
  *  8. No scroll-within-scroll: with a 40-node skeleton in a short window the
  *     CARD scrolls, its weight grid never does, and Continue is reachable.
  *
@@ -275,7 +276,7 @@ try {
         await page.evaluate(() => document.getElementById('tbTrackFrameRange').click());
         await page.waitForSelector('.track-range-modal', { timeout: 5000 });
     };
-    const rangeRows = () => page.evaluate(() => [...document.querySelectorAll('.track-range-modal .settings-node-weight-row')]
+    const rangeRows = () => page.evaluate(() => [...document.querySelectorAll('.track-range-modal .track-setup-weights .settings-node-weight-row')]
         .map(r => ({ name: r.querySelector('.settings-kbd-label').textContent, value: r.querySelector('input').value,
             greyed: r.classList.contains('settings-view-excluded') })));
     await openRange();
@@ -283,6 +284,26 @@ try {
     check(JSON.stringify(rr.map(r => r.name)) === JSON.stringify(NODES), 'it lists every skeleton node, in order');
     check(JSON.stringify(rr.map(r => r.value)) === JSON.stringify(['1', '1', '1', '1', '1', '1', '0.25', '0']) && rr[7].greyed,
         `with the stored weights, 0 greyed (${rr.map(r => r.value).join(', ')})`);
+    const rangeImage = () => page.evaluate(() => {
+        const m = document.querySelector('.track-range-modal');
+        const opts = m.querySelector('.track-setup-options');
+        return {
+            label: (m.querySelector('.track-image-check-block > .track-setup-switch-row') || {}).textContent,
+            on: (m.querySelector('input[data-setting="autoImageSwitchCheck"]') || {}).checked,
+            shown: !!opts && !opts.hidden,
+            thr: (m.querySelector('input[data-setting="imageChangeThreshold"]') || {}).value,
+            hz: (m.querySelector('input[data-setting="imageCheckHz"]') || {}).value,
+        };
+    });
+    let ri = await rangeImage();
+    check(ri.label === 'Check for ID switches by image after tracking the range',
+        `the image-check section is there, worded for the range ("${ri.label}")`);
+    check(ri.on && ri.shown && ri.thr === '-0.5' && ri.hz === '3',
+        `showing the stored settings: on, threshold ${ri.thr}, ${ri.hz} crops/s`);
+    const rangeSwitch = '.track-range-modal .track-image-check-block > .track-setup-switch-row';
+    await page.click(rangeSwitch);
+    ri = await rangeImage();
+    check(!ri.on && !ri.shown, 'switching it off hides its options');
     const rangeTail = '.track-range-modal input[data-node="TailTip"]';
     await page.fill(rangeTail, '-1');
     let rerr = await page.evaluate(() => ({ err: document.getElementById('trackRangeError').textContent,
@@ -291,13 +312,19 @@ try {
     await page.fill(rangeTail, '0.75');
     await page.keyboard.press('Escape');
     s = await appState();
-    check(!(await page.$('.track-range-modal')) && s.weights.TailTip === 0, 'Esc closes it and writes nothing');
+    check(!(await page.$('.track-range-modal')) && s.weights.TailTip === 0 &&
+        JSON.stringify(s.image) === JSON.stringify([1, -0.5, 3, 3, 0]), 'Esc closes it and writes nothing (image check still on)');
     await openRange();
     await page.fill(rangeTail, '0.75');
+    await page.fill('.track-range-modal input[data-setting="imageChangeThreshold"]', '-1');
+    await page.evaluate(() => { document.getElementById('statusText').textContent = ''; });
     await page.click('#trackRangeContinue');
     await page.waitForSelector('.track-range-modal', { state: 'detached' });
     await page.waitForFunction(() => /identit/i.test(document.getElementById('statusText').textContent), null, { timeout: 30000 });
     s = await appState();
+    check(JSON.stringify(s.image) === JSON.stringify([1, -1, 3, 3, 0]), `Continue stores the edited threshold (${s.image})`);
+    check(/ID-switch check \(images\): skipped — needs the session's videos/.test(s.status),
+        'and the range run attempted the check (skipped: no videos are loaded)');
     check(JSON.stringify(s.weights) === JSON.stringify({ TailMid: 0.25, TailTip: 0.75, otherSkeletonNode: 0.3 }),
         `Continue stores the edited weight, the rest kept (${JSON.stringify(s.weights)})`);
     check(!(await dialog()), 'and the first-use dialog does not stack on top of it');

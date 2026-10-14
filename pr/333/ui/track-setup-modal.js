@@ -21,7 +21,8 @@
  * run (`autoImageSwitchCheck` and its four options, the Tracking Wizard's own
  * settings): it is off by default and slow when on, so the moment a run is
  * about to start is when to decide. Track Frame's copy leaves it out — a
- * single frame is never checked.
+ * single frame is never checked. Track Frame Range shows the same section
+ * (`buildImageCheckFields`), since a range is checked too.
  *
  * When it opens is the tracker's business, unchanged from the prompt: only
  * while the session has never been asked (`numAnimalsAnswered`). Track Frame
@@ -280,7 +281,8 @@ export const IMAGE_CHECK_IDS = [
 ];
 
 /**
- * The image ID-switch check's settings as the Track All dialog shows them: a
+ * The image ID-switch check's settings as the Track All and Track Frame Range
+ * dialogs show them: a
  * switch for the check itself and, while it is on, its options in a compact
  * grid. Labels are the Wizard's, less its "Image check: " prefix (the section
  * says it); the Wizard's long description of each sits in its label's `title`
@@ -289,6 +291,8 @@ export const IMAGE_CHECK_IDS = [
  * @param {Array<Object>} [defs]  `getTrackingThresholdDefs()` entries
  *   (`{id, label, value, min, max, step, desc, kind}`); only `IMAGE_CHECK_IDS`
  *   are used, in that order.
+ * @param {string} [after]  what the check follows, for the switch's label
+ *   ("Track All", "tracking the range"); default "Track All".
  * @returns {{element: ?HTMLElement,
  *            read: () => ({thresholds: Object<string, number>} | {error: string}),
  *            refresh: () => void}}
@@ -296,7 +300,7 @@ export const IMAGE_CHECK_IDS = [
  *   outside its setting's range — never clamps it — naming the setting.
  *   `refresh` shows the options only while the check is on.
  */
-export function buildImageCheckFields(defs) {
+export function buildImageCheckFields(defs, after) {
     var byId = {};
     (Array.isArray(defs) ? defs : []).forEach(function (d) { byId[d.id] = d; });
     var main = byId[IMAGE_CHECK_IDS[0]];
@@ -336,7 +340,7 @@ export function buildImageCheckFields(defs) {
     title.className = 'track-setup-section-title';
     title.textContent = 'ID switch check (images)';
     element.appendChild(title);
-    element.appendChild(toggle(main, 'Check for ID switches by image after Track All'));
+    element.appendChild(toggle(main, 'Check for ID switches by image after ' + (after || 'Track All')));
     var hint = document.createElement('p');
     hint.className = 'track-setup-note';
     hint.textContent = 'Slow: minutes for a long recording, and it needs the videos loaded.';
