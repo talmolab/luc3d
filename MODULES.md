@@ -72,6 +72,8 @@ the old `app.js` entry point.
 - `setupTimeline()` — instantiates `Timeline` and wires its frame-change /
   range-select callbacks plus the display-mode button group. The frame-change /
   drag-end callbacks fall back to `navigateToFrame` when there's no video.
+  Passes `getColorByIdentity` (reads `state.colorByIdentity`) so the
+  timeline's track rows use the palette the canvas uses.
 - `updateFpsDisplay()` — refreshes the FPS readout, and the frame readout's
   times (`refreshReadoutTotals`), which are frame / fps.
 
@@ -1511,8 +1513,20 @@ session graph that holds them.
   `InstanceGroup`. Auto-incrementing `id`.
 - `FrameGroup` — per-frame container of linked `instances` and
   `unlinkedInstances`, both keyed by camera name.
-- `Identity` — id + name + color (uses `IDENTITY_COLORS` palette).
-- `IDENTITY_COLORS` — 20-color palette for identity badges.
+- `Identity` — id + name + color (uses `IDENTITY_COLORS` palette). A color
+  passed in that equals the OLD default for its slot (`id % 20`, private
+  `LEGACY_IDENTITY_COLORS`) is replaced by the current default: projects store
+  identity colors, LUCID has no control for picking one, so that color IS the
+  old default. Every load path builds identities through this constructor, so
+  this is the one upgrade point. Any other color is kept.
+- `IDENTITY_COLORS` — 20-color palette for identity badges; identity N takes
+  entry N, so N animals show the first N. Entries 0-6 are the original neon
+  set; 7-19 were chosen farthest-first (CIEDE2000) so the closest pair stays
+  as wide as possible per animal count (18.0 at 8 animals, 13.7 at 12; the old
+  7-19 gave 6.0 at 8). Every entry is L* >= 55 and vivid.
+  `UNIDENTIFIED_TRACK_COLORS` (`ui/overlays.js`) must stay ΔE2000 ≥ 20 from
+  every entry. All of it is pinned by `tests/test-track-identity-palette.mjs`
+  §2, §8 and §9, so a change here re-runs that test.
 - `InstanceGroup` — cross-view grouped instances + triangulated `points3d`
   + cached `reprojectedInstances`. `markDirty`/`markClean`. Also
   `triangulationMethod` (`'ba'`|`'dlt'`|undefined), recording WHICH SOLVER
@@ -1538,7 +1552,13 @@ session graph that holds them.
   a track (a pre-#273 `-1` is trackless). Used by the five group-naming status
   lines in `pose/initialization.js`. Tested by `tests/test-group-display-name.mjs`.
 - `Session` — top-level container: cameras, skeleton, tracks, identities,
-  frameGroups, instanceGroups. The `numFrames` getter returns
+  frameGroups, instanceGroups. **`numAnimals`** is the number of animals every
+  tracking run on the session caps identities at: a positive integer, `'auto'`
+  (an explicit auto-detect), or `null` while nobody has been asked, which is
+  what makes Track Frame / Track All prompt. Per session because a session is
+  one recording; saved as `metadata.lucid.numAnimals`
+  (`import-export/visibility-metadata.js`), read and set through
+  `pose/tracker.js`. The `numFrames` getter returns
   `lazyLoader.nFrames` on a lazy session (`frameGroups` there holds only the
   visited/resident window, badly understating the project) and `frameGroups.size`
   otherwise. **Tracks and identities are per-session.** The
@@ -2074,8 +2094,9 @@ no `points3d` are skipped) and show the total in the bottom-left status bar
 node weights change which instances get grouped (not which nodes triangulate),
 this is the headline metric for comparing weight settings.
 
-**Auto-cap.** When the user leaves the "Number of animals" prompt empty,
-`trackAll` / `trackCurrentFrame` resolve `numAnimals` via
+**Auto-cap.** When the animal count is blank (the prompt answered empty, or
+the toolbar's Animals field cleared), `trackAll` / `trackCurrentFrame` resolve
+`numAnimals` via
 `computeMaxInstancesPerView(session)` — the largest instance count seen
 in any (camera, frame) pair across the session — instead of leaving it
 null. Without the cap, leftover groups that survive reorder (after Fix
@@ -2091,6 +2112,23 @@ drifts upward (e.g., 4 → 11 on the test fixture).
   undefined `CrossViewTracker` — latent bug, see comment in source).
 - `trackAll()` — toolbar "Track All" handler — runs `matchFrameInstances`
   across every frame with temporal continuity signals.
+- `getTrackerNumAnimals()` / `setTrackerNumAnimals(n)` /
+  `onTrackerNumAnimalsChange(fn)` — the ACTIVE session's animal count
+  (`Session.numAnimals`; the getter returns `null` for auto-detect and for
+  never-asked alike). It lives on the session so it is saved with the project.
+  The native `promptNumAnimals()` fires only while the session has **no answer
+  at all** (`numAnimalsAnswered`: `numAnimals` is `null`), not while the count
+  reads null: a blank answer is stored as `'auto'`, and gating on null
+  re-prompted on every Track Frame / Track All after one. The prompt is
+  pre-filled with the session's count, else the last count given in any
+  session this page has seen (`_lastNumAnimals`), so a multi-session project of
+  the same animals answers each new session with one Enter.
+  `setTrackerNumAnimals` counts as an answer, null included; on a change it
+  calls `markDirty()` (it is project state now) and notifies the listeners —
+  that is how the toolbar's Animals field (`ui/animal-count-field.js`) follows
+  the prompt and the Track Frame Range dialog. With no session it is a no-op:
+  there is nothing to save the count with. Loading never goes through it — the
+  readers set `numAnimals` directly, so a reopened project is not dirty.
 
 **Imports from project modules.**
 - `./pose-data.js` — `InstanceGroup`, `points3dNodeCount`, `hasPoint3d`,
@@ -2139,6 +2177,15 @@ drifts upward (e.g., 4 → 11 on the test fixture).
 - `../ui/color-by.js` — `setColorByIdentity`: a successful Track All / Track
   Frame Range that assigned identities switches Color from Tracks to ID
   (#242) and says so in the status line. Track Frame (one frame) does not.
+- `../ui/trail-presets.js` — `setTrailSeconds`, `trailSecondsName`,
+  `TRACK_ALL_TRAIL_SECONDS`: a successful Track All that assigned identities
+  turns node trails on at ¼ s **if they are off** (each animal's recent path is
+  where an identity switch shows) and says so in the status line ("node trails
+  on (¼ second)"). A length the user already picked is kept; Track Frame and
+  Track Frame Range (a targeted re-run) leave trails alone. Through the shared
+  setter, so ui-wiring's handler moves the menus' checkmarks and the button's
+  blue. Covered by `tests/test-tracker-gui.mjs` and
+  `tests/e2e/track-all-turns-on-trails.mjs`.
 
 **Imported by.** `ui/ui-wiring.js`.
 
@@ -2282,7 +2329,8 @@ reversed; a non-integer endpoint is refused outright, because every comparison
 against `NaN` is false and it would otherwise sail past the ordering check and
 sweep nothing while reporting a `NaN` range. Like Track All, a range run does NOT propagate to tracks.
 `getTrackerNumAnimals` / `setTrackerNumAnimals` expose the animal count so the
-modal can collect it inline; `runTrackingPass` skips the native `promptNumAnimals()`
+modal can collect it inline (and the toolbar's Animals field then shows what it
+set); `runTrackingPass` skips the native `promptNumAnimals()`
 on the range path so a `prompt()` never stacks on top of the dialog.
 `runTrackingPass` **returns** `{ok, start, end, identities, frames}` — `ok:false`
 for every bail-out, and on success the CLAMPED, normalized span actually swept.
@@ -2945,6 +2993,23 @@ subtitle is populated for loaded projects, not just freshly triangulated ones.
   fallback straight to `.reprojections[viewName]` (via `drawReprojectedSkeleton`,
   no Instance wrapper needed) — also unchanged. Covered by
   `tests/test-reprojection-lifecycle.js`'s "getOrComputeReprojectedInstance" block.
+  `reprojectIntoEveryCamera(reprojections, points3d, cameras)` — **a group's
+  reprojection must reach EVERY calibrated camera, including one where it has
+  no instance on that frame.** The bulk sweeps solve each group from its
+  `groupCameras`, so `triangulateAndReproject` hands back reprojections for
+  those cameras only. Three of them stored that as-is: `triangulateAllFrames`'
+  in-memory path, `triangulateMultiFrameInstances`, and Group by Track
+  (`ui/export-modals.js`). `ui/rendering.js`'s lazy fill only fills a group
+  whose reprojections are EMPTY, so it never added the missing camera. On a
+  real 8-camera recording, a mouse hidden behind another in one side view lost
+  its reprojection there after Triangulate All ▸ Refined, though it had shown
+  right after Track All. All three now pass their result through this helper,
+  which adds `reprojectPointsCamera(points3d, cam)` for each missing camera, in
+  place. It adds reprojections only: the 3D, the per-camera errors and the
+  mean are untouched, since a camera with no instance has nothing to measure
+  against. Covered by `tests/e2e/triangulate-all-reprojects-every-view.mjs`
+  (all three paths plus the windowed sweep, against single-frame Triangulate,
+  on a real overlay canvas; confirmed to fail on the pre-fix build).
   **Two robustness features:** (1) views excluded in the Tracking Wizard's Camera
   Views panel (`isCameraTracked`, or `options.includedCameras` override) never
   contribute to the 3D solve, but are still reprojected INTO — an excluded view
@@ -3516,108 +3581,95 @@ results}` (points3d buffers transferred) or `{type:'error', id, message}`.
 
 **Purpose.** The analysis behind Tracks ▸ **Check ID Switches (Body Size)…** and
 **(Images)…**, which also run automatically after Track All / Track Frame Range
-(`ui/id-switch-modal.js`). Flags close encounters between two tracked identities
-where the labels may have changed hands — a possible identity switch. Two cues,
-two methods: body size (3D bone lengths, cheap, no video) asks whether the animals
-leaving an encounter match the identities they now carry, by a classifier learned
-from the tracker's labels; appearance (embeddings of masked, pose-aligned crops,
-supplied by the caller — `ui/image-embedder.js` in the app) asks whether each
-animal looks like ITSELF across a contact, using no identity labels across it.
-Pure — no DOM, no app state — so both run headlessly (the image check with any
-embedding provider).
+(`ui/id-switch-modal.js`). Flags contacts between two tracked identities where the
+labels may have changed hands — a possible identity switch — by asking whether
+each animal looks like ITSELF across the contact, using no identity labels across
+it. Two cues through ONE pipeline (`scoreContacts`): body size (3D bone lengths,
+cheap, no video) and appearance (embeddings of masked, pose-aligned crops,
+supplied by the caller — `ui/image-embedder.js` in the app). Pure — no DOM, no app
+state — so both run headlessly (the image check with any embedding provider).
 
 **Key exports.** `checkSizeSwitches(session, opts)` and
-`checkImageSwitches(session, opts)` (async) -> `{ok, flags, changes, encounters,
-identities, sampledFrames, closeDistance, threshold, fps, step, sampleHz, cue}`
-(+ `bones` for size; + `imageHz`, `crops`, `cameras` for images) or
-`{ok:false, reason}`; `markChangePoints(scored, o)` (the change-point step,
-exported so calibration can re-apply thresholds to the same scores);
-`fitSoftmax(X, y, n, D, K, opts)` (L2 multinomial logistic regression, Adam);
-`fitPCA(X, n, D, k)` (randomized subspace iteration); the image check's parts —
-`contactEpisodes(grid, gapSeconds)`, `learnAppearanceMetric(X, n, D, stretch,
-sample, o)`, `appearanceChangeScores(grid, feat, o, every)`,
-`markAppearanceChanges(scored, o)` (its change-point step, exported to re-apply a
-threshold) and `symmetricEigen(A, n)` (cyclic Jacobi);
-`KEYFRAME_GAP_TOLERANCE` (1.1);
+`checkImageSwitches(session, opts)` (async) -> `{ok, flags, changes ([]),
+encounters (the scored contacts), identities, sampledFrames, closeDistance,
+threshold, fps, step, sampleHz, cue}` (+ `bones` for size; + `imageHz`, `crops`,
+`cameras` for images) or `{ok:false, reason}`; the pipeline's parts —
+`contactEpisodes(grid, gapSeconds)`, `learnIdentityMetric(X, n, D, stretch, sample,
+o)`, `contactChangeScores(grid, feat, o, every)`, `markContactChanges(scored, o)`
+(the change-point step, returning the change points; exported so a threshold can
+be re-applied to the same scores), `symmetricEigen(A, n)` (cyclic Jacobi) and
+`fitPCA(X, n, D, k)` (randomized subspace iteration); `KEYFRAME_GAP_TOLERANCE` (1.1);
 `planKeyframeSamples(frames, keyframes, hasFrame)` -> `{decode, snapped, spacing,
 keyframeGap, maxShift}` (which frame each image sample decodes in one camera — see
 "Keyframe sampling" under `ui/image-embedder.js`); `SIZE_BONES`;
-`REFERENCE_HZ` (15); `SIZE_CHECK_DEFAULTS` (`fps` REQUIRED, `sampleHz` 15,
-`folds` 5, `gapSeconds` 10, `syncSeconds` 1, `threshold` -50, `continueBelow` 0,
-`followSeconds` 60, `minTrackedSeconds` 60, `sepFactor` 0.65, `signal`, ...);
-`IMAGE_CHECK_DEFAULTS` (+ `imageHz` 2, `threshold` -0.8, `episodeGapSeconds` 3,
-`minSamples` 6, `windowSeconds` 10, `maxSpanSeconds` 60, `followSeconds` 5,
-`metricPcaDims` 64, `metricDims` 16, `metricReg` 0.1, `maxTrainRows` 20000,
-`getEmbeddings` REQUIRED: `async (frame, items[{k, group}]) -> per item
-[{camera, vector}]`, STARTED in increasing frame order with up to `inFlight`
-(default 2; the image embedder asks for 8) in flight; optional `prepareFrames(frames)` (awaited once with the
-sorted frames it will ask for) and `releaseFrames()` (always called at the end) let
-the provider stream its video).
+`SIZE_CHECK_DEFAULTS` (`fps` REQUIRED, `sampleHz` 15, `minTrackedSeconds` 60,
+`sepFactor` 0.65, `episodeGapSeconds` 3, `minApartSeconds` 3, `windowSeconds` 10,
+`maxSpanSeconds` 60, `followSeconds` 5, `metricPcaDims` 64, `metricDims` 16,
+`metricReg` 0.1, `signal`; `threshold` -1, `maxTrainRows` 200000);
+`IMAGE_CHECK_DEFAULTS` (the same shared ones; `threshold` -0.8, `maxTrainRows`
+20000, `imageHz` 2, `getEmbeddings` REQUIRED: `async (frame, items[{k, group}]) ->
+per item [{camera, vector}]`, STARTED in increasing frame order with up to
+`inFlight` (default 2; the image embedder asks for 8) in flight; optional
+`prepareFrames(frames)` (awaited once with the sorted frames it will ask for) and
+`releaseFrames()` (always called at the end) let the provider stream its video).
 
-**The shared grid.** Every round(fps / `sampleHz`)-th frame is a grid sample.
-"Close" = body centroids within `sepFactor` x the median body extent (unit-free).
-Tracklet = a run where an identity is apart from every other.
+**The grid.** Every round(fps / `sampleHz`)-th frame is a grid sample: per
+identity its InstanceGroup, body centroid and bone lengths. "Close" = body
+centroids within `sepFactor` x the median body extent (unit-free). Tracklet = a
+run where an identity is apart from every other.
 
-**The size method.** Encounter = the last
-close sample of a close spell, scored when both identities' next tracklets start
-within `syncSeconds`. A softmax is trained on the tracker's OWN labels with blocked
-CV (each fold excludes `gapSeconds` either side) on bone lengths. Log-probabilities are normalised within
-each frame across the identities present; an encounter's score = summed evidence
-for the claimed labelling minus the exchanged one over the two following
-tracklets. Each sample is weighted by `REFERENCE_HZ` / that cue's sample rate, so
-scores are evidence per unit TIME and thresholds hold at any frame rate (25-120
-fps tested within 0.4%). `opts.signal` cancels (AbortError).
+**The method (images 2026-10-09, size 2026-10-11).** Features per (sample,
+identity) come in VIEWS: the image check embeds crops every round(sampleHz /
+imageHz)-th grid sample, one view per camera; the size check's one view is the
+16 bone lengths of every grid sample, each standardised by its spread over the
+session. Per view the features are centred — embeddings also scaled to unit
+length, since an embedding's direction is what it encodes while a bone-length
+vector's size is the signal — and projected into a metric learned WITHOUT
+identity labels (`learnIdentityMetric`): an LDA whose "same animal" pairs are
+features of one identity within one tracklet (it is apart from all others, so its
+label cannot change hands there) and whose "different animals" pairs are two
+identities in the same frame — both true however wrong the tracking is. Contacts
+are #286's episodes (`contactEpisodes`: the two identities in one connected
+component of the close graph, so a swap through a third animal counts; runs <
+`episodeGapSeconds` apart merged), and episodes separated by less than
+`minApartSeconds` of usable samples of either animal are merged too, so a swap
+inside a long huddle is judged from the stretches either side of it. Each episode
+is scored (`contactChangeScores`) per view from the mean feature of each animal
+just before (aB, bB) and just after (aA, bA) it — up to `windowSeconds` a side,
+within `maxSpanSeconds`, never past the pair's neighbouring episode, a sample
+being usable when the animal is not in contact with its partner (it may touch a
+third: a crop masks others out): S = cos(aB,aA) + cos(bB,bA) − cos(aB,bA) −
+cos(bB,aA), mean over views seeing both animals on both sides (episodes with none
+are dropped). Below `threshold` the labels changed hands there
+(`markContactChanges`): taking the session's start as right, a pair's 1st, 3rd, …
+flagged contact is an `onset` whose `switchBackAt` is the next one (or null: to
+the end), its 2nd, 4th, … the `end` of that stretch (`switchedAt`), so fixing
+either row swaps the same stretch; all are in `flags` (`changes` is []), none is a
+repeat (`continues` is always false), and a change point of a pair sharing one
+identity within `followSeconds` of another is its `followOf` (a three-way
+relabel). A score is a difference of cosines between mean features, so no sample
+rate scales it (25-120 fps tested). `opts.signal` cancels (AbortError).
 
-**The image method (2026-10-09).** Crops are embedded every round(sampleHz /
-imageHz)-th grid sample. Per camera the embeddings are centred, unit-normalised and
-projected into an appearance metric learned WITHOUT identity labels
-(`learnAppearanceMetric`): an LDA whose "same animal" pairs are crops of one
-identity within one tracklet (it is apart from all others, so its label cannot
-change hands there) and whose "different animals" pairs are two identities in the
-same frame — both true however wrong the tracking is. Contacts are #286's episodes
-(`contactEpisodes`: the two identities in one connected component of the close
-graph, so a swap through a third animal counts; runs < `episodeGapSeconds` apart
-merged), and episodes separated by fewer than `minSamples` usable crops of either
-animal are merged too, so a swap inside a long huddle is judged from the stretches
-either side of it. Each episode is scored (`appearanceChangeScores`) per camera
-from the mean appearance of each animal just before (aB, bB) and just after (aA,
-bA) it — up to `windowSeconds` of crops a side, within `maxSpanSeconds`, never past
-the pair's neighbouring episode, a crop being usable when the animal is not in
-contact with its partner (it may touch a third: the crop masks others out):
-S = cos(aB,aA) + cos(bB,bA) − cos(aB,bA) − cos(bB,aA), mean over cameras seeing
-both animals on both sides (episodes with none are dropped). Below `threshold`
-the labels changed hands there (`markAppearanceChanges`): taking the session's
-start as right, a pair's 1st, 3rd, … flagged contact is an `onset` whose
-`switchBackAt` is the next one (or null: to the end), its 2nd, 4th, … the `end`
-of that stretch (`switchedAt`), so fixing either row swaps the same stretch; all
-are in `flags` (`changes` is []), none is a repeat, and a change point of a pair
-sharing one identity within `followSeconds` of another is its `followOf` (a
-three-way relabel). **Why not the size method's classifier:** it learns whichever
-labelling covers more of the session, and when a pair swaps several times none
-does — on the CD1FSCR3_CSI recording (3 white CD1 mice, two in mesh jackets) the
-plain mouse wore id_0 for 36% and id_1 for 50% of 15 min, the classifier's
-per-sample evidence for id_0 vs id_1 was ±0.5, and the real 0:19 swap (at the
-pair's FIRST encounter, so the swapped stretch before it was never scored) was
-missed while 17 false change points were raised. **Why the metric:** on five
-white mice raw DINOv2 cosine separated real changes from clean contacts at AUC
-0.68; in the metric 0.78.
+**Why not a classifier on the tracker's labels** — what both checks did before:
+a softmax trained on Track All's own labels with blocked cross-validation,
+flagging encounters whose aftermath it disagreed with, change points from runs of
+flagged encounters. It learns whichever labelling covers more of the session, and
+when a pair swaps several times none does — on the CD1FSCR3_CSI recording (3 white
+CD1 mice, two in mesh jackets) the plain mouse wore id_0 for 36% and id_1 for 50%
+of 15 min, the image classifier's per-sample evidence for id_0 vs id_1 was ±0.5,
+and the real 0:19 swap (at the pair's FIRST encounter, so the swapped stretch
+before it was never scored) was missed while 17 false change points were raised.
+**Why the metric:** on five white mice raw DINOv2 cosine separated real changes
+from clean contacts at AUC 0.68; in the metric 0.78. **Why cosine, not distance,
+for size:** a bone-length vector has essentially one direction (size), so the
+MIDDLE-sized animal sits near the average and its own before/after cosine is weak
+(a synthetic swap involving it scores -0.7, between the two extremes -1.4); the
+distance-based alternative — the dot product of the two animals' difference before
+and after, which is what comparing the two labellings by distance reduces to —
+was tried and scored worse on the real recordings (pooled AUC 0.86-0.87 vs 0.88,
+more false rows at every catch rate), its scale swinging per recording.
 
-**Change points, not raw flags (size).** The model can tell that the labelling on the
-two sides of an encounter disagrees, not which side is right (it learns whichever
-side covers more of the session). Per pair, a run of flagged encounters (starting
-below `threshold`, continuing FORWARD while below `continueBelow`) yields one
-change point: its start (`kind: 'onset'`) when it reaches the session end, else
-the first unflagged encounter after it (`kind: 'end'`, in `changes`) when it
-starts the session; both for a middle run of 2+. Other members are repeats
-(`continues`). Each change point also names the other edge of its swapped
-stretch, which is what fixing it swaps: an onset's `switchBackAt` (the pair's
-encounter after the run — for a lone middle flag that encounter is no change
-point of its own — or null when the run reaches the end) and an 'end''s
-`switchedAt` (the run's first encounter, or null when the run starts the
-session). A change point within `followSeconds` after another of a different
-pair sharing an identity is its follow-on (`followOf`).
-
-**Calibration (2026-10-03).** Size: on the 5-mouse tail-mark recording
+**Calibration of the classifier method (2026-10-03; both checks have since been replaced, see below).** Size: on the 5-mouse tail-mark recording
 (194366_05mice_flippers, 108k frames, 8 cameras) planted swaps AUC 0.95; the real
 gate-off switch (frame 74,544) is an onset; the verified run gets 7 false change
 points / 30 min. Images, calibrated with this code on DINOv2 embeddings of the
@@ -3631,9 +3683,9 @@ the similar-size, different-coat pairs (brown-black: size AUC 0.73, 5% caught at
 false-flag rate per clean encounter. When both checks flag an encounter it was a
 real swap 98% of the time (images alone 79%; none on the 5-mouse run with no
 switches). Images remain weak for animals that look alike (same coat).
-**Superseded for images by the 2026-10-09 calibration below**; the notes on views
-per animal, sampling rate and keyframes were measured with the old image scoring
-and are kept for what they say about the crops.
+**Superseded by the 2026-10-09/11 calibrations below**; the notes on views per
+animal, sampling rate and keyframes were measured with the old image scoring and
+are kept for what they say about the crops.
 **Views per animal** (`imageCheckMaxViews`, default 3; recalibrated 2026-10-04):
 embedding only each animal's 3 largest views matches all 8 — brown-black AUC
 0.925, 48% at -25, 0.8% false flags, "Both" 98% real; 5-mouse: real switch scored
@@ -3685,23 +3737,50 @@ episode scoring (classifier, -200) 8 of 12 with 15 false. -0.5: 10 of 12, 6 fals
 vs white). Five white mice are the hard case: 1 of 2 at -0.8 with 2 false rows
 (the 21:57 three-way relabel scores -0.19). Missed: a brown/black swap 14 s before
 the end of 143153 (-0.04, one side has 7 crops). Robust to the knobs — at -0.8,
-`metricDims` 32, `metricReg` 0.03/0.3, `windowSeconds` 5/20, `minSamples` 3,
+`metricDims` 32, `metricReg` 0.03/0.3, `windowSeconds` 5/20, `minApartSeconds` 1.6 (3 crops),
 `episodeGapSeconds` 1, `metricPcaDims` 32 and all views give 9-10 of 12 with 0-2
 false rows (`metricDims` 8: 6 false); without the evidence-driven merge
-(`minSamples` 0) the 144215 huddle swap goes unscored, and with crops only from
+(`minApartSeconds` 0) the 144215 huddle swap goes unscored, and with crops only from
 time apart from EVERY animal 17 of its 24 episodes have none. On the same 8 runs
-the size check (unchanged) gives 60 rows, 56 false; rows both checks flag ("Both")
-were real 4 of 4, image-only rows 6 of 8. Analysis after embedding: 3-7 s per
-10-min session, 21 s for 30 min of 5 animals. Harness: the session scratchpad of
-2026-10-09 (collect.mjs, evalall.mjs, ba.mjs) — not in the repo.
+the size check's classifier gave 60 rows, 56 false. Analysis after embedding: 3-7 s
+per 10-min session, 21 s for 30 min of 5 animals. Harness: the session scratchpad
+of 2026-10-09 (collect.mjs, evalall.mjs, ba.mjs) — not in the repo.
 
-**Out of sample (2026-10-11).** Confirmed on 16 proofread SLAP sessions of
-2022-10-07 that played no part in choosing the method or the threshold — every
+**Calibration of the size method (2026-10-11).** The same 8 runs, truth and row
+rule, from the tracker's 3D. NOTE: 142111 loaded alone gets scrambled node NAMES
+on main (its `back` camera's skeleton is nested under `nx_graph`; fixed on the
+unmerged branch `claude/dreamy-chatterjee-d480db`), so every bone length by name is
+wrong there — the numbers below use its standard node order, which every other
+session shares. At -1: **6 of 12 relabels caught, 13 rows, 7 false**, all 7 on the
+five white mice (the SLAP sessions and CD1: 5 of 10, 0 false); the classifier it
+replaces, at its -50 default: 4 of 12, 54 rows, 50 false (at -200: 3 of 12, 13
+rows, 10 false). -0.8: 7 of 12, 18 rows, 11 false; -1.2: 4 of 12, 9 rows, 5 false.
+Bone lengths cannot tell apart animals of one size (142111's white/black swap
+scores +0.5), but catch what images miss (143153's brown/black swap 14 s before the
+end, -1.1). **Limitation:** on animals of IDENTICAL size the windows are noise, and
+the cosine of noise-only means still dips just past -1 now and then (the synthetic
+fixture of `tests/e2e/id-switch-image-check.mjs`: 2 of 24 contacts at -1.02 and
+-1.15). Not renormalising the window means (the mean of unit vectors, its length
+kept) silences that exactly (all ~0.00) and gave the image check 10 of 12 with NO
+false rows at -0.5 — but on the real recordings it made size slightly worse (pooled
+AUC 0.867 vs 0.879; 10 false rows vs 7 at 6 caught), and on 16 new sessions it
+gained the image check nothing either (see "Out of sample"), so both checks keep
+renormalised means. Swept at -1: `metricDims` 2 is much worse (59 false at -0.8),
+4 worse, 8 equal to 16 one step looser; `windowSeconds` 20/30 and `minApartSeconds` 1.6
+change little, 6.4 loses 2 relabels. The five-mouse "false" rows at 1:01, 14:55,
+16:07, 26:41 were checked against the tail marks (both checks flag some of them).
+With both checks at their defaults, rows both flag ("Both", same pair, overlapping
+contacts) were real 5 of 5, image-only rows 5 of 7, size-only 1 of 8. The size
+check takes ~0.2 s per 10-min session and ~1.3 s for 30 min of 5 animals after
+the grid is built.
+
+**Out of sample (2026-10-11), both checks.** Confirmed on 16 proofread SLAP sessions of
+2022-10-07 that played no part in choosing the methods or the thresholds — every
 multi-animal one not used above: 131531, 132603, 133702, 134804, 135851, 140918,
 161055, 162233, 163346, 170913, 173152, 180149, 181300, 183527, 184618, 190807
 (2 h 49 min; 15 with two mice, including white/white 163346 and brown/brown
 173152, and 190807 with two brown and one white), with the same harness, truth
-and row rule. At -0.8: **9 of 11 relabels caught, 11 rows, 0 false**. Every real
+and row rule. Images at -0.8: **9 of 11 relabels caught, 11 rows, 0 false**. Every real
 change scored below every one of the 348 clean contacts (per-contact AUC 1.000),
 so no threshold from -0.2 to -1.2 gave a false row; -0.5 and looser caught 10 of
 11. Missed: a swap inside the pair's first contact, which starts the session
@@ -3709,7 +3788,11 @@ so no threshold from -0.2 to -1.2 gave a false row; -0.5 and looser caught 10 of
 brown mice that scored -0.58 (190807 at 9:06). A variant that keeps the length of
 the window means (the mean of unit vectors, not renormalised), which had looked
 better on the 8 calibration runs (10 of 12 with no false rows at -0.5), gave the
-identical 9 of 11 with no false rows here — no gain, so not adopted. These
+identical 9 of 11 with no false rows here — no gain, so not adopted. Size at -1:
+**2 of 11 caught, 2 rows, 0 false** (-0.8: 3 of 11, 5 rows, 2 false; per-contact
+AUC 0.902); the classifier it replaces, at its -50 default: 0 of 11 caught, 20 rows,
+all false. These mice are close in size, so size catches little here — but it no
+longer raises false rows. These
 sessions keep a second label file per camera
 (`*.predictions.static.externals.slp`), which a harness has to leave out of the
 folder pick.
@@ -3719,13 +3802,14 @@ folder pick.
 **Imported by.** `ui/id-switch-modal.js`, `ui/image-embedder.js` (`planKeyframeSamples`, `KEYFRAME_GAP_TOLERANCE`).
 
 **Coverage.** `tests/test-id-switch-check.mjs` (synthetic 3-animal sessions defined
-in time: clean -> no flags; minority / majority switch -> onset / end change point;
+in time: clean -> no flags; a switch late or early in the session (the swapped
+stretch the minority or the MAJORITY) -> one onset at the switch, nothing else;
 25-120 fps invariance; images with synthetic embeddings catching a swap between
 animals of IDENTICAL size that size misses; a pair swapping three times from its
-first encounter (all three found, onset/end/onset with the right fix edges; the
-size check as the negative control misses the first); #286's huddle and
-three-animal scenarios; the appearance metric on look-alike animals (98% vs raw
-cosine 52%); `symmetricEigen`; `markAppearanceChanges`; cancellation; PCA; failure reasons;
+first encounter (all three found by BOTH checks, onset/end/onset with the right
+fix edges); #286's huddle and three-animal scenarios; the identity metric on
+look-alike animals (98% vs raw cosine 52%); `symmetricEigen`; `markContactChanges`;
+cancellation; PCA; failure reasons; progress;
 crop geometry of `ui/image-embedder.js`; `planKeyframeSamples`: sparse/unknown
 keyframes move nothing, a keyframe every 30 frames moves every 32-frame sample
 <= 15 frames, strictly increasing, untracked keyframes skipped, gaps up to 1.1x
@@ -3827,6 +3911,14 @@ Calibration and `envSkeleton` remain per-session.
   it follows the frame rate when a video loads or the FPS pill is edited, with
   no caller recomputing it. Setting it (tests and benches pin a frame count)
   stores `frames / fps` in `trailSeconds`. The pickers set `trailSeconds`.
+  `state.trailShade` — the node-trail shade, a `TRAIL_SHADES` key
+  (`ui/overlays.js`), starting at `DEFAULT_TRAIL_SHADE` ('dark'); `ui/ui-wiring.js`
+  replaces it at startup with the one remembered in `localStorage`.
+  `state.nativeResolution` is View ▸ Native Resolution (Shift+0): true exactly
+  when every shown view is at one video pixel per device pixel. Written only by
+  `VideoController._syncNativeMode` (derived from the views, never latched), and
+  read by `VideoController.initZoom` so a pane rebuild keeps every view at 1:1
+  (see `loading/video.js`).
 - `videoController`, `interactionManager`, `viewport3d`, `timeline`,
   `paneManager` — live `let` bindings.
 - `setVideoController`, `setInteractionManager`, `setViewport3D`,
@@ -3865,7 +3957,7 @@ Calibration and `envSkeleton` remain per-session.
   only). Filled/read by `copySelectedInstance`/`pasteInstance` in `ui-wiring.js`.
 
 **Imports from project modules.** `./trail-presets.js` (`trailFrames`,
-`trailRate`), itself import-free.
+`trailRate`) and `./overlays.js` (`DEFAULT_TRAIL_SHADE`), both import-free.
 
 **Imported by.** `pose/initialization.js`, `pose/triangulation.js`,
 `pose/tracker.js`, `import-export/save-load.js`,
@@ -3890,7 +3982,8 @@ ui-wiring (import loop; its Node tests stub UI modules). Dependency-free.
 **Key exports.** `setColorByIdentity(state, on)` -> `true` if it changed
 anything (the handler runs only on a change); `onColorByChange(fn)` —
 registers the single change handler (ui-wiring: button highlight +
-`drawAllOverlays` + `update3DViewport`). With no handler (Node tests) it only
+`drawAllOverlays` + `update3DViewport` + the timeline's track rows and the
+Visibility tab's track swatches). With no handler (Node tests) it only
 sets the state.
 
 **Imports from project modules.** None.
@@ -4470,7 +4563,9 @@ SLP all-sessions, JSON labels, points3d H5, reproj H5).
   `sessionHasCalibration`, `showCalibrationRequiredPopup`,
   `getInstanceGroupsForFrame`, `sweepLazyFrameWindows`,
   `resolveTriangulationMethod`, `findEquivalentPriorGroup`, `adoptPrior3d`,
-  `triangulationMethodLabel` (the last four for the adopt-don't-downgrade rule).
+  `triangulationMethodLabel` (the last four for the adopt-don't-downgrade rule),
+  `reprojectIntoEveryCamera` (Group by Track reprojects each solve into every
+  camera, not only the cameras it has instances in or the run's camera filter).
 - `./viewport3d.js` — `Viewport3D` (Export 3D Video modal).
 - `./overlays.js` — `getTrackColor`, `getGroupColor` (Export 3D Video modal).
 - `./rendering.js` — `drawAllOverlays`, `setReprojErrorVisible`,
@@ -4985,10 +5080,13 @@ class="slider"></span></label>`) rather than a bare checkbox so the
 control matches the rest of the Visibility panel. Track AND identity
 rows both render a `.vis-color-swatch`: identity rows pull from
 `identity.color`, track rows compute their swatch via
-`getTrackColor(i)` (imported from `./overlays.js`) where `i` is the
-row's position in `session.tracks` — the same palette-index the
-timeline canvas itself uses for the bar color, so the swatch in the
-panel matches the bar the user sees on the timeline. Camera rows have
+`getTrackColor(i, state.colorByIdentity)` (imported from `./overlays.js`)
+where `i` is the row's position in `session.tracks` — the same palette-index
+AND palette the timeline canvas itself uses for the bar color (`NULL_ID_COLOR`
+for the No ID track), so the swatch in the panel matches the bar the user
+sees on the timeline. The Tracks / Identity change handler (`ui/ui-wiring.js`)
+re-runs `populateTimelineVisibility` so the swatches switch palette with the
+mode. Camera rows have
 no swatch (cameras have no intrinsic color in the data model).
 
 The change listener calls `toggle{Camera,Track,Identity}Visibility(session, name)`
@@ -5030,6 +5128,11 @@ edit-group mode, keyboard shortcuts.
   `onMouseLeave`/`onWheel`, `onKeyDown`, `_addNewInstance` (used by smart-add;
   lays out a new skeleton via an inline BFS fan-out from the highest-degree
   root, with a vertical-line fallback when there are no edges).
+  `canvasToVideo(clientX, clientY, viewName)` maps a pointer to video pixels;
+  on a ROTATED view it rebuilds the display size from `cssW × zoom.scale` and
+  `cssH × zoom.scaleY` — the vertical scale differs a hair from the horizontal
+  one at native resolution (`VideoController.nativeZoomScales`), and using
+  `zoom.scale` for both put a click up to ~0.3% of the frame height off there.
 - `isInteractiveClickTarget(target)` — used by other UI to skip
   click-through on form controls.
 
@@ -5681,7 +5784,10 @@ the classic-script unit runner and exercised without a browser dock.
   likes overlays to look, not how big the file will be. Note it is the **read** that
   resets, not the write; `tests/e2e/overlay-export-modal.mjs` asserts both halves.
 - `overlayOptionsFrom(settings, videoW, videoH, canvasW, canvasH)` — the
-  settings → `drawFrameOverlays()` options translation. Explicitly nulls ALL
+  settings → `drawFrameOverlays()` options translation (`trailShade` passes
+  through as its key; `drawNodeTrails` resolves it). The default
+  `trailShade: 'dark'` repeats `DEFAULT_TRAIL_SHADE` because this module imports
+  nothing; `tests/test-overlay-export-layout.js` holds the two together. Explicitly nulls ALL
   interaction state (selection / hover / drag / assignment): an export has no
   cursor, and a stray highlight would be burned into the video.
   **Node labels are gated by `showLabels`, never by their size** (issue #223).
@@ -5723,6 +5829,11 @@ composition and its user / predicted / reprojected overlay layers.
 
 **Key exports.** `showOverlayExportModal()`, `settingsFromVisibilityPanel()`,
 `loadOverlayExportSettings()`, and a re-export of `TILE_3D`.
+The node-trail shade is seeded from `state.trailShade` and offered as the Layers
+group's **Trail shade** select (`#ovTrailShade`, the five `TRAIL_SHADES`), right
+under Node trails; like the trail length it is then remembered with the export's
+own settings. `loadOverlayExportSettings` replaces a stored shade this build does
+not offer with `DEFAULT_TRAIL_SHADE`, which would otherwise leave the select blank.
 
 **Layout.** `[views strip] [composition dock] [settings panel]`. The strip lists
 the **3D grid FIRST**, then one thumbnail per video; drag or double-click to dock.
@@ -6024,7 +6135,8 @@ exported but the amber `?` editing prompt is not.
 - `./browser-hints.js` — `fileSystemAccessHint` (appended to the in-memory
   export confirm in Brave).
 - `./viewport3d.js` — `Viewport3D`.
-- `./overlays.js` — `drawFrameOverlays`, `getTrackColor`, `getGroupColor`.
+- `./overlays.js` — `drawFrameOverlays`, `getTrackColor`, `getGroupColor`,
+  `TRAIL_SHADES`, `DEFAULT_TRAIL_SHADE`, `trailShadeFor`.
 - `./rendering.js` — `getVisibilitySettings` (the seed).
 - `./overlay-export-layout.js` — the pure helpers above.
 - `./video-encode.js` — `createMp4Writer`, `videoEncodingAvailable`.
@@ -6160,9 +6272,22 @@ palettes, and per-frame draw routines. Receives `frameGroup` and
   the overlay-video export sets them (SLEAP's "Show: ☑ Nodes ☑ Edges"); the live
   Visibility panel has no such toggle. They ride in on the per-type opts bags, so
   `drawFrameOverlays` forwards them without needing to know about them.
-- Color: `TRACK_COLORS`, `REPROJECTION_COLOR`, `UNGROUPED_USER_COLOR`,
+- Identity-mode name labels: `drawFrameOverlays` sections 3a (predicted) and
+  4a (user) give an instance with no resolved identity its SKELETON's base
+  color in `colorByIndex`. Left empty, `drawInstanceLabels` fell back to
+  `getTrackColor(trackIdx)` — Track mode's vivid palette — so the label of an
+  identity-less grouped instance drew in a color near an identity's while
+  its skeleton was muted. Covered by `tests/e2e/unidentified-track-palette.mjs`.
+- Color: `TRACK_COLORS` (Track mode's vivid palette),
+  `UNIDENTIFIED_TRACK_COLORS` (11 muted earth tones, Identity mode's: when
+  coloring by Identity a track color is never an identity color, see CLAUDE.md
+  UI Conventions, enforced by `tests/test-track-identity-palette.mjs`),
+  `REPROJECTION_COLOR`, `UNGROUPED_USER_COLOR`,
   `NULL_ID_COLOR` (space gray `#a7adba` for explicit-none instances when
-  coloring by identity), `getTrackColor`, `getGroupColor`,
+  coloring by identity), `getTrackColor(trackIdx, colorByIdentity?)` (picks
+  the palette by the mode; `getGroupColor` / `getInstanceColor` pass their
+  `useIdentity` through, so an identity-less track is muted in Identity mode),
+  `getGroupColor`,
   `getInstanceColor`, `adjustColorBrightness`, `errorColor`, `hexToRgb`,
   `brightenColor`, `desaturateColor`, `complementaryColor`.
   `getGroupColor`/`getInstanceColor` return `NULL_ID_COLOR` when
@@ -6406,15 +6531,67 @@ palettes, and per-frame draw routines. Receives `frameGroup` and
   `options.trailLength`+1 **present** frames up to and including `frameIdx`
   (sparse-aware, like SLEAP's `labels.find(video,
   range(0,frame_idx+1))[-trail_length:]`; only reads frames already in
-  `session.frameGroups`, so no lazy-H5 fetch — the perf concern in #102). Draws a
-  trail for **every track that appears anywhere in the window** (linked AND
-  unlinked via `trailViewInstances`, matched by per-view `trackIdx`) — including
-  tracks that have **vanished** from the current frame, so a trail lingers and
-  fades out rather than disappearing the instant its instance is gone (unlinked
-  matters too: identities are inspected BEFORE cross-view linking). Each node's
-  positions join into a polyline that toward the past thins, fades, and darkens;
+  `session.frameGroups`, so no lazy-H5 fetch — the perf concern in #102).
+  **Trails attach to what is DISPLAYED.** Only a shown layer gets trails —
+  `options.trailUser` / `trailPredicted` / `trailReprojected`, which
+  `drawFrameOverlays` sets from the toolbar's User / Predictions / Reprojections
+  boxes (omitted = on) — so with both Predictions and Reprojections on, both sets
+  are drawn, back to front like the skeletons (`drawTrailLayer` once per set):
+  - **2D trails** follow a per-view `trackIdx` through the displayed User and
+    Predicted instances, linked AND unlinked (`trailViewInstances`; unlinked
+    matters: identities are inspected BEFORE cross-view linking). ONE trail per
+    track across both types, so a prediction corrected into a user instance does
+    not break it; where a frame holds both for one track, the user instance (drawn
+    on top) is followed. With one type hidden its frames are gaps.
+  - **Reprojection trails** follow a 3D group through its reprojection into the
+    view. Each frame has its own group objects, so `groupTrailKey(group, session,
+    viewName, frameIdx)` links them: the per-frame identity (resolved like
+    `getGroupColor` — this view's member, else every member), else the group's
+    `identityId`, else a member's track. `groupReprojection(group, viewName,
+    camera)` gives the positions exactly as the reprojection skeleton has them:
+    the cached reprojected `Instance`, else `group.reprojections`, else — the
+    usual case for a frame behind the playhead, since Triangulate All's sweep and
+    lazy eviction drop those caches — the group's 3D points through
+    `camera.project` + `distortPoint` (what `reprojectPointsCamera` computes).
+    **Read-only:** it never writes those caches, which the info panel and the
+    error vectors read as "this frame was triangulated", and it never
+    re-triangulates. Colored like the reprojection skeleton —
+    `getGroupColor` dimmed by `options.reprojBrightness` — which also keeps the two
+    sets apart when both are shown. Worst case (every past frame projected) is
+    ~1.2 ms per view per redraw at 100 frames × 5 animals × 17 nodes, vs ~0.1 ms
+    for the 2D trails.
+  Every track/animal that appears anywhere in the window gets a trail — including
+  ones that have **vanished** from the current frame, so a trail lingers and
+  fades out rather than disappearing the instant its instance is gone. Each node's
+  positions join into a polyline that toward the past thins and fades.
+  **Width:** the newest segment is exactly as thick as its layer's skeleton edges
+  — `options.lineWidth` (User ▸ Edge Weight), `options.predictedLineWidth`
+  (Predictions) or `options.reprojLineWidth` (Reprojections), chosen per segment by
+  the instance at its older end — and tapers to `1/(W-1)` of that at the oldest,
+  floored at 0.8 px but never above the edge width (a sub-pixel export tile).
+  It used to start at TWICE the User edge weight whatever it traced, so a trail
+  of predictions began at 6 px beside 2 px edges. Covered by
+  `tests/test-node-trails.mjs` §13 and `tests/e2e/node-trail-width.mjs` (both
+  fail on the old rule). The layers are covered by §14 and
+  `tests/e2e/trails-per-layer.mjs` (real Track All + Triangulate All, every
+  trail segment matched to the predicted or reprojected nodes it joins; on the
+  old code Reprojections-only drew 72 segments per view on the hidden
+  predictions);
   each segment is colored by the instance's color AT that frame (per-frame identity
   lookup), so an identity/color **switch shows as a color change along the trail**.
+  **Shade.** That color is drawn in `options.trailShade` — a key of
+  `TRAIL_SHADES` (Very dark / Dark / Normal / Light / Very light, `amount`
+  −0.65 / −0.4 / 0 / 0.4 / 0.7), default and fallback `DEFAULT_TRAIL_SHADE`
+  ('dark') — so the skeleton on the current frame stands apart from its history
+  (SLEAP 1.4's View ▸ Trail Shade, whose Dark is the same ×0.6). `trailColor(hex,
+  shadeKey, age)` is the rule: a negative amount scales RGB by `1 + amount`, a
+  positive one blends toward white (`brightenColor`; SLEAP's ×1.25 does nothing to
+  a channel already at 255, which is most of `TRACK_COLORS`), and `age` (0 newest
+  → ~1 oldest, `k / (W + 1)`) moves the color further the SAME way — darker by up
+  to 45% more, or that much further toward white — so a trail never fades back
+  toward its track's color. **Normal reproduces the pre-shade colors exactly**
+  (V scaled 1.0 → 0.55). `trailShadeFor(key)` returns the entry or null (strict;
+  the callers that need a fallback apply it).
   `drawFrameOverlays` calls it right after the canvas clear (behind the live
   skeletons) when `options.trailLength > 0`. Length is chosen from the **Tracks ▸
   Node Trails** submenu or the toolbar's **Trails** button (Off / ¼ s / ½ s / 1 s / 2 s
@@ -6459,8 +6636,12 @@ palettes, and per-frame draw routines. Receives `frameGroup` and
   **ID overlays:** in identity color mode (`options.colorByIdentity`) it now
   labels **predicted** instances with their identity name/color (step 3a), not
   just user instances — so the cross-view tracker's output (predicted) shows its
-  IDs as text for proofreading. `options.trailLength` threads through to
-  `drawNodeTrails`. Covered by `tests/test-node-trails.mjs`.
+  IDs as text for proofreading. `options.trailLength` and `options.trailShade`
+  thread through to `drawNodeTrails`, with `showUser` / `showPredicted` /
+  `showReprojected` as its layer switches, `userOpts` / `predictedOpts` /
+  `reprojOpts.lineWidth` as its edge widths and `reprojOpts.brightness`. Covered by `tests/test-node-trails.mjs`
+  (§12: the shade scale on every palette color, and the drawn strokes) and
+  `tests/e2e/node-trail-shade.mjs` (the menus and the real draw path).
   **Reprojection node color ignored the Visibility panel on the raw-fallback
   path (luc3d #209).** Step 2 has two ways to draw a group's reprojection:
   a materialized `reprojectedInstances` `Instance` (built by
@@ -6493,7 +6674,9 @@ palettes, and per-frame draw routines. Receives `frameGroup` and
 **Imports from project modules.** None.
 
 **Imported by.** `pose/initialization.js`, `ui/timeline.js`,
-`ui/rendering.js`, `ui/info-panel.js`.
+`ui/rendering.js`, `ui/info-panel.js`, `ui/app-state.js` (`DEFAULT_TRAIL_SHADE`),
+`ui/ui-wiring.js` (`TRAIL_SHADES`, `TRACK_COLORS`, `trailShadeFor`,
+`trailColor` — the trail menus), `ui/overlay-export-modal.js`.
 
 **User-facing features.** All on-canvas pose drawing — colored skeletons,
 reprojection error vectors, drag preview, selection highlight, instance
@@ -6558,8 +6741,8 @@ data sources. Plus visibility-toggle helpers and frame counter updates.
   view's frame. The lazy reprojection fill is the private
   `fillLazyReprojections(fi, groups)`, run for `frameIdx` and once for each
   other per-view frame. Threads
-  `state.colorByIdentity` and `state.trailLength` (node-trail length, issue #102)
-  into each `drawFrameOverlays` call. With trails on in a lazy project it first
+  `state.colorByIdentity`, `state.trailLength` (node-trail length, issue #102)
+  and `state.trailShade` into each `drawFrameOverlays` call. With trails on in a lazy project it first
   calls `ensureLazyTrailWindow(frameIdx, state.trailLength)`
   (`pose/triangulation.js`), so the trail drawn right after a seek has the
   frames BEHIND the target, which the seek's own hydration does not load; a
@@ -6692,6 +6875,13 @@ data sources. Plus visibility-toggle helpers and frame counter updates.
   does reach that code (without a session `drawAllOverlays` returns early and
   the assertion would be vacuous).
 
+  **The toolbar's Animals field catches up with a session change here too.**
+  The count is per session and nothing announces a session change — the
+  session switch and every load path assign `state.session` themselves — but
+  every one of them ends in a draw, so `syncAnimalCountField()`
+  (`ui/animal-count-field.js`) is called right after the lock. Two comparisons
+  when the session and its count are the ones already shown.
+
 **Imports from project modules.**
 - `./app-state.js` — `state`, `interactionManager`, `timeline`, `isViewDocked`.
 - `../pose/triangulation.js` — `ensureLazyFrameData`,
@@ -6708,6 +6898,8 @@ data sources. Plus visibility-toggle helpers and frame counter updates.
 - `./plane-definition.js` — `drawPlaneOverlays`, `applyPlaneModeToolbarLock`.
   **Circular** (that module imports `drawAllOverlays` back); safe because both
   call sites are inside function bodies.
+- `./animal-count-field.js` — `syncAnimalCountField`. **Circular** through
+  `pose/tracker.js`, which imports this module; safe for the same reason.
 
 **Imported by.** `pose/triangulation.js`, `pose/tracker.js`,
 `pose/initialization.js`, `import-export/save-load.js`,
@@ -6744,6 +6936,60 @@ A **LEAF module**: it imports nothing.
 **Imported by** `ui/plane-definition.js` (which also re-exports it, so the name
 stays reachable at its original path), `ui/plane-nodes-panel.js`,
 `ui/plane-angle.js`, `ui/origin-definition.js`.
+
+### ui/animal-count-field.js
+
+**Purpose.** The toolbar's **Animals** field (`#tbNumAnimals`), first in the
+Track group: shows and edits the ACTIVE session's animal count, the number every
+tracking run caps identities at (`Session.numAnimals`, through
+`pose/tracker.js`). The count used to be visible only in the first-use
+`prompt()`, so a user who forgot what they typed had no way to find out. Blank is
+auto-detect (`placeholder="auto"`), as in the prompt and the Track Frame Range
+dialog.
+
+**Two ways the shown value goes stale, two refreshes.** A change to the count
+(the prompt, the Track Frame Range dialog, the field itself) repaints it through
+`onTrackerNumAnimalsChange`. A change of ACTIVE SESSION has no event — the
+session switch and every load path assign `state.session` themselves — so
+`syncAnimalCountField()` is called from `drawAllOverlays` (`ui/rendering.js`),
+which all of them end in, and costs two comparisons when nothing changed. The
+plane toolbar lock is re-asserted from there for the same reason. It never
+rewrites the field while it has focus.
+
+**Editing.** Commits on `change` (Enter or blur), so a half-typed "1" on the way
+to "12" is never the count; Enter blurs (handing the shortcuts back — a number
+field blocks them all while focused, `ui/keyboard-target.js`), Esc reverts and
+blurs. A bad entry — below 1, not a whole number, or text `value` reports as
+`''` (`validity.badInput`, a stray "e") — reverts with an error status rather
+than being read as blank, and changes nothing. With no session loaded it reverts
+too and says why: the count is saved with a session. A good one goes through
+`setTrackerNumAnimals`, which marks the project dirty.
+
+**Placement and width.** BEFORE Track Frame, not after Track All, where the
+label read as "Track All Animals". Not in Defining Plane Mode's toolbar lock: it
+changes no annotation. The toolbar must fit a 1440px window
+(`tests/e2e/toolbar-3d-toggle-button.mjs` §7), and before this field there were
+~50px to spare. Its ~72px came from the `.toolbar`'s 4px flex gap (a leftover
+of the removed `.toolbar-separator`, 24px), 2px less between the visibility
+checkboxes, and a compact field (11px label, 26px input). The Trails menu
+(`#trailsMenu`) now hangs from its button's RIGHT edge, because the button moved
+right and the closed menu ran 1px past the window as scroll overflow.
+
+**Key exports.**
+- `wireAnimalCountField()` — called once from `setupUI` (`ui/ui-wiring.js`).
+- `syncAnimalCountField()` — called from `drawAllOverlays`; O(1).
+
+**Imports from project modules.** `./app-state.js` (`state`),
+`../import-export/save-load.js` (`setStatus`), `../pose/tracker.js`
+(`getTrackerNumAnimals`, `setTrackerNumAnimals`, `onTrackerNumAnimalsChange`).
+
+**Imported by.** `ui/ui-wiring.js`, `ui/rendering.js`.
+
+Covered by `tests/e2e/toolbar-animal-count.mjs` (placement, the prompt, typed
+counts reaching Track All, bad entries, Esc, shortcuts, blank = answered, the
+range dialog, per-session switching, and a save → fresh page → Load Project
+reopen) and, for the file format, `tests/e2e/visibility-settings-roundtrip.mjs`
+and `tests/test-visibility-metadata.js`.
 
 ### ui/plane-toolbar-lock.js
 
@@ -8826,9 +9072,29 @@ add/remove/switch, and view-strip thumbnails. Owns the on-screen
 multi-video docking layout.
 
 **Key exports.**
-- `panelRenderers` — Map of panelId → VideoPaneRenderer.
+- `panelRenderers` — Map of panelId → VideoPaneRenderer. Each pane carries
+  the zoom badge, `.zoom-badge.tri-dropdown`, shown while its view is zoomed or
+  at native resolution. Its `.unzoom-btn` reads the zoom as a percentage of 1:1
+  ("125% ▾", "100% ▾" — `applyZoom` writes `.zoom-badge-label` via
+  `zoomPercentLabel`, `loading/video.js`) and a click fits the view. Hovering
+  opens `.zoom-preset-menu` — the Triangulate split-button pattern, the same
+  pure-CSS hover `.tri-dropdown` — with `ZOOM_PRESET_PERCENTS` (50 / 100 / 150 /
+  200 %, each hinted with its screen:video pixel ratio from `zoomRatioLabel`:
+  1:2 / 1:1 / 3:2 / 2:1) and Fit, for THAT pane's view only (`setZoomPercent` /
+  `resetZoom`).
+  The current preset is ticked, re-read on each hover; 100% is ticked only when
+  the view is AT 1:1 (`zoom.native`), never merely near it. Items carry
+  `data-zoom-pct` / `data-zoom-fit`. The badge stops `mousedown` so a click on it
+  never starts the cell's pan / box zoom. It hangs from the badge's right edge
+  above the view legend (z 8 vs 7); the cell clips it, so a very short pane
+  can cut the menu off.
 - `multiSelectViews`, `clearMultiSelect`.
-- `refreshPaneInteractions`.
+- `refreshPaneInteractions` — re-inits every view's zoom (`initZoom`), fits the
+  canvases, then re-derives the 1:1 scale of every view `initZoom` flagged
+  native (View ▸ Native Resolution on), since that scale depends on the box
+  `fitCanvasesToCells` just laid out. A pane's `init` schedules a second call
+  one frame later, which re-inits zoom AGAIN — so after any pane rebuild every
+  view is either fitted or, with the mode on, at 1:1.
 - `scrollViewStripTo(viewName)` — scroll that view's strip item into sight.
   `.view-strip-list` is `overflow-y: auto`, so on a project with more cameras
   than fit the column, arrow-cycling the solo view would otherwise move the
@@ -9098,7 +9364,14 @@ always analyses the WHOLE session's identities. Each result it returns carries
 included), which the Track All summary box shows (`ui/track-summary.js`); it is
 not saved — `serializeIdSwitchReview` (`ui/id-switch-review.js`) picks its fields explicitly.
 
-**The image check.** Needs the session's videos (else it says why). Not a GPU:
+**The image check.** Needs the session's videos (else it says why), and the
+network the first time, to download the model: offline, an error the embedder
+marks `cannotRun` (ui/image-embedder.js — a failed download, or no Nose/TTI) is
+returned as the reason rather than thrown as a failure, so the status reads
+"Check ID Switches (images): needs an internet connection to download the image
+model (…)" and, after tracking, "skipped — …" — where it used to be "failed —
+Failed to fetch dynamically imported module: https://cdn.jsdelivr.net/…" (the
+original goes to the console). Not a GPU:
 without one the embedder runs the model on the CPU (`pickImageDevice` /
 `createCpuModelPool`, ui/image-embedder.js), ~15x slower, and the check runs as
 usual — from the menu and after tracking alike. It used to refuse ("needs WebGPU —
@@ -9165,17 +9438,20 @@ or a new tracking pass. The tab shows a heading, per-check counts, "About these
 flags" (the method, calibration figures, sampling rate, frame-rate warning and
 the image backend note), a sticky toolbar ("N of M reviewed", **Next
 unreviewed ▸** — the next unticked row after the current one, wrapping —
-**Clear**, and "Show N later encounters that still look swapped"), then one row
+**Clear**, and "Show N later encounters that still look swapped" — only for
+results restored from files saved before 2026-10-11: the checks no longer make
+repeats), then one row
 per change point: a **reviewed** checkbox, time, `id_a ↔ id_b` (each name in its
 identity's colour, as in the overlays), score, the encounter's span ("close
 4:59.6–5:01.7 (frames 17,977–18,105)") with an **end ⇥** button, and
 "frame N · check · note" (Both / size / images; "follows the switch at m:ss";
-"labelling changes here; earlier encounters look swapped"; "still swapped"). A
-change point both checks found (same pair within 1 s) is ONE "Both" row (scores
-"size / image"). Clicking a row navigates there; ticking it dims the row and its
+"labels change back here" on an 'end'; "still swapped" on a restored repeat). The
+score is shown to one decimal (`fmtScore`; whole numbers for the summed-evidence
+scores of files saved before 2026-10-09). A change point both checks found (same
+pair, overlapping contacts) is ONE "Both" row (scores "size / image"). Clicking a row navigates there; ticking it dims the row and its
 seekbar tick (`reviewed`). **Where a row lands:** an encounter's frame is the
-LAST close sample (the labels are read from the tracklets AFTER it), so a swap
-happens before it, while the animals are close; clicking a row therefore lands
+LAST close sample (the labels are compared before and after the contact), so a
+swap happens before it, while the animals are close; clicking a row therefore lands
 `ID_SWITCH_LEAD_IN_SECONDS` (1 s) before the close spell STARTS
 (`idSwitchLeadInFrame`, from the flag's `startFrame`; its end frame when the start
 is unknown, e.g. a file saved before start frames were kept), so pressing play
@@ -9267,7 +9543,9 @@ ids, are what a reopened project still agrees on); `idSwitchPrimary(res)` (chang
 points), `idSwitchMarkers(res)` (+ repeats), `idSwitchOnsets(res)` (the
 "possible switches" count), `idSwitchEncounterCount(res)`;
 `linkIdSwitchResults(results)` (tag each marker's `cue`, link a size and an image
-change point of the same pair within 1 s as `agree` — "Both");
+change point of the same pair at the same contact as `agree` — "Both": their close
+spells overlap, give or take 1 s, since the two checks merge contacts by their own
+evidence; or, without start frames, they end within 1 s — the nearest one wins);
 `serializeIdSwitchReview(session)` -> payload or `null` (no check results -> no
 key, so untouched projects keep their bytes); `ingestIdSwitchReview(session,
 payload)` (rebuilds `session._idSwitch`, re-links "Both"; ignores anything
@@ -9571,6 +9849,26 @@ decode + crop ceiling rose from 145 to ~270 crops/s at 3 views (decoding alone:
 7.9 s vs 8.3 s with cropping) — headroom for a GPU faster than ~145 crops/s.
 Numbers in `ui/id-switch-modal.js`.
 
+**Offline, or a host blocked (`asModelDownloadFailure`).** The runtime
+(cdn.jsdelivr.net) and the model (huggingface.co) download on first use, and
+without the network both reject with a bare TypeError that names no cause —
+"Failed to fetch dynamically imported module: <url>" and "Failed to fetch" in
+Chrome (measured), other wordings in Firefox and Safari — which the status line
+used to print verbatim ("failed — Failed to fetch"). Every such wording, from
+either download (and onnxruntime's own failed `.wasm` fetch, which it wraps in a
+plain Error), becomes `MODEL_OFFLINE_REASON` as a `cannotRun` error, which
+`runImage` (ui/id-switch-modal.js) reports as the reason the check cannot run —
+a skip after tracking — rather than a failure. Anything else is left alone. The
+CPU workers classify it themselves, where the error is still a real one, and post
+the flag across. **A retry needs no reload** (`importTransformers`): Chrome keeps
+a failed dynamic import of a URL failed for the page's lifetime — re-importing it
+rejects even once the network is back (measured) — so the runtime is imported
+once, and a retry after a failure imports it under a new FRAGMENT (`#retry1`):
+the same request, since a fragment is never sent, but a new module-map entry.
+`loadImageModel` and `loadWebNNModel` share it, so the page never holds two copies
+of the runtime. `createImageEmbedder`'s two preflight throws (no videos, no
+Nose/TTI) are `cannotRun` errors too.
+
 **Key exports.** `createImageEmbedder(session, {onStatus, maxViewsPerAnimal, webnn, keyframes})` ->
 `{getEmbeddings, prepareFrames, releaseFrames, backend, device, busyMs, stats, inFlight, views}` (the provider
 `checkImageSwitches` needs; `releaseFrames` also terminates the crop pool and the
@@ -9586,6 +9884,10 @@ force a device / worker count (tests, benchmarking);
 `CPU_MODEL_MAX_WORKERS`; `createCpuModelPool(count, onStatus)` -> `{size, run(data, n) ->
 Promise<Float32Array[]>, terminate()}`;
 `loadImageModel(onStatus)` (WebGPU; once, cached promise);
+`importTransformers()` (the runtime, imported once; re-imported under a new fragment
+after a failure); `cannotRun(reason, cause)` (an Error whose message is the reason
+the check cannot run, flagged `cannotRun`); `asModelDownloadFailure(err)` (a failed
+download as `MODEL_OFFLINE_REASON`, else `err` unchanged); `MODEL_OFFLINE_REASON`;
 `selectViews(geos, maxViews)`; `EMBED_MAX_BATCH`, `EMBED_IN_FLIGHT`,
 `summarizeEmbedTiming(tm, backend, dtype)`, `formatEmbedTiming(t)`;
 `describeAdapter(info)`, `gpuAdapterInfo(device, adapter)` -> `{name, fallback}`,
@@ -9649,7 +9951,12 @@ the keyframe line of `formatEmbedTiming` in
 the direct-read control that finds nothing) in `tests/test-lazy-residency.mjs`; the crop pool in `tests/e2e/image-crop-worker.mjs`;
 keyframe sampling on generated 60 fps H.264 and AV1 (keyframes every 30 frames vs one) in
 `tests/e2e/image-keyframe-sampling.mjs` (keyframe index, one decoded packet per
-sample, bit-identical planes, sparse video unchanged); accuracy on real data by
+sample, bit-identical planes, sparse video unchanged); a failed download in
+`tests/test-image-model-download.mjs` (every browser's wording becomes the reason,
+nothing else does; the summary row) and `tests/e2e/image-check-offline.mjs` (the
+real app with every off-localhost request aborted after boot: the runtime and the
+weights, on the GPU and CPU paths, a retry in the same page, after Track All, and
+two negative controls; confirmed to fail on the pre-fix build); accuracy on real data by
 `tests/e2e/_diag-image-keyframe-snap.mjs` (diagnostic, not in the suite);
 the full path on real data by a scratch harness (not in the suite: it needs the
 proofread videos and GPU) — see the image-check notes above.
@@ -9689,15 +9996,19 @@ WebAssembly gets one thread without cross-origin isolation. See
 `ui/image-embedder.js` ("The CPU path") for the measurements.
 
 **Messages.** IN `{type: 'load'}` -> `{type: 'loaded'}` (while downloading:
-`{type: 'progress', loaded, total}`) or `{type: 'error', message}`; IN `{type:
+`{type: 'progress', loaded, total}`) or `{type: 'error', message, cannotRun}`
+(`cannotRun`: a failed download, `message` then being `MODEL_OFFLINE_REASON` —
+classified here by `asModelDownloadFailure`, where the error is still a real
+one); IN `{type:
 'run', id, data: Float32Array(n x 3 x 224 x 224) (transferred), n}` -> `{type:
 'result', id, cls: Float32Array(n x 384) (transferred), dim}` — each crop's CLS
 token, read exactly as the main thread's `clsVectors` does — or `{type: 'error',
 id, message}`.
 
-**Imports from project modules.** `ui/image-embedder.js` (`TRANSFORMERS_URL`,
-`IMAGE_MODEL_ID`, `INPUT` — so the pin stays in one place), then the runtime from
-`TRANSFORMERS_URL` (a dynamic cross-origin import, which a module worker may do).
+**Imports from project modules.** `ui/image-embedder.js` (`importTransformers`,
+`asModelDownloadFailure`, `IMAGE_MODEL_ID`, `INPUT` — so the pin stays in one
+place), then the runtime through `importTransformers` (a dynamic cross-origin
+import of `TRANSFORMERS_URL`, which a module worker may do).
 
 **Spawned by.** `ui/image-embedder.js` (`createCpuModelPool`).
 
@@ -9705,7 +10016,8 @@ id, message}`.
 which has no GPU: vectors bit-identical to the main thread's per animal and camera,
 a responsive page, worker teardown, and the real dialog — the after-tracking path —
 running instead of refusing); `tests/e2e/id-switch-image-check.mjs` §4 (the dialog
-with no GPU runs to the end and finds the switch).
+with no GPU runs to the end and finds the switch); `tests/e2e/image-check-offline.mjs`
+(offline: the reason, not "Failed to fetch").
 
 ---
 
@@ -9734,7 +10046,10 @@ handler elsewhere and listed for reference only. The two **mouse gestures** on
 an instance — `moveInstance` (`Alt+Drag`) and `rotateInstance` (`Alt+Wheel`,
 issue #198) — are in the catalog for the same reason: they have no key to
 rebind, so they are reference-only, but they belong in Settings ▸ Keyboard
-Shortcuts and the Hot Keys modal where people look for them.
+Shortcuts and the Hot Keys modal where people look for them. So is
+`nativeResolution` (`Shift+0`, View ▸ Native Resolution): matched BY PHYSICAL
+KEY (`e.code === 'Digit0'`) in `ui/ui-wiring.js`'s transport handler beside
+`+` / `-` / `0`, since Shift+0 types `)` on a US layout.
 
 **Key exports.**
 - `getDefaultTriangulationMethod()` / `setDefaultTriangulationMethod(method)` —
@@ -9996,10 +10311,21 @@ when the bar appears/disappears.
 - `Timeline` — class. Selected methods: `setData(session)`,
   `setCurrentFrame(frameIdx, opts?)`, `setTotalFrames(n)`, `setZoom(level)`,
   `scrollTo(frameIdx)`, `resize`, `redraw`, `destroy`,
-  `setDisplayMode(mode)`, `refreshTracks(session, opts?)`,
+  `setDisplayMode(mode)`, `refreshTracks(session, opts?)`, `recolorTracks()`,
   `setFrameModified(frameIdx, modified)`, `getPreferredHeight`,
   `getCameraGroups`, `getLabelLines`, `getRowCount`,
   `getTrackAreaElement`.
+
+**Track rows follow the Tracks / Identity coloring.** The constructor takes
+`options.getColorByIdentity` (`pose/initialization.js` passes a reader of
+`state.colorByIdentity`), and a track row's bar is `getTrackColor(trackIdx,
+colorByIdentity)`, so the bar wears the palette the canvas draws that track in.
+Rows whose color comes from a track index carry `_trackColored` (not the No ID
+track's gray, not the "+N more" or empty rows); `recolorTracks()` repaints just
+those in the current mode's palette and redraws. It does NOT rebuild: segments
+do not depend on the mode, and `_buildTrackSegments` walks every frame of every
+camera. The Tracks / Identity change handler (`ui/ui-wiring.js`) calls it.
+Covered by `tests/e2e/unidentified-track-palette.mjs`.
 
 **Possible-ID-switch markers** are no longer drawn here — they moved to the
 transport seekbar (`ui/seekbar-markers.js`); the timeline's marker layer, its
@@ -10307,7 +10633,7 @@ so it loads cleanly in the headless node test runner without dragging in
 - `get{Camera,Track,Identity}VisibilityList(session)` — `[{ name, visible }]`
   (identity rows also include `id` and `color`). Track-row swatch color
   is intentionally NOT set by this module — `ui/info-panel.js` decorates
-  each track entry with `getTrackColor(i)` after the list returns so this
+  each track entry with `getTrackColor(i, state.colorByIdentity)` after the list returns so this
   module can stay free of `./overlays.js` (and the wider import graph) and
   load cleanly in the headless node test sandbox.
 - `renameHiddenTrack(session, oldName, newName)` /
@@ -10532,10 +10858,18 @@ a 100 fps recording and nearly 2 s of a 30 fps one. DOM-free and import-free, so
 - `MAX_TRAIL_FRAMES` (500) — `LAZY_KEEP_BEHIND` (512) must stay above the longest
   trail, since trails draw resident frames only; without the cap a 2 s trail on a
   300 fps recording would be 600 frames, so from 250 fps up 2 s draws 500. The test asserts the inequality.
+- `setTrailSeconds(state, seconds)` / `onTrailSecondsChange(fn)` — THE setter for
+  `state.trailSeconds`, the `ui/color-by.js` pattern: it sets the state and, only
+  on a change (it returns whether there was one), runs the ONE handler ui-wiring
+  registers — both menus' checkmarks, the Trails button's blue and tooltip, a
+  redraw. The menus go through it, and so does Track All (`pose/tracker.js`),
+  which cannot import ui-wiring. A throwing handler is logged, never re-raised.
+- `TRACK_ALL_TRAIL_SECONDS` (0.25) — the length Track All turns trails on at;
+  a preset, so the menus check "¼ second" rather than "Custom".
 
 **Imports from project modules.** None.
 
-**Imported by.** `ui/app-state.js`, `ui/ui-wiring.js`.
+**Imported by.** `ui/app-state.js`, `ui/ui-wiring.js`, `pose/tracker.js`.
 
 ### ui/track-summary.js
 
@@ -10863,8 +11197,12 @@ stopping at the last frame; the step transport buttons/keys stop it first.
   handler registered here via `onColorByChange`: update the active class,
   re-render the 2D overlays via `drawAllOverlays` AND the 3D viewer via
   `update3DViewport` (whose `getGroupColor` closure reads
-  `state.colorByIdentity` live, so instances recolor instantly). The buttons
-  use it, and so does the tracker after Track All (#242).
+  `state.colorByIdentity` live, so instances recolor instantly), and — since a
+  track's color changes palette with the mode (`getTrackColor`) — recolor the
+  timeline's track rows (`timeline.recolorTracks()`) and the Visibility tab's
+  track swatches (`populateTimelineVisibility`). The buttons use it, the
+  tracker after Track All (#242), and Tracks ▸ Propagate Tracks → IDs, which
+  used to set `state.colorByIdentity` directly and skip it.
 - Node Trails (issue #102): two pickers for `state.trailSeconds` — the Tracks ▸
   Node Trails submenu (`#menuTrailsSubmenu`, items `menuTrailsOff` /
   `menuTrailsQuarter` / `menuTrailsHalf` / `menuTrailsSecond` / `menuTrailsTwoSeconds`) and the toolbar's
@@ -10907,6 +11245,21 @@ stopping at the last frame; the step transport buttons/keys stop it first.
   toolbar lock (it changes what is drawn, not what is annotated). Covered by
   `tests/e2e/node-trails-toolbar.mjs` (including the frame counts following the
   FPS pill) and `tests/test-trail-presets.mjs`.
+  **Trail shade.** Both menus hold two radio groups under small headings
+  (`.trail-menu-heading`, each group a `role="group"`): **Length** (the items
+  above) and, after a separator, **Shade** — one item per `TRAIL_SHADES` entry
+  (`ui/overlays.js`; `data-trail-shade`, menubar ids `menuTrailsShade<Key>`, e.g.
+  `menuTrailsShadeVeryDark`), each with a swatch (`.trail-shade-swatch`): the
+  first track color running into that shade's trail from newest to oldest, the
+  contrast the choice is about. A pick goes through `setTrailShade`, which sets
+  `state.trailShade`, moves the checkmark in both menus, redraws and names the
+  shade in the status bar ("… (trails are off)" while they are). Default Dark.
+  Unlike the length, the shade is **remembered** in `localStorage`
+  (`nodeTrailShade`, best-effort, read once at setup; an unknown value keeps the
+  default): it is display taste, like the Visibility panel's appearance prefs,
+  and loading a project reloads the page. It never reaches the `.slp`. The
+  button's tooltip still names only the length. Covered by
+  `tests/e2e/node-trail-shade.mjs`.
 - Node Style: the four per-section Node Style button groups
   (`visUserNodeStyle` / `visPredNodeStyle` / `visReprojNodeStyle` /
   `vis3dNodeStyle`) reuse the `.line-style-btn` click handler (active toggle +
@@ -10970,10 +11323,19 @@ stopping at the last frame; the step transport buttons/keys stop it first.
   background `lazyPlaybackLoader`: it keeps `LAZY_PLAYBACK_AHEAD` (600) frames
   hydrated ahead of the playhead and calls `evictLazyFrames(cur)` after each
   top-up, so what playback leaves behind is dropped (`pose/lazy-residency.js`).
-  The Play button and Space preload the same window before starting. It was
+  The Play button, Space and the seekbar's resume preload the same window
+  before starting. It was
   5000 frames with no eviction, which kept every played frame resident; the
   lookahead and the eviction's protected ahead-window are one constant, so they
   cannot drift apart.
+  **A click or drag on the seekbar keeps the video playing or paused, as it
+  was.** The scrub pauses (`scrubToFrame` always stops playback); a press that
+  began while playing — or while a previous press's resume was still pending
+  (`videoController.resumePending`) — calls `videoController.resumeAfterScrub`
+  on release, which plays on from wherever the scrub lands. It used to leave the
+  video paused at the clicked frame. A video-less project does the same with
+  its timer (`stopNoVideoPlayback` on the press, `startNoVideoPlayback` on the
+  release). Covered by `tests/e2e/seekbar-click-keeps-playback.mjs`.
 - Toggles: `toggleInfoPanel`, `refreshInfoPanelAfterShow`,
   `updateInfoPanelToggleBtn`, `toggle3DViewport`,
   `update3DViewportToggleBtn`, `toggleTimeline`,
@@ -10982,6 +11344,15 @@ stopping at the last frame; the step transport buttons/keys stop it first.
   `setGridMode`, `updateVideoGridDisplay`, `showViewIndicator`. See
   **Single-view ("solo") mode** below.
 - Playback: `applyPlaybackRate`, `seekToLabeledFrame`.
+- View ▸ **Native Resolution (1:1)** (`menuNativeResolution`) and **`Shift+0`**
+  (matched by `e.code === 'Digit0'` in the transport keydown handler, beside
+  `+` / `-` / `0`, so only while real video is loaded) both call
+  `videoController.toggleNativeResolution()` (`loading/video.js`). The menu
+  tick (`.trail-check`) is refreshed when the View menu is clicked open, from
+  `nativeResolutionActive()` — whether it is on is derived from the views, so
+  asking at open time cannot go stale. `updateVideoGridDisplay` and the
+  `setGridMode` layout restore carry each view's `zoom.native` across the pane
+  rebuild (a restored 1:1 view gets `reapplyZoom`, not the old box's scale).
 - View ▸ **Define Planes** (`menuDefinePlanes`) → `togglePlaneMode()`
   (`ui/plane-definition.js`) — enters/leaves "Defining Plane Mode". A mode, not
   a modal, so it has no Esc binding; the banner's Exit button is the way out.
@@ -11183,6 +11554,8 @@ header for the full list. Notable ones: `app-state.js`,
 `sessions-panes.js`, `settings.js`, `settings-modal.js`,
 `track-range-modal.js` (`showTrackRangeModal`, wired to the Track Frame split
 button's `#tbTrackFrameRange` dropdown item — #212),
+`animal-count-field.js` (`wireAnimalCountField`, the Track group's Animals
+field),
 `view-align-modal.js` (`showAlignViewsModal`, wired to View ▸ "Align Views to
 References…" — #226),
 `seekbar-tooltip.js` (`installSeekbarTooltip`, the seekbar's hover tooltip —
@@ -11200,8 +11573,12 @@ unless the frame count or FPS changed),
 Identity toggle, also flipped by the tracker after Track All — #242),
 `trail-presets.js` (`TRAIL_PRESETS`, `MAX_TRAIL_FRAMES`, `trailPresetFor`,
 `trailLabel`, `trailFrames`, `trailRate`, `formatTrailSeconds`,
-`trailSecondsForFrames`, `parseTrailSeconds`, `parseTrailFrames` — the Node
-Trails menus and their Custom… dialog),
+`trailSecondsForFrames`, `parseTrailSeconds`, `parseTrailFrames`,
+`setTrailSeconds`, `onTrailSecondsChange` — the Node Trails menus and their
+Custom… dialog; the change handler is registered here, so a length set by Track
+All syncs the menus too),
+`overlays.js` (`TRAIL_SHADES`, `TRACK_COLORS`, `trailShadeFor`, `trailColor` —
+the menus' Shade group and its swatches),
 `video-filters.js` (`setSessionRotation`; `clampRotation` still comes in via
 `sessions-panes.js`, which re-exports it), `plane-definition.js`
 (`togglePlaneMode`).
@@ -11255,6 +11632,9 @@ imports the modal. The menu is revealed purely by `:hover`, which is
 worth knowing when driving it from a test: a modal opening over the toolbar
 drops hover, so a second click on the item has to re-hover the button first (see
 `tests/e2e/track-frame-range.mjs`).
+
+**The Animals field (`#tbNumAnimals`)** is wired by `wireAnimalCountField()`
+from `ui/animal-count-field.js`, which owns it (see that entry).
 
 **Track / Identity menu modals.** The `Tracks` menu's New / Rename / Delete
 actions for both tracks and identities open shared private modal helpers in
@@ -11326,7 +11706,7 @@ single source of truth for the Settings panel). The remaining shortcuts keep
 their own dedicated handlers and appear as **fixed** reference entries (not
 rebindable): `Mod+S` Save (works while typing), transport (`←/→`, `Space`,
 `Home`/`End`, `Opt+←/→`), the `1–9` identity / `Shift+1–9` track digit ranges,
-zoom (`+`/`-`/`0`), `Shift+R`+rotate, `Delete` plus the legacy `c`
+zoom (`+`/`-`/`0`, and `Shift+0` native resolution), `Shift+R`+rotate, `Delete` plus the legacy `c`
 confirm-group alias (`groupConfirmLegacy`, canvas-context ops in
 `interaction.js`), and `Mod+J`/`Mod+Shift+J` (timeline-controller).
 `Enter`/`Escape` remain hard-coded modal-button special cases.
@@ -12321,7 +12701,15 @@ filesystem enumeration, decoder rebuild.
   `attachVideosForLazyReopen` and the SLP import.
 - View/grid: `createViewForVideoFile`, `removeVideoFile`, `updateGridLayout`,
   `createVideoPromptCell`, `fitCanvasesToCells`, `cellResizeObserver`,
-  `rebuildVideoController`, `updateTotalFrames`.
+  `reapplyAllZoom`, `rebuildVideoController`, `updateTotalFrames`.
+  `reapplyAllZoom()` runs `videoController.reapplyZoom` on every view — what
+  `cellResizeObserver` does after `fitCanvasesToCells`, and what a
+  devicePixelRatio change does: a module-level `matchMedia('(resolution: Ndppx)')`
+  watcher (re-armed on each change) calls it, because a view at native
+  resolution is scaled in DEVICE pixels and dragging the window to a display
+  with another DPR resizes nothing, so no ResizeObserver fires. Headless DPR
+  emulation fires neither that event nor a resize, which is why
+  `tests/e2e/native-resolution-zoom.mjs` calls `reapplyAllZoom` itself.
   `removeVideoFile(videoFile)` is `createViewForVideoFile`'s inverse and the
   whole of the Videos tab's **Remove Video** (luc3d #216): it closes the dock
   pane (`paneManager.removeVideoPanel`), drops the view from `state.views` —
@@ -13463,6 +13851,19 @@ artificially slow decoder decode fewer frames than requests) and
 `tests/e2e/arrow-key-coalesced-stepping.mjs` (drives the REAL keydown
 handler, proves every ArrowRight press routes through `scrubToFrame`).
 
+**`resumeAfterScrub(prepare)` — play on from where a scrub lands.** A scrub
+stops playback, so the seekbar (on release of a press that began while
+playing) asks for it back. It waits for the scrub queue to drain
+(`_scrubSettled`, resolved by `_processScrub` once no target is in flight or
+queued), then for the optional `prepare(frame)` promise (the app hydrates a
+lazy project's frames ahead, as Play does), then `startPlayback()` at
+`state.currentFrame`. Starting before the scrub drains would let a queued seek
+paint over the playing video. It stays pending (`resumePending`) until playback
+starts, and any later `scrubToFrame` or `stopPlayback` cancels it — so an arrow
+step in that window leaves the video paused, while a second seekbar click reads
+`resumePending` as "still playing". Covered by
+`tests/e2e/seekbar-click-keeps-playback.mjs`.
+
 **Playback overlay/video sync — native default + per-frame throttling
 (issue #115 follow-up).** During playback the pose overlay drifted a few
 frames AHEAD of the video ("the tracking leads the video"; stepping one
@@ -13609,11 +14010,105 @@ records as `zoom.baseW/baseH`. When a cell is resized, `reapplyZoom` rescales th
 offset by the base-size ratio (`offset *= newBase/oldBase`) before re-clamping, so
 a zoomed-in image keeps the same region centered instead of jumping.
 
+**Wheel zoom stays under the cursor — through the WHOLE transform.**
+`zoomVideo(view, factor, cssX, cssY)` anchors through `_zoomAbout`, which
+inverts `applyZoom`'s full transform: a canvas-box point u is drawn at
+`flex + off + c + R·(u∘s − c)` (the wrapper's flex-centring offset in its cell,
+then its rotation R about its own centre c). The old `q − (q − off)·s/s0`
+dropped the flex term, so in a letterboxed axis the picture slid out from under
+the cursor by 10% of that offset per notch (14 video px per notch, measured).
+An axis whose picture still FITS its pane is re-centred by `_constrainOffsets`
+on every step regardless — anchoring can only hold along an overflowing axis.
+
+**Native resolution (1:1).** View ▸ Native Resolution / `Shift+0`
+(`setNativeResolution`, `toggleNativeResolution`) shows a view at ONE VIDEO
+PIXEL PER DEVICE PIXEL, so the picture is not resampled at all. It is a zoom
+scale, not a second display path: the backing canvas is already the video's
+native size (`canvas.width = videoWidth`), only the wrapper's CSS transform
+scales it. Measured with seeded noise against real screenshots
+(`tests/e2e/native-resolution-zoom.mjs`), two things are needed and each alone
+breaks it:
+- **A scale PER AXIS** (`nativeZoomScales` → `{x, y}`, stored as `zoom.scale` /
+  `zoom.scaleY`, written `scale(sx, sy)`). `fitCanvasesToCells` floors the canvas
+  box to whole CSS px, so its aspect is a hair off the video's (561×400 for
+  1680×1200); one uniform scale left the vertical axis resampled by ~0.3% and
+  1.6% of pixels exact. A fractional CSS height does NOT fix it — Chrome lays out
+  in 1/64 px and still came out 0.03 px short. `zoom.scaleY` exists only while
+  `zoom.native` (`_scaleY(z)` reads it), so every other zoom is unchanged.
+  `_rotatedBBox` / `_constrainOffsets` / `zoomToRect` and the rotated-view path of
+  `InteractionManager.canvasToVideo` read it.
+- **A pan on the device-pixel grid** (`_alignNativeOffsets`, run by
+  `applyZoom` while native). Chrome snaps the wrapper's own layout position to
+  whole device pixels before a non-translation transform, so what remains to
+  align is where the transform puts the canvas's top-left — `off + c − R·c`. A
+  half-device-pixel pan scored 2.4% exact.
+Exact at an integer devicePixelRatio — dpr 1 and 2, headless AND a headed,
+GPU-composited window on a Retina Mac — and, headless, at 1.25 and 1.5 too. At
+dpr 2.2 (110% browser zoom on Retina) no pan or box correction gets below a
+smooth error curve: Chrome resamples the canvas whatever the transform says, so
+the video is shown at its native SIZE but not pixel-exact. The test asserts
+only the size at fractional DPRs and prints the exact share.
+
+How it behaves:
+- **Derived, not latched.** `state.nativeResolution` is true exactly when every
+  shown view (`_zoomableViews`: laid out and `isViewShown`) has `zoom.native`;
+  `_syncNativeMode` recomputes it after every zoom change, so the menu tick
+  cannot disagree with the screen. A wheel snap that puts the solo view at 1:1
+  turns it on; zooming away turns it off.
+- **Held across everything that moves the 1:1 scale** — it depends on the box
+  and on devicePixelRatio. `reapplyZoom` re-derives it about the cell centre
+  for a native view (cell resize, `reapplyAllZoom` on a DPR change). A pane
+  rebuild re-inits every view: `initZoom` seeds `zoom.native` from
+  `state.nativeResolution`, and `refreshPaneInteractions` then re-derives the
+  scale for the new box — so cycling the solo camera keeps 1:1.
+- **OFF clears every view**, shown or hidden: a pane rebuild restores hidden
+  views' saved zoom (`updateVideoGridDisplay`), and a stale flag would bring one
+  back at 1:1. ON flags hidden views for the same reason.
+- **The snap.** `zoomVideo` passes each step through `snapZoomToNative`: a step
+  that crosses the view's 1:1 scale, or ends within `NATIVE_SNAP_TOL` (2%) of
+  it, lands exactly on it (`zoom.native` set) and returns true; a step from 1:1
+  leaves it. The `[fit, 10x]` range stretches to include 1:1 — a video smaller
+  than its pane can be zoomed OUT to 1:1, which is then the floor. The wheel
+  handler adds a HOLD: after a snap, same-direction wheel events are swallowed
+  until the wheel rests `NATIVE_SNAP_HOLD_MS` (250 ms), each swallowed event
+  extending it, so a fast spin or trackpad momentum stops at 1:1 and a fresh
+  gesture goes on past it; a reversal is never held. `+` / `-` snap on the way
+  with no hold (each press is discrete). Box zoom never snaps.
+- **The pane badge reads the zoom as a percentage of 1:1** — `zoomPercentLabel`
+  (exported, pure): 100% is one video pixel per device pixel, 125% is zoomed
+  in past it, 65% shows less. Only a view HELD at 1:1 reads exactly "100%"; one
+  within rounding of it but not held (off the pixel grid, or a hair off the
+  scale — so still resampled) reads "99.8%" or "≈100%" instead. "Zoomed" when
+  no 1:1 scale is known (canvas not laid out). It shows at 1:1 even when 1:1
+  happens to equal the fit, being the only sign a wheel zoom snapped there.
+  Set by `applyZoom`, so it follows every zoom, resize and DPR change; the same
+  call toggles `.video-cell.native-resolution`. Tabular figures, so it does
+  not jitter while wheel-zooming.
+- **Hovering the badge offers presets** (`ZOOM_PRESET_PERCENTS`: 50 / 100 / 150
+  / 200 %, plus Fit; the menu is built in `ui/sessions-panes.js`). They act on
+  that pane's view only, about the cell centre: `setZoomPercent(view, 100)` is
+  `_enterNative` (exact, held, turns the mode on if it was the last view off
+  1:1); any other value is a plain uniform zoom of `pct/100 ×` the 1:1 scale.
+  A preset is NOT clamped to the wheel's range — 50% below fit is honoured —
+  and the wheel's range in turn stretches to wherever the view already is
+  (`lo = min(fit-min, 1:1, current)`, `hi = max(10, 1:1, current)`), so a notch
+  from 50% goes to 55% instead of jumping back up to fit.
+- Grid views are each put at their own 1:1, centred, like `+`/`-`/`0` acting
+  on every view.
+
 **Key exports.**
 - `videoLog(msg, level)` — namespaced logger.
 - `STEP_CURSOR_IDLE_MS` (3000) — idle time before a paused-stepping stream closes.
 - `STEP_BACK_CHUNK` (24) — frames decoded and cached per backward step.
 - `STEP_BACK_WARM_MS` (250) — pause after landing on a frame before warming the chunk behind it.
+- `snapZoomToNative(oldScale, newScale, nativeScale)` → `{scale, snapped}` — the
+  pure snap rule (see **Native resolution** above). `NATIVE_SNAP_TOL` (0.02),
+  `NATIVE_SNAP_HOLD_MS` (250).
+- `zoomPercentLabel(scale, nativeScale, isNative)` → the pane badge's read-out
+  ("125%", "100%", "≈100%", "Zoomed"; see **Native resolution** above).
+- `ZOOM_PRESET_PERCENTS` (`[50, 100, 150, 200]`) — the badge menu's presets.
+- `zoomRatioLabel(pct)` — a percentage as screen:video pixels in lowest terms
+  (`200` → `"2:1"`, `150` → `"3:2"`), the hint beside each preset.
 - `OnDemandVideoDecoder` — class. Selected methods: `init(source)`,
   `getFrame(frameIndex)` (mediabunny: via `_mbGetFrame`, the open stepping
   stream), `releaseStepCursor()`, `releaseFrames()` (closes and drops every
@@ -13672,8 +14167,13 @@ a zoomed-in image keeps the same region centered instead of jumping.
   since its stepping moved to mid-frame seeks, see `_html5Moved` above),
   `_startBufferedPlayback` / `_bufferedPlaybackEnabled` (buffered
   video-led mediabunny playback, issue #115),
-  `setupSeekbar`, `setupKeyboardHandlers`, `initZoom`, `applyZoom`,
-  `zoomVideo`, `resetZoom`, `zoomToRect`, `zoomAllVideos`,
+  `setupSeekbar`, `setupKeyboardHandlers` (NOT called by the app — the live
+  transport and zoom keys, `Shift+0` included, are in `ui/ui-wiring.js`), `initZoom`, `applyZoom`,
+  `zoomVideo` (returns true when the step snapped to 1:1), `resetZoom`,
+  `zoomToRect`, `zoomAllVideos`, `nativeZoomScales(view)` (`{x, y}` or null
+  while not laid out), `setNativeResolution(on)`, `toggleNativeResolution()`,
+  `nativeResolutionActive()`, `zoomPercent(view)` (% of 1:1, or null),
+  `setZoomPercent(view, pct)` (the badge presets), `reapplyZoom`,
   `resetAllZoom`, `setupZoomHandlers`.
 
 **Only the views on screen are decoded, played and captured** —
@@ -13728,10 +14228,21 @@ keyboard transport.
 ### import-export/visibility-metadata.js
 
 **Purpose.** The `metadata.lucid` ↔ `Session` mapping for the Visibility panel's
-SESSION-SCOPED settings — and for the other per-session panel state that belongs
-in the project file: the ID Switches tab's review checklist (`idSwitchReview`,
-`ui/id-switch-review.js`). One module owns the key list so a writer and a reader
-cannot drift: adding a setting means touching this file and nothing else.
+SESSION-SCOPED settings — and for the other per-session state that belongs in
+the project file: the ID Switches tab's review checklist (`idSwitchReview`,
+`ui/id-switch-review.js`) and the number of animals tracking uses
+(`numAnimals` ↔ `Session.numAnimals`, the toolbar's Animals field). One module
+owns the key list so a writer and a reader cannot drift: adding a setting means
+touching this file and nothing else.
+
+**`numAnimals`.** A positive integer or `"auto"`. A never-asked session
+(`null`) writes nothing, so it is asked again after a reopen exactly as a new
+session is, and anything else read back (0, 2.5, `"3"`, `"AUTO"`) is treated
+the same way. The read assigns unconditionally, so a file without the key
+leaves `null`, never a stale value. The two helpers (`serializeNumAnimals` /
+`ingestNumAnimals`) are private to this module rather than in
+`pose/tracker.js`, which this module cannot import: it is loaded in the Node
+test sandbox (`tests/run-node.js`).
 
 **What it covers, and what it deliberately does not.** The Visibility panel
 holds two kinds of state:
@@ -13749,7 +14260,7 @@ holds two kinds of state:
 **Key exports.**
 - `VISIBILITY_METADATA_KEYS` — every key this module may write
   (`videoBrightness`, `videoContrast`, `videoRotation`, `hiddenCameras`,
-  `hiddenTracks`, `hiddenIdentities`, `idSwitchReview`). Exported so tests can assert a default
+  `hiddenTracks`, `hiddenIdentities`, `idSwitchReview`, `numAnimals`). Exported so tests can assert a default
   project carries none of them without duplicating the list.
 - `writeVisibilityMetadata(lucid, session)` — mutate a `metadata.lucid` dict in
   place, adding only non-default settings; returns the same dict.

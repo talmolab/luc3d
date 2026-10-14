@@ -19,6 +19,10 @@ import { isCameraTracked } from './settings.js';
 // drawFrameOverlays (which opens with a clearRect). Circular import — safe
 // because the call site is inside drawAllOverlays' body.
 import { drawPlaneOverlays, applyPlaneModeToolbarLock } from './plane-definition.js';
+// The toolbar's Animals field shows the ACTIVE session's count. Circular
+// (it reaches pose/tracker.js, which imports this module) — safe for the same
+// reason: the call site is inside drawAllOverlays' body.
+import { syncAnimalCountField } from './animal-count-field.js';
 
 // Pass 3f: editGroupState + finishEditGroup moved to ui/identity-assignment.js.
 import { editGroupState, finishEditGroup } from './identity-assignment.js';
@@ -319,6 +323,11 @@ export function drawAllOverlays(frameIdx, viewFrames) {
     // here rather than only at `enterPlaneMode`, where it would survive until
     // the first mouse move. A no-op when the mode is off.
     applyPlaneModeToolbarLock();
+    // Nothing announces a session change (each load path and the session
+    // switch assign `state.session` themselves), and every one of them ends in
+    // a draw — so the per-session Animals field catches up here. O(1) when the
+    // session and its count are the ones already shown.
+    syncAnimalCountField();
 
     var editGroupTarget = interactionManager ? interactionManager.editGroupTarget : null;
 
@@ -416,6 +425,7 @@ export function drawAllOverlays(frameIdx, viewFrames) {
         drawFrameOverlays(view.overlayCtx, view.name, overlayFrameGroup, vGroups, state.session, {
             colorByIdentity: state.colorByIdentity,
             trailLength: state.trailLength,
+            trailShade: state.trailShade,
             // NOT vis.showLegend: the live legend is pane chrome now
             // (`syncViewLegends`, below), because anything painted on this
             // canvas rotates with the view. `drawFrameOverlays` keeps the

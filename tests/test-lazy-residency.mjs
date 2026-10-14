@@ -488,8 +488,8 @@ group('the constants agree with the code they protect');
     // The playback loader's lookahead IS the protected ahead window.
     const wiring = fs.readFileSync(path.join(ROOT, 'ui', 'ui-wiring.js'), 'utf8');
     ok(!/batchLoadLazyFrames\([^)]*5000\)/.test(wiring), 'no 5000-frame playback lookahead is left');
-    ok((wiring.match(/batchLoadLazyFrames\([^)]*LAZY_PLAYBACK_AHEAD\)/g) || []).length === 3,
-        'Play, Space and the background loader all use LAZY_PLAYBACK_AHEAD');
+    ok((wiring.match(/batchLoadLazyFrames\([^)]*LAZY_PLAYBACK_AHEAD\)/g) || []).length === 4,
+        'Play, Space, the seekbar\'s resume and the background loader all use LAZY_PLAYBACK_AHEAD');
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);
