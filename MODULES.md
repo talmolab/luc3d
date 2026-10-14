@@ -1455,7 +1455,9 @@ for lazy-2D hydration), `insertNodeAt`/`removeNodeAt` (skeleton edits — these
 resize any backup alongside, so `restorePoints()` stays node-aligned),
 `permuteNodes(perm, seen)` (the skeleton's node ORDER changed — new node `s`
 takes old node `perm[s]`: coordinates, occlusion, backup, `nulledNodes`
-re-keyed; IN PLACE so an `adoptPointsFrom` alias stays shared, with one `seen`
+re-keyed, and the model's per-node scores — a NEW pool segment
+(`permutePointScores`), since segments are write-once and may be shared;
+IN PLACE otherwise, so an `adoptPointsFrom` alias stays shared, with one `seen`
 set across a whole-session walk so a shared buffer moves once; the placeholder
 is skipped; see `pose/session-node-order.js`),
 `backupPoints`/`restorePoints`/`hasBackup`.
@@ -3460,12 +3462,14 @@ this module reuses it so the two agree about what "the same nodes" means.
 **Imported by.** `ui/info-panel.js` (`adoptProjectSkeleton`).
 
 **Tests.** `tests/test-session-node-order.mjs` (one Instance — Number and
-Uint32Array occlusion, backup, `nulledNodes`, the placeholder; a whole eager
+Uint32Array occlusion, backup, `nulledNodes`, per-node scores (a shared segment
+left alone), the placeholder; a whole eager
 session with a hydration alias, pooled 3D, reprojections and shared result
 arrays, plus a negative control that renaming without re-ordering fails the
 checker; adoption across same / reordered / renamed / empty / refusing-lazy
-sessions; `SioLazyLoader` target order, composition, refusal and the shared
-project store with stub stores) and `tests/e2e/multi-session-skeleton-order.mjs`
+sessions; `SioLazyLoader` target order, composition, refusal, the shared
+project store, and `predictedPointScore` by name on re-ordered stores, with stub
+stores) and `tests/e2e/multi-session-skeleton-order.mjs`
 (every real path, eager and lazy, and the multi-session save's re-open).
 
 ### pose/triangulation-core.js
@@ -13899,7 +13903,9 @@ The node is NAMED and looked up in the order the camera's rows are in NOW —
 `_nodeOrderByCam`, which is the session skeleton's once `_unifyNodeOrder` has
 re-ordered a camera whose file lists the nodes differently (#296; the store's
 skeleton keeps the file's order, so reading it there gave every node its
-neighbour's score), else the store skeleton's. By name, not index, because a
+neighbour's score), or for `openProjectSlp`'s one shared store
+`_sharedNodeOrder`, which a skeleton adopted after loading moves the same way
+(`permuteNodes`, `pose/session-node-order.js`) — else the store skeleton's. By name, not index, because a
 skeleton edit after loading re-indexes the resident instances, so an index could
 pair a node with its neighbour's score; an added or renamed node simply has none. NaN for a user row (type 0, as
 `materializeFrame` reads it), an offset that is not an integer inside the

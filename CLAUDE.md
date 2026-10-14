@@ -693,8 +693,9 @@ wrong. Four rules:
   multi-session "Import skeleton for all sessions" prompt, a parent-folder or
   session-folder `skeleton.json`, the single-`.slp` folder load's. It compares
   each session's OWN `session.skeleton.nodes` with the new one: the same names
-  in another order are re-ordered (every Instance, `points3d`, reprojection,
-  `triangulationResults` entry, and a lazy session's store); different names
+  in another order are re-ordered (every Instance — per-node scores included —
+  `points3d`, reprojection, `triangulationResults` entry, and a lazy session's
+  store, whose `pred_points.score` moves with its rows); different names
   are applied by column, as before, and NAMED in the status line. The skeleton
   editor's rename / add / remove keep calling `setProjectSkeleton` directly —
   they change what a column is called, not which column holds which node.

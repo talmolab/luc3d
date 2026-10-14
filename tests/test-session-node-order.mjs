@@ -15,8 +15,9 @@
  * `SioLazyLoader.setTargetNodeOrder` / `permuteNodes`):
  *   1. one Instance: coordinates (NaN included), occlusion as a Number (<= 32
  *      nodes) and as a Uint32Array (> 32), the backup, `nulledNodes` re-keyed,
- *      the shared lazy placeholder never written, a node-count mismatch
- *      skipped;
+ *      the model's per-node scores (a NEW pool segment — a segment another
+ *      instance shares is left alone), the shared lazy placeholder never
+ *      written, a node-count mismatch skipped;
  *   2. a whole eager session: linked + unlinked instances, group members
  *      that ARE the linked instances, two Instances SHARING one `_xy` (the
  *      lazy hydration alias), pooled `points3d`, raw `reprojections`,
@@ -31,7 +32,9 @@
  *   4. `SioLazyLoader` (with stub stores): an explicit target re-orders every
  *      camera's store and survives later opens; `permuteNodes` composes;
  *      it refuses while a camera is loaded by column; `openProjectSlp`'s ONE
- *      shared store is re-ordered once, not once per camera.
+ *      shared store is re-ordered once, not once per camera; and
+ *      `predictedPointScore` still finds each node's OWN score by name on a
+ *      re-ordered store, per-camera and shared.
  *
  * A negative control in §2 checks the by-name checker itself: renaming without
  * re-ordering (what the old code did) must FAIL it.
@@ -116,6 +119,20 @@ console.log('\n1. Instance.permuteNodes');
         && [...Array(40).keys()].filter(i => bi.isOccluded(i)).length === 2,
         '40 nodes: a Uint32Array occlusion set moves its bits with the nodes');
     check(bi.getX(bigTo.indexOf('n7')) === 14, '40 nodes: coordinates move');
+
+    // The model's per-node scores live in a shared write-once pool; a re-order
+    // must give the instance a re-ordered segment and leave the old one (which
+    // another instance may share) exactly as it was.
+    const scored = makeInstance(from, 0);
+    scored.setPointScores(from.map(n => code(n) / 100));
+    const sharer = makeInstance(from, 0);
+    sharer.adoptPointScoresFrom(scored);
+    scored.permuteNodes(perm, new Set());
+    check(to.every((n, k) => Math.abs(scored.pointScore(k) - code(n) / 100) < 1e-6),
+        'per-node scores move with their nodes' + (to.every((n, k) => Math.abs(scored.pointScore(k) - code(n) / 100) < 1e-6) ? ''
+            : ' — got ' + to.map((n, k) => n + '=' + scored.pointScore(k).toFixed(2)).join(' ')));
+    check(from.every((n, k) => Math.abs(sharer.pointScore(k) - code(n) / 100) < 1e-6),
+        'an instance SHARING the old score segment keeps its own order (segments are never edited)');
 
     const ph = new Instance(lazyPlaceholderXY(NAMES.length), 0, 'predicted', 1);
     const before = ph._xy;
@@ -249,21 +266,29 @@ console.log('\n3. adoptSkeletonNodeOrder — across sessions');
 console.log('\n4. SioLazyLoader — stores re-ordered by name, the order recorded');
 {
     // A stub lazy store: instance j of camera c has its 6 point rows encoded
-    // by NAME (x = code, y = 10 * j), in the camera's own column order.
+    // by NAME (x = code, y = 10 * j, score = code / 100), in the camera's own
+    // column order; all of them in frame 0. Its `skeletons` keep the FILE's
+    // order, as a real store's do.
     function stubLabels(order, nInst) {
         const n = order.length;
-        const x = new Float64Array(n * nInst), y = new Float64Array(n * nInst);
-        for (let j = 0; j < nInst; j++) order.forEach((nm, k) => { x[j * n + k] = code(nm); y[j * n + k] = 10 * j; });
+        const x = new Float64Array(n * nInst), y = new Float64Array(n * nInst), score = new Float64Array(n * nInst);
+        for (let j = 0; j < nInst; j++) order.forEach((nm, k) => {
+            x[j * n + k] = code(nm); y[j * n + k] = 10 * j; score[j * n + k] = code(nm) / 100;
+        });
         let cleared = 0;
         return {
             _lazyDataStore: {
+                framesData: { frame_idx: new Float64Array([0]), instance_id_start: new Float64Array([0]),
+                    instance_id_end: new Float64Array([nInst]) },
                 instancesData: {
                     instance_type: new Float64Array(nInst).fill(1),
+                    skeleton: new Float64Array(nInst),
                     point_id_start: Float64Array.from({ length: nInst }, (_, j) => j * n),
                     point_id_end: Float64Array.from({ length: nInst }, (_, j) => (j + 1) * n),
                 },
                 pointsData: { x: new Float64Array(0), y: new Float64Array(0) },
-                predPointsData: { x, y },
+                predPointsData: { x, y, score },
+                skeletons: [{ nodeNames: order.slice() }],
             },
             _lazyFrameList: { clearCache() { cleared++; } },
             get cleared() { return cleared; },
@@ -274,10 +299,13 @@ console.log('\n4. SioLazyLoader — stores re-ordered by name, the order recorde
         for (let k = 0; k < n; k++) out.push(NAMES[st.predPointsData.x[j * n + k] - 1]);
         return out;
     };
+    // Every node's score, looked up BY NAME as the node tooltip does.
+    const scoresByName = (L, cam, j) => NAMES.every(nm => Math.abs(L.predictedPointScore(cam, 0, j, nm) - code(nm) / 100) < 1e-9);
     // `open()` needs HDF5; register cameras the way it does.
     function fakeOpen(L, cam, order) {
         const labels = stubLabels(order, 2);
         L.labelsByCam.set(cam, labels);
+        L.frameRowByCam.set(cam, new Map([[0, 0]]));
         L._skeletonByCam.set(cam, { name: 'sk', nodes: order, edges: [] });
         L.skeleton = null;
         for (const c of [...L._skeletonByCam.keys()].sort()) if (!L.skeleton) { L.skeleton = L._skeletonByCam.get(c); L.skeletonCam = c; }
@@ -299,6 +327,8 @@ console.log('\n4. SioLazyLoader — stores re-ordered by name, the order recorde
     const perm = nodeOrderRemap(NAMES, REV).perm;   // adopt NAMES on top
     check(L.permuteNodes(perm).ok && eq(L.targetNodeOrder, NAMES) && eq(storeNames(a, 0), NAMES) && eq(storeNames(b, 0), NAMES),
         'permuteNodes composes with the current order and RECORDS the result (what the save re-open repeats)');
+    check(scoresByName(L, 'a', 1) && scoresByName(L, 'b', 0),
+        'predictedPointScore still gives each node its OWN score after the re-order');
 
     const L2 = new SioLazyLoader();
     L2.setTargetNodeOrder(NAMES);
@@ -316,9 +346,11 @@ console.log('\n4. SioLazyLoader — stores re-ordered by name, the order recorde
     P._sharedStore = true; P._projectLabels = shared;
     P.skeleton = { name: 'sk', nodes: NAMES, edges: [] };
     P._sharedNodeOrder = NAMES.slice();
-    for (const cam of ['c0', 'c1', 'c2']) P.labelsByCam.set(cam, shared);
+    for (const cam of ['c0', 'c1', 'c2']) { P.labelsByCam.set(cam, shared); P.frameRowByCam.set(cam, new Map([[0, 0]])); }
     check(P.permuteNodes(nodeOrderRemap(ROT, NAMES).perm).ok && eq(storeNames(shared, 2), ROT) && shared.cleared === 1,
         'a shared project store is re-ordered ONCE for all its cameras (three moves would be wrong)');
+    check(scoresByName(P, 'c1', 2),
+        'predictedPointScore on the re-ordered SHARED store gives each node its own score (not the file order\'s neighbour)');
 
     L.close();
     check(L.targetNodeOrder === null, 'close() forgets the target');

@@ -1075,9 +1075,10 @@ export class Instance {
 
     /**
      * Re-order the node axis IN PLACE: new node `s` takes old node `perm[s]` —
-     * coordinates, occlusion, any backup, and `nulledNodes` (re-keyed). The
-     * skeleton's node order changed, not the pose (see
-     * `pose/session-node-order.js`).
+     * coordinates, occlusion, any backup, the model's per-node scores, and
+     * `nulledNodes` (re-keyed). The skeleton's node order changed, not the pose
+     * (see `pose/session-node-order.js`). The scores get a NEW pool segment, as
+     * `insertNodeAt` does: segments are write-once and may be shared.
      *
      * In place, because the lazy-2D hydration path deliberately shares one
      * `_xy` (and a `Uint32Array` `_occ`) between a group member and its
@@ -1102,6 +1103,7 @@ export class Instance {
         };
         if (!isLazyPlaceholderXY(this._xy) && fresh(this._xy)) permuteXY(this._xy, perm);
         if (typeof this._occ === 'number' || fresh(this._occ)) this._occ = permuteOcc(this._occ, perm);
+        if (this._ps >= 0) this._ps = permutePointScores(this._ps, perm);
         if (this._originalXY && this._originalXY.length === 2 * n && fresh(this._originalXY)) {
             permuteXY(this._originalXY, perm);
         }
@@ -1345,6 +1347,19 @@ function splicePointScores(handle, n, idx, del) {
         if (!del && k === idx) w++;           // the inserted node has no score
         out[w++] = readPointScore(handle, k);
     }
+    return storePointScores(out, 0, out.length);
+}
+
+
+/**
+ * The segment at `handle` re-ordered so node `s` holds old node `perm[s]`'s
+ * score. Writes a NEW segment — segments may be shared.
+ * @returns {number} the new handle (-1 stays -1)
+ */
+function permutePointScores(handle, perm) {
+    if (handle < 0) return -1;
+    const out = new Array(perm.length);
+    for (let s = 0; s < perm.length; s++) out[s] = readPointScore(handle, perm[s]);
     return storePointScores(out, 0, out.length);
 }
 

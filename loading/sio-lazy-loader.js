@@ -1046,7 +1046,9 @@ export class SioLazyLoader {
         // rows into the session skeleton's order (`permuteStoreNodeRows`, which also moves this
         // score column) while the store's skeleton keeps the file's — so reading the file's order
         // would give the neighbour's score. It re-ordered exactly the rows spanning that many nodes.
-        var order = this._nodeOrderByCam.get(camName);
+        // `openProjectSlp`'s ONE shared store has no per-camera entry; its current order is
+        // `_sharedNodeOrder`, which a re-order after loading moves off the file's too.
+        var order = this._nodeOrderByCam.get(camName) || (this._sharedStore ? this._sharedNodeOrder : null);
         var names = order && order.length === pEnd - pStart ? order : (skel && skel.nodeNames);
         var k = names ? names.indexOf(nodeName) : -1;
         if (k < 0 || !(pStart + k < pEnd)) return NaN;

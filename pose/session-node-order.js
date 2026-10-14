@@ -34,8 +34,8 @@
  * Everything held per node, in place: every Instance in `frameGroups`
  * (linked and unlinked) and in `instanceGroups` (members and
  * `reprojectedInstances`) via `Instance.permuteNodes` — coordinates,
- * occlusion, backup, `nulledNodes`; each group's `points3d` and raw
- * `reprojections`; and the derived `triangulationResults` entries (3D,
+ * occlusion, backup, per-node scores, `nulledNodes`; each group's `points3d`
+ * and raw `reprojections`; and the derived `triangulationResults` entries (3D,
  * reprojections, per-node errors), so the Info Panel's per-node errors stay
  * attached to the right node. One `seen` set spans the whole walk: the lazy
  * hydration path SHARES coordinate buffers between a group member and its
